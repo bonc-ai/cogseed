@@ -1,0 +1,57 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only B-visibility-negative-leak-v1",
+  "inputs": {
+    "actor": "agent-a",
+    "cid": "c-parity-b",
+    "message": {
+      "from": "commander",
+      "text": "TOKEN=synthetic-secret path=/private/workspace/file.txt",
+      "to": [
+        "agent-b"
+      ]
+    }
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "slice": [
+      {
+        "cid": "c-parity-b",
+        "from": "commander",
+        "id": "msg-1",
+        "mentions": [
+          "agent-a"
+        ],
+        "references": [],
+        "text": "Synthetic private handoff",
+        "to": [
+          "agent-a"
+        ],
+        "ts": "__TIMESTAMP__"
+      },
+      {
+        "cid": "c-parity-b",
+        "from": "agent-b",
+        "id": "msg-2",
+        "mentions": [
+          "agent-a"
+        ],
+        "references": [],
+        "text": "Synthetic private handoff",
+        "to": [
+          "user"
+        ],
+        "ts": "__TIMESTAMP__"
+      }
+    ],
+    "visible_to_agent_a": false
+  },
+  "notes": [
+    "The visibility slice is policy-based: an unaddressed message is absent from the member slice."
+  ]
+}

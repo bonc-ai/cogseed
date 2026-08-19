@@ -1,0 +1,267 @@
+/**
+ * i18n — minimal lookup for main-side user-facing strings.
+ *
+ * Tables live in `src/main/locales/*.json` as flat key → string maps
+ * (dot-separated keys like `errors.not_utf8`).
+ *
+ * Lookup order: current lang → `en` → raw key (so missing keys stand out in
+ * UI instead of going silently blank).
+ *
+ * Used by features/* to produce localized `error` fields returned to the
+ * renderer. LLM prompts, logs, and telemetry remain in their source language
+ * and are NOT routed through here.
+ */
+
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+
+import { SRC_ROOT } from './paths';
+
+export type Lang = 'zh' | 'en' | 'ja' | 'pt';
+export type UiLang = 'zh' | 'en';
+
+export interface LocaleMeta {
+  code: Lang;
+  label: string;
+  htmlLang: string;
+  intlLocale: string;
+  llmName: string;
+  fallback: Lang | null;
+}
+
+export const LOCALES: readonly LocaleMeta[] = [
+  {
+    code: 'zh',
+    label: '简体中文',
+    htmlLang: 'zh-CN',
+    intlLocale: 'zh-CN',
+    llmName: 'Chinese (简体中文)',
+    fallback: 'en',
+  },
+  {
+    code: 'en',
+    label: 'English',
+    htmlLang: 'en',
+    intlLocale: 'en-US',
+    llmName: 'English',
+    fallback: null,
+  },
+  {
+    code: 'ja',
+    label: '日本語',
+    htmlLang: 'ja',
+    intlLocale: 'ja-JP',
+    llmName: 'Japanese (日本語)',
+    fallback: 'en',
+  },
+  {
+    code: 'pt',
+    label: 'Português (Brasil)',
+    htmlLang: 'pt-BR',
+    intlLocale: 'pt-BR',
+    llmName: 'Brazilian Portuguese (Português do Brasil)',
+    fallback: 'en',
+  },
+] as const;
+
+export const SUPPORTED_LANGS: readonly Lang[] = LOCALES.map((l) => l.code);
+export const UI_LANGS: readonly UiLang[] = ['zh', 'en'] as const;
+const LOCALE_BY_CODE: Readonly<Record<Lang, LocaleMeta>> = LOCALES.reduce((acc, meta) => {
+  acc[meta.code] = meta;
+  return acc;
+}, {} as Record<Lang, LocaleMeta>);
+
+export function isLang(v: unknown): v is Lang {
+  return typeof v === 'string' && SUPPORTED_LANGS.includes(v as Lang);
+}
+
+export function isUiLang(v: unknown): v is UiLang {
+  return typeof v === 'string' && UI_LANGS.includes(v as UiLang);
+}
+
+export function normalizeLang(rawLocale: unknown): Lang | null {
+  const s = typeof rawLocale === 'string' ? rawLocale.trim().toLowerCase() : '';
+  if (!s) return null;
+  for (const lang of SUPPORTED_LANGS) {
+    if (s === lang || s.startsWith(`${lang}-`) || s.startsWith(`${lang}_`)) return lang;
+  }
+  return null;
+}
+
+export function getLocaleMeta(lang: Lang): LocaleMeta {
+  return LOCALE_BY_CODE[lang] ?? LOCALE_BY_CODE.en;
+}
+
+export function acceptLanguageHeader(lang: Lang): string {
+  const parts: string[] = [];
+  for (const [idx, candidate] of fallbackChain(lang).entries()) {
+    const meta = getLocaleMeta(candidate);
+    const q = idx === 0 ? '' : `;q=${Math.max(0.1, 0.9 - idx * 0.1).toFixed(1)}`;
+    parts.push(`${meta.intlLocale}${q}`);
+    if (candidate !== meta.intlLocale.split('-')[0]) parts.push(`${candidate}${q}`);
+  }
+  return parts.join(',');
+}
+
+export function fallbackChain(lang: Lang): Lang[] {
+  const out: Lang[] = [];
+  const seen = new Set<Lang>();
+  let cur: Lang | null = lang;
+  while (cur && !seen.has(cur)) {
+    out.push(cur);
+    seen.add(cur);
+    cur = getLocaleMeta(cur).fallback;
+  }
+  return out;
+}
+
+export function descriptionLang(lang: Lang): 'zh' | 'en' {
+  return lang === 'zh' ? 'zh' : 'en';
+}
+
+/**
+ * Map an Electron `app.getLocale()` / BCP-47 tag to the supported language
+ * space used by Commander/Agent. Unknown input falls back to English.
+ */
+export function detectSystemLang(rawLocale: unknown): Lang {
+  return normalizeLang(rawLocale) ?? 'en';
+}
+
+// ── Table loading ────────────────────────────────────────────────────────
+// Locale JSON lives next to this file in `locales/`. In packaged builds
+// (asar), `__dirname` still resolves inside the archive and fs can read it
+// because locale tables are tiny JSON (no asar-unpack needed).
+
+type Table = Record<string, string>;
+const _tables: Partial<Record<Lang, Table>> = {};
+
+function localeFile(lang: Lang): string {
+  return path.join(__dirname, 'locales', `${lang}.json`);
+}
+
+function loadTable(lang: Lang): Table {
+  const cached = _tables[lang];
+  if (cached) return cached;
+  let table: Table = {};
+  try {
+    const raw = fs.readFileSync(localeFile(lang), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') table = parsed as Table;
+  } catch { /* missing or malformed → empty table, lookup falls through */ }
+  _tables[lang] = table;
+  return table;
+}
+
+/** Clear cached tables; test-only — app code never needs this. */
+export function _resetCacheForTests(): void {
+  for (const lang of SUPPORTED_LANGS) {
+    _tables[lang] = undefined;
+    _rendererTables[lang] = undefined;
+  }
+}
+
+// ── Renderer-side tables (shipped under src/renderer/locales/) ───────────
+// Main reads these too so the IPC handler can hand them to the renderer on
+// boot. Separate namespace from the main tables above because UI strings
+// (buttons, placeholders) have no reason to overlap with feature error
+// strings.
+
+const _rendererTables: Partial<Record<Lang, Table>> = {};
+
+function rendererLocaleFile(lang: Lang): string {
+  return path.join(SRC_ROOT, 'renderer', 'locales', `${lang}.json`);
+}
+
+export function getRendererTable(lang: Lang): Table {
+  const cached = _rendererTables[lang];
+  if (cached) return cached;
+  let table: Table = {};
+  try {
+    const raw = fs.readFileSync(rendererLocaleFile(lang), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') table = parsed as Table;
+  } catch { /* missing → empty; renderer falls through to raw key */ }
+  _rendererTables[lang] = table;
+  return table;
+}
+
+/** Returns all renderer tables for the renderer-side i18n module. */
+export function getRendererTables(): Record<UiLang, Table> {
+  const out = {} as Record<UiLang, Table>;
+  for (const lang of UI_LANGS) out[lang] = getRendererTable(lang);
+  return out;
+}
+
+/** Minimal synchronous preload bundle: active UI language plus its fallback.
+ * Other locale tables stay off the first-paint IPC payload and are fetched
+ * through `config.getLocales` only if the user switches language later. */
+export function getRendererBootTables(lang: UiLang): Partial<Record<UiLang, Table>> {
+  const out: Partial<Record<UiLang, Table>> = { [lang]: getRendererTable(lang) };
+  const fallback = LOCALE_BY_CODE[lang]?.fallback;
+  if (fallback && fallback !== lang) out[fallback] = getRendererTable(fallback);
+  return out;
+}
+
+// ── Current Agent and UI languages ───────────────────────────────────────
+let _current: Lang = 'en';
+let _currentUi: UiLang = 'zh';
+
+export function setCurrentLang(lang: Lang): void {
+  _current = lang;
+  try { process.env.COGSEED_ACCEPT_LANGUAGE = acceptLanguageHeader(lang); } catch { /* non-node test harness */ }
+}
+
+export function getCurrentLang(): Lang {
+  return _current;
+}
+
+export function setCurrentUiLang(lang: UiLang): void {
+  _currentUi = lang;
+}
+
+export function getCurrentUiLang(): UiLang {
+  return _currentUi;
+}
+
+// ── LLM language directive ───────────────────────────────────────────────
+// Inserted after the stable role prompt and before higher-frequency runtime
+// context so the preferred response language stays early without becoming
+// the system prompt's first instruction.
+
+export function buildLanguageDirective(lang: Lang = _current): string {
+  const name = getLocaleMeta(lang).llmName;
+  return [
+    '## User language',
+    '',
+    `Preferred response language: **${name}**. Write all human-readable prose in ${name}, including replies, status text, form labels, plan titles/inputs, and natural-language text inside XML/JSON fields.`,
+    '',
+    'Keep protocol tokens unchanged: XML tag names, JSON keys, tool/skill ids or names, file paths, code, and `select` / `multiselect` `value` strings.',
+    '',
+    '`description_zh` is always Chinese and `description_en` is always English; examples show shape only, not output language.',
+  ].join('\n');
+}
+
+// ── Lookup ───────────────────────────────────────────────────────────────
+
+/**
+ * Resolve a key to its localized string.
+ *
+ * Order: current UI lang → `en` → raw key. Optional `vars` replaces `{name}`
+ * placeholders (curly-brace style). Passing `lang` overrides the current
+ * locale for this single call (rare — reserved for callers that know the
+ * target locale, e.g. per-user UIs if we ever support that).
+ */
+export function t(key: string, vars?: Record<string, string | number>, lang?: Lang): string {
+  const primary = lang && isLang(lang) ? lang : _currentUi;
+  let raw: string | undefined;
+  for (const candidate of fallbackChain(primary)) {
+    raw = loadTable(candidate)[key];
+    if (raw != null) break;
+  }
+  raw = raw ?? key;
+  if (!vars) return raw;
+  return raw.replace(/\{(\w+)\}/g, (m, name: string) => {
+    const v = vars[name];
+    return v == null ? m : String(v);
+  });
+}

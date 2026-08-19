@@ -1,0 +1,115 @@
+// Electron entry shim: register tsx so the main process can
+// `require('./src/main')` and resolve to src/main/index.ts (Node folder →
+// index.ts rule + tsx/cjs transpilation). Keeps __dirname semantics identical
+// to running plain JS — no compile step in dev.
+//
+// Two hooks:
+//  - `tsx/cjs` (sync require hook) handles src/main/**/*.ts on the require()
+//    code path.
+//  - `tsx/esm` (ESM loader, registered via node:module) handles dynamic
+//    `import()` specifiers that resolve to .ts files — notably the
+//    `import('#core-agent')` subpath import that targets core-agent source.
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const {
+  normalizeEnv,
+} = require('./src/main/identity-contract.cjs');
+const {
+  initializeInstallDataRoot,
+  selectRuntimeVariant,
+} = require('./src/main/install-data-root.cjs');
+const packageMeta = require('./package.json');
+
+function detectPackagedRuntime() {
+  const appPath = String(process.resourcesPath || '');
+  return !!process.versions.electron
+    && !!appPath
+    && !appPath.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`);
+}
+
+try {
+  const isPackaged = detectPackagedRuntime();
+  const isPackagedDev = isPackaged && packageMeta.cogseedBuildChannel === 'packaged-dev';
+  const normalizedEnv = normalizeEnv(process.env);
+  Object.assign(process.env, normalizedEnv);
+  if (isPackagedDev && !process.env.COGSEED_WORKSPACE_ROOT && !process.env.COGSEED_WORKSPACE_ROOT) {
+    process.env.COGSEED_WORKSPACE_ROOT = path.join(os.homedir(), '.cogseed-dev', 'data');
+  }
+  const runtimeVariant = selectRuntimeVariant({
+    argv: process.argv.slice(1),
+    envVariant: process.env.COGSEED_RUNTIME_VARIANT || process.env.COGSEED_SOURCE_RUNTIME_VARIANT,
+    isPackaged,
+    sourceVariant: packageMeta.cogseedSourceRuntimeVariant,
+  });
+  process.env.COGSEED_SOURCE_RUNTIME_VARIANT = runtimeVariant;
+  process.env.COGSEED_RUNTIME_VARIANT = runtimeVariant;
+  initializeInstallDataRoot(process.env.COGSEED_SOURCE_RUNTIME_VARIANT, {
+    allowWorkspaceOverride: isPackagedDev,
+  });
+} catch (err) {
+  process.stderr.write(`[CogSeed] ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exitCode = 2;
+  throw err;
+}
+
+for (const arg of process.argv.slice(1)) {
+  if (typeof arg !== 'string') continue;
+  if (arg.startsWith('--cogseed-api-base-url=')) {
+    process.env.COGSEED_API_BASE_URL = arg.slice('--cogseed-api-base-url='.length);
+  } else if (arg.startsWith('--cogseed-voice-api-base=')) {
+    process.env.COGSEED_VOICE_API_BASE = arg.slice('--cogseed-voice-api-base='.length);
+  }
+}
+
+function configurePackagedEsbuildBinary() {
+  if (!process.versions.electron || !process.resourcesPath || process.env.ESBUILD_BINARY_PATH) {
+    return;
+  }
+
+  const platformPackages = {
+    'darwin:arm64': ['@esbuild', 'darwin-arm64', 'bin', 'esbuild'],
+    'darwin:x64': ['@esbuild', 'darwin-x64', 'bin', 'esbuild'],
+    'linux:arm64': ['@esbuild', 'linux-arm64', 'bin', 'esbuild'],
+    'linux:x64': ['@esbuild', 'linux-x64', 'bin', 'esbuild'],
+    'win32:arm64': ['@esbuild', 'win32-arm64', 'esbuild.exe'],
+    'win32:ia32': ['@esbuild', 'win32-ia32', 'esbuild.exe'],
+    'win32:x64': ['@esbuild', 'win32-x64', 'esbuild.exe'],
+  };
+  const parts = platformPackages[`${process.platform}:${process.arch}`];
+  if (!parts) return;
+
+  const bin = path.join(
+    process.resourcesPath,
+    'app.asar.unpacked',
+    'node_modules',
+    ...parts,
+  );
+  if (fs.existsSync(bin)) {
+    process.env.ESBUILD_BINARY_PATH = bin;
+  }
+}
+
+function configureWindowsVcRuntimePath() {
+  if (process.platform !== 'win32') return;
+  const platformKey = `${process.platform}-${process.arch}`;
+  const candidates = [
+    process.resourcesPath && path.join(process.resourcesPath, 'runtime', 'vc', platformKey),
+    path.join(__dirname, 'resources', 'runtime', 'vc', platformKey),
+  ].filter(Boolean);
+  const runtimeDir = candidates.find((dir) => fs.existsSync(path.join(dir, 'vcruntime140.dll')));
+  if (!runtimeDir) return;
+  const entries = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  process.env.PATH = [runtimeDir, ...entries.filter((entry) => path.resolve(entry) !== path.resolve(runtimeDir))]
+    .join(path.delimiter);
+}
+
+configureWindowsVcRuntimePath();
+configurePackagedEsbuildBinary();
+
+require('tsx/cjs');
+require('tsx/esm/api').register();
+
+require('./src/main');

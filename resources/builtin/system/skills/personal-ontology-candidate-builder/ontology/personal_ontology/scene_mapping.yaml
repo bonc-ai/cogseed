@@ -1,0 +1,211 @@
+---
+# ============================================================
+# 个人本体候选构建本体 — MappingConfig（映射层）
+# 版本: v1.0.0
+# 描述: 本体概念到物理数据源的映射配置
+# 适用: 候选提炼/确认路由时定位实际数据
+# ============================================================
+
+schema_version: "1.0.0"
+profile: scene_mapping/1.0
+
+scene:
+  id: personal_ontology
+  name: 个人本体候选构建
+
+tbox_ref:
+  ontology_id: personal_ontology
+  ontology_version: "1.0.0"
+  file: scene_tbox.yaml
+
+# ============================================================
+# 映射配置（Mapping Configs）
+# ============================================================
+
+mapping_configs:
+  # ======================================================
+  # 候选 → 候选池文件（candidates.md）
+  # ======================================================
+  - id: MAP_CANDIDATE_01
+    target_class: PersonalOntologyCandidate
+    source:
+      data_source_id: local_ontology_candidates
+      entity_type: file
+      entity_name: candidates.md
+    identity_mapping:
+      target_property: candidateId
+      source_field: "### <candidate_id> 标题"
+      datatype: string
+      transform_hint: "### 标题行即候选 ID（cand- 前缀）"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: kind
+        source_field: "- 类型:"
+        datatype: string
+        transform_hint: "preference | instance | property | relation | rule"
+        mapping_status: confirmed
+      - target_property: confidence
+        source_field: "- 置信度:"
+        datatype: string
+        transform_hint: "low | medium | high"
+        mapping_status: confirmed
+      - target_property: summary
+        source_field: "- 摘要:"
+        datatype: string
+        transform_hint: "人话摘要"
+        mapping_status: confirmed
+      - target_property: memory_scope
+        source_field: "- 记忆去向:"
+        datatype: string
+        transform_hint: "user | shared"
+        mapping_status: confirmed
+      - target_property: memory_text
+        source_field: "- 记忆文本:"
+        datatype: string
+        transform_hint: "确认后写入 USER.md/MEMORY.md 的精炼文本"
+        mapping_status: confirmed
+      - target_property: registry_like_path
+        source_field: "- 路径:"
+        datatype: string
+        transform_hint: "可选，定位建议"
+        mapping_status: optional
+      - target_property: diff_summary
+        source_field: "- 差异:"
+        datatype: string
+        transform_hint: "可选，更新差异"
+        mapping_status: optional
+      - target_property: target_field
+        source_field: "- 建议字段:"
+        datatype: string
+        transform_hint: "可选，模板字段名"
+        mapping_status: optional
+      - target_property: source_memory_refs
+        source_field: "- 来源:"
+        datatype: string
+        transform_hint: "逗号分隔来源引用"
+        mapping_status: confirmed
+
+  # ======================================================
+  # 阻断项 → 阻断项文件（blocked_items.md）
+  # ======================================================
+  - id: MAP_BLOCKED_01
+    target_class: PersonalOntologyCandidate
+    source:
+      data_source_id: local_ontology_candidates
+      entity_type: file
+      entity_name: blocked_items.md
+    identity_mapping:
+      target_property: source_memory_refs
+      source_field: "### <source_ref> 标题"
+      datatype: string
+      transform_hint: "### 标题行即来源引用"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: reason
+        source_field: "- 原因:"
+        datatype: string
+        transform_hint: "阻断原因"
+        mapping_status: confirmed
+      - target_property: required_fix
+        source_field: "- 修复建议:"
+        datatype: string
+        transform_hint: "需要怎么改才能成为候选"
+        mapping_status: confirmed
+
+  # ======================================================
+  # 确认去向 → 全局记忆（USER.md / MEMORY.md）
+  # ======================================================
+  - id: MAP_MEMORY_01
+    target_class: MemoryTarget
+    source:
+      data_source_id: global_memory
+      entity_type: file
+      entity_name: USER.md | MEMORY.md
+    identity_mapping:
+      target_property: memory_scope
+      source_field: "memory_scope 字段"
+      datatype: string
+      transform_hint: "user → USER.md（个人画像）；shared → MEMORY.md（共享记忆）"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: memory_text
+        source_field: "memory_text 字段"
+        datatype: string
+        transform_hint: "确认后由 App 后端写入，技能本身不直接触碰"
+        mapping_status: confirmed
+
+  # ======================================================
+  # 确认去向 → 记忆分组（字段区/流水区）
+  # ======================================================
+  - id: MAP_GROUP_01
+    target_class: OntologyGroup
+    source:
+      data_source_id: personal_ontology_groups
+      entity_type: directory
+      entity_name: .personal_ontology_groups/
+    identity_mapping:
+      target_property: groupId
+      source_field: "groups.md 台账 group_id"
+      datatype: string
+      transform_hint: "普通组 = <groupId>.md；模板文件行 = <template_id>.md"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: target_field
+        source_field: "字段区 ## 字段名 小节"
+        datatype: string
+        transform_hint: "有坑填坑（appendFieldValue 多值追加+去重+标来源）"
+        mapping_status: confirmed
+      - target_property: flow_entry
+        source_field: "流水区（§ 分隔）"
+        datatype: string
+        transform_hint: "没坑进流水区（appendFlowEntry）"
+        mapping_status: confirmed
+
+  # ======================================================
+  # 角色模板 → 模板文件
+  # ======================================================
+  - id: MAP_TEMPLATE_01
+    target_class: RoleTemplate
+    source:
+      data_source_id: personal_ontology_groups
+      entity_type: file
+      entity_name: "<template_id>.md（如 student.md）"
+    identity_mapping:
+      target_property: templateId
+      source_field: "文件首行 > 模板: <id>@<ver>"
+      datatype: string
+      transform_hint: "student@0.2.0-review.1 格式；模板 = 预置分组 + 字段挖空清单"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: GroupField
+        source_field: "### <字段名> 小节"
+        datatype: string
+        transform_hint: "无值行 = 空坑；LLM 路由 catalog 读文件"
+        mapping_status: confirmed
+      - target_property: flow
+        source_field: "### 流水 小节"
+        datatype: string
+        transform_hint: "分节级流水"
+        mapping_status: confirmed
+
+  # ======================================================
+  # 来源追溯 → 会话/记忆源
+  # ======================================================
+  - id: MAP_SOURCE_01
+    target_class: PersonalMemoryEpisode
+    source:
+      data_source_id: conversation_history
+      entity_type: source_ref
+      entity_name: "会话 id / 轮次 id"
+    identity_mapping:
+      target_property: memoryId
+      source_field: "source_memory_refs"
+      datatype: string
+      transform_hint: "逗号分隔，供用户在审阅时回溯"
+      mapping_status: confirmed
+    property_mappings:
+      - target_property: source_kind
+        source_field: "来源标注"
+        datatype: string
+        transform_hint: "候选 | 手动 | 导入 | 智能（LLM 路由命中标[智能]）"
+        mapping_status: confirmed

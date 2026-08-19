@@ -1,0 +1,444 @@
+const _shimLog = typeof createLogger === 'function' ? createLogger('ipc-shim') : { warn() {}, info() {}, error() {} };
+// ─── HTTP → IPC shim ─────────────────────────────────────────────────
+// The original app was served over HTTP; every network call went through
+// `apiFetch(url, options)` which wrapped `fetch`. In Electron we route the
+// same calls through `window.cogseed.invoke` (for request/response) or
+// `.stream` (for SSE). The shim translates URL + method into an IPC channel
+// + payload and returns a Response-like object so the rest of the file's
+// 3000+ lines can stay unchanged.
+//
+// Auth is gone entirely — local IPC is trusted by construction, so
+// password / X-Access-Password / access-denied UI all become no-ops.
+
+// Route table. Each entry = [method, pathMatcher, channel, paramKeys?, opts?]
+//   - pathMatcher: string (exact match) or RegExp (capture groups → paramKeys)
+//   - channel: IPC channel name (or special objects: { fake }, { upload })
+//   - paramKeys: names assigned to regex capture groups, merged into payload
+//   - opts.stream: boolean (this call yields an SSE-style stream)
+//   - opts.wrapAsUpdates: wrap the whole body under `updates` key
+const _IPC_ROUTES = [
+  // Exact routes
+  ['GET',    '/api/auth/status',              { fake: { ok: true, authenticated: true } }],
+  ['GET',    '/api/model-authorizations',     'modelAuthorizations.list'],
+  ['POST',   '/api/model-authorizations/ccswitch/prepare', 'modelAuthorizations.prepareCcSwitch'],
+  ['POST',   '/api/model-authorizations/discover', 'modelAuthorizations.discover'],
+  ['POST',   '/api/model-authorizations/test', 'modelAuthorizations.testDraft'],
+  ['POST',   '/api/model-authorizations/complete', 'modelAuthorizations.complete'],
+  ['POST',   '/api/model-authorizations/remove-model', 'modelAuthorizations.removeModel'],
+  ['POST',   '/api/model-authorizations/remove', 'modelAuthorizations.remove'],
+  ['GET',    '/api/user/init',                'user.init'],
+  ['GET',    '/api/conversations/list',       'conversations.list'],
+  ['POST',   '/api/conversations/create',     'conversations.create'],
+  ['POST',   '/api/conversations/merge',      'conversations.merge'],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/clone$/, 'conversations.clone', ['cid']],
+  ['GET',    '/api/agents/list',              'agents.list'],
+  ['POST',   '/api/agents/create',            'agents.create'],
+  ['GET',    '/api/skills/list',              'skills.list'],
+  ['GET',    '/api/skills/read',              'skills.read'],
+  ['PUT',    '/api/skills/write',             'skills.writeFile'],
+  ['GET',    '/api/skills/tree',              'skills.tree'],
+  ['POST',   '/api/skills/create',            'skills.create'],
+  ['POST',   '/api/p3394/validations/scan', 'p3394.validation.scan'],
+  ['GET',    /^\/api\/p3394\/validations\/([^/]+)$/, 'p3394.validation.read', ['validationId']],
+  ['GET',    '/api/p3394/executions', 'p3394.execution.list'],
+  ['GET',    /^\/api\/p3394\/executions\/([^/]+)$/, 'p3394.execution.read', ['executionId']],
+  ['GET',    /^\/api\/p3394\/executions\/([^/]+)\/context-reuse-receipt$/, 'p3394.contextReuseReceipt.read', ['executionId']],
+  ['POST',   '/api/p3394/behavior-contrasts', 'p3394.behaviorContrast.start'],
+  ['GET',    /^\/api\/p3394\/behavior-contrasts\/([^/]+)$/, 'p3394.behaviorContrast.read', ['contrastId']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.list', ['cid']],
+  ['DELETE', /^\/api\/conversations\/([^/]+)\/aside$/, 'aside.clear', ['cid']],
+  ['POST',   '/api/workbench/baselines', 'workbench.baseline.freeze'],
+  ['GET',    '/api/workbench/baselines', 'workbench.baseline.list'],
+  ['GET',    /^\/api\/workbench\/baselines\/([^/]+)\/verify$/, 'workbench.baseline.verify', ['baselineId']],
+  ['POST',   '/api/workbench/gate', 'workbench.gate.evaluate'],
+  ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/action-plan$/, 'workbench.actionPlan.read', ['projectId']],
+  ['GET',    /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRuns.list', ['projectId', 'taskId']],
+  ['POST',   /^\/api\/workbench\/projects\/([^/]+)\/tasks\/([^/]+)\/runs$/, 'workbench.taskRun.start', ['projectId', 'taskId']],
+  // 遗留 CognitionAsset store（`cloud/cognition/`）的全部 REST 入口已删除。
+  //
+  // 那个 store 只剩**读**用途：`memory.ts::formatForSystemPrompt` 用
+  // `listActiveCognitionSourceIds` 门控历史 MEMORY 记录的可见性（老用户在
+  // legacy 资产被作废后，对应记忆行不该继续进提示词）。它**不再有任何写入
+  // 入口**，也从不参与正式认知资产 / 认知树 / runtime 注入。
+  //
+  // 正式认知资产的 canonical 读口是 `cognition.assets.list`（ipc/index.ts，
+  // 走 recall/formal-assets），治理与编辑走 `recall.assets.*`，沉淀走
+  // `recall.candidates.save`。不要在这里恢复任何 `/api/cognition/assets*` 路由。
+  ['POST',   '/api/skills/pick-import-dir',   'skills.pickImportDir'],
+  ['POST',   '/api/skills/create-from-url',   'skills.createFromUrl'],
+  ['POST',   '/api/skills/create-from-dir',   'skills.createFromDir'],
+  ['GET',    '/api/contexts/tree',            'contexts.tree'],
+  ['GET',    '/api/contexts/read',            'contexts.read'],
+  ['GET',    '/api/contexts/index',           'contexts.index'],
+  ['POST',   '/api/contexts/write',           'contexts.write'],
+  ['PUT',    '/api/contexts/update',          'contexts.update'],
+  ['POST',   '/api/contexts/mkdir',           'contexts.mkdir'],
+  ['POST',   '/api/contexts/rename',          'contexts.rename'],
+  ['DELETE', '/api/contexts/delete',          'contexts.delete'],
+  ['POST',   '/api/contexts/upload',          { upload: 'contexts.upload' }],
+  ['GET',    '/api/contexts/image',           'contexts.image'],
+  ['GET',    '/api/contexts/docx',            'contexts.docxHtml'],
+  ['GET',    '/api/contexts/office',          'contexts.officeHtml'],
+  ['POST',   '/api/contexts/reveal',          'contexts.reveal'],
+  ['POST',   '/api/library/write-text',        'library.writeText'],
+  ['POST',   '/api/search/global',            'search.global'],
+  ['POST',   '/api/conversations/attachments/adopt', 'conversations.attachments.adopt'],
+  ['POST',   '/api/common/pick-directory',    'common.pickDirectory'],
+  ['GET',    '/api/kb/status',                'kb.status'],
+  ['POST',   '/api/kb/reconcile',             'kb.reconcile'],
+  ['POST',   '/api/kb/reprocess',             'kb.reprocess'],
+  ['POST',   '/api/kb/events/stream',         'kb.events',                  null, { stream: true }],
+  ['POST',   '/api/marketplace/categories',   'marketplace.categories'],
+  ['POST',   '/api/marketplace/agents/list',  'marketplace.listAgents'],
+  ['POST',   '/api/marketplace/skills/list',  'marketplace.listSkills'],
+  ['POST',   '/api/marketplace/agents/install', 'marketplace.installAgent'],
+  ['POST',   '/api/marketplace/skills/install', 'marketplace.installSkill'],
+  ['POST',   '/api/marketplace/agents/upload',  'marketplace.uploadAgent'],
+  ['POST',   '/api/marketplace/skills/upload',  'marketplace.uploadSkill'],
+
+  // Pattern routes (with path parameters)
+  ['GET',    /^\/api\/conversations\/([^/]+)$/,            'conversations.get',          ['cid']],
+  ['DELETE', /^\/api\/conversations\/([^/]+)$/,            'conversations.delete',       ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/pin$/,       'conversations.pin',          ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/rename$/,    'conversations.rename',       ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/history$/,   'conversations.history',      ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/files$/,     'conversations.files.list',   ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/send$/,      'groupChat.send',             ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/companion-repro$/, 'companionRepro.getState', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/draft$/, 'companionRepro.saveDraft', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/guide$/, 'companionRepro.submitGuideMessage', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/project-context$/, 'companionRepro.generateProjectContext', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/project-context\/revision$/, 'companionRepro.applyProjectContextRevision', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/task-contract$/, 'companionRepro.generateTaskContract', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/task-contract\/confirm$/, 'companionRepro.confirmTaskContract', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/companion-repro\/start$/, 'companionRepro.startExecution', ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/companion-repro\/evidence$/, 'companionRepro.readEvidence', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/send\/stream$/, 'conversations.sendStream', ['cid'], { stream: true }],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/abort$/,     'groupChat.abort',            ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/wake-requests$/, 'p3394.listWakeRequests', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/wake-requests\/([^/]+)\/decision$/, 'p3394.decideWakeRequest', ['cid', 'requestId']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/protocol-events$/, 'p3394.listProtocolEvents', ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/members$/,   'groupChat.listMembers',      ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/runtime$/,   'groupChat.runtimeStatus',    ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts$/, 'groupChat.listCollaborationConflicts', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts\/([^/]+)\/resolve$/, 'groupChat.resolveCollaborationConflict', ['cid', 'conflictId']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/collaboration\/gates\/([^/]+)\/review$/, 'groupChat.reviewCollaborationGate', ['cid', 'gateId']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/events\/stream$/, 'groupChat.events',      ['cid'], { stream: true }],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/form-submitted$/, 'groupChat.markFormSubmitted', ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/marketplace-install$/, 'groupChat.resolveMarketplaceInstallRequest', ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/attachments$/,      'conversations.attachments.list',   ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/attachments\/upload$/, { upload: 'conversations.attachments.upload' }, ['cid']],
+  ['POST',   /^\/api\/conversations\/([^/]+)\/attachments\/import$/, 'conversations.attachments.import', ['cid']],
+  ['DELETE', /^\/api\/conversations\/([^/]+)\/attachments$/,      'conversations.attachments.delete', ['cid']],
+  ['GET',    /^\/api\/agents\/([^/]+)$/,                   'agents.get',                 ['agent_id']],
+  ['DELETE', /^\/api\/agents\/([^/]+)$/,                   'agents.delete',              ['agent_id']],
+  ['PUT',    /^\/api\/agents\/([^/]+)\/update$/,           'agents.update',              ['agent_id'], { wrapAsUpdates: true }],
+  ['GET',    /^\/api\/agents\/([^/]+)\/inheritance$/,      'agents.inheritance',         ['agent_id']],
+  ['GET',    /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.history',        ['agent_id']],
+  ['DELETE', /^\/api\/agents\/([^/]+)\/chat$/,             'agents.chat.clear',          ['agent_id']],
+  ['POST',   /^\/api\/agents\/([^/]+)\/chat\/send$/,       'agents.chat.send',           ['agent_id']],
+  ['POST',   /^\/api\/agents\/([^/]+)\/chat\/send\/stream$/, 'agents.chat.sendStream',   ['id'], { stream: true }],
+  ['GET',    /^\/api\/skills\/([^/]+)\/chat$/,             'skills.chat.history',        ['id']],
+  ['DELETE', /^\/api\/skills\/([^/]+)\/chat$/,             'skills.chat.clear',          ['id']],
+  ['POST',   /^\/api\/skills\/([^/]+)\/chat\/send$/,       'skills.chat.send',           ['id']],
+  ['POST',   /^\/api\/skills\/([^/]+)\/chat\/send\/stream$/, 'skills.chat.sendStream',   ['id'], { stream: true }],
+  ['PUT',    /^\/api\/skills\/([^/]+)\/update$/,           'skills.update',              ['id'], { wrapAsUpdates: true }],
+  ['DELETE', /^\/api\/skills\/([^/]+)$/,                   'skills.delete',              ['id']],
+];
+
+function _matchRoute(method, pathname) {
+  for (const entry of _IPC_ROUTES) {
+    const [m, matcher, channel, paramKeys, opts] = entry;
+    if (m !== method) continue;
+    if (typeof matcher === 'string') {
+      if (matcher === pathname) return { channel, params: {}, opts: opts || {} };
+    } else {
+      const match = matcher.exec(pathname);
+      if (match) {
+        const params = {};
+        // Path params are URL-encoded by callers (encodeURIComponent),
+        // so decode them before forwarding to the IPC handler — otherwise
+        // ids that contain spaces or non-ASCII chars fail backend
+        // validation (e.g. skills.isValidSkillId rejects "%20").
+        (paramKeys || []).forEach((k, i) => {
+          const raw = match[i + 1];
+          try { params[k] = decodeURIComponent(raw); }
+          catch { params[k] = raw; }
+        });
+        return { channel, params, opts: opts || {} };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a Response-like object that the original consumer code can .json() or
+ * (for streams) .body.getReader() on.
+ */
+function _mockJsonResponse(result) {
+  return {
+    ok: result && result.ok !== false,
+    status: result && result.ok === false ? 400 : 200,
+    json: async () => result,
+  };
+}
+
+function _mockErrorResponse(error, status) {
+  return {
+    ok: false,
+    status: status || 500,
+    json: async () => ({ ok: false, error }),
+  };
+}
+
+function _monitorIpcError(kind, channel, data) {
+  try {
+    if (!window.Monitor || !(() => {})) return;
+    (() => {})(kind, {
+      channel: String(channel || '').slice(0, 120),
+      ...(data || {}),
+    });
+  } catch (_) {}
+}
+
+function _hasCogSeedInvoke() {
+  return !!(window.cogseed && typeof window.cogseed.invoke === 'function');
+}
+
+function _hasCogSeedStream() {
+  return !!(window.cogseed && typeof window.cogseed.stream === 'function');
+}
+
+const _cogseedProjectionCache = new Map();
+const _cogseedProjectionInflight = new Map();
+let _cogseedProjectionInvokeOverride = null;
+
+function _cogseedProjectionInvoke(channel, payload) {
+  if (_cogseedProjectionInvokeOverride) return _cogseedProjectionInvokeOverride(channel, payload);
+  if (!_hasCogSeedInvoke()) return Promise.reject(new Error('ipc bridge unavailable'));
+  return window.cogseed.invoke(channel, payload);
+}
+
+function _cogseedProjectionEntry(key, loader, onUpdate) {
+  const snapshot = _cogseedProjectionCache.has(key) ? _cogseedProjectionCache.get(key) : null;
+  let refresh = _cogseedProjectionInflight.get(key);
+  if (!refresh) {
+    refresh = Promise.resolve().then(async () => {
+      const next = await loader();
+      _cogseedProjectionCache.set(key, next);
+      return next;
+    }).finally(() => {
+      _cogseedProjectionInflight.delete(key);
+    });
+    _cogseedProjectionInflight.set(key, refresh);
+  }
+  if (typeof onUpdate === 'function') {
+    refresh.then((next) => { try { onUpdate(next); } catch (_) {} }).catch(() => {});
+  }
+  return { snapshot, refresh };
+}
+
+function _cogseedProjectionSessionList(options) {
+  return _cogseedProjectionEntry('cogseed:sessions', async () => {
+    const result = await _cogseedProjectionInvoke('cogseed.session.list', {});
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return Array.isArray(result.sessions) ? result.sessions : (Array.isArray(result) ? result : []);
+  }, options && options.onUpdate);
+}
+
+function _cogseedProjectionSessionReference(sessionId) {
+  const id = String(sessionId || '').trim();
+  if (!id) return id;
+  if (/^(?:cogseed-session-|gconv-|gmember-)/.test(id)) return id;
+  return `gconv-${id}`;
+}
+
+function _cogseedProjectionSession(sessionId, options) {
+  const reference = _cogseedProjectionSessionReference(sessionId);
+  const key = `cogseed:session:${reference}`;
+  return _cogseedProjectionEntry(key, async () => {
+    const result = await _cogseedProjectionInvoke('cogseed.session.read', { sessionId: reference });
+    if (!result || result.ok === false) throw new Error((result && result.error) || 'load failed');
+    return result;
+  }, options && options.onUpdate);
+}
+
+window.cogseedProjection = window.cogseedProjection || {
+  setInvoker(fn) { _cogseedProjectionInvokeOverride = typeof fn === 'function' ? fn : null; },
+  sessions(options) { return _cogseedProjectionSessionList(options || {}); },
+  session(sessionId, options) { return _cogseedProjectionSession(sessionId, options || {}); },
+  collaboration(sessionId, options) { return _cogseedProjectionSession(sessionId, options || {}); },
+};
+
+function _isStreamCancel(err) {
+  const msg = err && err.message ? String(err.message) : String(err || '');
+  return (err && err.name === 'AbortError') || msg === 'stream cancelled';
+}
+
+/**
+ * Convert a window.cogseed.stream call into a Response whose body is a
+ * ReadableStream of SSE-formatted bytes. The existing app.js SSE reader
+ * (`res.body.getReader()` + 'data: …\\n\\n' parse) works unchanged.
+ */
+function _streamResponse(channel, payload, signal) {
+  const encoder = new TextEncoder();
+  let streamHandle = null;
+
+  const readable = new ReadableStream({
+    start(controller) {
+      streamHandle = window.cogseed.stream(channel, payload, (ev) => {
+        const chunk = encoder.encode('data: ' + JSON.stringify(ev) + '\n\n');
+        try { controller.enqueue(chunk); } catch (_) { /* already closed */ }
+      });
+      // Always terminate the ReadableStream on promise settle, regardless of
+      // whether the user aborted. Previously we gated close/error on an
+      // `aborted` flag, which left the stream in a dangling state when the
+      // renderer-side AbortController was tripped — reader.read() would hang
+      // forever, the caller's try/catch/finally never ran, and the UI stayed
+      // stuck in "streaming" state until the user clicked the stop button a
+      // second time.
+      streamHandle.promise
+        .then(() => { try { controller.close(); } catch (_) {} })
+        .catch((err) => {
+          if (_isStreamCancel(err)) {
+            try { controller.close(); } catch (_) {}
+            return;
+          }
+          _monitorIpcError('ipc_stream', channel, { msg: err && err.message ? err.message : String(err) });
+          try { controller.error(err); } catch (_) {}
+        });
+    },
+    cancel() {
+      if (streamHandle) streamHandle.cancel();
+    },
+  });
+
+  if (signal) {
+    if (signal.aborted) {
+      if (streamHandle) streamHandle.cancel();
+    } else {
+      signal.addEventListener('abort', () => {
+        if (streamHandle) streamHandle.cancel();
+      });
+    }
+  }
+
+  return { ok: true, status: 200, body: readable };
+}
+
+/**
+ * Special-case: binary uploads that used to be multipart/binary POSTs. In IPC
+ * we serialize the ArrayBuffer to base64 and send via a regular invoke channel.
+ * `channel` is the IPC channel; `extraParams` is merged into the payload
+ * (e.g. `{ cid }` for per-conversation attachments).
+ */
+async function _uploadBinary(channel, options, extraParams) {
+  if (!_hasCogSeedInvoke()) {
+    return _mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' });
+  }
+
+  const rawName = ((options.headers || {})['X-Filename']) || '';
+  const name = rawName ? decodeURIComponent(rawName) : '';
+  const body = options.body;
+  let buf;
+  if (body instanceof ArrayBuffer) buf = body;
+  else if (body && body.buffer instanceof ArrayBuffer) buf = body.buffer;
+  else if (body instanceof Uint8Array) buf = body.buffer;
+  else return _mockJsonResponse({ ok: false, error: 'binary body required' });
+
+  // Chunk-wise base64 to avoid stack blowup on large files.
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + step, bytes.length)));
+  }
+  const data = btoa(binary);
+  try {
+    const result = await window.cogseed.invoke(channel, { ...(extraParams || {}), name, data });
+    return _mockJsonResponse(result);
+  } catch (err) {
+    _monitorIpcError('ipc_upload', channel, { msg: err && err.message ? err.message : String(err) });
+    throw err;
+  }
+}
+
+/**
+ * Core shim — signature identical to the original `apiFetch(url, options)`.
+ * Recognizes the same /api/* surface as the old HTTP server; all unknowns
+ * fall through to window.fetch so static assets still load normally.
+ */
+function apiFetch(url, options) {
+  options = options || {};
+  const method = (options.method || 'GET').toUpperCase();
+
+  // Absolute URLs and non-API paths → real fetch (e.g. static assets).
+  if (typeof url !== 'string' || !url.startsWith('/api/')) {
+    return fetch(url, options);
+  }
+
+  const qIdx = url.indexOf('?');
+  const pathname = qIdx >= 0 ? url.slice(0, qIdx) : url;
+  const searchParams = qIdx >= 0 ? new URLSearchParams(url.slice(qIdx + 1)) : new URLSearchParams();
+
+  const route = _matchRoute(method, pathname);
+  if (!route) {
+    _shimLog.warn('unmatched route:', method, pathname);
+    _monitorIpcError('ipc_unmatched_route', method + ' ' + pathname);
+    return Promise.resolve(_mockErrorResponse(`unknown route: ${method} ${pathname}`, 404));
+  }
+
+  const { channel, params, opts } = route;
+
+  // `fake` — synthetic response used by /api/auth/status (auth is gone).
+  if (channel && typeof channel === 'object' && channel.fake) {
+    return Promise.resolve(_mockJsonResponse(channel.fake));
+  }
+
+  // Build query payload.
+  const query = {};
+  for (const [k, v] of searchParams.entries()) query[k] = v;
+
+  // Build body payload.
+  let body = {};
+  if (options.body && typeof options.body === 'string') {
+    try { body = JSON.parse(options.body); } catch (_) { body = {}; }
+  } else if (options.body && typeof options.body === 'object' && !(options.body instanceof ArrayBuffer) && !(options.body instanceof Uint8Array)) {
+    body = options.body;
+  }
+
+  // Special: binary upload. `channel.upload` is the IPC channel string to
+  // invoke; path params (e.g. `cid`) are merged into the payload.
+  if (channel && typeof channel === 'object' && channel.upload) {
+    const uploadChannel = typeof channel.upload === 'string' ? channel.upload : 'contexts.upload';
+    return _uploadBinary(uploadChannel, options, params).catch((err) => _mockErrorResponse((err && err.message) || String(err), 500));
+  }
+
+  // Streaming: go through window.cogseed.stream + ReadableStream body.
+  if (opts.stream) {
+    if (!_hasCogSeedStream()) {
+      return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc stream bridge unavailable' }));
+    }
+    const payload = { ...query, ...body, ...params };
+    return Promise.resolve(_streamResponse(channel, payload, options.signal));
+  }
+
+  // Non-stream: single invoke. `wrapAsUpdates` re-shapes body → { updates }.
+  const payload = opts.wrapAsUpdates
+    ? { ...params, updates: body, ...query }
+    : { ...query, ...body, ...params };
+
+  if (!_hasCogSeedInvoke()) {
+    return Promise.resolve(_mockJsonResponse({ ok: false, error: 'ipc bridge unavailable' }));
+  }
+
+  return window.cogseed.invoke(channel, payload)
+    .then((result) => {
+      return _mockJsonResponse(result);
+    })
+    .catch((err) => {
+      _monitorIpcError('ipc_invoke', channel, { msg: err && err.message ? err.message : String(err) });
+      return _mockErrorResponse((err && err.message) || String(err), 500);
+    });
+}

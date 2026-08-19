@@ -1,0 +1,29 @@
+{
+  "interface": {
+    "display_name": "客户Context澄清",
+    "short_description": "建立业务成果、利益相关者、现状流程、数据、系统、约束和决策的事实/假设账本。",
+    "default_prompt": "Use $context-clarification and follow its evidence, approval, and output contract."
+  },
+  "policy": {
+    "allow_implicit_invocation": true
+  },
+  "runtime": {
+    "executor": "codex_skill_interpreter",
+    "binding_status": "target_state_not_run",
+    "skill_entrypoint": "../SKILL.md",
+    "schema_ref": "../schemas.json",
+    "permissions": {
+      "direct_resource_access": false,
+      "external_actions": "deny_without_explicit_approval",
+      "formal_asset_write": false,
+      "candidate_write_only": true
+    },
+    "governance": {
+      "level": "L5",
+      "risk_route": "Full",
+      "promotion_ceiling": "staged",
+      "production_release_allowed": false,
+      "independent_review": "pending"
+    }
+  }
+}

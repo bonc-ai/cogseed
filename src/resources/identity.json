@@ -1,0 +1,9 @@
+{
+  "appName": "CogSeed",
+  "appId": "com.cogseed.desktop",
+  "protocolScheme": "cogseed",
+  "dataRootName": ".cogseed",
+  "devDataRootName": ".cogseed-dev",
+  "runtimeVariant": "cogseed",
+  "envPrefix": "COGSEED"
+}

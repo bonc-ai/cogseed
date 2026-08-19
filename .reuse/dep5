@@ -1,0 +1,15 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: CogSeed
+Upstream-Contact: security@bonc.com.cn
+Source: https://github.com/bonc-ai/cogseed
+
+# Bulk license declaration for the whole repository, per the REUSE
+# specification (https://reuse.software). Individual files MAY carry their
+# own SPDX headers (SPDX-FileCopyrightText / SPDX-License-Identifier), which
+# take precedence over this fallback rule.
+#
+# The full license text lives in LICENSES/MIT.txt. Keep the copyright lines
+# in sync with the LICENSE file.
+Files: *
+Copyright: 2026 CogSeed contributors, 2026 BONC
+License: MIT

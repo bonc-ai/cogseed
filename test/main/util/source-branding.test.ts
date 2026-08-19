@@ -1,0 +1,35 @@
+import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+const root = path.join(__dirname, '../../..');
+const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
+
+describe('CogSeed source-run branding', () => {
+  it('prepares one variant-specific macOS bundle after dependency repair', () => {
+    const source = read('scripts/prepare-source-runtime.cjs');
+    expect(source).toContain('CFBundleIdentifier');
+    expect(source).toContain('CFBundleName');
+    expect(source).toContain('CFBundleDisplayName');
+    expect(source).toContain('`${brand.appId}.source.${value}`');
+    expect(source).toContain('`${brand.appName} [${LABELS[value]}]`');
+    expect(source).toContain('CFBundleURLSchemes: schemes');
+    expect(read('run.sh')).toContain('scripts/prepare-source-runtime.cjs');
+    expect(read('run.cmd')).toContain('scripts\\prepare-source-runtime.cjs');
+    expect(fs.existsSync(path.join(root, 'scripts/prepare-source-protocol.cjs'))).toBe(false);
+  });
+
+  it('launches the prepared integration-specific macOS bundle', () => {
+    const source = read('run.sh');
+    expect(source).toContain('CogSeed.app');
+    expect(source).toContain('APP_BUNDLE="$APP_DIR/node_modules/electron/dist/CogSeed.app"');
+  });
+
+  it('uses CogSeed in cross-platform launcher output', () => {
+    const cmd = read('run.cmd');
+    const ensureDeps = read('scripts/ensure-deps.cjs');
+    expect(cmd).toContain('[CogSeed]');
+    expect(cmd).toContain('Starting source runtime');
+    expect(ensureDeps).toContain('CogSeed');
+  });
+});

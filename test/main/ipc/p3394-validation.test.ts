@@ -1,0 +1,11 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs'; import * as os from 'node:os'; import * as path from 'node:path';
+import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
+let invokeHandler: any = null;
+vi.mock('electron', () => ({ ipcMain:{handle:(c:string,f:any)=>{if(c==='cogseed.invoke')invokeHandler=f;},on:vi.fn()}, shell:{openExternal:vi.fn(),showItemInFolder:vi.fn()}, BrowserWindow:{getFocusedWindow:vi.fn(()=>null),getAllWindows:vi.fn(()=>[])}, dialog:{showOpenDialog:vi.fn(async()=>({canceled:true,filePaths:[]}))}, app:{getPath:vi.fn(()=>os.tmpdir()),isPackaged:false} }));
+vi.mock('../../../src/main/logger',()=>({createLogger:()=>({debug:vi.fn(),info:vi.fn(),warn:vi.fn(),error:vi.fn()}),logFromRenderer:vi.fn()}));
+let root=''; const UID='p3394ValidationUser';
+beforeEach(async()=>{root=fs.mkdtempSync(path.join(os.tmpdir(),'p3394-val-ipc-'));process.env.COGSEED_WORKSPACE_ROOT=root;invokeHandler=null;vi.resetModules();vi.doMock('../../../src/main/ipc/local_agents',()=>({invokeHandlers:{}}));const u=await import('../../../src/main/features/users');u.activateUser(UID);(await import('../../../src/main/ipc/index')).register();});
+afterEach(()=>{delete process.env.COGSEED_WORKSPACE_ROOT;fs.rmSync(root,{recursive:true,force:true});vi.resetModules();});
+const call=(channel:string,payload:any={})=>invokeHandler({sender:trustedIpcSender()},{channel,payload});
+describe('IPC P3394 validation',()=>{it('scans an installed skill and reads the persisted result',async()=>{const paths=await import('../../../src/main/paths');const dir=paths.userMarketplaceSkillDir(UID,'skill-one');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'SKILL.md'),'---\nname: skill-one\ndescription: safe\n---\nBody.');const scanned=await call('p3394.validation.scan',{skillId:'skill-one',target:'installed-skill'});expect(scanned.ok).toBe(true);expect(['pass','risk']).toContain(scanned.validation.status);const read=await call('p3394.validation.read',{validationId:scanned.validation.validationId});expect(read.validation).toEqual(scanned.validation);});});

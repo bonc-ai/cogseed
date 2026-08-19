@@ -1,0 +1,791 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+import { makeMinimalPdf } from '../../../fixtures/make-minimal-pdf';
+import { makeMinimalDocx } from '../../../fixtures/make-minimal-docx';
+import { makeMinimalXlsx, makeMinimalPptx } from '../../../fixtures/make-minimal-office';
+
+vi.mock('../../../../src/main/logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+const UID = 'u-ftools-001';
+const CID = 'conv-x';
+const PROJECT_ID = 'projfiletools';
+const PROJECT_CID = 'conv-project-x';
+
+let tmpDir: string;
+let prevWs: string | undefined;
+let prevHome: string | undefined;
+let prevGuard: string | undefined;
+
+beforeEach(async () => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-filetools-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevHome = process.env.HOME;
+  prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  delete process.env.COGSEED_TCC_GUARD_FORCE;
+  vi.resetModules();
+  const users = await import('../../../../src/main/features/users');
+  users.activateUser(UID);
+});
+
+afterEach(() => {
+  vi.doUnmock('../../../../src/main/features/ocr_runtime');
+  vi.restoreAllMocks();
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevHome;
+  if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
+  else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+function attachmentDir(): string {
+  return path.join(tmpDir, UID, 'cloud', 'chat_attachments', CID);
+}
+
+async function buildTools() {
+  const mod = await import('../../../../src/main/model/core-agent/file-tools');
+  const ws = await import('../../../../src/main/features/user_workspace');
+  const wsDir = path.join(tmpDir, 'ws');
+  fs.mkdirSync(wsDir, { recursive: true });
+  const r = ws.setWorkspacePath(UID, wsDir);
+  if (!r.ok) throw new Error(`setWorkspacePath failed: ${r.error}`);
+  const tools = mod.createFileTools({ userId: UID, cid: CID });
+  fs.mkdirSync(attachmentDir(), { recursive: true });
+  return { tools, wsDir, attDir: attachmentDir() };
+}
+
+async function buildProjectTools() {
+  const mod = await import('../../../../src/main/model/core-agent/file-tools');
+  const ws = await import('../../../../src/main/features/user_workspace');
+  const paths = await import('../../../../src/main/paths');
+  const wsDir = path.join(tmpDir, 'project-ws');
+  fs.mkdirSync(wsDir, { recursive: true });
+  const r = ws.setWorkspacePath(UID, wsDir);
+  if (!r.ok) throw new Error(`setWorkspacePath failed: ${r.error}`);
+
+  fs.mkdirSync(path.dirname(paths.projectMetaFile(UID, PROJECT_ID)), { recursive: true });
+  fs.writeFileSync(paths.projectMetaFile(UID, PROJECT_ID), JSON.stringify({
+    project_id: PROJECT_ID,
+    name: 'Project File Tools',
+  }), 'utf8');
+  fs.mkdirSync(path.dirname(paths.projectChatIndexFile(UID, PROJECT_ID)), { recursive: true });
+  fs.writeFileSync(paths.projectChatIndexFile(UID, PROJECT_ID), JSON.stringify([{
+    conversation_id: PROJECT_CID,
+    project_id: PROJECT_ID,
+    title: 'Project conversation',
+    created_at: '2026-07-09T00:00:00.000Z',
+    updated_at: '2026-07-09T00:00:00.000Z',
+  }]), 'utf8');
+
+  const attDir = paths.projectChatAttachmentDir(UID, PROJECT_ID, PROJECT_CID);
+  fs.mkdirSync(attDir, { recursive: true });
+  const tools = mod.createFileTools({ userId: UID, cid: PROJECT_CID, projectId: PROJECT_ID });
+  return { tools, wsDir, attDir };
+}
+
+function getTool(tools: any[], name: string) {
+  const t = tools.find((x) => x.name === name);
+  if (!t) throw new Error(`tool ${name} not found`);
+  return t;
+}
+
+async function run(tool: any, input: Record<string, any>) {
+  const ctx = { workingDir: '.', signal: undefined } as any;
+  return await tool.execute(input, ctx);
+}
+
+describe('file-tools › read_file (text)', () => {
+  it('reads whole file when no range given and reports total_chars + covered + lines', async () => {
+    const { tools, wsDir } = await buildTools();
+    const body = 'A\nB\nC\nD\nE';
+    const p = path.join(wsDir, 'note.md');
+    fs.writeFileSync(p, body);
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain(`total_chars="${body.length}"`);
+    expect(r.content).toContain(`covered="0-${body.length}"`);
+    expect(r.content).toContain('lines="1-5"');
+    // Lines are shown with absolute 1-based number + tab prefixes (G5).
+    expect(r.content).toContain('1\tA\n2\tB\n3\tC\n4\tD\n5\tE');
+  });
+
+  it('numbers lines from the absolute line of a mid-file char slice', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'code.txt');
+    fs.writeFileSync(p, 'L1\nL2\nL3\nL4\nL5');
+    // char 6 is the start of "L3" ("L1\n"=0-2, "L2\n"=3-5).
+    const r = await run(getTool(tools, 'read_file'), { path: p, charStart: 6 });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('lines="3-5"');
+    expect(r.content).toContain('3\tL3\n4\tL4\n5\tL5');
+    // The number+tab is a display prefix, not the raw file bytes.
+    expect(r.content).not.toContain('1\tL3');
+  });
+
+  it('slices by charStart/charEnd', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'note.md');
+    fs.writeFileSync(p, 'abcdefghij');
+    const r = await run(getTool(tools, 'read_file'), { path: p, charStart: 2, charEnd: 7 });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('covered="2-7"');
+    expect(r.content).toContain('cdefg');
+  });
+
+  it('clamps charEnd past total_chars without error', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'tiny.txt');
+    fs.writeFileSync(p, 'xy');
+    const r = await run(getTool(tools, 'read_file'), { path: p, charEnd: 999 });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('covered="0-2"');
+  });
+});
+
+describe('file-tools › read_file (rich documents require stat_file first)', () => {
+  it('returns E_NEED_STAT when pdf has never been stated', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'fresh.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['Alpha', 'Bravo']));
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_NEED_STAT');
+  });
+
+  it('returns E_NEED_STAT when xlsx has never been stated', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'fresh.xlsx');
+    fs.writeFileSync(p, makeMinimalXlsx({ rows: [['Name'], ['Ada']] }));
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_NEED_STAT');
+  });
+
+  it('reads pdf after stat_file', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'deck.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['Alpha', 'Bravo']));
+    const s = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(s.isError).toBeFalsy();
+    const totalMatch = s.content.match(/total_chars="(\d+)"/);
+    expect(totalMatch).not.toBeNull();
+    const total = parseInt(totalMatch![1]);
+
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain(`total_chars="${total}"`);
+    expect(r.content).toContain(`covered="0-${total}"`);
+    expect(r.content).toContain('Alpha');
+    expect(r.content).toContain('Bravo');
+  });
+
+  it('reads docx after stat_file', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'notes.docx');
+    fs.writeFileSync(p, makeMinimalDocx({ heading: 'HEAD', paragraphs: ['Body.'] }));
+    await run(getTool(tools, 'stat_file'), { path: p });
+    const r = await run(getTool(tools, 'read_file'), { path: p, charStart: 0, charEnd: 4 });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('covered="0-4"');
+  });
+
+  it('reads xlsx after stat_file', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'scores.xlsx');
+    fs.writeFileSync(p, makeMinimalXlsx({ sheetName: 'Scores', rows: [['Name', 'Score'], ['Ada', '99']] }));
+    const s = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(s.isError).toBeFalsy();
+    expect(s.content).toContain('kind="spreadsheet"');
+
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('Row 1: Name\tScore');
+    expect(r.content).toContain('Row 2: Ada\t99');
+  });
+
+  it('reads pptx after stat_file', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'slides.pptx');
+    fs.writeFileSync(p, makeMinimalPptx({ slides: [['Roadmap', 'Launch in June']] }));
+    const s = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(s.isError).toBeFalsy();
+    expect(s.content).toContain('kind="presentation"');
+
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('- Roadmap');
+    expect(r.content).toContain('- Launch in June');
+  });
+
+  it('returns E_UNSUPPORTED_FILE for legacy Office formats', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'legacy.xls');
+    fs.writeFileSync(p, Buffer.from('legacy'));
+    const r = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_UNSUPPORTED_FILE');
+  });
+});
+
+describe('file-tools › read_file (image)', () => {
+  it('returns image inline with ToolResult.images[]', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'chart.png');
+    const { Jimp } = await import('jimp' as any);
+    const img: any = new Jimp({ width: 50, height: 50, color: 0x336699FF });
+    fs.writeFileSync(p, await img.getBuffer('image/png'));
+    const r = await run(getTool(tools, 'read_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(Array.isArray(r.images)).toBe(true);
+    expect(r.images.length).toBe(1);
+    expect(r.images[0].mediaType).toBe('image/jpeg');
+  });
+});
+
+describe('file-tools › ocr_file', () => {
+  it('runs local OCR for images and returns OCR markdown', async () => {
+    const mockOcr = vi.fn(async () => ({
+      ok: true,
+      content: '<ocr-file path="/x" kind="image" pages="1" engine="local:rapidocr-onnxruntime" cached="false">\nhello\n</ocr-file>',
+      pages: [1],
+      cached: false,
+      engine: 'local:rapidocr-onnxruntime',
+    }));
+    vi.doMock('../../../../src/main/features/ocr_runtime', () => ({ ocrFile: mockOcr }));
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'scan.png');
+    const { Jimp } = await import('jimp' as any);
+    const img: any = new Jimp({ width: 20, height: 20, color: 0xFFFFFFFF });
+    fs.writeFileSync(p, await img.getBuffer('image/png'));
+
+    const r = await run(getTool(tools, 'ocr_file'), { path: p });
+
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('hello');
+    expect(mockOcr).toHaveBeenCalledWith(expect.objectContaining({
+      userId: UID,
+      absPath: p,
+    }));
+  });
+
+  it('passes PDF page ranges to the local OCR runtime', async () => {
+    const mockOcr = vi.fn(async () => ({
+      ok: true,
+      content: '<ocr-file path="/x" kind="pdf" pages="1,3" engine="local:rapidocr-onnxruntime" cached="false">\npage text\n</ocr-file>',
+      pages: [1, 3],
+      cached: false,
+      engine: 'local:rapidocr-onnxruntime',
+    }));
+    vi.doMock('../../../../src/main/features/ocr_runtime', () => ({ ocrFile: mockOcr }));
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'scan.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['']));
+
+    const r = await run(getTool(tools, 'ocr_file'), { path: p, pages: '1,3' });
+
+    expect(r.isError).toBeFalsy();
+    expect(mockOcr).toHaveBeenCalledWith(expect.objectContaining({ absPath: p, pages: '1,3' }));
+  });
+
+  it('surfaces local OCR runtime errors with process info', async () => {
+    vi.doMock('../../../../src/main/features/ocr_runtime', () => ({
+      ocrFile: vi.fn(async () => ({
+        ok: false,
+        errorCode: 'E_OCR_INSTALL_FAILED',
+        message: 'Local OCR runtime install failed.',
+        processLog: [
+          'Preparing local OCR runtime',
+          'Checking local OCR runtime',
+          'Downloading and installing local OCR packages',
+        ],
+      })),
+    }));
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'scan.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['']));
+
+    const r = await run(getTool(tools, 'ocr_file'), { path: p });
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_OCR_INSTALL_FAILED');
+    expect(r.content).toContain('Local OCR runtime install failed');
+    expect(r.content).toContain('<ocr-process>');
+    expect(r.content).toContain('Downloading and installing local OCR packages');
+  });
+
+  it('rejects unsupported file kinds before invoking OCR runtime', async () => {
+    const mockOcr = vi.fn();
+    vi.doMock('../../../../src/main/features/ocr_runtime', () => ({ ocrFile: mockOcr }));
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'notes.docx');
+    fs.writeFileSync(p, makeMinimalDocx({ paragraphs: ['not visual'] }));
+
+    const r = await run(getTool(tools, 'ocr_file'), { path: p });
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_OCR_UNSUPPORTED_FILE');
+    expect(mockOcr).not.toHaveBeenCalled();
+  });
+});
+
+describe('file-tools › read_file scope guards', () => {
+  it('rejects generic reads from the persisted tool-result root', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const resultRoot = path.join(tmpDir, 'tool-results');
+    fs.mkdirSync(resultRoot, { recursive: true });
+    const stored = path.join(resultRoot, 'web_fetch.0123456789abcdef.txt');
+    fs.writeFileSync(stored, 'large stored result');
+    const tools = mod.createFileTools({
+      userId: UID,
+      readOnlyExtraRoots: [resultRoot],
+      toolResultsRoot: resultRoot,
+    });
+    const result = await run(getTool(tools, 'read_file'), { path: stored });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('E_TOOL_RESULT_REF_REQUIRED');
+    expect(result.content).toContain('tool_result_read_chunk');
+  });
+
+  it('rejects paths outside the scope with E_PATH_OUT_OF_SCOPE', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    perm.setLocalExecMode('workspace_approval');
+    const { tools } = await buildTools();
+    const outside = path.join(tmpDir, '..', 'outside', 'secret.md');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'secret');
+    try {
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('E_PATH_OUT_OF_SCOPE');
+    } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
+  });
+
+  it('allows direct paths outside the workspace in all_files_approval mode', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    perm.setLocalExecMode('all_files_approval');
+    const { tools } = await buildTools();
+    const outside = path.join(tmpDir, '..', 'outside-allowed', 'note.md');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'outside ok');
+    try {
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBeFalsy();
+      expect(r.content).toContain('outside ok');
+    } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
+  });
+
+  it('prompts and blocks sensitive outside paths in all_files_approval mode when denied', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    const bashPerms = await import('../../../../src/main/model/core-agent/bash-permissions');
+    perm.setLocalExecMode('all_files_approval');
+    const { tools } = await buildTools();
+    const outside = path.join(tmpDir, '..', 'outside-sensitive', 'id_rsa');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'SECRET-FILE-TOOLS');
+    let payload: any = null;
+    bashPerms._setBroadcastForTest((_ch: string, info: any) => {
+      payload = info;
+      bashPerms.respond(info.request_id, 'deny');
+    });
+    try {
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('E_SENSITIVE_PATH_DENIED');
+      expect(r.content).not.toContain('SECRET-FILE-TOOLS');
+      expect(payload.operation).toBe('read_file');
+      expect(payload.reasons).toEqual(['sensitive_path']);
+    } finally {
+      bashPerms._setBroadcastForTest(null);
+      bashPerms._resetForTest();
+      fs.rmSync(path.dirname(outside), { recursive: true, force: true });
+    }
+  });
+
+  it('does not prompt for sensitive paths in all_files_auto mode', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    const bashPerms = await import('../../../../src/main/model/core-agent/bash-permissions');
+    perm.setLocalExecMode('all_files_auto');
+    const { tools } = await buildTools();
+    const outside = path.join(tmpDir, '..', 'outside-auto', 'id_rsa');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'AUTO-SECRET');
+    let prompted = false;
+    bashPerms._setBroadcastForTest(() => { prompted = true; });
+    try {
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBeFalsy();
+      expect(r.content).toContain('AUTO-SECRET');
+      expect(prompted).toBe(false);
+    } finally {
+      bashPerms._setBroadcastForTest(null);
+      fs.rmSync(path.dirname(outside), { recursive: true, force: true });
+    }
+  });
+
+  it('reports E_NOT_FOUND for missing files inside scope', async () => {
+    const { tools, wsDir } = await buildTools();
+    const r = await run(getTool(tools, 'read_file'), { path: path.join(wsDir, 'ghost.md') });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_NOT_FOUND');
+  });
+
+  it('allows project-scoped conversation attachments', async () => {
+    const { tools, attDir } = await buildProjectTools();
+    const p = path.join(attDir, 'project-note.md');
+    fs.writeFileSync(p, 'project attachment body');
+
+    const read = await run(getTool(tools, 'read_file'), { path: p });
+    expect(read.isError).toBeFalsy();
+    expect(read.content).toContain('project attachment body');
+
+    const search = await run(getTool(tools, 'search_files'), { query: 'project-note' });
+    expect(search.isError).toBeFalsy();
+    expect(search.content).toContain('project-note.md');
+  });
+
+  it('honours extraRoots — paths under an extra root are allowed', async () => {
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const wsDir = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+
+    const extra = path.join(tmpDir, 'extra-root');
+    fs.mkdirSync(extra, { recursive: true });
+    const f = path.join(extra, 'note.md');
+    fs.writeFileSync(f, 'hi from extra');
+
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const tools = mod.createFileTools({ userId: UID, extraRoots: [extra] });
+    const r = await run(getTool(tools, 'read_file'), { path: f });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('hi from extra');
+  });
+
+  it('blocks read_file from loading a disabled skill SKILL.md', async () => {
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const paths = await import('../../../../src/main/paths');
+    const enabled = await import('../../../../src/main/features/component_enabled');
+    const wsDir = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+
+    const skillRoot = paths.userSkillsDir(UID);
+    const skillPath = path.join(skillRoot, 'disabled-skill', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, '---\nname: Disabled\n---\nsecret workflow');
+    enabled.setSkillEnabled(UID, 'disabled-skill', false);
+
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const tools = mod.createFileTools({ userId: UID, readOnlyExtraRoots: [skillRoot] });
+    const r = await run(getTool(tools, 'read_file'), { path: skillPath });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_SKILL_DISABLED');
+    expect(r.content).not.toContain('secret workflow');
+  });
+
+  it('blocks stat_file from touching files inside a disabled skill', async () => {
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const paths = await import('../../../../src/main/paths');
+    const enabled = await import('../../../../src/main/features/component_enabled');
+    const wsDir = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+
+    const skillRoot = paths.userSkillsDir(UID);
+    const scriptPath = path.join(skillRoot, 'disabled-skill', 'scripts', 'search.py');
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, 'print("secret")\n');
+    enabled.setSkillEnabled(UID, 'disabled-skill', false);
+
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const tools = mod.createFileTools({ userId: UID, readOnlyExtraRoots: [skillRoot] });
+    const r = await run(getTool(tools, 'stat_file'), { path: scriptPath });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_SKILL_DISABLED');
+  });
+});
+
+describe('file-tools › stat_file', () => {
+  it('returns total_chars for text without extra extraction work', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'hello.txt');
+    fs.writeFileSync(p, 'hello');
+    const r = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('kind="text"');
+    expect(r.content).toContain('total_chars="5"');
+  });
+
+  it('extracts pdf and returns total_chars', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'deck.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['One']));
+    const r = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('kind="pdf"');
+    expect(r.content).toMatch(/total_chars="\d+"/);
+  });
+
+  it('extracts xlsx and pptx and returns total_chars', async () => {
+    const { tools, wsDir } = await buildTools();
+    const sheet = path.join(wsDir, 'scores.xlsx');
+    const deck = path.join(wsDir, 'slides.pptx');
+    fs.writeFileSync(sheet, makeMinimalXlsx({ rows: [['Name'], ['Ada']] }));
+    fs.writeFileSync(deck, makeMinimalPptx({ slides: [['Roadmap']] }));
+
+    const s1 = await run(getTool(tools, 'stat_file'), { path: sheet });
+    const s2 = await run(getTool(tools, 'stat_file'), { path: deck });
+
+    expect(s1.isError).toBeFalsy();
+    expect(s1.content).toContain('kind="spreadsheet"');
+    expect(s1.content).toMatch(/total_chars="\d+"/);
+    expect(s2.isError).toBeFalsy();
+    expect(s2.content).toContain('kind="presentation"');
+    expect(s2.content).toMatch(/total_chars="\d+"/);
+  });
+
+  it('returns E_NO_TEXT for image kind', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'chart.png');
+    const { Jimp } = await import('jimp' as any);
+    const img: any = new Jimp({ width: 30, height: 30, color: 0xFF00FFFF });
+    fs.writeFileSync(p, await img.getBuffer('image/png'));
+    const r = await run(getTool(tools, 'stat_file'), { path: p });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_NO_TEXT');
+  });
+
+  it('rejects paths outside scope', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    perm.setLocalExecMode('workspace_approval');
+    const { tools } = await buildTools();
+    const outside = path.join(tmpDir, '..', 'outside2', 'x.md');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 's');
+    try {
+      const r = await run(getTool(tools, 'stat_file'), { path: outside });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('E_PATH_OUT_OF_SCOPE');
+    } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
+  });
+});
+
+describe('file-tools › list_files', () => {
+  it('treats an unmaterialized conversation workspace as an empty directory', async () => {
+    const { tools, wsDir } = await buildTools();
+    const conversationDir = path.join(wsDir, 'new-conversation');
+    expect(fs.existsSync(conversationDir)).toBe(false);
+
+    const r = await getTool(tools, 'list_files').execute(
+      { path: conversationDir },
+      { workingDir: conversationDir, signal: undefined } as any,
+    );
+
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toBe('');
+    expect(fs.existsSync(conversationDir)).toBe(false);
+  });
+});
+
+describe('file-tools › search_files', () => {
+  it('finds by substring across workspace + attachment dir', async () => {
+    const { tools, wsDir, attDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'contract_v2.md'), 'x');
+    fs.writeFileSync(path.join(wsDir, 'unrelated.md'), 'x');
+    fs.writeFileSync(path.join(attDir, 'contract_signed.pdf'), makeMinimalPdf(['p']));
+    const r = await run(getTool(tools, 'search_files'), { query: 'contract' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('contract_v2.md');
+    expect(r.content).toContain('contract_signed.pdf');
+    expect(r.content).not.toContain('unrelated.md');
+    // search_files must NOT report pages= anymore, and must NOT trigger
+    // extract — a never-stated pdf has no total_chars in the hit.
+    expect(r.content).not.toContain('pages=');
+    expect(r.content).not.toMatch(/contract_signed\.pdf.*total_chars=/);
+  });
+
+  it('includes total_chars for files already in cache', async () => {
+    const { tools, wsDir } = await buildTools();
+    const p = path.join(wsDir, 'cached.pdf');
+    fs.writeFileSync(p, makeMinimalPdf(['X']));
+    // Pre-stat so the cache exists before the search runs.
+    await run(getTool(tools, 'stat_file'), { path: p });
+
+    const r = await run(getTool(tools, 'search_files'), { query: 'cached' });
+    expect(r.content).toMatch(/cached\.pdf.*total_chars=\d+/);
+  });
+
+  it('supports glob patterns', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.pdf'), makeMinimalPdf(['x']));
+    fs.writeFileSync(path.join(wsDir, 'b.md'), 'md');
+    const r = await run(getTool(tools, 'search_files'), { query: '*.pdf' });
+    expect(r.content).toContain('a.pdf');
+    expect(r.content).not.toContain('b.md');
+  });
+
+  it('scans extraRoots in addition to workspace + attachment dir', async () => {
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const wsDir = path.join(tmpDir, 'ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+    const extra = path.join(tmpDir, 'sync-conflict-target');
+    fs.mkdirSync(extra, { recursive: true });
+    fs.writeFileSync(path.join(extra, 'MOCK_SYNC_CONFLICT.md'), 'conflict target');
+
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const tools = mod.createFileTools({ userId: UID, extraRoots: [extra] });
+    const r = await run(getTool(tools, 'search_files'), { query: 'MOCK_SYNC_CONFLICT.md' });
+
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('MOCK_SYNC_CONFLICT.md');
+  });
+
+  it.runIf(process.platform === 'darwin')('does not recursively scan a legacy privacy-protected workspace root', async () => {
+    process.env.COGSEED_TCC_GUARD_FORCE = '1';
+    const home = path.join(tmpDir, 'home');
+    const downloads = path.join(home, 'Downloads');
+    fs.mkdirSync(downloads, { recursive: true });
+    fs.writeFileSync(path.join(downloads, 'secret-contract.md'), 'private');
+    process.env.HOME = home;
+    vi.resetModules();
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(UID);
+    const paths = await import('../../../../src/main/paths');
+    fs.mkdirSync(paths.DEFAULT_USER_WORKSPACE, { recursive: true });
+    fs.writeFileSync(path.join(paths.DEFAULT_USER_WORKSPACE, 'public-note.md'), 'public');
+    const cfgFile = paths.userWorkspaceConfigFile(UID);
+    fs.mkdirSync(path.dirname(cfgFile), { recursive: true });
+    fs.writeFileSync(cfgFile, JSON.stringify({
+      selectedPath: downloads,
+      updatedAt: '2026-07-03T00:00:00.000Z',
+      recentPaths: [],
+    }), 'utf8');
+    const ws = await import('../../../../src/main/features/user_workspace');
+    expect(ws.getWorkspacePath(UID)).toBe(paths.DEFAULT_USER_WORKSPACE);
+    fs.mkdirSync(attachmentDir(), { recursive: true });
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const tools = mod.createFileTools({ userId: UID, cid: CID });
+
+    const r = await run(getTool(tools, 'search_files'), { query: '' });
+
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('public-note.md');
+    expect(r.content).not.toContain('secret-contract.md');
+  });
+
+  it('lists results most-recently-modified first', async () => {
+    const { tools, wsDir } = await buildTools();
+    for (const f of ['old.md', 'mid.md', 'new.md']) fs.writeFileSync(path.join(wsDir, f), 'x');
+    const base = 1_700_000_000; // seconds
+    fs.utimesSync(path.join(wsDir, 'old.md'), base, base);
+    fs.utimesSync(path.join(wsDir, 'mid.md'), base + 100, base + 100);
+    fs.utimesSync(path.join(wsDir, 'new.md'), base + 200, base + 200);
+    const r = await run(getTool(tools, 'search_files'), { query: '*.md' });
+    expect(r.isError).toBeFalsy();
+    const iNew = r.content.indexOf('new.md');
+    const iMid = r.content.indexOf('mid.md');
+    const iOld = r.content.indexOf('old.md');
+    expect(iNew).toBeGreaterThanOrEqual(0);
+    expect(iNew).toBeLessThan(iMid);    // newest first
+    expect(iMid).toBeLessThan(iOld);
+  });
+});
+
+describe('file-tools › grep_files', () => {
+  it('matches text files directly on source', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.md'), 'line with banana\nother line');
+    fs.writeFileSync(path.join(wsDir, 'b.md'), 'no match here');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('a.md:1');
+    expect(r.content).not.toContain('b.md');
+  });
+
+  it('extracts pdf/docx on cache-miss then greps', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'clause.pdf'), makeMinimalPdf(['Termination of Agreement']));
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'Termination' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('clause.pdf');
+    expect(r.content).toContain('Termination');
+  });
+
+  it('extracts xlsx/pptx on cache-miss then greps', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'scores.xlsx'), makeMinimalXlsx({ rows: [['Name'], ['Banana KPI']] }));
+    fs.writeFileSync(path.join(wsDir, 'slides.pptx'), makeMinimalPptx({ slides: [['Roadmap Banana']] }));
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'Banana' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('scores.xlsx');
+    expect(r.content).toContain('slides.pptx');
+    expect(r.content).toContain('Banana');
+  });
+
+  it('rejects invalid regex under regex=true', async () => {
+    const { tools } = await buildTools();
+    const r = await run(getTool(tools, 'grep_files'), { pattern: '(', regex: true });
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('E_BAD_INPUT');
+  });
+
+  it('glob without "/" scopes by basename at any depth', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.md'), 'banana');
+    fs.writeFileSync(path.join(wsDir, 'a.txt'), 'banana');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana', glob: '*.md' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('a.md');
+    expect(r.content).not.toContain('a.txt');
+  });
+
+  it('glob with "/" matches the root-relative path', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.mkdirSync(path.join(wsDir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'sub', 'x.md'), 'banana');
+    fs.writeFileSync(path.join(wsDir, 'top.md'), 'banana');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana', glob: 'sub/**' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain(path.join('sub', 'x.md'));
+    expect(r.content).not.toContain('top.md');
+  });
+
+  it('output_mode "files" returns file paths only (no line snippets)', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.md'), 'banana\nbanana again');
+    fs.writeFileSync(path.join(wsDir, 'b.md'), 'banana');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana', output_mode: 'files' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('a.md');
+    expect(r.content).toContain('b.md');
+    expect(r.content).toContain('file(s) with matches');
+    expect(r.content).not.toMatch(/a\.md:\d/);   // no per-line snippet form
+  });
+
+  it('output_mode "count" reports matches per file', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.md'), 'banana\nbanana again\nno');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana', output_mode: 'count' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toMatch(/a\.md: 2/);
+  });
+
+  it('reports no glob match distinctly', async () => {
+    const { tools, wsDir } = await buildTools();
+    fs.writeFileSync(path.join(wsDir, 'a.md'), 'banana');
+    const r = await run(getTool(tools, 'grep_files'), { pattern: 'banana', glob: '*.nope' });
+    expect(r.isError).toBeFalsy();
+    expect(r.content).toContain('No files matched glob');
+  });
+});

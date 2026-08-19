@@ -1,0 +1,41 @@
+skill_spec:
+  skill_id: "skill.cogseed.recruiting.match-matrix"
+  name: "match-matrix"
+  version: "0.2.0-review.3"
+  skill_class: EndUseSkill
+  is_skill_of_skill: false
+  level: L5
+  risk_route: Full
+  promotion_ceiling: staged
+  production_release_allowed: false
+  session_role: sub_skill
+  owns_session: false
+  form: interpreted
+  asset_level: L2
+  self_assessment: level_b_candidate
+  independent_review: pending
+  level_c_status: not_eligible_not_run
+mutation_surface_policy:
+  mutable_surface: [配置键, 评测夹具, 阈值候选, 提示措辞]
+  protected_surface: [形式化规则结构, HITL要求, 审计机制, staged封顶, 生产发布硬锁]
+state_machine:
+  states: [intake, step_1, step_2, step_3, step_4, validate, staged_candidate, blocked]
+  external_execute_state: absent
+  transitions:
+    - {from: intake, to: step_1, when: previous_step_complete}
+    - {from: step_1, to: step_2, when: previous_step_complete}
+    - {from: step_2, to: step_3, when: previous_step_complete}
+    - {from: step_3, to: step_4, when: previous_step_complete}
+    - {from: step_4, to: validate, when: workflow_complete}
+    - {from: validate, to: staged_candidate, when: validation_pass}
+    - {from: validate, to: blocked, when: validation_fail_or_missing_authority}
+nine_elements:
+  trigger_semantics: ../SKILL.md
+  business_context_mapping: ontology-mapping.md
+  executable_workflow: ../SKILL.md
+  tool_resource_binding: ../agents/openai.yaml
+  validation_contract: validation-contract.md
+  eval_replay_regression: ../evals/evals.json
+  failure_attribution: failure-modes.md
+  evolution_hook: kstar-evolution.md
+  governance_boundaries: governance-boundaries.md
