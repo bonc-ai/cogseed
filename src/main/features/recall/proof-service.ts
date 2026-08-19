@@ -77,6 +77,33 @@ async function findValidTransferReceipt(
   }
 }
 
+/**
+ * M-7：本机回执 → 换机回落。
+ *
+ * 回执是**设备级**的（`local/kstar/executions/`，不同步），资产是账号级的。
+ * 换台机器后回执读不到，`findValidTransferReceipt` 恒返回 undefined，于是
+ * 「使用与证明」页为空、成熟度无法复核。这里在本机回执缺失时回落到可同步的
+ * 最小复用证明（`cloud/recall/records/reuse-proofs/`）。
+ *
+ * 两条纪律：
+ *  1. **本机回执优先**。它是权威源，cloud proof 只是回落，不能反过来覆盖它。
+ *  2. **判据必须一致**。`reuseProofProvesTransfer` 与 `receiptProvesTransfer`
+ *     逐条对齐（receiptId 相符 + boundary real + 非 rejected + 命中资产版本），
+ *     否则同一条资产在本机与换机后会得到不同的成熟度结论。
+ */
+async function transferReceiptIsProven(
+  userId: string,
+  receiptExecutionId: string | undefined,
+  receiptId: string | undefined,
+  assetVersions: readonly { assetId: string; version: string }[],
+): Promise<boolean> {
+  if (await findValidTransferReceipt(userId, receiptExecutionId, receiptId, assetVersions)) return true;
+  if (!receiptExecutionId) return false;
+  const { readReuseProof, reuseProofProvesTransfer } = await import('./reuse-proof');
+  const proof = await readReuseProof(userId, receiptExecutionId);
+  return !!proof && reuseProofProvesTransfer(proof, receiptId, assetVersions);
+}
+
 
 export async function listTransferProofs(userId: string): Promise<TransferProofRecord[]> {
   const directory = path.dirname(recallJsonRecordPath(userId, 'transfer-proofs', 'placeholder'));
@@ -134,7 +161,8 @@ async function completeTransferProofRecord(
     // 资产，形成可追溯 Action Plan 或可观察行为，**并生成 Receipt**」。没有回执
     // 就只证明了任务跑完，没证明这条资产被正确带入——不升档。
     // 使用记录照常写：它记的是"这次运行引用过它"，与够不够格升档无关。
-    const validReceipt = await findValidTransferReceipt(userId, proof.receiptExecutionId, proof.receiptId, proof.assetVersions);
+    // M-7：本机回执优先，换机后回落到 cloud 的最小复用证明。
+    const validReceipt = await transferReceiptIsProven(userId, proof.receiptExecutionId, proof.receiptId, proof.assetVersions);
     for (const item of proof.assetVersions) {
       const advanced = validReceipt ? maturityForTransferOutcome(proof.status) : undefined;
       if (advanced) await setAbilityAssetMaturity(userId, item.assetId, advanced);
@@ -183,6 +211,27 @@ export async function completeTransferProofWithReceipt(
     observedTransfer: input.observedTransfer,
     receipt,
   });
+  // M-7：迁移证明成立的这一刻，同时落一条**可同步的最小复用证明**。
+  // 只写复核所必需的字段（见 reuse-proof.ts 的取舍说明）——会话/上下文 id、
+  // reusedRefs 原文、权限模式、允许作用域一律留在本机回执里，不进同步域。
+  // provenAssets 是"这张回执确实证明了哪几条资产的哪一版"的交集结果，
+  // 不是 reusedRefs 原文。
+  {
+    const provenAssets = proof.assetVersions.filter((asset) => (
+      (receipt.reusedRefs || []).some((ref) => abilityAssetReferenceMatches(ref, asset))
+    ));
+    if (provenAssets.length) {
+      const { recordReuseProof } = await import('./reuse-proof');
+      await recordReuseProof(userId, {
+        receiptId: receipt.receiptId,
+        executionId: receiptExecutionId,
+        reusedAt: receipt.completedAt || receipt.createdAt,
+        status: receipt.status,
+        boundary: receipt.boundary,
+        provenAssets: provenAssets.map((asset) => ({ assetId: asset.assetId, version: asset.version })),
+      });
+    }
+  }
   // M-5: 回执闭环。迁移证明以回执为锚点完成后，回执本身从 prepared 落成
   // completed——回执状态与证明链同步，为将来收紧升档判定留好锚点
   // （receiptProvesTransfer 当前只要求 boundary==='real' && 非 rejected，
@@ -204,7 +253,7 @@ export async function completeTransferProofWithReceipt(
 }
 export async function evaluateEffectivenessProof(userId: string, input: { transferProofId: string; outcome: EffectivenessOutcome; observedResult: string; evidenceRefs: unknown[] }): Promise<EffectivenessProofRecord> {
   const raw = await readRecallJsonRecord(userId, 'transfer-proofs', input.transferProofId); if (!raw) throw new Error('transfer proof not found'); const transfer = asTransfer(raw); if (transfer.status !== 'succeeded') throw recallProofError('E_RECALL_TRANSFER_NOT_SUCCEEDED', 'effectiveness proof requires a successful transfer');
-  if (!await findValidTransferReceipt(userId, transfer.receiptExecutionId, transfer.receiptId, transfer.assetVersions)) throw recallProofError('E_RECALL_TRANSFER_RECEIPT_MISSING', 'effectiveness proof requires a verified transfer receipt');
+  if (!await transferReceiptIsProven(userId, transfer.receiptExecutionId, transfer.receiptId, transfer.assetVersions)) throw recallProofError('E_RECALL_TRANSFER_RECEIPT_MISSING', 'effectiveness proof requires a verified transfer receipt');
   if (!['better','no_improvement','worse','insufficient_evidence','invalid','rework'].includes(input.outcome)) throw new Error('invalid effectiveness outcome');
   const refs = normalizeCognitionSourceRefs(input.evidenceRefs);
   // A positive click is useful feedback, but without a traceable comparison it

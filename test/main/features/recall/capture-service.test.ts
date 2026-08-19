@@ -1844,7 +1844,10 @@ describe('Recall conversation capture', () => {
 
   it('moves a missed nightly task to the next window when catch-up is disabled', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-01T10:00:00.000Z'));
+    // 18:00Z: 在任何时区（UTC-12..+14）都落在本地 06:00-08:00，不在 02:00-06:00
+    // 夜间窗口内，否则 10:00Z 在 UTC-7 机器上是本地 03:00，仍在窗口内，
+    // 重排分支不会触发，测试会按时区不同而失败。
+    vi.setSystemTime(new Date('2026-08-01T18:00:00.000Z'));
     const settings = await import('../../../../src/main/features/recall/capture-settings');
     await settings.updateRecallCaptureSettings('capture-user', {
       executionPolicy: 'nightly',

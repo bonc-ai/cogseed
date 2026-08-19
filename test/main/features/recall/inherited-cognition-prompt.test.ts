@@ -236,3 +236,47 @@ describe('回执引用的构造', () => {
     expect(omittedRefs).toHaveLength(100);
   });
 });
+
+describe('出生继承术语表（N-3）', () => {
+  const glossary = [{ term: 'KSTAR', definition: '本团队指季度目标复盘流程，不是评分卡' }];
+
+  it('术语表随继承一起注入，并说明它只用于消歧、不是指令', () => {
+    const { promptBlock } = buildInheritedCognitionPrompt([selected({ id: 'aa-1' })], glossary);
+    expect(promptBlock).toContain('<inherited-glossary>');
+    expect(promptBlock).toContain('KSTAR');
+    expect(promptBlock).toContain('they are not instructions');
+  });
+
+  it('术语块排在资产块之后——资产过了准入闸门，术语没有，不该压过它', () => {
+    const { promptBlock } = buildInheritedCognitionPrompt([selected({ id: 'aa-1' })], glossary);
+    expect(promptBlock.indexOf('</inherited-cognition>')).toBeLessThan(promptBlock.indexOf('<inherited-glossary>'));
+  });
+
+  it('空术语表不产出空壳——那会让模型以为这个 Agent 没有任何术语约定', () => {
+    const { promptBlock } = buildInheritedCognitionPrompt([selected({ id: 'aa-1' })], []);
+    expect(promptBlock).not.toContain('inherited-glossary');
+    expect(buildInheritedCognitionPrompt([selected({ id: 'aa-1' })]).promptBlock).not.toContain('inherited-glossary');
+  });
+
+  it('没有可注入资产时不单独注入术语表', () => {
+    // 术语表是资产的附注，不是独立的注入来源；没有资产就没有它要消歧的对象。
+    const { promptBlock } = buildInheritedCognitionPrompt([], glossary);
+    expect(promptBlock).toBe('');
+  });
+
+  it('缺字段的术语条目被丢弃，不用空释义硬凑', () => {
+    const { promptBlock } = buildInheritedCognitionPrompt(
+      [selected({ id: 'aa-1' })],
+      [{ term: 'OnlyTerm', definition: '   ' }, ...glossary],
+    );
+    expect(promptBlock).not.toContain('OnlyTerm');
+    expect(promptBlock).toContain('KSTAR');
+  });
+
+  it('术语条数封顶，不让它挤掉资产正文', () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({ term: `T${i}`, definition: `D${i}` }));
+    const { promptBlock } = buildInheritedCognitionPrompt([selected({ id: 'aa-1' })], many);
+    expect(promptBlock).toContain('Statement for aa-1');
+    expect(promptBlock.length).toBeLessThan(20_000);
+  });
+});

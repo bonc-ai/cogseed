@@ -236,26 +236,35 @@ describe('confirmed candidate exits into the formal asset version chain', () => 
 });
 
 describe('governance page carries the asset revision entry', () => {
-  function renderGovernance(asset: Record<string, unknown>, editingAssetId = '') {
+  function renderGovernance(asset: Record<string, unknown>, editingAssetId = '', editingAssetRecord: unknown = null) {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
     context.document = {
       getElementById: (id: string) => (id === 'skills-cognition-governance-body' ? host : null),
     };
     vm.runInContext(`Object.assign(_skillsCognitionState, ${JSON.stringify({
-      assets: [asset], selectedAssetId: asset.id, inboxItems: [], editingAssetId,
+      assets: [asset], selectedAssetId: asset.id, inboxItems: [], editingAssetId, editingAssetRecord,
       sources: [], recallCandidates: [], captures: [], recentCaptures: [],
     })})`, context);
     context.renderSkillsCognitionGovernance();
     return host.innerHTML;
   }
 
+  // 治理页列表里的资产是**精简视图**：没有 statement / applicableWhen /
+  // forbiddenWhen。之前用"完整资产"做桩，把编辑器读错数据源这件事整个掩盖了。
   const ASSET = {
     id: 'aa-1', type: 'rule', category: 'rule', title: '架构决策要留可追溯记录',
-    statement: '架构决策要留可追溯记录', scope: 'product', status: 'active',
+    summary: '架构决策要留可追溯记录', scope: 'product', status: 'active',
     maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', version: '2',
-    applicableWhen: ['正式评审时'], forbiddenWhen: ['内部快速对齐'],
     workspaceRefs: [], receiptRefs: [], candidateRefs: [], relationRefs: [],
+  };
+
+  /** 编辑器真正该用的权威记录（recall.assets.read 的形状）。 */
+  const ASSET_RECORD = {
+    id: 'aa-1', type: 'rule', title: '架构决策要留可追溯记录',
+    statement: '架构决策要留可追溯记录，写明取舍', scope: 'product', status: 'active',
+    maturity: 'bud', lifecycleStatus: 'user_confirmed_unverified', version: '2',
+    applicableWhen: ['正式评审时'], forbiddenWhen: ['内部快速对齐'], evidenceRefs: [],
   };
 
   it('shows the edit entry for an asset whose content can still change', () => {
@@ -265,7 +274,7 @@ describe('governance page carries the asset revision entry', () => {
   });
 
   it('edits statement, scope and boundaries and says a new version will be created', () => {
-    const html = renderGovernance(ASSET, 'aa-1');
+    const html = renderGovernance(ASSET, 'aa-1', ASSET_RECORD);
     expect(html).toContain('data-recall-asset-edit-statement');
     expect(html).toContain('data-recall-asset-edit-scope');
     expect(html).toContain('data-recall-asset-edit-applicable');
@@ -274,6 +283,19 @@ describe('governance page carries the asset revision entry', () => {
     expect(html).toContain('data-recall-asset-edit-save="aa-1"');
     // 用户点保存前就知道会发生什么：当前 v2 保留，新的是 v3。
     expect(html).toContain('保存后会生成 v3，当前 v2 仍保留在版本历史里。');
+    // 表单必须带出资产真实内容与边界；空表单一保存就会把边界写没。
+    expect(html).toContain('架构决策要留可追溯记录，写明取舍');
+    expect(html).toContain('正式评审时');
+    expect(html).toContain('内部快速对齐');
+  });
+
+  it('refuses to open a blank form when the authoritative record is missing', () => {
+    // 只有精简视图、没有权威记录时不能渲染可编辑表单——那会让用户把
+    // applicableWhen / forbiddenWhen 保存成空数组，抹掉资产已有边界。
+    const html = renderGovernance(ASSET, 'aa-1', null);
+    expect(html).not.toContain('data-recall-asset-edit-save');
+    expect(html).not.toContain('data-recall-asset-edit-applicable');
+    expect(html).toContain('没能读到这条资产的完整内容');
   });
 
   it('offers no content editing for a revoked asset', () => {
@@ -347,5 +369,82 @@ describe('asset revision binding actually reads the edit fields', () => {
     expect(state.assetHistoryById['aa-1']).toBeUndefined();
     expect(refreshes).toBe(1);
     expect(button.disabled).toBe(false);
+  });
+});
+
+describe('candidate confirm never wipes fields the page did not render', () => {
+  /**
+   * 候选详情页没有「适用/禁止范围」输入框，早先无条件读取会把它们提交成空
+   * 数组——一次确认就抹掉候选原有边界，晋升出来的规则也就没了边界。
+   */
+  it('keeps applicableWhen / forbiddenWhen when those inputs are absent', async () => {
+    let clickHandler: ((event: any) => Promise<void>) | undefined;
+    const calls: Array<[string, any]> = [];
+    const panel: any = {
+      dataset: {},
+      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
+        if (type === 'click') clickHandler = handler;
+      },
+    };
+    // 详情页的卡片：只有 judgment / scope / summary / type / evidence，没有边界字段。
+    const fields: Record<string, { value: string }> = {
+      '[data-recall-edit-judgment]': { value: '改过的判断' },
+      '[data-recall-edit-scope]': { value: '收窄后的范围' },
+      '[data-recall-edit-summary]': { value: '摘要' },
+      '[data-recall-edit-type]': { value: 'rule' },
+      '[data-recall-edit-evidence]': { value: 'conversation:conv-1' },
+    };
+    const cardEl: any = { querySelector: (sel: string) => fields[sel] || null };
+    const button: any = {
+      dataset: { recallCandidateAction: 'save-and-promote', recallCandidateId: 'cand-1' },
+      disabled: false,
+      parentElement: { closest: () => cardEl },
+    };
+    const target = {
+      closest: (selector: string) => (selector === '[data-recall-candidate-action]' ? button : null),
+    };
+    const state: any = {
+      recallCandidates: [{
+        id: 'cand-1', status: 'pending_review', judgment: '原判断', value: '原 value',
+        suggestedAction: 'create', risk: 'low',
+        applicableWhen: ['正式评审时', '跨团队接口变更时'],
+        forbiddenWhen: ['内部快速对齐'],
+        sourceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+        evidenceRefs: [{ kind: 'conversation', id: 'conv-1' }],
+      }],
+    };
+    const context: any = {
+      document: { getElementById: (id: string) => (id === 'panel-recall' ? panel : null), querySelectorAll: () => [] },
+      window: {
+        addEventListener() {},
+        cogseed: { invoke: async (channel: string, payload: unknown) => { calls.push([channel, payload]); return { ok: true, candidate: {}, asset: { id: 'aa-1' } }; } },
+      },
+      _skillsCognitionState: state,
+      _cognitionText: (_key: string, fallback: string) => fallback,
+      _cognitionNotifyDone() {},
+      renderSkillsCognitionCandidates() {},
+      renderSkillsCognitionCandidateDetail() {},
+      renderSkillsCognitionCaptures() {},
+      renderSkillsCognitionInbox() {},
+      renderSkillsCognitionAssets() {},
+      loadSkillsCognitionSnapshot: async () => {},
+      initSkillsCognitionConsole() {},
+      switchSkillsCognitionPage() {},
+      uiAlert: async (m: string) => { (context.__alerts ||= []).push(String(m)); },
+      setTimeout,
+    };
+    vm.createContext(context);
+    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
+
+    await clickHandler!({ target });
+
+    const update = calls.find(([channel]) => channel === 'recall.candidates.update');
+    expect(update).toBeTruthy();
+    // 页面没渲染的字段必须原样保留，不能变成空数组。
+    expect(update![1].applicableWhen).toEqual(['正式评审时', '跨团队接口变更时']);
+    expect(update![1].forbiddenWhen).toEqual(['内部快速对齐']);
+    // 页面渲染过的字段照常提交用户的修改。
+    expect(update![1].suggestedScope).toBe('收窄后的范围');
+    expect(update![1].judgment).toBe('改过的判断');
   });
 });

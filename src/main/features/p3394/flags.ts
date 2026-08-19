@@ -1,47 +1,35 @@
 /**
  * P3394 Feature Flags — 渐进上线开关（架构文档 §13）。
  *
- * 用户偏好文件（config.UserPreferences.p3394_flags）持久化，主进程与
- * 渲染层双读同一来源；flag 关闭时 UI 入口不渲染（不展示空壳）。
- * 默认值遵循"保底 on、完整目标/条件增强 off"的渐进上线纪律。
+ * 用户偏好文件（config.UserPreferences.p3394_flags）持久化。
+ *
+ * ## N-14：只剩一个开关，其余 9 个已删除
+ *
+ * 原来这里有 10 个开关，只有 `skilllifecycle` 有读取点。**删掉而不是接上**，
+ * 理由是它们描述的功能已经**无条件上线并有测试覆盖**：
+ *
+ *   - `snapshot`（任务接续快照）→ `recall.continuation.list/read` 已开通并渲染
+ *   - `nightly`（本地夜间整理）→ capture-service 的夜间调度已在跑
+ *   - `rolecomposition` / `relationship` / `realtime` / `gateb` / `blueprint` /
+ *     `federation` / `community` → 无实现，也无正式产品规划在推
+ *
+ * 这些开关的默认值全是 `false`。把它们接到已上线的功能上，等于**默认关掉正在
+ * 工作的能力**——那不是"补上遗漏的接线"，是制造回归。
+ *
+ * 存量偏好里的旧字段会被 `readP3394Flags` 自然忽略（只读已知键），不需要迁移。
+ * 要再加开关，必须同时给出读取点，否则不要加。
  */
 
 import { readPreferences, writePreferences } from '../config';
 
 export interface P3394Flags {
-  /** Skill 生命周期四分支建议（保底最小分支）。 */
+  /** Skill 生命周期四分支建议（保底最小分支）。唯一消费者：
+   *  `features/skills/skill-lifecycle.ts::recordSkillLifecycle`。 */
   skilllifecycle: boolean;
-  /** 主导/辅助角色组合（Sprint 3/4）。 */
-  rolecomposition: boolean;
-  /** 任务接续快照（Sprint 3/4；D-1 决策项）。 */
-  snapshot: boolean;
-  /** 关系断言最小谓词（Sprint 3/4）。 */
-  relationship: boolean;
-  /** 本地夜间整理（条件增强）。 */
-  nightly: boolean;
-  /** 实时发现（条件增强）。 */
-  realtime: boolean;
-  /** 空间蓝图安装（Later）。 */
-  blueprint: boolean;
-  /** 跨空间联邦（Later）。 */
-  federation: boolean;
-  /** 社区（SCR-06 隐藏，Later）。 */
-  community: boolean;
-  /** KSTAR Gate B 隔离复用验证（Sprint 3 完整目标）。 */
-  gateb: boolean;
 }
 
 const DEFAULTS: P3394Flags = {
   skilllifecycle: true,
-  rolecomposition: false,
-  snapshot: false,
-  relationship: false,
-  nightly: false,
-  realtime: false,
-  blueprint: false,
-  federation: false,
-  community: false,
-  gateb: false,
 };
 
 const FLAG_KEYS = Object.keys(DEFAULTS) as (keyof P3394Flags)[];

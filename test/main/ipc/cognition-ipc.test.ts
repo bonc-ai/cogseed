@@ -130,6 +130,18 @@ describe('ipc cognition channels', () => {
     expect((created.asset as { id: string }).id).toBe('cog_new');
   });
 
+  it('资产列表的类型过滤收四类正式资产，不收上一代分类（N-6）', async () => {
+    // 曾经这里收的是 skill/knowledge/ontology/evaluation，与适配器实际过滤的
+    // personal/rule/template/skill_method **完全不相交**：传合法类型抛错、
+    // 传能过校验的类型恒返回空列表。渲染层当时不传该参数，所以一直潜伏。
+    for (const type of ['personal', 'rule', 'template', 'skill_method']) {
+      expect((await call('cognition.assets.list', { type })).ok).toBe(true);
+    }
+    for (const stale of ['skill', 'knowledge', 'ontology', 'evaluation']) {
+      expect((await call('cognition.assets.list', { type: stale })).ok).toBe(false);
+    }
+  });
+
   it('分页摘要校验边界并保留资产列表 channel', async () => {
     const result = await call('cognition.assets.page', { page: '2', pageSize: '20' });
     expect(result.ok).toBe(true);

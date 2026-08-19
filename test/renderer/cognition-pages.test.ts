@@ -18,7 +18,9 @@ const pages = require('../../src/renderer/modules/cognition/pages.js') as {
     summary: string;
     evidence?: string;
     sourceLabel: string;
+    suggestedType?: string;
     conversationId: string;
+    messageId?: string;
     error?: string;
   }) => string;
   escapeHtml: (value: string) => string;
@@ -58,6 +60,29 @@ describe('cognition pages', () => {
     expect(ready).toContain('模型生成方法');
     expect(ready).toContain('模型生成证据');
     expect(ready).toContain('data-cognition-capture-submit');
+  });
+
+  it('四类分类是必填项，模型预判只作默认值', () => {
+    // 气泡沉淀产出的是 recall 候选，saveRecallCandidate 会 requireAssetType，
+    // 所以分类必须在面板上收齐——不能靠后端兜底猜一个。
+    const withGuess = pages.renderCognitionCapture({
+      state: 'ready', title: 't', summary: 's', evidence: 'e',
+      sourceLabel: '当前会话', suggestedType: 'rule',
+      conversationId: 'conv_1', messageId: 'msg_1',
+    });
+    expect(withGuess).toContain('data-cognition-capture-type');
+    expect(withGuess).toContain('<option value="rule" selected>');
+    // 锚点消息 id 必须带进表单：evidenceRefs 要靠它，而不是靠用户手填的来源文本。
+    expect(withGuess).toContain('data-cognition-capture-message value="msg_1"');
+
+    // 模型给不出合法四类时留空占位，强制用户自己选,不替他猜一个默认分类。
+    const noGuess = pages.renderCognitionCapture({
+      state: 'ready', title: 't', summary: 's', evidence: 'e',
+      sourceLabel: '当前会话', suggestedType: 'not_a_type',
+      conversationId: 'conv_1', messageId: 'msg_1',
+    });
+    expect(noGuess).toContain('<option value="" selected>');
+    expect(noGuess).not.toContain('<option value="skill_method" selected>');
   });
 
   it('摘要列表可渲染成长树，但完整详情未加载前不冒充零证据', () => {
