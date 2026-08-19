@@ -1,0 +1,23 @@
+{
+  "evaluation_refs": [
+    "EVAL-DISCOVER-001",
+    "EVAL-DISCOVER-002",
+    "EVAL-DISCOVER-003",
+    "EVAL-DISCOVER-004",
+    "EVAL-DISCOVER-005",
+    "EVAL-DISCOVER-006",
+    "EVAL-DISCOVER-007",
+    "EVAL-DISCOVER-008",
+    "EVAL-DISCOVER-009",
+    "EVAL-DISCOVER-010"
+  ],
+  "id": "EVAL-SET-DISCOVER-001",
+  "negative_refs": [
+    "EVAL-DISCOVER-007",
+    "EVAL-DISCOVER-008",
+    "EVAL-DISCOVER-009",
+    "EVAL-DISCOVER-010"
+  ],
+  "schema_version": "1.0",
+  "source_type": "synthetic"
+}

@@ -1,0 +1,291 @@
+{
+  "name": "cogseed",
+  "version": "0.0.5",
+  "private": true,
+  "description": "CogSeed desktop — personal cognition asset workspace",
+  "main": "bootstrap.cjs",
+  "type": "commonjs",
+  "packageManager": "npm@11.11.0",
+  "imports": {
+    "#core-agent": "./src/core-agent/src/index.ts"
+  },
+  "scripts": {
+    "prestart": "node scripts/ensure-dev-dependencies.cjs",
+    "start": "electron .",
+    "prestart:electron": "node scripts/ensure-dev-dependencies.cjs",
+    "start:electron": "electron .",
+    "stop": "pkill -9 -f \"$PWD/node_modules/electron/dist\" || true",
+    "smoke": "tsx src/main/smoke.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "readme:check": "node scripts/check-readme-links.mjs",
+    "test": "npm run test:js && npm run test:resources",
+    "test:js": "node scripts/run-tests.mjs run",
+    "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test -q",
+    "test:coverage": "node scripts/run-tests.mjs run --coverage",
+    "test:watch": "node scripts/run-tests.mjs",
+    "test:local-agents:live": "tsx scripts/test-local-agents-live.ts",
+    "test:local-agents:prepare": "tsx scripts/test-local-agents-live.ts --install-only",
+    "test:platform-native": "node scripts/run-platform-native-tests.mjs",
+    "runtime:ensure": "node bin/ensure-runtime.cjs --root resources/runtime",
+    "officecli:fetch": "node scripts/fetch-officecli.cjs",
+    "vc:fetch": "node scripts/fetch-win-vc-runtime.cjs --platform win32 --arch x64",
+    "runtime:prepare:dev": "node scripts/ensure-dev-dependencies.cjs",
+    "builtin:manifest": "node scripts/update-builtin-manifest.cjs",
+    "builtin:manifest:check": "node scripts/update-builtin-manifest.cjs --check",
+    "reuse:check": "node scripts/reuse-check.cjs",
+    "sbom:generate": "npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --output-file sbom.cdx.json",
+    "sbom:check": "node scripts/sbom-check.cjs",
+    "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
+    "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "prepack": "node scripts/ensure-dev-dependencies.cjs",
+    "test:resources:setup": "node scripts/setup-python-test-env.mjs",
+    "audit:workspace": "node scripts/audit-local-workspace.mjs",
+    "diagnose:agents": "node scripts/diagnose-local-agents.mjs",
+    "package:dev:mac": "node scripts/package-dev-mac.cjs",
+    "verify:package:dev:mac": "node scripts/verify-packaged-dev.cjs",
+    "audit:branch": "node scripts/audit-branch-diff.mjs",
+    "p3394:doctor": "tsx scripts/p3394-doctor.ts",
+    "p3394:demo": "tsx scripts/p3394-demo.ts",
+    "p3394:hermes-server": "tsx scripts/p3394-hermes-server.ts",
+    "p3394:call": "tsx scripts/p3394-call.ts",
+    "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "@eslint/js": "^10.0.1",
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^25.6.0",
+    "@vitest/coverage-v8": "^4.1.5",
+    "7zip-bin": "^5.2.0",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3",
+    "eslint": "^10.8.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.5"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.9",
+    "@larksuiteoapi/node-sdk": "^1.72.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@wecom/aibot-node-sdk": "1.0.7",
+    "adm-zip": "^0.6.0",
+    "async-mutex": "^0.5.0",
+    "better-sqlite3": "^12.10.0",
+    "electron-log": "^5.4.3",
+    "fastembed": "^2.1.0",
+    "jimp": "^1.6.1",
+    "mammoth": "^1.12.0",
+    "node-pty": "^1.0.0",
+    "pdfjs-dist": "^6.2.108",
+    "socks-proxy-agent": "^8.0.5",
+    "sqlite-vec": "^0.1.9",
+    "tar": "7.5.20",
+    "tsx": "^4.21.0",
+    "undici": "^7.28.0",
+    "ws": "^8.21.3",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.0"
+  },
+  "overrides": {
+    "tar": "7.5.20"
+  },
+  "build": {
+    "appId": "com.cogseed.desktop",
+    "productName": "CogSeed",
+    "protocols": [
+      {
+        "name": "CogSeed Connector Callback",
+        "schemes": [
+          "cogseed"
+        ],
+        "role": "Viewer"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "bootstrap.cjs",
+      "bin/**/*",
+      "p3394-gateway/**/*",
+      "!bin/builtin-resource-gate.cjs",
+      "!bin/ensure-runtime.cjs",
+      "!bin/native-package-gate.cjs",
+      "!bin/packaged-entrypoint-gate.cjs",
+      "!bin/packaged-resource-gate.cjs",
+      "!bin/runtime-gate.cjs",
+      "src/main/**/*.{cjs,js,ts,mjs,md,json}",
+      "src/main/native/build/*.node",
+      "src/renderer/**/*",
+      "src/resources/brand.json",
+      "src/resources/identity.json",
+      "src/resources/icons/**/*",
+      "tsconfig.json",
+      "node_modules/tsx/**/*",
+      "node_modules/get-tsconfig/**/*",
+      "node_modules/resolve-pkg-maps/**/*",
+      "node_modules/esbuild/**/*",
+      "node_modules/@esbuild/**/*",
+      "node_modules/tar/**/*",
+      "node_modules/@isaacs/fs-minipass/**/*",
+      "node_modules/chownr/**/*",
+      "node_modules/minipass/**/*",
+      "node_modules/minizlib/**/*",
+      "node_modules/yallist/**/*",
+      "src/core-agent/package.json",
+      "src/core-agent/src/**/*.ts",
+      "!**/*.{py,pyc}",
+      "!**/__pycache__",
+      "!**/.DS_Store",
+      "!src/core-agent/test/**",
+      "!src/main/features/*_dev.ts",
+      "!src/main/ipc/dev_handlers.ts",
+      ".build/build-info.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "bin/**/*",
+      "p3394-gateway/**/*",
+      "src/main/native/build/*.node",
+      "node_modules/tsx/**/*",
+      "node_modules/get-tsconfig/**/*",
+      "node_modules/resolve-pkg-maps/**/*",
+      "node_modules/esbuild/**/*",
+      "node_modules/@esbuild/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/node-pty/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*",
+      "node_modules/sqlite-vec*/**/*",
+      "node_modules/fastembed/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/embedding-model",
+        "to": "embedding-model",
+        "filter": [
+          "**/*",
+          "!*.tar.gz"
+        ]
+      },
+      {
+        "from": "resources/runtime",
+        "to": "runtime",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/builtin",
+        "to": "builtin",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/officecli",
+        "to": "officecli",
+        "filter": [
+          "**/*",
+          "!*.part"
+        ]
+      },
+      {
+        "from": "resources/guardrail",
+        "to": "guardrail",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/mac-locales",
+        "to": ".",
+        "filter": [
+          "en.lproj/InfoPlist.strings",
+          "ja.lproj/InfoPlist.strings",
+          "zh-Hans.lproj/InfoPlist.strings"
+        ]
+      }
+    ],
+    "beforePack": "scripts/ensure-runtime-before-pack.cjs",
+    "afterPack": "scripts/codesign-adhoc.cjs",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "entitlements": "product/signing/entitlements.mac.plist",
+      "entitlementsInherit": "product/signing/entitlements.mac.inherit.plist",
+      "notarize": false,
+      "forceCodeSigning": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "src/resources/icons/icon.icns",
+      "extendInfo": {}
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "src/resources/icons/icon.ico",
+      "extraFiles": [
+        {
+          "from": "resources/runtime/vc/win32-x64",
+          "to": ".",
+          "filter": [
+            "*.dll"
+          ]
+        }
+      ],
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://ts.ssl.com"
+      }
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "artifactName": "CogSeed-${version}-${os}-${arch}.${ext}"
+  },
+  "license": "MIT",
+  "cogseedSourceRuntimeVariant": "cogseed",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bonc-ai/cogseed.git"
+  },
+  "homepage": "https://github.com/bonc-ai/cogseed",
+  "bugs": {
+    "url": "https://github.com/bonc-ai/cogseed/issues"
+  },
+  "author": {
+    "name": "BONC 东方国信",
+    "email": "security@bonc.com.cn",
+    "url": "https://www.bonc.com.cn"
+  }
+}

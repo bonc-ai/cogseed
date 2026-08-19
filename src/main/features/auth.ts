@@ -1,0 +1,2854 @@
+/**
+ * Auth — LLM provider credentials + ordered (provider, model, credential)
+ * priority list.
+ *
+ * Data model (v3)
+ * ───────────────
+ * Two layers of storage, both under `data/config/`:
+ *
+ *   auth-profiles.json   ← credentials + priority list:
+ *     {
+ *       version: 4,
+ *       profiles: { "<provider>:<label>": { type, ...credential, ...meta } },
+ *       entries:  [ { entryId, provider, model, profileId, lastUsed, createdAt } ],
+ *       searchProfiles: [ { id, provider, apiKey, label, createdAt, extras? } ],   // v4+
+ *       imageProfiles:  [ { id, provider, apiKey, label, createdAt } ],             // v4+
+ *     }
+ *     The file body is encrypted through `util/local-secret-store`: Hosted CogSeed writes
+ *     `ORKLSEC1:`, while the open-source build falls back to the open backend. The read path accepts
+ *     the previous whole-file `crypto-vault` payload and plaintext JSON as one-shot migration
+ *     inputs, then rewrites with the preferred backend.
+ *
+ * Forward/backward compat:
+ *   - v3 readers see v4 files: `searchProfiles` / `imageProfiles` are
+ *     unknown fields and ignored harmlessly.
+ *   - v4 readers see v3 files: missing fields default to `[]`.
+ *   No destructive migration needed.
+ *
+ * Entries list = user-controlled priority order.
+ *   - First entry is the default model for chat.
+ *   - Fallback order follows display order (drag to reorder).
+ *   - Multiple entries with the same (provider, model) form an implicit
+ *     rotation pool: when picking, pick the oldest-used one in that group
+ *     so requests spread across API keys.
+ *
+ * Pick algorithm (pickChatEntry / pickChatEntryGroup)
+ *   1. Walk entries top-to-bottom.
+ *   2. Group consecutive entries by (provider, model): the first group hit
+ *      is the "primary" model; entries in that group round-robin by
+ *      lastUsed (oldest picked first).
+ *   3. For each candidate, check credential is usable:
+ *        - api_key:  key is present, profile not in cooldown
+ *        - oauth:    access token not expired, OR refresh succeeds
+ *      If unusable, try the next candidate in the group, then the next
+ *      group.
+ *   4. Bump lastUsed on the chosen entry.
+ *
+ * Cooldown (`model/core-agent/profile-cooldown.ts`)
+ *   A profile that fails with a key-specific error (401 / 403 / 429 / 402;
+ *   see `model/core-agent/auth-error.ts::classifyKeyFailure`) is parked in
+ *   an in-memory cooldown map for 10 minutes. `pickChatEntry` /
+ *   `pickChatEntryGroup` skip cooled-down profiles; `addApiKey` and
+ *   successful `testConnection` clear the cooldown so user intervention
+ *   always wins over auto-cooldown.
+ *
+ * OAuth flow (startOAuth / pollOAuthFlow / submitOAuthInput / cancel)
+ *   unchanged from v2; see below.
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { shell } from 'electron';
+
+import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
+import { safeId } from '../storage';
+import * as localSecrets from '../util/local-secret-store';
+import { safeExternalUserActionUrl } from '../util/window-security';
+import { getActiveUserId } from './users';
+import {
+  CATALOG,
+  FEATURED_API_PROVIDERS,
+  OAUTH_PROVIDERS,
+  OAUTH_ALIAS_FOR,
+  VISIBLE_PROVIDERS,
+  EXTERNAL_API_PROVIDERS,
+  isVisibleProvider,
+  curatedModelsFor,
+  resolveConfiguredPiModel,
+  pickLatestGenerations,
+  providerLabel,
+  providerDocsUrl,
+  providerSubscriptionNote,
+  providerManualModel,
+  providerRecommended,
+  sortProviderIds,
+} from '../model/provider_catalog';
+import {
+  assertModelProviderAllowed,
+  isModelProviderAllowed,
+} from '../model/provider_policy';
+import { isCooledDown, getCooldown, clearCooldown } from '../model/core-agent/profile-cooldown';
+import type { KeyFailureKind } from '../model/core-agent/auth-error';
+import { createLogger } from '../logger';
+import { t } from '../i18n';
+
+const log = createLogger('auth');
+
+// ── core-agent lazy loader ───────────────────────────────────────────────
+type CoreAgentModule = typeof import('#core-agent');
+let _caPromise: Promise<CoreAgentModule> | null = null;
+function ca(): Promise<CoreAgentModule> {
+  if (!_caPromise) {
+    _caPromise = (import('#core-agent') as Promise<CoreAgentModule>).catch((e) => {
+      _caPromise = null; // allow retry on next call
+      throw e;
+    });
+  }
+  return _caPromise;
+}
+
+/** Lazy loader for pi-ai's OAuth providers (anthropic, openai-codex, etc.).
+ *  On first load we also register our custom providers (MiniMax Portal).
+ *  Idempotent — pi-ai's registry is id-keyed. */
+type PiOauthModule = typeof import('@earendil-works/pi-ai/oauth');
+let _oauthPromise: Promise<PiOauthModule> | null = null;
+function piOauth(): Promise<PiOauthModule> {
+  if (!_oauthPromise) {
+    _oauthPromise = (async () => {
+      const mod = await import('@earendil-works/pi-ai/oauth');
+      try {
+        const { registerMinimaxOAuthProviders } = await import('./oauth-minimax');
+        await registerMinimaxOAuthProviders();
+      } catch (err) {
+        // Don't swallow the failure: stash the message into both the log
+        // and the cached module object so subsequent listProviders /
+        // startOAuth calls can surface a clear "MiniMax registration
+        // failed" hint, instead of the user only finding out via the
+        // generic "does not support OAuth" error after clicking OAuth.
+        const msg = (err as Error)?.message || String(err);
+        log.warn('failed to register custom OAuth providers:', msg);
+        _minimaxRegisterError = msg;
+      }
+      return mod;
+    })();
+  }
+  return _oauthPromise;
+}
+
+/** Last MiniMax registration failure reason; used by startOAuth to
+ *  surface a fallback hint to the user. */
+let _minimaxRegisterError: string | null = null;
+
+/**
+ * Prime the dynamic-import caches (`ca()` + `piOauth()`) on app boot so the
+ * first open of the settings page doesn't eat the 1-2s cold-start latency
+ * of loading core-agent + pi-ai's OAuth module. Idempotent; safe to call
+ * multiple times. Errors are swallowed — a failure here is recoverable
+ * (listProviders has its own fallback path).
+ */
+export async function warmup(): Promise<void> {
+  try { await Promise.all([ca(), piOauth()]); }
+  catch (err) { log.debug('warmup skipped:', (err as Error).message); }
+}
+
+// ── File paths ───────────────────────────────────────────────────────────
+function assertAuthUserId(userId: string): string {
+  if (!safeId(userId)) throw new Error('invalid user id');
+  return userId;
+}
+
+function profilesFile(userId = getActiveUserId()): string { return userAuthProfilesFile(assertAuthUserId(userId)); }
+function authDir(userId = getActiveUserId()): string { return userLocalConfigDir(assertAuthUserId(userId)); }
+
+// Legacy compat for tests/callers that expect this shape.
+export const FEATURED_PROVIDERS: readonly string[] =
+  FEATURED_API_PROVIDERS.map((p) => p.id);
+
+// ── Key masking ──────────────────────────────────────────────────────────
+export function maskKey(key: unknown): string {
+  if (!key || typeof key !== 'string') return '';
+  const k = key.trim();
+  if (k.length <= 8) return '*'.repeat(k.length);
+  return `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
+
+// ── Types ────────────────────────────────────────────────────────────────
+
+interface ApiKeyProfile {
+  type: 'api_key';
+  provider: string;
+  label: string;
+  key: string;
+  /** Optional custom endpoint for openai-compatible profiles. */
+  baseUrl?: string;
+  /** Per-profile output-token cap for OpenAI-compatible chat endpoints. */
+  maxOutputTokens?: number;
+  email?: string;
+  createdAt: number;
+  lastUsed: number;
+}
+interface OAuthProfile {
+  type: 'oauth';
+  provider: string;
+  label: string;
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+  createdAt: number;
+  lastUsed: number;
+  [extra: string]: unknown;
+}
+type StoredProfile = ApiKeyProfile | OAuthProfile;
+
+export interface CustomProviderEntry {
+  entryId: string;
+  provider: string;
+  model: string;
+  profileId: string;
+  lastUsed: number;
+  createdAt: number;
+}
+
+type Entry = CustomProviderEntry;
+
+/**
+ * Search-tool API key (one row per stored credential, in priority order).
+ * Independent from chat `entries` — search providers are addressed by
+ * `provider` only (no model concept). The first usable row wins; rest are
+ * fallbacks if the primary fails.
+ */
+export interface SearchProfile {
+  id: string;
+  provider: string;          // tavily / serper / brave-search / baidu-ai-search / ...
+  apiKey: string;
+  label: string;
+  createdAt: number;
+  /** Provider-specific extras (e.g. baidu requires app id alongside key). */
+  extras?: Record<string, string>;
+}
+
+/**
+ * Image-generation API key. Same shape as SearchProfile but lives in its
+ * own array — a chat key for openai is NOT auto-reused for images and vice
+ * versa, since users may want to bill them separately.
+ */
+export interface ImageProfile {
+  id: string;
+  provider: string;          // openai / google / doubao / ...
+  apiKey: string;
+  label: string;
+  createdAt: number;
+}
+
+/** BYO text-to-speech provider. Open-source builds only store user-owned keys:
+ *  - OpenAI-compatible `/audio/speech`: `baseUrl`, `model`, bearer `apiKey`.
+ *  - `doubao`: V3 X-Api-Key plus optional `resourceId` and speaker `voice`.
+ *  `voice`/`format` are per-request defaults for downstream speech tools. */
+export interface TtsProfile {
+  id: string;
+  provider: string;          // openai | doubao | elevenlabs | custom
+  baseUrl: string;           // e.g. https://api.openai.com/v1
+  model: string;             // OpenAI-compatible TTS model id ('' for doubao)
+  apiKey: string;            // bearer key, or doubao V3 X-Api-Key
+  resourceId?: string;       // doubao only: optional X-Api-Resource-Id override
+  voice?: string;            // default voice id / voice_type
+  format?: string;           // default response_format / encoding
+  label: string;
+  createdAt: number;
+}
+
+export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 131072;
+export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 8192;
+export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
+export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
+export const MAX_CUSTOM_PROVIDER_MODELS = 100;
+export const MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH = 200;
+
+export interface CustomProviderModel {
+  id: string;
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface CustomProvider {
+  id: string;
+  name: string;
+  protocol: 'anthropic' | 'openai' | 'openai-responses' | 'gemini';
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+  notes?: string;
+  websiteUrl?: string;
+  needsKey?: boolean;
+  needsModelMapping?: boolean;
+  models: CustomProviderModel[];
+  source: 'manual' | 'ccswitch';
+  externalId?: string;
+  createdAt: number;
+  updatedAt?: number;
+}
+
+interface ProfilesFile {
+  /** v3 = chat profiles only. v4 adds media profiles. v5 adds custom providers.
+   *  v6 adds bounded unified-authorization request receipts. */
+  version: number;
+  profiles: Record<string, StoredProfile>;
+  entries: Entry[];
+  searchProfiles?: SearchProfile[];
+  imageProfiles?: ImageProfile[];
+  ttsProfiles?: TtsProfile[];
+  customProviders?: CustomProvider[];
+  authorizationRequests?: AuthorizationRequestReceipt[];
+}
+
+interface AuthorizationRequestReceipt {
+  requestId: string;
+  authorizationId: string;
+  createdAt: number;
+}
+
+const PROFILES_FILE_VERSION = 6;
+const AUTH_SECRET_NAMESPACE = 'auth.profiles';
+const AUTH_SECRET_RECORD_ID = 'auth-profiles.json';
+
+export interface ProfilesStoreStatus {
+  ok: boolean;
+  exists: boolean;
+  encrypted: boolean;
+  recoverable: boolean;
+  reason?: 'missing' | 'hosted_backend_unavailable' | 'decrypt_failed' | 'invalid_json';
+  entries?: number;
+  profiles?: number;
+  error?: string;
+}
+
+function emptyProfilesStore(): ProfilesFile {
+  return {
+    version: PROFILES_FILE_VERSION,
+    profiles: {},
+    entries: [],
+    searchProfiles: [],
+    imageProfiles: [],
+    ttsProfiles: [],
+    customProviders: [],
+    authorizationRequests: [],
+  };
+}
+
+// ── Profiles store IO ────────────────────────────────────────────────────
+
+function ensureAuthDir(userId = getActiveUserId()): void {
+  const d = authDir(userId);
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+}
+
+function authSecretContext(uid: string): localSecrets.LocalSecretContext {
+  return {
+    namespace: AUTH_SECRET_NAMESPACE,
+    ownerId: uid,
+    recordId: AUTH_SECRET_RECORD_ID,
+  };
+}
+
+function authSecretOwner(localId: string): string {
+  try {
+    const obj = JSON.parse(fs.readFileSync(path.join(userLocalConfigDir(localId), 'account.json'), 'utf8'));
+    if (obj && typeof obj === 'object' && typeof obj.user_id === 'string' && obj.user_id) {
+      return obj.user_id;
+    }
+  } catch { /* logged out / open-source build / unreadable account file */ }
+  return localId;
+}
+
+function uniqueOwners(values: Array<string | null | undefined>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of values) {
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function decryptProfilesPayload(raw: string, localId: string): { json: string; needsRewrite: boolean } {
+  const primaryOwner = authSecretOwner(localId);
+  if (!localSecrets.isEncryptedSecret(raw)) {
+    return { json: raw, needsRewrite: true };
+  }
+
+  for (const ownerId of uniqueOwners([primaryOwner, localId])) {
+    try {
+      const dec = localSecrets.decryptLocalSecretWithMeta(
+        authSecretContext(ownerId),
+        raw,
+        { legacySeeds: [ownerId] },
+      );
+      return {
+        json: dec.plaintext,
+        needsRewrite: ownerId !== primaryOwner || localSecrets.shouldRewriteLocalSecret(dec.kind),
+      };
+    } catch {
+      /* try next owner */
+    }
+  }
+
+  throw new Error('auth-profiles decrypt failed');
+}
+
+export function loadProfilesForUser(userId: string): ProfilesFile {
+  const uid = assertAuthUserId(userId);
+  try {
+    const raw = fs.readFileSync(profilesFile(uid), 'utf-8');
+    // Decrypt current Hosted/Open fallback payloads, or the previous crypto-vault whole-file
+    // format. Plain JSON is also accepted as a one-shot migration input.
+    const { json, needsRewrite } = decryptProfilesPayload(raw, uid);
+    const data = JSON.parse(json) as Partial<ProfilesFile>;
+    if (data && typeof data === 'object' && data.profiles && typeof data.profiles === 'object') {
+      const profiles: Record<string, StoredProfile> = {};
+      for (const [id, p] of Object.entries(data.profiles)) {
+        const prof = p as any;
+        if (!prof || typeof prof !== 'object' || !prof.provider || !prof.type) continue;
+        const label = prof.label || id.split(':').slice(1).join(':') || 'default';
+        profiles[id] = {
+          ...prof,
+          label,
+          createdAt: typeof prof.createdAt === 'number' ? prof.createdAt : Date.now(),
+          lastUsed: typeof prof.lastUsed === 'number' ? prof.lastUsed : 0,
+        } as StoredProfile;
+      }
+      const entries: Entry[] = Array.isArray(data.entries)
+        ? data.entries
+            .filter((e: any) => e && e.entryId && e.provider && e.model && e.profileId)
+            .map((e: any) => ({
+              entryId: String(e.entryId),
+              provider: String(e.provider),
+              model: String(e.model),
+              profileId: String(e.profileId),
+              lastUsed: typeof e.lastUsed === 'number' ? e.lastUsed : 0,
+              createdAt: typeof e.createdAt === 'number' ? e.createdAt : Date.now(),
+            }))
+        : [];
+      const searchProfiles = parseSearchProfilesArray((data as any).searchProfiles);
+      const imageProfiles = parseImageProfilesArray((data as any).imageProfiles);
+      const ttsProfiles = parseTtsProfilesArray((data as any).ttsProfiles);
+      const customProviders = parseCustomProvidersArray((data as any).customProviders, entries);
+      const authorizationRequests = parseAuthorizationRequestReceipts((data as any).authorizationRequests);
+      const store = { version: PROFILES_FILE_VERSION, profiles, entries, searchProfiles, imageProfiles, ttsProfiles, customProviders, authorizationRequests };
+      if (needsRewrite) saveProfilesForUser(uid, store);
+      return store;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      log.warn('failed to load profiles store:', (err as Error).message);
+    }
+  }
+  return emptyProfilesStore();
+}
+
+function loadProfiles(): ProfilesFile {
+  return loadProfilesForUser(getActiveUserId());
+}
+
+function loadProfilesForActiveUserOrEmpty(): ProfilesFile {
+  try { return loadProfiles(); }
+  catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no active user/i.test(message)) return emptyProfilesStore();
+    throw error;
+  }
+}
+
+export function getProfilesStoreStatus(): ProfilesStoreStatus {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(profilesFile(), 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ok: true, exists: false, encrypted: false, recoverable: false, reason: 'missing', entries: 0, profiles: 0 };
+    }
+    return {
+      ok: false, exists: false, encrypted: false, recoverable: false,
+      reason: 'decrypt_failed', error: (err as Error).message,
+    };
+  }
+
+  const encrypted = localSecrets.isEncryptedSecret(raw);
+  try {
+    const uid = getActiveUserId();
+    const { json } = decryptProfilesPayload(raw, uid);
+    const data = JSON.parse(json) as Partial<ProfilesFile>;
+    return {
+      ok: true, exists: true, encrypted, recoverable: false,
+      entries: Array.isArray(data.entries) ? data.entries.length : 0,
+      profiles: data.profiles && typeof data.profiles === 'object' ? Object.keys(data.profiles).length : 0,
+    };
+  } catch (err) {
+    const hostedUnavailable = localSecrets.isHostedEncryptedSecret(raw)
+      && localSecrets.preferredLocalSecretKind() !== 'hosted';
+    return {
+      ok: false, exists: true, encrypted, recoverable: true,
+      reason: hostedUnavailable ? 'hosted_backend_unavailable' : 'decrypt_failed',
+      error: (err as Error).message,
+    };
+  }
+}
+
+export function resetProfilesStoreAfterDecryptFailure(): { ok: boolean; backupPath?: string; error?: string } {
+  const status = getProfilesStoreStatus();
+  if (status.ok) return { ok: true };
+  if (!status.recoverable) return { ok: false, error: status.error || 'profiles store is not recoverable' };
+  ensureAuthDir();
+  let backupPath = '';
+  try {
+    const source = profilesFile();
+    if (fs.existsSync(source)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      backupPath = `${source}.unreadable-${stamp}.bak`;
+      fs.copyFileSync(source, backupPath);
+    }
+    saveProfiles(emptyProfilesStore());
+    return { ok: true, ...(backupPath ? { backupPath } : {}) };
+  } catch (err) {
+    return { ok: false, ...(backupPath ? { backupPath } : {}), error: (err as Error).message };
+  }
+}
+
+function parseSearchProfilesArray(arr: unknown): SearchProfile[] {
+  if (!Array.isArray(arr)) return [];
+  const out: SearchProfile[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.provider || !p.apiKey) continue;
+    out.push({
+      id: String(p.id),
+      provider: String(p.provider),
+      apiKey: String(p.apiKey),
+      label: String(p.label || 'default'),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+      extras: p.extras && typeof p.extras === 'object'
+        ? Object.fromEntries(Object.entries(p.extras).map(([k, v]) => [String(k), String(v)]))
+        : undefined,
+    });
+  }
+  return out;
+}
+
+function parseImageProfilesArray(arr: unknown): ImageProfile[] {
+  if (!Array.isArray(arr)) return [];
+  const out: ImageProfile[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.provider || !p.apiKey) continue;
+    out.push({
+      id: String(p.id),
+      provider: String(p.provider),
+      apiKey: String(p.apiKey),
+      label: String(p.label || 'default'),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+    });
+  }
+  return out;
+}
+
+function parseTtsProfilesArray(arr: unknown): TtsProfile[] {
+  if (!Array.isArray(arr)) return [];
+  const out: TtsProfile[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.provider || !p.apiKey) continue;
+    const provider = String(p.provider || 'custom');
+    if (provider === 'cogseed-voice') continue;
+    if (provider !== 'doubao' && !p.baseUrl) continue;
+    if (provider !== 'doubao' && !p.model) continue;
+    out.push({
+      id: String(p.id),
+      provider,
+      baseUrl: String(p.baseUrl || ''),
+      model: String(p.model || ''),
+      apiKey: String(p.apiKey),
+      ...(p.resourceId ? { resourceId: String(p.resourceId) } : {}),
+      ...(p.voice ? { voice: String(p.voice) } : {}),
+      ...(p.format ? { format: String(p.format) } : {}),
+      label: String(p.label || 'default'),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+    });
+  }
+  return out;
+}
+
+function normalizedLegacyCustomProviderNumber(
+  value: unknown,
+  fallback: number,
+  max: number,
+): number {
+  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= max
+    ? value as number
+    : fallback;
+}
+
+function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
+  if (!Array.isArray(value)) return [];
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const rawId = typeof raw === 'string'
+      ? raw
+      : (raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : '');
+    const id = String(rawId || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    const metadata = raw && typeof raw === 'object'
+      ? raw as { contextWindow?: unknown; maxTokens?: unknown }
+      : {};
+    const contextWindow = normalizedLegacyCustomProviderNumber(
+      metadata.contextWindow,
+      DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    );
+    const maxTokens = Math.min(
+      normalizedLegacyCustomProviderNumber(
+        metadata.maxTokens,
+        DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        MAX_CUSTOM_PROVIDER_MAX_TOKENS,
+      ),
+      contextWindow,
+    );
+    models.push({ id, contextWindow, maxTokens });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function migrateCustomProviderModelsFromEntries(
+  providerId: string,
+  entries: readonly Entry[],
+): CustomProviderModel[] {
+  const syntheticId = `cp:${providerId}`;
+  const models: CustomProviderModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (entry.provider !== syntheticId || entry.profileId !== syntheticId) continue;
+    const id = String(entry.model || '').trim();
+    if (!id || id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH || seen.has(id)) continue;
+    seen.add(id);
+    models.push({
+      id,
+      contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+      maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+    });
+    if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
+  }
+  return models;
+}
+
+function parseCustomProvidersArray(arr: unknown, entries: readonly Entry[] = []): CustomProvider[] {
+  if (!Array.isArray(arr)) return [];
+  const protocols = new Set<CustomProvider['protocol']>(['anthropic', 'openai', 'openai-responses', 'gemini']);
+  const out: CustomProvider[] = [];
+  for (const raw of arr) {
+    const p = raw as any;
+    if (!p || typeof p !== 'object' || !p.id || !p.name || !p.baseUrl) continue;
+    const id = String(p.id);
+    const protocol = protocols.has(p.protocol) ? p.protocol as CustomProvider['protocol'] : 'anthropic';
+    const parsedModels = parseCustomProviderModels(p.models);
+    out.push({
+      id,
+      name: String(p.name),
+      protocol,
+      baseUrl: String(p.baseUrl),
+      apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+      enabled: p.enabled !== false,
+      ...(p.notes ? { notes: String(p.notes) } : {}),
+      ...(p.websiteUrl ? { websiteUrl: String(p.websiteUrl) } : {}),
+      ...(p.needsKey ? { needsKey: true } : {}),
+      ...(p.needsModelMapping ? { needsModelMapping: true } : {}),
+      models: parsedModels.length ? parsedModels : migrateCustomProviderModelsFromEntries(id, entries),
+      source: p.source === 'ccswitch' ? 'ccswitch' : 'manual',
+      ...(p.externalId ? { externalId: String(p.externalId) } : {}),
+      createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+      ...(typeof p.updatedAt === 'number' ? { updatedAt: p.updatedAt } : {}),
+    });
+  }
+  return out;
+}
+
+function parseAuthorizationRequestReceipts(arr: unknown): AuthorizationRequestReceipt[] {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((row: any) => row && typeof row === 'object' && row.requestId && row.authorizationId)
+    .map((row: any) => ({
+      requestId: String(row.requestId).trim().slice(0, 120),
+      authorizationId: String(row.authorizationId).trim().slice(0, 180),
+      createdAt: typeof row.createdAt === 'number' ? row.createdAt : Date.now(),
+    }))
+    .filter((row) => row.requestId && row.authorizationId)
+    .slice(-100);
+}
+
+// ── Search / Image / TTS profiles store IO (low-level) ────────────────────
+//
+// These helpers expose the new top-level fields so feature modules
+// (`features/search_auth.ts`, `features/image_auth.ts`,
+// `features/tts_auth.ts`) can manage them
+// without re-implementing the load/save round-trip. Live in auth.ts so
+// the entire `auth-profiles.json` file has a single owner.
+
+export function loadSearchProfiles(): SearchProfile[] {
+  return loadProfiles().searchProfiles || [];
+}
+
+export function saveSearchProfiles(list: SearchProfile[]): void {
+  const store = loadProfiles();
+  store.searchProfiles = [...list];
+  saveProfiles(store);
+}
+
+export function loadImageProfiles(): ImageProfile[] {
+  return loadProfiles().imageProfiles || [];
+}
+
+export function saveImageProfiles(list: ImageProfile[]): void {
+  const store = loadProfiles();
+  store.imageProfiles = [...list];
+  saveProfiles(store);
+}
+
+export function loadTtsProfiles(): TtsProfile[] {
+  return loadProfiles().ttsProfiles || [];
+}
+
+export function saveTtsProfiles(list: TtsProfile[]): void {
+  const store = loadProfiles();
+  store.ttsProfiles = [...list];
+  saveProfiles(store);
+}
+
+function assertActiveUser(userId: string): void {
+  if (getActiveUserId() !== userId) throw new Error('user scope mismatch');
+}
+
+export function loadCustomProviders(userId: string): CustomProvider[] {
+  assertActiveUser(userId);
+  return loadProfiles().customProviders || [];
+}
+
+export function saveCustomProviders(userId: string, list: CustomProvider[]): void {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  store.customProviders = [...list];
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+}
+
+export function mutateCustomProviders<T>(
+  userId: string,
+  mutate: (state: { customProviders: CustomProvider[]; entries: CustomProviderEntry[] }) => T,
+): T {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const result = mutate({
+    customProviders: store.customProviders || (store.customProviders = []),
+    entries: store.entries,
+  });
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return result;
+}
+
+export function removeEntriesForProvider(userId: string, providerId: string): number {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  const before = store.entries.length;
+  store.entries = store.entries.filter((entry) => entry.provider !== providerId);
+  if (store.entries.length !== before) saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return before - store.entries.length;
+}
+
+let authorizationStoreSaveForTests: ((store: ProfilesFile) => void) | undefined;
+
+export function __setAuthorizationStoreSaveForTests(
+  save: ((store: ProfilesFile) => void) | undefined,
+): void {
+  if (process.env.NODE_ENV !== 'test') throw new Error('test-only authorization save hook');
+  authorizationStoreSaveForTests = save;
+}
+
+export function saveProfilesForUser(userId: string, store: ProfilesFile): void {
+  const uid = assertAuthUserId(userId);
+  if (authorizationStoreSaveForTests) {
+    authorizationStoreSaveForTests(store);
+    return;
+  }
+  ensureAuthDir(uid);
+  const json = JSON.stringify(store, null, 2);
+  const localId = uid;
+  const ownerId = authSecretOwner(localId);
+  const out = ownerId ? localSecrets.encryptLocalSecret(authSecretContext(ownerId), json) : json;
+  const target = profilesFile(uid);
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temp, out, { encoding: 'utf-8', mode: 0o600 });
+    fs.renameSync(temp, target);
+  } catch (error) {
+    try { fs.unlinkSync(temp); } catch { /* missing/locked temporary */ }
+    throw error;
+  }
+}
+
+function saveProfiles(store: ProfilesFile): void {
+  saveProfilesForUser(getActiveUserId(), store);
+}
+
+function isStoredProfileBlocked(profile: StoredProfile | undefined): boolean {
+  return !!profile && !isModelProviderAllowed(profile.provider);
+}
+
+function isStoredProfileAllowed(profile: StoredProfile | undefined): profile is StoredProfile {
+  return !!profile && !isStoredProfileBlocked(profile);
+}
+
+export function isCustomProviderId(providerId: string): boolean {
+  return String(providerId || '').startsWith('cp:');
+}
+
+function customProviderForId(store: ProfilesFile, providerId: string): CustomProvider | undefined {
+  if (!isCustomProviderId(providerId)) return undefined;
+  const id = providerId.slice(3);
+  return (store.customProviders || []).find((provider) => provider.id === id);
+}
+
+function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
+  const normalized = String(model || '').trim();
+  if (!normalized) return false;
+  return provider.models.some((candidate) => candidate.id === normalized);
+}
+
+function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
+  if (isCustomProviderId(entry.provider) || isCustomProviderId(entry.profileId)) {
+    const custom = customProviderForId(store, entry.provider);
+    return !!custom
+      && entry.profileId === entry.provider
+      && custom.enabled
+      && !!custom.apiKey
+      && isCustomProviderModelAllowed(custom, entry.model);
+  }
+  const prof = store.profiles[entry.profileId];
+  return isModelProviderAllowed(entry.provider, entry.model)
+    && isStoredProfileAllowed(prof)
+    && prof.provider === entry.provider;
+}
+
+function makeProfileId(provider: string, label: string): string {
+  return `${provider}:${label}`;
+}
+
+function autoLabel(store: ProfilesFile, provider: string): string {
+  const existing = Object.keys(store.profiles)
+    .filter((id) => id.startsWith(provider + ':'))
+    .map((id) => id.slice(provider.length + 1));
+  if (!existing.includes('default')) return 'default';
+  for (let i = 2; i < 100; i++) {
+    const candidate = `account${i}`;
+    if (!existing.includes(candidate)) return candidate;
+  }
+  return `account-${Date.now()}`;
+}
+
+function sanitizeLabel(input: string): string {
+  const clean = String(input || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '-').slice(0, 40);
+  return clean || 'default';
+}
+
+let _entryCounter = 0;
+function nextEntryId(): string {
+  _entryCounter = (_entryCounter + 1) % 100000;
+  return `e-${Date.now().toString(36)}-${_entryCounter}`;
+}
+
+export function createCustomProviderEntry(customProviderId: string, modelId: string): CustomProviderEntry {
+  const id = String(customProviderId || '').trim();
+  const model = String(modelId || '').trim();
+  if (!id || !model) throw new Error('custom provider id and model required');
+  const now = Date.now();
+  return {
+    entryId: nextEntryId(),
+    provider: `cp:${id}`,
+    model,
+    profileId: `cp:${id}`,
+    lastUsed: 0,
+    createdAt: now,
+  };
+}
+
+// ── Configured-model probe ───────────────────────────────────────────────
+
+export interface AuthConfig { provider: string; model: string }
+
+/**
+ * True when the user has at least one saved (provider, model, credential)
+ * entry, OR the dev-only `ANTHROPIC_API_KEY` env-var fallback is set. Any
+ * LLM-driven feature should treat `configured === false` as "disabled
+ * pending setup" and redirect the user to the settings page.
+ */
+export function hasConfiguredModel(): { configured: boolean } {
+  const store = loadProfilesForActiveUserOrEmpty();
+  if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
+  if (process.env.ANTHROPIC_API_KEY) return { configured: true };
+  return { configured: false };
+}
+
+export function getConfiguredModelCooldown(): {
+  profileId: string;
+  cooledUntil: number;
+  kind: KeyFailureKind;
+  reason: string;
+} | null {
+  const store = loadProfilesForActiveUserOrEmpty();
+  let best: { profileId: string; cooledUntil: number; kind: KeyFailureKind; reason: string } | null = null;
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    const cooldown = getCooldown(entry.profileId);
+    if (!cooldown) continue;
+    const current = { profileId: entry.profileId, ...cooldown };
+    if (!best || current.cooledUntil < best.cooledUntil) best = current;
+  }
+  return best;
+}
+
+/**
+ * Return a user-facing message when the configured chat model is backed by an
+ * OAuth profile whose access token has expired. Synchronous on purpose:
+ * token refresh (with its side effects) already happened inside
+ * pickChatEntryGroup / resolveEntryApiKey; by the time this is consulted the
+ * refresh either succeeded (profile no longer counts as expired) or failed
+ * (the expired profile is skipped and the user needs to reauthorize).
+ */
+export function getConfiguredModelOAuthExpiredMessage(): string | null {
+  const store = loadProfilesForActiveUserOrEmpty();
+  for (const entry of store.entries) {
+    if (!isEntryAllowed(store, entry)) continue;
+    const profile = store.profiles[entry.profileId];
+    if (profile?.type === 'oauth' && Date.now() >= profile.expires) {
+      return t('errors.model_oauth_expired', { provider: providerLabel(profile.provider) });
+    }
+  }
+  return null;
+}
+
+export async function getConfig(): Promise<AuthConfig> {
+  // Default (provider, model) pair is `entries[0]` — the top of the priority
+  // list. Credentials + model selection share one source of truth
+  // (auth-profiles.json); there's no longer a fallback config.json.
+  const store = loadProfilesForActiveUserOrEmpty();
+  const first = store.entries.find((e) => isEntryAllowed(store, e));
+  if (first) return { provider: first.provider, model: first.model };
+  return { provider: '', model: '' };
+}
+
+function invalidateCoreAgentRunner(): void {
+  try {
+    const key = require.resolve('../model/core-agent/runner');
+    const mod = require.cache[key];
+    if (mod && typeof (mod.exports as any)?.invalidateConfig === 'function') {
+      (mod.exports as any).invalidateConfig();
+    }
+  } catch { /* module not loaded — no-op */ }
+}
+
+// ── Provider + credential listing ────────────────────────────────────────
+
+export interface ProfileView {
+  profileId: string;
+  provider: string;
+  label: string;
+  type: 'api_key' | 'oauth';
+  masked?: string;
+  baseUrl?: string;
+  maxOutputTokens?: number;
+  email?: string;
+  expired?: boolean;
+  createdAt: number;
+  lastUsed: number;
+}
+
+export type ProviderKind = 'builtin' | 'custom';
+
+export interface ProviderEntry {
+  id: string;
+  label: string;
+  providerKind: ProviderKind;
+  featured: boolean;
+  supportsApiKey: boolean;
+  supportsOAuth: boolean;
+  /** If OAuth on this provider actually logs in via a different pi-ai
+   *  provider (e.g. `openai` → `openai-codex`), this carries the target id
+   *  so the renderer can call `startOAuth(oauthProvider)` accordingly. */
+  oauthProvider?: string;
+  docsUrl?: string;
+  /** Per-provider prerequisite note (see `CatalogEntry.subscriptionNote`).
+   *  Renderer shows it as a warning-tinted hint on the card + the add-key
+   *  form so users can verify they have the right kind of account. */
+  subscriptionNote?: string;
+  /** Cosmetic hint — renderer appends a "(Recommended)" suffix on the
+   *  picker label. Source of truth is `CatalogEntry.recommended`. */
+  recommended?: boolean;
+  /** True when the UI must ask for a model id text field instead of a fixed dropdown. */
+  manualModel?: boolean;
+  profiles: ProfileView[];
+}
+
+function profileToView(id: string, p: StoredProfile): ProfileView {
+  const base = {
+    profileId: id,
+    provider: p.provider,
+    label: p.label,
+    type: p.type,
+    email: p.email,
+    createdAt: p.createdAt,
+    lastUsed: p.lastUsed,
+  };
+  if (p.type === 'api_key') return {
+    ...base,
+    type: 'api_key',
+    masked: maskKey(p.key),
+    ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
+    ...(isOpenAICompatibleProvider(p.provider)
+      ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(p.provider, p.maxOutputTokens) }
+      : {}),
+  };
+  return { ...base, type: 'oauth', expired: Date.now() >= p.expires };
+}
+
+/**
+ * Provider catalog for the settings dropdown.
+ *
+ * The visible set is `VISIBLE_PROVIDERS` plus any provider for which the
+ * user already has a saved profile (so nothing disappears mid-session).
+ * OAuth-only backends like `openai-codex` are hidden and reached via the
+ * `oauthProvider` field on their API-key-facing sibling.
+ */
+export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
+  let mod: CoreAgentModule | null = null;
+  try { mod = await ca(); } catch (e) {
+    log.warn('core-agent unavailable for listProviders; falling back to static catalog', { error: (e as Error).message });
+  }
+  // OAuth capability source = pi-ai's runtime registry. Custom
+  // providers (e.g. MiniMax Portal) are registered synchronously by
+  // `piOauth()` at startup; registration failures get a warn-level log.
+  // The `OAUTH_PROVIDERS` constant is only a fallback for the case
+  // where pi-ai's entire oauth module fails to load — we deliberately
+  // do NOT union it in, otherwise the UI would show OAuth buttons that
+  // can never actually work.
+  let oauthIds: Set<string>;
+  try {
+    const oauth = await piOauth();
+    oauthIds = new Set(oauth.getOAuthProviders().map((p: any) => p.id));
+  } catch {
+    oauthIds = new Set(OAUTH_PROVIDERS.map((p) => p.id));
+  }
+
+  const store = loadProfiles();
+  const byProvider = new Map<string, ProfileView[]>();
+  for (const [id, prof] of Object.entries(store.profiles)) {
+    if (!isStoredProfileAllowed(prof)) continue;
+    const list = byProvider.get(prof.provider) || [];
+    list.push(profileToView(id, prof));
+    byProvider.set(prof.provider, list);
+  }
+
+  // OAuth alias merge: profiles attached to an OAuth backend get folded
+  // into the parent provider's card, so a user who logs in via OAuth on
+  // the "MiniMax" card sees the resulting profile displayed on the
+  // same card (instead of a surprise extra "MiniMax Subscription (CN)"
+  // card appearing).
+  for (const [parent, alias] of Object.entries(OAUTH_ALIAS_FOR)) {
+    const aliasProfiles = byProvider.get(alias);
+    if (aliasProfiles && aliasProfiles.length) {
+      const merged = (byProvider.get(parent) || []).concat(aliasProfiles);
+      byProvider.set(parent, merged);
+      byProvider.delete(alias);
+    }
+  }
+
+  // Visible set: whitelist + providers with saved profiles.
+  const visible = new Set<string>(VISIBLE_PROVIDERS);
+  for (const pid of byProvider.keys()) {
+    if (isModelProviderAllowed(pid)) visible.add(pid);
+  }
+  // Hide pi-ai providers that exist only as the OAuth back-end for
+  // something in the whitelist (e.g. minimax-portal-cn is reached through
+  // minimax-cn), unless the user already has a profile there that wasn't
+  // captured by the alias merge above.
+  for (const alias of Object.values(OAUTH_ALIAS_FOR)) {
+    if (!byProvider.has(alias)) visible.delete(alias);
+  }
+
+  const sorted = sortProviderIds([...visible].filter((id) => isModelProviderAllowed(id)));
+  const featuredIds = new Set(FEATURED_API_PROVIDERS.map((p) => p.id));
+  // Provider-is-known-to-pi-ai check so we don't advertise API-key support
+  // for an id that pi-ai can't build a client for. When core-agent is
+  // unavailable, fall back to the visible set so the catalog still renders.
+  // EXTERNAL_API_PROVIDERS are CogSeed-side adapters (see `external-providers.ts`)
+  // that pi-ai doesn't know about — manually mark them api-capable.
+  const apiCapable = mod
+    ? new Set<string>([...mod.listPiProviders(), ...EXTERNAL_API_PROVIDERS])
+    : new Set<string>([...visible, ...EXTERNAL_API_PROVIDERS]);
+
+  // OAuth-only providers can't be authenticated with a raw API key — their
+  // endpoints only accept OAuth access tokens. Force the API-key tile off.
+  // Single source of truth: oauthOnly marks on CATALOG entries, plus the
+  // OAuth back-ends that only exist outside the catalog (Gemini CLI,
+  // Antigravity, GitHub Copilot) and surface once a saved profile exists.
+  const oauthOnlyIds = new Set([
+    ...CATALOG.filter((entry) => entry.oauthOnly).map((entry) => entry.id),
+    ...OAUTH_PROVIDERS.filter((entry) => !isVisibleProvider(entry.id)).map((entry) => entry.id),
+  ]);
+
+  const providers: ProviderEntry[] = sorted.map((id) => {
+    const directOAuth = oauthIds.has(id);
+    const aliasOAuth  = OAUTH_ALIAS_FOR[id];
+    const supportsOAuth = directOAuth || (!!aliasOAuth && oauthIds.has(aliasOAuth));
+    const supportsApiKey = apiCapable.has(id) && !oauthOnlyIds.has(id);
+    return {
+      id,
+      label: providerLabel(id),
+      providerKind: 'builtin',
+      featured: featuredIds.has(id),
+      supportsApiKey,
+      supportsOAuth,
+      oauthProvider: directOAuth ? id : (supportsOAuth ? aliasOAuth : undefined),
+      docsUrl: providerDocsUrl(id),
+      subscriptionNote: providerSubscriptionNote(id),
+      recommended: providerRecommended(id),
+      manualModel: providerManualModel(id),
+      profiles: (byProvider.get(id) || []).sort((a, b) => a.label.localeCompare(b.label)),
+    };
+  });
+
+  for (const custom of store.customProviders || []) {
+    providers.push({
+      id: `cp:${custom.id}`,
+      label: custom.name,
+      providerKind: 'custom',
+      featured: false,
+      supportsApiKey: true,
+      supportsOAuth: false,
+      manualModel: !custom.models?.length,
+      profiles: [{
+        profileId: `cp:${custom.id}`,
+        provider: `cp:${custom.id}`,
+        label: custom.name,
+        type: 'api_key',
+        masked: maskKey(custom.apiKey),
+        baseUrl: custom.baseUrl,
+        createdAt: custom.createdAt,
+        lastUsed: 0,
+      }],
+    });
+  }
+
+  return { providers };
+}
+
+/**
+ * Model list for a provider.
+ *
+ * Source priority:
+ *   1. Hand-curated list in `provider_catalog.ts::CURATED_MODELS`
+ *      (the sole file to edit when adding/removing models).
+ *   2. Fallback: `pickLatestGenerations()` derives the last 2 (major,
+ *      minor) version bands from pi-ai's raw list. Only used for
+ *      uncurated providers.
+ */
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string }[] }> {
+  const id = String(providerId || '').trim();
+  if (!id) return { models: [] };
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(loadProfiles(), id);
+    return { models: (custom?.models || []).map((model) => ({ id: model.id, name: model.id })) };
+  }
+  if (!isModelProviderAllowed(id)) return { models: [] };
+  const allowed = (models: { id: string; name: string }[]) =>
+    models.filter((m) => isModelProviderAllowed(id, m.id));
+  const curated = curatedModelsFor(id);
+  if (curated.length) return { models: allowed(curated) };
+  try {
+    const mod = await ca();
+    const raw = mod.listPiModels(id) || [];
+    return { models: allowed(pickLatestGenerations(raw as any[], 2)) };
+  } catch {
+    return { models: [] };
+  }
+}
+
+function isOpenAICompatibleProvider(providerId: string): boolean {
+  return String(providerId || '').trim() === 'openai-compatible';
+}
+
+function normalizeCustomBaseUrl(providerId: string, raw: unknown): string | undefined {
+  const value = String(raw || '').trim();
+  if (!isOpenAICompatibleProvider(providerId)) return undefined;
+  if (!value) throw new Error('base URL required for OpenAI-compatible provider');
+  let url: URL;
+  try { url = new URL(value); }
+  catch { throw new Error('base URL must be a valid http(s) URL'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('base URL must be a valid http(s) URL');
+  }
+  if (url.username || url.password) {
+    throw new Error('base URL must not contain credentials');
+  }
+  return value.replace(/\/+$/, '');
+}
+
+const OPENAI_COMPATIBLE_DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+const OPENAI_COMPATIBLE_MIN_MAX_OUTPUT_TOKENS = 8192;
+const OPENAI_COMPATIBLE_MAX_MAX_OUTPUT_TOKENS = 32768;
+
+function normalizeOpenAICompatibleMaxOutputTokens(providerId: string, raw: unknown): number | undefined {
+  if (!isOpenAICompatibleProvider(providerId)) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return OPENAI_COMPATIBLE_DEFAULT_MAX_OUTPUT_TOKENS;
+  const value = Math.trunc(n);
+  return Math.max(
+    OPENAI_COMPATIBLE_MIN_MAX_OUTPUT_TOKENS,
+    Math.min(OPENAI_COMPATIBLE_MAX_MAX_OUTPUT_TOKENS, value),
+  );
+}
+
+// ── Credential writes ────────────────────────────────────────────────────
+
+export async function addApiKey(
+  providerId: string,
+  apiKey: string,
+  label?: string,
+  opts?: { baseUrl?: string; maxOutputTokens?: number },
+): Promise<{ profileId: string }> {
+  const id = String(providerId || '').trim();
+  const key = String(apiKey || '').trim();
+  if (!id) throw new Error('provider required');
+  if (!key) throw new Error('api key required');
+  assertModelProviderAllowed(id);
+  const baseUrl = normalizeCustomBaseUrl(id, opts?.baseUrl);
+  const maxOutputTokens = normalizeOpenAICompatibleMaxOutputTokens(id, opts?.maxOutputTokens);
+
+  const store = loadProfiles();
+  const chosenLabel = label ? sanitizeLabel(label) : autoLabel(store, id);
+  const profileId = makeProfileId(id, chosenLabel);
+  const now = Date.now();
+  const existing = store.profiles[profileId];
+  store.profiles[profileId] = {
+    type: 'api_key',
+    provider: id,
+    label: chosenLabel,
+    key,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
+    email: (existing as ApiKeyProfile | undefined)?.email,
+    createdAt: existing?.createdAt ?? now,
+    lastUsed: 0,
+  };
+  saveProfiles(store);
+  // User updated the key — their manual intervention overrides any auto
+  // cooldown from a past failure. Clear it so the next chat request
+  // actually tries this profile again instead of skipping it.
+  clearCooldown(profileId);
+  invalidateCoreAgentRunner();
+  return { profileId };
+}
+
+export async function removeCredential(profileId: string): Promise<{ removed: boolean }> {
+  const id = String(profileId || '').trim();
+  if (!id) throw new Error('profileId required');
+  const store = loadProfiles();
+  if (!store.profiles[id]) return { removed: false };
+  delete store.profiles[id];
+  // Cascade: any entry referencing this profile is now dangling; drop those
+  // entries too so the priority list doesn't silently skip a hole.
+  store.entries = store.entries.filter((e) => e.profileId !== id);
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return { removed: true };
+}
+
+export async function renameProfile(
+  profileId: string,
+  newLabel: string,
+): Promise<{ profileId: string }> {
+  const id = String(profileId || '').trim();
+  const label = sanitizeLabel(newLabel);
+  if (!id) throw new Error('profileId required');
+  const store = loadProfiles();
+  const prof = store.profiles[id];
+  if (!prof) throw new Error('profile not found');
+  const newId = makeProfileId(prof.provider, label);
+  if (newId === id) return { profileId: id };
+  if (store.profiles[newId]) throw new Error(`label "${label}" already used for this provider`);
+  delete store.profiles[id];
+  store.profiles[newId] = { ...prof, label };
+  // Update any entries referencing the old profile id.
+  store.entries = store.entries.map((e) => e.profileId === id ? { ...e, profileId: newId } : e);
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return { profileId: newId };
+}
+
+// Full API key is returned only on explicit reveal. Every other path keeps
+// renderer-facing payloads masked (`profileMasked` / `apiKeyMasked`).
+export async function revealApiKey(profileId: string): Promise<{ apiKey: string }> {
+  const id = String(profileId || '').trim();
+  if (!id) throw new Error('profileId required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    return { apiKey: custom?.apiKey || '' };
+  }
+  const prof = store.profiles[id];
+  if (!prof || prof.type !== 'api_key') return { apiKey: '' };
+  return { apiKey: prof.key || '' };
+}
+
+export async function updateApiKey(
+  profileId: string,
+  apiKey: string,
+): Promise<{ profileId: string }> {
+  const id = String(profileId || '').trim();
+  const key = String(apiKey || '').trim();
+  if (!id) throw new Error('profileId required');
+  if (!key) throw new Error('api key required');
+  const store = loadProfiles();
+  if (isCustomProviderId(id)) {
+    const custom = customProviderForId(store, id);
+    if (!custom) throw new Error('custom provider not found');
+    custom.apiKey = key;
+    custom.updatedAt = Date.now();
+    saveProfiles(store);
+    invalidateCoreAgentRunner();
+    return { profileId: id };
+  }
+  const prof = store.profiles[id];
+  if (!prof) throw new Error('profile not found');
+  if (prof.type !== 'api_key') throw new Error('profile is not an api key profile');
+  store.profiles[id] = { ...prof, key };
+  saveProfiles(store);
+  // User updated the key — mirror addApiKey: drop any failure cooldown so the
+  // next request actually tries this profile again.
+  clearCooldown(id);
+  invalidateCoreAgentRunner();
+  return { profileId: id };
+}
+
+// ── Entries (priority list) ──────────────────────────────────────────────
+
+export interface EntryView {
+  entryId: string;
+  provider: string;
+  providerLabel: string;
+  model: string;
+  modelName: string;
+  profileId: string;
+  profileLabel: string;
+  profileType: 'api_key' | 'oauth';
+  profileMasked?: string;
+  oauthExpired?: boolean;
+  modelAvailable?: false;
+  createdAt: number;
+  lastUsed: number;
+}
+
+function entryToView(e: Entry, store: ProfilesFile, modelNameLookup: (p: string, m: string) => string): EntryView {
+  const custom = customProviderForId(store, e.provider);
+  if (custom) {
+    return {
+      entryId: e.entryId,
+      provider: e.provider,
+      providerLabel: custom.name,
+      model: e.model,
+      modelName: e.model,
+      profileId: e.profileId,
+      profileLabel: custom.name,
+      profileType: 'api_key',
+      profileMasked: maskKey(custom.apiKey),
+      createdAt: e.createdAt,
+      lastUsed: e.lastUsed,
+    };
+  }
+  const prof = store.profiles[e.profileId];
+  const base = {
+    entryId: e.entryId,
+    provider: e.provider,
+    providerLabel: providerLabel(e.provider),
+    model: e.model,
+    modelName: modelNameLookup(e.provider, e.model),
+    profileId: e.profileId,
+    profileLabel: prof?.label || e.profileId.split(':').slice(1).join(':') || '(missing)',
+    profileType: (prof?.type as 'api_key' | 'oauth') || 'api_key',
+    createdAt: e.createdAt,
+    lastUsed: e.lastUsed,
+  };
+  if (prof?.type === 'api_key') return { ...base, profileMasked: maskKey(prof.key) };
+  if (prof?.type === 'oauth')  return { ...base, oauthExpired: Date.now() >= prof.expires };
+  return base;
+}
+
+/** Build a pi-ai-backed (provider, modelId) → name lookup. Cached per call. */
+async function buildModelNameLookup(): Promise<(p: string, m: string) => string> {
+  let mod: CoreAgentModule | undefined;
+  try { mod = await ca(); } catch { /* no pi-ai available */ }
+  const cache = new Map<string, Map<string, string>>();
+  return (provider: string, modelId: string) => {
+    const curated = curatedModelsFor(provider).find((m) => m.id === modelId);
+    if (curated) return curated.name;
+    if (!mod) return modelId;
+    let byId = cache.get(provider);
+    if (!byId) {
+      byId = new Map();
+      try {
+        for (const m of (mod.listPiModels(provider) || []) as any[]) {
+          if (m && typeof m.id === 'string') byId.set(m.id, (m.name as string) || m.id);
+        }
+      } catch { /* fall through */ }
+      cache.set(provider, byId);
+    }
+    return byId.get(modelId) || modelId;
+  };
+}
+
+export interface ListEntriesOptions {
+  includeUnavailable?: boolean;
+}
+
+export async function listEntries(
+  options: ListEntriesOptions = {},
+): Promise<{ entries: EntryView[] }> {
+  const store = loadProfiles();
+  const lookup = await buildModelNameLookup();
+  const includeUnavailable = options.includeUnavailable === true;
+  return {
+    entries: store.entries
+      .flatMap((entry) => {
+        const available = isEntryAllowed(store, entry);
+        if (!available && !includeUnavailable) return [];
+        const view = entryToView(entry, store, lookup);
+        return [available ? view : { ...view, modelAvailable: false as const }];
+      }),
+  };
+}
+
+export async function addEntry({
+  provider,
+  model,
+  profileId,
+  position = 'front',
+}: {
+  provider: string; model: string; profileId: string;
+  /** Where to insert: 'front' makes this entry the primary chat choice;
+   *  'back' appends it as a fallback (chat dispatch walks entries in order). */
+  position?: 'front' | 'back';
+}): Promise<{ entryId: string }> {
+  const p = String(provider || '').trim();
+  const m = String(model || '').trim();
+  const pid = String(profileId || '').trim();
+  if (!p || !m || !pid) throw new Error('provider / model / profileId required');
+  const store = loadProfiles();
+  const custom = customProviderForId(store, p);
+  if (custom) {
+    if (pid !== p) throw new Error('custom provider profile mismatch');
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+    if (!custom.enabled) throw new Error(`custom provider ${p} is disabled; cannot add model ${m}`);
+  } else {
+    assertModelProviderAllowed(p, m);
+    if (!store.profiles[pid]) throw new Error('profile not found');
+    if (store.profiles[pid].provider !== p) throw new Error('profile does not belong to provider');
+  }
+
+  // Deduplicate: if an entry with the same (provider, model, profileId)
+  // already exists, don't create a second one. Returning the existing id
+  // keeps the UI idempotent under double-click.
+  const existing = store.entries.find((e) => e.provider === p && e.model === m && e.profileId === pid);
+  if (existing) return { entryId: existing.entryId };
+
+  const entryId = nextEntryId();
+  const now = Date.now();
+  const entry = {
+    entryId,
+    provider: p,
+    model: m,
+    profileId: pid,
+    lastUsed: 0,
+    createdAt: now,
+  };
+  if (position === 'back') store.entries.push(entry);
+  else store.entries.unshift(entry);
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return { entryId };
+}
+
+export async function updateEntryModel(entryId: string, model: string): Promise<{ entryId: string; model: string }> {
+  const id = String(entryId || '').trim();
+  const m = String(model || '').trim();
+  if (!id || !m) throw new Error('entryId and model required');
+  const store = loadProfiles();
+  const target = store.entries.find((e) => e.entryId === id);
+  if (!target) throw new Error('entry not found');
+  const custom = customProviderForId(store, target.provider);
+  if (custom) {
+    if (!isCustomProviderModelAllowed(custom, m)) throw new Error('custom provider model not found');
+  } else {
+    assertModelProviderAllowed(target.provider, m);
+  }
+  // Deduplicate: if another entry with the same (provider, model, profileId)
+  // already exists, removing the target makes the priority list cleaner.
+  const collision = store.entries.find(
+    (e) => e.entryId !== id && e.provider === target.provider && e.model === m && e.profileId === target.profileId,
+  );
+  if (collision) throw new Error('same (provider, model, profile) entry already exists');
+  target.model = m;
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return { entryId: id, model: m };
+}
+
+export async function removeEntry(entryId: string): Promise<{ removed: boolean }> {
+  const id = String(entryId || '').trim();
+  if (!id) throw new Error('entryId required');
+  const store = loadProfiles();
+  const before = store.entries.length;
+  store.entries = store.entries.filter((e) => e.entryId !== id);
+  if (store.entries.length === before) return { removed: false };
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  return { removed: true };
+}
+
+export async function reorderEntries(orderedIds: string[]): Promise<{ entries: EntryView[] }> {
+  if (!Array.isArray(orderedIds)) throw new Error('orderedIds must be an array');
+  const store = loadProfiles();
+  const byId = new Map(store.entries.map((e) => [e.entryId, e]));
+  const reordered: Entry[] = [];
+  for (const id of orderedIds) {
+    const e = byId.get(String(id));
+    if (e) { reordered.push(e); byId.delete(String(id)); }
+  }
+  // Anything the caller forgot — append in original order so we never drop.
+  for (const e of store.entries) {
+    if (byId.has(e.entryId)) reordered.push(e);
+  }
+  store.entries = reordered;
+  saveProfiles(store);
+  invalidateCoreAgentRunner();
+  const lookup = await buildModelNameLookup();
+  return {
+    entries: store.entries
+      .filter((e) => isEntryAllowed(store, e))
+      .map((e) => entryToView(e, store, lookup)),
+  };
+}
+
+// ── Unified model authorizations ────────────────────────────────────────
+
+export interface AuthorizationModelSummary {
+  entryId: string;
+  model: string;
+}
+
+export type AuthorizationWarningCode = 'orphan_entry' | 'missing_custom_provider' | 'unbound_authorization';
+
+export interface AuthorizationWarning {
+  code: AuthorizationWarningCode;
+  entryId?: string;
+  authorizationId?: string;
+}
+
+export interface AuthorizationSummary {
+  authorizationId: string;
+  authType: 'api_key' | 'oauth';
+  source: 'manual' | 'ccswitch';
+  providerId: string;
+  profileId: string;
+  label: string;
+  protocol?: CustomProvider['protocol'];
+  baseUrl?: string;
+  masked?: string;
+  oauthExpired?: boolean;
+  models: AuthorizationModelSummary[];
+  enabledModels: string[];
+  defaultModel: string;
+  unbound: boolean;
+  warningCode?: AuthorizationWarningCode;
+}
+
+interface AuthorizationCompletionBase {
+  requestId: string;
+  selectedModels: string[];
+  defaultModel: string;
+}
+
+export interface BuiltinApiKeyCompletion extends AuthorizationCompletionBase {
+  authType: 'api_key';
+  source: 'manual';
+  providerKind: 'builtin';
+  providerId: string;
+  label?: string;
+  apiKey: string;
+  baseUrl?: string;
+}
+
+export interface BuiltinOAuthCompletion extends AuthorizationCompletionBase {
+  authType: 'oauth';
+  source: 'manual';
+  providerKind: 'builtin';
+  providerId: string;
+  profileId: string;
+}
+
+export interface CustomApiKeyCompletion extends AuthorizationCompletionBase {
+  authType: 'api_key';
+  source: 'manual' | 'ccswitch';
+  providerKind: 'custom';
+  customProvider: {
+    id?: string;
+    name: string;
+    protocol: CustomProvider['protocol'];
+    baseUrl: string;
+    apiKey: string;
+    externalId?: string;
+    notes?: string;
+    websiteUrl?: string;
+  };
+}
+
+export type CompleteAuthorizationInput =
+  | BuiltinApiKeyCompletion
+  | BuiltinOAuthCompletion
+  | CustomApiKeyCompletion;
+
+const authorizationMutationTails = new Map<string, Promise<void>>();
+let _authorizationCustomProviderCounter = 0;
+
+function cloneProfilesStore(store: ProfilesFile): ProfilesFile {
+  return JSON.parse(JSON.stringify(store)) as ProfilesFile;
+}
+
+async function withAuthorizationMutation<T>(
+  userId: string,
+  run: (store: ProfilesFile) => T | Promise<T>,
+): Promise<T> {
+  assertActiveUser(userId);
+  const previous = authorizationMutationTails.get(userId) || Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  authorizationMutationTails.set(userId, tail);
+  await previous.catch(() => undefined);
+  try {
+    const working = cloneProfilesStore(loadProfiles());
+    const result = await run(working);
+    saveProfiles(working);
+    invalidateCoreAgentRunner();
+    return result;
+  } finally {
+    release();
+    void tail.finally(() => {
+      if (authorizationMutationTails.get(userId) === tail) authorizationMutationTails.delete(userId);
+    });
+  }
+}
+
+function normalizeAuthorizationModels(models: unknown): string[] {
+  if (!Array.isArray(models)) throw new Error('selectedModels must be an array');
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of models.slice(0, 100)) {
+    const model = String(raw || '').trim().slice(0, 200);
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    out.push(model);
+  }
+  if (!out.length) throw new Error('selectedModels must contain at least one model');
+  return out;
+}
+
+function orderedAuthorizationModels(selected: string[], defaultModel: unknown): string[] {
+  const fallback = String(defaultModel || '').trim();
+  if (!selected.includes(fallback)) throw new Error('defaultModel must belong to selectedModels');
+  return [fallback, ...selected.filter((model) => model !== fallback)];
+}
+
+function normalizeAuthorizationBaseUrl(raw: unknown): string {
+  const value = String(raw || '').trim().replace(/\/+$/, '');
+  if (!value) throw new Error('baseUrl required');
+  let parsed: URL;
+  try { parsed = new URL(value); }
+  catch { throw new Error('baseUrl must be a valid http(s) URL'); }
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) {
+    throw new Error('baseUrl must be a valid http(s) URL without credentials');
+  }
+  return value;
+}
+
+function nextAuthorizationCustomProviderId(store: ProfilesFile): string {
+  const used = new Set((store.customProviders || []).map((provider) => provider.id));
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    _authorizationCustomProviderCounter = (_authorizationCustomProviderCounter + 1) % 100000;
+    const id = `cp-${Date.now().toString(36)}-${_authorizationCustomProviderCounter}`;
+    if (!used.has(id)) return id;
+  }
+  throw new Error('could not allocate custom provider id');
+}
+
+function entriesForProfile(store: ProfilesFile, profileId: string): Entry[] {
+  return store.entries.filter((entry) => entry.profileId === profileId && entry.provider === store.profiles[profileId]?.provider);
+}
+
+function entriesForCustomProvider(store: ProfilesFile, customId: string): Entry[] {
+  const synthetic = `cp:${customId}`;
+  return store.entries.filter((entry) => entry.provider === synthetic && entry.profileId === synthetic);
+}
+
+function profileAuthorizationSummary(
+  store: ProfilesFile,
+  profileId: string,
+  profile: StoredProfile,
+): AuthorizationSummary {
+  const entries = entriesForProfile(store, profileId);
+  return {
+    authorizationId: `profile:${profileId}`,
+    authType: profile.type,
+    source: 'manual',
+    providerId: profile.provider,
+    profileId,
+    label: profile.label,
+    ...(profile.type === 'api_key' && profile.baseUrl ? { baseUrl: profile.baseUrl } : {}),
+    ...(profile.type === 'api_key' ? { masked: maskKey(profile.key) } : { oauthExpired: Date.now() >= profile.expires }),
+    models: entries.map((entry) => ({ entryId: entry.entryId, model: entry.model })),
+    enabledModels: entries.map((entry) => entry.model),
+    defaultModel: entries[0]?.model || '',
+    unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
+  };
+}
+
+function customAuthorizationSummary(store: ProfilesFile, provider: CustomProvider): AuthorizationSummary {
+  const synthetic = `cp:${provider.id}`;
+  const entries = entriesForCustomProvider(store, provider.id);
+  return {
+    authorizationId: `custom:${provider.id}`,
+    authType: 'api_key',
+    source: provider.source || 'manual',
+    providerId: synthetic,
+    profileId: synthetic,
+    label: provider.name,
+    protocol: provider.protocol,
+    baseUrl: provider.baseUrl,
+    masked: maskKey(provider.apiKey),
+    models: entries.map((entry) => ({ entryId: entry.entryId, model: entry.model })),
+    enabledModels: entries.map((entry) => entry.model),
+    defaultModel: entries[0]?.model || '',
+    unbound: entries.length === 0,
+    ...(entries.length === 0 ? { warningCode: 'unbound_authorization' as const } : {}),
+  };
+}
+
+function authorizationSummaryById(store: ProfilesFile, authorizationId: string): AuthorizationSummary | undefined {
+  if (authorizationId.startsWith('profile:')) {
+    const profileId = authorizationId.slice('profile:'.length);
+    const profile = store.profiles[profileId];
+    return profile ? profileAuthorizationSummary(store, profileId, profile) : undefined;
+  }
+  if (authorizationId.startsWith('custom:')) {
+    const customId = authorizationId.slice('custom:'.length);
+    const provider = (store.customProviders || []).find((row) => row.id === customId);
+    return provider ? customAuthorizationSummary(store, provider) : undefined;
+  }
+  return undefined;
+}
+
+function authorizationStoreWarnings(store: ProfilesFile): AuthorizationWarning[] {
+  const warnings: AuthorizationWarning[] = [];
+  const customIds = new Set((store.customProviders || []).map((provider) => provider.id));
+  const pushUnique = (warning: AuthorizationWarning) => {
+    if (!warnings.some((row) => row.code === warning.code && row.entryId === warning.entryId && row.authorizationId === warning.authorizationId)) {
+      warnings.push(warning);
+    }
+  };
+  for (const entry of store.entries || []) {
+    if (entry.provider.startsWith('cp:') || entry.profileId.startsWith('cp:')) {
+      const customId = (entry.provider.startsWith('cp:') ? entry.provider : entry.profileId).slice('cp:'.length);
+      if (!customIds.has(customId)) pushUnique({ code: 'missing_custom_provider', entryId: entry.entryId });
+      continue;
+    }
+    const profile = store.profiles[entry.profileId];
+    if (!profile || profile.provider !== entry.provider) pushUnique({ code: 'orphan_entry', entryId: entry.entryId });
+  }
+  for (const [profileId, profile] of Object.entries(store.profiles)) {
+    if (entriesForProfile(store, profileId).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `profile:${profileId}` });
+    void profile;
+  }
+  for (const provider of store.customProviders || []) {
+    if (entriesForCustomProvider(store, provider.id).length === 0) pushUnique({ code: 'unbound_authorization', authorizationId: `custom:${provider.id}` });
+  }
+  return warnings.slice(0, 100);
+}
+
+export function listAuthorizationSummaries(userId: string): { authorizations: AuthorizationSummary[]; warnings: AuthorizationWarning[] } {
+  assertActiveUser(userId);
+  const store = loadProfiles();
+  return {
+    authorizations: [
+      ...Object.entries(store.profiles).map(([profileId, profile]) => profileAuthorizationSummary(store, profileId, profile)),
+      ...(store.customProviders || []).map((provider) => customAuthorizationSummary(store, provider)),
+    ],
+    warnings: authorizationStoreWarnings(store),
+  };
+}
+
+function replaceAuthorizationEntries(
+  store: ProfilesFile,
+  providerId: string,
+  profileId: string,
+  orderedModels: string[],
+): void {
+  const belongs = (entry: Entry) => entry.provider === providerId && entry.profileId === profileId;
+  const existing = new Map(store.entries.filter(belongs).map((entry) => [entry.model, entry]));
+  const now = Date.now();
+  const selected = orderedModels.map((model) => existing.get(model) || {
+    entryId: nextEntryId(), provider: providerId, profileId, model, createdAt: now, lastUsed: 0,
+  });
+  store.entries = [...selected, ...store.entries.filter((entry) => !belongs(entry))];
+}
+
+function rememberAuthorizationRequest(store: ProfilesFile, requestId: string, authorizationId: string): void {
+  const previous = (store.authorizationRequests || []).filter((receipt) => receipt.requestId !== requestId);
+  store.authorizationRequests = [...previous, { requestId, authorizationId, createdAt: Date.now() }].slice(-100);
+}
+
+export async function completeAuthorization(
+  userId: string,
+  input: CompleteAuthorizationInput,
+): Promise<{ ok: true; authorization: AuthorizationSummary }> {
+  const requestId = String(input?.requestId || '').trim().slice(0, 120);
+  if (!requestId) throw new Error('requestId required');
+  const selected = normalizeAuthorizationModels(input.selectedModels);
+  const orderedModels = orderedAuthorizationModels(selected, input.defaultModel);
+
+  return withAuthorizationMutation(userId, (store) => {
+    const receipt = (store.authorizationRequests || []).find((row) => row.requestId === requestId);
+    if (receipt) {
+      const existing = authorizationSummaryById(store, receipt.authorizationId);
+      if (existing) return { ok: true as const, authorization: existing };
+      store.authorizationRequests = (store.authorizationRequests || []).filter((row) => row.requestId !== requestId);
+    }
+
+    let authorizationId = '';
+    if (input.providerKind === 'builtin') {
+      const providerId = String(input.providerId || '').trim();
+      if (!providerId) throw new Error('providerId required');
+      for (const model of orderedModels) assertModelProviderAllowed(providerId, model);
+
+      let profileId = '';
+      if (input.authType === 'oauth') {
+        profileId = String(input.profileId || '').trim();
+        const profile = store.profiles[profileId];
+        if (!profile || profile.type !== 'oauth' || profile.provider !== providerId) {
+          throw new Error('OAuth profile not found');
+        }
+      } else {
+        const apiKey = String(input.apiKey || '').trim();
+        if (!apiKey) throw new Error('apiKey required');
+        const label = input.label ? sanitizeLabel(input.label) : autoLabel(store, providerId);
+        profileId = makeProfileId(providerId, label);
+        if (store.profiles[profileId]) throw new Error('profile label already exists');
+        const baseUrl = normalizeCustomBaseUrl(providerId, input.baseUrl);
+        store.profiles[profileId] = {
+          type: 'api_key', provider: providerId, label, key: apiKey,
+          ...(baseUrl ? { baseUrl } : {}),
+          createdAt: Date.now(), lastUsed: 0,
+        };
+      }
+      replaceAuthorizationEntries(store, providerId, profileId, orderedModels);
+      authorizationId = `profile:${profileId}`;
+    } else {
+      const draft = input.customProvider;
+      const name = String(draft?.name || '').trim().slice(0, 60);
+      const apiKey = String(draft?.apiKey || '').trim();
+      const protocol = draft?.protocol;
+      if (!name) throw new Error('custom provider name required');
+      if (!apiKey) throw new Error('apiKey required');
+      if (protocol !== 'openai' && protocol !== 'openai-responses' && protocol !== 'anthropic' && protocol !== 'gemini') {
+        throw new Error('unsupported custom provider protocol');
+      }
+      const baseUrl = normalizeAuthorizationBaseUrl(draft.baseUrl);
+      const list = store.customProviders || [];
+      const requestedId = String(draft.id || '').trim();
+      let provider = requestedId ? list.find((row) => row.id === requestedId) : undefined;
+      if (!provider && input.source === 'ccswitch' && draft.externalId) {
+        provider = list.find((row) => row.source === 'ccswitch' && row.externalId === draft.externalId);
+      }
+      if (provider) {
+        const existingModelMetadata = new Map(provider.models.map((model) => [model.id, model]));
+        Object.assign(provider, {
+          name, protocol, baseUrl, apiKey,
+          models: orderedModels.map((id) => existingModelMetadata.get(id) || ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          source: input.source,
+          ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
+          ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
+          ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
+          needsKey: false,
+          updatedAt: Date.now(),
+        });
+      } else {
+        provider = {
+          id: nextAuthorizationCustomProviderId(store), name, protocol, baseUrl, apiKey,
+          models: orderedModels.map((id) => ({
+            id,
+            contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+            maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+          })),
+          enabled: true,
+          source: input.source,
+          ...(draft.externalId ? { externalId: String(draft.externalId).slice(0, 160) } : {}),
+          ...(draft.notes ? { notes: String(draft.notes).trim().slice(0, 200) } : {}),
+          ...(draft.websiteUrl ? { websiteUrl: String(draft.websiteUrl).trim().slice(0, 500) } : {}),
+          createdAt: Date.now(),
+        };
+        list.unshift(provider);
+        store.customProviders = list;
+      }
+      const synthetic = `cp:${provider.id}`;
+      replaceAuthorizationEntries(store, synthetic, synthetic, orderedModels);
+      authorizationId = `custom:${provider.id}`;
+    }
+
+    rememberAuthorizationRequest(store, requestId, authorizationId);
+    const authorization = authorizationSummaryById(store, authorizationId);
+    if (!authorization) throw new Error('authorization summary unavailable');
+    return { ok: true as const, authorization };
+  });
+}
+
+export async function removeAuthorizationModel(
+  userId: string,
+  authorizationId: string,
+  entryId: string,
+): Promise<{ removed: boolean; authorization?: AuthorizationSummary }> {
+  const authId = String(authorizationId || '').trim();
+  const targetEntryId = String(entryId || '').trim();
+  return withAuthorizationMutation(userId, (store) => {
+    const current = authorizationSummaryById(store, authId);
+    if (!current || !current.models.some((model) => model.entryId === targetEntryId)) return { removed: false };
+    store.entries = store.entries.filter((entry) => entry.entryId !== targetEntryId);
+    return { removed: true, authorization: authorizationSummaryById(store, authId) };
+  });
+}
+
+export async function removeAuthorization(
+  userId: string,
+  authorizationId: string,
+): Promise<{ removed: boolean }> {
+  const authId = String(authorizationId || '').trim();
+  return withAuthorizationMutation(userId, (store) => {
+    if (authId.startsWith('profile:')) {
+      const profileId = authId.slice('profile:'.length);
+      if (!store.profiles[profileId]) return { removed: false };
+      delete store.profiles[profileId];
+      store.entries = store.entries.filter((entry) => entry.profileId !== profileId);
+    } else if (authId.startsWith('custom:')) {
+      const customId = authId.slice('custom:'.length);
+      const before = (store.customProviders || []).length;
+      store.customProviders = (store.customProviders || []).filter((provider) => provider.id !== customId);
+      if ((store.customProviders || []).length === before) return { removed: false };
+      const synthetic = `cp:${customId}`;
+      store.entries = store.entries.filter((entry) => entry.provider !== synthetic && entry.profileId !== synthetic);
+    } else {
+      return { removed: false };
+    }
+    store.authorizationRequests = (store.authorizationRequests || []).filter((receipt) => receipt.authorizationId !== authId);
+    return { removed: true };
+  });
+}
+
+// ── OAuth flow orchestration ─────────────────────────────────────────────
+
+interface FlowPrompt { message: string; placeholder?: string; allowEmpty?: boolean }
+
+type FlowStatus =
+  | { kind: 'starting' }
+  | { kind: 'awaiting_auth'; url: string; instructions?: string; usesCallbackServer?: boolean }
+  | { kind: 'awaiting_input'; prompt: FlowPrompt }
+  | { kind: 'progress'; message: string }
+  | { kind: 'done'; profileId: string }
+  | { kind: 'error'; error: string };
+
+interface Flow {
+  flowId: string;
+  provider: string;
+  label: string;
+  status: FlowStatus;
+  /** Resolves pi-ai's late-stage `onPrompt` (server never received a callback). */
+  pendingInputResolver?: (value: string) => void;
+  /** Resolves pi-ai's early-stage `onManualCodeInput` race — raced against the
+   *  browser-callback server. Lets users either authorize in the browser OR
+   *  paste the code, whichever they prefer. */
+  manualInputResolver?: (value: string) => void;
+  abortController: AbortController;
+}
+
+const flows = new Map<string, Flow>();
+let _flowCounter = 0;
+
+function nextFlowId(): string {
+  _flowCounter = (_flowCounter + 1) % 100000;
+  return `oauth-${Date.now().toString(36)}-${_flowCounter}`;
+}
+
+/**
+ * Try to extract a user-friendly label from OAuth credentials.
+ *
+ * Precedence (first non-empty wins):
+ *   1. Credential `email` field, if provider populates it (local-part only).
+ *   2. JWT payload `email` / `https://api.openai.com/profile.email`
+ *      (OpenAI Codex tokens carry this).
+ *   3. `accountId` prefix (first 8 chars).
+ *
+ * Returns '' when nothing usable is found; caller falls back to autoLabel().
+ */
+function deriveOAuthLabel(creds: Record<string, unknown>): string {
+  const directEmail = (creds as any).email;
+  if (typeof directEmail === 'string' && directEmail.includes('@')) {
+    return directEmail.split('@')[0];
+  }
+  const access = (creds as any).access;
+  if (typeof access === 'string') {
+    try {
+      const parts = access.split('.');
+      if (parts.length >= 2) {
+        const padded = parts[1] + '='.repeat((4 - parts[1].length % 4) % 4);
+        const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf-8'));
+        const profile = payload?.['https://api.openai.com/profile'];
+        const email = profile?.email || payload?.email;
+        if (typeof email === 'string' && email.includes('@')) {
+          return email.split('@')[0];
+        }
+      }
+    } catch { /* token wasn't a readable JWT */ }
+  }
+  const accountId = (creds as any).accountId;
+  if (typeof accountId === 'string' && accountId.length) {
+    return accountId.slice(0, 8);
+  }
+  return '';
+}
+
+/**
+ * Open a user-clicked URL in its platform-native handler (browser, mail,
+ * phone, etc.) instead of Electron's BrowserWindow. The validator is strict
+ * because shell.openExternal delegates to OS applications.
+ */
+export function openExternalUrl(url: string): { ok: boolean; error?: string } {
+  const raw = String(url || '').trim();
+  if (!raw) return { ok: false, error: 'url required' };
+  const target = safeExternalUserActionUrl(raw);
+  if (!target) return { ok: false, error: 'url must be a safe external link' };
+  // Electron's shell.openExternal is the official cross-platform API:
+  // macOS uses open(1), Windows uses ShellExecuteW, Linux uses
+  // xdg-open — supersedes our old hand-rolled shell commands (Windows
+  // cmd's `start "" "url"` quoting was prone to breaking under exec()).
+  shell.openExternal(target).catch((err: unknown) => {
+    log.warn('openExternal failed:', (err as Error)?.message || String(err));
+  });
+  return { ok: true };
+}
+
+export async function startOAuth(
+  providerId: string,
+  label?: string,
+): Promise<{ flowId: string; status: FlowStatus }> {
+  const id = String(providerId || '').trim();
+  if (!id) throw new Error('provider required');
+  const oauth = await piOauth();
+  const provider = oauth.getOAuthProvider(id as any);
+  if (!provider) {
+    const hint = _minimaxRegisterError && id.startsWith('minimax-portal')
+      ? t('oauth.minimax.register_error_hint', { message: _minimaxRegisterError })
+      : '';
+    throw new Error(`provider "${id}" does not support OAuth${hint}`);
+  }
+
+  const flowId = nextFlowId();
+  const chosenLabel = label ? sanitizeLabel(label) : autoLabel(loadProfiles(), id);
+  // Device-code style flows (MiniMax) don't bind a local port — the UI must
+  // hide its "paste callback URL" input in that case.
+  const usesCallbackServer = provider.usesCallbackServer !== false;
+  const flow: Flow = {
+    flowId,
+    provider: id,
+    label: chosenLabel,
+    status: { kind: 'starting' },
+    abortController: new AbortController(),
+  };
+  flows.set(flowId, flow);
+
+  provider
+    .login({
+      signal: flow.abortController.signal,
+      onAuth: (info) => {
+        flow.status = {
+          kind: 'awaiting_auth',
+          url: info.url,
+          instructions: info.instructions,
+          usesCallbackServer,
+        };
+        // Auto-open the user's system default browser. If this fails the
+        // renderer still shows the URL + "copy link" button as a fallback.
+        openExternalUrl(info.url);
+      },
+      onDeviceCode: (info) => {
+        const details = [`Code: ${info.userCode}`];
+        if (info.expiresInSeconds) details.push(`Expires in ${info.expiresInSeconds} seconds.`);
+        flow.status = {
+          kind: 'awaiting_auth',
+          url: info.verificationUri,
+          instructions: details.join('\n'),
+          usesCallbackServer: false,
+        };
+        openExternalUrl(info.verificationUri);
+      },
+      onPrompt: async (prompt) => {
+        flow.status = {
+          kind: 'awaiting_input',
+          prompt: {
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+            allowEmpty: prompt.allowEmpty,
+          },
+        };
+        return new Promise<string>((resolve) => {
+          flow.pendingInputResolver = (val) => {
+            flow.pendingInputResolver = undefined;
+            resolve(val);
+          };
+        });
+      },
+      // Race the browser-callback server against a manual-paste input. Two
+      // benefits:
+      //   1. The "paste" text box shows up in the UI alongside the URL,
+      //      so users who run into a redirect problem (wrong browser,
+      //      corporate proxy, stale port) can still finish by pasting the
+      //      redirect URL they see after authorizing.
+      //   2. Gives us a cancel handle — resolving this promise on cancel
+      //      lets pi-ai drain out of `server.waitForCode()` and reach the
+      //      `finally { server.close() }` block, so port 1455 gets freed
+      //      instead of leaking.
+      onManualCodeInput: () => new Promise<string>((resolve) => {
+        flow.manualInputResolver = (val) => {
+          flow.manualInputResolver = undefined;
+          resolve(val);
+        };
+      }),
+      onSelect: async (prompt) => {
+        const selected = prompt.options[0];
+        flow.status = {
+          kind: 'progress',
+          message: selected ? `${prompt.message} ${selected.label}` : prompt.message,
+        };
+        return selected?.id;
+      },
+      onProgress: (message) => {
+        flow.status = { kind: 'progress', message };
+      },
+    })
+    .then((credentials) => {
+      const store = loadProfiles();
+      // Prefer a human-identifiable label from the token if the caller
+      // didn't supply one — email local-part, then accountId prefix —
+      // so multi-account rows don't all read "default".
+      const derived = !label ? deriveOAuthLabel(credentials) : '';
+      let finalLabel = derived ? sanitizeLabel(derived) : chosenLabel;
+      if (store.profiles[makeProfileId(id, finalLabel)]) {
+        finalLabel = `${finalLabel}-${Date.now().toString(36).slice(-4)}`;
+      }
+      const pid = makeProfileId(id, finalLabel);
+      const now = Date.now();
+      store.profiles[pid] = {
+        type: 'oauth',
+        provider: id,
+        label: finalLabel,
+        access: credentials.access,
+        refresh: credentials.refresh,
+        expires: credentials.expires,
+        createdAt: now,
+        lastUsed: 0,
+        ...Object.fromEntries(
+          Object.entries(credentials).filter(([k]) =>
+            !['access', 'refresh', 'expires'].includes(k),
+          ),
+        ),
+      };
+      saveProfiles(store);
+      invalidateCoreAgentRunner();
+      flow.status = { kind: 'done', profileId: pid };
+    })
+    .catch((err: unknown) => {
+      flow.status = { kind: 'error', error: (err as Error)?.message || String(err) };
+    });
+
+  return { flowId, status: flow.status };
+}
+
+export function pollOAuthFlow(flowId: string): { status: FlowStatus } {
+  const flow = flows.get(flowId);
+  if (!flow) return { status: { kind: 'error', error: 'unknown flow' } };
+  return { status: flow.status };
+}
+
+export function submitOAuthInput(flowId: string, value: string): { ok: boolean } {
+  const flow = flows.get(flowId);
+  if (!flow) return { ok: false };
+  const val = String(value ?? '');
+  // Prefer the late-stage `onPrompt` resolver if active (bind failed), else
+  // feed the early-stage `onManualCodeInput` race (bind succeeded — racing
+  // against the browser callback).
+  const resolver = flow.pendingInputResolver || flow.manualInputResolver;
+  if (!resolver) return { ok: false };
+  flow.status = { kind: 'progress', message: t('auth.progress.processing') };
+  resolver(val);
+  return { ok: true };
+}
+
+export function cancelOAuthFlow(flowId: string): { ok: boolean } {
+  const flow = flows.get(flowId);
+  if (!flow) return { ok: false };
+  try { flow.abortController.abort(); } catch { /* noop */ }
+  // Resolve both resolvers with empty string so pi-ai's flow drains out,
+  // hits its `finally { server.close() }` and releases port 1455. Without
+  // this a cancel mid-auth would leave the HTTP server bound and break
+  // subsequent OAuth attempts.
+  if (flow.pendingInputResolver) {
+    try { flow.pendingInputResolver(''); } catch { /* noop */ }
+  }
+  if (flow.manualInputResolver) {
+    try { flow.manualInputResolver(''); } catch { /* noop */ }
+  }
+  flow.status = { kind: 'error', error: 'cancelled' };
+  setTimeout(() => flows.delete(flowId), 5000);
+  return { ok: true };
+}
+
+// ── Chat entry picker (runner integration) ───────────────────────────────
+
+/** Wire protocols the CogSeed runtime model providers can speak natively. */
+export type RuntimeChatProtocol = 'openai-completions' | 'openai-responses' | 'anthropic' | 'gemini';
+
+export interface ChatEntryChoice {
+  entryId: string;
+  profileId: string;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  maxOutputTokens?: number;
+  /** Wire protocol this entry speaks; undefined = native pi-ai surface the
+   *  CogSeed runtime cannot reach (OpenAI Responses, OpenRouter, zai, ...). */
+  protocol?: RuntimeChatProtocol;
+}
+
+/**
+ * Map an entry to the wire protocol the CogSeed runtime can speak, or null
+ * when the entry only exists on a native pi-ai surface (OpenAI Responses,
+ * OpenRouter aggregates, zai, minimax portal, Codex/Copilot OAuth, ...).
+ */
+function runtimeProtocolForEntry(store: ProfilesFile, entry: Entry): RuntimeChatProtocol | null {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) {
+    if (custom.protocol === 'openai') return 'openai-completions';
+    if (custom.protocol === 'openai-responses') return 'openai-responses';
+    if (custom.protocol === 'anthropic') return 'anthropic';
+    if (custom.protocol === 'gemini') return 'gemini';
+    return null;
+  }
+  const profile = store.profiles[entry.profileId];
+  if (!profile) return null;
+  if (profile.type === 'api_key') {
+    switch (profile.provider) {
+      case 'openai-compatible':
+      case 'moonshot':
+      case 'deepseek':
+      case 'doubao':
+        return 'openai-completions';
+      case 'openai':
+        return 'openai-responses';
+      case 'anthropic':
+      case 'kimi-coding':
+        return 'anthropic';
+      case 'google':
+        return 'gemini';
+      default:
+        // zai, minimax-cn, openrouter, ... are native pi-ai surfaces the
+        // runtime cannot reach.
+        return null;
+    }
+  }
+  // OAuth-backed entries: only the Anthropic surface is reachable with a raw
+  // Messages-API request (Claude Pro/Max access tokens). Codex / Gemini CLI /
+  // Copilot / MiniMax portal tokens are native-protocol only.
+  return profile.provider === 'anthropic' ? 'anthropic' : null;
+}
+
+/**
+ * Resolve one usable chat entry for an explicit user that the CogSeed runtime
+ * can actually call, walking the priority list like pickChatEntryGroup does.
+ * Accepts entries backed by api_key profiles, OAuth profiles (with refresh)
+ * and custom providers, as long as the entry maps to one of the wire
+ * protocols the runtime implements (openai-completions / anthropic / gemini).
+ * Native-only surfaces (OpenAI Responses, OpenRouter, zai, minimax portal,
+ * Codex / Copilot OAuth) are skipped so the runtime never gets a candidate it
+ * cannot talk to. OAuth refresh runs inside resolveEntryApiKey; when it fails
+ * the expired entry is skipped and the user gets the OAuth-expired hint.
+ */
+export async function pickRuntimeChatEntryForUser(
+  userId: string,
+  profileId?: string,
+): Promise<ChatEntryChoice | null> {
+  const uid = assertAuthUserId(userId);
+  const wantedProfileId = profileId === undefined ? undefined : String(profileId).trim();
+  if (profileId !== undefined && !wantedProfileId) throw new Error('invalid profile id');
+
+  const store = loadProfilesForUser(uid);
+  for (const entry of store.entries) {
+    if (wantedProfileId && entry.profileId !== wantedProfileId) continue;
+    if (!isEntryAllowed(store, entry)) continue;
+    const protocol = runtimeProtocolForEntry(store, entry);
+    if (!protocol) continue;
+    const apiKey = await resolveEntryApiKey(store, entry);
+    if (!apiKey) continue;
+    const profile = store.profiles[entry.profileId];
+    const apiProfile = profile?.type === 'api_key' ? profile as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
+    return {
+      entryId: entry.entryId,
+      profileId: entry.profileId,
+      provider: entry.provider,
+      model: entry.model,
+      apiKey,
+      protocol,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
+        : {}),
+    };
+  }
+  return null;
+}
+
+/**
+ * Group consecutive entries by `(provider, model)`. Dropped into a helper
+ * so `pickChatEntry` (single winner) and `pickChatEntryGroup` (whole
+ * group of candidates for rotation) share exactly the same grouping
+ * semantics — including the "first group wins" priority rule.
+ */
+function groupEntries(entries: Entry[]): Entry[][] {
+  const groups: Entry[][] = [];
+  let current: Entry[] = [];
+  let currentKey = '';
+  for (const e of entries) {
+    const key = `${e.provider}::${e.model}`;
+    if (key !== currentKey) {
+      if (current.length) groups.push(current);
+      current = [e];
+      currentKey = key;
+    } else {
+      current.push(e);
+    }
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+/**
+ * Resolve the usable `apiKey` for an entry (returns undefined if the
+ * profile is gone, the OAuth token expired and refresh fails, etc.).
+ */
+async function resolveEntryApiKey(store: ProfilesFile, entry: Entry): Promise<string | undefined> {
+  const custom = customProviderForId(store, entry.provider);
+  if (custom) return custom.apiKey || undefined;
+  const prof = store.profiles[entry.profileId];
+  if (!prof || !isStoredProfileAllowed(prof)) return undefined;
+  if (prof.type === 'api_key') return prof.key;
+  if (Date.now() < prof.expires) return prof.access;
+  try {
+    return await refreshOAuthProfile(entry.profileId);
+  } catch (err) {
+    log.warn(`OAuth refresh failed for ${entry.profileId}:`, (err as Error).message);
+    return undefined;
+  }
+}
+
+// ── Api-key-only entry listing (broader-API features) ───────────────────
+//
+// Image generation, TTS, embeddings, file management, etc. are HTTP
+// endpoints that sit on each provider's broader API surface — NOT the
+// chat-completions endpoint that OAuth tokens are scoped to. None of the
+// OAuth surfaces we ship (Anthropic Pro/Max, OpenAI Codex, Gemini CLI,
+// Antigravity, MiniMax Portal, GitHub Copilot) can reach these endpoints,
+// either because the token scope excludes them or because the provider's
+// ToS forbids re-use outside the OAuth app's own surface.
+//
+// Callers that need such an endpoint use this helper to scan only the
+// api-key entries, then match the provider against their own capability
+// table (e.g. `provider_catalog.IMAGE_GEN_BY_PROVIDER`).
+
+export interface ApiKeyEntryChoice {
+  entryId: string;
+  profileId: string;
+  provider: string;
+  /** The user's chat model on this entry — exposed so callers can log
+   *  what entry they picked. NOT what the broader-API feature dispatches
+   *  to (image gen has its own fixed model id, etc.). */
+  model: string;
+  apiKey: string;
+}
+
+export function listApiKeyEntries(): ApiKeyEntryChoice[] {
+  const store = loadProfiles();
+  const out: ApiKeyEntryChoice[] = [];
+  for (const e of store.entries) {
+    const prof = store.profiles[e.profileId];
+    if (!isEntryAllowed(store, e) || !isStoredProfileAllowed(prof)) continue;
+    if (prof.type !== 'api_key') continue;
+    out.push({
+      entryId: e.entryId,
+      profileId: e.profileId,
+      provider: e.provider,
+      model: e.model,
+      apiKey: prof.key,
+    });
+  }
+  return out;
+}
+
+/**
+ * Bump `lastUsed` on a specific entry (re-reads the store to avoid
+ * clobbering concurrent writes). Safe no-op if the entry disappeared.
+ */
+export function bumpEntryLastUsed(entryId: string): void {
+  const fresh = loadProfiles();
+  const target = fresh.entries.find((e) => e.entryId === entryId);
+  if (target) {
+    target.lastUsed = Date.now();
+    saveProfiles(fresh);
+  }
+}
+
+/**
+ * Return the ordered list of usable entries for the current chat request.
+ * Entry order = user-controlled drag order in the settings UI (entries[0]
+ * is the primary, the rest are fallbacks). Rotation goes **across** the
+ * entire list — not just within a `(provider, model)` group. Primary 401
+ * can fall back to a completely different provider+model if that's how
+ * the user arranged their list.
+ *
+ * Within a run of consecutive entries sharing the same `(provider, model)`
+ * (often: multiple API keys for the same model), we still pre-order by
+ * oldest `lastUsed` first so load spreads fairly — but we flatten the
+ * ordered sub-lists back into a single stream so the rotating provider
+ * sees one simple sequence.
+ *
+ * Skips:
+ *   - entries whose profile was deleted
+ *   - entries whose OAuth expired without a working refresh
+ *   - entries in the cooldown map (`profile-cooldown.ts`)
+ *
+ * Returns `[]` when no entry at all is usable.
+ *
+ * Does NOT bump `lastUsed` — that's the caller's job (rotating-provider
+ * bumps the winning candidate via `onSuccess`).
+ */
+export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
+  const store = loadProfilesForActiveUserOrEmpty();
+  if (store.entries.length === 0) return [];
+
+  // Flatten: preserve entries[] order across groups, but within a
+  // consecutive same-(provider, model) run, sort oldest lastUsed first.
+  const groups = groupEntries(store.entries);
+  const ordered: Entry[] = [];
+  for (const group of groups) {
+    const sorted = [...group].sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
+    for (const e of sorted) ordered.push(e);
+  }
+
+  const choices: ChatEntryChoice[] = [];
+  for (const entry of ordered) {
+    if (!isEntryAllowed(store, entry)) {
+      log.info(`skipping disabled provider/model ${entry.provider}/${entry.model}`);
+      continue;
+    }
+    if (isCooledDown(entry.profileId)) {
+      log.info(`skipping cooled-down profile ${entry.profileId}`);
+      continue;
+    }
+    const apiKey = await resolveEntryApiKey(store, entry);
+    if (!apiKey) continue;
+    const prof = store.profiles[entry.profileId];
+    const apiProfile = prof?.type === 'api_key' ? prof as ApiKeyProfile : undefined;
+    const custom = customProviderForId(store, entry.provider);
+    choices.push({
+      entryId: entry.entryId,
+      profileId: entry.profileId,
+      provider: entry.provider,
+      model: entry.model,
+      apiKey,
+      ...(custom?.baseUrl ? { baseUrl: custom.baseUrl } : {}),
+      ...(apiProfile?.baseUrl ? { baseUrl: apiProfile.baseUrl } : {}),
+      ...(apiProfile && isOpenAICompatibleProvider(entry.provider)
+        ? { maxOutputTokens: normalizeOpenAICompatibleMaxOutputTokens(entry.provider, apiProfile.maxOutputTokens) }
+        : {}),
+    });
+  }
+  return choices;
+}
+
+/**
+ * Pick the next chat entry respecting user priority. Thin wrapper over
+ * `pickChatEntryGroup` that returns the top candidate (first group,
+ * oldest-lastUsed first) and bumps `lastUsed` immediately. Callers that
+ * want rotation (runner.ts's chat path) use `pickChatEntryGroup` directly;
+ * callers that only need one key (testConnection with provider-only mode)
+ * keep using this.
+ *
+ * Returns null if no group has a usable candidate.
+ */
+export async function pickChatEntry(): Promise<ChatEntryChoice | null> {
+  const group = await pickChatEntryGroup();
+  if (group.length === 0) return null;
+  const chosen = group[0];
+  bumpEntryLastUsed(chosen.entryId);
+  return chosen;
+}
+
+/** Retained for one legacy caller (testConnection with a specific provider). */
+export async function pickRotationKey(providerId: string): Promise<{
+  profileId: string; provider: string; label: string; apiKey: string; baseUrl?: string;
+} | null> {
+  const id = String(providerId || '').trim();
+  if (!id) return null;
+  if (!isModelProviderAllowed(id)) return null;
+  const store = loadProfiles();
+  const candidates = Object.entries(store.profiles)
+    .filter(([, p]) => p.provider === id)
+    .sort(([, a], [, b]) => (a.lastUsed || 0) - (b.lastUsed || 0));
+  for (const [pid, prof] of candidates) {
+    if (isCooledDown(pid)) {
+      log.info(`skipping cooled-down profile ${pid}`);
+      continue;
+    }
+    let apiKey: string | undefined;
+    let baseUrl: string | undefined;
+    if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
+    else if (Date.now() < prof.expires) apiKey = prof.access;
+    else apiKey = await refreshOAuthProfile(pid).catch(() => undefined);
+    if (!apiKey) continue;
+    const fresh = loadProfiles();
+    const target = fresh.profiles[pid];
+    if (target) { target.lastUsed = Date.now(); saveProfiles(fresh); }
+    return {
+      profileId: pid,
+      provider: id,
+      label: prof.label,
+      apiKey,
+      ...(prof.type === 'api_key' && prof.baseUrl ? { baseUrl: prof.baseUrl } : {}),
+    };
+  }
+  return null;
+}
+
+async function refreshOAuthProfile(profileId: string): Promise<string | undefined> {
+  const store = loadProfiles();
+  const prof = store.profiles[profileId];
+  if (!prof || prof.type !== 'oauth') return undefined;
+
+  const oauth = await piOauth();
+  const provider = oauth.getOAuthProvider(prof.provider);
+  if (!provider) return undefined;
+
+  const creds = {
+    access: prof.access,
+    refresh: prof.refresh,
+    expires: prof.expires,
+    ...Object.fromEntries(
+      Object.entries(prof).filter(([k]) =>
+        !['type', 'provider', 'label', 'createdAt', 'lastUsed', 'email', 'access', 'refresh', 'expires'].includes(k),
+      ),
+    ),
+  };
+  const newCreds = await provider.refreshToken(creds as any);
+  const fresh = loadProfiles();
+  const target = fresh.profiles[profileId];
+  if (target && target.type === 'oauth') {
+    target.access = newCreds.access;
+    target.refresh = newCreds.refresh;
+    target.expires = newCreds.expires;
+    for (const [k, v] of Object.entries(newCreds)) {
+      if (!['access', 'refresh', 'expires'].includes(k)) {
+        (target as OAuthProfile)[k] = v;
+      }
+    }
+    saveProfiles(fresh);
+  }
+  return provider.getApiKey(newCreds);
+}
+
+// ── Test connection ──────────────────────────────────────────────────────
+
+export interface TestConnectionResult {
+  ok: boolean;
+  error?: string;
+  durationMs?: number;
+  model?: string;
+  profileId?: string;
+}
+
+export type AuthorizationDraftTestInput =
+  | { kind: 'oauth'; providerId: string; profileId: string; model: string }
+  | { kind: 'builtin_api_key'; providerId: string; apiKey: string; baseUrl?: string; model: string }
+  | { kind: 'custom_api_key'; protocol: CustomProvider['protocol']; apiKey: string; baseUrl: string; model: string };
+
+async function completeConnectivityProbe(provider: any, model: string): Promise<{ model?: string }> {
+  return provider.complete({
+    model,
+    systemPrompt: 'You are a connectivity probe; reply with a single word.',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    maxTokens: 1,
+  });
+}
+
+/** Test a credential before the unified authorization flow persists it. */
+export async function testAuthorizationDraft(
+  userId: string,
+  input: AuthorizationDraftTestInput,
+): Promise<TestConnectionResult> {
+  assertActiveUser(userId);
+  const model = String(input?.model || '').trim();
+  if (!model) return { ok: false, error: 'model required' };
+  if (input.kind === 'oauth') {
+    return testConnection(String(input.providerId || '').trim(), model, String(input.profileId || '').trim());
+  }
+  const apiKey = String(input.apiKey || '').trim();
+  if (!apiKey) return { ok: false, error: 'apiKey required' };
+  const t0 = Date.now();
+  try {
+    let provider: any;
+    if (input.kind === 'custom_api_key') {
+      const baseUrl = normalizeAuthorizationBaseUrl(input.baseUrl);
+      const runtime = await import('../model/core-agent/custom_provider_runtime');
+      const mod = await ca();
+      const draftProvider: CustomProvider = {
+        id: 'authorization-draft',
+        name: 'Authorization draft',
+        protocol: input.protocol,
+        baseUrl,
+        apiKey,
+        enabled: true,
+        models: [{
+          id: model,
+          contextWindow: DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        }],
+        source: 'manual',
+        createdAt: Date.now(),
+      };
+      provider = mod.createPiProvider({
+        provider: 'cp:authorization-draft',
+        apiKey,
+        customModel: runtime.buildCustomProviderModel(draftProvider, model),
+      });
+    } else {
+      const providerId = String(input.providerId || '').trim();
+      if (!providerId) return { ok: false, error: 'provider required' };
+      if (!isModelProviderAllowed(providerId, model)) return { ok: false, error: 'provider/model disabled' };
+      if (EXTERNAL_API_PROVIDERS.includes(providerId)) {
+        const ext = await import('../model/core-agent/external-providers');
+        if (providerId === 'moonshot') provider = await ext.createMoonshotProvider({ apiKey, modelId: model });
+        else if (providerId === 'deepseek') provider = await ext.createDeepSeekProvider({ apiKey, modelId: model });
+        else if (providerId === 'doubao') provider = await ext.createDoubaoProvider({ apiKey, modelId: model });
+        else if (providerId === 'openai-compatible') {
+          provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: input.baseUrl || '', modelId: model });
+        } else return { ok: false, error: `provider "${providerId}" has no draft probe` };
+      } else {
+        const mod = await ca();
+        const resolvedModel = resolveConfiguredPiModel(mod, providerId, model);
+        provider = mod.createPiProvider({
+          provider: providerId,
+          ...(resolvedModel?.needsCustomModel ? { customModel: resolvedModel.model } : { model }),
+          apiKey,
+        });
+      }
+    }
+    const message = await completeConnectivityProbe(provider, model);
+    return { ok: true, durationMs: Date.now() - t0, model: message.model || model };
+  } catch (error) {
+    const rawError = (error as Error)?.message || String(error);
+    const safeError = rawError
+      .split(apiKey).join('[redacted]')
+      .replace(/https?:\/\/[^\s"']+/gi, '[endpoint]')
+      .slice(0, 500);
+    log.warn('authorization draft connection failed', {
+      kind: input.kind,
+      durationMs: Date.now() - t0,
+      error_chars: safeError.length,
+    });
+    return { ok: false, error: safeError, durationMs: Date.now() - t0 };
+  }
+}
+
+export async function testConnection(
+  providerId: string,
+  modelId?: string,
+  profileId?: string,
+): Promise<TestConnectionResult> {
+  const pid = String(providerId || '').trim();
+  if (!pid) return { ok: false, error: 'provider required' };
+  if (!isModelProviderAllowed(pid, modelId)) {
+    return { ok: false, error: 'DeepSeek is disabled in this build' };
+  }
+  const mod = await ca();
+
+  let chosenProfileId: string | undefined = profileId;
+  let apiKey: string | undefined;
+  let baseUrl: string | undefined;
+
+  if (chosenProfileId) {
+    const store = loadProfiles();
+    const prof = store.profiles[chosenProfileId];
+    if (!prof || prof.provider !== pid) return { ok: false, error: 'profile not found' };
+    if (prof.type === 'api_key') { apiKey = prof.key; baseUrl = prof.baseUrl; }
+    else if (Date.now() < prof.expires) apiKey = prof.access;
+    else apiKey = await refreshOAuthProfile(chosenProfileId).catch(() => undefined);
+  } else {
+    const choice = await pickRotationKey(pid);
+    if (choice) { apiKey = choice.apiKey; baseUrl = choice.baseUrl; chosenProfileId = choice.profileId; }
+  }
+
+  if (!apiKey) return { ok: false, error: 'no credential stored for this provider', profileId: chosenProfileId };
+
+  // CogSeed-side external providers bypass pi-ai's catalog — route directly
+  // to their factory so we don't hit the "provider has no models registered"
+  // guard below (which relies on pi-ai's listPiModels).
+  if (EXTERNAL_API_PROVIDERS.includes(pid)) {
+    const modelForTest = String(modelId || '').trim();
+    const t0 = Date.now();
+    try {
+      const ext = await import('../model/core-agent/external-providers');
+      let provider;
+      let probeModel = modelForTest;
+      if (pid === 'moonshot') {
+        probeModel = probeModel || 'kimi-k2.5';
+        provider = await ext.createMoonshotProvider({ apiKey, modelId: probeModel });
+      } else if (pid === 'deepseek') {
+        // Default probe = V4 Flash (cheaper than Pro; fine for a 1-token ping).
+        probeModel = probeModel || 'deepseek-v4-flash';
+        provider = await ext.createDeepSeekProvider({ apiKey, modelId: probeModel });
+      } else if (pid === 'doubao') {
+        // Default probe = Seed 2.0 Lite (cheaper than Pro).
+        probeModel = probeModel || 'doubao-seed-2-0-lite-260215';
+        provider = await ext.createDoubaoProvider({ apiKey, modelId: probeModel });
+      } else if (pid === 'openai-compatible') {
+        probeModel = probeModel || 'gpt-4o-mini';
+        provider = await ext.createOpenAICompatibleProvider({ apiKey, baseUrl: baseUrl || '', modelId: probeModel });
+      } else {
+        throw new Error(`external provider "${pid}" has no test-connection factory yet`);
+      }
+      const msg = await provider.complete({
+        model: probeModel,
+        systemPrompt: 'You are a connectivity probe; reply with a single word.',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+        maxTokens: 1,
+      });
+      if (chosenProfileId) clearCooldown(chosenProfileId);
+      return { ok: true, durationMs: Date.now() - t0, model: msg.model || probeModel, profileId: chosenProfileId };
+    } catch (err) {
+      const errMsg = (err as Error).message || String(err);
+      log.warn('testConnection failed (external provider)', {
+        provider: pid,
+        model: modelForTest,
+        durationMs: Date.now() - t0,
+        error: errMsg,
+      });
+      return {
+        ok: false,
+        error: errMsg,
+        durationMs: Date.now() - t0,
+        profileId: chosenProfileId,
+      };
+    }
+  }
+
+  // pi-ai's `getModel()` returns undefined (doesn't throw) for unknown model
+  // IDs, which trips an NPE inside core-agent's `resolveModel`. Guard here
+  // so we surface a clean "model not found" instead of "Cannot read
+  // properties of undefined".
+  const requestedModel = modelId ? String(modelId).trim() : '';
+  let effectiveModel = requestedModel;
+  const resolvedModel = requestedModel ? resolveConfiguredPiModel(mod, pid, requestedModel) : null;
+  if (resolvedModel?.isConfiguredFallback) {
+    log.info('using configured model fallback for connection test', {
+      provider: pid,
+      model: requestedModel,
+      templateProvider: resolvedModel.catalogProviderId,
+      templateModel: resolvedModel.templateModelId,
+    });
+  }
+  try {
+    const knownIds: string[] = ((mod as any).listPiModels(pid) || [])
+      .map((m: any) => m && m.id)
+      .filter((id: unknown): id is string => typeof id === 'string');
+    if (requestedModel && !resolvedModel && !knownIds.includes(requestedModel)) {
+      if (!knownIds.length) {
+        return { ok: false, error: `provider "${pid}" has no models registered`, profileId: chosenProfileId };
+      }
+      effectiveModel = knownIds[0];
+    }
+  } catch { /* fall through — let pi-ai surface whatever it wants */ }
+
+  const t0 = Date.now();
+  try {
+    const provider = mod.createPiProvider({
+      provider: pid,
+      ...(resolvedModel?.needsCustomModel
+        ? { customModel: resolvedModel.model }
+        : { model: effectiveModel || undefined }),
+      apiKey,
+    });
+    const msg = await provider.complete({
+      model: resolvedModel?.needsCustomModel ? requestedModel : effectiveModel,
+      // ChatGPT Codex's `responses` API rejects requests without
+      // `instructions` (= system prompt). Plain providers ignore it.
+      systemPrompt: 'You are a connectivity probe; reply with a single word.',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+      maxTokens: 1,
+    });
+    if (chosenProfileId) clearCooldown(chosenProfileId);
+    return { ok: true, durationMs: Date.now() - t0, model: msg.model || '', profileId: chosenProfileId };
+  } catch (err) {
+    return {
+      ok: false,
+      error: (err as Error).message || String(err),
+      durationMs: Date.now() - t0,
+      profileId: chosenProfileId,
+    };
+  }
+}
+
+// ── Legacy aliases ───────────────────────────────────────────────────────
+export const saveApiKey = (providerId: string, apiKey: string, label?: string, opts?: { baseUrl?: string; maxOutputTokens?: number }) =>
+  addApiKey(providerId, apiKey, label, opts);

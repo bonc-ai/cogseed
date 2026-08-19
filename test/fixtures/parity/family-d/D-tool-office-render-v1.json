@@ -1,0 +1,42 @@
+{
+  "source_revision": "e19d54fefa6d91b3b2bfac3a789ff68701cffe89",
+  "capture_command": "node_modules/.bin/tsx scripts/capture-cogseed-parity-fixtures.ts --only D-tool-office-render-v1",
+  "inputs": {
+    "targets": [
+      "document.docx",
+      "sheet.xlsx",
+      "slide.pptx",
+      "unknown.bin"
+    ]
+  },
+  "canonicalization_notes": [
+    "timestamps are replaced with __TIMESTAMP__",
+    "generated ids are normalized by semantic prefix and encounter order",
+    "temporary workspace roots are replaced with __TMP_ROOT__",
+    "object keys are sorted; array order is preserved where it is observable"
+  ],
+  "expected": {
+    "officeArgs": [
+      {
+        "error": null,
+        "target": "document.docx"
+      },
+      {
+        "error": null,
+        "target": "sheet.xlsx"
+      },
+      {
+        "error": null,
+        "target": "slide.pptx"
+      },
+      {
+        "error": null,
+        "target": "unknown.bin"
+      }
+    ],
+    "render_preview_bounded": true
+  },
+  "notes": [
+    "Office argument validation is captured without invoking an external Office renderer."
+  ]
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skill-security-core"
+version = "1.3.0"
+description = "Skill Security Core for Skill PREVALIDATION / FREEZE / FORMAL_TEST (phase-1 baseline)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=6.0",
+  "jsonschema>=4.20",
+]
+
+[project.scripts]
+cogseed-security-template = "scripts.template_cli:main"
+cogseed-security-validator = "scripts.validator_cli:main"
+cogseed-security-orchestrator = "scripts.orchestrator_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["security_core*", "scripts*"]
+
+[tool.setuptools.package-data]
+security_core = []
+"*" = ["ontologies/**/*", "exit-code-registry.yaml", "VERSION"]

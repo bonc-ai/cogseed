@@ -1,0 +1,35 @@
+CogSeed — @cogseed/p3394-gateway
+
+Copyright (c) 2026 CogSeed contributors
+Copyright (c) 2026 BONC 东方国信
+
+This package (@cogseed/p3394-gateway) is published as part of the CogSeed
+desktop companion agent and is distributed under the MIT License.  See the
+LICENSE file in this directory for the full license text.
+
+Upstream projects
+-----------------
+
+CogSeed is a secondary development of Orkas.
+  Source: https://github.com/Orkas-AI/Orkas
+  License: MIT
+  Copyright (c) 2026 Orkas contributors
+
+CogSeed's core-agent component originates from OpenClaw.
+  Source: https://github.com/openclaw/openclaw
+  License: MIT
+  Copyright (c) 2026 OpenClaw Foundation
+
+CogSeed incorporates planning and runtime adaptation patterns informed by
+Hermes-Agent.
+  Source: https://github.com/NousResearch/hermes-agent
+  License: MIT
+  Copyright (c) 2025 Nous Research
+
+The protocol implemented here ("P3394") refers to the IEEE P3394 standard for
+agent interoperability; that standard remains the property of its respective
+standards body.
+
+This package has no third-party runtime dependencies (Node.js built-ins only).
+
+Contact: security@bonc.com.cn

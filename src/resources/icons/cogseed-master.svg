@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Approved CogSeed brand mark: green sprout ring and orange seed-guardian character. -->
+  <g id="brand">
+    <circle id="ring" cx="512" cy="512" r="400" fill="none" stroke="#146441" stroke-width="88"/>
+    <g id="character">
+      <circle cx="392" cy="322" r="58" fill="#D58926"/>
+      <circle cx="632" cy="322" r="58" fill="#D58926"/>
+      <ellipse cx="512" cy="700" rx="252" ry="218" fill="#D58926"/>
+      <ellipse cx="512" cy="740" rx="150" ry="130" fill="#F1E3CB"/>
+      <circle cx="512" cy="408" r="158" fill="#F1E3CB"/>
+      <circle cx="454" cy="392" r="16" fill="#146441"/>
+      <circle cx="570" cy="392" r="16" fill="#146441"/>
+      <ellipse cx="512" cy="452" rx="20" ry="13" fill="#146441"/>
+      <path d="M470 496 Q512 528 554 496" fill="none" stroke="#146441" stroke-width="14" stroke-linecap="round"/>
+      <path d="M392 640 Q330 760 420 830" fill="none" stroke="#D58926" stroke-width="46" stroke-linecap="round"/>
+      <path d="M632 640 Q694 760 604 830" fill="none" stroke="#D58926" stroke-width="46" stroke-linecap="round"/>
+    </g>
+    <g id="seed">
+      <path d="M512 790 C560 800 582 862 512 930 C442 862 464 800 512 790 Z" fill="#D58926"/>
+      <ellipse cx="512" cy="830" rx="16" ry="26" fill="#F8E7C8"/>
+    </g>
+    <g id="leaves">
+      <path d="M452 250 C470 190 540 190 560 250 C520 240 490 240 452 250 Z" fill="#146441"/>
+      <path d="M512 270 C500 320 470 330 452 310 C480 290 500 280 512 270 Z" fill="#146441"/>
+    </g>
+  </g>
+</svg>

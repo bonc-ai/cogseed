@@ -1,0 +1,29 @@
+{
+  "interface": {
+    "display_name": "来源证据抽取",
+    "short_description": "从代码、规范和现有文档中建立带版本、定位与冲突状态的事实账本。",
+    "default_prompt": "Use $source-extraction and follow its evidence, approval, and output contract."
+  },
+  "policy": {
+    "allow_implicit_invocation": true
+  },
+  "runtime": {
+    "executor": "codex_skill_interpreter",
+    "binding_status": "target_state_not_run",
+    "skill_entrypoint": "../SKILL.md",
+    "schema_ref": "../schemas.json",
+    "permissions": {
+      "direct_resource_access": false,
+      "external_actions": "deny_without_explicit_approval",
+      "formal_asset_write": false,
+      "candidate_write_only": true
+    },
+    "governance": {
+      "level": "L5",
+      "risk_route": "Full",
+      "promotion_ceiling": "staged",
+      "production_release_allowed": false,
+      "independent_review": "pending"
+    }
+  }
+}

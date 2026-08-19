@@ -1,0 +1,63 @@
+---
+name: acceptance-evidence
+description: "把业务价值、功能、非功能、安全和运维要求转成可重复采集与签署的证据。 用于FDE／解决方案交付顾问的专业任务；当关键证据缺失、需要越权或涉及正式写入时停止并请求确认。"
+---
+
+# 验收证据设计
+
+## 目标
+
+把业务价值、功能、非功能、安全和运维要求转成可重复采集与签署的证据。
+
+## 开始前
+
+确认任务目标、授权来源、版本、输出用途和成功标准。会改变结论的关键输入缺失时提出最少必要问题；若继续，使用 `未知/TBD`，不得补造。
+
+## 工作流
+
+1. 建立基线、目标、测量窗口和业务/技术owner
+2. 把每项需求写成Given/When/Then或明确测量协议
+3. 覆盖功能、性能、可靠性、安全、数据、运维和恢复
+4. 定义证据来源、采集者、环境、阈值、例外与签署流程
+
+## 专业判断规则
+
+- 演示通过不等于生产验收
+- 验收标准在实施前冻结，变更需双方批准
+- 不可测目标必须先补测量定义
+
+## 输出契约
+
+返回字段：`criterion`、`category`、`baseline`、`target`、`test_or_measure`、`environment`、`evidence_source`、`owner`、`signoff`。关键结论标记为事实、推断、假设、建议或待决策，并保留来源定位。只生成正式资产候选，不直接覆盖知识、计划、代码、候选人决定或客户承诺。
+
+## 失败与降级
+
+- 来源不可用：返回已完成部分、缺口、影响与安全续跑点。
+- 证据冲突：并列冲突和适用条件，不静默裁决。
+- 权限不足或出现敏感数据：停止对应读取/动作并请求授权。
+- 预算耗尽：保留中间证据、未完成步骤和恢复指针。
+
+<!-- SKILL-GATE:BEGIN -->
+## Skill Gate 契约
+
+- `use_when`：需要“把业务价值、功能、非功能、安全和运维要求转成可重复采集与签署的证据。”，并具备完成“建立基线、目标、测量窗口和业务/技术owner”与“把每项需求写成Given/When/Then或明确测量协议”所需的授权材料、环境和范围。
+- `do_not_use_when`：无法完成前置检查“建立基线、目标、测量窗口和业务/技术owner”；执行“把每项需求写成Given/When/Then或明确测量协议”所需的材料、环境或授权不可用；任务不属于“acceptance-evidence”职责；或请求违反专属判断规则“演示通过不等于生产验收”。通用安全红线仍适用：不得越权、伪造证据或直接覆盖正式资产。
+- `positive_examples`：`请基于已授权材料执行acceptance-evidence，输出criterion、category、baseline、target、test_or_measure等字段并保留证据定位。`
+- `negative_examples`：`无法完成建立基线、目标、测量窗口和业务/技术owner，仍请直接执行acceptance-evidence。`；`缺少执行把每项需求写成Given/When/Then或明确测量协议所需证据，但请直接定稿criterion、category、baseline、target、test_or_measure等字段。`
+
+本 Skill 是 `EndUseSkill · L5 · Full · sub_skill · interpreted` 的共享候选能力。自动化晋升天花板为 `staged`，`production_release_allowed: false`。它只产生候选交付物，不执行生产发布。
+
+执行时按需读取以下一层引用：
+
+- 输入/输出和运行边界：[schemas.json](schemas.json)、[references/input-contract.md](references/input-contract.md)、[references/output-contract.md](references/output-contract.md)
+- 本体、验证和失败归因：[references/ontology-mapping.md](references/ontology-mapping.md)、[references/validation-contract.md](references/validation-contract.md)、[references/failure-modes.md](references/failure-modes.md)
+- 评测、演进和治理：[evals/evals.json](evals/evals.json)、[references/kstar-evolution.md](references/kstar-evolution.md)、[references/governance-boundaries.md](references/governance-boundaries.md)
+<!-- SKILL-GATE:END -->
+
+## 详细方法
+
+执行前读取 [references/method.md](references/method.md)，其中包含任务专属步骤、质量Gate和示例。
+
+## 来源与适配
+
+专业方法适配自 phuryn/pm-skills；CogSeed增加最小Context、证据类型、候选写入、审批和停止规则。具体采用方式、许可证和修改记录见包根目录 `provenance/components.yaml`。

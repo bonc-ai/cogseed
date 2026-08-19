@@ -1,0 +1,3 @@
+# Default reviewers for every changed file. Keep this GitLab handle aligned
+# with the repository maintainer account before enabling required approvals.
+* @chenwankang

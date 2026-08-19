@@ -1,0 +1,155 @@
+# Thesis-Creator 配置文件模板
+# 位置：thesis-workspace/.thesis-config.yaml
+# 生成前请先检查并按学校要求修改本文件，再执行图片生成与文档导出
+
+# ========================================
+# 学术搜索 API 配置
+# ========================================
+
+# Semantic Scholar API Key（推荐申请）
+# 申请地址：https://www.semanticscholar.org/product/api
+#
+# 限流说明：
+# - 无 API Key: 每5分钟100次请求，高峰期容易触发429限流错误
+# - 有 API Key: 每5分钟5000次请求，搜索稳定可靠
+#
+# 建议在使用前申请免费 API Key，避免搜索中断
+semantic_scholar:
+  api_key: ""  # 填入你的 API Key，如 "your-api-key-here"
+
+  # 是否启用 Semantic Scholar 搜索（false则跳过此源）
+  enabled: true
+
+  # 限流设置（无 API Key 时自动生效）
+  rate_limit:
+    # 请求间隔（秒）- 无Key时建议1秒以上
+    min_interval: 1.0
+    # 最大重试次数
+    max_retries: 3
+    # 429错误重试等待时间（秒）
+    retry_wait: 60
+
+# 其他 API 配置（无需配置，均为免费）
+# CrossRef: 完全免费，无需注册，DOI验证
+# OpenAlex: 完全免费，无需注册，中文文献覆盖较好
+
+# ========================================
+# ER 建模输出策略（非交互配置驱动）
+# ========================================
+# 默认使用 dot：教科书风格概念 ER 图（Graphviz DOT）
+# 唯一事实源：thesis-workspace/references/prompt/background.md
+# graph_type 可选值：
+# - dot: 教科书ER图（Graphviz DOT，默认）
+# - chen: 概念ER图（Graphviz DOT Chen 风格）
+# - erd: 工程ERD（Mermaid erDiagram）
+# dot_mode 可选值：
+# - "": 使用现有默认 DOT 逻辑
+# - textbook-single-entity-ring: 仅对 diagram_type=entity_er 生效，生成单实体字段环绕图
+#   注意：overall_er 不受该值影响；images.yaml 单图配置可覆盖全局值
+# diagram_scope 可选值：
+# - single: 单表单图，适合逐表讲解
+# - multi: 多表同图，适合展示实体关系
+er_modeling:
+  enabled: true
+  graph_type: dot
+  dot_mode: ""
+  diagram_scope: single
+  strict_single_table: true
+  line_style: straight
+  interactive_confirmation: false
+  allow_optional_extensions: true
+
+# ========================================
+# 图表生成策略
+# ========================================
+# architecture_mode:
+# - llm: 优先使用模型生成系统架构图
+# - template: 强制使用本地兜底模板
+# flowchart_direction:
+# - 推荐 LR，使流程图尽量横向展开
+# - 也可选 RL / TB / BT
+
+diagram_generation:
+  architecture_mode: llm
+  flowchart_direction: LR
+
+# PlantUML 渲染方式
+# method 可选值：
+# - auto: 先尝试本地 plantuml 命令，再尝试 Kroki，最后尝试 PlantUML 官方服务器
+# - plantuml: 仅使用本地 plantuml 命令，适合本机已安装 PlantUML CLI 的场景
+# - kroki: 先尝试 Kroki，失败后再尝试 PlantUML 官方服务器
+# - official_server: 仅使用 PlantUML 官方服务器
+# 当前模板默认值为 kroki；如需改为本地优先，再手动改成 auto
+# allow_graphviz_fallback: 仅在 method=auto 且本地/服务器均失败时，是否允许使用 Graphviz 本地兜底渲染
+plantuml_render:
+  method: kroki
+  allow_graphviz_fallback: false
+
+logging:
+  # 是否启用日志功能
+  # true: 正常生成日志文件（适合调试、问题排查）
+  # false: 禁用日志（节省上下文，适合正常运行）
+  enabled: true
+
+  # 日志级别（DEBUG, INFO, WARNING, ERROR）
+  level: INFO
+
+  # 控制台输出级别
+  console_level: INFO
+
+  # 文件输出级别
+  file_level: DEBUG
+
+# ========================================
+# 参考文献验证设置
+# ========================================
+
+reference_validation:
+  # 是否启用在线验证（需网络连接）
+  online_validation: true
+
+  # 是否允许标记虚构文献（不删除）
+  allow_hallucination_mark: false
+
+  # DOI 无效时是否自动替换为搜索到的真实文献
+  auto_replace_invalid: true
+
+  # DOI 验证超时时间（秒）
+  timeout: 30
+
+# ========================================
+# 导出设置
+# ========================================
+
+export:
+  # 图片默认宽度（厘米）
+  image_width: 12
+
+  # 图片最大宽度（厘米）
+  max_image_width: 14
+
+  # 图片最大高度（厘米）
+  max_image_height: 18
+
+# ========================================
+# 格式设置
+# ========================================
+
+format:
+  # 标题字体
+  heading_font: 黑体
+
+  # 正文字体
+  body_font: 宋体
+
+  # 正文字号
+  body_size: 12
+
+  # 图注字体
+  caption_font: 宋体
+
+  # 图注字号（五号）
+  caption_size: 10.5
+
+  # 三线表字体（表头和正文统一）
+  table_font: 黑体

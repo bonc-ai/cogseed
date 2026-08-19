@@ -1,0 +1,42 @@
+CogSeed
+
+Copyright (c) 2026 CogSeed contributors
+Copyright (c) 2026 BONC 东方国信
+
+CogSeed is a desktop companion agent application, distributed under the MIT
+License.  See the LICENSE file for the full license text.
+
+Upstream projects
+-----------------
+
+Orkas
+  Source: https://github.com/Orkas-AI/Orkas
+  License: MIT
+  Copyright (c) 2026 Orkas contributors
+  CogSeed is a secondary development of Orkas.
+
+OpenClaw
+  Source: https://github.com/openclaw/openclaw
+  License: MIT
+  Copyright (c) 2026 OpenClaw Foundation
+  CogSeed's core-agent component originates from OpenClaw.
+
+Hermes-Agent
+  Source: https://github.com/NousResearch/hermes-agent
+  License: MIT
+  Copyright (c) 2025 Nous Research
+  CogSeed incorporates planning and runtime adaptation patterns informed by
+  Hermes-Agent.
+
+Component license boundary
+--------------------------
+
+The directory resources/guardrail/skill-sentry/ is a separately licensed
+component. It is distributed under the Apache License, Version 2.0; see its
+local LICENSE file. The root MIT License does not relicense that component.
+
+This product includes third-party software.  The complete list of
+third-party components, with their copyright and license information, is
+provided in the THIRD_PARTY_NOTICES.md file accompanying this distribution.
+
+Contact: security@bonc.com.cn

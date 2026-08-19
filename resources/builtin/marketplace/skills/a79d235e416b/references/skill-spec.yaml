@@ -1,0 +1,130 @@
+{
+  "artifact_manifest": [
+    "SKILL.md",
+    "agents/openai.yaml",
+    "evals/evals.json",
+    "evals/forecast_model.md",
+    "evals/outcome_evaluation.md",
+    "evals/replay_dataset.md",
+    "evals/regression_tests.md",
+    "references/skill-spec.yaml",
+    "references/input-contract.md",
+    "references/output-contract.md",
+    "references/validation-contract.md",
+    "references/ontology-mapping.md",
+    "references/kstar-evolution.md",
+    "references/governance-boundaries.md",
+    "references/eval-cases.yaml",
+    "references/failure-modes.md",
+    "manifest.yaml",
+    "schemas/input.schema.json",
+    "schemas/output.schema.json",
+    "evals/manifest.yaml"
+  ],
+  "business_context": {
+    "abox_examples": [
+      {
+        "id": "SYNTHETIC-DISCOVER-001",
+        "source_type": "synthetic"
+      }
+    ],
+    "rbox_relations": [
+      "observed_in",
+      "supports",
+      "contradicts",
+      "requires_validation"
+    ],
+    "tbox_classes": [
+      "EvidenceItem",
+      "Participant",
+      "Journey",
+      "Need",
+      "Hypothesis"
+    ]
+  },
+  "contracts": {
+    "input": "schemas/input.schema.json",
+    "output": "schemas/output.schema.json"
+  },
+  "evaluation_contract": {
+    "coverage_categories": 5,
+    "minimum": 10,
+    "negative_minimum": 4,
+    "suite_e2e_required_on_material_change": true
+  },
+  "failure_attribution": [
+    "product",
+    "model",
+    "prompt",
+    "data",
+    "tool",
+    "permission",
+    "workflow",
+    "schema",
+    "governance",
+    "evidence"
+  ],
+  "generated_by": "FACTORY-CANDIDATE-001",
+  "governance": {
+    "automation_ceiling": "staged_eligible",
+    "owner_gates": [
+      "Evidence Gate",
+      "staged decision",
+      "production release"
+    ],
+    "production_release_allowed": false
+  },
+  "id": "SKILL-DISCOVER-AI-PRODUCT-001",
+  "kstar_hook": {
+    "bounded_patch": true,
+    "change_candidate_required": true,
+    "delta_r_is_not_release": true
+  },
+  "name": "discover-ai-product",
+  "skill_category": "EndUseSkill",
+  "schema_version": "1.0",
+  "status": "candidate",
+  "suite_role": "stage",
+  "tool_bindings": [
+    {
+      "fallback": "blocked",
+      "permission": "read-and-bounded-draft",
+      "scope": "approved-project-root",
+      "tool": "local-filesystem"
+    },
+    {
+      "fallback": "blocked",
+      "permission": "execute-read-only-checks",
+      "scope": "current-package",
+      "tool": "local-validator"
+    }
+  ],
+  "trigger": {
+    "ambiguity_behavior": "ask",
+    "required_context": [
+      "product_version_id",
+      "approved source refs",
+      "research_question",
+      "participant_scope",
+      "source_refs"
+    ],
+    "stage_compatibility": [
+      "Discover"
+    ],
+    "when_not_to_use": [
+      "把竞品页面当作用户证据",
+      "只凭团队观点宣布需求成立"
+    ],
+    "when_to_use": [
+      "需要开展用户调研、证据提取或用户旅程验证",
+      "价值或体验不确定性仍高"
+    ]
+  },
+  "validation_contract": {
+    "gate": "Evidence Gate",
+    "protected_failures": 0,
+    "ref": "references/validation-contract.md"
+  },
+  "version": "0.1.0",
+  "workflow_ref": "SKILL.md#executable-workflow"
+}

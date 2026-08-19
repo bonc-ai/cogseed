@@ -1,0 +1,31 @@
+{
+  "case_ids": [
+    "EVAL-FRAME-001",
+    "EVAL-FRAME-002",
+    "EVAL-FRAME-003",
+    "EVAL-FRAME-004",
+    "EVAL-FRAME-005",
+    "EVAL-FRAME-006",
+    "EVAL-FRAME-007",
+    "EVAL-FRAME-008",
+    "EVAL-FRAME-009",
+    "EVAL-FRAME-010"
+  ],
+  "count": 10,
+  "coverage": [
+    "anti_trigger",
+    "boundary",
+    "failure",
+    "prohibited_behavior",
+    "trigger"
+  ],
+  "id": "EVAL-MANIFEST-FRAME-001",
+  "negative_count": 4,
+  "negative_ids": [
+    "EVAL-FRAME-007",
+    "EVAL-FRAME-008",
+    "EVAL-FRAME-009",
+    "EVAL-FRAME-010"
+  ],
+  "schema_version": "1.0"
+}

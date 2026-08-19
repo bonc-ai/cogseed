@@ -1,0 +1,38 @@
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '23 14 * * 1'
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

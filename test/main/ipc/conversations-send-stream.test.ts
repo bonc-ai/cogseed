@@ -1,0 +1,387 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+type StreamStartFn = (
+  event: { sender: { getURL: () => string; isDestroyed: () => boolean; send: (channel: string, payload: unknown) => void } },
+  req: { requestId: string; channel: string; payload?: unknown },
+) => Promise<void>;
+type StreamCancelFn = (
+  event: { sender: { getURL: () => string } },
+  requestId: unknown,
+) => void;
+
+let streamStartHandler: StreamStartFn | null = null;
+let streamCancelHandler: StreamCancelFn | null = null;
+
+const groupChatMock = vi.hoisted(() => ({
+  subscribers: new Set<(ev: unknown) => void>(),
+  quiescent: false,
+  releaseSend: null as null | (() => void),
+  resolveSendStarted: null as null | (() => void),
+  resolveSendFinished: null as null | (() => void),
+  sendStarted: Promise.resolve(),
+  sendFinished: Promise.resolve(),
+  sendCalls: [] as unknown[],
+  retryCalls: [] as unknown[],
+  editCalls: [] as unknown[],
+}));
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: vi.fn(),
+    on: (channel: string, fn: StreamStartFn | StreamCancelFn) => {
+      if (channel === 'cogseed.streamStart') streamStartHandler = fn as StreamStartFn;
+      if (channel === 'cogseed.streamCancel') streamCancelHandler = fn as StreamCancelFn;
+    },
+  },
+  shell: { openExternal: vi.fn(async () => undefined), showItemInFolder: vi.fn() },
+  BrowserWindow: { getAllWindows: vi.fn(() => []), getFocusedWindow: vi.fn(() => null) },
+  dialog: { showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })) },
+}));
+
+vi.mock('../../../src/main/features/group_chat', () => ({
+  subscribeBus: vi.fn((_userId: string, _cid: string, cb: (ev: unknown) => void) => {
+    groupChatMock.subscribers.add(cb);
+    return () => groupChatMock.subscribers.delete(cb);
+  }),
+  send: vi.fn(async (input: unknown) => {
+    groupChatMock.sendCalls.push(input);
+    groupChatMock.resolveSendStarted?.();
+    await new Promise<void>((resolve) => { groupChatMock.releaseSend = resolve; });
+    groupChatMock.resolveSendFinished?.();
+    return { ok: true };
+  }),
+  retryFailedTurn: vi.fn(async (input: unknown) => {
+    groupChatMock.retryCalls.push(input);
+    groupChatMock.resolveSendStarted?.();
+    await new Promise<void>((resolve) => { groupChatMock.releaseSend = resolve; });
+    groupChatMock.resolveSendFinished?.();
+    return { ok: true, mode: 'resume' };
+  }),
+  replaceUserMessage: vi.fn(async (input: unknown) => {
+    groupChatMock.editCalls.push(input);
+    groupChatMock.resolveSendStarted?.();
+    await new Promise<void>((resolve) => { groupChatMock.releaseSend = resolve; });
+    groupChatMock.resolveSendFinished?.();
+    return { ok: true, msg: { id: 'replacement-msg', text: 'edited' } };
+  }),
+  busIsQuiescent: vi.fn(() => groupChatMock.quiescent),
+  streamEvents: vi.fn(async function* () {}),
+}));
+
+let tmpDir: string;
+let prevWs: string | undefined;
+const TEST_UID = 'u1';
+
+beforeEach(async () => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-send-stream-ipc-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  streamStartHandler = null;
+  streamCancelHandler = null;
+  groupChatMock.subscribers.clear();
+  groupChatMock.quiescent = false;
+  groupChatMock.releaseSend = null;
+  groupChatMock.sendCalls.length = 0;
+  groupChatMock.retryCalls.length = 0;
+  groupChatMock.editCalls.length = 0;
+  groupChatMock.sendStarted = new Promise<void>((resolve) => { groupChatMock.resolveSendStarted = resolve; });
+  groupChatMock.sendFinished = new Promise<void>((resolve) => { groupChatMock.resolveSendFinished = resolve; });
+  vi.resetModules();
+
+  const users = await import('../../../src/main/features/users');
+  users.activateUser(TEST_UID);
+  const ipc = await import('../../../src/main/ipc/index');
+  ipc.register();
+});
+
+afterEach(() => {
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(predicate()).toBe(true);
+}
+
+describe('ipc › conversations.sendStream', () => {
+  it('forwards a validated structured Agent selection to the group-chat facade', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'selected-agent-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: '发热还',
+          recipient_agent_id: 'agent-codex-1',
+          recipient_origin: 'user_selection',
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.sendCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      text: '发热还',
+      recipient_agent_id: 'agent-codex-1',
+      recipient_origin: 'user_selection',
+    }]);
+
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('rejects malformed structured Agent routes before dispatch', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sent = vi.fn();
+    await streamStartHandler(
+      { sender: trustedIpcSender({ isDestroyed: () => false, send: sent }) },
+      {
+        requestId: 'invalid-agent-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'hello',
+          recipient_agent_id: '../agent',
+          recipient_origin: 'cli_fallback',
+        },
+      },
+    );
+
+    expect(groupChatMock.sendCalls).toEqual([]);
+    expect(sent).toHaveBeenCalledWith(
+      'stream:invalid-agent-request',
+      expect.objectContaining({ type: 'error', text: 'invalid recipient route' }),
+    );
+  });
+
+  it('routes a failed-message retry to the smart retry path instead of a normal send', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'retry-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'Continue',
+          retry_message_id: 'failed-message-1',
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.retryCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      failedMessageId: 'failed-message-1',
+      visibleText: 'Continue',
+    }]);
+    expect(groupChatMock.sendCalls).toEqual([]);
+
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('routes edit_message_id to user-message replacement and keeps retry mutually exclusive', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sender = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'edit-request',
+        channel: 'conversations.sendStream',
+        payload: {
+          cid: 'c123abc',
+          content: 'edited content',
+          edit_message_id: 'user-message-1',
+          attachments: ['ignored-by-backend'],
+        },
+      },
+    );
+
+    await groupChatMock.sendStarted;
+    expect(groupChatMock.editCalls).toEqual([{
+      userId: TEST_UID,
+      cid: 'c123abc',
+      messageId: 'user-message-1',
+      text: 'edited content',
+    }]);
+    expect(groupChatMock.sendCalls).toEqual([]);
+    expect(groupChatMock.retryCalls).toEqual([]);
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+  });
+
+  it('ignores stream starts from an untrusted sender', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sent = vi.fn();
+    await streamStartHandler(
+      {
+        sender: {
+          getURL: () => 'https://evil.example/index.html',
+          isDestroyed: () => false,
+          send: sent,
+        },
+      },
+      {
+        requestId: 'untrusted',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'go' },
+      },
+    );
+    expect(sent).not.toHaveBeenCalled();
+    expect(groupChatMock.subscribers.size).toBe(0);
+  });
+
+  it('does not let a second sender cancel another sender\'s stream', async () => {
+    if (!streamStartHandler || !streamCancelHandler) throw new Error('stream handlers not registered');
+    const owner = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const other = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    let settled = false;
+    const run = streamStartHandler(
+      { sender: owner },
+      {
+        requestId: 'owned-stream',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'go' },
+      },
+    ).finally(() => { settled = true; });
+    await groupChatMock.sendStarted;
+
+    streamCancelHandler({ sender: other }, 'owned-stream');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+
+    streamCancelHandler({ sender: owner }, 'owned-stream');
+    await run;
+    expect(settled).toBe(true);
+    groupChatMock.releaseSend?.();
+  });
+
+  it('rejects a duplicate request id without replacing the original owner', async () => {
+    if (!streamStartHandler || !streamCancelHandler) throw new Error('stream handlers not registered');
+    const first = trustedIpcSender({ isDestroyed: () => false, send: vi.fn() });
+    const duplicateSent = vi.fn();
+    const second = trustedIpcSender({ isDestroyed: () => false, send: duplicateSent });
+    const original = streamStartHandler(
+      { sender: first },
+      {
+        requestId: 'same-id',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'go' },
+      },
+    );
+    await groupChatMock.sendStarted;
+
+    await streamStartHandler(
+      { sender: second },
+      {
+        requestId: 'same-id',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'duplicate' },
+      },
+    );
+    expect(duplicateSent).toHaveBeenNthCalledWith(1, 'stream:same-id', {
+      type: 'error',
+      text: 'duplicate stream request id',
+    });
+    expect(duplicateSent).toHaveBeenNthCalledWith(2, 'stream:same-id', { type: 'done' });
+
+    streamCancelHandler({ sender: first }, 'same-id');
+    await original;
+    groupChatMock.releaseSend?.();
+  });
+
+  it('relays group bus events before groupChat.send resolves', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sent: Array<{ channel: string; payload: any }> = [];
+    const sender = trustedIpcSender({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
+    });
+
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'req1',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'go' },
+      },
+    );
+    await groupChatMock.sendStarted;
+
+    const liveEvent = {
+      type: 'process',
+      cid: 'c123abc',
+      actor: 'agent1',
+      data: { type: 'delta', text: 'live' },
+    };
+    for (const cb of groupChatMock.subscribers) cb(liveEvent);
+
+    await waitFor(() => sent.some((item) => item.channel === 'stream:req1' && item.payload?.event?.data === liveEvent));
+    expect(sent.some((item) => item.payload?.type === 'done')).toBe(false);
+
+    groupChatMock.quiescent = true;
+    groupChatMock.releaseSend?.();
+    await run;
+
+    expect(sent.at(-1)).toEqual({ channel: 'stream:req1', payload: { type: 'done' } });
+  });
+
+  it('keeps relaying group bus events after groupChat.send resolves while the bus is still active', async () => {
+    if (!streamStartHandler) throw new Error('stream handler not registered');
+    const sent: Array<{ channel: string; payload: any }> = [];
+    const sender = trustedIpcSender({
+      isDestroyed: () => false,
+      send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
+    });
+
+    const run = streamStartHandler(
+      { sender },
+      {
+        requestId: 'req2',
+        channel: 'conversations.sendStream',
+        payload: { cid: 'c123abc', content: 'go' },
+      },
+    );
+    await groupChatMock.sendStarted;
+    groupChatMock.quiescent = false;
+    groupChatMock.releaseSend?.();
+    await groupChatMock.sendFinished;
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sent.some((item) => item.payload?.type === 'done')).toBe(false);
+
+    const liveEvent = {
+      type: 'process',
+      cid: 'c123abc',
+      actor: 'agent1',
+      data: { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 't1', name: 'web_search' } } },
+    };
+    for (const cb of groupChatMock.subscribers) cb(liveEvent);
+
+    await waitFor(() => sent.some((item) => item.channel === 'stream:req2' && item.payload?.event?.data === liveEvent));
+    groupChatMock.quiescent = true;
+    for (const cb of groupChatMock.subscribers) cb({ type: 'state_changed', cid: 'c123abc', state: { status: 'idle', in_flight: [] } });
+    await run;
+
+    expect(sent.at(-1)).toEqual({ channel: 'stream:req2', payload: { type: 'done' } });
+  });
+});

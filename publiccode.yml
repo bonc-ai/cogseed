@@ -1,0 +1,63 @@
+publiccodeYmlVersion: "0.2"
+
+name: CogSeed
+url: "https://github.com/bonc-ai/cogseed"
+landingURL: "https://github.com/bonc-ai/cogseed"
+softwareVersion: "0.0.5"
+releaseDate: "2026-08-19"
+logo: "assets/cogseed-icon.png"
+monochromeLogo: "assets/cogseed-icon.png"
+
+platforms:
+  - mac
+  - windows
+  - linux
+
+categories:
+  - developer-tools
+
+developmentStatus: development
+
+softwareType: standalone/desktop
+
+description:
+  en:
+    shortDescription: >-
+      A local-first desktop workspace for coordinating AI agents and turning
+      task experience into reusable personal capability assets.
+    longDescription: >-
+      CogSeed brings tasks, workspaces, AI teams, skills, connectors, personal
+      knowledge, and reusable cognition assets into one Electron desktop
+      application. A Commander maintains the shared plan and delegates work
+      through structured dispatch; built-in agents and supported local CLI
+      agents operate through controlled execution paths. Results can remain
+      conversation output, become workspace files or artifacts, or enter the
+      Cognition and Recall workflow as user-reviewed capability assets.
+      CogSeed is a secondary development of Orkas.
+  zh:
+    shortDescription: >-
+      本地优先的桌面工作空间，用于协调 AI 智能体，并将任务经验沉淀为可复用的个人能力资产。
+    longDescription: >-
+      CogSeed 将任务、工作区、AI 团队、技能、连接器、个人知识与可复用认知资产整合到一个
+      Electron 桌面应用中。Commander 维护共享计划并通过结构化派发委派工作；内置智能体与
+      受支持的本地 CLI 智能体在受控执行路径上运行。结果可作为对话输出、工作区文件或工件，
+      也可作为经用户审阅的能力资产进入 Cognition 与 Recall 工作流。CogSeed 是 Orkas 的二次开发。
+
+legal:
+  license: MIT
+  mainCopyrightOwner: BONC
+  repoOwner: bonc-ai
+
+maintenance:
+  type: community
+  contacts:
+    - name: CogSeed Team
+      email: security@bonc.com.cn
+
+localisation:
+  localisationReady: true
+  availableLanguages:
+    - en
+    - zh
+    - ja
+    - pt

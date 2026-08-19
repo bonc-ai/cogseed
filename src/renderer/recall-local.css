@@ -1,0 +1,1301 @@
+/* Recall cognition console. */
+.skills-cognition-console { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; padding: 0; box-sizing: border-box; background: var(--app-bg, #f6f7fb); }
+.skills-cognition-header { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 24px; padding: 24px 28px 20px; box-sizing: border-box; background: var(--card, #fff); }
+.skills-cognition-heading { display: flex; min-width: 0; max-width: 680px; flex-direction: column; align-items: flex-start; gap: 0; }
+.skills-cognition-eyebrow { margin-bottom: 8px; color: var(--primary, #0E9F6E); font-size: 10px; font-weight: 700; letter-spacing: .12em; line-height: 1.2; text-transform: uppercase; }
+.skills-cognition-header h1 { margin: 0; color: var(--fg, #111827); font-size: 24px; line-height: 1.25; letter-spacing: -.02em; }
+.skills-cognition-header p { max-width: 620px; margin: 7px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.6; }
+.skills-cognition-header-actions { display: flex; flex: none; align-items: center; gap: 8px; padding-top: 2px; }
+.skills-cognition-tabs { display: block; flex: none; min-width: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; border-bottom: 1px solid var(--border, #e5e7eb); background: var(--card, #fff); }
+.skills-cognition-tab { display: flex; min-width: 0; min-height: 82px; align-items: flex-start; gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: color-mix(in srgb, var(--card, #fff) 97%, var(--fg, #111827) 3%); color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; text-align: left; white-space: normal; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease, transform .16s ease; }
+.skills-cognition-tab:hover { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, var(--card, #fff)); color: var(--fg, #111827); transform: translateY(-1px); }
+.skills-cognition-tab.is-active { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 55%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); color: var(--fg, #111827); box-shadow: inset 3px 0 0 var(--primary, #0E9F6E), 0 4px 12px rgba(20, 71, 55, .08); }
+.skills-cognition-tab-icon { display: grid; flex: none; width: 34px; height: 34px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--fg, #111827) 5%, transparent); color: var(--muted-fg, #6b7280); }
+.skills-cognition-tab.is-active .skills-cognition-tab-icon { background: color-mix(in srgb, var(--primary, #0E9F6E) 14%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-tab-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.skills-cognition-tab-copy strong { color: var(--fg, #111827); font-size: 13px; line-height: 1.35; }
+.skills-cognition-tab-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 400; line-height: 1.45; }
+.skills-cognition-page { height: 100%; min-height: 0; overflow: auto; padding: 22px 28px 32px; background: var(--app-bg, #f6f7fb); }
+.skills-cognition-page { min-height: 100%; height: auto; box-sizing: border-box; overflow: visible; padding: 22px 28px 32px; background: var(--app-bg, #f6f7fb); }
+/* style.css 里 .skills-cognition-page 是 display:flex，会压掉 UA [hidden] 的 display:none，
+   导致六个 tab 页全部同时显示（点 tab 无反应、看着像同一个页面）。这里显式补覆盖。 */
+.skills-cognition-page[hidden] { display: none; }
+.skills-cognition-overview { display: grid; gap: 14px; max-width: 1480px; margin: 0 auto; }
+.cognition-task-hero { max-width: 1480px; margin: 0 auto 20px; padding: 4px 0 20px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.skills-cognition-overview > .cognition-task-hero { width: 100%; margin-bottom: 2px; }
+.cognition-task-eyebrow { display: block; margin-bottom: 8px; color: var(--primary-text, #06734f); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.cognition-task-hero-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
+.cognition-task-hero-row > div:first-child { min-width: 0; max-width: 760px; }
+.cognition-task-hero h2 { margin: 0; color: var(--fg, #111827); font-size: 24px; line-height: 1.28; letter-spacing: -.025em; }
+.cognition-task-hero p { margin: 8px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.65; }
+.cognition-task-metrics { display: flex; flex: none; align-items: stretch; overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
+.cognition-task-metric { display: grid; min-width: 104px; gap: 2px; padding: 10px 14px; border-left: 1px solid var(--border, #e5e7eb); }
+.cognition-task-metric:first-child { border-left: 0; }
+.cognition-task-metric strong { color: var(--fg, #111827); font-size: 19px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.cognition-task-metric span { color: var(--muted-fg, #6b7280); font-size: 10px; white-space: nowrap; }
+.cognition-task-empty { max-width: 1480px; min-height: 180px; margin: 0 auto; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.recall-proof-list { display: grid; max-width: 1480px; margin: 0 auto; gap: 14px; }
+.recall-proof-asset { padding: 0; overflow: hidden; border-radius: 10px; }
+.recall-proof-asset > .skills-cognition-card-head { align-items: center; padding: 15px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-proof-asset > .skills-cognition-card-head > div { display: grid; min-width: 0; gap: 4px; }
+.recall-proof-count { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-proof-timeline { position: relative; display: grid; padding: 4px 18px 8px; }
+.recall-proof-event { position: relative; display: grid; min-height: 62px; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 13px 0; border-top: 1px solid var(--border, #eef0f3); }
+.recall-proof-event:first-child { border-top: 0; }
+.recall-proof-event:not(:last-child)::before { position: absolute; top: 24px; bottom: -14px; left: 5px; width: 1px; background: color-mix(in srgb, var(--primary, #0E9F6E) 22%, var(--border, #e5e7eb)); content: ''; }
+.recall-proof-marker { position: relative; z-index: 1; width: 9px; height: 9px; margin-top: 5px; border: 2px solid var(--card, #fff); border-radius: 999px; background: var(--primary, #0E9F6E); box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #0E9F6E) 40%, var(--border, #e5e7eb)); }
+/* 标记点按**结果**着色，不按事件种类。按种类上色时「需要修正」「出现负面
+   影响」也会画成绿点，等于用颜色说了一句与文字相反的结论。 */
+.recall-proof-event.is-tone-good .recall-proof-marker { background: var(--success, #15803d); }
+.recall-proof-event.is-tone-warn .recall-proof-marker { background: var(--warning, #d97706); }
+.recall-proof-event.is-tone-bad .recall-proof-marker { background: var(--danger, #b42318); }
+.recall-proof-event.is-tone-neutral .recall-proof-marker { background: var(--muted-fg, #6b7280); }
+/* 已评价的那一行不给首次评价控件，改为陈述已形成的结论。 */
+.recall-proof-rating.is-rated .recall-proof-rating-conclusion { display: grid; gap: 5px; }
+.recall-proof-rating.is-rated .recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 600; }
+.recall-proof-rating.is-rated p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.recall-proof-event-body { display: grid; min-width: 0; gap: 4px; }
+.recall-proof-outcome { color: var(--fg, #111827); font-size: 12px; font-weight: 650; line-height: 1.45; }
+.recall-proof-summary { margin: 0; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.recall-proof-meta,
+.recall-proof-time { color: var(--muted-fg, #6b7280); font-size: 10px; line-height: 1.45; }
+.recall-proof-time { padding-top: 3px; white-space: nowrap; }
+.recall-overview-notices { display: grid; gap: 8px; }
+.recall-overview-notices .skills-cognition-warning { margin-bottom: 0; }
+.skills-cognition-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.skills-cognition-card { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); padding: 14px; }
+.skills-cognition-card h2, .skills-cognition-card-head h2 { margin: 0; font-size: 14px; color: var(--fg, #111827); }
+.skills-cognition-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.skills-cognition-list { display: grid; gap: 12px; }
+.skills-cognition-list-card { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; width: 100%; padding: 12px 0; border: 0; border-bottom: 1px solid var(--border, #eef0f3); background: transparent; text-align: left; cursor: pointer; }
+.skills-cognition-list-card:last-child { border-bottom: 0; }
+.skills-cognition-list-card strong { font-size: 13px; color: var(--fg, #111827); }
+.skills-cognition-list-card span, .skills-cognition-meta { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.skills-cognition-status { flex: none; border-radius: 999px; padding: 3px 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 10%, transparent); color: var(--primary-text, #06734f); font-size: 11px; }
+.skills-cognition-card p { margin: 10px 0; color: var(--fg, #374151); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.skills-cognition-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.skills-cognition-flow-band { margin-bottom: 12px; padding: 0 0 10px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.skills-cognition-band-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.skills-cognition-band-head h2 { margin: 0; font-size: 14px; color: var(--fg, #111827); }
+.skills-cognition-band-head span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.skills-cognition-source-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.skills-cognition-source-state { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.skills-cognition-source-state b { color: var(--fg, #111827); font-size: 12px; }
+.skills-cognition-source-state em { color: var(--muted-fg, #6b7280); font-size: 11px; font-style: normal; }
+.skills-cognition-source-state.is-degraded { border-color: color-mix(in srgb, var(--warning, #d97706) 35%, var(--border, #e5e7eb)); }
+.skills-cognition-source-state.is-pending,
+.skills-cognition-source-state.is-processing { border-color: color-mix(in srgb, var(--warning, #d97706) 28%, var(--border, #e5e7eb)); }
+.skills-cognition-source-state.is-failed { border-color: color-mix(in srgb, var(--danger, #b42318) 32%, var(--border, #e5e7eb)); }
+.skills-cognition-source-state.is-paused { border-color: color-mix(in srgb, var(--muted-fg, #6b7280) 28%, var(--border, #e5e7eb)); }
+.skills-cognition-capture-list { display: grid; }
+.skills-cognition-capture-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 44px; border-top: 1px solid var(--border, #eef0f3); }
+.skills-cognition-capture-row:first-child { border-top: 0; }
+.skills-cognition-capture-row > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.skills-cognition-capture-row strong, .skills-cognition-capture-row span { overflow-wrap: anywhere; }
+.skills-cognition-capture-row strong { color: var(--fg, #111827); font-size: 12px; }
+.skills-cognition-capture-row > div > span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skills-cognition-status.is-review_ready { background: color-mix(in srgb, var(--warning, #d97706) 11%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-status.is-waiting,
+.skills-cognition-status.is-cancelled { background: color-mix(in srgb, var(--muted-fg, #6b7280) 10%, transparent); color: var(--muted-fg, #6b7280); }
+.skills-cognition-status.is-extracting,
+.skills-cognition-status.is-writing { background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-status.is-processing { background: color-mix(in srgb, var(--warning, #d97706) 11%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-status.is-pending { background: color-mix(in srgb, var(--warning, #d97706) 9%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-status.is-paused { background: color-mix(in srgb, var(--muted-fg, #6b7280) 10%, transparent); color: var(--muted-fg, #6b7280); }
+.skills-cognition-status.is-ready { background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-status.is-failed,
+.skills-cognition-status.is-configuration_required { background: color-mix(in srgb, var(--danger, #b42318) 9%, transparent); color: var(--danger, #b42318); }
+.skills-cognition-status.is-completed { background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, transparent); color: var(--primary-text, #06734f); }
+.recall-overview-pipeline,
+.recall-overview-panel { min-width: 0; margin: 0; border: 1px solid color-mix(in srgb, var(--fg, #111827) 7%, transparent); border-radius: 8px; background: var(--card, #fff); box-shadow: 0 1px 3px rgba(20, 71, 55, .05); }
+.recall-overview-pipeline { padding: 15px 16px 16px; }
+.recall-overview-pipeline .skills-cognition-band-head { align-items: center; margin-bottom: 13px; }
+.recall-overview-pipeline .skills-cognition-band-head > span { flex: 1 1 auto; text-align: right; }
+.cognition-pipeline-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0; overflow: hidden; border: 1px solid color-mix(in srgb, var(--fg, #111827) 7%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); }
+.cognition-pipeline-row .skills-cognition-source-state { justify-content: space-between; min-height: 46px; padding: 7px 12px; border: 0; border-radius: 0; background: transparent; }
+.cognition-pipeline-note { margin: -4px 0 12px; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.45; }
+.cognition-pipeline-row .cognition-pipeline-state { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'label count' 'hint hint'; align-items: center; width: 100%; min-width: 0; gap: 3px 8px; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.cognition-pipeline-row .cognition-pipeline-state:hover { background: color-mix(in srgb, var(--primary, #0E9F6E) 7%, transparent); }
+.cognition-pipeline-state b { grid-area: label; overflow-wrap: anywhere; }
+.cognition-pipeline-state em { grid-area: count; }
+.cognition-pipeline-state small { grid-area: hint; overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 10px; line-height: 1.35; }
+.cognition-pipeline-row .skills-cognition-source-state em { color: var(--fg, #111827); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cognition-pipeline-arrow { color: var(--muted-fg, #6b7280); font-size: 13px; font-style: normal; }
+.recall-overview-activity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: stretch; }
+/* 待我处理的空状态。给足留白并明确说"当前无需处理"——空白页无法让用户区分
+   "真的没事"和"页面没渲染出来"。 */
+.cognition-inbox-empty { display: grid; gap: 6px; padding: 40px 16px; }
+.cognition-inbox-empty strong { color: var(--fg, #111827); font-size: 14px; }
+/* 三条分组带：需要确认 / 可以稍后 / 教学回执。组头必须自解释——同一个收件箱里
+   "系统认为必须打扰你"和"顺手告诉你一声"是两种承诺，只靠卡片颜色分不出来。 */
+.cognition-inbox-band { display: grid; gap: 10px; margin-top: 18px; }
+.cognition-inbox-band-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.cognition-inbox-band-head > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cognition-inbox-band-head strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-inbox-band-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
+.skills-cognition-status.is-confirm { background: color-mix(in srgb, var(--warning, #d97706) 11%, transparent); color: var(--warning, #92400e); }
+.skills-cognition-status.is-later { background: color-mix(in srgb, var(--primary, #0E9F6E) 11%, transparent); color: var(--primary-text, #06734f); }
+.skills-cognition-status.is-teaching { background: color-mix(in srgb, var(--info, #2563eb) 10%, transparent); color: var(--info, #1d4ed8); }
+/* 待办行：标题区说清这是什么事，决策动作独立摆在右侧。整行可点时用户无法在
+   "打开"和"拒绝"之间做区分，只能先进详情页再退回来。 */
+.cognition-inbox-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); }
+.cognition-inbox-row-main { display: grid; gap: 3px; min-width: 0; }
+.cognition-inbox-row-main strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.5; }
+/* 主位是"要你做什么"，资产名退为副行——同一条资产可能挂着几件不同的事，只有
+   资产名时它们长得一模一样，读起来像系统重复发了一条。 */
+.cognition-inbox-row-subject { color: var(--fg, #374151); font-size: 11px; line-height: 1.5; }
+.cognition-inbox-row-main span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-inbox-row-actions { display: flex; flex: none; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+/* 辅助页页头右上角的返回按钮。这些页不在 tab 条里占位，四个 tab 全是未选中
+   态，用户没有可依赖的返回路径。 */
+.cognition-task-hero-aside { display: flex; flex: none; align-items: center; gap: 8px; }
+/* 沉淀活动的三个区块：自动沉淀 / 从历史会话沉淀 / 沉淀记录。段头统一成一个
+   组件，消除此前三种并存的标题样式。 */
+.recall-capture-block { max-width: 1480px; margin: 0 auto 22px; }
+.recall-capture-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.recall-capture-section-head strong { color: var(--fg, #111827); font-size: 15px; letter-spacing: -.01em; }
+.recall-capture-section-head > span { color: var(--muted-fg, #6b7280); font-size: 11px; text-align: right; }
+/* 区块内部的小标题必须明显低一级，否则「执行时机」「自动沉淀设置」和它们的
+   父标题「自动沉淀」同重，看不出是下级——"合成一块"就只在 DOM 上成立。 */
+.recall-capture-block .cognition-inbox-band-head strong,
+.recall-capture-block .recall-capture-control-summary h2 { font-size: 12px; font-weight: 600; color: var(--muted-fg, #4b5563); }
+.recall-capture-block .recall-capture-control-summary { min-height: 40px; }
+.recall-capture-block .cognition-capture-modes { margin-bottom: 14px; }
+/* 区块之间拉开距离，让"三块"这件事在视觉上先于块内细节被读到。 */
+.recall-capture-block + .recall-capture-block { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border, #e5e7eb); }
+/* 去向说明。刻意不编号——编号会和下面的段落标题抢层级，用户会以为要照着做。 */
+.recall-capture-chain { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 1480px; margin: 0 auto 20px; padding: 10px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); color: var(--fg, #374151); font-size: 12px; }
+.recall-capture-chain i { color: var(--muted-fg, #9ca3af); font-style: normal; }
+.recall-manual-search { width: 100%; margin-bottom: 8px; padding: 8px 11px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
+/* 候选就地展开在被选中的那条沉淀记录底下，而不是另起一个一级区域——候选是
+   任务走到某一步的待确认结果，不是和任务平级的东西。 */
+.recall-capture-inline-review:empty { display: none; }
+.recall-capture-inline-review { margin-top: 10px; }
+/* 沉淀时机的三张模式卡。互斥语义——选中的那张给主色按钮，其余给普通按钮；
+   不用开关样式，开关会让人以为可以同时开两种。 */
+.cognition-capture-modes { display: grid; gap: 10px; margin-bottom: 18px; }
+.cognition-capture-mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.cognition-capture-mode { display: grid; gap: 8px; align-content: start; }
+.cognition-capture-mode.is-active { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 34%, var(--border, #e5e7eb)); background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, var(--card, #fff)); }
+.cognition-capture-mode-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cognition-capture-mode-top strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-capture-mode .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 管理来源页底的边界声明。用 attention 的外观但不是告警——它是一条常驻契约。 */
+.cognition-source-boundary { margin-top: 20px; }
+/* 五类来源概览卡。首屏要回答"系统能从哪五类地方发现认知、各自什么状态"，所以
+   五类并列成卡，条目收进展开态——直接铺条目时光「会话」一类就占满一屏，另外
+   四类被挤到屏幕外。 */
+.recall-source-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; margin-bottom: 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.recall-source-card.is-expanded { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--border, #e5e7eb)); }
+.recall-source-card-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 14px 4px 14px 16px; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-source-card-icon { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); }
+.recall-source-card-icon-glyph { width: 17px; height: 17px; }
+.recall-source-card-copy { display: grid; gap: 3px; min-width: 0; }
+.recall-source-card-copy strong { color: var(--fg, #111827); font-size: 13px; }
+.recall-source-card-copy small { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.recall-source-card-action { padding: 0 16px 0 8px; }
+/* 展开的条目列表横跨整张卡，不挤在左列里。 */
+.recall-source-card > .recall-source-items { grid-column: 1 / -1; padding: 0 16px 12px; border-top: 1px solid var(--border, #eef0f3); }
+@media (max-width: 720px) {
+  .recall-source-card { grid-template-columns: minmax(0, 1fr); }
+  .recall-source-card-action { padding: 0 16px 14px 16px; }
+}
+/* 统计条里可点的那两格（需授权 / 失败记录）。其余三格保持纯统计的样子——
+   让不可点的东西看起来可点，比不能点更糟。 */
+.recall-workbench-summary-action { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px; border: 0; border-left: 1px solid var(--border, #e5e7eb); background: transparent; text-align: left; cursor: pointer; }
+.recall-workbench-summary-action:first-child { border-left: 0; }
+.recall-workbench-summary-action:hover { background: color-mix(in srgb, var(--fg, #111827) 4%, transparent); }
+.recall-workbench-summary-action strong { color: var(--fg, #111827); font-size: 22px; }
+.recall-workbench-summary-action span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+/* 被定位到的来源组。短暂高亮而不是持久选中：它回答"你要找的是这一组"，
+   看到之后就该让位给内容。 */
+.recall-source-group.is-located { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 45%, transparent); outline-offset: 3px; border-radius: 10px; }
+/* 候选详情 / Skill 更新候选共用的两栏：左边做决定，右边给依据。 */
+.cognition-candidate-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 14px; align-items: start; }
+.cognition-candidate-main { display: grid; gap: 12px; }
+.cognition-candidate-main h2 { margin: 0; color: var(--fg, #111827); font-size: 17px; line-height: 1.4; }
+.cognition-candidate-quote { margin: 0; padding: 12px 14px; border-left: 3px solid color-mix(in srgb, var(--primary, #0E9F6E) 40%, transparent); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, transparent); color: var(--fg, #374151); font-size: 13px; line-height: 1.65; }
+.cognition-candidate-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; gap: 12px; }
+.cognition-candidate-field.is-wide { grid-template-columns: 92px minmax(0, 1fr); align-items: start; }
+.cognition-candidate-field > span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.cognition-candidate-field input,
+.cognition-candidate-field select,
+.cognition-candidate-field textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; }
+.cognition-candidate-field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+.cognition-candidate-profile-target { align-items: start; }
+.cognition-candidate-profile-target small { grid-column: 2; margin-top: -5px; line-height: 1.45; }
+.cognition-candidate-actions { margin-top: 4px; }
+.cognition-candidate-side { display: grid; gap: 8px; align-content: start; }
+.cognition-candidate-side h3 { margin: 0; color: var(--fg, #111827); font-size: 12px; }
+.cognition-candidate-side ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.cognition-candidate-side li { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 认知树：四条分支 + 关系区 + 图例。叶片深浅直接映射 maturity，不自己发明分级。 */
+.cognition-tree-layout { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(0, 1fr) minmax(260px, .5fr); gap: 14px; align-items: start; }
+.cognition-tree-canvas { display: grid; gap: 12px; min-width: 0; }
+.cognition-tree-branch-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.cognition-tree-branch-head strong { color: var(--fg, #111827); font-size: 13px; }
+.cognition-tree-branch-head b { display: grid; min-width: 24px; height: 24px; place-items: center; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); font-size: 11px; }
+.cognition-tree-leaves { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.cognition-tree-leaf { display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); text-align: left; cursor: pointer; }
+.cognition-tree-leaf:hover { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 32%, var(--border, #e5e7eb)); }
+.cognition-tree-leaf-body { display: grid; gap: 2px; min-width: 0; }
+.cognition-tree-leaf-body strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; line-height: 1.45; }
+.cognition-tree-leaf-body small { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-dot { flex: none; width: 10px; height: 10px; margin-top: 3px; border-radius: 50%; background: var(--muted-fg, #6b7280); }
+.cognition-tree-leaf.is-light .cognition-tree-dot,
+.cognition-tree-dot.is-light { background: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); }
+.cognition-tree-leaf.is-deep .cognition-tree-dot,
+.cognition-tree-dot.is-deep { background: var(--primary, #0E9F6E); }
+.cognition-tree-dot.is-bud { background: var(--warning, #d97706); }
+.cognition-tree-dot.is-none { background: color-mix(in srgb, var(--muted-fg, #6b7280) 45%, transparent); }
+.cognition-tree-relation { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 0; border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 6%, transparent); color: var(--fg, #374151); font-size: 12px; }
+.cognition-tree-relation em { color: var(--muted-fg, #6b7280); font-size: 11px; font-style: normal; }
+.cognition-tree-relation i { color: var(--muted-fg, #6b7280); font-style: normal; }
+.cognition-tree-legend { display: grid; gap: 12px; align-content: start; }
+.cognition-tree-legend-row { display: flex; align-items: flex-start; gap: 9px; }
+.cognition-tree-legend-row strong { display: block; color: var(--fg, #111827); font-size: 12px; }
+.cognition-tree-legend-row span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-tree-legend .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 我的资产页底的认知树入口。 */
+.ability-asset-tree-entry { display: flex; align-items: center; justify-content: space-between; gap: 16px; max-width: 1480px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid var(--border, #e5e7eb); border-radius: 9px; background: var(--card, #fff); }
+.ability-asset-tree-entry strong { color: var(--fg, #111827); font-size: 13px; }
+.ability-asset-tree-entry .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+/* 我的认知树 tab：种子/树是一级页面，四类资产卡接在树内容下方。 */
+#skills-cognition-assets-summary .ability-asset-summary-grid { margin-top: 18px; }
+#skills-cognition-assets-summary .cognition-seed-wrap { padding-top: 34px; }
+/* 二级页面（四类资产 + 详情）的返回认知树头部：按钮靠右。 */
+.cognition-assets-subview-head { display: flex; justify-content: flex-end; max-width: 1480px; margin: 0 auto 12px; }
+/* 非资产分流的链路条。 */
+.cognition-nonasset-steps { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cognition-nonasset-step { display: grid; gap: 3px; flex: 1 1 150px; min-width: 0; padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.cognition-nonasset-step strong { color: var(--fg, #111827); font-size: 12px; }
+.cognition-nonasset-step span { color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-nonasset-layout { display: grid; max-width: 1480px; margin: 14px auto 0; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 14px; align-items: start; }
+/* 使用与证明的分层筛选与两张说明卡。说明卡不是装饰：用户最容易犯的错就是把
+   「被正确带入」读成「有效」，这一页的全部意义就是把这两件事分开。 */
+.cognition-proof-filters { max-width: 1480px; margin: 0 auto 14px; }
+.cognition-proof-notes { display: grid; max-width: 1480px; margin: 16px auto 0; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.cognition-proof-notes h3 { margin: 0 0 6px; color: var(--fg, #111827); font-size: 12px; }
+.cognition-proof-notes .panel-sub { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+/* 我的资产详情里的三格事实（作用范围 / 默认使用 / 版本）。 */
+.cognition-asset-facts { margin: 0 0 14px; }
+@media (max-width: 1080px) {
+  .cognition-candidate-layout,
+  .cognition-tree-layout,
+  .cognition-nonasset-layout { grid-template-columns: minmax(0, 1fr); }
+  .cognition-candidate-field,
+  .cognition-candidate-field.is-wide { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .cognition-candidate-profile-target small { grid-column: 1; }
+}
+.cognition-governance-workbench { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: minmax(320px, .8fr) minmax(0, 1.2fr); gap: 14px; align-items: start; }
+.cognition-governance-history-card,
+.cognition-governance-control-card { min-width: 0; padding: 0; overflow: hidden; border-radius: 10px; }
+.cognition-governance-panel-head,
+.cognition-governance-selected-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-panel-head h2,
+.cognition-governance-selected-head h2 { margin: 0; color: var(--fg, #111827); font-size: 15px; line-height: 1.4; }
+.cognition-governance-panel-head p,
+.cognition-governance-selected-head p { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+.cognition-governance-panel-head > span { display: grid; min-width: 28px; height: 28px; place-items: center; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 9%, transparent); color: var(--primary-text, #06734f); font-size: 11px; font-weight: 700; }
+.cognition-governance-asset-list { display: grid; max-height: min(620px, calc(100vh - 360px)); overflow-y: auto; }
+.cognition-governance-asset-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; width: 100%; min-height: 70px; padding: 12px 16px; border: 0; border-top: 1px solid var(--border, #eef0f3); background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.cognition-governance-asset-row:first-child { border-top: 0; }
+.cognition-governance-asset-row:hover { background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, transparent); }
+.cognition-governance-asset-row.is-selected { background: color-mix(in srgb, var(--primary, #0E9F6E) 8%, var(--card, #fff)); box-shadow: inset 3px 0 0 var(--primary, #0E9F6E); }
+.cognition-governance-asset-row > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.cognition-governance-asset-row strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-governance-asset-row small { overflow: hidden; color: var(--muted-fg, #6b7280); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-governance-version { color: var(--fg, #374151); font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.cognition-governance-selected-head { align-items: center; }
+.cognition-governance-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-facts > div { min-width: 0; padding: 13px 12px; border-left: 1px solid var(--border, #eef0f3); }
+.cognition-governance-facts > div:first-child { padding-left: 0; border-left: 0; }
+.cognition-governance-facts dt { margin-bottom: 4px; color: var(--muted-fg, #6b7280); font-size: 10px; }
+.cognition-governance-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--fg, #374151); font-size: 11px; line-height: 1.5; }
+.cognition-governance-action-group { padding: 16px 18px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-governance-action-group h3 { margin: 0; color: var(--fg, #111827); font-size: 13px; }
+.cognition-governance-action-group p { margin: 5px 0 12px; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-governance-action-group > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.cognition-governance-action-group.is-danger { background: color-mix(in srgb, var(--danger, #b42318) 2%, var(--card, #fff)); }
+.cognition-governance-control-card > :is(.recall-asset-version-panel, .recall-asset-chain-panel) { margin: 16px 18px; }
+.recall-overview-panel { padding: 14px; }
+.recall-overview-attention { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warning, #d97706) 28%, var(--border, #e5e7eb)); border-radius: 8px; background: color-mix(in srgb, var(--warning, #d97706) 5%, var(--card, #fff)); }
+.recall-overview-attention .skills-cognition-band-head { margin-bottom: 8px; }
+.recall-overview-attention > div:last-child { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border: 1px solid color-mix(in srgb, var(--warning, #d97706) 20%, var(--border, #e5e7eb)); border-radius: 6px; background: var(--card, #fff); }
+.recall-overview-attention-row { display: flex; min-width: 0; min-height: 40px; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 0; border-left: 1px solid color-mix(in srgb, var(--warning, #d97706) 18%, var(--border, #e5e7eb)); background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-overview-attention-row:first-child { border-left: 0; }
+.recall-overview-attention-row:hover { background: color-mix(in srgb, var(--warning, #d97706) 6%, transparent); }
+.recall-overview-attention-row span { min-width: 0; overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 11px; }
+.recall-overview-attention-row b { flex: none; color: var(--warning, #92400e); font-size: 11px; }
+.recall-overview-panel .skills-cognition-band-head { align-items: flex-start; margin-bottom: 10px; }
+.recall-overview-panel .skills-cognition-band-head > span { flex: 1 1 auto; text-align: right; }
+.recall-overview-sources .skills-cognition-source-row { align-content: flex-start; }
+.recall-overview-sources .skills-cognition-source-state { flex: 1 1 172px; justify-content: space-between; }
+.recall-overview-captures .recall-capture-overview-counts { padding-top: 1px; }
+.recall-overview-captures .skills-cognition-capture-list { max-height: 190px; overflow-y: auto; }
+.recall-overview-teaching .skills-cognition-capture-list { max-height: 180px; overflow-y: auto; }
+.recall-overview-teaching .skills-cognition-band-head { display: block; }
+.recall-overview-teaching .skills-cognition-band-head > h2 { white-space: nowrap; }
+.recall-overview-teaching .skills-cognition-band-head > span { display: block; margin-top: 4px; text-align: left; }
+.recall-overview-panel .skills-cognition-empty { padding: 20px 8px; }
+.recall-overview-activity { min-height: 0; }
+.recall-overview-activity-list { display: grid; margin-top: 10px; }
+.recall-overview-activity-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; min-height: 52px; align-items: center; gap: 16px; padding: 8px 2px; border: 0; border-top: 1px solid var(--border, #e5e7eb); background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-overview-activity-row:first-child { border-top: 0; }
+.recall-overview-activity-row:hover { background: var(--surface-subtle, #f7f8fa); }
+.recall-overview-activity-main, .recall-overview-activity-meta { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.recall-overview-activity-main strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.recall-overview-activity-main small, .recall-overview-activity-meta small { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-overview-activity-meta { align-items: flex-end; }
+.recall-overview-activity-meta b { color: var(--fg, #111827); font-size: 11px; font-weight: 600; }
+.recall-capture-overview-counts { display: flex; flex-wrap: wrap; gap: 14px; padding: 7px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-capture-overview-counts span { display: inline-flex; align-items: baseline; gap: 5px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-capture-overview-counts b { color: var(--fg, #111827); font-size: 14px; }
+.recall-capture-control-panel { padding-bottom: 14px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-capture-control-summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 18px; }
+.recall-capture-control-summary > div { display: flex; min-width: 0; align-items: baseline; gap: 12px; }
+.recall-capture-control-summary h2 { margin: 0; color: var(--fg, #111827); font-size: 14px; white-space: nowrap; }
+.recall-capture-control-summary span { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 12px; }
+.recall-capture-settings-toggle { flex: none; }
+.recall-capture-control-expanded { margin-top: 12px; padding-top: 14px; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-capture-control-expanded[hidden] { display: none; }
+.recall-capture-control-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.recall-capture-control-head > span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.recall-capture-master { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; color: var(--fg, #111827); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.recall-capture-master input, .recall-capture-check input { accent-color: var(--primary, #0E9F6E); }
+.recall-capture-control-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, .8fr); gap: 14px 22px; }
+.recall-capture-control-field { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.recall-capture-control-field[hidden] { display: none; }
+.recall-capture-control-field > span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-capture-control-field > label, .recall-capture-model-state label { color: var(--muted-fg, #6b7280); font-size: 11px; font-weight: 600; }
+.recall-capture-policy-group { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: min(100%, 420px); padding: 3px; border: 1px solid var(--border, #dfe3e8); border-radius: 8px; background: var(--surface-subtle, #f7f8fa); }
+.recall-capture-policy-group.is-review { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.recall-capture-policy { min-width: 0; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 12px; }
+.recall-capture-policy:hover:not(:disabled) { color: var(--fg, #111827); }
+.recall-capture-policy.is-active { background: var(--card, #fff); color: var(--primary, #0E9F6E); box-shadow: 0 1px 3px rgba(20, 71, 55, .12); font-weight: 600; }
+.recall-capture-policy:disabled { cursor: not-allowed; opacity: .5; }
+.recall-capture-night-window > div { display: flex; align-items: center; gap: 8px; }
+.recall-capture-night-window input[type="time"], .recall-capture-quiet-window select { min-width: 116px; height: 34px; padding: 0 9px; border: 1px solid var(--border, #dfe3e8); border-radius: 6px; background: var(--card, #fff); color: var(--fg, #111827); font: inherit; }
+.recall-capture-quiet-window span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-capture-check { display: inline-flex; align-items: center; gap: 7px; width: fit-content; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-capture-model-state { grid-column: 2; grid-row: 1 / span 3; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 12px 0 12px 18px; border-left: 1px solid var(--border, #e5e7eb); }
+.recall-capture-model-state.is-compact { grid-column: auto; grid-row: auto; margin-top: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--danger, #b42318) 20%, var(--border, #e5e7eb)); border-radius: 8px; background: color-mix(in srgb, var(--danger, #b42318) 4%, var(--card, #fff)); }
+.recall-capture-model-state > div { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 5px; }
+.recall-capture-model-state strong { max-width: 100%; overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 13px; }
+.recall-manual-history { padding: 18px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-manual-history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.recall-manual-history-head h2 { margin: 0; color: var(--fg, #111827); font-size: 14px; }
+.recall-manual-history-head p { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-manual-history-head .btn { flex: none; }
+.recall-manual-history-source { margin-top: 15px; padding-bottom: 7px; color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
+.recall-manual-conversation-list { max-height: 280px; overflow-y: auto; border-top: 1px solid var(--border, #e5e7eb); }
+/* 行是容器不是按钮：这个列表是 280px 的滚动框，整行可点时触控板在框里滑动
+   就会误发提取，没有安全的抓取区。动作收在右侧 .recall-manual-conversation-trigger。 */
+.recall-manual-conversation { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; min-height: 54px; align-items: center; gap: 10px; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--border, #e5e7eb); background: transparent; color: inherit; text-align: left; }
+.recall-manual-conversation:hover { background: var(--surface-subtle, #f8f9fb); }
+/* style.css 里同名规则给了 cursor:pointer，行已经不是按钮，必须显式改回来，
+   否则整行看着仍像可点，用户还会往行上按。 */
+.recall-manual-conversation { cursor: default; }
+.recall-manual-conversation.is-disabled { opacity: .72; }
+.recall-manual-conversation-trigger { flex: none; white-space: nowrap; }
+.recall-manual-conversation-action { color: var(--primary, #0E9F6E); font-size: 11px; font-weight: 600; }
+.recall-manual-conversation-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.recall-manual-conversation-main strong { overflow: hidden; color: var(--fg, #111827); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.recall-manual-conversation-main small { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-capture-task-workbench { padding-top: 18px; }
+.recall-capture-task-log-head { margin-bottom: 12px; }
+.recall-capture-filter-bar { display: flex; gap: 6px; margin-bottom: 14px; overflow-x: auto; }
+.recall-capture-filter { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted-fg, #6b7280); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
+.recall-capture-filter:hover { color: var(--fg, #111827); background: var(--surface-subtle, #f7f8fa); }
+.recall-capture-filter.is-active { border-color: var(--border, #dfe3e8); background: var(--card, #fff); color: var(--fg, #111827); }
+.recall-capture-filter b { display: inline-flex; min-width: 18px; min-height: 18px; align-items: center; justify-content: center; border-radius: 6px; background: var(--surface-subtle, #eef1f4); color: inherit; font-size: 10px; }
+.recall-capture-task-list { display: grid; gap: 8px; }
+.recall-capture-task { overflow: hidden; border: 1px solid var(--border, #e1e5ea); border-radius: 8px; background: var(--card, #fff); }
+.recall-capture-task.is-selected { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 42%, var(--border, #e1e5ea)); }
+.recall-capture-task-summary { display: grid; grid-template-columns: minmax(220px, 1fr) 108px 148px; width: 100%; min-height: 64px; align-items: center; gap: 12px; padding: 10px 14px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+.recall-capture-task-summary:hover { background: var(--surface-subtle, #f8f9fb); }
+.recall-capture-task-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.recall-capture-task-main strong { overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 13px; }
+.recall-capture-task-time { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-capture-task-time { text-align: right; }
+.recall-capture-task-detail { padding: 14px; border-top: 1px solid var(--border, #e5e7eb); background: var(--surface-subtle, #fafbfc); }
+.recall-capture-task-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 12px; }
+.recall-capture-task-meta span { display: inline-flex; gap: 6px; color: var(--fg, #111827); font-size: 11px; }
+.recall-capture-task-meta b { color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
+.recall-capture-task-timeline span { display: flex; min-width: 0; flex-direction: column; gap: 3px; overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 11px; }
+.recall-capture-task-timeline b { color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
+.recall-capture-task-timeline { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.recall-capture-task-error { display: flex; gap: 8px; margin-top: 12px; color: var(--danger, #b42318); font-size: 11px; }
+.recall-capture-review-summary { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-capture-review-summary span { display: inline-flex; align-items: baseline; gap: 5px; color: var(--fg, #111827); font-size: 11px; }
+.recall-capture-review-summary b { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-capture-task-feedback,
+.recall-capture-next-action { margin-top: 12px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--primary, #0E9F6E) 22%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); color: var(--fg, #374151); font-size: 11px; }
+.recall-capture-task-feedback.is-recovered { border-color: color-mix(in srgb, var(--warning, #d97706) 26%, transparent); background: color-mix(in srgb, var(--warning, #d97706) 7%, transparent); }
+.recall-capture-next-action { display: flex; gap: 7px; border-color: color-mix(in srgb, var(--fg, #111827) 8%, transparent); background: transparent; }
+.recall-capture-asset-receipts { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-capture-asset-receipts-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.recall-capture-asset-receipts-head strong { color: var(--fg, #111827); font-size: 11px; }
+.recall-capture-asset-receipts-head span { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-capture-asset-receipts-list { display: grid; gap: 6px; }
+.recall-capture-asset-receipt { padding: 7px 0 9px; border-bottom: 1px solid color-mix(in srgb, var(--border, #e5e7eb) 78%, transparent); }
+.recall-capture-asset-receipt:last-child { padding-bottom: 0; border-bottom: 0; }
+.recall-capture-asset-receipt-head { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; }
+.recall-capture-asset-receipt-head > span { display: flex; min-width: 0; align-items: baseline; gap: 6px; }
+/* 卡头的 b 现在是**资产名**（过去是 asset_id 这个字段标签），必须按标题排，
+   不能继续用字段标签的 10px 灰字——否则资产名比它旁边的 id 还不起眼。 */
+.recall-capture-asset-receipt-head b { color: var(--fg, #111827); font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recall-capture-asset-receipt dt { color: var(--muted-fg, #6b7280); font-size: 10px; font-weight: 600; }
+.recall-capture-asset-receipt code { min-width: 0; overflow-wrap: anywhere; color: var(--fg, #111827); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; }
+.recall-capture-asset-receipt-head em { flex: none; color: var(--primary-text, #06734f); font-size: 10px; font-style: normal; }
+.recall-capture-asset-receipt dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; margin: 7px 0 0; }
+.recall-capture-asset-receipt dl > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.recall-capture-asset-receipt dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 11px; }
+.recall-capture-task-detail .skills-cognition-actions { margin-top: 14px; }
+.recall-capture-load-more { display: block; margin: 14px auto 0; }
+.recall-capture-review { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-capture-review .recall-workbench-section-head { margin-bottom: 12px; }
+.recall-capture-review-head-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.recall-candidate-selection-count { color: var(--muted-fg, #6b7280); font-size: 11px; white-space: nowrap; }
+.recall-candidate-pool-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--surface-subtle, #fafbfc); color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-candidate-pool-toolbar label { display: inline-flex; align-items: center; gap: 7px; color: var(--fg, #374151); font-weight: 600; }
+.recall-candidate-pool-toolbar input,
+.recall-candidate-select input { accent-color: var(--primary, #0E9F6E); }
+.recall-capture-review .skills-cognition-record-list { display: grid; gap: 8px; }
+.recall-candidate-pool-empty { padding: 28px 16px; border-top: 1px solid var(--border, #e5e7eb); color: var(--muted-fg, #6b7280); font-size: 12px; text-align: center; }
+.cognition-candidate-row { padding: 0; overflow: hidden; }
+.recall-candidate-pool-row { display: flex; min-height: 34px; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border, #eef0f3); background: var(--card, #fff); }
+.recall-candidate-pool-row > div { flex: none; }
+.recall-candidate-select { display: inline-flex; align-items: center; gap: 6px; color: var(--muted-fg, #6b7280); font-size: 11px; cursor: pointer; }
+.recall-candidate-select-placeholder { display: inline-flex; width: 14px; align-items: center; justify-content: center; color: var(--warning, #92400e); font-size: 13px; font-weight: 700; }
+.recall-candidate-source { min-width: 0; overflow: hidden; color: var(--muted-fg, #6b7280); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.cognition-candidate-row.is-bulk-selected { border-color: color-mix(in srgb, var(--primary, #0E9F6E) 35%, var(--border, #e1e5ea)); }
+.cognition-candidate-row > .recall-collapsible-body { padding: 12px; }
+/* 认知卡片可折叠（交互规范：默认收起，展开看内容/证据/操作）。 */
+.recall-collapsible-body { border-radius: inherit; }
+.recall-collapsible-body summary { cursor: pointer; list-style: none; }
+.recall-collapsible-body summary::-webkit-details-marker { display: none; }
+.recall-collapsible-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.recall-collapsible-summary .recall-collapsible-title { flex: 1; min-width: 0; }
+.recall-collapsible-summary .recall-collapsible-title h2 { margin: 0 0 4px; }
+.recall-collapsible-summary .recall-collapsible-title .skills-cognition-meta { font-size: 11px; }
+.recall-collapsible-summary::after { content: '▸'; color: var(--muted-fg, #6b7280); margin-top: 4px; transition: transform 0.15s ease; }
+.recall-collapsible-body[open] > .recall-collapsible-summary::after { transform: rotate(90deg); }
+.ability-asset-row-details { margin-top: 6px; }
+.ability-asset-row-details summary { cursor: pointer; color: var(--accent, #2563eb); font-size: 11px; user-select: none; }
+.ability-asset-row-details summary::-webkit-details-marker { display: none; }
+.ability-asset-row-details .ability-asset-row-summary { display: block; margin-top: 6px; white-space: normal; }
+.skills-cognition-empty, .skills-cognition-loading, .skills-cognition-error { padding: 16px 10px; color: var(--muted-fg, #6b7280); text-align: center; font-size: 12px; }
+.skills-cognition-error { color: var(--danger, #b91c1c); }
+.skills-cognition-warning { margin-bottom: 14px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warning, #d97706) 30%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--warning, #d97706) 8%, transparent); color: var(--warning, #92400e); font-size: 12px; }
+@media (max-width: 800px) {
+  .skills-cognition-columns { grid-template-columns: 1fr 1fr; }
+  .recall-overview-attention > div:last-child { grid-template-columns: 1fr; }
+  .recall-overview-attention-row { border-top: 1px solid color-mix(in srgb, var(--warning, #d97706) 18%, var(--border, #e5e7eb)); border-left: 0; }
+  .recall-overview-attention-row:first-child { border-top: 0; }
+  .recall-capture-control-grid { grid-template-columns: 1fr; }
+  .recall-capture-model-state { grid-column: auto; grid-row: auto; padding-left: 0; border-top: 1px solid var(--border, #e5e7eb); border-left: 0; }
+  .recall-capture-task-summary { grid-template-columns: minmax(0, 1fr) 104px; }
+  .recall-capture-task-time { display: none; }
+}
+@media (max-width: 560px) {
+  .skills-cognition-header, .skills-cognition-page { padding-left: 16px; padding-right: 16px; }
+  .skills-cognition-tabs { padding-left: 16px; padding-right: 16px; }
+  .skills-cognition-columns { grid-template-columns: 1fr; }
+  .skills-cognition-band-head { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .recall-overview-activity-grid { grid-template-columns: 1fr; }
+  .recall-overview-pipeline .skills-cognition-band-head,
+  .recall-overview-panel .skills-cognition-band-head { align-items: flex-start; flex-direction: column; }
+  .recall-overview-pipeline .skills-cognition-band-head > span,
+  .recall-overview-panel .skills-cognition-band-head > span { text-align: left; }
+  .recall-overview-activity-row { grid-template-columns: 1fr; gap: 5px; }
+  .recall-overview-activity-meta { align-items: flex-start; }
+  .cognition-pipeline-row { grid-template-columns: 1fr; }
+  .cognition-pipeline-arrow { display: none; }
+  .cognition-pipeline-row .skills-cognition-source-state:not(:first-child) { border-top: 1px solid color-mix(in srgb, var(--fg, #111827) 7%, transparent); }
+  .skills-cognition-capture-row { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 0; }
+  .skills-cognition-capture-row .btn { grid-column: 1 / -1; justify-self: start; }
+  .recall-capture-control-head, .recall-capture-model-state { align-items: flex-start; flex-direction: column; }
+  .recall-capture-control-summary { align-items: flex-start; }
+  .recall-capture-control-summary > div { flex-direction: column; gap: 3px; }
+  .recall-manual-history-head { align-items: flex-start; flex-direction: column; }
+  .recall-manual-history-head .btn { width: 100%; }
+  .recall-capture-policy-group { width: 100%; }
+  .recall-capture-task-summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .recall-capture-task-summary .skills-cognition-status { justify-self: end; }
+  .recall-capture-asset-receipt dl { grid-template-columns: 1fr 1fr; }
+}
+
+.skills-cognition-detail-block {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.skills-cognition-detail-block ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.skill-diff-summary { margin-top: 7px; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-files { display: grid; gap: 6px; margin-top: 8px; }
+.skill-diff-file { overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--card, #fff); }
+.skill-diff-file > summary { display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px; cursor: pointer; list-style: none; }
+.skill-diff-file > summary::-webkit-details-marker { display: none; }
+.skill-diff-file > summary span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.skill-diff-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); padding: 1px 8px; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.skill-diff-line > span { color: var(--muted-fg, #9ca3af); text-align: center; }
+.skill-diff-line.is-added { background: color-mix(in srgb, #22c55e 10%, transparent); }
+.skill-diff-line.is-added > span { color: #15803d; }
+.skill-diff-line.is-deleted { background: color-mix(in srgb, #ef4444 10%, transparent); }
+.skill-diff-line.is-deleted > span { color: #b91c1c; }
+
+.recall-candidate-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.recall-candidate-editor label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted-fg, #6b7280);
+  font-weight: 600;
+}
+
+.recall-candidate-editor input,
+.recall-candidate-editor select,
+.recall-candidate-editor textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.recall-candidate-editor textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.recall-candidate-editor-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .recall-candidate-editor { grid-template-columns: minmax(0, 1fr); }
+  .recall-candidate-editor-wide { grid-column: auto; }
+}
+
+.skills-cognition-muted {
+  color: var(--text-muted, #64748b);
+  font-size: 12px;
+}
+
+.skills-cognition-ref-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.skills-cognition-ref-row span,
+.skills-cognition-diff {
+  display: inline-flex;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: color-mix(in srgb, var(--primary, #0E9F6E) 7%, transparent);
+  color: var(--muted-fg, #6b7280);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* Recall workspace shell and page-specific workbenches. */
+#panel-recall {
+  overflow: hidden;
+  background: var(--app-bg, #f6f7fb);
+}
+
+.skills-cognition-surface {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--card, #fff);
+  box-shadow: none;
+}
+
+.cognition-refresh-btn {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  place-items: center;
+}
+
+.skills-cognition-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.skills-cognition-tab-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 10px;
+  padding: 0;
+}
+.skills-cognition-tab-group + .skills-cognition-tab-group {
+  margin: 0 0 0 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border, #e5e7eb);
+}
+.skills-cognition-tab-group-label {
+  display: none;
+}
+
+.skills-cognition-tab-icon .ui-icon { width: 17px; height: 17px; flex: none; }
+
+.skills-cognition-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* 滚动归 .skills-cognition-main（develop）：Electron 在内层滚动到边缘时会
+     断掉滚轮接力，配套的 wheel handoff 修复就挂在这个容器上。背景仍用 --app-bg，
+     v0.7 的内容区是浅灰底衬白卡片。 */
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+  background: var(--app-bg, #f6f7fb);
+}
+.skills-cognition-main:focus-visible { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 42%, transparent); outline-offset: -2px; }
+
+.recall-workbench-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+.recall-workbench-page-actions { display: flex; align-items: center; flex: none; gap: 8px; }
+.recall-candidate-pool-entry { display: inline-flex; align-items: center; gap: 7px; border-color: color-mix(in srgb, var(--primary, #0E9F6E) 28%, var(--border, #e5e7eb)); color: var(--primary, #0E9F6E); }
+.recall-candidate-pool-entry b { min-width: 18px; padding: 1px 5px; border-radius: 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 12%, transparent); color: var(--primary, #0E9F6E); font-size: 11px; font-weight: 700; text-align: center; }
+.recall-workbench-page-head h2 { margin: 0; color: var(--fg, #111827); font-size: 19px; }
+.recall-workbench-page-head p,
+.recall-workbench-section-head p { margin: 5px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.5; }
+/* 管理来源的统计条现在是 5 格（来源类型 / 当前可见 / 可用 / 需授权 / 失败记录）。
+   auto-fit 而不是写死列数：其他调用方仍是 3 格，写死会把它们撑坏。 */
+.recall-workbench-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 0;
+  margin-bottom: 24px;
+  border-block: 1px solid var(--border, #e5e7eb);
+}
+.recall-workbench-summary > div { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px; border-left: 1px solid var(--border, #e5e7eb); }
+.recall-workbench-summary > div:first-child { border-left: 0; }
+.recall-workbench-summary strong { color: var(--fg, #111827); font-size: 22px; }
+.recall-workbench-summary span { color: var(--muted-fg, #6b7280); font-size: 12px; }
+.recall-workbench-section,
+.recall-source-group { padding: 18px 0; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-source-group:first-child { border-top: 0; padding-top: 0; }
+.recall-workbench-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+.recall-workbench-section-head h2 { margin: 0; color: var(--fg, #111827); font-size: 14px; }
+.recall-workbench-empty { padding: 24px 0; color: var(--muted-fg, #6b7280); font-size: 12px; text-align: center; }
+.recall-workbench-empty-state {
+  display: flex;
+  min-height: 200px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 32px 16px;
+  border-top: 1px solid var(--border, #e5e7eb);
+  color: var(--muted-fg, #6b7280);
+  text-align: center;
+}
+.recall-workbench-empty-state strong { color: var(--fg, #111827); font-size: 14px; font-weight: 600; }
+.recall-workbench-empty-state span { max-width: 520px; font-size: 12px; line-height: 1.6; }
+.recall-workbench-empty-state .btn { margin-top: 6px; }
+.recall-candidate-empty { min-height: 260px; border-top: 0; }
+.recall-source-items { border-top: 1px solid var(--border, #e5e7eb); }
+.recall-source-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--border, #eef0f3);
+}
+.recall-source-item-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.recall-source-item-main strong { overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 13px; }
+.recall-source-item-main span { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-source-item-main small { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.45; }
+.recall-source-item-main .recall-source-next { color: var(--fg, #374151); }
+.recall-source-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.recall-source-item:focus-within { outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 55%, transparent); outline-offset: -2px; }
+.recall-source-more { display: grid; width: 32px; min-width: 32px; padding: 0; place-items: center; }
+.recall-source-more .ui-icon { width: 15px; height: 15px; }
+.recall-source-group-advanced > summary { cursor: pointer; list-style: none; }
+.recall-source-group-advanced > summary::-webkit-details-marker { display: none; }
+.recall-source-group-advanced > summary::after { content: ''; width: 7px; height: 7px; margin-left: 4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; color: var(--muted-fg, #6b7280); transform: rotate(45deg); transition: transform .16s ease; }
+.recall-source-group-advanced[open] > summary::after { transform: rotate(225deg); }
+.recall-source-group-advanced .recall-source-items {
+  max-height: clamp(240px, calc(100dvh - 300px), 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+@media (max-width: 1100px) {
+  .skills-cognition-surface .skills-cognition-header { padding: 24px 28px 20px; }
+  .skills-cognition-surface .skills-cognition-tabs { min-height: 0; padding: 0 28px 20px; overflow-x: hidden; overflow-y: visible; }
+  .skills-cognition-tab-group { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skills-cognition-surface .skills-cognition-tab { gap: 12px; padding: 14px; font-size: inherit; }
+  .skills-cognition-surface .skills-cognition-tab .ui-icon { display: inline-block; }
+  .skills-cognition-surface .skills-cognition-page { padding: 22px 28px 32px; }
+  .cognition-task-hero-row { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .cognition-task-metrics { width: 100%; }
+  .cognition-task-metric { min-width: 0; flex: 1 1 0; }
+  .cognition-governance-workbench { grid-template-columns: 1fr; }
+  .cognition-governance-asset-list { max-height: 360px; }
+}
+
+@media (max-width: 600px) {
+  .skills-cognition-surface .skills-cognition-header { flex-direction: column; gap: 16px; padding: 20px 16px 16px; }
+  .skills-cognition-header-actions { width: 100%; padding-top: 0; }
+  .skills-cognition-header-actions .cognition-aux-entry { flex: 1 1 auto; }
+  .skills-cognition-surface .skills-cognition-tabs { padding: 0 16px 16px; overflow-x: auto; overflow-y: hidden; }
+  .skills-cognition-tab-group { display: flex; width: max-content; }
+  .skills-cognition-surface .skills-cognition-tab { width: min(76vw, 260px); }
+  .skills-cognition-surface .skills-cognition-page { padding: 18px 16px 24px; }
+  .recall-workbench-summary { grid-template-columns: 1fr; }
+  .recall-workbench-summary > div { border-left: 0; border-top: 1px solid var(--border, #e5e7eb); }
+  .recall-workbench-summary > div:first-child { border-top: 0; }
+  .recall-source-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .recall-source-item-actions { grid-column: 1 / -1; }
+  .cognition-task-hero h2 { font-size: 20px; }
+  .cognition-task-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cognition-task-metric { padding: 9px 10px; border-left: 1px solid var(--border, #e5e7eb); }
+  .cognition-task-metric:first-child { border-left: 0; }
+  .cognition-task-metric span { overflow: hidden; text-overflow: ellipsis; }
+  .recall-proof-event { grid-template-columns: 14px minmax(0, 1fr); }
+  .recall-proof-time { grid-column: 2; padding-top: 0; white-space: normal; }
+  .cognition-governance-asset-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .cognition-governance-asset-row > .skills-cognition-status { grid-column: 1 / -1; justify-self: start; }
+  .cognition-governance-facts { grid-template-columns: 1fr; }
+  .cognition-governance-facts > div { padding: 10px 0; border-top: 1px solid var(--border, #eef0f3); border-left: 0; }
+  .cognition-governance-facts > div:first-child { border-top: 0; }
+  .recall-source-group-advanced .recall-source-items { max-height: clamp(220px, calc(100dvh - 260px), 320px); }
+}
+
+.skills-cognition-record-list {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 16px;
+  background: var(--card, #fff);
+}
+
+.skills-cognition-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 18px;
+  padding: 16px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--border, #eef0f3);
+  border-radius: 0;
+  background: transparent;
+}
+
+.skills-cognition-record:last-child {
+  border-bottom: 0;
+}
+
+.skills-cognition-record:hover {
+  background: color-mix(in srgb, var(--primary, #0E9F6E) 4%, transparent);
+}
+
+.skills-cognition-record-head {
+  display: contents;
+}
+
+.skills-cognition-record-head h2 {
+  grid-column: 1;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--fg, #111827);
+}
+
+.skills-cognition-record-head .skills-cognition-status {
+  grid-column: 2;
+  justify-self: end;
+}
+
+.skills-cognition-record > p,
+.skills-cognition-record > .skills-cognition-meta,
+.skills-cognition-record > .skills-cognition-detail-block,
+.skills-cognition-record > .skills-cognition-actions {
+  grid-column: 1 / -1;
+}
+
+.skills-cognition-record > p {
+  margin: 0;
+}
+
+.ability-assets-workbench { display: grid; gap: 14px; }
+.ability-asset-summary-grid { display: grid; max-width: 1480px; margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ability-asset-summary-card { min-height: 96px; padding: 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px; background: var(--card, #fff); }
+.ability-asset-summary-card span { display: block; color: var(--muted-fg, #6b7280); font-size: 12px; }
+.ability-asset-summary-card strong { display: block; margin: 6px 0 2px; font-size: 22px; }
+.ability-asset-summary-card small { color: var(--muted-fg, #6b7280); font-size: 11px; }
+#skills-cognition-assets-summary { margin-bottom: 18px; }
+.recall-asset-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.recall-asset-section-head[hidden],
+.recall-personal-ontology-section[hidden] { display: none; }
+.recall-asset-section-head h2 { margin: 0; color: var(--fg, #111827); font-size: 14px; line-height: 1.45; }
+.recall-asset-section-head p { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.5; }
+#skills-cognition-assets {
+  --personal-onto-bg: var(--surface-subtle, #f8faf9);
+  --personal-onto-card: var(--card, #fff);
+  --personal-onto-border: var(--border, #e5e7eb);
+  --personal-onto-fg: var(--fg, #111827);
+  --personal-onto-muted: var(--muted-fg, #6b7280);
+  --personal-onto-primary: var(--primary-text, #06734f);
+  --personal-onto-accent: var(--primary, #0E9F6E);
+  --personal-onto-green: var(--success, #15803d);
+  --personal-onto-red: var(--danger, #b42318);
+  --personal-onto-orange: var(--warning, #d97706);
+  --personal-onto-radius: 8px;
+  --personal-onto-radius-sm: 6px;
+  --personal-onto-shadow: none;
+  position: relative;
+  overflow-x: hidden;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+.recall-personal-ontology-section { margin-bottom: 24px; }
+.recall-personal-ontology-frame {
+  width: 100%;
+  height: clamp(420px, calc(100dvh - 300px), 580px);
+  min-width: 0;
+  min-height: 0;
+  max-height: 580px;
+  overflow: hidden;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  background: var(--card, #fff);
+  color: var(--fg, #111827);
+}
+.recall-personal-ontology-frame .personal-onto-layout,
+.recall-personal-ontology-frame .personal-onto-sidebar,
+.recall-personal-ontology-frame .personal-onto-main { min-width: 0; min-height: 0; }
+.recall-personal-ontology-frame .personal-onto-sidebar { width: 260px; }
+.recall-personal-ontology-frame .personal-onto-nav,
+.recall-personal-ontology-frame .personal-onto-main-body {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+.recall-personal-ontology-frame .personal-onto-main-header { min-height: 46px; padding: 12px 18px; }
+.recall-personal-ontology-frame .personal-onto-main-title { font-size: 14px; }
+.recall-personal-ontology-frame .personal-onto-main-body { min-width: 0; min-height: 0; padding: 16px 18px; }
+.recall-personal-ontology-frame .personal-onto-modal {
+  display: flex;
+  max-height: min(720px, calc(100dvh - 48px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.recall-personal-ontology-frame .personal-onto-modal-body { min-height: 0; overflow: hidden; }
+.recall-personal-ontology-frame .personal-onto-library-modal .personal-onto-modal-body { display: flex; flex-direction: column; }
+.recall-personal-ontology-frame .personal-onto-library-list {
+  flex: 0 0 160px;
+  min-height: 0;
+  max-height: none;
+  overscroll-behavior: auto;
+  scrollbar-gutter: stable;
+}
+.recall-formal-assets-section { min-width: 0; }
+.recall-personal-memory-head { padding-top: 18px; border-top: 1px solid var(--border, #e5e7eb); }
+.ability-assets-workbench.is-asset-management-only { gap: 0; }
+.ability-assets-management { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.2fr); min-width: 0; min-height: 0; gap: 14px; align-items: start; }
+.ability-asset-list, .ability-asset-detail, .ability-assets-empty { border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); overflow: hidden; }
+.ability-asset-list, .ability-asset-detail { min-width: 0; min-height: 0; }
+.ability-asset-list-head { padding: 12px; border-bottom: 1px solid var(--border, #e5e7eb); }
+.ability-asset-list-row { width: 100%; grid-template-columns: minmax(0, 1fr) auto; text-align: left; cursor: pointer; }
+.ability-asset-list-row.is-selected { background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, transparent); }
+.ability-asset-row-main strong { display: block; margin-bottom: 4px; line-height: 1.4; }
+.ability-asset-row-summary {
+  display: -webkit-box;
+  margin-bottom: 5px;
+  overflow: hidden;
+  color: var(--muted-fg, #6b7280);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+.ability-asset-row-main small { display: block; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.45; }
+.ability-asset-detail .asset-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+}
+.ability-asset-detail .asset-detail-head > div { min-width: 0; }
+.ability-asset-detail .asset-detail-head h2 { margin: 0; font-size: 16px; line-height: 1.45; overflow-wrap: anywhere; }
+.ability-asset-detail .asset-detail-head p { margin: 5px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.ability-asset-detail .asset-detail-head .skills-cognition-status { flex: 0 0 auto; }
+.asset-detail-head-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.recall-asset-more { display: grid; width: 32px; min-width: 32px; padding: 0; place-items: center; }
+.recall-asset-version-panel { margin-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
+.recall-asset-version-head { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; }
+.recall-asset-version-head > strong { font-size: 12px; }
+.recall-asset-version-close { display: grid; width: 28px; min-width: 28px; padding: 0; place-items: center; }
+.recall-asset-version-row { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--border, #eef0f3); }
+.recall-asset-version-row > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.recall-asset-version-row strong { color: var(--fg, #111827); font-size: 11px; }
+.recall-asset-version-row small, .recall-asset-version-row p { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-asset-version-row p { margin: 0; overflow-wrap: anywhere; }
+/* 使用与证明。复用版本面板的框架样式，只加履历自己的排版。 */
+.recall-asset-chain-panel { margin-top: 12px; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-body { display: grid; gap: 2px; }
+.cognition-chain-segments { display: grid; gap: 2px; padding: 4px 0 8px; }
+.cognition-chain-segment { display: grid; grid-template-columns: minmax(84px, auto) minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border, #eef0f3); }
+.cognition-chain-stage { color: var(--fg, #111827); font-size: 11px; font-weight: 600; }
+.cognition-chain-detail { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.cognition-chain-segment > small { color: var(--muted-fg, #6b7280); font-size: 10px; white-space: nowrap; }
+/* `not_yet` 是「还没发生」，不是「欠着一步」。所以它只是更淡，**不用**警告色，
+   也不加任何图标——履历不是进度条，缺一段不代表出了问题。 */
+.cognition-chain-segment.is-not-yet .cognition-chain-stage,
+.cognition-chain-segment.is-not-yet .cognition-chain-detail { color: var(--muted-fg, #9ca3af); }
+.cognition-chain-withheld { padding: 12px 0; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-withheld > strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.cognition-chain-withheld-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 5px 0; }
+.cognition-chain-withheld-row > span { color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.cognition-chain-withheld-row > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+
+.asset-detail-body { display: grid; padding: 0 16px 16px; }
+.asset-content-summary { padding: 12px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.asset-content-summary strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.asset-content-summary p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.reference-strip,
+.injection-preview { padding: 12px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.reference-strip strong,
+.injection-preview strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.reference-strip p,
+.injection-preview p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.recall-skill-draft-state { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.recall-skill-draft-state > div { min-width: 0; }
+.recall-skill-draft-state > .btn { flex: 0 0 auto; }
+.recall-capture-task-error.recall-skill-draft-state { margin: 0; padding: 12px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.recall-capture-task-error.recall-skill-draft-state b,
+.recall-capture-task-error.recall-skill-draft-state span { display: block; }
+.recall-capture-task-error.recall-skill-draft-state b { margin-bottom: 5px; }
+.ability-assets-empty { padding: 36px 18px; color: var(--muted-fg, #6b7280); text-align: center; }
+@media (min-width: 901px) {
+  /* 滚动架构随 develop：主容器 .skills-cognition-main 负责纵向滚动，资产页
+     本身不再自成滚动区，列表与详情各自内滚并由 bindings 里的 wheel handoff
+     把边界处的滚轮交还给主容器——这正是当初改成整页滚动想解决的问题。 */
+  #skills-cognition-assets { overflow: visible; }
+  #skills-cognition-assets-body { height: clamp(420px, calc(100dvh - 250px), 620px); min-height: 0; }
+  .ability-assets-workbench {
+    grid-template-rows: auto;
+    height: auto;
+    min-height: 0;
+  }
+  .ability-assets-workbench.is-asset-management-only { grid-template-rows: auto; }
+  .ability-assets-management {
+    height: auto;
+    min-height: 0;
+    align-items: start;
+  }
+  .ability-asset-list {
+    display: block;
+    min-height: 0;
+  }
+  .ability-asset-list-body {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: auto;
+    scrollbar-gutter: stable;
+  }
+  .ability-asset-detail {
+    /* 配合 develop 的内滚模型：没有高度约束时 overflow-y:auto 永远不会触发，
+       详情栏会一路撑长，内滚形同虚设。 */
+    height: 100%;
+    min-height: 0;
+    align-self: stretch;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: auto;
+    scrollbar-gutter: stable;
+  }
+}
+@media (max-width: 900px) {
+  .ability-asset-summary-grid, .ability-assets-management { grid-template-columns: 1fr; }
+  #skills-cognition-assets-body { min-height: 0; }
+  .ability-assets-management { align-items: stretch; }
+  .ability-asset-list { display: flex; max-height: min(320px, 42dvh); flex-direction: column; }
+  .ability-asset-list-body { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+  .ability-asset-detail { max-height: min(480px, 58dvh); overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; }
+}
+@media (max-width: 720px) {
+  .recall-personal-ontology-frame { height: max(360px, calc(100dvh - 160px)); max-height: 680px; }
+  .recall-personal-ontology-frame .personal-onto-layout { display: grid; grid-template-rows: minmax(148px, 34%) minmax(0, 1fr); height: 100%; }
+  .recall-personal-ontology-frame .personal-onto-sidebar { width: 100%; max-height: none; border-right: 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+  .recall-personal-ontology-frame .personal-onto-main { min-height: 0; }
+}
+@media (max-width: 620px) {
+  .recall-skill-draft-state { align-items: stretch; flex-direction: column; }
+  .recall-skill-draft-state > .btn { align-self: flex-start; }
+  .ability-asset-detail .asset-detail-head { align-items: stretch; flex-direction: column; }
+  .asset-detail-head-actions { justify-content: space-between; }
+}
+
+.ability-asset-summary-card {
+  text-align: left;
+  cursor: pointer;
+}
+
+.ability-asset-summary-card:hover,
+.ability-asset-summary-card.is-active {
+  border-color: var(--primary, #0E9F6E);
+  background: color-mix(in srgb, var(--primary, #0E9F6E) 6%, var(--card, #fff));
+}
+
+.skills-cognition-surface :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 62%, transparent);
+  outline-offset: 2px;
+}
+.skills-cognition-tab:focus-visible,
+.recall-capture-task-summary:focus-visible,
+.ability-asset-list-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.ability-asset-list-row .skills-cognition-status {
+  align-self: start;
+  justify-self: end;
+  height: fit-content;
+  min-height: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .ew-guide-intro { flex-direction: column; gap: 8px; }
+  .ew-guide-intro .btn { align-self: flex-start; }
+  .ew-guide-steps { grid-template-columns: 1fr; }
+  .ew-guide-step { padding: 9px 10px; }
+  .ew-guide-step small { display: none; }
+  .ew-guide-card { padding: 18px; }
+  .ew-business-guide { padding: 14px; }
+  .ew-service-state { min-height: 260px; padding: 24px 16px; }
+  .ew-service-callout .btn { width: 100%; }
+}
+
+.chat-teaching-receipts {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-teaching-receipt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.28));
+  border-radius: 6px;
+  background: var(--surface-secondary, rgba(127, 127, 127, 0.08));
+}
+
+.chat-teaching-receipt > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.chat-teaching-receipt strong,
+.chat-teaching-receipt span {
+  overflow-wrap: anywhere;
+}
+
+.chat-teaching-receipt span {
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+}
+
+.chat-teaching-receipt.is-revoked {
+  opacity: 0.68;
+}
+
+/* 这里曾经遗留一个未闭合的 `@media (max-width: 560px) {`：a785e631 删除引用
+   页脚 UI 时删掉了它的内容和右花括号，却留下开括号。后果不是少几条小屏样式，
+   而是**它把本文件剩下的 60 多条规则全部吞进了 560px 媒体查询**——包括「使用
+   与证明」的逐条展开、六段链条、回执与评价面板。桌面宽度下这些规则一条都不
+   生效，所以那一页看上去像没做完：事件行退回浏览器默认 <button> 外观（灰底、
+   按内容宽度），排成参差的阶梯块。
+   CSS 不会因此报错，全量测试也测不到——只有量真实计算样式才看得见。 */
+/* 证明。迁移与效果分两层：一层说「有没有真的被用上」，一层说「用了好不好」。 */
+.cognition-chain-proofs { padding: 12px 0; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-chain-proofs > strong { display: block; margin-bottom: 5px; font-size: 12px; }
+.cognition-proof-row { padding: 6px 0; border-top: 1px solid var(--border, #eef0f3); }
+.cognition-proof-row:first-of-type { border-top: none; }
+.cognition-proof-transfer { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cognition-proof-transfer > span { color: var(--fg, #111827); font-size: 12px; }
+.cognition-proof-transfer > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+.cognition-proof-outcome { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 3px 0 0 12px; }
+.cognition-proof-outcome > span { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-proof-outcome > small { color: var(--muted-fg, #9ca3af); font-size: 10px; white-space: nowrap; }
+/* 「没帮上忙」也是结论，用中性色如实说，不藏也不渲染成告警——把它标红等于
+   替用户做了「这条资产有问题」的判断，而一次没帮上忙不等于资产错了。 */
+.cognition-proof-outcome.is-none > span { color: var(--muted-fg, #9ca3af); }
+
+/* 版本行下面的「本次改动」。before → after 一行一个字段，扩权与边界变化用
+   颜色区分——用户扫一眼要能看出这次是不是把范围放大了。 */
+.recall-asset-version-changes { display: grid; gap: 4px; margin: 0 0 10px; padding: 8px 10px; border-left: 2px solid color-mix(in srgb, var(--primary, #0E9F6E) 40%, transparent); background: color-mix(in srgb, var(--fg, #111827) 3%, transparent); border-radius: 0 6px 6px 0; }
+.recall-asset-version-changes.is-empty { border-left-color: color-mix(in srgb, var(--fg, #111827) 12%, transparent); color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-asset-version-changes > strong { color: var(--fg, #111827); font-size: 11px; }
+.recall-asset-version-change { display: grid; grid-template-columns: minmax(64px, auto) minmax(0, 1fr) auto minmax(0, 1fr); align-items: baseline; gap: 6px; font-size: 11px; }
+.recall-asset-version-change b { color: var(--muted-fg, #6b7280); font-weight: 500; }
+.recall-asset-version-change span { overflow-wrap: anywhere; color: var(--fg, #374151); }
+.recall-asset-version-change i { color: var(--muted-fg, #6b7280); font-style: normal; }
+.recall-asset-version-change.is-sensitivity_escalated b,
+.recall-asset-version-change.is-sensitivity_escalated i { color: var(--danger, #b42318); }
+.recall-asset-version-change.is-boundary b { color: var(--warning, #92400e); }
+
+/* ── 使用与证明：每条使用记录原地展开 ──────────────────────────────── */
+/* 交互与「版本与治理」一致：点哪一条就在那一条底下展开。证明这件事要求视线
+   不离开被证明的那一行——分栏会让用户反复确认"右边这张回执是不是左边选中
+   那条的"。 */
+.recall-proof-entry { border-radius: 8px; }
+.recall-proof-entry.is-open { background: color-mix(in srgb, var(--primary, #0E9F6E) 5%, var(--card, #fff)); box-shadow: inset 2px 0 0 var(--primary, #0E9F6E); }
+.recall-proof-event { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+.recall-proof-event:hover { background: var(--surface-subtle, #f7f8fa); }
+.recall-proof-entry.is-open .recall-proof-event:hover { background: transparent; }
+.recall-proof-event-body { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.recall-proof-event-body .recall-proof-summary,
+.recall-proof-event-body .recall-proof-meta { overflow-wrap: anywhere; color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-proof-detail { display: grid; gap: 12px; padding: 4px 12px 14px 34px; }
+
+/* 六段链条：把一次复用摊开成可核对的一条线。取不到的那一段显示 — 并降透明度，
+   让"这里没有事实"和"这里有事实"一眼分得开，而不是留白让人以为没渲染。 */
+.recall-proof-chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; overflow: hidden; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.recall-proof-chain-stage { display: flex; min-width: 0; flex: 1 1 130px; flex-direction: column; gap: 4px; padding: 9px 11px; }
+.recall-proof-chain-stage span { color: var(--muted-fg, #6b7280); font-size: 10px; }
+.recall-proof-chain-stage strong { overflow-wrap: anywhere; color: var(--fg, #111827); font-size: 12px; }
+.recall-proof-chain-stage.is-empty strong { color: var(--muted-fg, #9ca3af); font-weight: 400; }
+.recall-proof-chain-arrow { display: grid; flex: none; padding: 0 2px; place-items: center; color: var(--muted-fg, #9ca3af); font-size: 11px; font-style: normal; }
+
+.recall-proof-receipt { padding: 11px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.recall-proof-receipt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.recall-proof-receipt-head > strong { color: var(--fg, #111827); font-size: 12px; }
+.recall-proof-receipt-id { color: var(--muted-fg, #6b7280); font-size: 11px; font-variant-numeric: tabular-nums; }
+.recall-proof-receipt-note { margin: 8px 0 0; color: var(--muted-fg, #6b7280); font-size: 12px; }
+.recall-proof-receipt-body { display: grid; gap: 7px; margin: 10px 0 0; }
+.recall-proof-receipt-row { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.recall-proof-receipt-row dt { color: var(--muted-fg, #6b7280); font-size: 11px; }
+.recall-proof-receipt-row dd { margin: 0; overflow-wrap: anywhere; color: var(--fg, #374151); font-size: 12px; }
+
+.recall-proof-rating { padding: 11px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 8px; background: var(--card, #fff); }
+.recall-proof-rating > strong { display: block; margin-bottom: 8px; color: var(--fg, #111827); font-size: 12px; }
+.recall-proof-rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 不能评价时这一区照样在，只是把按钮换成「为什么现在不能评」。样式刻意与
+   已评价态（.is-rated）一致而非做成告警——它不是错误，是链条还没走到那一步。 */
+.recall-proof-rating.is-blocked .recall-proof-rating-blocked { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 「更好了」的取证步骤。它是唯一能把成熟度推到 effectiveness_validated 的
+   路径，所以给它一块能写字、能勾选依据的地方，而不是一个赞。 */
+.recall-proof-rating.is-evidence { display: grid; gap: 9px; }
+.recall-proof-evidence-hint { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+.recall-proof-evidence-note { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 6px; background: var(--bg, #fff); color: var(--fg, #111827); font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.recall-proof-evidence-options { display: grid; gap: 6px; }
+.recall-proof-evidence-option { display: flex; align-items: baseline; gap: 7px; color: var(--fg, #111827); font-size: 12px; cursor: pointer; }
+.recall-proof-evidence-option code { color: var(--muted-fg, #6b7280); font-size: 10px; overflow-wrap: anywhere; }
+.recall-proof-evidence-none { margin: 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .recall-proof-detail { padding-left: 12px; }
+}
+
+/* 「空种子」首启页。整页一件东西都没有时才出现——它不是第五个任务视图，
+   而是一种状态。居中单栏：这一页只有一个问题要回答（我该从哪儿开始），
+   多栏排版会把两个入口读成两类并列功能。 */
+.cognition-seed-wrap { display: grid; justify-items: center; gap: 10px; max-width: 520px; margin: 0 auto; padding: 48px 20px; text-align: center; }
+.cognition-seed-wrap h2 { margin: 0; color: var(--fg, #111827); font-size: 20px; font-weight: 700; }
+.cognition-seed-wrap p { margin: 0; color: var(--muted-fg, #6b7280); font-size: 13px; line-height: 1.75; }
+.cognition-seed-actions { justify-content: center; margin-top: 8px; }
+/* 种子图形：土壤 + 种子 + 一片刚探头的芽。纯 CSS，不引图片资源。
+   它对应认知树的"还没有叶片"那一端，颜色沿用树的浅叶色。 */
+.cognition-seed-art { position: relative; width: 96px; height: 72px; margin-bottom: 6px; }
+.cognition-seed-soil { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; border-radius: 999px; background: var(--border, #e5e7eb); }
+.cognition-seed-core { position: absolute; left: 50%; bottom: 8px; width: 16px; height: 20px; margin-left: -8px; border-radius: 50% 50% 46% 46%; background: #b98a5e; }
+.cognition-seed-sprout { position: absolute; left: 50%; bottom: 24px; width: 26px; height: 16px; margin-left: -4px; border-radius: 0 999px 999px 999px; background: color-mix(in srgb, var(--primary, #0E9F6E) 38%, var(--card, #fff)); transform: rotate(-16deg); transform-origin: left bottom; }
+@media (max-width: 760px) {
+  .cognition-seed-wrap { padding: 32px 16px; }
+}
+
+/* 认知树的有机可视化（v0.9.1 风格）：一片大叶 = 一类资产，颜色按该类"已验证
+   占比"分三档；芽 = 待确认候选（真实候选数据），橙色可点跳「待我处理」。
+   叶色只表达成熟度这一个真实字段，不自己发明分级。 */
+.cognition-tree-figure { padding: 6px 10px 10px; }
+.cognition-tree-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 12px 4px; }
+.cognition-tree-panel-head h3 { margin: 0; color: var(--fg, #111827); font-size: 15px; }
+.cognition-tree-panel-head .panel-sub { margin: 4px 0 0; color: var(--muted-fg, #6b7280); font-size: 11px; line-height: 1.55; }
+.cognition-tree-panel-actions { display: flex; flex-wrap: wrap; gap: 7px; flex: none; }
+.cognition-tree-svg { display: block; width: 100%; height: auto; max-height: 400px; }
+.cognition-tree-svg-ground { fill: var(--border, #e5e7eb); opacity: .7; }
+.cognition-tree-svg-roots { fill: var(--muted-fg, #6b7280); font-size: 11px; }
+.cognition-tree-svg-empty { fill: var(--muted-fg, #6b7280); font-size: 12px; font-weight: 600; }
+.cognition-tree-svg-leaf { cursor: pointer; }
+.cognition-tree-svg-leaf ellipse { transition: opacity .12s ease; }
+/* 大叶三档：无验证 → 浅；部分验证 → 中；全部验证 → 深。与当前成长面板的
+   is-light/is-deep 圆点同色系，图例和叶子对得上。 */
+.cognition-tree-svg-leaf.is-ratio-none ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 30%, var(--card, #fff)); }
+.cognition-tree-svg-leaf.is-ratio-mixed ellipse { fill: color-mix(in srgb, var(--primary, #0E9F6E) 62%, var(--card, #fff)); }
+.cognition-tree-svg-leaf.is-ratio-full ellipse { fill: var(--primary, #0E9F6E); }
+.cognition-tree-svg-leaf:hover ellipse { opacity: .8; }
+.cognition-tree-svg-leaf-label { fill: #155d46; font-size: 12.5px; font-weight: 700; }
+.cognition-tree-svg-leaf.is-ratio-mixed .cognition-tree-svg-leaf-label,
+.cognition-tree-svg-leaf.is-ratio-full .cognition-tree-svg-leaf-label { fill: #fff; }
+.cognition-tree-svg-bud { cursor: pointer; }
+.cognition-tree-svg-bud circle { fill: var(--warning, #d97706); stroke: #fff; stroke-width: 2; transition: opacity .12s ease; }
+.cognition-tree-svg-bud:hover circle { opacity: .8; }
+@media (max-width: 760px) {
+  .cognition-tree-svg { max-height: 280px; }
+}
+
+/* 当前成长面板（v0.9.1 右栏）：大数字 + 文案 + 四行统计 + 动作。四行数字
+   全部来自真实读模型，一行都不编。 */
+.cognition-tree-summary { display: grid; gap: 12px; align-content: start; }
+.cognition-tree-summary > h3 { margin: 0; color: var(--fg, #111827); font-size: 14px; }
+.cognition-tree-big-stat { color: var(--fg, #111827); font-size: 30px; font-weight: 780; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.cognition-tree-summary-text { margin: 0; color: var(--muted-fg, #6b7280); font-size: 12px; line-height: 1.65; }
+.cognition-tree-summary-list { display: grid; margin-top: 2px; border-top: 1px solid var(--border, #e5e7eb); }
+.cognition-tree-summary-row { display: flex; align-items: center; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--border, #e5e7eb); }
+.cognition-tree-summary-row strong { color: var(--fg, #111827); font-size: 12px; font-weight: 600; }
+.cognition-tree-summary-row b { margin-left: auto; color: var(--fg, #111827); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cognition-tree-summary-note { margin-left: auto; color: var(--muted-fg, #6b7280); font-size: 10px; text-align: right; }
+.cognition-tree-summary-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cognition-tree-nonasset-link { justify-self: start; margin-top: 2px; }
+
+/* 「已处理」历史带。与上面两条待办带同构，但状态徽章用完成色——它记录的是
+   已经落账的事实，不是还要做的事。 */
+.cognition-review-history { display: grid; gap: 6px; }
+.cognition-review-history-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid var(--border, #e5e7eb); border-radius: 7px; background: var(--card, #fff); }
+.cognition-review-history-row > div { display: grid; gap: 2px; min-width: 0; }
+.cognition-review-history-row strong { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }

@@ -1,0 +1,25 @@
+interface:
+  display_name: "PRD与用户故事"
+  short_description: "把用户证据、产品范围和约束转成可测量的PRD与用户故事"
+  default_prompt: "使用 $prd-user-stories：根据这些证据生成PRD和可验收的用户故事。"
+
+# SKILL-GATE:BEGIN
+policy:
+  allow_implicit_invocation: true
+runtime:
+  executor: "codex_skill_interpreter"
+  binding_status: "target_state_not_run"
+  skill_entrypoint: "../SKILL.md"
+  schema_ref: "../schemas.json"
+  permissions:
+    direct_resource_access: false
+    external_actions: "deny_without_explicit_approval"
+    formal_asset_write: false
+    candidate_write_only: true
+  governance:
+    level: "L5"
+    risk_route: "Full"
+    promotion_ceiling: "staged"
+    production_release_allowed: false
+    independent_review: "pending"
+# SKILL-GATE:END

@@ -1,0 +1,118 @@
+{
+  "scanner": "skill-security-scanner",
+  "scanner_version": "1.0.0",
+  "skill": ".",
+  "skill_path": "/home/dev/skill-samples/sample-safe-skill",
+  "security_score": 100,
+  "risk_classification": "LOW",
+  "attack_surface": {
+    "network_egress_points": [],
+    "dynamic_execution_points": [],
+    "persistence_points": [],
+    "binary_files": 0,
+    "has_binaries": false
+  },
+  "permission_summary": {
+    "declares_permissions": true,
+    "has_hitl": false,
+    "has_side_effects": false,
+    "note": "基于文本声明的启发式判断，非运行时实际权限"
+  },
+  "data_access_summary": {
+    "network_used": false,
+    "egress_findings": 0,
+    "has_audit": true,
+    "binary_network_indicators": []
+  },
+  "dangerous_action_list": [],
+  "vulnerability_findings": [],
+  "required_mitigations": [],
+  "deployment_recommendation": "ALLOW",
+  "sr_items": [
+    {
+      "id": "SR-01",
+      "name": "密钥与敏感信息",
+      "passed": true,
+      "required": true,
+      "detail": "未发现硬编码密钥",
+      "recommendation": "移除硬编码密钥，改用环境变量或密钥托管"
+    },
+    {
+      "id": "SR-02",
+      "name": "权限最小化",
+      "passed": true,
+      "required": true,
+      "detail": "发现权限边界声明",
+      "recommendation": "在 SKILL.md/manifest 声明 allowed_tools、数据范围、网络范围、读写权限"
+    },
+    {
+      "id": "SR-03",
+      "name": "危险命令 / 注入 / 破坏性动作",
+      "passed": true,
+      "required": true,
+      "detail": "未发现危险命令",
+      "recommendation": "移除危险命令；如必需请用 allowlist + 容器隔离 + 人工确认"
+    },
+    {
+      "id": "SR-04",
+      "name": "外部网络与数据外发",
+      "passed": true,
+      "required": true,
+      "detail": "无外联或外联受权限/审计约束",
+      "recommendation": "外联行为增加 allowlist、审计日志和数据脱敏"
+    },
+    {
+      "id": "SR-05",
+      "name": "写操作与人工确认",
+      "passed": true,
+      "required": true,
+      "detail": "无副作用或已声明 HITL",
+      "recommendation": "对高风险写操作添加 approve_required/HITL 机制"
+    },
+    {
+      "id": "SR-06",
+      "name": "供应链可复现性",
+      "passed": true,
+      "required": false,
+      "detail": "依赖已 pin 或未发现 latest/main",
+      "recommendation": "固定 tag/commit/digest，提交 lockfile，避免运行时拉 latest"
+    },
+    {
+      "id": "SR-07",
+      "name": "提示注入与系统信息保护",
+      "passed": true,
+      "required": false,
+      "detail": "未发现提示注入载荷",
+      "recommendation": "移除注入载荷；补充提示注入防护与工具输出隔离策略"
+    },
+    {
+      "id": "SR-08",
+      "name": "审计与可追踪",
+      "passed": true,
+      "required": false,
+      "detail": "发现审计/日志证据",
+      "recommendation": "记录工具调用、输入输出摘要、审批人、策略版本和报告路径"
+    }
+  ],
+  "findings": [],
+  "hard_blocked": false,
+  "binary_scan": {
+    "binary_count": 0,
+    "dynamic_sandbox_available": false,
+    "binaries": [],
+    "findings": [],
+    "note": "二进制扫描当前为静态层实现（strings + 指标匹配）。会议要求的运行时行为分析（写了什么/发到哪）需接入动态沙箱，尚未实现。"
+  },
+  "tool_status": {
+    "gitleaks": "SKIPPED",
+    "osv_scanner": "SKIPPED",
+    "binary_scan": "static-only"
+  },
+  "rules_source": "yaml overrides: secret_patterns.yaml, scanner_rules.yaml",
+  "limitations": [
+    "文本检测以正则/关键词为主，存在误报与漏报，分数为启发式而非绝对度量",
+    "二进制扫描当前仅静态层（strings+指标），未接入动态沙箱，无法确认真实运行时行为",
+    "依赖漏洞(CVE)、密钥扫描依赖外部工具（osv-scanner/gitleaks），未安装时能力降级"
+  ],
+  "status": "OK"
+}

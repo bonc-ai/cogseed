@@ -1,0 +1,537 @@
+{
+  "scanner": "skill-security-scanner",
+  "scanner_version": "1.0.0",
+  "skill": ".",
+  "skill_path": "/home/dev/skill-samples/sample-risky-skill",
+  "security_score": 0,
+  "risk_classification": "CRITICAL",
+  "attack_surface": {
+    "network_egress_points": [
+      {
+        "sr": "SR-04",
+        "rule_id": "http_url",
+        "severity": "info",
+        "category": "network",
+        "file": "handler.py",
+        "line": 13,
+        "description": "命中规则 http_url（network_egress）",
+        "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-04",
+        "rule_id": "http_url",
+        "severity": "info",
+        "category": "network",
+        "file": "handler.py",
+        "line": 22,
+        "description": "命中规则 http_url（network_egress）",
+        "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-04",
+        "rule_id": "requests_post",
+        "severity": "medium",
+        "category": "data_egress",
+        "file": "handler.py",
+        "line": 22,
+        "description": "命中规则 requests_post（network_egress）",
+        "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-04",
+        "rule_id": "cloud_metadata_ip",
+        "severity": "high",
+        "category": "ssrf",
+        "file": "handler.py",
+        "line": 22,
+        "description": "命中规则 cloud_metadata_ip（suspicious_addresses）",
+        "remediation": "移除可疑地址；确认外联目标可信并纳入 allowlist",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-04",
+        "rule_id": "raw_ip_url",
+        "severity": "medium",
+        "category": "network",
+        "file": "handler.py",
+        "line": 22,
+        "description": "命中规则 raw_ip_url（suspicious_addresses）",
+        "remediation": "移除可疑地址；确认外联目标可信并纳入 allowlist",
+        "hard_block": false
+      }
+    ],
+    "dynamic_execution_points": [
+      {
+        "sr": "SR-03",
+        "rule_id": "python_eval_exec",
+        "severity": "high",
+        "category": "dynamic_exec",
+        "file": "handler.py",
+        "line": 14,
+        "description": "命中规则 python_eval_exec（dynamic_execution）",
+        "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-03",
+        "rule_id": "python_os_system",
+        "severity": "high",
+        "category": "dynamic_exec",
+        "file": "handler.py",
+        "line": 12,
+        "description": "命中规则 python_os_system（dynamic_execution）",
+        "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-03",
+        "rule_id": "python_os_system",
+        "severity": "high",
+        "category": "dynamic_exec",
+        "file": "handler.py",
+        "line": 25,
+        "description": "命中规则 python_os_system（dynamic_execution）",
+        "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-03",
+        "rule_id": "shell_true",
+        "severity": "medium",
+        "category": "dynamic_exec",
+        "file": "handler.py",
+        "line": 13,
+        "description": "命中规则 shell_true（dynamic_execution）",
+        "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+        "hard_block": false
+      },
+      {
+        "sr": "SR-03",
+        "rule_id": "base64_decode_exec",
+        "severity": "critical",
+        "category": "obfuscation",
+        "file": "handler.py",
+        "line": 14,
+        "description": "命中规则 base64_decode_exec（dynamic_execution）",
+        "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+        "hard_block": false
+      }
+    ],
+    "persistence_points": [
+      {
+        "sr": "SR-03",
+        "rule_id": "crontab_write",
+        "severity": "high",
+        "category": "persistence",
+        "file": "handler.py",
+        "line": 25,
+        "description": "命中规则 crontab_write（persistence）",
+        "remediation": "移除持久化写入；如为合法需求需显式声明并走人工审批",
+        "hard_block": false
+      }
+    ],
+    "binary_files": 0,
+    "has_binaries": false
+  },
+  "permission_summary": {
+    "declares_permissions": false,
+    "has_hitl": false,
+    "has_side_effects": false,
+    "note": "基于文本声明的启发式判断，非运行时实际权限"
+  },
+  "data_access_summary": {
+    "network_used": true,
+    "egress_findings": 5,
+    "has_audit": false,
+    "binary_network_indicators": []
+  },
+  "dangerous_action_list": [
+    {
+      "rule_id": "rm_rf_root",
+      "category": "destructive",
+      "severity": "critical",
+      "file": "handler.py",
+      "line": 12,
+      "description": "命中规则 rm_rf_root（dangerous_commands）"
+    },
+    {
+      "rule_id": "curl_pipe_shell",
+      "category": "unauthorized_download",
+      "severity": "critical",
+      "file": "handler.py",
+      "line": 13,
+      "description": "命中规则 curl_pipe_shell（dangerous_commands）"
+    },
+    {
+      "rule_id": "python_eval_exec",
+      "category": "dynamic_exec",
+      "severity": "high",
+      "file": "handler.py",
+      "line": 14,
+      "description": "命中规则 python_eval_exec（dynamic_execution）"
+    },
+    {
+      "rule_id": "python_os_system",
+      "category": "dynamic_exec",
+      "severity": "high",
+      "file": "handler.py",
+      "line": 12,
+      "description": "命中规则 python_os_system（dynamic_execution）"
+    },
+    {
+      "rule_id": "python_os_system",
+      "category": "dynamic_exec",
+      "severity": "high",
+      "file": "handler.py",
+      "line": 25,
+      "description": "命中规则 python_os_system（dynamic_execution）"
+    },
+    {
+      "rule_id": "shell_true",
+      "category": "dynamic_exec",
+      "severity": "medium",
+      "file": "handler.py",
+      "line": 13,
+      "description": "命中规则 shell_true（dynamic_execution）"
+    },
+    {
+      "rule_id": "base64_decode_exec",
+      "category": "obfuscation",
+      "severity": "critical",
+      "file": "handler.py",
+      "line": 14,
+      "description": "命中规则 base64_decode_exec（dynamic_execution）"
+    },
+    {
+      "rule_id": "fstring_sql",
+      "category": "sql_injection",
+      "severity": "high",
+      "file": "handler.py",
+      "line": 18,
+      "description": "命中规则 fstring_sql（sql_injection）"
+    },
+    {
+      "rule_id": "crontab_write",
+      "category": "persistence",
+      "severity": "high",
+      "file": "handler.py",
+      "line": 25,
+      "description": "命中规则 crontab_write（persistence）"
+    },
+    {
+      "rule_id": "cognitive_asset_exfil",
+      "category": "cognitive_asset_exfil",
+      "severity": "critical",
+      "file": "handler.py",
+      "line": 29,
+      "description": "检测到疑似持续外传提示词/代码/会话等认知资产的行为"
+    }
+  ],
+  "vulnerability_findings": [],
+  "required_mitigations": [
+    {
+      "id": "SR-01",
+      "name": "密钥与敏感信息",
+      "recommendation": "移除硬编码密钥，改用环境变量或密钥托管"
+    },
+    {
+      "id": "SR-02",
+      "name": "权限最小化",
+      "recommendation": "在 SKILL.md/manifest 声明 allowed_tools、数据范围、网络范围、读写权限"
+    },
+    {
+      "id": "SR-03",
+      "name": "危险命令 / 注入 / 破坏性动作",
+      "recommendation": "移除危险命令；如必需请用 allowlist + 容器隔离 + 人工确认"
+    },
+    {
+      "id": "SR-04",
+      "name": "外部网络与数据外发",
+      "recommendation": "外联行为增加 allowlist、审计日志和数据脱敏"
+    },
+    {
+      "id": "SR-08",
+      "name": "审计与可追踪",
+      "recommendation": "记录工具调用、输入输出摘要、审批人、策略版本和报告路径"
+    }
+  ],
+  "deployment_recommendation": "DO_NOT_INSTALL",
+  "sr_items": [
+    {
+      "id": "SR-01",
+      "name": "密钥与敏感信息",
+      "passed": false,
+      "required": true,
+      "detail": "发现疑似密钥/敏感文件",
+      "recommendation": "移除硬编码密钥，改用环境变量或密钥托管"
+    },
+    {
+      "id": "SR-02",
+      "name": "权限最小化",
+      "passed": false,
+      "required": true,
+      "detail": "未发现 allowed_tools/scope/权限声明",
+      "recommendation": "在 SKILL.md/manifest 声明 allowed_tools、数据范围、网络范围、读写权限"
+    },
+    {
+      "id": "SR-03",
+      "name": "危险命令 / 注入 / 破坏性动作",
+      "passed": false,
+      "required": true,
+      "detail": "发现危险命令/注入/动态执行模式",
+      "recommendation": "移除危险命令；如必需请用 allowlist + 容器隔离 + 人工确认"
+    },
+    {
+      "id": "SR-04",
+      "name": "外部网络与数据外发",
+      "passed": false,
+      "required": true,
+      "detail": "发现外联/外传但缺少权限或审计",
+      "recommendation": "外联行为增加 allowlist、审计日志和数据脱敏"
+    },
+    {
+      "id": "SR-05",
+      "name": "写操作与人工确认",
+      "passed": true,
+      "required": true,
+      "detail": "无副作用或已声明 HITL",
+      "recommendation": "对高风险写操作添加 approve_required/HITL 机制"
+    },
+    {
+      "id": "SR-06",
+      "name": "供应链可复现性",
+      "passed": true,
+      "required": false,
+      "detail": "依赖已 pin 或未发现 latest/main",
+      "recommendation": "固定 tag/commit/digest，提交 lockfile，避免运行时拉 latest"
+    },
+    {
+      "id": "SR-07",
+      "name": "提示注入与系统信息保护",
+      "passed": true,
+      "required": false,
+      "detail": "未发现提示注入载荷",
+      "recommendation": "移除注入载荷；补充提示注入防护与工具输出隔离策略"
+    },
+    {
+      "id": "SR-08",
+      "name": "审计与可追踪",
+      "passed": false,
+      "required": false,
+      "detail": "缺少审计/日志/留痕证据",
+      "recommendation": "记录工具调用、输入输出摘要、审批人、策略版本和报告路径"
+    }
+  ],
+  "findings": [
+    {
+      "sr": "SR-01",
+      "rule_id": "github_token",
+      "severity": "critical",
+      "category": "secret",
+      "file": "handler.py",
+      "line": 9,
+      "description": "疑似硬编码密钥/凭据",
+      "remediation": "移除硬编码密钥，改用环境变量或密钥托管",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-01",
+      "rule_id": "generic_env_api_key",
+      "severity": "high",
+      "category": "secret",
+      "file": "handler.py",
+      "line": 9,
+      "description": "疑似硬编码密钥/凭据",
+      "remediation": "移除硬编码密钥，改用环境变量或密钥托管",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "rm_rf_root",
+      "severity": "critical",
+      "category": "destructive",
+      "file": "handler.py",
+      "line": 12,
+      "description": "命中规则 rm_rf_root（dangerous_commands）",
+      "remediation": "移除危险命令；必须使用 allowlist、容器隔离、只读挂载和人工确认",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "curl_pipe_shell",
+      "severity": "critical",
+      "category": "unauthorized_download",
+      "file": "handler.py",
+      "line": 13,
+      "description": "命中规则 curl_pipe_shell（dangerous_commands）",
+      "remediation": "移除危险命令；必须使用 allowlist、容器隔离、只读挂载和人工确认",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "python_eval_exec",
+      "severity": "high",
+      "category": "dynamic_exec",
+      "file": "handler.py",
+      "line": 14,
+      "description": "命中规则 python_eval_exec（dynamic_execution）",
+      "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "python_os_system",
+      "severity": "high",
+      "category": "dynamic_exec",
+      "file": "handler.py",
+      "line": 12,
+      "description": "命中规则 python_os_system（dynamic_execution）",
+      "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "python_os_system",
+      "severity": "high",
+      "category": "dynamic_exec",
+      "file": "handler.py",
+      "line": 25,
+      "description": "命中规则 python_os_system（dynamic_execution）",
+      "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "shell_true",
+      "severity": "medium",
+      "category": "dynamic_exec",
+      "file": "handler.py",
+      "line": 13,
+      "description": "命中规则 shell_true（dynamic_execution）",
+      "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "base64_decode_exec",
+      "severity": "critical",
+      "category": "obfuscation",
+      "file": "handler.py",
+      "line": 14,
+      "description": "命中规则 base64_decode_exec（dynamic_execution）",
+      "remediation": "避免动态代码执行/反序列化不可信输入；如必需请沙箱隔离",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "fstring_sql",
+      "severity": "high",
+      "category": "sql_injection",
+      "file": "handler.py",
+      "line": 18,
+      "description": "命中规则 fstring_sql（sql_injection）",
+      "remediation": "使用参数化查询，禁止字符串拼接构造 SQL",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-03",
+      "rule_id": "crontab_write",
+      "severity": "high",
+      "category": "persistence",
+      "file": "handler.py",
+      "line": 25,
+      "description": "命中规则 crontab_write（persistence）",
+      "remediation": "移除持久化写入；如为合法需求需显式声明并走人工审批",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-04",
+      "rule_id": "http_url",
+      "severity": "info",
+      "category": "network",
+      "file": "handler.py",
+      "line": 13,
+      "description": "命中规则 http_url（network_egress）",
+      "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-04",
+      "rule_id": "http_url",
+      "severity": "info",
+      "category": "network",
+      "file": "handler.py",
+      "line": 22,
+      "description": "命中规则 http_url（network_egress）",
+      "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-04",
+      "rule_id": "requests_post",
+      "severity": "medium",
+      "category": "data_egress",
+      "file": "handler.py",
+      "line": 22,
+      "description": "命中规则 requests_post（network_egress）",
+      "remediation": "对外联行为增加 allowlist、审计日志和数据脱敏",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-04",
+      "rule_id": "cloud_metadata_ip",
+      "severity": "high",
+      "category": "ssrf",
+      "file": "handler.py",
+      "line": 22,
+      "description": "命中规则 cloud_metadata_ip（suspicious_addresses）",
+      "remediation": "移除可疑地址；确认外联目标可信并纳入 allowlist",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-04",
+      "rule_id": "raw_ip_url",
+      "severity": "medium",
+      "category": "network",
+      "file": "handler.py",
+      "line": 22,
+      "description": "命中规则 raw_ip_url（suspicious_addresses）",
+      "remediation": "移除可疑地址；确认外联目标可信并纳入 allowlist",
+      "hard_block": false
+    },
+    {
+      "sr": "SR-HB",
+      "rule_id": "cognitive_asset_exfil",
+      "severity": "critical",
+      "category": "cognitive_asset_exfil",
+      "file": "handler.py",
+      "line": 29,
+      "description": "检测到疑似持续外传提示词/代码/会话等认知资产的行为",
+      "remediation": "禁止在核心环境安装/运行；需安全团队专项评估",
+      "hard_block": true
+    }
+  ],
+  "hard_blocked": true,
+  "binary_scan": {
+    "binary_count": 0,
+    "dynamic_sandbox_available": false,
+    "binaries": [],
+    "findings": [],
+    "note": "二进制扫描当前为静态层实现（strings + 指标匹配）。会议要求的运行时行为分析（写了什么/发到哪）需接入动态沙箱，尚未实现。"
+  },
+  "tool_status": {
+    "gitleaks": "SKIPPED",
+    "osv_scanner": "SKIPPED",
+    "binary_scan": "static-only"
+  },
+  "rules_source": "yaml overrides: secret_patterns.yaml, scanner_rules.yaml",
+  "limitations": [
+    "文本检测以正则/关键词为主，存在误报与漏报，分数为启发式而非绝对度量",
+    "二进制扫描当前仅静态层（strings+指标），未接入动态沙箱，无法确认真实运行时行为",
+    "依赖漏洞(CVE)、密钥扫描依赖外部工具（osv-scanner/gitleaks），未安装时能力降级"
+  ],
+  "status": "OK"
+}

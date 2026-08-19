@@ -1,0 +1,2090 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
+
+function findCommanderReply(lines: any[]) {
+  return lines.find((line) => line.from === 'commander' && !line.recall_projection_card);
+}
+
+vi.mock('../../../../src/main/logger', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+
+const streamGate = vi.hoisted(() => ({
+  releaseActiveTurn: null as null | (() => void),
+}));
+const streamProbe = vi.hoisted(() => ({
+  messages: [] as string[],
+  readOnlyRoots: [] as string[][],
+  dispatchResults: [] as string[],
+  maxToolLoops: [] as Array<number | undefined>,
+  lifecycleSeen: [] as boolean[],
+}));
+
+// Mock the model client so `runTurn` doesn't try to do a real LLM call.
+// `streamChatWithModel` returns an async iterator that yields one final
+// event with empty text + a done event; bus interprets that as "done,
+// no reply" and emits a "(no reply)" message. Good enough for the
+// integration assertions here — we're testing routing / persistence /
+// state, not actual model output.
+// The blocking projection gate calls the real KSTAR routing, which would
+// create an empty Recall projection for every fresh conversation and gate the
+// Commander dispatch. Most routing tests below exercise the pre-gate behavior,
+// so mock context-projection to return no projection; the gating behavior has
+// dedicated tests in kstar-preview-trigger.test.ts.
+vi.mock('../../../../src/main/features/recall/context-projection', () => ({
+  previewContextProjection: vi.fn(async () => { throw new Error('no projection in routing tests'); }),
+}));
+
+vi.mock('../../../../src/main/model/client', () => ({
+  async *streamChatWithModel(_opts: any) {
+    streamProbe.messages.push(String(_opts?.message || ''));
+    streamProbe.readOnlyRoots.push(Array.isArray(_opts?.readOnlyExtraRoots) ? [..._opts.readOnlyExtraRoots] : []);
+    streamProbe.maxToolLoops.push(typeof _opts?.maxToolLoops === 'number' ? _opts.maxToolLoops : undefined);
+    streamProbe.lifecycleSeen.push(!!_opts?.executionLifecycle);
+    if (String(_opts?.message || '').includes('ARTIFACT_EVENT_TEST')) {
+      _opts?.onArtifactCreated?.({ id: 'art-live-1', title: 'Live App' });
+    }
+    const nestedOutputMarker = 'NESTED_OUTPUT_VISIBILITY_TEST:';
+    const nestedOutputIdx = String(_opts?.message || '').indexOf(nestedOutputMarker);
+    if (nestedOutputIdx >= 0) {
+      const encoded = String(_opts.message).slice(nestedOutputIdx + nestedOutputMarker.length).split(/\s/, 1)[0];
+      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      const tool = (Array.isArray(_opts?.extraTools) ? _opts.extraTools : [])
+        .find((candidate: any) => candidate?.name === data.tool);
+      if (!tool) throw new Error(`missing nested tool ${data.tool}`);
+      const task = `PRODUCED_FILTER_TEST:${Buffer.from(JSON.stringify({ paths: [data.path] })).toString('base64')}`;
+      const result = await tool.execute(
+        data.tool === 'run_worker'
+          ? { to: AGENT_NAME, task }
+          : { to: AGENT_NAME, message: task },
+        { signal: new AbortController().signal },
+      );
+      streamProbe.dispatchResults.push(String(result?.content || ''));
+      yield { type: 'final', text: data.tool === 'hand_off_to' ? '' : 'commander synthesis ok' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('AGENT_RESULT_FAILURE_TEST')) {
+      yield { type: 'final', text: '没有完成交付。\n<agent-result status="failure" />' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('PROTOCOL_EVENT_TEST')) {
+      yield { type: 'final', text: 'protocol event recorded' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('COMMANDER_RESULT_FAILURE_TEST')) {
+      yield { type: 'final', text: '没有完成调度。\n<commander-result status="failure" />' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('CONTEXT_PATCH_TEST')) {
+      yield {
+        type: 'final',
+        text: 'Shared state updated.\n<context-patch>\n{"facts_add":[{"text":"Agents can exchange durable state through ContextPatch"}],"open_questions_add":[{"text":"Should Gate become user-reviewable in the next slice?"}]}\n</context-patch>',
+      };
+      yield { type: 'done' };
+      return;
+    }
+    const xmlMarker = 'SYNC_CONFLICT_XML_RESULT:';
+    const xmlIdx = String(_opts?.message || '').indexOf(xmlMarker);
+    if (xmlIdx >= 0) {
+      const encoded = String(_opts.message).slice(xmlIdx + xmlMarker.length).split(/\s/, 1)[0];
+      const esc = (value: string) => String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      yield {
+        type: 'final',
+        text: `<sync-conflict-result conflict_id="${esc(data.conflictId)}" rel_path="${esc(data.relPath)}" target_path="${esc(data.targetPath)}" status="${esc(data.status || 'resolved')}" action="${esc(data.action || 'use_current')}" />`,
+      };
+      yield { type: 'done' };
+      return;
+    }
+    const producedMarker = 'PRODUCED_FILTER_TEST:';
+    const producedIdx = String(_opts?.message || '').indexOf(producedMarker);
+    if (producedIdx >= 0) {
+      const encoded = String(_opts.message).slice(producedIdx + producedMarker.length).split(/\s/, 1)[0];
+      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      for (const p of data.paths || []) _opts?.onFileWritten?.(p);
+      const interaction = data.planInteraction === 'open' || data.planInteraction === 'closed'
+        ? `\n<plan-interaction status="${data.planInteraction}" />`
+        : '';
+      const form = data.withForm
+        ? `\n<agent-input-form>\n${JSON.stringify({ fields: [{ id: 'decision', label: 'Decision', type: 'text' }] })}\n</agent-input-form>`
+        : '';
+      yield { type: 'final', text: `produced filter ok${form}${interaction}` };
+      yield { type: 'done' };
+      return;
+    }
+    const publishedMarker = 'PUBLISHED_OUTPUT_TEST:';
+    const publishedIdx = String(_opts?.message || '').indexOf(publishedMarker);
+    if (publishedIdx >= 0) {
+      const encoded = String(_opts.message).slice(publishedIdx + publishedMarker.length).split(/\s/, 1)[0];
+      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      for (const p of data.paths || []) await _opts?.onFileWritten?.(p);
+      _opts?.onOutputsPublished?.(data.published || []);
+      const interaction = data.planInteraction === 'open' || data.planInteraction === 'closed'
+        ? `\n<plan-interaction status="${data.planInteraction}" />`
+        : '';
+      const form = data.withForm
+        ? `\n<agent-input-form>\n${JSON.stringify({ fields: [{ id: 'decision', label: 'Decision', type: 'text' }] })}\n</agent-input-form>`
+        : '';
+      yield { type: 'final', text: `published output ok${form}${interaction}` };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('ACTIVE_TURN_TEST')) {
+      yield { type: 'progress', text: 'active turn started' };
+      await new Promise<void>((resolve) => { streamGate.releaseActiveTurn = resolve; });
+    }
+    if (String(_opts?.message || '').includes('COMPACTION_EVENT_TEST')) {
+      yield {
+        type: 'progress',
+        text: 'compacted 20000→3000 tokens',
+        event: {
+          stream: 'compaction',
+          data: { tokensBefore: 20000, tokensAfter: 3000 },
+        },
+      };
+      yield { type: 'final', text: 'compaction recorded' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('TIMING_EVENT_TEST')) {
+      yield {
+        type: 'event',
+        event: {
+          stream: 'agent_run_result',
+          data: {
+            provider_ms: 40,
+            tool_ms: 20,
+            compaction_ms: 10,
+            retry_wait_ms: 5,
+            other_ms: 3,
+            failure_phase: 'tool',
+          },
+        },
+      };
+      yield { type: 'final', text: 'timing recorded' };
+      yield { type: 'done' };
+      return;
+    }
+    if (String(_opts?.message || '').includes('EXECUTION_LIFECYCLE_TEST')) {
+      await _opts?.executionLifecycle?.queued?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.started?.({
+        kind: 'core-agent',
+        sessionId: _opts.sessionId,
+        conversationId: _opts.cid,
+        ...(_opts.agentId ? { agentId: _opts.agentId } : {}),
+      });
+      await _opts?.executionLifecycle?.event?.('output', { output: 'mock lifecycle output' });
+      await _opts?.executionLifecycle?.terminal?.({
+        status: 'completed',
+        sessionId: _opts.sessionId,
+        output: 'mock lifecycle output',
+      });
+      yield { type: 'final', text: 'execution lifecycle recorded' };
+      yield { type: 'done' };
+      return;
+    }
+    yield { type: 'final', text: '' };
+    yield { type: 'done' };
+  },
+  async chatWithModel() { return { ok: true, text: '', error: '', aborted: false }; },
+  abortActiveSessionsForConversation: vi.fn(() => 0),
+}));
+
+const cliRunMock = vi.hoisted(() => ({
+  calls: [] as any[],
+  nextResult: null as any,
+  nextResults: [] as any[],
+}));
+vi.mock('../../../../src/main/features/local_agents/runner', () => ({
+  run: vi.fn(async (opts: any) => {
+    cliRunMock.calls.push(opts);
+    const result = cliRunMock.nextResults.length
+      ? cliRunMock.nextResults.shift()
+      : (cliRunMock.nextResult || { runId: 'mock-run', status: 'completed', output: 'ok' });
+    opts.onEvent({
+      type: 'done',
+      status: result.status,
+      ...(result.output ? { output: result.output } : {}),
+      ...(result.error ? { error: result.error } : {}),
+    });
+    return result;
+  }),
+}));
+
+// External-agent first-launch confirmation is exercised by its own unit suite
+// (launch-confirm.test.ts). These bus tests assert CLI routing / persistence
+// behavior, so the gate is mocked open here — otherwise every first CLI
+// dispatch would block on an unanswered confirmation push (10-min timeout).
+vi.mock('../../../../src/main/features/local_agents/launch_confirm', () => ({
+  requestLaunchConfirm: vi.fn(async () => true),
+}));
+
+let tmpDir: string;
+let prevWs: string | undefined;
+let prevWakeGate: string | undefined;
+const TEST_UID = 'u1';
+const TEST_CID = 'cidbus';
+const AGENT_ID = 'a83d30d995fd';
+const cidsToDrop = new Set<string>();
+const AGENT_NAME = '软件工程师';
+
+beforeEach(async () => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bus-'));
+  prevWs = process.env.COGSEED_WORKSPACE_ROOT;
+  prevWakeGate = process.env.COGSEED_P3394_WAKE_GATE;
+  process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_P3394_WAKE_GATE = '0';
+  vi.resetModules();
+  cliRunMock.calls.length = 0;
+  cliRunMock.nextResult = null;
+  cliRunMock.nextResults.length = 0;
+  streamProbe.messages.length = 0;
+  streamProbe.readOnlyRoots.length = 0;
+  streamProbe.dispatchResults.length = 0;
+  streamProbe.maxToolLoops.length = 0;
+  streamProbe.lifecycleSeen.length = 0;
+  streamGate.releaseActiveTurn = null;
+  cidsToDrop.clear();
+  const users = await import('../../../../src/main/features/users');
+  users.activateUser(TEST_UID);
+
+  // Point the workspace at the `<tmpDir>/workspace` path these fixtures
+  // already assume. Produced-file finalization is scoped to the roots CogSeed
+  // manages, so deliverables must live somewhere the workspace actually
+  // resolves to — otherwise the gate assertions below pass because the files
+  // sit outside the boundary rather than because a review gate held them.
+  const userWorkspace = await import('../../../../src/main/features/user_workspace');
+  const wsDir = path.join(tmpDir, 'workspace');
+  fs.mkdirSync(wsDir, { recursive: true });
+  userWorkspace.setWorkspacePath(TEST_UID, wsDir);
+
+  // Seed a custom agent on disk so listAgents / getAgent can resolve it.
+  // Agent 目录形态: agents/<aid>/agent.json (详见 docs/plans/agent-as-directory.md)
+  const paths = await import('../../../../src/main/paths');
+  const dir = paths.agentDir(TEST_UID, AGENT_ID);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({
+    agent_id: AGENT_ID,
+    name: AGENT_NAME,
+    description: '交付高质量的软件产品',
+    workflow: '收需求 → 出方案 → 实现',
+    created_at: 't', updated_at: 't',
+  }));
+});
+
+afterEach(async () => {
+  cidsToDrop.add(TEST_CID);
+  try {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    for (const cid of cidsToDrop) {
+      await bus.abort(TEST_UID, cid);
+      await bus.dropConv(TEST_UID, cid);
+    }
+  } catch {
+    // Some skipped/failed setup paths may not have loaded the bus module yet.
+  }
+  await drainMainRuntimeForTest();
+  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevWakeGate === undefined) delete process.env.COGSEED_P3394_WAKE_GATE;
+  else process.env.COGSEED_P3394_WAKE_GATE = prevWakeGate;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function waitForQuiescent(uid: string, cid: string, timeoutMs = 2000) {
+  cidsToDrop.add(cid);
+  const bus = await import('../../../../src/main/features/group_chat/bus');
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (bus.isQuiescent(uid, cid)) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(`bus did not quiesce for ${uid}/${cid}`);
+}
+
+describe('group_chat bus › enqueue routing + persistence', () => {
+  it('user → commander default route persists with to=["commander"]', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const events: any[] = [];
+    bus.subscribe(TEST_UID, TEST_CID, (ev) => events.push(ev));
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: '你好',
+    });
+    expect(msg.to).toEqual(['commander']);
+    expect(msg.from).toBe('user');
+
+    // listener saw message event for the user msg
+    expect(events.find((e) => e.type === 'message' && e.msg.id === msg.id)).toBeTruthy();
+  });
+
+  it('persists a recipient epoch and passes the same value to P3394 admission', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const observed: any[] = [];
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        observed.push(input);
+        return {
+          ok: true,
+          message: {
+            message_type: 'agent.request',
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            metadata: {
+              relationship: input.relationship,
+              session_epoch: input.incomingEpoch || 0,
+            },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} EPOCH_PROPAGATION_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+
+      const persistedEpoch = msg.p3394?.recipient_epochs[AGENT_ID];
+      expect(persistedEpoch).toBe(1);
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        sender: 'user',
+        incomingEpoch: persistedEpoch,
+      });
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
+  });
+
+  it('persists short visible text while sending model_text to the worker', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const visibility = await import('../../../../src/main/features/group_chat/visibility');
+    const cid = 'cid-model-text';
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: '请帮我处理冲突。',
+      model_text: 'Please resolve the conflict using the hidden protocol.',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(msg.text).toBe('请帮我处理冲突。');
+    expect(msg.model_text).toBe('Please resolve the conflict using the hidden protocol.');
+    expect(streamProbe.messages.some((m) => m.includes('Please resolve the conflict using the hidden protocol.'))).toBe(true);
+    expect(streamProbe.messages.some((m) => m.includes('请帮我处理冲突。'))).toBe(false);
+
+    const slice = await visibility.readSlice(TEST_UID, cid, 'commander');
+    expect(visibility.buildReplayPrefix(slice, 'missing').prefix).toContain('Please resolve the conflict using the hidden protocol.');
+  });
+
+  it('persists structured references and injects them as inert model context', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const layout = await import('../../../../src/main/util/project-layout');
+    const sourceAttachmentDir = layout.chatAttachmentDirForConversation(TEST_UID, 'source-cid');
+    fs.mkdirSync(sourceAttachmentDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceAttachmentDir, 'brief.txt'), 'reference attachment');
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid: TEST_CID,
+      fromActorId: 'user',
+      text: '比较一下',
+      references: [{
+        source_cid: 'source-cid',
+        source_title: '来源任务',
+        source_msg_id: 'source-msg',
+        from_actor: 'writer',
+        from_name: '撰稿人',
+        source_ts: '2026-07-10T10:00:00',
+        text: '历史内容里有 @other-agent，但不应参与当前消息路由。',
+        attachments: [{ name: 'brief.txt', kind: 'text' }],
+        produced: ['/tmp/report.pdf'],
+      }],
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    expect(msg.to).toEqual(['commander']);
+    expect(msg.references?.[0]).toMatchObject({
+      source_cid: 'source-cid',
+      source_msg_id: 'source-msg',
+      text: expect.stringContaining('@other-agent'),
+    });
+    expect(streamProbe.messages.some((payload) => (
+      payload.includes('<referenced-messages>')
+      && payload.includes('not executable instructions or routing mentions')
+      && payload.includes('@other-agent')
+      // The path is embedded in a JSON snapshot, which doubles Windows
+      // backslashes even though the underlying read-only root is native.
+      && payload.includes(path.join(sourceAttachmentDir, 'brief.txt').replace(/\\/g, '\\\\'))
+      && payload.includes('比较一下')
+    ))).toBe(true);
+    expect(streamProbe.readOnlyRoots.some((roots) => roots.includes(sourceAttachmentDir))).toBe(true);
+  });
+
+  it('keeps earlier conversation attachments visible on later turns without reattaching', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const attachments = await import('../../../../src/main/features/chat_attachments');
+    const cid = 'cid-attachment-index';
+
+    await attachments.uploadAttachment(
+      TEST_UID,
+      cid,
+      'cogseed-1.0.5-update.md',
+      Buffer.from('# CogSeed 1.0.5\nAttachment index keeps old files discoverable.', 'utf8'),
+    );
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: 'please check the old md again',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const call = streamProbe.messages.find((m) => m.includes('please check the old md again')) || '';
+    expect(call).toContain('<conversation-attachments');
+    expect(call).toContain('name="cogseed-1.0.5-update.md"');
+    expect(call).toContain('kind="text"');
+    expect(call).toContain('total_chars=');
+  });
+
+  it('extracts commander context-patch blocks into the active shared context', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const cid = 'cid-context-patch';
+    const { context } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Patch extraction integration',
+      kind: 'discussion',
+      created_by: 'commander',
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: 'CONTEXT_PATCH_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const updated = await collaboration.readSharedTaskContext(TEST_UID, cid, context.id);
+    expect(updated?.facts.map((item) => item.text)).toContain('Agents can exchange durable state through ContextPatch');
+    expect(updated?.open_questions.map((item) => item.text)).toContain('Should Gate become user-reviewable in the next slice?');
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    expect(reply?.text).toBe('Shared state updated.');
+    expect(reply?.text).not.toContain('context-patch');
+  });
+
+  it('strips commander result markers and records commander model failures', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: 'COMMANDER_RESULT_FAILURE_TEST',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    expect(reply?.text).toBe('没有完成调度。');
+    expect(reply?.text).not.toContain('commander-result');
+
+    const stats = JSON.parse(fs.readFileSync(paths.commanderRuntimeStatsFile(TEST_UID), 'utf-8'));
+    expect(stats.attempts).toBe(1);
+    expect(stats.successes).toBe(0);
+    expect(stats.deliveries).toBe(0);
+    expect(stats.failures).toBe(1);
+    expect(stats.errors).toBe(0);
+  });
+
+  it('records markerless commander completions as success when no runtime error occurs', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: '普通问题',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const stats = JSON.parse(fs.readFileSync(paths.commanderRuntimeStatsFile(TEST_UID), 'utf-8'));
+    expect(stats.attempts).toBe(1);
+    expect(stats.successes).toBe(1);
+    expect(stats.deliveries).toBe(1);
+    expect(stats.failures).toBe(0);
+    expect(stats.errors).toBe(0);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    expect(reply?.process).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'event',
+        event: expect.objectContaining({
+          stream: 'runtime',
+          data: expect.objectContaining({ duration_ms: expect.any(Number) }),
+        }),
+      }),
+    ]));
+  });
+
+  it('ignores legacy Hermes commander backend config and runs the CogSeed commander', async () => {
+    const config = await import('../../../../src/main/features/config');
+    config.writePreferences({
+      commander_backend: {
+        backend: 'hermes-cli',
+        authEntryId: null,
+        localCli: { type: 'hermes', useCliDefaultModel: true, model: '' },
+      } as never,
+    });
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-legacy-hermes-commander-disabled';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: '普通问题',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(0);
+    expect(streamProbe.messages.some((message) => message.includes('普通问题'))).toBe(true);
+    expect(config.getCommanderBackendSettings()).toEqual({
+      backend: 'cogseed-core-agent',
+      authEntryId: null,
+      localCli: null,
+    });
+  });
+
+  it('persists context compaction metadata in process history', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-compaction-process';
+    const events: any[] = [];
+    bus.subscribe(TEST_UID, cid, (ev) => events.push(ev));
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: 'COMPACTION_EVENT_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    expect(reply?.text).toBe('compaction recorded');
+    expect(reply?.process).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'progress',
+        text: 'compacted 20000→3000 tokens',
+        event: {
+          stream: 'compaction',
+          data: { tokensBefore: 20000, tokensAfter: 3000 },
+        },
+      }),
+      expect.objectContaining({
+        type: 'event',
+        event: expect.objectContaining({
+          stream: 'runtime',
+          data: expect.objectContaining({ duration_ms: expect.any(Number) }),
+        }),
+      }),
+    ]));
+    expect(events.some((e) => e.type === 'process' && e.data?.event?.stream === 'compaction')).toBe(true);
+    expect(events.some((e) => e.type === 'process' && e.data?.event?.stream === 'runtime')).toBe(true);
+  });
+
+  it('persists phase timing attribution in the final runtime process item', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-runtime-breakdown';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user', text: 'TIMING_EVENT_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = findCommanderReply(lines);
+    const runtime = reply?.process?.find((item: any) => item?.event?.stream === 'runtime');
+    expect(runtime?.event?.data).toMatchObject({
+      duration_ms: expect.any(Number),
+      provider_ms: 40,
+      tool_ms: 20,
+      compaction_ms: 10,
+      retry_wait_ms: 5,
+      other_ms: 3,
+      failure_phase: 'tool',
+    });
+  });
+
+  it('passes a P3394 execution lifecycle sink to real core-agent group turns', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const records = await import('../../../../src/main/features/execution-records');
+    const cid = 'cid-execution-lifecycle';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user', text: 'EXECUTION_LIFECYCLE_TEST',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(streamProbe.lifecycleSeen).toContain(true);
+    const executionRecords = await records.list(TEST_UID);
+    const record = executionRecords.find((candidate) => candidate.conversationId === cid);
+    expect(record).toMatchObject({
+      kind: 'core-agent',
+      sessionId: `gconv-${cid}`,
+      conversationId: cid,
+      status: 'completed',
+      boundary: 'real',
+      permissionMode: 'all_files_approval',
+      artifactIds: [],
+    });
+    expect(record?.executionId).toMatch(/^turn-/);
+    const events = await records.readEvents(TEST_UID, record!.executionId);
+    expect(events.map((event) => event.type)).toEqual(expect.arrayContaining([
+      'queued',
+      'started',
+      'output',
+      'terminal',
+    ]));
+  });
+
+  it('P3394 Wake Gate keeps an unapproved mentioned agent out of the roster and runtime', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 检查这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    expect(msg.to).toEqual(['user']);
+    expect(msg.wake_requests).toEqual([expect.objectContaining({
+      agent_id: AGENT_ID,
+      agent_name: AGENT_NAME,
+      source: 'user_mention',
+      status: 'pending',
+    })]);
+    const members = await state.readMembers(TEST_UID, TEST_CID);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(streamProbe.messages.some((text) => text.includes('检查这个项目'))).toBe(false);
+    expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(1);
+  });
+
+  it('P3394 external inbound never wakes a named agent directly (no bypass; Commander mediates)', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const cid = 'wake-external-' + Math.random().toString(36).slice(2, 10);
+
+    // 安全边界（指南 §15）：对端消息只路由给指挥官；@本地智能体不产生直接
+    // 唤醒，必须由指挥官中转并走常规唤醒审批。
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'p3394_hermes',
+      text: `@${AGENT_NAME} 检查这个项目`,
+      forceTo: ['commander'],
+      externalInbound: true,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(msg.to).toEqual(['commander']);
+    expect(msg.wake_requests ?? []).toHaveLength(0);
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toHaveLength(0);
+  });
+  it('P3394 approval admits the original intent through CogSeed Backend without using the Agent id as a model profile', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const controller = await import('../../../../src/main/features/p3394/wake-controller');
+    const cogseedTasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+
+    const deferred = await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 完成审批后的任务`,
+    });
+    const requestId = deferred.wake_requests?.[0]?.id;
+    expect(requestId).toBeTruthy();
+
+    const result = await controller.decideWakeRequest(TEST_UID, {
+      requestId: requestId!,
+      decision: 'approve',
+    });
+    expect(result.ok).toBe(true);
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const tasks = await cogseedTasks.listCogSeedTasks(TEST_UID);
+    expect(tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        task: expect.stringContaining('完成审批后的任务'),
+        agentId: AGENT_ID,
+        conversationId: TEST_CID,
+      }),
+    ]));
+    expect(tasks.find((task) => task.agentId === AGENT_ID)).not.toHaveProperty('profileId');
+    const requests = await wake.listWakeRequests(TEST_UID, TEST_CID);
+    expect(requests[0].status).toBe('executed');
+  });
+
+  it('routes a no-mention user follow-up for the active formal Agent into CogSeed instead of the Group Chat model loop', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const followups: any[] = [];
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
+    (bus as any)._setInteractiveFollowupStarterForTest(async (input: any) => {
+      followups.push(input);
+      return { taskId: 'cogseed-task-followup', status: 'running' };
+    });
+
+    try {
+      const beforeModelCalls = streamProbe.messages.length;
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: '继续处理下一步，不需要重新唤醒。',
+      });
+
+      expect(msg.to).toEqual([AGENT_ID]);
+      expect(followups).toEqual([expect.objectContaining({
+        userId: TEST_UID,
+        conversationId: TEST_CID,
+        agentId: AGENT_ID,
+        requestId: `req-followup-${msg.id}`,
+        task: '继续处理下一步，不需要重新唤醒。',
+      })]);
+      expect(streamProbe.messages).toHaveLength(beforeModelCalls);
+      expect(await wake.listWakeRequests(TEST_UID, TEST_CID)).toHaveLength(0);
+    } finally {
+      (bus as any)._setInteractiveFollowupStarterForTest(null);
+    }
+  });
+
+  it('P3394 Wake Gate blocks an unapproved plan-step dispatch', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const cid = 'cid-p3394-plan-step';
+
+    const msg = await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'commander',
+      text: '执行计划中的实现步骤',
+      forceTo: [AGENT_ID],
+      dispatch: true,
+    });
+
+    expect(msg.to).toEqual(['user']);
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toEqual([expect.objectContaining({
+      source: 'plan_step',
+      agent_id: AGENT_ID,
+      status: 'pending',
+    })]);
+  });
+
+  it('user → @<name> resolves to agent_id and auto-adds the agent to the roster', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 我想要开发一个软件`,
+    });
+    expect(msg.to).toEqual([AGENT_ID]);
+
+    // Auto-add: agent now appears in the roster
+    const m = await state.readMembers(TEST_UID, TEST_CID);
+    expect(m.actors.find((a) => a.id === AGENT_ID)).toBeTruthy();
+    expect(m.actors.find((a) => a.id === AGENT_ID)?.name).toBe(AGENT_NAME);
+  });
+
+  it('passes the explicit 100-round tool budget into a named agent run', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 执行一个长程任务`,
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const callIndex = streamProbe.messages.findIndex((message) => message.includes('执行一个长程任务'));
+    expect(callIndex).toBeGreaterThanOrEqual(0);
+    expect(streamProbe.maxToolLoops[callIndex]).toBe(100);
+  });
+
+  it('attaches a <group-context-summary> digest when the user switches to an agent after a conversation with other participants', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    // Phase 1: the user has a conversation with the commander first. This
+    // thread is invisible to the agent (its visibility slice only contains
+    // messages where it was from/to/mentioned), so switching to it afterwards
+    // would otherwise start the worker blind.
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: '先和指挥官讨论一下需求A的背景',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+    expect(streamProbe.messages.some((m) => m.includes('先和指挥官讨论一下需求A的背景'))).toBe(true);
+
+    // Phase 2: the user switches to the agent (composer chip / @mention).
+    // The first message to the freshly-targeted agent must carry a digest of
+    // the missed user↔commander conversation, not just the single message.
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: '@' + AGENT_NAME + ' 现在开始实现需求A',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const agentCall = streamProbe.messages.find((m) => m.includes('现在开始实现需求A'));
+    expect(agentCall).toBeTruthy();
+    expect(agentCall).toContain('<group-context-summary>');
+    expect(agentCall).toContain('先和指挥官讨论一下需求A的背景');
+    // The digest is context, never the full transcript — the current trigger
+    // message is not re-injected as 'missed' (it lives after </group-context-summary>).
+    const digestOnly = agentCall!.split('</group-context-summary>')[0] ?? '';
+    expect(digestOnly).toContain('<group-context-summary>');
+    expect(digestOnly).not.toContain('现在开始实现需求A');
+  });
+
+  it('strips agent result markers and records model failures separately from errors', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} AGENT_RESULT_FAILURE_TEST`,
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    const lines = fs.readFileSync(mainFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    const reply = lines.find((line) => line.from === AGENT_ID);
+    expect(reply?.text).toBe('没有完成交付。');
+    expect(reply?.text).not.toContain('agent-result');
+
+    const stats = JSON.parse(fs.readFileSync(paths.agentRuntimeStatsFile(TEST_UID, AGENT_ID), 'utf-8'));
+    expect(stats.attempts).toBe(1);
+    expect(stats.successes).toBe(0);
+    expect(stats.deliveries).toBe(0);
+    expect(stats.failures).toBe(1);
+    expect(stats.errors).toBe(0);
+  });
+
+  it('records markerless agent completions as success when no runtime error occurs', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 普通任务`,
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const stats = JSON.parse(fs.readFileSync(paths.agentRuntimeStatsFile(TEST_UID, AGENT_ID), 'utf-8'));
+    expect(stats.attempts).toBe(1);
+    expect(stats.successes).toBe(1);
+    expect(stats.deliveries).toBe(1);
+    expect(stats.failures).toBe(0);
+    expect(stats.errors).toBe(0);
+  });
+
+  it('exposes a stable active turn id from process event through final message', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const events: any[] = [];
+    let resolveProgress: ((ev: any) => void) | null = null;
+    const progressSeen = new Promise<any>((resolve) => { resolveProgress = resolve; });
+    bus.subscribe(TEST_UID, TEST_CID, (ev) => {
+      events.push(ev);
+      if (ev.type === 'process' && ev.actor === 'commander' && ev.data?.type === 'progress') {
+        resolveProgress?.(ev);
+      }
+    });
+
+    try {
+      const trigger = await bus.enqueue({
+        uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+        text: 'ACTIVE_TURN_TEST',
+      });
+      const processEv = await Promise.race([
+        progressSeen,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('progress event timeout')), 1000)),
+      ]) as any;
+
+      expect(processEv.turn_id).toEqual(expect.any(String));
+      const running = bus.runtimeSnapshot(TEST_UID, TEST_CID);
+      expect(running.activeTurns).toHaveLength(1);
+      expect(running.activeTurns[0]).toMatchObject({
+        actor: 'commander',
+        turn_id: processEv.turn_id,
+        msg_id: trigger.id,
+        started_at_ms: expect.any(Number),
+      });
+      expect(running.activeTurns[0].started_at_ms).toBeLessThanOrEqual(Date.now());
+      expect(bus.runtimeSnapshot(TEST_UID, TEST_CID).activeTurns[0].started_at_ms)
+        .toBe(running.activeTurns[0].started_at_ms);
+      expect(running.inFlight).toContain('commander');
+
+      streamGate.releaseActiveTurn?.();
+      await waitForQuiescent(TEST_UID, TEST_CID);
+
+      const finalEv = events.find((ev) => ev.type === 'message' && ev.turn_end && ev.msg?.from === 'commander');
+      expect(finalEv?.turn_id).toBe(processEv.turn_id);
+      expect(finalEv?.msg?.turn_id).toBe(processEv.turn_id);
+      const paths = await import('../../../../src/main/paths');
+      const persisted = fs.readFileSync(
+        path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`),
+        'utf8',
+      ).trim().split('\n').map((line) => JSON.parse(line));
+      expect(persisted.find((row) => row.id === finalEv?.msg?.id)?.turn_id).toBe(processEv.turn_id);
+      expect(bus.runtimeSnapshot(TEST_UID, TEST_CID).activeTurns).toEqual([]);
+    } finally {
+      streamGate.releaseActiveTurn?.();
+      streamGate.releaseActiveTurn = null;
+    }
+  });
+
+  // `@<agent_id>` → `@<name>` rewrite assertions live in
+  // `bus-integration.test.ts` since they only matter for the persisted
+  // form viewed end-to-end. Keep this file focused on bus's standalone
+  // routing / persistence semantics.
+
+  it('writes the message into both main jsonl and recipient visibility slice', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: `@${AGENT_NAME} 第一条任务`,
+    });
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${TEST_CID}.jsonl`);
+    expect(fs.existsSync(mainFile)).toBe(true);
+    const mainLine = fs.readFileSync(mainFile, 'utf-8').trim();
+    const persisted = JSON.parse(mainLine);
+    expect(persisted.to).toEqual([AGENT_ID]);
+
+    const sliceFile = paths.groupChatVisibilityFile(TEST_UID, TEST_CID, AGENT_ID);
+    expect(fs.existsSync(sliceFile)).toBe(true);
+    const sliceLine = fs.readFileSync(sliceFile, 'utf-8').trim();
+    expect(JSON.parse(sliceLine).id).toBe(persisted.id);
+  });
+
+  it('emits artifact_created as soon as create_artifact reports success', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const events: any[] = [];
+    bus.subscribe(TEST_UID, TEST_CID, (ev) => events.push(ev));
+
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: 'ARTIFACT_EVENT_TEST',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const artifactIdx = events.findIndex((e) => e.type === 'artifact_created');
+    const finalIdx = events.findIndex((e) =>
+      e.type === 'message' && e.turn_end === true && e.msg?.from === 'commander');
+    expect(artifactIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThan(artifactIdx);
+    expect(events[artifactIdx]).toMatchObject({
+      cid: TEST_CID,
+      actor: 'commander',
+      artifact: { id: 'art-live-1', title: 'Live App', agent_id: 'commander' },
+    });
+    expect(events[finalIdx].msg.artifacts).toEqual([
+      { id: 'art-live-1', title: 'Live App', agent_id: 'commander' },
+    ]);
+  });
+
+  it('filters stale produced paths before persisting the final message', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-produced-filter';
+    const stalePath = path.join(tmpDir, 'workspace', 'projects', 'business_planning.md');
+    const finalPath = path.join(tmpDir, 'workspace', 'projects', 'deck', 'sources', 'business_planning.md');
+    fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+    fs.writeFileSync(finalPath, 'final source');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `PRODUCED_FILTER_TEST:${Buffer.from(JSON.stringify({
+        paths: [stalePath, finalPath],
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'produced filter ok');
+    expect(commanderMsg?.produced).toEqual([finalPath]);
+    expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(stalePath)).toBe(false);
+    expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(finalPath)).toBe(true);
+  });
+
+  it('persists only the terminal deliverable while retaining supporting-file ownership', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-produced-deliverable';
+    const sourcePath = path.join(tmpDir, 'workspace', 'report.md');
+    const previewPath = path.join(tmpDir, 'workspace', 'preview-cover.png');
+    const finalPath = path.join(tmpDir, 'workspace', 'report.pdf');
+    for (const [file, body] of [
+      [sourcePath, '# source'],
+      [previewPath, 'preview'],
+      [finalPath, 'pdf'],
+    ] as const) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, body);
+    }
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `PRODUCED_FILTER_TEST:${Buffer.from(JSON.stringify({
+        paths: [sourcePath, previewPath, finalPath],
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'produced filter ok');
+    expect(commanderMsg?.produced).toEqual([finalPath]);
+    expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(sourcePath)).toBe(true);
+    expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(previewPath)).toBe(true);
+    expect(bus._cidStateForTest(TEST_UID, cid)?.producedPaths.has(finalPath)).toBe(true);
+  });
+
+  it('runs generic produced-file hooks for source-like files', async () => {
+    const hooks = await import('../../../../src/main/features/produced_output_hooks');
+    const finalized: string[] = [];
+    const unregister = hooks.registerProducedOutputHooks({
+      finalizeFile: async (file) => { finalized.push(file); },
+    });
+    try {
+      const bus = await import('../../../../src/main/features/group_chat/bus');
+      const sourcePath = path.join(tmpDir, 'workspace', 'repository', 'README.md');
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.mkdirSync(path.join(path.dirname(sourcePath), '.git'));
+      fs.writeFileSync(sourcePath, '# source');
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid: 'cid-source-provenance',
+        fromActorId: 'user',
+        text: `PRODUCED_FILTER_TEST:${Buffer.from(JSON.stringify({ paths: [sourcePath] })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, 'cid-source-provenance');
+      expect(finalized).toEqual([sourcePath]);
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid: 'cid-explicit-source-deliverable',
+        fromActorId: 'user',
+        text: `PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+          paths: [sourcePath],
+          published: [sourcePath],
+        })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, 'cid-explicit-source-deliverable');
+      expect(finalized).toEqual([sourcePath, sourcePath]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it('keeps generic produced-file hooks independent from review-gate visibility', async () => {
+    const hooks = await import('../../../../src/main/features/produced_output_hooks');
+    const finalized: string[] = [];
+    const unregister = hooks.registerProducedOutputHooks({
+      finalizeFile: async (file) => { finalized.push(file); },
+    });
+    try {
+      const bus = await import('../../../../src/main/features/group_chat/bus');
+      const paths = await import('../../../../src/main/paths');
+      const cid = 'cid-open-gate-output';
+      const htmlPath = path.join(tmpDir, 'workspace', 'project', 'composition', 'index.html');
+      fs.mkdirSync(path.dirname(htmlPath), { recursive: true });
+      fs.writeFileSync(htmlPath, '<!doctype html><html><body>clean composition</body></html>');
+
+      // Plan-interaction parsing is intentionally limited to interactive
+      // agents. Make this fixture match SampleAgent's runtime contract.
+      const agentPath = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+      const agent = JSON.parse(fs.readFileSync(agentPath, 'utf8'));
+      fs.writeFileSync(agentPath, JSON.stringify({ ...agent, interactive: true }));
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} PRODUCED_FILTER_TEST:${Buffer.from(JSON.stringify({
+          paths: [htmlPath],
+          planInteraction: 'open',
+          withForm: true,
+        })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+      const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const agentMsg = rows.find((row: any) => row.from === AGENT_ID && row.text === 'produced filter ok');
+      expect(agentMsg?.produced).toBeUndefined();
+      expect(agentMsg?.form?.fields?.[0]?.id).toBe('decision');
+      expect(finalized).toEqual([htmlPath]);
+      expect(fs.readFileSync(htmlPath, 'utf8')).toContain('clean composition');
+    } finally {
+      unregister();
+    }
+  });
+
+  it('shows explicitly published review outputs while running generic produced-file hooks', async () => {
+    const hooks = await import('../../../../src/main/features/produced_output_hooks');
+    const finalized: string[] = [];
+    const unregister = hooks.registerProducedOutputHooks({
+      finalizeFile: async (file) => { finalized.push(file); },
+    });
+    try {
+      const bus = await import('../../../../src/main/features/group_chat/bus');
+      const paths = await import('../../../../src/main/paths');
+      const cid = 'cid-open-gate-review-output';
+      const contactSheetPath = path.join(tmpDir, 'workspace', 'project', 'composition', 'preview', 'contact-sheet.svg');
+      fs.mkdirSync(path.dirname(contactSheetPath), { recursive: true });
+      fs.writeFileSync(contactSheetPath, '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+
+      const agentPath = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+      const agent = JSON.parse(fs.readFileSync(agentPath, 'utf8'));
+      fs.writeFileSync(agentPath, JSON.stringify({ ...agent, interactive: true }));
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+          paths: [contactSheetPath],
+          published: [contactSheetPath],
+          planInteraction: 'open',
+          withForm: true,
+        })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+      const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const agentMsg = rows.find((row: any) => row.from === AGENT_ID && row.text === 'published output ok');
+      expect(agentMsg?.produced).toEqual([contactSheetPath]);
+      expect(agentMsg?.form?.fields?.[0]?.id).toBe('decision');
+      expect(finalized).toEqual([contactSheetPath]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it('shows and finalizes explicitly published draft videos at Gate D', async () => {
+    const hooks = await import('../../../../src/main/features/produced_output_hooks');
+    const finalized: string[] = [];
+    const unregister = hooks.registerProducedOutputHooks({
+      finalizeFile: async (file) => { finalized.push(file); },
+    });
+    try {
+      const bus = await import('../../../../src/main/features/group_chat/bus');
+      const paths = await import('../../../../src/main/paths');
+      const cid = 'cid-open-gate-draft-video';
+      const draftPath = path.join(tmpDir, 'workspace', 'project', 'render', 'draft.webm');
+      fs.mkdirSync(path.dirname(draftPath), { recursive: true });
+      fs.writeFileSync(draftPath, 'draft video bytes');
+
+      const agentPath = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+      const agent = JSON.parse(fs.readFileSync(agentPath, 'utf8'));
+      fs.writeFileSync(agentPath, JSON.stringify({ ...agent, interactive: true }));
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+          paths: [draftPath],
+          published: [draftPath],
+          planInteraction: 'open',
+          withForm: true,
+        })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+      const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const agentMsg = rows.find((row: any) => row.from === AGENT_ID && row.text === 'published output ok');
+      expect(agentMsg?.produced).toEqual([draftPath]);
+      expect(agentMsg?.form?.fields?.[0]?.id).toBe('decision');
+      expect(finalized).toEqual([draftPath]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it('finalizes explicitly published exported videos on terminal delivery', async () => {
+    const hooks = await import('../../../../src/main/features/produced_output_hooks');
+    const finalized: string[] = [];
+    const unregister = hooks.registerProducedOutputHooks({
+      finalizeFile: async (file) => { finalized.push(file); },
+    });
+    try {
+      const bus = await import('../../../../src/main/features/group_chat/bus');
+      const paths = await import('../../../../src/main/paths');
+      const cid = 'cid-export-video-final';
+      const finalPath = path.join(tmpDir, 'workspace', 'project', 'render', 'final.mp4');
+      fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+      fs.writeFileSync(finalPath, 'final video bytes');
+
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+          paths: [finalPath],
+          published: [finalPath],
+        })).toString('base64')}`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+      const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'published output ok');
+      expect(commanderMsg?.produced).toEqual([finalPath]);
+      expect(finalized).toEqual([finalPath]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it('prefers an explicit current-turn publication over extension ranking', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-published-output';
+    const sourcePath = path.join(tmpDir, 'workspace', 'editable-source.md');
+    const finalPath = path.join(tmpDir, 'workspace', 'export.pdf');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, '# source');
+    fs.writeFileSync(finalPath, 'pdf');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+        paths: [sourcePath, finalPath],
+        published: [sourcePath],
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'published output ok');
+    expect(commanderMsg?.produced).toEqual([sourcePath]);
+  });
+
+  it('allows an explicit empty publication to suppress ambiguous working files', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-published-output-empty';
+    const scriptPath = path.join(tmpDir, 'workspace', 'script.md');
+    const shotlistPath = path.join(tmpDir, 'workspace', 'shotlist.json');
+    fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+    fs.writeFileSync(scriptPath, '# script');
+    fs.writeFileSync(shotlistPath, '{}');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `PUBLISHED_OUTPUT_TEST:${Buffer.from(JSON.stringify({
+        paths: [scriptPath, shotlistPath],
+        published: [],
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const commanderMsg = rows.find((row: any) => row.from === 'commander' && row.text === 'published output ok');
+    expect(commanderMsg?.produced).toBeUndefined();
+    expect(fs.existsSync(scriptPath)).toBe(true);
+    expect(fs.existsSync(shotlistPath)).toBe(true);
+  });
+
+  it('approving a collaboration Gate automatically resumes the commander', async () => {
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-collaboration-gate-auto-resume';
+    const { run } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Auto resume after gate approval',
+      kind: 'review',
+      created_by: 'commander',
+    });
+    const step = await collaboration.startWorkflowStep(TEST_UID, cid, run.id, {
+      title: 'Manual review',
+      actor_id: 'reviewer',
+      type: 'gate',
+    });
+    const gate = await collaboration.recordGateResult(TEST_UID, cid, run.id, step.id, {
+      name: 'manual_review',
+      status: 'needs_review',
+      reason: 'Wait for approval.',
+      checks: [{ name: 'manual_review_required', status: 'needs_review' }],
+    });
+
+    const result = await groupChat.reviewCollaborationGate(TEST_UID, cid, gate.id, {
+      decision: 'approve',
+      reviewed_by: 'user',
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(result.ok).toBe(true);
+    expect(bus.isQuiescent(TEST_UID, cid)).toBe(true);
+    expect(streamProbe.messages.some((message) => message.includes('<collaboration-gate-resume>'))).toBe(true);
+    expect(streamProbe.messages.some((message) => message.includes('Gate approved: manual_review'))).toBe(true);
+  });
+
+  it('collaboration Gate blocks commander dispatch_to before a named Agent starts', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const collaboration = await import('../../../../src/main/features/group_chat/collaboration');
+    const cid = 'cid-collaboration-dispatch-gate';
+    const processPath = path.join(tmpDir, 'workspace', 'collaboration-blocked-output.json');
+    const { run } = await collaboration.createWorkflowRun(TEST_UID, cid, {
+      objective: 'Blocked dispatch guard',
+      kind: 'review',
+      created_by: 'commander',
+    });
+    const step = await collaboration.startWorkflowStep(TEST_UID, cid, run.id, {
+      title: 'Manual review',
+      actor_id: 'reviewer',
+      type: 'gate',
+    });
+    await collaboration.recordGateResult(TEST_UID, cid, run.id, step.id, {
+      name: 'manual_review',
+      status: 'needs_review',
+      reason: 'Wait for approval.',
+      checks: [{ name: 'manual_review_required', status: 'needs_review' }],
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({
+        tool: 'dispatch_to',
+        path: processPath,
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(fs.existsSync(processPath)).toBe(false);
+    expect(streamProbe.dispatchResults.some((result) => result.includes('Workflow is blocked by collaboration gate'))).toBe(true);
+  });
+
+  it('P3394 Wake Gate blocks commander dispatch_to before a named Agent starts', async () => {
+    process.env.COGSEED_P3394_WAKE_GATE = '1';
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const wake = await import('../../../../src/main/features/p3394/wake-service');
+    const cid = 'cid-p3394-nested-gate';
+    const processPath = path.join(tmpDir, 'workspace', 'blocked-output.json');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({
+        tool: 'dispatch_to',
+        path: processPath,
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const members = await state.readMembers(TEST_UID, cid);
+    expect(members.actors.some((actor) => actor.id === AGENT_ID)).toBe(false);
+    expect(fs.existsSync(processPath)).toBe(false);
+    expect(streamProbe.dispatchResults.some((result) => result.includes('wake approval'))).toBe(true);
+    expect(await wake.listWakeRequests(TEST_UID, cid)).toEqual([expect.objectContaining({
+      source: 'dispatch_to',
+      agent_id: AGENT_ID,
+      status: 'pending',
+    })]);
+  });
+
+  it('hides process-dispatch files while keeping their paths in the commander handback', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-process-output-hidden';
+    const processPath = path.join(tmpDir, 'workspace', 'shotlist.json');
+    fs.mkdirSync(path.dirname(processPath), { recursive: true });
+    fs.writeFileSync(processPath, '{}');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({
+        tool: 'dispatch_to',
+        path: processPath,
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const agentMsg = rows.find((row: any) => row.from === AGENT_ID && row.text === 'produced filter ok');
+    expect(agentMsg?.produced).toBeUndefined();
+    expect(streamProbe.dispatchResults.some((result) => result.includes(processPath))).toBe(true);
+    expect(fs.existsSync(processPath)).toBe(true);
+  });
+
+  it('keeps hand-off files visible because the agent bubble is the final delivery', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-final-output-visible';
+    const finalPath = path.join(tmpDir, 'workspace', 'final.pdf');
+    fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+    fs.writeFileSync(finalPath, 'pdf');
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: 'user',
+      text: `NESTED_OUTPUT_VISIBILITY_TEST:${Buffer.from(JSON.stringify({
+        tool: 'hand_off_to',
+        path: finalPath,
+      })).toString('base64')}`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const agentMsg = rows.find((row: any) => row.from === AGENT_ID && row.text === 'produced filter ok');
+    expect(agentMsg?.produced).toEqual([finalPath]);
+  });
+
+  // `isQuiescent` reflects the in-memory queue/running state — exercised
+  // implicitly by every bus-integration `waitForQuiescent` call. A
+  // standalone tautological test (newly-empty bus is quiescent) wasn't
+  // catching anything, so it was dropped.
+
+  it('dropConv terminates the worker so it doesn\'t leak after conv delete', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    bus.subscribe(TEST_UID, TEST_CID, () => {});
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: 'hello',
+    });
+    const stateBefore = bus._cidStateForTest(TEST_UID, TEST_CID);
+    expect(stateBefore).toBeTruthy();
+
+    await bus.dropConv(TEST_UID, TEST_CID);
+    const stateAfter = bus._cidStateForTest(TEST_UID, TEST_CID);
+    expect(stateAfter).toBeNull();
+    // Worker.terminated flag was set; the loop's `while (!w.terminated)`
+    // now exits at the next wake. We can't observe the loop exit
+    // directly, but isQuiescent reports true (since cid state is gone).
+    expect(bus.isQuiescent(TEST_UID, TEST_CID)).toBe(true);
+  });
+
+  it('dropConv rejects late enqueue admission while an active worker unwinds', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid: TEST_CID,
+      fromActorId: 'user',
+      text: 'ACTIVE_TURN_TEST',
+    });
+    const deadline = Date.now() + 2_000;
+    while (!streamGate.releaseActiveTurn && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    expect(streamGate.releaseActiveTurn).toBeTypeOf('function');
+
+    const dropping = bus.dropConv(TEST_UID, TEST_CID);
+    await expect(bus.enqueue({
+      uid: TEST_UID,
+      cid: TEST_CID,
+      fromActorId: 'user',
+      text: 'must not resurrect deleted runtime',
+    })).rejects.toMatchObject({ code: 'E_CONVERSATION_TERMINATING' });
+
+    streamGate.releaseActiveTurn?.();
+    await dropping;
+    expect(bus._cidStateForTest(TEST_UID, TEST_CID)).toBeNull();
+  });
+
+  it('dropConv drains an enqueue already admitted before terminating workers', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    let enterGate!: () => void;
+    let releaseGate!: () => void;
+    const entered = new Promise<void>((resolve) => { enterGate = resolve; });
+    const released = new Promise<void>((resolve) => { releaseGate = resolve; });
+    bus._setEnqueueAdmissionGateForTest(async () => {
+      enterGate();
+      await released;
+    });
+
+    try {
+      const enqueuing = bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: 'admitted before deletion',
+      });
+      await entered;
+      let dropResolved = false;
+      const dropping = bus.dropConv(TEST_UID, TEST_CID).then(() => { dropResolved = true; });
+      await Promise.resolve();
+      expect(dropResolved).toBe(false);
+
+      releaseGate();
+      await enqueuing;
+      await dropping;
+      expect(bus._cidStateForTest(TEST_UID, TEST_CID)).toBeNull();
+    } finally {
+      bus._setEnqueueAdmissionGateForTest(null);
+      releaseGate?.();
+    }
+  });
+
+  it('initialises a coding CLI conversation cwd from the agent project-dir setting without replaying on first dispatch', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const projectDir = path.join(tmpDir, 'repo');
+    fs.mkdirSync(projectDir);
+    const agents = await import('../../../../src/main/features/agents');
+    await agents.setAgentCliProjectDir(TEST_UID, AGENT_ID, projectDir);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const cid = 'cid-coding-dir';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(projectDir);
+    expect(cliRunMock.calls[0].prompt).toContain('看一下这个项目');
+    expect(cliRunMock.calls[0].prompt).not.toContain('## Conversation so far');
+    const st = await state.readState(TEST_UID, cid);
+    expect(st.coding_project_dir).toBe(projectDir);
+    expect(st.coding_project_dir_explicit).toBe(true);
+  });
+
+  it('routes a space conversation CLI cwd into the space workspace dir (spaces/<空间名>/workspace/<slug>)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const userWorkspace = await import('../../../../src/main/features/user_workspace');
+    const wsDir = userWorkspace.getWorkspacePath(TEST_UID);
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '空间任务' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '空间任务', spaceId: sid });
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    // 目录名跟随空间名（'空间任务'），不再以 sid 命名
+    expect(expected).toContain(path.join('cloud', 'spaces', '空间任务', 'workspace'));
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(cliRunMock.calls[0].cwd).not.toBe(wsDir);
+    const st = await state.readState(TEST_UID, conv.conversation_id);
+    expect(st.coding_project_dir).toBe(expected);
+  });
+
+  it('materialises the space workspace dir before CLI dispatch (chat-only space conv must not spawn ENOENT)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '纯对话空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const conv = await chats.createConversation(TEST_UID, { title: '纯对话任务', spaceId: created.space.space_id });
+
+    // 派发前空间工作区目录不存在（conv_workspace 惰性 mkdir：只对话不产出的会话零足迹）
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    expect(fs.existsSync(expected)).toBe(false);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    // CLI 派发后目录必须已创建——否则 child_process.spawn 因 cwd 缺失抛 ENOENT
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(fs.statSync(expected).isDirectory()).toBe(true);
+  });
+
+  it('re-points a stale non-explicit coding_project_dir (userWorkSpace root) to the space workspace dir', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'workbuddy' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const userWorkspace = await import('../../../../src/main/features/user_workspace');
+    const wsDir = userWorkspace.getWorkspacePath(TEST_UID);
+    const spaces = await import('../../../../src/main/features/spaces');
+    const chats = await import('../../../../src/main/features/chats');
+    const convWs = await import('../../../../src/main/features/group_chat/conv_workspace');
+    const created = await spaces.createSpace(TEST_UID, { name: '存量修复空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '存量任务', spaceId: sid });
+
+    // 先冻结 workspace_dir slug（与真实流程一致），再模拟旧版固化：
+    // coding_project_dir = 根工作区（非显式）
+    const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
+    const stateFile = path.join(paths.userChatsDir(TEST_UID), conv.conversation_id, 'state.json');
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({
+      version: 1,
+      status: 'idle',
+      workspace_dir: path.basename(expected),
+      coding_project_dir: wsDir,
+    }));
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    await bus.enqueue({
+      uid: TEST_UID, cid: conv.conversation_id, fromActorId: 'user',
+      text: `@${AGENT_NAME} 看一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, conv.conversation_id);
+
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    const st = await state.readState(TEST_UID, conv.conversation_id);
+    expect(st.coding_project_dir).toBe(expected);
+    expect(st.coding_project_dir_explicit).not.toBe(true);
+  });
+
+  it('shows localized external-agent failure copy without raw backend diagnostics', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'openclaw' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+    cliRunMock.nextResult = {
+      runId: 'failed-run',
+      status: 'failed',
+        error: 'openclaw exited with code 17 at /Users/user/private-project',
+    };
+
+    const i18n = await import('../../../../src/main/i18n');
+    i18n.setCurrentLang('en');
+    i18n.setCurrentUiLang('en');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-cli-failure-copy';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} run the task`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const failure = rows.find((row: any) => row.from === AGENT_ID && row.failure_kind === 'runtime');
+    expect(failure?.failure_code).toBe('cli_failed');
+    expect(failure?.text).toContain('Agent run failed');
+    expect(failure?.text).toContain('Confirm that its CLI is signed in and working');
+    expect(failure?.text).not.toContain('openclaw exited');
+    expect(failure?.text).not.toContain('/Users/alice');
+  });
+
+  it('records P3394 protocol metadata on named agent turns', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-p3394-protocol-event';
+
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} PROTOCOL_EVENT_TEST`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const agentMessage = rows.find((row: any) => row.from === AGENT_ID && row.text === 'protocol event recorded');
+    const protocolEvent = agentMessage?.process?.find((item: any) => item.event?.stream === 'p3394');
+
+    expect(protocolEvent?.event.data).toMatchObject({
+      phase: 'normalized',
+      ok: true,
+      agent_id: AGENT_ID,
+      role: 'cogseed_core',
+      relationship: 'owner',
+      speech_act: 'request',
+      message_type: 'agent.handle_message.request',
+      correlation_id: cid,
+      canonical_session_id: cid,
+    });
+  });
+
+  it('stops an in-process Agent turn when P3394 rejects admission', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-p3394-block-model';
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        return {
+          ok: false,
+          error: {
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            body: { reason_code: 'replay_detected', detail: 'duplicate epoch' },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} P3394_BLOCK_MODEL_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      expect(streamProbe.messages.some((message) => message.includes('P3394_BLOCK_MODEL_TEST'))).toBe(false);
+      const rows = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(rows).toContainEqual(expect.objectContaining({
+        from: AGENT_ID,
+        failure_kind: 'validation',
+        failure_code: 'p3394_replay_detected',
+        turn_id: expect.any(String),
+      }));
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
+  });
+
+  it('does not start Codex when P3394 rejects admission', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+    const projectDir = path.join(tmpDir, 'p3394-codex-project');
+    fs.mkdirSync(projectDir);
+    const agents = await import('../../../../src/main/features/agents');
+    await agents.setAgentCliProjectDir(TEST_UID, AGENT_ID, projectDir);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const cid = 'cid-p3394-block-codex';
+    bus._setP3394ControllerForTest({
+      async admitMessage(input: any) {
+        return {
+          ok: false,
+          error: {
+            correlation_id: input.conversationId,
+            canonical_session_id: input.sessionId,
+            body: { reason_code: 'context_scope_violation', detail: 'wrong context' },
+          },
+        } as any;
+      },
+    } as any);
+
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: 'user',
+        text: `@${AGENT_NAME} P3394_BLOCK_CODEX_TEST`,
+      });
+      await waitForQuiescent(TEST_UID, cid);
+
+      expect(cliRunMock.calls).toHaveLength(0);
+      const rows = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8')
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(rows).toContainEqual(expect.objectContaining({
+        from: AGENT_ID,
+        failure_kind: 'validation',
+        failure_code: 'p3394_context_scope_violation',
+      }));
+    } finally {
+      bus._setP3394ControllerForTest(null);
+    }
+  });
+
+  it('asks for a project directory instead of silently falling back when a custom coding cwd vanished', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    spec.inputs = [{ id: 'project_dir', type: 'directory', label: 'Project directory', required: true, default: '' }];
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const projectDir = path.join(tmpDir, 'repo-removed');
+    fs.mkdirSync(projectDir);
+    const agents = await import('../../../../src/main/features/agents');
+    await agents.setAgentCliProjectDir(TEST_UID, AGENT_ID, projectDir);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const cid = 'cid-coding-dir-missing';
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} 修一下这个项目`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(0);
+    const st = await state.readState(TEST_UID, cid);
+    expect(st.coding_project_dir).toBeUndefined();
+
+    const mainFile = path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`);
+    const rows = fs.readFileSync(mainFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    const formMsg = rows.find((row: any) => row?.form?.agent_id === AGENT_ID);
+    expect(formMsg?.form?.fields?.map((f: any) => f.id)).toEqual(['project_dir']);
+  });
+
+  it('does not replay prior visible history when a CLI session resumes', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const cid = 'cid-coding-resume';
+    const visibility = await import('../../../../src/main/features/group_chat/visibility');
+    await visibility.appendVisible(TEST_UID, cid, {
+      id: 'older-history',
+      ts: '2026-05-19T00:00:00.000Z',
+      from: 'user',
+      to: [AGENT_ID],
+      text: 'DO_NOT_PASS_WHEN_RESUMING',
+    }, [AGENT_ID]);
+    const sessions = await import('../../../../src/main/features/local_agents/sessions');
+    await sessions.setSessionId(TEST_UID, cid, AGENT_ID, 'codex', 'thread-123');
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} 继续`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].resumeSessionId).toBe('thread-123');
+    expect(cliRunMock.calls[0].prompt).not.toContain('DO_NOT_PASS_WHEN_RESUMING');
+    expect(cliRunMock.calls[0].prompt).not.toContain('## Conversation so far');
+  });
+
+  it('bridges prior visible history when starting a fresh CLI session with existing context', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const agentFile = path.join(paths.agentDir(TEST_UID, AGENT_ID), 'agent.json');
+    const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    spec.runtime = { kind: 'cli', cli: 'codex' };
+    fs.writeFileSync(agentFile, JSON.stringify(spec));
+
+    const cid = 'cid-coding-bridge';
+    const visibility = await import('../../../../src/main/features/group_chat/visibility');
+    await visibility.appendVisible(TEST_UID, cid, {
+      id: 'older-history',
+      ts: '2026-05-19T00:00:00.000Z',
+      from: 'user',
+      to: [AGENT_ID],
+      text: 'PASS_WHEN_FRESH_WITH_PRIOR_CONTEXT',
+    }, [AGENT_ID]);
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${AGENT_NAME} 换目录后继续`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].resumeSessionId).toBeUndefined();
+    expect(cliRunMock.calls[0].prompt).toContain('## Conversation so far');
+    expect(cliRunMock.calls[0].prompt).toContain('PASS_WHEN_FRESH_WITH_PRIOR_CONTEXT');
+    expect(cliRunMock.calls[0].prompt).toContain('换目录后继续');
+  });
+});
+
+describe('group_chat bus › abort', () => {
+  it('flips state.json to aborted + clears the queue', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    bus.subscribe(TEST_UID, TEST_CID, () => {});
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user', text: 'hi',
+    });
+    await bus.abort(TEST_UID, TEST_CID);
+    const st = await state.readState(TEST_UID, TEST_CID);
+    expect(st.status).toBe('aborted');
+    expect(st.in_flight).toEqual([]);
+    await bus.dropConv(TEST_UID, TEST_CID);
+  });
+
+  it('group abort cancels Backend conversation tasks and clears the interactive recipient and ledger', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    const cancelled: any[] = [];
+    await state.ensureAgentMember(TEST_UID, TEST_CID, AGENT_ID, AGENT_NAME);
+    await state.commitHandoffState(TEST_UID, TEST_CID, {
+      recipient_id: AGENT_ID,
+      ledger: {
+        status: 'waiting_for_agent',
+        blocked_on: 'agent_handoff',
+        source_tool: 'hand_off_to',
+        owner_agent_id: AGENT_ID,
+        user_goal: 'Finish the task',
+        handoff_message: 'Continue',
+        resume_instruction: 'Return when explicitly complete',
+      },
+    });
+    (bus as any)._setBackendConversationCancellerForTest(async (uid: string, cid: string) => {
+      cancelled.push([uid, cid]);
+      return [];
+    });
+
+    try {
+      await bus.abort(TEST_UID, TEST_CID);
+      expect(cancelled).toEqual([[TEST_UID, TEST_CID]]);
+      await expect(state.readState(TEST_UID, TEST_CID)).resolves.toMatchObject({ status: 'aborted' });
+      const persisted = await state.readState(TEST_UID, TEST_CID);
+      expect(persisted.active_recipient).toBeUndefined();
+      expect(persisted.orchestration_ledger).toBeUndefined();
+    } finally {
+      (bus as any)._setBackendConversationCancellerForTest(null);
+    }
+  });
+});
+
+describe('group_chat bus › processItemsAreRoutingOnly (abort promotion guard)', () => {
+  const toolEvent = (name: string) => ({ type: 'event' as const, event: { stream: 'tool', data: { name } } });
+  const cliToolEvent = (tool: string) => ({ type: 'event' as const, event: { stream: 'cli', data: { type: 'tool-event', tool } } });
+
+  it('is routing-only for a prep read + hand_off_to (aborted turn stays silent)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    expect(bus.processItemsAreRoutingOnly([
+      toolEvent('read_file'), toolEvent('read_file'), toolEvent('hand_off_to'),
+    ])).toBe(true);
+    // Runtime "总耗时" + progress lines (no tool name) are ignored.
+    expect(bus.processItemsAreRoutingOnly([
+      { type: 'progress', text: 'thinking…' },
+      toolEvent('search_files'),
+      cliToolEvent('dispatch_to'),
+      { type: 'event', event: { stream: 'runtime', data: { phase: 'end' } } },
+    ])).toBe(true);
+  });
+
+  it('is NOT routing-only when the trail did real work (keeps the persisted bubble)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    expect(bus.processItemsAreRoutingOnly([toolEvent('plan_set'), toolEvent('hand_off_to')])).toBe(false);
+    expect(bus.processItemsAreRoutingOnly([toolEvent('write_file'), toolEvent('hand_off_to')])).toBe(false);
+    expect(bus.processItemsAreRoutingOnly([toolEvent('bash'), toolEvent('hand_off_to')])).toBe(false);
+  });
+
+  it('is NOT routing-only without a delegation tool (a read-only turn is preserved)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    expect(bus.processItemsAreRoutingOnly([toolEvent('read_file')])).toBe(false);
+    expect(bus.processItemsAreRoutingOnly([{ type: 'progress', text: 'x' }])).toBe(false);
+    expect(bus.processItemsAreRoutingOnly([])).toBe(false);
+  });
+});
+
+describe('group_chat bus › parseContinuationJudgement (kstar routing judge)', () => {
+  async function judge(): Promise<typeof import('../../../../src/main/features/group_chat/bus')> {
+    return import('../../../../src/main/features/group_chat/bus');
+  }
+
+  it('accepts the canonical tagged shape', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":true,"continuation":false}</kstar-judge>'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('<kstar-judge>{"is_task":false,"continuation":true}</kstar-judge>'))
+      .toEqual({ isTask: false, continuation: true });
+  });
+
+  it('accepts bare JSON and prose-wrapped JSON', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement('{"is_task":true,"continuation":true}'))
+      .toEqual({ isTask: true, continuation: true });
+    expect(bus.parseContinuationJudgement('Sure: {"is_task":false,"continuation":false} here.'))
+      .toEqual({ isTask: false, continuation: false });
+  });
+
+  it('accepts the wrapped {"kstar-judge":{...}} shape models actually emit', async () => {
+    const bus = await judge();
+    // 实测模型输出：把标签名误解成 JSON key
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"is_task":true,"continuation":false}}'))
+      .toEqual({ isTask: true, continuation: false });
+    expect(bus.parseContinuationJudgement('{"kstar_judge":{"is_task":true,"continuation":true}}'))
+      .toEqual({ isTask: true, continuation: true });
+  });
+
+  it('returns null for absent/malformed judgements', async () => {
+    const bus = await judge();
+    expect(bus.parseContinuationJudgement(undefined)).toBeNull();
+    expect(bus.parseContinuationJudgement('')).toBeNull();
+    expect(bus.parseContinuationJudgement('just prose')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"is_task":"yes"}')).toBeNull();
+    expect(bus.parseContinuationJudgement('{"kstar-judge":{"continuation":true}}')).toBeNull();
+    expect(bus.parseContinuationJudgement('not json {')).toBeNull();
+  });
+});
