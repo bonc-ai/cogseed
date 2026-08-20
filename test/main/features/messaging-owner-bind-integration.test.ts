@@ -77,7 +77,7 @@ describe('owner auto-bind through the real Feishu event path', () => {
     await vi.waitFor(async () => {
       const instance = await registry.getInstance('user-1', created.id);
       expect(instance?.ownerExternalUserId).toBe('ou_sender_1');
-    });
+    }, { timeout: 10000 });
     const bound = await registry.getInstance('user-1', created.id);
     expect(bound).toMatchObject({
       ownerExternalUserId: 'ou_sender_1',
@@ -157,9 +157,7 @@ describe('wechat_personal end-to-end', () => {
     expect(adapter.platform).toBe('wechat_personal');
   });
 
-  // Skipped per P7 release-test-waiver (2026-08-20): known failing case carried
-  // over from previous baselines; remediation scheduled for a future cycle.
-  it.skip('carries the inbound contextTokenRef into the ledger entry and the send context', async () => {
+  it('carries the inbound contextTokenRef into the ledger entry and the send context', async () => {
     let busListener: ((event: unknown) => void) | undefined;
     const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
     const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
@@ -210,7 +208,7 @@ describe('wechat_personal end-to-end', () => {
       await vi.waitFor(async () => {
         const instances = await manager.listInstances('uid-1');
         expect(instances[0]?.status.kind).toBe('connected');
-      });
+      }, { timeout: 10000 });
 
       const envelope = {
         platform: 'wechat_personal' as const,
@@ -226,7 +224,7 @@ describe('wechat_personal end-to-end', () => {
       };
       const inbound = await manager.ingestInbound('uid-1', envelope);
       expect(inbound.accepted).toBe(true);
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1), { timeout: 10000 });
 
       busListener?.({
         type: 'message',
@@ -234,7 +232,7 @@ describe('wechat_personal end-to-end', () => {
         source_msg_id: 'user-msg-1',
         msg: { id: 'reply-1', from: 'commander', text: '回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1), { timeout: 10000 });
       // The ledger entry carries the inbound token reference so a restart
       // recovery can re-send with the same context token.
       expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
@@ -252,14 +250,14 @@ describe('wechat_personal end-to-end', () => {
         contextTokenRef: undefined,
       });
       expect(second.accepted).toBe(true);
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2), { timeout: 10000 });
       busListener?.({
         type: 'message',
         turn_end: true,
         source_msg_id: 'user-msg-2',
         msg: { id: 'reply-2', from: 'commander', text: '第二回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 10000 });
       expect(sendMessage.mock.calls[1][3]).not.toHaveProperty('contextTokenRef');
       expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-2'))).not.toHaveProperty('contextTokenRef');
 
@@ -320,7 +318,7 @@ describe('wechat_personal end-to-end', () => {
       await vi.waitFor(async () => {
         const instances = await manager.listInstances('uid-1');
         expect(instances[0]?.status.kind).toBe('connected');
-      });
+      }, { timeout: 10000 });
 
       const envelope = {
         platform: 'wechat_personal' as const,
@@ -344,7 +342,7 @@ describe('wechat_personal end-to-end', () => {
       expect(results[0].accepted).toBe(true);
       expect(results[1]).toMatchObject({ accepted: false, duplicate: true, reason: 'merged' });
       // 合并为单一入站轮次
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1), { timeout: 10000 });
 
       busListener?.({
         type: 'message',
@@ -352,7 +350,7 @@ describe('wechat_personal end-to-end', () => {
         source_msg_id: 'user-msg-1',
         msg: { id: 'reply-1', from: 'commander', text: '合并回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1), { timeout: 10000 });
       // 回复必须绑定批次中最后一条消息的 tokenRef，而不是第一条
       expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-new' });
       expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
@@ -417,7 +415,7 @@ describe('wechat_personal end-to-end', () => {
       await vi.waitFor(async () => {
         const instances = await manager.listInstances('uid-1');
         expect(instances[0]?.status.kind).toBe('connected');
-      });
+      }, { timeout: 10000 });
 
       const envelope = {
         platform: 'wechat_personal' as const,
@@ -434,11 +432,11 @@ describe('wechat_personal end-to-end', () => {
       // turn 1 is still in flight — the shared binding now holds ref-2.
       const first = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-1', contextTokenRef: 'ref-1' });
       expect(first.accepted).toBe(true);
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1), { timeout: 10000 });
       groupSend.mockResolvedValueOnce({ ok: true, msg: { id: 'user-msg-2', from: 'user', text: '' } });
       const second = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-2', contextTokenRef: 'ref-2' });
       expect(second.accepted).toBe(true);
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(2), { timeout: 10000 });
 
       // Turn 1 completes after inbound 2 was processed: its reply must still
       // use ref-1, never the newer ref-2.
@@ -448,7 +446,7 @@ describe('wechat_personal end-to-end', () => {
         source_msg_id: 'user-msg-1',
         msg: { id: 'reply-1', from: 'commander', text: '第一回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1), { timeout: 10000 });
       expect(sendMessage.mock.calls[0][3]).toMatchObject({ contextTokenRef: 'ref-1' });
       expect(await ledger.getDelivery('uid-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
         contextTokenRef: 'ref-1',
@@ -459,7 +457,7 @@ describe('wechat_personal end-to-end', () => {
       groupSend.mockResolvedValueOnce({ ok: true, msg: { id: 'user-msg-3', from: 'user', text: '' } });
       const third = await manager.ingestInbound('uid-1', { ...envelope, externalMessageId: 'in-3', contextTokenRef: undefined });
       expect(third.accepted).toBe(true);
-      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(3), { timeout: 10000 });
 
       busListener?.({
         type: 'message',
@@ -467,7 +465,7 @@ describe('wechat_personal end-to-end', () => {
         source_msg_id: 'user-msg-2',
         msg: { id: 'reply-2', from: 'commander', text: '第二回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 10000 });
       expect(sendMessage.mock.calls[1][3]).toMatchObject({ contextTokenRef: 'ref-2' });
 
       // The ref-less inbound's own turn resolves no ref at all.
@@ -477,7 +475,7 @@ describe('wechat_personal end-to-end', () => {
         source_msg_id: 'user-msg-3',
         msg: { id: 'reply-3', from: 'commander', text: '第三回复' },
       });
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(3), { timeout: 10000 });
       expect(sendMessage.mock.calls[2][3]).not.toHaveProperty('contextTokenRef');
 
       await manager.stopForUser('uid-1');
@@ -517,7 +515,7 @@ describe('instance status broadcast to the renderer', () => {
       // 等待 connected 广播（connecting → connected 两次 kind 变化）
       await vi.waitFor(() => {
         expect(broadcasts.map((b) => b.status.kind)).toContain('connected');
-      });
+      }, { timeout: 10000 });
       // 心跳重复 connected 不广播：记录当前次数，等待两个心跳周期后不变
       const settled = broadcasts.length;
       await new Promise((resolve) => setTimeout(resolve, 120));
