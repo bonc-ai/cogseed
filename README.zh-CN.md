@@ -110,7 +110,7 @@ npm install
 Windows 环境：
 
 ```bat
-run.cmd
+./run.cmd
 ```
 
 源码启动器会校验依赖、准备 `cogseed` runtime variant，并使用隔离的数据根目录和应用身份启动 Electron。
