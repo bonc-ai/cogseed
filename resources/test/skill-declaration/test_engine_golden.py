@@ -26,10 +26,10 @@ FIXTURE = ENGINE / "fixtures" / "sample-skill"
 
 # ── 黄金值（2026-08-19 由当前引擎实测捕获；重写后必须不变）──────────────
 GOLDEN_WORKTREE_DIGEST = (
-    "sha256:d3f7ed2f9fb1078bc8d25672d383097c28e35c45ab955c47bbc81e9b7a4226c9"
+    "sha256:dd119053551ab30464d5a169bb38bf9c50e2627309f3c32a71f9eb0de08a3573"
 )
 GOLDEN_REPORT_ID = "val-skill.sample.local_format-1.0.0-prevalidation"
-GOLDEN_FILESET_COUNT = 4
+GOLDEN_FILESET_COUNT = 9
 GOLDEN_PROFILE_REF = "cogseed.skill.fileset@1.0.0"
 GOLDEN_PREVALIDATION_FINDING_RULES = {
     "SEC-PROVENANCE-CHECKSUM-DEFERRED-001": "INFO",
