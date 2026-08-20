@@ -16,7 +16,7 @@
 
 ## 项目概览
 
-CogSeed 将任务、工作空间、AI 团队、Skill、Connector、个人知识和可复用的 Cognition Asset 整合进一个 Electron 桌面应用。它面向那些无法通过单轮对话完成的工作：规划、分派、工具调用、本地项目访问、跨会话延续、可审查的执行证据，以及经验的长期复用。
+CogSeed 将任务、工作空间、AI 团队、Skill、Connector、个人知识和可复用的 Cognitive Asset 整合进一个 Electron 桌面应用。它面向那些无法通过单轮对话完成的工作：规划、分派、工具调用、本地项目访问、跨会话延续、可审查的执行证据，以及经验的长期复用。
 
 Commander 维护共享计划，并通过结构化调度分派工作。内置 Agent 和受支持的本地 CLI Agent 都在受控执行路径中运行，每个 worker 只获得其职责所需的上下文。执行结果可以保留为对话输出，也可以成为工作空间文件或 Artifact，还可以进入 Cognition 与 Recall 流程，经用户审查后沉淀为能力资产。
 
@@ -29,7 +29,7 @@ CogSeed 坚持本地优先。Renderer 不能直接访问 Node.js，本地工具�
 | 结构化多 Agent 协作 | 通过统一的 group-chat 执行路径规划、分派、观察、重试、跳过和停止任务。 |
 | 本地 CLI Agent 集成 | 在同一个工作空间中使用 Claude Code、Codex、OpenClaw、OpenCode、Hermes 或 WorkBuddy。 |
 | 跨任务连续性 | 导入受支持的会话，并携带工作空间上下文、当前进度、已知约束和执行证据继续工作。 |
-| 受治理的 Cognition Asset | 审查候选经验、确认正式资产、管理版本，并跟踪复用和效果证据。 |
+| 受治理的 Cognitive Asset | 审查候选经验、确认正式资产、管理版本，并跟踪复用和效果证据。 |
 | 工具与知识连接 | 让受支持的 Agent 受控访问 Skill、MCP Connector、消息触点和已建立索引的 Library 内容。 |
 | 本地优先的安全边界 | 将凭据、索引、缓存、工具结果和本地安装内容置于明确的存储与执行边界之后。 |
 

@@ -16,7 +16,7 @@
 
 ## Overview
 
-CogSeed brings tasks, workspaces, AI teams, skills, connectors, personal knowledge, and reusable cognition assets into one Electron desktop application. It is designed for work that needs more than a single chat turn: planning, delegation, tool use, local project access, continuity across sessions, reviewable evidence, and long-term reuse.
+CogSeed brings tasks, workspaces, AI teams, skills, connectors, personal knowledge, and reusable cognitive assets into one Electron desktop application. It is designed for work that needs more than a single chat turn: planning, delegation, tool use, local project access, continuity across sessions, reviewable evidence, and long-term reuse.
 
 A Commander maintains the shared plan and delegates work through structured dispatch. Built-in agents and supported local CLI agents operate through controlled execution paths, while each worker receives only the context needed for its role. Results can remain as conversation output, become workspace files or artifacts, or enter the Cognition and Recall workflow as user-reviewed capability assets.
 
@@ -29,7 +29,7 @@ CogSeed is local-first. The renderer cannot access Node.js directly, local tools
 | Structured multi-agent coordination | Plan, delegate, observe, retry, skip, and stop work through one group-chat execution path. |
 | Local CLI agent integration | Use Claude Code, Codex, OpenClaw, OpenCode, Hermes, or WorkBuddy from the same workspace. |
 | Continuity across tasks | Import supported sessions and continue work with workspace context, progress, constraints, and execution evidence. |
-| Governed cognition assets | Review candidate experience, promote confirmed assets, version them, and track reuse and effectiveness evidence. |
+| Governed cognitive assets | Review candidate experience, promote confirmed assets, version them, and track reuse and effectiveness evidence. |
 | Connected tools and knowledge | Give supported agents controlled access to skills, MCP connectors, messaging touchpoints, and indexed Library content. |
 | Local-first security boundaries | Keep credentials, indexes, caches, tool results, and local installations behind explicit storage and execution boundaries. |
 
