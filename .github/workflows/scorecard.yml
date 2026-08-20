@@ -6,7 +6,7 @@ on:
     - cron: '23 14 * * 1'
   push:
     branches:
-      - develop
+      - main
   workflow_dispatch:
 
 permissions:
