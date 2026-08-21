@@ -562,6 +562,12 @@ export const userAuthProfilesFile = (uid: string) => path.join(userLocalConfigDi
 export const userWebSearchCache   = (uid: string) => path.join(userLocalConfigDir(uid), 'web-search-cache.json');
 export const userReflectionStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'reflection-state.json');
 export const userDevtoolsFile     = (uid: string) => path.join(userLocalConfigDir(uid), 'devtools.json');
+// Update-check state is machine-private: reminder throttle, skipped versions,
+// and the downloaded installer path must never sync across devices.
+export const userUpdaterStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'updater.json');
+// Downloaded installers land under local/updates/ (machine-private, cache-like
+// content; re-downloadable at any time).
+export const userUpdaterDownloadsDir = (uid: string) => path.join(userLocalRoot(uid), 'updates');
 // Compact crash-recovery journal. Keeping this local avoids syncing transient
 // process state and lets startup inspect only conversations that were running.
 export const userRunningConversationsFile = (uid: string) =>

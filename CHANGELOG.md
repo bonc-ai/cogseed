@@ -7,6 +7,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **In-app update reminders** — silent startup check plus a Settings › 通用 › 更新
+  entry; once-per-day reminders with a "skip this version" option; in-app download
+  with sha256 verification and OS installer hand-off (macOS dmg; zip-based
+  automatic replacement is a planned phase 2). Server contract:
+  `GET {COGSEED_API_BASE_URL}/updates/latest` — see `docs/design/updates-api.md`.
+
 ## [0.0.5] - 2026-08-19
 
 CogSeed's first public release.

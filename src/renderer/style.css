@@ -26601,3 +26601,59 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-radius: 4px;
   padding: 1px 4px;
 }
+
+/* ─── 应用更新提醒（modules/updater.js）─────────────────────────────────
+   Banner sits under the modal tier (z-index 1000) so dialogs still win. */
+.updater-banner {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 24px rgba(20, 40, 30, 0.14);
+}
+.updater-banner[hidden] { display: none; }
+.updater-banner-icon { flex: 0 0 auto; color: var(--primary); }
+.updater-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.updater-banner .btn { flex: 0 0 auto; }
+
+/* Settings › 通用 › 更新 group rows. */
+.settings-updater-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.settings-updater-status {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.settings-updater-status-error { color: var(--danger); }
+.updater-progress-track {
+  flex: 1 1 140px;
+  min-width: 140px;
+  max-width: 260px;
+  height: 6px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.updater-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
