@@ -47,6 +47,7 @@ jobs:
         run: |
           # 生成随机密码(用完就删,不需要记住)
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
 
           # 创建临时 keychain 文件
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
@@ -79,9 +80,10 @@ jobs:
             -T /usr/bin/productsign
 
           # 设置证书为可信任(否则 codesign 会报错)
+          # 使用 keychain 密码而不是空密码
           security set-key-partition-list \
             -S apple-tool:,apple: \
-            -s -k "" \
+            -s -k "$KEYCHAIN_PASSWORD" \
             build.keychain
 
           # 删除 .p12 文件(安全起见)
