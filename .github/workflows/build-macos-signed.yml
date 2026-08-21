@@ -109,6 +109,10 @@ jobs:
           # (因为你本地配置是 notarize: false)
           npx json -I -f package.json -e 'this.build.mac.notarize = true'
 
+          # 删除 runtime archive 文件(这些是下载缓存,不应该被签名)
+          find resources/runtime -name "*.tar.gz" -type f -delete 2>/dev/null || true
+          find resources/runtime -name "archive" -type d -exec rm -rf {} + 2>/dev/null || true
+
           # 构建 macOS .dmg (arm64 + x64)
           npm run build:mac
 
