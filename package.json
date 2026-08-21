@@ -222,7 +222,7 @@
       }
     ],
     "beforePack": "scripts/ensure-runtime-before-pack.cjs",
-    "afterPack": "scripts/codesign-adhoc.cjs",
+    "afterPack": "scripts/after-pack.js",
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
