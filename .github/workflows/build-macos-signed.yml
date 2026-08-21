@@ -95,10 +95,26 @@ jobs:
           rm certificate.p12
 
       # ========================================
-      # 阶段 3: 构建 + 签名
+      # 阶段 3: 版本号对齐
       # ========================================
 
-      # 步骤 3.1: 使用 electron-builder 打包
+      # 步骤 3.0: 把 package.json 的 version 改成和 tag 一致
+      # 比如推的 tag 是 v0.0.7,就把 package.json 的 version 改成 0.0.7
+      # 这样打包出来的文件名 (CogSeed-0.0.7-mac-*.dmg) 才会和 tag 对上
+      # 只在推 tag 触发时才改;手动触发 (workflow_dispatch) 时不改,保持原样
+      - name: Sync package.json version with tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # github.ref_name 例如 "v0.0.7",去掉开头的 "v" 得到 "0.0.7"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "将 package.json 的 version 设置为: $TAG_VERSION"
+          npx json -I -f package.json -e "this.version = \"$TAG_VERSION\""
+
+      # ========================================
+      # 阶段 4: 构建 + 签名
+      # ========================================
+
+      # 步骤 4.1: 使用 electron-builder 打包
       # 它会自动调用 codesign 签名 .app 和 .dmg
       - name: Build & Sign app
         env:
@@ -120,7 +136,7 @@ jobs:
           npx electron-builder --mac --publish never
 
       # ========================================
-      # 阶段 4: 公证(notarization)
+      # 阶段 5: 公证(notarization)
       # ========================================
       #
       # 公证是什么?
@@ -131,10 +147,10 @@ jobs:
       # (如果 notarize 配置正确的话)
 
       # ========================================
-      # 阶段 5: 上传产物
+      # 阶段 6: 上传产物
       # ========================================
 
-      # 步骤 5.1: 上传 .dmg 到 GitHub
+      # 步骤 6.1: 上传 .dmg 到 GitHub
       # 构建完成后,你可以在 GitHub Actions 页面下载
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -144,7 +160,7 @@ jobs:
           retention-days: 30  # 保留 30 天
 
       # ========================================
-      # 阶段 6: 发布到 GitHub Release
+      # 阶段 7: 发布到 GitHub Release
       # ========================================
       #
       # Artifact 只有仓库成员能看到,过期还会被删
@@ -165,7 +181,7 @@ jobs:
       # 清理工作
       # ========================================
 
-      # 步骤 6: 删除临时 keychain(安全起见)
+      # 步骤 8: 删除临时 keychain(安全起见)
       - name: Cleanup keychain
         if: always()  # 无论成功失败都执行
         run: |
