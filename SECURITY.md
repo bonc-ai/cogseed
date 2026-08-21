@@ -13,9 +13,12 @@ supported on a best-effort basis.
 
 **Please do not open a public issue for security vulnerabilities.**
 
-Report vulnerabilities privately to:
+Report vulnerabilities privately through one of the following channels:
 
-**security@bonc.com.cn**
+1. **Preferred: GitHub private vulnerability reporting** — use the
+   **Security → Report a vulnerability** button on the repository page
+   (https://github.com/bonc-ai/cogseed/security).
+2. **Alternative: email** — **business@bonc.com.cn**
 
 Please include:
 
