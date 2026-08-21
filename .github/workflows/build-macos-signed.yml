@@ -1,0 +1,148 @@
+# GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
+#
+# 触发条件: 推送到 main 分支或手动触发
+# 产物: 签名+公证后的 .dmg 文件
+
+name: Build & Sign macOS
+
+# 什么时候触发这个 workflow
+on:
+  push:
+    tags:
+      - 'v*'  # 只在推送 v1.0.0、v2.1.3 这样的 tag 时触发构建
+  workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮)
+
+jobs:
+  build-macos:
+    runs-on: macos-latest  # 使用 GitHub 提供的 macOS 虚拟机(免费)
+
+    steps:
+      # ========================================
+      # 阶段 1: 环境准备
+      # ========================================
+
+      # 步骤 1.1: 下载你的代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 步骤 1.2: 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'  # 根据你项目需要调整版本
+          cache: 'npm'        # 缓存 npm 依赖,加速后续构建
+
+      # 步骤 1.3: 安装项目依赖
+      - name: Install dependencies
+        run: npm ci  # ci 比 install 更快更稳定,适合 CI/CD
+
+      # ========================================
+      # 阶段 2: 证书导入(关键!)
+      # ========================================
+
+      # 步骤 2.1: 创建临时 keychain
+      # 为什么? GitHub Actions 的 macOS 虚拟机没有登录用户,
+      # 无法使用默认 keychain,所以要创建一个临时的
+      - name: Create temporary keychain
+        run: |
+          # 生成随机密码(用完就删,不需要记住)
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          # 创建临时 keychain 文件
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+
+          # 设置为默认 keychain(让 codesign 命令能找到证书)
+          security default-keychain -s build.keychain
+
+          # 解锁 keychain(否则 codesign 无法读取证书)
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+
+          # 设置 keychain 超时时间(3600 秒 = 1 小时,足够构建用)
+          security set-keychain-settings -t 3600 -u build.keychain
+
+      # 步骤 2.2: 导入 Apple 证书
+      # 从 GitHub Secrets 读取 base64 编码的 .p12 文件
+      - name: Import signing certificate
+        env:
+          # 从 GitHub Secrets 读取(下面会教你怎么设置)
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # 将 base64 解码成 .p12 文件
+          echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+
+          # 导入证书到临时 keychain
+          security import certificate.p12 \
+            -k build.keychain \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productsign
+
+          # 设置证书为可信任(否则 codesign 会报错)
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "" \
+            build.keychain
+
+          # 删除 .p12 文件(安全起见)
+          rm certificate.p12
+
+      # ========================================
+      # 阶段 3: 构建 + 签名
+      # ========================================
+
+      # 步骤 3.1: 使用 electron-builder 打包
+      # 它会自动调用 codesign 签名 .app 和 .dmg
+      - name: Build & Sign app
+        env:
+          # 告诉 electron-builder 要签名
+          CSC_LINK: "dummy"  # 占位符,证书已经在 keychain 里了
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+          # 公证需要的环境变量
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # 修改 package.json,启用公证
+          # (因为你本地配置是 notarize: false)
+          npx json -I -f package.json -e 'this.build.mac.notarize = {
+            "teamId": process.env.APPLE_TEAM_ID
+          }'
+
+          # 构建 macOS .dmg (arm64 + x64)
+          npm run build:mac
+
+      # ========================================
+      # 阶段 4: 公证(notarization)
+      # ========================================
+      #
+      # 公证是什么?
+      # Apple 会扫描你的 .dmg,检查病毒、恶意代码、私有 API 等
+      # 通过后会发"通行证",用户下载时就不会看到"有风险"警告
+      #
+      # electron-builder 在上一步已经自动帮你提交公证了
+      # (如果 notarize 配置正确的话)
+
+      # ========================================
+      # 阶段 5: 上传产物
+      # ========================================
+
+      # 步骤 5.1: 上传 .dmg 到 GitHub
+      # 构建完成后,你可以在 GitHub Actions 页面下载
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CogSeed-macOS
+          path: dist/*.dmg
+          retention-days: 30  # 保留 30 天
+
+      # ========================================
+      # 清理工作
+      # ========================================
+
+      # 步骤 6: 删除临时 keychain(安全起见)
+      - name: Cleanup keychain
+        if: always()  # 无论成功失败都执行
+        run: |
+          security delete-keychain build.keychain || true
