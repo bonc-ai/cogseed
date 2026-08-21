@@ -109,6 +109,7 @@ import {
   runBootPhases,
 } from './util/boot_init';
 import { getBootDeviceProfile } from './util/boot-device-profile';
+import * as updaterClient from './features/updater/client';
 
 // `CORE_AGENT_AUTH_DIR` is pinned per-uid by `features/users.activateUser()`
 // (runs inside `runBootSelfCheck` below). `resolveAuthDir()` in core-agent
@@ -1195,6 +1196,25 @@ if (!gotLock) {
       preferIdle: true,
       maxSliceMs: 20_000,
     });
+    // In-app update check. Silent by design: failures are logged and swallowed
+    // inside the feature; a surfaced reminder is broadcast to the renderer.
+    // Skipped in the packaged launch smoke so the smoke run never touches the
+    // network.
+    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+      registerDeferred('updater:check', async () => {
+        const result = await updaterClient.checkForUpdates(users.getActiveUserId(), { manual: false });
+        if (result.reminded && result.info) {
+          ipc.broadcastToRenderer('updates:available', {
+            info: result.info,
+            current_version: result.current_version,
+          });
+        }
+      }, 'parallel', 0, {
+        resourceClass: 'network',
+        preferIdle: true,
+        maxSliceMs: 30_000,
+      });
+    }
     // P3394 bridge (opt-in): starts a loopback HTTP channel bound to the real
     // runtime controller when COGSEED_P3394_PORT is set; no-op otherwise.
     registerImmediate('p3394:bridge', () => {
