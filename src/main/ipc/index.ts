@@ -122,6 +122,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
+import { invokeHandlers as updatesHandlers } from './updates';
 import { readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -4809,6 +4810,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   ...personalContextHandlers,
   ...touchpointHandlers,
   ...desktopWorkbenchHandlers,
+
+  // In-app update reminders. Machine-local state; the server contract is
+  // GET {COGSEED_API_BASE_URL}/updates/latest with withCommonHeaders().
+  ...updatesHandlers,
 
   // CogSeed Hub account — desktop-side account management against the Hub
   // account service. Tokens never cross this table; renderer-safe status DTOs only.
