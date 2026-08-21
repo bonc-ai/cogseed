@@ -11,6 +11,14 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/github/license/bonc-ai/cogseed" alt="License">
+  <img src="https://img.shields.io/github/actions/workflow/status/bonc-ai/cogseed/ci.yml" alt="CI">
+  <img src="https://img.shields.io/github/v/release/bonc-ai/cogseed" alt="Release">
+  <img src="https://img.shields.io/github/downloads/bonc-ai/cogseed/total" alt="Downloads">
+  <img src="https://img.shields.io/badge/platform-macOS%2012%2B-0071BC" alt="Platform">
+</p>
+
+<p align="center">
   <img src="./assets/cogseed-homepage-hero-agent-continuity.png" width="1000" alt="CogSeed desktop workspace">
 </p>
 
