@@ -108,9 +108,7 @@ jobs:
         run: |
           # 修改 package.json,启用公证
           # (因为你本地配置是 notarize: false)
-          npx json -I -f package.json -e 'this.build.mac.notarize = {
-            "teamId": process.env.APPLE_TEAM_ID
-          }'
+          npx json -I -f package.json -e 'this.build.mac.notarize = true'
 
           # 构建 macOS .dmg (arm64 + x64)
           npm run build:mac
