@@ -97,13 +97,12 @@ jobs:
       # 它会自动调用 codesign 签名 .app 和 .dmg
       - name: Build & Sign app
         env:
-          # 告诉 electron-builder 要签名
-          CSC_LINK: "dummy"  # 占位符,证书已经在 keychain 里了
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # 告诉 electron-builder 使用 keychain 里的证书
+          CSC_IDENTITY_AUTO_DISCOVERY: true
 
           # 公证需要的环境变量
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           # 修改 package.json,启用公证
