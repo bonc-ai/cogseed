@@ -111,8 +111,8 @@ jobs:
           npx json -I -f package.json -e 'this.build.files.push("!**/archive/**")'
           npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
 
-          # 构建 macOS .dmg (arm64 + x64)
-          npm run build:mac
+          # 构建 macOS .dmg (arm64 + x64),禁用自动发布
+          npx electron-builder --mac --publish never
 
       # ========================================
       # 阶段 4: 公证(notarization)
