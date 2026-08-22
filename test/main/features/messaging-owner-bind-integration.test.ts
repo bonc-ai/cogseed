@@ -20,6 +20,36 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+// Static mocks for the group-chat dispatch seam. The per-test
+// `vi.doMock` + `vi.resetModules` + dynamic `import` sequence raced under
+// parallel load: intermittently the mock was never registered and the real
+// `group_chat.send` answered instead, leaving the test's spy at 0 calls
+// while the merged batch itself dispatched fine. `vi.mock` registers at
+// transform time and is immune to that race. The installed spy delegates to
+// the real implementation by default (vitest caches the factory result, so
+// one shared spy instance serves every module graph); the wechat end-to-end
+// cases below take it over per test, clearing accumulated calls first.
+const groupChatMocks = vi.hoisted(() => ({
+  send: undefined as undefined | ReturnType<typeof vi.fn>,
+}));
+const busMocks = vi.hoisted(() => ({
+  subscribe: undefined as undefined | ReturnType<typeof vi.fn>,
+}));
+
+vi.mock('../../../src/main/features/group_chat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/group_chat')>();
+  const send = vi.fn((...args: Parameters<typeof actual.send>) => actual.send(...args));
+  groupChatMocks.send = send;
+  return { ...actual, send };
+});
+
+vi.mock('../../../src/main/features/group_chat/bus', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/group_chat/bus')>();
+  const subscribe = vi.fn((...args: Parameters<typeof actual.subscribe>) => actual.subscribe(...args));
+  busMocks.subscribe = subscribe;
+  return { ...actual, subscribe };
+});
+
 /**
  * Integration: a real Feishu receive_v1 event flows through the actual
  * FeishuAdapter → onInbound → manager.enqueueInbound → owner auto-bind.
@@ -274,7 +304,6 @@ describe('wechat_personal end-to-end', () => {
 
   it('merged burst replies use the LAST inbound tokenRef, not the first (spec §3.1)', async () => {
     let busListener: ((event: unknown) => void) | undefined;
-    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
     const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
     const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
       platform: 'wechat_personal',
@@ -294,21 +323,29 @@ describe('wechat_personal end-to-end', () => {
       },
       sendMessage,
     };
-    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
-      busListener = listener;
-      return () => { busListener = undefined; };
-    });
     vi.doMock('../../../src/main/features/messaging/adapters', () => ({
       createAdapter: vi.fn(() => adapter),
     }));
-    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
-    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
     vi.resetModules();
 
     try {
       const registry = await import('../../../src/main/features/messaging/registry');
       const manager = await import('../../../src/main/features/messaging/manager');
       const ledger = await import('../../../src/main/features/messaging/ledger');
+      // Fresh module graph: aim the static group-chat spies at this test's
+      // fakes before any inbound dispatch can run.
+      const groupSend = groupChatMocks.send;
+      const subscribe = busMocks.subscribe;
+      if (!groupSend || !subscribe) throw new Error('static group-chat mocks not installed');
+      // The static spies are shared across the file (vitest caches the mock
+      // factory result), so reset call counts left by earlier tests.
+      groupSend.mockClear();
+      subscribe.mockClear();
+      groupSend.mockImplementation(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
+      subscribe.mockImplementation((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+        busListener = listener;
+        return () => { busListener = undefined; };
+      });
       const created = await registry.createWechatInstance('uid-1', {
         displayName: '我的微信',
         ilinkBotToken: 't'.repeat(64),
@@ -363,15 +400,12 @@ describe('wechat_personal end-to-end', () => {
       await manager.stopForUser('uid-1');
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
-      vi.doUnmock('../../../src/main/features/group_chat');
-      vi.doUnmock('../../../src/main/features/group_chat/bus');
       vi.resetModules();
     }
   });
 
   it('keeps each reply on the token of its own inbound when turns interleave', async () => {
     let busListener: ((event: unknown) => void) | undefined;
-    const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
     const sendMessage = vi.fn(async () => ({ deliveryId: 'remote-reply-1' }));
     const adapter: import('../../../src/main/features/messaging/types').MessagingAdapter = {
       platform: 'wechat_personal',
@@ -391,21 +425,29 @@ describe('wechat_personal end-to-end', () => {
       },
       sendMessage,
     };
-    const subscribe = vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
-      busListener = listener;
-      return () => { busListener = undefined; };
-    });
     vi.doMock('../../../src/main/features/messaging/adapters', () => ({
       createAdapter: vi.fn(() => adapter),
     }));
-    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
-    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
     vi.resetModules();
 
     try {
       const registry = await import('../../../src/main/features/messaging/registry');
       const manager = await import('../../../src/main/features/messaging/manager');
       const ledger = await import('../../../src/main/features/messaging/ledger');
+      // Fresh module graph: aim the static group-chat spies at this test's
+      // fakes before any inbound dispatch can run.
+      const groupSend = groupChatMocks.send;
+      const subscribe = busMocks.subscribe;
+      if (!groupSend || !subscribe) throw new Error('static group-chat mocks not installed');
+      // The static spies are shared across the file (vitest caches the mock
+      // factory result), so reset call counts left by earlier tests.
+      groupSend.mockClear();
+      subscribe.mockClear();
+      groupSend.mockImplementation(async () => ({ ok: true, msg: { id: 'user-msg-1', from: 'user', text: '' } }));
+      subscribe.mockImplementation((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+        busListener = listener;
+        return () => { busListener = undefined; };
+      });
       const created = await registry.createWechatInstance('uid-1', {
         displayName: '我的微信',
         ilinkBotToken: 't'.repeat(64),
@@ -483,8 +525,6 @@ describe('wechat_personal end-to-end', () => {
       await manager.stopForUser('uid-1');
     } finally {
       vi.doUnmock('../../../src/main/features/messaging/adapters');
-      vi.doUnmock('../../../src/main/features/group_chat');
-      vi.doUnmock('../../../src/main/features/group_chat/bus');
       vi.resetModules();
     }
   });
