@@ -28,7 +28,7 @@ jobs:
 
       # 步骤 1.1: 下载你的代码
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # 步骤 1.2: 安装 Node.js
       - name: Setup Node.js
