@@ -83,7 +83,7 @@
     "fastembed": "^2.1.0",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.0",
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.2.108",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
