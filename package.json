@@ -39,7 +39,7 @@
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
     "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
-    "prepare": "node scripts/install-git-hooks.mjs",
+    "prepare": "husky",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
     "audit:workspace": "node scripts/audit-local-workspace.mjs",
@@ -67,6 +67,7 @@
     "electron": "^41.7.1",
     "electron-builder": "^26.15.3",
     "eslint": "^10.8.1",
+    "husky": "^9.1.7",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.5"
