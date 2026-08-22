@@ -118,7 +118,7 @@ Start CogSeed on macOS or a Linux development environment:
 On Windows:
 
 ```bat
-run.cmd
+./run.cmd
 ```
 
 The source launcher verifies dependencies, prepares the `cogseed` runtime variant, and starts Electron with an isolated data root and application identity.
