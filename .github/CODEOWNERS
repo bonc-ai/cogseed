@@ -1,2 +1,3 @@
-# Keep this owner aligned with .gitlab/CODEOWNERS when mirroring to GitHub.
-* @chenwankang
+# CogSeed 代码评审负责人（合并评审人员）
+# 由 bonc-ai/reviewers Team 承担：Usernames686、Zian-Anson、ab1-0301
+* @bonc-ai/reviewers
