@@ -22,7 +22,7 @@ CogSeed 源码包
 --------
 npm install
 ./run.sh      # macOS / Linux shell
-run.cmd       # Windows
+./run.cmd     # Windows
 
 验证方式
 --------
