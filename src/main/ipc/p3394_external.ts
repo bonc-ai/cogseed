@@ -19,6 +19,9 @@ import {
   listExternalGateways, startExternalGateway, stopExternalGateway,
 } from '../features/p3394_bridge/external-gateways';
 import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
+import {
+  listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode,
+} from '../features/p3394_bridge/remote-nodes';
 import { listAgents } from '../features/agents';
 
 export const p3394ExternalHandlers = {
@@ -78,4 +81,12 @@ export const p3394ExternalHandlers = {
     if (!agentId) return { ok: false, error: 'p3394_peer_id_required' };
     return setP3394PeerEnabled(agentId, args?.disabled === true);
   },
+
+  // 第二期 Dashboard：远端节点配置管理（token 只落机器私有文件，视图打码）
+  'p3394.remote.list': async () => listRemoteNodes(),
+  'p3394.remote.add': async (args: { label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
+    addRemoteNode(args ?? {}),
+  'p3394.remote.remove': async (args: { id?: unknown }) => removeRemoteNode(args?.id),
+  'p3394.remote.test': async (args: { endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
+    testRemoteNode(args ?? {}),
 };
