@@ -200,6 +200,9 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       ...(typeof candidate.contextTokenRef === 'string' && candidate.contextTokenRef.trim()
         ? { contextTokenRef: candidate.contextTokenRef.trim().slice(0, 512) }
         : {}),
+      ...(typeof candidate.p3394MessageId === 'string' && candidate.p3394MessageId.trim()
+        ? { p3394MessageId: candidate.p3394MessageId.trim().slice(0, 160) }
+        : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       status,
       ...(typeof candidate.externalDeliveryId === 'string' ? { externalDeliveryId: candidate.externalDeliveryId.slice(0, 512) } : {}),

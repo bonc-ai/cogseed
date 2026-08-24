@@ -344,6 +344,25 @@ describe('messaging registry and ledgers', () => {
     expect(read?.file).toEqual({ path: '/workspace/report.pdf', name: 'report.pdf' });
   });
 
+  it('keeps the p3394 message id on a delivery across write and reload', async () => {
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const begun = await ledger.beginDelivery('user-1', {
+      key: ledger.deliveryKey('bot-1', 'reply-p3394-1'),
+      instanceId: 'bot-1',
+      recipientId: 'oc_chat_1',
+      recipientIdType: 'chat_id',
+      sourceMessageId: 'reply-p3394-1',
+      textHash: ledger.textHash('reply text'),
+      text: 'reply text',
+      p3394MessageId: 'p3394-env-source-1',
+    });
+    expect(begun.duplicate).toBe(false);
+    expect(begun.entry.p3394MessageId).toBe('p3394-env-source-1');
+
+    const read = await ledger.getDelivery('user-1', begun.entry.key);
+    expect(read?.p3394MessageId).toBe('p3394-env-source-1');
+  });
+
   it('rejects malformed file delivery payloads', async () => {
     const ledger = await import('../../../src/main/features/messaging/ledger');
     await expect(ledger.beginDelivery('user-1', {
@@ -877,6 +896,7 @@ describe('messaging manager adapter flow', () => {
         type: 'message',
         turn_end: true,
         msg: { id: 'reply-1', from: 'commander', text: 'reply from agent' },
+        source_p3394_message_id: 'p3394-env-incoming-1',
       };
       busListener?.(outboundEvent);
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
@@ -885,6 +905,9 @@ describe('messaging manager adapter flow', () => {
       expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
         status: 'retry_pending',
         attempts: 1,
+        // 出站对齐：投递台账关联触发回合的 P3394 信封 message_id，
+        // 与入站台账同编号体系（运单号出门也贯穿）。
+        p3394MessageId: 'p3394-env-incoming-1',
       });
 
       await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 3000 });
