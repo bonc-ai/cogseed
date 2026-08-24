@@ -855,8 +855,22 @@ describe('messaging manager adapter flow', () => {
           sender: expect.objectContaining({ agent_id: 'user-1', channel_instance_id: created.id }),
         }),
       }));
+      // 翻译官模式：入站台账条目记录投影出的 p3394 message_id，可对账
       const entry = await ledger.readInbound('user-1', ledger.inboundKey(created.id, 'incoming-1'));
       expect(entry?.status).toBe('accepted');
+      expect(entry?.p3394MessageId).toBe(
+        (await import('../../../src/main/features/messaging/p3394-projection')).projectInboundToP3394('user-1', {
+          platform: 'telegram',
+          instanceId: created.id,
+          externalMessageId: 'incoming-1',
+          externalChatId: 'chat-1',
+          externalUserId: 'user-1',
+          text: 'hello agent',
+          isGroup: false,
+          mentionPresent: false,
+          receivedAt: '',
+        } as never).message_id,
+      );
       expect(busListener).toBeTypeOf('function');
 
       const outboundEvent = {

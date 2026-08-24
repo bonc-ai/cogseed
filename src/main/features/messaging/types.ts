@@ -206,6 +206,7 @@ export interface InboundLedgerEntry {
   internalMessageId?: string;
   /** P3394 信封 message_id（翻译官模式投影）：与 key (= inboundKey) 双编号
    * 互查，排障可从渠道事件一路追踪到总线派发。 */
+  p3394MessageId?: string;
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;

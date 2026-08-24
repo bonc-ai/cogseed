@@ -584,8 +584,22 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  // P3394 投影（翻译官模式）：尽早投影，让后续所有台账结局（含被拒/失败）
+  // 都能带上 p3394 编号；失败降级为无信封，绝不阻塞入站。
+  let p3394Envelope: P3394Envelope | undefined;
+  try {
+    p3394Envelope = projectInboundToP3394(uid, envelope);
+  } catch (error) {
+    log.warn('messaging p3394 projection failed; dispatching without envelope', {
+      instanceId: instance.id,
+      error: (error as Error).message,
+    });
+  }
   const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
-    ledger.completeInbound(uid, key, patch);
+    ledger.completeInbound(uid, key, {
+      ...patch,
+      ...(p3394Envelope ? { p3394MessageId: p3394Envelope.message_id } : {}),
+    });
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
@@ -664,16 +678,6 @@ async function handleInboundLocked(
       // reference the message they actually answer.
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
-    }
-    // P3394 投影（翻译官模式）：失败降级为无信封派发，绝不阻塞入站。
-    let p3394Envelope: P3394Envelope | undefined;
-    try {
-      p3394Envelope = projectInboundToP3394(uid, envelope);
-    } catch (error) {
-      log.warn('messaging p3394 projection failed; dispatching without envelope', {
-        instanceId: instance.id,
-        error: (error as Error).message,
-      });
     }
     const result = await groupChat.send({
       userId: uid,
