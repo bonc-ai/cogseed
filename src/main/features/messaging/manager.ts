@@ -583,17 +583,33 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  // P3394 投影（翻译官模式）：尽早投影，让后续所有台账结局（含被拒/失败）
+  // 都能带上 p3394 编号；失败降级为无信封，绝不阻塞入站。
+  let p3394Envelope: P3394Envelope | undefined;
+  try {
+    p3394Envelope = projectInboundToP3394(uid, envelope);
+  } catch (error) {
+    log.warn('messaging p3394 projection failed; dispatching without envelope', {
+      instanceId: instance.id,
+      error: (error as Error).message,
+    });
+  }
+  const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
+    ledger.completeInbound(uid, key, {
+      ...patch,
+      ...(p3394Envelope ? { p3394MessageId: p3394Envelope.message_id } : {}),
+    });
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
   const decision = evaluateInboundPolicy(instance, envelope);
   if (!decision.allowed) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: decision.reason || 'policy_rejected' });
+    await completeLedger({ status: 'rejected', reason: decision.reason || 'policy_rejected' });
     return { accepted: false, duplicate: false, reason: decision.reason };
   }
   const text = stripBotMention(envelope.text).slice(0, 12_000);
   if (!text) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: 'empty_message' });
+    await completeLedger({ status: 'rejected', reason: 'empty_message' });
     return { accepted: false, duplicate: false, reason: 'empty_message' };
   }
   // Session-reset slashes rotate the bound conversation to a fresh cid and
@@ -617,11 +633,11 @@ async function handleInboundLocked(
           instanceId: instance.id,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     } catch (error) {
       const message = (error as Error).message || 'messaging new-session dispatch failed';
-      await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+      await completeLedger({ status: 'failed', reason: message });
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
@@ -642,7 +658,7 @@ async function handleInboundLocked(
           command: inboundCommand.name,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     }
   }
@@ -662,16 +678,6 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
-    // P3394 投影（翻译官模式）：失败降级为无信封派发，绝不阻塞入站。
-    let p3394Envelope: P3394Envelope | undefined;
-    try {
-      p3394Envelope = projectInboundToP3394(uid, envelope);
-    } catch (error) {
-      log.warn('messaging p3394 projection failed; dispatching without envelope', {
-        instanceId: instance.id,
-        error: (error as Error).message,
-      });
-    }
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,
@@ -685,11 +691,11 @@ async function handleInboundLocked(
     if (runtime && result.msg?.id && envelope.contextTokenRef) {
       runtime.turnSourceRefs.set(result.msg.id, envelope.contextTokenRef);
     }
-    await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+    await completeLedger({ status: 'accepted', cid: binding.cid });
     return { accepted: true, duplicate: false, cid: binding.cid };
   } catch (error) {
     const message = (error as Error).message || 'messaging inbound dispatch failed';
-    await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+    await completeLedger({ status: 'failed', reason: message });
     throw new Error(`messaging inbound dispatch failed: ${message}`);
   }
 }
