@@ -589,6 +589,9 @@ async function handleInboundLocked(
   let p3394Envelope: P3394Envelope | undefined;
   try {
     p3394Envelope = projectInboundToP3394(uid, envelope);
+    // 回填到入站信封本体：deliverText 等出站路径据此把投递台账与入站
+    // 信封关联（运单号贯穿）。入站信封是本函数内的私有引用，回填不外泄。
+    if (p3394Envelope) envelope.p3394MessageId = p3394Envelope.message_id;
   } catch (error) {
     log.warn('messaging p3394 projection failed; dispatching without envelope', {
       instanceId: instance.id,

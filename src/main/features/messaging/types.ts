@@ -191,6 +191,9 @@ export interface InboundEnvelope {
    * in the wechat state store. The reply for this message must use exactly
    * this token; it is never the peer's latest token. */
   contextTokenRef?: string;
+  /** P3394 信封 message_id（翻译官模式投影）。manager 投影后回填，
+   * deliverText 等出站路径据此把投递台账与入站信封关联（运单号贯穿）。 */
+  p3394MessageId?: string;
   receivedAt: string;
   /** Synthetic feedback event (a reaction on one of our messages), not a
    * real user text message. Skips burst merging and carries the interaction
@@ -253,6 +256,11 @@ export interface DeliveryLedgerEntry {
    * in the wechat state store. The reply for this message must use exactly
    * this token; it is never the peer's latest token. */
   contextTokenRef?: string;
+  /** P3394 运单号贯穿（出站对齐）：触发本条投递的入站信封 message_id。
+   * 与入站台账 InboundLedgerEntry.p3394MessageId 同编号体系，一个
+   * message_id 可从进门 grep 到出门。非渠道入站触发的投递（定时触达等）
+   * 不带此字段。 */
+  p3394MessageId?: string;
   /** Feishu uses this as the API uuid; keeping it stable makes timeout retries
    * idempotent. Other adapters may ignore it. */
   idempotencyKey?: string;
