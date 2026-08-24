@@ -440,6 +440,7 @@
 
   let _view = 'center';            // 'center' | 'space' | 'task'
   let _detailSpaceId = null;       // 当前详情空间 space_id
+  let _pendingOpenSpaceId = null;  // 会话面包屑请求打开的空间 id（renderWorkspace 消费一次）
   let _spaceTab = 'tasks';         // 详情页签：tasks | artifacts | assets
   let _configOpen = false;         // 详情页配置抽屉
   let _centerSearch = '';
@@ -493,7 +494,21 @@
     root.innerHTML = `<div class="ws-loading">${_t('ws.loading', '加载中…')}</div>`;
     try {
       await _loadData();
-      _reRender();
+      // 会话面包屑「空间名」在 workspace.js 懒加载完成前被点击时，目标空间 id
+      // 暂存在 window 上；首次进入工作空间面板时在这里消费一次。
+      if (!_pendingOpenSpaceId && window.__cogseedPendingOpenSpace) {
+        _pendingOpenSpaceId = window.__cogseedPendingOpenSpace;
+        window.__cogseedPendingOpenSpace = null;
+      }
+      if (_pendingOpenSpaceId) {
+        _detailSpaceId = _pendingOpenSpaceId;
+        _pendingOpenSpaceId = null;
+        _view = 'space';
+        _reRender();
+        _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      } else {
+        _reRender();
+      }
     } catch (err) {
       _loadError = (err && err.message) || String(err);
       _loaded = false;
@@ -1985,7 +2000,15 @@
     try { await renderWorkspace(); } catch (_) {}
     _openCreate(null);
   }
+  /** 会话面包屑「空间名」入口：切到工作空间面板并直接打开指定空间详情。 */
+  function openWorkspaceSpace(spaceId) {
+    if (!spaceId) return;
+    _pendingOpenSpaceId = spaceId;
+    window.__cogseedPendingOpenSpace = null;
+    if (typeof setView === 'function') setView('workspace');
+  }
   window.renderWorkspace = renderWorkspace;
   window.openWorkspaceCreate = openWorkspaceCreate;
+  window.openWorkspaceSpace = openWorkspaceSpace;
   window.addEventListener('i18n-change', () => { void _refreshForLanguageChange(); });
 })();
