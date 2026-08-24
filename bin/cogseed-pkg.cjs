@@ -549,13 +549,15 @@ function scanVerdictBlocksInstall(outcome) {
 
 function securityScanStaging(stagingDir) {
   const root = guardrailRoot();
-  if (!root) {
-    // A build that intentionally omits the bundled scanner reports
-    // `scanner_absent`, which does not refuse the install. `unknown` still means
-    // "the check should have run and did not", and still refuses.
+  // Mirrors scannerAvailability() in sentry-adapter.ts: an engine that is gone
+  // while the marker declares the omission is `scanner_absent` (installs still
+  // allowed); without the marker it stays `unknown`, which still refuses. The
+  // engine-only check matters for stripped builds that keep scan_gate.py.
+  const engineMissing = !root || !fs.existsSync(path.join(root, 'skill-sentry'));
+  if (engineMissing) {
     return scannerAbsentByBuild()
       ? { outcome: 'scanner_absent', reason: 'scanner_absent_by_build', blocking_rules: [] }
-      : { outcome: 'unknown', reason: 'guardrail_not_found', blocking_rules: [] };
+      : { outcome: 'unknown', reason: root ? 'engine_not_found' : 'guardrail_not_found', blocking_rules: [] };
   }
 
   const engine = path.join(root, 'skill-sentry');

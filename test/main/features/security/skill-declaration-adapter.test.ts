@@ -24,6 +24,9 @@ import {
 import { marketplaceContentTreeHash } from '../../../../src/main/util/marketplace-tree-hash';
 
 const ENGINE = 'resources/guardrail/skill-declaration-core';
+// The open-source tree ships without the declaration engine; these blocks
+// can only run where the engine is actually vendored/present.
+const ENGINE_PRESENT = fs.existsSync(ENGINE);
 const PIN = 'resources/guardrail/skill-declaration-core.INTEGRITY';
 
 describe('skill-declaration-adapter › declarationVerdictFromExitCode', () => {
@@ -103,7 +106,7 @@ describe('skill-declaration-adapter › report parsing', () => {
   });
 });
 
-describe('skill-declaration-adapter › packaged engine', () => {
+describe.skipIf(!ENGINE_PRESENT)('skill-declaration-adapter › packaged engine', () => {
   it('resolves the engine directory from packaged resources', () => {
     expect(declarationEngineDir()).toBeTruthy();
   });
@@ -134,7 +137,7 @@ describe('skill-declaration-adapter › packaged engine', () => {
   });
 });
 
-describe('skill-declaration-adapter › integrity pin', () => {
+describe.skipIf(!ENGINE_PRESENT)('skill-declaration-adapter › integrity pin', () => {
   it('stores the pin beside the tree, not inside it', () => {
     // Inside would be self-defeating: the tree hash covers every file in the
     // directory, so writing the pin would change the value it records and the
@@ -190,7 +193,7 @@ describe('skill-declaration-adapter › integrity pin', () => {
   });
 });
 
-describe('skill-declaration-adapter › engine run', () => {
+describe.skipIf(!ENGINE_PRESENT)('skill-declaration-adapter › engine run', () => {
   beforeEach(() => { _resetPythonChoiceForTest(); });
 
   /** Skip when no interpreter on this machine can load the vendored payload. */

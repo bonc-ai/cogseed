@@ -42,6 +42,9 @@ const gitOk = spawnSync('git', ['--version'], { stdio: 'ignore' }).status === 0;
 const onPosix = process.platform !== 'win32';
 
 const need = (cond: boolean) => (cond ? it : it.skip);
+// The open-source tree ships without the deep-scanner engine; engine-backed
+// cells can only run where the engine is actually present.
+const engineOk = fs.existsSync(path.join(GUARDRAIL, 'skill-sentry'));
 
 // ── Samples ────────────────────────────────────────────────────────────────
 //
@@ -142,21 +145,21 @@ function gate(target: string): { outcome: string; blocking_rules: string[]; reco
 // ── Row 1: the shared verdict ──────────────────────────────────────────────
 
 describe('security matrix › shared gate (scan_gate.py)', () => {
-  need(pythonOk)('clean → pass', () => {
+  need(pythonOk && engineOk)('clean → pass', () => {
     expect(gate(materialize(CLEAN())).outcome).toBe('pass');
   }, 200_000);
 
-  need(pythonOk)('medium → restricted (installable, with a risk card)', () => {
+  need(pythonOk && engineOk)('medium → restricted (installable, with a risk card)', () => {
     const v = gate(materialize(MEDIUM()));
     expect(v.outcome).toBe('restricted');
     expect(v.blocking_rules).toEqual([]);
   }, 200_000);
 
-  need(pythonOk)('high → blocked', () => {
+  need(pythonOk && engineOk)('high → blocked', () => {
     expect(gate(materialize(HIGH())).outcome).toBe('blocked');
   }, 200_000);
 
-  need(pythonOk)('hidden-in-tests → blocked despite a CAUTION roll-up', () => {
+  need(pythonOk && engineOk)('hidden-in-tests → blocked despite a CAUTION roll-up', () => {
     const v = gate(materialize(HIDDEN()));
     expect(v.outcome).toBe('blocked');
     // Proves the block came from the category gate, not the recommendation.
@@ -178,25 +181,25 @@ describe('security matrix › local folder import', () => {
     return skills.createFromDir(null, null, materialize(files, 'mx-imp-'), { force: false });
   }
 
-  need(pythonOk)('clean → installs, no risk flag', async () => {
+  need(pythonOk && engineOk)('clean → installs, no risk flag', async () => {
     const r = await importDir(CLEAN('imp-clean'));
     expect(r.ok).toBe(true);
     expect(r.securityPass?.outcome ?? 'pass').toBe('pass');
   }, 200_000);
 
-  need(pythonOk)('medium → installs, surfaced as restricted', async () => {
+  need(pythonOk && engineOk)('medium → installs, surfaced as restricted', async () => {
     const r = await importDir(MEDIUM('imp-medium'));
     expect(r.ok).toBe(true);
     expect(r.securityPass?.outcome).toBe('restricted');
   }, 200_000);
 
-  need(pythonOk)('high → refused', async () => {
+  need(pythonOk && engineOk)('high → refused', async () => {
     const r = await importDir(HIGH('imp-high'));
     expect(r.ok).toBe(false);
   }, 200_000);
 
   // The hole that let a marketplace-refused payload in through the import side.
-  need(pythonOk)('hidden-in-tests → refused', async () => {
+  need(pythonOk && engineOk)('hidden-in-tests → refused', async () => {
     const r = await importDir(HIDDEN('imp-hidden'));
     expect(r.ok).toBe(false);
   }, 200_000);
@@ -235,7 +238,7 @@ describe('security matrix › package CLI (install + update)', () => {
     return { status: r.status, json, pkgDir: path.join(ws, 'u1', 'local', 'packages', name) };
   }
 
-  need(pythonOk && gitOk && onPosix)('clean → installs', () => {
+  need(pythonOk && engineOk && gitOk && onPosix)('clean → installs', () => {
     const r = install(repo(CLEAN('pkg-clean'), 'clean'), 'mxclean');
     expect(r.status).toBe(0);
     expect(fs.existsSync(r.pkgDir)).toBe(true);
@@ -244,20 +247,20 @@ describe('security matrix › package CLI (install + update)', () => {
   // Restricted is installable here too. Worth pinning: the package path refuses on
   // `unknown`, and it would be easy to over-tighten it into refusing CAUTION as
   // well, which would make ordinary community packages uninstallable.
-  need(pythonOk && gitOk && onPosix)('medium → installs', () => {
+  need(pythonOk && engineOk && gitOk && onPosix)('medium → installs', () => {
     const r = install(repo(MEDIUM('pkg-medium'), 'medium'), 'mxmedium');
     expect(r.status).toBe(0);
     expect(fs.existsSync(r.pkgDir)).toBe(true);
   }, 300_000);
 
-  need(pythonOk && gitOk && onPosix)('high → refused, nothing promoted', () => {
+  need(pythonOk && engineOk && gitOk && onPosix)('high → refused, nothing promoted', () => {
     const r = install(repo(HIGH('pkg-high'), 'high'), 'mxhigh');
     expect(r.status).not.toBe(0);
     expect(r.json?.security_outcome).toBe('blocked');
     expect(fs.existsSync(r.pkgDir)).toBe(false);
   }, 300_000);
 
-  need(pythonOk && gitOk && onPosix)('hidden-in-tests → refused, nothing promoted', () => {
+  need(pythonOk && engineOk && gitOk && onPosix)('hidden-in-tests → refused, nothing promoted', () => {
     const r = install(repo(HIDDEN('pkg-hidden'), 'hidden'), 'mxhidden');
     expect(r.status).not.toBe(0);
     expect(r.json?.security_outcome).toBe('blocked');
@@ -266,7 +269,7 @@ describe('security matrix › package CLI (install + update)', () => {
 
   // Update is its own supply-chain event: a repo clean at install time can ship a
   // payload in any later commit.
-  need(pythonOk && gitOk && onPosix)('clean install then poisoned update → reverted', () => {
+  need(pythonOk && engineOk && gitOk && onPosix)('clean install then poisoned update → reverted', () => {
     const src = repo(CLEAN('pkg-upd'), 'upd');
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'mx-pkg-upd-'));
     tmps.push(ws);
@@ -331,21 +334,21 @@ describe('security matrix › load-time re-verification', () => {
     return rv.isSkillTrustedForLoadDeep('u1', skillId);
   }
 
-  need(pythonOk)('clean → loadable', async () => {
+  need(pythonOk && engineOk)('clean → loadable', async () => {
     expect((await afterInstallEdit(CLEAN('victim'))).trusted).toBe(true);
   }, 200_000);
 
-  need(pythonOk)('medium → loadable (risk is not withheld)', async () => {
+  need(pythonOk && engineOk)('medium → loadable (risk is not withheld)', async () => {
     expect((await afterInstallEdit(MEDIUM('victim'))).trusted).toBe(true);
   }, 200_000);
 
-  need(pythonOk)('high → withheld', async () => {
+  need(pythonOk && engineOk)('high → withheld', async () => {
     expect((await afterInstallEdit(HIGH('victim'))).trusted).toBe(false);
   }, 200_000);
 
   // The load-time hole: blocked at install, passed at load, so an install-time
   // reject could be reinstated by editing files afterwards.
-  need(pythonOk)('hidden-in-tests → withheld', async () => {
+  need(pythonOk && engineOk)('hidden-in-tests → withheld', async () => {
     const v = await afterInstallEdit(HIDDEN('victim'));
     expect(v.trusted).toBe(false);
     expect(v.decision).toBe('blocked');
@@ -358,7 +361,7 @@ describe('security matrix › load-time re-verification', () => {
 // correct answer and "fail closed everywhere" is not it.
 
 describe('security matrix › scanner unavailable', () => {
-  need(pythonOk)('shared gate reports unknown, never pass and never blocked', () => {
+  need(pythonOk && engineOk)('shared gate reports unknown, never pass and never blocked', () => {
     const r = spawnSync(PYTHON, [path.join(GUARDRAIL, 'scan_gate.py'), path.join(os.tmpdir(), 'no-engine'), materialize(CLEAN())], {
       encoding: 'utf8',
       timeout: 120_000,
@@ -372,7 +375,7 @@ describe('security matrix › scanner unavailable', () => {
   // no verdict there is nothing to show a user and stopping is the only safe
   // default. Contrast with the local-import path, which installs with a
   // "could not verify" notice because a human picked that folder.
-  need(gitOk && onPosix)('package install refuses (fail-closed)', () => {
+  need(gitOk && engineOk && onPosix)('package install refuses (fail-closed)', () => {
     const dir = materialize(CLEAN('pkg-noscan'), 'mx-noscan-');
     const env = {
       ...process.env,
@@ -424,14 +427,14 @@ describe('security matrix › guardrail is shipped', () => {
     expect(froms).toContain('resources/guardrail');
   });
 
-  it('ships the shared gate and the engine it needs', () => {
-    for (const rel of [
-      'scan_gate.py',
-      path.join('skill-sentry', 'engine', 'scanner_core', 'report.py'),
-      path.join('skill-sentry', 'engine', 'rulesets', 'v1.0.0', 'ruleset.yaml'),
-    ]) {
+  it('ships the shared gate and declares the engine absent', () => {
+    // The open-source tree intentionally ships without the deep-scanner
+    // engine: the gate script stays, and the marker declares the omission so
+    // a fresh checkout reports `scanner_absent` instead of `unknown`.
+    for (const rel of ['scan_gate.py', 'SCANNER_ABSENT']) {
       expect(fs.existsSync(path.join(GUARDRAIL, rel)), rel).toBe(true);
     }
+    expect(fs.existsSync(path.join(GUARDRAIL, 'skill-sentry')), 'engine').toBe(false);
   });
 });
 
@@ -459,7 +462,7 @@ describe('security matrix › generation admission (commander container)', () =>
     });
   }
 
-  need(pythonOk)('clean → created with a deep receipt', async () => {
+  need(pythonOk && engineOk)('clean → created with a deep receipt', async () => {
     const name = `gen-clean-${(seq += 1)}`;
     // Contract-shaped clean: the generation gate escalates missing trigger /
     // anti-trigger semantics to a `risk` receipt (authoring defect, not a
@@ -477,7 +480,7 @@ describe('security matrix › generation admission (commander container)', () =>
     expect(receipt?.scanner).toBe('deep');
   }, 200_000);
 
-  need(pythonOk)('high → refused, no skill left behind', async () => {
+  need(pythonOk && engineOk)('high → refused, no skill left behind', async () => {
     const name = `gen-high-${(seq += 1)}`;
     const r = await createViaCommander(HIGH(name), name);
     expect(r.ok).toBe(false);

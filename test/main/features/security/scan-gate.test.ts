@@ -23,7 +23,8 @@ const ENGINE = path.join(GUARDRAIL, 'skill-sentry');
 
 const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 const pythonAvailable = spawnSync(PYTHON, ['--version'], { stdio: 'ignore' }).status === 0;
-const itWithPython = pythonAvailable ? it : it.skip;
+// The open-source tree ships without the engine; engine-backed verdicts need it.
+const itWithPython = pythonAvailable && fs.existsSync(ENGINE) ? it : it.skip;
 
 interface Verdict {
   outcome: string;
