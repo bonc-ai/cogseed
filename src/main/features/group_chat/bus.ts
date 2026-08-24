@@ -199,6 +199,7 @@ import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
 } from "../p3394/protocol";
+import type { P3394Envelope } from "../p3394_bridge/envelope";
 import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
@@ -1144,6 +1145,7 @@ interface QueueItem {
   sourceMessageText?: string;
   /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随派发 item
    * 运行时携带，不持久化到 GroupMessage。 */
+  sourceP3394Envelope?: P3394Envelope;
   /** Composed runtime payload — what the worker actually feeds the LLM,
    * including the `<msg from=X>...</msg>` wrapper. Built at enqueue time
    * so the queue is a real FIFO of LLM-ready turns, no last-minute
@@ -1985,6 +1987,9 @@ export interface EnqueueParams {
    * that persists under the peer agent's own actor identity. Only the
    * bridge wiring sets this; user IPC paths never do. */
   externalInbound?: boolean;
+  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封。仅随派发
+   * item 运行时携带（QueueItem.sourceP3394Envelope），不落 GroupMessage。 */
+  p3394_envelope?: P3394Envelope;
   /** True when this enqueue IS the actor's own end-of-turn message (called
    * from runTurn after the LLM stream completed). False / absent for any
    * tool-side-effect or plan-executor mid-turn enqueues. Renderer routes
@@ -2760,6 +2765,9 @@ async function _enqueueBody(
       fromActorId,
       ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
+      ...(params.p3394_envelope
+        ? { sourceP3394Envelope: params.p3394_envelope }
+        : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
         ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
