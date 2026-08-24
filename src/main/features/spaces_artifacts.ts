@@ -15,6 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceContentDir } from '../paths';
@@ -207,6 +208,40 @@ async function scanArtifacts(uid: string, spaceId: string, cid: string, out: Spa
   }
 }
 
+// ── 工作区兜底遍历护栏（2026-08-24 修复：会话工作目录解析异常导致全盘遍历）────
+// 事故场景：导入的 Claude 会话被记为「工作目录 = 主目录」→ 兜底遍历递归扫出
+// 29,266 条产物（主目录 222 万文件，打开空间卡顿 40s+）。护栏三件套：
+//  1. 异常根目录黑名单（主目录本身 / 文件系统根 / 含 .cogseed 段）→ 跳过兜底遍历
+//  2. 遍历计数上限 MAX_FALLBACK_WALK_FILES：超限中止并丢弃本次兜底结果
+//     （produced[] 登记产物不受影响——兜底只是"锦上添花"，跳过不丢真产物）
+//  3. 显式跳过 node_modules / __pycache__（`.` 开头目录原已跳过）
+// 上限可经 SPACE_ARTIFACTS_WALK_LIMIT 覆盖（测试用）。
+export const MAX_FALLBACK_WALK_FILES = (() => {
+  const n = Number(process.env.SPACE_ARTIFACTS_WALK_LIMIT ?? 5000);
+  return Number.isFinite(n) && n > 0 ? n : 5000;
+})();
+const WALK_LIMIT = new Error('space_artifacts.walk_limit');
+
+/** 异常工作目录黑名单判定（纯函数，可单测）。
+ *  只拦截「明显不是会话工作目录」的根：主目录本身、文件系统根、CogSeed 自身数据目录。
+ *  主目录下的正常项目目录（~/code/...）不在拦截范围——由计数护栏兜底。 */
+export function isUnsafeWorkspaceRoot(dir: string): boolean {
+  let real: string;
+  try {
+    real = fs.realpathSync(dir);
+  } catch {
+    return false; // 目录不存在/不可读 → 由上层 stat 处理
+  }
+  try {
+    if (real === fs.realpathSync(os.homedir())) return true; // 整个主目录
+  } catch {
+    /* homedir 不可解析则跳过该项检查 */
+  }
+  if (real === path.parse(real).root) return true; // 文件系统根 '/'
+  if (real.split(path.sep).includes('.cogseed')) return true; // CogSeed 自身数据目录
+  return false;
+}
+
 /** 扫描 AI 产出文件：先走消息 produced[]（已登记），再兜底扫会话工作区目录
  *  （未登记进 produced 的产物，如部分工具直接写文件）。按文件名去重（附件优先）。
  *  COGSEED-16：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
@@ -240,21 +275,40 @@ async function scanProducedFiles(uid: string, spaceId: string, cid: string, out:
     // 消息读取失败不阻断（继续工作区兜底）
   }
   // 2. 会话工作区目录兜底（部分工具直接写文件、未登记 produced；递归子目录防漏）
+  //    护栏：异常根目录直接跳过；遍历计数超限中止并回滚本次兜底新增（见顶部注释）。
   try {
     const { getConversationWorkspacePath } = await import('./group_chat/conv_workspace');
     const wsDir = await getConversationWorkspacePath(uid, cid);
-    const walk = async (dir: string): Promise<void> => {
-      let entries: fs.Dirent[] = [];
-      try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (e.name.startsWith('.')) continue;
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) await walk(full);
-        else if (e.isFile()) await add(full, e.name);
+    if (wsDir && !isUnsafeWorkspaceRoot(wsDir)) {
+      const startLen = out.length;
+      try {
+        await fsp.stat(wsDir);
+        let fileCount = 0;
+        const walk = async (dir: string): Promise<void> => {
+          let entries: fs.Dirent[] = [];
+          try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+          for (const e of entries) {
+            if (e.name.startsWith('.')) continue;
+            if (e.isDirectory() && (e.name === 'node_modules' || e.name === '__pycache__')) continue;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) { await walk(full); continue; }
+            if (!e.isFile()) continue;
+            fileCount++;
+            if (fileCount > MAX_FALLBACK_WALK_FILES) throw WALK_LIMIT;
+            await add(full, e.name);
+          }
+        };
+        await walk(wsDir);
+      } catch (err) {
+        if (err === WALK_LIMIT) {
+          out.length = startLen; // 回滚本次兜底新增——防爆炸目录污染产物列表
+          try {
+            const log = (await import('../logger')).createLogger('spaces_artifacts');
+            log.warn(`space artifacts fallback walk aborted: ${MAX_FALLBACK_WALK_FILES} file limit exceeded uid=${uid} cid=${cid}`);
+          } catch { /* best-effort */ }
+        }
+        // 其它错误（工作区不存在/不可读）静默
       }
-    };
-    if (wsDir) {
-      try { await fsp.stat(wsDir); await walk(wsDir); } catch { /* 工作区不存在/不可读 */ }
     }
   } catch (err) {
     // 工作区解析失败不阻断列表

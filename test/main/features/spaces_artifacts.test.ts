@@ -265,3 +265,73 @@ describe('spaces › 附件落位与主流 coding agent 一致（上传不进空
     expect(fs.existsSync(path.join(globalArt, 'index.html'))).toBe(false);
   });
 });
+
+describe('spaces › 兜底遍历护栏（工作目录解析异常防全盘遍历）', () => {
+  it('isUnsafeWorkspaceRoot：主目录/盘根/.cogseed 目录拦截，正常项目目录放行', async () => {
+    const arts = await import('../../../src/main/features/spaces_artifacts');
+    expect(arts.isUnsafeWorkspaceRoot(os.homedir())).toBe(true); // 事故场景：整个主目录
+    expect(arts.isUnsafeWorkspaceRoot(path.parse(os.homedir()).root)).toBe(true); // 文件系统根
+    const fakeCogseed = path.join(tmpDir, 'a', '.cogseed', 'b');
+    fs.mkdirSync(fakeCogseed, { recursive: true });
+    expect(arts.isUnsafeWorkspaceRoot(fakeCogseed)).toBe(true); // CogSeed 自身数据目录
+    const normal = path.join(tmpDir, 'normal-project');
+    fs.mkdirSync(normal, { recursive: true });
+    expect(arts.isUnsafeWorkspaceRoot(normal)).toBe(false); // 主目录下的正常项目不拦截
+    expect(arts.isUnsafeWorkspaceRoot(path.join(tmpDir, 'does-not-exist'))).toBe(false);
+  });
+
+  it('兜底遍历跳过 node_modules / __pycache__，正常文件仍收', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '护栏空间' });
+    if (!created.ok) throw new Error('create failed');
+    const conv = await chats.createConversation(UID, { title: '护栏', spaceId: created.space.space_id });
+    const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+    const wsRoot = await getConversationWorkspacePath(UID, conv.conversation_id);
+    fs.mkdirSync(path.join(wsRoot, 'node_modules', 'x'), { recursive: true });
+    fs.mkdirSync(path.join(wsRoot, '__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(wsRoot, 'node_modules', 'x', 'big.js'), 'x');
+    fs.writeFileSync(path.join(wsRoot, '__pycache__', 'c.pyc'), 'x');
+    fs.writeFileSync(path.join(wsRoot, 'keep.md'), 'keep');
+
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, created.space.space_id);
+    const names = artifacts.map((a) => a.name);
+    expect(names).toContain('keep.md');
+    expect(names).not.toContain('big.js');
+    expect(names).not.toContain('c.pyc');
+  });
+
+  it('遍历计数超限：中止并回滚兜底结果，produced 登记产物不受影响', async () => {
+    const prevLimit = process.env.SPACE_ARTIFACTS_WALK_LIMIT;
+    process.env.SPACE_ARTIFACTS_WALK_LIMIT = '10';
+    vi.resetModules();
+    try {
+      const spaces = await import('../../../src/main/features/spaces');
+      const chats = await import('../../../src/main/features/chats');
+      const created = await spaces.createSpace(UID, { name: '超限空间' });
+      if (!created.ok) throw new Error('create failed');
+      const conv = await chats.createConversation(UID, { title: '超限', spaceId: created.space.space_id });
+      const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+      const wsRoot = await getConversationWorkspacePath(UID, conv.conversation_id);
+      fs.mkdirSync(wsRoot, { recursive: true });
+      // 15 个兜底文件 + 1 个 produced 登记文件
+      for (let i = 0; i < 15; i++) fs.writeFileSync(path.join(wsRoot, `f${i}.md`), 'x');
+      const registered = path.join(wsRoot, 'registered.md');
+      fs.writeFileSync(registered, 'x');
+      const msgFile = path.join(tmpDir, UID, 'cloud', 'chats', `${conv.conversation_id}.jsonl`);
+      fs.writeFileSync(msgFile, JSON.stringify({
+        id: 'm1', from: 'commander', ts: new Date().toISOString(), text: 'x', produced: [registered],
+      }) + '\n');
+
+      const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, created.space.space_id);
+      const names = artifacts.map((a) => a.name);
+      // 兜底结果整体回滚：15 个文件一个都不该出现
+      for (let i = 0; i < 15; i++) expect(names).not.toContain(`f${i}.md`);
+      // produced 登记的产物保留
+      expect(names).toContain('registered.md');
+    } finally {
+      if (prevLimit === undefined) delete process.env.SPACE_ARTIFACTS_WALK_LIMIT;
+      else process.env.SPACE_ARTIFACTS_WALK_LIMIT = prevLimit;
+    }
+  });
+});
