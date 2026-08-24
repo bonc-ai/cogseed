@@ -4839,5 +4839,19 @@
   "settings.updates.errors.verify_failed": "ダウンロードの検証に失敗しました。再試行してください",
   "settings.updates.errors.already_downloading": "ダウンロードが進行中です",
   "settings.updates.errors.file_missing": "インストーラーファイルが見つかりません。再度ダウンロードしてください",
-  "settings.updates.errors.bad_url": "更新のダウンロードURLが無効です"
+  "settings.updates.errors.bad_url": "更新のダウンロードURLが無効です",
+  "ws.artifact_label": "成果物",
+  "ws.new_task_in_space": "「{name}」で新規タスク",
+  "ws.import_folder_label": "ローカルフォルダ（任意）",
+  "ws.import_folder_pick": "ローカルフォルダを選択",
+  "ws.import_folder_none": "未選択——スペースは空で作成され、ファイルはいつでも追加できます",
+  "ws.import_folder_clear": "クリア",
+  "ws.importing_progress": "{done}/{total} ファイルをインポート中…",
+  "ws.import_failed": "インポート失敗：{reason}",
+  "ws.import_done": "インポート完了：{copied} ファイル",
+  "ws.import_done_with_skips": "インポート完了：{copied} ファイル成功、{skipped} スキップ（スペース成果物参照）",
+  "ws.imported_file": "インポートファイル",
+  "sidebar.space_new_task": "このスペースで新規タスク",
+  "sidebar.space_new_task_failed": "タスク作成失敗：{reason}",
+  "ws.import_folder_change": "変更"
 }
