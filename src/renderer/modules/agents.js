@@ -2106,7 +2106,7 @@ async function _renderAgentDetailRuntime(agent) {
       // Mirror the create-modal behaviour: if the user's current name /
       // description are still the defaults of the previous CLI (or empty),
       // follow the new CLI's defaults. Otherwise, leave their edits alone.
-      const updates = { runtime: { kind: 'cli', cli: newCli } };
+      const updates = { runtime: { kind: 'p3394-gateway', cli: newCli } };
       const lang = (typeof getLang === 'function') ? getLang() : 'en';
       const prev = (typeof getCliDefaults === 'function') ? getCliDefaults(currentType) : null;
       const next2 = (typeof getCliDefaults === 'function') ? getCliDefaults(newCli) : null;
