@@ -32,6 +32,9 @@ import { writeInstallReceipt } from '../../../../src/main/features/skill_trust';
 
 /** The real engine in the source tree, standing in for a separately installed one. */
 const REAL_ENGINE = path.resolve(__dirname, '../../../../resources/guardrail/skill-sentry');
+// The open-source tree ships without the engine; engine-backed behaviours can
+// only be exercised where an engine is actually present.
+const HAS_REAL_ENGINE = fs.existsSync(REAL_ENGINE);
 
 let guardrail = '';
 let priorOverride: string | undefined;
@@ -148,7 +151,7 @@ describe('security scan › externally installed scanner', () => {
     else process.env.COGSEED_SENTRY_SKILL_DIR = priorSentry;
   });
 
-  it('performs a real deep scan instead of reporting the scanner absent', async () => {
+  it.skipIf(!HAS_REAL_ENGINE)('performs a real deep scan instead of reporting the scanner absent', async () => {
     guardrail = emptyGuardrail(true);
     process.env.COGSEED_GUARDRAIL_DIR = guardrail;
     process.env.COGSEED_SENTRY_SKILL_DIR = REAL_ENGINE;
@@ -162,7 +165,7 @@ describe('security scan › externally installed scanner', () => {
     expect(scan.rulesetVersion).toBeTruthy();
   }, 180_000);
 
-  it('blocks a malicious payload through the external engine', async () => {
+  it.skipIf(!HAS_REAL_ENGINE)('blocks a malicious payload through the external engine', async () => {
     guardrail = emptyGuardrail(true);
     process.env.COGSEED_GUARDRAIL_DIR = guardrail;
     process.env.COGSEED_SENTRY_SKILL_DIR = REAL_ENGINE;
@@ -183,7 +186,7 @@ describe('security scan › externally installed scanner', () => {
 
   // An engine with no drivable gate script must not read as "no scanner
   // installed" — that conflates a misconfigured install with an absent one.
-  it('finds the repository gate script when the engine ships none', () => {
+  it.skipIf(!HAS_REAL_ENGINE)('finds the repository gate script when the engine ships none', () => {
     process.env.COGSEED_SENTRY_SKILL_DIR = REAL_ENGINE;
 
     expect(findExternalScannerEngine(null)).toBe(REAL_ENGINE);

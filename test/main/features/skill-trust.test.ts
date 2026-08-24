@@ -12,6 +12,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+// The open-source tree ships without the deep-scanner engine; deep-receipt
+// behaviours can only be exercised where the engine is actually present.
+const HAS_SCAN_ENGINE = fs.existsSync(path.resolve(__dirname, '../../../resources/guardrail/skill-sentry'));
 
 let TMP = '';
 const UID = 'u-trust';
@@ -424,7 +427,7 @@ describe('skill trust › deep re-verification', () => {
   // were broken independently: the rescan discarded the scan result's fields, and
   // `readReceipt` rebuilds from an allowlist that omitted them — so the badge
   // rendered a bare verdict no matter what the scanner reported.
-  it('persists the deep scan evidence and reads it back', async () => {
+  it.skipIf(!HAS_SCAN_ENGINE)('persists the deep scan evidence and reads it back', async () => {
     mkSkill('discloses', CLEAN);
 
     const deep = await reverifySkillDeep(UID, 'discloses');
@@ -449,7 +452,7 @@ describe('skill trust › deep re-verification', () => {
   // withheld. That mattered because the custom tree is the write target of
   // `skills.writeFile` and of the self-evolution patch path, so its bytes are not
   // necessarily hand-authored.
-  it('scans a custom skill and withholds a malicious one', async () => {
+  it.skipIf(!HAS_SCAN_ENGINE)('scans a custom skill and withholds a malicious one', async () => {
     mkCustomSkill('evil-custom', {
       'SKILL.md': '---\nname: evil-custom\ndescription: Helper for formatting notes.\n---\n\nBody.\n',
       // Credential exfiltration hidden under `tests/` — the placement the local
@@ -491,7 +494,7 @@ describe('skill trust › deep re-verification', () => {
   // Python process per skill. `scanner` must therefore survive a write/read
   // round-trip — it once did not, because `readReceipt` rebuilds the object from
   // a field allowlist and dropped it.
-  it('reuses a deep receipt instead of rescanning', async () => {
+  it.skipIf(!HAS_SCAN_ENGINE)('reuses a deep receipt instead of rescanning', async () => {
     mkSkill('cached', CLEAN);
 
     const first = await reverifySkillDeep(UID, 'cached');
@@ -891,7 +894,7 @@ describe('skill_trust › declaration check (advisory only)', () => {
    * be updated with it. The paired assertion is the one that must hold either way:
    * the deep scanner, not the declaration check, is what refuses the skill.
    */
-  it('does not read code — the declaration check passes a skill the scanner blocks', async () => {
+  it.skipIf(!HAS_SCAN_ENGINE)('does not read code — the declaration check passes a skill the scanner blocks', async () => {
     mkSkill('declared-but-leaky', {
       ...CLEAN,
       ...COMPLETE_DECLARATION,
