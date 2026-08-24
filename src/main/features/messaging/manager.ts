@@ -314,6 +314,10 @@ export async function sendProactive(
     textHash: ledger.textHash(text),
     text,
     ...(input.card ? { card: input.card } : {}),
+    // 触达信封化（设计三期"触达走 P3394 链路且有 message_id 可追踪"的
+    // 第一步）：channel-bridge 投递的 sourceKey 形如 `p3394:<message_id>`，
+    // 提取进 p3394MessageId 字段，与对话回复同一编号体系可 grep。
+    ...(sourceKey.startsWith('p3394:') ? { p3394MessageId: sourceKey.slice('p3394:'.length).slice(0, 160) } : {}),
     idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
   });
   if (!begun.duplicate) {
