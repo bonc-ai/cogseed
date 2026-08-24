@@ -1033,6 +1033,10 @@ export type GroupEvent =
       turn_end?: boolean;
       turn_id?: string;
       source_msg_id?: string;
+      /** P3394 运单号贯穿（出站对齐）：触发本回合的入站信封 message_id。
+       * 渠道入站派发的 item 携带 sourceP3394Envelope，回合结束消息把它
+       * 带回 runtime，写入出站投递台账。 */
+      source_p3394_message_id?: string;
       seg?: number;
     }
   | {
@@ -1974,6 +1978,10 @@ export interface EnqueueParams {
    * messaging manager can pair a completing turn with the inbound that
    * started it. */
   source_msg_id?: string;
+  /** P3394 运单号贯穿（出站对齐）：item.sourceP3394Envelope 的 message_id。
+   * 回合结束消息经 emit 带回 runtime，写入出站投递台账，与入站台账
+   * 同编号体系。 */
+  source_p3394_message_id?: string;
   /** Mark this message as an internal plan-step dispatch (commander →
    * agent, fired by plan_executor). Persists for the agent's slice but the
    * renderer hides it from the user view — the plan announcement already
@@ -2616,6 +2624,7 @@ async function _enqueueBody(
     ...(params.turn_end ? { turn_end: true } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
     ...(params.source_msg_id ? { source_msg_id: params.source_msg_id } : {}),
+    ...(params.source_p3394_message_id ? { source_p3394_message_id: params.source_p3394_message_id } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
   });
   log.info(
@@ -3786,6 +3795,9 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        ...(item.sourceP3394Envelope
+          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
+          : {}),
       });
       await _syncStateStatus(state);
       log.info(
@@ -3937,6 +3949,9 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        ...(item.sourceP3394Envelope
+          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
+          : {}),
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
@@ -3965,6 +3980,9 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
+        ...(item.sourceP3394Envelope
+          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
+          : {}),
         process: processItems,
       });
       await markInFlight(uid, cid, actor.id, false);
@@ -4612,6 +4630,9 @@ async function runActorTurnBody(
             forceTo: [USER_ID],
             turn_end: true,
             turn_id: item.turnId,
+            ...(item.sourceP3394Envelope
+              ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
+              : {}),
           });
           await _syncStateStatus(state);
           return { kind: "early" };
@@ -5683,6 +5704,9 @@ async function runActorTurnBody(
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
       turn_id: item.turnId,
+      ...(item.sourceP3394Envelope
+        ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
+        : {}),
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
