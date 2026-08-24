@@ -2385,7 +2385,7 @@ describe('skills › import security gate', () => {
   const CLEAN_MD = '---\nname: tidy-text\ndescription: Tidy pasted plain text into clean Markdown.\n---\n'
     + '# Tidy\n\nNormalize punctuation and collapse blank lines. No file, network, or shell access.\n';
 
-  it('imports a clean skill and reports the passing verdict', async () => {
+  it.skipIf(!fs.existsSync(path.resolve(__dirname, '../../../resources/guardrail/skill-sentry')))('imports a clean skill and reports the passing verdict', async () => {
     const skills = await import('../../../src/main/features/skills');
     const src = writeSkill('clean', { 'SKILL.md': CLEAN_MD });
 

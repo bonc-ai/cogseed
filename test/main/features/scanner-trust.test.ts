@@ -23,6 +23,9 @@ import { skillPayloadHash } from '../../../src/main/features/skill_trust';
 import { scanSkillDir } from '../../../src/main/features/security/sentry-adapter';
 
 const REAL_SCANNER = path.resolve(__dirname, '../../../resources/guardrail/skill-sentry');
+// The open-source tree ships without the scanner; pinning and self-scan
+// behaviours can only run where the scanner is actually present.
+const HAS_SCANNER = fs.existsSync(REAL_SCANNER);
 
 let root = '';
 
@@ -49,7 +52,7 @@ afterEach(() => {
 describe('scanner trust › why content scanning cannot be used', () => {
   // The premise. If this ever passes clean, the exemption has lost its
   // justification and should be reconsidered.
-  it('blocks itself when content-scanned, because its rules contain what it detects', async () => {
+  it.skipIf(!HAS_SCANNER)('blocks itself when content-scanned, because its rules contain what it detects', async () => {
     const dir = stageScanner();
 
     const scan = await scanSkillDir(dir, 'thirdparty');
@@ -60,7 +63,7 @@ describe('scanner trust › why content scanning cannot be used', () => {
 });
 
 describe('scanner trust › pinned tree hash', () => {
-  it('verifies an untouched tree against its pin', () => {
+  it.skipIf(!HAS_SCANNER)('verifies an untouched tree against its pin', () => {
     const dir = stageScanner();
     pin(dir);
 
@@ -69,7 +72,7 @@ describe('scanner trust › pinned tree hash', () => {
   });
 
   // The reason this mechanism exists at all: a modified rule file must not load.
-  it('detects a modified rule file and withholds the scanner', () => {
+  it.skipIf(!HAS_SCANNER)('detects a modified rule file and withholds the scanner', () => {
     const dir = stageScanner();
     pin(dir);
 
@@ -82,7 +85,7 @@ describe('scanner trust › pinned tree hash', () => {
     expect(scannerTrustedForLoad(dir).trusted).toBe(false);
   });
 
-  it('detects an added file, not only edits to existing ones', () => {
+  it.skipIf(!HAS_SCANNER)('detects an added file, not only edits to existing ones', () => {
     const dir = stageScanner();
     pin(dir);
 
@@ -94,7 +97,7 @@ describe('scanner trust › pinned tree hash', () => {
   // The pin lives beside the tree, not inside it: the tree hash covers every file
   // in the directory, so an inside pin would change the value it records and no
   // freshly pinned tree could ever verify.
-  it('keeps the pin outside the hashed tree', () => {
+  it.skipIf(!HAS_SCANNER)('keeps the pin outside the hashed tree', () => {
     const dir = stageScanner();
     pin(dir);
 
@@ -107,7 +110,7 @@ describe('scanner trust › pinned tree hash', () => {
 
   // Not shown intact, not shown modified. Folding this into `verified` would make
   // an unsigned drop-in look checked.
-  it('reports an unpinned tree as neither verified nor tampered', () => {
+  it.skipIf(!HAS_SCANNER)('reports an unpinned tree as neither verified nor tampered', () => {
     const dir = stageScanner();
 
     expect(verifyScannerIntegrity(dir).status).toBe('unpinned');
@@ -116,7 +119,7 @@ describe('scanner trust › pinned tree hash', () => {
   // Deliberate fail-open: refusing an unverifiable scanner would disable scanning
   // for every other skill, turning a missing pin into an outage of the whole
   // security path. Only a real mismatch withholds it.
-  it('still loads an unpinned scanner rather than disabling all scanning', () => {
+  it.skipIf(!HAS_SCANNER)('still loads an unpinned scanner rather than disabling all scanning', () => {
     const dir = stageScanner();
 
     expect(scannerTrustedForLoad(dir)).toEqual({ trusted: true, integrity: 'unpinned' });
