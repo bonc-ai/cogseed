@@ -849,6 +849,11 @@ describe('messaging manager adapter flow', () => {
         userId: 'user-1',
         cid: inbound.cid,
         text: 'hello agent',
+        p3394_envelope: expect.objectContaining({
+          idempotency_key: `${created.id}:incoming-1`,
+          kind: 'message',
+          sender: expect.objectContaining({ agent_id: 'user-1', channel_instance_id: created.id }),
+        }),
       }));
       const entry = await ledger.readInbound('user-1', ledger.inboundKey(created.id, 'incoming-1'));
       expect(entry?.status).toBe('accepted');
@@ -3121,3 +3126,80 @@ describe('iLink URL trust split (API base vs scan URL)', () => {
   });
 });
 
+describe('messaging manager P3394 projection fallback', () => {
+  it('投影抛错时降级为无信封派发，消息不丢', async () => {
+    const groupSend = vi.fn(async () => ({ ok: true }));
+    const subscribe = vi.fn((_uid: string, _cid: string, _listener: (event: unknown) => void) => () => {});
+    const adapter: MessagingAdapter = {
+      platform: 'telegram',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      async sendMessage() {
+        return { deliveryId: 'fallback-reply-1' };
+      },
+    };
+
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/messaging/p3394-projection', () => ({
+      projectInboundToP3394: vi.fn(() => {
+        throw new Error('projection boom');
+      }),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
+
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'telegram',
+        displayName: 'Fallback Telegram',
+        policy: { allowUserIds: ['user-1'] },
+        secret: { botToken: '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890' },
+      });
+
+      await manager.setEnabled('user-1', created.id, true);
+      await vi.waitFor(async () => {
+        const instances = await manager.listInstances('user-1');
+        expect(instances[0]?.status.kind).toBe('connected');
+      });
+      const inbound = await manager.ingestInbound('user-1', {
+        platform: 'telegram',
+        instanceId: created.id,
+        externalMessageId: 'fallback-1',
+        externalChatId: 'chat-fb',
+        externalUserId: 'user-1',
+        text: 'still works',
+        isGroup: false,
+        mentionPresent: false,
+        receivedAt: new Date().toISOString(),
+      });
+
+      expect(inbound.accepted).toBe(true);
+      expect(groupSend).toHaveBeenCalledTimes(1);
+      const arg = groupSend.mock.calls[0][0] as Record<string, unknown>;
+      expect(arg.p3394_envelope).toBeUndefined();
+      expect(arg.text).toBe('still works');
+    } finally {
+      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      vi.doUnmock('../../../src/main/features/messaging/p3394-projection');
+      vi.doUnmock('../../../src/main/features/group_chat');
+      vi.doUnmock('../../../src/main/features/group_chat/bus');
+      await import('../../../src/main/features/messaging/manager').then((m) => m.stopForUser('user-1'));
+    }
+  });
+});
