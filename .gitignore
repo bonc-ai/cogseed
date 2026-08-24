@@ -47,10 +47,9 @@ package.json.new
 # deliberately; this file is local state and would churn per developer.
 /.claude/settings.local.json
 
-# Written by scripts/strip-closed-source-scanner.mjs when building an
-# open-source distribution. Not source: its presence in a normal checkout would
-# tell the app the bundled scanner is intentionally absent.
-/resources/guardrail/SCANNER_ABSENT
+# Declares the intentional absence of the bundled deep scanner. Since the
+# engine itself is not distributed in this repository, the marker is tracked
+# so a fresh clone reports `scanner_absent` instead of `unknown`.
 # Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
 /.hermes/
 
