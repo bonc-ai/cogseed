@@ -146,10 +146,11 @@
     box.innerHTML = nodes.map((node) => {
       const peer = peers.find((p) => p && (p.agent_id === node.expected_identity || p.endpoint === node.endpoint));
       const online = !!(peer && peer.online);
+      const disabled = !!(peer && peer.disabled);
       const lastSeen = peer ? formatRelative(peer.last_seen_at) : '';
       return rowHtml({
         name: node.label,
-        badgeHtml: badge(online ? 'on' : 'off', t(online ? 'dashboard.node_online' : 'dashboard.node_offline')),
+        badgeHtml: badge(disabled ? 'off' : online ? 'on' : 'off', t(disabled ? 'dashboard.node_disabled' : online ? 'dashboard.node_online' : 'dashboard.node_offline')),
         sub: [
           node.endpoint,
           lastSeen ? `${t('dashboard.last_seen')}：${lastSeen}` : '',
@@ -161,7 +162,8 @@
           [t('dashboard.detail_last_seen'), lastSeen],
           [t('dashboard.detail_locality'), t('dashboard.locality_external')],
         ]),
-        actions: `<button type="button" class="btn btn-sm" data-dash-action="test-node" data-id="${esc(node.id)}">${esc(t('dashboard.test'))}</button>
+        actions: `${peer ? `<button type="button" class="btn btn-sm" data-dash-action="toggle-node" data-agent-id="${esc(node.expected_identity || '')}" data-disabled="${disabled ? '1' : ''}">${esc(t(disabled ? 'dashboard.enable_node' : 'dashboard.disable_node'))}</button>` : ''}
+          <button type="button" class="btn btn-sm" data-dash-action="test-node" data-id="${esc(node.id)}">${esc(t('dashboard.test'))}</button>
           <button type="button" class="btn btn-sm btn-danger" data-dash-action="remove-node" data-id="${esc(node.id)}">${esc(t('dashboard.remove'))}</button>`,
       });
     }).join('');
@@ -321,6 +323,22 @@
         button.classList.remove('is-loading');
         refresh(false);
       });
+    } else if (action === 'toggle-node') {
+      // 节点停用/启用（花名册维度，不删配置）：停用后不再被派发。
+      const agentId = button.dataset.agentId;
+      const nextDisabled = button.dataset.disabled !== '1';
+      if (!agentId) return;
+      button.disabled = true;
+      window.cogseed.invoke('p3394.peers.toggle', { agentId, disabled: nextDisabled })
+        .then((res) => {
+          if (!res || !res.ok) {
+            if (typeof uiToast === 'function') uiToast((res && res.error) || t('dashboard.node_toggle_failed'));
+          }
+        })
+        .catch((err) => {
+          if (typeof uiToast === 'function') uiToast((err && err.message) || t('dashboard.node_toggle_failed'));
+        })
+        .finally(() => refresh(false));
     } else if (action === 'remove-node') {
       const id = button.dataset.id;
       const doRemove = () => window.cogseed.invoke('p3394.remote.remove', { id }).then(() => refresh(false));

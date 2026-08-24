@@ -86,7 +86,15 @@ export const p3394ExternalHandlers = {
   'p3394.remote.list': async () => listRemoteNodes(),
   'p3394.remote.add': async (args: { label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     addRemoteNode(args ?? {}),
-  'p3394.remote.remove': async (args: { id?: unknown }) => removeRemoteNode(args?.id),
+  // 移除远端节点 = 删配置 + 撤销花名册注册（同一 agent_id），否则节点
+  // 下次 hello 又会重新出现，用户视角"删不掉"。
+  'p3394.remote.remove': async (args: { id?: unknown }) => {
+    const removed = removeRemoteNode(args?.id);
+    if (removed.ok && removed.expected_identity) {
+      try { revokeP3394Peer(removed.expected_identity); } catch { /* best effort */ }
+    }
+    return removed.ok ? { ok: true } : removed;
+  },
   'p3394.remote.test': async (args: { id?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     (typeof args?.id === 'string' && args.id
       ? testRemoteNodeById(args.id)

@@ -17721,6 +17721,17 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 /* P3394 已接入节点（外接 tab 统一注册表管理区） */
 .agents-ext-peers-empty { font-size: 12px; color: var(--cs-ink-soft, #666); padding: 6px 2px; }
+/* 名册迁入 Dashboard 后的跳转入口（创建弹窗 External tab 底部） */
+.agents-ext-peers-moved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm, 10px);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
 .agents-ext-peer-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;

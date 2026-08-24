@@ -125,13 +125,15 @@ export function addRemoteNode(input: {
   return { ok: true, node: toView(node) };
 }
 
-export function removeRemoteNode(id: unknown): { ok: boolean; error?: { reason: string; message: string } } {
+export function removeRemoteNode(id: unknown): { ok: boolean; expected_identity?: string; error?: { reason: string; message: string } } {
   if (typeof id !== 'string' || !id) return { ok: false, error: { reason: 'invalid_id', message: '节点 id 无效' } };
   const data = readFile();
-  if (!data.nodes[id]) return { ok: false, error: { reason: 'not_found', message: '节点不存在' } };
+  const node = data.nodes[id];
+  if (!node) return { ok: false, error: { reason: 'not_found', message: '节点不存在' } };
   delete data.nodes[id];
   writeFile(data);
-  return { ok: true };
+  // 把被删节点的期望身份带回给调用方（IPC 层据此撤销花名册注册）。
+  return { ok: true, expected_identity: node.expected_identity };
 }
 
 export type RemoteNodeTestResult =

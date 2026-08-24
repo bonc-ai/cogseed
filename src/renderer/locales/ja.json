@@ -4916,5 +4916,11 @@
   "dashboard.ago_seconds": "{n} 秒前",
   "dashboard.ago_minutes": "{n} 分前",
   "dashboard.ago_hours": "{n} 時間前",
-  "dashboard.ago_days": "{n} 日前"
+  "dashboard.ago_days": "{n} 日前",
+  "agents.peers.moved": "ノードの管理（有効化/無効化/削除）は「エージェント総覧」へ移動しました",
+  "agents.peers.open_dashboard": "エージェント総覧を開く",
+  "dashboard.disable_node": "無効化",
+  "dashboard.enable_node": "有効化",
+  "dashboard.node_disabled": "無効",
+  "dashboard.node_toggle_failed": "操作に失敗しました。再試行してください"
 }

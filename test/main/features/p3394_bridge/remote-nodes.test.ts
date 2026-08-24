@@ -37,6 +37,12 @@ describe('p3394 remote nodes store', () => {
     expect(removeRemoteNode(added.node.id).ok).toBe(true);
     expect(removeRemoteNode(added.node.id)).toMatchObject({ ok: false, error: { reason: 'not_found' } });
     expect(listRemoteNodes().nodes).toHaveLength(0);
+    // 移除返回被删节点的期望身份：IPC 层据此撤销花名册注册（联动）
+    const withIdentity = addRemoteNode({ label: 'n2', endpoint: 'http://10.0.0.2:8444', token: 'tok2', expected_identity: 'peer-2' });
+    expect(withIdentity.ok).toBe(true);
+    if (withIdentity.ok) {
+      expect(removeRemoteNode(withIdentity.node.id)).toMatchObject({ ok: true, expected_identity: 'peer-2' });
+    }
   });
 });
 

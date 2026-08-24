@@ -4916,5 +4916,11 @@
   "dashboard.ago_seconds": "{n}s atrás",
   "dashboard.ago_minutes": "{n}min atrás",
   "dashboard.ago_hours": "{n}h atrás",
-  "dashboard.ago_days": "{n}d atrás"
+  "dashboard.ago_days": "{n}d atrás",
+  "agents.peers.moved": "O gerenciamento de nós (ativar/desativar/remover) mudou para o Panorama de Agentes",
+  "agents.peers.open_dashboard": "Abrir Panorama de Agentes",
+  "dashboard.disable_node": "Desativar",
+  "dashboard.enable_node": "Ativar",
+  "dashboard.node_disabled": "Desativado",
+  "dashboard.node_toggle_failed": "Falha na operação, tente novamente"
 }

@@ -6011,5 +6011,11 @@
   "dashboard.ago_seconds": "{n}s ago",
   "dashboard.ago_minutes": "{n}m ago",
   "dashboard.ago_hours": "{n}h ago",
-  "dashboard.ago_days": "{n}d ago"
+  "dashboard.ago_days": "{n}d ago",
+  "agents.peers.moved": "Node enable/disable/remove management has moved to the Agents Overview",
+  "agents.peers.open_dashboard": "Open Agents Overview",
+  "dashboard.disable_node": "Disable",
+  "dashboard.enable_node": "Enable",
+  "dashboard.node_disabled": "Disabled",
+  "dashboard.node_toggle_failed": "Operation failed, please retry"
 }

@@ -6011,5 +6011,11 @@
   "dashboard.ago_seconds": "{n} 秒前",
   "dashboard.ago_minutes": "{n} 分钟前",
   "dashboard.ago_hours": "{n} 小时前",
-  "dashboard.ago_days": "{n} 天前"
+  "dashboard.ago_days": "{n} 天前",
+  "agents.peers.moved": "已接入节点的启停 / 停用 / 移除已迁入「智能体总览」",
+  "agents.peers.open_dashboard": "前往智能体总览",
+  "dashboard.disable_node": "停用",
+  "dashboard.enable_node": "启用",
+  "dashboard.node_disabled": "已停用",
+  "dashboard.node_toggle_failed": "操作失败，请重试"
 }
