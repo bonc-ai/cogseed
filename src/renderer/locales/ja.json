@@ -4887,5 +4887,11 @@
   "dashboard.remove": "削除",
   "dashboard.remove_confirm": "このリモートノードを削除しますか？",
   "dashboard.node_online": "オンライン",
-  "dashboard.node_offline": "オフライン"
+  "dashboard.node_offline": "オフライン",
+  "dashboard.subtitle": "内蔵・ローカル・リモートのエージェントを一元管理",
+  "dashboard.loading": "読み込み中…",
+  "dashboard.builtin_row": "CogSeed 本体ロール",
+  "dashboard.builtin_members": "メンバー {count} 名",
+  "dashboard.builtin_desc": "CogSeed 本体が演じます · 「表示」で AI チームを開く",
+  "dashboard.gateway_toggle_failed": "操作に失敗しました。再試行してください"
 }

@@ -5982,5 +5982,11 @@
   "dashboard.remove": "Remove",
   "dashboard.remove_confirm": "Remove this remote node?",
   "dashboard.node_online": "online",
-  "dashboard.node_offline": "offline"
+  "dashboard.node_offline": "offline",
+  "dashboard.subtitle": "Manage builtin, local, and remote agents in one place",
+  "dashboard.loading": "Loading…",
+  "dashboard.builtin_row": "CogSeed built-in roles",
+  "dashboard.builtin_members": "{count} members",
+  "dashboard.builtin_desc": "Played by CogSeed itself · click View to open the AI team",
+  "dashboard.gateway_toggle_failed": "Operation failed, please retry"
 }

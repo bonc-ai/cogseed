@@ -4887,5 +4887,11 @@
   "dashboard.remove": "Remover",
   "dashboard.remove_confirm": "Remover este nó remoto?",
   "dashboard.node_online": "online",
-  "dashboard.node_offline": "offline"
+  "dashboard.node_offline": "offline",
+  "dashboard.subtitle": "Gerencie agentes integrados, locais e remotos num só lugar",
+  "dashboard.loading": "Carregando…",
+  "dashboard.builtin_row": "Papéis integrados do CogSeed",
+  "dashboard.builtin_members": "{count} membros",
+  "dashboard.builtin_desc": "Representados pelo próprio CogSeed · clique em Ver para abrir a equipe",
+  "dashboard.gateway_toggle_failed": "Falha na operação, tente novamente"
 }

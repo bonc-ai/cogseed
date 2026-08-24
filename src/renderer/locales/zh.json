@@ -5982,5 +5982,11 @@
   "dashboard.remove": "移除",
   "dashboard.remove_confirm": "确定移除这个远端节点吗？",
   "dashboard.node_online": "在线",
-  "dashboard.node_offline": "离线"
+  "dashboard.node_offline": "离线",
+  "dashboard.subtitle": "统一管理内置、本机与远端的智能体",
+  "dashboard.loading": "正在加载…",
+  "dashboard.builtin_row": "CogSeed 本体角色",
+  "dashboard.builtin_members": "{count} 位成员",
+  "dashboard.builtin_desc": "由 CogSeed 本体扮演 · 点击查看进入 AI 团队",
+  "dashboard.gateway_toggle_failed": "操作失败，请重试"
 }
