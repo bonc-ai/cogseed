@@ -59,3 +59,6 @@ package.json.new
 # updates-server installer artifacts (large binaries; published via
 # updates-server/publish.cjs which copies them here)
 /updates-server/downloads/
+
+# 内部全流程开发手册（AGENTS.md，团队内部用，勿提交/勿推送）
+/AGENTS.md
