@@ -5527,8 +5527,10 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const menuTitle = escapeHtml(t('project.menu.more_actions'));
   // ZCode 式行内相对时间（58分 / 3小时 / 6小时）：最近任务平铺列表没有时间桶标题，
   // 行尾的相对时间承担「新近度」信号。置顶区/空间组同样受益（一眼看出哪些最近动过）。
-  const timeHtml = _renderConversationRelativeTime(c)
-    ? `<span class="conv-item-time" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(_renderConversationRelativeTime(c))}</span>`
+  // data-time-iso 是 ticker 定点刷新的时间源（见 _refreshConversationRelativeTimes）。
+  const timeText = _renderConversationRelativeTime(c);
+  const timeHtml = timeText
+    ? `<span class="conv-item-time" data-time-iso="${escapeHtml(_conversationActivityIso(c) || '')}" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(timeText)}</span>`
     : '';
   // Auto-fired conversations get the same clock icon as the sidebar
   // "Automation" tab, rendered to the LEFT of the title text. Visible in
@@ -5626,9 +5628,8 @@ function _refreshConvTaskLine(cid) {
   else item.insertAdjacentHTML('beforeend', line);
 }
 
-/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
-function _renderConversationRelativeTime(c) {
-  const iso = _conversationActivityIso(c);
+/** 相对时间纯计算（iso → 「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _relativeTimeFromIso(iso) {
   if (!iso) return '';
   const dt = new Date(iso);
   if (isNaN(dt.getTime())) return '';
@@ -5641,6 +5642,37 @@ function _renderConversationRelativeTime(c) {
   const d = Math.floor(h / 24);
   if (d < 30) return t('sidebar.time_days', { n: d });
   return t('sidebar.time_old');
+}
+
+/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _renderConversationRelativeTime(c) {
+  return _relativeTimeFromIso(_conversationActivityIso(c));
+}
+
+// 相对时间不会自己走：整列表只在数据事件（新消息 / 置顶 / 重命名…）时重渲染，
+// 时间文本会一直冻结到重启或手动刷新。ticker 定点刷新 .conv-item-time 的文本
+// （时间源挂在 data-time-iso 上，不回查会话缓存），避免周期性全量重渲染打断
+// 行内重命名、合并勾选和滚动位置。
+let _convTimeTickerStarted = false;
+function _refreshConversationRelativeTimes() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  document.querySelectorAll('.conv-item-time[data-time-iso]').forEach((el) => {
+    const next = _relativeTimeFromIso(el.getAttribute('data-time-iso'));
+    if (next && el.textContent !== next) el.textContent = next;
+  });
+}
+function _ensureConversationTimeTicker() {
+  if (_convTimeTickerStarted || typeof setInterval !== 'function') return;
+  _convTimeTickerStarted = true;
+  setInterval(() => {
+    if (typeof document === 'undefined' || document.hidden) return;
+    _refreshConversationRelativeTimes();
+  }, 30000);
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) _refreshConversationRelativeTimes();
+    });
+  }
 }
 
 /** 绝对时间（悬停 title 用）。 */
@@ -7065,6 +7097,7 @@ function _sidebarHasMoreOld() {
 function renderConversationList() {
   _conversationBucketDateKey = _conversationLocalDateKey();
   const container = document.getElementById('conversation-list');
+  _ensureConversationTimeTicker();
   _sortConversationCacheForSidebar();
   // 三段结构：置顶（pinned）→ 空间（space_id）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）。
   // pin 的会话只在置顶区出现（不重复进空间/最近区）。

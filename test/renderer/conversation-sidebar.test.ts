@@ -1709,3 +1709,71 @@ describe('new chat quick-start scenarios', () => {
     expect(toasts).toHaveLength(0);
   });
 });
+
+describe('conversation sidebar relative time refresh', () => {
+  const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  function fakeTimeEl(iso: string, text: string) {
+    return {
+      _text: text,
+      writes: 0,
+      get textContent() { return this._text; },
+      set textContent(v: string) { this._text = v; this.writes += 1; },
+      getAttribute: (name: string) => (name === 'data-time-iso' ? iso : null),
+    };
+  }
+
+  it('stamps the rendered time span with its ISO source', () => {
+    const context = loadConversationRenderer();
+    const iso = isoAgo(13 * 60_000);
+
+    const html = context._renderConversationSidebarItem({
+      conversation_id: 'c1',
+      title: 'Stale clock',
+      updated_at: iso,
+    });
+
+    expect(html).toContain('class="conv-item-time"');
+    expect(html).toContain(`data-time-iso="${iso}"`);
+  });
+
+  it('classifies relative-time buckets from a bare ISO string', () => {
+    const context = loadConversationRenderer();
+
+    expect(context._relativeTimeFromIso(isoAgo(10_000))).toBe('Just now');
+    expect(context._relativeTimeFromIso(isoAgo(13 * 60_000))).toBe('13m ago');
+    expect(context._relativeTimeFromIso(isoAgo(3 * 3_600_000))).toBe('3h ago');
+    expect(context._relativeTimeFromIso(isoAgo(2 * 86_400_000))).toBe('2d ago');
+    expect(context._relativeTimeFromIso(isoAgo(40 * 86_400_000))).toBe('Earlier');
+    expect(context._relativeTimeFromIso('')).toBe('');
+    expect(context._relativeTimeFromIso('not-a-date')).toBe('');
+  });
+
+  it('refreshes stale time texts in place and skips unchanged or empty rows', () => {
+    const context = loadConversationRenderer();
+    const stale = fakeTimeEl(isoAgo(13 * 60_000), 'Just now');
+    const fresh = fakeTimeEl(isoAgo(5 * 60_000), '5m ago');
+    const noIso = fakeTimeEl('', '13m ago');
+    context.document.querySelectorAll = () => [stale, fresh, noIso];
+
+    context._refreshConversationRelativeTimes();
+
+    expect(stale.textContent).toBe('13m ago');
+    expect(stale.writes).toBe(1);
+    expect(fresh.textContent).toBe('5m ago');
+    expect(fresh.writes).toBe(0);
+    expect(noIso.textContent).toBe('13m ago');
+    expect(noIso.writes).toBe(0);
+  });
+
+  it('renders the list without throwing in a host that has no setInterval', () => {
+    const context = loadConversationRenderer();
+    const container = { innerHTML: '', querySelectorAll: () => [] };
+    context.document.getElementById = (id: string) => (id === 'conversation-list' ? container : null);
+    context.conversations = [{ conversation_id: 'c1', title: 'Guarded', updated_at: isoAgo(60_000) }];
+
+    // 沙箱未提供 setInterval：若 ticker 启动缺少类型守卫，这里会直接 TypeError。
+    expect(() => context.renderConversationList()).not.toThrow();
+    expect(container.innerHTML).toContain('conv-item-time');
+  });
+});
