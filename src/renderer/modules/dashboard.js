@@ -16,15 +16,17 @@
   let _lastData = null;
 
   async function fetchDashboardData(force) {
-    const [externalRes, remoteRes, agentsRes] = await Promise.all([
+    const [externalRes, remoteRes, agentsRes, channelsRes] = await Promise.all([
       window.cogseed.invoke('p3394.external.list', { force: force === true }),
       window.cogseed.invoke('p3394.remote.list', {}),
       window.cogseed.invoke('agents.list', {}).catch(() => null),
+      window.cogseed.invoke('messaging.list', {}).catch(() => null),
     ]);
     return {
       external: externalRes || { entries: [], gateways: [], bound: {}, peers: [] },
       remote: remoteRes || { nodes: [] },
       agents: (agentsRes && agentsRes.agents) || [],
+      channels: (channelsRes && channelsRes.instances) || [],
     };
   }
 
@@ -46,13 +48,42 @@
     return `<span class="dash-badge dash-badge-${esc(kind)}">${esc(text)}</span>`;
   }
 
-  function rowHtml({ name, badgeHtml, sub, subMono, actions }) {
-    return `<div class="dash-row">
-      <div class="dash-row-main">
-        <div class="dash-row-name">${esc(name)}${badgeHtml || ''}</div>
-        ${sub ? `<div class="dash-row-sub${subMono ? ' dash-mono' : ''}">${esc(sub)}</div>` : ''}
+  // 相对时间（最近心跳展示）：xx 秒/分钟/小时前，超过 1 天给绝对日期。
+  function formatRelative(iso) {
+    if (!iso) return '';
+    const ts = new Date(iso).getTime();
+    if (!Number.isFinite(ts)) return '';
+    const diff = Date.now() - ts;
+    if (diff < 0) return '';
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return t('dashboard.ago_seconds', { n: sec });
+    const min = Math.floor(sec / 60);
+    if (min < 60) return t('dashboard.ago_minutes', { n: min });
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return t('dashboard.ago_hours', { n: hr });
+    const day = Math.floor(hr / 24);
+    if (day < 7) return t('dashboard.ago_days', { n: day });
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // 详情键值网格（行展开块）。
+  function detailGrid(pairs) {
+    const rows = pairs.filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `<div class="dash-detail-item"><span class="dash-detail-key">${esc(k)}</span><span class="dash-detail-val">${esc(v)}</span></div>`).join('');
+    return rows ? `<div class="dash-row-detail"><div class="dash-detail-grid">${rows}</div></div>` : '';
+  }
+
+  function rowHtml({ name, badgeHtml, sub, subMono, actions, detail, open }) {
+    return `<div class="dash-row-wrap${detail ? ' has-detail' : ''}${open ? ' is-open' : ''}">
+      <div class="dash-row" ${detail ? 'data-dash-action="toggle-detail" role="button" tabindex="0" aria-expanded="false"' : ''}>
+        <div class="dash-row-main">
+          <div class="dash-row-name">${esc(name)}${badgeHtml || ''}</div>
+          ${sub ? `<div class="dash-row-sub${subMono ? ' dash-mono' : ''}">${esc(sub)}</div>` : ''}
+        </div>
+        <div class="dash-row-actions">${actions || ''}</div>
       </div>
-      <div class="dash-row-actions">${actions || ''}</div>
+      ${detail || ''}
     </div>`;
   }
 
@@ -82,10 +113,22 @@
       const gw = gateways.find((g) => g && g.cli === entry.type);
       const running = !!(gw && gw.running);
       const boundNames = (bound[entry.type] || []).join('、');
+      const peer = (data.external.peers || []).find((p) => p && p.locality === 'same_host'
+        && (p.endpoints || []).some((ep) => String(ep).includes(String(entry.type))));
+      const lastSeen = peer ? formatRelative(peer.last_seen_at) : '';
       return rowHtml({
         name: entry.displayName || entry.type,
         badgeHtml: badge(running ? 'on' : 'off', t(running ? 'dashboard.gateway_running' : 'dashboard.gateway_offline')),
-        sub: boundNames ? `${t('dashboard.bound_agents')}：${boundNames}` : '',
+        sub: [
+          boundNames ? `${t('dashboard.bound_agents')}：${boundNames}` : '',
+          lastSeen ? `${t('dashboard.last_seen')}：${lastSeen}` : '',
+        ].filter(Boolean).join(' · '),
+        detail: detailGrid([
+          [t('dashboard.detail_cli'), entry.type],
+          [t('dashboard.detail_bound_agents'), boundNames],
+          [t('dashboard.detail_last_seen'), lastSeen],
+          [t('dashboard.detail_locality'), t('dashboard.locality_same_host')],
+        ]),
         actions: `<button type="button" class="btn btn-sm" data-dash-action="toggle-gateway" data-cli="${esc(entry.type)}" data-running="${running ? '1' : ''}">${running ? esc(t('dashboard.stop')) : esc(t('dashboard.start'))}</button>`,
       });
     }).join('');
@@ -103,15 +146,66 @@
     box.innerHTML = nodes.map((node) => {
       const peer = peers.find((p) => p && (p.agent_id === node.expected_identity || p.endpoint === node.endpoint));
       const online = !!(peer && peer.online);
+      const lastSeen = peer ? formatRelative(peer.last_seen_at) : '';
       return rowHtml({
         name: node.label,
         badgeHtml: badge(online ? 'on' : 'off', t(online ? 'dashboard.node_online' : 'dashboard.node_offline')),
-        sub: node.endpoint,
-        subMono: true,
+        sub: [
+          node.endpoint,
+          lastSeen ? `${t('dashboard.last_seen')}：${lastSeen}` : '',
+        ].filter(Boolean).join(' · '),
+        subMono: false,
+        detail: detailGrid([
+          [t('dashboard.form_endpoint'), node.endpoint],
+          [t('dashboard.detail_identity'), node.expected_identity || '—'],
+          [t('dashboard.detail_last_seen'), lastSeen],
+          [t('dashboard.detail_locality'), t('dashboard.locality_external')],
+        ]),
         actions: `<button type="button" class="btn btn-sm" data-dash-action="test-node" data-id="${esc(node.id)}">${esc(t('dashboard.test'))}</button>
           <button type="button" class="btn btn-sm btn-danger" data-dash-action="remove-node" data-id="${esc(node.id)}">${esc(t('dashboard.remove'))}</button>`,
       });
     }).join('');
+  }
+
+  // 渠道即节点（第三期）：运行中的 messaging 渠道实例也注册为 P3394
+  // 花名册节点，在总览里可见（设计三期验收："出现在花名册与 Dashboard"）。
+  function renderChannels(data) {
+    const box = el('dash-channel-list');
+    if (!box) return;
+    const instances = data.channels || [];
+    const enabled = instances.filter((i) => i && i.enabled);
+    if (!instances.length) {
+      box.innerHTML = `<div class="dash-empty">${esc(t('dashboard.channels_empty'))}</div>`;
+      return;
+    }
+    const bridgePeers = (data.external.peers || []).filter((p) => p && p.node_kind === 'channel_bridge');
+    box.innerHTML = instances.map((instance) => {
+      const connected = instance.status && instance.status.kind === 'connected';
+      const bridgeAgentId = `channel-${instance.id}`;
+      const bridged = bridgePeers.some((p) => p.agent_id === bridgeAgentId);
+      const statusKey = !instance.enabled ? 'dashboard.channel_disabled'
+        : connected ? 'dashboard.channel_connected' : 'dashboard.channel_offline';
+      const badgeKind = !instance.enabled || !connected ? 'off' : 'on';
+      return rowHtml({
+        name: instance.displayName || instance.platform,
+        badgeHtml: badge(badgeKind, t(statusKey)),
+        sub: [
+          instance.platform,
+          bridged ? t('dashboard.channel_bridged') : '',
+        ].filter(Boolean).join(' · '),
+        detail: detailGrid([
+          [t('dashboard.detail_platform'), instance.platform],
+          [t('dashboard.detail_instance_id'), instance.id],
+          [t('dashboard.detail_status'), instance.status && instance.status.kind],
+          [t('dashboard.detail_p3394_node'), bridged ? bridgeAgentId : '—'],
+        ]),
+        actions: `<button type="button" class="btn btn-sm" data-dash-action="manage-channel">${esc(t('dashboard.channel_manage'))}</button>`,
+      });
+    }).join('');
+    if (enabled.length) {
+      // 供 Dashboard 数据消费说明：启用中的实例同时是渠道桥节点候选
+      box.dataset.bridgedCount = String(bridgePeers.length);
+    }
   }
 
   function render(data) {
@@ -119,6 +213,7 @@
     renderBuiltin(data);
     renderLocal(data);
     renderRemote(data);
+    renderChannels(data);
   }
 
   async function refresh(force) {
@@ -188,7 +283,15 @@
     const button = event.target.closest('[data-dash-action]');
     if (!button) return;
     const action = button.dataset.dashAction;
-    if (action === 'open-agents') {
+    if (action === 'toggle-detail') {
+      const wrap = button.closest('.dash-row-wrap');
+      if (wrap) wrap.classList.toggle('is-open');
+    } else if (action === 'manage-channel') {
+      // 渠道实例管理在「连接 → 触点」面板：跳过去并切到触点 tab。
+      if (typeof window.setView === 'function') window.setView('connections');
+      const tab = document.querySelector('[data-connections-tab="touchpoints"]');
+      if (tab) tab.click();
+    } else if (action === 'open-agents') {
       if (typeof window.setView === 'function') window.setView('agents');
     } else if (action === 'add-local') {
       // 打开现有创建弹窗的外接 tab（agents.js 的 openAgentModal）
@@ -235,6 +338,15 @@
     if (!panel.dataset.wired) {
       panel.dataset.wired = '1';
       panel.addEventListener('click', onDashboardClick);
+      // 行展开的键盘可达性：role=button 的行按 Enter/Space 等价点击。
+      panel.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const row = event.target.closest?.('[data-dash-action="toggle-detail"]');
+        if (row && row === event.target) {
+          event.preventDefault();
+          row.click();
+        }
+      });
       const form = el('dash-remote-form');
       if (form) form.addEventListener('submit', submitRemoteForm);
       const refreshBtn = el('dash-refresh-btn');
