@@ -20,6 +20,7 @@ import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { projectInboundToP3394 } from './p3394-projection';
+import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
@@ -977,6 +978,14 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       error: (error as Error).message,
     });
   }
+  // 第三期「渠道即节点」：实例运行即注册为 P3394 节点（幂等，桥未启动时静默跳过）
+  const bridgeRegister = registerChannelBridgeNode(loaded.instance);
+  if (!bridgeRegister.ok && bridgeRegister.error !== 'p3394_bridge_unavailable') {
+    log.warn('messaging channel-bridge node registration failed', {
+      instanceId,
+      error: bridgeRegister.error,
+    });
+  }
 }
 
 async function stopRuntime(uid: string, instanceId: string): Promise<void> {
@@ -989,6 +998,7 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   runtime.active = false;
   map?.delete(instanceId);
   if (!map?.size) runtimes.delete(uid);
+  unregisterChannelBridgeNode(instanceId);
   runtime.disposeTimers();
 
   let stopFailure: Error | null = null;

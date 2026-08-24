@@ -620,6 +620,11 @@ export function getP3394BridgeHandle(): P3394AppBridgeHandle | null {
   return activeHandle;
 }
 
+/** 当前对端注册表（渠道即节点等进程内虚拟节点的注册入口）。桥未启动返回 null。 */
+export function getP3394PeerRegistry(): P3394PeerRegistry | null {
+  return activeHandle?.registry ?? null;
+}
+
 /**
  * V-01：把真实 wiring/listener 状态自动注入 Doctor。桥未启动时只返回
  * 全 warn 报告（不虚报绑定）；启动后逐项反映：
