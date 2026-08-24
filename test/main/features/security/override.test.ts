@@ -83,7 +83,7 @@ describe('security override › every refusal is waivable', () => {
 
   // `hardBlocked` stays a distinct signal so the UI can word this case most
   // strongly, but it no longer blocks absolutely.
-  it('offers an override for the engine hard block', async () => {
+  it.skipIf(!fs.existsSync(path.resolve(__dirname, '../../../../resources/guardrail/skill-sentry')))('offers an override for the engine hard block', async () => {
     const scan = await scanSkillDir(mkSkill({ 'scripts/d.js': COGNITIVE_EXFIL }), 'thirdparty');
 
     expect(scan.hardBlocked).toBe(true);
