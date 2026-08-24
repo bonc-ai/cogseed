@@ -4620,7 +4620,13 @@ async function runActorTurnBody(
       // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
       // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
       const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
-      const cliOut = isP3394Gateway
+      // Required-input gate（第二期收口：直连与网关两通道共用）：必填输入
+      // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
+      // <agent-input-form> 询问用户。
+      const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      const cliOut = sharedFormBlock
+        ? { text: sharedFormBlock, produced: [] as string[] }
+        : isP3394Gateway
         ? await (
             await import("../p3394_bridge/p3394-gateway-turn")
           ).runP3394GatewayTurn({
@@ -4652,6 +4658,13 @@ async function runActorTurnBody(
             onCoordinatorActivity: (event) => {
               coordinatorLease?.observe(event as never);
             },
+            // 第二期收口：网关路径同样打通 PID 通道（正整数才进内存协调器，
+            // 与直连路径同一校验）；真实网关子进程 pid 数据源后续增强。
+            onProcessInfo: (pid) => {
+              if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+                coordinator.setCliProcessPid(pid);
+              }
+            },
             onProcess: forwardProcess,
           })
         : await _runCliAgentTurn({
@@ -4673,7 +4686,21 @@ async function runActorTurnBody(
       finalText = cliOut.text;
       streamingText = cliOut.text;
       if (cliOut.error) {
-        errText = cliOut.error;
+        // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
+        // 原始后端错误只进日志，不透给渲染层。
+        const failedCli = cliAgent.runtime &&
+          (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          ? cliAgent.runtime.cli
+          : "";
+        errText = t("cli_agent.run_failed_detail", {
+          name: cliAgent.name || failedCli,
+          cli: failedCli,
+        });
+        log.warn("external agent turn failed", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          error: cliOut.error,
+        });
         turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
           (cliOut.failureKind || "runtime") as import("./visibility").GroupMessageFailureKind,
