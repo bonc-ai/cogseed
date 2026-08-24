@@ -84,7 +84,7 @@ describe('认知履历：段命名与状态词', () => {
   });
 
   it('只报可数的事实，不下「很稳」这类系统结论', async () => {
-    const { asset } = await seedAsset('对外报价前统一一遍话术。', 'c');
+    const { asset } = await seedAsset('对外报价前过一遍统一话术。', 'c');
     await receiptFor(asset.id, { execution: 'exec-use-1', session: 'gmember-c-one' });
 
     const view = await trace(asset.id);
