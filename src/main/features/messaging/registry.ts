@@ -243,6 +243,12 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
   if (rawRequireMention !== undefined && typeof rawRequireMention !== 'boolean' && strict) {
     throw new Error('invalid group mention requirement');
   }
+  const rawBridgeAllowlist = input?.channelBridgeSenderAllowlist;
+  if (rawBridgeAllowlist !== undefined && strict) {
+    if (!Array.isArray(rawBridgeAllowlist) || rawBridgeAllowlist.some((id) => typeof id !== 'string' || !id.trim())) {
+      throw new Error('invalid channel bridge sender allowlist');
+    }
+  }
   // Missing allowlists are persisted as empty arrays. Inbound policy evaluates
   // empty arrays as deny-all, so malformed or legacy config never opens access.
   return {
@@ -250,6 +256,9 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
     allowUserIds: normalizeIdList(input?.allowUserIds, 'allowUserIds', strict),
     allowGroupIds: normalizeIdList(input?.allowGroupIds, 'allowGroupIds', strict),
     requireMentionInGroups: rawRequireMention === false ? false : true,
+    ...(Array.isArray(rawBridgeAllowlist)
+      ? { channelBridgeSenderAllowlist: Array.from(new Set(rawBridgeAllowlist.map((id) => String(id).trim()).filter(Boolean))) }
+      : {}),
   };
 }
 

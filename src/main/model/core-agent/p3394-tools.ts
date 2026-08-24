@@ -171,9 +171,17 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
         .find((candidate) => candidate.identity.agent_id === resolved.agent_id);
       if (peerRecord?.node_kind === 'channel_bridge') {
         try {
-          const { deliverToChannelBridge } = await import('../../features/messaging/channel-bridge');
+          const { deliverToChannelBridge, instanceIdFromChannelBridgeAgentId } = await import('../../features/messaging/channel-bridge');
           const { sendProactive } = await import('../../features/messaging/manager');
           const { getInstanceWithSecret } = await import('../../features/messaging/registry');
+          const bridgeInstanceId = instanceIdFromChannelBridgeAgentId(resolved.agent_id) || '';
+          // 白名单来自实例策略（policy.channelBridgeSenderAllowlist；
+          // undefined = 全放行保持现状，数组 = 仅名单内 sender 可发）。
+          const policyLoaded = bridgeInstanceId
+            ? await getInstanceWithSecret(opts.userId, bridgeInstanceId).catch(() => null)
+            : null;
+          const allowlist = (policyLoaded?.instance as { policy?: { channelBridgeSenderAllowlist?: string[] } } | undefined)
+            ?.policy?.channelBridgeSenderAllowlist;
           const delivered = await deliverToChannelBridge(
             opts.userId,
             resolved.agent_id,
@@ -184,6 +192,7 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
               const ownerExternalUserId = (loaded?.instance as { ownerExternalUserId?: string } | undefined)?.ownerExternalUserId;
               return ownerExternalUserId ? { recipientId: ownerExternalUserId } : null;
             },
+            Array.isArray(allowlist) ? { allowedSenders: allowlist } : undefined,
           );
           if (delivered.ok) {
             return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: 'channel bridge delivered' }) };

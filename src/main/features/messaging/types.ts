@@ -61,6 +61,11 @@ export interface MessagingPolicy {
   allowUserIds: string[];
   allowGroupIds: string[];
   requireMentionInGroups: boolean;
+  /** 渠道即节点（第三期）发送白名单：允许经 p3394_send 主动发到本渠道
+   * 实例的 sender agent_id 列表。undefined = 全放行（现状兼容）；
+   * 空数组 = 拒绝所有。速率上限（per-sender 10/min、per-instance
+   * 30/min）为硬护栏，不在此配置。 */
+  channelBridgeSenderAllowlist?: string[];
 }
 
 export interface MessagingInstanceStatus {

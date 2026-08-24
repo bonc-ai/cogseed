@@ -65,16 +65,31 @@ export function unregisterChannelBridgeNode(instanceId: string): void {
   registry?.revoke(channelBridgeAgentId(instanceId));
 }
 
-/** p3394_send 到渠道节点：取信封文本 → 经渠道主动发给 owner → 回执信封。 */
+/** p3394_send 到渠道节点：取信封文本 → 经渠道主动发给 owner → 回执信封。
+ *
+ * 护栏（设计风险表：渠道即节点后智能体滥发消息）：
+ * - 白名单：allowedSenders 为 sender agent_id 列表；undefined = 全放行
+ *   （现状兼容），空数组 = 拒绝所有。
+ * - 限流：内存滑动窗口，per (uid, instance, sender) 10 条/分钟 +
+ *   per (uid, instance) 总 30 条/分钟。进程内护栏（重启清零），
+ *   防的是失控智能体刷屏，不是计费精度。 */
 export async function deliverToChannelBridge(
   uid: string,
   agentId: string,
   envelope: P3394Envelope,
   send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string }) => Promise<unknown>,
   ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>,
+  options?: { allowedSenders?: string[] },
 ): Promise<{ ok: true; receipt: P3394Envelope } | { ok: false; error: string }> {
   const instanceId = instanceIdFromChannelBridgeAgentId(agentId);
   if (!instanceId) return { ok: false, error: 'p3394_not_a_channel_bridge' };
+  const senderId = envelope.sender?.agent_id || '';
+  if (options && Array.isArray(options.allowedSenders) && !options.allowedSenders.includes(senderId)) {
+    return { ok: false, error: 'p3394_channel_bridge_sender_not_allowed' };
+  }
+  if (!admitChannelBridgeSend(uid, instanceId, senderId)) {
+    return { ok: false, error: 'p3394_channel_bridge_rate_limited' };
+  }
   const text = (envelope.payload?.parts || [])
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text)
@@ -103,4 +118,52 @@ export async function deliverToChannelBridge(
     payload: { parts: [{ type: 'text', text: 'channel bridge delivered' }] },
   };
   return { ok: true, receipt };
+}
+
+// ── 限流（进程内滑动窗口）──────────────────────────────────────────────
+
+const RATE_WINDOW_MS = 60_000;
+const PER_SENDER_LIMIT = 10;
+const PER_INSTANCE_LIMIT = 30;
+
+/** sender 维度窗口：`<uid>\0<instance>\0<sender>` → 时间戳数组。 */
+const _senderWindows = new Map<string, number[]>();
+/** 实例维度窗口：`<uid>\0<instance>` → 时间戳数组。 */
+const _instanceWindows = new Map<string, number[]>();
+
+function admitWindow(windowKey: string, store: Map<string, number[]>, limit: number, now: number): boolean {
+  const cutoff = now - RATE_WINDOW_MS;
+  const stamps = (store.get(windowKey) || []).filter((ts) => ts > cutoff);
+  if (stamps.length >= limit) {
+    store.set(windowKey, stamps);
+    return false;
+  }
+  stamps.push(now);
+  store.set(windowKey, stamps);
+  return true;
+}
+
+/** 限流判定 + 记账。放行时两级窗口都记账；任一级超限拒绝（不记账，重试
+ * 仍会被同一窗口挡住直到滑出）。 */
+function admitChannelBridgeSend(uid: string, instanceId: string, senderAgentId: string, now = Date.now()): boolean {
+  const senderOk = admitWindow(`${uid}\0${instanceId}\0${senderAgentId}`, _senderWindows, PER_SENDER_LIMIT, now);
+  if (!senderOk) return false;
+  const instanceOk = admitWindow(`${uid}\0${instanceId}`, _instanceWindows, PER_INSTANCE_LIMIT, now);
+  if (!instanceOk) {
+    // 回滚 sender 记账，避免实例级限流白白消耗单个 sender 的配额
+    const key = `${uid}\0${instanceId}\0${senderAgentId}`;
+    const stamps = _senderWindows.get(key);
+    if (stamps && stamps.length) {
+      stamps.pop();
+      _senderWindows.set(key, stamps);
+    }
+    return false;
+  }
+  return true;
+}
+
+/** 测试专用：清空限流窗口。 */
+export function resetChannelBridgeRateLimitsForTests(): void {
+  _senderWindows.clear();
+  _instanceWindows.clear();
 }
