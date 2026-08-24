@@ -3436,6 +3436,7 @@
   "recall.projection.confirm_assets": "プリロード済みアセットを確認",
   "settings.title": "設定",
   "ws.center_title": "ワークスペース",
+  "ws.my_spaces": "マイスペース",
   "ws.delete_space_confirm": "スペース「{name}」を削除しますか？タスクは残りますが、スペース内の成果物と資産は削除されます。",
   "ws.delete_space_failed": "スペースの削除に失敗しました",
   "ws.open_folder_failed": "スペースフォルダを開けませんでした",
