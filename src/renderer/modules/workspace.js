@@ -1741,7 +1741,8 @@
       const p = el.dataset.path;
       const cid = el.dataset.cid;
       if (!p) { _stub(_t('ws.open_artifact', '打开产物')); return; }
-      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '' });
+      // COGSEED-18：导入产物无 cid，带当前空间 spaceId 供主进程校验放行（空间内容目录内文件）
+      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '', spaceId: _detailSpaceId || '' });
       if (res.error) _stub(_t('ws.open_failed', '打开失败：{reason}', { reason: res.error }));
     }));
     root.querySelectorAll('[data-ws="open-source"]').forEach((el) => el.addEventListener('click', () => {

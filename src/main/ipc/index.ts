@@ -629,6 +629,17 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
+  // COGSEED-18：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
+  // 条目无 cid）。仅当调用方显式声明 spaceId 且该空间属于当前用户——防越权。
+  const spaceId = payload?.spaceId;
+  if (typeof spaceId === 'string' && safeId(spaceId) && await spaces.spaceExists(userId, spaceId)) {
+    try {
+      const { spaceContentDir } = await import('../paths');
+      const contentDir = path.resolve(spaceContentDir(userId, spaceId));
+      const target = path.resolve(absPath);
+      if (target === contentDir || target.startsWith(contentDir + path.sep)) return true;
+    } catch { /* fall through */ }
+  }
   const cid = payload?.cid;
   if (typeof cid !== 'string' || !cid) return false;
   // 1) 会话记录过的产物文件（消息 produced[]）
