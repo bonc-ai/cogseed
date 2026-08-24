@@ -52,7 +52,7 @@ maintenance:
   type: community
   contacts:
     - name: CogSeed Team
-      email: security@bonc.com.cn
+      email: business@bonc.com.cn
 
 localisation:
   localisationReady: true
