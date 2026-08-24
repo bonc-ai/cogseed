@@ -82,8 +82,9 @@ export interface SpaceWithMeta extends Space {
   agent_count: number;
   invalid_count: number;
   /** COGSEED-15：空间可用智能体清单（与会话是否对话过无关）。
-   *  = ['commander'（CogSeed 主智能体，恒可用）] ∪ 基础 Agent（base_agents 映射成功）
-   *    ∪ 模板/extra 解析出的有效智能体（effective_agents，去重保序）。
+   *  = ['commander'（CogSeed 主智能体，恒可用）] ∪ 外接智能体（base_agents 映射成功的
+   *    本机可协作工具，runtime.kind=cli/p3394-gateway，如 Claude Code / Codex）。
+   *  模板/市场引用的内置 Agent（专家类）不属于此清单——它们是另一类能力。
    *  会话头部/空间任务行/空间 meta 的统一计数来源。 */
   usable_agents: string[];
   /** 最近一次活跃会话标题（列表「最近」展示用；无会话则不填）。 */
@@ -534,10 +535,11 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       .map((t) => baseAgentToAgentId(agents, t))
       .filter((x): x is string => !!x);
     const res = resolveSpaceResources(s, valid, { baseAgentAgentIds: baseAgentIds });
-    // COGSEED-15：空间可用智能体清单 = CogSeed 主智能体 + 基础 Agent + 有效引用智能体（去重保序）。
-    // 失效引用（invalid_refs）不算"能用"。与会话是否对话过无关。
+    // COGSEED-15：空间可用智能体清单 = CogSeed 主智能体 + 外接智能体（base_agents 映射
+    // 成功、去重保序）。模板/市场引用的内置 Agent（effective_agents）不计入——
+    // 它们与外接协作工具是两类不同的东西。与会话是否对话过无关。
     const usableAgents = ['commander'];
-    for (const id of [...baseAgentIds, ...res.effective_agents]) {
+    for (const id of baseAgentIds) {
       if (id && !usableAgents.includes(id)) usableAgents.push(id);
     }
     // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
