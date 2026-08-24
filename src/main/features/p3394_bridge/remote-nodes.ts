@@ -160,10 +160,11 @@ export async function testRemoteNode(input: {
   });
   try {
     const result = await channel.negotiate();
-    if (result.ok) return { ok: true, peer_agent_id: result.peer_agent_id };
+    if (result.ok === true) return { ok: true, peer_agent_id: result.peer_agent_id };
+    const failure = result as Extract<typeof result, { ok: false }>;
     // negotiate 统一返回 negotiation_failed，差异在 message 前缀：
     // p3394_identity_mismatch（身份不符）/ p3394_manifest_http_401（令牌）/ 其他（连接）。
-    const message = result.error.message;
+    const message = failure.error.message;
     if (message.includes('identity_mismatch') || message.includes('identity_changed')) {
       return { ok: false, error: { reason: 'identity_mismatch', message: `对端身份与期望不符（期望 ${expectedIdentity || '—'}）` } };
     }
