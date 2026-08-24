@@ -875,6 +875,35 @@ describe('chats › index repair', () => {
     expect(index[0].participant_summary_updated_at).toBe(index[0].updated_at);
   });
 
+  it('COGSEED-15：空间任务行与会话运行协作区域共用同一份参与智能体名单', async () => {
+    const chats = await loadChats();
+    const spaces = await import('../../../src/main/features/spaces');
+    const created = await spaces.createSpace(TEST_UID, { name: '一致空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '一致', spaceId: sid });
+
+    // 运行协作区域的数据源：members.json（同一 Agent 多次加入只计 1 个；commander 不计入）
+    const membersDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id);
+    fs.mkdirSync(membersDir, { recursive: true });
+    fs.writeFileSync(path.join(membersDir, 'members.json'), JSON.stringify({
+      version: 1,
+      actors: [
+        { kind: 'commander', id: 'commander', joined_at: '2026-06-01T00:00:00Z' },
+        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:01Z' },
+        { kind: 'agent', id: 'agent-b', joined_at: '2026-06-01T00:00:02Z' },
+        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:03Z' },
+      ],
+    }));
+
+    const spaceConvs = await chats.listSpaceConversations(TEST_UID, sid);
+    const row = spaceConvs.find((c) => c.conversation_id === conv.conversation_id);
+    expect(row).toBeTruthy();
+    // 与运行协作区域一致：独立 Agent 去重计数（agent-a 只计 1），commander 不占名额
+    expect(row!.agent_ids).toEqual(['agent-a', 'agent-b']);
+    expect(row!.commander_in_chat).toBe(false);
+  });
+
   it('updates a fresh participant summary incrementally with message activity', async () => {
     const chats = await loadChats();
     const conv = await chats.createConversation(TEST_UID, { agentId: 'agent-start' });
