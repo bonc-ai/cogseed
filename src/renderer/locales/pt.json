@@ -3436,6 +3436,7 @@
   "recall.projection.confirm_assets": "Confirmar ativos pré-carregados",
   "settings.title": "Configurações",
   "ws.center_title": "Espaço de trabalho",
+  "ws.my_spaces": "Meus espaços",
   "ws.delete_space_confirm": "Excluir espaço {name}? As tarefas permanecem; artefatos e ativos do espaço serão removidos.",
   "ws.delete_space_failed": "Falha ao excluir espaço",
   "ws.open_folder_failed": "Falha ao abrir a pasta do espaço",

@@ -1520,7 +1520,61 @@ window.addEventListener('i18n-change', _refreshEmptyStateGreeting);
 // already consumes (conversations[] cache, _groupMembersCache, pendingConvs)
 // so the header stays consistent across refreshes without new IPC.
 
+/** 会话顶部的返回面包屑：工作空间 / 我的空间 / <空间名>（会话名由标题行承担）。 */
+function _refreshChatBreadcrumb() {
+  const crumbEl = document.getElementById('chat-header-breadcrumb');
+  if (!crumbEl) return;
+  const cid = currentCid;
+  const conv = Array.isArray(conversations)
+    ? conversations.find((c) => c && c.conversation_id === cid)
+    : null;
+  const spaceId = (conv && conv.space_id) || '';
+  if (!cid || !spaceId) {
+    crumbEl.hidden = true;
+    crumbEl.innerHTML = '';
+    return;
+  }
+  let spaceName = (conv && conv.space_name) || '';
+  if (!spaceName) {
+    const sp = Array.isArray(_sidebarSpaces)
+      ? _sidebarSpaces.find((s) => s && s.space_id === spaceId)
+      : null;
+    if (sp) spaceName = _conversationSpaceDisplayName(sp);
+  }
+  if (!spaceName) spaceName = spaceId;
+  const rootLabel = t('ws.center_title', '工作空间');
+  const spacesLabel = t('ws.my_spaces', '我的空间');
+  crumbEl.innerHTML =
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(rootLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(spacesLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="space" data-space-id="${escapeHtml(spaceId)}">${escapeHtml(spaceName)}</button>`;
+  crumbEl.hidden = false;
+  crumbEl.querySelectorAll('[data-breadcrumb-nav]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const nav = btn.getAttribute('data-breadcrumb-nav');
+      if (nav === 'workspace') {
+        window.setView('workspace');
+      } else if (nav === 'space') {
+        const sid = btn.getAttribute('data-space-id');
+        if (typeof window.openWorkspaceSpace === 'function') {
+          window.openWorkspaceSpace(sid);
+        } else {
+          // workspace.js 是懒加载的：首次点击时可能还没注册 openWorkspaceSpace。
+          // 先暂存目标空间 id，等 renderWorkspace 加载完成后消费它打开指定空间。
+          window.__cogseedPendingOpenSpace = sid;
+          window.setView('workspace');
+        }
+      }
+    });
+  });
+}
+
 function _refreshChatHeader() {
+  _refreshChatBreadcrumb();
   const cid = currentCid;
   const conv = Array.isArray(conversations)
     ? conversations.find((c) => c && c.conversation_id === cid)
