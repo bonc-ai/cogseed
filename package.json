@@ -64,7 +64,7 @@
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.5",
     "7zip-bin": "^5.2.0",
-    "electron": "^41.7.1",
+    "electron": "^41.10.6",
     "electron-builder": "^26.15.3",
     "eslint": "^10.8.1",
     "typescript": "^6.0.3",
