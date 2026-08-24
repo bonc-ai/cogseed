@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
@@ -1386,20 +1387,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
   },
 
-  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { confirmed: result.confirmed };
-  },
-
-  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { rejected: result.rejected };
+  // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
+  // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
+  'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof sourceDir !== 'string' || !path.isAbsolute(sourceDir)) throw new Error('invalid sourceDir');
+    return spaceImport.importFolderIntoSpace(ctx.userId, spaceId, sourceDir, (p) => {
+      broadcastToRenderer('workspace-import:progress', p);
+    });
   },
 
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──

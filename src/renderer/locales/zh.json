@@ -5552,6 +5552,7 @@
   "ws.tab_assets": "资产",
   "ws.back_to_center": "返回空间中心",
   "ws.space_settings": "空间设置",
+  "ws.new_task_in_space": "在「{name}」下新建任务",
   "ws.new_task": "新建任务",
   "ws.task_more": "更多操作",
   "ws.tasks_empty": "该空间暂无任务。",
@@ -5663,6 +5664,7 @@
   "ws.template_counts": "{skills} 个 Skill · {agents} 个 Agent",
   "ws.tasks_summary": "{count} 个任务 · 按最近更新时间排序",
   "ws.space_asset": "空间资产",
+  "ws.artifact_label": "产物",
   "ws.confirmed_artifact": "确认产物",
   "ws.attachment": "附件",
   "ws.assets_note": "资产仅包含四类经过确认、可持续复用的认知与能力。",
@@ -5934,5 +5936,14 @@
   "settings.updates.errors.verify_failed": "下载校验失败，请重试",
   "settings.updates.errors.already_downloading": "已有下载任务进行中",
   "settings.updates.errors.file_missing": "安装包文件不存在，请重新下载",
-  "settings.updates.errors.bad_url": "更新下载地址无效"
+  "settings.updates.errors.bad_url": "更新下载地址无效",
+  "ws.import_folder_label": "本地文件夹（可选）",
+  "ws.import_folder_pick": "选择本地文件夹",
+  "ws.import_folder_none": "未选择——空间创建后为空，文件可随时加入",
+  "ws.import_folder_clear": "清除",
+  "ws.importing_progress": "正在导入 {done}/{total} 个文件…",
+  "ws.import_failed": "导入失败：{reason}",
+  "ws.import_done": "导入完成：{copied} 个文件",
+  "ws.import_done_with_skips": "导入完成：{copied} 个文件成功，跳过 {skipped} 个（详见空间产物）",
+  "ws.imported_file": "导入文件"
 }

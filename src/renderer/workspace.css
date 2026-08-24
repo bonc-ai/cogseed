@@ -98,6 +98,12 @@
 .ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
 
+/* COGSEED-19：空间卡片悬浮「+」——悬停卡片时才显示；点击直接在该空间下新建任务（无二次弹窗） */
+.ws-quick-task { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; opacity: 0; transition: opacity .12s ease; }
+.ws-space-card:hover .ws-quick-task,
+.ws-quick-task:focus-visible { opacity: 1; }
+.ws-quick-task:hover { background: var(--ws-soft); color: var(--ws-accent); }
+
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
 .ws-more-menu {

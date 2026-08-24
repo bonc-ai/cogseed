@@ -4838,5 +4838,16 @@
   "settings.updates.errors.verify_failed": "Falha na verificação do download. Tente novamente",
   "settings.updates.errors.already_downloading": "Um download já está em andamento",
   "settings.updates.errors.file_missing": "Arquivo do instalador ausente. Baixe novamente",
-  "settings.updates.errors.bad_url": "URL de download inválida"
+  "settings.updates.errors.bad_url": "URL de download inválida",
+  "ws.artifact_label": "Artefato",
+  "ws.new_task_in_space": "Nova tarefa em \"{name}\"",
+  "ws.import_folder_label": "Pasta local (opcional)",
+  "ws.import_folder_pick": "Escolher pasta local",
+  "ws.import_folder_none": "Não escolhida — o espaço inicia vazio, arquivos podem ser adicionados depois",
+  "ws.import_folder_clear": "Limpar",
+  "ws.importing_progress": "Importando {done}/{total} arquivos…",
+  "ws.import_failed": "Falha na importação: {reason}",
+  "ws.import_done": "Importação concluída: {copied} arquivos",
+  "ws.import_done_with_skips": "Importação concluída: {copied} copiados, {skipped} ignorados (ver artefatos do espaço)",
+  "ws.imported_file": "Arquivo importado"
 }

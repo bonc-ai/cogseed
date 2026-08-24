@@ -85,7 +85,7 @@ describe('spaces › listSpaceArtifacts（空间产物聚合）', () => {
   });
 });
 
-describe('spaces › 产物确认流程（AI 产出候选 → 确认正式）', () => {
+describe('spaces › 产物无确认态（COGSEED-16：产出即正式）', () => {
   async function makeSpaceWithProduced() {
     const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
@@ -102,21 +102,21 @@ describe('spaces › 产物确认流程（AI 产出候选 → 确认正式）', 
     return { sid: created.space.space_id, cid: conv.conversation_id, file };
   }
 
-  it('AI 产出默认候选（confirmed=false），确认后正式', async () => {
-    const { sid, cid } = await makeSpaceWithProduced();
+  it('AI 产出直接正式（confirmed=true），无需确认动作', async () => {
+    const { sid } = await makeSpaceWithProduced();
     const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
     const entry = artifacts.find((a) => a.name === '成果.docx');
     expect(entry).toBeTruthy();
     expect(entry?.source).toBe('produced');
-    expect(entry?.confirmed).toBe(false); // 候选
+    expect(entry?.confirmed).toBe(true); // 无确认态：产出即正式
+  });
 
-    const arts = await import('../../../src/main/features/spaces_artifacts');
-    const r = await arts.confirmSpaceArtifact(UID, sid, cid, '成果.docx');
-    expect(r.ok).toBe(true);
-
-    const after = await arts.listSpaceArtifacts(UID, sid);
-    const confirmedEntry = after.find((a) => a.name === '成果.docx');
-    expect(confirmedEntry?.confirmed).toBe(true); // 确认后正式
+  it('无 artifacts_state.json 时产物同样正式（不再依赖确认清单）', async () => {
+    const { sid } = await makeSpaceWithProduced();
+    const stateFile = path.join(await spaceDirFor(sid), 'artifacts_state.json');
+    expect(fs.existsSync(stateFile)).toBe(false); // 确认流程移除后不再生成状态文件
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
+    expect(artifacts.every((a) => a.confirmed === true)).toBe(true);
   });
 
   it('附件直接算正式（无需确认）', async () => {
@@ -169,7 +169,7 @@ describe('spaces › 工作区兜底扫描（未登记 produced 的产物文件�
     expect(names).toContain('报告.html'); // 工作区兜底（html 放行）
     const htmlEntry = artifacts.find((a) => a.name === '报告.html');
     expect(htmlEntry?.source).toBe('produced');
-    expect(htmlEntry?.confirmed).toBe(false);
+    expect(htmlEntry?.confirmed).toBe(true); // COGSEED-16：兜底扫描的产出同样直接正式
   });
 });
 

@@ -102,6 +102,25 @@ describe('renderer lazy feature loader', () => {
     expect(source).toContain('renderWorkspace');
   });
 
+  it('workspace surface：COGSEED-16 无确认态 + COGSEED-19 悬浮「+」新建任务入口', () => {
+    const js = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
+    // COGSEED-16：产物确认 UI 与通道全部移除（无按钮、无状态条、无 IPC 调用）
+    expect(js).not.toContain('confirm-artifact');
+    expect(js).not.toContain('reject-artifact');
+    expect(js).not.toContain('spaces.artifacts.confirm');
+    expect(js).not.toContain('spaces.artifacts.reject');
+    expect(js).not.toContain('ws.candidate_pending');
+    // COGSEED-19：空间卡片悬浮「+」直接新建该空间下任务（调用 _startNewTask，无二次弹窗）
+    expect(js).toContain('data-ws="quick-task"');
+    expect(js).toContain("_startNewTask(spaceId)");
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/workspace.css'), 'utf8');
+    expect(css).toContain('.ws-space-card:hover .ws-quick-task');
+    // COGSEED-18：新建空间弹窗本地文件夹选择 + 导入进度订阅（workspace-import:progress 推送）
+    expect(js).toContain('data-ws="pick-import-dir"');
+    expect(js).toContain("_invoke('workspace.importFolder'");
+    expect(js).toContain('workspace-import:progress');
+  });
+
   it('retries a required script while reusing scripts that already loaded', async () => {
     let contextAttempts = 0;
     const { context, appended } = loadFeatureLoader((script) => {
