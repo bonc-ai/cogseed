@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
@@ -628,6 +629,17 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
+  // COGSEED-18：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
+  // 条目无 cid）。仅当调用方显式声明 spaceId 且该空间属于当前用户——防越权。
+  const spaceId = payload?.spaceId;
+  if (typeof spaceId === 'string' && safeId(spaceId) && await spaces.spaceExists(userId, spaceId)) {
+    try {
+      const { spaceContentDir } = await import('../paths');
+      const contentDir = path.resolve(spaceContentDir(userId, spaceId));
+      const target = path.resolve(absPath);
+      if (target === contentDir || target.startsWith(contentDir + path.sep)) return true;
+    } catch { /* fall through */ }
+  }
   const cid = payload?.cid;
   if (typeof cid !== 'string' || !cid) return false;
   // 1) 会话记录过的产物文件（消息 produced[]）
@@ -1386,20 +1398,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
   },
 
-  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { confirmed: result.confirmed };
-  },
-
-  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { rejected: result.rejected };
+  // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
+  // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
+  'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof sourceDir !== 'string' || !path.isAbsolute(sourceDir)) throw new Error('invalid sourceDir');
+    return spaceImport.importFolderIntoSpace(ctx.userId, spaceId, sourceDir, (p) => {
+      broadcastToRenderer('workspace-import:progress', p);
+    });
   },
 
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
