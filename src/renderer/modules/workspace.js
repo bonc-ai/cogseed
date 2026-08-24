@@ -111,12 +111,16 @@
 
   // ── 三 tab 数据映射（后端形状 → 渲染形状）──────────────────────────────
 
-  /** 会话 → 任务行。 */
-  function _mapConversation(c) {
+  /** 会话 → 任务行。COGSEED-15：智能体数量 = 空间可用清单数（与对话无关；
+   *  usableCount 由空间 meta 注入，缺失时回退会话级名单长度）。 */
+  function _mapConversation(c, usableCount) {
+    const agentN = typeof usableCount === 'number'
+      ? usableCount
+      : (c.agent_ids && c.agent_ids.length);
     return {
       id: c.conversation_id || '',
       title: c.title || _t('ws.untitled_task', '未命名任务'),
-      desc: (c.agent_ids && c.agent_ids.length) ? _t('ws.agent_count', '{count} 个智能体', { count: c.agent_ids.length }) : '',
+      desc: agentN ? _t('ws.agent_count', '{count} 个智能体', { count: agentN }) : '',
       results: c.processing ? _t('ws.in_progress', '进行中') : '',
       time: _relTime(c.updated_at || c.last_active_at || c.created_at),
       refCount: Array.isArray(c.task_references) ? c.task_references.length : 0,
@@ -217,7 +221,12 @@
       _invoke('spaces.conversations.list', { spaceId }),
       _invoke('recall.assets.listForSpace', { spaceId }),
     ]);
-    _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map(_mapConversation);
+    // COGSEED-15：空间可用智能体数（空间 meta 缓存；与会话是否对话过无关）
+    const spaceMeta = _spaces.find((s) => s && s.space_id === spaceId);
+    const usableCount = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+      ? spaceMeta.usable_agents.length
+      : undefined;
+    _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map((c) => _mapConversation(c, usableCount));
     // 资产 tab = 本空间沉淀的认知资产（recall 按 spaceId 过滤；空间可读全局但显示只显示本空间）
     _assets = (Array.isArray(assetRes.assets) ? assetRes.assets : []).map(_mapRecallAsset);
     // 产物后台加载：不阻塞任务/资产首屏；已切走空间则丢弃过期结果
@@ -611,7 +620,6 @@
           <div><h3>${escapeHtml(displayName)}</h3><small>${escapeHtml(_relTime(s.updated_at))}</small></div>
         </div>
         <button class="ws-more" data-ws="space-more" data-space="${escapeHtml(s.space_id)}" aria-label="${escapeHtml(_t('ws.more_actions_for', '{name}的更多操作', { name: displayName }))}">${_icon('more-horizontal', 'ui-icon')}</button>
-        <button class="ws-quick-task" data-ws="quick-task" data-space="${escapeHtml(s.space_id)}" aria-label="${escapeHtml(_t('ws.new_task', '新建任务'))}" title="${escapeHtml(_t('ws.new_task_in_space', '在「{name}」下新建任务', { name: displayName }))}">${_icon('plus', 'ui-icon')}</button>
         <div class="ws-more-menu" hidden>
           ${metaRows.map((r) => `<div class="ws-more-row"><span>${escapeHtml(r.k)}</span><strong>${escapeHtml(r.v)}</strong></div>`).join('')}
           <div class="ws-more-actions">
@@ -1081,10 +1089,14 @@
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
             <label class="full"><span>${_t('ws.import_folder_label', '本地文件夹（可选）')}</span>
-              <div class="ws-import-row">
-                <button class="ws-secondary" data-ws="pick-import-dir">${_icon('folder', 'ui-icon')}${_t('ws.import_folder_pick', '选择本地文件夹')}</button>
-                <span class="ws-import-name">${_createImportDir ? escapeHtml(_importDirBasename(_createImportDir)) : escapeHtml(_t('ws.import_folder_none', '未选择——空间创建后为空'))}</span>
-                ${_createImportDir ? `<button class="ws-import-clear" data-ws="clear-import-dir">${_t('ws.import_folder_clear', '清除')}</button>` : ''}
+              <div class="ws-import-picker" data-ws="pick-import-dir" role="button" tabindex="0"
+                title="${escapeHtml(_t('ws.import_folder_pick', '选择本地文件夹'))}">
+                <span class="ws-import-icon">${_icon('folder', 'ui-icon')}</span>
+                <span class="ws-import-name${_createImportDir ? '' : ' is-empty'}">${_createImportDir ? escapeHtml(_importDirBasename(_createImportDir)) : escapeHtml(_t('ws.import_folder_none', '未选择——空间创建后为空'))}</span>
+                ${_createImportDir
+                  ? `<span class="ws-import-clear" data-ws="clear-import-dir" role="button" tabindex="0" title="${escapeHtml(_t('ws.import_folder_clear', '清除'))}">${_icon('x', 'ui-icon')}</span>
+                     <span class="ws-import-change">${escapeHtml(_t('ws.import_folder_change', '更换'))}</span>`
+                  : `<span class="ws-import-pick">${escapeHtml(_t('ws.import_folder_pick', '选择文件夹'))}</span>`}
               </div>
               ${_importing ? `<div class="ws-import-progress">${escapeHtml(_t('ws.importing_progress', '正在导入 {done}/{total} 个文件…', { done: _importing.done, total: _importing.total }))}</div>` : ''}
             </label>
@@ -1691,13 +1703,6 @@
     root.querySelectorAll('[data-ws="clear-main-skill"]').forEach((el) => el.addEventListener('click', () => _clearMainSkill()));
     // 「新建任务」→ 在该空间建新会话并跳到标准会话对话框（与主对话同一 composer）
     root.querySelectorAll('[data-ws="new-task"]').forEach((el) => el.addEventListener('click', () => _startNewTask(_detailSpaceId)));
-    // COGSEED-19：空间卡片悬浮「+」→ 直接在该空间下新建任务（无二次弹窗），新建后进入会话页
-    root.querySelectorAll('[data-ws="quick-task"]').forEach((el) => el.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const spaceId = el.dataset.space;
-      if (!spaceId) return;
-      _startNewTask(spaceId);
-    }));
     // 任务行 → 打开真实会话
     root.querySelectorAll('[data-ws="open-task"]').forEach((el) => el.addEventListener('click', () => {
       const cid = el.dataset.session;
@@ -1763,12 +1768,22 @@
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
-    // COGSEED-18：本地文件夹选择 / 清除（取消对话框 → 保持未选择，不报错）
+    // COGSEED-18：本地文件夹选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
     root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('click', async () => {
       const res = await _invoke('common.pickDirectory', { title: _t('ws.import_folder_pick', '选择本地文件夹') });
       if (res && !res.cancelled && res.path) { _createImportDir = res.path; _reRender(); }
     }));
-    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('click', () => { _createImportDir = null; _reRender(); }));
+    root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    }));
+    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _createImportDir = null;
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); _createImportDir = null; _reRender(); }
+    }));
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
     // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）

@@ -4849,5 +4849,8 @@
   "ws.import_failed": "Falha na importação: {reason}",
   "ws.import_done": "Importação concluída: {copied} arquivos",
   "ws.import_done_with_skips": "Importação concluída: {copied} copiados, {skipped} ignorados (ver artefatos do espaço)",
-  "ws.imported_file": "Arquivo importado"
+  "ws.imported_file": "Arquivo importado",
+  "sidebar.space_new_task": "Nova tarefa neste espaço",
+  "sidebar.space_new_task_failed": "Falha ao criar tarefa: {reason}",
+  "ws.import_folder_change": "Trocar"
 }

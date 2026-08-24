@@ -1566,14 +1566,29 @@ function _refreshChatHeader() {
     // path as the sidebar conv row + chat-msg avatar — uniform icon
     // style across surfaces. The trailing "N agents" count only counts
     // real agents.
-    const members = _groupMembersCache.get(cid) || [];
-    const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+    // COGSEED-15：空间会话按「空间可用智能体清单」渲染头像与数量（与是否对话过无关，
+    // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+    const spaceMeta = conv && conv.space_id ? _spaceById(conv.space_id) : null;
+    const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+      ? spaceMeta.usable_agents
+      : null;
     const slots = [];
-    // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
-    if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-    for (const a of agents) slots.push({ kind: 'agent', id: a.id });
-    // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
-    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+    let agentCount = 0;
+    if (usableAgents) {
+      agentCount = usableAgents.length;
+      for (const id of usableAgents) {
+        slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
+      }
+    } else {
+      const members = _groupMembersCache.get(cid) || [];
+      const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+      // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
+      if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+      for (const a of agents) slots.push({ kind: 'agent', id: a.id });
+      // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
+      if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+      agentCount = agents.length;
+    }
     const visibleSlots = slots.slice(0, 4);
     if (visibleSlots.length) {
       if (parts.length) parts.push('<span class="chat-header-meta-sep">·</span>');
@@ -1598,11 +1613,11 @@ function _refreshChatHeader() {
         });
       }).join('');
       parts.push(`<span class="chat-header-meta-members">${memberHtml}</span>`);
-      if (agents.length) {
-        const countTxt = t('chat.header.agent_count', { n: agents.length });
+      if (agentCount) {
+        const countTxt = t('chat.header.agent_count', { n: agentCount });
         const countLabel = (countTxt && countTxt !== 'chat.header.agent_count')
           ? countTxt
-          : `${agents.length} agents`;
+          : `${agentCount} agents`;
         parts.push(`<span class="chat-header-meta-text">${escapeHtml(countLabel)}</span>`);
       }
     }
@@ -5385,28 +5400,43 @@ function _renderConvAgentStackHtml(c) {
   //   the list fresh, so a freshly @-mentioned agent shows up before the
   //   next `listConversations` lands.
   // Cap at 4 slots total.
+  // COGSEED-15：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
+  // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+  const spaceMeta = c.space_id ? _spaceById(c.space_id) : null;
+  const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+    ? spaceMeta.usable_agents
+    : null;
   const slots = [];
-  if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-  const seen = new Set();
-  if (Array.isArray(c.agent_ids)) {
-    for (const id of c.agent_ids) {
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      slots.push({ kind: 'agent', id });
+  if (usableAgents) {
+    const seenU = new Set();
+    for (const id of usableAgents) {
+      if (!id || seenU.has(id)) continue;
+      seenU.add(id);
+      slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
     }
-  }
-  const cached = _groupMembersCache.get(c.conversation_id);
-  if (Array.isArray(cached)) {
-    for (const a of cached) {
-      if (!a || !a.id || a.kind !== 'agent') continue;
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      slots.push({ kind: 'agent', id: a.id });
+  } else {
+    if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+    const seen = new Set();
+    if (Array.isArray(c.agent_ids)) {
+      for (const id of c.agent_ids) {
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        slots.push({ kind: 'agent', id });
+      }
     }
+    const cached = _groupMembersCache.get(c.conversation_id);
+    if (Array.isArray(cached)) {
+      for (const a of cached) {
+        if (!a || !a.id || a.kind !== 'agent') continue;
+        if (seen.has(a.id)) continue;
+        seen.add(a.id);
+        slots.push({ kind: 'agent', id: a.id });
+      }
+    }
+    // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
+    // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
+    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   }
-  // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
-  // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
-  if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   const parts = slots.slice(0, 4).map((s) => {
     if (s.kind === 'commander') {
       const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
@@ -6416,6 +6446,30 @@ function _spaceById(sid) {
   return _sidebarSpaces.find((s) => s && s.space_id === sid) || null;
 }
 
+/** COGSEED-19：空间组头「+」——在该空间下直接创建任务，立即进入会话页。
+ *  无二次弹窗；创建失败 toast 提示，不打断侧栏。 */
+async function _quickNewTaskInSpace(sid) {
+  if (!sid) return;
+  try {
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spaceId: sid }),
+    });
+    const data = await res.json();
+    if (!data.ok || !data.conversation) throw new Error(data.error || 'create failed');
+    const conv = data.conversation;
+    conv.last_active_at = new Date().toISOString();
+    conversations.unshift(conv);
+    renderConversationList();
+    setView('conversation', conv.conversation_id, { skipLoad: true });
+  } catch (e) {
+    if (typeof uiToast === 'function') {
+      uiToast(t('sidebar.space_new_task_failed', '新建任务失败：{reason}', { reason: (e && e.message) || '' }), { variant: 'error', timeoutMs: 5000 });
+    }
+  }
+}
+
 async function _openSpaceActionMenu(anchorBtn, sid) {
   if (!anchorBtn || !sid) return;
   let menu = document.getElementById('conversation-action-menu');
@@ -6630,6 +6684,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       _openSpaceActionMenu(el, el.dataset.convSpaceMore || '');
     });
   });
+  // COGSEED-19：空间组头「+」→ 直接在该空间下新建任务并进入会话页（无二次弹窗）
+  container.querySelectorAll('[data-conv-space-quick-task]').forEach((el) => {
+    if (el.dataset.quickTaskBound === '1') return;
+    el.dataset.quickTaskBound = '1';
+    const fire = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _quickNewTaskInSpace(el.dataset.convSpaceQuickTask || '');
+    };
+    el.addEventListener('click', fire);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') fire(e);
+    });
+  });
   // 空间行内联重命名：回车保存、Esc 取消、失焦保存
   container.querySelectorAll('[data-conv-space-rename-input]').forEach((input) => {
     if (input.dataset.renameBound === '1') return;
@@ -6832,6 +6900,9 @@ function _renderSpaceSidebarGroup(sp, convs) {
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
       ${labelHtml}
       <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-space-quick-task" role="button" tabindex="0" data-conv-space-quick-task="${escapeHtml(sp.space_id)}"
+        title="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}" aria-label="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}">
+        ${_uiIconHtml('plus', 'conv-space-quick-task-icon')}</span>
       <span class="conv-space-more-btn" role="button" tabindex="0" data-conv-space-more="${escapeHtml(sp.space_id)}"
         title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</span>
     </button>

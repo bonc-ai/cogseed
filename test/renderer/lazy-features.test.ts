@@ -110,11 +110,14 @@ describe('renderer lazy feature loader', () => {
     expect(js).not.toContain('spaces.artifacts.confirm');
     expect(js).not.toContain('spaces.artifacts.reject');
     expect(js).not.toContain('ws.candidate_pending');
-    // COGSEED-19：空间卡片悬浮「+」直接新建该空间下任务（调用 _startNewTask，无二次弹窗）
-    expect(js).toContain('data-ws="quick-task"');
-    expect(js).toContain("_startNewTask(spaceId)");
-    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/workspace.css'), 'utf8');
-    expect(css).toContain('.ws-space-card:hover .ws-quick-task');
+    // COGSEED-19：左侧空间组头「+」直接新建该空间下任务（conversation.js 侧栏入口，无二次弹窗）
+    const convJs = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
+    expect(convJs).toContain('data-conv-space-quick-task');
+    expect(convJs).toContain('_quickNewTaskInSpace');
+    const styleCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+    expect(styleCss).toContain('.conv-list-section-header:hover .conv-space-quick-task');
+    // 中心页卡片的旧入口已移除（入口统一到左侧空间组）
+    expect(js).not.toContain('data-ws="quick-task"');
     // COGSEED-18：新建空间弹窗本地文件夹选择 + 导入进度订阅（workspace-import:progress 推送）
     expect(js).toContain('data-ws="pick-import-dir"');
     expect(js).toContain("_invoke('workspace.importFolder'");

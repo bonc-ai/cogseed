@@ -2865,6 +2865,31 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   visibility: visible;
   opacity: 1;
 }
+/* COGSEED-19：空间组头「+」快速建任务入口——与 ⋯ 同款 hover 显现交互 */
+.conv-space-quick-task {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: #7f8fa8;
+  cursor: pointer;
+  visibility: hidden;
+  opacity: 0;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+}
+.conv-space-quick-task:hover,
+.conv-space-quick-task:focus-visible {
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--primary-text);
+}
+.conv-list-section-header:hover .conv-space-quick-task,
+.conv-list-section-header:focus-within .conv-space-quick-task {
+  visibility: visible;
+  opacity: 1;
+}
 /* 空间行内联重命名输入框 */
 .conv-space-rename-input {
   flex: 0 1 auto;

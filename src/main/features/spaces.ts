@@ -81,6 +81,11 @@ export interface SpaceWithMeta extends Space {
   skill_count: number;
   agent_count: number;
   invalid_count: number;
+  /** COGSEED-15：空间可用智能体清单（与会话是否对话过无关）。
+   *  = ['commander'（CogSeed 主智能体，恒可用）] ∪ 基础 Agent（base_agents 映射成功）
+   *    ∪ 模板/extra 解析出的有效智能体（effective_agents，去重保序）。
+   *  会话头部/空间任务行/空间 meta 的统一计数来源。 */
+  usable_agents: string[];
   /** 最近一次活跃会话标题（列表「最近」展示用；无会话则不填）。 */
   last_conversation_title?: string;
   /** 最近一次活跃会话时间（最近使用排序用；无会话则不填）。 */
@@ -525,9 +530,16 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const metas = await Promise.all(ids.map(async (sid) => {
     const s = await _readSpace(uid, sid);
     if (!s) return null;
-    const res = resolveSpaceResources(s, valid, {
-      baseAgentAgentIds: (s.base_agents ?? []).map((t) => baseAgentToAgentId(agents, t)).filter((x): x is string => !!x),
-    });
+    const baseAgentIds = (s.base_agents ?? [])
+      .map((t) => baseAgentToAgentId(agents, t))
+      .filter((x): x is string => !!x);
+    const res = resolveSpaceResources(s, valid, { baseAgentAgentIds: baseAgentIds });
+    // COGSEED-15：空间可用智能体清单 = CogSeed 主智能体 + 基础 Agent + 有效引用智能体（去重保序）。
+    // 失效引用（invalid_refs）不算"能用"。与会话是否对话过无关。
+    const usableAgents = ['commander'];
+    for (const id of [...baseAgentIds, ...res.effective_agents]) {
+      if (id && !usableAgents.includes(id)) usableAgents.push(id);
+    }
     // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
     let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
     try {
@@ -540,7 +552,8 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       template_names: [res.template?.name, ...res.secondary_templates.map((t) => t.name)]
         .filter(Boolean).join(' ') || undefined,
       skill_count: res.effective_skills.length + res.invalid_refs.skills.length,
-      agent_count: res.effective_agents.length + res.invalid_refs.agents.length,
+      agent_count: usableAgents.length,
+      usable_agents: usableAgents,
       invalid_count: res.invalid_refs.skills.length + res.invalid_refs.agents.length,
       last_conversation_title: lastConv?.title || undefined,
       last_conversation_at: lastConv?.updated_at || lastConv?.created_at || undefined,

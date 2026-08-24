@@ -98,11 +98,6 @@
 .ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
 
-/* COGSEED-19：空间卡片悬浮「+」——悬停卡片时才显示；点击直接在该空间下新建任务（无二次弹窗） */
-.ws-quick-task { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; opacity: 0; transition: opacity .12s ease; }
-.ws-space-card:hover .ws-quick-task,
-.ws-quick-task:focus-visible { opacity: 1; }
-.ws-quick-task:hover { background: var(--ws-soft); color: var(--ws-accent); }
 
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
@@ -591,3 +586,20 @@
   .ws-space-grid, .ws-template-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .ws-task-page { grid-template-columns: minmax(480px,1fr) 290px; }
 }
+
+/* COGSEED-18：本地文件夹选择行——与表单输入控件同构（40px 高、同款边框圆角），
+   融合进 ws-form-grid，避免割裂感。 */
+.ws-import-picker {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 40px;
+  padding: 0 10px; border: 1px solid var(--ws-line-strong); border-radius: 8px;
+  background: #fff; cursor: pointer; outline: none;
+}
+.ws-import-picker:hover { border-color: #6fb18c; }
+.ws-import-picker:focus-visible { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
+.ws-import-icon { flex: 0 0 auto; display: grid; place-items: center; color: #8a938e; }
+.ws-import-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #3d4a42; font-size: 12px; }
+.ws-import-name.is-empty { color: #9aa39e; }
+.ws-import-pick, .ws-import-change { flex: 0 0 auto; font-size: 11px; color: #176f45; }
+.ws-import-clear { flex: 0 0 auto; display: grid; place-items: center; width: 20px; height: 20px; border: none; border-radius: 5px; background: none; color: #9aa39e; cursor: pointer; }
+.ws-import-clear:hover { background: var(--ws-soft); color: #46534b; }
+.ws-import-progress { margin-top: 6px; font-size: 11px; color: #176f45; }

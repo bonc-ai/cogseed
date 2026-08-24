@@ -584,7 +584,9 @@ describe('spaces › listSpaces 失效数（真实有效集合，假阳性回归
     const me = list.find((s) => s.space_id === created.space.space_id);
     expect(me).toBeDefined();
     expect(me?.skill_count).toBe(6); // bundle 5 + extra 1
-    expect(me?.agent_count).toBe(4); // bundle 3 + extra 1
+    // COGSEED-15：agent_count = 空间可用清单数（CogSeed 主智能体 1 + bundle 3 + extra 1）
+    expect(me?.agent_count).toBe(5);
+    expect(me?.usable_agents).toEqual(['commander', '3bf780cd23be', '54f102b6c1ee', '5a5fe1598ed0', 'ag-1']);
     expect(me?.invalid_count).toBe(0); // 全有效 → 不误报失效
   });
 

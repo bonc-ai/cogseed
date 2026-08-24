@@ -5945,5 +5945,8 @@
   "ws.import_failed": "导入失败：{reason}",
   "ws.import_done": "导入完成：{copied} 个文件",
   "ws.import_done_with_skips": "导入完成：{copied} 个文件成功，跳过 {skipped} 个（详见空间产物）",
-  "ws.imported_file": "导入文件"
+  "ws.imported_file": "导入文件",
+  "sidebar.space_new_task": "在该空间下新建任务",
+  "sidebar.space_new_task_failed": "新建任务失败：{reason}",
+  "ws.import_folder_change": "更换"
 }

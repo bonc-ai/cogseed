@@ -5945,5 +5945,8 @@
   "ws.import_failed": "Import failed: {reason}",
   "ws.import_done": "Import complete: {copied} files",
   "ws.import_done_with_skips": "Import complete: {copied} files copied, {skipped} skipped (see space artifacts)",
-  "ws.imported_file": "Imported file"
+  "ws.imported_file": "Imported file",
+  "sidebar.space_new_task": "New task in this space",
+  "sidebar.space_new_task_failed": "Failed to create task: {reason}",
+  "ws.import_folder_change": "Change"
 }

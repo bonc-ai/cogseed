@@ -4849,5 +4849,8 @@
   "ws.import_failed": "インポート失敗：{reason}",
   "ws.import_done": "インポート完了：{copied} ファイル",
   "ws.import_done_with_skips": "インポート完了：{copied} ファイル成功、{skipped} スキップ（スペース成果物参照）",
-  "ws.imported_file": "インポートファイル"
+  "ws.imported_file": "インポートファイル",
+  "sidebar.space_new_task": "このスペースで新規タスク",
+  "sidebar.space_new_task_failed": "タスク作成失敗：{reason}",
+  "ws.import_folder_change": "変更"
 }
