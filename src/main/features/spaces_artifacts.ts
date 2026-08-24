@@ -15,10 +15,11 @@
 
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceContentDir } from '../paths';
-import { writeJson, safeId } from '../storage';
+import { safeId } from '../storage';
 import { ALLOWED_EXTENSIONS } from './chat_attachments';
 import { getMessages, listSpaceConversations } from './chats';
 
@@ -109,7 +110,7 @@ export async function migrateSpaceAttachments(uid: string, spaceId: string): Pro
 
 export type SpaceArtifactType = 'attachment' | 'artifact';
 /** 产物来源：attachment=上传附件；artifact=网页交互产物；produced=AI 工具产出文件。 */
-export type SpaceArtifactSource = 'attachment' | 'artifact' | 'produced';
+export type SpaceArtifactSource = 'attachment' | 'artifact' | 'produced' | 'import';
 
 export interface SpaceArtifactEntry {
   /** 附件 = 文件名；artifact = 标题（缺省用 artifactId）。 */
@@ -123,7 +124,7 @@ export interface SpaceArtifactEntry {
   time: number;
   /** 产物来源（前端区分「待确认」的 AI 产出）。 */
   source: SpaceArtifactSource;
-  /** 是否正式产物：附件/网页直接算；AI 产出需用户确认（确认清单）。 */
+  /** 是否正式产物（COGSEED-16 起恒为 true：产物无确认态，产出即正式）。 */
   confirmed: boolean;
   /** 绝对路径（打开产物用）。 */
   path?: string;
@@ -137,12 +138,12 @@ export interface SpaceArtifactEntry {
 // 每次切空间都重扫，会话多/聊天长/产物多时延迟随数据量线性放大，且同步
 // 扫描会阻塞主进程（整个应用卡顿）。这里做空间级缓存：
 //   - TTL 内命中直接返回（切空间/反复进出秒回）；
-//   - 确认/驳回产物、空间内新建会话时主动失效（invalidateSpaceArtifacts）；
+//   - 空间内新建会话时主动失效（invalidateSpaceArtifacts）；
 //   - 缓存值带 uid，多账号不会串数据。
 const ARTIFACT_CACHE_TTL_MS = 30_000;
 const _artifactCache = new Map<string, { uid: string; at: number; items: SpaceArtifactEntry[] }>();
 
-/** 空间产物缓存失效：确认/驳回产物、空间内新建会话后调用，保证下次列表新鲜。 */
+/** 空间产物缓存失效：空间内新建会话后调用，保证下次列表新鲜。 */
 export function invalidateSpaceArtifacts(spaceId: string): void {
   if (!spaceId) return;
   _artifactCache.delete(spaceId);
@@ -207,106 +208,47 @@ async function scanArtifacts(uid: string, spaceId: string, cid: string, out: Spa
   }
 }
 
-/** 空间级产物确认/驳回清单落点：`<sid>/artifacts_state.json` = { confirmed: {[cid]:string[]}, rejected: {[cid]:string[]} }。
- *  确认 = 正式产物；驳回 = 不再作为候选展示。随 deleteSpace 的 spaceContentDir 一起删。 */
-function artifactsStateFile(uid: string, spaceId: string): string {
-  return path.join(spaceContentDir(uid, spaceId), 'artifacts_state.json');
-}
+// ── 工作区兜底遍历护栏（2026-08-24 修复：会话工作目录解析异常导致全盘遍历）────
+// 事故场景：导入的 Claude 会话被记为「工作目录 = 主目录」→ 兜底遍历递归扫出
+// 29,266 条产物（主目录 222 万文件，打开空间卡顿 40s+）。护栏三件套：
+//  1. 异常根目录黑名单（主目录本身 / 文件系统根 / 含 .cogseed 段）→ 跳过兜底遍历
+//  2. 遍历计数上限 MAX_FALLBACK_WALK_FILES：超限中止并丢弃本次兜底结果
+//     （produced[] 登记产物不受影响——兜底只是"锦上添花"，跳过不丢真产物）
+//  3. 显式跳过 node_modules / __pycache__（`.` 开头目录原已跳过）
+// 上限可经 SPACE_ARTIFACTS_WALK_LIMIT 覆盖（测试用）。
+export const MAX_FALLBACK_WALK_FILES = (() => {
+  const n = Number(process.env.SPACE_ARTIFACTS_WALK_LIMIT ?? 5000);
+  return Number.isFinite(n) && n > 0 ? n : 5000;
+})();
+const WALK_LIMIT = new Error('space_artifacts.walk_limit');
 
-interface ArtifactsState {
-  confirmed: Record<string, string[]>;
-  rejected: Record<string, string[]>;
-}
-
-function readArtifactsState(uid: string, spaceId: string): ArtifactsState {
-  const out: ArtifactsState = { confirmed: {}, rejected: {} };
-  const norm = (v: unknown): Record<string, string[]> => {
-    const r: Record<string, string[]> = {};
-    if (v && typeof v === 'object') {
-      for (const [cid, names] of Object.entries(v as Record<string, unknown>)) {
-        if (Array.isArray(names)) r[cid] = (names as unknown[]).filter((n): n is string => typeof n === 'string');
-      }
-    }
-    return r;
-  };
+/** 异常工作目录黑名单判定（纯函数，可单测）。
+ *  只拦截「明显不是会话工作目录」的根：主目录本身、文件系统根、CogSeed 自身数据目录。
+ *  主目录下的正常项目目录（~/code/...）不在拦截范围——由计数护栏兜底。 */
+export function isUnsafeWorkspaceRoot(dir: string): boolean {
+  let real: string;
   try {
-    const raw = JSON.parse(fs.readFileSync(artifactsStateFile(uid, spaceId), 'utf8'));
-    if (raw && typeof raw === 'object') {
-      out.confirmed = norm((raw as ArtifactsState).confirmed);
-      out.rejected = norm((raw as ArtifactsState).rejected);
-      return out;
-    }
-  } catch { /* new file missing/malformed → fall through */ }
-  // 兼容旧版 confirmed_artifacts.json（{ [cid]: string[] }）：迁移到新结构
-  const legacy = path.join(spaceContentDir(uid, spaceId), 'confirmed_artifacts.json');
+    real = fs.realpathSync(dir);
+  } catch {
+    return false; // 目录不存在/不可读 → 由上层 stat 处理
+  }
   try {
-    const raw = JSON.parse(fs.readFileSync(legacy, 'utf8'));
-    if (raw && typeof raw === 'object') {
-      out.confirmed = norm(raw);
-      // 迁移：写新文件（保留旧文件不动，避免回滚丢状态）
-      void writeArtifactsState(uid, spaceId, out).catch(() => {});
-    }
-  } catch { /* no legacy either */ }
-  return out;
-}
-
-async function writeArtifactsState(uid: string, spaceId: string, state: ArtifactsState): Promise<void> {
-  const f = artifactsStateFile(uid, spaceId);
-  await fsp.mkdir(path.dirname(f), { recursive: true });
-  await writeJson(f, state);
-}
-
-/** 确认某 AI 产出文件为正式产物（幂等；确认即从驳回态移除）。 */
-export async function confirmSpaceArtifact(
-  uid: string,
-  spaceId: string,
-  cid: string,
-  name: string,
-): Promise<{ ok: true; confirmed: string[] } | { ok: false; error: string }> {
-  if (!spaceId || !cid || !name) return { ok: false, error: 'invalid_artifact' };
-  const state = readArtifactsState(uid, spaceId);
-  const confirmed = state.confirmed[cid] ? [...state.confirmed[cid]] : [];
-  if (!confirmed.includes(name)) confirmed.push(name);
-  state.confirmed[cid] = confirmed;
-  // 确认后不再处于驳回态
-  if (state.rejected[cid]) state.rejected[cid] = state.rejected[cid].filter((n) => n !== name);
-  await writeArtifactsState(uid, spaceId, state);
-  invalidateSpaceArtifacts(spaceId);
-  return { ok: true, confirmed };
-}
-
-/** 驳回某候选产物（幂等；驳回后不再作为候选展示）。 */
-export async function rejectSpaceArtifact(
-  uid: string,
-  spaceId: string,
-  cid: string,
-  name: string,
-): Promise<{ ok: true; rejected: string[] } | { ok: false; error: string }> {
-  if (!spaceId || !cid || !name) return { ok: false, error: 'invalid_artifact' };
-  const state = readArtifactsState(uid, spaceId);
-  const rejected = state.rejected[cid] ? [...state.rejected[cid]] : [];
-  if (!rejected.includes(name)) rejected.push(name);
-  state.rejected[cid] = rejected;
-  // 驳回后不再是正式产物
-  if (state.confirmed[cid]) state.confirmed[cid] = state.confirmed[cid].filter((n) => n !== name);
-  await writeArtifactsState(uid, spaceId, state);
-  invalidateSpaceArtifacts(spaceId);
-  return { ok: true, rejected };
+    if (real === fs.realpathSync(os.homedir())) return true; // 整个主目录
+  } catch {
+    /* homedir 不可解析则跳过该项检查 */
+  }
+  if (real === path.parse(real).root) return true; // 文件系统根 '/'
+  if (real.split(path.sep).includes('.cogseed')) return true; // CogSeed 自身数据目录
+  return false;
 }
 
 /** 扫描 AI 产出文件：先走消息 produced[]（已登记），再兜底扫会话工作区目录
  *  （未登记进 produced 的产物，如部分工具直接写文件）。按文件名去重（附件优先）。
- *  这些是「候选产物」：confirmed 由空间确认清单决定（用户确认后正式）。
- *  state 由调用方一次读取传入（artifacts_state.json 是空间级文件，逐会话重读
- *  是 N 次重复磁盘读）。扫描全部走异步 fs，避免阻塞主进程。 */
-async function scanProducedFiles(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[], state: ArtifactsState): Promise<void> {
-  const confirmedSet = new Set(state.confirmed[cid] || []);
-  const rejectedSet = new Set(state.rejected[cid] || []);
+ *  COGSEED-16：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
+async function scanProducedFiles(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): Promise<void> {
   const seen = new Set(out.map((o) => o.name));
   const add = async (abs: string, name: string): Promise<void> => {
     if (!name || seen.has(name)) return;
-    // 已驳回的候选不再展示
-    if (rejectedSet.has(name)) return;
     const ext = path.extname(name).toLowerCase();
     // 宽扩展名：附件上传白名单之外，工作区产物放行旧 Office / svg / 压缩包 / html 等
     // （AI 产出的都能落位），不放松附件上传边界（上传仍走 ALLOWED_EXTENSIONS）。
@@ -316,7 +258,7 @@ async function scanProducedFiles(uid: string, spaceId: string, cid: string, out:
     seen.add(name);
     out.push({
       name, type: 'attachment', ext, sourceSessionId: cid, time: Math.floor(st.mtimeMs / 1000),
-      source: 'produced', confirmed: confirmedSet.has(name), path: abs,
+      source: 'produced', confirmed: true, path: abs,
     });
   };
   // 1. 消息 produced[]（已登记为产物的文件；取最近一段即可，产物都产生在会话尾部）
@@ -333,29 +275,71 @@ async function scanProducedFiles(uid: string, spaceId: string, cid: string, out:
     // 消息读取失败不阻断（继续工作区兜底）
   }
   // 2. 会话工作区目录兜底（部分工具直接写文件、未登记 produced；递归子目录防漏）
+  //    护栏：异常根目录直接跳过；遍历计数超限中止并回滚本次兜底新增（见顶部注释）。
   try {
     const { getConversationWorkspacePath } = await import('./group_chat/conv_workspace');
     const wsDir = await getConversationWorkspacePath(uid, cid);
-    const walk = async (dir: string): Promise<void> => {
-      let entries: fs.Dirent[] = [];
-      try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (e.name.startsWith('.')) continue;
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) await walk(full);
-        else if (e.isFile()) await add(full, e.name);
+    if (wsDir && !isUnsafeWorkspaceRoot(wsDir)) {
+      const startLen = out.length;
+      try {
+        await fsp.stat(wsDir);
+        let fileCount = 0;
+        const walk = async (dir: string): Promise<void> => {
+          let entries: fs.Dirent[] = [];
+          try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+          for (const e of entries) {
+            if (e.name.startsWith('.')) continue;
+            if (e.isDirectory() && (e.name === 'node_modules' || e.name === '__pycache__')) continue;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) { await walk(full); continue; }
+            if (!e.isFile()) continue;
+            fileCount++;
+            if (fileCount > MAX_FALLBACK_WALK_FILES) throw WALK_LIMIT;
+            await add(full, e.name);
+          }
+        };
+        await walk(wsDir);
+      } catch (err) {
+        if (err === WALK_LIMIT) {
+          out.length = startLen; // 回滚本次兜底新增——防爆炸目录污染产物列表
+          try {
+            const log = (await import('../logger')).createLogger('spaces_artifacts');
+            log.warn(`space artifacts fallback walk aborted: ${MAX_FALLBACK_WALK_FILES} file limit exceeded uid=${uid} cid=${cid}`);
+          } catch { /* best-effort */ }
+        }
+        // 其它错误（工作区不存在/不可读）静默
       }
-    };
-    if (wsDir) {
-      try { await fsp.stat(wsDir); await walk(wsDir); } catch { /* 工作区不存在/不可读 */ }
     }
   } catch (err) {
     // 工作区解析失败不阻断列表
   }
 }
 
+// COGSEED-18：本地文件夹整体导入的产物（<空间内容目录>/imports/**，保留目录结构）。
+// 全部为正式产物（无确认态），打开/删除沿用产物既有能力。
+async function scanImportedFiles(uid: string, spaceId: string, out: SpaceArtifactEntry[]): Promise<void> {
+  const root = path.join(spaceContentDir(uid, spaceId), 'imports');
+  const walk = async (dir: string): Promise<void> => {
+    let entries: fs.Dirent[];
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { await walk(full); continue; }
+      if (!e.isFile()) continue;
+      let mtime = 0;
+      try { mtime = Math.floor((await fsp.stat(full)).mtimeMs / 1000); } catch { /* keep 0 */ }
+      out.push({
+        name: e.name, type: 'attachment', ext: path.extname(e.name).toLowerCase(),
+        sourceSessionId: '', time: mtime, source: 'import', confirmed: true, path: full,
+      });
+    }
+  };
+  await walk(root);
+}
+
 /** 空间产物聚合：附件 + artifact + AI 产出文件统一列表，按时间倒序。空空间返回空数组（不 mock）。
- *  空间级缓存：TTL 内命中直接返回；确认/驳回/新建会话时由 invalidateSpaceArtifacts 失效。 */
+ *  空间级缓存：TTL 内命中直接返回；新建会话时由 invalidateSpaceArtifacts 失效。 */
 export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<SpaceArtifactEntry[]> {
   if (!spaceId) return [];
   const cached = _artifactCache.get(spaceId);
@@ -368,14 +352,13 @@ export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<
     _migratedSpaces.add(spaceId);
   }
   const conversations = await listSpaceConversations(uid, spaceId);
-  // artifacts_state.json 是空间级文件，一次读取全部会话共用
-  const state = readArtifactsState(uid, spaceId);
   const out: SpaceArtifactEntry[] = [];
   for (const c of conversations) {
     await scanAttachments(uid, spaceId, c.conversation_id, out);
     await scanArtifacts(uid, spaceId, c.conversation_id, out);
-    await scanProducedFiles(uid, spaceId, c.conversation_id, out, state);
+    await scanProducedFiles(uid, spaceId, c.conversation_id, out);
   }
+  await scanImportedFiles(uid, spaceId, out);
   out.sort((a, b) => b.time - a.time);
   _artifactCache.set(spaceId, { uid, at: Date.now(), items: out });
   return [...out];
