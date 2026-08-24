@@ -138,6 +138,20 @@ export type RemoteNodeTestResult =
   | { ok: true; peer_agent_id: string }
   | { ok: false; error: { reason: string; message: string } };
 
+/** 按存储 id 测试（渲染层只有打码 token，明文从磁盘取）。 */
+export async function testRemoteNodeById(id: unknown): Promise<RemoteNodeTestResult> {
+  if (typeof id !== 'string' || !id) {
+    return { ok: false, error: { reason: 'invalid_id', message: '节点 id 无效' } };
+  }
+  const node = readFile().nodes[id];
+  if (!node) return { ok: false, error: { reason: 'not_found', message: '节点不存在' } };
+  return testRemoteNode({
+    endpoint: node.endpoint,
+    token: node.token,
+    expected_identity: node.expected_identity,
+  });
+}
+
 /** 连通性校验：地址不通 / 令牌不对 / 身份不符 各有独立错误码。 */
 export async function testRemoteNode(input: {
   endpoint?: unknown;

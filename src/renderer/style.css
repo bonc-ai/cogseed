@@ -26728,3 +26728,34 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-radius: 999px;
   transition: width 0.2s ease;
 }
+
+/* ─── 智能体总览 Dashboard（第二期）─── */
+.dash-container { max-width: 860px; margin: 0 auto; padding: 24px 20px 48px; overflow-y: auto; height: 100%; }
+.dash-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.dash-header h2 { margin: 0; font-size: 18px; }
+.dash-section { margin-bottom: 22px; }
+.dash-section h3 { font-size: 13px; margin: 0 0 8px; opacity: .75; text-transform: uppercase; letter-spacing: .04em; }
+.dash-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.dash-section-head h3 { margin: 0; }
+.dash-list { display: flex; flex-direction: column; gap: 6px; }
+.dash-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 10px; }
+.dash-row-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.dash-row-sub { font-size: 12px; opacity: .7; margin-top: 2px; }
+.dash-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.dash-btn { border: 1px solid var(--border, rgba(128,128,128,.35)); background: transparent; border-radius: 7px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+.dash-btn:hover { opacity: .85; }
+.dash-btn.primary { background: var(--accent, #4a7dcc); color: #fff; border-color: transparent; }
+.dash-btn.dash-btn-danger { color: var(--danger, #c0392b); }
+.dash-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.dash-dot-on { background: #2ecc71; }
+.dash-dot-off { background: rgba(128,128,128,.5); }
+.dash-empty { padding: 14px; border: 1px dashed var(--border, rgba(128,128,128,.3)); border-radius: 10px; opacity: .65; font-size: 13px; }
+.dash-remote-form { margin-top: 10px; }
+.dash-remote-form summary { cursor: pointer; opacity: .8; font-size: 13px; }
+.dash-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px; margin-top: 8px; border: 1px solid var(--border, rgba(128,128,128,.25)); border-radius: 10px; }
+.dash-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.dash-form-grid input { padding: 6px 10px; border: 1px solid var(--border, rgba(128,128,128,.35)); border-radius: 7px; background: transparent; color: inherit; }
+.dash-form-status { font-size: 12px; min-height: 16px; grid-column: 1 / -1; }
+.dash-form-status.err { color: var(--danger, #c0392b); }
+.dash-form-status.ok { color: #2ecc71; }
+.dash-form-status.pending { opacity: .7; }

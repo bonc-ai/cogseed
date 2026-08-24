@@ -20,7 +20,7 @@ import {
 } from '../features/p3394_bridge/external-gateways';
 import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
 import {
-  listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode,
+  listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode, testRemoteNodeById,
 } from '../features/p3394_bridge/remote-nodes';
 import { listAgents } from '../features/agents';
 
@@ -87,6 +87,8 @@ export const p3394ExternalHandlers = {
   'p3394.remote.add': async (args: { label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     addRemoteNode(args ?? {}),
   'p3394.remote.remove': async (args: { id?: unknown }) => removeRemoteNode(args?.id),
-  'p3394.remote.test': async (args: { endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
-    testRemoteNode(args ?? {}),
+  'p3394.remote.test': async (args: { id?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
+    (typeof args?.id === 'string' && args.id
+      ? testRemoteNodeById(args.id)
+      : testRemoteNode(args ?? {})),
 };
