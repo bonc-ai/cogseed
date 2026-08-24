@@ -228,6 +228,8 @@
 .ws-artifact-card > em { position: absolute; top: 12px; right: 12px; padding: 3px 6px; border-radius: 5px; color: #547264; background: #edf4f0; font-size: 9px; font-style: normal; }
 .ws-artifact-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 11px; padding-top: 8px; border-top: 1px solid #edf1ef; color: #7f8a83; font-size: 9px; }
 .ws-artifact-card footer button { color: #177d4d; font-size: 10px; }
+/* COGSEED-18：导入产物无「来自」按钮，「打开」仍固定右对齐——与对话产物卡片位置一致 */
+.ws-artifact-card footer [data-ws="open-artifact"] { margin-left: auto; }
 /* 候选产物（AI 产出待确认）：灰显 + 强调确认按钮 */
 .ws-artifact-card.is-candidate { opacity: .72; background: #fbfcfb; }
 .ws-artifact-card.is-candidate:hover { opacity: 1; }
