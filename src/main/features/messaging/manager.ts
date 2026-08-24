@@ -19,6 +19,8 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { projectInboundToP3394 } from './p3394-projection';
+import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
@@ -660,7 +662,22 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
-    const result = await groupChat.send({ userId: uid, cid: binding.cid, text });
+    // P3394 投影（翻译官模式）：失败降级为无信封派发，绝不阻塞入站。
+    let p3394Envelope: P3394Envelope | undefined;
+    try {
+      p3394Envelope = projectInboundToP3394(uid, envelope);
+    } catch (error) {
+      log.warn('messaging p3394 projection failed; dispatching without envelope', {
+        instanceId: instance.id,
+        error: (error as Error).message,
+      });
+    }
+    const result = await groupChat.send({
+      userId: uid,
+      cid: binding.cid,
+      text,
+      ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
+    });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message
     // this turn starts from, so the completing turn's reply resolves its own
