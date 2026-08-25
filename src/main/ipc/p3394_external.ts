@@ -20,7 +20,7 @@ import {
 } from '../features/p3394_bridge/external-gateways';
 import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
 import {
-  listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode, testRemoteNodeById,
+  listRemoteNodes, addRemoteNode, removeRemoteNode, updateRemoteNode, testRemoteNode, testRemoteNodeById,
 } from '../features/p3394_bridge/remote-nodes';
 import { listAgents } from '../features/agents';
 
@@ -86,6 +86,10 @@ export const p3394ExternalHandlers = {
   'p3394.remote.list': async () => listRemoteNodes(),
   'p3394.remote.add': async (args: { label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     addRemoteNode(args ?? {}),
+  // G-15 编辑：label/身份/endpoint/token 任意子集；未传 token 保留原值；
+  // endpoint 变更做去重校验。
+  'p3394.remote.update': async (args: { id?: unknown; label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
+    updateRemoteNode(args?.id, args ?? {}),
   // 移除远端节点 = 删配置 + 撤销花名册注册（同一 agent_id），否则节点
   // 下次 hello 又会重新出现，用户视角"删不掉"。
   'p3394.remote.remove': async (args: { id?: unknown }) => {

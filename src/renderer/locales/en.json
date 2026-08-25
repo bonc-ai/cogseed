@@ -6025,5 +6025,11 @@
   "messaging.bridge_allowlist.off": "Disabled (allow all)",
   "messaging.bridge_allowlist.hint": "One agent id per line (sender agent_id); sends from others are rejected",
   "messaging.bridge_allowlist.save": "Save list",
-  "messaging.bridge_allowlist.enable_confirm": "Once enabled, only listed agents can proactively send to this channel; an empty list rejects all until you save entries. Enable now?"
+  "messaging.bridge_allowlist.enable_confirm": "Once enabled, only listed agents can proactively send to this channel; an empty list rejects all until you save entries. Enable now?",
+  "dashboard.edit_node": "Edit",
+  "dashboard.cancel_edit": "Cancel",
+  "dashboard.save_edit": "Save changes",
+  "dashboard.edit_saved": "Saved; if endpoint or token changed, re-test the connection",
+  "dashboard.edit_failed": "Save failed",
+  "dashboard.form_token_keep": "Token (leave blank to keep)"
 }

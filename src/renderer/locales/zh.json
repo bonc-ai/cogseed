@@ -6025,5 +6025,11 @@
   "messaging.bridge_allowlist.off": "未启用（全放行）",
   "messaging.bridge_allowlist.hint": "每行一个智能体 ID（sender agent_id）；名单外的主动发送将被拒绝",
   "messaging.bridge_allowlist.save": "保存名单",
-  "messaging.bridge_allowlist.enable_confirm": "开启白名单后，只有名单内的智能体能主动发到本渠道；保存名单前，名单为空将暂时拒绝所有主动发送。确定开启吗？"
+  "messaging.bridge_allowlist.enable_confirm": "开启白名单后，只有名单内的智能体能主动发到本渠道；保存名单前，名单为空将暂时拒绝所有主动发送。确定开启吗？",
+  "dashboard.edit_node": "编辑",
+  "dashboard.cancel_edit": "取消",
+  "dashboard.save_edit": "保存修改",
+  "dashboard.edit_saved": "已保存；若修改了地址或令牌，建议重新测试连接",
+  "dashboard.edit_failed": "保存失败",
+  "dashboard.form_token_keep": "令牌（留空保留原值）"
 }

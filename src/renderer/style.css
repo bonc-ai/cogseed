@@ -26835,6 +26835,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-top: 0;
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
+.dash-detail-edit { margin-top: 8px; }
+.dash-edit-form { margin-top: 10px; }
 .dash-detail-grid {
   display: grid;
   grid-template-columns: minmax(120px, max-content) 1fr;

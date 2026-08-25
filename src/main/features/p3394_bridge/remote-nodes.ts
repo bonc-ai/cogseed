@@ -136,6 +136,47 @@ export function removeRemoteNode(id: unknown): { ok: boolean; expected_identity?
   return { ok: true, expected_identity: node.expected_identity };
 }
 
+/** 编辑远端节点（G-15）：label/期望身份/endpoint/token 任意子集；
+ * 未传 token 保留原值；endpoint 变更做去重校验。 */
+export function updateRemoteNode(id: unknown, input: {
+  label?: unknown;
+  endpoint?: unknown;
+  token?: unknown;
+  expected_identity?: unknown;
+}): { ok: true; node: P3394RemoteNodeView } | { ok: false; error: { reason: string; message: string } } {
+  if (typeof id !== 'string' || !id) return { ok: false, error: { reason: 'invalid_id', message: '节点 id 无效' } };
+  const data = readFile();
+  const node = data.nodes[id];
+  if (!node) return { ok: false, error: { reason: 'not_found', message: '节点不存在' } };
+  const nextEndpoint = input.endpoint === undefined ? node.endpoint : normalizeEndpoint(input.endpoint);
+  if (input.endpoint !== undefined && !nextEndpoint) {
+    return { ok: false, error: { reason: 'invalid_endpoint', message: '远端节点地址无效（需要 http(s)://host:port）' } };
+  }
+  if (nextEndpoint && nextEndpoint !== node.endpoint) {
+    const duplicate = Object.values(data.nodes).find((n) => n.id !== id && n.endpoint === nextEndpoint);
+    if (duplicate) {
+      return { ok: false, error: { reason: 'duplicate_endpoint', message: `该端点已配置为「${duplicate.label}」` } };
+    }
+  }
+  const nextToken = typeof input.token === 'string' && input.token.trim() ? input.token.trim() : node.token;
+  const nextLabel = input.label === undefined
+    ? node.label
+    : (typeof input.label === 'string' && input.label.trim() ? input.label.trim().slice(0, 80) : node.label);
+  const nextIdentity = input.expected_identity === undefined
+    ? node.expected_identity
+    : (typeof input.expected_identity === 'string' && input.expected_identity.trim() ? input.expected_identity.trim() : undefined);
+  const updated: P3394RemoteNode = {
+    ...node,
+    label: nextLabel,
+    endpoint: nextEndpoint || node.endpoint,
+    token: nextToken,
+    ...(nextIdentity ? { expected_identity: nextIdentity } : {}),
+  };
+  data.nodes[id] = updated;
+  writeFile(data);
+  return { ok: true, node: toView(updated) };
+}
+
 export type RemoteNodeTestResult =
   | { ok: true; peer_agent_id: string }
   | { ok: false; error: { reason: string; message: string } };

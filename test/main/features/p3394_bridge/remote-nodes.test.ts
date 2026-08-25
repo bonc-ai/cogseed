@@ -44,6 +44,32 @@ describe('p3394 remote nodes store', () => {
       expect(removeRemoteNode(withIdentity.node.id)).toMatchObject({ ok: true, expected_identity: 'peer-2' });
     }
   });
+
+  it('update: 改 label/身份不动 token；改 endpoint 去重校验（G-15）', async () => {
+    const { updateRemoteNode } = await import('../../../../src/main/features/p3394_bridge/remote-nodes');
+    const a = addRemoteNode({ label: '节点A', endpoint: 'http://10.0.0.9:8444', token: 'tok-a', expected_identity: 'peer-a' });
+    const b = addRemoteNode({ label: '节点B', endpoint: 'http://10.0.0.8:8444', token: 'tok-b', expected_identity: 'peer-b' });
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    // 改 label：其余不动（token 保留——视图层只能看到打码）
+    const renamed = updateRemoteNode(a.node.id, { label: '新名字' });
+    expect(renamed).toMatchObject({ ok: true });
+    if (renamed.ok) expect(renamed.node.label).toBe('新名字');
+    const afterRename = listRemoteNodes().nodes.find((n) => n.id === a.node.id);
+    expect(afterRename?.tokenPreview).toBe(a.node.tokenPreview);
+    // 改 endpoint 撞已有节点 → duplicate_endpoint 拒绝
+    const dup = updateRemoteNode(a.node.id, { endpoint: 'http://10.0.0.8:8444' });
+    expect(dup).toMatchObject({ ok: false, error: { reason: 'duplicate_endpoint' } });
+    // 改 endpoint + 换 token：成功且 token 更新
+    const moved = updateRemoteNode(a.node.id, { endpoint: 'http://10.0.0.7:8444', token: 'tok-new' });
+    expect(moved).toMatchObject({ ok: true });
+    const afterMove = listRemoteNodes().nodes.find((n) => n.id === a.node.id);
+    expect(afterMove?.endpoint).toBe('http://10.0.0.7:8444');
+    expect(afterMove?.tokenPreview).not.toBe(a.node.tokenPreview);
+    // 不存在的 id
+    expect(updateRemoteNode('nope', { label: 'x' })).toMatchObject({ ok: false, error: { reason: 'not_found' } });
+    removeRemoteNode(a.node.id); removeRemoteNode(b.node.id);
+  });
 });
 
 describe('p3394 remote node connectivity test', () => {

@@ -134,6 +134,21 @@
     }).join('');
   }
 
+  // 编辑远端节点（G-15）：行详情展开内嵌编辑表单；未填 token 保留原值。
+  function editFormHtml(node) {
+    return `<form class="dash-form dash-edit-form" data-dash-edit-id="${esc(node.id)}">
+      <label><span data-i18n="dashboard.form_label">名称</span><input type="text" name="label" value="${esc(node.label || '')}" autocomplete="off"></label>
+      <label><span data-i18n="dashboard.form_endpoint">地址</span><input type="text" name="endpoint" value="${esc(node.endpoint || '')}" autocomplete="off" spellcheck="false"></label>
+      <label><span data-i18n="dashboard.form_token_keep">令牌（留空保留原值）</span><input type="password" name="token" autocomplete="off" placeholder="${esc(node.tokenPreview || '••••')}"></label>
+      <label><span data-i18n="dashboard.form_identity">期望身份（可选）</span><input type="text" name="expected_identity" value="${esc(node.expected_identity || '')}" autocomplete="off" spellcheck="false"></label>
+      <div class="dash-form-actions">
+        <button type="button" class="btn btn-sm" data-dash-action="cancel-edit">${esc(t('dashboard.cancel_edit'))}</button>
+        <button type="submit" class="btn btn-sm btn-primary">${esc(t('dashboard.save_edit'))}</button>
+      </div>
+      <div class="dash-form-status" role="status"></div>
+    </form>`;
+  }
+
   function renderRemote(data) {
     const box = el('dash-remote-list');
     if (!box) return;
@@ -161,7 +176,7 @@
           [t('dashboard.detail_identity'), node.expected_identity || '—'],
           [t('dashboard.detail_last_seen'), lastSeen],
           [t('dashboard.detail_locality'), t('dashboard.locality_external')],
-        ]),
+        ]) + `<div class="dash-detail-edit"><button type="button" class="btn btn-sm" data-dash-action="edit-node" data-id="${esc(node.id)}">${esc(t('dashboard.edit_node'))}</button></div>`,
         actions: `${peer ? `<button type="button" class="btn btn-sm" data-dash-action="toggle-node" data-agent-id="${esc(node.expected_identity || '')}" data-disabled="${disabled ? '1' : ''}">${esc(t(disabled ? 'dashboard.enable_node' : 'dashboard.disable_node'))}</button>` : ''}
           <button type="button" class="btn btn-sm" data-dash-action="test-node" data-id="${esc(node.id)}">${esc(t('dashboard.test'))}</button>
           <button type="button" class="btn btn-sm btn-danger" data-dash-action="remove-node" data-id="${esc(node.id)}">${esc(t('dashboard.remove'))}</button>`,
@@ -280,6 +295,41 @@
     }
   }
 
+  // 编辑远端节点提交（G-15）：token 留空保留原值；改 endpoint 后提示重测。
+  async function submitEditNodeForm(event) {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    const form = event.target;
+    if (!form || !form.matches('.dash-edit-form')) return;
+    const id = form.dataset.dashEditId;
+    const node = (_lastData?.remote.nodes || []).find((n) => n.id === id);
+    if (!node) return;
+    const status = form.querySelector('.dash-form-status');
+    const setStatus = (kind, text) => { if (status) { status.textContent = text; status.className = `dash-form-status ${kind}`; } };
+    const val = (name) => form.querySelector(`[name="${name}"]`)?.value?.trim() || '';
+    const payload = { id };
+    if (val('label') && val('label') !== node.label) payload.label = val('label');
+    if (val('endpoint') && val('endpoint') !== node.endpoint) payload.endpoint = val('endpoint');
+    if (val('token')) payload.token = val('token');
+    if (val('expected_identity') !== (node.expected_identity || '')) payload.expected_identity = val('expected_identity');
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const res = await window.cogseed.invoke('p3394.remote.update', payload);
+      if (!res || !res.ok) {
+        setStatus('err', (res && res.error && res.error.message) || t('dashboard.edit_failed'));
+        return;
+      }
+      setStatus('ok', t('dashboard.edit_saved'));
+      if (typeof uiToast === 'function') uiToast(t('dashboard.edit_saved'));
+      await new Promise((r) => setTimeout(r, 600));
+      await refresh(false);
+    } catch (err) {
+      setStatus('err', (err && err.message) || String(err));
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
   // ── 事件代理 ──
   function onDashboardClick(event) {
     const button = event.target.closest('[data-dash-action]');
@@ -288,6 +338,21 @@
     if (action === 'toggle-detail') {
       const wrap = button.closest('.dash-row-wrap');
       if (wrap) wrap.classList.toggle('is-open');
+    } else if (action === 'edit-node') {
+      // 展开行并在详情尾部挂编辑表单（只挂一个；重复点击不重复挂）
+      const wrap = button.closest('.dash-row-wrap');
+      const node = (_lastData?.remote.nodes || []).find((n) => n.id === button.dataset.id);
+      if (!wrap || !node) return;
+      wrap.classList.add('is-open');
+      const detailEl = wrap.querySelector('.dash-row-detail');
+      if (detailEl && !detailEl.querySelector('.dash-edit-form')) {
+        const holder = document.createElement('div');
+        holder.innerHTML = editFormHtml(node);
+        detailEl.appendChild(holder.firstChild);
+      }
+    } else if (action === 'cancel-edit') {
+      const form = button.closest('.dash-edit-form');
+      if (form) form.remove();
     } else if (action === 'manage-channel') {
       // 渠道实例管理在「连接 → 触点」面板：跳过去并切到触点 tab。
       if (typeof window.setView === 'function') window.setView('connections');
@@ -367,6 +432,12 @@
       });
       const form = el('dash-remote-form');
       if (form) form.addEventListener('submit', submitRemoteForm);
+      // 编辑表单是动态插入的，submit 委托到面板层
+      panel.addEventListener('submit', (event) => {
+        if (event.target && event.target.matches && event.target.matches('.dash-edit-form')) {
+          void submitEditNodeForm(event);
+        }
+      });
       const refreshBtn = el('dash-refresh-btn');
       if (refreshBtn) refreshBtn.addEventListener('click', () => refresh(true));
       // 切换语言时重渲染 JS 生成的行（HTML 部分由 applyDomI18n 处理）
