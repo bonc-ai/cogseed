@@ -497,12 +497,14 @@ async function main() {
   fs.writeFileSync(shimAgent, [
     "'use strict';",
     "const msg = process.argv[2] || '';",
-    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧",
+    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧；附带 cwd",
     "process.stdout.write('SHIM-');",
-    "setTimeout(() => { process.stdout.write('REPLY: ' + msg); process.exit(0); }, 150);",
+    "setTimeout(() => { process.stdout.write('REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); }, 150);",
   ].join('\n'));
   const SHIM_PORT = GATEWAY_PORT + 95;
   const shimHome = path.join(tmp, 'shim-home');
+  const shimRequestedCwd = path.join(tmp, 'shim-requested-cwd');
+  fs.mkdirSync(shimRequestedCwd, { recursive: true });
   const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
   const shimGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let shimGwLog = '';
@@ -510,12 +512,13 @@ async function main() {
   shimGw.stderr.on('data', (c) => { shimGwLog += c; });
   await sleep(900);
   check('shim：非原生 CLI 登记后走 sscli 模式', shimGwLog.includes('runtime: sscli'));
-  const shimMsg1 = { message_id: 'shm1', session_id: 'shim-s1', task_id: 'shtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'first shim turn' }] }, idempotency_key: 'shim-idem1' };
+  const shimMsg1 = { message_id: 'shm1', session_id: 'shim-s1', task_id: 'shtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'first shim turn' }] }, idempotency_key: 'shim-idem1', extensions: { working_dir: shimRequestedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
   await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg1 }, GATEWAY_TOKEN);
   // 等终态回复（delta 事件帧会先到，不能作为"完成"信号）。
   const shimDone1 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('first shim turn'));
   for (let i = 0; i < 50 && !shimDone1(); i += 1) await sleep(100);
   check('shim：终态回复（deliver → shim → CLI → completed）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('SHIM-REPLY: first shim turn')));
+  check('shim：open_session workspace 作为 CLI cwd 生效（指南 §9.2）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('CWD:' + fs.realpathSync(shimRequestedCwd))));
   const shimDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
   check('shim：stdout chunk 转协议 delta 帧实时回发', shimDeltas.length >= 2 && shimDeltas.some((e) => (e.payload.parts[0].text || '').includes('SHIM-')));
   const shimMsg2 = { message_id: 'shm2', session_id: 'shim-s1', task_id: 'shtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second shim turn' }] }, idempotency_key: 'shim-idem2' };

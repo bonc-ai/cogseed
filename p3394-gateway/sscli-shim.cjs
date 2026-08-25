@@ -148,13 +148,19 @@ function resumeRejectedByText(t) {
 
 // ── CLI 执行（单轮 spawn；chunk → delta 帧）──
 let activeTurn = null; // { child, requestId, streamedChars }
+let eventSeq = 0; // 指南 §9.2：Request 内事件单调 sequence
+const sessionWorkspaces = new Map(); // session_id → workspace（open_session 声明）
 
 function emit(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+function emitEvent(fields) {
+  eventSeq += 1;
+  emit({ ...fields, sequence: eventSeq });
+}
 
-function runCliOnce(requestId, prompt, extraArgs, onChunk) {
+function runCliOnce(requestId, prompt, extraArgs, cwd) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((p) => p.replace('{message}', prompt)).concat(Array.isArray(extraArgs) ? extraArgs : []);
-    const child = spawn(CLI, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     activeTurn = { child, requestId, streamedChars: 0 };
     let out = '';
     let errOut = '';
@@ -175,8 +181,7 @@ function runCliOnce(requestId, prompt, extraArgs, onChunk) {
       const visible = sanitizeStreamText(chunk.toString('utf8'));
       if (!visible) return;
       activeTurn.streamedChars += visible.length;
-      emit({ event: 'delta', request_id: requestId, text: visible });
-      onChunk?.();
+      emitEvent({ event: 'delta', request_id: requestId, text: visible });
     });
     child.stderr.on('data', (chunk) => { if (errOut.length < 8 * 1024) errOut += chunk; });
     child.on('error', (error) => finish(error));
@@ -192,20 +197,24 @@ async function handleDeliver(op) {
   const text = String(op.message && op.message.payload && op.message.payload.parts
     && op.message.payload.parts[0] && op.message.payload.parts[0].text || '');
   if (!text.trim()) {
-    emit({ event: 'failed', request_id: op.request_id, error: 'shim_empty_message' });
+    emitEvent({ event: 'failed', request_id: op.request_id, error: 'shim_empty_message' });
     return;
   }
+  // 指南 §9.2：open_session 声明的 workspace 即 CLI 工作目录（与 oneshot
+  // 模式的 extensions.working_dir 语义一致——否则 CLI 退回网关目录，丢
+  // 项目上下文）。
+  const cwd = sessionWorkspaces.get(sid) || null;
   // G-27 同款降级链：resume 优先（不回放），被拒清绑定回放重试一次。
   if (resumeCapable()) {
     const cliSessionId = currentOrGeneratedCliSessionId(sid);
     if (cliSessionId) {
       try {
-        const out = await runCliOnce(op.request_id, text, buildResumeArgs(cliSessionId));
+        const out = await runCliOnce(op.request_id, text, buildResumeArgs(cliSessionId), cwd);
         const nextId = extractCliSessionId(out);
         if (nextId && nextId !== cliSessionId) writeCliSession(sid, nextId);
         appendTranscript(sid, 'in', text);
         appendTranscript(sid, 'out', out);
-        emit({ event: 'completed', request_id: op.request_id });
+        emitEvent({ event: 'completed', request_id: op.request_id });
         return;
       } catch (err) {
         if (!resumeRejectedByText(err && err.message)) throw err;
@@ -216,12 +225,12 @@ async function handleDeliver(op) {
   }
   const transcript = readTranscriptTail(sid);
   const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text;
-  const out = await runCliOnce(op.request_id, prompt, []);
+  const out = await runCliOnce(op.request_id, prompt, [], cwd);
   const nextId = extractCliSessionId(out);
   if (nextId) writeCliSession(sid, nextId);
   appendTranscript(sid, 'in', text);
   appendTranscript(sid, 'out', out);
-  emit({ event: 'completed', request_id: op.request_id });
+  emitEvent({ event: 'completed', request_id: op.request_id });
 }
 
 // ── p3394-sscli/1.0 协议主循环 ──
@@ -239,11 +248,15 @@ process.stdin.on('data', (chunk) => {
     if (op.op === 'hello') {
       emit({ ok: true, protocol: PROTOCOL, runtime: 'p3394-sscli-shim/1.0', request_id: op.request_id });
     } else if (op.op === 'open_session') {
-      emit({ ok: true, request_id: op.request_id });
+      if (typeof op.workspace === 'string' && op.workspace.trim()) {
+        sessionWorkspaces.set(String(op.session_id || 'default'), op.workspace.trim());
+      }
+      // 指南 §9.2：应答携带 native_session_id（shim 的原生会话即其会话目录）。
+      emit({ ok: true, request_id: op.request_id, native_session_id: 'shim:' + String(op.session_id || 'default') });
     } else if (op.op === 'deliver') {
       handleDeliver(op).catch((err) => {
         const message = (err && err.message) || String(err);
-        emit({ event: 'failed', request_id: op.request_id, error: message });
+        emitEvent({ event: 'failed', request_id: op.request_id, error: message });
       });
     } else if (op.op === 'cancel') {
       if (activeTurn && activeTurn.child) {
