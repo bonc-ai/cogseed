@@ -138,22 +138,34 @@ export function p3394ExternalGatewayIdFor(cliType: string): string | null {
   return mapping ? mapping.id : null;
 }
 
-/** 托管网关的运行时模式（sscli 主导，已全面落地）：
+/** 托管网关的运行时模式（sscli 主导，"任意智能体"已落地 G-35）：
  *  - claude 走 stream-json 包装器 / 常驻双工（逐 token 流式）；
- *  - 其余全部预设 CLI（hermes/gemini/aider/openclaw/opencode/workbuddy）
- *    经 sscli-shim 通用协议垫片走 p3394-sscli/1.0（shim 内部每轮 spawn
- *    真实 CLI，resume/transcript 语义与 oneshot 一致）——P3394 标准推广、
- *    CLI 原生讲协议后撤垫片换直连，登记不变；
- *  - codex 不在此表：runtimeFor 里它的专有 app-server 后端优先于 sscli。
+ *  - codex 走专有 app-server（runtimeFor 优先于 sscli，不在此表）；
+ *  - **其余一切 CLI（含未知名自接智能体）默认经 sscli-shim 通用协议垫片
+ *    走 p3394-sscli/1.0**——shim 本就为任意一次性命令行智能体设计（每轮
+ *    spawn + resume/transcript 语义），不再限定预设名单；这正是标准指南
+ *    "任意本地 Agent + 接入层 = P3394 节点"承诺的落地。
+ *  排除表：COGSEED_P3394_SSCLI_EXCLUDE=cli1,cli2 让个别 CLI 回 oneshot。
  *  回退开关：COGSEED_P3394_STREAM_JSON=0 全部回 oneshot（紧急回退）；
- *  COGSEED_P3394_SSCLI_SHIM=0 仅撤垫片回 oneshot（claude 保持 sscli）。 */
+ *  COGSEED_P3394_SSCLI_SHIM=0 仅撤垫片（claude 保持 sscli）。 */
 const streamJsonEnabled = String(process.env.COGSEED_P3394_STREAM_JSON ?? '1') !== '0';
 const sscliShimEnabled = String(process.env.COGSEED_P3394_SSCLI_SHIM ?? '1') !== '0';
-const CLI_TO_RUNTIME_MODE: Record<string, string | undefined> = streamJsonEnabled
-  ? (sscliShimEnabled
-    ? { claude: 'sscli', hermes: 'sscli', gemini: 'sscli', aider: 'sscli', openclaw: 'sscli', opencode: 'sscli', workbuddy: 'sscli' }
-    : { claude: 'sscli' })
-  : {};
+/** 排除表调用时读取（运行时可配置；单次 split 开销可忽略）。 */
+function sscliExcludeHas(key: string): boolean {
+  return String(process.env.COGSEED_P3394_SSCLI_EXCLUDE ?? '')
+    .split(',').some((s) => s.trim().toLowerCase() === key && key);
+}
+/** 任意 CLI 的运行时模式判定（导出供测试）：G-35"任意智能体走 sscli"。 */
+export function runtimeModeForCli(cli: string): string | undefined {
+  if (!streamJsonEnabled) return undefined;
+  const key = String(cli || '').trim().toLowerCase();
+  // codex 的专有 app-server 后端优于 sscli（runtimeFor 分支顺序）。
+  if (key === 'codex') return undefined;
+  // claude 的 stream-json 包装器不依赖 shim，shim 关闭也保留 sscli。
+  if (key === 'claude') return 'sscli';
+  if (!sscliShimEnabled || sscliExcludeHas(key)) return undefined;
+  return 'sscli';
+}
 
 interface GatewayStateFile { schema_version: number; gateways: Array<Omit<P3394ExternalGatewayState, 'running'>> }
 
@@ -310,7 +322,8 @@ async function doStartExternalGateway(input: {
     P3394_AGENT_CLI: String(input.binPath || '').trim() || mapping.id,
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
-    ...(CLI_TO_RUNTIME_MODE[cli] ? { P3394_AGENT_MODE: CLI_TO_RUNTIME_MODE[cli] } : {}),
+    // sscli 主导（G-35）：任意 CLI（含未知名自接）默认经 shim 走 sscli。
+    ...(runtimeModeForCli(cli) ? { P3394_AGENT_MODE: runtimeModeForCli(cli) } : {}),
   };
 
   let child: ChildProcess | null = null;

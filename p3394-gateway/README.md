@@ -60,6 +60,27 @@ CogSeed 对话里说"问一下 Hermes"，Commander 就会通过 P3394 直接调�
 
 ## 适配其他 Agent（任意名字都可接入）
 
+### 三步接入（统一包 · 装包即用，G-35）
+
+本包就是**任意智能体的 P3394 统一接入包**：装上它，任何一次性命令行形态的
+智能体（不原生讲协议也行）立即成为一个讲 `p3394-sscli/1.0` 的 P3394 节点
+（内置通用垫片协议化：delta 流式 / 会话连续 / 取消 / 心跳）。
+
+```bash
+# 1. 拿到本包（CogSeed 仓库 p3394-gateway/ 目录，或已安装的桌面版内置副本）
+# 2. 一条命令接入你的智能体（--agent 启动默认走 sscli）：
+node gateway.cjs --agent my-agent --exec my-agent --args '{message} --headless'
+# 3. 在 CogSeed「智能体总览 → 外接·本机」添加 my-agent 即可协作。
+#    （原生讲 p3394-sscli 协议的智能体加 --native 直连，不经垫片）
+```
+
+命令行参数：`--agent <名>  --exec <命令>  --args '<参数模板>'  --port <端口>
+--home <目录>  --native`（`node gateway.cjs --help` 有完整说明；参数优先于
+同名环境变量）。CogSeed 托管侧同样默认全量 sscli：任意自接 CLI 经垫片接入，
+个别 CLI 需回退 oneshot 时设 `COGSEED_P3394_SSCLI_EXCLUDE=名字1,名字2`。
+
+### 环境变量方式（等价）
+
 **预设只是便捷模板，不是白名单**——P3394 面向任意智能体/任意程序，`P3394_AGENT` 填任何名字都能启动：
 
 | 情况 | 身份 | 实际执行 |
