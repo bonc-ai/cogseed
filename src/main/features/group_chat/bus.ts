@@ -4695,6 +4695,7 @@ async function runActorTurnBody(
         : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
             return {
               text: "",
+              produced: [],
               error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
               failureKind: "runtime",
               failureCode: "p3394_gateway_unreachable",
