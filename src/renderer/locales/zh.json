@@ -6055,6 +6055,7 @@
   "dashboard.control_reject_confirm": "确定拒绝这条唤醒请求吗？对应的派发将被终止。",
   "dashboard.control_decided_approve": "已批准，对应的派发将恢复执行",
   "dashboard.control_decided_reject": "已拒绝",
+  "dashboard.control_open_conversation": "查看会话",
   "dashboard.builtin_section": "内置智能体",
   "dashboard.builtin_count": "{count} 位成员 · 由 CogSeed 本体扮演",
   "dashboard.view_agents": "查看",
