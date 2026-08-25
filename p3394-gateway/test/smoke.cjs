@@ -538,6 +538,37 @@ async function main() {
   check('shim：会话状态落垫片独立目录', fs.existsSync(shimTranscript));
   shimGw.kill('SIGTERM');
 
+  // ── G-38 信封型 CLI 走垫片（openclaw --json 形态）：stdout 整体是 JSON
+  // 信封，垫片须提取 payloads[].text 作正文（终态经 completed.text 回传），
+  // 且不得把 JSON 碎片流式灌进气泡（零 delta 帧）。G-34 切垫片时该能力
+  // 遗漏——整坨 JSON 当正文回发的回归钉子。 ──
+  const shimOcAgent = path.join(tmp, 'fake-shim-openclaw.cjs');
+  fs.writeFileSync(shimOcAgent, [
+    "'use strict';",
+    "const msg = process.argv[2] || '';",
+    "const payload = JSON.stringify({ payloads: [{ text: 'OC-SHIM-REPLY: ' + msg }], meta: { agentMeta: { model: 'fake-model', usage: { total: 1 } } } });",
+    "setTimeout(() => { process.stdout.write(payload); process.exit(0); }, 150);",
+  ].join('\n'));
+  const SHIM_OC_PORT = GATEWAY_PORT + 97;
+  const shimOcEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'shim-oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimOcAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const shimOcGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimOcEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let shimOcGwLog = '';
+  shimOcGw.stdout.on('data', (c) => { shimOcGwLog += c; });
+  shimOcGw.stderr.on('data', (c) => { shimOcGwLog += c; });
+  await sleep(900);
+  check('shim openclaw：登记后走 sscli 模式', shimOcGwLog.includes('runtime: sscli'));
+  const shimOcMsg = { message_id: 'socm1', session_id: 'shim-oc-s1', task_id: 'soctk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'openclaw' }], payload: { parts: [{ type: 'text', text: 'envelope turn' }] }, idempotency_key: 'shim-oc-idem1', extensions: { reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(SHIM_OC_PORT, 'POST', '/p3394/envelope', { envelope: shimOcMsg }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message'); i += 1) await sleep(100);
+  const shimOcFinal = received.filter((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('shim openclaw：JSON 信封提取为正文（completed.text 终态）', shimOcFinal.includes('OC-SHIM-REPLY: envelope turn'));
+  check('shim openclaw：信封不漏进气泡（无 payloads/meta 键）', !shimOcFinal.includes('"payloads"') && !shimOcFinal.includes('agentMeta'));
+  const shimOcDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  check('shim openclaw：信封型不流式（零 delta 帧）', shimOcDeltas.length === 0);
+  const shimOcProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('shim openclaw：冷启动提示仍生效', shimOcProgress.includes('正在启动'));
+  shimOcGw.kill('SIGTERM');
+
   // ── opencode 常驻（server 模式）：fake opencode server 实现 /session、
   // /session/:id/message（同步终态）与 /event（SSE）。验证：runtime 选择、
   // 正文 delta 透传（reasoning 流不混入）、工具 progress 帧、server 进程

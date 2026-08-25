@@ -1023,7 +1023,12 @@ class SscliRuntime {
       if (parsed.event === 'completed') {
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
-        entry.resolve(entry.deltas.join(''));
+        // completed 带 text（shim 已提取的终态全文，含信封型 CLI 的
+        // extractReplyText）优先；无 text（native CLI 等）退 delta 拼接。
+        const finalText = typeof parsed.text === 'string' && parsed.text.trim()
+          ? parsed.text
+          : entry.deltas.join('');
+        entry.resolve(finalText);
       } else if (parsed.event === 'failed') {
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
