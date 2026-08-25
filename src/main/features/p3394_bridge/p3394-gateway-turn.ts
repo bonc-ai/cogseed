@@ -120,6 +120,11 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   }
 
   input.onCoordinatorActivity?.({ kind: 'activity' });
+  // G-18：网关进程 pid 数据源——hello 自报进注册表（gateway_pid），turn
+  // 开始即喂给内存协调器（正整数，与 bus 边界同一校验）。
+  if (typeof peer?.gateway_pid === 'number' && Number.isInteger(peer.gateway_pid) && peer.gateway_pid > 0) {
+    input.onProcessInfo?.(peer.gateway_pid);
+  }
   input.onProcess?.({ type: 'progress', text: '正在通过 P3394 与 ' + (input.agent.name || nodeId) + ' 协作…' });
   // 信封按需重建：message_id/idempotency_key 每次发送都必须是新的（重试时
   // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由

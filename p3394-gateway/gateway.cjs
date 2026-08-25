@@ -282,6 +282,8 @@ const MANIFEST = {
   spec_version: 'p3394/1.0',
   identity: { agent_id: AGENT_ID, display_name: AGENT_ALIAS || AGENT_ID },
   runtime: { kind: 'in_process' },
+  // G-18：manifest 自报网关进程 pid（探活数据源；正整数，读取侧同校验）。
+  pid: process.pid,
   capability_profile: {
     agent_id: AGENT_ID,
     runtime_kind: 'cogseed-native',
@@ -2108,6 +2110,9 @@ function registerWithCogseed() {
       locality: 'same_host',
       node_kind: NODE_KIND,
       supported_profiles: PROFILES,
+      // G-18：自报网关进程 pid——CogSeed 侧内存协调器的探活数据源
+      //（正整数才被采纳，与 bus 边界同一校验）。
+      pid: process.pid,
     },
     idempotency_key: 'idem-hello-' + nonce,
   };
