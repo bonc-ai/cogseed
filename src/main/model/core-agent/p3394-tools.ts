@@ -210,7 +210,14 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
             },
           );
           if (delivered.ok) {
-            return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: 'channel bridge delivered' }) };
+            // 透传真实回执文本（含 "delivered (N file(s))" 文件数），不再
+            // 硬编码——真机排查时硬编码掩盖了文件投递结果。
+            const receiptText = (delivered.receipt.payload?.parts || [])
+              .filter((p) => p.type === 'text' && typeof p.text === 'string')
+              .map((p) => p.text)
+              .join(' ')
+              .trim();
+            return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: receiptText || 'channel bridge delivered' }) };
           }
           const deliverFailure = delivered as Extract<typeof delivered, { ok: false }>;
           return errResult('E_P3394_SEND_FAILED', deliverFailure.error);
