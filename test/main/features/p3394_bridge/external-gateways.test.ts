@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/registry';
-import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
+import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, runtimeModeForCli, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import * as fs from 'node:fs';
 
@@ -352,4 +352,29 @@ describe('P3394 external-agent gateway host', () => {
       try { fs.rmSync(gatewayStateFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
+});
+
+describe('G-35 任意智能体走 sscli（runtimeModeForCli）', () => {
+  it('未知名自接 CLI → sscli（经通用垫片，不再限定预设名单）', () => {
+    expect(runtimeModeForCli('my-custom-bot')).toBe('sscli');
+    expect(runtimeModeForCli('')).toBe('sscli');
+  });
+  it('预设 CLI → sscli；codex → 专属后端（undefined）', () => {
+    for (const cli of ['hermes', 'gemini', 'aider', 'openclaw', 'opencode', 'workbuddy']) {
+      expect(runtimeModeForCli(cli)).toBe('sscli');
+    }
+    expect(runtimeModeForCli('codex')).toBeUndefined();
+  });
+  it('排除表 COGSEED_P3394_SSCLI_EXCLUDE 命中 → 回 oneshot', () => {
+    const prev = process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+    process.env.COGSEED_P3394_SSCLI_EXCLUDE = 'weird-cli, another';
+    try {
+      expect(runtimeModeForCli('weird-cli')).toBeUndefined();
+      expect(runtimeModeForCli('another')).toBeUndefined();
+      expect(runtimeModeForCli('other')).toBe('sscli');
+    } finally {
+      if (prev === undefined) delete process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+      else process.env.COGSEED_P3394_SSCLI_EXCLUDE = prev;
+    }
+  });
 });
