@@ -184,9 +184,13 @@ export interface InboundEnvelope {
   /** Preserve a platform thread/topic when replying to the inbound message. */
   replyInThread?: boolean;
   /** Wechat-personal only: reference to the encrypted context_token snapshot
-   * in the wechat state store. The reply for this message must use exactly
-   * this token; it is never the peer's latest token. */
+   *  in the wechat state store. The reply for this message must use exactly
+   *  this token; it is never the peer's latest token. */
   contextTokenRef?: string;
+  /** G-17 多模态：渠道入站消息携带的图片引用（飞书 image_key 等）。
+   *  引用式记录（不下载字节）；text 为"[图片]"占位保证路由不丢。
+   *  （2026-08-26 理清：仅作渠道消息元数据，不再投影进 P3394 信封。） */
+  imageKeys?: string[];
   receivedAt: string;
   /** Synthetic feedback event (a reaction on one of our messages), not a
    * real user text message. Skips burst merging and carries the interaction
