@@ -47,6 +47,27 @@ vi.mock('../../../../src/main/model/client', () => ({
     if (String(_opts?.message || '').includes('ARTIFACT_EVENT_TEST')) {
       _opts?.onArtifactCreated?.({ id: 'art-live-1', title: 'Live App' });
     }
+    // G-26: dispatched agent turns now carry a <group-context-summary> digest
+    // which may echo earlier marker text (e.g. NESTED_OUTPUT_VISIBILITY_TEST
+    // from the user's commander turn). Check the per-turn task marker
+    // (PRODUCED_FILTER_TEST) BEFORE the commander-only NESTED marker so the
+    // dispatched-agent turn still resolves its own task, not digested history.
+    const producedMarker = 'PRODUCED_FILTER_TEST:';
+    const producedIdx = String(_opts?.message || '').indexOf(producedMarker);
+    if (producedIdx >= 0) {
+      const encoded = String(_opts.message).slice(producedIdx + producedMarker.length).split(/\s/, 1)[0];
+      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+      for (const p of data.paths || []) _opts?.onFileWritten?.(p);
+      const interaction = data.planInteraction === 'open' || data.planInteraction === 'closed'
+        ? `\n<plan-interaction status="${data.planInteraction}" />`
+        : '';
+      const form = data.withForm
+        ? `\n<agent-input-form>\n${JSON.stringify({ fields: [{ id: 'decision', label: 'Decision', type: 'text' }] })}\n</agent-input-form>`
+        : '';
+      yield { type: 'final', text: `produced filter ok${form}${interaction}` };
+      yield { type: 'done' };
+      return;
+    }
     const nestedOutputMarker = 'NESTED_OUTPUT_VISIBILITY_TEST:';
     const nestedOutputIdx = String(_opts?.message || '').indexOf(nestedOutputMarker);
     if (nestedOutputIdx >= 0) {
@@ -104,22 +125,6 @@ vi.mock('../../../../src/main/model/client', () => ({
         type: 'final',
         text: `<sync-conflict-result conflict_id="${esc(data.conflictId)}" rel_path="${esc(data.relPath)}" target_path="${esc(data.targetPath)}" status="${esc(data.status || 'resolved')}" action="${esc(data.action || 'use_current')}" />`,
       };
-      yield { type: 'done' };
-      return;
-    }
-    const producedMarker = 'PRODUCED_FILTER_TEST:';
-    const producedIdx = String(_opts?.message || '').indexOf(producedMarker);
-    if (producedIdx >= 0) {
-      const encoded = String(_opts.message).slice(producedIdx + producedMarker.length).split(/\s/, 1)[0];
-      const data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
-      for (const p of data.paths || []) _opts?.onFileWritten?.(p);
-      const interaction = data.planInteraction === 'open' || data.planInteraction === 'closed'
-        ? `\n<plan-interaction status="${data.planInteraction}" />`
-        : '';
-      const form = data.withForm
-        ? `\n<agent-input-form>\n${JSON.stringify({ fields: [{ id: 'decision', label: 'Decision', type: 'text' }] })}\n</agent-input-form>`
-        : '';
-      yield { type: 'final', text: `produced filter ok${form}${interaction}` };
       yield { type: 'done' };
       return;
     }
@@ -889,6 +894,63 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const digestOnly = agentCall!.split('</group-context-summary>')[0] ?? '';
     expect(digestOnly).toContain('<group-context-summary>');
     expect(digestOnly).not.toContain('现在开始实现需求A');
+  });
+
+  it('attaches the digest and routing envelope to a commander-dispatched external gateway turn (G-26)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const paths = await import('../../../../src/main/paths');
+    const cid = 'cid-gw-dispatch-digest';
+    const gwAgentId = 'a-gw-dispatch';
+    const gwAgentName = '外接工匠';
+    // Gateway-typed agent fixture (legacy `cli` runtime reads back as
+    // p3394-gateway per the channel unification), same as
+    // cli-prompt-project.test.ts.
+    const dir = paths.agentDir(TEST_UID, gwAgentId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify({
+      agent_id: gwAgentId,
+      name: gwAgentName,
+      description: '外部网关智能体',
+      created_at: 't', updated_at: 't',
+      runtime: { kind: 'cli', cli: 'hermes' },
+    }));
+
+    // Phase 1: bring the external agent into the roster with a direct @, so
+    // the later commander dispatch has a valid member to route to.
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: `@${gwAgentName} 你好，先加入会话`,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    // Phase 2: the user discusses background with the commander — invisible
+    // to the external agent's visibility slice. Route explicitly to the
+    // commander, otherwise the conversation sticks to the last @target.
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'user',
+      text: '先和指挥官讨论网关上下文注入的背景细节',
+      forceTo: ['commander'],
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    // Phase 3: commander dispatches a task to the external agent. G-26: this
+    // turn must now carry the missed-context digest AND keep the routing
+    // envelope (previously dispatches carried neither digest nor sender).
+    await bus.enqueue({
+      uid: TEST_UID, cid, fromActorId: 'commander',
+      text: '执行网关上下文注入的验证任务', forceTo: [gwAgentId], dispatch: true,
+    });
+    await waitForQuiescent(TEST_UID, cid);
+
+    const call = gatewayTurnMock.calls[gatewayTurnMock.calls.length - 1];
+    expect(call).toBeTruthy();
+    expect(String(call.prompt)).toContain('<group-context-summary>');
+    expect(String(call.prompt)).toContain('先和指挥官讨论网关上下文注入的背景细节');
+    expect(String(call.prompt)).toContain('<msg from="commander"');
+    // The digest is context, not instructions: the current task text lives
+    // outside the summary block.
+    const digestPart = String(call.prompt).split('</group-context-summary>')[0] ?? '';
+    expect(digestPart).not.toContain('执行网关上下文注入的验证任务');
   });
 
   it('strips agent result markers and records model failures separately from errors', async () => {
