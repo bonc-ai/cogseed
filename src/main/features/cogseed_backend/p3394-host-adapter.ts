@@ -13,6 +13,7 @@ import { genId12 } from '../../storage';
 import { getP3394BridgeInfo, getP3394OutboundHub, resolveP3394Peer } from '../p3394_bridge/app-wiring';
 import { sessionForGoal } from '../p3394_bridge/session-store';
 import { filesToResourceParts } from '../p3394_bridge/artifact-parts';
+import { normalizePeerParam } from '../p3394_bridge/mention-resolver';
 import type { P3394Envelope, P3394PayloadPart } from '../p3394_bridge/envelope';
 
 const log = createLogger('p3394-host-adapter');
@@ -73,6 +74,9 @@ export function buildP3394OutboundEnvelope(
   sourceKey: string,
   opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string; references?: P3394OutboundReference[] } = {},
 ): P3394Envelope {
+  // @alias 便利写法（§7.2）：peer 参数允许 "@hermes"，剥前缀后由注册表
+  // 按 alias/agent_id 解析；解析与身份验证仍在协商链（fail-closed）。
+  peer = normalizePeerParam(peer);
   // Goal 自动隔离（指南 §5.3）：同 (scope, peer) 同 Goal 复用会话，不同 Goal 开新会话。
   const sessionId = sessionForGoal(opts.scopeKey ?? peer, peer, opts.goal);
   // 约定（S-04 关联 id 脱敏前提）：P3394 的 message/session/task id 一律由
