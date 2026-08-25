@@ -989,7 +989,7 @@ class SscliRuntime {
   get name() { return 'sscli'; }
   _nextReq() { this.reqSeq += 1; return 'req-' + this.reqSeq; }
   _send(op) { if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(op) + '\n'); }
-  _request(op, timeoutMs, onDelta) {
+  _request(op, timeoutMs, onDelta, onProgress) {
     return new Promise((resolve, reject) => {
       const requestId = op.request_id || this._nextReq();
       op.request_id = requestId;
@@ -997,6 +997,7 @@ class SscliRuntime {
         resolve, reject,
         deltas: [],
         onDelta,
+        onProgress,
         timer: setTimeout(() => {
           this.pending.delete(requestId);
           reject(new Error('p3394_sscli_timeout'));
@@ -1015,6 +1016,9 @@ class SscliRuntime {
       if (parsed.event === 'delta' && typeof parsed.text === 'string') {
         entry.deltas.push(parsed.text);
         entry.onDelta?.(parsed.text);
+      } else if (parsed.event === 'progress' && typeof parsed.text === 'string') {
+        // 工具过程/冷启动提示（shim stderr 识别、native CLI 自报）→ process rail。
+        entry.onProgress?.(parsed.text);
       }
       if (parsed.event === 'completed') {
         this.pending.delete(parsed.request_id);
@@ -1105,7 +1109,7 @@ class SscliRuntime {
     }, SSCLI_HANDSHAKE_MS);
     this.sessions.add(sessionId);
   }
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     await this.start();
@@ -1113,7 +1117,7 @@ class SscliRuntime {
       op: 'deliver',
       session_id: sessionId,
       message: { message_id: messageId, payload: { parts: [{ type: 'text', text: text + note + hint }] } },
-    }, TIMEOUT_MS, onDelta);
+    }, TIMEOUT_MS, onDelta, onProgress);
   }
   cancel(taskId) {
     if (!this.child) return false;
@@ -1346,12 +1350,57 @@ class ClaudePersistentRuntime {
     try { ev = JSON.parse(line); } catch { return; }
     if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
     const turn = entry.turn;
-    if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
-      && ev.event.delta && typeof ev.event.delta.text === 'string') {
-      const t = ev.event.delta.text;
-      if (t) {
-        turn.accumulated += t;
-        turn.onDelta && turn.onDelta(t);
+    // 工具过程帧：总量封顶（失控的多工具循环不爆 process rail）。
+    const note = (t) => {
+      turn.progressCount = (turn.progressCount || 0) + 1;
+      if (turn.progressCount > 100) return;
+      turn.onProgress && turn.onProgress(t);
+    };
+    if (ev && ev.type === 'stream_event' && ev.event) {
+      const se = ev.event;
+      // 工具调用可见性：content_block_start 报工具名；参数经 input_json_delta
+      // 流式拼接，content_block_stop 时解析出最有信息量的字段（file_path/
+      // command 等）作摘要——过程栏能看到"在跑什么"而不只是"在调工具"。
+      if (se.type === 'content_block_start' && se.content_block && se.content_block.type === 'tool_use'
+        && typeof se.content_block.name === 'string') {
+        turn.toolJson = { name: se.content_block.name, buf: '' };
+        note('🔧 ' + se.content_block.name + '…');
+        return;
+      }
+      if (se.type === 'content_block_delta' && se.delta && se.delta.type === 'input_json_delta'
+        && typeof se.delta.partial_json === 'string' && turn.toolJson) {
+        turn.toolJson.buf += se.delta.partial_json;
+        return;
+      }
+      if (se.type === 'content_block_stop' && turn.toolJson) {
+        const tj = turn.toolJson;
+        turn.toolJson = null;
+        let brief = '';
+        try {
+          const input = JSON.parse(tj.buf || '{}');
+          const v = input.file_path || input.command || input.pattern || input.path
+            || input.url || input.query || input.keyword || input.description;
+          if (v) brief = ' ' + String(v).slice(0, 120);
+        } catch { /* 参数流不完整时只报工具名 */ }
+        note(brief ? '└ ' + tj.name + ' ' + brief : '└ ' + tj.name);
+        return;
+      }
+      if (se.type === 'content_block_delta'
+        && se.delta && typeof se.delta.text === 'string') {
+        const t = se.delta.text;
+        if (t) {
+          turn.accumulated += t;
+          turn.onDelta && turn.onDelta(t);
+        }
+        return;
+      }
+      return;
+    }
+    if (ev && ev.type === 'user' && ev.message && Array.isArray(ev.message.content)) {
+      // 此模式的 user 帧只承载 tool_result（工具执行结果回给模型）：
+      // 一帧 = 上一组工具调用完成，轻提示收尾。
+      if (ev.message.content.some((c) => c && c.type === 'tool_result')) {
+        note('✅ 工具执行完成');
       }
       return;
     }
@@ -1397,7 +1446,7 @@ class ClaudePersistentRuntime {
     }
   }
 
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cancelKey = (opts && opts.taskId) || messageId;
@@ -1433,6 +1482,8 @@ class ClaudePersistentRuntime {
         accumulated: '',
         lastAssistantText: '',
         onDelta,
+        onProgress,
+        toolJson: null, // 当前 tool_use 块的参数累积（input_json_delta 流式拼接）
       };
       try {
         entry.child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');

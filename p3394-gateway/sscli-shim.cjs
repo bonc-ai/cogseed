@@ -157,13 +157,45 @@ function emitEvent(fields) {
   emit({ ...fields, sequence: eventSeq });
 }
 
+// ── 工具过程可见性（best-effort）──
+// 多数 CLI 的过程日志（openclaw 的 [skills]/[tools]、aider 的编辑回显等）
+// 走 stderr；正文走 stdout。stderr 逐行清洗后转发为 progress 帧 → 网关
+// pushProgress → process rail。规则刻意保守：噪声行不进栏（无信息量还刷屏），
+// 每轮总量封顶防失控 CLI 爆栏。
+const PROGRESS_MAX_LINES = 200;
+const SLOW_START_HINT_MS = 8000;
+const STDERR_NOISE_RE = /deprecat|warning|debug|verbose|experimental|trace|telemetry|update available|usage data|anonymous|node:internal|--trace|socket hang up/i;
+function cliLabel() { return path.basename(String(CLI || 'cli')); }
+function progressLine(line) {
+  const t = String(line || '').trim();
+  if (!t || t.length > 400) return null;
+  if (t.startsWith('{')) return null; // JSON 信封/结构化输出不是过程日志
+  if (t.startsWith('[')) {
+    // 方括号标签行（openclaw 的 [skills]/[tools] 等）是合法过程日志；
+    // 只有整行真能 JSON.parse（数组型结构化输出）才排除。
+    try { JSON.parse(t); return null; } catch { /* 标签行，放行 */ }
+  }
+  if (STDERR_NOISE_RE.test(t)) return null;
+  return t;
+}
+
 function runCliOnce(requestId, prompt, extraArgs, cwd) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((p) => p.replace('{message}', prompt)).concat(Array.isArray(extraArgs) ? extraArgs : []);
+    // 冷启动可见性：CLI 启动占每轮首字延迟大头（实测 8-12s），spawn 即告知，
+    // 超时未见首字再提示一次——无提示时用户面对的是无响应黑盒。
+    emitEvent({ event: 'progress', request_id: requestId, text: '正在启动 ' + cliLabel() + '…' });
     const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     activeTurn = { child, requestId, streamedChars: 0 };
     let out = '';
     let errOut = '';
+    let errLineBuf = '';
+    let progressSent = 0;
+    const slowStartTimer = setTimeout(() => {
+      if (activeTurn && activeTurn.child === child && activeTurn.streamedChars === 0) {
+        emitEvent({ event: 'progress', request_id: requestId, text: cliLabel() + ' 冷启动较慢，仍在等待首个输出…' });
+      }
+    }, SLOW_START_HINT_MS);
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 3000).unref();
@@ -171,6 +203,7 @@ function runCliOnce(requestId, prompt, extraArgs, cwd) {
     }, TIMEOUT_MS);
     function finish(error) {
       clearTimeout(timer);
+      clearTimeout(slowStartTimer);
       if (activeTurn && activeTurn.child === child) activeTurn = null;
       if (error) reject(error); else resolve(out.trim());
     }
@@ -183,7 +216,19 @@ function runCliOnce(requestId, prompt, extraArgs, cwd) {
       activeTurn.streamedChars += visible.length;
       emitEvent({ event: 'delta', request_id: requestId, text: visible });
     });
-    child.stderr.on('data', (chunk) => { if (errOut.length < 8 * 1024) errOut += chunk; });
+    child.stderr.on('data', (chunk) => {
+      if (errOut.length < 8 * 1024) errOut += chunk;
+      // 行可能跨 chunk，残行缓冲拼接后逐行走 progress 通道。
+      errLineBuf += chunk.toString('utf8');
+      const lines = errLineBuf.split('\n');
+      errLineBuf = lines.pop() || '';
+      for (const line of lines) {
+        const text = progressLine(sanitizeStreamText(line));
+        if (!text || progressSent >= PROGRESS_MAX_LINES) continue;
+        progressSent += 1;
+        emitEvent({ event: 'progress', request_id: requestId, text });
+      }
+    });
     child.on('error', (error) => finish(error));
     child.on('close', (code) => {
       if (code === 0) finish();
