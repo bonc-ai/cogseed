@@ -497,9 +497,13 @@ async function main() {
   fs.writeFileSync(shimAgent, [
     "'use strict';",
     "const msg = process.argv[2] || '';",
-    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧；附带 cwd",
+    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧；附带 cwd。",
+    "// stderr 模拟 CLI 过程日志：工具行 + 噪声行（延迟 200ms 发，避开网关",
+    "// 80ms progress 合并窗口，保证噪声行独立成帧可被断言）。",
+    "process.stderr.write('[tools] Reading file src/x.ts\\n');",
+    "setTimeout(() => process.stderr.write('node:internal deprecation warning noise\\n'), 200);",
     "process.stdout.write('SHIM-');",
-    "setTimeout(() => { process.stdout.write('REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); }, 150);",
+    "setTimeout(() => { process.stdout.write('REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); }, 350);",
   ].join('\n'));
   const SHIM_PORT = GATEWAY_PORT + 95;
   const shimHome = path.join(tmp, 'shim-home');
@@ -521,6 +525,10 @@ async function main() {
   check('shim：open_session workspace 作为 CLI cwd 生效（指南 §9.2）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('CWD:' + fs.realpathSync(shimRequestedCwd))));
   const shimDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
   check('shim：stdout chunk 转协议 delta 帧实时回发', shimDeltas.length >= 2 && shimDeltas.some((e) => (e.payload.parts[0].text || '').includes('SHIM-')));
+  const shimProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress');
+  check('shim：stderr 工具日志转 progress 帧（过程栏可见）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('[tools] Reading file')));
+  check('shim：stderr 噪声行被过滤（告警/调试不进过程栏）', !shimProgress.some((e) => (e.payload.parts[0].text || '').includes('node:internal')));
+  check('shim：冷启动提示进 progress 帧（spawn 即告知）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('正在启动')));
   const shimMsg2 = { message_id: 'shm2', session_id: 'shim-s1', task_id: 'shtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second shim turn' }] }, idempotency_key: 'shim-idem2' };
   await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg2 }, GATEWAY_TOKEN);
   const shimDone2 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('second shim turn'));
@@ -603,6 +611,14 @@ async function main() {
     "  round += 1;",
     "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
     "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
+    "  if (round === 1) {",
+    "    // 工具调用事件流：block_start 报名 → input_json_delta 流式参数 →",
+    "    // block_stop 收尾 → user 帧 tool_result。网关解析为 process rail 帧。",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'tool_use',id:'tu1',name:'Bash',input:{}}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'{\"command\":\"npm test\"}'}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_stop',index:0}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tu1',content:'ok'}]}}) + '\\n');",
+    "  }",
     "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
     "  setTimeout(() => {",
     "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
@@ -625,6 +641,10 @@ async function main() {
   const psDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
   check('claude 常驻：第一轮 delta 实时回发', psDeltas.includes('PERSISTENT-1'));
   check('claude 常驻：第一轮终态 = 累积文本', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:first round')));
+  const psProgress = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('claude 常驻：tool_use 工具名进 progress 帧', psProgress.includes('🔧 Bash'));
+  check('claude 常驻：工具参数摘要进 progress 帧', psProgress.includes('npm test'));
+  check('claude 常驻：tool_result 完成提示进 progress 帧', psProgress.includes('工具执行完成'));
   // 第二轮：进程必须复用（pid 只记一次、argv 只记一次），且不带 [会话历史]
   // 前缀（进程内上下文自动延续）。
   const psMsg2 = { message_id: 'ps2', session_id: 's-persistent', task_id: 'pstk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'follow up' }] }, idempotency_key: 'idem-ps2' };

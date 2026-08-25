@@ -47,6 +47,9 @@ describe('P3394 external-agent gateway host', () => {
     const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
       if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        // 过程帧（progress/delta，kind=event）先于终态到达，不算回复——
+        // 等待条件只认终态信封，否则会把冷启动提示误当回复/错误回信。
+        if (envelope.kind === 'event') return;
         replies.push(envelope);
         replyResolve?.(envelope);
         return;
@@ -163,6 +166,9 @@ describe('P3394 external-agent gateway host', () => {
     const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
       if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        // 过程帧（progress/delta，kind=event）先于终态到达，不算回复——
+        // 等待条件只认终态信封，否则会把冷启动提示误当回复/错误回信。
+        if (envelope.kind === 'event') return;
         replies.push(envelope);
         replyResolve?.(envelope);
         return;
