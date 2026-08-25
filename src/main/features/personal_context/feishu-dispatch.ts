@@ -22,6 +22,7 @@ import * as crypto from 'node:crypto';
 import * as proactive from '../messaging/proactive';
 import * as messagingRegistry from '../messaging/registry';
 import { sendProactive } from '../messaging/manager';
+import { sendSystemViaChannelBridge } from '../messaging/channel-bridge';
 import { createTouchpointDomainEvent } from '../touchpoints/events';
 import { orchestrateTouchpointEvent, dispatchTouchpointIntent } from '../touchpoints/orchestrator';
 import { createFeishuTouchpointAdapter } from '../touchpoints/feishu/adapter';
@@ -98,14 +99,26 @@ export async function dispatchToFeishuHome(
   }
 
   try {
-    await sendProactive(uid, {
-      instanceId: opts.instanceId,
-      recipientId: ownerExternalUserId,
+    // G-13：触达与对话同路——简报经 P3394 信封投递（护栏+回执+台账运单号）。
+    const dispatched = await sendSystemViaChannelBridge(uid, opts.instanceId, {
       text,
       sourceKey,
       signal: opts.signal ?? null,
+    }, {
+      send: sendProactive,
+      ownerResolver: async () => (ownerExternalUserId ? { recipientId: ownerExternalUserId } : null),
     });
-    log.info('briefing dispatched to feishu home', { instanceId: opts.instanceId, textLen: text.length, sourceKey });
+    if (!dispatched.ok) {
+      const dispatchFailure = dispatched as Extract<typeof dispatched, { ok: false }>;
+      log.warn('briefing dispatch failed', { instanceId: opts.instanceId, error: dispatchFailure.error });
+      return { ok: false, code: 'delivery_failed', error: dispatchFailure.error };
+    }
+    log.info('briefing dispatched to feishu home', {
+      instanceId: opts.instanceId,
+      textLen: text.length,
+      sourceKey,
+      p3394MessageId: dispatched.messageId,
+    });
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

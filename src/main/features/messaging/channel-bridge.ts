@@ -72,12 +72,14 @@ export function unregisterChannelBridgeNode(instanceId: string): void {
  *   （现状兼容），空数组 = 拒绝所有。
  * - 限流：内存滑动窗口，per (uid, instance, sender) 10 条/分钟 +
  *   per (uid, instance) 总 30 条/分钟。进程内护栏（重启清零），
- *   防的是失控智能体刷屏，不是计费精度。 */
+ *   防的是失控智能体刷屏，不是计费精度。
+ * - 卡片：parts 中 {type:'json', data:{card}} 格子还原为投递 card 参数
+ *   （飞书交互卡片等渠道特有结构，信封不丢特性）。 */
 export async function deliverToChannelBridge(
   uid: string,
   agentId: string,
   envelope: P3394Envelope,
-  send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string }) => Promise<unknown>,
+  send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string; card?: Record<string, unknown> }) => Promise<unknown>,
   ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>,
   options?: { allowedSenders?: string[] },
 ): Promise<{ ok: true; receipt: P3394Envelope } | { ok: false; error: string }> {
@@ -96,6 +98,9 @@ export async function deliverToChannelBridge(
     .join('\n')
     .trim();
   if (!text) return { ok: false, error: 'p3394_channel_bridge_empty_text' };
+  const cardPart = (envelope.payload?.parts || []).find((part) => part.type === 'json'
+    && part.data && typeof part.data === 'object' && 'card' in (part.data as Record<string, unknown>));
+  const card = cardPart ? (cardPart.data as { card?: Record<string, unknown> }).card : undefined;
   const owner = await ownerResolver(uid, instanceId);
   if (!owner) return { ok: false, error: 'p3394_channel_bridge_no_owner' };
   try {
@@ -104,8 +109,14 @@ export async function deliverToChannelBridge(
       recipientId: owner.recipientId,
       text,
       sourceKey: `p3394:${envelope.message_id}`,
+      ...(card ? { card } : {}),
     });
   } catch (error) {
+    // AbortError 单独识别：调用方（如 proactive sendToSelf）依赖它区分
+    // "turn 中止"（not_sent/aborted）与真实投递失败。
+    if ((error as Error)?.name === 'AbortError') {
+      return { ok: false, error: 'p3394_channel_bridge_aborted' };
+    }
     return { ok: false, error: (error as Error).message || 'p3394_channel_bridge_delivery_failed' };
   }
   const receipt: P3394Envelope = {
@@ -118,6 +129,93 @@ export async function deliverToChannelBridge(
     payload: { parts: [{ type: 'text', text: 'channel bridge delivered' }] },
   };
   return { ok: true, receipt };
+}
+
+// ── 系统触达统一信封入口（G-13：触达与对话同路）───────────────────────
+// touchpoints / 个人简报 / sendToSelf 等系统侧主动通知，不再直调
+// sendProactive，而是构造 P3394 信封经 deliverToChannelBridge 投递——
+// 与智能体触达同一条路（护栏 + 回执 + 台账运单号）。sendProactive 退为
+// 底层物理传输（台账/重试/幂等能力保留，只被本路径与 agent 分流调用）。
+// 系统身份（cogseed:<uid>）不走白名单（白名单管智能体，不管用户自配置
+// 的系统通知），但仍受实例级限流保护（防系统 bug 刷屏）。
+
+import { createHash } from 'node:crypto';
+
+function systemChannelMessageId(uid: string, instanceId: string, sourceKey: string): string {
+  return `sys-${createHash('sha256').update(`${uid}:${instanceId}:${sourceKey}`).digest('hex').slice(0, 24)}`;
+}
+
+export interface SystemChannelBridgeDeps {
+  /** 底层传输（生产环境传 manager.sendProactive）。返回值若含 entry 会被
+   * 透传到结果（adapter 需要 externalDeliveryId 做回执校验）。input 的
+   * signal（如有）会附加到本回调的入参。 */
+  send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string; card?: Record<string, unknown>; signal?: AbortSignal | null }) => Promise<unknown>;
+  ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>;
+}
+
+export async function sendSystemViaChannelBridge(
+  uid: string,
+  instanceId: string,
+  input: { text: string; card?: Record<string, unknown>; sourceKey: string; signal?: AbortSignal | null },
+  deps: SystemChannelBridgeDeps,
+): Promise<
+  | { ok: true; messageId: string; receipt: P3394Envelope; delivery?: { externalDeliveryId?: string; attempts?: number } }
+  | { ok: false; error: string }
+> {
+  const text = typeof input.text === 'string' ? input.text.trim() : '';
+  if (!text) return { ok: false, error: 'p3394_channel_bridge_empty_text' };
+  const sourceKey = typeof input.sourceKey === 'string' ? input.sourceKey.trim() : '';
+  if (!sourceKey) return { ok: false, error: 'p3394_system_source_key_required' };
+  const message_id = systemChannelMessageId(uid, instanceId, sourceKey);
+  const envelope: P3394Envelope = {
+    spec_version: 'p3394/1.0',
+    message_id,
+    session_id: `sys:${instanceId}`,
+    kind: 'message',
+    performative: 'inform',
+    sender: { agent_id: `cogseed:${uid}` },
+    recipients: [{ agent_id: channelBridgeAgentId(instanceId) }],
+    payload: {
+      parts: [
+        { type: 'text', text },
+        ...(input.card ? [{ type: 'json' as const, data: { card: input.card } }] : []),
+      ],
+    },
+    idempotency_key: `sys:${instanceId}:${sourceKey}`.slice(0, 160),
+  };
+  let deliveryEntry: unknown = null;
+  const signal = input.signal ?? null;
+  const delivered = await deliverToChannelBridge(
+    uid,
+    channelBridgeAgentId(instanceId),
+    envelope,
+    async (uid2, sendInput) => {
+      const res = await deps.send(uid2, { ...sendInput, signal });
+      if (res && typeof res === 'object' && 'entry' in (res as Record<string, unknown>)) {
+        deliveryEntry = (res as { entry?: unknown }).entry;
+      }
+      return res;
+    },
+    deps.ownerResolver,
+  );
+  if (!delivered.ok) {
+    const failure = delivered as Extract<typeof delivered, { ok: false }>;
+    return failure;
+  }
+  const entry = deliveryEntry as { externalDeliveryId?: string; attempts?: number } | null;
+  return {
+    ok: true,
+    messageId: message_id,
+    receipt: delivered.receipt,
+    ...(entry
+      ? {
+          delivery: {
+            ...(typeof entry.externalDeliveryId === 'string' ? { externalDeliveryId: entry.externalDeliveryId } : {}),
+            ...(typeof entry.attempts === 'number' ? { attempts: entry.attempts } : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 // ── 限流（进程内滑动窗口）──────────────────────────────────────────────
@@ -144,18 +242,26 @@ function admitWindow(windowKey: string, store: Map<string, number[]>, limit: num
 }
 
 /** 限流判定 + 记账。放行时两级窗口都记账；任一级超限拒绝（不记账，重试
- * 仍会被同一窗口挡住直到滑出）。 */
+ * 仍会被同一窗口挡住直到滑出）。系统身份（cogseed:* 前缀，sendSystemVia
+ * ChannelBridge 的 sender）聚合了全部系统通知（简报/触达点/提醒），单个
+ * 系统身份的 10 条/分钟会误伤正常业务——系统身份只受实例级 30 条/分钟
+ * 约束（防 bug 刷屏依然有效）。 */
 function admitChannelBridgeSend(uid: string, instanceId: string, senderAgentId: string, now = Date.now()): boolean {
-  const senderOk = admitWindow(`${uid}\0${instanceId}\0${senderAgentId}`, _senderWindows, PER_SENDER_LIMIT, now);
-  if (!senderOk) return false;
+  const isSystemSender = senderAgentId.startsWith('cogseed:');
+  if (!isSystemSender) {
+    const senderOk = admitWindow(`${uid}\0${instanceId}\0${senderAgentId}`, _senderWindows, PER_SENDER_LIMIT, now);
+    if (!senderOk) return false;
+  }
   const instanceOk = admitWindow(`${uid}\0${instanceId}`, _instanceWindows, PER_INSTANCE_LIMIT, now);
   if (!instanceOk) {
     // 回滚 sender 记账，避免实例级限流白白消耗单个 sender 的配额
-    const key = `${uid}\0${instanceId}\0${senderAgentId}`;
-    const stamps = _senderWindows.get(key);
-    if (stamps && stamps.length) {
-      stamps.pop();
-      _senderWindows.set(key, stamps);
+    if (!isSystemSender) {
+      const key = `${uid}\0${instanceId}\0${senderAgentId}`;
+      const stamps = _senderWindows.get(key);
+      if (stamps && stamps.length) {
+        stamps.pop();
+        _senderWindows.set(key, stamps);
+      }
     }
     return false;
   }

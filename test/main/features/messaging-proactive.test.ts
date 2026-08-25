@@ -203,11 +203,12 @@ describe('messaging proactive target service', () => {
       ownerLabel: '本人',
       text: 'hello',
     }));
+    // G-13 触达与对话同路：底层投递经 P3394 信封（sourceKey 带运单号前缀）
     expect(manager.sendProactive).toHaveBeenCalledWith('user-1', {
       instanceId: 'bot-1',
       recipientId: 'ou_self_1',
       text: 'hello',
-      sourceKey: 'stable-key-1',
+      sourceKey: expect.stringMatching(/^p3394:sys-/),
       signal: null,
     });
   });

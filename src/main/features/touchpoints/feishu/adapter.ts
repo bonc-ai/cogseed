@@ -1,6 +1,8 @@
 import { t } from '../../../i18n';
+import { createLogger } from '../../../logger';
 import * as manager from '../../messaging/manager';
 import * as registry from '../../messaging/registry';
+import { sendSystemViaChannelBridge } from '../../messaging/channel-bridge';
 import { buildTouchpointCard } from './card';
 import { applyTouchpointTemplate } from '../config';
 import type {
@@ -8,6 +10,8 @@ import type {
   TouchpointDeliveryResult,
   TouchpointIntent,
 } from '../types';
+
+const log = createLogger('touchpoints:feishu-adapter');
 
 export type FeishuTouchpointAdapterErrorCode =
   | 'instance_not_found'
@@ -69,18 +73,30 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
       try {
         // Actionable intents go out as interactive cards whose buttons carry
         // signed receipt envelopes; read-only intents stay plain text.
-        const { entry } = await manager.sendProactive(userId, {
-          instanceId,
-          recipientId: instance.ownerExternalUserId,
+        // G-13：触达与对话同路——经 P3394 信封投递（护栏+回执+台账运单号），
+        // sendProactive 退为 channel-bridge 的底层物理传输。
+        const dispatched = await sendSystemViaChannelBridge(userId, instanceId, {
           text: renderFeishuTouchpointText(renderedIntent),
-          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) } : {}),
+          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) as unknown as Record<string, unknown> } : {}),
           sourceKey: `touchpoint:${renderedIntent.intentId}`,
-          signal: null,
+        }, {
+          send: manager.sendProactive,
+          ownerResolver: async () => (instance.ownerExternalUserId ? { recipientId: instance.ownerExternalUserId } : null),
         });
-        if (!entry.externalDeliveryId) {
+        if (!dispatched.ok) {
+          const dispatchFailure = dispatched as Extract<typeof dispatched, { ok: false }>;
+          // 底层错误只进日志；抛给上层的错误固定文案——不把渠道侧细节
+          // （可能含消息内容）泄露进错误对象（原有安全语义保留）。
+          log.warn('feishu touchpoint channel-bridge delivery failed', {
+            instanceId,
+            error: dispatchFailure.error,
+          });
+          throw new FeishuTouchpointAdapterError('delivery_failed', 'Feishu touchpoint delivery failed.', true);
+        }
+        if (!dispatched.delivery?.externalDeliveryId) {
           throw new FeishuTouchpointAdapterError('delivery_receipt_missing', 'Feishu delivery receipt is missing.', true);
         }
-        return { externalDeliveryId: entry.externalDeliveryId };
+        return { externalDeliveryId: dispatched.delivery.externalDeliveryId };
       } catch (error) {
         if (error instanceof FeishuTouchpointAdapterError) throw error;
         throw new FeishuTouchpointAdapterError('delivery_failed', 'Feishu touchpoint delivery failed.', true);

@@ -70,10 +70,11 @@ describe('Feishu touchpoint adapter', () => {
     const result = await adapter.send('user-1', intent());
 
     expect(result).toEqual({ externalDeliveryId: 'om_123' });
+    // G-13 触达与对话同路：sourceKey 经 P3394 信封派生（带运单号前缀）
     expect(mocks.manager.sendProactive).toHaveBeenCalledWith('user-1', expect.objectContaining({
       instanceId: 'feishu-1',
       recipientId: 'ou_owner',
-      sourceKey: 'touchpoint:intent-1',
+      sourceKey: expect.stringMatching(/^p3394:sys-/),
     }));
   });
 

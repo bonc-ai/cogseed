@@ -14,6 +14,7 @@ import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import * as manager from './manager';
 import * as registry from './registry';
+import { sendSystemViaChannelBridge } from './channel-bridge';
 import type { MessagingInstanceClient } from './types';
 import type { TouchpointRouteScene } from '../touchpoints/types';
 import { resolveTouchpointInstanceId } from '../touchpoints/config';
@@ -56,7 +57,8 @@ export type ProactiveSendResult =
       instance_id: string;
       owner_label?: string;
       text_length: number;
-      attempts: number;
+      /** G-13 后经 channel-bridge 透传，链路异常时可能缺失（可选）。 */
+      attempts?: number;
       delivery_id?: string;
     }
   | { status: 'not_sent'; reason: 'denied' | 'timed_out' | 'aborted' | 'no_renderer' }
@@ -224,20 +226,33 @@ export async function sendToSelf(
   }
 
   try {
-    const { entry } = await manager.sendProactive(uid, {
-      instanceId: chosen.instance_id,
-      recipientId: ownerExternalUserId,
+    // G-13：触达与对话同路——sendToSelf 经 P3394 信封投递（护栏+回执+
+    // 台账运单号）；确认弹窗语义保留在信封投递之前。
+    const dispatched = await sendSystemViaChannelBridge(uid, chosen.instance_id, {
       text,
       sourceKey: opts.sourceKey,
       signal: opts.signal ?? null,
+    }, {
+      send: manager.sendProactive,
+      ownerResolver: async () => ({ recipientId: ownerExternalUserId }),
     });
+    if (!dispatched.ok) {
+      const dispatchFailure = dispatched as Extract<typeof dispatched, { ok: false }>;
+      if (dispatchFailure.error === 'p3394_channel_bridge_aborted') {
+        log.info('proactive send aborted mid-delivery', { instanceId: chosen.instance_id });
+        return { status: 'not_sent', reason: 'aborted' };
+      }
+      log.warn('proactive send failed after approval', { instanceId: chosen.instance_id, error: dispatchFailure.error });
+      return error('E_MESSAGING_DELIVERY_FAILED', dispatchFailure.error);
+    }
+    const dispatchSuccess = dispatched as Extract<typeof dispatched, { ok: true }>;
     return {
       status: 'sent',
       instance_id: chosen.instance_id,
       ...(chosen.owner_label ? { owner_label: chosen.owner_label } : {}),
       text_length: text.length,
-      attempts: entry.attempts,
-      ...(entry.externalDeliveryId ? { delivery_id: entry.externalDeliveryId } : {}),
+      ...(typeof dispatchSuccess.delivery?.attempts === 'number' ? { attempts: dispatchSuccess.delivery.attempts } : {}),
+      ...(dispatchSuccess.delivery?.externalDeliveryId ? { delivery_id: dispatchSuccess.delivery.externalDeliveryId } : {}),
     };
   } catch (err) {
     // A session abort (turn signal) or an AbortError from the delivery wait
