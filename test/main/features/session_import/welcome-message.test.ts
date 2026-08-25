@@ -118,7 +118,19 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
     expect(out.text).not.toContain('核对产品对象和术语');
   });
 
+  // 本组用例 mock 了 CLI 探测/执行（不真跑宿主机 CLI），是 local-agent 回退
+  // 的行为钉子——setup-env 全局关闭回退（G-20：其余测试不得依赖宿主机 CLI），
+  // 这里用例级解除以验证回退逻辑本身。
+  function withLocalAgentFallback<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK;
+    delete process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK;
+    return fn().finally(() => {
+      if (prev !== undefined) process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK = prev;
+    });
+  }
+
   it('uses a detected local Agent when no API model is configured', async () => {
+    await withLocalAgentFallback(async () => {
     modelMocks.hasConfiguredModel.mockReturnValue({ configured: false });
     modelMocks.pickBestCliForFallback
       .mockResolvedValueOnce({
@@ -127,8 +139,9 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
         version: '1.0.0',
         available: true,
         auth: { loggedIn: true, mode: 'oauth' },
-      })
-      .mockResolvedValueOnce(null);
+      });
+    // 不再补 mockResolvedValueOnce(null)：成功路径一次 pick 即返回，残留的
+    // Once 队列会漏进后续用例（开关让 no-Agent 用例不再消费它）。
     modelMocks.runCliAgent.mockResolvedValueOnce({
       runId: 'local-plan-1',
       status: 'completed',
@@ -156,6 +169,7 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       skipDispatchCheck: true,
       prompt: expect.stringContaining('完善支付流程'),
     }));
+    });
   });
 
   it('reports when no local Agent is detected and does not invent a plan', async () => {
@@ -174,6 +188,7 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
   });
 
   it('tries the next local Agent when the first one fails', async () => {
+    await withLocalAgentFallback(async () => {
     modelMocks.hasConfiguredModel.mockReturnValue({ configured: false });
     modelMocks.pickBestCliForFallback
       .mockResolvedValueOnce({
@@ -201,6 +216,7 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       exclude: expect.any(Set),
     }));
     expect([...modelMocks.pickBestCliForFallback.mock.calls[1][0].exclude]).toEqual(['codex']);
+    });
   });
 
   it('reports an empty model reply separately', async () => {
