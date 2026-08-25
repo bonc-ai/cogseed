@@ -538,6 +538,102 @@ async function main() {
   check('shim：会话状态落垫片独立目录', fs.existsSync(shimTranscript));
   shimGw.kill('SIGTERM');
 
+  // ── opencode 常驻（server 模式）：fake opencode server 实现 /session、
+  // /session/:id/message（同步终态）与 /event（SSE）。验证：runtime 选择、
+  // 正文 delta 透传（reasoning 流不混入）、工具 progress 帧、server 进程
+  // 跨会话/跨轮复用。真 opencode 的端到端实测见账本 G-37。 ──
+  const fakeOcServer = path.join(tmp, 'fake-opencode-server.cjs');
+  fs.writeFileSync(fakeOcServer, [
+    '#!/usr/bin/env node',
+    "'use strict';",
+    "const http = require('http');",
+    "const fs = require('fs');",
+    "if (process.env.FAKE_OC_PID) fs.appendFileSync(process.env.FAKE_OC_PID, process.pid + '\\n');",
+    "let sseClients = [];",
+    "let sessionSeq = 0;",
+    "const server = http.createServer((req, res) => {",
+    "  const send = (obj) => { for (const r of sseClients) r.write('data: ' + JSON.stringify(obj) + '\\n\\n'); };",
+    "  if (req.method === 'POST' && req.url === '/session') {",
+    "    sessionSeq += 1;",
+    "    res.writeHead(200, { 'content-type': 'application/json' });",
+    "    res.end(JSON.stringify({ id: 'ses_fake_' + sessionSeq, title: 'fake' }));",
+    "    return;",
+    "  }",
+    "  const mMsg = req.url.match(/^\\/session\\/([^/]+)\\/message$/);",
+    "  if (req.method === 'POST' && mMsg) {",
+    "    const sid = decodeURIComponent(mMsg[1]);",
+    "    let body = '';",
+    "    req.on('data', (c) => { body += c; });",
+    "    req.on('end', () => {",
+    "      const prompt = JSON.parse(body).parts[0].text;",
+    //      reasoning part 先建映射，其 delta 必须被网关丢弃（不进正文气泡）
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_r', type: 'reasoning', text: 'thinking' } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_r', field: 'text', delta: 'REASONING-NOISE' } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_t', type: 'text', text: '' } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'echo FAKE-TOOL' } } } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'completed' } } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'OC-PERSIST-' } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'REPLY: ' + prompt.slice(0, 20) } });",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: ' + prompt.slice(0, 20) }] }));",
+    "    });",
+    "    return;",
+    "  }",
+    "  if (req.method === 'GET' && req.url === '/event') {",
+    "    res.writeHead(200, { 'content-type': 'text/event-stream' });",
+    "    res.write('data: ' + JSON.stringify({ type: 'server.connected', properties: {} }) + '\\n\\n');",
+    "    sseClients.push(res);",
+    "    req.on('close', () => { sseClients = sseClients.filter((r) => r !== res); });",
+    "    return;",
+    "  }",
+    "  res.writeHead(404); res.end('{}');",
+    "});",
+    "server.listen(0, '127.0.0.1', () => {",
+    "  process.stdout.write('opencode server listening on http://127.0.0.1:' + server.address().port + '\\n');",
+    "});",
+  ].join('\n'));
+  fs.chmodSync(fakeOcServer, 0o755);
+  const OC_PERSIST_PORT = GATEWAY_PORT + 96;
+  const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
+  // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
+  // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
+  const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
+  fs.mkdirSync(ocSharedCwd, { recursive: true });
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile };
+  const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ocPersistGwLog = '';
+  ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
+  ocPersistGw.stderr.on('data', (c) => { ocPersistGwLog += c; });
+  await sleep(900);
+  check('opencode 常驻：默认启用（runtime: opencode-persistent）', ocPersistGwLog.includes('runtime: opencode-persistent'));
+  const ocEnv1 = { message_id: 'ocm1', session_id: 'oc-fs1', task_id: 'oct1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first oc turn' }] }, idempotency_key: 'oc-idem1', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv1 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message'); i += 1) await sleep(100);
+  check('opencode 常驻：终态回复（HTTP 同步响应 parts 提取）', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY: first oc turn')));
+  // 过程帧晚于终态到达（SSE 与同步 HTTP 分属两条连接 + 网关 80ms 合并
+  // flush），终态一到就断言会抢跑——留出宽限窗口再验帧。
+  await sleep(500);
+  const ocDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('opencode 常驻：SSE 正文 delta 实时透传', ocDeltas.includes('OC-PERSIST-'));
+  check('opencode 常驻：reasoning 流不混入正文（partID 映射过滤）', !ocDeltas.includes('REASONING-NOISE'));
+  const ocProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('opencode 常驻：工具调用实时进 progress 帧（带参数）', ocProgress.includes('🔧 bash echo FAKE-TOOL'));
+  check('opencode 常驻：工具完成提示进 progress 帧', ocProgress.includes('✅ bash 完成'));
+  // 第二轮（同会话）+ 新会话各一条：server 进程全周期只 spawn 一次（按 cwd 复用）。
+  // 隔开首轮的 SSE 宽限窗口再连发，避免同会话两轮 turn 在宽限期内叠加。
+  await sleep(300);
+  const ocEnv2 = { message_id: 'ocm2', session_id: 'oc-fs1', task_id: 'oct2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second oc turn' }] }, idempotency_key: 'oc-idem2', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv2 }, GATEWAY_TOKEN);
+  const ocEnv3 = { message_id: 'ocm3', session_id: 'oc-fs2', task_id: 'oct3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'other session' }] }, idempotency_key: 'oc-idem3', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv3 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 80 && received.filter((e) => (e.session_id === 'oc-fs1' || e.session_id === 'oc-fs2') && e.kind === 'message').length < 3; i += 1) await sleep(100);
+  check('opencode 常驻：第二轮回信正常', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('second oc turn')));
+  check('opencode 常驻：跨会话回信正常', received.some((e) => e.session_id === 'oc-fs2' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('other session')));
+  let ocPids = [];
+  try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
+  check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
+  ocPersistGw.kill('SIGTERM');
+
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
   const streamJsonAgent = path.join(tmp, 'fake-stream-json-agent.cjs');
