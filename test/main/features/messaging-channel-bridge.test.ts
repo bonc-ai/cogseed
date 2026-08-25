@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   channelBridgeAgentId, instanceIdFromChannelBridgeAgentId, deliverToChannelBridge,
-  resetChannelBridgeRateLimitsForTests, sendSystemViaChannelBridge,
+  resetChannelBridgeRateLimitsForTests,
 } from '../../../src/main/features/messaging/channel-bridge';
 import type { P3394Envelope } from '../../../src/main/features/p3394_bridge/envelope';
 
@@ -151,81 +151,3 @@ describe('channel bridge guardrails (rate limit + sender allowlist)', () => {
   });
 });
 
-describe('system proactive via channel bridge (G-13)', () => {
-  function makeDeps(sent: any[], entry: any = { externalDeliveryId: 'om_123' }) {
-    return {
-      send: async (_uid: string, input: any) => { sent.push(input); return { entry }; },
-      ownerResolver: async () => ({ recipientId: 'ou_boss' }),
-    };
-  }
-
-  it('系统触达经信封路径投递：信封形状正确、投递源键带 p3394 运单号前缀', async () => {
-    resetChannelBridgeRateLimitsForTests();
-    const sent: any[] = [];
-    const result = await sendSystemViaChannelBridge(
-      'u1', 'inst-1',
-      { text: '早上好，这是你的简报', sourceKey: 'briefing:2026-08-25' },
-      makeDeps(sent),
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(sent).toHaveLength(1);
-    // 底层投递收到的 sourceKey 是 p3394:<message_id>（台账运单号链路）
-    expect(sent[0].sourceKey.startsWith('p3394:')).toBe(true);
-    expect(sent[0].text).toBe('早上好，这是你的简报');
-    expect(sent[0].recipientId).toBe('ou_boss');
-    expect(result.messageId.startsWith('p3394:')).toBe(false);
-    expect(result.messageId.length).toBeGreaterThan(10);
-    expect(result.receipt.kind).toBe('event');
-    expect(result.delivery?.externalDeliveryId).toBe('om_123');
-  });
-
-  it('message_id 确定性：同 (uid, instance, sourceKey) 重复构造得到同一编号', async () => {
-    resetChannelBridgeRateLimitsForTests();
-    const sent: any[] = [];
-    const r1 = await sendSystemViaChannelBridge('u1', 'inst-1', { text: 'a', sourceKey: 'sk-1' }, makeDeps(sent));
-    const r2 = await sendSystemViaChannelBridge('u1', 'inst-1', { text: 'a', sourceKey: 'sk-1' }, makeDeps(sent));
-    expect(r1.ok).toBe(true); expect(r2.ok).toBe(true);
-    if (r1.ok && r2.ok) expect(r1.messageId).toBe(r2.messageId);
-    // 不同 sourceKey 不同编号
-    const r3 = await sendSystemViaChannelBridge('u1', 'inst-1', { text: 'a', sourceKey: 'sk-2' }, makeDeps(sent));
-    if (r3.ok && r1.ok) expect(r3.messageId).not.toBe(r1.messageId);
-  });
-
-  it('card 装进信封 parts.json 格子，投递时还原为 card 参数', async () => {
-    resetChannelBridgeRateLimitsForTests();
-    const sent: any[] = [];
-    const card = { config: { elements: [{ tag: 'div', text: '点击确认' }] } };
-    const result = await sendSystemViaChannelBridge(
-      'u1', 'inst-1',
-      { text: '任务待审批', card, sourceKey: 'touchpoint:tp-1' },
-      makeDeps(sent),
-    );
-    expect(result.ok).toBe(true);
-    expect(sent[0].card).toEqual(card);
-  });
-
-  it('owner 缺失 → 明确错误，不投递', async () => {
-    resetChannelBridgeRateLimitsForTests();
-    const sent: any[] = [];
-    const result = await sendSystemViaChannelBridge(
-      'u1', 'inst-1', { text: 'x', sourceKey: 'sk' },
-      { send: async (_u, i) => { sent.push(i); return { entry: {} }; }, ownerResolver: async () => null },
-    );
-    expect(result).toMatchObject({ ok: false, error: 'p3394_channel_bridge_no_owner' });
-    expect(sent).toHaveLength(0);
-  });
-
-  it('系统触达受实例级限流保护（防系统 bug 刷屏）', async () => {
-    resetChannelBridgeRateLimitsForTests();
-    const sent: any[] = [];
-    const deps = makeDeps(sent);
-    for (let i = 0; i < 30; i++) {
-      const r = await sendSystemViaChannelBridge('u1', 'inst-1', { text: 'x', sourceKey: `sk-${i}` }, deps);
-      expect(r.ok).toBe(true);
-    }
-    const capped = await sendSystemViaChannelBridge('u1', 'inst-1', { text: 'x', sourceKey: 'sk-over' }, deps);
-    expect(capped).toMatchObject({ ok: false, error: 'p3394_channel_bridge_rate_limited' });
-    expect(sent).toHaveLength(30);
-  });
-});

@@ -14,7 +14,6 @@ import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import * as manager from './manager';
 import * as registry from './registry';
-import { sendSystemViaChannelBridge } from './channel-bridge';
 import type { MessagingInstanceClient } from './types';
 import type { TouchpointRouteScene } from '../touchpoints/types';
 import { resolveTouchpointInstanceId } from '../touchpoints/config';
@@ -226,33 +225,23 @@ export async function sendToSelf(
   }
 
   try {
-    // G-13：触达与对话同路——sendToSelf 经 P3394 信封投递（护栏+回执+
-    // 台账运单号）；确认弹窗语义保留在信封投递之前。
-    const dispatched = await sendSystemViaChannelBridge(uid, chosen.instance_id, {
+    // 渠道原生投递：触达是 CogSeed 自身功能，直连 messaging 层的幂等投递
+    // 台账（含重试/中止/回执 externalDeliveryId）。（2026-08-26 理清：
+    // 此前经 P3394 信封绕路投递，属叙事耦合，渠道功能与协议解耦。）
+    const { entry } = await manager.sendProactive(uid, {
+      instanceId: chosen.instance_id,
+      recipientId: ownerExternalUserId,
       text,
       sourceKey: opts.sourceKey,
       signal: opts.signal ?? null,
-    }, {
-      send: manager.sendProactive,
-      ownerResolver: async () => ({ recipientId: ownerExternalUserId }),
     });
-    if (!dispatched.ok) {
-      const dispatchFailure = dispatched as Extract<typeof dispatched, { ok: false }>;
-      if (dispatchFailure.error === 'p3394_channel_bridge_aborted') {
-        log.info('proactive send aborted mid-delivery', { instanceId: chosen.instance_id });
-        return { status: 'not_sent', reason: 'aborted' };
-      }
-      log.warn('proactive send failed after approval', { instanceId: chosen.instance_id, error: dispatchFailure.error });
-      return error('E_MESSAGING_DELIVERY_FAILED', dispatchFailure.error);
-    }
-    const dispatchSuccess = dispatched as Extract<typeof dispatched, { ok: true }>;
     return {
       status: 'sent',
       instance_id: chosen.instance_id,
       ...(chosen.owner_label ? { owner_label: chosen.owner_label } : {}),
       text_length: text.length,
-      ...(typeof dispatchSuccess.delivery?.attempts === 'number' ? { attempts: dispatchSuccess.delivery.attempts } : {}),
-      ...(dispatchSuccess.delivery?.externalDeliveryId ? { delivery_id: dispatchSuccess.delivery.externalDeliveryId } : {}),
+      ...(typeof entry.attempts === 'number' ? { attempts: entry.attempts } : {}),
+      ...(entry.externalDeliveryId ? { delivery_id: entry.externalDeliveryId } : {}),
     };
   } catch (err) {
     // A session abort (turn signal) or an AbortError from the delivery wait

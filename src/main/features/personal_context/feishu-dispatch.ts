@@ -22,7 +22,6 @@ import * as crypto from 'node:crypto';
 import * as proactive from '../messaging/proactive';
 import * as messagingRegistry from '../messaging/registry';
 import { sendProactive } from '../messaging/manager';
-import { sendSystemViaChannelBridge } from '../messaging/channel-bridge';
 import { createTouchpointDomainEvent } from '../touchpoints/events';
 import { orchestrateTouchpointEvent, dispatchTouchpointIntent } from '../touchpoints/orchestrator';
 import { createFeishuTouchpointAdapter } from '../touchpoints/feishu/adapter';
@@ -99,25 +98,20 @@ export async function dispatchToFeishuHome(
   }
 
   try {
-    // G-13：触达与对话同路——简报经 P3394 信封投递（护栏+回执+台账运单号）。
-    const dispatched = await sendSystemViaChannelBridge(uid, opts.instanceId, {
+    // 渠道原生投递：简报是 CogSeed 自身功能，直连 messaging 层幂等投递
+    // 台账。（2026-08-26 理清：此前经 P3394 信封绕路，属叙事耦合。）
+    const { entry } = await sendProactive(uid, {
+      instanceId: opts.instanceId,
+      recipientId: ownerExternalUserId,
       text,
       sourceKey,
       signal: opts.signal ?? null,
-    }, {
-      send: sendProactive,
-      ownerResolver: async () => (ownerExternalUserId ? { recipientId: ownerExternalUserId } : null),
     });
-    if (!dispatched.ok) {
-      const dispatchFailure = dispatched as Extract<typeof dispatched, { ok: false }>;
-      log.warn('briefing dispatch failed', { instanceId: opts.instanceId, error: dispatchFailure.error });
-      return { ok: false, code: 'delivery_failed', error: dispatchFailure.error };
-    }
     log.info('briefing dispatched to feishu home', {
       instanceId: opts.instanceId,
       textLen: text.length,
       sourceKey,
-      messageId: dispatched.messageId,
+      deliveryId: entry.externalDeliveryId,
     });
     return { ok: true };
   } catch (err) {

@@ -139,84 +139,8 @@ export async function deliverToChannelBridge(
 // 系统身份（cogseed:<uid>）不走白名单（白名单管智能体，不管用户自配置
 // 的系统通知），但仍受实例级限流保护（防系统 bug 刷屏）。
 
-import { createHash } from 'node:crypto';
 
-function systemChannelMessageId(uid: string, instanceId: string, sourceKey: string): string {
-  return `sys-${createHash('sha256').update(`${uid}:${instanceId}:${sourceKey}`).digest('hex').slice(0, 24)}`;
-}
 
-export interface SystemChannelBridgeDeps {
-  /** 底层传输（生产环境传 manager.sendProactive）。返回值若含 entry 会被
-   * 透传到结果（adapter 需要 externalDeliveryId 做回执校验）。input 的
-   * signal（如有）会附加到本回调的入参。 */
-  send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string; card?: Record<string, unknown>; signal?: AbortSignal | null }) => Promise<unknown>;
-  ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>;
-}
-
-export async function sendSystemViaChannelBridge(
-  uid: string,
-  instanceId: string,
-  input: { text: string; card?: Record<string, unknown>; sourceKey: string; signal?: AbortSignal | null },
-  deps: SystemChannelBridgeDeps,
-): Promise<
-  | { ok: true; messageId: string; receipt: P3394Envelope; delivery?: { externalDeliveryId?: string; attempts?: number } }
-  | { ok: false; error: string }
-> {
-  const text = typeof input.text === 'string' ? input.text.trim() : '';
-  if (!text) return { ok: false, error: 'p3394_channel_bridge_empty_text' };
-  const sourceKey = typeof input.sourceKey === 'string' ? input.sourceKey.trim() : '';
-  if (!sourceKey) return { ok: false, error: 'p3394_system_source_key_required' };
-  const message_id = systemChannelMessageId(uid, instanceId, sourceKey);
-  const envelope: P3394Envelope = {
-    spec_version: 'p3394/1.0',
-    message_id,
-    session_id: `sys:${instanceId}`,
-    kind: 'message',
-    performative: 'inform',
-    sender: { agent_id: `cogseed:${uid}` },
-    recipients: [{ agent_id: channelBridgeAgentId(instanceId) }],
-    payload: {
-      parts: [
-        { type: 'text', text },
-        ...(input.card ? [{ type: 'json' as const, data: { card: input.card } }] : []),
-      ],
-    },
-    idempotency_key: `sys:${instanceId}:${sourceKey}`.slice(0, 160),
-  };
-  let deliveryEntry: unknown = null;
-  const signal = input.signal ?? null;
-  const delivered = await deliverToChannelBridge(
-    uid,
-    channelBridgeAgentId(instanceId),
-    envelope,
-    async (uid2, sendInput) => {
-      const res = await deps.send(uid2, { ...sendInput, signal });
-      if (res && typeof res === 'object' && 'entry' in (res as Record<string, unknown>)) {
-        deliveryEntry = (res as { entry?: unknown }).entry;
-      }
-      return res;
-    },
-    deps.ownerResolver,
-  );
-  if (!delivered.ok) {
-    const failure = delivered as Extract<typeof delivered, { ok: false }>;
-    return failure;
-  }
-  const entry = deliveryEntry as { externalDeliveryId?: string; attempts?: number } | null;
-  return {
-    ok: true,
-    messageId: message_id,
-    receipt: delivered.receipt,
-    ...(entry
-      ? {
-          delivery: {
-            ...(typeof entry.externalDeliveryId === 'string' ? { externalDeliveryId: entry.externalDeliveryId } : {}),
-            ...(typeof entry.attempts === 'number' ? { attempts: entry.attempts } : {}),
-          },
-        }
-      : {}),
-  };
-}
 
 // ── 限流（进程内滑动窗口）──────────────────────────────────────────────
 
