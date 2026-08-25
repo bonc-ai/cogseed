@@ -37,11 +37,42 @@ export interface P3394HostToolContext {
  *  same peer in the same conversation keeps one P3394 session (guide §5.2).
  *  `scopeKey` = conversation id on the conversation path, user id on the
  *  host-tool path. */
+/** Outbound reference snapshot carried in payload.metadata.references —
+ *  the structured quote slot of the envelope (Tutti-style "@" reachability
+ *  over P3394). Local structure on purpose (not imported from group_chat)
+ *  to keep the adapter boundary dependency-free; file paths are excluded
+ *  because the peer cannot resolve them. */
+export interface P3394OutboundReference {
+  source_cid: string;
+  source_msg_id: string;
+  from_actor: string;
+  from_name?: string;
+  source_ts: string;
+  text: string;
+}
+
+/** Max references per envelope (mirrors the in-process 20-quote cap) and
+ *  per-reference text cap for the metadata slot. */
+const OUTBOUND_REFERENCES_MAX = 20;
+const OUTBOUND_REFERENCE_TEXT_MAX = 500;
+
+function toOutboundReferences(refs: P3394OutboundReference[]): P3394OutboundReference[] {
+  return refs.slice(0, OUTBOUND_REFERENCES_MAX).map((r) => ({
+    source_cid: String(r.source_cid || ''),
+    source_msg_id: String(r.source_msg_id || ''),
+    from_actor: String(r.from_actor || ''),
+    ...(r.from_name ? { from_name: String(r.from_name).slice(0, 120) } : {}),
+    source_ts: String(r.source_ts || ''),
+    text: String(r.text || '').slice(0, OUTBOUND_REFERENCE_TEXT_MAX),
+  }));
+}
+
 export function buildP3394OutboundEnvelope(
   peer: string,
   message: string,
   sourceKey: string,
-  opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string } = {},): P3394Envelope {
+  opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string; references?: P3394OutboundReference[] } = {},
+): P3394Envelope {
   // Goal 自动隔离（指南 §5.3）：同 (scope, peer) 同 Goal 复用会话，不同 Goal 开新会话。
   const sessionId = sessionForGoal(opts.scopeKey ?? peer, peer, opts.goal);
   // 约定（S-04 关联 id 脱敏前提）：P3394 的 message/session/task id 一律由
@@ -49,6 +80,13 @@ export function buildP3394OutboundEnvelope(
   // 这些 id**——审计/KSTAR 会"先掩码后还原"关联 id，id 内含秘密会绕过脱敏。
   const messageId = `msg-${genId12()}`;
   const bridgeInfo = getP3394BridgeInfo();
+  // metadata 自由区聚合：goal（话题）+ references（结构化引用快照，T1——
+  // 正文文本里 llmPayload 已含 <referenced-messages> 人类可读版，这里是
+  // 给对端网关程序化消费的对称槽位）。
+  const metadata: Record<string, unknown> = {
+    ...(opts.goal && opts.goal.trim() ? { goal: opts.goal.trim().slice(0, 200) } : {}),
+    ...(opts.references && opts.references.length ? { references: toOutboundReferences(opts.references) } : {}),
+  };
   return {
     spec_version: 'p3394/1.0',
     message_id: messageId,
@@ -61,7 +99,7 @@ export function buildP3394OutboundEnvelope(
     recipients: [{ agent_id: peer }],
     payload: {
       parts: [{ type: 'text', text: message.slice(0, 20_000) }, ...(opts.parts ?? [])],
-      ...(opts.goal && opts.goal.trim() ? { metadata: { goal: opts.goal.trim().slice(0, 200) } } : {}),
+      ...(Object.keys(metadata).length ? { metadata } : {}),
     },
     idempotency_key: `${sourceKey}:${messageId}`,
     // 外接 agent 需要知道它在哪个工作区执行（否则 WorkBuddy/Codex 会退到

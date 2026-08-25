@@ -266,4 +266,24 @@ describe('P3394 gateway turn runner', () => {
     const [, , , withoutGoal] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { goal?: string }];
     expect(withoutGoal?.goal).toBeUndefined();
   });
+
+  it('forwards message references to the envelope metadata slot (T1)', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // T1 引用信封化：quote/@ 的引用快照透传给信封构造（落
+    // payload.metadata.references），对端网关可程序化消费。
+    const references = [
+      { source_cid: 'cid-src', source_msg_id: 'm-9', from_actor: 'user', from_name: '子安', source_ts: 't1', text: '被引用的历史消息' },
+    ];
+    await runP3394GatewayTurn({ ...baseInput, references });
+    const [, , , opts] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { references?: unknown[] }];
+    expect(Array.isArray(opts?.references)).toBe(true);
+    expect(opts!.references).toHaveLength(1);
+    expect(opts!.references![0]).toMatchObject({ source_cid: 'cid-src', source_msg_id: 'm-9', from_actor: 'user' });
+
+    // 无引用时不传字段（原行为）。
+    mocks.buildP3394OutboundEnvelope.mockClear();
+    await runP3394GatewayTurn({ ...baseInput });
+    const [, , , noRefs] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { references?: unknown[] }];
+    expect(noRefs?.references).toBeUndefined();
+  });
 });

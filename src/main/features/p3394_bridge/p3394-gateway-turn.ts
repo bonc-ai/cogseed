@@ -11,6 +11,7 @@
 import { detectOne } from '../local_agents/registry.js';
 import { getP3394OutboundHub } from './app-wiring';
 import { buildP3394OutboundEnvelope } from '../cogseed_backend/p3394-host-adapter';
+import type { P3394OutboundReference } from '../cogseed_backend/p3394-host-adapter';
 import { p3394ExternalGatewayIdFor, startExternalGateway } from './external-gateways';
 import { createLogger } from '../../logger';
 
@@ -40,6 +41,9 @@ export interface P3394GatewayTurnInput {
    *  复用 P3394 会话、异 goal 开新会话（sessionForGoal）；缺省时保持
    *  (cid, peer) 稳定会话（原行为）。 */
   goal?: string;
+  /** T1 引用信封化：本轮消息携带的结构化引用快照，进信封
+   *  payload.metadata.references（正文文本已含人类可读版）。 */
+  references?: P3394OutboundReference[];
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -124,6 +128,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
     scopeKey: input.cid,
     ...(input.goal && input.goal.trim() ? { goal: input.goal.trim() } : {}),
+    ...(input.references && input.references.length ? { references: input.references } : {}),
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
   });
   let envelope = buildEnvelope();
