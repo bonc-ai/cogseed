@@ -4862,6 +4862,7 @@
   "dashboard.control_reject_confirm": "Rejeitar esta solicitação de ativação? O despacho correspondente será cancelado.",
   "dashboard.control_decided_approve": "Aprovado — o despacho será retomado",
   "dashboard.control_decided_reject": "Rejeitado",
+  "dashboard.control_open_conversation": "Abrir conversa",
   "dashboard.builtin_section": "Agentes Integrados",
   "dashboard.builtin_count": "{count} membros · interpretados pelo próprio CogSeed",
   "dashboard.view_agents": "Ver",

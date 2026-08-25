@@ -5961,6 +5961,7 @@
   "dashboard.control_reject_confirm": "Reject this wake request? The corresponding dispatch will be cancelled.",
   "dashboard.control_decided_approve": "Approved — the dispatch will resume",
   "dashboard.control_decided_reject": "Rejected",
+  "dashboard.control_open_conversation": "Open conversation",
   "dashboard.builtin_section": "Built-in Agents",
   "dashboard.builtin_count": "{count} members · performed by CogSeed itself",
   "dashboard.view_agents": "View",
