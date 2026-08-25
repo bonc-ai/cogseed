@@ -19,28 +19,34 @@ function envelope(text: string): P3394Envelope {
   };
 }
 
-describe('channel bridge file delivery (T2a)', () => {
-  function envelopeWithFiles(text: string, files: Array<{ uri: string; name?: string; type?: 'resource' | 'artifact' | 'image' }>): P3394Envelope {
+describe('channel bridge file delivery (T2a, 2026-08-25 真机修复)', () => {
+  // 真实链路形态：p3394_send → filesToResourceParts 产生 data:…;base64
+  // 内联（小文件）或 p3394-object:sha256 引用（大文件）——不是本地绝对
+  // 路径。首版误把过滤写成"只认绝对路径"，真机文件被静默丢弃，本组
+  // 用例按真实形态构造防回归。
+  function b64(text: string): string {
+    return Buffer.from(text, 'utf8').toString('base64');
+  }
+  function sha256hex(text: string): string {
+    return require('node:crypto').createHash('sha256').update(text, 'utf8').digest('hex');
+  }
+  function envelopeWithFiles(text: string, parts: Array<Record<string, unknown>>): P3394Envelope {
     return {
       ...envelope(text),
-      payload: {
-        parts: [
-          { type: 'text', text },
-          ...files.map((f) => ({ type: f.type || 'resource' as const, uri: f.uri, ...(f.name ? { name: f.name } : {}) })),
-        ],
-      },
+      payload: { parts: [{ type: 'text', text }, ...parts] },
     };
   }
 
-  it('本地路径的 resource/artifact part → 文本送达后经 sendFile 逐个投递，回执带文件数', async () => {
+  it('data:URI 内联 part → 物化后逐个投递，回执带文件数', async () => {
     const sentText: any[] = [];
     const sentFiles: any[] = [];
+    const content = 'P3394 渠道文件投递验证';
     const result = await deliverToChannelBridge(
       'u1',
       'channel-inst-1',
       envelopeWithFiles('产物已生成', [
-        { uri: '/tmp/ws/report.docx', name: 'report.docx' },
-        { uri: '/tmp/ws/chart.png' },
+        { type: 'resource', uri: `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${b64(content)}`, media_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', name: 'report.docx', digest: sha256hex(content) },
+        { type: 'image', uri: `data:image/png;base64,${b64('png-bytes')}`, media_type: 'image/png' },
       ]),
       async (_uid, input) => { sentText.push(input); },
       async () => ({ recipientId: 'ou_boss' }),
@@ -49,63 +55,20 @@ describe('channel bridge file delivery (T2a)', () => {
     expect(result.ok).toBe(true);
     expect(sentText).toHaveLength(1);
     expect(sentFiles).toHaveLength(2);
-    expect(sentFiles[0]).toMatchObject({ instanceId: 'inst-1', recipientId: 'ou_boss', path: '/tmp/ws/report.docx', name: 'report.docx', sourceKey: 'p3394:msg_bridge_1:file:0' });
-    expect(sentFiles[1]).toMatchObject({ path: '/tmp/ws/chart.png', sourceKey: 'p3394:msg_bridge_1:file:1' });
+    expect(sentFiles[0]).toMatchObject({ instanceId: 'inst-1', recipientId: 'ou_boss', name: 'report.docx', sourceKey: 'p3394:msg_bridge_1:file:0' });
+    expect(sentFiles[0].path).toContain('p3394-channel-');
+    expect(require('node:fs').readFileSync(sentFiles[0].path, 'utf8')).toBe(content);
     if (!result.ok) return;
     expect(result.receipt.payload.parts[0].text).toContain('(2 file(s))');
   });
 
-  it('文件数超过上限 5 → 只投递前 5 个', async () => {
+  it('digest 不符的 data:URI → 丢弃该文件（不投递不报错）', async () => {
     const sentFiles: any[] = [];
     const result = await deliverToChannelBridge(
       'u1',
       'channel-inst-1',
-      envelopeWithFiles('批量产物', Array.from({ length: 8 }, (_, i) => ({ uri: `/tmp/ws/f${i}.png` }))),
-      async () => {},
-      async () => ({ recipientId: 'ou_boss' }),
-      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
-    );
-    expect(result.ok).toBe(true);
-    expect(sentFiles).toHaveLength(5);
-  });
-
-  it('未提供 sendFile → 文件 part 被忽略，文本照常送达（向后兼容）', async () => {
-    const sentText: any[] = [];
-    const result = await deliverToChannelBridge(
-      'u1',
-      'channel-inst-1',
-      envelopeWithFiles('无文件通道', [{ uri: '/tmp/ws/x.docx' }]),
-      async (_uid, input) => { sentText.push(input); },
-      async () => ({ recipientId: 'ou_boss' }),
-    );
-    expect(result.ok).toBe(true);
-    expect(sentText).toHaveLength(1);
-    if (!result.ok) return;
-    expect(result.receipt.payload.parts[0].text).toBe('channel bridge delivered');
-  });
-
-  it('文件投递失败 → 整体按失败上报（文本已送达不回滚）', async () => {
-    const result = await deliverToChannelBridge(
-      'u1',
-      'channel-inst-1',
-      envelopeWithFiles('带失败文件', [{ uri: '/tmp/ws/gone.docx' }]),
-      async () => {},
-      async () => ({ recipientId: 'ou_boss' }),
-      { sendFile: async () => { throw new Error('upload rejected'); } },
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toContain('p3394_channel_bridge_file_failed');
-  });
-
-  it('非本地绝对路径的 uri（对象存储引用）与相对路径 → 不进文件通道', async () => {
-    const sentFiles: any[] = [];
-    const result = await deliverToChannelBridge(
-      'u1',
-      'channel-inst-1',
-      envelopeWithFiles('混合引用', [
-        { uri: 'p3394-object:sha256:abc', name: 'big.bin' },
-        { uri: 'relative/x.png' },
+      envelopeWithFiles('篡改检测', [
+        { type: 'resource', uri: `data:text/plain;base64,${b64('content')}`, media_type: 'text/plain', digest: sha256hex('other-content') },
       ]),
       async () => {},
       async () => ({ recipientId: 'ou_boss' }),
@@ -113,6 +76,81 @@ describe('channel bridge file delivery (T2a)', () => {
     );
     expect(result.ok).toBe(true);
     expect(sentFiles).toHaveLength(0);
+  });
+
+  it('裸本地绝对路径 uri → 拒绝物化（不可信输入防任意路径读取）', async () => {
+    const sentFiles: any[] = [];
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('路径注入尝试', [
+        { type: 'resource', uri: '/etc/passwd', name: 'evil' },
+      ]),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentFiles).toHaveLength(0);
+  });
+
+  it('穿越型文件名 → 清洗为 basename 安全字符', async () => {
+    const sentFiles: any[] = [];
+    const content = 'x';
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('名字清洗', [
+        { type: 'resource', uri: `data:text/plain;base64,${b64(content)}`, media_type: 'text/plain', name: '../../etc/cron.d/evil.sh', digest: sha256hex(content) },
+      ]),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentFiles).toHaveLength(1);
+    expect(sentFiles[0].name).not.toContain('/');
+    expect(sentFiles[0].name).not.toContain('..');
+  });
+
+  it('文件数超过上限 5 → 只投递前 5 个；未提供 sendFile → 兼容忽略', async () => {
+    const sentFiles: any[] = [];
+    const r1 = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('批量', Array.from({ length: 8 }, (_, i) => ({ type: 'resource', uri: `data:text/plain;base64,${b64('f' + i)}` }))),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(r1.ok).toBe(true);
+    expect(sentFiles).toHaveLength(5);
+    const sentText: any[] = [];
+    const r2 = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('无文件通道', [{ type: 'resource', uri: `data:text/plain;base64,${b64('x')}` }]),
+      async (_uid, input) => { sentText.push(input); },
+      async () => ({ recipientId: 'ou_boss' }),
+    );
+    expect(r2.ok).toBe(true);
+    expect(sentText).toHaveLength(1);
+    if (!r2.ok) return;
+    expect(r2.receipt.payload.parts[0].text).toBe('channel bridge delivered');
+  });
+
+  it('文件投递失败 → 整体按失败上报（文本已送达不回滚）', async () => {
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('带失败文件', [{ type: 'resource', uri: `data:text/plain;base64,${b64('gone')}` }]),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async () => { throw new Error('upload rejected'); } },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('p3394_channel_bridge_file_failed');
   });
 });
 
