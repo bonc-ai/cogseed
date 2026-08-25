@@ -3636,9 +3636,12 @@ async function runActorTurnBody(
   // happened with the Commander or another Agent before this turn. Carry a
   // bounded digest of that missed context into the new Agent session; the
   // helper advances a per-Agent watermark so the same history is not repeated.
+  // G-26: covers every dispatch source (user direct, commander dispatch,
+  // agent→agent) so an external gateway agent dispatched a task also receives
+  // the digest — previously only direct user messages triggered it.
   if (
     actor.kind === "agent"
-    && item.fromActorId === USER_ID
+    && item.fromActorId !== actor.id
     && !item.internalControl
     && !item.tap
   ) {
@@ -4635,13 +4638,14 @@ async function runActorTurnBody(
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
-            // payload envelope instead. Fall back to unwrapping that so a
-            // dispatched external agent never receives an empty prompt.
+            // payload envelope instead. G-26: keep the `<msg from=… to=…>`
+            // envelope on dispatched turns so the external agent can see who
+            // dispatched the task and who it was routed to (multi-agent
+            // routing context); direct user text stays unwrapped as before.
             prompt: [
               switchedContextDigest,
               _firstNonBlankText(
                 (item as { sourceMessageText?: string }).sourceMessageText,
-                _unwrapLlmTurnPayload(item.llmPayload),
                 item.llmPayload,
               ),
             ].filter(Boolean).join("\n\n"),
