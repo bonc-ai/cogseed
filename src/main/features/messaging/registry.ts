@@ -244,7 +244,7 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
     throw new Error('invalid group mention requirement');
   }
   const rawBridgeAllowlist = input?.channelBridgeSenderAllowlist;
-  if (rawBridgeAllowlist !== undefined && strict) {
+  if (rawBridgeAllowlist !== undefined && rawBridgeAllowlist !== null && strict) {
     if (!Array.isArray(rawBridgeAllowlist) || rawBridgeAllowlist.some((id) => typeof id !== 'string' || !id.trim())) {
       throw new Error('invalid channel bridge sender allowlist');
     }
@@ -259,6 +259,7 @@ function normalizePolicy(input?: Partial<MessagingPolicy>, strict = false): Mess
     ...(Array.isArray(rawBridgeAllowlist)
       ? { channelBridgeSenderAllowlist: Array.from(new Set(rawBridgeAllowlist.map((id) => String(id).trim()).filter(Boolean))) }
       : {}),
+    // null = 显式清除白名单（UI 关闭开关）：输出不含该键即回落全放行。
   };
 }
 

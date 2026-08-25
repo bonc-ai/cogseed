@@ -6017,5 +6017,13 @@
   "dashboard.disable_node": "Disable",
   "dashboard.enable_node": "Enable",
   "dashboard.node_disabled": "Disabled",
-  "dashboard.node_toggle_failed": "Operation failed, please retry"
+  "dashboard.node_toggle_failed": "Operation failed, please retry",
+  "messaging.section.bridge_allowlist": "Agent send allowlist",
+  "messaging.section.bridge_allowlist_subtitle": "Which agents may proactively send to this channel via P3394 (rate guards always apply)",
+  "messaging.bridge_allowlist.toggle": "Allowlist toggle",
+  "messaging.bridge_allowlist.on": "Enabled",
+  "messaging.bridge_allowlist.off": "Disabled (allow all)",
+  "messaging.bridge_allowlist.hint": "One agent id per line (sender agent_id); sends from others are rejected",
+  "messaging.bridge_allowlist.save": "Save list",
+  "messaging.bridge_allowlist.enable_confirm": "Once enabled, only listed agents can proactively send to this channel; an empty list rejects all until you save entries. Enable now?"
 }

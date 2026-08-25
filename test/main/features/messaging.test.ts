@@ -142,6 +142,22 @@ describe('messaging registry and ledgers', () => {
     });
   });
 
+  it('channel-bridge allowlist: array kept, null clears, invalid rejected (G-14)', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    const np = _registryTestHooks.normalizePolicy;
+    // 数组：去空白去重后保留
+    expect(np({ channelBridgeSenderAllowlist: [' a ', 'a', 'b'] })).toMatchObject({
+      channelBridgeSenderAllowlist: ['a', 'b'],
+    });
+    // null = 显式清除（输出不含该键，回落全放行）
+    expect(np({ channelBridgeSenderAllowlist: null })).not.toHaveProperty('channelBridgeSenderAllowlist');
+    // undefined / 未传：不产生该键
+    expect(np({})).not.toHaveProperty('channelBridgeSenderAllowlist');
+    // strict 下非法值拒绝（对象/含非字符串）
+    expect(() => np({ channelBridgeSenderAllowlist: [1] }, true)).toThrow();
+    expect(() => np({ channelBridgeSenderAllowlist: 'oops' }, true)).toThrow();
+  });
+
   it('encrypts credentials and never returns them in the client DTO', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const created = await registry.createInstance('user-1', {

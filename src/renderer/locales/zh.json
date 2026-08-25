@@ -6017,5 +6017,13 @@
   "dashboard.disable_node": "停用",
   "dashboard.enable_node": "启用",
   "dashboard.node_disabled": "已停用",
-  "dashboard.node_toggle_failed": "操作失败，请重试"
+  "dashboard.node_toggle_failed": "操作失败，请重试",
+  "messaging.section.bridge_allowlist": "智能体触达白名单",
+  "messaging.section.bridge_allowlist_subtitle": "允许哪些智能体经 P3394 主动发送到本渠道（速率护栏始终生效）",
+  "messaging.bridge_allowlist.toggle": "白名单开关",
+  "messaging.bridge_allowlist.on": "已启用",
+  "messaging.bridge_allowlist.off": "未启用（全放行）",
+  "messaging.bridge_allowlist.hint": "每行一个智能体 ID（sender agent_id）；名单外的主动发送将被拒绝",
+  "messaging.bridge_allowlist.save": "保存名单",
+  "messaging.bridge_allowlist.enable_confirm": "开启白名单后，只有名单内的智能体能主动发到本渠道；保存名单前，名单为空将暂时拒绝所有主动发送。确定开启吗？"
 }

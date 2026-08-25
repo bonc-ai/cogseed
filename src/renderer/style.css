@@ -15502,6 +15502,28 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .messaging-scan-button:hover:not(:disabled),
 .messaging-link-button:hover:not(:disabled) { filter: brightness(1.04); }
 .messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
+
+/* 渠道即节点（G-14）：智能体触达白名单卡片 */
+.messaging-allowlist-toggle.is-on { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--primary-text); }
+.messaging-allowlist-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  resize: vertical;
+}
+.messaging-allowlist-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+.messaging-allowlist-hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.messaging-allowlist-save { margin-top: 10px; }
 .messaging-secondary-button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); color: var(--text); }
 .messaging-association-bound { flex: 0 0 auto; font-size: 12px; color: var(--success); white-space: nowrap; }
 .messaging-action-icon { width: 13px; height: 13px; }

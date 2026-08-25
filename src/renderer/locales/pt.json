@@ -4922,5 +4922,13 @@
   "dashboard.disable_node": "Desativar",
   "dashboard.enable_node": "Ativar",
   "dashboard.node_disabled": "Desativado",
-  "dashboard.node_toggle_failed": "Falha na operação, tente novamente"
+  "dashboard.node_toggle_failed": "Falha na operação, tente novamente",
+  "messaging.section.bridge_allowlist": "Lista de agentes permitidos",
+  "messaging.section.bridge_allowlist_subtitle": "Quais agentes podem enviar ativamente para este canal via P3394 (limites de taxa sempre ativos)",
+  "messaging.bridge_allowlist.toggle": "Alternar lista",
+  "messaging.bridge_allowlist.on": "Ativada",
+  "messaging.bridge_allowlist.off": "Desativada (permitir todos)",
+  "messaging.bridge_allowlist.hint": "Um id de agente por linha (sender agent_id); envios de fora da lista são rejeitados",
+  "messaging.bridge_allowlist.save": "Salvar lista",
+  "messaging.bridge_allowlist.enable_confirm": "Ao ativar, apenas agentes listados poderão enviar ativamente; lista vazia rejeita tudo até salvar. Ativar agora?"
 }
