@@ -388,7 +388,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'dashboard' ? 'panel-dashboard'
-                : view === 'apps' ? 'panel-apps'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
                 : view === 'marketplace' ? 'panel-marketplace'
@@ -401,7 +400,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   document.getElementById('dashboard-btn')?.classList.toggle('active', view === 'dashboard');
-  document.getElementById('apps-btn')?.classList.toggle('active', view === 'apps');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
     window.setChipSettingsActive(view === 'settings');
@@ -422,12 +420,6 @@ function setView(view, cid, opts = {}) {
   if (view === 'dashboard') {
     _loadViewFeature('dashboard', 'dashboard', () => {
       if (typeof renderDashboard === 'function') renderDashboard();
-    });
-  }
-  // 应用中心（T2b）：人与智能体共用的能力单元（画图/文档/PPT/表格）。
-  if (view === 'apps') {
-    _loadViewFeature('apps', 'apps', () => {
-      if (typeof renderAppCenter === 'function') renderAppCenter();
     });
   }
   if (view === 'conversation' && cid) {

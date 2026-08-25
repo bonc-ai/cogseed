@@ -26978,12 +26978,3 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-form-status.ok { color: var(--success); }
 .dash-form-status.pending { color: var(--muted); }
 
-/* ── 应用中心（T2b）：卡片图标 / 运行对话框 / 图片预览 ── */
-.apps-card-icon { margin-right: 6px; }
-.apps-agent-hint { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
-.apps-run-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 60; }
-.apps-run-overlay[hidden] { display: none; }
-.apps-run-dialog { width: min(560px, 92vw); max-height: 84vh; overflow: auto; background: var(--bg-elevated, #fff); border-radius: 12px; padding: 18px 20px; box-shadow: 0 12px 40px rgba(0,0,0,.25); }
-.apps-run-dialog textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-.apps-run-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.apps-image-preview { max-width: 100%; max-height: 46vh; margin-top: 10px; border-radius: 8px; border: 1px solid var(--border, rgba(0,0,0,.1)); }
