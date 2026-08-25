@@ -57,7 +57,7 @@ export function buildP3394CapabilityProfile(agent: Agent): P3394CapabilityProfil
   const boundaryResult = validateIdentityRuntimeBoundary(identityResult.identity, agent.runtime);
   if (boundaryResult.ok === false) return { ok: false, error: boundaryResult.error };
 
-  const runtimeKind: P3394RuntimeKind = agent.runtime?.kind === 'cli' ? 'local-cli' : 'cogseed-native';
+  const runtimeKind: P3394RuntimeKind = agent.runtime?.kind === 'p3394-gateway' ? 'local-cli' : 'cogseed-native';
   const capabilities = ['handle_message'];
   if (runtimeKind === 'local-cli') capabilities.push('local-cli');
 

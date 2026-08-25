@@ -40,7 +40,7 @@ describe('P3394 protocol MVP', () => {
       interface_contract: {
         version: 1,
         role: 'external_expert',
-        runtime: { kind: 'cli', cli: 'codex' },
+        runtime: { kind: 'p3394-gateway', cli: 'codex' },
         io: { input: 'task_message', output: 'final_message_with_artifacts' },
         governance: {
           session_role: 'participant_only',

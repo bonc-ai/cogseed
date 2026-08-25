@@ -15,7 +15,7 @@ vi.mock('../../../src/main/features/skills', () => ({
 vi.mock('../../../src/main/features/agents', () => ({
   listAgents: async () => Array.from(visibleAgentIds).map((agent_id) =>
     externalCliAgentIds.has(agent_id)
-      ? { agent_id, name: agent_id, runtime: { kind: 'cli', cli: agent_id } }
+      ? { agent_id, name: agent_id, runtime: { kind: 'p3394-gateway', cli: agent_id } }
       : { agent_id, name: agent_id }),
 }));
 
@@ -156,7 +156,7 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     const start = source.indexOf('function baseAgentToAgentId');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, start + 1200);
-    expect(body).toContain("a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'");
+    expect(body).toContain("a.runtime.kind === 'p3394-gateway'");
   });
 
   it('extra 与 bundle 重复的 id 去重（保留模板优先序）', () => {

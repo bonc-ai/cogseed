@@ -119,7 +119,7 @@ function explicitModelProfile(runtimeOrProfile: unknown): { field: string; model
   if (!runtimeOrProfile || typeof runtimeOrProfile !== 'object' || Array.isArray(runtimeOrProfile)) return null;
   const raw = runtimeOrProfile as Partial<AgentRuntime> & { model?: unknown };
   if (typeof raw.model !== 'string' || !raw.model.trim()) return null;
-  return { field: raw.kind === 'cli' ? 'runtime.model' : 'model', model: raw.model.trim() };
+  return { field: raw.kind === 'p3394-gateway' ? 'runtime.model' : 'model', model: raw.model.trim() };
 }
 
 export function validateIdentityRuntimeBoundary(

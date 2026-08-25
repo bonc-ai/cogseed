@@ -179,13 +179,13 @@ const RELATIONSHIP_SPEECH_ACTS: Record<P3394Relationship, 'unrestricted' | P3394
 function agentContract(agent: Agent): AgentInterfaceContract {
   return agent.interface_contract || {
     version: 1,
-    role: agent.runtime?.kind === 'cli' ? 'external_expert' : 'cogseed_core',
-    runtime: agent.runtime?.kind === 'cli' ? { kind: 'cli', cli: agent.runtime.cli } : { kind: 'in_process' },
+    role: agent.runtime?.kind === 'p3394-gateway' ? 'external_expert' : 'cogseed_core',
+    runtime: agent.runtime?.kind === 'p3394-gateway' ? { kind: 'p3394-gateway', cli: agent.runtime.cli } : { kind: 'in_process' },
     io: { input: 'task_message', output: 'final_message' },
     governance: {
-      session_role: agent.runtime?.kind === 'cli' ? 'participant_only' : 'owner_capable',
+      session_role: agent.runtime?.kind === 'p3394-gateway' ? 'participant_only' : 'owner_capable',
       data_scope: 'visibility_slice_with_workspace',
-      uses_mate_skills: agent.runtime?.kind !== 'cli',
+      uses_mate_skills: agent.runtime?.kind !== 'p3394-gateway',
       records_process: true,
       records_tool_evidence: true,
     },
@@ -201,7 +201,7 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
     principal_source: 'cogseed_user',
     security: { inbound: { mode: 'implicit' } },
   }];
-  if (contract.runtime.kind === 'cli') {
+  if (contract.runtime.kind === 'p3394-gateway') {
     channels.push({
       id: contract.runtime.cli,
       scope: '$PATH',

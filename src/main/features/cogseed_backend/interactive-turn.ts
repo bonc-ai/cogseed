@@ -62,14 +62,15 @@ export async function startCogSeedInteractiveFollowup(
     agentId,
     sessionId: session.sessionId,
     ...(parent ? { parentTaskId: parent.taskId } : {}),
-    executionKind: executionContext.runtime.kind === 'cli' ? 'local-cli' : 'cogseed-native',
-    ...(executionContext.runtime.kind === 'cli' ? {
+    executionKind: executionContext.runtime.kind === 'p3394-gateway' ? 'local-cli' : 'cogseed-native',
+    ...(executionContext.runtime.kind === 'p3394-gateway' ? {
       localCli: {
         cli: executionContext.runtime.cli,
         agentName: executionContext.agentName,
         ...(executionContext.runtime.model ? { model: executionContext.runtime.model } : {}),
         ...(executionContext.runtime.custom_args?.length ? { customArgs: executionContext.runtime.custom_args } : {}),
         ...(executionContext.runtime.cli_provider_id ? { cliProviderId: executionContext.runtime.cli_provider_id } : {}),
+        viaP3394Gateway: true,
       },
     } : {}),
     ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),

@@ -93,9 +93,11 @@ function fail(
 }
 
 function normalizeRuntime(runtime: AgentRuntime | undefined): AgentRuntime {
-  return runtime?.kind === 'cli'
+  // G-19：内部类型已无 'cli'；对端/存量数据里的 legacy 'cli' 一律按
+  // G-05 迁移语义归一为 p3394-gateway（读回即网关型）。
+  return runtime && (runtime.kind === 'p3394-gateway')
     ? {
-        kind: 'cli',
+        kind: 'p3394-gateway',
         cli: runtime.cli,
         ...(runtime.model ? { model: runtime.model } : {}),
         ...(runtime.custom_args?.length ? { custom_args: [...runtime.custom_args] } : {}),
@@ -110,8 +112,11 @@ function validateRuntime(value: unknown): { ok: true; runtime: AgentRuntime } | 
   }
   const raw = value as Record<string, unknown>;
   if (raw.kind === 'in_process') return { ok: true, runtime: { kind: 'in_process' } };
-  if (raw.kind === 'cli' && typeof raw.cli === 'string' && raw.cli.trim()) {
-    const runtime: AgentRuntime = { kind: 'cli', cli: raw.cli.trim() };
+  // 线上兼容：旧对端 manifest 仍可能自报 kind:'cli'——按迁移语义视作
+  // p3394-gateway 节点（直连已删，'cli' 不再是合法内部形态）。
+  const isExternalKind = raw.kind === 'p3394-gateway' || raw.kind === 'cli';
+  if (isExternalKind && typeof raw.cli === 'string' && raw.cli.trim()) {
+    const runtime: AgentRuntime = { kind: 'p3394-gateway', cli: raw.cli.trim() };
     if (typeof raw.model === 'string' && raw.model.trim()) runtime.model = raw.model.trim();
     if (Array.isArray(raw.custom_args)) runtime.custom_args = raw.custom_args.filter((value): value is string => typeof value === 'string');
     if (typeof raw.cli_provider_id === 'string' && raw.cli_provider_id.trim()) runtime.cli_provider_id = raw.cli_provider_id.trim();

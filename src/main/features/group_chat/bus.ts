@@ -963,7 +963,7 @@ async function p3394ProtocolProcessItem(input: {
             agent_id: input.actor.id,
             role:
               contract?.role ||
-              (input.agent.runtime?.kind === "cli"
+              (input.agent.runtime?.kind === "p3394-gateway"
                 ? "external_expert"
                 : "cogseed_core"),
             relationship,
@@ -989,12 +989,12 @@ async function p3394ProtocolProcessItem(input: {
           agent_id: input.actor.id,
           role:
             contract?.role ||
-            (input.agent.runtime?.kind === "cli"
+            (input.agent.runtime?.kind === "p3394-gateway"
               ? "external_expert"
               : "cogseed_core"),
           runtime_kind:
             contract?.runtime.kind ||
-            (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
+            (input.agent.runtime?.kind === "p3394-gateway" ? "p3394-gateway" : "in_process"),
           p3394_level: manifest.conformance.p3394_level,
           relationship: result.message.metadata.relationship,
           speech_act: speechAct,
@@ -1004,7 +1004,7 @@ async function p3394ProtocolProcessItem(input: {
           session_role: manifest.session.ownership.role,
           uses_mate_skills:
             contract?.governance.uses_mate_skills ??
-            input.agent.runtime?.kind !== "cli",
+            input.agent.runtime?.kind !== "p3394-gateway",
         },
       },
     },
@@ -4460,7 +4460,7 @@ async function runActorTurnBody(
     let cliWorkingDir = wsRoot;
     if (
       agentsFeat.cliIsCodingAgent(
-        cliAgent.runtime?.kind === "cli" || cliAgent.runtime?.kind === "p3394-gateway"
+        cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.cli
           : "",
       )
@@ -4575,7 +4575,7 @@ async function runActorTurnBody(
       // 永久记住，「允许一次」记住到本会话结束），之后轮次静默放行。拒绝时
       // 消息不发送：向用户回一个明确提示并终止本回合。
       const cliRuntime =
-        cliAgent.runtime?.kind === "cli" || cliAgent.runtime?.kind === "p3394-gateway"
+        cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.cli
           : "";
       if (cliRuntime) {
@@ -4709,7 +4709,7 @@ async function runActorTurnBody(
         // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
         // 原始后端错误只进日志，不透给渲染层。
         const failedCli = cliAgent.runtime &&
-          (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          (cliAgent.runtime.kind === "p3394-gateway")
           ? cliAgent.runtime.cli
           : "";
         errText = t("cli_agent.run_failed_detail", {
@@ -10848,365 +10848,12 @@ async function _maybeBuildCliInputForm(
   return `<agent-input-form>\n${body}\n</agent-input-form>`;
 }
 
-async function _runCliAgentTurn(opts: {
-  uid: string;
-  cid: string;
-  actor: { id: string; kind: ActorKind };
-  agent: import("../agents").Agent;
-  item: QueueItem;
-  slice: GroupMessage[];
-  projectId?: string;
-  spaceId?: string;
-  workingDir: string;
-  signal: AbortSignal;
-  onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
-  onProcessInfo?: (pid: number) => void;
-  onProcess: (data: Record<string, unknown>) => void;
-}): Promise<{
-  text: string;
-  error?: string;
-  aborted?: boolean;
-  produced?: string[];
-  failureKind?: GroupMessageFailureKind;
-  failureCode?: string;
-  infrastructureFailure?: boolean;
-}> {
-  const runtime = opts.agent.runtime as Extract<
-    NonNullable<import("../agents").AgentRuntime>,
-    { kind: "cli" }
-  >;
-
-  // Required-input gate: a CLI agent never runs an LLM, so the form-emit
-  // logic in `chat_agent_in_group.md` (where in-process agents check their
-  // inputs_schema and emit `<agent-input-form>` themselves) doesn't fire.
-  // We mirror that here: if any required input is unfulfilled, return a
-  // synthetic body containing the form block — runTurn's
-  // `extractFormFromFinal` then lifts it into a `form` payload, the
-  // renderer shows the picker, and the user's submission re-dispatches
-  // through the standard pipeline. Only the `project_dir` input is
-  // currently auto-injected, but the gate is generic so future required
-  // inputs reuse the same path.
-  const formBlock = await _maybeBuildCliInputForm(
-    opts.uid,
-    opts.cid,
-    opts.agent,
-  );
-  if (formBlock) return { text: formBlock };
-
-  // Look up any prior CLI session bound to this (cid, aid, cli). If
-  // present, we ask the CLI to resume it (claude: `--resume <id>`,
-  // codex: `thread/resume`). With a valid resume handle, the prompt stays
-  // current-turn-only: CLI agents persist their own conversation records,
-  // and duplicating host chat history here bloats context and can confuse
-  // the CLI's native memory. Without a handle, but with prior visible
-  // turns, we bridge that transcript into the fresh CLI session.
-  const cliSessions = await import("../local_agents/sessions");
-  const resumeSessionId = await cliSessions.getSessionId(
-    opts.uid,
-    opts.cid,
-    opts.agent.agent_id,
-    runtime.cli,
-  );
-  const bridgeHistory =
-    !resumeSessionId && _hasPriorVisibleCliHistory(opts.item, opts.slice);
-  const promptText = await _buildCliPrompt(
-    opts.uid,
-    opts.cid,
-    opts.agent,
-    opts.item,
-    opts.slice,
-    bridgeHistory,
-    opts.spaceId,
-  );
-  // When `_buildCliPrompt` took the slash-command fast-path, promptText is
-  // the raw `/cmd …` we forwarded. Remember the command name so the
-  // success-return path below can swap CLI's (no content)/empty result
-  // for a helpful note instead of leaving an empty bubble — common with
-  // session-control slashes like `/new` / `/clear` that no-op in -p mode.
-  const slashCommandName = _isSlashCommand(promptText)
-    ? (/^(\/[A-Za-z][A-Za-z0-9_-]*)/.exec(promptText)?.[1] ?? null)
-    : null;
-  const runner = await import("../local_agents/runner");
-
-  let accText = "";
-  let resultText = "";
-  let aborted = false;
-  let backendSessionId: string | undefined;
-  const produced = new Set<string>();
-  const pendingToolPaths = new Map<string, string[]>();
-  // Set when the CLI rejects our `--resume <id>` (e.g. claude code's
-  // "No conversation found with session ID …"). Triggers a one-time
-  // cleanup of the cliSessions binding so the next dispatch starts
-  // fresh instead of replaying the same broken resume forever. Detect
-  // by stderr-line pattern because there is no structured signal —
-  // each CLI phrases it slightly differently but they all carry the
-  // session-id hex.
-  let resumeRejected = false;
-  const _RESUME_REJECTED_PATTERNS = [
-    /No conversation found with session ID/i,
-    /session.*(not found|does not exist|expired|invalid)/i,
-  ];
-
-  const result = await runner.run({
-    uid: opts.uid,
-    cid: opts.cid,
-    agentId: opts.agent.agent_id,
-    agentName: opts.agent.name || opts.agent.agent_id,
-    ...(opts.projectId ? { projectId: opts.projectId } : {}),
-    cli: runtime.cli as import("../local_agents/registry").LocalCliType,
-    model: runtime.model,
-    customArgs: runtime.custom_args,
-    ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
-    resumeSessionId: resumeSessionId || undefined,
-    prompt: promptText,
-    cwd: opts.workingDir,
-    signal: opts.signal,
-    onEvent: (e) => {
-      opts.onCoordinatorActivity?.(activityFromLocalEvent(e));
-      // Translate each LocalEvent into the `process` event shape the
-      // renderer's group-chat listener expects so output streams live
-      // into the placeholder bubble (text-delta) and the process rail
-      // (tool-event, stderr, process-info). Without this, the renderer
-      // treats every event as an unrecognized shape and only the final
-      // text appears at turn-end.
-      switch (e.type) {
-        case "text-delta":
-          if (typeof (e as any).text === "string") {
-            accText += (e as any).text as string;
-            // Slash-command turns: buffer text-delta in `accText` instead
-            // of streaming to the bubble. The success-return path below
-            // either swaps the body for "已发送命令 …" (CLI returned
-            // empty / "(no content)") or hands the accumulated text in
-            // one shot as the final msg.text. Streaming would otherwise
-            // flash the CLI's "(no content)" before our substitution
-            // lands, since renderer commits each delta to the bubble.
-            if (!slashCommandName) {
-              opts.onProcess({ type: "delta", text: (e as any).text });
-            }
-          }
-          break;
-        case "thinking":
-          if (typeof (e as any).text === "string") {
-            opts.onProcess({ type: "progress", text: (e as any).text });
-          }
-          break;
-        case "tool-event":
-          if ((e as any).phase === "use") {
-            const paths = extractWritablePathsFromCliTool(
-              e as any,
-              opts.workingDir,
-            );
-            if (paths.length)
-              pendingToolPaths.set(String((e as any).callId || ""), paths);
-          } else if ((e as any).phase === "result") {
-            const callId = String((e as any).callId || "");
-            const paths = pendingToolPaths.get(callId) || [];
-            for (const p of paths) produced.add(p);
-            if (callId) pendingToolPaths.delete(callId);
-          }
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "file-change":
-          for (const p of normalizeCliProducedPaths(
-            (e as any).paths,
-            opts.workingDir,
-          ))
-            produced.add(p);
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "process-info": {
-          const rawPid = (e as { pid?: unknown }).pid;
-          if (
-            typeof rawPid === "number" &&
-            Number.isInteger(rawPid) &&
-            rawPid > 0
-          ) {
-            opts.onProcessInfo?.(rawPid);
-          }
-          opts.onProcess({
-            type: "event",
-            event: { stream: "cli", data: { type: "process-info" } },
-          });
-          break;
-        }
-        case "status":
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "stderr-line":
-          if (resumeSessionId && typeof (e as any).line === "string") {
-            const line = (e as any).line as string;
-            if (_RESUME_REJECTED_PATTERNS.some((re) => re.test(line)))
-              resumeRejected = true;
-          }
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "done":
-          if (typeof (e as any).output === "string")
-            resultText = (e as any).output as string;
-          if ((e as any).status === "cancelled") aborted = true;
-          if (typeof (e as any).sessionId === "string")
-            backendSessionId = (e as any).sessionId as string;
-          break;
-        default:
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-      }
-    },
-  });
-
-  // Session ordering is part of retry correctness: a same-Agent retry must
-  // not read the old binding while the failed attempt's newest backend id is
-  // still being written. The sessions module owns persistence-error logging;
-  // this layer verifies the authoritative value without logging session ids.
-  let sessionPersistenceFailed = false;
-  if (resumeRejected) {
-    log.warn("cli session expired; clearing resume binding", {
-      cid: maskId(opts.cid),
-      agent_id: maskId(opts.agent.agent_id),
-      cli: runtime.cli,
-    });
-    await cliSessions.clearForAgent(opts.uid, opts.cid, opts.agent.agent_id);
-  }
-  if (backendSessionId) {
-    await cliSessions.setSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-      backendSessionId,
-    );
-    const persisted = await cliSessions.getSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-    );
-    sessionPersistenceFailed = persisted !== backendSessionId;
-  } else if (resumeRejected) {
-    const persisted = await cliSessions.getSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-    );
-    sessionPersistenceFailed = persisted !== null;
-  }
-  if (sessionPersistenceFailed && result.status !== "cancelled") {
-    return {
-      text: resultText || accText,
-      error: t("cli_agent.run_failed_detail", {
-        name: opts.agent.name || runtime.cli,
-        cli: runtime.cli,
-      }),
-      produced: Array.from(produced),
-      failureKind: "runtime",
-      failureCode: "cli_session_persistence_failed",
-      infrastructureFailure: true,
-    };
-  }
-  if (result.status === "missing_cli") {
-    const vars = {
-      name: opts.agent.name || runtime.cli,
-      cli: runtime.cli,
-      path: result.cliPath || "",
-      version: result.cliVersion || "",
-    };
-    const msg =
-      result.cliError === "version_unknown"
-        ? t("cli_agent.version_unknown", vars)
-        : result.cliError === "version_too_old"
-          ? t("cli_agent.version_too_old", vars)
-          : t("cli_agent.not_found", vars);
-    return {
-      text: "",
-      error: msg,
-      aborted: false,
-      produced: Array.from(produced),
-      failureKind: "dependency",
-      failureCode: result.cliError || "missing_cli",
-    };
-  }
-  if (result.status === "cancelled") {
-    return {
-      text: resultText || accText,
-      aborted: true,
-      produced: Array.from(produced),
-    };
-  }
-  if (result.status === "failed" || result.status === "timeout") {
-    const vars = { name: opts.agent.name || runtime.cli, cli: runtime.cli };
-    // Backend errors remain available to runner diagnostics, but they are
-    // internal implementation details and may contain paths, stderr, or
-    // protocol prose. User copy is derived from structured terminal state.
-    let detail = resumeRejected
-      ? t("cli_agent.session_expired_detail", vars)
-      : result.status === "timeout"
-        ? t("cli_agent.timeout_detail", vars)
-        : t("cli_agent.run_failed_detail", vars);
-    // 本地代理未运行 → 给出明确的根因提示。很多用户把 CLI（Codex / Claude 等）
-    // 配成走本地代理（CC Switch 等），代理没开时 CLI 必然失败。探测本地代理
-    // 端口不可达时，报错直接说明，而不是笼统的「未能完成任务」。
-    try {
-      const { readCliModelEndpoint, probeModelEndpointReachable } = await import("../local_agents/active_config.js");
-      const cli = runtime.cli as string;
-      const ep = readCliModelEndpoint(cli as never);
-      if (ep && ep.isLocalProxy) {
-        const reachable = await probeModelEndpointReachable(cli as never);
-        if (reachable === false) {
-          detail = t("cli_agent.local_proxy_unreachable", {
-            name: opts.agent.name || runtime.cli,
-            cli: runtime.cli,
-            url: ep.baseUrl,
-          });
-        }
-      }
-    } catch { /* probe is best-effort — fall through to the generic detail */ }
-    return {
-      text: resultText || accText,
-      error: detail,
-      produced: Array.from(produced),
-      failureKind: "runtime",
-      failureCode: result.status === "timeout" ? "cli_timeout" : "cli_failed",
-    };
-  }
-  const finalText = resultText || accText;
-  if (slashCommandName && _looksLikeNoOutput(finalText)) {
-    return {
-      text: t("cli_agent.slash_no_output", { cmd: slashCommandName }),
-      produced: Array.from(produced),
-    };
-  }
-  return { text: finalText, produced: Array.from(produced) };
-}
+// G-19（兼容期结束，二阶段）：_runCliAgentTurn 直连执行函数已物理删除
+// ——legacy `cli` runtime 由 G-05 迁移器读回即网关型，群聊 CLI/P3394
+// 智能体统一走 runP3394GatewayTurn；直连时代的会话续聊语义已由 G-27
+// 迁移至网关（oneshot resume / sscli-shim）。其辅助函数
+// （_buildCliPrompt/_maybeBuildCliInputForm 等）若仅此处引用，随本删除
+// 成为死代码，由 tsc noUnusedLocals 与后续清理收口。
 
 function normalizeCliProducedPaths(
   paths: unknown,
@@ -11296,7 +10943,7 @@ async function _buildCliPrompt(
   // and never see the project-dir-switching rules — the host doesn't
   // route their cwd through `coding_project_dir` and the form
   // wouldn't fire on their submissions anyway.
-  const cli = agent.runtime?.kind === "cli" ? agent.runtime.cli : "";
+  const cli = agent.runtime?.kind === "p3394-gateway" ? agent.runtime.cli : "";
   let outputProtocolBlock = "";
   if (agentsFeat.cliIsCodingAgent(cli)) {
     const inputs = Array.isArray(agent.inputs) ? agent.inputs : [];

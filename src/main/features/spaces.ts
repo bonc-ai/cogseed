@@ -501,11 +501,11 @@ async function _listSpaceIds(uid: string): Promise<string[]> {
 function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?: { kind?: string; cli?: string } }>, baseAgent: string | undefined): string | undefined {
   if (!baseAgent) return undefined;
   // 外接 CLI agent 的 runtime.kind 有两种：'cli'（本地直接 spawn）与
-  // 'p3394-gateway'（走网关协作）。两者都是"外接 CLI"，
-  // 必须都能映射，否则空间 base_agents 里选了外接 CLI 也进不了
+  // 'p3394-gateway'（走网关协作；G-19 后唯一外接形态，旧 'cli' 读回即
+  // 迁移），必须能映射，否则空间 base_agents 里选了外接 CLI 也进不了
   // effective_agents，空间会话 @ tab 里就看不到它。
   const isExternalCli = (a: { runtime?: { kind?: string; cli?: string } } | undefined): a is { runtime: { kind?: string; cli?: string } } =>
-    !!a && !!a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway') && !!a.runtime.cli;
+    !!a && !!a.runtime && a.runtime.kind === 'p3394-gateway' && !!a.runtime.cli;
   const hit = agents.find((a) => isExternalCli(a) && a.runtime!.cli === baseAgent);
   if (hit?.agent_id) return hit.agent_id;
   const lower = baseAgent.toLowerCase();

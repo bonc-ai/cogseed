@@ -77,7 +77,7 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
   it('rejects CLI runtime model equal to agent_id', () => {
     const identity = { agent_id: 'agent-bridge-001', display_name: 'Bridge Agent' };
     const result = validateIdentityRuntimeBoundary(identity, {
-      kind: 'cli',
+      kind: 'p3394-gateway',
       cli: 'codex',
       model: 'agent-bridge-001',
     });
@@ -99,7 +99,7 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
   });
 
   it('maps CLI runtime to local-cli and includes local-cli capability', () => {
-    const result = buildP3394CapabilityProfile(agent({ runtime: { kind: 'cli', cli: 'codex', model: 'gpt-5' } }));
+    const result = buildP3394CapabilityProfile(agent({ runtime: { kind: 'p3394-gateway', cli: 'codex', model: 'gpt-5' } }));
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected capability profile success');
@@ -118,7 +118,7 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
 
   it('builds manifest with identity, runtime, capability profile, channel declaration, session/security/conformance', () => {
     const result = buildP3394BridgeManifest(agent({
-      runtime: { kind: 'cli', cli: 'codex', model: 'gpt-5' },
+      runtime: { kind: 'p3394-gateway', cli: 'codex', model: 'gpt-5' },
       skill_list: ['research'],
     }));
 
@@ -126,7 +126,7 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
     if (!result.ok) throw new Error('expected manifest success');
     expect(result.manifest.spec_version).toBe('p3394/1.0');
     expect(result.manifest.identity.agent_id).toBe('agent-bridge-001');
-    expect(result.manifest.runtime).toEqual({ kind: 'cli', cli: 'codex', model: 'gpt-5' });
+    expect(result.manifest.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex', model: 'gpt-5' });
     expect(result.manifest.capability_profile.agent_id).toBe('agent-bridge-001');
     expect(result.manifest.capability_profile.runtime_kind).toBe('local-cli');
     expect(result.manifest.channels).toEqual([

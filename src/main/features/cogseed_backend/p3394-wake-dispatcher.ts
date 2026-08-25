@@ -34,16 +34,9 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
         request.conversation_id,
       );
       const agentRuntime = executionContext.runtime;
-      const localCli: CogSeedLocalCliConfig | undefined = agentRuntime.kind === 'cli'
+      // G-19：legacy 'cli' 分支删除（读回即迁移为 p3394-gateway）。
+      const localCli: CogSeedLocalCliConfig | undefined = agentRuntime.kind === 'p3394-gateway'
         ? {
-            cli: agentRuntime.cli,
-            agentName: executionContext.agentName,
-            ...(agentRuntime.model ? { model: agentRuntime.model } : {}),
-            ...(agentRuntime.custom_args?.length ? { customArgs: agentRuntime.custom_args } : {}),
-            ...(agentRuntime.cli_provider_id ? { cliProviderId: agentRuntime.cli_provider_id } : {}),
-          }
-        : agentRuntime.kind === 'p3394-gateway'
-          ? {
               cli: agentRuntime.cli,
               agentName: executionContext.agentName,
               ...(agentRuntime.model ? { model: agentRuntime.model } : {}),
