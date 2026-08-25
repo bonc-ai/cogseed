@@ -1667,6 +1667,8 @@
   "new_chat.quick.education": "学習サポート",
   "new_chat.quick.office": "資料整理",
   "new_chat.quick.rnd": "アプリ開発",
+  "new_chat.quick.goal": "ゴールモード",
+  "new_chat.quick.tmpl.goal": "ゴール：[達成したいことを記述]。まずこのゴールをサブタスク計画（マイルストーンとステップ）に分解して私に提示し、確認後に各ステップを適切なエージェントへディスパッチしてください。エージェントの起動はすべて私の承認を経ます。",
   "new_chat.quick.seo_geo": "AI検索での露出",
   "new_chat.quick.space_builder": "スペースモード",
   "new_chat.quick.tmpl.creation": "[テーマ] について書いてください。構成と切り口を提案し、初稿を作り、対象読者に合わせて磨き込んでください",

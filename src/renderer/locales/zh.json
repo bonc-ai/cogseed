@@ -1811,6 +1811,8 @@
   "new_chat.quick.education": "学习辅导",
   "new_chat.quick.office": "整理文档",
   "new_chat.quick.rnd": "开发软件",
+  "new_chat.quick.goal": "目标模式",
+  "new_chat.quick.tmpl.goal": "目标：[描述你要达成的事]。请先把这个目标拆解为子任务计划（里程碑与步骤）并展示给我确认；我确认后再逐项派发给合适的智能体执行，每次智能体唤醒都经我审批。",
   "new_chat.quick.seo_geo": "AI/搜索曝光",
   "new_chat.quick.space_builder": "空间模式",
   "new_chat.quick.tmpl.creation": "帮我写一篇关于 [主题] 的文章：先给结构和角度，再写初稿，最后按目标读者润色",
