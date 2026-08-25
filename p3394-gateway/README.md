@@ -106,6 +106,17 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
   输出边增长，不必等工具+回复跑完）；`openclaw` 预设整体排除（其 CLI 无中间
   分片、最终 JSON 回复信封写在 stderr 末尾，保持一次性回发）。可用
   `P3394_DISABLE_ONESHOT_STREAM=1` 关闭。
+- **CLI 原生会话恢复（resume，G-27）**：预设表登记了 `resumeArgs` 的 CLI
+  （opencode `--session`、openclaw `--session-id`、claude 降级模式 `--resume`）
+  由网关在会话目录维护 `cli-session.json`（CLI 自己的会话号），下轮 spawn
+  自动追加恢复参数——CLI 自己恢复完整上下文，prompt 只带本轮新内容，**不再
+  回放 `[会话历史]`**。会话号来源两种：从 CLI 输出按 `sessionIdPattern`
+  正则提取（opencode/claude），或由网关生成 UUID 传入（`sessionGenerate`，
+  openclaw）。会话被拒（not found / expired 等特征）时自动清绑定、退回
+  transcript 回放重试一次。未登记 resume 的 CLI（gemini/hermes/aider/
+  workbuddy）行为不变，继续 transcript 回放兜底；常驻后端（claude 常驻 /
+  codex app-server）自管会话，不走此机制。新 CLI 接入 resume 只需在预设表
+  加同款字段。
 - **sscli**：`P3394_AGENT_MODE=sscli` 常驻单个 CLI 进程，按 `p3394-sscli/1.0`
   JSONL 协议交换 hello / open_session / deliver / 事件 / cancel / heartbeat
   （指南 §9.2），适合支持结构化会话协议的 Agent Runtime。
