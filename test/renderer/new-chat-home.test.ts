@@ -36,6 +36,7 @@ describe('new chat home surface', () => {
       'seo_geo',
       'office',
       'rnd',
+      'goal',
     ]);
     expect(html).not.toContain('data-scenario="ecommerce"');
     expect(html).not.toContain('data-scenario="creation"');
