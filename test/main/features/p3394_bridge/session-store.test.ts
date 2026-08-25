@@ -22,6 +22,19 @@ describe('p3394 session store', () => {
     expect(first).toMatch(/^ses-[a-f0-9]{12}$/);
   });
 
+  it('keeps the session id when the transport channel type changes (C6, §17.2)', () => {
+    // 通道切换后 Session ID 不变（指南 §12：新 Channel Instance 与协议
+    // correlation 只更新 Session Binding，session_id 不变）。会话键
+    // (scope, peer[, goal]) 本就通道无关：同一 peer 先经 HTTP、后经 WS
+    // 到达（无论 goal 隔离与否）都命中同一会话。
+    const viaHttp = sessionForGoal('conv-a', 'hermes', 'review the draft');
+    const viaWebSocket = sessionForGoal('conv-a', 'hermes', 'review the draft');
+    expect(viaWebSocket).toBe(viaHttp);
+    const plainHttp = sessionFor('conv-b', 'hermes');
+    const plainWs = sessionFor('conv-b', 'hermes');
+    expect(plainWs).toBe(plainHttp);
+  });
+
   it('isolates sessions by scope and by peer', () => {
     const a = sessionFor('conv-a', 'hermes');
     const b = sessionFor('conv-b', 'hermes');
