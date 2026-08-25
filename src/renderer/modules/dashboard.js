@@ -107,7 +107,8 @@
       badgeHtml: badge('info', t('p3394.wake.status.pending')),
       sub: String(r.objective || '').slice(0, 160),
       actions: `<button type="button" class="btn btn-primary btn-sm" data-dash-action="wake-decide" data-request-id="${esc(r.id)}" data-cid="${esc(r.conversation_id || '')}" data-decision="approve">${esc(t('p3394.wake.approve'))}</button>
-        <button type="button" class="btn btn-sm" data-dash-action="wake-decide" data-request-id="${esc(r.id)}" data-cid="${esc(r.conversation_id || '')}" data-decision="reject">${esc(t('p3394.wake.reject'))}</button>`,
+        <button type="button" class="btn btn-sm" data-dash-action="wake-decide" data-request-id="${esc(r.id)}" data-cid="${esc(r.conversation_id || '')}" data-decision="reject">${esc(t('p3394.wake.reject'))}</button>
+        <button type="button" class="btn btn-sm" data-dash-action="wake-jump" data-cid="${esc(r.conversation_id || '')}">${esc(t('dashboard.control_open_conversation'))}</button>`,
       detail: detailGrid([
         [t('dashboard.control_source'), r.source || ''],
         [t('dashboard.control_conversation'), r.conversation_id || ''],
@@ -442,6 +443,10 @@
       } else {
         doRemove();
       }
+    } else if (action === 'wake-jump') {
+      // 审批前先看会话上下文：跳到该会话（与会话内审批卡同一会话）。
+      const cid = button.dataset.cid;
+      if (cid && typeof window.setView === 'function') window.setView('conversation', cid);
     } else if (action === 'wake-decide') {
       // 控制中心（T3）：跨会话 wake 审批——批准恢复派发、拒绝终止。
       const requestId = button.dataset.requestId;
