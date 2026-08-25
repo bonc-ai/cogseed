@@ -1,10 +1,16 @@
 name: CI
 
+# CI (verify) runs only on the cicd branch — the release gate.
+# Day-to-day development merges into develop via review only (no CI);
+# the full verify suite runs once when a PR targets cicd, and again on
+# push to cicd, right before tagging a release.
 on:
   pull_request:
+    branches:
+      - cicd
   push:
     branches:
-      - main
+      - cicd
   workflow_dispatch:
 
 permissions:
