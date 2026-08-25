@@ -66,6 +66,58 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// ── 命令行参数（G-35 统一包快速接入）：环境变量之外的便捷入口——
+//   node gateway.cjs --agent <名> [--exec <命令>] [--args '<参数模板>']
+//                   [--port <端口>] [--home <目录>] [--native]
+//   参数优先于环境变量；--native 即 P3394_SSCLI_NATIVE=1（CLI 原生讲
+//   p3394-sscli 协议时直连，不经垫片）。这让"任意智能体装包即用"成为
+//   一条命令的事，不再要求手配 env。
+function _parseArgv() {
+  const out = {};
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--agent') out.agent = argv[i + 1];
+    else if (a === '--exec') out.exec = argv[i + 1];
+    else if (a === '--args') out.args = argv[i + 1];
+    else if (a === '--port') out.port = argv[i + 1];
+    else if (a === '--home') out.home = argv[i + 1];
+    else if (a === '--native') out.native = '1';
+    else if (a === '--help' || a === '-h') {
+      console.log([
+        'p3394-gateway — 任意智能体的 P3394 接入包（装包即成一个 P3394 节点）',
+        '',
+        '用法：node gateway.cjs --agent <智能体名> [选项]',
+        '  --agent <名>    智能体身份名（内置预设名用其模板；任意名=同名命令）',
+        '  --exec <命令>   实际执行的命令（默认：预设命令或与 --agent 同名）',
+        '  --args <模板>   参数模板，{message} 为消息占位（默认预设模板或 {message}）',
+        '  --port <端口>   本端监听端口（默认 9000；也可 P3394_GATEWAY_PORT）',
+        '  --home <目录>   会话/工作区根（默认 ~/.p3394-gateway）',
+        '  --native        该智能体原生讲 p3394-sscli/1.0 协议，直连不经垫片',
+        '',
+        '运行模式：默认经 sscli-shim 通用垫片走 p3394-sscli/1.0（任意一次性',
+        '命令行智能体零改造接入）；原生协议智能体加 --native。',
+        '完整变量说明见 README.md「配置（环境变量）」。',
+      ].join('\n'));
+      process.exit(0);
+    }
+  }
+  return out;
+}
+const _ARGV = _parseArgv();
+if (_ARGV.agent) {
+  process.env.P3394_AGENT = _ARGV.agent;
+  // 快速接入路径（--agent）默认走 sscli（经通用垫片，任意智能体零改造
+  // 即协议化）——这是"统一包"的承诺；显式 P3394_AGENT_MODE 优先。
+  // 纯 env 启动维持 oneshot 默认（存量兼容）。
+  if (!process.env.P3394_AGENT_MODE) process.env.P3394_AGENT_MODE = 'sscli';
+}
+if (_ARGV.exec) process.env.P3394_AGENT_CLI = _ARGV.exec;
+if (_ARGV.args) process.env.P3394_AGENT_CLI_ARGS = _ARGV.args;
+if (_ARGV.port) process.env.P3394_GATEWAY_PORT = _ARGV.port;
+if (_ARGV.home) process.env.P3394_GATEWAY_HOME = _ARGV.home;
+if (_ARGV.native) process.env.P3394_SSCLI_NATIVE = _ARGV.native;
+
 const PORT = Number(process.env.P3394_GATEWAY_PORT || 9000);
 // 跨机器：可绑定局域网地址（默认回环，安全优先）。
 const GATEWAY_HOST = (process.env.P3394_GATEWAY_HOST || '127.0.0.1').trim();
