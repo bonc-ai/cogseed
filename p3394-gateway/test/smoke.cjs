@@ -308,6 +308,61 @@ async function main() {
   check('openclaw 一次性回发：终态回复正常', received.some((e) => e.session_id === 's-oc' && (e.payload.parts[0].text || '').includes('OC-REPLY-ONE-SHOT')));
   ocGw.kill('SIGTERM');
 
+  // G-27 CLI 原生会话恢复（oneshot resume）：opencode 形态（--session 续聊 +
+  // 输出含 sessionID 可提取）。假 CLI 带 --session 时回 RESUMED(id) 前缀、
+  // 无 --session 回 FRESH 前缀；--session 值以 poison 开头时报 session not
+  // found 退出非零（验证被拒清绑定 + transcript 回放重试一次的降级链）。
+  const resumeAgent = path.join(tmp, 'fake-resume-agent.cjs');
+  fs.writeFileSync(resumeAgent, [
+    "'use strict';",
+    "const argv = process.argv.slice(2);",
+    "const sessIdx = argv.indexOf('--session');",
+    "const sessionId = sessIdx >= 0 ? argv[sessIdx + 1] : null;",
+    "const msg = argv[0] || '';",
+    "if (sessionId && sessionId.startsWith('poison')) {",
+    "  process.stderr.write('Error: session not found: ' + sessionId + '\\n');",
+    "  process.exit(1);",
+    "}",
+    "const prefix = sessionId ? 'RESUMED(' + sessionId + '): ' : 'FRESH: ';",
+    "process.stdout.write(JSON.stringify({ sessionID: 'oc-fixed-sess', text: prefix + msg }) + '\\n');",
+    "process.exit(0);",
+  ].join('\n'));
+  const RESUME_PORT = GATEWAY_PORT + 90;
+  const resumeHome = path.join(tmp, 'resume-home');
+  const resumeEnv = { ...process.env, P3394_GATEWAY_PORT: String(RESUME_PORT), P3394_GATEWAY_HOME: resumeHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: resumeAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const resumeGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: resumeEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const cliSessionFileOf = (sid) => path.join(resumeHome, 'sessions', sid, 'cli-session.json');
+
+  // 第一轮（s-r1）：无绑定 → FRESH 前缀；输出含 sessionID → cli-session.json 落盘
+  const r1 = { message_id: 'rm1', session_id: 's-r1', task_id: 'rtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first turn' }] }, idempotency_key: 'idem-r1' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r1 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  check('resume：首轮无 resume 参数（FRESH 前缀）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('FRESH: first turn')));
+  const r1CliSession = fs.existsSync(cliSessionFileOf('s-r1')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r1'), 'utf8')) : null;
+  check('resume：会话号从输出提取并落盘 cli-session.json', !!(r1CliSession && r1CliSession.sessionId === 'oc-fixed-sess' && r1CliSession.cli === 'opencode'));
+
+  // 第二轮（s-r1 同会话）：带 --session 续聊；不回放 [会话历史]（纯增量）
+  const r2 = { message_id: 'rm2', session_id: 's-r1', task_id: 'rtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second turn' }] }, idempotency_key: 'idem-r2' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r2 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  const r2Reply = received.find((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('second turn'));
+  check('resume：第二轮带 --session 续聊（RESUMED 前缀）', !!(r2Reply && (r2Reply.payload.parts[0].text || '').includes('RESUMED(oc-fixed-sess): second turn')));
+  check('resume：第二轮不回放 [会话历史]（纯增量，CLI 自管记忆）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[会话历史]') && !(r2Reply.payload.parts[0].text || '').includes('first turn')));
+
+  // 被拒重试（s-r2）：预埋毒会话号 → CLI 报 session not found → 清绑定、
+  // transcript 回放重跑一次 → 最终成功且为 FRESH 形态
+  fs.mkdirSync(path.dirname(cliSessionFileOf('s-r2')), { recursive: true });
+  fs.writeFileSync(cliSessionFileOf('s-r2'), JSON.stringify({ cli: 'opencode', sessionId: 'poison-9', updatedAt: new Date().toISOString() }));
+  const r3 = { message_id: 'rm3', session_id: 's-r2', task_id: 'rtk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'retry turn' }] }, idempotency_key: 'idem-r3' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r3 }, GATEWAY_TOKEN);
+  await sleep(1500);
+  check('resume：被拒后清绑定带回放重试（最终 FRESH 成功）', received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('FRESH: retry turn')));
+  check('resume：被拒重试不外发错误信封', !received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('p3394_gateway_error')));
+  const r3CliSession = fs.existsSync(cliSessionFileOf('s-r2')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r2'), 'utf8')) : null;
+  check('resume：被拒后毒绑定被新会话号覆盖', !!(r3CliSession && r3CliSession.sessionId === 'oc-fixed-sess'));
+  resumeGw.kill('SIGTERM');
+
   // cancel 控制帧：长任务被终止，只回取消回执
   const cancelEnv = { message_id: 'm7', session_id: 's7', task_id: 'tsk-cancel-1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-5000 long task' }] }, idempotency_key: 'idem7' };
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: cancelEnv }, GATEWAY_TOKEN);

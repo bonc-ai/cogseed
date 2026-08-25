@@ -177,12 +177,19 @@ const PRESETS = {
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
-  claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages' },
+  // G-27 resume 登记：--resume 让降级模式（每轮 spawn）也带会话号续聊，
+  // stream-json init 帧含 session_id 可提取；常驻模式自管会话不走此表。
+  claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
+              resumeArgs: '--resume {cli_session_id}', sessionIdPattern: '"session_id"\\s*:\\s*"([^"]+)"' },
   codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex' },
-  opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode' },
+  // G-27 resume 登记：opencode run 的输出含 sessionID，--session 续聊；
+  // openclaw 会话号由网关生成 UUID 传入（CLI 接受任意 id 新建会话）。
+  opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode',
+              resumeArgs: '--session {cli_session_id}', sessionIdPattern: '"sessionID"\\s*:\\s*"([^"]+)"' },
   gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider' },
-  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw' },
+  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
+              resumeArgs: '--session-id {cli_session_id}', sessionGenerate: true },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy' },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
@@ -368,6 +375,85 @@ function appendTranscript(sessionId, role, text) {
   } catch { /* best effort */ }
 }
 
+// ── G-27 CLI 原生会话恢复（resume）──
+// 有原生会话恢复能力的 CLI（--resume / --session 类参数）按会话目录存一份
+// CLI 自己的会话号：首轮调用后从输出提取（sessionIdPattern）或由网关生成
+// （sessionGenerate，CLI 接受任意 id 新建），下轮 spawn 追加恢复参数，CLI
+// 自己恢复完整上下文。resume 生效时不回放 [会话历史]（避免双份上下文）；
+// transcript 回放退为未登记 CLI 的兜底与 resume 被拒后的重试路径。
+// 语义对齐 CogSeed 直连路径的 cli-sessions（存 CLI 名防换绑失效、被拒清
+// 绑定重跑一次），G-19 删直连后此机制独立存活。
+function cliSessionFile(sessionId) {
+  return path.join(sessionDir(sessionId), 'cli-session.json');
+}
+function readCliSession(sessionId) {
+  try {
+    const data = JSON.parse(fs.readFileSync(cliSessionFile(sessionId), 'utf8'));
+    if (!data || typeof data.sessionId !== 'string' || !data.sessionId) return null;
+    // CLI 名不一致（同会话目录换了 CLI）视为失效，按全新会话处理。
+    if (data.cli !== AGENT_ID) return null;
+    return data;
+  } catch { return null; }
+}
+function writeCliSession(sessionId, cliSessionIdValue) {
+  if (!cliSessionIdValue) return;
+  try {
+    fs.mkdirSync(sessionDir(sessionId), { recursive: true });
+    fs.writeFileSync(cliSessionFile(sessionId), JSON.stringify({
+      cli: AGENT_ID, sessionId: cliSessionIdValue, updatedAt: new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.error('[p3394-gateway] cli-session write failed:', err && err.message);
+  }
+}
+function clearCliSession(sessionId) {
+  try { fs.unlinkSync(cliSessionFile(sessionId)); } catch { /* absent ok */ }
+}
+// 从 CLI 输出提取会话号：登记了 sessionIdPattern 的预设按正则取第一捕获组。
+function extractCliSessionId(output) {
+  if (!preset || typeof preset.sessionIdPattern !== 'string' || !output) return null;
+  try {
+    const m = new RegExp(preset.sessionIdPattern).exec(String(output));
+    if (m && m[1]) return m[1].trim();
+  } catch { /* bad pattern — ignore */ }
+  return null;
+}
+// 会话被拒的 stderr/错误特征（模式列表沿用 CogSeed 直连路径成熟经验，
+// 含 claude 专属的 "No conversation found with session ID"）。
+const RESUME_REJECTED_PATTERNS = [
+  /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
+  /unknown\s+(?:session|conversation|thread)/i,
+  /cannot\s+resume/i,
+  /failed\s+to\s+resume/i,
+  /No\s+conversation\s+found\s+with\s+session\s+ID/i,
+];
+function resumeRejectedByText(...texts) {
+  return texts.some((t) => typeof t === 'string' && t
+    && RESUME_REJECTED_PATTERNS.some((re) => re.test(t)));
+}
+// 本预设是否具备 resume 能力（登记了 resumeArgs 或自生成会话号）。
+function resumeCapable() {
+  return !!(preset && (typeof preset.resumeArgs === 'string' || preset.sessionGenerate === true));
+}
+// 取当前会话号：有绑定用绑定；无绑定且是 sessionGenerate 形态则生成新
+// UUID 并立即落盘（openclaw 直连语义：同会话号跨轮稳定，CLI 接受任意 id）。
+function currentOrGeneratedCliSessionId(sessionId) {
+  const existing = readCliSession(sessionId);
+  if (existing) return existing.sessionId;
+  if (preset && preset.sessionGenerate === true) {
+    const id = 'p3394-' + crypto.randomUUID();
+    writeCliSession(sessionId, id);
+    return id;
+  }
+  return null;
+}
+// 生成 resume 追加参数；{cli_session_id} 占位符在调用时替换。
+function buildResumeArgs(cliSessionIdValue) {
+  if (!preset || typeof preset.resumeArgs !== 'string' || !cliSessionIdValue) return [];
+  return preset.resumeArgs.split(' ').filter(Boolean)
+    .map((part) => part.replace('{cli_session_id}', cliSessionIdValue));
+}
+
 // ── p3394-object 拉取（入站，§12 resource endpoint） ──
 // 信封里的 resource part 若是 p3394-object URI（内容寻址引用），从发送方
 // 的资源端点拉取原始字节并验证 digest。失败不阻塞消息处理。
@@ -506,9 +592,12 @@ function sanitizeStreamText(raw) {
 // ── oneshot 模式：每消息 spawn CLI（可取消） ──
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
-function runAgent(message, taskId, cwd, onStream, onProgress) {
+function runAgent(message, taskId, cwd, onStream, onProgress, extraArgs) {
   return new Promise((resolve, reject) => {
-    const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
+    // G-27: extraArgs 追加在模板参数之后（resume 类参数），与 {message}
+    // 模板互不干扰。
+    const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message))
+      .concat(Array.isArray(extraArgs) ? extraArgs : []);
     const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     if (taskId) activeTasks.set(taskId, child);
     let out = '';
@@ -609,17 +698,48 @@ function cancelTask(taskId) {
 // 在与 sscli 统一的后端接口下，这是"无协议 agent"的默认落点。
 const oneshotRuntime = {
   name: 'oneshot',
-  async openSession() { /* transcript 负责连续性，无需握手 */ },
+  async openSession() { /* transcript / cli-session 负责连续性，无需握手 */ },
   async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
-    const transcript = readTranscriptTail(sessionId);
-    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     // 注册可取消键用 task_id（cancel 控制帧按 task_id 匹配）；无 task_id 时
     // 回退到 message_id，保证单消息用例仍可取消。
     const cancelKey = (opts && opts.taskId) || messageId;
+
+    // G-27 降级链：有 resume 能力且有会话号 → 带 resume 参数、只发本轮新
+    // 内容（CLI 自己恢复完整上下文，不回放 [会话历史]，避免双份）；被拒
+    // （会话号过期/不存在等）→ 清绑定，落回 transcript 回放重试一次。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const rawReply = await runAgent(
+            text + note + hint, cancelKey, opts && opts.cwd, onDelta, onProgress,
+            buildResumeArgs(cliSessionId),
+          );
+          const reply = clipReply(rawReply);
+          const nextId = extractCliSessionId(rawReply);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', reply);
+          return reply;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected, retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径（首轮 / 未登记 resume / 被拒重试）：回放 transcript + 当前
+    // 消息；登记了 sessionIdPattern 的 CLI 顺手提取会话号写回（下轮生效）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress);
-    const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
+    const reply = clipReply(rawReply);
+    const nextId = extractCliSessionId(rawReply);
+    if (nextId) writeCliSession(sessionId, nextId);
     appendTranscript(sessionId, 'in', text);
     appendTranscript(sessionId, 'out', reply);
     return reply;
@@ -630,6 +750,11 @@ const oneshotRuntime = {
     activeTasks.clear();
   },
 };
+function clipReply(rawReply) {
+  return rawReply.length > MAX_REPLY_BYTES
+    ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]'
+    : rawReply;
+}
 
 
 /** 引号感知的 argv 切分（sscli 模式的 CLI 参数可能含带空格的路径）。 */
@@ -942,40 +1067,37 @@ class StreamJsonRuntime {
   async deliver(sessionId, messageId, text, opts, onDelta) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
-    // 与 oneshot 一致：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
-    // 不带 [会话历史] 会让 claude 每轮失忆）。
-    const transcript = readTranscriptTail(sessionId);
-    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
-    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [])];
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
-    return new Promise((resolve, reject) => {
-      const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
-      this.active.set(cancelKey, child);
-      let lineBuf = '';
-      let accumulated = '';
-      let finished = false;
-      let stderrLog = '';
-      const finish = (error) => {
-        if (finished) return;
-        finished = true;
-        this.active.delete(cancelKey);
-        if (error) reject(error); else {
-          // 落盘 transcript（与 oneshot 同构），供跨轮回放。
-          appendTranscript(sessionId, 'in', text);
-          appendTranscript(sessionId, 'out', accumulated.trim());
-          resolve(accumulated.trim());
-        }
-      };
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 3000).unref();
-        finish(new Error('p3394_stream_json_timeout'));
-      }, STREAM_JSON_TIMEOUT_MS);
-      child.stdout.on('data', (chunk) => {
-        lineBuf += chunk.toString('utf8');
-        const lines = lineBuf.split('\n');
-        lineBuf = lines.pop();
+
+    // 单次 spawn 尝试：prompt 全文替换 {message}，extraArgs 追加在模板参数
+    // 之后（G-27 resume 参数）。返回累积的助手输出文本。
+    const runOnce = (prompt, extraArgs) => {
+      const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)),
+        ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []),
+        ...(Array.isArray(extraArgs) ? extraArgs : [])];
+      return new Promise((resolve, reject) => {
+        const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+        this.active.set(cancelKey, child);
+        let lineBuf = '';
+        let accumulated = '';
+        let finished = false;
+        let stderrLog = '';
+        const finish = (error) => {
+          if (finished) return;
+          finished = true;
+          this.active.delete(cancelKey);
+          if (error) reject(error); else resolve(accumulated.trim());
+        };
+        const timer = setTimeout(() => {
+          child.kill('SIGTERM');
+          setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+          finish(new Error('p3394_stream_json_timeout'));
+        }, STREAM_JSON_TIMEOUT_MS);
+        child.stdout.on('data', (chunk) => {
+          lineBuf += chunk.toString('utf8');
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
           const result = this._parseLine(line, onDelta, (t) => { accumulated += t; }, () => accumulated);
@@ -999,7 +1121,42 @@ class StreamJsonRuntime {
           else finish(); // 进程正常退出，无显式终帧 → 以累积文本收尾
         }
       });
-    });
+      });
+    };
+
+    // G-27 降级链（与 oneshot 同构）：有 resume 能力且有会话号 → 只发本轮
+    // 新内容 + --resume（CLI 自己恢复上下文，不回放 [会话历史]）；被拒 →
+    // 清绑定，带回放重试一次。stream-json 每轮 spawn 的失忆问题由此根治。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const out = await runOnce(text + note + hint, buildResumeArgs(cliSessionId));
+          const nextId = extractCliSessionId(out);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', out);
+          return out;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected (stream-json), retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
+    // 不带 [会话历史] 会让 claude 每轮失忆）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    const out = await runOnce(prompt, []);
+    const nextId = extractCliSessionId(out);
+    if (nextId) writeCliSession(sessionId, nextId);
+    // 落盘 transcript（与 oneshot 同构），供跨轮回放。
+    appendTranscript(sessionId, 'in', text);
+    appendTranscript(sessionId, 'out', out);
+    return out;
   }
   /** 解析一行 stream-json 事件：text_delta → 逐 token 增量；assistant 完整帧
    *  作为终态（仅在无 delta 累积时以其全文本收尾，避免与已累积的 delta 重复）。
