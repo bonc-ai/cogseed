@@ -1781,6 +1781,8 @@
   "new_chat.quick.education": "Learning",
   "new_chat.quick.office": "Documents",
   "new_chat.quick.rnd": "Build app",
+  "new_chat.quick.goal": "Goal mode",
+  "new_chat.quick.tmpl.goal": "Goal: [describe what you want to achieve]. First break this goal into a sub-task plan (milestones and steps) and show it to me for confirmation; after I confirm, dispatch each step to the right agents. Every agent wake-up goes through my approval.",
   "new_chat.quick.seo_geo": "AI Search Visibility",
   "new_chat.quick.space_builder": "Space Mode",
   "new_chat.quick.tmpl.creation": "Write [topic]: propose the structure and angle, draft it, then polish it for the target audience",

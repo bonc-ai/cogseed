@@ -1642,6 +1642,8 @@
   "new_chat.quick.education": "Aprendizagem",
   "new_chat.quick.office": "Documentos",
   "new_chat.quick.rnd": "Construir aplicativo",
+  "new_chat.quick.goal": "Modo Objetivo",
+  "new_chat.quick.tmpl.goal": "Objetivo: [descreva o que você quer alcançar]. Primeiro divida este objetivo em um plano de subtarefas (marcos e etapas) e mostre para eu confirmar; após minha confirmação, despache cada etapa para os agentes certos. Cada ativação de agente passa pela minha aprovação.",
   "new_chat.quick.seo_geo": "Visibilidade em busca com IA",
   "new_chat.quick.space_builder": "Modo Espaço",
   "new_chat.quick.tmpl.creation": "Escreva [tópico]: proponha a estrutura e o ângulo, faça um rascunho e depois aprimore-o para o público-alvo",
