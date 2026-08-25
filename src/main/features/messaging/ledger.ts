@@ -135,9 +135,6 @@ function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingIn
       ...(typeof candidate.internalMessageId === 'string' && candidate.internalMessageId.trim()
         ? { internalMessageId: candidate.internalMessageId.trim().slice(0, 160) }
         : {}),
-      ...(typeof candidate.p3394MessageId === 'string' && candidate.p3394MessageId.trim()
-        ? { p3394MessageId: candidate.p3394MessageId.trim().slice(0, 160) }
-        : {}),
       ...(typeof candidate.replyToMessageId === 'string' && candidate.replyToMessageId.trim()
         ? { replyToMessageId: candidate.replyToMessageId.trim().slice(0, 512) }
         : {}),
@@ -199,9 +196,6 @@ function normalizeDelivery(raw: Partial<MessagingDeliveryLedgerFile>): Messaging
       ...(candidate.replyInThread === true ? { replyInThread: true } : {}),
       ...(typeof candidate.contextTokenRef === 'string' && candidate.contextTokenRef.trim()
         ? { contextTokenRef: candidate.contextTokenRef.trim().slice(0, 512) }
-        : {}),
-      ...(typeof candidate.p3394MessageId === 'string' && candidate.p3394MessageId.trim()
-        ? { p3394MessageId: candidate.p3394MessageId.trim().slice(0, 160) }
         : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       status,
@@ -271,7 +265,7 @@ export async function reserveInbound(uid: string, key: string, receivedAt = nowI
 export async function completeInbound(
   uid: string,
   key: string,
-  patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'internalMessageId' | 'p3394MessageId' | 'replyToMessageId' | 'threadId' | 'replyInThread' | 'reason'>>,
+  patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'internalMessageId' | 'replyToMessageId' | 'threadId' | 'replyInThread' | 'reason'>>,
 ): Promise<InboundLedgerEntry> {
   assertUserId(uid);
   boundedKey(key, 'inbound key');
@@ -283,7 +277,6 @@ export async function completeInbound(
       status: patch.status,
       ...(patch.cid ? { cid: patch.cid } : {}),
       ...(patch.internalMessageId ? { internalMessageId: patch.internalMessageId.slice(0, 160) } : {}),
-      ...(patch.p3394MessageId ? { p3394MessageId: patch.p3394MessageId.slice(0, 160) } : {}),
       ...(patch.replyToMessageId ? { replyToMessageId: patch.replyToMessageId.slice(0, 512) } : {}),
       ...(patch.threadId ? { threadId: patch.threadId.slice(0, 512) } : {}),
       ...(patch.replyInThread === true ? { replyInThread: true } : {}),
