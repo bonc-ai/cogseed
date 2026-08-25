@@ -203,6 +203,17 @@ jobs:
           files: dist/*.dmg
           # tag 名字就用推送的那个 tag (比如 v0.0.6)
           tag_name: ${{ github.ref_name }}
+          # 显式关闭自动生成的更新日志。
+          # 若不设置 body,action 会让 GitHub 自动汇总本次 tag 涵盖的
+          # 所有 commit message(含提交者邮箱、co-author、内部实现细节),
+          # 这些会公开在 Release 页面。这里用固定的干净说明覆盖,避免泄露。
+          generate_release_notes: false
+          body: |
+            CogSeed ${{ github.ref_name }} macOS 安装包(已签名并公证)。
+
+            下载对应芯片的版本:
+            - arm64.dmg — Apple 芯片(M 系列)
+            - x64.dmg — Intel 芯片
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
