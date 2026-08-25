@@ -2919,6 +2919,49 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(cid)) throw new Error('invalid cid');
     return chatArtifacts.inspectArtifactIndex(ctx.userId, String(cid), String(artifactId || ''));
   },
+  // ── App Center（T2b 应用中心）──
+  'apps.list': async () => {
+    const { APP_CENTER_APPS, appCenterAvailability } = await import('../features/app_center/registry');
+    return { ok: true, apps: APP_CENTER_APPS, availability: appCenterAvailability() };
+  },
+
+  'apps.runImage': async ({ prompt, size }, ctx) => {
+    // direct 型应用执行：AI 画图直连 image_gen service（不经 LLM）。
+    // 产物落用户 workspace 的 apps/ 目录，返回绝对路径供预览/引用。
+    const cleanPrompt = String(prompt || '').trim().slice(0, 4_000);
+    if (!cleanPrompt) throw new Error('prompt is required');
+    const { getWorkspacePath } = await import('../features/user_workspace');
+    const { generateImage, pickImageGenProfile } = await import('../features/image_gen');
+    if (!pickImageGenProfile()) {
+      return { ok: false, error: 'apps.image_not_configured' };
+    }
+    const dir = getWorkspacePath(ctx.userId);
+    const appsDir = dir + '/apps';
+    const fs = await import('node:fs');
+    fs.mkdirSync(appsDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const outputAbsPath = `${appsDir}/app-image-${stamp}.png`;
+    const result = await generateImage({
+      prompt: cleanPrompt,
+      outputAbsPath,
+      ...(typeof size === 'string' && /^\d{3,4}x\d{3,4}$/.test(size) ? { size } : {}),
+    });
+    if (result.ok !== true) {
+      const failure = result as { errorCode?: string };
+      return { ok: false, error: `apps.image_failed:${failure.errorCode || 'unknown'}` };
+    }
+    return { ok: true, path: result.path, bytes: result.bytes, provider: result.provider, model: result.model };
+  },
+
+  'apps.taskMessage': async ({ appId, goal }) => {
+    // agent_task 型应用的任务模板组装（渲染层入口 → 新建任务会话首条
+    // 消息）。模板在主进程维护，渲染层只提交目标。
+    const { appTaskMessage } = await import('../features/app_center/registry');
+    const message = appTaskMessage(String(appId || ''), String(goal || ''));
+    if (!message) return { ok: false, error: 'apps.invalid_task_request' };
+    return { ok: true, message };
+  },
+
   // ── Agents ──
   'agents.list': async ({ summary } = {}) => {
     // P3394 local peers and AI team Agents share one directory. Reconcile

@@ -45,6 +45,7 @@
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
         <button class="sidebar-btn" id="dashboard-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.dashboard">智能体总览</span></button>
+        <button class="sidebar-btn" id="apps-btn"><span data-ui-icon="grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.apps">应用中心</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
@@ -698,6 +699,35 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- 应用中心（T2b，Tutti 式）：人与智能体共用的能力单元。AI 画图
+           direct 直连（不经 LLM）；文档/PPT/表格走任务模板驱动群聊智能体
+           （工具已注入）。产物落工作空间、可经渠道回传（channel-bridge 文件
+           投递）。数据由 modules/app-center.js 懒加载渲染。 -->
+      <section class="panel" id="panel-apps">
+        <div class="dash-container">
+          <div class="dash-inner">
+            <header class="dash-header">
+              <div class="dash-header-titles">
+                <h2 data-i18n="apps.title">应用中心</h2>
+                <p class="dash-subtitle" data-i18n="apps.subtitle">人与智能体共用的能力：画图、文档、演示文稿、表格</p>
+              </div>
+              <div class="dash-header-actions">
+                <button type="button" class="btn btn-sm" id="apps-refresh-btn" data-i18n="dashboard.refresh">刷新</button>
+              </div>
+            </header>
+            <p class="dash-subtitle apps-agent-hint" id="apps-agent-hint"></p>
+            <div class="dash-section">
+              <div class="dash-list" id="apps-list">
+                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="apps-run-overlay" id="apps-run-overlay" hidden>
+          <div class="apps-run-dialog" id="apps-run-dialog" role="dialog" aria-modal="true"></div>
         </div>
       </section>
 
