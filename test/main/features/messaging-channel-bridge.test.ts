@@ -19,6 +19,103 @@ function envelope(text: string): P3394Envelope {
   };
 }
 
+describe('channel bridge file delivery (T2a)', () => {
+  function envelopeWithFiles(text: string, files: Array<{ uri: string; name?: string; type?: 'resource' | 'artifact' | 'image' }>): P3394Envelope {
+    return {
+      ...envelope(text),
+      payload: {
+        parts: [
+          { type: 'text', text },
+          ...files.map((f) => ({ type: f.type || 'resource' as const, uri: f.uri, ...(f.name ? { name: f.name } : {}) })),
+        ],
+      },
+    };
+  }
+
+  it('本地路径的 resource/artifact part → 文本送达后经 sendFile 逐个投递，回执带文件数', async () => {
+    const sentText: any[] = [];
+    const sentFiles: any[] = [];
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('产物已生成', [
+        { uri: '/tmp/ws/report.docx', name: 'report.docx' },
+        { uri: '/tmp/ws/chart.png' },
+      ]),
+      async (_uid, input) => { sentText.push(input); },
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentText).toHaveLength(1);
+    expect(sentFiles).toHaveLength(2);
+    expect(sentFiles[0]).toMatchObject({ instanceId: 'inst-1', recipientId: 'ou_boss', path: '/tmp/ws/report.docx', name: 'report.docx', sourceKey: 'p3394:msg_bridge_1:file:0' });
+    expect(sentFiles[1]).toMatchObject({ path: '/tmp/ws/chart.png', sourceKey: 'p3394:msg_bridge_1:file:1' });
+    if (!result.ok) return;
+    expect(result.receipt.payload.parts[0].text).toContain('(2 file(s))');
+  });
+
+  it('文件数超过上限 5 → 只投递前 5 个', async () => {
+    const sentFiles: any[] = [];
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('批量产物', Array.from({ length: 8 }, (_, i) => ({ uri: `/tmp/ws/f${i}.png` }))),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentFiles).toHaveLength(5);
+  });
+
+  it('未提供 sendFile → 文件 part 被忽略，文本照常送达（向后兼容）', async () => {
+    const sentText: any[] = [];
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('无文件通道', [{ uri: '/tmp/ws/x.docx' }]),
+      async (_uid, input) => { sentText.push(input); },
+      async () => ({ recipientId: 'ou_boss' }),
+    );
+    expect(result.ok).toBe(true);
+    expect(sentText).toHaveLength(1);
+    if (!result.ok) return;
+    expect(result.receipt.payload.parts[0].text).toBe('channel bridge delivered');
+  });
+
+  it('文件投递失败 → 整体按失败上报（文本已送达不回滚）', async () => {
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('带失败文件', [{ uri: '/tmp/ws/gone.docx' }]),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async () => { throw new Error('upload rejected'); } },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('p3394_channel_bridge_file_failed');
+  });
+
+  it('非本地绝对路径的 uri（对象存储引用）与相对路径 → 不进文件通道', async () => {
+    const sentFiles: any[] = [];
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('混合引用', [
+        { uri: 'p3394-object:sha256:abc', name: 'big.bin' },
+        { uri: 'relative/x.png' },
+      ]),
+      async () => {},
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentFiles).toHaveLength(0);
+  });
+});
+
 describe('channel bridge node ids', () => {
   it('agent_id 与 instanceId 互为可逆', () => {
     expect(channelBridgeAgentId('inst-9')).toBe('channel-inst-9');

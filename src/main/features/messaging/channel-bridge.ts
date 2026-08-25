@@ -7,6 +7,7 @@
  * outbound-hub 的 HTTP dial——渠道节点没有网络端点，它是进程内虚拟节点。
  */
 
+import * as path from 'node:path';
 import { getP3394PeerRegistry } from '../p3394_bridge/app-wiring';
 import { buildP3394BridgeManifest } from '../p3394_bridge/manifest';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
@@ -74,14 +75,25 @@ export function unregisterChannelBridgeNode(instanceId: string): void {
  *   per (uid, instance) 总 30 条/分钟。进程内护栏（重启清零），
  *   防的是失控智能体刷屏，不是计费精度。
  * - 卡片：parts 中 {type:'json', data:{card}} 格子还原为投递 card 参数
- *   （飞书交互卡片等渠道特有结构，信封不丢特性）。 */
+ *   （飞书交互卡片等渠道特有结构，信封不丢特性）。
+ * - 文件（T2a 应用中心跨渠道回传）：resource/artifact/image part 的
+ *   uri 为本地绝对路径时，文本送达后经 sendFile 逐个投递（上限 5 个/
+ *   信封）。文件与文本同信封（同一次派发），不单独消耗限流配额；
+ *   p3394-object:sha256 内容寻址 part 需对象存储取回，暂不走此通道。 */
+const CHANNEL_BRIDGE_FILE_PARTS_MAX = 5;
+
 export async function deliverToChannelBridge(
   uid: string,
   agentId: string,
   envelope: P3394Envelope,
   send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string; card?: Record<string, unknown> }) => Promise<unknown>,
   ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>,
-  options?: { allowedSenders?: string[] },
+  options?: {
+    allowedSenders?: string[];
+    /** 文件投递通道（生产环境传 manager.sendProactiveFile 的包装）。
+     *  未提供时信封里的文件 part 被忽略（向后兼容）。 */
+    sendFile?: (uid: string, input: { instanceId: string; recipientId: string; path: string; name?: string; sourceKey: string }) => Promise<unknown>;
+  },
 ): Promise<{ ok: true; receipt: P3394Envelope } | { ok: false; error: string }> {
   const instanceId = instanceIdFromChannelBridgeAgentId(agentId);
   if (!instanceId) return { ok: false, error: 'p3394_not_a_channel_bridge' };
@@ -119,6 +131,35 @@ export async function deliverToChannelBridge(
     }
     return { ok: false, error: (error as Error).message || 'p3394_channel_bridge_delivery_failed' };
   }
+  // T2a 文件投递：文本送达后，把信封里本地绝对路径的 resource/artifact/
+  // image part 逐个发给 owner。单个文件失败不回滚已送达的文本（文件是
+  // 附件语义），但整个投递按失败上报（调用方可重试整信封——文本走
+  // 幂等台账不会重复，文件 sourceKey 独立带序号，重试同样幂等）。
+  let deliveredFiles = 0;
+  if (options?.sendFile) {
+    const fileParts = (envelope.payload?.parts || [])
+      .filter((part) => (part.type === 'resource' || part.type === 'artifact' || part.type === 'image')
+        && typeof part.uri === 'string' && path.isAbsolute(part.uri))
+      .slice(0, CHANNEL_BRIDGE_FILE_PARTS_MAX);
+    for (let i = 0; i < fileParts.length; i += 1) {
+      const part = fileParts[i];
+      try {
+        await options.sendFile(uid, {
+          instanceId,
+          recipientId: owner.recipientId,
+          path: part.uri as string,
+          ...(part.name ? { name: part.name } : {}),
+          sourceKey: `p3394:${envelope.message_id}:file:${i}`,
+        });
+        deliveredFiles += 1;
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError') {
+          return { ok: false, error: 'p3394_channel_bridge_aborted' };
+        }
+        return { ok: false, error: `p3394_channel_bridge_file_failed:${(error as Error).message || 'unknown'}` };
+      }
+    }
+  }
   const receipt: P3394Envelope = {
     ...envelope,
     message_id: `${envelope.message_id}:receipt`,
@@ -126,7 +167,7 @@ export async function deliverToChannelBridge(
     performative: 'inform',
     sender: { agent_id: agentId },
     recipients: [envelope.sender],
-    payload: { parts: [{ type: 'text', text: 'channel bridge delivered' }] },
+    payload: { parts: [{ type: 'text', text: deliveredFiles > 0 ? `channel bridge delivered (${deliveredFiles} file(s))` : 'channel bridge delivered' }] },
   };
   return { ok: true, receipt };
 }
