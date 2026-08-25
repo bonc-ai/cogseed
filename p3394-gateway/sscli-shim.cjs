@@ -179,6 +179,29 @@ function progressLine(line) {
   return t;
 }
 
+// ── 信封型 CLI 的终态提取（openclaw --json 等）──
+// stdout 整体是 JSON 信封（正文在 payloads[].text 等字段），流式 delta 只会
+// 把 JSON 碎片灌进气泡、终态不提取则整坨 JSON 当正文回发。与网关 oneshot
+// 的 extractReplyText 同一语义——G-34 切 sscli 垫片时该能力遗漏，本处补齐。
+const ENVELOPE_CLIS = new Set(['openclaw']);
+function extractReplyText(out) {
+  const text = String(out || '').trim();
+  if (!text || !ENVELOPE_CLIS.has(String(CFG.preset || ''))) return text;
+  const visible = /"finalAssistantVisibleText"\s*:\s*"([^"]*)"/.exec(text);
+  if (visible && visible[1]) return visible[1].replace(/\\n/g, '\n');
+  try {
+    const parsed = JSON.parse(text);
+    const pick = [
+      parsed.finalAssistantVisibleText,
+      parsed.text,
+      parsed.result && parsed.result.text,
+      Array.isArray(parsed.payloads) && parsed.payloads[0] && parsed.payloads[0].text,
+    ].find((v) => typeof v === 'string' && v.trim());
+    if (pick) return pick.trim();
+  } catch { /* not a single JSON object — return raw */ }
+  return text;
+}
+
 function runCliOnce(requestId, prompt, extraArgs, cwd) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((p) => p.replace('{message}', prompt)).concat(Array.isArray(extraArgs) ? extraArgs : []);
@@ -211,6 +234,9 @@ function runCliOnce(requestId, prompt, extraArgs, cwd) {
       if (out.length < MAX_REPLY_BYTES * 4) out += chunk;
       if (!activeTurn || activeTurn.child !== child) return;
       if (activeTurn.streamedChars >= STREAM_CAP_CHARS) return;
+      // 信封型 CLI（openclaw --json）不流式：输出是 JSON，碎片进气泡只有噪声；
+      // 终态由 extractReplyText 提取后经 completed 事件回传。
+      if (ENVELOPE_CLIS.has(String(CFG.preset || ''))) return;
       const visible = sanitizeStreamText(chunk.toString('utf8'));
       if (!visible) return;
       activeTurn.streamedChars += visible.length;
@@ -254,12 +280,13 @@ async function handleDeliver(op) {
     const cliSessionId = currentOrGeneratedCliSessionId(sid);
     if (cliSessionId) {
       try {
-        const out = await runCliOnce(op.request_id, text, buildResumeArgs(cliSessionId), cwd);
-        const nextId = extractCliSessionId(out);
+        const raw = await runCliOnce(op.request_id, text, buildResumeArgs(cliSessionId), cwd);
+        const nextId = extractCliSessionId(raw);
         if (nextId && nextId !== cliSessionId) writeCliSession(sid, nextId);
+        const out = extractReplyText(raw);
         appendTranscript(sid, 'in', text);
         appendTranscript(sid, 'out', out);
-        emitEvent({ event: 'completed', request_id: op.request_id });
+        emitEvent({ event: 'completed', request_id: op.request_id, text: out });
         return;
       } catch (err) {
         if (!resumeRejectedByText(err && err.message)) throw err;
@@ -270,12 +297,13 @@ async function handleDeliver(op) {
   }
   const transcript = readTranscriptTail(sid);
   const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text;
-  const out = await runCliOnce(op.request_id, prompt, [], cwd);
-  const nextId = extractCliSessionId(out);
+  const raw = await runCliOnce(op.request_id, prompt, [], cwd);
+  const nextId = extractCliSessionId(raw);
   if (nextId) writeCliSession(sid, nextId);
+  const out = extractReplyText(raw);
   appendTranscript(sid, 'in', text);
   appendTranscript(sid, 'out', out);
-  emitEvent({ event: 'completed', request_id: op.request_id });
+  emitEvent({ event: 'completed', request_id: op.request_id, text: out });
 }
 
 // ── p3394-sscli/1.0 协议主循环 ──
