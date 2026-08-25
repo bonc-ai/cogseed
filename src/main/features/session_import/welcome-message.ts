@@ -208,7 +208,15 @@ async function buildCarry(
   return carry;
 }
 
-const ACTION_PLAN_TIMEOUT_MS = 120_000;
+const ACTION_PLAN_TIMEOUT_MS = 30_000;
+/** 单次 welcome 里 local-agent 回退的总预算：多个 CLI 依次试也必须在这个
+ *  窗口内收尾（Action Plan 只是一句话建议，不值得拖住整个提取状态）。
+ *  G-20 教训：曾有环境无界等待（每 CLI 120s × N 个）把 extraction 状态
+ *  卡 pending 数分钟。 */
+const ACTION_PLAN_LOCAL_BUDGET_MS = 15_000;
+/** welcome 整链对 Action Plan 的硬超时：任何未知挂起不得阻塞 commit 的
+ *  done 落盘（seed 重写/快照/认知路由早已完成，plan 是锦上添花）。 */
+const ACTION_PLAN_TOTAL_TIMEOUT_MS = 10_000;
 
 function actionPlanPrompt(context: string): string {
   return [
@@ -243,6 +251,12 @@ async function generateActionPlanWithLocalAgent(
   userId: string,
   normalizedContext: string,
 ): Promise<ActionPlanResult> {
+  // 测试/运维开关：local-agent 回退依赖宿主机装了哪些 CLI——行为随机器
+  // 变化（G-20 卡点：测试机上真跑 CLI 导致 extraction 卡 pending）。测试
+  // 环境经 setup-env 统一关闭，生产不设此变量不受影响。
+  if (process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK === '1') {
+    return { plan: [], failureReason: 'local_agent_unavailable' };
+  }
   try {
     const { run: runCliAgent } = await import('../local_agents/runner');
     const { pickBestCliForFallback } = await import('../local_agents/fallback-picker');
@@ -252,9 +266,11 @@ async function generateActionPlanWithLocalAgent(
     const tried = new Set<string>();
     let sawEmptyReply = false;
     let sawInvalidReply = false;
+    const deadline = Date.now() + ACTION_PLAN_LOCAL_BUDGET_MS;
 
     let chosen;
     while ((chosen = await pickBestCliForFallback({ prefer, exclude: new Set(tried) }))) {
+      if (Date.now() >= deadline) break;
       tried.add(chosen.type);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), ACTION_PLAN_TIMEOUT_MS);
@@ -381,7 +397,15 @@ export async function generateWelcomeMessage(input: GenerateWelcomeMessageInput)
       `快照记录的下一步（仅供参考）：${snapshot.nextStep || '未提供'}`,
     ].join('\n') : '',
   ].filter(Boolean).join('\n\n');
-  const actionPlanResult = await generateActionPlan(input.userId, actionPlanContext);
+  const actionPlanResult = await Promise.race([
+    generateActionPlan(input.userId, actionPlanContext),
+    new Promise<ActionPlanResult>((resolve) => {
+      setTimeout(
+        () => resolve({ plan: [], failureReason: 'model_unavailable' }),
+        ACTION_PLAN_TOTAL_TIMEOUT_MS,
+      ).unref?.();
+    }),
+  ]);
   const planLines = actionPlanResult.plan;
   const unavailablePlanText = (() => {
     switch (actionPlanResult.failureReason) {
