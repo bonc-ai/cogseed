@@ -464,7 +464,10 @@ function normalizeFeishuEvent(
     isGroup,
     mentionPresent: botMentionTokens.length > 0 || mentionsAll,
     ...(botMentionTokens.length ? { botMentionTokens } : {}),
-    replyToMessageId: message.message_id,
+    // 被回复消息 = 飞书 parent_id（回复事件才带）；此前误填 message_id
+    // （自己的 id），导致每条消息都被投影成"回复"（metadata.reply_to_
+    // message_id 恒等于 external_message_id，下游误判）。
+    ...(message.parent_id?.trim() ? { replyToMessageId: message.parent_id.trim() } : {}),
     ...(message.thread_id?.trim() || message.root_id?.trim() ? { replyInThread: true } : {}),
     receivedAt: Number.isNaN(createTime.getTime()) ? new Date().toISOString() : createTime.toISOString(),
   };

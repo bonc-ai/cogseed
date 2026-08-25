@@ -4895,6 +4895,7 @@
   "dashboard.control_reject_confirm": "このウェイクリクエストを拒否しますか？対応するディスパッチは中止されます。",
   "dashboard.control_decided_approve": "承認しました — ディスパッチが再開されます",
   "dashboard.control_decided_reject": "拒否しました",
+  "dashboard.control_open_conversation": "会話を開く",
   "dashboard.builtin_section": "内蔵エージェント",
   "dashboard.builtin_count": "{count} 名 · CogSeed 本体が演じます",
   "dashboard.view_agents": "表示",

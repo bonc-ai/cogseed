@@ -66,6 +66,30 @@ describe('Feishu official event adapter', () => {
     })).toBeNull();
   });
 
+  it('maps parent_id to replyToMessageId; plain messages carry no reply marker', async () => {
+    // 回复事件（parent_id 指向被回复消息）→ replyToMessageId；普通消息
+    // 不带 reply 标记——此前误填自身 message_id，每条消息都被投影成回复。
+    const { _adapterTestHooks } = await import('../../../src/main/features/messaging/adapters');
+    const instance = feishuInstance();
+    const reply = _adapterTestHooks.normalizeFeishuEvent(instance, {
+      message: {
+        message_id: 'om_9', chat_id: 'oc_1', chat_type: 'group', message_type: 'text',
+        content: JSON.stringify({ text: 're' }), create_time: '1710000000000', parent_id: 'om_8',
+      },
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_1' } },
+    }, 'ou_bot');
+    expect(reply?.replyToMessageId).toBe('om_8');
+    expect(reply?.externalMessageId).toBe('om_9');
+    const plain = _adapterTestHooks.normalizeFeishuEvent(instance, {
+      message: {
+        message_id: 'om_10', chat_id: 'oc_1', chat_type: 'group', message_type: 'text',
+        content: JSON.stringify({ text: 'plain' }), create_time: '1710000000000',
+      },
+      sender: { sender_type: 'user', sender_id: { open_id: 'ou_1' } },
+    }, 'ou_bot');
+    expect(plain?.replyToMessageId).toBeUndefined();
+  });
+
   it('reports connected only after the SDK handshake and stops on its terminal error callback', async () => {
     interface WsOptions {
       onReady?: () => void;
