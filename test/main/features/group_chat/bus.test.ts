@@ -936,9 +936,11 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     // Phase 3: commander dispatches a task to the external agent. G-26: this
     // turn must now carry the missed-context digest AND keep the routing
     // envelope (previously dispatches carried neither digest nor sender).
+    // T1: quotes on the message ride along as structured references.
     await bus.enqueue({
       uid: TEST_UID, cid, fromActorId: 'commander',
       text: '执行网关上下文注入的验证任务', forceTo: [gwAgentId], dispatch: true,
+      references: [{ source_cid: TEST_CID, source_msg_id: 'm-ref-1' }],
     });
     await waitForQuiescent(TEST_UID, cid);
 
@@ -947,6 +949,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(String(call.prompt)).toContain('<group-context-summary>');
     expect(String(call.prompt)).toContain('先和指挥官讨论网关上下文注入的背景细节');
     expect(String(call.prompt)).toContain('<msg from="commander"');
+    // T1 引用信封化：消息引用透传到网关 turn（落信封 metadata 槽位）。
+    expect(Array.isArray(call.references)).toBe(true);
+    expect(call.references).toHaveLength(1);
+    expect(call.references[0]).toMatchObject({ source_cid: TEST_CID, source_msg_id: 'm-ref-1' });
     // The digest is context, not instructions: the current task text lives
     // outside the summary block.
     const digestPart = String(call.prompt).split('</group-context-summary>')[0] ?? '';

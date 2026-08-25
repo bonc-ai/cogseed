@@ -4648,6 +4648,20 @@ async function runActorTurnBody(
                 ? cliAgent.runtime.cli
                 : "",
             ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
+            //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
+            ...(item.references && item.references.length
+              ? {
+                  references: item.references.slice(0, 20).map((r) => ({
+                    source_cid: r.source_cid,
+                    source_msg_id: r.source_msg_id,
+                    from_actor: r.from_actor,
+                    ...(r.from_name ? { from_name: r.from_name } : {}),
+                    source_ts: r.source_ts,
+                    text: String(r.text || '').slice(0, 500),
+                  })),
+                }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
