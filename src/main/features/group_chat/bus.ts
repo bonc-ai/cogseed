@@ -199,7 +199,6 @@ import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
 } from "../p3394/protocol";
-import type { P3394Envelope } from "../p3394_bridge/envelope";
 import { P3394Controller } from "../p3394/controller";
 import { authoritativeSessionSource } from "../p3394/session-source";
 import { EpochStore } from "../p3394/epoch-store";
@@ -1055,10 +1054,6 @@ export type GroupEvent =
       turn_end?: boolean;
       turn_id?: string;
       source_msg_id?: string;
-      /** P3394 运单号贯穿（出站对齐）：触发本回合的入站信封 message_id。
-       * 渠道入站派发的 item 携带 sourceP3394Envelope，回合结束消息把它
-       * 带回 runtime，写入出站投递台账。 */
-      source_p3394_message_id?: string;
       seg?: number;
     }
   | {
@@ -1149,7 +1144,6 @@ interface QueueItem {
   sourceMessageText?: string;
   /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随派发 item
    * 运行时携带，不持久化到 GroupMessage。 */
-  sourceP3394Envelope?: P3394Envelope;
   /** Composed runtime payload — what the worker actually feeds the LLM,
    * including the `<msg from=X>...</msg>` wrapper. Built at enqueue time
    * so the queue is a real FIFO of LLM-ready turns, no last-minute
@@ -1991,9 +1985,6 @@ export interface EnqueueParams {
    * that persists under the peer agent's own actor identity. Only the
    * bridge wiring sets this; user IPC paths never do. */
   externalInbound?: boolean;
-  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封。仅随派发
-   * item 运行时携带（QueueItem.sourceP3394Envelope），不落 GroupMessage。 */
-  p3394_envelope?: P3394Envelope;
   /** True when this enqueue IS the actor's own end-of-turn message (called
    * from runTurn after the LLM stream completed). False / absent for any
    * tool-side-effect or plan-executor mid-turn enqueues. Renderer routes
@@ -2019,10 +2010,6 @@ export interface EnqueueParams {
    * messaging manager can pair a completing turn with the inbound that
    * started it. */
   source_msg_id?: string;
-  /** P3394 运单号贯穿（出站对齐）：item.sourceP3394Envelope 的 message_id。
-   * 回合结束消息经 emit 带回 runtime，写入出站投递台账，与入站台账
-   * 同编号体系。 */
-  source_p3394_message_id?: string;
   /** Mark this message as an internal plan-step dispatch (commander →
    * agent, fired by plan_executor). Persists for the agent's slice but the
    * renderer hides it from the user view — the plan announcement already
@@ -2688,7 +2675,6 @@ async function _enqueueBody(
     ...(params.turn_end ? { turn_end: true } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
     ...(params.source_msg_id ? { source_msg_id: params.source_msg_id } : {}),
-    ...(params.source_p3394_message_id ? { source_p3394_message_id: params.source_p3394_message_id } : {}),
     ...(params.seg !== undefined ? { seg: params.seg } : {}),
   });
   log.info(
@@ -2774,9 +2760,6 @@ async function _enqueueBody(
       fromActorId,
       ...(params.internalControl ? { internalControl: true } : {}),
       ...(fromActorId === USER_ID ? { sourceMessageText: msg.text } : {}),
-      ...(params.p3394_envelope
-        ? { sourceP3394Envelope: params.p3394_envelope }
-        : {}),
       llmPayload: composeLlmTurnPayload(uid, fromActorId, msg),
       ...(msg.p3394?.recipient_epochs[recipientId] !== undefined
         ? { incomingEpoch: msg.p3394.recipient_epochs[recipientId] }
@@ -3859,9 +3842,6 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        ...(item.sourceP3394Envelope
-          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
-          : {}),
       });
       await _syncStateStatus(state);
       log.info(
@@ -4013,9 +3993,6 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        ...(item.sourceP3394Envelope
-          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
-          : {}),
       });
       await markInFlight(uid, cid, actor.id, false);
       await emitStateChanged(state);
@@ -4044,9 +4021,6 @@ async function runActorTurnBody(
         forceTo: [USER_ID],
         turn_end: true,
         turn_id: item.turnId,
-        ...(item.sourceP3394Envelope
-          ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
-          : {}),
         process: processItems,
       });
       await markInFlight(uid, cid, actor.id, false);
@@ -4702,9 +4676,6 @@ async function runActorTurnBody(
             forceTo: [USER_ID],
             turn_end: true,
             turn_id: item.turnId,
-            ...(item.sourceP3394Envelope
-              ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
-              : {}),
           });
           await _syncStateStatus(state);
           return { kind: "early" };
@@ -5879,9 +5850,6 @@ async function runActorTurnBody(
       turn_end: true,
       turn_id: item.turnId,
       ...(replyMetrics ? { metrics: replyMetrics } : {}),
-      ...(item.sourceP3394Envelope
-        ? { source_p3394_message_id: item.sourceP3394Envelope.message_id }
-        : {}),
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
