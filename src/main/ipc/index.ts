@@ -2178,7 +2178,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
+    // 控制中心（T3）：cid 可选——不传返回全量（跨会话待审批聚合），
+    // 传了按会话过滤（会话内审批卡原行为）。
+    if (cid !== undefined && !safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
   },
 

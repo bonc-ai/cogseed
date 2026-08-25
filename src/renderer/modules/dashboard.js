@@ -16,17 +16,20 @@
   let _lastData = null;
 
   async function fetchDashboardData(force) {
-    const [externalRes, remoteRes, agentsRes, channelsRes] = await Promise.all([
+    const [externalRes, remoteRes, agentsRes, channelsRes, wakeRes] = await Promise.all([
       window.cogseed.invoke('p3394.external.list', { force: force === true }),
       window.cogseed.invoke('p3394.remote.list', {}),
       window.cogseed.invoke('agents.list', {}).catch(() => null),
       window.cogseed.invoke('messaging.list', {}).catch(() => null),
+      // 控制中心（T3）：跨会话待审批聚合（cid 缺省 = 全量）。
+      window.cogseed.invoke('p3394.listWakeRequests', {}).catch(() => null),
     ]);
     return {
       external: externalRes || { entries: [], gateways: [], bound: {}, peers: [] },
       remote: remoteRes || { nodes: [] },
       agents: (agentsRes && agentsRes.agents) || [],
       channels: (channelsRes && channelsRes.instances) || [],
+      wake: (wakeRes && wakeRes.requests) || [],
     };
   }
 
@@ -85,6 +88,32 @@
       </div>
       ${detail || ''}
     </div>`;
+  }
+
+  // ── 控制中心（T3）：跨会话待审批聚合 ──
+  // wake 请求 pending 列表（"需要你确认的操作"）：批准即恢复派发执行、
+  // 拒绝即终止。会话内的审批卡（conversation.js）原行为不变，这里只是
+  // 把散在各会话里的待办聚合到总览顶部，一处看完一处处理。
+  function renderControl(data) {
+    const box = el('dash-control-list');
+    if (!box) return;
+    const pending = (data.wake || []).filter((r) => r && r.status === 'pending');
+    if (!pending.length) {
+      box.innerHTML = `<div class="dash-empty">${esc(t('dashboard.control_empty'))}</div>`;
+      return;
+    }
+    box.innerHTML = pending.map((r) => rowHtml({
+      name: r.agent_name || r.agent_id,
+      badgeHtml: badge('info', t('p3394.wake.status.pending')),
+      sub: String(r.objective || '').slice(0, 160),
+      actions: `<button type="button" class="btn btn-primary btn-sm" data-dash-action="wake-decide" data-request-id="${esc(r.id)}" data-cid="${esc(r.conversation_id || '')}" data-decision="approve">${esc(t('p3394.wake.approve'))}</button>
+        <button type="button" class="btn btn-sm" data-dash-action="wake-decide" data-request-id="${esc(r.id)}" data-cid="${esc(r.conversation_id || '')}" data-decision="reject">${esc(t('p3394.wake.reject'))}</button>`,
+      detail: detailGrid([
+        [t('dashboard.control_source'), r.source || ''],
+        [t('dashboard.control_conversation'), r.conversation_id || ''],
+        [t('dashboard.last_seen'), formatRelative(r.created_at)],
+      ]),
+    })).join('');
   }
 
   function renderBuiltin(data) {
@@ -227,6 +256,7 @@
 
   function render(data) {
     _lastData = data;
+    renderControl(data);
     renderBuiltin(data);
     renderLocal(data);
     renderRemote(data);
@@ -411,6 +441,34 @@
         uiConfirm({ message: t('dashboard.remove_confirm') }).then((ok) => { if (ok) doRemove(); });
       } else {
         doRemove();
+      }
+    } else if (action === 'wake-decide') {
+      // 控制中心（T3）：跨会话 wake 审批——批准恢复派发、拒绝终止。
+      const requestId = button.dataset.requestId;
+      const cid = button.dataset.cid;
+      const decision = button.dataset.decision;
+      if (!requestId || !cid || !decision) return;
+      if (decision === 'reject' && typeof uiConfirm === 'function') {
+        uiConfirm({ message: t('dashboard.control_reject_confirm') }).then((ok) => { if (ok) doWakeDecide(); });
+      } else {
+        doWakeDecide();
+      }
+      function doWakeDecide() {
+        button.disabled = true;
+        window.cogseed.invoke('p3394.decideWakeRequest', { cid, requestId, decision })
+          .then((res) => {
+            if (!res || !res.ok) {
+              if (typeof uiToast === 'function') uiToast((res && res.error && res.error.message) || t('p3394.wake.failed'));
+              button.disabled = false;
+              return;
+            }
+            if (typeof uiToast === 'function') uiToast(t(decision === 'approve' ? 'dashboard.control_decided_approve' : 'dashboard.control_decided_reject'));
+            refresh(false);
+          })
+          .catch((err) => {
+            if (typeof uiToast === 'function') uiToast((err && err.message) || t('p3394.wake.failed'));
+            button.disabled = false;
+          });
       }
     }
   }
