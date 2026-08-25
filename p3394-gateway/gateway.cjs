@@ -2572,10 +2572,25 @@ async function handleEnvelope(envelope) {
       ? envelope.payload.metadata.goal
       : '';
     await runtime.openSession(sessionId, goal, runtimeDir);
+    // PEER_CALL_HINT 每会话只注一次（首轮）：hint 信息（端口/用法）会话内
+    // 恒定，resume 的 CLI 自会记住，重复注入浪费上下文还会被 CLI 当正文
+    // 回应（子安 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
+    // 目录 marker 防重（网关重启不重注；transcript 回放路径 hint 已在历史
+    // 里）；marker 在 deliver 成功后才写——首轮失败下轮补注，不丢入口。
+    let peerHintThisTurn = '';
+    let hintMark = '';
+    if (PEER_CALL_HINT && dir) {
+      hintMark = path.join(dir, 'peer-hint.sent');
+      if (!fs.existsSync(hintMark)) peerHintThisTurn = PEER_CALL_HINT;
+    }
     // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
-    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）；peer-call
+    // hint 每会话只注一次（peerHintThisTurn 由 marker 防重，首轮失败下轮补注）。
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    if (peerHintThisTurn && hintMark) {
+      try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
+    }
     await stream.finish();
     // deliver 契约：string（无用量）或 { text, usage? }（带本轮 CLI 自报
     // 用量——claude persistent 的 result 帧；其余 runtime 一期不带）。
