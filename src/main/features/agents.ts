@@ -1057,9 +1057,11 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
 /** True when this agent runs via a local CLI rather than in-process
  *  core-agent. Single source of truth — group_chat / chats / renderer
  *  all import this rather than re-checking `runtime?.kind` directly.
- *  第二期收口：直连 `cli` 已升级为网关型，两者都算"本机 CLI 智能体"。 */
+ *  G-19（兼容期结束）：legacy `cli` 直连已删除（读回即迁移为
+ *  p3394-gateway，见 _migrateLegacyRuntime），本判定与
+ *  isP3394GatewayAgent 等价，保留为语义别名。 */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
-  return !!agent && (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
+  return !!agent && agent.runtime?.kind === 'p3394-gateway';
 }
 
 /** True when this agent is a P3394-managed external agent (dispatch goes

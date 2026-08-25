@@ -4762,21 +4762,17 @@ async function runActorTurnBody(
             },
             onProcess: forwardProcess,
           })
-        : await _runCliAgentTurn({
-            uid,
-            cid,
-            actor,
-            agent: cliAgent,
-            item,
-            slice,
-            workingDir: cliWorkingDir,
-            ...(turnProjectId ? { projectId: turnProjectId } : {}),
-            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
-            signal: w.abortController.signal,
-            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-            onProcess: forwardProcess,
-          });
+        // G-19（兼容期结束）：legacy `cli` runtime 读回即迁移为 p3394-gateway
+        // （G-05 迁移器），直连执行分支已删除——此处不再有非网关路径。
+        : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
+            return {
+              text: "",
+              error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
+              failureKind: "runtime",
+              failureCode: "p3394_gateway_unreachable",
+              infrastructureFailure: true,
+            };
+          })();
       for (const p of cliOut.produced || []) await onFileWritten(p);
       finalText = cliOut.text;
       streamingText = cliOut.text;
