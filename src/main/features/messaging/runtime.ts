@@ -262,7 +262,6 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     message: OutboundMessage,
     turnSourceMsgId?: string,
-    turnP3394MessageId?: string,
   ): Promise<void> {
     if (!this.isCurrent()) return;
     const sourceMessageId = typeof message.id === 'string' && message.id ? message.id : '';
@@ -271,7 +270,7 @@ export class RuntimeInstance {
     const key = ledger.deliveryKey(this.instanceId, sourceMessageId);
     const begun = await ledger.beginDelivery(
       this.uid,
-      beginDeliveryEntry(this.instanceId, binding, message, text, undefined, this.resolveTurnContextTokenRef(turnSourceMsgId, binding), turnP3394MessageId),
+      beginDeliveryEntry(this.instanceId, binding, message, text, undefined, this.resolveTurnContextTokenRef(turnSourceMsgId, binding)),
     );
     if (begun.duplicate) return;
     if (!this.isCurrent() || this.controller.signal.aborted) {
@@ -288,9 +287,8 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     message: OutboundMessage,
     turnSourceMsgId?: string,
-    turnP3394MessageId?: string,
   ): void {
-    const delivery = this.deliverGroupMessage(binding, message, turnSourceMsgId, turnP3394MessageId);
+    const delivery = this.deliverGroupMessage(binding, message, turnSourceMsgId);
     this.outboundDeliveries.add(delivery);
     void delivery.then(
       () => {
@@ -330,7 +328,7 @@ export class RuntimeInstance {
     const key = ledger.deliveryKey(this.instanceId, envelope.externalMessageId);
     const begun = await ledger.beginDelivery(
       this.uid,
-      beginDeliveryEntry(this.instanceId, binding, { id: envelope.externalMessageId, text: trimmed }, trimmed, undefined, envelope.contextTokenRef, envelope.p3394MessageId),
+      beginDeliveryEntry(this.instanceId, binding, { id: envelope.externalMessageId, text: trimmed }, trimmed, undefined, envelope.contextTokenRef),
     );
     if (begun.duplicate) return;
     await this.attemptDelivery(key, begun.entry);
@@ -632,7 +630,7 @@ export class RuntimeInstance {
     if (toolLines.length && typeof message.text === 'string') {
       message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
     }
-    this.trackOutboundDelivery(binding, message, event.source_msg_id, event.source_p3394_message_id);
+    this.trackOutboundDelivery(binding, message, event.source_msg_id);
     if (turnId) this.clearToolLinesForTurn(turnId);
   }
 
@@ -681,7 +679,6 @@ function beginDeliveryEntry(
   text: string,
   idempotencyKey?: string,
   contextTokenRef?: string,
-  p3394MessageId?: string,
 ) {
   // Defense in depth: every current call site (bus reply, confirmation, ledger
   // recovery) guarantees a non-empty id upstream; a missing one would silently
@@ -701,7 +698,6 @@ function beginDeliveryEntry(
     ...(binding.threadId ? { threadId: binding.threadId } : {}),
     ...(binding.replyInThread ? { replyInThread: true } : {}),
     ...(contextTokenRef ? { contextTokenRef } : {}),
-    ...(p3394MessageId ? { p3394MessageId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
 }
