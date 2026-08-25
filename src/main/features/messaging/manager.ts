@@ -19,9 +19,7 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
-import { projectInboundToP3394 } from './p3394-projection';
 import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
-import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
@@ -314,10 +312,6 @@ export async function sendProactive(
     textHash: ledger.textHash(text),
     text,
     ...(input.card ? { card: input.card } : {}),
-    // 触达信封化（设计三期"触达走 P3394 链路且有 message_id 可追踪"的
-    // 第一步）：channel-bridge 投递的 sourceKey 形如 `p3394:<message_id>`，
-    // 提取进 p3394MessageId 字段，与对话回复同一编号体系可 grep。
-    ...(sourceKey.startsWith('p3394:') ? { p3394MessageId: sourceKey.slice('p3394:'.length).slice(0, 160) } : {}),
     idempotencyKey: `proactive-${ledger.textHash(sourceKey).slice(0, 24)}`,
   });
   if (!begun.duplicate) {
@@ -588,25 +582,8 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
-  // P3394 投影（翻译官模式）：尽早投影，让后续所有台账结局（含被拒/失败）
-  // 都能带上 p3394 编号；失败降级为无信封，绝不阻塞入站。
-  let p3394Envelope: P3394Envelope | undefined;
-  try {
-    p3394Envelope = projectInboundToP3394(uid, envelope);
-    // 回填到入站信封本体：deliverText 等出站路径据此把投递台账与入站
-    // 信封关联（运单号贯穿）。入站信封是本函数内的私有引用，回填不外泄。
-    if (p3394Envelope) envelope.p3394MessageId = p3394Envelope.message_id;
-  } catch (error) {
-    log.warn('messaging p3394 projection failed; dispatching without envelope', {
-      instanceId: instance.id,
-      error: (error as Error).message,
-    });
-  }
   const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
-    ledger.completeInbound(uid, key, {
-      ...patch,
-      ...(p3394Envelope ? { p3394MessageId: p3394Envelope.message_id } : {}),
-    });
+    ledger.completeInbound(uid, key, patch);
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
@@ -690,7 +667,6 @@ async function handleInboundLocked(
       userId: uid,
       cid: binding.cid,
       text,
-      ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
     });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message

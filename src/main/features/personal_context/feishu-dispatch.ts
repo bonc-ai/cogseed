@@ -117,7 +117,7 @@ export async function dispatchToFeishuHome(
       instanceId: opts.instanceId,
       textLen: text.length,
       sourceKey,
-      p3394MessageId: dispatched.messageId,
+      messageId: dispatched.messageId,
     });
     return { ok: true };
   } catch (err) {
