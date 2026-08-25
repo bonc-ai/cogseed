@@ -1526,7 +1526,198 @@ class ClaudePersistentRuntime {
     this.turnKeys.clear();
   }
 }
+// ── opencode 常驻（server 模式）────────────────────────────────────────────
+// 实测对比（2026-08-25，同任务同模型）：每轮 spawn `opencode run` ≈66s，
+// 常驻 server 同步 HTTP ≈15s——差值即 CLI 冷启动（配置/插件/客户端重建），
+// 续轮还吃到会话 prompt cache。API（v1.18 实测）：
+//   POST /session → {id}；POST /session/:id/message（挂起至整轮完成）
+//   → {info, parts:[step-start|reasoning|text|tool|step-finish]}
+//   GET /event（SSE）→ message.part.delta{field:'text',delta} /
+//   message.part.updated{part:{type:'tool',tool,state:{status,input}}}
+// server 按工作目录复用（同项目多会话共享），会话连续性由 opencode 服务端
+// 自管。reasoning 与正文的 delta 都是 field:'text'，按 partID→type 映射
+// 区分，思考流不混进气泡。COGSEED_P3394_OPENCODE_PERSISTENT=0 回退 sscli。
+const OPENCODE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_OPENCODE_PERSISTENT ?? '1').trim() !== '0';
+// 无人值守放行：opencode server 的 bash/edit 默认 permission.asked 等人工
+// 批准，headless 无人应答会永久挂起。垫片/oneshot 模式下同一 CLI 本就是
+// 全权限直跑，常驻模式收紧反而倒退——经 OPENCODE_CONFIG_CONTENT 注入
+// allow 规则（不落盘、不污染用户项目/全局配置）。置 0 恢复 opencode
+// 自身权限策略（需人工在 web UI 批准）。
+const OPENCODE_AUTO_APPROVE = String(process.env.COGSEED_P3394_OPENCODE_AUTO_APPROVE ?? '1').trim() !== '0';
+class OpencodeRuntime {
+  constructor() {
+    this.servers = new Map(); // cwd → {child, base, port, ready}
+    this.sessions = new Map(); // p3394 session_id → {cwd, ocSessionId}
+    this.turns = new Map(); // opencode sessionID → {onDelta, onProgress, partTypes, timer, progressCount}
+    this.closing = false;
+  }
+  get name() { return 'opencode-persistent'; }
+  async _serverFor(cwd) {
+    const key = cwd || process.cwd();
+    const hit = this.servers.get(key);
+    if (hit) return hit.ready;
+    const entry = { child: null, base: '', port: 0, ready: null };
+    this.servers.set(key, entry);
+    entry.ready = (async () => {
+      const serveEnv = { ...process.env };
+      if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
+        serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
+      }
+      const child = spawn(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
+      entry.child = child;
+      let errLog = '';
+      child.stderr.on('data', (c) => { if (errLog.length < 8 * 1024) errLog += c; });
+      const port = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('p3394_opencode_serve_timeout' + (errLog ? ': ' + errLog.slice(-200) : ''))), 30_000);
+        timer.unref();
+        child.on('error', (error) => { clearTimeout(timer); reject(new Error('p3394_opencode_spawn_failed: ' + error.message)); });
+        let buf = '';
+        child.stdout.on('data', (c) => {
+          buf += c;
+          const m = buf.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
+          if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+        });
+      });
+      child.on('close', () => { this.servers.delete(key); });
+      entry.port = port;
+      entry.base = 'http://127.0.0.1:' + port;
+      this._subscribeEvents(entry);
+      return entry;
+    })();
+    // serve 启动失败要摘掉占位，否则该 cwd 永久卡死在 rejected promise。
+    entry.ready.catch(() => { if (this.servers.get(key) === entry) this.servers.delete(key); });
+    return entry.ready;
+  }
+  _subscribeEvents(entry) {
+    const connect = () => {
+      if (this.closing || !entry.child || entry.child.exitCode !== null) return;
+      const req = http.get(entry.base + '/event', (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c;
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line.startsWith('data:')) continue;
+            try { this._onEvent(JSON.parse(line.slice(5).trim())); } catch { /* 非 JSON 行忽略 */ }
+          }
+        });
+        // SSE 断线重连：在途轮的终态由同步 HTTP 兜底，事件流只影响实时性。
+        res.on('end', () => { setTimeout(connect, 2000).unref(); });
+      });
+      req.on('error', () => { setTimeout(connect, 2000).unref(); });
+    };
+    connect();
+  }
+  _onEvent(ev) {
+    const p = ev && ev.properties;
+    if (!p || typeof p.sessionID !== 'string') return;
+    const turn = this.turns.get(p.sessionID);
+    if (!turn) return;
+    if (ev.type === 'message.part.updated' && p.part && typeof p.part.id === 'string') {
+      const part = p.part;
+      turn.partTypes.set(part.id, part.type);
+      if (part.type === 'text' && typeof part.text === 'string') {
+        turn.lastText = part.text; // 无 delta 流时的终态文本兜底
+      } else if (part.type === 'tool' && part.state) {
+        const note = (t) => {
+          turn.progressCount = (turn.progressCount || 0) + 1;
+          if (turn.progressCount > 100 || !turn.onProgress) return;
+          turn.onProgress(t);
+        };
+        const st = part.state.status;
+        if (st === 'running') {
+          const input = part.state.input || {};
+          const brief = input.command || input.filePath || input.pattern || input.path || input.url;
+          note(brief ? '🔧 ' + part.tool + ' ' + String(brief).slice(0, 120) : '🔧 ' + part.tool + '…');
+        } else if (st === 'completed') {
+          note('✅ ' + part.tool + ' 完成');
+        }
+      }
+      return;
+    }
+    if (ev.type === 'message.part.delta' && p.field === 'text' && typeof p.delta === 'string' && p.delta) {
+      // reasoning part 的增量也是 field:'text'：按 partID 查映射，只透传正文。
+      if (turn.partTypes.get(p.partID) === 'text') turn.onDelta && turn.onDelta(p.delta);
+    }
+  }
+  async openSession(sessionId, goal, workspace) {
+    const cwd = workspace || process.cwd();
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      if (existing.cwd !== cwd) throw new Error('p3394_session_cwd_conflict');
+      return;
+    }
+    const server = await this._serverFor(cwd);
+    const created = await this._postJson(server.base, '/session', {});
+    if (!created || typeof created.id !== 'string') throw new Error('p3394_opencode_session_failed');
+    this.sessions.set(sessionId, { cwd, ocSessionId: created.id });
+  }
+  _postJson(base, pathName, body) {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const req = http.request(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error('p3394_opencode_no_session');
+    const server = await this._serverFor(entry.cwd);
+    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '' };
+    this.turns.set(entry.ocSessionId, turn);
+    try {
+      const msg = await new Promise((resolve, reject) => {
+        const data = JSON.stringify({ parts: [{ type: 'text', text: text + note + hint }] });
+        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+          let buf = '';
+          res.on('data', (c) => { buf += c; });
+          res.on('end', () => {
+            if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+            try { resolve(JSON.parse(buf)); } catch { resolve({ parts: [] }); }
+          });
+        });
+        req.on('error', reject);
+        turn.timer = setTimeout(() => { req.destroy(); reject(new Error('p3394_opencode_timeout')); }, STREAM_JSON_TIMEOUT_MS);
+        turn.timer.unref();
+        req.write(data);
+        req.end();
+      });
+      const out = (msg.parts || []).filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
+      return (out.trim() || (turn.lastText || '').trim());
+    } finally {
+      if (turn.timer) clearTimeout(turn.timer);
+      // 宽限删除：SSE 帧与同步 HTTP 终态分属两个连接、无到达顺序保证——
+      // 终态先到时立刻删 turn 会把紧随其后的过程/增量帧全部丢弃（终态文本
+      // 以 HTTP parts 为准，晚帧只影响实时流完整性）。短窗口后删；若同
+      // 会话下一轮已覆盖 turn 则不动（比对实例）。
+      setTimeout(() => { if (this.turns.get(entry.ocSessionId) === turn) this.turns.delete(entry.ocSessionId); }, 250).unref();
+    }
+  }
+  cancel() { return false; } // 细粒度 abort 端点未登记；超时兜底，后续按需补
+  close() {
+    this.closing = true;
+    for (const [, entry] of this.servers) {
+      try { if (entry.child) entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+    }
+    this.servers.clear();
+    this.sessions.clear();
+  }
+}
 const claudePersistentRuntime = new ClaudePersistentRuntime();
+const opencodeRuntime = new OpencodeRuntime();
 
 /** 运行时后端选择 —— sscli 主导：显式声明 sscli 的 agent 优先走
  *  p3394-sscli/1.0 常驻协议（原生 delta 流式）；声明了 stream-json 输出且
@@ -1542,6 +1733,9 @@ function runtimeFor() {
       if (PRESET_NAME === 'claude' && CLAUDE_PERSISTENT_ENABLED) return claudePersistentRuntime;
       return streamJsonRuntime;
     }
+    // opencode 常驻 server（默认开；COGSEED_P3394_OPENCODE_PERSISTENT=0
+    // 回退到 sscli 垫片每轮 spawn——冷启动差值见 OpencodeRuntime 头注）。
+    if (PRESET_NAME === 'opencode' && OPENCODE_PERSISTENT_ENABLED) return opencodeRuntime;
     return sscliRuntime;
   }
   if (PRESET_NAME === 'codex') return codexAppServerRuntime;
@@ -2021,6 +2215,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     codexAppServerRuntime.close();
     streamJsonRuntime.close();
     claudePersistentRuntime.close();
+    opencodeRuntime.close();
     oneshotRuntime.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 3000).unref();
