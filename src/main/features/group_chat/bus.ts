@@ -4619,6 +4619,18 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
+      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
+      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
+      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
+      let gatewayTurnGoal: string | undefined;
+      try {
+        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+        const lifecycle = await readKstarTaskLifecycle(uid, cid);
+        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
+          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
+        }
+      } catch { /* KStar 不可用时退回默认稳定会话 */ }
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -4635,6 +4647,7 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
+            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM

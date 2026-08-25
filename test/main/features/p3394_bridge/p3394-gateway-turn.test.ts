@@ -248,4 +248,22 @@ describe('P3394 gateway turn runner', () => {
     const [, , , opts] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { workingDir?: string }];
     expect(opts?.workingDir).toBe('/tmp/proj-a');
   });
+
+  it('forwards the turn goal to the envelope builder for topic-isolated sessions (G-28)', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // G-28 话题隔离：goal 透传给信封构造（buildP3394OutboundEnvelope 内的
+    // sessionForGoal 按 (scope, peer, goal) 分会话——同 goal 复用、异 goal
+    // 开新会话的行为由 session-store.test.ts 覆盖）。
+    await runP3394GatewayTurn({ ...baseInput, goal: 'req:req-42' });
+    const [, , , withGoal] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { goal?: string; scopeKey?: string }];
+    expect(withGoal?.goal).toBe('req:req-42');
+    expect(withGoal?.scopeKey).toBe('cid-1');
+
+    // goal 缺省（闲聊 / KStar 无开放需求）：信封构造不收 goal 字段，保持
+    // (cid, peer) 稳定会话的原行为。
+    mocks.buildP3394OutboundEnvelope.mockClear();
+    await runP3394GatewayTurn({ ...baseInput });
+    const [, , , withoutGoal] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { goal?: string }];
+    expect(withoutGoal?.goal).toBeUndefined();
+  });
 });

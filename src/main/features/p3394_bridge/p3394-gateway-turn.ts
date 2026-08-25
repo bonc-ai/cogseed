@@ -36,6 +36,10 @@ export interface P3394GatewayTurnInput {
    *  Without this an external agent may fall back to `/` and lose its
    *  project workspace context. */
   workingDir?: string;
+  /** G-28 话题隔离：会话级话题标识（当前开放的 KStar 需求 id）。同 goal
+   *  复用 P3394 会话、异 goal 开新会话（sessionForGoal）；缺省时保持
+   *  (cid, peer) 稳定会话（原行为）。 */
+  goal?: string;
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -115,10 +119,11 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   input.onProcess?.({ type: 'progress', text: '正在通过 P3394 与 ' + (input.agent.name || nodeId) + ' 协作…' });
   // 信封按需重建：message_id/idempotency_key 每次发送都必须是新的（重试时
   // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由
-  // sessionForGoal(scopeKey=cid, peer) 决定，天然保持稳定，用户可见的会话
-  // 连续性不受影响。
+  // sessionForGoal(scopeKey=cid, peer, goal) 决定——goal 缺省时 (cid, peer)
+  // 稳定复用，goal 变化（话题切换）自动开新会话（G-28）。
   const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
     scopeKey: input.cid,
+    ...(input.goal && input.goal.trim() ? { goal: input.goal.trim() } : {}),
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
   });
   let envelope = buildEnvelope();
