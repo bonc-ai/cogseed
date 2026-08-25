@@ -138,14 +138,21 @@ export function p3394ExternalGatewayIdFor(cliType: string): string | null {
   return mapping ? mapping.id : null;
 }
 
-/** 托管网关的运行时模式（sscli 主导）：声明了的 CLI 走 sscli 路径——
- *  claude 用 stream-json 包装器逐 token 流式（配合 --include-partial-messages
- *  才真正出增量帧）；未声明的保持 oneshot 兜底。默认开启；发布时需要紧急
- *  回退到全部 oneshot 时设 COGSEED_P3394_STREAM_JSON=0。后续新增支持
- *  stream-json / 原生 p3394-sscli 的 CLI 只需在此登记。 */
+/** 托管网关的运行时模式（sscli 主导，已全面落地）：
+ *  - claude 走 stream-json 包装器 / 常驻双工（逐 token 流式）；
+ *  - 其余全部预设 CLI（hermes/gemini/aider/openclaw/opencode/workbuddy）
+ *    经 sscli-shim 通用协议垫片走 p3394-sscli/1.0（shim 内部每轮 spawn
+ *    真实 CLI，resume/transcript 语义与 oneshot 一致）——P3394 标准推广、
+ *    CLI 原生讲协议后撤垫片换直连，登记不变；
+ *  - codex 不在此表：runtimeFor 里它的专有 app-server 后端优先于 sscli。
+ *  回退开关：COGSEED_P3394_STREAM_JSON=0 全部回 oneshot（紧急回退）；
+ *  COGSEED_P3394_SSCLI_SHIM=0 仅撤垫片回 oneshot（claude 保持 sscli）。 */
 const streamJsonEnabled = String(process.env.COGSEED_P3394_STREAM_JSON ?? '1') !== '0';
+const sscliShimEnabled = String(process.env.COGSEED_P3394_SSCLI_SHIM ?? '1') !== '0';
 const CLI_TO_RUNTIME_MODE: Record<string, string | undefined> = streamJsonEnabled
-  ? { claude: 'sscli' }
+  ? (sscliShimEnabled
+    ? { claude: 'sscli', hermes: 'sscli', gemini: 'sscli', aider: 'sscli', openclaw: 'sscli', opencode: 'sscli', workbuddy: 'sscli' }
+    : { claude: 'sscli' })
   : {};
 
 interface GatewayStateFile { schema_version: number; gateways: Array<Omit<P3394ExternalGatewayState, 'running'>> }

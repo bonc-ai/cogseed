@@ -991,7 +991,30 @@ class SscliRuntime {
   }
   async start() {
     if (this.child) return;
-    this.child = spawn(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    // sscli 主导落地（过渡桥）：CLI 原生讲 p3394-sscli 协议时直连
+    // （P3394_SSCLI_NATIVE=1，测试用 fake-sscli-agent / 将来原生支持的
+    // CLI）；否则经 sscli-shim 通用垫片包装——shim 对本 runtime 讲协议、
+    // 内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致）。
+    // 标准推广、CLI 原生化后撤垫片即可，上层零改动。
+    if (String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
+      this.child = spawn(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    } else {
+      const resumeCfg = preset ? {
+        ...(typeof preset.resumeArgs === 'string' ? { resumeArgs: preset.resumeArgs } : {}),
+        ...(typeof preset.sessionIdPattern === 'string' ? { sessionIdPattern: preset.sessionIdPattern } : {}),
+        ...(preset.sessionGenerate === true ? { sessionGenerate: true } : {}),
+      } : {};
+      this.child = spawn(process.execPath, [
+        path.join(__dirname, 'sscli-shim.cjs'),
+        '--exec', CLI,
+        '--args', CLI_ARGS,
+        '--home', GATEWAY_HOME,
+        '--preset', PRESET_NAME,
+        ...(Object.keys(resumeCfg).length
+          ? ['--resume-config', Buffer.from(JSON.stringify(resumeCfg), 'utf8').toString('base64')]
+          : []),
+      ], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, P3394_AGENT_TIMEOUT_MS: String(TIMEOUT_MS) } });
+    }
     this.lineBuf = '';
     let errLog = '';
     this.child.stdout.on('data', (chunk) => {
@@ -1039,8 +1062,9 @@ class SscliRuntime {
     }, TIMEOUT_MS, onDelta);
   }
   cancel(taskId) {
-    if (!this.child) return;
+    if (!this.child) return false;
     this._send({ op: 'cancel', task_id: taskId });
+    return true;
   }
   close() {
     this.closing = true;
@@ -1618,7 +1642,7 @@ function handleCancel(envelope) {
     postReply(envelope, '[已取消]');
     return;
   }
-  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId);
+  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
   if (killed) cancelledTasks.add(taskId);
   sscliRuntime.cancel(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));

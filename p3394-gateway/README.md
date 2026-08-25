@@ -119,7 +119,14 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
   加同款字段。
 - **sscli**：`P3394_AGENT_MODE=sscli` 常驻单个 CLI 进程，按 `p3394-sscli/1.0`
   JSONL 协议交换 hello / open_session / deliver / 事件 / cancel / heartbeat
-  （指南 §9.2），适合支持结构化会话协议的 Agent Runtime。
+  （指南 §9.2）。**已全面落地（过渡桥）**：原生讲协议的 CLI 直连
+  （`P3394_SSCLI_NATIVE=1`，目前为测试桩与未来原生支持者预留）；其余全部
+  预设（hermes/gemini/aider/openclaw/opencode/workbuddy）由 CogSeed 托管时
+  自动经 **sscli-shim 通用垫片**（`sscli-shim.cjs`）接入——shim 对网关讲
+  协议、内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致，
+  会话状态落 `<home>/shim-sessions/`）。P3394 标准推广、CLI 原生实现协议
+  后撤垫片换直连即可，登记与上层零改动。`COGSEED_P3394_SSCLI_SHIM=0`
+  可单独撤垫片回退 oneshot（claude 不受影响）。
 
 两种模式通用：
 
