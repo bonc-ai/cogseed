@@ -443,7 +443,18 @@ function normalizeFeishuEvent(
   const createTime = Number.isFinite(rawCreateTime)
     ? new Date((rawCreateTime > 10_000_000_000 ? rawCreateTime : rawCreateTime * 1000))
     : new Date();
+  // G-17 多模态：图片消息提取 image_key（引用式，不下载字节）——投影为
+  // P3394 信封 parts.image 格子；text 保持"[图片]"占位保证路由不丢。
+  let imageKeys: string[] | undefined;
+  if (messageType === 'image') {
+    try {
+      const parsed = JSON.parse(message.content || '{}');
+      const key = parsed && typeof parsed.image_key === 'string' ? parsed.image_key.trim() : '';
+      if (key) imageKeys = [key];
+    } catch { /* malformed image content — 占位文本仍可路由 */ }
+  }
   return {
+    ...(imageKeys ? { imageKeys } : {}),
     platform: 'feishu_lark',
     instanceId: instance.id,
     externalMessageId: message.message_id,
