@@ -349,6 +349,10 @@ async function main() {
   const r2Reply = received.find((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('second turn'));
   check('resume：第二轮带 --session 续聊（RESUMED 前缀）', !!(r2Reply && (r2Reply.payload.parts[0].text || '').includes('RESUMED(oc-fixed-sess): second turn')));
   check('resume：第二轮不回放 [会话历史]（纯增量，CLI 自管记忆）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[会话历史]') && !(r2Reply.payload.parts[0].text || '').includes('first turn')));
+  // G-39 协作提示词每会话只注一次：首轮回显 prompt 含 hint；resume 第二轮
+  // 纯增量（无历史回放），若重注会出现在回显里。
+  check('协作提示词：每会话首轮注入（第一轮回显含 hint）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('[P3394 协作工具]')));
+  check('协作提示词：第二轮不重注（纯增量无 hint）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[P3394 协作工具]')));
 
   // 被拒重试（s-r2）：预埋毒会话号 → CLI 报 session not found → 清绑定、
   // transcript 回放重跑一次 → 最终成功且为 FRESH 形态
