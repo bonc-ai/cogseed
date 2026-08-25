@@ -62,6 +62,45 @@ describe('channel bridge file delivery (T2a, 2026-08-25 真机修复)', () => {
     expect(result.receipt.payload.parts[0].text).toContain('(2 file(s))');
   });
 
+  it('p3394-object:sha256 引用 → 对象存储 resolve 物化投递；缺失对象跳过', async () => {
+    const fs = require('node:fs');
+    const { p3394ObjectPath, p3394ObjectUri } = await import(
+      '../../../src/main/features/p3394_bridge/object-store'
+    );
+    // 大文件形态：filesToResourceParts 把超限内容落对象存储后以内容寻址
+    // 引用代替内联。按存储布局写入一个真实对象。
+    const bigContent = 'BIG-BINARY-PAYLOAD-'.repeat(500);
+    const digest = sha256hex(bigContent);
+    const objPath = p3394ObjectPath(digest);
+    fs.mkdirSync(require('node:path').dirname(objPath), { recursive: true });
+    fs.writeFileSync(objPath, bigContent);
+
+    const sentText: any[] = [];
+    const sentFiles: any[] = [];
+    const missingDigest = 'f'.repeat(64);
+    const result = await deliverToChannelBridge(
+      'u1',
+      'channel-inst-1',
+      envelopeWithFiles('大文件产物', [
+        { type: 'resource', uri: p3394ObjectUri(digest), media_type: 'application/octet-stream', name: 'big-artifact.bin' },
+        { type: 'resource', uri: `p3394-object:sha256:${missingDigest}`, media_type: 'application/octet-stream', name: 'ghost.bin' },
+      ]),
+      async (_uid, input) => { sentText.push(input); },
+      async () => ({ recipientId: 'ou_boss' }),
+      { sendFile: async (_uid, input) => { sentFiles.push(input); } },
+    );
+    expect(result.ok).toBe(true);
+    expect(sentText).toHaveLength(1);
+    // 存在的对象物化为存储路径本体（不复制）；缺失对象静默跳过不阻塞。
+    expect(sentFiles).toHaveLength(1);
+    expect(sentFiles[0].path).toBe(objPath);
+    expect(sentFiles[0].name).toBe('big-artifact.bin');
+    expect(fs.readFileSync(sentFiles[0].path, 'utf8')).toBe(bigContent);
+    if (!result.ok) return;
+    expect(result.receipt.payload.parts[0].text).toContain('(1 file(s))');
+    fs.rmSync(objPath, { force: true });
+  });
+
   it('digest 不符的 data:URI → 丢弃该文件（不投递不报错）', async () => {
     const sentFiles: any[] = [];
     const result = await deliverToChannelBridge(
