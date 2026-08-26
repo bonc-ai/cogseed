@@ -4888,7 +4888,7 @@
   "dashboard.remove_confirm": "このリモートノードを削除しますか？",
   "dashboard.node_online": "オンライン",
   "dashboard.node_offline": "オフライン",
-  "dashboard.subtitle": "内蔵・ローカル・リモートのエージェントを一元管理",
+  "dashboard.subtitle": "全体アクティビティ・コスト・協働を一望",
   "dashboard.loading": "読み込み中…",
   "dashboard.builtin_row": "CogSeed 本体ロール",
   "dashboard.builtin_members": "メンバー {count} 名",
@@ -4936,5 +4936,13 @@
   "dashboard.save_edit": "変更を保存",
   "dashboard.edit_saved": "保存しました。アドレスやトークンを変えた場合は再テストを推奨",
   "dashboard.edit_failed": "保存に失敗しました",
-  "dashboard.form_token_keep": "トークン（空欄で維持）"
+  "dashboard.form_token_keep": "トークン（空欄で維持）",
+  "dashboard.tab.overview": "概要",
+  "dashboard.tab.cost": "コスト",
+  "dashboard.tab.collab": "協働",
+  "dashboard.coming_soon": "このセクションは近日公開",
+  "dashboard.time.just_now": "たった今",
+  "dashboard.time.minutes_ago": "{n} 分前",
+  "dashboard.time.hours_ago": "{n} 時間前",
+  "dashboard.time.days_ago": "{n} 日前"
 }

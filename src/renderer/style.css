@@ -26805,6 +26805,35 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-subtitle { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
 .dash-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
+/* ── 智能体总览 2.0：三标签骨架（总览 / 成本 / 协作）── */
+.dash-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.dash-tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px 10px;
+  margin-bottom: -1px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0;
+}
+.dash-tab:hover { color: var(--text); }
+.dash-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent, #4f7cff);
+}
+.dash-pane { display: none; }
+.dash-pane.is-active { display: block; }
+
 .dash-section { margin-bottom: 28px; }
 .dash-section-head {
   display: flex;

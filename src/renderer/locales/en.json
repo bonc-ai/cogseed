@@ -5983,7 +5983,7 @@
   "dashboard.remove_confirm": "Remove this remote node?",
   "dashboard.node_online": "online",
   "dashboard.node_offline": "offline",
-  "dashboard.subtitle": "Manage builtin, local, and remote agents in one place",
+  "dashboard.subtitle": "Global activity · cost · collaboration at a glance",
   "dashboard.loading": "Loading…",
   "dashboard.builtin_row": "CogSeed built-in roles",
   "dashboard.builtin_members": "{count} members",
@@ -6031,5 +6031,13 @@
   "dashboard.save_edit": "Save changes",
   "dashboard.edit_saved": "Saved; if endpoint or token changed, re-test the connection",
   "dashboard.edit_failed": "Save failed",
-  "dashboard.form_token_keep": "Token (leave blank to keep)"
+  "dashboard.form_token_keep": "Token (leave blank to keep)",
+  "dashboard.tab.overview": "Overview",
+  "dashboard.tab.cost": "Cost",
+  "dashboard.tab.collab": "Collaboration",
+  "dashboard.coming_soon": "This section is coming soon",
+  "dashboard.time.just_now": "just now",
+  "dashboard.time.minutes_ago": "{n} min ago",
+  "dashboard.time.hours_ago": "{n} h ago",
+  "dashboard.time.days_ago": "{n} d ago"
 }

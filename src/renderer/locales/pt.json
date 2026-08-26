@@ -4888,7 +4888,7 @@
   "dashboard.remove_confirm": "Remover este nó remoto?",
   "dashboard.node_online": "online",
   "dashboard.node_offline": "offline",
-  "dashboard.subtitle": "Gerencie agentes integrados, locais e remotos num só lugar",
+  "dashboard.subtitle": "Atividade global · custo · colaboração num relance",
   "dashboard.loading": "Carregando…",
   "dashboard.builtin_row": "Papéis integrados do CogSeed",
   "dashboard.builtin_members": "{count} membros",
@@ -4936,5 +4936,13 @@
   "dashboard.save_edit": "Salvar alterações",
   "dashboard.edit_saved": "Salvo; se endereço ou token mudaram, teste novamente",
   "dashboard.edit_failed": "Falha ao salvar",
-  "dashboard.form_token_keep": "Token (deixe em branco para manter)"
+  "dashboard.form_token_keep": "Token (deixe em branco para manter)",
+  "dashboard.tab.overview": "Visão geral",
+  "dashboard.tab.cost": "Custo",
+  "dashboard.tab.collab": "Colaboração",
+  "dashboard.coming_soon": "Esta seção chega em breve",
+  "dashboard.time.just_now": "agora mesmo",
+  "dashboard.time.minutes_ago": "{n} min atrás",
+  "dashboard.time.hours_ago": "{n} h atrás",
+  "dashboard.time.days_ago": "{n} d atrás"
 }
