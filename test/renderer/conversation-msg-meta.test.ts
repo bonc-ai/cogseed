@@ -60,9 +60,12 @@ function loadMountMsgMeta(): (ph: Record<string, unknown>, metrics: unknown) => 
   `, {
     window: {
       conversationMetrics,
-      i18n: { t: (k: string, vars: Record<string, string>) => `${k}|${vars ? JSON.stringify(vars) : ''}` },
     },
     document: { createElement: () => makeNode() },
+    // The real renderer i18n helper is a classic-script top-level function
+    // (`t` in i18n.js), not a property on window — mirror that lexical
+    // environment so the stub can't paper over a missing global.
+    t: (k: string, vars: Record<string, string>) => `${k}|${vars ? JSON.stringify(vars) : ''}`,
   });
 }
 
@@ -144,5 +147,13 @@ describe('conversation message metrics line', () => {
     const convIdx = htmlSource.indexOf('./modules/conversation.js');
     expect(metricsIdx).toBeGreaterThan(-1);
     expect(convIdx).toBeGreaterThan(metricsIdx);
+  });
+
+  it('never references window.i18n (regression contract)', () => {
+    // The renderer i18n helper `t` is a classic-script top-level function in
+    // i18n.js — it is never attached to window and preload does not expose
+    // it. Any `window.i18n` reference throws a TypeError at runtime on the
+    // first metrics-bearing message.
+    expect(source).not.toContain('window.i18n');
   });
 });
