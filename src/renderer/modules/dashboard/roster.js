@@ -177,7 +177,7 @@
     // 模型候选清单（datalist）：有目录的 CLI 给下拉候选，没有的自由输入。
     // 先为每个 CLI 建空 datalist 节点（input 的 list 属性已引用其 id），
     // 再异步拉目录填充；清单为空或不可得时 datalist 保持空 = 纯文本输入。
-    const cliTypes = new Set<string>();
+    const cliTypes = new Set();
     el.querySelectorAll('[data-roster-model]').forEach((input) => {
       const listId = input.getAttribute('list') || '';
       if (listId) cliTypes.add(listId.replace('dash-model-list-', ''));
