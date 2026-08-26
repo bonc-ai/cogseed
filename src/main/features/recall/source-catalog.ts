@@ -242,7 +242,7 @@ async function conversationSources(userId: string, query: Parameters<SourceAdapt
   ];
 }
 
-function contextFilesForUser(userId: string): ContextNode[] {
+async function contextFilesForUser(userId: string): Promise<ContextNode[]> {
   const files: ContextNode[] = [];
   const visit = (nodes: ContextNode[]): void => {
     for (const node of nodes) {
@@ -250,7 +250,7 @@ function contextFilesForUser(userId: string): ContextNode[] {
       if (node.children?.length) visit(node.children);
     }
   };
-  visit(listContextsTreeForUser(userId));
+  visit(await listContextsTreeForUser(userId));
   return files;
 }
 
@@ -270,7 +270,7 @@ async function contextFileStatuses(userId: string): Promise<Map<string, { status
 }
 
 async function artifactFileSources(userId: string, query: Parameters<SourceAdapter>[1]): Promise<DiscoveredSource[]> {
-  const files = contextFilesForUser(userId);
+  const files = await contextFilesForUser(userId);
   const statuses = await contextFileStatuses(userId);
   const contexts = files.slice(0, query.limit).map((node) => {
     const lifecycle = statuses.get(node.path) || { status: 'pending' as const, reason: 'file_index_pending' };
@@ -661,7 +661,7 @@ export async function retryCognitionSource(userId: string, kind: CognitionCatalo
     throw new Error('cognition source retry is not supported');
   }
   try {
-    const node = contextFilesForUser(userId).find((file) => cognitionContextFileSourceId(file.path) === source.id);
+    const node = (await contextFilesForUser(userId)).find((file) => cognitionContextFileSourceId(file.path) === source.id);
     if (!node) throw new Error('source_missing');
     const indexer = await import('../kb_indexer');
     indexer.enqueue(userId, node.path, 'upsert', { reason: 'manual' });

@@ -1657,7 +1657,7 @@
       if (typeof uiToast === 'function') uiToast(_t('ws.delete_space_done', '空间已删除，任务已移到「最近任务」'), { variant: 'success' });
     }));
     const cs = root.querySelector('[data-ws="center-search"]');
-    if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _reRender(); });
+    if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _debouncedSearchReRender(); });
     const sortSel = root.querySelector('[data-ws="center-sort"]');
     if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
 
@@ -1737,7 +1737,7 @@
     root.querySelectorAll('[data-ws="toggle-ref"]').forEach((el) => el.addEventListener('click', () => _toggleRef(el.dataset.kind, el.dataset.id)));
     root.querySelectorAll('[data-ws="save-ref"]').forEach((el) => el.addEventListener('click', () => _saveRefPicker()));
     const refSearch = root.querySelector('[data-ws="ref-search"]');
-    if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _reRender(); });
+    if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _debouncedSearchReRender(); });
     root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
     // 资产卡 × → 撤销（弹确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
@@ -2001,9 +2001,25 @@
     _reRender();
   }
 
+  // 搜索输入防抖：每键全量 innerHTML 重建 N 张卡片很贵，合并成 ~120ms 一次。
+  let _searchDebounceTimer = null;
+  function _debouncedSearchReRender() {
+    if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
+    _searchDebounceTimer = setTimeout(() => {
+      _searchDebounceTimer = null;
+      _reRender();
+    }, 120);
+  }
+
   function _reRender() {
     const root = document.getElementById('ws-view');
     if (!root) return;
+    // 重建前捕获搜索框焦点/光标：innerHTML 全量替换会销毁输入框。
+    // 搜索框在打字过程中触发的重建必须把焦点还给用户，否则每敲一次就失焦。
+    const active = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
+    const restoreSel = active && (active.matches('[data-ws="center-search"]') || active.matches('[data-ws="ref-search"]'))
+      ? { sel: active.dataset.ws, pos: typeof active.selectionStart === 'number' ? active.selectionStart : active.value.length }
+      : null;
     let html = _render();
     if (_createOpen) html += _renderCreateModal();
     if (_createAgentOpen) html += _renderCreateAgentModal();
@@ -2015,6 +2031,13 @@
     if (_refPickerOpen) html += _renderRefPicker();
     root.innerHTML = html;
     _bind(root);
+    if (restoreSel) {
+      const el = root.querySelector(`[data-ws="${restoreSel.sel}"]`);
+      if (el) {
+        el.focus();
+        try { el.setSelectionRange(restoreSel.pos, restoreSel.pos); } catch { /* 非文本输入不处理 */ }
+      }
+    }
   }
 
   async function _refreshForLanguageChange() {
