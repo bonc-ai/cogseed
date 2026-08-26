@@ -1,0 +1,30 @@
+{
+  "execution-card.css": {
+    "color": 37,
+    "fontSize": 1
+  },
+  "onboarding.css": {
+    "color": 92,
+    "zIndex": 4,
+    "fontSize": 54,
+    "radius": 11
+  },
+  "recall-local.css": {
+    "color": 530,
+    "zIndex": 1,
+    "fontSize": 43,
+    "radius": 13
+  },
+  "style.css": {
+    "color": 2182,
+    "zIndex": 56,
+    "fontSize": 427,
+    "radius": 275
+  },
+  "workspace.css": {
+    "color": 449,
+    "zIndex": 8,
+    "fontSize": 72,
+    "radius": 58
+  }
+}

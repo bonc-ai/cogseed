@@ -254,7 +254,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
    条内控件可点。覆盖工作空间/自动化/认知资产/市场/AI团队/技能/上下文
    搜索等页面的顶部条与连接/设置的标签条。 */
 .is-macos .ws-page-top,
-.is-macos .auto-header,
+.is-macos .ui-page-header,
 .is-macos .skills-cognition-header,
 .is-macos .marketplace-header,
 .is-macos .agents-grid-header,
@@ -270,10 +270,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .is-macos .ws-page-top textarea,
 .is-macos .ws-page-top a,
 .is-macos .ws-page-top label,
-.is-macos .auto-header button,
-.is-macos .auto-header input,
-.is-macos .auto-header select,
-.is-macos .auto-header a,
+.is-macos .ui-page-header button,
+.is-macos .ui-page-header input,
+.is-macos .ui-page-header select,
+.is-macos .ui-page-header a,
 .is-macos .skills-cognition-header button,
 .is-macos .skills-cognition-header input,
 .is-macos .skills-cognition-header select,
@@ -18433,32 +18433,6 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   background: transparent; /* show body grid */
   min-height: 0;
 }
-/* Single-row page header matching `.agents-grid-header` / `.skills-grid-header`
-   — bold title + count chip on the left, "+ New task" button on the right. */
-.auto-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-.auto-title-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-.auto-header-count {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--muted);
-}
-.auto-header-count:empty { display: none; }
-.auto-header-add {
-  margin-left: auto;
-}
-
 .auto-scroll {
   flex: 1;
   overflow-y: auto;
