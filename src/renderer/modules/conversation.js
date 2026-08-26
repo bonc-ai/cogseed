@@ -3558,6 +3558,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
+    ...(gm.metrics ? { metrics: gm.metrics } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -8867,6 +8868,29 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
+// gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
+function _mountMsgMeta(ph, metrics) {
+  const line = window.conversationMetrics
+    ? window.conversationMetrics.messageMetricsLine(metrics) : null;
+  if (!line) return;
+  let meta = ph.querySelector('[data-role="msg-meta"]');
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.className = 'chat-msg-meta';
+    meta.dataset.role = 'msg-meta';
+    ph.appendChild(meta);
+  }
+  const t = (k, vars) => window.i18n.t(k, vars);
+  const parts = [];
+  parts.push(t('chat.metrics.duration', { d: window.conversationMetrics.formatDuration(line.durationMs) }));
+  if (line.latencyText) parts.push(t('chat.metrics.ttft', { s: line.latencyText }));
+  if (line.rateText) parts.push(t('chat.metrics.rate', { r: line.rateText }));
+  if (line.inText) parts.push(t('chat.metrics.tokens', { i: line.inText, o: line.outText }));
+  meta.textContent = parts.join(' · ');
+  if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+}
+
 function appendChatMessage(message, autoScroll = true, opts = {}) {
   const container = opts.container
     ? (typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container)
@@ -9097,6 +9121,10 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (historyHydration) container.appendChild(msgDiv);
   else _insertByTimestamp(container, msgDiv);
   if (role === 'user') _moveUserBeforeOrphanLivePlaceholder(container, msgDiv);
+  // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
+  // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
+  msgDiv._msgMetrics = message.metrics || null;
+  _mountMsgMeta(msgDiv, message.metrics);
   if (!isHtmlSnippet && typeof typesetMath === 'function') {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
@@ -15016,6 +15044,11 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     actionsRow.dataset.role = 'msg-actions';
     ph.appendChild(actionsRow);
   }
+
+  // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
+  // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
+  ph._msgMetrics = gm.metrics || null;
+  _mountMsgMeta(ph, gm.metrics);
 
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.
   const gmCreated = _normalizeCreatedAgents(gm);
