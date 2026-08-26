@@ -26834,6 +26834,43 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-pane { display: none; }
 .dash-pane.is-active { display: block; }
 
+/* ── 实时活动区（全局监视）：每行 = 谁 + 状态徽章 + 干什么 + 时间 + 动作 ── */
+.dash-activity-list { display: flex; flex-direction: column; gap: 6px; }
+.dash-activity-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2, transparent);
+  font-size: 13px;
+}
+.dash-activity-row.is-stuck { border-color: #d4a017; }
+.dash-activity-row.is-waiting { border-color: #8b5cf6; }
+.dash-activity-who { font-weight: 600; color: var(--text); flex-shrink: 0; }
+.dash-activity-head {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.dash-activity-time { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.dash-activity-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.dash-activity-empty {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.dash-badge-waiting { background: rgba(139, 92, 246, 0.14); color: #8b5cf6; }
+.dash-badge-stuck { background: rgba(212, 160, 23, 0.16); color: #a07c10; }
+.dash-badge-run { background: rgba(16, 122, 87, 0.12); color: #107a57; }
+
 .dash-section { margin-bottom: 28px; }
 .dash-section-head {
   display: flex;

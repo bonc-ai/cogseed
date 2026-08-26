@@ -6039,5 +6039,18 @@
   "dashboard.time.just_now": "just now",
   "dashboard.time.minutes_ago": "{n} min ago",
   "dashboard.time.hours_ago": "{n} h ago",
-  "dashboard.time.days_ago": "{n} d ago"
+  "dashboard.time.days_ago": "{n} d ago",
+  "dashboard.activity.title": "Happening now",
+  "dashboard.activity.empty": "All idle",
+  "dashboard.activity.start_chat": "Start a chat",
+  "dashboard.activity.waiting": "Waiting for you",
+  "dashboard.activity.stuck": "Possibly stuck",
+  "dashboard.activity.view_conversation": "View chat",
+  "dashboard.activity.cancel": "Cancel",
+  "dashboard.activity.cancel_confirm": "Cancel this task?",
+  "dashboard.status.running": "Running",
+  "dashboard.status.queued": "Queued",
+  "dashboard.status.waiting_user": "Waiting for you",
+  "dashboard.status.recoverable": "Recoverable",
+  "dashboard.status.created": "Created"
 }
