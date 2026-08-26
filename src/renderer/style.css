@@ -26925,6 +26925,72 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--text);
 }
 
+/* ── 健康防线：常态安静一行，异常浮现告警条 ── */
+.dash-health-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 12px;
+}
+.dash-health-bar.is-quiet { border: 1px dashed var(--border); color: var(--muted); }
+.dash-health-ok { color: #107a57; font-weight: 600; }
+.dash-health-observing { color: var(--muted); }
+.dash-health-rule { color: var(--muted); opacity: 0.75; }
+.dash-health-bar.is-alert {
+  border: 1px solid #c0392b;
+  background: rgba(192, 57, 43, 0.06);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.dash-health-title { font-weight: 700; color: #c0392b; font-size: 13px; }
+.dash-health-alert {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text);
+}
+.dash-health-agent { font-weight: 700; }
+.dash-health-reason { color: #c0392b; }
+.dash-health-failure { color: var(--muted); }
+.dash-health-actions { display: flex; gap: 6px; }
+
+/* ── 空态三步起步卡：把最空的时候变成最有用的时候 ── */
+.dash-onboard {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.dash-onboard-head {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.dash-onboard-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.dash-onboard-step.is-done { opacity: 0.6; }
+.dash-onboard-no {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--accent, #4f7cff);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.dash-onboard-step.is-done .dash-onboard-no { background: #107a57; }
+.dash-onboard-text { flex: 1; min-width: 0; }
+.dash-onboard-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.dash-onboard-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
 .dash-section { margin-bottom: 28px; }
 .dash-section-head {
   display: flex;

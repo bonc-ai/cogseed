@@ -83,14 +83,109 @@
     roster.bindEvents(el);
   }
 
+  // ── T10 侧边栏红点：有活跃告警才亮（常亮=噪音）──────────────────────
+  function updateAlertDot() {
+    const btn = document.getElementById('dashboard-btn');
+    if (!btn) return;
+    const alerts = ((_snapshot && _snapshot.health) || []).filter((h) => h.state === 'alert');
+    btn.classList.toggle('has-dot', alerts.length > 0);
+    btn.classList.toggle('is-red', alerts.length > 0);
+  }
+
+  // ── T10 空态三步起步卡：全空时替换整个总览，把最空的时候变成最有用的时候 ──
+  function isEmptyState() {
+    if (!_snapshot) return false;
+    const roster = _snapshot.roster || {};
+    const externalAgents = (roster.agents || []).filter((a) => a && a.runtime && a.runtime.kind !== 'in_process');
+    const hasRoster = ((roster.external && roster.external.entries) || []).length > 0
+      || externalAgents.length > 0
+      || (roster.remote || []).length > 0
+      || (roster.instances || []).length > 0;
+    return !hasRoster && ((_snapshot.runningTasks || []).length === 0) && ((_snapshot.health || []).length === 0);
+  }
+
+  function renderOnboarding(el) {
+    const esc = DS().esc;
+    const t = DS().t;
+    const done = (key) => {
+      try { return localStorage.getItem(`dash-onboarding-${key}`) === 'done'; } catch (_) { return false; }
+    };
+    const step = (n, key, title, desc, actLabel, act) => `
+      <div class="dash-onboard-step${done(key) ? ' is-done' : ''}">
+        <span class="dash-onboard-no">${done(key) ? '✓' : n}</span>
+        <div class="dash-onboard-text">
+          <div class="dash-onboard-title">${esc(title)}</div>
+          <div class="dash-onboard-desc">${esc(desc)}</div>
+        </div>
+        ${done(key) ? '' : `<button type="button" class="btn btn-sm btn-primary" data-dash-act="${act}">${esc(actLabel)}</button>`}
+      </div>`;
+    el.innerHTML = `
+      <div class="dash-onboard">
+        <div class="dash-onboard-head">${esc(t('dashboard.onboard.title'))}</div>
+        ${step(1, 'model', t('dashboard.onboard.model'), t('dashboard.onboard.model_desc'), t('dashboard.onboard.model_btn'), 'ob-model')}
+        ${step(2, 'first', t('dashboard.onboard.first'), t('dashboard.onboard.first_desc'), t('dashboard.onboard.first_btn'), 'ob-first')}
+        ${step(3, 'agent', t('dashboard.onboard.agent'), t('dashboard.onboard.agent_desc'), t('dashboard.onboard.agent_btn'), 'ob-agent')}
+      </div>`;
+  }
+
+  // ── T9 健康防线：常态一行小字，出异常才浮现告警条 ────────────────────
   function renderHealth(el) {
-    if (el) el.innerHTML = `<div class="dash-loading">${DS().esc(DS().t('dashboard.coming_soon'))}</div>`;
+    if (!el) return;
+    const esc = DS().esc;
+    const t = DS().t;
+    const health = (_snapshot && _snapshot.health) || [];
+    const alerts = health.filter((h) => h.state === 'alert');
+    const observing = health.filter((h) => h.state === 'observing');
+
+    if (!alerts.length) {
+      const bits = [`<span class="dash-health-ok">✓ ${esc(t('dashboard.health.all_good'))}</span>`];
+      if (observing.length) {
+        bits.push(`<span class="dash-health-observing">${esc(t('dashboard.health.observing_n', { n: observing.length }))}</span>`);
+      }
+      bits.push(`<span class="dash-health-rule">${esc(t('dashboard.health.rule'))}</span>`);
+      el.innerHTML = `<div class="dash-health-bar is-quiet">${bits.join('')}</div>`;
+      return;
+    }
+
+    const rows = alerts.map((h) => {
+      const reason = h.consecutiveFailures >= 3
+        ? t('dashboard.health.rule_consecutive', { n: h.consecutiveFailures })
+        : t('dashboard.health.rule_rate', { rate: Math.round(h.recent10SuccessRate * 100) });
+      const failure = h.lastFailure
+        ? `<span class="dash-health-failure">${esc(t('dashboard.health.last_failure'))}：${esc(h.lastFailure.errorCode || h.lastFailure.taskId)} · ${esc(DS().fmtTimeAgo(Date.parse(h.lastFailure.updatedAt)))}</span>`
+        : '';
+      const actions = [
+        h.lastFailure && h.lastFailure.conversationId
+          ? `<button type="button" class="btn btn-sm" data-dash-act="open" data-cid="${esc(h.lastFailure.conversationId)}">${esc(t('dashboard.health.view_failure'))}</button>`
+          : '',
+        `<button type="button" class="btn btn-sm" data-dash-act="disable-agent" data-agent="${esc(h.agentId)}">${esc(t('dashboard.health.disable_agent'))}</button>`,
+      ].join('');
+      return `
+        <div class="dash-health-alert">
+          <span class="dash-health-agent">${esc(h.agentId)}</span>
+          <span class="dash-health-reason">${esc(reason)}</span>
+          ${failure}
+          <span class="dash-roster-spacer"></span>
+          <span class="dash-health-actions">${actions}</span>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div class="dash-health-bar is-alert">
+      <div class="dash-health-title">${esc(t('dashboard.health.alert_title'))}</div>
+      ${rows}
+    </div>`;
   }
 
   function render() {
     if (!_pane) return;
     if (!_snapshot) {
       _pane.innerHTML = `<div class="dash-loading">${DS().esc(DS().t('dashboard.loading'))}</div>`;
+      return;
+    }
+    updateAlertDot();
+    if (isEmptyState()) {
+      _pane.innerHTML = '';
+      renderOnboarding(_pane);
       return;
     }
     _pane.innerHTML = `
@@ -126,6 +221,21 @@
       if (typeof window.setView === 'function') window.setView('new-chat');
       return;
     }
+    if (act === 'ob-model') {
+      try { localStorage.setItem('dash-onboarding-model', 'done'); } catch (_) { /* noop */ }
+      if (typeof window.setView === 'function') window.setView('settings');
+      return;
+    }
+    if (act === 'ob-first') {
+      try { localStorage.setItem('dash-onboarding-first', 'done'); } catch (_) { /* noop */ }
+      if (typeof window.setView === 'function') window.setView('new-chat');
+      return;
+    }
+    if (act === 'ob-agent') {
+      try { localStorage.setItem('dash-onboarding-agent', 'done'); } catch (_) { /* noop */ }
+      if (typeof window.setView === 'function') window.setView('agents');
+      return;
+    }
     if (act === 'open' && btn.dataset.cid) {
       if (typeof window.setView === 'function') window.setView('conversation', btn.dataset.cid);
       return;
@@ -139,6 +249,13 @@
       } else {
         go();
       }
+      return;
+    }
+    if (act === 'disable-agent' && btn.dataset.agent) {
+      // 临时停用：禁用的 peer 不可被 @ 派发但保留注册——防止继续往坏 agent 派活
+      DS().invoke('p3394.peers.toggle', { agentId: btn.dataset.agent, disabled: true })
+        .then(() => refresh())
+        .catch(() => undefined);
     }
   }
 
