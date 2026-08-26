@@ -54,7 +54,12 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/workspace.js' },
   ],
   dashboard: [
-    { src: './modules/dashboard.js' },
+    { src: './modules/dashboard/tab-state.js' },
+    { src: './modules/dashboard/shared.js' },
+    { src: './modules/dashboard/overview.js' },
+    { src: './modules/dashboard/cost.js' },
+    { src: './modules/dashboard/collab.js' },
+    { src: './modules/dashboard/index.js' },
   ],
 });
 

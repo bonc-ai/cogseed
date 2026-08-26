@@ -5,53 +5,44 @@ import { describe, expect, it } from 'vitest';
 const html = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/index.html'), 'utf8');
 const lazy = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/lazy-features.js'), 'utf8');
 const boot = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/boot.js'), 'utf8');
-const dash = fs.readFileSync(path.resolve(process.cwd(), 'src/renderer/modules/dashboard.js'), 'utf8');
 
 function locale(lang: string): Record<string, string> {
   return JSON.parse(fs.readFileSync(path.resolve(process.cwd(), `src/renderer/locales/${lang}.json`), 'utf8'));
 }
 
-describe('agents overview dashboard layout contract (phase 2)', () => {
-  it('sidebar entry, panel container and three-section structure exist', () => {
+// 智能体总览 2.0（指挥中心）布局契约：三标签骨架 + 模块目录加载 +
+// 四语言键集。名册/成本/协作各分区的数据契约随实现任务（T8+）补回，
+// 其中必须保留的旧安全契约：远端节点测试只回传存储 id，令牌永不
+// 回传渲染层。
+
+describe('agents overview dashboard layout contract (v2, command center)', () => {
+  it('sidebar entry, panel container and three-tab structure exist', () => {
     expect(html).toContain('id="dashboard-btn"');
     expect(html).toContain('id="panel-dashboard"');
-    expect(html).toContain('id="dash-builtin-list"');
-    expect(html).toContain('id="dash-local-list"');
-    expect(html).toContain('id="dash-remote-list"');
-    expect(html).toContain('data-dash-action="add-local"');
-  });
-
-  it('remote-node add form carries the four fields and a test-and-add submit', () => {
-    for (const id of ['dash-remote-label', 'dash-remote-endpoint', 'dash-remote-token', 'dash-remote-identity']) {
-      expect(html).toContain(`id="${id}"`);
+    expect(html).toContain('id="dash-tabs"');
+    for (const tab of ['overview', 'cost', 'collab']) {
+      expect(html).toContain(`data-dash-tab="${tab}"`);
+      expect(html).toContain(`id="dash-pane-${tab}"`);
     }
-    expect(html).toContain('id="dash-remote-submit"');
-    expect(html).toContain('id="dash-remote-status"');
   });
 
-  it('view routing: setView maps dashboard to the panel and lazy-loads the module', () => {
+  it('view routing: setView maps dashboard to the panel and lazy-loads the module directory', () => {
     expect(boot).toContain(`view === 'dashboard' ? 'panel-dashboard'`);
     expect(boot).toContain(`_loadViewFeature('dashboard', 'dashboard'`);
     expect(lazy).toContain(`dashboard: [`);
-    expect(lazy).toContain(`./modules/dashboard.js`);
+    expect(lazy).toContain(`./modules/dashboard/index.js`);
+    // 旧单文件模块已退役，不得再被引用
+    expect(lazy).not.toContain(`./modules/dashboard.js'`);
   });
 
-  it('dashboard module renders the three groups over the unified data source', () => {
-    expect(dash).toContain(`p3394.external.list`);
-    expect(dash).toContain(`p3394.remote.list`);
-    expect(dash).toContain(`agents.list`);
-    expect(dash).toContain('renderBuiltin');
-    expect(dash).toContain('renderLocal');
-    expect(dash).toContain('renderRemote');
-  });
-
-  it('remote test goes through the stored id (token never round-trips to renderer)', () => {
-    expect(dash).toContain(`p3394.remote.test`, );
-    expect(dash).toContain(`{ id: node.id }`);
-  });
-
-  it('all four locales carry the dashboard copy set', () => {
-    const keys = ['sidebar.dashboard', 'dashboard.title', 'dashboard.builtin_section', 'dashboard.local_section', 'dashboard.remote_section', 'dashboard.form_submit', 'dashboard.remove_confirm'];
+  it('all four locales carry the dashboard v2 copy set', () => {
+    const keys = [
+      'sidebar.dashboard', 'dashboard.title', 'dashboard.subtitle',
+      'dashboard.tab.overview', 'dashboard.tab.cost', 'dashboard.tab.collab',
+      'dashboard.coming_soon', 'dashboard.refresh',
+      'dashboard.time.just_now', 'dashboard.time.minutes_ago',
+      'dashboard.time.hours_ago', 'dashboard.time.days_ago',
+    ];
     for (const lang of ['zh', 'en', 'ja', 'pt']) {
       const data = locale(lang);
       for (const key of keys) expect(data[key], `${lang}:${key}`).toBeTruthy();
