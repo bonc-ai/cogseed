@@ -26991,6 +26991,75 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-onboard-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .dash-onboard-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
+/* ── 成本标签：双层账本（人话层/技术层）── */
+.dash-cost-big {
+  display: flex; align-items: baseline; gap: 12px;
+  margin-bottom: 14px;
+}
+.dash-cost-amount { font-size: 30px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
+.dash-cost-note { font-size: 12px; color: var(--muted); }
+.dash-budget-warn {
+  border: 1px solid #d4a017;
+  background: rgba(212, 160, 23, 0.10);
+  color: #a07c10;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.dash-cost-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
+}
+.dash-cost-dims { display: flex; gap: 4px; }
+.dash-cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dash-cost-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dash-cost-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.dash-cost-cache.is-na { color: var(--muted); opacity: 0.7; }
+.dash-cost-clinote {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.dash-cost-since { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.dash-price-dialog {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 300;
+}
+.dash-price-card {
+  background: var(--bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  width: min(420px, 90vw);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.dash-price-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.dash-price-desc { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.dash-price-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
 .dash-section { margin-bottom: 28px; }
 .dash-section-head {
   display: flex;
