@@ -246,29 +246,22 @@ async function _renderMenu() {
     return;
   }
 
-  // 已登录：账号头部 + 设置 + 账号管理 + 退出 + 收起。
+  // 已登录：账号头部 + 设置 + 退出 + 收起。
+  // P3394 ACCOUNT-01/03：菜单只保留当前账号状态、设置、退出登录；
+  // 不再提供「账号概览」「登录设备」入口，也不展示 LocalIdentity 绑定状态。
   const maskedId = _chipMaskId((status && status.account_id) || '');
   const displayName = await _chipDisplayName();
   const name = displayName || maskedId;
-  const bound = status && status.bound
-    ? _chipEscapeHtml(t('hub.account.bound_local'))
-    : _chipEscapeHtml(t('hub.account.not_bound'));
 
   menu.innerHTML = `
     <div class="hub-chip-menu-head">
       <span class="hub-chip-avatar is-signed">${_chipIcon('user', 'hub-chip-avatar-icon')}</span>
       <div class="hub-chip-menu-id">
         <span class="hub-chip-menu-name">${_chipEscapeHtml(name)}</span>
-        <span class="hub-chip-menu-sub">${_chipEscapeHtml(maskedId)} · ${bound}</span>
+        <span class="hub-chip-menu-sub">${_chipEscapeHtml(maskedId)}</span>
       </div>
     </div>
     ${settingsItem}
-    <button type="button" class="hub-chip-menu-item" data-chip-action="overview" role="menuitem">
-      ${_chipIcon('info', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.overview'))}
-    </button>
-    <button type="button" class="hub-chip-menu-item" data-chip-action="devices" role="menuitem">
-      ${_chipIcon('monitor', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.chip.menu.devices'))}
-    </button>
     <div class="hub-chip-menu-sep" role="separator"></div>
     <button type="button" class="hub-chip-menu-item is-danger" data-chip-action="sign-out" role="menuitem">
       ${_chipIcon('log-out', 'hub-chip-menu-item-icon')}${_chipEscapeHtml(t('hub.account.sign_out'))}
@@ -398,13 +391,6 @@ async function _onMenuAction(action) {
   if (action === 'settings') {
     // 与面板设置项同路径：只切视图，不指定 tab（默认 tab）。
     if (typeof window.setView === 'function') window.setView('settings');
-    return;
-  }
-  // overview / devices：落到 设置 › 账号 tab（完整管理面），
-  // 与 settings_tabs.js 的 activateSettingsTab 组合使用。
-  if (typeof window.setView === 'function') window.setView('settings');
-  if (typeof window.activateSettingsTab === 'function') {
-    window.activateSettingsTab('account');
   }
 }
 
