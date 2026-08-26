@@ -11169,7 +11169,10 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
     if (failedMessageId) {
       payload = {
         content: t('chat.retry_user_message'),
-        extra: { retry_message_id: failedMessageId },
+        extra: {
+          retry_message_id: failedMessageId,
+          retry_request_id: `req-chat-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
       };
     } else {
       // Compatibility for an unpersisted/legacy live failure with no stable

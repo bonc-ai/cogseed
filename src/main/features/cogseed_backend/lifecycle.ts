@@ -15,9 +15,10 @@ const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus
   recoverable: ['queued'],
 };
 
-function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'task.recoverable' {
+function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 'task.waiting_user' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'task.recoverable' {
   if (status === 'queued') return 'task.queued';
   if (status === 'running') return 'task.started';
+  if (status === 'waiting_user') return 'task.waiting_user';
   if (status === 'completed') return 'task.completed';
   if (status === 'cancelled') return 'task.cancelled';
   if (status === 'recoverable') return 'task.recoverable';
@@ -26,6 +27,11 @@ function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 
 
 function isTerminal(status: CogSeedTaskStatus): boolean {
   return status === 'completed' || status === 'cancelled';
+}
+
+function safeErrorCode(value: unknown): string | undefined {
+  const code = typeof value === 'string' ? value.trim() : '';
+  return code && code.length <= 120 && /^[A-Za-z0-9_.:-]+$/.test(code) ? code : undefined;
 }
 
 export async function transitionCogSeedTask(
@@ -42,12 +48,18 @@ export async function transitionCogSeedTask(
   if (isTerminal(current.status) || !TRANSITIONS[current.status].includes(nextStatus)) {
     throw new Error(`invalid CogSeed task transition ${current.status} -> ${nextStatus}`);
   }
-  const updated = await updateCogSeedTask(userId, taskId, (task) => ({
-    ...task,
-    status: nextStatus,
-    updatedAt: nowIso(),
-    ...(isTerminal(nextStatus) ? { terminalAt: nowIso() } : {}),
-  }));
+  const errorCode = safeErrorCode(payload.errorCode);
+  const updated = await updateCogSeedTask(userId, taskId, (task) => {
+    const next: CogSeedTaskRecord = {
+      ...task,
+      status: nextStatus,
+      updatedAt: nowIso(),
+      ...(isTerminal(nextStatus) ? { terminalAt: nowIso() } : {}),
+    };
+    delete next.errorCode;
+    if (errorCode && (nextStatus === 'failed' || nextStatus === 'recoverable')) next.errorCode = errorCode;
+    return next;
+  });
   await appendCogSeedTaskEvent(userId, taskId, updated.sessionId, eventType(nextStatus), payload);
   return updated;
 }
@@ -59,6 +71,7 @@ export async function markCogSeedTaskRecoverable(userId: string, taskId: string,
 export async function retryCogSeedTask(userId: string, taskId: string, requestId: string): Promise<CogSeedTaskRecord> {
   const previous = await readCogSeedTask(userId, taskId);
   if (!previous) throw new Error('CogSeed task not found');
+  if (previous.executionKind === 'group-chat') throw new Error('Group Chat tasks must be retried through Group Chat');
   if (previous.status !== 'recoverable' && previous.status !== 'failed') {
     throw new Error('CogSeed task is not retryable');
   }

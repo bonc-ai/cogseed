@@ -24,6 +24,10 @@ const _rendererFeatureManifest = Object.freeze({
   auto: [
     { src: './modules/auto.js' },
   ],
+  'run-center': [
+    { src: './modules/run-center-board.js' },
+    { src: './modules/run-center.js' },
+  ],
   contexts: [
     { src: './modules/library-transfer.js' },
     { src: './modules/contexts.js' },

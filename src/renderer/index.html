@@ -42,6 +42,7 @@
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
+        <button class="sidebar-btn" id="run-center-btn"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行中心</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
         <button class="sidebar-btn" id="dashboard-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.dashboard">智能体总览</span></button>
@@ -1104,6 +1105,11 @@
             <div class="auto-empty empty" id="auto-empty" data-i18n="auto.empty">No auto tasks yet</div>
           </div>
         </div>
+      </section>
+
+      <!-- Run Center: private Task/Event projections only, loaded on demand. -->
+      <section class="panel" id="panel-run-center">
+        <div id="run-center-root"></div>
       </section>
 
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->

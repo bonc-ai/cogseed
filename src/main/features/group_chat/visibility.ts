@@ -127,6 +127,8 @@ export interface GroupMessage {
   failure_kind?: GroupMessageFailureKind;
   /** Stable low-cardinality reason paired with `failure_kind`. */
   failure_code?: string;
+  /** Host action idempotency key. This is a safe correlation id, never user text. */
+  action_request_id?: string;
   /** Internal model-facing text. UI renders `text`; workers use this when
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */

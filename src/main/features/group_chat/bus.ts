@@ -138,6 +138,10 @@ import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import { getThinkingLevel } from "../config";
+import {
+  groupChatTaskBridge,
+  type GroupChatTaskBridge,
+} from "../cogseed_backend/group-chat-task-bridge";
 
 // Narrowed once so TS can see the excluded 'auto' branch.
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
@@ -1294,6 +1298,8 @@ interface CidState {
     projectionId?: string;
     forecastId?: string;
     wakeRequestId?: string;
+    /** Dashboard projection only; never controls Group Chat execution. */
+    cogseedTaskId?: string;
     /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
      *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
      *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
@@ -1385,6 +1391,7 @@ type InteractiveFollowupStarter = (input: {
 let _interactiveFollowupStarterForTest: InteractiveFollowupStarter | null = null;
 type BackendConversationCanceller = (userId: string, conversationId: string) => Promise<unknown>;
 let _backendConversationCancellerForTest: BackendConversationCanceller | null = null;
+let _groupChatTaskBridgeForTest: GroupChatTaskBridge | null = null;
 
 export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
@@ -1421,6 +1428,14 @@ export function _setBackendConversationCancellerForTest(
   canceller: BackendConversationCanceller | null,
 ): void {
   _backendConversationCancellerForTest = canceller;
+}
+
+export function _setGroupChatTaskBridgeForTest(bridge: GroupChatTaskBridge | null): void {
+  _groupChatTaskBridgeForTest = bridge;
+}
+
+function observedTaskBridge(): GroupChatTaskBridge {
+  return _groupChatTaskBridgeForTest || groupChatTaskBridge;
 }
 
 function getOrInitCid(uid: string, cid: string): CidState {
@@ -1520,7 +1535,7 @@ function _emitTaskRunTerminalIfQuiescent(
         ? "waiting_input"
         : run.status || "failed";
   const listeners = [..._taskTerminalListeners];
-  void (async () => {
+  trackBackgroundWrite(state, (async () => {
     // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
     // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
     // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
@@ -1571,6 +1586,15 @@ function _emitTaskRunTerminalIfQuiescent(
     }
     if (!event.logical_run_id) event.logical_run_id = run.runId;
     if (!event.execution_id) event.execution_id = run.runId;
+    if (run.cogseedTaskId) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: run.cogseedTaskId,
+        status,
+        ...(event.finished_message_id ? { messageId: event.finished_message_id } : {}),
+        ...(status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
+      });
+    }
     for (const listener of listeners) {
       try {
         listener(event);
@@ -1578,7 +1602,7 @@ function _emitTaskRunTerminalIfQuiescent(
         log.warn(`task terminal listener threw: ${(err as Error).message}`);
       }
     }
-  })();
+  })(), "task terminal projection");
 }
 
 function emit(state: CidState, ev: GroupEvent): void {
@@ -1781,7 +1805,7 @@ export interface ProjectedGroupProcessInput {
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
   data: Record<string, unknown>;
 }
 
@@ -1931,6 +1955,8 @@ export interface EnqueueParams {
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
   failure_code?: string;
+  /** Durable host action id used to make retry/continuation enqueue idempotent. */
+  actionRequestId?: string;
   model_text?: string;
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
@@ -2548,6 +2574,7 @@ async function _enqueueBody(
       : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
+    ...(params.actionRequestId ? { action_request_id: params.actionRequestId } : {}),
     ...(params.model_text && params.model_text.trim()
       ? { model_text: params.model_text }
       : {}),
@@ -2622,6 +2649,19 @@ async function _enqueueBody(
       state.taskRun.anchorMessageId = msg.id;
     }
     state.taskRun.lastMessageId = msg.id;
+    const opensObservedRun = !params.internalControl
+      && !backendFollowupAgentId
+      && !state.taskRun.cogseedTaskId
+      && (fromActorId === USER_ID || params.externalInbound === true);
+    if (opensObservedRun) {
+      const observed = await observedTaskBridge().startRun({
+        userId: uid,
+        conversationId: cid,
+        runId: state.taskRun.runId,
+        sourceMessageId: msg.id,
+      });
+      if (observed) state.taskRun.cogseedTaskId = observed.taskId;
+    }
   }
   // Strip the process trail before writing visibility slices: only the user-
   // facing main jsonl needs it for history reload. Agent workers replay
@@ -3422,6 +3462,24 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  const observedTurn = state.taskRun?.cogseedTaskId
+    ? await observedTaskBridge().startTurn({
+        userId: state.uid,
+        conversationId: state.cid,
+        runId: state.taskRun.runId,
+        turnId: item.turnId,
+        sourceMessageId: item.msgId,
+        parentTaskId: state.taskRun.cogseedTaskId,
+        actorId: w.actor.id,
+        ...(w.actor.name ? { actorName: w.actor.name } : {}),
+        actorKind: w.actor.kind === 'worker'
+          ? 'worker'
+          : w.actor.kind === 'agent'
+            ? 'agent'
+            : 'commander',
+        ...(stepId ? { workflowStepId: stepId } : {}),
+      })
+    : null;
   let cliProcessPid: number | undefined;
   let inProcessSessionIsActive = () => false;
   const appendCoordinatorEvent = (event: ProcessEvent): void => {
@@ -3522,6 +3580,20 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: result.kind === 'completed' ? result.terminalStatus : 'failed',
+        ...(result.kind === 'completed' && result.persistedMsg?.id ? { messageId: result.persistedMsg.id } : {}),
+        ...(result.kind === 'completed' && result.outcome.kind === 'persist' && result.outcome.failureCode
+          ? { errorCode: result.outcome.failureCode }
+          : result.kind === 'early' && result.failureCode
+            ? { errorCode: result.failureCode }
+            : {}),
+        process: processItems,
+      });
+    }
     return result;
   } catch (err) {
     const coordinatorAbort =
@@ -3540,6 +3612,15 @@ async function runActorTurn(
         error: logErrorRef(
           new Error("Nested workflow step settlement failed."),
         ),
+      });
+    }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: aborted ? 'cancelled' : 'failed',
+        errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
+        process: processItems,
       });
     }
     if (stepId && !settled) {

@@ -318,4 +318,30 @@ describe('group_chat failed-turn smart retry', () => {
 
     expect(resolved).toEqual({ ok: false, error: 'retry target is not a failed assistant reply' });
   });
+
+  it('replays a Dashboard retry idempotently and rejects request-id payload conflicts', async () => {
+    const cid = 'idempotent-retry-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const input = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-idempotent-retry',
+    };
+
+    const first = await groupChat.retryFailedTurn(input);
+    const replay = await groupChat.retryFailedTurn(input);
+    const conflict = await groupChat.retryFailedTurn({ ...input, visibleText: 'Different request' });
+
+    expect(first).toMatchObject({ ok: true, mode: 'restart', msg: { action_request_id: input.requestId } });
+    expect(replay).toMatchObject({ ok: true, mode: 'restart', msg: { id: first.msg?.id } });
+    expect(conflict).toEqual({ ok: false, error: 'retry request ID payload conflict' });
+    const layout = await import('../../../../src/main/util/project-layout');
+    const rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    expect(rows.filter((row) => row.action_request_id === input.requestId)).toHaveLength(1);
+    await groupChat.dropConv(UID, cid);
+  });
 });

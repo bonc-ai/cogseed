@@ -12,6 +12,7 @@ import { markCogSeedTaskRecoverable, retryCogSeedTask as retryStoredCogSeedTask,
 import { createCogSeedTask, listCogSeedTasks, readCogSeedTask, updateCogSeedTask } from './task-store';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
 import { buildDispatchedRuntimeAssetContext, buildRuntimeAssetContext } from './runtime-asset-context';
+import { cogSeedRequestFingerprint } from './request-fingerprint';
 import { readCogSeedSession } from './session-store';
 import type { CogSeedTaskRecord } from './types';
 import type { CogSeedGroupChatProjectionInput, CogSeedProjectionEvent } from './group-chat-projection';
@@ -101,6 +102,11 @@ function asRuntimeInput(input: StartCogSeedTaskInput & { runtimeSessionId?: stri
 
 function terminal(task: CogSeedTaskRecord): boolean {
   return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+}
+
+function runtimeErrorCode(value: unknown): string {
+  const code = typeof value === 'string' ? value.trim() : '';
+  return code && code.length <= 120 && /^[A-Za-z0-9_.:-]+$/.test(code) ? code : 'runtime_failed';
 }
 
 /**
@@ -196,13 +202,13 @@ async function mapRuntimeEvent(
     return cancelled;
   }
   if (event.type === 'error' && event.status === 'failed') {
-    const failed = await transitionCogSeedTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
+    const failureCode = runtimeErrorCode(event.metadata?.code);
+    const failed = await transitionCogSeedTask(userId, task.taskId, 'failed', { errorCode: failureCode });
     // Carry the executor's failure detail (gateway/CLI error text, failure
     // code) into the projected event — without it every failure collapses
     // into the generic retry notice and the root cause is unrecoverable
     // from the conversation history alone.
     const failureDetail = String(event.error || '').trim();
-    const failureCode = typeof event.metadata?.code === 'string' ? event.metadata.code : '';
     await projectTaskEventBestEffort(userId, failed, {
       eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.failed',
@@ -356,6 +362,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
 
     async retryCogSeedTask(userId, taskId, requestId) {
       const retried = await retryStoredCogSeedTask(userId, taskId, requestId);
+      if (retried.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
       if (retried.status !== 'created') return retried;
       const capabilities = await resolveRuntimeCapabilities(userId, retried.requestId, retried.runtimeSessionId);
       const retryInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
@@ -382,18 +389,42 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
     async resumeCogSeedTask(userId, taskId, input) {
       const current = await readCogSeedTask(userId, taskId);
       if (!current) throw new Error('CogSeed task not found');
-      if (current.status === 'completed' || current.status === 'cancelled') return current;
-      if (current.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
+      if (current.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
       const continuation = input.continuation.trim();
       if (!continuation) throw new Error('CogSeed continuation is required');
+      const requestFingerprint = cogSeedRequestFingerprint('resume', {
+        taskId,
+        continuation,
+        profileId: input.profileId,
+        context: input.context,
+        attachments: input.attachments,
+        workingDir: input.workingDir,
+        coordinationId: input.coordinationId,
+        parentTaskId: input.parentTaskId,
+        coordinationDepth: input.coordinationDepth,
+      });
+      if (current.lastResumeRequestId === input.requestId) {
+        if (current.lastResumeRequestFingerprint && current.lastResumeRequestFingerprint !== requestFingerprint) {
+          throw new Error('CogSeed request ID payload conflict');
+        }
+        return current;
+      }
+      if (current.status === 'completed' || current.status === 'cancelled') return current;
+      if (current.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
       if (resumeClaims.has(taskId)) return current;
       resumeClaims.add(taskId);
       try {
         const reserved = await updateCogSeedTask(userId, taskId, (task) => {
           if (task.status !== 'recoverable') throw new Error('CogSeed task is not resumable');
-          if (task.lastResumeRequestId === input.requestId) return task;
-          return { ...task, lastResumeRequestId: input.requestId };
+          if (task.lastResumeRequestId === input.requestId) {
+            if (task.lastResumeRequestFingerprint && task.lastResumeRequestFingerprint !== requestFingerprint) {
+              throw new Error('CogSeed request ID payload conflict');
+            }
+            return task;
+          }
+          return { ...task, lastResumeRequestId: input.requestId, lastResumeRequestFingerprint: requestFingerprint };
         });
+        if (reserved.executionKind === 'group-chat') throw new Error('Group Chat tasks cannot run in CogSeed Runtime');
         const resumeInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
           requestId: input.requestId,
           task: continuation,

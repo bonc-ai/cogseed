@@ -204,7 +204,9 @@ describe('CogSeed Runtime controller', () => {
     });
     const duplicate = await controller.startCogSeedTask(USER, {
       requestId: 'req-controller',
-      task: 'This must not execute again.',
+      task: 'Read the file.',
+      agentId: 'agent-controller',
+      profileId: 'openai-compatible:cogseed',
     });
 
     expect(first.status).toBe('running');
@@ -214,19 +216,25 @@ describe('CogSeed Runtime controller', () => {
       agent_id: 'agent-controller',
       model_profile: 'openai-compatible:cogseed',
     })]);
+    await expect(controller.startCogSeedTask(USER, {
+      requestId: 'req-controller',
+      task: 'This must not execute again.',
+    })).rejects.toThrow(/payload conflict/i);
 
     await eventually(async () => {
       await expect(tasks.readCogSeedTask(USER, first.taskId)).resolves.toMatchObject({ status: 'completed' });
     });
-    await expect(events.readCogSeedTaskEvents(USER, first.taskId, 0, 20)).resolves.toEqual([
-      expect.objectContaining({ type: 'task.created' }),
-      expect.objectContaining({ type: 'task.queued' }),
-      expect.objectContaining({ type: 'task.started' }),
-      expect.objectContaining({ type: 'model.delta', payload: { text: 'thinking' } }),
-      expect.objectContaining({ type: 'tool.started', payload: { name: 'read_file' } }),
-      expect.objectContaining({ type: 'artifact', payload: { uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown' } }),
-      expect.objectContaining({ type: 'task.completed', payload: { outputChars: 12 } }),
-    ]);
+    await eventually(async () => {
+      await expect(events.readCogSeedTaskEvents(USER, first.taskId, 0, 20)).resolves.toEqual([
+        expect.objectContaining({ type: 'task.created' }),
+        expect.objectContaining({ type: 'task.queued' }),
+        expect.objectContaining({ type: 'task.started' }),
+        expect.objectContaining({ type: 'model.delta', payload: { text: 'thinking' } }),
+        expect.objectContaining({ type: 'tool.started', payload: { name: 'read_file' } }),
+        expect.objectContaining({ type: 'artifact', payload: { uri: 'p3394-object:sha256:abc', digest: 'abc', name: 'report.md', media_type: 'text/markdown' } }),
+        expect.objectContaining({ type: 'task.completed', payload: { outputChars: 12 } }),
+      ]);
+    });
   });
 
   it('cancels a background task through its own AbortController without fallback or retry', async () => {
@@ -253,6 +261,34 @@ describe('CogSeed Runtime controller', () => {
       await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 20)).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({ type: 'task.cancelled' }),
       ]));
+    });
+  });
+
+  it('persists a safe runtime failure code for renderer task details', async () => {
+    const runtime = runtimeFrom([
+      {
+        type: 'error',
+        request_id: 'req-runtime-failure-code',
+        runtime_session_id: 'mruntime-runtime-failure-code',
+        status: 'failed',
+        error: 'Provider request failed.',
+        metadata: { code: 'provider_timeout' },
+      },
+    ]);
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const controller = createCogSeedRuntimeController({ runtime });
+
+    const task = await controller.startCogSeedTask(USER, {
+      requestId: 'req-runtime-failure-code',
+      task: 'This private prompt must not become the renderer title.',
+    });
+
+    await eventually(async () => {
+      await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({
+        status: 'failed',
+        errorCode: 'provider_timeout',
+      });
     });
   });
 
@@ -341,6 +377,18 @@ describe('CogSeed Runtime controller', () => {
       runtime_session_id: original.runtimeSessionId,
     });
     expect((runtime.inputs[1] as { task: string }).task).not.toContain('Original prompt');
+    await expect(controller.resumeCogSeedTask(USER, original.taskId, {
+      requestId: 'req-resume',
+      continuation: 'Continue from the persisted runtime state.',
+    })).resolves.toMatchObject({ taskId: original.taskId });
+    await expect(controller.resumeCogSeedTask(USER, original.taskId, {
+      requestId: 'req-resume',
+      continuation: 'A conflicting continuation must not run.',
+    })).rejects.toThrow(/payload conflict/i);
+    expect(runtime.inputs).toHaveLength(2);
+    const persisted = await tasks.readCogSeedTask(USER, original.taskId);
+    expect(persisted?.lastResumeRequestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(persisted)).not.toContain('Continue from the persisted runtime state.');
   });
 
   it('reports independent CogSeed runtime status and can restart its worker service', async () => {

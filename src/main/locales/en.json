@@ -257,5 +257,6 @@
   "touchpoints.card.button.retry": "Retry",
   "touchpoints.card.button.forget_source": "Forget source",
   "touchpoints.card.button.revoke_grant": "Revoke grant",
-  "touchpoints.card.resolved": "Processed"
+  "touchpoints.card.resolved": "Processed",
+  "dashboard.retry_user_message": "(retry)"
 }

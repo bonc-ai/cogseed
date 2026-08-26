@@ -66,12 +66,32 @@ describe('CogSeed task and session store', () => {
 
     const [first, second] = await Promise.all([
       store.createCogSeedTask(USER_A, { requestId: 'req-idempotent', task: 'First payload.' }),
-      store.createCogSeedTask(USER_A, { requestId: 'req-idempotent', task: 'Second payload must not run.' }),
+      store.createCogSeedTask(USER_A, { requestId: 'req-idempotent', task: 'First payload.' }),
     ]);
 
     expect([first.created, second.created].filter(Boolean)).toHaveLength(1);
     expect(first.task.taskId).toBe(second.task.taskId);
     expect(first.task.task).toBe(second.task.task);
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-idempotent',
+      task: 'Second payload must not run.',
+    })).rejects.toThrow(/payload conflict/i);
+  });
+
+  it('keeps legacy request claims readable while fingerprinting all new claims', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const created = await store.createCogSeedTask(USER_A, { requestId: 'req-legacy-claim', task: 'Original request.' });
+    const claimFile = paths.cogseedRequestClaimFile(USER_A, 'req-legacy-claim');
+    const claim = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
+    expect(claim.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    delete claim.requestFingerprint;
+    fs.writeFileSync(claimFile, JSON.stringify(claim));
+
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-legacy-claim',
+      task: 'Legacy replay keeps its historical behavior.',
+    })).resolves.toMatchObject({ created: false, task: { taskId: created.task.taskId } });
   });
 
   it('persists formal Agent identity and maps a commander conversation alias to the durable member session', async () => {

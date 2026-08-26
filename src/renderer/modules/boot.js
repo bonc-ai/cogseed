@@ -287,6 +287,7 @@ function _lazyFeaturePanel(view) {
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'auto' ? 'panel-auto'
+    : view === 'run-center' ? 'panel-run-center'
     : view === 'marketplace' ? 'panel-marketplace'
     : view === 'devtools' ? 'panel-devtools'
     : null;
@@ -380,6 +381,7 @@ function setView(view, cid, opts = {}) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
+                : view === 'run-center' ? 'panel-run-center'
                 : view === 'agents' || view === 'contexts' ? 'panel-connections'
                 : view === 'skills' ? 'panel-connections'
                 : view === 'personal-ontology' ? 'panel-recall'
@@ -396,6 +398,7 @@ function setView(view, cid, opts = {}) {
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
+  document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
@@ -420,6 +423,11 @@ function setView(view, cid, opts = {}) {
   if (view === 'dashboard') {
     _loadViewFeature('dashboard', 'dashboard', () => {
       if (typeof renderDashboard === 'function') renderDashboard();
+    });
+  }
+  if (view === 'run-center') {
+    _loadViewFeature('run-center', 'run-center', () => {
+      if (typeof renderRunCenter === 'function') renderRunCenter();
     });
   }
   if (view === 'conversation' && cid) {

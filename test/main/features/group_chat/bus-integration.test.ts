@@ -424,6 +424,7 @@ afterEach(async () => {
   // ENOENT log noise.
   try {
     const bus = await import("../../../../src/main/features/group_chat/bus");
+    bus._setGroupChatTaskBridgeForTest(null);
     (bus as any)._setCoordinatorLeaseFactoryForTest?.();
     (bus as any)._setNestedDispatchOutcomeObserverForTest?.(null);
     (bus as any)._setNestedDispatchAttemptHooksForTest?.(null);
@@ -1404,6 +1405,14 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
+    let observedTaskSequence = 0;
+    const observedParent = { taskId: 'cogseed-task-worker-parent', status: 'running' } as any;
+    const taskBridge = {
+      startRun: vi.fn(async () => observedParent),
+      startTurn: vi.fn(async () => ({ taskId: `cogseed-task-worker-turn-${++observedTaskSequence}`, status: 'running' } as any)),
+      finishTask: vi.fn(async (input: any) => ({ taskId: input.taskId, status: input.status } as any)),
+    };
+    bus._setGroupChatTaskBridgeForTest(taskBridge);
     (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
       _recordedNestedOutcomes.push(outcome);
     });
@@ -1441,6 +1450,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       workerCall,
       "an in-process worker sub-run should have streamed",
     ).toBeTruthy();
+    expect(taskBridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      parentTaskId: observedParent.taskId,
+      actorKind: 'worker',
+      workflowStepId: expect.stringMatching(/^wstep-/),
+    }));
 
     // 2) Its FULL result came back SYNCHRONOUSLY as the run_worker tool result,
     //    wrapped as <worker-result> — the handback IS the tool result.

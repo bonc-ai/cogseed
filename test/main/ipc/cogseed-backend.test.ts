@@ -50,6 +50,12 @@ const cogseedService = {
   streamEvents: vi.fn(async function* () {
     yield { type: 'event', event: { eventId: 'cogseed-event-1', taskId: 'cogseed-task-ipc', sessionId: 'cogseed-session-ipc', sequence: 1 } };
   }),
+  board: vi.fn(async () => ({
+    schemaVersion: 1,
+    tasks: [{ ...taskSummary(), column: 'running', sessionTitle: 'IPC run' }],
+    groups: [],
+    counts: { pending: 0, running: 1, attention: 0, completed: 0, archived: 0 },
+  })),
   sessions: vi.fn(async () => [{ sessionId: 'cogseed-session-ipc', createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:01.000Z', taskCount: 1, activeTaskCount: 1, latestStatus: 'running', hasRecovery: false }]),
   session: vi.fn(async () => ({
     session: { sessionId: 'cogseed-session-ipc', createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:01.000Z', taskCount: 1, activeTaskCount: 1, latestStatus: 'running', hasRecovery: false },
@@ -94,6 +100,7 @@ describe('Mate Agent backend IPC channels', () => {
     await expect(call('cogseed.task.retry', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-retry', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-retry' });
     await expect(call('cogseed.task.resume', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-resume', continuation: 'Continue.', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', status: 'recoverable' });
     await expect(call('cogseed.task.events', { taskId: 'cogseed-task-ipc', afterSequence: 0, uid: 'attacker' })).resolves.toMatchObject({ ok: true, events: [expect.objectContaining({ eventId: 'cogseed-event-1' })] });
+    await expect(call('cogseed.task.list', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, schemaVersion: 1, tasks: [expect.objectContaining({ column: 'running' })] });
     await expect(call('cogseed.task.action', { action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, sessionId: 'cogseed-session-ipc', workflow: expect.objectContaining({ childTaskIds: [] }) });
 
     expect(cogseedService.start).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc', task: 'Do work.', uid: 'attacker' }));
@@ -102,6 +109,7 @@ describe('Mate Agent backend IPC channels', () => {
     expect(cogseedService.retry).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc-retry', uid: 'attacker' }));
     expect(cogseedService.resume).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', requestId: 'req-ipc-resume', continuation: 'Continue.', uid: 'attacker' }));
     expect(cogseedService.events).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', uid: 'attacker' }));
+    expect(cogseedService.board).toHaveBeenCalledWith(TEST_UID);
     expect(cogseedService.action).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' }));
   });
 

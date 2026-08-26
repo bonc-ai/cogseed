@@ -349,6 +349,7 @@ function bindStaticHandlers() {
   // 首页保持进入新建会话页（panel-new-chat）；「新任务」独立按钮已移除。
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
+  document.getElementById('run-center-btn')?.addEventListener('click', () => _setViewFromSidebar('run-center'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
   document.getElementById('dashboard-btn')?.addEventListener('click', () => _setViewFromSidebar('dashboard'));

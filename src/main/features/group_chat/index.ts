@@ -17,11 +17,13 @@ import {
   conversationMessageFile,
   conversationMessageReadFile,
 } from '../../util/project-layout';
-import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, nowIso, safeId } from '../../storage';
+import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, genId12, nowIso, safeId, writeJson } from '../../storage';
 import { createLogger } from '../../logger';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { t } from '../../i18n';
 import { logErrorRef } from '../../util/log-redact';
+import { fileEditLock } from '../../util/locks';
+import { cogSeedRequestFingerprint } from '../cogseed_backend/request-fingerprint';
 
 import {
   COMMANDER_ID, USER_ID, RESERVED_IDS, readMembers, readState, seedReservedActors, purgeGroupDir,
@@ -921,7 +923,7 @@ export async function replaceUserMessage(
 
 export type FailedTurnRetryMode = 'resume' | 'restart';
 
-export interface RetryFailedTurnInput {
+export interface ResolveFailedTurnRetryInput {
   userId: string;
   cid: string;
   failedMessageId: string;
@@ -930,9 +932,46 @@ export interface RetryFailedTurnInput {
   visibleText: string;
 }
 
+export interface RetryFailedTurnInput extends ResolveFailedTurnRetryInput {
+  requestId: string;
+}
+
 export interface ResolvedFailedTurnRetry {
   mode: FailedTurnRetryMode;
   enqueue: Parameters<typeof enqueue>[0];
+}
+
+interface FailedTurnRetryClaim {
+  schemaVersion: 1;
+  requestId: string;
+  fingerprint: string;
+  failedMessageId: string;
+  status: 'pending' | 'completed';
+  mode?: FailedTurnRetryMode;
+  messageId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function failedTurnRetryClaimFile(userId: string, cid: string, requestId: string): string {
+  return path.join(conversationLayout(userId, cid).groupDir, 'dashboard-retry-claims', `${requestId}.json`);
+}
+
+async function readFailedTurnRetryClaim(file: string): Promise<FailedTurnRetryClaim | null> {
+  try {
+    const value = JSON.parse(await fsp.readFile(file, 'utf8')) as Partial<FailedTurnRetryClaim>;
+    if (value.schemaVersion !== 1
+      || !safeId(value.requestId || '')
+      || !/^[a-f0-9]{64}$/.test(value.fingerprint || '')
+      || !safeId(value.failedMessageId || '')
+      || (value.status !== 'pending' && value.status !== 'completed')) {
+      throw new Error('malformed Group Chat retry claim');
+    }
+    return value as FailedTurnRetryClaim;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 function _processHasCompletedOrStartedTool(msg: GroupMessage): boolean {
@@ -950,7 +989,7 @@ function _processHasCompletedOrStartedTool(msg: GroupMessage): boolean {
  * main process owns this decision so the renderer cannot guess from localized
  * text or stale DOM. */
 export async function resolveFailedTurnRetry(
-  input: RetryFailedTurnInput,
+  input: ResolveFailedTurnRetryInput,
 ): Promise<{ ok: true; value: ResolvedFailedTurnRetry } | { ok: false; error: string }> {
   const { userId, cid, failedMessageId } = input;
   const visibleText = String(input.visibleText || '').trim();
@@ -1085,11 +1124,67 @@ export async function resolveFailedTurnRetry(
 export async function retryFailedTurn(
   input: RetryFailedTurnInput,
 ): Promise<{ ok: boolean; mode?: FailedTurnRetryMode; msg?: GroupMessage; error?: string }> {
+  const requestId = String(input.requestId || '').trim();
+  if (!safeId(requestId)) return { ok: false, error: 'invalid retry request id' };
+  const fingerprint = cogSeedRequestFingerprint('retry', {
+    cid: input.cid,
+    failedMessageId: input.failedMessageId,
+    visibleText: String(input.visibleText || '').trim(),
+  });
+  const claimFile = failedTurnRetryClaimFile(input.userId, input.cid, requestId);
   try {
-    const resolved = await resolveFailedTurnRetry(input);
-    if (!resolved.ok) return resolved;
-    const msg = await enqueue(resolved.value.enqueue);
-    return { ok: true, mode: resolved.value.mode, msg };
+    return await fileEditLock(claimFile).runExclusive(async () => {
+      const existing = await readFailedTurnRetryClaim(claimFile);
+      if (existing && existing.fingerprint !== fingerprint) {
+        return { ok: false, error: 'retry request ID payload conflict' };
+      }
+      if (existing?.messageId) {
+        const rows = await readJsonl<GroupMessage>(mainJsonlFile(input.userId, input.cid), 100_000);
+        const msg = rows.find((row) => row.id === existing.messageId && row.action_request_id === requestId);
+        if (msg) return { ok: true, mode: existing.mode, msg };
+      }
+      if (existing?.status === 'pending') {
+        const rows = await readJsonl<GroupMessage>(mainJsonlFile(input.userId, input.cid), 100_000);
+        const msg = rows.find((row) => row.action_request_id === requestId);
+        if (msg) {
+          const completed: FailedTurnRetryClaim = {
+            ...existing,
+            status: 'completed',
+            messageId: msg.id,
+            updatedAt: nowIso(),
+          };
+          await writeJson(claimFile, completed);
+          return { ok: true, mode: completed.mode, msg };
+        }
+      }
+      const resolved = await resolveFailedTurnRetry(input);
+      if (!resolved.ok) return resolved;
+      const timestamp = nowIso();
+      const pending: FailedTurnRetryClaim = {
+        schemaVersion: 1,
+        requestId,
+        fingerprint,
+        failedMessageId: input.failedMessageId,
+        status: 'pending',
+        mode: resolved.value.mode,
+        createdAt: existing?.createdAt || timestamp,
+        updatedAt: timestamp,
+      };
+      await writeJson(claimFile, pending);
+      try {
+        const msg = await enqueue({ ...resolved.value.enqueue, actionRequestId: requestId });
+        await writeJson(claimFile, {
+          ...pending,
+          status: 'completed',
+          messageId: msg.id,
+          updatedAt: nowIso(),
+        } satisfies FailedTurnRetryClaim);
+        return { ok: true, mode: resolved.value.mode, msg };
+      } catch (error) {
+        await fsp.unlink(claimFile).catch(() => undefined);
+        throw error;
+      }
+    });
   } catch (err) {
     log.error('failed-turn retry failed', { error: logErrorRef(err) });
     return { ok: false, error: (err as Error).message || String(err) };
