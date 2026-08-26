@@ -7078,15 +7078,20 @@ function _renderChannelSidebarGroups(channelConvs) {
   return groups.map(({ platform, convs }) => {
     const collapsed = !!_sidebarCollapse.channelGroups[platform];
     const label = _channelGroupLabel(platform, convs);
+    // 与「最近任务」等分区头同构（conv-list-space-title + fold 按钮 +
+    // 渐变线 + 计数徽章），保证侧栏所有标题行视觉一致；渠道差异只保留
+    // 标签前的渠道图标与组内会话数徽章。
     return `
-    <button type="button" class="conv-list-section-header conv-channel-group is-collapsible${collapsed ? ' is-collapsed' : ''}"
-      data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
-      aria-expanded="${collapsed ? 'false' : 'true'}">
-      <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
-      <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
-      <span class="conv-list-section-label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+    <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
+      <button type="button" class="conv-list-section-fold" data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
+        aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+        <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
+        <span class="conv-list-section-label">${escapeHtml(label)}</span>
+      </button>
       <span class="conv-list-section-count">${convs.length}</span>
-    </button>
+      <span class="conv-list-section-rule" aria-hidden="true"></span>
+    </div>
     ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
   }).join('');
 }

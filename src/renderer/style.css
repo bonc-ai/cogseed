@@ -2771,25 +2771,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   line-height: 18px;
   text-align: center;
 }
-/* 消息渠道分组（飞书/微信等）：组头复用空间组样式骨架，渠道图标与文字同行 */
-.conv-list-section-header.conv-channel-group {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  padding: 10px 8px 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  appearance: none;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #7c8a99;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  text-align: left;
-}
-.conv-list-section-header.conv-channel-group:hover { background: rgba(148, 163, 184, 0.1); }
+/* 消息渠道分组（飞书/微信等）：标题行完全复用 conv-list-space-title 分区头
+   样式（字体/行高/折叠箭头/渐变线同款），渠道差异只有标签前的图标位。 */
 .conv-channel-group-icon {
   flex: 0 0 auto;
   display: inline-flex;
@@ -2803,13 +2786,6 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   width: 15px;
   height: 15px;
   display: block;
-}
-.conv-list-section-header.conv-channel-group .conv-list-section-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 /* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目）。
    大厂风格：克制的分组标签 —— 小字号、中字重、中性灰，无分隔线，靠留白分区。 */
