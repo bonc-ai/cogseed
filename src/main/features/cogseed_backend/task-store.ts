@@ -21,6 +21,7 @@ import {
   readCogSeedSession,
   listCogSeedSessions,
   setCogSeedSessionActiveTask,
+  setCogSeedSessionDisplayName,
 } from './session-store';
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import {
@@ -33,6 +34,7 @@ import {
 } from './types';
 import { listSkillVersions } from '../skills/version-store';
 import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
+import { cogSeedRequestFingerprint } from './request-fingerprint';
 
 export {
   getOrCreateCogSeedAgentSession,
@@ -40,6 +42,7 @@ export {
   readCogSeedSession,
   listCogSeedSessions,
   setCogSeedSessionActiveTask,
+  setCogSeedSessionDisplayName,
 } from './session-store';
 
 export interface CreateCogSeedTaskInput {
@@ -48,7 +51,14 @@ export interface CreateCogSeedTaskInput {
   sessionId?: string;
   conversationId?: string;
   agentId?: string;
-  executionKind?: 'cogseed-native' | 'local-cli';
+  executionKind?: 'cogseed-native' | 'local-cli' | 'group-chat';
+  groupChatRunId?: string;
+  groupChatTurnId?: string;
+  groupChatSourceMessageId?: string;
+  groupChatMessageId?: string;
+  groupChatActorKind?: 'commander' | 'agent' | 'worker';
+  groupChatWorkflowRunId?: string;
+  groupChatWorkflowStepId?: string;
   allowedSkillIds?: string[];
   skillVersionPins?: CogSeedTaskSkillVersionPin[];
   skillVersionPinStatus?: 'pinned' | 'unpinned';
@@ -161,9 +171,21 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.workingDir !== undefined && (typeof row.workingDir !== 'string' || !path.isAbsolute(row.workingDir))) {
     throw new Error('malformed CogSeed task');
   }
-  if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli') {
+  if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli' && row.executionKind !== 'group-chat') {
     throw new Error('malformed CogSeed task');
   }
+  for (const key of ['groupChatRunId', 'groupChatTurnId', 'groupChatSourceMessageId', 'groupChatMessageId', 'groupChatWorkflowRunId', 'groupChatWorkflowStepId'] as const) {
+    if (row[key] !== undefined && (typeof row[key] !== 'string' || !safeId(row[key]))) {
+      throw new Error('malformed CogSeed task');
+    }
+  }
+  if (row.groupChatActorKind !== undefined
+    && row.groupChatActorKind !== 'commander'
+    && row.groupChatActorKind !== 'agent'
+    && row.groupChatActorKind !== 'worker') {
+    throw new Error('malformed CogSeed task');
+  }
+  if (row.executionKind === 'group-chat' && row.groupChatRunId === undefined) throw new Error('malformed CogSeed task');
   if (row.allowedSkillIds !== undefined) {
     if (!Array.isArray(row.allowedSkillIds) || row.allowedSkillIds.length > 128) throw new Error('malformed CogSeed task');
     for (const skillId of row.allowedSkillIds) assertCogSeedAgentId(String(skillId));
@@ -201,6 +223,10 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.executionKind === 'local-cli' && row.localCli === undefined) throw new Error('malformed CogSeed task');
   assertCogSeedRequestId(row.requestId);
   if (row.lastResumeRequestId !== undefined) assertCogSeedRequestId(String(row.lastResumeRequestId));
+  if (row.lastResumeRequestFingerprint !== undefined
+    && (typeof row.lastResumeRequestFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(row.lastResumeRequestFingerprint))) {
+    throw new Error('malformed CogSeed task');
+  }
   if (typeof row.task !== 'string' || typeof row.status !== 'string' || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') {
     throw new Error('malformed CogSeed task');
   }
@@ -215,7 +241,40 @@ function validateClaim(userId: string, requestId: string, value: unknown): CogSe
   }
   if (typeof row.taskId !== 'string' || typeof row.createdAt !== 'string') throw new Error('malformed CogSeed request claim');
   assertCogSeedTaskId(row.taskId);
+  if (row.requestFingerprint !== undefined
+    && (typeof row.requestFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(row.requestFingerprint))) {
+    throw new Error('malformed CogSeed request claim');
+  }
   return row as unknown as CogSeedRequestClaim;
+}
+
+function createRequestFingerprint(input: CreateCogSeedTaskInput, normalizedTask: string): string {
+  return cogSeedRequestFingerprint('create', {
+    task: normalizedTask,
+    sessionId: input.sessionId,
+    conversationId: input.conversationId,
+    agentId: input.agentId,
+    executionKind: input.executionKind,
+    groupChatRunId: input.groupChatRunId,
+    groupChatTurnId: input.groupChatTurnId,
+    groupChatSourceMessageId: input.groupChatSourceMessageId,
+    groupChatMessageId: input.groupChatMessageId,
+    groupChatActorKind: input.groupChatActorKind,
+    groupChatWorkflowRunId: input.groupChatWorkflowRunId,
+    groupChatWorkflowStepId: input.groupChatWorkflowStepId,
+    allowedSkillIds: input.allowedSkillIds ? [...input.allowedSkillIds].sort() : undefined,
+    skillVersionPins: input.skillVersionPins
+      ? [...input.skillVersionPins].sort((left, right) => left.skillId.localeCompare(right.skillId))
+      : undefined,
+    localCli: input.localCli,
+    profileId: input.profileId,
+    abilityAssetIds: input.abilityAssetIds ? [...input.abilityAssetIds].sort() : undefined,
+    workingDir: input.workingDir?.trim(),
+    retryOfTaskId: input.retryOfTaskId,
+    coordinationId: input.coordinationId,
+    parentTaskId: input.parentTaskId,
+    coordinationDepth: input.coordinationDepth,
+  });
 }
 
 export async function readCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord | null> {
@@ -302,12 +361,22 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
   if (input.executionKind === 'local-cli' && !String(input.localCli?.cli || '').trim()) {
     throw new Error('CogSeed local CLI configuration is required');
   }
+  for (const value of [input.groupChatRunId, input.groupChatTurnId, input.groupChatSourceMessageId, input.groupChatMessageId, input.groupChatWorkflowRunId, input.groupChatWorkflowStepId]) {
+    if (value !== undefined && !safeId(value)) throw new Error('invalid CogSeed Group Chat correlation id');
+  }
+  if (input.executionKind === 'group-chat' && !input.groupChatRunId) {
+    throw new Error('CogSeed Group Chat run id is required');
+  }
+  const requestFingerprint = createRequestFingerprint(input, task);
   const claimFile = cogseedRequestClaimFile(userId, requestId);
 
   return fileEditLock(claimFile).runExclusive(async () => {
     try {
       const claimText = await fs.readFile(claimFile, 'utf8');
       const claim = validateClaim(userId, requestId, JSON.parse(claimText));
+      if (claim.requestFingerprint && claim.requestFingerprint !== requestFingerprint) {
+        throw new Error('CogSeed request ID payload conflict');
+      }
       const existing = await readCogSeedTask(userId, claim.taskId);
       if (!existing) throw new Error('CogSeed request claim references a missing task');
       return { task: existing, created: false };
@@ -361,6 +430,13 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       ...(requestedConversationId ? { conversationId: requestedConversationId } : {}),
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       ...(input.executionKind ? { executionKind: input.executionKind } : {}),
+      ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}),
+      ...(input.groupChatTurnId ? { groupChatTurnId: input.groupChatTurnId } : {}),
+      ...(input.groupChatSourceMessageId ? { groupChatSourceMessageId: input.groupChatSourceMessageId } : {}),
+      ...(input.groupChatMessageId ? { groupChatMessageId: input.groupChatMessageId } : {}),
+      ...(input.groupChatActorKind ? { groupChatActorKind: input.groupChatActorKind } : {}),
+      ...(input.groupChatWorkflowRunId ? { groupChatWorkflowRunId: input.groupChatWorkflowRunId } : {}),
+      ...(input.groupChatWorkflowStepId ? { groupChatWorkflowStepId: input.groupChatWorkflowStepId } : {}),
       ...(allowedSkillIds !== undefined ? { allowedSkillIds } : {}),
       ...(skillVersionPins?.length ? { skillVersionPins } : {}),
       ...(allowedSkillIds?.length ? { skillVersionPinStatus: skillVersionPins?.length === allowedSkillIds.length ? 'pinned' : 'unpinned' } : {}),
@@ -393,6 +469,7 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       taskId: taskRecord.taskId,
       ownerId: userId,
       createdAt,
+      requestFingerprint,
     };
     await writeJson(cogseedTaskFile(userId, taskRecord.taskId), taskRecord);
     await writeJson(claimFile, claim);
