@@ -21,6 +21,7 @@ import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { userLocalRoot } from '../paths';
+import { setModelUsageSink } from '../model/core-agent/usage-events';
 import type { ModelUsageEvent } from '../model/core-agent/usage-events';
 
 const BATCH_THRESHOLD = 50;
@@ -170,6 +171,18 @@ export async function readUsageEvents(uid: string, fromMs: number, toMs: number)
   }
   out.sort((a, b) => a.at - b.at);
   return out;
+}
+
+/**
+ * Wire the model-layer usage channel into this ledger. Events carry their own
+ * `userId` (it was in scope at the model call site), so no active-user lookup
+ * is needed — and events without identity are dropped rather than recorded
+ * as orphans that would poison per-agent aggregation.
+ */
+export function initUsageLedger(): void {
+  setModelUsageSink((event) => {
+    if (event.userId) appendUsageEvent(event.userId, event);
+  });
 }
 
 /** Test hook: drop in-memory buffers and timers without touching disk. */
