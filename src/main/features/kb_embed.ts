@@ -22,7 +22,6 @@ import { Mutex } from 'async-mutex';
 
 import { embeddingModelDir } from '../paths';
 import { createLogger } from '../logger';
-import { createEmbedBridge, type EmbedBridge } from './kb_embed_bridge';
 
 const log = createLogger('kb_embed');
 
@@ -35,49 +34,6 @@ const log = createLogger('kb_embed');
  * stable ceiling for bge-small-zh on desktop hardware.
  */
 const EMBED_BATCH_SIZE = 32;
-
-// ── 隔离子进程优先，进程内回退 ─────────────────────────────────────────
-// ONNX 推理是同步原生计算，放主进程会成批占用事件循环。优先走独立子进程
-// （bin/cogseed-embed-worker.cjs），worker 不可用（spawn 失败 / 握手超时 /
-// 中途崩溃 / 请求超时）时自动回退到进程内推理——功能永不因 worker 缺失
-// 而丢失，回退后本进程内只发生一次（_workerFailed 粘性标记）。
-let _bridge: EmbedBridge | null = null;
-let _workerFailed = false;
-const _bridgeStartLock = new Mutex();
-
-async function ensureBridge(): Promise<EmbedBridge | null> {
-  if (_workerFailed) return null;
-  if (_bridge) return _bridge;
-  return _bridgeStartLock.runExclusive(async () => {
-    if (_workerFailed) return null;
-    if (_bridge) return _bridge;
-    try {
-      const bridge = createEmbedBridge();
-      await bridge.ready;
-      _bridge = bridge;
-      log.info('embed worker ready');
-      return bridge;
-    } catch (err) {
-      _workerFailed = true;
-      log.warn('embed worker unavailable; falling back to in-process embedding', {
-        error: (err as Error)?.message || String(err),
-      });
-      return null;
-    }
-  });
-}
-
-async function embedViaWorker(texts: string[]): Promise<number[][]> {
-  const bridge = await ensureBridge();
-  if (!bridge) throw new Error('embed worker unavailable');
-  return bridge.embedTexts(texts);
-}
-
-function dropBridge(): void {
-  if (!_bridge) return;
-  try { _bridge.close(); } catch { /* already gone */ }
-  _bridge = null;
-}
 
 // Loaded lazily so test code that mocks this module never touches fastembed.
 // Use require() deliberately: fastembed's ESM entry imports `tar` as a default
@@ -103,7 +59,12 @@ async function initEmbedder(): Promise<void> {
   });
 }
 
-async function embedInProcess(texts: string[]): Promise<number[][]> {
+/**
+ * Produce a 512-dim unit-normalised embedding for each input text. Preserves
+ * input order 1:1. Throws on empty input or model load failure.
+ */
+export async function embedTexts(texts: string[]): Promise<number[][]> {
+  if (!texts.length) return [];
   await initEmbedder();
   const out: number[][] = [];
   const gen = _embedder.embed(texts, EMBED_BATCH_SIZE);
@@ -113,37 +74,11 @@ async function embedInProcess(texts: string[]): Promise<number[][]> {
     for (const v of batch) {
       out.push(Array.isArray(v) ? v : Array.from(v as ArrayLike<number>));
     }
-    // 回退路径的批次间让出主循环（子进程路径不需要）：推理是同步原生
-    // 计算，长文本回填时连续占用事件循环会让 IPC/UI 排队。每批之间让
-    // 一次 macrotask 轮转；结果完全一致。
-    await new Promise<void>((resolve) => setImmediate(resolve));
   }
   if (out.length !== texts.length) {
     throw new Error(`embed count mismatch: ${out.length} vectors vs ${texts.length} texts`);
   }
   return out;
-}
-
-/**
- * Produce a 512-dim unit-normalised embedding for each input text. Preserves
- * input order 1:1. Throws on empty input or model load failure.
- */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  if (!texts.length) return [];
-  if (!_workerFailed) {
-    try {
-      return await embedViaWorker(texts);
-    } catch (err) {
-      // worker 中途失效（崩溃/请求超时）：本次请求进程内重试一次保证
-      // 结果正确，之后粘性回退到进程内路径。
-      _workerFailed = true;
-      dropBridge();
-      log.warn('embed worker failed mid-flight; retrying in-process', {
-        error: (err as Error)?.message || String(err),
-      });
-    }
-  }
-  return embedInProcess(texts);
 }
 
 /** Embed a single query. Shortcut for `embedTexts([q])[0]`. */
@@ -154,7 +89,6 @@ export async function embedQuery(query: string): Promise<number[]> {
 
 /** Close + release the ONNX session. Should be called on app shutdown. */
 export function closeEmbedder(): void {
-  dropBridge();
   if (!_embedder) return;
   try {
     // fastembed doesn't expose a release API; we just drop the reference and

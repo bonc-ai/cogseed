@@ -36,11 +36,6 @@
  *       options.baseURL + options.apiKey; CC Switch opencode rows usually
  *       carry an EMPTY apiKey (setCacheKey), so fall back to OpenCode's own
  *       auth store (~/.local/share/opencode/auth.json) — real data, read-only.
- *   hermes → protocol 'openai' (api_mode 'anthropic' → 'anthropic')
- *       flat base_url + api_key + models[] hints. The SAME third-party
- *       service often ALSO exists as a codex row with a shorter base_url,
- *       but only the hermes row's prefix-path base (e.g.
- *       https://api.commandcode.ai/provider) serves the model-list API.
  *
  * `category='official'` rows are skipped: they're the built-in
  * Anthropic/OpenAI/Google endpoints, already covered by CogSeed's own catalog.
@@ -151,13 +146,7 @@ function codexModelsFromConfigToml(configToml: unknown): string[] {
  */
 function modelHints(cfg: Record<string, unknown>, env: Record<string, unknown>): string[] | undefined {
   const raw: unknown[] = [];
-  // hermes rows store `models` as `[{ id, name }]` objects; other app types
-  // use plain string arrays — accept both shapes.
-  if (Array.isArray(cfg.models)) {
-    for (const entry of cfg.models) {
-      raw.push(entry && typeof entry === 'object' ? (entry as Record<string, unknown>).id : entry);
-    }
-  }
+  if (Array.isArray(cfg.models)) raw.push(...cfg.models);
   if (cfg.modelCatalog && typeof cfg.modelCatalog === 'object') {
     const catalogModels = (cfg.modelCatalog as Record<string, unknown>).models;
     if (Array.isArray(catalogModels)) {
@@ -264,18 +253,6 @@ function mapRow(
     return { ...common, protocol: 'openai', baseUrl, apiKey, ...(apiKey ? {} : { needsKey: true }) };
   }
 
-  if (appType === 'hermes') {
-    // Flat shape: { base_url, api_key, api_mode, models: [{id, name}] }.
-    // Hermes endpoints are frequently prefix-path style (e.g.
-    // https://api.commandcode.ai/provider) — the model-list API lives under
-    // that prefix, which is exactly what the live probe needs.
-    const baseUrl = typeof cfg.base_url === 'string' ? cfg.base_url : '';
-    const apiKey = typeof cfg.api_key === 'string' ? cfg.api_key : '';
-    if (!baseUrl) return undefined;
-    const protocol = cfg.api_mode === 'anthropic' ? 'anthropic' : 'openai';
-    return { ...common, protocol, baseUrl, apiKey, ...(apiKey ? {} : { needsKey: true }) };
-  }
-
   return undefined;
 }
 
@@ -353,7 +330,7 @@ export function readCcSwitchImportItems(
       }
       let reason: CcSwitchSkippedItem['reason'] = item ? 'missing_api_key' : 'missing_base_url';
       if (r.category === 'official') reason = 'official';
-      else if (!['claude', 'claude-desktop', 'codex', 'gemini', 'opencode', 'hermes'].includes(r.app_type)) reason = 'unsupported_protocol';
+      else if (!['claude', 'claude-desktop', 'codex', 'gemini', 'opencode'].includes(r.app_type)) reason = 'unsupported_protocol';
       else {
         try { JSON.parse(r.settings_config || '{}'); }
         catch { reason = 'invalid_config'; }

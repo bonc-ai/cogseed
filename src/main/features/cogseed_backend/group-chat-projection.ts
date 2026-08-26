@@ -143,7 +143,6 @@ export function groupChatProcessDataForProjection(
           phase: kind === 'tool.started' ? 'start' : 'result',
           ...(typeof payload.name === 'string' ? { name: payload.name } : {}),
           ...(kind === 'tool.finished' && typeof payload.isError === 'boolean' ? { isError: payload.isError } : {}),
-          ...(kind === 'tool.finished' && payload.isError === true && typeof payload.error === 'string' && payload.error ? { error: payload.error.slice(0, 500) } : {}),
         },
       },
     };
@@ -167,15 +166,7 @@ function terminalText(event: CogSeedProjectionEvent): { text: string; failureKin
     return text ? { text } : null;
   }
   if (event.type === 'task.failed') {
-    // Append the executor's failure detail (when the adapter recorded one)
-    // so the conversation bubble shows the actual cause instead of only the
-    // generic retry notice.
-    const detail = typeof event.payload.error === 'string' ? event.payload.error.trim().slice(0, 500) : '';
-    return {
-      text: detail ? `${t('cogseed.runtime_failed')}\n\n${detail}` : t('cogseed.runtime_failed'),
-      failureKind: 'runtime',
-      failureCode: 'runtime_failed',
-    };
+    return { text: t('cogseed.runtime_failed'), failureKind: 'runtime', failureCode: 'runtime_failed' };
   }
   return null;
 }
