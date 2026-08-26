@@ -4944,5 +4944,18 @@
   "dashboard.time.just_now": "たった今",
   "dashboard.time.minutes_ago": "{n} 分前",
   "dashboard.time.hours_ago": "{n} 時間前",
-  "dashboard.time.days_ago": "{n} 日前"
+  "dashboard.time.days_ago": "{n} 日前",
+  "dashboard.activity.title": "実行中",
+  "dashboard.activity.empty": "すべてアイドル",
+  "dashboard.activity.start_chat": "チャットを開始",
+  "dashboard.activity.waiting": "あなたの確認待ち",
+  "dashboard.activity.stuck": "停止の疑い",
+  "dashboard.activity.view_conversation": "会話を見る",
+  "dashboard.activity.cancel": "キャンセル",
+  "dashboard.activity.cancel_confirm": "このタスクをキャンセルしますか？",
+  "dashboard.status.running": "実行中",
+  "dashboard.status.queued": "待機中",
+  "dashboard.status.waiting_user": "あなたの確認待ち",
+  "dashboard.status.recoverable": "復旧可能",
+  "dashboard.status.created": "作成済み"
 }

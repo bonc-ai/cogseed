@@ -4944,5 +4944,18 @@
   "dashboard.time.just_now": "agora mesmo",
   "dashboard.time.minutes_ago": "{n} min atrás",
   "dashboard.time.hours_ago": "{n} h atrás",
-  "dashboard.time.days_ago": "{n} d atrás"
+  "dashboard.time.days_ago": "{n} d atrás",
+  "dashboard.activity.title": "Acontecendo agora",
+  "dashboard.activity.empty": "Tudo ocioso",
+  "dashboard.activity.start_chat": "Iniciar conversa",
+  "dashboard.activity.waiting": "Aguardando você",
+  "dashboard.activity.stuck": "Possivelmente travado",
+  "dashboard.activity.view_conversation": "Ver conversa",
+  "dashboard.activity.cancel": "Cancelar",
+  "dashboard.activity.cancel_confirm": "Cancelar esta tarefa?",
+  "dashboard.status.running": "Em execução",
+  "dashboard.status.queued": "Na fila",
+  "dashboard.status.waiting_user": "Aguardando você",
+  "dashboard.status.recoverable": "Recuperável",
+  "dashboard.status.created": "Criada"
 }
