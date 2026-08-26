@@ -8828,7 +8828,6 @@ function _mountMsgMeta(ph, metrics) {
     meta.dataset.role = 'msg-meta';
     ph.appendChild(meta);
   }
-  const t = (k, vars) => window.i18n.t(k, vars);
   const parts = [];
   parts.push(t('chat.metrics.duration', { d: window.conversationMetrics.formatDuration(line.durationMs) }));
   if (line.latencyText) parts.push(t('chat.metrics.ttft', { s: line.latencyText }));
