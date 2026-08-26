@@ -24,6 +24,10 @@ import { P3394BridgeKernel, type P3394BridgeSendResult } from './bridge';
 import { P3394BridgeKstarCloseHook } from './kstar-close-hook';
 import { P3394BridgeSessionManager } from './session-manager';
 import { P3394BridgeTaskManager } from './task-manager';
+import {
+  APPROVAL_GRANTED_EVENT, APPROVAL_REJECTED_EVENT, APPROVAL_REQUESTED_EVENT,
+  P3394ApprovalQueue, buildApprovedReplay, requiresHumanApproval,
+} from './approval-gate';
 import type { P3394Envelope, P3394EnvelopeParticipant, P3394PayloadPart } from './envelope';
 import { normalizeDigest } from './artifact-parts';
 import { P3394ByteBudget, P3394_CHANNEL_LIMITS } from './channel-limits';
@@ -99,6 +103,9 @@ export class P3394BridgeExecutor {
   private readonly selfIdentity: P3394EnvelopeParticipant;
   private readonly now: () => string;
   private readonly forwards = new Map<string, Promise<void>>();
+  /** §15 Human Approval：requires_approval 信封的挂起队列（accept/cancel
+   *  控制帧驱动恢复/终止，见 approval-gate.ts）。 */
+  private readonly approvals = new P3394ApprovalQueue();
   /** S-06：artifact 自动回发的按会话累计预算（字节 + 数量）。 */
   private readonly artifactBudgets = new Map<string, P3394ByteBudget>();
   private readonly artifactCounts = new Map<string, number>();
@@ -181,8 +188,37 @@ export class P3394BridgeExecutor {
         status: 'accepted',
         metadata: { task_id: envelope.task_id, session_id: envelope.session_id },
       });
+      // §15 Human Approval：挂起等待批准的任务被取消 → 终态 cancelled，
+      // 不再执行（runtime 里没有对应任务，直接结算状态机）。
+      if (this.approvals.take(envelope.task_id)) {
+        this.tasks.settle(envelope.task_id, 'cancelled');
+        this.bridge.audit.append({
+          event: APPROVAL_REJECTED_EVENT,
+          actor_id: envelope.sender.agent_id,
+          status: 'rejected',
+          metadata: { task_id: envelope.task_id, session_id: envelope.session_id },
+        });
+      }
       void this.runtime.cancel(envelope.task_id).catch(() => {});
       return { ok: true, receipt: sent.receipt, executed: false, task_id: envelope.task_id };
+    }
+    // §15 Human Approval：accept 控制帧批准挂起任务 → 以唯一幂等键重放
+    // 原始信封（审批标志清除，见 approval-gate.ts）走完整执行链；task
+    // submit 幂等返回既有 input-required 任务，流内 started 自动转回
+    // working。批准动作审计可追溯。
+    if (envelope.kind === 'control' && envelope.performative === 'accept' && envelope.task_id) {
+      const approved = this.approvals.take(envelope.task_id);
+      if (!approved) {
+        return { ok: true, receipt: sent.receipt, executed: false, task_id: envelope.task_id };
+      }
+      this.bridge.audit.append({
+        event: APPROVAL_GRANTED_EVENT,
+        actor_id: envelope.sender.agent_id,
+        status: 'accepted',
+        metadata: { task_id: envelope.task_id, session_id: envelope.session_id },
+      });
+      const replay = buildApprovedReplay(approved);
+      return this.runApprovedReplay(replay);
     }
     // A peer's reply may resolve a waiting outbound call; it still flows
     // into the conversation below so the exchange stays visible in the UI.
@@ -205,6 +241,24 @@ export class P3394BridgeExecutor {
 
     if (!EXECUTABLE_KINDS.has(envelope.kind)) {
       return { ok: true, receipt: sent.receipt, executed: false };
+    }
+
+    // §15 Human Approval：入站信封显式请求人工确认时挂起不执行——任务
+    // 置 input-required 等待 accept（恢复执行）或 cancel（终止），全程
+    // 审计（approval.requested/granted/rejected）。
+    if (requiresHumanApproval(envelope)) {
+      const pendingTaskId = envelope.task_id || `tsk-${envelope.message_id}`;
+      this.tasks.submit({ task_id: pendingTaskId, session_id: envelope.session_id, message_id: envelope.message_id });
+      this.tasks.start(pendingTaskId);
+      this.tasks.awaitInput(pendingTaskId);
+      this.approvals.park(pendingTaskId, envelope);
+      this.bridge.audit.append({
+        event: APPROVAL_REQUESTED_EVENT,
+        actor_id: envelope.sender.agent_id,
+        status: 'accepted',
+        metadata: { task_id: pendingTaskId, session_id: envelope.session_id },
+      });
+      return { ok: true, receipt: sent.receipt, executed: false, task_id: pendingTaskId, session_id: envelope.session_id };
     }
 
     const recipientAgentId = sent.receipt.recipient_ids[0] ?? envelope.recipients[0]?.agent_id ?? 'local';
@@ -314,6 +368,12 @@ export class P3394BridgeExecutor {
     this.forwards.set(p3394TaskId, forward);
 
     return { ok: true, receipt: sent.receipt, executed: true, task_id: p3394TaskId, session_id: envelope.session_id };
+  }
+
+  /** §15 批准后的重放入口：完整执行链（内核准入/幂等/会话/流）原样复用。 */
+  private runApprovedReplay(replay: P3394Envelope): P3394BridgeExecutorResult {
+    const rerun = this.execute;
+    return rerun.call(this, replay);
   }
 
   private async postAutoArtifact(envelope: P3394Envelope, data: Record<string, unknown>): Promise<void> {

@@ -601,6 +601,9 @@ export async function maybeStartP3394Bridge(): Promise<P3394AppBridgeHandle | nu
       handle = await buildBridge(fallback, token, conversation);
     }
     activeHandle = handle;
+    // 运行时 wiring 事实落盘：CLI p3394:doctor 读这份导出反映真实 14 项
+    // 检查（V-01/A15——此前 CLI 只能读到磁盘布局 3 项）。
+    exportP3394DoctorState();
     return handle;
   } catch (error) {
     log.warn('P3394 bridge start failed', { error: error instanceof Error ? error.message : String(error) });
@@ -620,6 +623,11 @@ export function getP3394BridgeHandle(): P3394AppBridgeHandle | null {
   return activeHandle;
 }
 
+/** 当前对端注册表（渠道即节点等进程内虚拟节点的注册入口）。桥未启动返回 null。 */
+export function getP3394PeerRegistry(): P3394PeerRegistry | null {
+  return activeHandle?.registry ?? null;
+}
+
 /**
  * V-01：把真实 wiring/listener 状态自动注入 Doctor。桥未启动时只返回
  * 全 warn 报告（不虚报绑定）；启动后逐项反映：
@@ -634,6 +642,12 @@ export function getP3394BridgeHandle(): P3394AppBridgeHandle | null {
  */
 export function runP3394WiringDoctor(): P3394DoctorReport {
   if (!activeHandle) return runP3394BridgeDoctor({});
+  return runP3394BridgeDoctor(buildP3394WiringDoctorInput(collectWiringDoctorFacts()));
+}
+
+/** 运行时 wiring 事实（V-01）。CLI doctor 经落盘导出消费同一份事实，
+ *  呈现与运行中的应用一致的 14 项检查，而不是"未上报"。 */
+function collectWiringDoctorFacts(): import('./doctor').P3394WiringDoctorFacts {
   const manifestOf = (id: string) => {
     const result = buildP3394BridgeManifest({
       agent_id: id, name: id, description_zh: '', description_en: '', workflow: '', category: 'general',
@@ -641,10 +655,10 @@ export function runP3394WiringDoctor(): P3394DoctorReport {
     return result.ok ? result.manifest : undefined;
   };
   const missingCapabilities = missingP3394ChannelCapabilities(
-    activeHandle.channel.descriptor,
+    activeHandle!.channel.descriptor,
     P3394_REQUIRED_CHANNEL_CAPABILITIES,
   );
-  return runP3394BridgeDoctor(buildP3394WiringDoctorInput({
+  return {
     manifest: manifestOf('cogseed'),
     agentHomeExists: fs.existsSync(variantRoot()),
     registryPersisted: fs.existsSync(p3394StateFile('p3394-peers.json')),
@@ -658,7 +672,25 @@ export function runP3394WiringDoctor(): P3394DoctorReport {
     channelCapabilitiesMissing: missingCapabilities,
     resourceLimitsMissing: [],
     autoReplyEnabled: process.env.COGSEED_P3394_AUTO_REPLY !== '0',
-  }));
+  };
+}
+
+/** 把 wiring 事实导出到 variant 目录（fire-and-forget，失败静默——doctor
+ *  的落盘导出不得影响桥启动）。CLI p3394:doctor 优先读这份运行时状态。 */
+export function exportP3394DoctorState(): void {
+  if (!activeHandle) return;
+  try {
+    const facts = collectWiringDoctorFacts();
+    const state = {
+      schema_version: 1,
+      exported_at: new Date().toISOString(),
+      pid: process.pid,
+      facts,
+    };
+    fs.writeFileSync(p3394StateFile('p3394-doctor-state.json'), JSON.stringify(state, null, 2) + '\n');
+  } catch (error) {
+    log.warn('P3394 doctor state export failed', { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /** Resolve a p3394_send peer argument: agent id / alias first, then a
