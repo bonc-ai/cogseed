@@ -9,6 +9,7 @@ import {
   usageStatsSince,
   usageLedgerDir,
   readUsageEvents,
+  aggregateUsage,
 } from '../../../src/main/features/usage_ledger';
 import type { ModelUsageEvent } from '../../../src/main/model/core-agent/usage-events';
 
@@ -112,5 +113,82 @@ describe('usage ledger', () => {
     expect(theirs).toHaveLength(1);
     expect(theirs[0].userId).toBe(other);
     fs.rmSync(usageLedgerDir(other), { recursive: true, force: true });
+  });
+});
+
+describe('usage aggregation', () => {
+  async function seed(): Promise<void> {
+    appendUsageEvent(uid, event({
+      at: Date.parse('2026-08-26T10:00:00Z'), agentId: 'a1', conversationId: 'c1',
+      inputTokens: 1000, outputTokens: 200, cacheReadTokens: 800, totalTokens: 2000,
+    }));
+    appendUsageEvent(uid, event({
+      at: Date.parse('2026-08-26T11:00:00Z'), agentId: 'a1', conversationId: 'c2',
+      inputTokens: 500, outputTokens: 100, cacheReadTokens: 0, totalTokens: 600,
+    }));
+    appendUsageEvent(uid, event({
+      at: Date.parse('2026-08-27T09:00:00Z'), agentId: 'a2', conversationId: 'c1',
+      inputTokens: 100, outputTokens: 50, totalTokens: 150,
+      cacheReadTokens: undefined, cacheWriteTokens: undefined,
+    }));
+    await flushUsageLedger();
+  }
+
+  beforeEach(async () => {
+    resetUsageLedgerForTests();
+    await flushUsageLedger();
+    fs.rmSync(usageLedgerDir(uid), { recursive: true, force: true });
+    await seed();
+  });
+
+  const range = {
+    from: Date.parse('2026-08-26T00:00:00Z'),
+    to: Date.parse('2026-08-27T23:59:59Z'),
+  };
+
+  it('aggregates by day with token sums and call counts', async () => {
+    const res = await aggregateUsage(uid, { dimension: 'day', ...range });
+    expect(res.empty).toBe(false);
+    expect(res.buckets).toHaveLength(2);
+    const d26 = res.buckets.find((b) => b.key === '2026-08-26');
+    expect(d26).toMatchObject({ calls: 2, inputTokens: 1500, outputTokens: 300, cacheReadTokens: 800 });
+    const d27 = res.buckets.find((b) => b.key === '2026-08-27');
+    expect(d27).toMatchObject({ calls: 1, inputTokens: 100 });
+  });
+
+  it('aggregates by agent and by conversation', async () => {
+    const byAgent = await aggregateUsage(uid, { dimension: 'agent', ...range });
+    expect(byAgent.buckets.find((b) => b.key === 'a1')).toMatchObject({ calls: 2, totalTokens: 2600 });
+    expect(byAgent.buckets.find((b) => b.key === 'a2')).toMatchObject({ calls: 1 });
+
+    const byConv = await aggregateUsage(uid, { dimension: 'conversation', ...range });
+    expect(byConv.buckets.find((b) => b.key === 'c1')).toMatchObject({ calls: 2 });
+    expect(byConv.buckets.find((b) => b.key === 'c2')).toMatchObject({ calls: 1 });
+  });
+
+  it('reports cache hit rate only when cache data exists, never as fake zero', async () => {
+    const byAgent = await aggregateUsage(uid, { dimension: 'agent', ...range });
+    const a1 = byAgent.buckets.find((b) => b.key === 'a1');
+    // a1: cacheRead 800 / (input 1500 + cacheRead 800) = 0.3478…
+    expect(a1?.cacheHitRate).toBeCloseTo(800 / 2300, 4);
+    // a2 无任何 cache 字段记录 → rate 必须是 undefined，不许拿 0 冒充
+    const a2 = byAgent.buckets.find((b) => b.key === 'a2');
+    expect(a2?.cacheHitRate).toBeUndefined();
+  });
+
+  it('marks empty explicitly when the range has no records and always carries since', async () => {
+    const res = await aggregateUsage(uid, {
+      dimension: 'day',
+      from: Date.parse('2025-01-01T00:00:00Z'),
+      to: Date.parse('2025-01-31T00:00:00Z'),
+    });
+    expect(res.empty).toBe(true);
+    expect(res.buckets).toEqual([]);
+    expect(res.since).toBe('2026-08-26T10:00:00.000Z');
+  });
+
+  it('rejects unknown dimensions', async () => {
+    await expect(aggregateUsage(uid, { dimension: 'nonsense' as 'day', ...range }))
+      .rejects.toThrow(/dimension/);
   });
 });
