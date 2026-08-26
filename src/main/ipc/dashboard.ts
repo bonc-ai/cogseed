@@ -9,12 +9,15 @@ import * as usageLedger from '../features/usage_ledger';
 import type { UsageDimension } from '../features/usage_ledger';
 import { agentHealthFromTasks, nonTerminalStatuses } from '../features/dashboard_health';
 import { listCogSeedTasks } from '../features/cogseed_backend/task-store';
-import { listExternalGateways } from '../features/p3394_bridge/external-gateways';
 import { detectAll } from '../features/local_agents/registry.js';
+import { listExternalGateways } from '../features/p3394_bridge/external-gateways';
 import { listRemoteNodes } from '../features/p3394_bridge/remote-nodes';
 import { listP3394Peers } from '../features/p3394_bridge/app-wiring';
 import { listAgents } from '../features/agents';
 import { listInstances } from '../features/messaging/manager';
+import { parseGroupMessages } from '../features/collab_timeline';
+import { conversationLayout } from '../util/project-layout';
+import { readJsonl } from '../storage';
 
 interface DashboardContext {
   userId: string;
@@ -81,6 +84,7 @@ export const invokeHandlers: Record<string, Handler> = {
         createdAt: t.createdAt,
         updatedAt: t.updatedAt,
       }));
+
     return {
       health: agentHealthFromTasks(tasks),
       runningTasks: running,
@@ -92,4 +96,18 @@ export const invokeHandlers: Record<string, Handler> = {
       },
     };
   },
+
+  // Relay timeline for one conversation: parse the existing group jsonl into
+  // a ts-ordered turn list. Facts only — the parser never infers intent.
+  'collab.timeline.query': async (payload, ctx) => {
+    const cid = typeof payload?.cid === 'string' ? payload.cid.trim() : '';
+    if (!cid || !safeIdLike(cid)) throw new Error('invalid conversation id');
+    const layout = conversationLayout(ctx.userId, cid, null);
+    const messages = await readJsonl<Record<string, unknown>>(layout.messageFile, 5000).catch(() => []);
+    return { timeline: parseGroupMessages(cid, messages) };
+  },
 };
+
+function safeIdLike(value: string): boolean {
+  return /^[A-Za-z0-9_-]{1,120}$/.test(value);
+}

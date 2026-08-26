@@ -6101,5 +6101,14 @@
   "dashboard.cost.default_price_out": "输出单价",
   "dashboard.cost.budget": "日预算",
   "dashboard.cost.close": "关闭",
-  "dashboard.cost.save": "保存"
+  "dashboard.cost.save": "保存",
+  "dashboard.collab.sessions": "协作会话",
+  "dashboard.collab.relay": "接力序列",
+  "dashboard.collab.empty": "还没有会话",
+  "dashboard.collab.pick": "左侧选一个会话，看它的协作接力",
+  "dashboard.collab.no_messages": "该会话还没有消息",
+  "dashboard.collab.no_agents": "普通对话（未派发外接智能体）",
+  "dashboard.collab.agents_n": "{n} 个智能体参与",
+  "dashboard.collab.dispatches_n": "指挥官派发 {n} 次",
+  "dashboard.collab.dispatch": "派发"
 }

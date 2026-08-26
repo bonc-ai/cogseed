@@ -6101,5 +6101,14 @@
   "dashboard.cost.default_price_out": "Output price",
   "dashboard.cost.budget": "Daily budget",
   "dashboard.cost.close": "Close",
-  "dashboard.cost.save": "Save"
+  "dashboard.cost.save": "Save",
+  "dashboard.collab.sessions": "Collaboration chats",
+  "dashboard.collab.relay": "Relay sequence",
+  "dashboard.collab.empty": "No conversations yet",
+  "dashboard.collab.pick": "Pick a chat on the left to see its relay",
+  "dashboard.collab.no_messages": "No messages in this chat",
+  "dashboard.collab.no_agents": "Plain chat (no external agents dispatched)",
+  "dashboard.collab.agents_n": "{n} agents involved",
+  "dashboard.collab.dispatches_n": "{n} commander dispatches",
+  "dashboard.collab.dispatch": "dispatch"
 }

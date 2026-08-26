@@ -5006,5 +5006,14 @@
   "dashboard.cost.default_price_out": "出力単価",
   "dashboard.cost.budget": "日次予算",
   "dashboard.cost.close": "閉じる",
-  "dashboard.cost.save": "保存"
+  "dashboard.cost.save": "保存",
+  "dashboard.collab.sessions": "協働会話",
+  "dashboard.collab.relay": "リレー順",
+  "dashboard.collab.empty": "会話がありません",
+  "dashboard.collab.pick": "左から会話を選ぶとリレーが見えます",
+  "dashboard.collab.no_messages": "この会話にはメッセージがありません",
+  "dashboard.collab.no_agents": "通常会話（外部エージェント未派遣）",
+  "dashboard.collab.agents_n": "{n} 件のエージェントが参加",
+  "dashboard.collab.dispatches_n": "指揮官の派遣 {n} 回",
+  "dashboard.collab.dispatch": "派遣"
 }
