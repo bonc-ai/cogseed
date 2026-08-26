@@ -164,6 +164,7 @@ import * as skillsFeature from './features/skills';
 import * as agentsFeature from './features/agents';
 import * as contextsFeature from './features/contexts';
 import * as chatsFeature from './features/chats';
+import * as usageLedger from './features/usage_ledger';
 import * as searchFeature from './features/search';
 import * as projectFilesFeature from './features/project_files';
 import * as appConfig from './features/config';
@@ -566,6 +567,10 @@ async function runBootSelfCheck(): Promise<void> {
   try { await chatsFeature.sweepStaleProcessing(users.getActiveUserId()); }
   catch (err) { log.warn('chats sweep failed', { error: (err as Error).message }); }
 
+  // Stage 3: usage accounting. Pure registration (no IO) — every completed
+  // model call reports tokens into the per-user ledger from here on.
+  try { usageLedger.initUsageLedger(); }
+  catch (err) { log.warn('usage ledger init failed', { error: (err as Error).message }); }
 }
 
 async function runBootMaintenanceSweeps(): Promise<void> {
