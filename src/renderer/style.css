@@ -2771,6 +2771,22 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   line-height: 18px;
   text-align: center;
 }
+/* 消息渠道分组（飞书/微信等）：标题行完全复用 conv-list-space-title 分区头
+   样式（字体/行高/折叠箭头/渐变线同款），渠道差异只有标签前的图标位。 */
+.conv-channel-group-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  width: 15px;
+  height: 15px;
+}
+.conv-channel-group-icon .ui-icon,
+.conv-channel-group-icon svg,
+.conv-channel-group-icon img {
+  width: 15px;
+  height: 15px;
+  display: block;
+}
 /* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目）。
    大厂风格：克制的分组标签 —— 小字号、中字重、中性灰，无分隔线，靠留白分区。 */
 .conv-list-section-header.conv-list-space-title {

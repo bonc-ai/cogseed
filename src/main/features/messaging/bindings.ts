@@ -293,6 +293,7 @@ export async function resolveOrCreateBinding(
     const conversation = await chats.createConversation(uid, {
       title,
       ...(spaceId ? { spaceId } : {}),
+      channelPlatform: instance.platform,
     });
     const now = nowIso();
     const binding: MessagingBinding = {
