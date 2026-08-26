@@ -79,7 +79,7 @@
     "adm-zip": "^0.6.0",
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^12.10.0",
-    "electron-log": "^5.4.3",
+    "electron-log": "^5.4.4",
     "fastembed": "^2.1.0",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.1",
