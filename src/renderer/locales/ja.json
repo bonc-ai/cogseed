@@ -5016,5 +5016,6 @@
   "dashboard.collab.agents_n": "{n} 件のエージェントが参加",
   "dashboard.collab.dispatches_n": "指揮官の派遣 {n} 回",
   "dashboard.collab.dispatch": "派遣",
-  "dashboard.activity.go_decide": "対応する"
+  "dashboard.activity.go_decide": "対応する",
+  "dashboard.section_error": "このセクションの読み込みに失敗しました。更新をお試しください"
 }

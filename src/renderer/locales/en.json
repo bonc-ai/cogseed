@@ -6111,5 +6111,6 @@
   "dashboard.collab.agents_n": "{n} agents involved",
   "dashboard.collab.dispatches_n": "{n} commander dispatches",
   "dashboard.collab.dispatch": "dispatch",
-  "dashboard.activity.go_decide": "Decide"
+  "dashboard.activity.go_decide": "Decide",
+  "dashboard.section_error": "This section failed to load — try refresh"
 }

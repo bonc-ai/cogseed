@@ -5016,5 +5016,6 @@
   "dashboard.collab.agents_n": "{n} agentes envolvidos",
   "dashboard.collab.dispatches_n": "{n} despachos do comandante",
   "dashboard.collab.dispatch": "despacho",
-  "dashboard.activity.go_decide": "Decidir"
+  "dashboard.activity.go_decide": "Decidir",
+  "dashboard.section_error": "Falha ao carregar esta seção — tente atualizar"
 }
