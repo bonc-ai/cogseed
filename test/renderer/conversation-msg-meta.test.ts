@@ -62,6 +62,10 @@ function loadMountMsgMeta(): (ph: Record<string, unknown>, metrics: unknown) => 
       conversationMetrics,
     },
     document: { createElement: () => makeNode() },
+    // Task 8: _mountMsgMeta's tail now refreshes the session stats line.
+    // This suite scopes to the per-message meta node — the stats behavior
+    // itself lives in conversation-session-stats.test.ts.
+    _refreshSessionStats: () => {},
     // The real renderer i18n helper is a classic-script top-level function
     // (`t` in i18n.js), not a property on window — mirror that lexical
     // environment so the stub can't paper over a missing global.

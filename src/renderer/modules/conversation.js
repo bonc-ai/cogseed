@@ -7620,6 +7620,8 @@ async function _loadOlderConversationHistory(cid, before) {
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
       container.insertBefore(fragment, row.nextSibling);
+      // 更早历史也是离屏 fragment 装载，插入后补刷会话统计行（Task 8）。
+      _refreshSessionStats();
       _removeSupersededInterruptionBubbles(container);
       _setLoadEarlierHistory(container, cid, nextCursor);
       _restoreOlderHistoryPrependScroll(container, previousScrollHeight, previousScrollTop);
@@ -8092,6 +8094,10 @@ async function loadConversationHistory(cid, opts = {}) {
       }));
       container.appendChild(historyFragment);
     }
+    // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
+    // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
+    // 会话统计行（Task 8）。
+    _refreshSessionStats();
     _mountCollaborationStatusCard(container, convMeta.collaboration || null);
     if (window.CompanionRepro && typeof window.CompanionRepro.mount === 'function') {
       void window.CompanionRepro.mount(cid);
@@ -8238,6 +8244,9 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!preserveScroll) {
       container.innerHTML = `<div class="empty">${escapeHtml(t('chat.load_failed', { msg: e.message || '' }))}</div>`;
     }
+    // 加载失败时消息区只剩占位——统计行随之隐藏，避免残留上个会话的数据
+    // （Task 8）。preserveScroll 的部分重载保留现有消息，刷新结果不变。
+    _refreshSessionStats();
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
   }
 }
@@ -8868,6 +8877,112 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// ─── 会话统计行（输入框下方，Task 8）────────────────────────────────────
+// 折叠当前会话所有带 metrics 的 assistant 消息：轮数/步数、LLM 总耗时、
+// 首 token 平均与速率、缓存命中、上下文占用、token 合计与费用。常驻显示
+// （不受消息级 .chat-msg-meta 的 hover 显隐影响）；无带 metrics 的消息整行
+// hidden；窗口/单价未知就省略对应段——诚实省略，不编数字。
+
+// 单价复用 dashboard 成本页同一 localStorage key（'dashboard-price-table'，
+// 实测结构 { [modelId]: { in: ¥/1M, out: ¥/1M } }，成本页保存时只写 '*'
+// 默认条目、无模型名，也无 cacheRead/cacheWrite 单价），不另立存储。
+// 结构对不上或没有可用的 '*'/'default' 条目 → 返回 null（不显示费用段）。
+function _userPriceForStats() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dashboard-price-table') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const def = raw['*'] || raw.default;
+    if (!def || typeof def !== 'object') return null;
+    const pin = Number(def.in);
+    const pout = Number(def.out);
+    const hasIn = Number.isFinite(pin) && pin > 0;
+    const hasOut = Number.isFinite(pout) && pout > 0;
+    if (!hasIn && !hasOut) return null;
+    // 现场价格表没有缓存单价（成本页同样只按 in/out 折算）→ 按 0 计，
+    // 费用是下界估算，费用段的 title 已注明非账单金额。
+    return { in: hasIn ? pin : 0, out: hasOut ? pout : 0, cacheRead: 0, cacheWrite: 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+// 当前模型 contextWindow：渲染层没有现成全局，走已有 auth.* IPC（不新造）
+// ——auth.listEntries[0] 是默认模型（与 model-chip 同源），auth.listModels
+// 的 curated 分支透传 contextWindow；未策展/custom provider 的 fallback
+// 分支没有该字段 → null，统计行只显示已用量。结果缓存 60s（负结果也在
+// 内，避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
+let _statsModelWindowCache = null; // { value: number|null, at: ms }
+function getCurrentModelContextWindow() {
+  const now = Date.now();
+  if (!_statsModelWindowCache || now - _statsModelWindowCache.at > 60_000) {
+    _statsModelWindowCache = {
+      value: _statsModelWindowCache ? _statsModelWindowCache.value : null,
+      at: now,
+    };
+    _fetchCurrentModelContextWindow();
+  }
+  return _statsModelWindowCache.value;
+}
+async function _fetchCurrentModelContextWindow() {
+  try {
+    const entries = await window.cogseed.invoke('auth.listEntries');
+    const current = entries && entries.ok && Array.isArray(entries.entries)
+      ? entries.entries[0] : null;
+    if (!current || !current.provider || !current.model) return;
+    const res = await window.cogseed.invoke('auth.listModels', { provider: current.provider });
+    const models = res && res.ok && Array.isArray(res.models) ? res.models : [];
+    const hit = models.find((m) => m && typeof m === 'object' && m.id === current.model);
+    const cw = hit && Number.isSafeInteger(hit.contextWindow) && hit.contextWindow > 0
+      ? hit.contextWindow : null;
+    _statsModelWindowCache = { value: cw, at: Date.now() };
+    if (cw) _refreshSessionStats();
+  } catch (_) {
+    // 取不到保持现状（null 或旧值）——只显示已用量。
+  }
+}
+window.getCurrentModelContextWindow = getCurrentModelContextWindow;
+
+// 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
+// ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
+// 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
+function _refreshSessionStats() {
+  const box = document.getElementById('chat-session-stats');
+  if (!box || !window.conversationMetrics) return;
+  const list = [];
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    if (el._msgMetrics) list.push(el._msgMetrics);
+  });
+  if (!list.length) { box.hidden = true; return; }
+  const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
+    ? window.getCurrentModelContextWindow() : null;
+  const price = _userPriceForStats();
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  const segs = [];
+  segs.push(t('chat.stats.counts', { turns: f.turns, steps: f.steps }));
+  if (f.llmMs > 0) segs.push(t('chat.stats.llm', { d: window.conversationMetrics.formatDuration(f.llmMs) }));
+  if (f.ttftAvgText) segs.push(t('chat.stats.speed', { ttft: f.ttftAvgText, r: f.rateText || '' }).trim());
+  if (f.cacheHitText) segs.push(t('chat.stats.cache', { p: f.cacheHitText }));
+  if (f.ctxText) segs.push({ text: t('chat.stats.ctx', { v: f.ctxText }), hot: f.ctxHot });
+  segs.push(t('chat.stats.tokens', { i: f.inText, o: f.outText }));
+  if (f.costText) segs.push(t('chat.stats.cost', { c: f.costText }));
+  box.innerHTML = '';
+  box.hidden = false;
+  segs.forEach((s) => {
+    const span = document.createElement('span');
+    const hot = typeof s === 'object';
+    const text = hot ? s.text : s;
+    span.textContent = text;
+    span.className = hot && s.hot ? 'seg-hot' : '';
+    box.appendChild(span);
+  });
+  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
+  // 单价、无模型名，title 不带模型字段。
+  if (f.costText) {
+    const costSpan = box.lastElementChild;
+    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+  }
+}
+
 // 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
 // gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
 function _mountMsgMeta(ph, metrics) {
@@ -8888,6 +9003,9 @@ function _mountMsgMeta(ph, metrics) {
   if (line.inText) parts.push(t('chat.metrics.tokens', { i: line.inText, o: line.outText }));
   meta.textContent = parts.join(' · ');
   if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+  // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
+  // appendChatMessage 尾部；Task 8）。
+  _refreshSessionStats();
 }
 
 function appendChatMessage(message, autoScroll = true, opts = {}) {
@@ -9124,6 +9242,9 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
   msgDiv._msgMetrics = message.metrics || null;
   _mountMsgMeta(msgDiv, message.metrics);
+  // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
+  // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
+  _refreshSessionStats();
   if (!isHtmlSnippet && typeof typesetMath === 'function') {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
