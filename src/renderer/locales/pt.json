@@ -5006,5 +5006,14 @@
   "dashboard.cost.default_price_out": "Preço de saída",
   "dashboard.cost.budget": "Orçamento diário",
   "dashboard.cost.close": "Fechar",
-  "dashboard.cost.save": "Salvar"
+  "dashboard.cost.save": "Salvar",
+  "dashboard.collab.sessions": "Conversas de colaboração",
+  "dashboard.collab.relay": "Sequência de revezamento",
+  "dashboard.collab.empty": "Ainda sem conversas",
+  "dashboard.collab.pick": "Escolha uma conversa à esquerda para ver o revezamento",
+  "dashboard.collab.no_messages": "Sem mensagens nesta conversa",
+  "dashboard.collab.no_agents": "Conversa simples (sem agentes externos)",
+  "dashboard.collab.agents_n": "{n} agentes envolvidos",
+  "dashboard.collab.dispatches_n": "{n} despachos do comandante",
+  "dashboard.collab.dispatch": "despacho"
 }
