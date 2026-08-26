@@ -21,6 +21,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -32,3 +34,15 @@ jobs:
       - run: npm test
       - run: npm run readme:check
       - run: npm run builtin:manifest:check
+      - name: Email hygiene gate (release gate)
+        run: |
+          set -euo pipefail
+          bad=$(git log --format='%h|%an|%ae' "origin/cicd..HEAD" 2>/dev/null \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits to cicd contain non-noreply author emails:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ All commit author emails are noreply."

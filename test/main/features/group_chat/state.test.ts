@@ -101,7 +101,7 @@ describe('group_chat state › membership log privacy', () => {
   const actorId = 'privacy-agent-raw-abcdef';
   const actorName = 'SECRET_AGENT_DISPLAY_NAME';
   const secretError =
-    'SECRET_MEMBERSHIP_ERROR /Users/private/member-token.json token=raw';
+    'SECRET_MEMBERSHIP_ERROR /Users/tester/member-token.json token=raw';
 
   async function activatePrivacyUser(): Promise<void> {
     const users = await import('../../../../src/main/features/users');
@@ -167,7 +167,7 @@ describe('group_chat state › membership log privacy', () => {
       actorName,
       secretError,
       'SECRET_MEMBERSHIP_ERROR',
-      '/Users/private',
+      '/Users/tester',
       'token=raw',
     );
     expect(loggerMocks.warn).toHaveBeenCalledWith('members read failed', {
@@ -196,7 +196,7 @@ describe('group_chat state › membership log privacy', () => {
       actorName,
       secretError,
       'SECRET_MEMBERSHIP_ERROR',
-      '/Users/private',
+      '/Users/tester',
       'token=raw',
     );
     expect(loggerMocks.warn).toHaveBeenCalledWith(
@@ -247,7 +247,7 @@ describe('group_chat state › membership log privacy', () => {
       actorName,
       secretError,
       'SECRET_MEMBERSHIP_ERROR',
-      '/Users/private',
+      '/Users/tester',
       'token=raw',
     );
     expect(loggerMocks.warn).toHaveBeenCalledWith('member rename write failed', {
@@ -315,6 +315,28 @@ describe('group_chat state › addMember + ensureAgentMember', () => {
     expect(await s.ensureAgentMember(TEST_UID, TEST_CID, 'user')).toBe(false);
     expect(await s.ensureAgentMember(TEST_UID, TEST_CID, '../etc')).toBe(false);
     expect(await s.ensureAgentMember(TEST_UID, TEST_CID, 'writer', 'Writer')).toBe(true);
+  });
+});
+
+describe('group_chat state › markCommanderSpoken', () => {
+  it('sets the flag once and readMembers preserves it', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    await s.seedReservedActors(TEST_UID, TEST_CID);
+    expect(await s.markCommanderSpoken(TEST_UID, TEST_CID)).toBe(true);
+    const m = await s.readMembers(TEST_UID, TEST_CID);
+    expect(m.commander_spoken).toBe(true);
+    expect(m.actors.map((a) => a.id).sort()).toEqual(['commander', 'user']);
+    // 幂等：第二次不再写盘（返回 false）
+    expect(await s.markCommanderSpoken(TEST_UID, TEST_CID)).toBe(false);
+  });
+
+  it('marks without clobbering a concurrent-looking existing roster', async () => {
+    const s = await import('../../../../src/main/features/group_chat/state');
+    await s.addMember(TEST_UID, TEST_CID, { kind: 'agent', id: 'writer', name: 'Writer' });
+    await s.markCommanderSpoken(TEST_UID, TEST_CID);
+    const m = await s.readMembers(TEST_UID, TEST_CID);
+    expect(m.commander_spoken).toBe(true);
+    expect(m.actors.find((a) => a.id === 'writer')).toBeTruthy();
   });
 });
 

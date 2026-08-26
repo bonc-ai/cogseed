@@ -53,6 +53,9 @@ const _rendererFeatureManifest = Object.freeze({
   workspace: [
     { src: './modules/workspace.js' },
   ],
+  dashboard: [
+    { src: './modules/dashboard.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

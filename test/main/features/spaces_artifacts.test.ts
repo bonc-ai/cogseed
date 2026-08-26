@@ -137,6 +137,52 @@ describe('spaces › 产物无确认态（COGSEED-16：产出即正式）', () =
   });
 });
 
+describe('spaces › 产物缓存「变更才扫」', () => {
+  it('无变化时列表稳定，新增附件后下一次列表立即可见', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '缓存空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: 'a', spaceId: sid });
+    const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(attDir, { recursive: true });
+    fs.writeFileSync(path.join(attDir, 'a.pdf'), 'x');
+
+    const mod = await import('../../../src/main/features/spaces_artifacts');
+    const first = await mod.listSpaceArtifacts(UID, sid);
+    expect(first.map((a) => a.name)).toContain('a.pdf');
+
+    // 无变化：列表一致（指纹命中缓存）
+    const second = await mod.listSpaceArtifacts(UID, sid);
+    expect(second.map((a) => a.name)).toEqual(first.map((a) => a.name));
+
+    // 新增附件 → 目录指纹变化 → 下一次列表立即可见
+    fs.writeFileSync(path.join(attDir, 'b.pdf'), 'y');
+    const third = await mod.listSpaceArtifacts(UID, sid);
+    expect(third.map((a) => a.name)).toContain('b.pdf');
+  });
+
+  it('删除附件后从列表消失', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '删除空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: 'a', spaceId: sid });
+    const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(attDir, { recursive: true });
+    const f = path.join(attDir, 'gone.pdf');
+    fs.writeFileSync(f, 'x');
+
+    const mod = await import('../../../src/main/features/spaces_artifacts');
+    expect((await mod.listSpaceArtifacts(UID, sid)).map((a) => a.name)).toContain('gone.pdf');
+    fs.rmSync(f);
+    const after = await mod.listSpaceArtifacts(UID, sid);
+    expect(after.map((a) => a.name)).not.toContain('gone.pdf');
+  });
+});
+
 describe('spaces › 工作区兜底扫描（未登记 produced 的产物文件）', () => {
   it('消息 produced 没记录、但存在于会话工作区的文件也进产物（md/html）', async () => {
     const spaces = await import('../../../src/main/features/spaces');

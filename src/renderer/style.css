@@ -15502,6 +15502,28 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .messaging-scan-button:hover:not(:disabled),
 .messaging-link-button:hover:not(:disabled) { filter: brightness(1.04); }
 .messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
+
+/* 渠道即节点（G-14）：智能体触达白名单卡片 */
+.messaging-allowlist-toggle.is-on { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--primary-text); }
+.messaging-allowlist-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  resize: vertical;
+}
+.messaging-allowlist-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+.messaging-allowlist-hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.messaging-allowlist-save { margin-top: 10px; }
 .messaging-secondary-button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); color: var(--text); }
 .messaging-association-bound { flex: 0 0 auto; font-size: 12px; color: var(--success); white-space: nowrap; }
 .messaging-action-icon { width: 13px; height: 13px; }
@@ -17721,6 +17743,17 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 /* P3394 已接入节点（外接 tab 统一注册表管理区） */
 .agents-ext-peers-empty { font-size: 12px; color: var(--cs-ink-soft, #666); padding: 6px 2px; }
+/* 名册迁入 Dashboard 后的跳转入口（创建弹窗 External tab 底部） */
+.agents-ext-peers-moved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm, 10px);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
 .agents-ext-peer-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
@@ -26728,3 +26761,219 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-radius: 999px;
   transition: width 0.2s ease;
 }
+
+/* ─── 智能体总览 Dashboard（panel-dashboard）──────────────────────────
+   第二期。按钮复用全局 .btn 体系（不另造 .dash-btn）；颜色/圆角全部走
+   主题变量；卡片行 + 胶囊徽章对齐 connections / agents 面板的设计语言。 */
+.dash-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px clamp(20px, 3vw, 48px) 44px;
+}
+.dash-inner { max-width: 880px; margin: 0 auto; }
+.dash-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.dash-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.dash-subtitle { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
+.dash-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.dash-section { margin-bottom: 28px; }
+.dash-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.dash-section-head h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.dash-list { display: flex; flex-direction: column; gap: 8px; }
+
+/* 卡片行：白卡 + 细边框，hover 提亮边框（同 connectors 卡片节奏） */
+.dash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s;
+}
+.dash-row:hover { border-color: var(--border-strong); }
+.dash-row[data-dash-action="toggle-detail"] { cursor: pointer; }
+
+/* 行详情展开（点击行 toggle）：展开块贴在卡片下方，视觉上同一张卡 */
+.dash-row-wrap { display: flex; flex-direction: column; }
+.dash-row-wrap .dash-row { border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.dash-row-wrap:not(.has-detail) .dash-row { border-radius: var(--radius-sm); }
+.dash-row-detail { display: none; }
+.dash-row-wrap.is-open .dash-row-detail {
+  display: block;
+  padding: 10px 16px 12px;
+  background: color-mix(in srgb, var(--surface-2) 55%, var(--card));
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+.dash-detail-edit { margin-top: 8px; }
+.dash-edit-form { margin-top: 10px; }
+.dash-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 6px 18px;
+}
+.dash-detail-item { display: contents; }
+.dash-detail-key { font-size: 12px; color: var(--muted); }
+.dash-detail-val {
+  font-size: 12px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.dash-row-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.dash-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.dash-row-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-mono { font-family: var(--font-mono); font-size: 11px; }
+.dash-row-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* 胶囊状态徽章 — color-mix 柔和底色，同 skills-cognition-status 模式 */
+.dash-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.dash-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.dash-badge-on {
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success);
+}
+.dash-badge-off {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+}
+.dash-badge-info {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary-text);
+}
+
+/* 空态 / 加载态 */
+.dash-empty {
+  padding: 22px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+.dash-loading {
+  padding: 18px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 远端节点添加表单（<details> 渐进披露） */
+.dash-remote-form { margin-top: 10px; }
+.dash-remote-form > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--primary-text);
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+  border: 1px dashed color-mix(in srgb, var(--primary) 32%, var(--border));
+  border-radius: var(--radius-sm);
+  transition: background 0.15s, border-color 0.15s;
+}
+.dash-remote-form > summary::-webkit-details-marker { display: none; }
+.dash-remote-form > summary:hover {
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+}
+.dash-remote-form[open] > summary { margin-bottom: 8px; }
+.dash-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.dash-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.dash-form input {
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+.dash-form input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+}
+.dash-form-actions { display: flex; align-items: flex-end; justify-content: flex-end; }
+.dash-form-status { grid-column: 1 / -1; font-size: 12px; min-height: 16px; }
+.dash-form-status.err { color: var(--danger); }
+.dash-form-status.ok { color: var(--success); }
+.dash-form-status.pending { color: var(--muted); }

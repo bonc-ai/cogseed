@@ -23,6 +23,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { shell } from 'electron';
@@ -223,14 +224,35 @@ export function isSupportedContextFileName(name: string): boolean {
 
 // ── Listing / Reading ────────────────────────────────────────────────────
 
-export function listContextsTreeForUser(uid: string): ContextNode[] {
+/** 并发相同 uid 的树遍历 in-flight 去重（导入/树接口叠加时共享一次遍历）。
+ *  结果每次都是新鲜数据，不引入陈旧窗口。 */
+const _treeInFlight = new Map<string, Promise<ContextNode[]>>();
+
+export function listContextsTreeForUser(uid: string): Promise<ContextNode[]> {
+  const existing = _treeInFlight.get(uid);
+  if (existing) return existing;
+  const run = walkContextsTree(uid).then(
+    (tree) => {
+      if (_treeInFlight.get(uid) === run) _treeInFlight.delete(uid);
+      return tree;
+    },
+    (err) => {
+      if (_treeInFlight.get(uid) === run) _treeInFlight.delete(uid);
+      throw err;
+    },
+  );
+  _treeInFlight.set(uid, run);
+  return run;
+}
+
+async function walkContextsTree(uid: string): Promise<ContextNode[]> {
   const root = contextsRootForUser(uid);
   fs.mkdirSync(root, { recursive: true });
 
-  function walk(d: string, rel = ''): ContextNode[] {
+  async function walk(d: string, rel = ''): Promise<ContextNode[]> {
     let items;
     try {
-      items = fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => {
+      items = (await fsp.readdir(d, { withFileTypes: true })).sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
         return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
       });
@@ -242,13 +264,13 @@ export function listContextsTreeForUser(uid: string): ContextNode[] {
       const relPath = rel ? `${rel}/${e.name}` : e.name;
       const full = path.join(d, e.name);
       if (e.isDirectory()) {
-        out.push({ name: e.name, path: relPath, type: 'dir', children: walk(full, relPath) });
+        out.push({ name: e.name, path: relPath, type: 'dir', children: await walk(full, relPath) });
       } else if (e.isFile()) {
         // Show every supported KB file kind in the tree — text + binary both
         // get vectorized, both deserve to be visible.
         if (!isAllowedName(e.name)) continue;
         let size = 0; let mtime = 0;
-        try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs / 1000; }
+        try { const st = await fsp.stat(full); size = st.size; mtime = st.mtimeMs / 1000; }
         catch { /* ignore */ }
         out.push({ name: e.name, path: relPath, type: 'file', bytes: size, mtime });
       }
@@ -258,7 +280,7 @@ export function listContextsTreeForUser(uid: string): ContextNode[] {
   return walk(root);
 }
 
-export function listContextsTree(): ContextNode[] {
+export function listContextsTree(): Promise<ContextNode[]> {
   return listContextsTreeForUser(getActiveUserId());
 }
 

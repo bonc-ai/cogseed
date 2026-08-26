@@ -20,7 +20,7 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName } from '../paths';
+import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName, userAgentsDir, userSkillsDir } from '../paths';
 import { nowIso, readJson, writeJson } from '../storage';
 import { createLogger } from '../logger';
 import { getRendererTable } from '../i18n';
@@ -517,6 +517,17 @@ function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?:
  *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
+  const startedAt = Date.now();
+  // 持久化元数据表路径：指纹命中 → 直接返回（重启后冷启动同样命中，
+  // 不再逐空间读 space.json + 最近会话）。
+  const meta = await import('./workspace_meta');
+  const tableEntry = await meta.getEntry<SpaceWithMeta[]>(uid, 'spaces', 'all');
+  if (tableEntry && Array.isArray(tableEntry.data)) {
+    if ((await _spacesStamp(uid)) === tableEntry.stamp) {
+      log.info('listSpaces table hit', { spaces: tableEntry.data.length, ms: Date.now() - startedAt });
+      return tableEntry.data.map((s) => ({ ...s }));
+    }
+  }
   const ids = await _listSpaceIds(uid);
   const [agents, skills] = await Promise.all([
     import('./agents').then((m) => m.listAgents()).catch(() => []),
@@ -542,10 +553,12 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
     for (const id of baseAgentIds) {
       if (id && !usableAgents.includes(id)) usableAgents.push(id);
     }
-    // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
+    // 最近活跃会话（列表「最近」展示 + 最近使用排序）。走轻量版：只合并
+    // 空间/全局索引取最新一行，跳过 members.json 读取与整份 jsonl 的
+    // commander 扫描 —— 否则 N 个空间会把全部消息字节读一遍再丢掉。
     let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
     try {
-      const convs = await import('./chats').then((m) => m.listSpaceConversations(uid, sid));
+      const convs = await import('./chats').then((m) => m.listSpaceConversationsLight(uid, sid));
       lastConv = convs[0];
     } catch (_) { /* 会话索引异常不阻断列表 */ }
     return {
@@ -564,7 +577,36 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const out: SpaceWithMeta[] = metas.filter((m): m is NonNullable<typeof m> => Boolean(m));
   const collator = new Intl.Collator('zh', { sensitivity: 'base', numeric: true });
   out.sort((a, b) => collator.compare(a.name, b.name) || a.space_id.localeCompare(b.space_id));
+  try {
+    await meta.putEntry(uid, 'spaces', 'all', await _spacesStamp(uid), out);
+  } catch { /* 表写入失败不阻断 */ }
+  // 性能埋点：工作空间首屏核心路径耗时（诊断用，仅计数/时长）。
+  log.info('listSpaces done', { spaces: out.length, ms: Date.now() - startedAt });
   return out;
+}
+
+async function _entryStamp(dir: string): Promise<string> {
+  try {
+    const st = await fsp.stat(dir);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** 工作空间摘要的验证指纹：spaces 目录 + 会话索引全部根 + skills/agents
+ *  目录。任一变化（新建空间/会话、技能或智能体增删）即失配 → 实时重算。 */
+async function _spacesStamp(uid: string): Promise<string> {
+  const parts: string[] = [
+    `sd:${await _entryStamp(ensureSpacesDir(uid))}`,
+    `sk:${await _entryStamp(userSkillsDir(uid))}`,
+    `ag:${await _entryStamp(userAgentsDir(uid))}`,
+  ];
+  try {
+    const chats = await import('./chats');
+    parts.push(await chats.conversationIndexStamp(uid));
+  } catch { /* 索引不可用 → 失配兜底由 live 路径覆盖 */ }
+  return parts.join('|');
 }
 
 export async function getSpace(uid: string, spaceId: string): Promise<Space | null> {

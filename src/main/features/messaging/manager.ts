@@ -19,6 +19,7 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
@@ -581,17 +582,19 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
+    ledger.completeInbound(uid, key, patch);
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
   const decision = evaluateInboundPolicy(instance, envelope);
   if (!decision.allowed) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: decision.reason || 'policy_rejected' });
+    await completeLedger({ status: 'rejected', reason: decision.reason || 'policy_rejected' });
     return { accepted: false, duplicate: false, reason: decision.reason };
   }
   const text = stripBotMention(envelope.text).slice(0, 12_000);
   if (!text) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: 'empty_message' });
+    await completeLedger({ status: 'rejected', reason: 'empty_message' });
     return { accepted: false, duplicate: false, reason: 'empty_message' };
   }
   // Session-reset slashes rotate the bound conversation to a fresh cid and
@@ -615,11 +618,11 @@ async function handleInboundLocked(
           instanceId: instance.id,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     } catch (error) {
       const message = (error as Error).message || 'messaging new-session dispatch failed';
-      await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+      await completeLedger({ status: 'failed', reason: message });
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
@@ -640,7 +643,7 @@ async function handleInboundLocked(
           command: inboundCommand.name,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     }
   }
@@ -660,7 +663,11 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
-    const result = await groupChat.send({ userId: uid, cid: binding.cid, text });
+    const result = await groupChat.send({
+      userId: uid,
+      cid: binding.cid,
+      text,
+    });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message
     // this turn starts from, so the completing turn's reply resolves its own
@@ -668,11 +675,11 @@ async function handleInboundLocked(
     if (runtime && result.msg?.id && envelope.contextTokenRef) {
       runtime.turnSourceRefs.set(result.msg.id, envelope.contextTokenRef);
     }
-    await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+    await completeLedger({ status: 'accepted', cid: binding.cid });
     return { accepted: true, duplicate: false, cid: binding.cid };
   } catch (error) {
     const message = (error as Error).message || 'messaging inbound dispatch failed';
-    await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+    await completeLedger({ status: 'failed', reason: message });
     throw new Error(`messaging inbound dispatch failed: ${message}`);
   }
 }
@@ -954,6 +961,14 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       error: (error as Error).message,
     });
   }
+  // 第三期「渠道即节点」：实例运行即注册为 P3394 节点（幂等，桥未启动时静默跳过）
+  const bridgeRegister = registerChannelBridgeNode(loaded.instance);
+  if (!bridgeRegister.ok && bridgeRegister.error !== 'p3394_bridge_unavailable') {
+    log.warn('messaging channel-bridge node registration failed', {
+      instanceId,
+      error: bridgeRegister.error,
+    });
+  }
 }
 
 async function stopRuntime(uid: string, instanceId: string): Promise<void> {
@@ -966,6 +981,7 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   runtime.active = false;
   map?.delete(instanceId);
   if (!map?.size) runtimes.delete(uid);
+  unregisterChannelBridgeNode(instanceId);
   runtime.disposeTimers();
 
   let stopFailure: Error | null = null;

@@ -1257,11 +1257,18 @@ async function _csEnsureCliAgent(cli, existingAgents) {
       }),
       icon: 'code',
       color: 'sage',
-      runtime: { kind: 'cli', cli },
+      runtime: { kind: 'p3394-gateway', cli },
       category: 'general',
     });
     if (res && res.agent) {
       _obLog.info('team CLI agent created', { cli, agentId: res.agent.agent_id });
+      // 收口后统一经托管网关接入：创建即拉起网关（失败不影响记录，后续
+      // 派发自愈会再拉）。镜像 agents.js _saveExternalAgent 的启动路径。
+      try {
+        await window.cogseed.invoke('p3394.external.start', { cli });
+      } catch (gwErr) {
+        _obLog.warn('team CLI gateway start deferred to self-heal', { cli, error: (gwErr && gwErr.message) || String(gwErr) });
+      }
       return 'created';
     }
     _obLog.warn('team CLI agent create returned no agent', { cli });
@@ -1444,12 +1451,12 @@ async function _csConnectTeam(box, appType, shouldStoreApi = false) {
       try {
         const listRes = await window.cogseed.invoke('agents.list', {});
         const row = ((listRes && listRes.agents) || []).find(
-          (a) => a && a.runtime && a.runtime.kind === 'cli' && a.runtime.cli === cli,
+          (a) => a && a.runtime && a.runtime.kind === 'p3394-gateway' && a.runtime.cli === cli,
         );
         if (row && row.agent_id) {
           const upd = await window.cogseed.invoke('agents.update', {
             agent_id: row.agent_id,
-            updates: { runtime: { kind: 'cli', cli, cli_provider_id: `cp:${storedProviderId}` } },
+            updates: { runtime: { kind: 'p3394-gateway', cli, cli_provider_id: `cp:${storedProviderId}` } },
           });
           if (upd && upd.agent) {
             _obLog.info('cli provider bound to agent', { cli, agentId: row.agent_id, providerId: storedProviderId });
