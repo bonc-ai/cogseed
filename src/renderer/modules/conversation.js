@@ -5324,18 +5324,35 @@ function startRelayActivitySubscription() {
 // Called whenever a non-internal message lands on a cid so the list stays
 // ordered by pin state first, then last activity (matches backend
 // listConversations sort on the next full reload).
+// rAF 合并（仅热路径）：多 agent turn 会在同一帧内连发多个 message 事件，
+// 每个事件都全量排序 + innerHTML 重建侧栏是流式期间卡顿主因。行已在
+// 列表中时数据（last_active_at）即时更新、排序与渲染每帧至多一次——
+// 视觉更新延迟 ≤16ms，不可感知。冷启动水合（缓存外新任务行）保持
+// 同步渲染：新任务需要立即可见。
+let _bumpScheduled = false;
 async function _bumpConvToTop(cid) {
   if (!cid) return;
   if (!Array.isArray(conversations)) conversations = [];
   let c = conversations.find((row) => row && row.conversation_id === cid);
+  const hydrated = !c;
   if (!c) {
     c = await _hydrateConversationRow(cid);
     if (!c) return;
   }
   _markConversationListLocallyChanged();
   c.last_active_at = new Date().toISOString();
-  _sortConversationCacheForSidebar();
-  renderConversationList();
+  if (hydrated) {
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+    return;
+  }
+  if (_bumpScheduled) return;
+  _bumpScheduled = true;
+  requestAnimationFrame(() => {
+    _bumpScheduled = false;
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+  });
 }
 
 function _compareConversationsForSidebar(a, b) {
@@ -14997,7 +15014,11 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   // user's view; visible end-of-turn replies will bump shortly after).
   if (evData.type === 'message' && evData.msg && !evData.msg.dispatch) {
     _bumpConvToTop(cid);
-    if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
+    // 文件快照刷新统一走防抖（_scheduleConversationInfoFileRefresh）：
+    // 流式期间每个 message 事件都即时触发 conversations.files.list 会在
+    // 主进程叠加整树遍历（每次消息 → 一次全量快照），还会反复闪加载态。
+    // 180ms 合并一次 + silent 刷新，数据到达延迟不可感知，行为不变。
+    _scheduleConversationInfoFileRefresh(cid);
     // Mark commander as "in chat" the moment it speaks here, so the
     // sidebar/header badges add the commander avatar without waiting for
     // the next `listConversations` to re-derive it from <cid>.jsonl.
@@ -15011,7 +15032,6 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         }
       }
     }
-    if (evData.msg.from !== 'user') _scheduleConversationInfoFileRefresh(cid);
     // Global cache refresh — must happen BEFORE the cross-cid early-return
     // below, since the agents/skills tabs are global UI surfaces. Without
     // this hop, creating a skill / agent from a background conv leaves
@@ -16289,12 +16309,14 @@ function _updateConvSidebarBadge(cid, _unused) {
 
 // Repaint badges on every visible conversation item. Called after re-render
 // of the sidebar list so previously-known pending/queued state is reapplied.
+// 每行徽标已空化：_updateConvSidebarBadge 对每行做的是同一个全局 chip 刷新 +
+// 当前会话头刷新（最多一行命中）。改成 O(1) 单次刷新，消除侧栏重建后
+// O(N×P) 的重复 pendingConvs 遍历。
 function _refreshAllConvBadges() {
-  document.querySelectorAll('.conv-item').forEach(el => {
-    const cid = el.dataset.cid;
-    if (cid) _updateConvSidebarBadge(cid);
-  });
   _refreshCommanderRunningChip();
+  if (currentCid) {
+    try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
+  }
 }
 
 // Right-aligned chip on the Commander sidebar button that surfaces "N in

@@ -124,19 +124,29 @@ describe('project_files › async project tree', () => {
     });
   });
 
-  it('reuses a warm tree and invalidates it after a supported write', async () => {
+  it('reuses a warm tree, sees root-level external writes via stamp, invalidates after a supported write', async () => {
     const projectFiles = await import('../../../src/main/features/project_files');
     await projectFiles.uploadSpaceFile('u1', 'p1', 'first.md', Buffer.from('first'));
     await projectFiles.listSpaceFileTree('u1', 'p1');
 
     const root = path.dirname((await projectFiles.listSpaceFileTree('u1', 'p1'))[0].path);
+    // 根目录外部写入 → 根指纹变化 → 下一次列表立即可见（「变更才扫」）
     fs.writeFileSync(path.join(root, 'out-of-band.md'), 'external');
     const warm = await projectFiles.listSpaceFileTree('u1', 'p1');
-    expect(warm.map((node) => node.name)).toEqual(['first.md']);
+    expect(warm.map((node) => node.name).sort()).toEqual(['first.md', 'out-of-band.md']);
+
+    // 深层外部写入不改根目录指纹 → 兜底窗口内热命中（陈旧由 SPACE_TREE_BACKSTOP_MS 兜底）
+    await projectFiles.createSpaceDir('u1', 'p1', 'deep');
+    await projectFiles.listSpaceFileTree('u1', 'p1');
+    const deepDir = path.join(root, 'deep');
+    fs.writeFileSync(path.join(deepDir, 'deep-file.md'), 'deep');
+    const deepWarm = await projectFiles.listSpaceFileTree('u1', 'p1');
+    expect(deepWarm.flatMap((n: any) => [n.name, ...(n.children || []).map((c: any) => c.name)]))
+      .not.toContain('deep-file.md');
 
     await projectFiles.uploadSpaceFile('u1', 'p1', 'second.md', Buffer.from('second'));
     const refreshed = await projectFiles.listSpaceFileTree('u1', 'p1');
-    expect(refreshed.map((node) => node.name)).toEqual(['first.md', 'out-of-band.md', 'second.md']);
+    expect(refreshed.map((node) => node.name).sort()).toEqual(['deep', 'first.md', 'out-of-band.md', 'second.md']);
   });
 });
 
