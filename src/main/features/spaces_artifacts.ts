@@ -18,10 +18,11 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceContentDir } from '../paths';
+import { chatArtifactCidDir, chatAttachmentDir, spaceChatAttachmentDir, spaceChatArtifactCidDir, spaceChatIndexFile, spaceContentDir } from '../paths';
+import { conversationMessageReadFile } from '../util/project-layout';
 import { safeId } from '../storage';
 import { ALLOWED_EXTENSIONS } from './chat_attachments';
-import { getMessages, listSpaceConversations } from './chats';
+import { getMessages, listSpaceConversations, listSpaceConversationsLight } from './chats';
 
 /** AI 产出文件宽扩展名：附件上传白名单之外，工作区产物额外放行的常见格式
  *  （旧 Office / 矢量图 / 压缩包 / 电子书 / 网页等），保证「产出的都能落位」。 */
@@ -134,19 +135,72 @@ export interface SpaceArtifactEntry {
 
 // ── 产物列表缓存 ─────────────────────────────────────────────────────────
 // 打开/切换空间详情时渲染端会反复请求 artifacts.list，而聚合是一次全量
-// 磁盘扫描（每个会话读消息 produced[] + 递归遍历工作区目录）。不加缓存时
-// 每次切空间都重扫，会话多/聊天长/产物多时延迟随数据量线性放大，且同步
-// 扫描会阻塞主进程（整个应用卡顿）。这里做空间级缓存：
-//   - TTL 内命中直接返回（切空间/反复进出秒回）；
+// 磁盘扫描（每个会话读消息 produced[] + 递归遍历工作区目录）。缓存策略：
+//   - 「变更才扫」：每次调用先算一个廉价指纹（空间会话索引 + 每个会话的
+//     附件/产物目录 + 消息文件 + imports 目录的 mtime:size），指纹与上次
+//     扫描时一致 → 直接返回缓存，无论隔了多久；
+//   - 兜底重扫：指纹一致但缓存超过 ARTIFACT_STAMP_BACKSTOP_MS 仍重扫一次，
+//     覆盖指纹感知不到的变更（如外部手动往工作区深层目录放文件），保证
+//     最坏情况下陈旧不超过该窗口；
 //   - 空间内新建会话时主动失效（invalidateSpaceArtifacts）；
 //   - 缓存值带 uid，多账号不会串数据。
-const ARTIFACT_CACHE_TTL_MS = 30_000;
-const _artifactCache = new Map<string, { uid: string; at: number; items: SpaceArtifactEntry[] }>();
+const ARTIFACT_STAMP_BACKSTOP_MS = 3 * 60_000;
+const _artifactCache = new Map<string, { uid: string; at: number; stamp: string; items: SpaceArtifactEntry[] }>();
 
 /** 空间产物缓存失效：空间内新建会话后调用，保证下次列表新鲜。 */
 export function invalidateSpaceArtifacts(spaceId: string): void {
   if (!spaceId) return;
   _artifactCache.delete(spaceId);
+  // 持久化表同源失效（fire-and-forget；表是派生缓存，失败无害）
+  const uid = (() => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const users = require('./users') as typeof import('./users');
+      return users.getActiveUserId();
+    } catch { return ''; }
+  })();
+  if (uid) {
+    void import('./workspace_meta').then((m) => m.dropEntry(uid, 'artifacts', spaceId)).catch(() => { /* best-effort */ });
+  }
+}
+
+async function _entryStamp(dir: string): Promise<string> {
+  try {
+    const st = await fsp.stat(dir);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+async function _fileStamp(file: string): Promise<string> {
+  try {
+    const st = await fsp.stat(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** 空间产物的廉价变更指纹：覆盖会话成员变化（空间会话索引）、附件/网页
+ *  产物增删（各自目录 mtime）、消息 produced[] 登记（消息文件 mtime）、
+ *  imports 增删（imports 根目录 mtime）。指纹一致即认为产物集合未变。 */
+async function _spaceArtifactsStamp(uid: string, spaceId: string): Promise<string> {
+  const parts: string[] = [];
+  parts.push(`chatidx:${await _fileStamp(spaceChatIndexFile(uid, spaceId))}`);
+  const conversations = await listSpaceConversationsLight(uid, spaceId);
+  for (const c of conversations) {
+    const cid = c.conversation_id;
+    if (!cid) continue;
+    parts.push([
+      `c:${cid}`,
+      `att:${await _entryStamp(spaceChatAttachmentDir(uid, spaceId, cid))},${await _entryStamp(chatAttachmentDir(uid, cid))}`,
+      `art:${await _entryStamp(spaceChatArtifactCidDir(uid, spaceId, cid))},${await _entryStamp(chatArtifactCidDir(uid, cid))}`,
+      `msg:${await _fileStamp(conversationMessageReadFile(uid, cid))}`,
+    ].join('|'));
+  }
+  parts.push(`imports:${await _entryStamp(path.join(spaceContentDir(uid, spaceId), 'imports'))}`);
+  return parts.join(';');
 }
 
 async function scanAttachments(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): Promise<void> {
@@ -245,7 +299,13 @@ export function isUnsafeWorkspaceRoot(dir: string): boolean {
 /** 扫描 AI 产出文件：先走消息 produced[]（已登记），再兜底扫会话工作区目录
  *  （未登记进 produced 的产物，如部分工具直接写文件）。按文件名去重（附件优先）。
  *  COGSEED-16：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
-async function scanProducedFiles(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): Promise<void> {
+async function scanProducedFiles(
+  uid: string,
+  spaceId: string,
+  cid: string,
+  out: SpaceArtifactEntry[],
+  walkedWorkspaces?: Set<string>,
+): Promise<void> {
   const seen = new Set(out.map((o) => o.name));
   const add = async (abs: string, name: string): Promise<void> => {
     if (!name || seen.has(name)) return;
@@ -276,10 +336,14 @@ async function scanProducedFiles(uid: string, spaceId: string, cid: string, out:
   }
   // 2. 会话工作区目录兜底（部分工具直接写文件、未登记 produced；递归子目录防漏）
   //    护栏：异常根目录直接跳过；遍历计数超限中止并回滚本次兜底新增（见顶部注释）。
+  //    同一空间内所有会话共享同一工作区根（除非个别会话自定义 coding_project_dir），
+  //    逐会话重复遍历同一目录是 O(会话数 × 文件数) 的浪费——同一目录在一次
+  //    聚合中只遍历一次（walkedWorkspaces 记忆）。
   try {
     const { getConversationWorkspacePath } = await import('./group_chat/conv_workspace');
     const wsDir = await getConversationWorkspacePath(uid, cid);
-    if (wsDir && !isUnsafeWorkspaceRoot(wsDir)) {
+    if (wsDir && !isUnsafeWorkspaceRoot(wsDir) && !walkedWorkspaces?.has(wsDir)) {
+      walkedWorkspaces?.add(wsDir);
       const startLen = out.length;
       try {
         await fsp.stat(wsDir);
@@ -339,12 +403,31 @@ async function scanImportedFiles(uid: string, spaceId: string, out: SpaceArtifac
 }
 
 /** 空间产物聚合：附件 + artifact + AI 产出文件统一列表，按时间倒序。空空间返回空数组（不 mock）。
- *  空间级缓存：TTL 内命中直接返回；新建会话时由 invalidateSpaceArtifacts 失效。 */
+ *  空间级「变更才扫」缓存：指纹一致直接返回（见 _spaceArtifactsStamp），
+ *  指纹变化或超过兜底窗口才重扫；新建会话时由 invalidateSpaceArtifacts 失效。 */
 export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<SpaceArtifactEntry[]> {
   if (!spaceId) return [];
+  const startedAt = Date.now();
+  const stamp = await _spaceArtifactsStamp(uid, spaceId);
   const cached = _artifactCache.get(spaceId);
-  if (cached && cached.uid === uid && Date.now() - cached.at < ARTIFACT_CACHE_TTL_MS) {
+  if (cached && cached.uid === uid && cached.stamp === stamp && Date.now() - cached.at < ARTIFACT_STAMP_BACKSTOP_MS) {
+    // 性能埋点：缓存命中路径（诊断用，仅计数/时长）。
+    try {
+      const perfLog = (await import('../logger')).createLogger('spaces_artifacts');
+      perfLog.info('listSpaceArtifacts cache hit', { items: cached.items.length, ms: Date.now() - startedAt });
+    } catch { /* best-effort */ }
     return [...cached.items];
+  }
+  // 持久化元数据表：重启后冷启动直接查表，不再全盘扫描。
+  const meta = await import('./workspace_meta');
+  const tableEntry = await meta.getEntry<SpaceArtifactEntry[]>(uid, 'artifacts', spaceId);
+  if (tableEntry && tableEntry.stamp === stamp) {
+    _artifactCache.set(spaceId, { uid, at: Date.now(), stamp, items: tableEntry.data });
+    try {
+      const perfLog = (await import('../logger')).createLogger('spaces_artifacts');
+      perfLog.info('listSpaceArtifacts table hit', { items: tableEntry.data.length, ms: Date.now() - startedAt });
+    } catch { /* best-effort */ }
+    return [...tableEntry.data];
   }
   // 触发一次附件/网页产物空间化迁移（幂等，进程内只跑一次）
   if (!_migratedSpaces.has(spaceId)) {
@@ -353,13 +436,23 @@ export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<
   }
   const conversations = await listSpaceConversations(uid, spaceId);
   const out: SpaceArtifactEntry[] = [];
+  const walkedWorkspaces = new Set<string>();
   for (const c of conversations) {
     await scanAttachments(uid, spaceId, c.conversation_id, out);
     await scanArtifacts(uid, spaceId, c.conversation_id, out);
-    await scanProducedFiles(uid, spaceId, c.conversation_id, out);
+    await scanProducedFiles(uid, spaceId, c.conversation_id, out, walkedWorkspaces);
   }
   await scanImportedFiles(uid, spaceId, out);
   out.sort((a, b) => b.time - a.time);
-  _artifactCache.set(spaceId, { uid, at: Date.now(), items: out });
+  // 迁移可能搬动附件/产物目录——存缓存前按扫描后的状态重算指纹。
+  const finalStamp = await _spaceArtifactsStamp(uid, spaceId);
+  _artifactCache.set(spaceId, { uid, at: Date.now(), stamp: finalStamp, items: out });
+  try {
+    await meta.putEntry(uid, 'artifacts', spaceId, finalStamp, out);
+  } catch { /* 表写入失败不阻断列表 */ }
+  try {
+    const perfLog = (await import('../logger')).createLogger('spaces_artifacts');
+    perfLog.info('listSpaceArtifacts scanned', { items: out.length, convs: conversations.length, ms: Date.now() - startedAt });
+  } catch { /* best-effort */ }
   return [...out];
 }

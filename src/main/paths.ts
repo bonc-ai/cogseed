@@ -558,6 +558,10 @@ export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConf
 // activateUser(); both core-agent's auth store and the web-search provider
 // cache land in this same directory.
 export const userLocalConfigDir   = (uid: string) => path.join(userLocalRoot(uid), 'config');
+/** 工作空间持久化元数据表目录（列表查询的本地缓存；纯派生数据，可整表丢弃）。 */
+export const workspaceMetaDir     = (uid: string) => path.join(userLocalRoot(uid), 'workspace');
+/** 元数据表分区文件（spaces/conversations/artifacts/fileTrees 各一个，互不拖累）。 */
+export const workspaceMetaSectionFile = (uid: string, section: string) => path.join(workspaceMetaDir(uid), `meta-${section}.json`);
 export const userAuthProfilesFile = (uid: string) => path.join(userLocalConfigDir(uid), 'auth-profiles.json');
 export const userWebSearchCache   = (uid: string) => path.join(userLocalConfigDir(uid), 'web-search-cache.json');
 export const userReflectionStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'reflection-state.json');

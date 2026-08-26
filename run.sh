@@ -40,6 +40,9 @@ if [ -n "${COGSEED_WORKSPACE_ROOT:-}" ]; then
 fi
 # Do not inherit gateway-only Anthropic credentials into the app model layer.
 unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_MODEL
+# ELECTRON_RUN_AS_NODE makes the Electron binary run as plain Node and is
+# inherited by `open`-launched app instances; never let it leak into the app.
+unset ELECTRON_RUN_AS_NODE
 
 export COGSEED_RUNTIME_VARIANT="cogseed"
 

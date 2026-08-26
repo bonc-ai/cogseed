@@ -557,7 +557,7 @@ describe('contexts › listContextsTree', () => {
     writeFile('.kb/vector.db', 'bin');
     writeFile('_INDEX.md', '# idx');
     const c = await loadContexts();
-    const tree = c.listContextsTree();
+    const tree = await c.listContextsTree();
     const top = tree.map((n) => n.name).sort();
     expect(top).toEqual(['sub', 'a.md'].sort());
     const sub = tree.find((n) => n.name === 'sub')!;
@@ -571,8 +571,8 @@ describe('contexts › listContextsTree', () => {
     writeFile('active.md', '# active');
     const c = await loadContexts();
 
-    expect(c.listContextsTreeForUser('u2').map((node) => node.name)).toEqual(['other.md']);
-    expect(c.listContextsTree().map((node) => node.name)).toEqual(['active.md']);
+    expect((await c.listContextsTreeForUser('u2')).map((node) => node.name)).toEqual(['other.md']);
+    expect((await c.listContextsTree()).map((node) => node.name)).toEqual(['active.md']);
   });
 });
 

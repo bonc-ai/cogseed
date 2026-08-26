@@ -144,6 +144,10 @@ interface Handle {
 
 const _cache = new Map<string, Handle>();
 const _vacuumTimers = new Map<string, NodeJS.Timeout>();
+/** 多次删除合并为一次 VACUUM 的防抖窗口。 */
+const VACUUM_DEBOUNCE_MS = 5_000;
+/** 低于该字节数的库直接跳过 VACUUM（无空闲页可回收）。 */
+const VACUUM_MIN_BYTES = 2 * 1024 * 1024;
 
 function handleFor(dbDir: string): Handle {
   const cached = _cache.get(dbDir);
@@ -285,7 +289,7 @@ function scheduleVacuum(dbDir: string): void {
   _vacuumTimers.set(dbDir, setTimeout(() => {
     _vacuumTimers.delete(dbDir);
     runVacuum(dbDir).catch((err) => log.warn(`vacuum ${dbDir}: ${(err as Error).message}`));
-  }, 2000));
+  }, VACUUM_DEBOUNCE_MS));
 }
 
 async function runVacuum(dbDir: string): Promise<void> {
@@ -293,6 +297,8 @@ async function runVacuum(dbDir: string): Promise<void> {
   if (!h) return;
   return h.writeLock.runExclusive(() => {
     const before = dbSize(h.dbPath);
+    // 小库几乎没有空闲页，VACUUM 无收益；跳过省一次主线程全量重写。
+    if (before < VACUUM_MIN_BYTES) return;
     const started = Date.now();
     h.db.exec('VACUUM');
     const after = dbSize(h.dbPath);
