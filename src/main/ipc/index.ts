@@ -128,7 +128,7 @@ import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { invokeHandlers as updatesHandlers } from './updates';
-import { readJsonl, safeId } from '../storage';
+import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -892,6 +892,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
+  'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
   'cogseed.connector.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.connectors(ctx.userId),
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
@@ -4960,7 +4961,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* cogseedBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -5035,6 +5036,9 @@ const streamHandlers: Record<string, StreamHandler> = {
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
+              requestId: typeof retry_request_id === 'string' && safeId(retry_request_id)
+                ? retry_request_id
+                : `req-chat-retry-${genId12()}`,
             })
             : await groupChat.send({
                 userId: ctx.userId, cid, text,

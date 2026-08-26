@@ -335,6 +335,102 @@ async function waitForQuiescent(uid: string, cid: string, timeoutMs = 2000) {
 }
 
 describe('group_chat bus › enqueue routing + persistence', () => {
+  it('projects a normal Commander run into the Dashboard task bridge without a second execution', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const parent = {
+      taskId: 'cogseed-task-parent',
+      status: 'running',
+    } as any;
+    const child = {
+      taskId: 'cogseed-task-child',
+      status: 'running',
+    } as any;
+    const bridge = {
+      startRun: vi.fn(async () => parent),
+      startTurn: vi.fn(async () => child),
+      finishTask: vi.fn(async (input: any) => ({ ...child, taskId: input.taskId, status: input.status })),
+    };
+    bus._setGroupChatTaskBridgeForTest(bridge);
+    try {
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: 'DASHBOARD_BRIDGE_TEST private prompt body',
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+      const deadline = Date.now() + 1000;
+      while (bridge.finishTask.mock.calls.length < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      expect(bridge.startRun).toHaveBeenCalledWith(expect.objectContaining({
+        userId: TEST_UID,
+        conversationId: TEST_CID,
+        sourceMessageId: msg.id,
+      }));
+      expect(bridge.startRun.mock.calls[0][0]).not.toHaveProperty('task');
+      expect(bridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        parentTaskId: parent.taskId,
+        actorId: 'commander',
+        actorKind: 'commander',
+      }));
+      expect(bridge.finishTask.mock.calls.some(([input]) => input.taskId === child.taskId && input.status === 'completed')).toBe(true);
+      expect(bridge.finishTask.mock.calls.some(([input]) => input.taskId === parent.taskId && input.status === 'completed')).toBe(true);
+      expect(streamProbe.messages.filter((text) => text.includes('DASHBOARD_BRIDGE_TEST'))).toHaveLength(1);
+    } finally {
+      bus._setGroupChatTaskBridgeForTest(null);
+    }
+  });
+
+  it('waits for the Dashboard terminal projection before dropping a conversation', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    let releaseParentFinish: (() => void) | null = null;
+    const parentFinishGate = new Promise<void>((resolve) => {
+      releaseParentFinish = resolve;
+    });
+    const bridge = {
+      startRun: vi.fn(async () => ({ taskId: 'cogseed-task-parent', status: 'running' } as any)),
+      startTurn: vi.fn(async () => ({ taskId: 'cogseed-task-child', status: 'running' } as any)),
+      finishTask: vi.fn(async (input: any) => {
+        if (input.taskId === 'cogseed-task-parent') await parentFinishGate;
+        return { taskId: input.taskId, status: input.status } as any;
+      }),
+    };
+    bus._setGroupChatTaskBridgeForTest(bridge);
+    try {
+      await bus.enqueue({
+        uid: TEST_UID,
+        cid: TEST_CID,
+        fromActorId: 'user',
+        text: 'DASHBOARD_TERMINAL_DRAIN_TEST',
+      });
+      await waitForQuiescent(TEST_UID, TEST_CID);
+      const deadline = Date.now() + 1000;
+      while (
+        !bridge.finishTask.mock.calls.some(([input]) => input.taskId === 'cogseed-task-parent')
+        && Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(bridge.finishTask.mock.calls.some(([input]) => input.taskId === 'cogseed-task-parent')).toBe(true);
+
+      let dropped = false;
+      const dropping = bus.dropConv(TEST_UID, TEST_CID).then(() => {
+        dropped = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(dropped).toBe(false);
+
+      releaseParentFinish?.();
+      await dropping;
+      expect(dropped).toBe(true);
+    } finally {
+      releaseParentFinish?.();
+      bus._setGroupChatTaskBridgeForTest(null);
+    }
+  });
+
   it('user → commander default route persists with to=["commander"]', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const events: any[] = [];

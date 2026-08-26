@@ -352,6 +352,18 @@ export async function setCogSeedSessionActiveTask(
   return updateCogSeedSession(userId, sessionId, (current) => ({ ...current, activeTaskId: taskId }));
 }
 
+export async function setCogSeedSessionDisplayName(
+  userId: string,
+  sessionId: string,
+  displayName: string,
+): Promise<CogSeedSessionRecord> {
+  const normalized = String(displayName || '').trim().slice(0, 160);
+  const current = await readCogSeedSession(userId, sessionId);
+  if (!current) throw new Error('CogSeed session not found');
+  if (!normalized || current.displayName === normalized) return current;
+  return updateCogSeedSession(userId, sessionId, (session) => ({ ...session, displayName: normalized }));
+}
+
 export async function joinCogSeedMember(
   userId: string,
   conversationId: string,
