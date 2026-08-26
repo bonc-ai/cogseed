@@ -6111,5 +6111,6 @@
   "dashboard.collab.agents_n": "{n} 个智能体参与",
   "dashboard.collab.dispatches_n": "指挥官派发 {n} 次",
   "dashboard.collab.dispatch": "派发",
-  "dashboard.activity.go_decide": "去处理"
+  "dashboard.activity.go_decide": "去处理",
+  "dashboard.section_error": "该分区加载出错，可点右上角刷新重试"
 }

@@ -205,9 +205,21 @@
       <div class="dash-section" id="dash-ov-activity"></div>
       <div class="dash-section" id="dash-ov-roster"></div>
       <div class="dash-section" id="dash-ov-health"></div>`;
-    renderActivity(_pane.querySelector('#dash-ov-activity'));
-    renderRoster(_pane.querySelector('#dash-ov-roster'));
-    renderHealth(_pane.querySelector('#dash-ov-health'));
+    // 分段错误隔离（设计 1.2）：一段渲染崩溃只显示该段的错误占位，
+    // 不拖垮整页——此前名册抛错把健康区也带成空白。
+    const section = (sel, label, fn) => {
+      const node = _pane.querySelector(sel);
+      if (!node) return;
+      try {
+        fn(node);
+      } catch (_) {
+        node.innerHTML = `<div class="dash-empty">${DS().esc(DS().t('dashboard.section_error'))}</div>`;
+        void label;
+      }
+    };
+    section('#dash-ov-activity', 'activity', renderActivity);
+    section('#dash-ov-roster', 'roster', renderRoster);
+    section('#dash-ov-health', 'health', renderHealth);
   }
 
   async function fetchSnapshot(force) {

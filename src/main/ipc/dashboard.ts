@@ -52,17 +52,20 @@ export const invokeHandlers: Record<string, Handler> = {
   // channel instances). The renderer keeps its per-source detail calls for
   // interactions; this snapshot is the page's first paint.
   'dashboard.overview.snapshot': async (_payload, ctx) => {
-    const [tasks, entries, gateways, remote, agents, instances, wakes] = await Promise.all([
+    const [tasks, entries, gateways, remoteResult, agents, instances, wakes] = await Promise.all([
       listCogSeedTasks(ctx.userId),
       detectAll().catch(() => []),
       Promise.resolve(listExternalGateways()).catch(() => []),
-      Promise.resolve(listRemoteNodes()).catch(() => []),
+      Promise.resolve(listRemoteNodes()).catch(() => ({ nodes: [] as never[] })),
       listAgents().catch(() => []),
       listInstances(ctx.userId).catch(() => []),
       // 计划门（Wake Gate）：commander 派发默认等待用户批准——待审请求
       // 就是「等待你的确认」行，无超时、批准后经原 enqueue 恢复派发。
       listWakeRequests(ctx.userId).catch(() => []),
     ]);
+    // listRemoteNodes returns { ok, nodes } — unwrap so the renderer sees a
+    // plain array like every other roster source.
+    const remote = (remoteResult && Array.isArray(remoteResult.nodes)) ? remoteResult.nodes : [];
     const pendingWakes = wakes
       .filter((w) => w && w.status === 'pending')
       .map((w) => ({
