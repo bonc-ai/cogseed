@@ -374,6 +374,16 @@ function stream(channel, payload, onEvent) {
   let cancelled = false;
 
   const promise = new Promise((resolve, reject) => {
+    const deliver = (ev) => {
+      if (!ev || settled) return;
+      try { onEvent && onEvent(ev); }
+      catch (err) {
+        settled = true;
+        ipcRenderer.removeListener(channelKey, listener);
+        ipcRenderer.send('cogseed.streamCancel', requestId);
+        reject(err);
+      }
+    };
     const listener = (_evt, ev) => {
       if (!ev || settled) return;
       if (ev.type === 'done') {
@@ -383,13 +393,16 @@ function stream(channel, payload, onEvent) {
         else resolve();
         return;
       }
-      try { onEvent && onEvent(ev); }
-      catch (err) {
-        settled = true;
-        ipcRenderer.removeListener(channelKey, listener);
-        ipcRenderer.send('cogseed.streamCancel', requestId);
-        reject(err);
+      // 主进程批量打包的 process 事件（数组）——拆包后逐个回调，
+      // 事件语义与顺序不变。
+      if (Array.isArray(ev)) {
+        for (const item of ev) {
+          deliver(item);
+          if (settled) return;
+        }
+        return;
       }
+      deliver(ev);
     };
 
     ipcRenderer.on(channelKey, listener);
