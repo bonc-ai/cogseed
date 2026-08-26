@@ -55,18 +55,21 @@
     "p3394:hermes-server": "tsx scripts/p3394-hermes-server.ts",
     "p3394:call": "tsx scripts/p3394-call.ts",
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "smoke:run-center": "node scripts/run-center-layout-smoke.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "@eslint/js": "^10.0.1",
     "@types/adm-zip": "^0.5.7",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.11",
     "7zip-bin": "^5.2.0",
     "electron": "^41.10.6",
     "electron-builder": "^26.15.3",
     "eslint": "^10.9.0",
+    "jsdom": "^30.0.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.5"
