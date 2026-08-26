@@ -44,7 +44,7 @@
 | 「Task Store / Event Store 是本次新造」 | 错。二者均为原有能力，本次只新增 group-chat 相关字段 |
 | 「点看板 tab 会跳回会话」 | 错。实机 trace 证实是人工并发操作叠加，tab 切换本身正常 |
 
-### 2.2 事实基线（18 条）
+### 2.2 事实基线（25 条）
 
 | # | 事实 | 证据 |
 |---|---|---|
@@ -261,6 +261,21 @@ Token / Cost / Trace / Span / Logs / Tool input-output / 完整 Tool result / Mo
 
 > **DECISION-01 未定 → RC-P0-13 无法开工 → Phase 3 DoD 无法达成。** 建议在 Phase 1 进行期间并行决策。
 
+#### ✅ 决议（2026-08-26）
+
+**采纳候选 B**：`run ordinal + 相对时间 + conversationId 前 8 位 + agentId + turn ordinal`。
+
+决策理由（团队确认）：
+- 可辨识性够用；
+- `agentId` 已过 `rendererSafeIdentifier()` 白名单、已在现有 `taskSummary()` projection 中透出、卡片 meta 行已在渲染 —— **零新增暴露面**；
+- **不动 `0c0b7907` 刻意做的隐私收敛**；候选 C 被否决，Run Center **不承载用户可读内容**。
+
+对 `RC-P0-13` 的约束（写入 verify）：
+- projection **不得**新增 conversation title、prompt、objective、step result、首条消息文本任一字段；
+- ordinal 必须由服务端稳定计算（同 session 内按 `createdAt` 升序），不得用数组下标。
+
+**RC-P0-13 解除阻塞，Phase 3 DoD 可达成。**
+
 ---
 
 ### DECISION-02：每个 actor turn 是否继续独占一个 CogSeed Task
@@ -291,6 +306,12 @@ Token / Cost / Trace / Span / Logs / Tool input-output / 完整 Tool result / Mo
 3. 它与 Observability Expansion 强相关（turn 粒度正是未来 trace/span 的天然载体），应在下一阶段连同 event schema 一起决策。
 
 **记录为架构债务**，见 §18。
+
+#### ✅ 决议（2026-08-26）
+
+团队确认**本轮不重构**，维持 run → parent task / turn → child task 模型，记为架构债务 D-1。
+Phase 4 的止血工作（`RC-P1-14` orphan 清理、`RC-P1-15` 查询边界）**照常执行，不降级、不冻结**。
+模型存废连同 event schema 一起留给 Observability Expansion 阶段决策。
 
 ---
 
@@ -470,15 +491,17 @@ Token / Cost / Trace / Span / Logs / Tool input-output / 完整 Tool result / Mo
 |---|---|
 | 问题 | retry 产生新 run/新 task，旧 failed task 原地不动且无关联 |
 | 用户表现 | attention 列的失败卡片永不消失，旁边多一张新卡片，看不出是同一件事的两次尝试 |
-| 根因 | `retryGroupChat()` → `enqueue()` 新起 run → `startRun()` 用新 `runId` 建全新 parent task，`CreateCogSeedTaskInput.retryOfTaskId` 未被传入 |
-| 本轮修法 | `ipc-service.action()` 的 retry 分支把原 `taskId` 透传下去；`bus.ts` `_enqueueBody()` 的 `startRun()` 调用带上 `retryOfTaskId`（经 `actionRequestId` 关联回原 task）。projection 中透出 `retryOfTaskId`，UI 在卡片与详情区标注「重试自 …」 |
+| 根因 | **两处独立缺口，不是一处**（2026-08-26 复核）：<br>(a) **写入侧** — `retryGroupChat()` → `enqueue()` 新起 run → `startRun()` 用新 `runId` 建全新 parent task，`CreateCogSeedTaskInput.retryOfTaskId` 未被传入；<br>(b) **投影侧** — `taskSummary()` **对所有 executionKind 都没透出 `retryOfTaskId`**（`grep retryOfTaskId src/main/features/cogseed_backend/ipc-service.ts` → 0 命中），所以连 CogSeed-native 任务的 retry 关联在 UI 上也不可见 |
+| 已存在的能力（**无需 schema 变更**） | `retryOfTaskId` 字段已端到端存在：`types.ts:19`（`CreateCogSeedTaskInput`）、`types.ts:89`（`CogSeedTaskRecord`）、`task-store.ts:72`（input 类型）、`:273`（进 fingerprint）、`:459`（持久化）；且 **CogSeed-native retry 已经在写它** —— `lifecycle.ts:93` `retryOfTaskId: previous.taskId`。本项**只是 plumbing + 投影**，不动 schema |
+| 本轮修法 | **拆两步，(b) 可独立先行：**<br>**(a) group-chat 写入路径** — `ipc-service.action()` 的 retry 分支把原 `taskId` 透传下去；`bus.ts:2127 _enqueueBody()` 的 `startRun()` 调用带上 `retryOfTaskId`（经 `actionRequestId` 关联回原 task）。<br>**(b) projection 透出（一行，对所有 executionKind 生效，独立有价值）** — `taskSummary()` 增加 `...(task.retryOfTaskId ? { retryOfTaskId: task.retryOfTaskId } : {})`。<br>UI 在卡片与详情区标注「重试自 …」 |
 | 长期方向 | 建立 run 谱系视图 |
 | 涉及文件 | `ipc-service.ts`、`group-chat-task-bridge.ts`、`bus.ts`、`run-center.js` |
 | 依赖 | RC-P0-01 |
 | 风险 | **中** — 需触碰 `bus.ts:_enqueueBody`，是并行开发热点（见 §7） |
-| 验证方式 | 测试：retry 后断言新 task `retryOfTaskId === 旧 taskId`；projection 透出该字段；UI 渲染关联标注 |
+| 验证方式 | 测试：(a) group-chat retry 后断言新 parent task `retryOfTaskId === 旧 taskId`；(b) **CogSeed-native retry 任务的 `retryOfTaskId` 同样经 projection 透出**（覆盖 `lifecycle.ts:93` 已写入的路径）；UI 渲染关联标注；旧 failed task 状态不被篡改 |
 | Priority | P1 |
 | Scope | 本轮 |
+| 范围修订 | 2026-08-26 —— 范围**扩大**（不只 group-chat，投影缺口对所有任务类型生效），但**成本下降**（无 schema 变更，(b) 步为一行）。来源：design-rationale 附录疑点 1，已 grep 复核 |
 
 ---
 
@@ -817,7 +840,9 @@ transitionCogSeedTask / appendCogSeedTaskEvent
 - [ ] 启动时自动跑 CogSeed task recovery，失败不阻塞启动
 - [ ] 重启后不存在 `status==='running'` 的 group-chat task
 - [ ] 重启后不存在 `status==='recoverable'` 的 group-chat task
-- [ ] `app_restart` 失败任务在 UI 上有可用 retry 出口
+- [x] ~~`app_restart` 失败任务在 UI 上有可用 retry 出口~~ → **改判（2026-08-26）**：该要求**不可达且不应达成**。`retry` 的真实条件是 `status==='failed' && conversationId && groupChatMessageId`（`ipc-service.ts:385`），而 `groupChatMessageId` 只在 `finishTask` 写入（`group-chat-task-bridge.ts:245`），被重启打断的 task 必然没有。改为：**`app_restart` 任务必须诚实地报告 `retry===false`，并在 UI 上说明不可从 Run Center 恢复**
+- [ ] **启动恢复只处理上一进程遗留任务** —— 本进程的 live task 永不被扫（`updatedAt < PROCESS_STARTED_AT`）
+- [ ] **重复 sweep 不虚报** —— 已恢复任务不再计入 `recoveredCount`，不重复投影
 - [ ] 非 group-chat task 恢复行为未回归
 
 ---
@@ -858,6 +883,52 @@ RC-P0-13，**被 DECISION-01 阻塞**。
 - RC-P2-17 `groupIdForTask()` 重复上溯
 - 索引 / SQLite / event compaction
 
+> ### ⚠️ 执行顺序更正（2026-08-26）：Phase 5 先于 Phase 4
+>
+> 原图为 Phase 4 → Phase 5。经只读审计后调整为 **Phase 5 → Phase 4**，理由均为代码事实：
+>
+> 1. **Phase 5 的 depends 已全部满足** —— `RC-P0-01` / `RC-P0-06` / `RC-P0-13` 均已完成；
+> 2. **Phase 4 原 TODO 的 production hook 判断错误** —— 指向 `group_chat/index.ts:1212 dropConv()`，
+>    该函数在 `src/` 与 `test/` 中**零调用方**；真实编排在 `chats.ts:2297 _purgeDeletedConversationFiles()`。
+>    按原落点实现，cleanup 在生产中永不执行；
+> 3. **Phase 4 尚有 native task 可见性语义待收口**（见下方「方案 (c)」）；
+> 4. 两阶段**无 contract 双向依赖** —— Phase 4 不增删投影字段，Phase 5 的 DELETE 项
+>    （`board.counts` / `actions.skip`）与 cleanup 无关，故调序不会造成 Phase 5 返工。
+
+### 真实 production 落点（更正）
+
+| | 内容 |
+|---|---|
+| **挂载点** | `src/main/features/chats.ts:2297 _purgeDeletedConversationFiles()` |
+| ~~原写法~~ | ~~`src/main/features/group_chat/index.ts::dropConv()`~~ —— **零调用方的死函数**，不要改它 |
+| **先例** | 同函数 `:2341` 以 `try/catch + log.warn` 调 `chat_attachments.purgeByCid(userId, cid)`，best-effort、不阻塞会话删除 |
+| **新增能力** | `task-store.ts` 目前**没有任何删除 API**，需新增最小 cleanup primitive（先例形状：`connector-store.ts:146 deleteCogSeedConnector`）。不设计通用框架 |
+
+### conversation 删除后的数据语义（方案 (c)，2026-08-26 拍板）
+
+```
+conversation 删除
+        ↓
+group-chat shadow task / events / claims  → 物理删除
+        ↓
+local-cli / cogseed-native task            → 不删除（数据保留）
+        ↓
+若其 conversation 已不存在：
+Run Center projection 不再提供 / 展示失效的 conversation 出口
+```
+
+**方案 (c) 不是「删除 native task」。** 物理删除范围严格限定在
+`executionKind === 'group-chat' && conversationId === targetCid`。
+native task 的处理发生在 **projection / visibility 层**，不动磁盘数据。
+
+> 依据：`interactive-turn.ts:65` 创建的 per-agent 追问任务带**同一个 `conversationId`**，
+> 但 `executionKind` 为 `local-cli` / `cogseed-native` —— 是真实在跑的路径。
+> 而 `ipc-service.ts:676` 的可见性过滤**只对 `group-chat` 生效**，
+> 因此会话删除后这些 native task 会永久带着一个指向已删除会话的失效出口留在 Run Center。
+
+**claim 必须与 task 同删** —— `task-store.ts:454` 在 claim 指向的 task 缺失时抛
+`CogSeed request claim references a missing task`，只删 task JSON 会留下会抛错的悬空 claim。
+
 ### 保留策略（本轮定义）
 
 | 范围 | 策略 |
@@ -865,14 +936,20 @@ RC-P0-13，**被 DECISION-01 阻塞**。
 | active（非终态） | **永远可见**，不受时间窗裁剪 |
 | recent | 默认近 N 天（建议 7 天，评审确认）进看板 |
 | archived / 超窗 | 不进看板，但仍可通过 Session 详情访问 |
-| orphan（会话已删） | `dropConv` 时级联删除 |
+| orphan（会话已删） | 会话删除时级联删除 **group-chat** shadow task；native task 见方案 (c) |
 
 ### 已知增长驱动（本轮不重构）
 
 「每个 actor turn 独占一个 Task + 一个 events JSONL」是根本增长驱动 —— 见 **DECISION-02**，本轮明确记为架构债务。Phase 4 只止血，不治本。
 
 ### Phase 4 DoD
-- [ ] 删除会话后对应 CogSeed task / events / claim 被清理
+- [ ] cleanup 挂在**真实 production 落点** `chats.ts::_purgeDeletedConversationFiles()`，不是死函数
+- [ ] 删除会话后对应 **group-chat** CogSeed task / events / claim 被清理（parent 与 child 各自独立判定，不依赖树完整性）
+- [ ] `local-cli` / `cogseed-native` task 的物理文件**零误删**
+- [ ] 会话已删除的 native task 不再暴露失效 conversation 出口（方案 (c)）
+- [ ] claim 与 task 同删，不留悬空 claim
+- [ ] cleanup 失败 best-effort，不阻塞会话删除
+- [ ] 重复执行幂等
 - [ ] `listCogSeedTasks()` 有明确上界，活跃任务不被裁掉
 - [ ] 单次 Refresh 不产生重复完整扫描
 - [ ] 保留策略已文档化并评审通过
@@ -979,6 +1056,15 @@ Renderer(harness) → invoke('cogseed.task.action')
 
 ## 16. 本轮 Definition of Done
 
+> ✅ **已达成 2026-08-26**（分支 `feat/run-center-v1-hardening`）。逐项证据见
+> `evidence/phase-6/RC-T06-final-acceptance.md` §7；Phase 6 前的 Debt Gate 见同文档 §1。
+> **D-1 / D-2 / D-3 / D-9 仍为 open** —— 见 §18，hardening 完成不代表架构债务已解决。
+>
+> **下一阶段的全部遗留项集中在 [`post-v1-followups.md`](./post-v1-followups.md)** ——
+> 架构债务索引与优先级、correctness follow-up（FU-1）、测试基础设施（TI-1～TI-4）、
+> future capability、RESERVED 契约字段、upstream 替换图。本 spec 只保留 §18 的详细字段。
+
+
 - [ ] completed 列在常见窗口宽度真实可见（720/1050/1456/1920 四档）
 - [ ] Run Center 卡片可辨识（DECISION-01 已落地）
 - [ ] Refresh 刷新 Board + Detail + Timeline + Collaboration
@@ -988,7 +1074,7 @@ Renderer(harness) → invoke('cogseed.task.action')
 - [ ] retry 后能识别新 run 与旧 failed task 的关系
 - [ ] App 重启不会遗留永久 running zombie
 - [ ] 也不会遗留 recoverable zombie
-- [ ] `app_restart` 状态有明确 retry 出口
+- [ ] `app_restart` 状态**语义诚实**：`retry`/`resume` 均为 false 时，UI 明确说明不可从 Run Center 恢复（**不再要求存在 retry 出口**，见 Phase 2 DoD 改判）
 - [ ] `waiting_user` 可以进入原 Conversation
 - [ ] Open Task 正常工作
 - [ ] Resume UI 与真实能力一致
@@ -1026,18 +1112,120 @@ Run Center
 
 ---
 
-## 18. 长期架构债务
+## 17.5 Correctness follow-ups（Phase 完成后发现，独立收口）
 
-| # | 债务 | 来源 | 建议处理时机 |
-|---|---|---|---|
-| D-1 | 每个 actor turn 独占一个 Task + 一个 events JSONL，写放大与增长无上界 | DECISION-02 | Observability Expansion（与 event schema 一并决策） |
-| D-2 | `state.taskRun.cogseedTaskId` 仅内存，关联本身不可恢复 | F-16 | Phase 2 之后独立小改造 |
-| D-3 | Group Chat 的 `healing orphan running state` 与 CogSeed recovery 是两套判定 | F-18 | 统一为单一谓词 |
-| D-4 | 无 push 通道，preload 白名单缺 `cogseed:` 前缀 | F-13 | Observability Expansion 前置 |
-| D-5 | `cogseed.task.events` 命名为 stream 实为分页读，契约误导 | F-14 | 改造为真订阅时一并正名 |
-| D-6 | Task Store 无索引，全目录扫描 | F-22 | 规模化时引入索引/SQLite |
-| D-7 | 仓库缺 DOM 测试环境，renderer 测试长期靠字符串匹配 | F-24 | Phase 0.5 引入后推广为全仓标准 |
-| D-8 | 布局正确性无法被单元测试覆盖 | F-24 | 建立轻量真实浏览器冒烟层 |
+本节收录**已确诊、有确定修法、有可验证 DoD** 的 correctness 问题。
+它们与 §18 的 Architecture Debt 性质不同：那里记录的是 ownership 未决，
+这里记录的是「知道错在哪、知道怎么修」的具体缺陷。**不要把两者混放。**
+
+### RC-P2-20 — `taskTree()` 吞掉父任务缺失的 turn
+
+| 字段 | 内容 |
+|---|---|
+| **发现于** | Phase 3 验收（RC-P0-13 卡片身份实现期间） |
+| **性质** | Renderer correctness，pre-existing（`0c0b7907` 起即存在），非本轮引入 |
+| **根因** | `taskTree()` 的根判定为 `!task.parentTaskId \|\| !byParent.has(task.parentTaskId)`。`byParent` 以 parentTaskId 为 key，而这些 key 是**由子任务自己登记的** —— 因此 `byParent.has(task.parentTaskId)` 对任何有父的任务**恒为真**，该判定实际退化成 `!task.parentTaskId` |
+| **实测后果** | 父任务不在本次投影中的 turn（父 run 被保留窗口裁掉，或历史数据残缺）**既不是 root、也挂不到任何已渲染的父节点** → `roots` 为空 → 整个 Runs 视图落到 `run_center.tasks_empty` 空态。同一时刻**看板仍然显示这条卡片** —— 同一条真实数据在两个视图里存在与否不一致 |
+| **修法** | 用 `present`（本次投影的 taskId 集合）判定：`!task.parentTaskId \|\| !present.has(task.parentTaskId)`。父任务缺失的 turn **提升为自己的 root**，仍然可见 |
+| **明确不做** | 不伪造 parent、不猜测 parent 状态、不改 task-store、不自动修复磁盘结构、不把 orphan child 当作应删数据 |
+| **附带加固** | ① 渲染递归加 `seen` 环路守卫（后端 `cogSeedTaskIdentity` / `applyCogSeedTaskWindow` 已守同一风险）；② 环形数据导致根集为空时**扁平列出**全部任务，而不是在真实数据之上显示空态 |
+| **UI 表达** | 低侵入：复用既有 `<small>` 位置，新增一个 `[data-run-center-orphan]` 标记与 `run_center.parent_run_unavailable` 文案（en/zh）。不改 Runs tree 视觉结构 |
+| **DoD** | Runs 视图中不得有真实存在的 task 消失；正常 parent-child 树无回归；orphan 的 status / identity / detail / Open Conversation 均真实可达；不出现 undefined 占位；不误显示 resume/retry；不伪造 run ordinal |
+| **状态** | ✅ 已修复 2026-08-26，13 条回归测试（`test/renderer/run-center-tree-orphan.test.ts`） |
+| **关联** | `RC-P0-13`（发现于其实现期间）、`RC-P1-15`（保留窗口是父任务缺失的主要来源）、evidence `evidence/phase-3/RC-P0-13-card-identity.md` §9 |
+
+> **与 Phase 4 `RC-P1-14` 的区别** —— 两者都叫 orphan，但含义相反，不可混淆：
+> `RC-P2-20` 说的是「父记录缺失，但 child task **本身仍真实存在**」→ **UI 不能吞掉它**；
+> `RC-P1-14` 说的是「conversation **已被明确删除**」→ 对应的 shadow task/events/claims **应该被一并清理**。
+
+---
+
+## 18. 长期架构债务（Debt Registry）
+
+> **索引与优先级见 [`post-v1-followups.md`](./post-v1-followups.md) §2。**
+> 本节保留每条债务的详细字段（当前事实 / 本轮止血 / 未解决风险 / future trigger / owner）。
+> 两处的 open/closed 状态必须一致。
+
+> **这一节是长期索引，不是证据。** Evidence（`evidence/`）记录「当时发生了什么」；
+> 本注册表记录「以后必须回来处理什么」。任何一条债务只写进 evidence 都不算登记 ——
+> 换 session、换账号、Phase 3–6 收工之后，只有本节能被重新发现。
+>
+> **编号规则**：`D-n` 在本仓库是**稳定标识**，一经分配不再改写语义。新增债务取下一个
+> 空闲编号，不复用、不重排。若外部讨论中出现同名不同号的编号（例如把 waiting_user
+> 归属称作「D-2」），以本表为准 —— 本仓库的 D-2 早已指向 F-16。
+
+### 18.1 索引
+
+| # | 债务 | 来源 | 建议处理时机 | 详细条目 |
+|---|---|---|---|---|
+| D-1 | 每个 actor turn 独占一个 Task + 一个 events JSONL，写放大与增长无上界 | DECISION-02 | Observability Expansion（与 event schema 一并决策） | §18.2 |
+| D-2 | `state.taskRun.cogseedTaskId` 仅内存，关联本身不可恢复 | F-16 | Phase 2 之后独立小改造 | — |
+| D-3 | Group Chat 的 `healing orphan running state` 与 CogSeed recovery 是两套 orphan 判定，**长期 ownership 未定** | F-18 / Phase 2 second review | Runtime Task Plane 决策时一并收口 | §18.3 |
+| D-4 | 无 push 通道，preload 白名单缺 `cogseed:` 前缀 | F-13 | Observability Expansion 前置 | — |
+| D-5 | `cogseed.task.events` 命名为 stream 实为分页读，契约误导 | F-14 | 改造为真订阅时一并正名 | — |
+| D-6 | Task Store 无索引，全目录扫描 | F-22 | 规模化时引入索引/SQLite | — |
+| D-7 | 仓库缺 DOM 测试环境，renderer 测试长期靠字符串匹配 | F-24 | Phase 0.5 引入后推广为全仓标准 | — |
+| D-8 | 布局正确性无法被单元测试覆盖 | F-24 | 建立轻量真实浏览器冒烟层 | — |
+| D-9 | `waiting_user` 影子任务的生命周期 owner 未定 —— 权威状态在 Ledger，影子 task 却停在非终态且无人负责收口 | Phase 2 second review | 正式定义 `waiting_user` 生命周期时 | §18.4 |
+
+**不在本表内的项** —— Phase 2 corrective patch 已经收口的 correctness 缺陷不是长期债务，
+不得回填进来：startup sweep 误杀本进程 live task、process-start boundary 缺失、
+重复 sweep 虚报计数、`app_restart` 文案错误承诺 Retry、`waiting_user` 被误判 `app_restart`、
+running / recoverable zombie。这些**已修复并重新验收**，见
+`evidence/baseline/RC-P0-04-05-restart-recovery.md` 的 corrective patch 附录。
+
+### 18.2 D-1 — actor-turn-per-task 模型
+
+| 字段 | 内容 |
+|---|---|
+| **当前事实** | 一个 run = 一个 parent task；每个 actor turn = 一个 child task = 1 个 JSON + 1 个 events JSONL。写放大与 Task Store 增长和对话轮次线性相关，无上界（见 §6 簇 7、design-rationale §7） |
+| **为什么本轮不解决** | 本轮是 **shadow ledger hardening**，不重构 Runtime Task Plane / Event Plane。重构面覆盖 `boardProjection()` / `collaborationSnapshot()` 全部核心函数，且模型存废取决于 Runtime 侧未来 Task Plane 形态 —— 不在工程单方面可决范围（DECISION-02） |
+| **当前止血** | Phase 1 `RC-P1-15` 查询边界（limit / since / 单次扫描 / 祖先保留）；Phase 4 `RC-P1-14` orphan 级联清理。两者都只压平延迟与体积，不改变增长斜率 |
+| **未解决风险** | 增长斜率不变；长会话下 Task Store 体积与刷新延迟持续劣化；若最终决定改模型，Phase 4 的止血工作大部分作废 |
+| **未来触发条件** | ① Observability Expansion 启动、event schema 进入设计；② Runtime 原生 Task Plane 出现；③ Task Store 体积或刷新延迟越过 `RC-P1-15` 窗口仍不可接受 |
+| **潜在 owner** | Runtime（Task Plane / Event Plane 形态）+ CogSeed Task Plane。**owner unresolved —— 需 Runtime 架构决策** |
+| **关联** | DECISION-02、`RC-P1-14`、`RC-P1-15`、`RC-P2-16` / `RC-P2-17`（本轮不做）、§17 Observability Expansion |
+
+### 18.3 D-3 — 双套 orphan reconciliation 的 ownership
+
+| 字段 | 内容 |
+|---|---|
+| **当前事实** | 两套 reconciliation 并存且各自为政：**Group Chat** —— 读时 lazy healing，谓词 `(state.status==='running' \|\| diskInFlight.length>0) && !runtime.processing && !backendActive`，把**当前会话状态**收敛到 `idle`（`group_chat/index.ts:213-216`，F-18）；**CogSeed 影子任务** —— 启动时 recovery，按 `updatedAt < PROCESS_STARTED_AT` 筛出**上一进程遗留**的 group-chat task → `failed` + `app_restart`（`recovery.ts`）。二者的输入、时机、收敛目标都不同，且没有共享谓词 |
+| **为什么本轮不解决** | 本轮是 shadow ledger hardening。统一谓词意味着要先回答「orphan 判断的真相长期由谁持有」，这是 Runtime / Group Chat / CogSeed Task Plane 之间的 ownership 决策，不为一个局部问题扩大成状态模型重写 |
+| **当前止血** | ① process-start boundary（`storage.ts` `PROCESS_STARTED_AT`，由 `nowIso()` 产出以避免与任务时间戳跨格式比较）确保 startup sweep 不误杀本进程 live task；② 「历史 task」与「当前会话状态」两个语义已明确区分 —— 一个管过去，一个管现在，当前不重叠；③ 已 `recoverable` 的 native task 在候选集层面排除，不重复计数与投影。**当前 correctness 可接受**（Phase 2 已重新验收） |
+| **未解决风险** | 两套谓词长期各自演进 → 语义漂移；任一侧改动（Group Chat healing 条件、startup recovery 谓词）都可能在另一侧产生不可见的行为差；出现第三套 recovery 时无处仲裁；`app_restart` 与 `idle` 两种收敛结果对同一次中断可能给出不一致的用户叙事 |
+| **未来触发条件** | ① Runtime 原生 Task Plane 出现；② Event Plane / restart reconciliation 统一；③ 修改 Group Chat orphan healing 谓词；④ 修改 startup recovery 谓词；⑤ 出现第三套 recovery / reconciliation 机制 |
+| **潜在 owner** | Group Chat（当前会话真相）+ Runtime（进程/执行真相）+ CogSeed Task Plane（历史 ledger）。**owner unresolved —— 需 Runtime / Group Chat 架构决策** |
+| **关联** | F-18、Phase 2 / `RC-P0-04` + `RC-P0-05`、§6 第 14 问、D-2（`cogseedTaskId` 持久化是共享谓词的前置）、§17 Observability Expansion / Runtime Task Plane、evidence `evidence/baseline/RC-P0-04-05-restart-recovery.md` §8 与 corrective patch 附录 |
+
+### 18.4 D-9 — `waiting_user` 生命周期 / ownership
+
+| 字段 | 内容 |
+|---|---|
+| **当前事实** | ① 从 `bus.ts` 视角，产生 `waiting_user` 的那次 run **已经正常终结** —— `:1526` 先清 `state.taskRun`，`:1531-1536` 才算出 `waiting_input` 并经 `_emitTaskRunTerminalIfQuiescent` 调 `finishTask`；② 真正「用户仍需回复」的**权威状态由持久化 `OrchestrationLedger` 持有**（`state.ts:72-88`，含 `resume_instruction` / `form_id`，重启后完好），不在影子 task 上；③ 但 CogSeed 状态机仍把 `waiting_user` 视为**非终态**，且没有 `waiting_user → failed` 出边；④ 用户后续回复后，旧 `waiting_user` 影子 task 如何最终收口 —— **当前没有任何组件负责** |
+| **为什么本轮不解决** | 本轮是 shadow ledger hardening，不重构 Group Chat / Runtime 状态模型。要让影子 task 随用户回复收口，先得正式定义 `waiting_user` 的生命周期与「新 run 与旧 task 的关系」，那是模型决策而非投影修复 |
+| **当前止血** | ① 重启恢复**故意不把 `waiting_user` 判为 `app_restart` failed`** —— 那次 run 并未被打断，盖章属事实错误（`COGSEED_INTERRUPTIBLE_STATUSES` 由 `TRANSITIONS` 推导而来，已排除它）；② Phase 3 `RC-P1-08` 提供「打开对话」出口并渲染说明文案；③ UI **不把 `waiting_user` 描述成 Runtime 仍在后台运行**，也不伪造 resume 动作（`RC-P2-10` 已把 `resume === false` 锁成不变量）。注意：`RC-P1-08` 只解决 UI 出口，**不等于**解决本条模型问题 |
+| **未解决风险** | `waiting_user` 影子 task 永久停在非终态：计入 `activeTaskCount`、永不被 `RC-P1-15` 保留窗口裁剪（active 永不老化）、长期在 attention 列累积；用户在对话里回复并继续后，看板仍显示一条「等待用户」的陈旧任务，与真实状态不一致 |
+| **未来触发条件** | ① 正式定义 `waiting_user` 生命周期；② Runtime Task Plane 开始设计；③ Group Chat 用户回复需要反向收口旧 task；④ `waiting_user` 历史 task 增长开始影响 UI / retention / 语义一致性 |
+| **潜在 owner** | Group Chat（Ledger 与回复语义）+ CogSeed Task Plane（状态机出边）+ Run Center projection（呈现）。**owner unresolved —— 需 Runtime / Group Chat 架构决策** |
+| **关联** | Phase 2 / `RC-P0-04` + `RC-P0-05`、`RC-P1-08`、`RC-P2-10`、`RC-P1-15`（active 永不老化）、§17 Observability Expansion / Runtime Task Plane、evidence `evidence/baseline/RC-P0-04-05-restart-recovery.md` §3「`waiting_user` 故意排除」与 §8 |
+
+### 18.5 三条模型债务的统一视角
+
+D-1 / D-3 / D-9 不是三个孤立缺陷，而是同一个缺口的三个切面：
+**CogSeed Task 是 Runtime 之外的影子账本，而账本的粒度、收口时机与终结责任都还没有长期 owner。**
+
+```
+D-1  actor-turn-per-task model        ── 账本的粒度谁定？
+D-3  orphan reconciliation ownership  ── 中断后谁判定真相？
+D-9  waiting_user lifecycle ownership ── 谁负责最终收口？
+                    │
+                    ▼
+     Runtime Task Plane / Event Plane 统一决策
+     （§17 Observability Expansion）
+```
+
+三条都应在该决策中**一并重新打开**，而不是各自单独修补 —— 单独修任何一条，都会给另外两条留下新的接缝。
 
 ---
 
@@ -1062,12 +1250,15 @@ Phase 3    用户可达性
    │       3B RC-P0-06(P0) → RC-P2-12
    │       3C RC-P0-13  ← 阻塞于 DECISION-01
    ▼
-Phase 4    数据生命周期止血
-   │       RC-P1-14 → RC-P1-15
-   │       DECISION-02 记为债务，不重构
-   ▼
-Phase 5    前后端契约收口
+Phase 5    前后端契约收口                      ★ 调序前移（2026-08-26）
    │       RC-P1-18
+   │       depends 已全满足；与 Phase 4 无 contract 双向依赖
+   ▼
+Phase 4    数据生命周期止血
+   │       RC-P1-14   （RC-P1-15 已在 Phase 1 完成）
+   │       落点更正：chats.ts::_purgeDeletedConversationFiles()
+   │       native task 按方案 (c) 在 projection 层收口
+   │       DECISION-02 记为债务，不重构
    ▼
 Phase 6    补齐所有 P0/P1 测试
    │

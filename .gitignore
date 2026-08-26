@@ -59,3 +59,7 @@ package.json.new
 # updates-server installer artifacts (large binaries; published via
 # updates-server/publish.cjs which copies them here)
 /updates-server/downloads/
+
+# Vitest coverage output (`npm run test:coverage`, reportsDirectory in
+# vitest.config.ts). Generated per-run; the config itself stays tracked.
+/coverage/

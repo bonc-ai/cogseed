@@ -1,0 +1,371 @@
+{
+  "widths": [
+    720,
+    1050,
+    1456,
+    1920
+  ],
+  "failures": 0,
+  "results": [
+    {
+      "width": 720,
+      "name": "four board columns present",
+      "ok": true,
+      "detail": "4 columns"
+    },
+    {
+      "width": 720,
+      "name": "no column clipped past the main pane",
+      "ok": true,
+      "detail": "mainRight=704"
+    },
+    {
+      "width": 720,
+      "name": "page does not scroll horizontally",
+      "ok": true
+    },
+    {
+      "width": 720,
+      "name": "no card overflows its column",
+      "ok": true,
+      "detail": "0 overflowing"
+    },
+    {
+      "width": 720,
+      "name": "controls visible (tabs + search + filters)",
+      "ok": true,
+      "detail": "tabs=3 search=true filters=4"
+    },
+    {
+      "width": 720,
+      "name": "board filters enabled",
+      "ok": true,
+      "detail": "4/4"
+    },
+    {
+      "width": 720,
+      "name": "no resume offered anywhere",
+      "ok": true
+    },
+    {
+      "width": 720,
+      "name": "no empty Open Conversation target",
+      "ok": true
+    },
+    {
+      "width": 720,
+      "name": "every card identity is distinct",
+      "ok": true,
+      "detail": "12 distinct / 12 cards"
+    },
+    {
+      "width": 720,
+      "name": "runs view hides and disables the board filters",
+      "ok": true,
+      "detail": "view=runs hidden=true enabled=0"
+    },
+    {
+      "width": 720,
+      "name": "runs tree identities are distinct",
+      "ok": true,
+      "detail": "2 entries"
+    },
+    {
+      "width": 720,
+      "name": "runs view offers no resume",
+      "ok": true
+    },
+    {
+      "width": 720,
+      "name": "exit is labelled as opening a conversation",
+      "ok": true,
+      "detail": "label=\"打开会话\""
+    },
+    {
+      "width": 720,
+      "name": "exit points at a real conversation",
+      "ok": true
+    },
+    {
+      "width": 720,
+      "name": "a deleted-conversation task offers no exit",
+      "ok": true,
+      "detail": "not applicable"
+    },
+    {
+      "width": 720,
+      "name": "detail offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "four board columns present",
+      "ok": true,
+      "detail": "4 columns"
+    },
+    {
+      "width": 1050,
+      "name": "no column clipped past the main pane",
+      "ok": true,
+      "detail": "mainRight=1023"
+    },
+    {
+      "width": 1050,
+      "name": "page does not scroll horizontally",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "no card overflows its column",
+      "ok": true,
+      "detail": "0 overflowing"
+    },
+    {
+      "width": 1050,
+      "name": "controls visible (tabs + search + filters)",
+      "ok": true,
+      "detail": "tabs=3 search=true filters=4"
+    },
+    {
+      "width": 1050,
+      "name": "board filters enabled",
+      "ok": true,
+      "detail": "4/4"
+    },
+    {
+      "width": 1050,
+      "name": "no resume offered anywhere",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "no empty Open Conversation target",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "every card identity is distinct",
+      "ok": true,
+      "detail": "12 distinct / 12 cards"
+    },
+    {
+      "width": 1050,
+      "name": "runs view hides and disables the board filters",
+      "ok": true,
+      "detail": "view=runs hidden=true enabled=0"
+    },
+    {
+      "width": 1050,
+      "name": "runs tree identities are distinct",
+      "ok": true,
+      "detail": "2 entries"
+    },
+    {
+      "width": 1050,
+      "name": "runs view offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "exit is labelled as opening a conversation",
+      "ok": true,
+      "detail": "label=\"打开会话\""
+    },
+    {
+      "width": 1050,
+      "name": "exit points at a real conversation",
+      "ok": true
+    },
+    {
+      "width": 1050,
+      "name": "a deleted-conversation task offers no exit",
+      "ok": true,
+      "detail": "not applicable"
+    },
+    {
+      "width": 1050,
+      "name": "detail offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "four board columns present",
+      "ok": true,
+      "detail": "4 columns"
+    },
+    {
+      "width": 1456,
+      "name": "no column clipped past the main pane",
+      "ok": true,
+      "detail": "mainRight=1157"
+    },
+    {
+      "width": 1456,
+      "name": "page does not scroll horizontally",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "no card overflows its column",
+      "ok": true,
+      "detail": "0 overflowing"
+    },
+    {
+      "width": 1456,
+      "name": "controls visible (tabs + search + filters)",
+      "ok": true,
+      "detail": "tabs=3 search=true filters=4"
+    },
+    {
+      "width": 1456,
+      "name": "board filters enabled",
+      "ok": true,
+      "detail": "4/4"
+    },
+    {
+      "width": 1456,
+      "name": "no resume offered anywhere",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "no empty Open Conversation target",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "every card identity is distinct",
+      "ok": true,
+      "detail": "12 distinct / 12 cards"
+    },
+    {
+      "width": 1456,
+      "name": "runs view hides and disables the board filters",
+      "ok": true,
+      "detail": "view=runs hidden=true enabled=0"
+    },
+    {
+      "width": 1456,
+      "name": "runs tree identities are distinct",
+      "ok": true,
+      "detail": "2 entries"
+    },
+    {
+      "width": 1456,
+      "name": "runs view offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "exit is labelled as opening a conversation",
+      "ok": true,
+      "detail": "label=\"打开会话\""
+    },
+    {
+      "width": 1456,
+      "name": "exit points at a real conversation",
+      "ok": true
+    },
+    {
+      "width": 1456,
+      "name": "a deleted-conversation task offers no exit",
+      "ok": true,
+      "detail": "not applicable"
+    },
+    {
+      "width": 1456,
+      "name": "detail offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "four board columns present",
+      "ok": true,
+      "detail": "4 columns"
+    },
+    {
+      "width": 1920,
+      "name": "no column clipped past the main pane",
+      "ok": true,
+      "detail": "mainRight=1511"
+    },
+    {
+      "width": 1920,
+      "name": "page does not scroll horizontally",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "no card overflows its column",
+      "ok": true,
+      "detail": "0 overflowing"
+    },
+    {
+      "width": 1920,
+      "name": "controls visible (tabs + search + filters)",
+      "ok": true,
+      "detail": "tabs=3 search=true filters=4"
+    },
+    {
+      "width": 1920,
+      "name": "board filters enabled",
+      "ok": true,
+      "detail": "4/4"
+    },
+    {
+      "width": 1920,
+      "name": "no resume offered anywhere",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "no empty Open Conversation target",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "every card identity is distinct",
+      "ok": true,
+      "detail": "12 distinct / 12 cards"
+    },
+    {
+      "width": 1920,
+      "name": "runs view hides and disables the board filters",
+      "ok": true,
+      "detail": "view=runs hidden=true enabled=0"
+    },
+    {
+      "width": 1920,
+      "name": "runs tree identities are distinct",
+      "ok": true,
+      "detail": "2 entries"
+    },
+    {
+      "width": 1920,
+      "name": "runs view offers no resume",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "exit is labelled as opening a conversation",
+      "ok": true,
+      "detail": "label=\"打开会话\""
+    },
+    {
+      "width": 1920,
+      "name": "exit points at a real conversation",
+      "ok": true
+    },
+    {
+      "width": 1920,
+      "name": "a deleted-conversation task offers no exit",
+      "ok": true,
+      "detail": "not applicable"
+    },
+    {
+      "width": 1920,
+      "name": "detail offers no resume",
+      "ok": true
+    }
+  ]
+}
