@@ -77,6 +77,7 @@ import {
   type ChatUseSelection,
   type ChatMessageReference,
   type GroupMessageFailureKind,
+  type GroupMessageMetrics,
   type MarketplaceInstallRequest,
   type RecallMessageCitation,
   type WakeRequestSummary,
@@ -2024,6 +2025,10 @@ export interface EnqueueParams {
    * end-of-turn message. Renderer uses it to finalize the exact placeholder
    * that collected this turn's process / delta events. */
   turn_id?: string;
+  /** Usage/timing metrics for the settled assistant reply this enqueue
+   *  persists. Passed through to the persisted GroupMessage; absent on
+   *  user messages and host status rows. */
+  metrics?: GroupMessageMetrics;
   /** QueueItem.msgId for the actor execution that produced this message —
    * the id of the (user/commander) message that triggered the turn. Carried
    * on live bus events only (never persisted) so consumers such as the
@@ -2620,6 +2625,7 @@ async function _enqueueBody(
       ? { process: params.process }
       : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
+    ...(params.metrics ? { metrics: params.metrics } : {}),
   };
 
   if (state.taskRun && params.kstarTerminalProvenance) {

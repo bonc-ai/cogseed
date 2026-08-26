@@ -87,6 +87,19 @@ export interface WakeRequestSummary {
   workflow_resume_token?: string;
 }
 
+export interface GroupMessageMetrics {
+  startedAt: number;
+  firstTokenAt: number | null;
+  completedAt: number;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
+  toolCalls?: number;
+}
+
 export interface GroupMessage {
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
@@ -120,6 +133,10 @@ export interface GroupMessage {
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
   system_kind?: "reply_interrupted" | "kstar_review";
+  /** Usage/timing facts for one settled assistant reply. Absent on legacy
+   *  rows, user messages, and host status rows. Numbers only — never
+   *  credentials or free text. */
+  metrics?: GroupMessageMetrics;
   /** Markdown text body. */
   text: string;
   /** Structured failure origin. Older records omit this field and must not be
