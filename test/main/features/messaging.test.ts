@@ -142,6 +142,22 @@ describe('messaging registry and ledgers', () => {
     });
   });
 
+  it('channel-bridge allowlist: array kept, null clears, invalid rejected (G-14)', async () => {
+    const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
+    const np = _registryTestHooks.normalizePolicy;
+    // 数组：去空白去重后保留
+    expect(np({ channelBridgeSenderAllowlist: [' a ', 'a', 'b'] })).toMatchObject({
+      channelBridgeSenderAllowlist: ['a', 'b'],
+    });
+    // null = 显式清除（输出不含该键，回落全放行）
+    expect(np({ channelBridgeSenderAllowlist: null })).not.toHaveProperty('channelBridgeSenderAllowlist');
+    // undefined / 未传：不产生该键
+    expect(np({})).not.toHaveProperty('channelBridgeSenderAllowlist');
+    // strict 下非法值拒绝（对象/含非字符串）
+    expect(() => np({ channelBridgeSenderAllowlist: [1] }, true)).toThrow();
+    expect(() => np({ channelBridgeSenderAllowlist: 'oops' }, true)).toThrow();
+  });
+
   it('encrypts credentials and never returns them in the client DTO', async () => {
     const registry = await import('../../../src/main/features/messaging/registry');
     const created = await registry.createInstance('user-1', {
@@ -829,7 +845,13 @@ describe('messaging manager adapter flow', () => {
 
       expect(inbound.accepted).toBe(true);
       expect(inbound.cid).toBeTruthy();
-      expect(groupSend).toHaveBeenCalledWith({ userId: 'user-1', cid: inbound.cid, text: 'hello agent' });
+      expect(groupSend).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1',
+        cid: inbound.cid,
+        text: 'hello agent',
+      }));
+      const entry = await ledger.readInbound('user-1', ledger.inboundKey(created.id, 'incoming-1'));
+      expect(entry?.status).toBe('accepted');
       expect(busListener).toBeTypeOf('function');
 
       const outboundEvent = {
@@ -1986,6 +2008,78 @@ describe('messaging card action dispatch', () => {
       vi.resetModules();
     }
   });
+
+  it('treats approve re-clicks on an already-executed wake as idempotent success', async () => {
+    const decideWakeRequest = vi.fn(async () => ({
+      ok: false,
+      error: 'wake request cannot be approved from executed',
+    }));
+    vi.doMock('../../../src/main/features/p3394/wake-controller', () => ({
+      decideWakeRequest,
+    }));
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Card bot',
+        policy: { allowUserIds: ['ou_admin'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await registry.updateInstance('user-1', created.id, { enabled: true });
+      const result = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_card_1',
+        externalChatId: 'oc_1',
+        externalUserId: 'ou_admin',
+        action: 'approve',
+        payload: { wake_id: 'wake-executed' },
+        receivedAt: new Date().toISOString(),
+      });
+      // The operator already approved this wake (it advanced to executed):
+      // the re-click must not surface as an error — it settles the card.
+      expect(result).toMatchObject({ accepted: true, duplicate: false });
+    } finally {
+      vi.doUnmock('../../../src/main/features/p3394/wake-controller');
+      vi.resetModules();
+    }
+  });
+
+  it('reports a non-idempotent approval failure as rejected (not silent)', async () => {
+    const decideWakeRequest = vi.fn(async () => ({
+      ok: false,
+      error: 'wake request not found',
+    }));
+    vi.doMock('../../../src/main/features/p3394/wake-controller', () => ({
+      decideWakeRequest,
+    }));
+    try {
+      const registry = await import('../../../src/main/features/messaging/registry');
+      const manager = await import('../../../src/main/features/messaging/manager');
+      const created = await registry.createInstance('user-1', {
+        platform: 'feishu_lark',
+        displayName: 'Card bot',
+        policy: { allowUserIds: ['ou_admin'] },
+        secret: { appId: 'cli_1234567890abcdef', appSecret: 'secret' },
+      });
+      await registry.updateInstance('user-1', created.id, { enabled: true });
+      const result = await manager.ingestCardAction('user-1', {
+        platform: 'feishu_lark',
+        instanceId: created.id,
+        externalMessageId: 'om_card_2',
+        externalChatId: 'oc_1',
+        externalUserId: 'ou_admin',
+        action: 'approve',
+        payload: { wake_id: 'wake-missing' },
+        receivedAt: new Date().toISOString(),
+      });
+      expect(result).toMatchObject({ accepted: false, reason: 'wake request not found' });
+    } finally {
+      vi.doUnmock('../../../src/main/features/p3394/wake-controller');
+      vi.resetModules();
+    }
+  });
 });
 
 describe('feishu approval cards', () => {
@@ -3026,3 +3120,4 @@ describe('iLink URL trust split (API base vs scan URL)', () => {
     expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
   });
 });
+

@@ -69,11 +69,15 @@ Add it with `git commit -s`. By signing off you agree to the terms of the
 
 ## Branching and Merge Rules
 
-We follow a simplified **GitHub Flow**:
+We use a **three-line branch model**:
 
-- `main` is always releasable and **protected** — no direct pushes, all changes go through pull requests.
-- Short-lived branches: `feat/xxx` (new features), `fix/xxx` (bug fixes), `docs/xxx` (documentation), `chore/xxx` (tooling). Merge via **squash** and delete the branch.
+- `main` — public release branch. Always releasable and **protected** — no direct pushes, all changes go through pull requests.
+- `develop` — the main development branch. All feature work merges here via pull requests; CI (`verify`) must pass and a reviewer must approve before merge.
+- `cicd` — release packaging branch. Used to build, sign and publish artifacts; merging into it requires a review (plus a manual security scan by the maintainers).
+- Short-lived personal branches: `dev/<your-github-username>` (e.g. `dev/alice`) for day-to-day work; open a pull request against `develop` when ready.
 - `release/vX.Y` branches are cut from `main` at release time for patch-only fixes; they are protected by the same review rules.
+
+**For external contributors**: open your pull request against `develop`, not `main`.
 
 ### Merge requirements (branch protection)
 

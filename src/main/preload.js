@@ -347,7 +347,7 @@ function logRecord(record) {
 // the lifecycle (unlike `stream` which the renderer starts). Channel names are restricted to
 // a known prefix list so the renderer can't tap into arbitrary internal IPC traffic.
 const PUSH_EVENT_CHANNELS = new Set();
-const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'bridge:', 'bash:', 'interactive-cli:', 'messaging:', 'personal-context:', 'hub-account:', 'local-agents:', 'updates:'];
+const PUSH_EVENT_PREFIXES = ['marketplace:', 'conversations:', 'connectors:', 'client-config:', 'delete_file.', 'bridge:', 'bash:', 'interactive-cli:', 'messaging:', 'personal-context:', 'hub-account:', 'local-agents:', 'updates:', 'workspace-import:'];
 function isAllowedPushChannel(channel) {
   if (typeof channel !== 'string') return false;
   return PUSH_EVENT_CHANNELS.has(channel) || PUSH_EVENT_PREFIXES.some((p) => channel.startsWith(p));
@@ -374,6 +374,16 @@ function stream(channel, payload, onEvent) {
   let cancelled = false;
 
   const promise = new Promise((resolve, reject) => {
+    const deliver = (ev) => {
+      if (!ev || settled) return;
+      try { onEvent && onEvent(ev); }
+      catch (err) {
+        settled = true;
+        ipcRenderer.removeListener(channelKey, listener);
+        ipcRenderer.send('cogseed.streamCancel', requestId);
+        reject(err);
+      }
+    };
     const listener = (_evt, ev) => {
       if (!ev || settled) return;
       if (ev.type === 'done') {
@@ -383,13 +393,16 @@ function stream(channel, payload, onEvent) {
         else resolve();
         return;
       }
-      try { onEvent && onEvent(ev); }
-      catch (err) {
-        settled = true;
-        ipcRenderer.removeListener(channelKey, listener);
-        ipcRenderer.send('cogseed.streamCancel', requestId);
-        reject(err);
+      // 主进程批量打包的 process 事件（数组）——拆包后逐个回调，
+      // 事件语义与顺序不变。
+      if (Array.isArray(ev)) {
+        for (const item of ev) {
+          deliver(item);
+          if (settled) return;
+        }
+        return;
       }
+      deliver(ev);
     };
 
     ipcRenderer.on(channelKey, listener);

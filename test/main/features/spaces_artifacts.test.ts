@@ -85,7 +85,7 @@ describe('spaces › listSpaceArtifacts（空间产物聚合）', () => {
   });
 });
 
-describe('spaces › 产物确认流程（AI 产出候选 → 确认正式）', () => {
+describe('spaces › 产物无确认态（COGSEED-16：产出即正式）', () => {
   async function makeSpaceWithProduced() {
     const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
@@ -102,21 +102,21 @@ describe('spaces › 产物确认流程（AI 产出候选 → 确认正式）', 
     return { sid: created.space.space_id, cid: conv.conversation_id, file };
   }
 
-  it('AI 产出默认候选（confirmed=false），确认后正式', async () => {
-    const { sid, cid } = await makeSpaceWithProduced();
+  it('AI 产出直接正式（confirmed=true），无需确认动作', async () => {
+    const { sid } = await makeSpaceWithProduced();
     const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
     const entry = artifacts.find((a) => a.name === '成果.docx');
     expect(entry).toBeTruthy();
     expect(entry?.source).toBe('produced');
-    expect(entry?.confirmed).toBe(false); // 候选
+    expect(entry?.confirmed).toBe(true); // 无确认态：产出即正式
+  });
 
-    const arts = await import('../../../src/main/features/spaces_artifacts');
-    const r = await arts.confirmSpaceArtifact(UID, sid, cid, '成果.docx');
-    expect(r.ok).toBe(true);
-
-    const after = await arts.listSpaceArtifacts(UID, sid);
-    const confirmedEntry = after.find((a) => a.name === '成果.docx');
-    expect(confirmedEntry?.confirmed).toBe(true); // 确认后正式
+  it('无 artifacts_state.json 时产物同样正式（不再依赖确认清单）', async () => {
+    const { sid } = await makeSpaceWithProduced();
+    const stateFile = path.join(await spaceDirFor(sid), 'artifacts_state.json');
+    expect(fs.existsSync(stateFile)).toBe(false); // 确认流程移除后不再生成状态文件
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
+    expect(artifacts.every((a) => a.confirmed === true)).toBe(true);
   });
 
   it('附件直接算正式（无需确认）', async () => {
@@ -134,6 +134,52 @@ describe('spaces › 产物确认流程（AI 产出候选 → 确认正式）', 
     const entry = artifacts.find((a) => a.name === '上传资料.pdf');
     expect(entry?.source).toBe('attachment');
     expect(entry?.confirmed).toBe(true);
+  });
+});
+
+describe('spaces › 产物缓存「变更才扫」', () => {
+  it('无变化时列表稳定，新增附件后下一次列表立即可见', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '缓存空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: 'a', spaceId: sid });
+    const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(attDir, { recursive: true });
+    fs.writeFileSync(path.join(attDir, 'a.pdf'), 'x');
+
+    const mod = await import('../../../src/main/features/spaces_artifacts');
+    const first = await mod.listSpaceArtifacts(UID, sid);
+    expect(first.map((a) => a.name)).toContain('a.pdf');
+
+    // 无变化：列表一致（指纹命中缓存）
+    const second = await mod.listSpaceArtifacts(UID, sid);
+    expect(second.map((a) => a.name)).toEqual(first.map((a) => a.name));
+
+    // 新增附件 → 目录指纹变化 → 下一次列表立即可见
+    fs.writeFileSync(path.join(attDir, 'b.pdf'), 'y');
+    const third = await mod.listSpaceArtifacts(UID, sid);
+    expect(third.map((a) => a.name)).toContain('b.pdf');
+  });
+
+  it('删除附件后从列表消失', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '删除空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: 'a', spaceId: sid });
+    const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(attDir, { recursive: true });
+    const f = path.join(attDir, 'gone.pdf');
+    fs.writeFileSync(f, 'x');
+
+    const mod = await import('../../../src/main/features/spaces_artifacts');
+    expect((await mod.listSpaceArtifacts(UID, sid)).map((a) => a.name)).toContain('gone.pdf');
+    fs.rmSync(f);
+    const after = await mod.listSpaceArtifacts(UID, sid);
+    expect(after.map((a) => a.name)).not.toContain('gone.pdf');
   });
 });
 
@@ -169,7 +215,7 @@ describe('spaces › 工作区兜底扫描（未登记 produced 的产物文件�
     expect(names).toContain('报告.html'); // 工作区兜底（html 放行）
     const htmlEntry = artifacts.find((a) => a.name === '报告.html');
     expect(htmlEntry?.source).toBe('produced');
-    expect(htmlEntry?.confirmed).toBe(false);
+    expect(htmlEntry?.confirmed).toBe(true); // COGSEED-16：兜底扫描的产出同样直接正式
   });
 });
 
@@ -263,5 +309,75 @@ describe('spaces › 附件落位与主流 coding agent 一致（上传不进空
     // 网页产物：全局 → 空间
     expect(fs.existsSync(path.join(await spaceDirFor(sid), 'chat_artifacts', conv.conversation_id, 'index.html'))).toBe(true);
     expect(fs.existsSync(path.join(globalArt, 'index.html'))).toBe(false);
+  });
+});
+
+describe('spaces › 兜底遍历护栏（工作目录解析异常防全盘遍历）', () => {
+  it('isUnsafeWorkspaceRoot：主目录/盘根/.cogseed 目录拦截，正常项目目录放行', async () => {
+    const arts = await import('../../../src/main/features/spaces_artifacts');
+    expect(arts.isUnsafeWorkspaceRoot(os.homedir())).toBe(true); // 事故场景：整个主目录
+    expect(arts.isUnsafeWorkspaceRoot(path.parse(os.homedir()).root)).toBe(true); // 文件系统根
+    const fakeCogseed = path.join(tmpDir, 'a', '.cogseed', 'b');
+    fs.mkdirSync(fakeCogseed, { recursive: true });
+    expect(arts.isUnsafeWorkspaceRoot(fakeCogseed)).toBe(true); // CogSeed 自身数据目录
+    const normal = path.join(tmpDir, 'normal-project');
+    fs.mkdirSync(normal, { recursive: true });
+    expect(arts.isUnsafeWorkspaceRoot(normal)).toBe(false); // 主目录下的正常项目不拦截
+    expect(arts.isUnsafeWorkspaceRoot(path.join(tmpDir, 'does-not-exist'))).toBe(false);
+  });
+
+  it('兜底遍历跳过 node_modules / __pycache__，正常文件仍收', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '护栏空间' });
+    if (!created.ok) throw new Error('create failed');
+    const conv = await chats.createConversation(UID, { title: '护栏', spaceId: created.space.space_id });
+    const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+    const wsRoot = await getConversationWorkspacePath(UID, conv.conversation_id);
+    fs.mkdirSync(path.join(wsRoot, 'node_modules', 'x'), { recursive: true });
+    fs.mkdirSync(path.join(wsRoot, '__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(wsRoot, 'node_modules', 'x', 'big.js'), 'x');
+    fs.writeFileSync(path.join(wsRoot, '__pycache__', 'c.pyc'), 'x');
+    fs.writeFileSync(path.join(wsRoot, 'keep.md'), 'keep');
+
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, created.space.space_id);
+    const names = artifacts.map((a) => a.name);
+    expect(names).toContain('keep.md');
+    expect(names).not.toContain('big.js');
+    expect(names).not.toContain('c.pyc');
+  });
+
+  it('遍历计数超限：中止并回滚兜底结果，produced 登记产物不受影响', async () => {
+    const prevLimit = process.env.SPACE_ARTIFACTS_WALK_LIMIT;
+    process.env.SPACE_ARTIFACTS_WALK_LIMIT = '10';
+    vi.resetModules();
+    try {
+      const spaces = await import('../../../src/main/features/spaces');
+      const chats = await import('../../../src/main/features/chats');
+      const created = await spaces.createSpace(UID, { name: '超限空间' });
+      if (!created.ok) throw new Error('create failed');
+      const conv = await chats.createConversation(UID, { title: '超限', spaceId: created.space.space_id });
+      const { getConversationWorkspacePath } = await import('../../../src/main/features/group_chat/conv_workspace');
+      const wsRoot = await getConversationWorkspacePath(UID, conv.conversation_id);
+      fs.mkdirSync(wsRoot, { recursive: true });
+      // 15 个兜底文件 + 1 个 produced 登记文件
+      for (let i = 0; i < 15; i++) fs.writeFileSync(path.join(wsRoot, `f${i}.md`), 'x');
+      const registered = path.join(wsRoot, 'registered.md');
+      fs.writeFileSync(registered, 'x');
+      const msgFile = path.join(tmpDir, UID, 'cloud', 'chats', `${conv.conversation_id}.jsonl`);
+      fs.writeFileSync(msgFile, JSON.stringify({
+        id: 'm1', from: 'commander', ts: new Date().toISOString(), text: 'x', produced: [registered],
+      }) + '\n');
+
+      const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, created.space.space_id);
+      const names = artifacts.map((a) => a.name);
+      // 兜底结果整体回滚：15 个文件一个都不该出现
+      for (let i = 0; i < 15; i++) expect(names).not.toContain(`f${i}.md`);
+      // produced 登记的产物保留
+      expect(names).toContain('registered.md');
+    } finally {
+      if (prevLimit === undefined) delete process.env.SPACE_ARTIFACTS_WALK_LIMIT;
+      else process.env.SPACE_ARTIFACTS_WALK_LIMIT = prevLimit;
+    }
   });
 });

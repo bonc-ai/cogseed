@@ -1,0 +1,44 @@
+# Email hygiene gate — blocks PRs whose commits carry personal email addresses.
+#
+# Personal emails (gmail / qq / 163 / corporate-personal / *.local) must never
+# enter public commit history. Every commit in a PR must use a noreply address:
+#   {GitHubUserID}+{username}@users.noreply.github.com
+# or a sanctioned team address (business@bonc.com.cn).
+#
+# This gate is fast (<5s): it only inspects commit author emails, no build.
+# It runs on every PR targeting develop (and is also wired into cicd's verify).
+
+name: email-gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-commit-emails:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check author emails
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          bad=$(git log --format='%h|%an|%ae' "$BASE_SHA..$HEAD_SHA" 2>/dev/null \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::PR contains commits with non-noreply author emails:"
+            echo "$bad"
+            echo ""
+            echo "Fix: set git config user.email to {GitHubUserID}+{username}@users.noreply.github.com"
+            echo "  e.g. git config --global user.email 12345678+octocat@users.noreply.github.com"
+            echo "  then amend/rebase the offending commits."
+            exit 1
+          fi
+          echo "✅ All commit author emails are noreply."

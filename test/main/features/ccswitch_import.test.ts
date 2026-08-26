@@ -39,7 +39,7 @@ function createDb(rows: Array<Record<string, unknown>>): void {
 }
 
 describe('CC Switch importer', () => {
-  it('maps Claude, Codex and Gemini rows while skipping official providers', async () => {
+  it('maps Claude, Codex, Gemini and Hermes rows while skipping official providers', async () => {
     createDb([
       {
         id: 'claude-relay', app_type: 'claude', name: 'Claude Relay',
@@ -62,11 +62,26 @@ describe('CC Switch importer', () => {
 env_key = "OPENAI_API_KEY"` }),
       },
       {
+        // Real-world shape (e.g. command): prefix-path base whose /models the
+        // live probe can reach, plus [{id, name}] model hints.
+        id: 'hermes-command', app_type: 'hermes', name: 'command',
+        settings_config: JSON.stringify({
+          base_url: 'https://api.commandcode.ai/provider',
+          api_key: 'ck',
+          api_mode: 'chat_completions',
+          models: [{ id: 'gpt-5.6-luna', name: '' }, { id: 'zai-org/GLM-5.3', name: '' }],
+        }),
+      },
+      {
+        id: 'hermes-nokey', app_type: 'hermes', name: 'No Key Hermes',
+        settings_config: JSON.stringify({ base_url: 'https://relay.example/v1' }),
+      },
+      {
         id: 'official', app_type: 'claude', name: 'Official', category: 'official',
         settings_config: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com', ANTHROPIC_AUTH_TOKEN: 'skip' } }),
       },
       {
-        id: 'unsupported-hermes', app_type: 'hermes', name: 'DeepSeek', category: null,
+        id: 'unsupported-other', app_type: 'some-future-app', name: 'DeepSeek', category: null,
         settings_config: JSON.stringify({ env: { API_KEY: 'hidden' } }),
       },
     ]);
@@ -85,11 +100,17 @@ env_key = "OPENAI_API_KEY"` }),
       // Env-key-only rows are importable with needsKey so the user can fill
       // the key after the preview instead of losing the endpoint entirely.
       expect.objectContaining({ externalId: 'codex:codex-env-key', protocol: 'openai', apiKey: '', needsKey: true }),
+      expect.objectContaining({
+        externalId: 'hermes:hermes-command', protocol: 'openai',
+        baseUrl: 'https://api.commandcode.ai/provider', apiKey: 'ck',
+        models: ['gpt-5.6-luna', 'zai-org/GLM-5.3'],
+      }),
+      expect.objectContaining({ externalId: 'hermes:hermes-nokey', protocol: 'openai', apiKey: '', needsKey: true }),
     ]));
-    expect(result.items).toHaveLength(4);
+    expect(result.items).toHaveLength(6);
     expect(result.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ externalId: 'claude:official', reason: 'official' }),
-      expect.objectContaining({ externalId: 'hermes:unsupported-hermes', reason: 'unsupported_protocol' }),
+      expect.objectContaining({ externalId: 'some-future-app:unsupported-other', reason: 'unsupported_protocol' }),
     ]));
   });
 
