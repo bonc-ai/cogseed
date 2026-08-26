@@ -122,7 +122,18 @@ Run Center → cogseed.task.action → ipc-service.action()
 ### 簇 7 — Task 模型长期架构债务
 **问题**：一个 run = 一个 parent task；**每个 actor turn = 一个 child task = 1 个 JSON + 1 个 events JSONL**。
 **为什么是问题**：写放大与 Task Store 增长和对话轮次线性相关，无上界。Phase 4 的清理与限流只是止血，不改变增长斜率。
-**本轮怎么处理**：**不重构**，记为架构债务，见 **DECISION-02**。
+**本轮怎么处理**：**不重构**，记为架构债务 **D-1**，见 **DECISION-02**。
+
+Phase 2 二次 review 之后，同一视角下还确认了两条模型债务，均已正式登记（spec §18）：
+
+| # | 债务 | 一句话 | 详细 |
+|---|---|---|---|
+| D-1 | actor-turn-per-task 模型 | 影子账本的**粒度**谁定 | spec §18.2 |
+| D-3 | 双套 orphan reconciliation 的 ownership | 中断后谁**判定真相**（Group Chat 读时 healing vs CogSeed 启动 recovery） | spec §18.3 |
+| D-9 | `waiting_user` 生命周期 / ownership | 谁负责**最终收口**（权威状态在 Ledger，影子 task 却停在非终态） | spec §18.4 |
+
+三条都是 **ownership 未定**，不是 correctness 缺陷 —— Phase 2 的 correctness blocker 已修复并重新验收。
+它们应在 Runtime Task Plane / Event Plane 决策时**一并**重新打开，单独修一条会给另外两条留下新接缝。
 
 ---
 
@@ -145,7 +156,7 @@ Phase 2    RC-P0-04 + RC-P0-05（同一 PR，不可拆）
    │       启动恢复 + action 语义：group-chat 中断 → failed + app_restart
    ▼
 Phase 3    3A RC-P0-07 → RC-P1-08 → RC-P2-10 → RC-P2-11
-   │       3B RC-P0-06(P0) → RC-P2-12 → RC-P2-13a
+   │       3B RC-P0-06(P0) → RC-P2-12 → RC-P2-19
    │       3C RC-P0-13  ← 阻塞于 DECISION-01
    ▼
 Phase 4    RC-P1-14  orphan 清理（RC-P1-15 已在 Phase 1 完成）
@@ -203,7 +214,13 @@ Run Center v1 Hardening Done  →  Observability Expansion
 动作：log.warn('healing orphan running state') → setStatus(uid, cid, 'idle')
 ```
 
-即 **Group Chat 对中断 run 的处理是「放弃并治愈」，本身没有 run 恢复能力**。影子任务如果落 `recoverable`，等于承诺一个上游根本不提供的能力。而 `failed` 有现成 retry 出口（`taskActions().retry` 条件即 `status==='failed'`），改动面最小。
+即 **Group Chat 对中断 run 的处理是「放弃并治愈」，本身没有 run 恢复能力**。影子任务如果落 `recoverable`，等于承诺一个上游根本不提供的能力。~~而 `failed` 有现成 retry 出口（`taskActions().retry` 条件即 `status==='failed'`），改动面最小。~~
+
+> **⚠️ 该论据已于实现阶段被证伪（2026-08-26）。** `taskActions()` 对 group-chat 的真实条件是
+> `retry = status==='failed' && !!conversationId && !!groupChatMessageId`（`ipc-service.ts:385`），
+> 而 `groupChatMessageId` **只在 `finishTask` 内写入**（`group-chat-task-bridge.ts:245`）——被重启打断的 task 从未到达那里，`retry` 恒 false；`groupChatSourceMessageId`（用户消息）也不能兜底，`resolveFailedTurnRetry` 要求目标是**失败的助手回复**。
+>
+> **`failed + app_restart` 成立的真实理由**：上一次 run 已因进程终止而不可继续，`failed` 是对该**历史 run** 最诚实的终态描述，避免把不存在的 resume/recover 能力包装成 `recoverable`。
 
 **潜在风险**：
 1. 两套判定并存——Group Chat 的 healing 是**读时惰性**触发，CogSeed recovery 是**启动时**触发，可能短暂不一致；
@@ -400,7 +417,7 @@ Runtime
 
 ## 附：编写本文档时发现的疑点
 
-> 按流程记录，**未回改 source of truth**，待确认后再决定是否更新 spec / TODO。
+> **状态更新（2026-08-26）：3 条均已对代码复核确认属实，并已回改 source of truth。** 逐条处置见各条末尾的「✅ 处置」。
 
 ### 疑点 1 — spec RC-P1-09 的表述不够精确（建议补充，非错误）
 
@@ -417,6 +434,8 @@ Runtime
 
 **建议**：把 RC-P1-09 的修法拆成两步并明确标注 —— (a) group-chat 路径 plumbing；(b) `taskSummary()` 透出 `retryOfTaskId`（对所有 executionKind 生效）。第 (b) 步是一行，且独立有价值。
 
+**✅ 处置（2026-08-26）**：已 grep 复核，6 处 `retryOfTaskId` 命中与 `ipc-service.ts` 的 0 命中**全部属实**。spec `RC-P1-09` 已改写：新增「已存在的能力（无需 schema 变更）」行、「根因」拆为 (a) 写入侧 / (b) 投影侧两处缺口、「本轮修法」拆两步、「验证方式」补 CogSeed-native 覆盖，并加「范围修订」行说明**范围扩大但成本下降**。TODO 的 `RC-P1-09` 同步更新。
+
 ### 疑点 2 — spec §2.2 标题写「18 条」，实际列了 25 条（F-01 ~ F-25）
 
 **问题**：小节标题为「### 2.2 事实基线（18 条）」，但表格实际有 F-01 到 F-25 共 25 行。
@@ -425,6 +444,8 @@ Runtime
 
 **建议**：改为「（25 条）」。
 
+**✅ 处置（2026-08-26）**：已复核实际为 F-01 ~ F-25 共 25 行，spec §2.2 标题已改为「事实基线（25 条）」。
+
 ### 疑点 3 — TODO 中 `RC-P2-13a` 编号风格与其余不一致
 
 **问题**：其余编号形如 `RC-P{0,1,2}-NN`，`RC-P2-13a` 带字母后缀，且 `RC-P0-13` 已占用 13 号。
@@ -432,3 +453,5 @@ Runtime
 **影响**：编号可能引起歧义（`RC-P2-13a` 与 `RC-P0-13` 无关，但看起来像子项）。
 
 **建议**：改为 `RC-P2-19`（空看板文案与保留窗口协同），并同步更新 spec §4 D5 的引用。
+
+**✅ 处置（2026-08-26）**：TODO 与本文档 §4 路线图中的 `RC-P2-13a` 已全部改为 `RC-P2-19`。spec §4 D5（`:200`）原文未带编号引用，无需改动。
