@@ -1360,6 +1360,24 @@ const _TASK_TERMINAL_LISTENERS_KEY = Symbol.for(
 const _taskTerminalListeners: Set<TaskTerminalListener> = ((globalThis as any)[
   _TASK_TERMINAL_LISTENERS_KEY
 ] ??= new Set<TaskTerminalListener>());
+// Cross-conversation listeners (dashboard overview / collab overview). Same
+// globalThis pinning convention as _taskTerminalListeners above.
+const _GLOBAL_GROUP_LISTENERS_KEY = Symbol.for(
+  "cogseed.group_chat.bus.global_group_listeners",
+);
+const _globalGroupListeners: Set<GroupListener> = ((globalThis as any)[
+  _GLOBAL_GROUP_LISTENERS_KEY
+] ??= new Set<GroupListener>());
+
+/** Subscribe to every GroupEvent across all conversations. For cross-cid
+ * overview surfaces (dashboard). Per-conversation UI should keep using
+ * `subscribe(uid, cid, listener)`. */
+export function subscribeAllGroups(listener: GroupListener): () => void {
+  _globalGroupListeners.add(listener);
+  return () => {
+    _globalGroupListeners.delete(listener);
+  };
+}
 
 function cidKey(uid: string, cid: string): string {
   return `${uid}:${cid}`;
@@ -1587,6 +1605,13 @@ function emit(state: CidState, ev: GroupEvent): void {
       l(ev);
     } catch (err) {
       log.warn(`listener threw: ${(err as Error).message}`);
+    }
+  }
+  for (const l of _globalGroupListeners) {
+    try {
+      l(ev);
+    } catch (err) {
+      log.warn(`global listener threw: ${(err as Error).message}`);
     }
   }
 }
