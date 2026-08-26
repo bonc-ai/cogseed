@@ -8339,3 +8339,58 @@ describe("group_chat bus integration › Task 10 handoff finalization races", ()
   });
 });
 
+describe("group_chat bus › desktop message broadcaster", () => {
+  it("notifies the registered broadcaster for every persisted message and survives listener errors", async () => {
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const cid = newCid();
+    const seen: Array<Record<string, unknown>> = [];
+    let first = true;
+    bus.setGroupChatMessageBroadcaster((info) => {
+      seen.push(info);
+      if (first) {
+        first = false;
+        throw new Error("listener explosion must not break the bus");
+      }
+    });
+    try {
+      bus.subscribe(TEST_UID, cid, () => {});
+      const msg = await bus.enqueue({
+        uid: TEST_UID,
+        cid,
+        fromActorId: "user",
+        text: "广播探针",
+      });
+      await waitForQuiescent(TEST_UID, cid, 4000);
+
+      // The first call threw; the same enqueue must still have delivered its
+      // broadcast (fire-and-forget per call) and the turn must complete.
+      expect(seen.length).toBeGreaterThanOrEqual(1);
+      const info = seen.find((row) => row.msgId === msg.id);
+      expect(info).toMatchObject({
+        uid: TEST_UID,
+        cid,
+        from: state.USER_ID,
+      });
+    } finally {
+      bus.setGroupChatMessageBroadcaster(null);
+    }
+  });
+
+  it("stays silent when no broadcaster is registered", async () => {
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const cid = newCid();
+    bus.setGroupChatMessageBroadcaster(null);
+    bus.subscribe(TEST_UID, cid, () => {});
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: "静默探针",
+    });
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    // Reaching here without a throw is the assertion: an unset broadcaster
+    // is the pre-fix steady state for external inbound paths.
+  });
+});
+

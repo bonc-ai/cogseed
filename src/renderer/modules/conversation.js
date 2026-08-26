@@ -14965,6 +14965,19 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   _scheduleConversationInfoFileRefresh(cid);
 }
 
+// Msg ids recently rendered through a live bus stream (in-app send / open
+// conversation observer). The `conversations:updated` desktop push consults
+// this to avoid double-rendering messages the renderer already appended.
+const _recentLiveBusMsgIds = new Set();
+const _recentLiveBusMsgOrder = [];
+function _rememberLiveBusMsgId(id) {
+  if (!id || _recentLiveBusMsgIds.has(id)) return;
+  _recentLiveBusMsgIds.add(id);
+  _recentLiveBusMsgOrder.push(id);
+  while (_recentLiveBusMsgOrder.length > 200) _recentLiveBusMsgIds.delete(_recentLiveBusMsgOrder.shift());
+}
+window.__cogseedLiveBusTracker = { has: (id) => _recentLiveBusMsgIds.has(id) };
+
 // Group-chat bus event router. Each event is one of:
 //   { type: 'message', cid, msg: GroupMessage, turn_id? }
 //   { type: 'process', cid, actor, turn_id?, data: { type, text?, event? } }
@@ -14975,6 +14988,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 //   { type: 'aborted', cid }
 function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {}) {
   if (!evData || typeof evData !== 'object') return;
+  if (evData.type === 'message' && evData.msg) _rememberLiveBusMsgId(evData.msg.id);
   if (evData.type === 'agent_run_result') {
     if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
       void window.ConversationInfo.refreshAgentActivity(cid);

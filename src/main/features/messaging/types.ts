@@ -131,6 +131,10 @@ export interface MessagingBinding {
   externalChatId: string;
   externalUserId?: string;
   externalChatTitle?: string;
+  /** Resolved display name of the bound peer (direct chats) or group
+   *  sender — persisted so title upgrades survive without a fresh API
+   *  lookup on the next inbound. */
+  externalUserName?: string;
   cid: string;
   /** 空间化后 workspace 绑定写 spaceId；旧记录保留 projectId 兼容读。 */
   spaceId?: string;

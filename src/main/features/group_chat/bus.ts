@@ -237,6 +237,27 @@ export function _setP3394ControllerForTest(
   _p3394ControllerForTest = controller;
 }
 
+/** Notification a persisted group-chat message sends to the app shell
+ *  (renderer push, tests). Fired after `appendVisible`, so receivers can
+ *  re-read conversation state from disk. */
+export interface GroupChatMessageBroadcast {
+  uid: string;
+  cid: string;
+  msgId: string;
+  from: string;
+  turnEnd: boolean;
+}
+
+type GroupChatMessageBroadcaster = (info: GroupChatMessageBroadcast) => void;
+
+let messageBroadcaster: GroupChatMessageBroadcaster | null = null;
+
+/** Register the desktop push hook (IPC layer calls this at boot). Passing
+ *  null detaches (used by tests to isolate). */
+export function setGroupChatMessageBroadcaster(fn: GroupChatMessageBroadcaster | null): void {
+  messageBroadcaster = fn;
+}
+
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
  *  out of the renderer's markdown-ish rendering pass without pulling in
@@ -2618,6 +2639,28 @@ async function _enqueueBody(
     ...members.actors.map((a) => a.id),
   ]);
   await appendVisible(uid, cid, sliceMsg, Array.from(allActorIds));
+
+  // Desktop refresh rail: every persisted group-chat message (in-app sends,
+  // external-channel inbound like Feishu, agent replies) notifies the
+  // registered broadcaster. The IPC layer wires this to a
+  // `conversations:updated` push so the renderer's sidebar and open
+  // conversation stay live even when no per-request stream is attached
+  // (which is exactly the external-inbound case: nothing in the renderer
+  // subscribed to this conversation's bus events).
+  if (messageBroadcaster) {
+    try {
+      messageBroadcaster({
+        uid,
+        cid,
+        msgId,
+        from: fromActorId,
+        turnEnd: params.turn_end === true,
+      });
+      log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
+    } catch {
+      // A broken broadcast listener must never take the bus down.
+    }
+  }
 
   emit(state, {
     type: "message",

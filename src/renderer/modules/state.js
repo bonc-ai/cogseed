@@ -309,6 +309,31 @@ function bindStaticHandlers() {
     _openTaskNotificationConversation(payload);
   });
 
+  // Live refresh for externally-originated messages (e.g. Feishu inbound).
+  // Main pushes `conversations:updated` after every persisted group-chat
+  // message; without a subscription those conversations only appear after a
+  // manual reload. Skip when the renderer already rendered this message via
+  // a live stream, or when a stream is actively updating the open
+  // conversation (reloading mid-stream would yank the streaming bubble).
+  window.cogseed.onPushEvent('conversations:updated', (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    const { cid, msgId } = payload;
+    if (typeof cid !== 'string' || !cid) return;
+    const tracker = window.__cogseedLiveBusTracker;
+    if (msgId && tracker && typeof tracker.has === 'function' && tracker.has(msgId)) return;
+    if (cid === (typeof currentCid === 'string' ? currentCid : '')) {
+      const lastStreamAt = (typeof _lastGroupWorkEventAt !== 'undefined' && _lastGroupWorkEventAt && typeof _lastGroupWorkEventAt.get === 'function')
+        ? (_lastGroupWorkEventAt.get(cid) || 0)
+        : 0;
+      if (Date.now() - lastStreamAt < 3000) return;
+      if (typeof loadConversationHistory === 'function') {
+        loadConversationHistory(cid, { preserveScroll: true });
+      }
+      return;
+    }
+    if (typeof _bumpConvToTop === 'function') _bumpConvToTop(cid);
+  });
+
   // Sidebar nav
   // 首页保持进入新建会话页（panel-new-chat）；「新任务」独立按钮已移除。
   document.getElementById('new-chat-btn').addEventListener('click', () => _setViewFromSidebar('new-chat'));

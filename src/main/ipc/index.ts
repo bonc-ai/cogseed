@@ -62,6 +62,7 @@ import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
 import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
+import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
@@ -5351,6 +5352,14 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
+  // Desktop live-refresh rail: every persisted group-chat message (external
+  // channel inbound included — nothing in the renderer holds a stream for
+  // those conversations) is pushed to all windows so the sidebar and the
+  // open conversation can refresh without a manual reload.
+  setGroupChatMessageBroadcaster((info) => {
+    broadcastToRenderer('conversations:updated', info);
+  });
+
   const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');
