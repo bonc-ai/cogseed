@@ -5015,5 +5015,6 @@
   "dashboard.collab.no_agents": "通常会話（外部エージェント未派遣）",
   "dashboard.collab.agents_n": "{n} 件のエージェントが参加",
   "dashboard.collab.dispatches_n": "指揮官の派遣 {n} 回",
-  "dashboard.collab.dispatch": "派遣"
+  "dashboard.collab.dispatch": "派遣",
+  "dashboard.activity.go_decide": "対応する"
 }

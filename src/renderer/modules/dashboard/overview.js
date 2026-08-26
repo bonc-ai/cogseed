@@ -30,8 +30,10 @@
     const esc = DS().esc;
     const t = DS().t;
     const tasks = (_snapshot && _snapshot.runningTasks) || [];
+    // 计划门待审：后台任务其实在等用户拍板——置顶显示，不能让人忘掉
+    const wakes = (_snapshot && _snapshot.pendingWakes) || [];
 
-    if (!tasks.length) {
+    if (!tasks.length && !wakes.length) {
       el.innerHTML = `
         <div class="dash-activity-empty">
           <span>${esc(t('dashboard.activity.empty'))}</span>
@@ -39,6 +41,17 @@
         </div>`;
       return;
     }
+
+    const wakeRows = wakes.map((w) => `
+      <div class="dash-activity-row is-waiting">
+        <span class="dash-activity-who">${esc(w.agentName || w.agentId || t('dashboard.collab.dispatch'))}</span>
+        <span class="dash-badge dash-badge-waiting">${esc(t('dashboard.activity.waiting'))}</span>
+        <span class="dash-activity-head">${esc(w.objectiveHead || '')}</span>
+        <span class="dash-activity-time">—</span>
+        <span class="dash-activity-actions">
+          <button type="button" class="btn btn-sm btn-primary" data-dash-act="open" data-cid="${esc(w.conversationId)}">${esc(t('dashboard.activity.go_decide'))}</button>
+        </span>
+      </div>`).join('');
 
     const rows = tasks.map((task) => {
       const waiting = task.status === 'waiting_user';
@@ -68,7 +81,7 @@
     }).join('');
 
     el.innerHTML = `<div class="dash-section-head"><h3>${esc(t('dashboard.activity.title'))}</h3></div>
-      <div class="dash-activity-list">${rows}</div>`;
+      <div class="dash-activity-list">${wakeRows}${rows}</div>`;
   }
 
   // ── T8 名册：委托 roster.js（四分区卡片 + 展开操作）──────────────────

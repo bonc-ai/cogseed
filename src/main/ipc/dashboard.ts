@@ -18,6 +18,7 @@ import { listInstances } from '../features/messaging/manager';
 import { parseGroupMessages } from '../features/collab_timeline';
 import { conversationLayout } from '../util/project-layout';
 import { readJsonl } from '../storage';
+import { listWakeRequests } from '../features/p3394/wake-service';
 
 interface DashboardContext {
   userId: string;
@@ -51,14 +52,27 @@ export const invokeHandlers: Record<string, Handler> = {
   // channel instances). The renderer keeps its per-source detail calls for
   // interactions; this snapshot is the page's first paint.
   'dashboard.overview.snapshot': async (_payload, ctx) => {
-    const [tasks, entries, gateways, remote, agents, instances] = await Promise.all([
+    const [tasks, entries, gateways, remote, agents, instances, wakes] = await Promise.all([
       listCogSeedTasks(ctx.userId),
       detectAll().catch(() => []),
       Promise.resolve(listExternalGateways()).catch(() => []),
       Promise.resolve(listRemoteNodes()).catch(() => []),
       listAgents().catch(() => []),
       listInstances(ctx.userId).catch(() => []),
+      // 计划门（Wake Gate）：commander 派发默认等待用户批准——待审请求
+      // 就是「等待你的确认」行，无超时、批准后经原 enqueue 恢复派发。
+      listWakeRequests(ctx.userId).catch(() => []),
     ]);
+    const pendingWakes = wakes
+      .filter((w) => w && w.status === 'pending')
+      .map((w) => ({
+        id: w.id,
+        conversationId: w.conversation_id,
+        agentId: w.agent_id,
+        ...(w.agent_name ? { agentName: w.agent_name } : {}),
+        ...(w.objective ? { objectiveHead: String(w.objective).slice(0, 80) } : {}),
+        status: w.status,
+      }));
     // Same roster assembly as p3394.external.list: bound-agent markers from
     // agent runtimes + the P3394 peer registry (online/disabled state).
     let bound: Record<string, string[]> = {};
@@ -88,6 +102,7 @@ export const invokeHandlers: Record<string, Handler> = {
     return {
       health: agentHealthFromTasks(tasks),
       runningTasks: running,
+      pendingWakes,
       roster: {
         external: { entries, gateways, bound, peers },
         remote,
