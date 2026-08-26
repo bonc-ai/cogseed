@@ -5982,9 +5982,9 @@
   "dashboard.form_submit": "测试并添加",
   "dashboard.remote_form_missing": "地址与令牌必填",
   "dashboard.remote_testing": "正在连接对端节点…",
-  "dashboard.remote_test_failed": "连接失败",
+  "dashboard.remote_test_failed": "连接测试未通过，请检查地址与令牌",
   "dashboard.remote_add_failed": "保存失败",
-  "dashboard.remote_added": "已添加（对端身份：{id}）",
+  "dashboard.remote_added": "远端节点已添加",
   "dashboard.test": "测试",
   "dashboard.test_ok": "连接正常（对端身份：{id}）",
   "dashboard.test_failed": "连接失败",
@@ -6052,5 +6052,12 @@
   "dashboard.status.queued": "排队中",
   "dashboard.status.waiting_user": "等待你的确认",
   "dashboard.status.recoverable": "待恢复",
-  "dashboard.status.created": "已创建"
+  "dashboard.status.created": "已创建",
+  "dashboard.builtin_empty": "暂无内置智能体",
+  "dashboard.roster.calls": "累计 {n} 次",
+  "dashboard.roster.builtin_badge": "CogSeed 本体",
+  "dashboard.roster.model": "模型",
+  "dashboard.roster.model_default": "默认（由 CLI 自选）",
+  "dashboard.roster.save_model": "保存模型",
+  "dashboard.roster.config": "去配置"
 }

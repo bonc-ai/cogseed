@@ -5973,9 +5973,9 @@
   "dashboard.form_submit": "Test & add",
   "dashboard.remote_form_missing": "Endpoint and token are required",
   "dashboard.remote_testing": "Connecting to the remote node…",
-  "dashboard.remote_test_failed": "Connection failed",
+  "dashboard.remote_test_failed": "Connection test failed — check endpoint and token",
   "dashboard.remote_add_failed": "Failed to save",
-  "dashboard.remote_added": "Added (peer identity: {id})",
+  "dashboard.remote_added": "Remote node added",
   "dashboard.test": "Test",
   "dashboard.test_ok": "Connection OK (peer identity: {id})",
   "dashboard.test_failed": "Connection failed",
@@ -6052,5 +6052,12 @@
   "dashboard.status.queued": "Queued",
   "dashboard.status.waiting_user": "Waiting for you",
   "dashboard.status.recoverable": "Recoverable",
-  "dashboard.status.created": "Created"
+  "dashboard.status.created": "Created",
+  "dashboard.builtin_empty": "No built-in agents",
+  "dashboard.roster.calls": "{n} calls total",
+  "dashboard.roster.builtin_badge": "CogSeed itself",
+  "dashboard.roster.model": "Model",
+  "dashboard.roster.model_default": "Default (CLI picks)",
+  "dashboard.roster.save_model": "Save model",
+  "dashboard.roster.config": "Configure"
 }

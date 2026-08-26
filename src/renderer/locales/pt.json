@@ -4878,9 +4878,9 @@
   "dashboard.form_submit": "Testar e adicionar",
   "dashboard.remote_form_missing": "Endereço e token são obrigatórios",
   "dashboard.remote_testing": "Conectando ao nó remoto…",
-  "dashboard.remote_test_failed": "Falha na conexão",
+  "dashboard.remote_test_failed": "Teste de conexão falhou — verifique endereço e token",
   "dashboard.remote_add_failed": "Falha ao salvar",
-  "dashboard.remote_added": "Adicionado (identidade do par: {id})",
+  "dashboard.remote_added": "Nó remoto adicionado",
   "dashboard.test": "Testar",
   "dashboard.test_ok": "Conexão OK (identidade do par: {id})",
   "dashboard.test_failed": "Falha na conexão",
@@ -4957,5 +4957,12 @@
   "dashboard.status.queued": "Na fila",
   "dashboard.status.waiting_user": "Aguardando você",
   "dashboard.status.recoverable": "Recuperável",
-  "dashboard.status.created": "Criada"
+  "dashboard.status.created": "Criada",
+  "dashboard.builtin_empty": "Nenhum agente integrado",
+  "dashboard.roster.calls": "{n} chamadas no total",
+  "dashboard.roster.builtin_badge": "Próprio CogSeed",
+  "dashboard.roster.model": "Modelo",
+  "dashboard.roster.model_default": "Padrão (o CLI escolhe)",
+  "dashboard.roster.save_model": "Salvar modelo",
+  "dashboard.roster.config": "Configurar"
 }

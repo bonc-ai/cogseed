@@ -71,9 +71,16 @@
       <div class="dash-activity-list">${rows}</div>`;
   }
 
-  // ── T8/T9 占位（随任务填充）───────────────────────────────────────────
+  // ── T8 名册：委托 roster.js（四分区卡片 + 展开操作）──────────────────
   function renderRoster(el) {
-    if (el) el.innerHTML = `<div class="dash-loading">${DS().esc(DS().t('dashboard.coming_soon'))}</div>`;
+    if (!el) return;
+    const roster = window.DashboardRoster;
+    if (!roster || typeof roster.renderRoster !== 'function') {
+      el.innerHTML = `<div class="dash-loading">${DS().esc(DS().t('dashboard.loading'))}</div>`;
+      return;
+    }
+    roster.renderRoster(el, _snapshot);
+    roster.bindEvents(el);
   }
 
   function renderHealth(el) {

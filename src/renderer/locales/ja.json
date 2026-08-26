@@ -4878,9 +4878,9 @@
   "dashboard.form_submit": "テストして追加",
   "dashboard.remote_form_missing": "アドレスとトークンは必須です",
   "dashboard.remote_testing": "リモートノードに接続中…",
-  "dashboard.remote_test_failed": "接続に失敗しました",
+  "dashboard.remote_test_failed": "接続テストに失敗しました。アドレスとトークンを確認してください",
   "dashboard.remote_add_failed": "保存に失敗しました",
-  "dashboard.remote_added": "追加しました（対向識別子: {id}）",
+  "dashboard.remote_added": "リモートノードを追加しました",
   "dashboard.test": "テスト",
   "dashboard.test_ok": "接続 OK（対向識別子: {id}）",
   "dashboard.test_failed": "接続に失敗しました",
@@ -4957,5 +4957,12 @@
   "dashboard.status.queued": "待機中",
   "dashboard.status.waiting_user": "あなたの確認待ち",
   "dashboard.status.recoverable": "復旧可能",
-  "dashboard.status.created": "作成済み"
+  "dashboard.status.created": "作成済み",
+  "dashboard.builtin_empty": "内蔵エージェントはありません",
+  "dashboard.roster.calls": "累計 {n} 回",
+  "dashboard.roster.builtin_badge": "CogSeed 本体",
+  "dashboard.roster.model": "モデル",
+  "dashboard.roster.model_default": "デフォルト（CLI が選択）",
+  "dashboard.roster.save_model": "モデルを保存",
+  "dashboard.roster.config": "設定へ"
 }

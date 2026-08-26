@@ -56,6 +56,7 @@ const _rendererFeatureManifest = Object.freeze({
   dashboard: [
     { src: './modules/dashboard/tab-state.js' },
     { src: './modules/dashboard/shared.js' },
+    { src: './modules/dashboard/roster.js' },
     { src: './modules/dashboard/overview.js' },
     { src: './modules/dashboard/cost.js' },
     { src: './modules/dashboard/collab.js' },
