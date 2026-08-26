@@ -79,6 +79,16 @@ describe('foldSessionMetrics', () => {
     expect(f.ctxText).toBe('150/4K·4%');
     expect(f.ctxHot).toBe(false);
   });
+  it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps 3-term sum', () => {
+    const f = foldSessionMetrics(
+      [m({ usage: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 100 } })],
+      { contextWindow: null, price: null },
+    );
+    // 300/(100+300)=75%，不含 cacheWrite（与 usage_ledger.ts dashboard 口径一致）
+    expect(f.cacheHitText).toBe('75%');
+    // inText 口径不变：input+cacheRead+cacheWrite 三项和
+    expect(f.inText).toBe('500');
+  });
   it('flags ctx >= 80%', () => {
     const f = foldSessionMetrics(
       [m({ usage: { inputTokens: 3_300, outputTokens: 0 } })],

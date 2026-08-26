@@ -93,9 +93,11 @@ export function foldSessionMetrics(metricsList, opts = {}) {
     cacheWrite += num(u.cacheWriteTokens);
     if (num(u.inputTokens) + num(u.outputTokens) > 0) lastUsage = u;
   }
-  const denom = input + cacheRead + cacheWrite;
-  const cacheHitText = denom > 0
-    ? `${Math.min(100, Math.round((cacheRead / denom) * 100))}%`
+  // 命中率分母 = input+cacheRead（与 usage_ledger dashboard 口径一致，§101，不含 cacheWrite）
+  const cacheDenom = input + cacheRead;
+  const totalIn = input + cacheRead + cacheWrite;
+  const cacheHitText = cacheDenom > 0
+    ? `${Math.min(100, Math.round((cacheRead / cacheDenom) * 100))}%`
     : null;
   // 上下文占用 = 最近一次 usage 的 input+output（设计 §94）
   const ctx = lastUsage && num(opts.contextWindow) > 0
@@ -110,7 +112,7 @@ export function foldSessionMetrics(metricsList, opts = {}) {
   const rateText = decodeMs > 0 ? formatRate(decodeTok / (decodeMs / 1_000)) : null;
   const ttftAvgText = ttftN > 0 ? formatDuration(ttftMs / ttftN) : null;
   let costText = null;
-  if (opts.price && (denom > 0 || output > 0)) {
+  if (opts.price && (totalIn > 0 || output > 0)) {
     // 单价为 ¥/百万 token，费用需除以 1_000_000
     const cost = (input * num(opts.price.in) + output * num(opts.price.out)
       + cacheRead * num(opts.price.cacheRead) + cacheWrite * num(opts.price.cacheWrite)) / 1_000_000;
@@ -119,6 +121,6 @@ export function foldSessionMetrics(metricsList, opts = {}) {
   return {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
-    inText: formatTokens(denom), outText: formatTokens(output), costText,
+    inText: formatTokens(totalIn), outText: formatTokens(output), costText,
   };
 }
