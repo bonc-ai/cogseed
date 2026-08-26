@@ -2,8 +2,11 @@
 // 口径照 DSH：input=裸输入；缓存命中=cacheRead/(input+cacheRead)；速率只计
 // 有计时的回合；未知不显示，不编数字。
 // steps = Σ 每条消息的 toolCalls（设计 §98：步 = 该消息内工具调用次数）。
+// 渲染层是经典 script（见 index.html 头注释，无构建步、无 ESM import），
+// 所以本文件以函数声明共享 + `window.conversationMetrics` 暴露给
+// conversation.js；测试走底部 CJS 桥（同 utils.js / strip-structural-blocks.js）。
 
-export function formatTokens(n) {
+function formatTokens(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return '0';
   const scaled = (x) => (x >= 100 ? String(Math.round(x)) : String(Math.round(x * 10) / 10));
@@ -12,26 +15,26 @@ export function formatTokens(n) {
   return `${scaled(v / 1_000_000)}M`;
 }
 
-export function formatDuration(ms) {
+function formatDuration(ms) {
   const s = Math.max(0, ms) / 1_000;
   if (s < 60) return `${Math.round(s * 10) / 10}s`;
   const whole = Math.round(s);
   return `${Math.floor(whole / 60)}m${whole % 60}s`;
 }
 
-export function formatRate(tps) {
+function formatRate(tps) {
   const v = Math.max(0, tps);
   return v >= 10 ? String(Math.round(v)) : String(Math.round(v * 10) / 10);
 }
 
-export function formatLatency(ms) {
+function formatLatency(ms) {
   const s = Math.max(0, ms) / 1_000;
   return s < 10 ? String(Math.round(s * 10) / 10) : String(Math.round(s));
 }
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
 
-export function messageMetricsLine(metrics) {
+function messageMetricsLine(metrics) {
   if (!metrics || typeof metrics !== 'object') return null;
   const { startedAt, firstTokenAt, completedAt, usage, toolCalls } = metrics;
   const hasUsage = usage && (num(usage.inputTokens) + num(usage.outputTokens)
@@ -60,7 +63,7 @@ export function messageMetricsLine(metrics) {
   };
 }
 
-export function foldSessionMetrics(metricsList, opts = {}) {
+function foldSessionMetrics(metricsList, opts = {}) {
   const list = (Array.isArray(metricsList) ? metricsList : []).filter(Boolean);
   const turns = list.length;
   let steps = 0;
@@ -122,5 +125,31 @@ export function foldSessionMetrics(metricsList, opts = {}) {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
     inText: formatTokens(totalIn), outText: formatTokens(output), costText,
+  };
+}
+
+// 经典 script 暴露：conversation.js（同为经典 script，无 import 能力）通过
+// `window.conversationMetrics` 消费。jsdom 测试环境下同样生效，无副作用。
+if (typeof window !== 'undefined') {
+  window.conversationMetrics = {
+    formatTokens,
+    formatDuration,
+    formatRate,
+    formatLatency,
+    messageMetricsLine,
+    foldSessionMetrics,
+  };
+}
+
+// Test bridge — guarded CommonJS export（照 utils.js / strip-structural-blocks.js
+// 的既有模式）。浏览器里 `module` 未定义，整块 no-op。
+if (typeof module !== 'undefined' && typeof module.exports === 'object') {
+  module.exports = {
+    formatTokens,
+    formatDuration,
+    formatRate,
+    formatLatency,
+    messageMetricsLine,
+    foldSessionMetrics,
   };
 }
