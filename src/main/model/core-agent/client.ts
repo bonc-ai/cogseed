@@ -34,6 +34,7 @@ import type { ChatOptions, ChatResolvedRuntime, ChatResult, StreamEvent } from '
 
 import { buildRunner, type ToolDefSnapshot } from './runner';
 import { mapCoreAgentEvents } from './event-mapper';
+import { emitModelUsage } from './usage-events';
 import { getSession as _getCachedSession } from './session-store';
 import { app } from 'electron';
 import * as fs from 'node:fs';
@@ -1728,6 +1729,18 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       })
       : undefined);
     await executionLifecycleTail;
+    emitModelUsage({
+      at: Date.now(),
+      ...(userId ? { userId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(cid ? { conversationId: cid } : {}),
+      ...(agentId ? { agentId } : {}),
+      providerId: diagnostics.provider || activeProviderId,
+      modelId: diagnostics.model || activeModelId,
+      ...(diagnostics.usage || {}),
+      durationMs: Date.now() - runStartedAt,
+      status: terminalStatus,
+    });
     yield agentRunResultEventForTelemetry({
       status: terminalStatus,
       durationMs: Date.now() - runStartedAt,
