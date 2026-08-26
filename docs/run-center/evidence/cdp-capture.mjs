@@ -1,0 +1,17 @@
+import http from 'node:http'; import fs from 'node:fs';
+const t=await new Promise((res,rej)=>http.get('http://127.0.0.1:9222/json/list',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>res(JSON.parse(d)[0]));}).on('error',rej));
+const ws=new WebSocket(t.webSocketDebuggerUrl); let id=0; const p=new Map();
+ws.addEventListener('message',e=>{const m=JSON.parse(e.data); if(m.id&&p.has(m.id)){p.get(m.id)(m);p.delete(m.id);}});
+const send=(m,q={})=>new Promise(r=>{const i=++id;p.set(i,r);ws.send(JSON.stringify({id:i,method:m,params:q}));});
+const ev=async x=>(await send('Runtime.evaluate',{expression:x,awaitPromise:true,returnByValue:true})).result?.result?.value;
+await new Promise(r=>ws.addEventListener('open',r));
+const [out,w,h]=[process.argv[2],+process.argv[3],+process.argv[4]];
+await send('Emulation.setDeviceMetricsOverride',{width:w,height:h,deviceScaleFactor:1,mobile:false});
+await ev("document.getElementById('run-center-btn').click()");
+await new Promise(r=>setTimeout(r,1200));
+await ev("(()=>{const b=[...document.querySelectorAll('.run-center-tab')].find(x=>x.dataset.runCenterView==='board'); if(b&&!b.classList.contains('is-active'))b.click();})()");
+await new Promise(r=>setTimeout(r,900));
+const s=await send('Page.captureScreenshot',{format:'png'});
+fs.writeFileSync(out,Buffer.from(s.result.data,'base64'));
+console.log(out, await ev("JSON.stringify([...document.querySelectorAll('.dashboard-board-column')].map(c=>c.dataset.dashboardBoardColumn+'='+c.querySelector('header>span:last-child').textContent+(c.getBoundingClientRect().right<=document.querySelector('.run-center-main').getBoundingClientRect().right?'':' <CLIPPED>')))"));
+await send('Emulation.clearDeviceMetricsOverride'); ws.close();
