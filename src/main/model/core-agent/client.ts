@@ -902,6 +902,16 @@ function agentRunResultEventForTelemetry(input: {
   timings?: AgentRunTimings;
   failureCode?: string;
   failurePhase?: StreamEvent['failurePhase'];
+  /** Terminal usage totals for this run (SafeUsage — provider-reported
+   *  numbers only). Consumed by the group-chat bus to attach metrics to the
+   *  settled assistant reply. */
+  usage?: SafeUsage;
+  /** Wall-clock delay from run start to the first text delta, when one
+   *  arrived. Lets the bus derive firstTokenAt for reply metrics. */
+  firstTokenMs?: number;
+  /** Actual tool invocations this run (tool_start count, NOT the available
+   *  tool definition count used by has_tools/tool_count_bucket). */
+  toolCalls?: number;
 }): StreamEvent {
   const result = input.status === 'completed'
     ? 'success'
@@ -929,6 +939,9 @@ function agentRunResultEventForTelemetry(input: {
     data.retry_wait_ms = Math.max(0, Math.round(input.timings.retryWaitMs));
     data.other_ms = Math.max(0, Math.round(input.timings.otherMs));
   }
+  if (input.usage) data.usage = input.usage;
+  if (Number.isFinite(input.firstTokenMs)) data.first_token_ms = Math.max(0, Math.round(input.firstTokenMs || 0));
+  if (Number.isFinite(input.toolCalls) && (input.toolCalls || 0) > 0) data.tool_calls = input.toolCalls;
   if (errorCode) data.error_code = errorCode;
   return { type: 'event', event: { stream: 'agent_run_result', data } };
 }
@@ -1756,6 +1769,9 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       failureCode: terminalFailureCode || undefined,
       failurePhase: terminalFailurePhase
         || (terminalStatus === 'aborted' ? liveRunFailurePhase(liveRunTimings.phase) : undefined),
+      usage: diagnostics.usage,
+      firstTokenMs: diagnostics.firstTextDeltaMs,
+      toolCalls: diagnostics.toolStarts > 0 ? diagnostics.toolStarts : undefined,
     });
     log.info('model turn finish', {
       ...turnLogContext,
