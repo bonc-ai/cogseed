@@ -12,7 +12,9 @@ import {
   assertCogSeedTaskId,
   assertCogSeedUserId,
   cogseedRequestClaimFile,
+  cogseedTaskEventsFile,
   cogseedTaskFile,
+  cogseedTaskProjectionFile,
   cogseedTasksDirectory,
 } from './paths';
 import {
@@ -29,6 +31,7 @@ import {
   type CogSeedRequestClaim,
   type CogSeedSessionRecord,
   type CogSeedTaskRecord,
+  type CogSeedTaskStatus,
   type CogSeedLocalCliConfig,
   type CogSeedTaskSkillVersionPin,
 } from './types';
@@ -322,7 +325,78 @@ export async function readCogSeedTaskByRequestId(userId: string, requestId: stri
   }
 }
 
-export async function listCogSeedTasks(userId: string): Promise<CogSeedTaskRecord[]> {
+/**
+ * Statuses a task may age out of a bounded dashboard query in.
+ *
+ * Deliberately narrower than `ipc-service`'s `TERMINAL_TASK_STATUSES`, which
+ * also counts `failed`. A failed task is precisely what the attention column
+ * exists to surface, and a recoverable or waiting_user task is still asking the
+ * user for something — none of those may silently disappear because they got
+ * old. This mirrors `lifecycle.ts`'s notion of terminal: the two states a task
+ * can never leave on its own.
+ */
+const AGEABLE_TASK_STATUSES = new Set<CogSeedTaskStatus>(['completed', 'cancelled']);
+
+export interface ListCogSeedTasksOptions {
+  /**
+   * Cap on how many *ageable* (completed/cancelled) tasks come back. Tasks that
+   * still need attention are always returned and do not consume this budget, so
+   * the result can exceed `limit` — the cap bounds history, never live work.
+   */
+  limit?: number;
+  /** ISO timestamp. Ageable tasks older than this are dropped. */
+  since?: string;
+}
+
+/**
+ * Applies a retention window to an already-sorted (updatedAt desc) task list.
+ *
+ * Split out from `listCogSeedTasks` so a caller that needs both a full and a
+ * bounded view — the Run Center does, on every refresh — can scan the directory
+ * once and window the result in memory. See RC-P1-15.
+ *
+ * Retention policy:
+ *   - active / attention (created, queued, running, waiting_user, recoverable,
+ *     failed) — always returned, regardless of age or limit;
+ *   - completed / cancelled — kept while inside `since` and under `limit`;
+ *   - ancestors of anything kept — always returned (see below).
+ */
+export function applyCogSeedTaskWindow(
+  sorted: CogSeedTaskRecord[],
+  options: ListCogSeedTasksOptions = {},
+): CogSeedTaskRecord[] {
+  const { limit, since } = options;
+  if (limit === undefined && since === undefined) return sorted;
+  const kept = new Set<string>();
+  let budget = limit ?? Number.POSITIVE_INFINITY;
+  for (const task of sorted) {
+    if (!AGEABLE_TASK_STATUSES.has(task.status)) { kept.add(task.taskId); continue; }
+    if (since && task.updatedAt < since) continue;
+    if (budget <= 0) continue;
+    budget -= 1;
+    kept.add(task.taskId);
+  }
+  // Board grouping walks `parentTaskId` up to a root to decide which cards
+  // belong to which run. Dropping a parent that merely aged out would leave its
+  // children rooted at themselves and silently split one run into several, so
+  // every kept task drags its ancestors back in.
+  const byId = new Map(sorted.map((task) => [task.taskId, task]));
+  for (const taskId of [...kept]) {
+    let current = byId.get(taskId);
+    const visited = new Set<string>();
+    while (current?.parentTaskId && !visited.has(current.parentTaskId)) {
+      visited.add(current.parentTaskId);
+      kept.add(current.parentTaskId);
+      current = byId.get(current.parentTaskId);
+    }
+  }
+  return sorted.filter((task) => kept.has(task.taskId));
+}
+
+export async function listCogSeedTasks(
+  userId: string,
+  options: ListCogSeedTasksOptions = {},
+): Promise<CogSeedTaskRecord[]> {
   assertCogSeedUserId(userId);
   let entries: import('node:fs').Dirent[];
   try { entries = await fs.readdir(cogseedTasksDirectory(userId), { withFileTypes: true }); }
@@ -333,7 +407,8 @@ export async function listCogSeedTasks(userId: string): Promise<CogSeedTaskRecor
     const taskId = entry.name.slice(0, -'.json'.length);
     tasks.push(await readCogSeedTask(userId, taskId).then((task) => { if (!task) throw new Error('CogSeed task disappeared during recovery'); return task; }));
   }
-  return tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const sorted = tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return applyCogSeedTaskWindow(sorted, options);
 }
 
 export async function readLatestCogSeedTaskForAgent(
@@ -477,4 +552,75 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
     await appendCogSeedTaskEvent(userId, taskRecord.taskId, taskRecord.sessionId, 'task.created', { requestId });
     return { task: taskRecord, created: true };
   });
+}
+
+export interface PurgeCogSeedGroupChatTasksResult {
+  /** Tasks whose files were removed. */
+  purgedTaskIds: string[];
+  /** Tasks that matched but could not be fully removed; cleanup is best-effort. */
+  failedTaskIds: string[];
+}
+
+/**
+ * Remove the CogSeed shadow ledger for a deleted Group Chat conversation
+ * (RC-P1-14).
+ *
+ * Scope is deliberately narrow and checked per task, never per tree:
+ * `executionKind === 'group-chat' && conversationId === conversationId`.
+ *
+ * - **Per task, not per tree.** RC-P2-20 proved that a child turn can outlive
+ *   its parent run in the store, so anything that walked `parentTaskId` to
+ *   decide membership would miss exactly those orphans. Each record answers
+ *   for itself.
+ * - **Never touches other execution kinds.** `interactive-turn.ts` creates
+ *   `local-cli` / `cogseed-native` tasks carrying the *same* `conversationId`;
+ *   those are independent agent-run history and are kept (decision (c)).
+ * - **Claim dies with its task.** A claim outliving its task is not inert:
+ *   `readCogSeedTaskByRequestId` and the create path both throw
+ *   `CogSeed request claim references a missing task` when they meet one.
+ * - **Idempotent.** Every unlink is `force: true`, and a second run simply
+ *   finds no matching records.
+ */
+export async function purgeCogSeedGroupChatTasksByConversation(
+  userId: string,
+  conversationId: string,
+): Promise<PurgeCogSeedGroupChatTasksResult> {
+  assertCogSeedUserId(userId);
+  const targetConversationId = assertCogSeedConversationId(conversationId);
+
+  let entries: import('node:fs').Dirent[];
+  try { entries = await fs.readdir(cogseedTasksDirectory(userId), { withFileTypes: true }); }
+  catch (error) { if (isEnoent(error)) return { purgedTaskIds: [], failedTaskIds: [] }; throw error; }
+
+  const purgedTaskIds: string[] = [];
+  const failedTaskIds: string[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const taskId = entry.name.slice(0, -'.json'.length);
+    if (!safeId(taskId)) continue;
+
+    let task: CogSeedTaskRecord | null;
+    // A record that cannot be read cannot be shown to match, so leave it
+    // alone: deleting on a parse failure would be deleting blind.
+    try { task = await readCogSeedTask(userId, taskId); }
+    catch { failedTaskIds.push(taskId); continue; }
+    if (!task) continue;
+    if (task.executionKind !== 'group-chat') continue;
+    if (task.conversationId !== targetConversationId) continue;
+
+    try {
+      await fs.rm(cogseedTaskFile(userId, task.taskId), { force: true });
+      await fs.rm(cogseedTaskEventsFile(userId, task.taskId), { force: true });
+      await fs.rm(cogseedTaskProjectionFile(userId, task.taskId), { force: true });
+      if (task.requestId) {
+        await fs.rm(cogseedRequestClaimFile(userId, task.requestId), { force: true });
+      }
+      purgedTaskIds.push(task.taskId);
+    } catch {
+      failedTaskIds.push(task.taskId);
+    }
+  }
+
+  return { purgedTaskIds, failedTaskIds };
 }

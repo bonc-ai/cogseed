@@ -34,6 +34,10 @@
 
   const UI_ICONS = {
     search: '<circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path>',
+    // Run Center sidebar entry. Without it `data-ui-icon="activity"`
+    // (index.html:45) silently fell back to the generic `info` glyph, so the
+    // Run Center looked like a help link (RC-P2-12). Lucide "activity".
+    activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>',
     // Fine-tune drawer icons (lucide-style).
     film: '<rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M7 3v18M17 3v18M3 7.5h4M3 12h18M3 16.5h4M17 7.5h4M17 16.5h4"></path>',
     music: '<path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>',

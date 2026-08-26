@@ -54,7 +54,6 @@ const cogseedService = {
     schemaVersion: 1,
     tasks: [{ ...taskSummary(), column: 'running', sessionTitle: 'IPC run' }],
     groups: [],
-    counts: { pending: 0, running: 1, attention: 0, completed: 0, archived: 0 },
   })),
   sessions: vi.fn(async () => [{ sessionId: 'cogseed-session-ipc', createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:01.000Z', taskCount: 1, activeTaskCount: 1, latestStatus: 'running', hasRecovery: false }]),
   session: vi.fn(async () => ({

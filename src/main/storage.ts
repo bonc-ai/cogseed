@@ -22,6 +22,23 @@ export function nowIso(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+/**
+ * When this process started, in the same clock and format as `nowIso()`.
+ *
+ * Captured at module load: `storage.ts` is a core utility pulled in during
+ * early main bootstrap, long before any conversation run can begin, so any
+ * record stamped at or after this instant was necessarily written by *this*
+ * process.
+ *
+ * It must be produced by `nowIso()` and nothing else. `nowIso()` returns
+ * *local* time at second precision with no timezone suffix
+ * (`2026-08-26T09:12:53`), whereas `new Date().toISOString()` returns UTC with
+ * milliseconds (`2026-08-26T16:12:53.278Z`). Comparing the two lexicographically
+ * silently misorders every record whenever the local offset is negative — the
+ * comparison still "works", it is just always wrong in the same direction.
+ */
+export const PROCESS_STARTED_AT = nowIso();
+
 /** 8-digit numeric user id. */
 export function genUserId(): string {
   let out = '';

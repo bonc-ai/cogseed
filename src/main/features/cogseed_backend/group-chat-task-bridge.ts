@@ -24,6 +24,13 @@ export interface GroupChatRunStartInput {
   conversationId: string;
   runId: string;
   sourceMessageId: string;
+  /**
+   * The failed task this run is a retry of, when the run was started by the
+   * Run Center's retry action. Threaded through so the new parent task and the
+   * old failed one are linked (RC-P1-09) — without it the attention column
+   * shows two unrelated cards for what the user experienced as one job.
+   */
+  retryOfTaskId?: string;
   /** Legacy caller field. Deliberately ignored so conversation text is never
    * copied into the CogSeed task store. */
   displayTitle?: string;
@@ -177,6 +184,7 @@ export function createGroupChatTaskBridge(deps: GroupChatTaskBridgeDeps = {}): G
           executionKind: 'group-chat',
           groupChatRunId: runId,
           groupChatSourceMessageId: sourceMessageId,
+          ...(safeCorrelationId(input.retryOfTaskId) ? { retryOfTaskId: safeCorrelationId(input.retryOfTaskId) } : {}),
         });
         await setSessionDisplayName(input.userId, task.sessionId, title);
         return task;

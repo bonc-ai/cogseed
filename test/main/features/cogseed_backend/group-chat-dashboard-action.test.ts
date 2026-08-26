@@ -96,6 +96,9 @@ describe('Group Chat Dashboard actions', () => {
       failedMessageId: 'msg-failed-a',
       visibleText: expect.any(String),
       requestId: 'req-dashboard-retry-a',
+      // RC-P1-09: the run this starts is linked back to the task being retried,
+      // so the board can present the two attempts as one job.
+      retryOfCogSeedTaskId: 'cogseed-task-group-chat',
     });
     expect(runtimeController.retryCogSeedTask).not.toHaveBeenCalled();
   });

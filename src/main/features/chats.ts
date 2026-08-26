@@ -2341,6 +2341,27 @@ async function _purgeDeletedConversationFiles(userId: string, cid: string, remov
     if (typeof att?.purgeByCid === 'function') await att.purgeByCid(userId, cid);
   } catch (err) { log.warn(`purge attachments user=${userId} cid=${cid}: ${(err as Error).message}`); }
 
+  // Purge the CogSeed shadow ledger for this conversation (RC-P1-14).
+  //
+  // Only `executionKind === 'group-chat'` records with this exact
+  // `conversationId` are removed: a Group Chat shadow task is a projection of
+  // the conversation and means nothing without it. `local-cli` /
+  // `cogseed-native` tasks carry the same `conversationId` but are independent
+  // agent-run history, so they are deliberately kept — the Run Center stops
+  // offering their (now dead) conversation exit instead (decision (c)).
+  //
+  // Best-effort, exactly like the attachment purge above: a shadow-ledger
+  // failure must never stop the user from deleting their conversation. Leftover
+  // records stay invisible (`visibleDashboardTasks`) and are re-collected the
+  // next time this conversation id is purged.
+  try {
+    const taskStore = require('./cogseed_backend/task-store') as typeof import('./cogseed_backend/task-store');
+    const purged = await taskStore.purgeCogSeedGroupChatTasksByConversation(userId, cid);
+    if (purged.failedTaskIds.length) {
+      log.warn(`cogseed task purge partial user=${userId} cid=${cid} failed=${purged.failedTaskIds.length}`);
+    }
+  } catch (err) { log.warn(`cogseed task purge user=${userId} cid=${cid}: ${(err as Error).message}`); }
+
   // Purge interactive web-app artifacts (chat_artifacts/<cid>/).
   try {
     const art = require('./chat_artifacts');

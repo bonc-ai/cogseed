@@ -1338,6 +1338,28 @@ if (!gotLock) {
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
 
+    // CogSeed task reconciliation (RC-P0-04). `state.taskRun.cogseedTaskId`
+    // lives only in bus.ts's in-memory CidState, so a restart orphans every
+    // in-flight shadow task at `running` with nothing left to finish it. This
+    // sweep is what makes that state terminal instead of permanent.
+    //
+    // Deferred + disk-classed + idle-preferring, matching the recovery sweeps
+    // above: it is reconciliation, never on the critical path to a usable
+    // window. `_runAdmitted` already contains any throw, so a failure here is
+    // logged and startup continues.
+    registerDeferred('cogseed:task-recovery', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { recoverCogSeedTasks } = await import('./features/cogseed_backend/recovery');
+      const report = await recoverCogSeedTasks(uid);
+      if (report.recoveredCount || report.groupChatFailedCount) {
+        log.info('cogseed task recovery complete', {
+          recoverable: report.recoveredCount,
+          group_chat_failed: report.groupChatFailedCount ?? 0,
+        });
+      }
+    }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+
 
 
     // Drive the immediate batch + schedule the deferred one.
