@@ -54,10 +54,11 @@ function _loadSidebarCollapse() {
         spaces: raw.spaces === true,
         recent: raw.recent === true,
         spaceGroups: (raw.spaceGroups && typeof raw.spaceGroups === 'object') ? raw.spaceGroups : {},
+        channelGroups: (raw.channelGroups && typeof raw.channelGroups === 'object') ? raw.channelGroups : {},
       };
     }
   } catch (_) {}
-  return { pinned: false, spaces: false, recent: false, spaceGroups: {} };
+  return { pinned: false, spaces: false, recent: false, spaceGroups: {}, channelGroups: {} };
 }
 function _saveSidebarCollapse() {
   try { localStorage.setItem(_SIDEBAR_COLLAPSE_KEY, JSON.stringify(_sidebarCollapse)); } catch (_) {}
@@ -1520,7 +1521,61 @@ window.addEventListener('i18n-change', _refreshEmptyStateGreeting);
 // already consumes (conversations[] cache, _groupMembersCache, pendingConvs)
 // so the header stays consistent across refreshes without new IPC.
 
+/** 会话顶部的返回面包屑：工作空间 / 我的空间 / <空间名>（会话名由标题行承担）。 */
+function _refreshChatBreadcrumb() {
+  const crumbEl = document.getElementById('chat-header-breadcrumb');
+  if (!crumbEl) return;
+  const cid = currentCid;
+  const conv = Array.isArray(conversations)
+    ? conversations.find((c) => c && c.conversation_id === cid)
+    : null;
+  const spaceId = (conv && conv.space_id) || '';
+  if (!cid || !spaceId) {
+    crumbEl.hidden = true;
+    crumbEl.innerHTML = '';
+    return;
+  }
+  let spaceName = (conv && conv.space_name) || '';
+  if (!spaceName) {
+    const sp = Array.isArray(_sidebarSpaces)
+      ? _sidebarSpaces.find((s) => s && s.space_id === spaceId)
+      : null;
+    if (sp) spaceName = _conversationSpaceDisplayName(sp);
+  }
+  if (!spaceName) spaceName = spaceId;
+  const rootLabel = t('ws.center_title', '工作空间');
+  const spacesLabel = t('ws.my_spaces', '我的空间');
+  crumbEl.innerHTML =
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(rootLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(spacesLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="space" data-space-id="${escapeHtml(spaceId)}">${escapeHtml(spaceName)}</button>`;
+  crumbEl.hidden = false;
+  crumbEl.querySelectorAll('[data-breadcrumb-nav]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const nav = btn.getAttribute('data-breadcrumb-nav');
+      if (nav === 'workspace') {
+        window.setView('workspace');
+      } else if (nav === 'space') {
+        const sid = btn.getAttribute('data-space-id');
+        if (typeof window.openWorkspaceSpace === 'function') {
+          window.openWorkspaceSpace(sid);
+        } else {
+          // workspace.js 是懒加载的：首次点击时可能还没注册 openWorkspaceSpace。
+          // 先暂存目标空间 id，等 renderWorkspace 加载完成后消费它打开指定空间。
+          window.__cogseedPendingOpenSpace = sid;
+          window.setView('workspace');
+        }
+      }
+    });
+  });
+}
+
 function _refreshChatHeader() {
+  _refreshChatBreadcrumb();
   const cid = currentCid;
   const conv = Array.isArray(conversations)
     ? conversations.find((c) => c && c.conversation_id === cid)
@@ -1566,14 +1621,29 @@ function _refreshChatHeader() {
     // path as the sidebar conv row + chat-msg avatar — uniform icon
     // style across surfaces. The trailing "N agents" count only counts
     // real agents.
-    const members = _groupMembersCache.get(cid) || [];
-    const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+    // COGSEED-15：空间会话按「空间可用智能体清单」渲染头像与数量（与是否对话过无关，
+    // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+    const spaceMeta = conv && conv.space_id ? _spaceById(conv.space_id) : null;
+    const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+      ? spaceMeta.usable_agents
+      : null;
     const slots = [];
-    // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
-    if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-    for (const a of agents) slots.push({ kind: 'agent', id: a.id });
-    // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
-    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+    let agentCount = 0;
+    if (usableAgents) {
+      agentCount = usableAgents.length;
+      for (const id of usableAgents) {
+        slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
+      }
+    } else {
+      const members = _groupMembersCache.get(cid) || [];
+      const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+      // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
+      if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+      for (const a of agents) slots.push({ kind: 'agent', id: a.id });
+      // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
+      if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+      agentCount = agents.length;
+    }
     const visibleSlots = slots.slice(0, 4);
     if (visibleSlots.length) {
       if (parts.length) parts.push('<span class="chat-header-meta-sep">·</span>');
@@ -1598,11 +1668,11 @@ function _refreshChatHeader() {
         });
       }).join('');
       parts.push(`<span class="chat-header-meta-members">${memberHtml}</span>`);
-      if (agents.length) {
-        const countTxt = t('chat.header.agent_count', { n: agents.length });
+      if (agentCount) {
+        const countTxt = t('chat.header.agent_count', { n: agentCount });
         const countLabel = (countTxt && countTxt !== 'chat.header.agent_count')
           ? countTxt
-          : `${agents.length} agents`;
+          : `${agentCount} agents`;
         parts.push(`<span class="chat-header-meta-text">${escapeHtml(countLabel)}</span>`);
       }
     }
@@ -5255,18 +5325,35 @@ function startRelayActivitySubscription() {
 // Called whenever a non-internal message lands on a cid so the list stays
 // ordered by pin state first, then last activity (matches backend
 // listConversations sort on the next full reload).
+// rAF 合并（仅热路径）：多 agent turn 会在同一帧内连发多个 message 事件，
+// 每个事件都全量排序 + innerHTML 重建侧栏是流式期间卡顿主因。行已在
+// 列表中时数据（last_active_at）即时更新、排序与渲染每帧至多一次——
+// 视觉更新延迟 ≤16ms，不可感知。冷启动水合（缓存外新任务行）保持
+// 同步渲染：新任务需要立即可见。
+let _bumpScheduled = false;
 async function _bumpConvToTop(cid) {
   if (!cid) return;
   if (!Array.isArray(conversations)) conversations = [];
   let c = conversations.find((row) => row && row.conversation_id === cid);
+  const hydrated = !c;
   if (!c) {
     c = await _hydrateConversationRow(cid);
     if (!c) return;
   }
   _markConversationListLocallyChanged();
   c.last_active_at = new Date().toISOString();
-  _sortConversationCacheForSidebar();
-  renderConversationList();
+  if (hydrated) {
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+    return;
+  }
+  if (_bumpScheduled) return;
+  _bumpScheduled = true;
+  requestAnimationFrame(() => {
+    _bumpScheduled = false;
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+  });
 }
 
 function _compareConversationsForSidebar(a, b) {
@@ -5385,28 +5472,43 @@ function _renderConvAgentStackHtml(c) {
   //   the list fresh, so a freshly @-mentioned agent shows up before the
   //   next `listConversations` lands.
   // Cap at 4 slots total.
+  // COGSEED-15：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
+  // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+  const spaceMeta = c.space_id ? _spaceById(c.space_id) : null;
+  const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+    ? spaceMeta.usable_agents
+    : null;
   const slots = [];
-  if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-  const seen = new Set();
-  if (Array.isArray(c.agent_ids)) {
-    for (const id of c.agent_ids) {
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      slots.push({ kind: 'agent', id });
+  if (usableAgents) {
+    const seenU = new Set();
+    for (const id of usableAgents) {
+      if (!id || seenU.has(id)) continue;
+      seenU.add(id);
+      slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
     }
-  }
-  const cached = _groupMembersCache.get(c.conversation_id);
-  if (Array.isArray(cached)) {
-    for (const a of cached) {
-      if (!a || !a.id || a.kind !== 'agent') continue;
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      slots.push({ kind: 'agent', id: a.id });
+  } else {
+    if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+    const seen = new Set();
+    if (Array.isArray(c.agent_ids)) {
+      for (const id of c.agent_ids) {
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        slots.push({ kind: 'agent', id });
+      }
     }
+    const cached = _groupMembersCache.get(c.conversation_id);
+    if (Array.isArray(cached)) {
+      for (const a of cached) {
+        if (!a || !a.id || a.kind !== 'agent') continue;
+        if (seen.has(a.id)) continue;
+        seen.add(a.id);
+        slots.push({ kind: 'agent', id: a.id });
+      }
+    }
+    // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
+    // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
+    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   }
-  // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
-  // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
-  if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   const parts = slots.slice(0, 4).map((s) => {
     if (s.kind === 'commander') {
       const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
@@ -5443,8 +5545,10 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const menuTitle = escapeHtml(t('project.menu.more_actions'));
   // ZCode 式行内相对时间（58分 / 3小时 / 6小时）：最近任务平铺列表没有时间桶标题，
   // 行尾的相对时间承担「新近度」信号。置顶区/空间组同样受益（一眼看出哪些最近动过）。
-  const timeHtml = _renderConversationRelativeTime(c)
-    ? `<span class="conv-item-time" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(_renderConversationRelativeTime(c))}</span>`
+  // data-time-iso 是 ticker 定点刷新的时间源（见 _refreshConversationRelativeTimes）。
+  const timeText = _renderConversationRelativeTime(c);
+  const timeHtml = timeText
+    ? `<span class="conv-item-time" data-time-iso="${escapeHtml(_conversationActivityIso(c) || '')}" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(timeText)}</span>`
     : '';
   // Auto-fired conversations get the same clock icon as the sidebar
   // "Automation" tab, rendered to the LEFT of the title text. Visible in
@@ -5542,9 +5646,8 @@ function _refreshConvTaskLine(cid) {
   else item.insertAdjacentHTML('beforeend', line);
 }
 
-/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
-function _renderConversationRelativeTime(c) {
-  const iso = _conversationActivityIso(c);
+/** 相对时间纯计算（iso → 「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _relativeTimeFromIso(iso) {
   if (!iso) return '';
   const dt = new Date(iso);
   if (isNaN(dt.getTime())) return '';
@@ -5557,6 +5660,37 @@ function _renderConversationRelativeTime(c) {
   const d = Math.floor(h / 24);
   if (d < 30) return t('sidebar.time_days', { n: d });
   return t('sidebar.time_old');
+}
+
+/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _renderConversationRelativeTime(c) {
+  return _relativeTimeFromIso(_conversationActivityIso(c));
+}
+
+// 相对时间不会自己走：整列表只在数据事件（新消息 / 置顶 / 重命名…）时重渲染，
+// 时间文本会一直冻结到重启或手动刷新。ticker 定点刷新 .conv-item-time 的文本
+// （时间源挂在 data-time-iso 上，不回查会话缓存），避免周期性全量重渲染打断
+// 行内重命名、合并勾选和滚动位置。
+let _convTimeTickerStarted = false;
+function _refreshConversationRelativeTimes() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  document.querySelectorAll('.conv-item-time[data-time-iso]').forEach((el) => {
+    const next = _relativeTimeFromIso(el.getAttribute('data-time-iso'));
+    if (next && el.textContent !== next) el.textContent = next;
+  });
+}
+function _ensureConversationTimeTicker() {
+  if (_convTimeTickerStarted || typeof setInterval !== 'function') return;
+  _convTimeTickerStarted = true;
+  setInterval(() => {
+    if (typeof document === 'undefined' || document.hidden) return;
+    _refreshConversationRelativeTimes();
+  }, 30000);
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) _refreshConversationRelativeTimes();
+    });
+  }
 }
 
 /** 绝对时间（悬停 title 用）。 */
@@ -6416,6 +6550,30 @@ function _spaceById(sid) {
   return _sidebarSpaces.find((s) => s && s.space_id === sid) || null;
 }
 
+/** COGSEED-19：空间组头「+」——在该空间下直接创建任务，立即进入会话页。
+ *  无二次弹窗；创建失败 toast 提示，不打断侧栏。 */
+async function _quickNewTaskInSpace(sid) {
+  if (!sid) return;
+  try {
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spaceId: sid }),
+    });
+    const data = await res.json();
+    if (!data.ok || !data.conversation) throw new Error(data.error || 'create failed');
+    const conv = data.conversation;
+    conv.last_active_at = new Date().toISOString();
+    conversations.unshift(conv);
+    renderConversationList();
+    setView('conversation', conv.conversation_id, { skipLoad: true });
+  } catch (e) {
+    if (typeof uiToast === 'function') {
+      uiToast(t('sidebar.space_new_task_failed', '新建任务失败：{reason}', { reason: (e && e.message) || '' }), { variant: 'error', timeoutMs: 5000 });
+    }
+  }
+}
+
 async function _openSpaceActionMenu(anchorBtn, sid) {
   if (!anchorBtn || !sid) return;
   let menu = document.getElementById('conversation-action-menu');
@@ -6620,6 +6778,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       renderConversationList();
     });
   });
+  // 侧栏「消息渠道」折叠组切换（飞书/微信等；状态持久化 localStorage）
+  container.querySelectorAll('[data-conv-channel-toggle="1"]').forEach((btn) => {
+    if (btn.dataset.channelBound === '1') return;
+    btn.dataset.channelBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const platform = btn.dataset.convChannel || '';
+      if (!platform) return;
+      _sidebarCollapse.channelGroups[platform] = !_sidebarCollapse.channelGroups[platform];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
   // 侧栏空间行 ⋯ 菜单（置顶/重命名/在访达中显示/删除）
   container.querySelectorAll('[data-conv-space-more]').forEach((el) => {
     if (el.dataset.moreBound === '1') return;
@@ -6628,6 +6800,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       e.preventDefault();
       e.stopPropagation();
       _openSpaceActionMenu(el, el.dataset.convSpaceMore || '');
+    });
+  });
+  // COGSEED-19：空间组头「+」→ 直接在该空间下新建任务并进入会话页（无二次弹窗）
+  container.querySelectorAll('[data-conv-space-quick-task]').forEach((el) => {
+    if (el.dataset.quickTaskBound === '1') return;
+    el.dataset.quickTaskBound = '1';
+    const fire = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _quickNewTaskInSpace(el.dataset.convSpaceQuickTask || '');
+    };
+    el.addEventListener('click', fire);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') fire(e);
     });
   });
   // 空间行内联重命名：回车保存、Esc 取消、失焦保存
@@ -6832,6 +7018,9 @@ function _renderSpaceSidebarGroup(sp, convs) {
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
       ${labelHtml}
       <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-space-quick-task" role="button" tabindex="0" data-conv-space-quick-task="${escapeHtml(sp.space_id)}"
+        title="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}" aria-label="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}">
+        ${_uiIconHtml('plus', 'conv-space-quick-task-icon')}</span>
       <span class="conv-space-more-btn" role="button" tabindex="0" data-conv-space-more="${escapeHtml(sp.space_id)}"
         title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</span>
     </button>
@@ -6839,6 +7028,72 @@ function _renderSpaceSidebarGroup(sp, convs) {
       bucketScope: `space:${sp.space_id}`,
       nested: true,
     })).join('')}`;
+}
+
+// ── 消息渠道分组（飞书/微信等渠道会话在「最近任务」tab 的聚合展示）──
+// 渠道会话 = conversations 列表里带 channel_platform 的行（主进程列表响应
+// 标注：新会话创建时落盘 + 存量经 binding join 兜底）。分组只收非置顶的
+// 渠道会话（用户置顶 = 想常驻顶部，不进组）。折叠状态持久化
+// _sidebarCollapse.channelGroups[platform]，默认展开。
+const CHANNEL_SIDEBAR_ICONS = {
+  feishu_lark: 'feishu',
+  wechat_personal: 'wechat',
+  wecom: 'wecom',
+  telegram: 'telegram',
+};
+const CHANNEL_SIDEBAR_NAMES = {
+  feishu_lark: '飞书',
+  wechat_personal: '微信',
+  wecom: '企业微信',
+  telegram: 'Telegram',
+};
+function _channelGroupLabel(platform, convs) {
+  const first = (convs || []).find(Boolean);
+  const live = first && typeof first.channel_name === 'string' && first.channel_name.trim();
+  return live || CHANNEL_SIDEBAR_NAMES[platform] || platform;
+}
+function _channelGroupIcon(platform) {
+  return CHANNEL_SIDEBAR_ICONS[platform] || 'message-square';
+}
+/** 渠道分组区：每组一个可折叠组头（图标+渠道名+会话数）+ 组内会话行。
+ *  组间按组内最新活跃倒序；组内排序复用置顶/最近的比较器。 */
+function _renderChannelSidebarGroups(channelConvs) {
+  if (!channelConvs.length) return '';
+  const byPlatform = new Map();
+  for (const conv of channelConvs) {
+    const platform = conv.channel_platform;
+    if (!platform) continue;
+    if (!byPlatform.has(platform)) byPlatform.set(platform, []);
+    byPlatform.get(platform).push(conv);
+  }
+  const groups = Array.from(byPlatform.entries())
+    .map(([platform, convs]) => ({ platform, convs }))
+    .sort((a, b) => {
+      const latest = (list) => list.reduce((acc, c) => {
+        const at = (c && (c.last_active_at || c.updated_at)) || '';
+        return at > acc ? at : acc;
+      }, '');
+      return latest(b.convs).localeCompare(latest(a.convs));
+    });
+  return groups.map(({ platform, convs }) => {
+    const collapsed = !!_sidebarCollapse.channelGroups[platform];
+    const label = _channelGroupLabel(platform, convs);
+    // 与「最近任务」等分区头同构（conv-list-space-title + fold 按钮 +
+    // 渐变线 + 计数徽章），保证侧栏所有标题行视觉一致；渠道差异只保留
+    // 标签前的渠道图标与组内会话数徽章。
+    return `
+    <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
+      <button type="button" class="conv-list-section-fold" data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
+        aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+        <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
+        <span class="conv-list-section-label">${escapeHtml(label)}</span>
+      </button>
+      <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-list-section-rule" aria-hidden="true"></span>
+    </div>
+    ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
+  }).join('');
 }
 
 /** 分区标题行：可折叠（data-sidebar-fold）+ 可选右侧操作按钮（data-sidebar-action）。 */
@@ -6940,6 +7195,7 @@ function _sidebarHasMoreOld() {
 function renderConversationList() {
   _conversationBucketDateKey = _conversationLocalDateKey();
   const container = document.getElementById('conversation-list');
+  _ensureConversationTimeTicker();
   _sortConversationCacheForSidebar();
   // 三段结构：置顶（pinned）→ 空间（space_id）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）。
   // pin 的会话只在置顶区出现（不重复进空间/最近区）。
@@ -6992,8 +7248,16 @@ function renderConversationList() {
         parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
       }
     }
+    // ② 渠道分组区（飞书/微信等渠道会话；置顶的渠道会话留在置顶区不进组）
+    const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
+    const plainRecent = channelConvs.length
+      ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
+      : recent;
+    if (channelConvs.length) {
+      parts.push(_renderChannelSidebarGroups(channelConvs));
+    }
     // ③ 最近任务区（平铺，无时间桶标题）
-    if (recent.length || hasDeferredRecent) {
+    if (plainRecent.length || hasDeferredRecent) {
       parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
         action: 'new-task',
         actionTitle: t('sidebar.new_task', '新建任务'),
@@ -7001,7 +7265,7 @@ function renderConversationList() {
       }));
       if (!_sidebarCollapse.recent) {
         if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-        parts.push(_renderConversationFlatList(recent, {
+        parts.push(_renderConversationFlatList(plainRecent, {
           bucketScope: 'sidebar',
           loadMore: _sidebarHasMoreOld(),
           loadMoreBucket: 'last30',
@@ -14790,6 +15054,19 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   _scheduleConversationInfoFileRefresh(cid);
 }
 
+// Msg ids recently rendered through a live bus stream (in-app send / open
+// conversation observer). The `conversations:updated` desktop push consults
+// this to avoid double-rendering messages the renderer already appended.
+const _recentLiveBusMsgIds = new Set();
+const _recentLiveBusMsgOrder = [];
+function _rememberLiveBusMsgId(id) {
+  if (!id || _recentLiveBusMsgIds.has(id)) return;
+  _recentLiveBusMsgIds.add(id);
+  _recentLiveBusMsgOrder.push(id);
+  while (_recentLiveBusMsgOrder.length > 200) _recentLiveBusMsgIds.delete(_recentLiveBusMsgOrder.shift());
+}
+window.__cogseedLiveBusTracker = { has: (id) => _recentLiveBusMsgIds.has(id) };
+
 // Group-chat bus event router. Each event is one of:
 //   { type: 'message', cid, msg: GroupMessage, turn_id? }
 //   { type: 'process', cid, actor, turn_id?, data: { type, text?, event? } }
@@ -14800,6 +15077,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 //   { type: 'aborted', cid }
 function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {}) {
   if (!evData || typeof evData !== 'object') return;
+  if (evData.type === 'message' && evData.msg) _rememberLiveBusMsgId(evData.msg.id);
   if (evData.type === 'agent_run_result') {
     if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
       void window.ConversationInfo.refreshAgentActivity(cid);
@@ -14825,7 +15103,11 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   // user's view; visible end-of-turn replies will bump shortly after).
   if (evData.type === 'message' && evData.msg && !evData.msg.dispatch) {
     _bumpConvToTop(cid);
-    if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
+    // 文件快照刷新统一走防抖（_scheduleConversationInfoFileRefresh）：
+    // 流式期间每个 message 事件都即时触发 conversations.files.list 会在
+    // 主进程叠加整树遍历（每次消息 → 一次全量快照），还会反复闪加载态。
+    // 180ms 合并一次 + silent 刷新，数据到达延迟不可感知，行为不变。
+    _scheduleConversationInfoFileRefresh(cid);
     // Mark commander as "in chat" the moment it speaks here, so the
     // sidebar/header badges add the commander avatar without waiting for
     // the next `listConversations` to re-derive it from <cid>.jsonl.
@@ -14839,7 +15121,6 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         }
       }
     }
-    if (evData.msg.from !== 'user') _scheduleConversationInfoFileRefresh(cid);
     // Global cache refresh — must happen BEFORE the cross-cid early-return
     // below, since the agents/skills tabs are global UI surfaces. Without
     // this hop, creating a skill / agent from a background conv leaves
@@ -16117,12 +16398,14 @@ function _updateConvSidebarBadge(cid, _unused) {
 
 // Repaint badges on every visible conversation item. Called after re-render
 // of the sidebar list so previously-known pending/queued state is reapplied.
+// 每行徽标已空化：_updateConvSidebarBadge 对每行做的是同一个全局 chip 刷新 +
+// 当前会话头刷新（最多一行命中）。改成 O(1) 单次刷新，消除侧栏重建后
+// O(N×P) 的重复 pendingConvs 遍历。
 function _refreshAllConvBadges() {
-  document.querySelectorAll('.conv-item').forEach(el => {
-    const cid = el.dataset.cid;
-    if (cid) _updateConvSidebarBadge(cid);
-  });
   _refreshCommanderRunningChip();
+  if (currentCid) {
+    try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
+  }
 }
 
 // Right-aligned chip on the Commander sidebar button that surfaces "N in

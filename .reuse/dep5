@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: CogSeed
-Upstream-Contact: security@bonc.com.cn
+Upstream-Contact: business@bonc.com.cn
 Source: https://github.com/bonc-ai/cogseed
 
 # Bulk license declaration for the whole repository, per the REUSE

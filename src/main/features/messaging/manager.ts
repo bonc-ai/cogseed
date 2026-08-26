@@ -19,6 +19,7 @@ import * as registry from './registry';
 import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
+import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
@@ -581,17 +582,19 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
+    ledger.completeInbound(uid, key, patch);
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
   const decision = evaluateInboundPolicy(instance, envelope);
   if (!decision.allowed) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: decision.reason || 'policy_rejected' });
+    await completeLedger({ status: 'rejected', reason: decision.reason || 'policy_rejected' });
     return { accepted: false, duplicate: false, reason: decision.reason };
   }
   const text = stripBotMention(envelope.text).slice(0, 12_000);
   if (!text) {
-    await ledger.completeInbound(uid, key, { status: 'rejected', reason: 'empty_message' });
+    await completeLedger({ status: 'rejected', reason: 'empty_message' });
     return { accepted: false, duplicate: false, reason: 'empty_message' };
   }
   // Session-reset slashes rotate the bound conversation to a fresh cid and
@@ -615,11 +618,11 @@ async function handleInboundLocked(
           instanceId: instance.id,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     } catch (error) {
       const message = (error as Error).message || 'messaging new-session dispatch failed';
-      await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+      await completeLedger({ status: 'failed', reason: message });
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
@@ -640,7 +643,7 @@ async function handleInboundLocked(
           command: inboundCommand.name,
         });
       }
-      await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+      await completeLedger({ status: 'accepted', cid: binding.cid });
       return { accepted: true, duplicate: false, cid: binding.cid };
     }
   }
@@ -660,7 +663,11 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
-    const result = await groupChat.send({ userId: uid, cid: binding.cid, text });
+    const result = await groupChat.send({
+      userId: uid,
+      cid: binding.cid,
+      text,
+    });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message
     // this turn starts from, so the completing turn's reply resolves its own
@@ -668,11 +675,11 @@ async function handleInboundLocked(
     if (runtime && result.msg?.id && envelope.contextTokenRef) {
       runtime.turnSourceRefs.set(result.msg.id, envelope.contextTokenRef);
     }
-    await ledger.completeInbound(uid, key, { status: 'accepted', cid: binding.cid });
+    await completeLedger({ status: 'accepted', cid: binding.cid });
     return { accepted: true, duplicate: false, cid: binding.cid };
   } catch (error) {
     const message = (error as Error).message || 'messaging inbound dispatch failed';
-    await ledger.completeInbound(uid, key, { status: 'failed', reason: message });
+    await completeLedger({ status: 'failed', reason: message });
     throw new Error(`messaging inbound dispatch failed: ${message}`);
   }
 }
@@ -721,13 +728,30 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (action.action === 'approve' || action.action === 'approve_once'
     || action.action === 'approve_session' || action.action === 'approve_always') {
     const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'approve' });
-    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_approval_failed' };
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Idempotent re-click: the wake already advanced past approval (it was
+      // approved earlier and may already be executing). Settle the card so
+      // the operator sees feedback instead of a silent no-op button.
+      if (/cannot be approved from (approved|executed|executing)/.test(reasonText)) {
+        void finalizeApprovalCard(uid, action);
+        return { accepted: true, duplicate: false };
+      }
+      void finalizeFailedCard(uid, action, reasonText || 'wake_approval_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_approval_failed' };
+    }
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
   if (action.action === 'deny') {
     const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'reject' });
-    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_rejection_failed' };
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Denying an already-approved/executed wake is a legitimate miss (the
+      // operator was too late) — still surface why instead of silence.
+      void finalizeFailedCard(uid, action, reasonText || 'wake_rejection_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_rejection_failed' };
+    }
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
@@ -834,6 +858,33 @@ async function finalizeApprovalCard(uid: string, action: CardActionEnvelope): Pr
     await adapter.updateCard(action.externalMessageId, buildResolvedApprovalCard(action.action));
   } catch (error) {
     log.warn('messaging approval card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** Terminal card for a wake button click that could not take effect (e.g.
+ *  re-clicking approve after the wake already executed). Without this the
+ *  click is a silent no-op from the operator's point of view. */
+async function finalizeFailedCard(uid: string, action: CardActionEnvelope, reason: string): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { content: t('messaging.wake_card.noop_title'), tag: 'plain_text' },
+        template: 'grey',
+      },
+      elements: [
+        { tag: 'markdown', content: `**${t('messaging.wake_card.noop_detail')}**\n\n\`${reason.slice(0, 300)}\`` },
+      ],
+    });
+  } catch (error) {
+    log.warn('messaging failed card finalize failed', {
       instanceId: action.instanceId,
       error: (error as Error).message,
     });
@@ -954,6 +1005,14 @@ async function startRuntime(uid: string, instanceId: string): Promise<void> {
       error: (error as Error).message,
     });
   }
+  // 第三期「渠道即节点」：实例运行即注册为 P3394 节点（幂等，桥未启动时静默跳过）
+  const bridgeRegister = registerChannelBridgeNode(loaded.instance);
+  if (!bridgeRegister.ok && bridgeRegister.error !== 'p3394_bridge_unavailable') {
+    log.warn('messaging channel-bridge node registration failed', {
+      instanceId,
+      error: bridgeRegister.error,
+    });
+  }
 }
 
 async function stopRuntime(uid: string, instanceId: string): Promise<void> {
@@ -966,6 +1025,7 @@ async function stopRuntime(uid: string, instanceId: string): Promise<void> {
   runtime.active = false;
   map?.delete(instanceId);
   if (!map?.size) runtimes.delete(uid);
+  unregisterChannelBridgeNode(instanceId);
   runtime.disposeTimers();
 
   let stopFailure: Error | null = null;

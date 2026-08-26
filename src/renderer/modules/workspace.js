@@ -111,12 +111,16 @@
 
   // ── 三 tab 数据映射（后端形状 → 渲染形状）──────────────────────────────
 
-  /** 会话 → 任务行。 */
-  function _mapConversation(c) {
+  /** 会话 → 任务行。COGSEED-15：智能体数量 = 空间可用清单数（与对话无关；
+   *  usableCount 由空间 meta 注入，缺失时回退会话级名单长度）。 */
+  function _mapConversation(c, usableCount) {
+    const agentN = typeof usableCount === 'number'
+      ? usableCount
+      : (c.agent_ids && c.agent_ids.length);
     return {
       id: c.conversation_id || '',
       title: c.title || _t('ws.untitled_task', '未命名任务'),
-      desc: (c.agent_ids && c.agent_ids.length) ? _t('ws.agent_count', '{count} 个智能体', { count: c.agent_ids.length }) : '',
+      desc: agentN ? _t('ws.agent_count', '{count} 个智能体', { count: agentN }) : '',
       results: c.processing ? _t('ws.in_progress', '进行中') : '',
       time: _relTime(c.updated_at || c.last_active_at || c.created_at),
       refCount: Array.isArray(c.task_references) ? c.task_references.length : 0,
@@ -153,13 +157,12 @@
       // 来源显示任务标题（不再是一串 cid 乱码）；跳转仍用 cid
       source: cid,
       sourceTitle: _sessionTitleById(cid) || cid,
-      desc: cid ? _t('ws.source_task', '来源任务：{title}', { title: _sessionTitleById(cid) || cid }) : '',
+      desc: cid ? _t('ws.source_task', '来源任务：{title}', { title: _sessionTitleById(cid) || cid })
+        : (a.sourceKind === 'import' ? _t('ws.imported_file', '导入文件') : ''),
       type: _artifactCategoryLabel(typeId),
       typeId,
       ext: a.ext || '',
       isArtifact: a.type === 'artifact',
-      // 确认流程：附件/网页直接正式；AI 产出需用户确认（候选）
-      confirmed: a.confirmed !== false,
       sourceKind: a.source || 'attachment',
       path: a.path || '',
     };
@@ -218,7 +221,12 @@
       _invoke('spaces.conversations.list', { spaceId }),
       _invoke('recall.assets.listForSpace', { spaceId }),
     ]);
-    _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map(_mapConversation);
+    // COGSEED-15：空间可用智能体数（空间 meta 缓存；与会话是否对话过无关）
+    const spaceMeta = _spaces.find((s) => s && s.space_id === spaceId);
+    const usableCount = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+      ? spaceMeta.usable_agents.length
+      : undefined;
+    _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map((c) => _mapConversation(c, usableCount));
     // 资产 tab = 本空间沉淀的认知资产（recall 按 spaceId 过滤；空间可读全局但显示只显示本空间）
     _assets = (Array.isArray(assetRes.assets) ? assetRes.assets : []).map(_mapRecallAsset);
     // 产物后台加载：不阻塞任务/资产首屏；已切走空间则丢弃过期结果
@@ -440,6 +448,7 @@
 
   let _view = 'center';            // 'center' | 'space' | 'task'
   let _detailSpaceId = null;       // 当前详情空间 space_id
+  let _pendingOpenSpaceId = null;  // 会话面包屑请求打开的空间 id（renderWorkspace 消费一次）
   let _spaceTab = 'tasks';         // 详情页签：tasks | artifacts | assets
   let _configOpen = false;         // 详情页配置抽屉
   let _centerSearch = '';
@@ -454,6 +463,8 @@
   let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
   let _createAgentTouched = false; // 用户是否手动改过基础 Agent 选择（探测合并时尊重，不回落首项）
   let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
+  let _createImportDir = null;    // COGSEED-18：弹窗内选择的本地文件夹（绝对路径；null=未选择）
+  let _importing = null;          // COGSEED-18：进行中的导入 {spaceId, done, total}（null=无导入）
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -493,7 +504,21 @@
     root.innerHTML = `<div class="ws-loading">${_t('ws.loading', '加载中…')}</div>`;
     try {
       await _loadData();
-      _reRender();
+      // 会话面包屑「空间名」在 workspace.js 懒加载完成前被点击时，目标空间 id
+      // 暂存在 window 上；首次进入工作空间面板时在这里消费一次。
+      if (!_pendingOpenSpaceId && window.__cogseedPendingOpenSpace) {
+        _pendingOpenSpaceId = window.__cogseedPendingOpenSpace;
+        window.__cogseedPendingOpenSpace = null;
+      }
+      if (_pendingOpenSpaceId) {
+        _detailSpaceId = _pendingOpenSpaceId;
+        _pendingOpenSpaceId = null;
+        _view = 'space';
+        _reRender();
+        _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+      } else {
+        _reRender();
+      }
     } catch (err) {
       _loadError = (err && err.message) || String(err);
       _loaded = false;
@@ -892,7 +917,7 @@
             const name = kind === 'asset' ? it.title : it.name;
             const sub = kind === 'asset'
               ? (it.asset_type ? _assetTypeLabel(it.asset_type) : _t('ws.space_asset', '空间资产'))
-              : `${it.type === 'artifact' ? _t('ws.confirmed_artifact', '确认产物') : _t('ws.attachment', '附件')} · ${it.ext}`;
+              : `${it.type === 'artifact' ? _t('ws.artifact_label', '产物') : _t('ws.attachment', '附件')} · ${it.ext}`;
             const picked = isPicked(it);
             const id = kind === 'asset' ? it.asset_id : it.name;
             return `
@@ -912,11 +937,7 @@
 
   function _renderArtifactsPane() {
     const items = _artifacts.filter((a) => _artifactFilter === 'all' || a.typeId === _artifactFilter);
-    const pendingCount = items.filter((a) => !a.confirmed).length;
-    // 只有存在待确认候选产物时才显示提示条；无候选时不渲染说明文案。
-    const noteHtml = pendingCount
-      ? `<div class="ws-info-note"><span>i</span><div><strong>${escapeHtml(_t('ws.candidate_pending', '{count} 个候选产物待确认。', { count: pendingCount }))}</strong></div></div>`
-      : '';
+    // COGSEED-16：产物无确认态，产出即正式——不再有候选提示条
     // 筛选工具栏常驻（空态也要能切回「全部」，否则用户被筛选"卡住"）
     const toolbarHtml = `
     <div class="ws-toolbar">
@@ -928,36 +949,29 @@
       </div>
     </div>`;
     if (!_artifacts.length) {
-      return `${noteHtml}${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_empty', '该空间暂无产物。')}</div>`;
+      return `${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_empty', '该空间暂无产物。')}</div>`;
     }
     if (!items.length) {
       // 有产物但被筛选过滤：提示切回「全部」，避免「暂无产物」误导
       const filterLabel = _artifactFilter === 'all' ? _t('ws.all', '全部') : _artifactCategoryLabel(_artifactFilter);
-      return `${noteHtml}${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_filtered', '没有符合「{filter}」筛选的产物，切回「全部」查看。', { filter: filterLabel })}</div>`;
+      return `${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_filtered', '没有符合「{filter}」筛选的产物，切回「全部」查看。', { filter: filterLabel })}</div>`;
     }
     return `
-    ${noteHtml}
     ${toolbarHtml}
     <div class="ws-artifact-grid">
       ${items.map((a) => {
-        const candidate = !a.confirmed;
         return `
-        <article class="ws-artifact-card${candidate ? ' is-candidate' : ''}">
+        <article class="ws-artifact-card">
           <div class="ws-file-icon ${a.ext.toLowerCase()}">${escapeHtml(a.ext)}</div>
           <div>
             <h3>${escapeHtml(a.name)}</h3>
             <p>${escapeHtml(a.desc)}</p>
             <footer>
-              <button data-ws="open-source" data-cid="${escapeHtml(a.source)}" title="${_t('ws.open_source_task', '打开来源任务')}">${_t('ws.from', '来自')}：${escapeHtml(a.sourceTitle)}</button>
-              ${candidate
-                ? `<span class="ws-candidate-actions">
-                    <button class="ws-confirm-artifact" data-ws="confirm-artifact" data-cid="${escapeHtml(a.source)}" data-name="${escapeHtml(a.name)}">${_t('ws.confirm', '确认')}</button>
-                    <button class="ws-reject-artifact" data-ws="reject-artifact" data-cid="${escapeHtml(a.source)}" data-name="${escapeHtml(a.name)}">${_t('ws.reject', '驳回')}</button>
-                  </span>`
-                : `<button data-ws="open-artifact" data-path="${escapeHtml(a.path)}" data-cid="${escapeHtml(a.source)}">${_t('ws.open', '打开')}</button>`}
+              ${a.source ? `<button data-ws="open-source" data-cid="${escapeHtml(a.source)}" title="${_t('ws.open_source_task', '打开来源任务')}">${_t('ws.from', '来自')}：${escapeHtml(a.sourceTitle)}</button>` : ''}
+              <button data-ws="open-artifact" data-path="${escapeHtml(a.path)}" data-cid="${escapeHtml(a.source)}">${_t('ws.open', '打开')}</button>
             </footer>
           </div>
-          <em>${candidate ? _t('ws.candidate', '待确认') : escapeHtml(a.type)}</em>
+          <em>${escapeHtml(a.type)}</em>
         </article>`;
       }).join('')}
     </div>`;
@@ -1089,6 +1103,18 @@
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
+            <label class="full"><span>${_t('ws.import_folder_label', '本地文件夹（可选）')}</span>
+              <div class="ws-import-picker" data-ws="pick-import-dir" role="button" tabindex="0"
+                title="${escapeHtml(_t('ws.import_folder_pick', '选择本地文件夹'))}">
+                <span class="ws-import-icon">${_icon('folder', 'ui-icon')}</span>
+                <span class="ws-import-name${_createImportDir ? '' : ' is-empty'}">${_createImportDir ? escapeHtml(_importDirBasename(_createImportDir)) : escapeHtml(_t('ws.import_folder_none', '未选择——空间创建后为空'))}</span>
+                ${_createImportDir
+                  ? `<span class="ws-import-clear" data-ws="clear-import-dir" role="button" tabindex="0" title="${escapeHtml(_t('ws.import_folder_clear', '清除'))}">${_icon('x', 'ui-icon')}</span>
+                     <span class="ws-import-change">${escapeHtml(_t('ws.import_folder_change', '更换'))}</span>`
+                  : `<span class="ws-import-pick">${escapeHtml(_t('ws.import_folder_pick', '选择文件夹'))}</span>`}
+              </div>
+              ${_importing ? `<div class="ws-import-progress">${escapeHtml(_t('ws.importing_progress', '正在导入 {done}/{total} 个文件…', { done: _importing.done, total: _importing.total }))}</div>` : ''}
+            </label>
             <div class="ws-tool-strip">
               <div class="ws-tool-strip-head"><strong>${_t('ws.collaborating_agents', '可协作 AI 工具 Agent')}</strong><small>${_t('ws.collaborating_agents_hint', '任务中可通过 @ 明确调用')}</small></div>
               ${_baseAgentToolRow(_createBaseAgents, {
@@ -1544,7 +1570,19 @@
     });
   }
 
+  let _importProgressBound = false; // COGSEED-18：推送订阅只注册一次（onPushEvent 每次调用都新增 listener）
+
   function _bind(root) {
+    // COGSEED-18：导入进度推送（preload 白名单 workspace-import:）→ 弹窗内进度行实时刷新
+    if (!_importProgressBound && window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
+      _importProgressBound = true;
+      window.cogseed.onPushEvent('workspace-import:progress', (p) => {
+        if (!p || !_importing || p.spaceId !== _importing.spaceId) return;
+        _importing.done = Number(p.done) || 0;
+        _importing.total = Number(p.total) || 0;
+        _reRender();
+      });
+    }
     _bindMoreMenuDismiss();
     // 弹窗内层：阻止冒泡到 scrim（否则点 dialog 内部会触发关闭）
     root.querySelectorAll('[data-ws="noop"]').forEach((el) => el.addEventListener('click', (e) => e.stopPropagation()));
@@ -1619,7 +1657,7 @@
       if (typeof uiToast === 'function') uiToast(_t('ws.delete_space_done', '空间已删除，任务已移到「最近任务」'), { variant: 'success' });
     }));
     const cs = root.querySelector('[data-ws="center-search"]');
-    if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _reRender(); });
+    if (cs) cs.addEventListener('input', () => { _centerSearch = cs.value; _debouncedSearchReRender(); });
     const sortSel = root.querySelector('[data-ws="center-sort"]');
     if (sortSel) sortSel.addEventListener('change', () => { _centerSort = sortSel.value; _reRender(); });
 
@@ -1699,7 +1737,7 @@
     root.querySelectorAll('[data-ws="toggle-ref"]').forEach((el) => el.addEventListener('click', () => _toggleRef(el.dataset.kind, el.dataset.id)));
     root.querySelectorAll('[data-ws="save-ref"]').forEach((el) => el.addEventListener('click', () => _saveRefPicker()));
     const refSearch = root.querySelector('[data-ws="ref-search"]');
-    if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _reRender(); });
+    if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _debouncedSearchReRender(); });
     root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
     // 资产卡 × → 撤销（弹确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
@@ -1713,34 +1751,13 @@
       _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
       if (typeof uiToast === 'function') uiToast(_t('ws.revoked', '已撤销'), { variant: 'warning' });
     }));
-    // 产物：确认候选 / 打开文件（系统默认应用）/ 跳来源任务
-    root.querySelectorAll('[data-ws="confirm-artifact"]').forEach((el) => el.addEventListener('click', async () => {
-      const cid = el.dataset.cid;
-      const name = el.dataset.name;
-      if (!_detailSpaceId || !cid || !name) return;
-      const res = await _invoke('spaces.artifacts.confirm', { spaceId: _detailSpaceId, cid, name });
-      if (res.error) { _stub(_t('ws.confirm_failed', '确认失败：{reason}', { reason: res.error })); return; }
-      _detailLoadedFor = null;
-      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
-      if (typeof uiToast === 'function') uiToast(_t('ws.artifact_confirmed', '已确认'), { variant: 'success' });
-    }));
-    // 驳回候选产物（不再作为候选展示）
-    root.querySelectorAll('[data-ws="reject-artifact"]').forEach((el) => el.addEventListener('click', async () => {
-      const cid = el.dataset.cid;
-      const name = el.dataset.name;
-      if (!_detailSpaceId || !cid || !name) return;
-      if (!confirm(_t('ws.reject_confirm', '驳回该候选产物？将不再作为候选展示。'))) return;
-      const res = await _invoke('spaces.artifacts.reject', { spaceId: _detailSpaceId, cid, name });
-      if (res.error) { _stub(_t('ws.reject_failed', '驳回失败：{reason}', { reason: res.error })); return; }
-      _detailLoadedFor = null;
-      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
-      if (typeof uiToast === 'function') uiToast(_t('ws.artifact_rejected', '已驳回'), { variant: 'warning' });
-    }));
+    // 产物（COGSEED-16：无确认态）：打开文件（系统默认应用）/ 跳来源任务
     root.querySelectorAll('[data-ws="open-artifact"]').forEach((el) => el.addEventListener('click', async () => {
       const p = el.dataset.path;
       const cid = el.dataset.cid;
       if (!p) { _stub(_t('ws.open_artifact', '打开产物')); return; }
-      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '' });
+      // COGSEED-18：导入产物无 cid，带当前空间 spaceId 供主进程校验放行（空间内容目录内文件）
+      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '', spaceId: _detailSpaceId || '' });
       if (res.error) _stub(_t('ws.open_failed', '打开失败：{reason}', { reason: res.error }));
     }));
     root.querySelectorAll('[data-ws="open-source"]').forEach((el) => el.addEventListener('click', () => {
@@ -1767,6 +1784,22 @@
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
+    // COGSEED-18：本地文件夹选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
+    root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('click', async () => {
+      const res = await _invoke('common.pickDirectory', { title: _t('ws.import_folder_pick', '选择本地文件夹') });
+      if (res && !res.cancelled && res.path) { _createImportDir = res.path; _reRender(); }
+    }));
+    root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
+    }));
+    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _createImportDir = null;
+      _reRender();
+    }));
+    root.querySelectorAll('[data-ws="clear-import-dir"]').forEach((el) => el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); _createImportDir = null; _reRender(); }
+    }));
     const ciInput = root.querySelector('[data-ws="create-instruction"]');
     if (ciInput) ciInput.addEventListener('input', () => { _createInstruction = ciInput.value; });
     // 基础 Agent 多选弹窗（新建空间内；勾选即时生效，保存=关闭）
@@ -1875,6 +1908,29 @@
     // 额外技能/智能体绑定（复用 spaces.resources.add）
     for (const id of extraSkills) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'skill', id });
     for (const id of extraAgents) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'agent', id });
+    // COGSEED-18：选择了本地文件夹 → 创建完成后整体导入（弹窗停留显示进度，完成后进入空间）
+    if (_createImportDir) {
+      _importing = { spaceId: space.space_id, done: 0, total: 0 };
+      _reRender();
+      let importResult = null;
+      try {
+        importResult = await _invoke('workspace.importFolder', { spaceId: space.space_id, sourceDir: _createImportDir });
+      } catch (err) {
+        importResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      _importing = null;
+      _createImportDir = null;
+      if (importResult && importResult.ok === false) {
+        if (typeof uiToast === 'function') uiToast(_t('ws.import_failed', '导入失败：{reason}', { reason: importResult.error || _t('ws.unknown_error', '未知错误') }), { variant: 'error' });
+      } else if (importResult && importResult.ok) {
+        const skippedN = Array.isArray(importResult.skipped) ? importResult.skipped.length : 0;
+        if (typeof uiToast === 'function') {
+          uiToast(skippedN
+            ? _t('ws.import_done_with_skips', '导入完成：{copied} 个文件成功，跳过 {skipped} 个（详见空间产物）', { copied: importResult.copied, skipped: skippedN })
+            : _t('ws.import_done', '导入完成：{copied} 个文件', { copied: importResult.copied }), { variant: 'success' });
+        }
+      }
+    }
     _createOpen = false;
     _abilityOpen = false;
     _createAgentOpen = false;
@@ -1884,10 +1940,16 @@
     _go('space', { spaceId: space.space_id });
   }
 
+  /** COGSEED-18：绝对路径 → 显示用文件夹名（/ 与 \ 通吃）。 */
+  function _importDirBasename(p) {
+    const parts = String(p || '').split(/[\\/]+/).filter(Boolean);
+    return parts[parts.length - 1] || p;
+  }
+
   function _stubLabel(el) {
     const map = {
       'stub-preview': 'preview', 'stub-edit': 'edit',
-      'stub-confirm-artifact': 'confirm_artifact', 'stub-edit-asset': 'edit_asset', 'stub-ignore-asset': 'ignore_asset',
+      'stub-edit-asset': 'edit_asset', 'stub-ignore-asset': 'ignore_asset',
       'stub-confirm-asset': 'confirm_asset', 'stub-add': 'add', 'stub-mention': 'mention',
       'stub-send': 'send', 'stub-search': 'search', 'stub-rerun': 'rerun', 'stub-more': 'more',
       'stub-panel-settings': 'panel_settings', 'stub-open-artifact-row': 'open_artifact', 'stub-manage-assets': 'manage_assets',
@@ -1939,9 +2001,25 @@
     _reRender();
   }
 
+  // 搜索输入防抖：每键全量 innerHTML 重建 N 张卡片很贵，合并成 ~120ms 一次。
+  let _searchDebounceTimer = null;
+  function _debouncedSearchReRender() {
+    if (_searchDebounceTimer) clearTimeout(_searchDebounceTimer);
+    _searchDebounceTimer = setTimeout(() => {
+      _searchDebounceTimer = null;
+      _reRender();
+    }, 120);
+  }
+
   function _reRender() {
     const root = document.getElementById('ws-view');
     if (!root) return;
+    // 重建前捕获搜索框焦点/光标：innerHTML 全量替换会销毁输入框。
+    // 搜索框在打字过程中触发的重建必须把焦点还给用户，否则每敲一次就失焦。
+    const active = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
+    const restoreSel = active && (active.matches('[data-ws="center-search"]') || active.matches('[data-ws="ref-search"]'))
+      ? { sel: active.dataset.ws, pos: typeof active.selectionStart === 'number' ? active.selectionStart : active.value.length }
+      : null;
     let html = _render();
     if (_createOpen) html += _renderCreateModal();
     if (_createAgentOpen) html += _renderCreateAgentModal();
@@ -1953,6 +2031,13 @@
     if (_refPickerOpen) html += _renderRefPicker();
     root.innerHTML = html;
     _bind(root);
+    if (restoreSel) {
+      const el = root.querySelector(`[data-ws="${restoreSel.sel}"]`);
+      if (el) {
+        el.focus();
+        try { el.setSelectionRange(restoreSel.pos, restoreSel.pos); } catch { /* 非文本输入不处理 */ }
+      }
+    }
   }
 
   async function _refreshForLanguageChange() {
@@ -1985,7 +2070,15 @@
     try { await renderWorkspace(); } catch (_) {}
     _openCreate(null);
   }
+  /** 会话面包屑「空间名」入口：切到工作空间面板并直接打开指定空间详情。 */
+  function openWorkspaceSpace(spaceId) {
+    if (!spaceId) return;
+    _pendingOpenSpaceId = spaceId;
+    window.__cogseedPendingOpenSpace = null;
+    if (typeof setView === 'function') setView('workspace');
+  }
   window.renderWorkspace = renderWorkspace;
   window.openWorkspaceCreate = openWorkspaceCreate;
+  window.openWorkspaceSpace = openWorkspaceSpace;
   window.addEventListener('i18n-change', () => { void _refreshForLanguageChange(); });
 })();

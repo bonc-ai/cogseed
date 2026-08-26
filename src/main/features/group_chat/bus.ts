@@ -237,6 +237,27 @@ export function _setP3394ControllerForTest(
   _p3394ControllerForTest = controller;
 }
 
+/** Notification a persisted group-chat message sends to the app shell
+ *  (renderer push, tests). Fired after `appendVisible`, so receivers can
+ *  re-read conversation state from disk. */
+export interface GroupChatMessageBroadcast {
+  uid: string;
+  cid: string;
+  msgId: string;
+  from: string;
+  turnEnd: boolean;
+}
+
+type GroupChatMessageBroadcaster = (info: GroupChatMessageBroadcast) => void;
+
+let messageBroadcaster: GroupChatMessageBroadcaster | null = null;
+
+/** Register the desktop push hook (IPC layer calls this at boot). Passing
+ *  null detaches (used by tests to isolate). */
+export function setGroupChatMessageBroadcaster(fn: GroupChatMessageBroadcaster | null): void {
+  messageBroadcaster = fn;
+}
+
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
  *  out of the renderer's markdown-ish rendering pass without pulling in
@@ -1120,6 +1141,8 @@ interface QueueItem {
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
+  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随派发 item
+   * 运行时携带，不持久化到 GroupMessage。 */
   /** Composed runtime payload — what the worker actually feeds the LLM,
    * including the `<msg from=X>...</msg>` wrapper. Built at enqueue time
    * so the queue is a real FIFO of LLM-ready turns, no last-minute
@@ -1714,6 +1737,21 @@ async function appendMain(
   const file = layout.messageFile;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   await appendJsonlAtomic<GroupMessage>(file, msg);
+  // 指挥官发言在落盘时顺手标记到 members.json（commander_spoken）。
+  // 展示路径（工作空间任务列表等）据此跳过整份 jsonl 的正则扫描；
+  // 老数据由读取侧懒补记。失败不阻断消息落盘流程。
+  if (msg.from === 'commander') {
+    try {
+      const { markCommanderSpoken } = await import('./state');
+      await markCommanderSpoken(uid, cid, layout.projectId);
+    } catch (err) {
+      log.warn('markCommanderSpoken failed', {
+        uid,
+        cid,
+        error: (err as Error)?.message,
+      });
+    }
+  }
   // Stamp `updated_at` on this cid's _index.json row so the sidebar can sort
   // by real last-activity time rather than file mtime (which sync clobbers
   // when pulling from another device — see chats.ts::listConversations).
@@ -2601,6 +2639,28 @@ async function _enqueueBody(
     ...members.actors.map((a) => a.id),
   ]);
   await appendVisible(uid, cid, sliceMsg, Array.from(allActorIds));
+
+  // Desktop refresh rail: every persisted group-chat message (in-app sends,
+  // external-channel inbound like Feishu, agent replies) notifies the
+  // registered broadcaster. The IPC layer wires this to a
+  // `conversations:updated` push so the renderer's sidebar and open
+  // conversation stay live even when no per-request stream is attached
+  // (which is exactly the external-inbound case: nothing in the renderer
+  // subscribed to this conversation's bus events).
+  if (messageBroadcaster) {
+    try {
+      messageBroadcaster({
+        uid,
+        cid,
+        msgId,
+        from: fromActorId,
+        turnEnd: params.turn_end === true,
+      });
+      log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
+    } catch {
+      // A broken broadcast listener must never take the bus down.
+    }
+  }
 
   emit(state, {
     type: "message",
@@ -4610,7 +4670,13 @@ async function runActorTurnBody(
       // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
       // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
       const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
-      const cliOut = isP3394Gateway
+      // Required-input gate（第二期收口：直连与网关两通道共用）：必填输入
+      // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
+      // <agent-input-form> 询问用户。
+      const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      const cliOut = sharedFormBlock
+        ? { text: sharedFormBlock, produced: [] as string[] }
+        : isP3394Gateway
         ? await (
             await import("../p3394_bridge/p3394-gateway-turn")
           ).runP3394GatewayTurn({
@@ -4642,6 +4708,13 @@ async function runActorTurnBody(
             onCoordinatorActivity: (event) => {
               coordinatorLease?.observe(event as never);
             },
+            // 第二期收口：网关路径同样打通 PID 通道（正整数才进内存协调器，
+            // 与直连路径同一校验）；真实网关子进程 pid 数据源后续增强。
+            onProcessInfo: (pid) => {
+              if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+                coordinator.setCliProcessPid(pid);
+              }
+            },
             onProcess: forwardProcess,
           })
         : await _runCliAgentTurn({
@@ -4663,7 +4736,21 @@ async function runActorTurnBody(
       finalText = cliOut.text;
       streamingText = cliOut.text;
       if (cliOut.error) {
-        errText = cliOut.error;
+        // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
+        // 原始后端错误只进日志，不透给渲染层。
+        const failedCli = cliAgent.runtime &&
+          (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          ? cliAgent.runtime.cli
+          : "";
+        errText = t("cli_agent.run_failed_detail", {
+          name: cliAgent.name || failedCli,
+          cli: failedCli,
+        });
+        log.warn("external agent turn failed", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          error: cliOut.error,
+        });
         turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
           (cliOut.failureKind || "runtime") as import("./visibility").GroupMessageFailureKind,
