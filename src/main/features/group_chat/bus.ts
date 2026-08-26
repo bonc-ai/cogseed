@@ -1716,6 +1716,21 @@ async function appendMain(
   const file = layout.messageFile;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   await appendJsonlAtomic<GroupMessage>(file, msg);
+  // 指挥官发言在落盘时顺手标记到 members.json（commander_spoken）。
+  // 展示路径（工作空间任务列表等）据此跳过整份 jsonl 的正则扫描；
+  // 老数据由读取侧懒补记。失败不阻断消息落盘流程。
+  if (msg.from === 'commander') {
+    try {
+      const { markCommanderSpoken } = await import('./state');
+      await markCommanderSpoken(uid, cid, layout.projectId);
+    } catch (err) {
+      log.warn('markCommanderSpoken failed', {
+        uid,
+        cid,
+        error: (err as Error)?.message,
+      });
+    }
+  }
   // Stamp `updated_at` on this cid's _index.json row so the sidebar can sort
   // by real last-activity time rather than file mtime (which sync clobbers
   // when pulling from another device — see chats.ts::listConversations).
