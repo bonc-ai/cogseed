@@ -67,6 +67,34 @@ Add it with `git commit -s`. By signing off you agree to the terms of the
 - Ensure all CI checks pass.
 - A maintainer will review; be patient and responsive to feedback.
 
+## Branching and Merge Rules
+
+We use a **three-line branch model**:
+
+- `main` — public release branch. Always releasable and **protected** — no direct pushes, all changes go through pull requests.
+- `develop` — the main development branch. All feature work merges here via pull requests; CI (`verify`) must pass and a reviewer must approve before merge.
+- `cicd` — release packaging branch. Used to build, sign and publish artifacts; merging into it requires a review (plus a manual security scan by the maintainers).
+- Short-lived personal branches: `dev/<your-github-username>` (e.g. `dev/alice`) for day-to-day work; open a pull request against `develop` when ready.
+- `release/vX.Y` branches are cut from `main` at release time for patch-only fixes; they are protected by the same review rules.
+
+**For external contributors**: open your pull request against `develop`, not `main`.
+
+### Merge requirements (branch protection)
+
+1. At least **1 approving review** from a designated reviewer (see CODEOWNERS / `@bonc-ai/reviewers`).
+2. All required CI checks pass (`verify`).
+3. You cannot approve or merge your own pull request.
+
+### Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <subject>
+```
+
+Example: `fix(messaging): route wechat group messages correctly`.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the

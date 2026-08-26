@@ -16,8 +16,6 @@ const fakeClient = vi.hoisted(() => ({
   setConsent: vi.fn(),
   revokeConsent: vi.fn(),
   deleteAccount: vi.fn(),
-  deletionImpact: vi.fn(),
-  sendDeletionCode: vi.fn(),
   healthz: vi.fn(),
   readyz: vi.fn(),
 }));
@@ -278,52 +276,6 @@ describe('hub account auth-flow', () => {
     fakeClient.logout.mockRejectedValueOnce(new Error('network down'));
     await authFlow.logout('88492103');
     expect(loadHubSession('88492103')).toBeNull();
-  });
-
-  it('deleteHubAccount sends the reauth payload and clears the local Hub session (DEL-02/03)', async () => {
-    await loginForTest();
-    fakeClient.deleteAccount.mockResolvedValue({
-      account_id: 'cogseed_acc_1',
-      status: 'pending_deletion',
-      requested_at: 't',
-      reversal_deadline_at: 'deadline',
-      revoked_sessions: 2,
-      revoked_devices: 2,
-      revoked_consents: 1,
-      message: 'ok',
-    });
-    const result = await authFlow.deleteHubAccount('88492103', {
-      confirmation: 'DELETE_MY_ACCOUNT',
-      reauth_method: 'sms_code',
-      code: '123456',
-    });
-    expect(result.status).toBe('pending_deletion');
-    expect(fakeClient.deleteAccount).toHaveBeenCalledWith('at1', {
-      confirmation: 'DELETE_MY_ACCOUNT',
-      reauth_method: 'sms_code',
-      code: '123456',
-    });
-    // DEL-03：申请成功即撤销全部 Session——本地清除 Hub 登录态与账号资料展示，
-    // 呈现与普通退出登录相同的未登录状态；installation_id 保留以便日后复用设备行。
-    expect(loadHubSession('88492103')).toBeNull();
-    const state = readHubAccountState('88492103');
-    expect(state.account_id).toBeUndefined();
-    expect(state.bound).toBe(false);
-    expect(state.installation_id).toBeTypeOf('string');
-  });
-
-  it('getDeletionImpact and sendDeletionCode go through the auth retry path', async () => {
-    await loginForTest();
-    fakeClient.deletionImpact.mockResolvedValue({ reversal_days: 30, items: [] });
-    fakeClient.sendDeletionCode.mockResolvedValue({ phone_masked: '+86 138****8000', expires_in: 300, resend_after: 60, purpose: 'delete' });
-
-    const impact = await authFlow.getDeletionImpact('88492103');
-    expect(impact.reversal_days).toBe(30);
-    expect(fakeClient.deletionImpact).toHaveBeenCalledWith('at1');
-
-    const sent = await authFlow.sendDeletionCode('88492103');
-    expect(sent.purpose).toBe('delete');
-    expect(fakeClient.sendDeletionCode).toHaveBeenCalledWith('at1');
   });
 
   it('getHubStatus reports signed-out with reachable hub', async () => {

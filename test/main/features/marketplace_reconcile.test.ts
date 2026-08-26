@@ -769,7 +769,7 @@ describe('marketplace reconcile security gate (W3)', () => {
     return reconcile.reconcileInstalls('u1');
   }
 
-  it('receipts a clean pulled skill as admitted', async () => {
+  it.skipIf(!fs.existsSync(path.resolve(__dirname, '../../../resources/guardrail/skill-sentry')))('receipts a clean pulled skill as admitted', async () => {
     const result = await runPull('pull-clean', {
       'SKILL.md': '---\nname: pull-clean\n---\n\nClean body.\n',
     });

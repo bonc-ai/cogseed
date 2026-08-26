@@ -243,41 +243,10 @@ export async function revokeConsent(userId: string, scope: string): Promise<impo
   return withAuthRetry(userId, (token, client) => client.revokeConsent(token, scope));
 }
 
-/**
- * 注销账号（P3394 DEL-02/03/04）：
- *  1. 服务端重新认证 + 二次确认，成功后立即撤销全部 Session/设备访问；
- *  2. 本地按 DEL-03 清除 Hub 登录态与账号资料展示，呈现与普通退出登录相同的
- *     未登录状态（保留 installation_id，日后重新登录可复用设备行）。
- * 本机 CogSeed 数据不删除、不上传、不改变（云端注销与本机数据是独立决定）。
- */
-export async function deleteHubAccount(
-  userId: string,
-  payload: import('./types').HubDeleteAccountRequest,
-): Promise<import('./types').HubDeletionResult> {
-  const result = await withAuthRetry(userId, (token, client) => client.deleteAccount(token, payload));
-  clearHubSession(userId);
-  writeHubAccountState(userId, {
-    bound: false,
-    account_id: undefined,
-    auth_provider: undefined,
-    device_id: undefined,
-    device_name: undefined,
-    account_status: undefined,
-    bound_at: undefined,
-    pending_login: undefined,
-  });
-  log.info('hub account deletion requested; local hub session cleared', { accountId: mask(result.account_id) });
+export async function deleteHubAccount(userId: string, confirmation: string): Promise<{ account_id: string; status: string; deletion_scheduled_at: string }> {
+  const result = await withAuthRetry(userId, (token, client) => client.deleteAccount(token, confirmation));
+  writeHubAccountState(userId, { account_status: 'pending_deletion' });
   return result;
-}
-
-/** 注销前影响矩阵（DEL-01）。 */
-export async function getDeletionImpact(userId: string): Promise<import('./types').HubDeletionImpact> {
-  return withAuthRetry(userId, (token, client) => client.deletionImpact(token));
-}
-
-/** 向账号绑定手机号发送注销重新认证验证码（DEL-02）。 */
-export async function sendDeletionCode(userId: string): Promise<import('./types').HubDeletionSendCodeResult> {
-  return withAuthRetry(userId, (token, client) => client.sendDeletionCode(token));
 }
 
 // ── Logout / sign-out ────────────────────────────────────────────────────
@@ -316,14 +285,14 @@ export interface HubStatusView {
   signed_in: boolean;
   account_id: string | null;
   auth_provider: string | null;
+  bound: boolean;
+  device_id: string | null;
   account_status: string | null;
   hub_reachable: boolean;
   access_expires_at: string | null;
 }
 
-/** Renderer-safe status snapshot (no tokens).
- *  P3394 ACCOUNT-03 / DEVICE-05：不下发 LocalIdentity 绑定状态（bound）与设备内部标识
- *  （device_id）——渲染端不应展示这些内部技术状态；主进程状态文件仍保留，供内部逻辑使用。 */
+/** Renderer-safe status snapshot (no tokens). */
 export async function getHubStatus(userId: string): Promise<HubStatusView> {
   const state = readHubAccountState(userId);
   const session = loadHubSession(userId);
@@ -332,6 +301,8 @@ export async function getHubStatus(userId: string): Promise<HubStatusView> {
     signed_in: !!session && !!state.account_id,
     account_id: state.account_id ?? null,
     auth_provider: state.auth_provider ?? null,
+    bound: state.bound,
+    device_id: state.device_id ?? null,
     account_status: state.account_status ?? null,
     hub_reachable: reachable,
     access_expires_at: session?.access_expires_at ?? null,

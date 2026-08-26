@@ -20,6 +20,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 const REPO = path.resolve(__dirname, '../../..');
 const SCRIPT = path.join(REPO, 'scripts', 'strip-closed-source-scanner.mjs');
 const REAL_SCANNER = path.join(REPO, 'resources', 'guardrail', 'skill-sentry');
+// The strip script's tests stage a copy of the real trees; without them in
+// the checkout (the open-source tree ships stripped) there is nothing to copy.
+const ENGINES_CHECKED_IN = fs.existsSync(REAL_SCANNER);
 const REAL_DECLARATION = path.join(REPO, 'resources', 'guardrail', 'skill-declaration-core');
 
 let tmp = '';
@@ -52,7 +55,7 @@ afterEach(() => {
   tmp = '';
 });
 
-describe('strip closed-source scanner', () => {
+describe.skipIf(!ENGINES_CHECKED_IN)('strip closed-source scanner', () => {
   it('removes the scanner tree', () => {
     const root = stageCheckout();
 

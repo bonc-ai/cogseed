@@ -62,9 +62,9 @@
     "@eslint/js": "^10.0.1",
     "@types/adm-zip": "^0.5.7",
     "@types/node": "^25.6.0",
-    "@vitest/coverage-v8": "^4.1.5",
+    "@vitest/coverage-v8": "^4.1.11",
     "7zip-bin": "^5.2.0",
-    "electron": "^41.7.1",
+    "electron": "^41.10.6",
     "electron-builder": "^26.15.3",
     "eslint": "^10.8.1",
     "typescript": "^6.0.3",
@@ -73,7 +73,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.9",
-    "@larksuiteoapi/node-sdk": "^1.72.0",
+    "@larksuiteoapi/node-sdk": "^1.73.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@wecom/aibot-node-sdk": "1.0.7",
     "adm-zip": "^0.6.0",
@@ -82,7 +82,7 @@
     "electron-log": "^5.4.3",
     "fastembed": "^2.1.0",
     "jimp": "^1.6.1",
-    "mammoth": "^1.12.0",
+    "mammoth": "^1.12.1",
     "node-pty": "^1.0.0",
     "pdfjs-dist": "^6.2.108",
     "socks-proxy-agent": "^8.0.5",
@@ -222,7 +222,7 @@
       }
     ],
     "beforePack": "scripts/ensure-runtime-before-pack.cjs",
-    "afterPack": "scripts/codesign-adhoc.cjs",
+    "afterPack": "scripts/after-pack.js",
     "mac": {
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,

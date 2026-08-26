@@ -1,7 +1,11 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 触发条件: 推送到 main 分支或手动触发
-# 产物: 签名+公证后的 .dmg 文件
+# 发布流程: 在 cicd 分支上打 tag (如 v0.0.7) 触发本流程
+#           dev/<用户名> → develop → cicd → 打 tag → CD 打包发布
+# 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
+#
+# 注意: tag 不绑定分支,所以下面加了防呆检查,
+#       只有指向 cicd 分支的 tag 才允许构建发布(见 "校验 tag 来源分支" 步骤)
 
 name: Build & Sign macOS
 
@@ -9,8 +13,13 @@ name: Build & Sign macOS
 on:
   push:
     tags:
-      - 'v*'  # 只在推送 v1.0.0、v2.1.3 这样的 tag 时触发构建
-  workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮)
+      - 'v*'  # 只在推送 v0.0.7 这样的 tag 时触发构建
+  workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮,用于调试)
+
+# 给 workflow 用的默认 GITHUB_TOKEN 加上"可以创建 Release"的权限
+# 不需要额外申请 Secret,GitHub 每次运行自动生成这个 token
+permissions:
+  contents: write
 
 jobs:
   build-macos:
@@ -22,8 +31,33 @@ jobs:
       # ========================================
 
       # 步骤 1.1: 下载你的代码
+      # fetch-depth: 0 = 拉取完整 git 历史,
+      # 否则下一步无法判断 tag 到底属于哪个分支
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 步骤 1.1b: 校验 tag 来源分支(防呆)
+      # tag 本身不绑分支,任何人在任何分支打 v* tag 都会触发本流程。
+      # 这里强制要求:tag 指向的提交必须已经在 cicd 分支上,
+      # 否则直接失败,防止有人误在 dev/develop/main 上打 tag 触发正式发布。
+      # 手动触发(workflow_dispatch)时跳过此检查,方便调试。
+      - name: Verify tag comes from cicd branch
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 cicd
+          git fetch origin cicd:refs/remotes/origin/cicd
+
+          # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
+          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
+            echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
+          else
+            echo "❌ 这个 tag 不在 cicd 分支上,拒绝构建发布"
+            echo "   正确流程: 先把代码合并进 cicd 分支,再在 cicd 上打 tag"
+            exit 1
+          fi
 
       # 步骤 1.2: 安装 Node.js
       - name: Setup Node.js
@@ -47,6 +81,7 @@ jobs:
         run: |
           # 生成随机密码(用完就删,不需要记住)
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
 
           # 创建临时 keychain 文件
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
@@ -79,42 +114,58 @@ jobs:
             -T /usr/bin/productsign
 
           # 设置证书为可信任(否则 codesign 会报错)
+          # 使用 keychain 密码而不是空密码
           security set-key-partition-list \
             -S apple-tool:,apple: \
-            -s -k "" \
+            -s -k "$KEYCHAIN_PASSWORD" \
             build.keychain
 
           # 删除 .p12 文件(安全起见)
           rm certificate.p12
 
       # ========================================
-      # 阶段 3: 构建 + 签名
+      # 阶段 3: 版本号对齐
       # ========================================
 
-      # 步骤 3.1: 使用 electron-builder 打包
+      # 步骤 3.0: 把 package.json 的 version 改成和 tag 一致
+      # 比如推的 tag 是 v0.0.7,就把 package.json 的 version 改成 0.0.7
+      # 这样打包出来的文件名 (CogSeed-0.0.7-mac-*.dmg) 才会和 tag 对上
+      # 只在推 tag 触发时才改;手动触发 (workflow_dispatch) 时不改,保持原样
+      - name: Sync package.json version with tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # github.ref_name 例如 "v0.0.7",去掉开头的 "v" 得到 "0.0.7"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "将 package.json 的 version 设置为: $TAG_VERSION"
+          npx json -I -f package.json -e "this.version = \"$TAG_VERSION\""
+
+      # ========================================
+      # 阶段 4: 构建 + 签名
+      # ========================================
+
+      # 步骤 4.1: 使用 electron-builder 打包
       # 它会自动调用 codesign 签名 .app 和 .dmg
       - name: Build & Sign app
         env:
-          # 告诉 electron-builder 要签名
-          CSC_LINK: "dummy"  # 占位符,证书已经在 keychain 里了
-          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # 告诉 electron-builder 使用 keychain 里的证书
+          CSC_IDENTITY_AUTO_DISCOVERY: true
 
           # 公证需要的环境变量
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          # 修改 package.json,启用公证
-          # (因为你本地配置是 notarize: false)
-          npx json -I -f package.json -e 'this.build.mac.notarize = {
-            "teamId": process.env.APPLE_TEAM_ID
-          }'
+          # 修改 package.json,启用公证并排除 archive 文件
+          npx json -I -f package.json -e 'this.build.mac.notarize = true'
+          npx json -I -f package.json -e 'this.build.asarUnpack = this.build.asarUnpack || []'
+          npx json -I -f package.json -e 'this.build.files.push("!**/archive/**")'
+          npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
 
-          # 构建 macOS .dmg (arm64 + x64)
-          npm run build:mac
+          # 构建 macOS .dmg (arm64 + x64),禁用自动发布
+          npx electron-builder --mac --publish never
 
       # ========================================
-      # 阶段 4: 公证(notarization)
+      # 阶段 5: 公证(notarization)
       # ========================================
       #
       # 公证是什么?
@@ -125,10 +176,10 @@ jobs:
       # (如果 notarize 配置正确的话)
 
       # ========================================
-      # 阶段 5: 上传产物
+      # 阶段 6: 上传产物
       # ========================================
 
-      # 步骤 5.1: 上传 .dmg 到 GitHub
+      # 步骤 6.1: 上传 .dmg 到 GitHub
       # 构建完成后,你可以在 GitHub Actions 页面下载
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
@@ -138,10 +189,39 @@ jobs:
           retention-days: 30  # 保留 30 天
 
       # ========================================
+      # 阶段 7: 发布到 GitHub Release
+      # ========================================
+      #
+      # Artifact 只有仓库成员能看到,过期还会被删
+      # Release 是公开页面,任何人都能直接下载,永久保留
+      # 只有推送 tag 触发的构建才发 Release(手动触发 workflow_dispatch 不发)
+
+      - name: Publish to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          # tag 名字就用推送的那个 tag (比如 v0.0.6)
+          tag_name: ${{ github.ref_name }}
+          # 显式关闭自动生成的更新日志。
+          # 若不设置 body,action 会让 GitHub 自动汇总本次 tag 涵盖的
+          # 所有 commit message(含提交者邮箱、co-author、内部实现细节),
+          # 这些会公开在 Release 页面。这里用固定的干净说明覆盖,避免泄露。
+          generate_release_notes: false
+          body: |
+            CogSeed ${{ github.ref_name }} macOS 安装包(已签名并公证)。
+
+            下载对应芯片的版本:
+            - arm64.dmg — Apple 芯片(M 系列)
+            - x64.dmg — Intel 芯片
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================
       # 清理工作
       # ========================================
 
-      # 步骤 6: 删除临时 keychain(安全起见)
+      # 步骤 8: 删除临时 keychain(安全起见)
       - name: Cleanup keychain
         if: always()  # 无论成功失败都执行
         run: |

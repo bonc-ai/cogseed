@@ -19,10 +19,6 @@ import type {
   HubCallbackDeviceInfo,
   HubCallbackResult,
   HubConsent,
-  HubDeletionImpact,
-  HubDeletionResult,
-  HubDeletionSendCodeResult,
-  HubDeleteAccountRequest,
   HubDevice,
   HubRefreshResult,
 } from './types';
@@ -94,12 +90,7 @@ export interface HubClient {
   listConsents(accessToken: string): Promise<HubConsent[]>;
   setConsent(accessToken: string, scope: string): Promise<HubConsent>;
   revokeConsent(accessToken: string, scope: string): Promise<HubConsent>;
-  /** 注销前影响矩阵（DEL-01，服务端下发）。 */
-  deletionImpact(accessToken: string): Promise<HubDeletionImpact>;
-  /** 向账号绑定手机号发送注销重新认证验证码（DEL-02）。 */
-  sendDeletionCode(accessToken: string): Promise<HubDeletionSendCodeResult>;
-  /** 注销账号：重新认证 + 二次确认（契约 v1.6）。 */
-  deleteAccount(accessToken: string, body: HubDeleteAccountRequest): Promise<HubDeletionResult>;
+  deleteAccount(accessToken: string, confirmation: string): Promise<{ account_id: string; status: string; deletion_scheduled_at: string }>;
   healthz(): Promise<boolean>;
   readyz(): Promise<boolean>;
 }
@@ -170,12 +161,8 @@ export function createHubClient(baseUrl: string): HubClient {
       request(`/api/v1/consent/${encodeURIComponent(scope)}`, { method: 'PUT', token: accessToken }),
     revokeConsent: (accessToken, scope) =>
       request(`/api/v1/consent/${encodeURIComponent(scope)}`, { method: 'DELETE', token: accessToken }),
-    deletionImpact: (accessToken) =>
-      request('/api/v1/account/deletion/impact', { token: accessToken }),
-    sendDeletionCode: (accessToken) =>
-      request('/api/v1/account/deletion/send-code', { method: 'POST', token: accessToken, body: {} }),
-    deleteAccount: (accessToken, body) =>
-      request('/api/v1/account', { method: 'DELETE', token: accessToken, body }),
+    deleteAccount: (accessToken, confirmation) =>
+      request('/api/v1/account', { method: 'DELETE', token: accessToken, body: { confirmation } }),
     async healthz() {
       try {
         await request<{ status: string }>('/healthz');

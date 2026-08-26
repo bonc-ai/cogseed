@@ -24,8 +24,6 @@ const mocks = vi.hoisted(() => ({
   setConsent: vi.fn(),
   revokeConsent: vi.fn(),
   deleteHubAccount: vi.fn(),
-  getDeletionImpact: vi.fn(),
-  sendDeletionCode: vi.fn(),
 }));
 
 vi.mock('../../../src/main/features/hub_account', () => ({
@@ -43,8 +41,6 @@ vi.mock('../../../src/main/features/hub_account', () => ({
   setConsent: mocks.setConsent,
   revokeConsent: mocks.revokeConsent,
   deleteHubAccount: mocks.deleteHubAccount,
-  getDeletionImpact: mocks.getDeletionImpact,
-  sendDeletionCode: mocks.sendDeletionCode,
 }));
 
 vi.mock('../../../src/main/features/hub_account/gate', () => ({
@@ -56,8 +52,6 @@ vi.mock('../../../src/main/features/hub_account/gate', () => ({
       throw error;
     }
   },
-  // status 端点在关闭 Gate 时仍须可读（渲染端据此展示关闭提示而非登录卡）。
-  isHubAccountReleaseEnabled: () => mocks.enabled,
 }));
 
 import { invokeHandlers } from '../../../src/main/ipc/hub-account';
@@ -103,56 +97,11 @@ describe('Hub account IPC release gate', () => {
     ['hub-account.consents', {}],
     ['hub-account.set_consent', { scope: 'cloud.sync' }],
     ['hub-account.revoke_consent', { scope: 'cloud.sync' }],
-    ['hub-account.deletion_impact', {}],
-    ['hub-account.deletion_send_code', {}],
-    ['hub-account.delete_account', { confirmation: 'DELETE_MY_ACCOUNT', reauth_method: 'sms_code', code: '123456' }],
+    ['hub-account.delete_account', { confirmation: 'DELETE_MY_ACCOUNT' }],
   ] as const)('blocks %s before calling feature code', async (channel, payload) => {
     await expect(invokeHandlers[channel](payload, { userId: 'u1' })).rejects.toMatchObject({ code: 'HUB_RELEASE_GATE_CLOSED' });
     expect(mocks.startLogin).not.toHaveBeenCalled();
     expect(mocks.getAccountMe).not.toHaveBeenCalled();
-  });
-
-  it('validates the delete_account payload before touching the feature layer', async () => {
-    mocks.enabled = true;
-    // 缺少重新认证方式 → 参数校验失败，不调用业务层。
-    await expect(invokeHandlers['hub-account.delete_account']({ confirmation: 'DELETE_MY_ACCOUNT' }, { userId: 'u1' })).rejects.toThrow('invalid reauth_method');
-    expect(mocks.deleteHubAccount).not.toHaveBeenCalled();
-
-    // 确认短语不符 → 拒绝。
-    await expect(
-      invokeHandlers['hub-account.delete_account']({ confirmation: 'nope', reauth_method: 'password', password: 'p' }, { userId: 'u1' }),
-    ).rejects.toThrow('invalid confirmation');
-    expect(mocks.deleteHubAccount).not.toHaveBeenCalled();
-
-    // 短信验证码方式缺 code → 拒绝。
-    await expect(
-      invokeHandlers['hub-account.delete_account']({ confirmation: 'DELETE_MY_ACCOUNT', reauth_method: 'sms_code' }, { userId: 'u1' }),
-    ).rejects.toThrow('invalid code');
-    expect(mocks.deleteHubAccount).not.toHaveBeenCalled();
-  });
-
-  it('forwards the reauth payload to the feature layer and broadcasts the state change', async () => {
-    mocks.enabled = true;
-    mocks.deleteHubAccount.mockResolvedValueOnce({
-      account_id: 'cogseed_acc_1',
-      status: 'pending_deletion',
-      requested_at: 't',
-      reversal_deadline_at: 'deadline',
-      revoked_sessions: 1,
-      revoked_devices: 1,
-      revoked_consents: 0,
-      message: 'ok',
-    });
-    const result = await invokeHandlers['hub-account.delete_account'](
-      { confirmation: 'DELETE_MY_ACCOUNT', reauth_method: 'password', password: 'secret' },
-      { userId: 'u1' },
-    );
-    expect(mocks.deleteHubAccount).toHaveBeenCalledWith('u1', {
-      confirmation: 'DELETE_MY_ACCOUNT',
-      reauth_method: 'password',
-      password: 'secret',
-    });
-    expect(result.deletion.status).toBe('pending_deletion');
   });
 
   it('lets logout through even while the release Gate is closed (user right to sign out)', async () => {

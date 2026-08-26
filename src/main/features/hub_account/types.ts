@@ -7,7 +7,7 @@
  *     both are random opaque strings — no JWT
  *   - `local_identity_id` is the desktop's local uid (`users.ts::getActiveUserId`)
  */
-export type HubAccountStatus = 'active' | 'suspended' | 'pending_deletion' | 'processing' | 'deleted';
+export type HubAccountStatus = 'active' | 'suspended' | 'pending_deletion' | 'deleted';
 
 export interface HubAccountInfo {
   account_id: string;
@@ -73,10 +73,6 @@ export interface HubAccountMe {
   account: HubAccountInfo & {
     bound_local_identity: string | null;
     community_profile: { display_name: string | null; is_contributor: boolean };
-    /** CogSeed ID（cs_xxx）：用户识别与内部支持标识；手机号注册账号同样有。 */
-    login_id?: string | null;
-    /** 掩码手机号（设置页展示用，服务端不下发完整号码；未绑定为 null）。 */
-    phone?: { masked: string; country_code: string; verified_at: string } | null;
   };
   stats: { active_device_count: number; consent_count: number };
 }
@@ -95,48 +91,4 @@ export interface HubErrorInfo {
   code: string;
   message: string;
   details?: Record<string, unknown>;
-}
-
-// ── 账号注销（P3394 注销与数据处理 PRD doc-v0.1；后端契约 v1.6）──
-
-/** 注销前影响矩阵条目（服务端权威下发，客户端不硬编码）。 */
-export interface HubDeletionImpactItem {
-  key: string;
-  title: string;
-  description: string;
-  immediate: string;
-  final: string;
-}
-
-export interface HubDeletionImpact {
-  reversal_days: number;
-  items: HubDeletionImpactItem[];
-}
-
-/** 注销重新认证验证码发送结果。 */
-export interface HubDeletionSendCodeResult {
-  phone_masked: string;
-  expires_in: number;
-  resend_after: number;
-  purpose: string;
-}
-
-/** 注销申请请求体（重新认证 + 二次确认）。 */
-export interface HubDeleteAccountRequest {
-  confirmation: 'DELETE_MY_ACCOUNT';
-  reauth_method: 'sms_code' | 'password';
-  code?: string;
-  password?: string;
-}
-
-/** 注销一次性退出回执。 */
-export interface HubDeletionResult {
-  account_id: string;
-  status: string;
-  requested_at: string;
-  reversal_deadline_at: string;
-  revoked_sessions: number;
-  revoked_devices: number;
-  revoked_consents: number;
-  message: string;
 }

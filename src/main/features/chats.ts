@@ -351,6 +351,69 @@ function _hasFreshParticipantSummary(c: Conversation): boolean {
   return !c.agent_id || c.agent_ids.includes(c.agent_id);
 }
 
+// COGSEED-15：会话参与智能体单一事实源。
+// 汇总语义与 listConversations 完全一致：kind==='agent' 去重（同一 Agent 多次调用
+// 只计 1 个；角色/Skill/工具不计入）+ 起始 agent_id 兜底 + commander 独立布尔。
+// 数据源 = members.json（运行协作区域 /api/conversations/:cid/members 同一份文件），
+// 保证会话行、会话页与运行协作区域的数量和名单一致。
+// 不落盘（磁盘索引回写由 listConversations 统一路径负责，避免以空间子集重写全局索引）；
+// 进程内 60s 缓存仅在 bus 空闲时生效——运行中不缓存，与运行协作区域保持同步。
+interface ParticipantSummary { agentIds: string[]; commanderInChat: boolean; }
+const _convSummaryCache = new Map<string, { at: number; summary: ParticipantSummary }>();
+const _convSummaryTtlMs = 60_000;
+
+async function _resolveParticipantSummary(
+  userId: string,
+  c: Conversation,
+  opts?: { liveMembersOnly?: boolean },
+): Promise<ParticipantSummary> {
+  // liveMembersOnly：空间任务行路径——空间索引行由创建/绑定时刻写入，bus 不增量维护，
+  // 行内"新鲜"摘要可能是创建时的旧快照（真实 bug：空间详情 1 个 vs 会话页 2 个）。
+  // 该路径永远以 members.json（运行协作区域数据源）为准，不做行内摘要短路。
+  if (!opts?.liveMembersOnly && _hasFreshParticipantSummary(c)) {
+    return { agentIds: _normaliseAgentIds(c.agent_ids), commanderInChat: c.commander_in_chat === true };
+  }
+  const cacheKey = `${userId}:${c.conversation_id}`;
+  // 运行中的会话（bus 忙）不走缓存：members.json 随 turn 更新，需与运行协作区域同步
+  const bus = require('./group_chat/bus') as typeof import('./group_chat/bus');
+  if (bus.isQuiescent(userId, c.conversation_id)) {
+    const cached = _convSummaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < _convSummaryTtlMs) return cached.summary;
+  }
+  const [membersRes, commRes] = await Promise.allSettled([
+    readMembers(userId, c.conversation_id, c.project_id ?? null),
+    (async () => {
+      // Substring scan of `<cid>.jsonl` for any `from:"commander"` line（与列表路径同口径）。
+      const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
+      if (!fs.existsSync(file)) return false;
+      try {
+        const text = await fsp.readFile(file, 'utf8');
+        return /"from"\s*:\s*"commander"/.test(text);
+      } catch { return false; }
+    })(),
+  ]);
+  const commanderInChat = commRes.status === 'fulfilled' ? commRes.value : false;
+  let agentIds: string[] = [];
+  if (membersRes.status === 'fulfilled' && membersRes.value) {
+    const seen = new Set<string>();
+    for (const a of membersRes.value.actors) {
+      if (a && a.kind === 'agent' && a.id && !seen.has(a.id)) {
+        seen.add(a.id);
+        agentIds.push(a.id);
+      }
+    }
+    // Union in the starting `agent_id` defensively（新建会话 members 文件未落前）
+    if (c.agent_id && !seen.has(c.agent_id)) agentIds.push(c.agent_id);
+  } else if (c.agent_id) {
+    agentIds = [c.agent_id];
+  }
+  const summary: ParticipantSummary = { agentIds: _normaliseAgentIds(agentIds), commanderInChat };
+  if (bus.isQuiescent(userId, c.conversation_id)) {
+    _convSummaryCache.set(cacheKey, { at: Date.now(), summary });
+  }
+  return summary;
+}
+
 function _lastActionMs(c: Conversation | null | undefined): number {
   if (!c) return 0;
   return Math.max(tsMs(c.deleted_at), tsMs(c.updated_at), tsMs(c.created_at));
@@ -1144,23 +1207,9 @@ async function _listConversationsUncached(
     const lastActiveMs = Math.max(updatedMs || 0, createdMs || 0);
     const busBusy = !bus.isQuiescent(userId, c.conversation_id);
     const stale = lastActiveMs > 0 && (now - lastActiveMs) > STALE_MS;
-    const [stateRes, membersRes, commRes] = await Promise.allSettled([
+    const [stateRes, summaryRes] = await Promise.allSettled([
       stale ? Promise.resolve(null) : readState(userId, c.conversation_id, c.project_id ?? null),
-      summaryFresh ? Promise.resolve(null) : readMembers(userId, c.conversation_id, c.project_id ?? null),
-      // Substring scan of `<cid>.jsonl` for any `from:"commander"` line.
-      // Cheaper than per-line JSON.parse and good enough — `commander` is
-      // an actor id, never legitimately a free-form value of any other
-      // field. False positives would require a user message containing
-      // that exact quoted pattern (and even then the read returns true,
-      // which is the conservative outcome: show commander when in doubt).
-      summaryFresh ? Promise.resolve(null) : (async () => {
-        const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
-        if (!fs.existsSync(file)) return false;
-        try {
-          const text = await fsp.readFile(file, 'utf8');
-          return /"from"\s*:\s*"commander"/.test(text);
-        } catch { return false; }
-      })(),
+      summaryFresh ? Promise.resolve(null) : _resolveParticipantSummary(userId, c),
     ]);
     if (stale) {
       // Stale: state.json was skipped, only bus quiescence drives processing.
@@ -1170,28 +1219,10 @@ async function _listConversationsUncached(
       processing = s.status === 'running' || busBusy;
       since = processing ? s.last_active_at : null;
     }
-    if (!summaryFresh && commRes.status === 'fulfilled') {
-      commanderInChat = commRes.value;
-    }
-    if (!summaryFresh && membersRes.status === 'fulfilled' && membersRes.value) {
-      const seen = new Set<string>();
-      for (const a of membersRes.value.actors) {
-        if (a && a.kind === 'agent' && a.id && !seen.has(a.id)) {
-          seen.add(a.id);
-          agentIds.push(a.id);
-        }
-      }
-      // Union in the starting `agent_id` defensively — `members.json` is
-      // populated by the bus once a turn runs, so a freshly-created conv
-      // can have agent_id set before its members file lands.
-      if (c.agent_id && !seen.has(c.agent_id)) {
-        agentIds.push(c.agent_id);
-      }
-    } else if (!summaryFresh && c.agent_id) {
-      agentIds = [c.agent_id];
-    }
-    if (!summaryFresh) {
-      c.agent_ids = _normaliseAgentIds(agentIds);
+    if (!summaryFresh && summaryRes.status === 'fulfilled') {
+      agentIds = summaryRes.value.agentIds;
+      commanderInChat = summaryRes.value.commanderInChat;
+      c.agent_ids = agentIds;
       c.commander_in_chat = commanderInChat;
       c.participant_summary_updated_at = c.updated_at;
       summariesToBackfill.push(c);
@@ -1317,9 +1348,19 @@ export async function listSpaceConversations(userId: string, spaceId: string): P
     if (!byCid.has(c.conversation_id)) byCid.set(c.conversation_id, c);
   }
 
-  return Array.from(byCid.values())
+  const rows = Array.from(byCid.values())
     .filter((c) => !isDeletedConversation(c))
     .sort(_compareConversationIndexRows);
+
+  // COGSEED-15：空间任务行的智能体数量/名单与运行协作区域同一事实源
+  // （members.json 派生，kind==='agent' 去重；liveMembersOnly 跳过行内旧快照）。
+  // 只覆盖返回行，不落盘。
+  await Promise.all(rows.map(async (c) => {
+    const s = await _resolveParticipantSummary(userId, c, { liveMembersOnly: true });
+    c.agent_ids = s.agentIds;
+    c.commander_in_chat = s.commanderInChat;
+  }));
+  return rows;
 }
 
 export interface StartupConversationList {
