@@ -380,23 +380,32 @@ async function _resolveParticipantSummary(
     const cached = _convSummaryCache.get(cacheKey);
     if (cached && Date.now() - cached.at < _convSummaryTtlMs) return cached.summary;
   }
-  const [membersRes, commRes] = await Promise.allSettled([
-    readMembers(userId, c.conversation_id, c.project_id ?? null),
-    (async () => {
-      // Substring scan of `<cid>.jsonl` for any `from:"commander"` line（与列表路径同口径）。
-      const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
-      if (!fs.existsSync(file)) return false;
+  const membersRes = await readMembers(userId, c.conversation_id, c.project_id ?? null).catch(() => null);
+  // 指挥官在场：优先用 members.json 的 commander_spoken 标志（消息落盘时
+  // 由 bus.appendMain 顺手写入）。无标志的老数据懒补记：扫一次 jsonl，
+  // 命中即回写标志 —— 此后只读 members.json 小文件。指挥官从未发言的
+  // 会话 jsonl 极小（或不存在），扫描成本可忽略；真正长且费的是指挥官
+  // 已发言的会话，它们都被标志覆盖，不再进扫描分支。
+  let commanderInChat = membersRes?.commander_spoken === true;
+  if (!commanderInChat) {
+    const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
+    if (fs.existsSync(file)) {
       try {
         const text = await fsp.readFile(file, 'utf8');
-        return /"from"\s*:\s*"commander"/.test(text);
-      } catch { return false; }
-    })(),
-  ]);
-  const commanderInChat = commRes.status === 'fulfilled' ? commRes.value : false;
+        if (/"from"\s*:\s*"commander"/.test(text)) {
+          commanderInChat = true;
+          try {
+            const { markCommanderSpoken } = await import('./group_chat/state');
+            await markCommanderSpoken(userId, c.conversation_id, c.project_id ?? null);
+          } catch { /* 补记失败不阻断展示 */ }
+        }
+      } catch { /* 扫描失败按 false 处理 */ }
+    }
+  }
   let agentIds: string[] = [];
-  if (membersRes.status === 'fulfilled' && membersRes.value) {
+  if (membersRes) {
     const seen = new Set<string>();
-    for (const a of membersRes.value.actors) {
+    for (const a of membersRes.actors) {
       if (a && a.kind === 'agent' && a.id && !seen.has(a.id)) {
         seen.add(a.id);
         agentIds.push(a.id);
@@ -1329,8 +1338,59 @@ export async function conversationSpaceId(uid: string, cid: string): Promise<str
   return sid;
 }
 
+/** 轻量版空间会话列表 —— 仅服务于「最近会话」展示（标题/时间）。
+ *  与 listSpaceConversations 同口径合并空间索引 + 全局索引，但跳过
+ *  _resolveParticipantSummary：那一步会读每个会话的 members.json 并
+ *  把整份 <cid>.jsonl 读进内存做 commander 正则扫描。工作空间中心
+ *  （listSpaces）对 N 个空间 × M 个会话调用它，成本会放大成「全部
+ *  消息字节总和」，是工作空间首屏卡顿的主因之一。最近会话只用到
+ *  convs[0].title / updated_at，不需要智能体名单口径（COGSEED-15 的
+ *  名单一致性只作用于空间任务行，仍走完整版路径）。 */
+export async function listSpaceConversationsLight(userId: string, spaceId: string): Promise<Conversation[]> {
+  if (!safeId(spaceId)) return [];
+  const byCid = new Map<string, Conversation>();
+
+  const spaceRaw: any = await readJson(spaceChatIndexFile(userId, spaceId));
+  const spaceItems = Array.isArray(spaceRaw)
+    ? spaceRaw : (spaceRaw && Array.isArray(spaceRaw.items) ? spaceRaw.items : []);
+  for (const raw of spaceItems) {
+    const row = _normaliseConversation(raw);
+    if (!row) continue;
+    if (!row.space_id) row.space_id = spaceId;
+    byCid.set(row.conversation_id, row);
+  }
+
+  for (const c of await _readIndexConversations(userId)) {
+    if (c.space_id !== spaceId) continue;
+    if (!byCid.has(c.conversation_id)) byCid.set(c.conversation_id, c);
+  }
+
+  return Array.from(byCid.values())
+    .filter((c) => !isDeletedConversation(c))
+    .sort(_compareConversationIndexRows);
+}
+
 export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
   if (!safeId(spaceId)) return [];
+  const startedAt = Date.now();
+  // 持久化元数据表路径：全部会话空闲（quiescent）且指纹命中 → 直接返回，
+  // 不再逐行读 members.json（COGSEED-15：bus 忙时必须实时，名单随 turn 变）。
+  const meta = await import('./workspace_meta');
+  const bus = require('./group_chat/bus') as typeof import('./group_chat/bus');
+  const tableEntry = await meta.getEntry<Conversation[]>(userId, 'conversations', spaceId);
+  if (tableEntry && Array.isArray(tableEntry.data)) {
+    let allQuiescent = true;
+    for (const c of tableEntry.data) {
+      if (!c || !c.conversation_id || !bus.isQuiescent(userId, c.conversation_id)) {
+        allQuiescent = false;
+        break;
+      }
+    }
+    if (allQuiescent && (await _spaceConversationsStamp(userId, spaceId, tableEntry.data)) === tableEntry.stamp) {
+      log.info('listSpaceConversations table hit', { rows: tableEntry.data.length, ms: Date.now() - startedAt });
+      return tableEntry.data.map((c) => ({ ...c }));
+    }
+  }
   const byCid = new Map<string, Conversation>();
 
   const spaceRaw: any = await readJson(spaceChatIndexFile(userId, spaceId));
@@ -1360,7 +1420,56 @@ export async function listSpaceConversations(userId: string, spaceId: string): P
     c.agent_ids = s.agentIds;
     c.commander_in_chat = s.commanderInChat;
   }));
+  // 回写持久化元数据表：下次冷启动/跨空间重进直接查表。
+  try {
+    const meta = await import('./workspace_meta');
+    await meta.putEntry(userId, 'conversations', spaceId, await _spaceConversationsStamp(userId, spaceId, rows), rows);
+  } catch { /* 表写入失败不阻断 */ }
+  // 性能埋点：空间任务列表耗时（诊断用，仅计数/时长）。
+  log.info('listSpaceConversations done', { rows: rows.length, ms: Date.now() - startedAt });
   return rows;
+}
+
+/** 会话索引文件指纹（全部根）：spaces.list 等工作空间摘要用它做验证。 */
+export async function conversationIndexStamp(userId: string): Promise<string> {
+  const parts: string[] = [];
+  for (const root of conversationRoots(userId)) {
+    parts.push(`ci:${root.indexFile}:${await _fileStamp(root.indexFile)}`);
+  }
+  return parts.join('|');
+}
+
+async function _fileStamp(file: string): Promise<string> {
+  try {
+    const st = await fsp.stat(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+async function _entryStamp(dir: string): Promise<string> {
+  try {
+    const st = await fsp.stat(dir);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** 空间任务列表的验证指纹：空间会话索引 + 全部会话索引根 + 每行 members
+ *  文件（名单/commander 标志的真源）。三者任一变化即失配 → 实时重算。 */
+async function _spaceConversationsStamp(userId: string, spaceId: string, rows: Conversation[]): Promise<string> {
+  const parts: string[] = [
+    `si:${await _fileStamp(spaceChatIndexFile(userId, spaceId))}`,
+    await conversationIndexStamp(userId),
+  ];
+  for (const c of rows) {
+    if (!c?.conversation_id) continue;
+    const layout = conversationLayout(userId, c.conversation_id, c.project_id ?? null);
+    parts.push(`m:${c.conversation_id}:${await _fileStamp(layout.membersFile)}`);
+  }
+  return parts.join('|');
 }
 
 export interface StartupConversationList {

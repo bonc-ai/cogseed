@@ -666,11 +666,11 @@ function _contextTreeHasPath(nodes: contexts.ContextNode[], relPath: string): bo
   return false;
 }
 
-function _uniqueContextImportPath(rawName: string): string {
+async function _uniqueContextImportPath(rawName: string): Promise<string> {
   const name = path.basename(String(rawName || '').trim() || 'artifact');
   const ext = path.extname(name);
   const stem = ext ? name.slice(0, -ext.length) : name;
-  const tree = contexts.listContextsTree();
+  const tree = await contexts.listContextsTree();
   if (!_contextTreeHasPath(tree, name)) return name;
   for (let i = 2; i < 1000; i += 1) {
     const candidate = `${stem}-${i}${ext}`;
@@ -736,7 +736,7 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
 
   const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
     ? payload.targetPath.trim()
-    : _uniqueContextImportPath(targetName);
+    : await _uniqueContextImportPath(targetName);
   const result = contexts.uploadContextFile(relPath, buf);
   if (!result.ok) return result;
   return { ok: true, scope: 'global', path: result.path, bytes: result.bytes };
@@ -1035,7 +1035,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         ? path.join(workspaceRoot, state.workspace_dir)
         : workspaceRoot;
     }
-    return conversationFiles.listWorkspaceFiles(root);
+    return await conversationFiles.listWorkspaceFiles(root);
   },
 
   // 引导「工作区目录已被移动或删除」→ 用户重新选择目录后固化到本会话。
@@ -1543,7 +1543,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.files.status': async ({ spaceId, skipReconcile }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
-    const reconcile = skipReconcile ? null : await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
+    // 快照先行：状态/文件列表直接读向量库（毫秒级），全量磁盘 reconcile
+    // 放后台补跑（in-flight 合并），不阻塞页签打开。状态变化经
+    // space.kb.events 实时推送，reconcile 结果并非首屏依赖。
+    if (!skipReconcile) {
+      void spaceLibraryIndexer.reconcile(ctx.userId, spaceId).catch((err) => {
+        log.warn('background space library reconcile failed', {
+          space_id: spaceId,
+          error: (err as Error)?.message || String(err),
+        });
+      });
+    }
     const summary = spaceLibraryIndexer.statusSummary(ctx.userId, spaceId);
     const files = spaceLibraryIndexer.listFiles(ctx.userId, spaceId).map((r) => ({
       name: r.rel_path,
@@ -1555,7 +1565,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       mtime: r.mtime,
       error: r.error || undefined,
     }));
-    return { summary, files, reconcile };
+    return { summary, files, reconcile: null };
   },
 
   'spaces.files.reconcile': async ({ spaceId }, ctx) => {
@@ -3573,7 +3583,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cache.clearAll': async () => ({ bytes_freed: await cacheClearable.clearAllClearable() }),
 
   // ── Contexts (user-owned directory tree; vectorized via kb_indexer) ──
-  'contexts.tree': async () => ({ tree: contexts.listContextsTree() }),
+  'contexts.tree': async () => ({ tree: await contexts.listContextsTree() }),
 
   'contexts.read': async ({ path }) => {
     return contexts.readContextFile(path || '');
@@ -5309,6 +5319,10 @@ const streamHandlers: Record<string, StreamHandler> = {
 
 interface StreamState { cancelled: boolean; controller: AbortController; sender: WebContents }
 const activeStreams = new Map<string, StreamState>();
+/** process 事件批量窗口：16ms 内相邻 delta 打包成一条 IPC 消息。 */
+const STREAM_BATCH_WINDOW_MS = 16;
+/** 单条批量消息最多携带的 process 事件数（防止长时间突发时包过大）。 */
+const STREAM_BATCH_MAX = 64;
 
 /**
  * Resolve the current user context for an IPC request. `user.init` must be
@@ -5449,8 +5463,36 @@ export function register(): void {
     const envelope = parseStreamEnvelope(request);
     if (!envelope) return;
     const { requestId, channel, payload } = envelope;
+    // 逐 token 的 process 事件每发一条都是一次 IPC 序列化 + 渲染层一次
+    // SSE 解析，流式高峰期（~50 事件/秒 × 若干并发流）会淹没主→渲染
+    // 通道。把相邻的 process 事件打包成数组一次发送，preload 拆包后
+    // 逐个回调 —— 渲染层事件语义与顺序完全不变，只减少消息数。
+    // 非 process 事件（message / turn_end / done / error 等结构事件）
+    // 立即发送，不引入可感知延迟。
+    const pending: unknown[] = [];
+    let flushTimer: NodeJS.Timeout | null = null;
+    const flushBatch = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (!pending.length) return;
+      if (event.sender.isDestroyed()) return;
+      const batch = pending.splice(0, pending.length);
+      event.sender.send(`stream:${requestId}`, batch);
+    };
     const out = (ev: unknown) => {
       if (event.sender.isDestroyed()) return;
+      if (ev && typeof ev === 'object' && (ev as { type?: string }).type === 'process') {
+        pending.push(ev);
+        if (pending.length >= STREAM_BATCH_MAX) {
+          flushBatch();
+        } else if (!flushTimer) {
+          flushTimer = setTimeout(flushBatch, STREAM_BATCH_WINDOW_MS);
+        }
+        return;
+      }
+      flushBatch();
       event.sender.send(`stream:${requestId}`, ev);
     };
 
