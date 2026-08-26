@@ -2641,6 +2641,7 @@ async function _enqueueBody(
         from: fromActorId,
         turnEnd: params.turn_end === true,
       });
+      log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
     } catch {
       // A broken broadcast listener must never take the bus down.
     }
