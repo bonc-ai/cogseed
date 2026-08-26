@@ -54,10 +54,11 @@ function _loadSidebarCollapse() {
         spaces: raw.spaces === true,
         recent: raw.recent === true,
         spaceGroups: (raw.spaceGroups && typeof raw.spaceGroups === 'object') ? raw.spaceGroups : {},
+        channelGroups: (raw.channelGroups && typeof raw.channelGroups === 'object') ? raw.channelGroups : {},
       };
     }
   } catch (_) {}
-  return { pinned: false, spaces: false, recent: false, spaceGroups: {} };
+  return { pinned: false, spaces: false, recent: false, spaceGroups: {}, channelGroups: {} };
 }
 function _saveSidebarCollapse() {
   try { localStorage.setItem(_SIDEBAR_COLLAPSE_KEY, JSON.stringify(_sidebarCollapse)); } catch (_) {}
@@ -6777,6 +6778,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       renderConversationList();
     });
   });
+  // 侧栏「消息渠道」折叠组切换（飞书/微信等；状态持久化 localStorage）
+  container.querySelectorAll('[data-conv-channel-toggle="1"]').forEach((btn) => {
+    if (btn.dataset.channelBound === '1') return;
+    btn.dataset.channelBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const platform = btn.dataset.convChannel || '';
+      if (!platform) return;
+      _sidebarCollapse.channelGroups[platform] = !_sidebarCollapse.channelGroups[platform];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
   // 侧栏空间行 ⋯ 菜单（置顶/重命名/在访达中显示/删除）
   container.querySelectorAll('[data-conv-space-more]').forEach((el) => {
     if (el.dataset.moreBound === '1') return;
@@ -7015,6 +7030,67 @@ function _renderSpaceSidebarGroup(sp, convs) {
     })).join('')}`;
 }
 
+// ── 消息渠道分组（飞书/微信等渠道会话在「最近任务」tab 的聚合展示）──
+// 渠道会话 = conversations 列表里带 channel_platform 的行（主进程列表响应
+// 标注：新会话创建时落盘 + 存量经 binding join 兜底）。分组只收非置顶的
+// 渠道会话（用户置顶 = 想常驻顶部，不进组）。折叠状态持久化
+// _sidebarCollapse.channelGroups[platform]，默认展开。
+const CHANNEL_SIDEBAR_ICONS = {
+  feishu_lark: 'feishu',
+  wechat_personal: 'wechat',
+  wecom: 'wecom',
+  telegram: 'telegram',
+};
+const CHANNEL_SIDEBAR_NAMES = {
+  feishu_lark: '飞书',
+  wechat_personal: '微信',
+  wecom: '企业微信',
+  telegram: 'Telegram',
+};
+function _channelGroupLabel(platform, convs) {
+  const first = (convs || []).find(Boolean);
+  const live = first && typeof first.channel_name === 'string' && first.channel_name.trim();
+  return live || CHANNEL_SIDEBAR_NAMES[platform] || platform;
+}
+function _channelGroupIcon(platform) {
+  return CHANNEL_SIDEBAR_ICONS[platform] || 'message-square';
+}
+/** 渠道分组区：每组一个可折叠组头（图标+渠道名+会话数）+ 组内会话行。
+ *  组间按组内最新活跃倒序；组内排序复用置顶/最近的比较器。 */
+function _renderChannelSidebarGroups(channelConvs) {
+  if (!channelConvs.length) return '';
+  const byPlatform = new Map();
+  for (const conv of channelConvs) {
+    const platform = conv.channel_platform;
+    if (!platform) continue;
+    if (!byPlatform.has(platform)) byPlatform.set(platform, []);
+    byPlatform.get(platform).push(conv);
+  }
+  const groups = Array.from(byPlatform.entries())
+    .map(([platform, convs]) => ({ platform, convs }))
+    .sort((a, b) => {
+      const latest = (list) => list.reduce((acc, c) => {
+        const at = (c && (c.last_active_at || c.updated_at)) || '';
+        return at > acc ? at : acc;
+      }, '');
+      return latest(b.convs).localeCompare(latest(a.convs));
+    });
+  return groups.map(({ platform, convs }) => {
+    const collapsed = !!_sidebarCollapse.channelGroups[platform];
+    const label = _channelGroupLabel(platform, convs);
+    return `
+    <button type="button" class="conv-list-section-header conv-channel-group is-collapsible${collapsed ? ' is-collapsed' : ''}"
+      data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
+      aria-expanded="${collapsed ? 'false' : 'true'}">
+      <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+      <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
+      <span class="conv-list-section-label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+      <span class="conv-list-section-count">${convs.length}</span>
+    </button>
+    ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
+  }).join('');
+}
+
 /** 分区标题行：可折叠（data-sidebar-fold）+ 可选右侧操作按钮（data-sidebar-action）。 */
 function _renderSidebarSectionHeader(section, label, opts = {}) {
   const collapsed = !!_sidebarCollapse[section];
@@ -7167,8 +7243,16 @@ function renderConversationList() {
         parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
       }
     }
+    // ② 渠道分组区（飞书/微信等渠道会话；置顶的渠道会话留在置顶区不进组）
+    const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
+    const plainRecent = channelConvs.length
+      ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
+      : recent;
+    if (channelConvs.length) {
+      parts.push(_renderChannelSidebarGroups(channelConvs));
+    }
     // ③ 最近任务区（平铺，无时间桶标题）
-    if (recent.length || hasDeferredRecent) {
+    if (plainRecent.length || hasDeferredRecent) {
       parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
         action: 'new-task',
         actionTitle: t('sidebar.new_task', '新建任务'),
@@ -7176,7 +7260,7 @@ function renderConversationList() {
       }));
       if (!_sidebarCollapse.recent) {
         if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-        parts.push(_renderConversationFlatList(recent, {
+        parts.push(_renderConversationFlatList(plainRecent, {
           bucketScope: 'sidebar',
           loadMore: _sidebarHasMoreOld(),
           loadMoreBucket: 'last30',
