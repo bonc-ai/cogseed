@@ -110,6 +110,7 @@ import {
 } from './util/boot_init';
 import { getBootDeviceProfile } from './util/boot-device-profile';
 import * as updaterClient from './features/updater/client';
+import * as updatesIpc from './ipc/updates';
 
 // `CORE_AGENT_AUTH_DIR` is pinned per-uid by `features/users.activateUser()`
 // (runs inside `runBootSelfCheck` below). `resolveAuthDir()` in core-agent
@@ -1191,6 +1192,11 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
+    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+      updatesIpc.initAutoUpdateBridge((channel, payload) => {
+        ipc.broadcastToRenderer(channel, payload);
+      });
+    }
     registerDeferred('messaging:start', () => messagingFeature.startForUser(users.getActiveUserId()), 'serial', CONNECTORS_BOOTSTRAP_DELAY_MS, {
       resourceClass: 'network',
       preferIdle: true,
