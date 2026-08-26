@@ -118,6 +118,9 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import * as messagingBindings from '../features/messaging/bindings';
+import * as messagingRegistry from '../features/messaging/registry';
+import { annotateChannelConversations } from '../features/messaging/channel-annotation';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
@@ -920,6 +923,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'conversations.list': async ({ mode, active_cid, expanded_projects, project_id, task_id, bucket, offset }, ctx) => {
+    // Channel conversations get their sidebar grouping fields (platform
+    // back-fill via bindings + live display name) on every list response;
+    // persisted fields stay authoritative, the join is display-only.
+    const annotate = async <T extends { conversation_id: string; channel_platform?: string }>(rows: readonly T[]): Promise<T[]> => {
+      if (!rows.length) return [...rows];
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      return annotateChannelConversations(rows, bindings, instances);
+    };
     if (mode === 'startup') {
       const expandedProjectIds = String(expanded_projects || '')
         .split(',')
@@ -928,21 +942,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         activeConversationId: safeId(active_cid) ? active_cid : undefined,
         expandedProjectIds,
       });
+      if (Array.isArray((result as { conversations?: unknown }).conversations)) {
+        (result as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((result as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
       return result;
     }
     if (mode === 'project') {
       if (!safeId(project_id)) throw new Error('invalid project id');
-      return chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      const page = await chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'auto_task') {
       if (!safeId(task_id)) throw new Error('invalid auto task id');
-      return chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      const page = await chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'old_unprojected') {
       if (bucket !== 'last30' && bucket !== 'older') throw new Error('invalid conversation bucket');
-      return chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      const page = await chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
-    return { conversations: await chats.listConversations(ctx.userId) };
+    return { conversations: await annotate(await chats.listConversations(ctx.userId)) };
   },
 
   'conversations.autoTaskCounts': async ({ task_ids } = {}, ctx) => {
@@ -955,7 +988,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(cid)) throw new Error('invalid cid');
     const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
-    return { conversation: conv };
+    // Same channel annotation as the list endpoints — a freshly hydrated
+    // sidebar row (e.g. external inbound to a brand-new conversation) must
+    // land in its channel group immediately.
+    if (!conv.channel_platform) {
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      const [annotated] = annotateChannelConversations([conv], bindings, instances);
+      return { conversation: annotated || conv };
+    }
+    const [instances] = await Promise.all([
+      messagingRegistry.listInstances(ctx.userId).catch(() => []),
+    ]);
+    const [annotated] = annotateChannelConversations([conv], [], instances);
+    return { conversation: annotated || conv };
   },
 
   'conversations.history': async (args, ctx) => {

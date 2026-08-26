@@ -114,9 +114,14 @@ export interface Conversation {
   space_id?: string;
   /** Set when this conversation was created by an auto-task fire (sidebar
    *  "Automation" tab). Used by the renderer to render the clock icon next
-   *  to the title and to group the conv under its originating task in the
-   *  auto-tab expand panel. Stable id; survives task deletion. */
+   * to the title and to group the conv under its originating task in the
+   * auto-tab expand panel. Stable id; survives task deletion. */
   origin_auto_task_id?: string;
+  /** Messaging channel this conversation was created by (e.g. `feishu_lark`,
+   *  `wechat_personal`). Set once at binding creation; the renderer groups
+   *  such conversations under a collapsible per-channel sidebar section.
+   *  Absent → ordinary in-app conversation. */
+  channel_platform?: string;
   /** Optional sidebar pin timestamp. Pinned conversations sort to the top of
    *  whichever sidebar list currently contains them (project or unprojected). */
   pinned_at?: string;
@@ -292,6 +297,7 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
   if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;
+  if (typeof raw.channel_platform === 'string' && raw.channel_platform) out.channel_platform = raw.channel_platform;
   if (typeof raw.pinned_at === 'string' && raw.pinned_at) out.pinned_at = raw.pinned_at;
   if (typeof raw.pin_state_updated_at === 'string' && raw.pin_state_updated_at) out.pin_state_updated_at = raw.pin_state_updated_at;
   if (raw.title_manually_set === true) out.title_manually_set = true;
@@ -2022,6 +2028,10 @@ export interface CreateConversationOptions {
    *  a back-link to the task that spawned it. Used by the renderer for the
    *  clock-icon prefix and the auto-tab expand-panel grouping. */
   originAutoTaskId?: string;
+  /** Messaging channel platform id (e.g. `feishu_lark`), set by
+   *  `features/messaging/bindings.ts` when a channel conversation is
+   *  created. Renderer groups channel conversations per platform. */
+  channelPlatform?: string;
   /** True if this conversation was imported from another agent (Claude Code,
    *  Codex, etc.) during onboarding. Used to identify imported sessions for
    *  special handling. */
@@ -2041,7 +2051,7 @@ function normaliseConversationTitle(raw: unknown): string {
 
 export async function createConversation(userId: string, {
   kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
-  imported = false, needs_welcome = false,
+  channelPlatform = '', imported = false, needs_welcome = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
   const outcome = await _withConversationIndexStore(userId, async (store) => {
@@ -2066,6 +2076,7 @@ export async function createConversation(userId: string, {
           ...(projectId ? { project_id: projectId } : {}),
           ...(spaceId ? { space_id: spaceId } : {}),
           ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+          ...(channelPlatform ? { channel_platform: channelPlatform } : {}),
           ...(imported ? { imported: true } : {}),
           ...(needs_welcome ? { needs_welcome: true } : {}),
           updated_at: now,
@@ -2099,6 +2110,7 @@ export async function createConversation(userId: string, {
       ...(projectId ? { project_id: projectId } : {}),
       ...(spaceId ? { space_id: spaceId } : {}),
       ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+      ...(channelPlatform ? { channel_platform: channelPlatform } : {}),
       ...(imported ? { imported: true } : {}),
       ...(needs_welcome ? { needs_welcome: true } : {}),
       created_at: now,

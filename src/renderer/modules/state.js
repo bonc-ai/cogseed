@@ -321,6 +321,17 @@ function bindStaticHandlers() {
     if (typeof cid !== 'string' || !cid) return;
     const tracker = window.__cogseedLiveBusTracker;
     if (msgId && tracker && typeof tracker.has === 'function' && tracker.has(msgId)) return;
+    // A message landing in a collapsed channel group re-opens that group —
+    // external-channel traffic is push-visible by design.
+    const conv = (typeof conversations !== 'undefined' && Array.isArray(conversations))
+      ? conversations.find((c) => c && c.conversation_id === cid)
+      : null;
+    if (conv && typeof conv.channel_platform === 'string' && conv.channel_platform
+      && typeof _sidebarCollapse !== 'undefined' && _sidebarCollapse
+      && _sidebarCollapse.channelGroups && _sidebarCollapse.channelGroups[conv.channel_platform]) {
+      _sidebarCollapse.channelGroups[conv.channel_platform] = false;
+      try { _saveSidebarCollapse(); } catch (_) { /* best-effort persistence */ }
+    }
     if (cid === (typeof currentCid === 'string' ? currentCid : '')) {
       const lastStreamAt = (typeof _lastGroupWorkEventAt !== 'undefined' && _lastGroupWorkEventAt && typeof _lastGroupWorkEventAt.get === 'function')
         ? (_lastGroupWorkEventAt.get(cid) || 0)
