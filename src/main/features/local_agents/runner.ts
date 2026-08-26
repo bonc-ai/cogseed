@@ -36,6 +36,7 @@ import type { ExecutionKind, ExecutionLifecycleSink } from '../execution-records
 import type { PreparedExecutionContext } from '../p3394/execution-context.js';
 import { isPathAllowed } from '../../util/path-sandbox.js';
 import { assertAgentChatDispatchable } from '../agent-dispatch-policy.js';
+import { emitModelUsage } from '../../model/core-agent/usage-events';
 
 const log = createLogger('local-agents:runner');
 export {
@@ -743,6 +744,8 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   const cliSessionId = `cli-${opts.cli}-${handle.runId}`;
   const spillDir = sessionToolResultsDir(opts.uid, cliSessionId);
   let lastEventAt = Date.now();
+  const cliRunStartedAt = Date.now();
+  let cliFirstTokenAt: number | null = null;
   const onEvent = (e: LocalEvent) => {
     // Self-emitted idle pulses don't count as "the CLI did something"
     // — without this carve-out we'd reset our own deadline and stop
@@ -771,10 +774,32 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     recordLocalAgentEventForLog(runDiagnostics, e);
     persist.append(handle, e);
     if (e.type === 'text-delta' && typeof e.text === 'string') {
+      if (cliFirstTokenAt === null) cliFirstTokenAt = Date.now();
       streamedOutput += e.text;
       persist.appendOutput(handle, e.text);
     }
     if (e.type === 'done') {
+      const doneUsage = (e as { usage?: { input?: number; output?: number; cacheRead?: number; cacheCreate?: number; model?: string } }).usage;
+      if (doneUsage && typeof doneUsage === 'object') {
+        emitModelUsage({
+          at: Date.now(),
+          ...(opts.uid ? { userId: opts.uid } : {}),
+          ...(opts.cid ? { conversationId: opts.cid } : {}),
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          providerId: `cli-${opts.cli}`,
+          modelId: typeof doneUsage.model === 'string' && doneUsage.model ? doneUsage.model : `cli-${opts.cli}`,
+          ...(typeof doneUsage.input === 'number' ? { inputTokens: doneUsage.input } : {}),
+          ...(typeof doneUsage.output === 'number' ? { outputTokens: doneUsage.output } : {}),
+          ...(typeof doneUsage.cacheRead === 'number' ? { cacheReadTokens: doneUsage.cacheRead } : {}),
+          ...(typeof doneUsage.cacheCreate === 'number' ? { cacheWriteTokens: doneUsage.cacheCreate } : {}),
+          durationMs: Date.now() - cliRunStartedAt,
+          status: 'completed',
+        });
+      }
+      (e as { metrics?: { startedAt: number; firstTokenAt: number | null } }).metrics = {
+        startedAt: cliRunStartedAt,
+        firstTokenAt: cliFirstTokenAt,
+      };
       terminal = {
         status: (e.status as RunCliAgentResult['status']) || 'failed',
         output: typeof e.output === 'string' ? e.output : undefined,
