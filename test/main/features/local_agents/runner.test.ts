@@ -61,6 +61,14 @@ async function loadRunner() {
   return import('../../../../src/main/features/local_agents/runner');
 }
 
+// Must be imported dynamically alongside loadRunner: beforeEach calls
+// vi.resetModules(), so a static top-level import would hand us a stale
+// module instance whose `sink` variable is not the one the freshly loaded
+// runner writes to.
+async function loadUsageEvents() {
+  return import('../../../../src/main/model/core-agent/usage-events');
+}
+
 describe('local_agents/runner', () => {
   it('rejects management-only Agents before CLI detection, persistence, or backend execution', async () => {
     const file = path.join(tmpDir, TEST_UID, 'cloud', 'agents', 'expense-agent', 'agent.json');
@@ -568,5 +576,115 @@ describe('local_agents/runner', () => {
     });
     expect(result.status).toBe('failed');
     expect(result.error).toMatch(/not implemented/);
+  });
+
+  describe('CLI done usage forwarding and first-token metrics', () => {
+    // The forwarding under test is unreachable on machines where every
+    // preset CLI routes through the P3394 gateway, so these tests are the
+    // only executable verification of the done→emitModelUsage contract.
+    it('books done.usage into the model usage ledger with the full token mapping', async () => {
+      mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+      mockBackendImpl = async ({ onEvent }) => {
+        // text-delta first so the first-token timestamp is also exercised
+        // on the happy path (asserted more precisely in the test below).
+        onEvent({ type: 'text-delta', text: 'hello' });
+        onEvent({
+          type: 'done', status: 'completed', output: 'hello', durationMs: 5,
+          usage: { input: 100, output: 50, cacheRead: 300, cacheCreate: 10, model: 'claude-sonnet-x' },
+        });
+      };
+      const runner = await loadRunner();
+      const usageEvents = await loadUsageEvents();
+      const booked: any[] = [];
+      usageEvents.setModelUsageSink((ev) => booked.push(ev));
+      try {
+        const events: any[] = [];
+        const result = await runner.run({
+          uid: TEST_UID, cid: 'c', agentId: 'agent-x',
+          cli: 'claude', prompt: 'p', cwd: tmpDir,
+          signal: new AbortController().signal,
+          onEvent: e => events.push(e),
+        });
+
+        expect(result.status).toBe('completed');
+        expect(booked.length).toBe(1);
+        const [ev] = booked;
+        expect(ev.providerId).toBe('cli-claude');
+        expect(ev.modelId).toBe('claude-sonnet-x');
+        expect(ev.inputTokens).toBe(100);
+        expect(ev.outputTokens).toBe(50);
+        expect(ev.cacheReadTokens).toBe(300);
+        expect(ev.cacheWriteTokens).toBe(10);
+        expect(ev.durationMs).toBeGreaterThanOrEqual(0);
+        expect(ev.status).toBe('completed');
+        expect(ev.userId).toBe(TEST_UID);
+        expect(ev.conversationId).toBe('c');
+        expect(ev.agentId).toBe('agent-x');
+        expect(ev.at).toBeGreaterThan(0);
+      } finally {
+        // Detach the sink — usage-events exposes no separate restore, and
+        // a leaking sink would swallow or duplicate ledger events for any
+        // test that runs against this module instance afterwards.
+        usageEvents.setModelUsageSink(null);
+      }
+    });
+
+    it('emits no usage event for done without usage, but still stamps metrics', async () => {
+      mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+      // No text-delta: done arrives bare, so there is no first token to
+      // timestamp and nothing to book into the ledger.
+      mockBackendImpl = async ({ onEvent }) => {
+        onEvent({ type: 'done', status: 'completed', output: '', durationMs: 1 });
+      };
+      const runner = await loadRunner();
+      const usageEvents = await loadUsageEvents();
+      const booked: any[] = [];
+      usageEvents.setModelUsageSink((ev) => booked.push(ev));
+      try {
+        const events: any[] = [];
+        const result = await runner.run({
+          uid: TEST_UID, cid: 'c', agentId: 'agent-x',
+          cli: 'claude', prompt: 'p', cwd: tmpDir,
+          signal: new AbortController().signal,
+          onEvent: e => events.push(e),
+        });
+
+        expect(result.status).toBe('completed');
+        expect(booked).toHaveLength(0);
+        const done = events.find(e => e.type === 'done');
+        expect(done).toBeDefined();
+        expect(done.metrics).toBeDefined();
+        expect(typeof done.metrics.startedAt).toBe('number');
+        expect(done.metrics.firstTokenAt).toBeNull();
+      } finally {
+        usageEvents.setModelUsageSink(null);
+      }
+    });
+
+    it('records metrics.firstTokenAt when a text-delta precedes done', async () => {
+      mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+      mockBackendImpl = async ({ onEvent }) => {
+        onEvent({ type: 'text-delta', text: 'first token' });
+        onEvent({ type: 'done', status: 'completed', output: 'first token', durationMs: 2 });
+      };
+      const runner = await loadRunner();
+
+      const events: any[] = [];
+      const result = await runner.run({
+        uid: TEST_UID, cid: 'c', agentId: 'agent-x',
+        cli: 'claude', prompt: 'p', cwd: tmpDir,
+        signal: new AbortController().signal,
+        onEvent: e => events.push(e),
+      });
+
+      expect(result.status).toBe('completed');
+      const done = events.find(e => e.type === 'done');
+      expect(done).toBeDefined();
+      expect(done.metrics).toBeDefined();
+      expect(typeof done.metrics.startedAt).toBe('number');
+      expect(typeof done.metrics.firstTokenAt).toBe('number');
+      // The first token can never precede the run start it belongs to.
+      expect(done.metrics.firstTokenAt).toBeGreaterThanOrEqual(done.metrics.startedAt);
+    });
   });
 });
