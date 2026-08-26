@@ -5,14 +5,26 @@ import { createCogSeedTask, readCogSeedTask, updateCogSeedTask } from './task-st
 import type { CogSeedTaskRecord, CogSeedTaskStatus } from './types';
 
 const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus[]>> = {
-  created: ['queued', 'cancelled', 'recoverable'],
-  queued: ['running', 'cancelled', 'recoverable'],
+  // `created`/`queued` → `failed` exists because a task can die before it ever
+  // runs: the process hosting it disappears. Startup reconciliation (RC-P0-04)
+  // is the concrete case — a Group Chat run interrupted by an app restart is
+  // dead whether or not it had reached `running`, and the only honest terminal
+  // state for it is `failed`. Without these edges `transitionCogSeedTask` throws
+  // and such tasks stay non-terminal forever.
+  created: ['queued', 'cancelled', 'recoverable', 'failed'],
+  queued: ['running', 'cancelled', 'recoverable', 'failed'],
   running: ['waiting_user', 'completed', 'failed', 'cancelled', 'recoverable'],
+  // Intentionally NOT extended to `failed`: `waiting_user` means "waiting on a
+  // human", which survives a restart — the conversation is still there and the
+  // user can still answer. Treating it as a crash would destroy real state.
   waiting_user: ['queued', 'cancelled'],
   completed: [],
   failed: ['queued'],
   cancelled: [],
-  recoverable: ['queued'],
+  // `recoverable` → `failed` closes the loop for a task we have since decided
+  // cannot actually be recovered. Group Chat offers no run resume, so a
+  // `recoverable` group-chat task is a promise nothing can keep (RC-P0-05).
+  recoverable: ['queued', 'failed'],
 };
 
 function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 'task.waiting_user' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'task.recoverable' {
@@ -27,6 +39,25 @@ function eventType(status: CogSeedTaskStatus): 'task.queued' | 'task.started' | 
 
 function isTerminal(status: CogSeedTaskStatus): boolean {
   return status === 'completed' || status === 'cancelled';
+}
+
+/**
+ * Statuses that mean "execution was in flight" — the ones an app restart
+ * definitively kills.
+ *
+ * Derived from the transition table rather than written out by hand, so it
+ * cannot drift if a status is added: a status belongs here when it is not
+ * terminal and is not `waiting_user` (which waits on a human, not a process)
+ * and is not `failed` (already terminal for our purposes — retryable, but not
+ * in flight). Exported for startup reconciliation (RC-P0-04).
+ */
+export const COGSEED_INTERRUPTIBLE_STATUSES: readonly CogSeedTaskStatus[] =
+  (Object.keys(TRANSITIONS) as CogSeedTaskStatus[]).filter((status) => (
+    !isTerminal(status) && status !== 'waiting_user' && status !== 'failed'
+  ));
+
+export function isCogSeedInterruptibleStatus(status: CogSeedTaskStatus): boolean {
+  return COGSEED_INTERRUPTIBLE_STATUSES.includes(status);
 }
 
 function safeErrorCode(value: unknown): string | undefined {

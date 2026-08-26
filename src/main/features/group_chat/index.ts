@@ -934,6 +934,13 @@ export interface ResolveFailedTurnRetryInput {
 
 export interface RetryFailedTurnInput extends ResolveFailedTurnRetryInput {
   requestId: string;
+  /**
+   * The failed CogSeed task this retry replaces. Passed straight through to the
+   * observed-run projection so the new run's parent task carries
+   * `retryOfTaskId` (RC-P1-09). Not part of the idempotency fingerprint: it is
+   * a projection link, not a difference in what gets executed.
+   */
+  retryOfCogSeedTaskId?: string;
 }
 
 export interface ResolvedFailedTurnRetry {
@@ -1172,7 +1179,11 @@ export async function retryFailedTurn(
       };
       await writeJson(claimFile, pending);
       try {
-        const msg = await enqueue({ ...resolved.value.enqueue, actionRequestId: requestId });
+        const msg = await enqueue({
+          ...resolved.value.enqueue,
+          actionRequestId: requestId,
+          ...(input.retryOfCogSeedTaskId ? { retryOfCogSeedTaskId: input.retryOfCogSeedTaskId } : {}),
+        });
         await writeJson(claimFile, {
           ...pending,
           status: 'completed',

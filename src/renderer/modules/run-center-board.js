@@ -18,7 +18,7 @@
       if (task.column === 'archived' && !includeArchived) return false;
       if (task.column !== 'archived' && !matchesFilter(task, filter)) return false;
       if (!query) return true;
-      return [task.title, task.taskId, task.sessionTitle, task.sessionId, task.agentId, task.coordinationId, task.groupId]
+      return [task.title, task.taskId, task.sessionTitle, task.sessionId, task.agentId, task.coordinationId, task.groupId, task.conversationShortId]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase().includes(query));
     });
@@ -26,10 +26,19 @@
 
   function render(projection, options) {
     const { text, esc, icon, statusKey, statusClass, formatDate, stateView } = options;
+    const identityLabel = options.identityLabel || (() => '');
     if (options.loading) return stateView('run_center.board_loading');
     if (options.error) return stateView('run_center.board_failed', options.error);
     const allTasks = Array.isArray(projection && projection.tasks) ? projection.tasks : [];
-    if (!allTasks.length) return stateView('run_center.board_empty');
+    if (!allTasks.length) {
+      // An empty board has two very different meanings. Saying "no tasks" to
+      // someone whose tasks merely aged past the window is the misleading
+      // empty state the retention change would otherwise create.
+      const hidden = Number(projection && projection.retentionHiddenCount) || 0;
+      return hidden > 0
+        ? stateView('run_center.board_empty_retention')
+        : stateView('run_center.board_empty');
+    }
 
     const tasks = filteredTasks(projection, options.search, options.filter);
     const groupById = new Map((Array.isArray(projection.groups) ? projection.groups : [])
@@ -53,7 +62,8 @@
         </span>
         <strong>${esc(localizedTitle(task, task.taskId))}</strong>
         <span class="dashboard-board-card-meta">
-          ${task.agentId ? `<span>${icon('terminal')}${esc(task.agentId)}</span>` : ''}
+          ${identityLabel(task) ? `<span data-run-center-identity="${esc(task.taskId)}">${icon('terminal')}${esc(identityLabel(task))}</span>` : ''}
+          ${task.retryOfTaskId ? `<span data-run-center-retry-of="${esc(task.retryOfTaskId)}">${esc(text('run_center.label_retry_of'))}</span>` : ''}
           <span>${icon('panel-list')}${esc(localizedTitle({ title: task.sessionTitle, titleKey: task.sessionTitleKey }, task.sessionId))}</span>
         </span>
           ${progress ? `<span class="dashboard-board-group">

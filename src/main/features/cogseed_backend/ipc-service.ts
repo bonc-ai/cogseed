@@ -6,7 +6,14 @@ import { assertCogSeedConnectorId, assertCogSeedKbSourceId, assertCogSeedRequest
 import { listCogSeedConnectors } from './connector-store';
 import { cogseedConnectorManager } from './connector-manager';
 import { cogseedKbManager } from './cogseed-kb-store';
-import { listCogSeedSessions, listCogSeedTasks, readCogSeedSession, readCogSeedTask } from './task-store';
+import {
+  applyCogSeedTaskWindow,
+  listCogSeedSessions,
+  listCogSeedTasks,
+  readCogSeedSession,
+  readCogSeedTask,
+  type ListCogSeedTasksOptions,
+} from './task-store';
 import { readCogSeedCoordination } from './coordinator';
 import { cogseedCollaborationStore } from './collaboration-store-adapter';
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
@@ -44,7 +51,7 @@ export interface CogSeedIpcServiceDeps {
   readGroupChatWorkflowEvents?: (userId: string, conversationId: string, limit?: number) => Promise<CollaborationEvent[]>;
   isConversationAvailable?: (userId: string, conversationId: string) => Promise<boolean>;
   abortGroupChat?: (userId: string, conversationId: string) => Promise<unknown>;
-  retryGroupChat?: (input: { userId: string; cid: string; failedMessageId: string; visibleText: string; requestId: string }) => Promise<{ ok: boolean; error?: string }>;
+  retryGroupChat?: (input: { userId: string; cid: string; failedMessageId: string; visibleText: string; requestId: string; retryOfCogSeedTaskId?: string }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export interface CogSeedTaskEventsInput {
@@ -59,7 +66,9 @@ export interface CogSeedTaskRetryInput {
 }
 
 
-export type CogSeedRendererTaskAction = 'retry' | 'skip' | 'resume' | 'abort';
+// `skip` was removed in RC-P1-18: `action()` threw for it unconditionally, so
+// the projection was advertising a capability nothing could honour.
+export type CogSeedRendererTaskAction = 'retry' | 'resume' | 'abort';
 
 export type CogSeedRendererTitleKey =
   | 'run_center.task_kind_cogseed'
@@ -72,7 +81,6 @@ export type CogSeedRendererTitleKey =
 
 export interface CogSeedRendererActionSet {
   retry: boolean;
-  skip: boolean;
   resume: boolean;
   abort: boolean;
 }
@@ -103,11 +111,20 @@ export interface CogSeedRendererBoardTask extends CogSeedRendererTaskSummary {
 
 export interface CogSeedRendererBoardGroup {
   groupId: string;
+  /** Consumed: board.js keys its group map by `groupId || coordinationId`. */
   coordinationId?: string;
+  /** Consumed: board.js shows group progress only on the parent's card. */
   parentTaskId: string;
+  /**
+   * RESERVED (`title` / `titleKey` / `status`) — intended consumer is a group
+   * header on the board, which today renders progress only. Kept because the
+   * data is already computed here and re-deriving it renderer-side would mean
+   * re-walking `parentTaskId`. Re-review when the group header is designed.
+   */
   title: string;
   titleKey: CogSeedRendererTitleKey;
   status: CogSeedTaskStatus;
+  /** Producer-side: groups are sorted by this before returning. */
   updatedAt: string;
   progress: {
     total: number;
@@ -119,11 +136,28 @@ export interface CogSeedRendererBoardGroup {
 }
 
 export interface CogSeedRendererBoardProjection {
+  /**
+   * RESERVED — projection protocol version. Not read by the renderer today;
+   * consumed by the first client that must tolerate two shapes at once
+   * (Observability Expansion, spec §17). Re-review then.
+   */
   schemaVersion: 1;
+  /**
+   * RESERVED — newest `updatedAt` across the board's tasks. Intended consumer:
+   * incremental refresh / push de-duplication, i.e. "has anything changed since
+   * the last poll" without diffing the whole board. Blocked on D-4 (no push
+   * channel; preload allowlist lacks the `cogseed:` prefix). Re-review when the
+   * push channel lands — RC-P0-02's 5s poll is the interim mechanism.
+   */
   updatedAt?: string;
   tasks: CogSeedRendererBoardTask[];
   groups: CogSeedRendererBoardGroup[];
-  counts: Record<CogSeedRendererBoardColumn, number>;
+  /**
+   * How many records the board's retention window elided. Lets an empty board
+   * say *why* it is empty instead of claiming there is nothing at all. Counts
+   * retention only — never tasks hidden because their conversation is gone.
+   */
+  retentionHiddenCount: number;
 }
 
 export interface CogSeedRendererTaskSummary {
@@ -139,7 +173,39 @@ export interface CogSeedRendererTaskSummary {
   updatedAt: string;
   errorCode?: string;
   executionKind?: CogSeedTaskRecord['executionKind'];
+  /** Conversation this task belongs to — the Open Task exit (RC-P0-07). */
+  conversationId?: string;
+  /** Set when this task was created by retrying `retryOfTaskId` (RC-P1-09). */
+  retryOfTaskId?: string;
+  /**
+   * The conversation this task ran in has been deleted. `conversationId` is
+   * withheld alongside this flag, so the renderer offers no Open Conversation
+   * exit and can explain why instead (RC-P1-14, decision (c)). Only ever set
+   * for non-group-chat tasks — group-chat shadow tasks are dropped outright.
+   */
+  conversationUnavailable?: boolean;
   agentId?: string;
+  /**
+   * 1-based position of this task's run among the session's runs, ordered by
+   * `createdAt`. Server-computed so every projection agrees; never an array
+   * index (RC-P0-13 / DECISION-01).
+   */
+  runOrdinal?: number;
+  /** 1-based position of this turn among its parent run's turns (RC-P0-13). */
+  turnOrdinal?: number;
+  /**
+   * First 8 characters of `conversationId` — enough to tell two runs of
+   * different conversations apart without widening the exposure surface with
+   * user-authored text (DECISION-01 candidate B; candidate C was rejected).
+   */
+  conversationShortId?: string;
+  /**
+   * RESERVED — owned by skill version governance, not by the Run Center.
+   * Intended consumer: the skill lifecycle surface (`cogseedAgentSkillLifecycleDir`).
+   * Kept because the pin status is only knowable at task-record level; deleting
+   * it would force that surface to re-read every task. Re-review with the skill
+   * governance UI.
+   */
   skillVersionPinStatus?: 'pinned' | 'unpinned';
   actions: CogSeedRendererActionSet;
 }
@@ -189,7 +255,12 @@ export interface CogSeedRendererWorkflowSummary {
 export interface CogSeedRendererReviewSummary {
   gateId: string;
   stepId: string;
-  name: string;
+  /**
+   * i18n key, not prose. This used to be the hardcoded English literal
+   * 'Review gate' — a backend-produced user-facing string, which is exactly
+   * what the rest of this projection avoids (titles all cross as keys).
+   */
+  nameKey: 'run_center.review_gate';
   status: string;
   reviewDecision?: string;
   reviewedBy?: string;
@@ -235,6 +306,14 @@ export interface CogSeedRendererCollaborationSnapshot {
   timeline: CogSeedRendererTimelineEvent[];
   actions: CogSeedRendererActionSet;
 }
+
+/**
+ * A task record as the dashboard sees it. `conversationUnavailable` is set by
+ * `visibleDashboardTasks` when the task's conversation has been deleted; the
+ * record's `conversationId` is withheld in that case so no dead exit reaches
+ * the renderer (RC-P1-14, decision (c)).
+ */
+type DashboardTaskRecord = CogSeedTaskRecord & { conversationUnavailable?: boolean };
 
 function rejectHiddenBackendFields(payload: Record<string, unknown>): void {
   const forbidden = ['allowFallback', 'backendPreference', 'kernelMode', 'mode', 'runtimeKernel'];
@@ -327,6 +406,14 @@ function normalizeEventsInput(payload: unknown): CogSeedTaskEventsInput {
 
 const TERMINAL_TASK_STATUSES = new Set<CogSeedTaskStatus>(['completed', 'failed', 'cancelled']);
 
+/**
+ * Dashboard retention window (RC-P1-15). Only completed/cancelled tasks age
+ * out; anything still active or needing attention is always listed, so these
+ * bound history rather than live work. See `applyCogSeedTaskWindow`.
+ */
+const DASHBOARD_TASK_LIMIT = 200;
+const DASHBOARD_TASK_WINDOW_DAYS = 30;
+
 function rendererSafeIdentifier(value: unknown, max = 120): string {
   const text = typeof value === 'string' ? value.trim() : '';
   if (text.length > max) return '';
@@ -361,19 +448,17 @@ function rendererSessionTitle(tasks: CogSeedTaskRecord[]): ReturnType<typeof ren
   return rendererTaskTitle(groupChatRun ?? latest ?? {});
 }
 
-function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 'conversationId' | 'groupChatMessageId'>, hasWorkflowStep = false): CogSeedRendererActionSet {
+function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 'conversationId' | 'groupChatMessageId'>): CogSeedRendererActionSet {
   const { status } = task;
   if (task.executionKind === 'group-chat') {
     return {
       retry: status === 'failed' && !!task.conversationId && !!task.groupChatMessageId,
-      skip: false,
       resume: false,
       abort: status === 'created' || status === 'queued' || status === 'running',
     };
   }
   return {
     retry: status === 'failed',
-    skip: hasWorkflowStep && !TERMINAL_TASK_STATUSES.has(status),
     resume: status === 'recoverable',
     abort: !TERMINAL_TASK_STATUSES.has(status),
   };
@@ -387,7 +472,69 @@ export function cogSeedRendererBoardColumn(status: CogSeedTaskStatus): CogSeedRe
   return 'archived';
 }
 
-function taskSummary(task: CogSeedTaskRecord, hasWorkflowStep = false): CogSeedRendererTaskSummary {
+export interface CogSeedTaskIdentity {
+  runOrdinal?: number;
+  turnOrdinal?: number;
+  conversationShortId?: string;
+}
+
+const CONVERSATION_SHORT_ID_CHARS = 8;
+
+/**
+ * Card identity for RC-P0-13. A board full of cards all titled "Agent turn"
+ * is unusable, so each card needs something that tells it apart from its
+ * siblings — without carrying user-authored text (DECISION-01 picked
+ * candidate B for exactly that reason).
+ *
+ * Ordinals are derived from a *sort*, never from the caller's array order:
+ * board and session projections scan in different orders, and an index-based
+ * ordinal would let the same run be "Run 2" on one screen and "Run 5" on the
+ * next. `createdAt` has second precision, so `taskId` breaks ties to keep the
+ * order total.
+ */
+export function cogSeedTaskIdentity(
+  task: Pick<CogSeedTaskRecord, 'taskId' | 'parentTaskId' | 'conversationId'>,
+  sessionTasks: Pick<CogSeedTaskRecord, 'taskId' | 'parentTaskId' | 'createdAt'>[],
+): CogSeedTaskIdentity {
+  const byId = new Map(sessionTasks.map((candidate) => [candidate.taskId, candidate]));
+  const byCreation = (
+    left: Pick<CogSeedTaskRecord, 'taskId' | 'createdAt'>,
+    right: Pick<CogSeedTaskRecord, 'taskId' | 'createdAt'>,
+  ): number => left.createdAt.localeCompare(right.createdAt) || left.taskId.localeCompare(right.taskId);
+
+  // Walk to the run this task belongs to. `visited` guards a corrupted store
+  // whose parent links form a cycle — a projection must not hang on one.
+  let root = byId.get(task.taskId) ?? { taskId: task.taskId, parentTaskId: task.parentTaskId, createdAt: '' };
+  const visited = new Set<string>([root.taskId]);
+  while (root.parentTaskId && byId.has(root.parentTaskId) && !visited.has(root.parentTaskId)) {
+    visited.add(root.parentTaskId);
+    root = byId.get(root.parentTaskId)!;
+  }
+
+  const runs = sessionTasks.filter((candidate) => !candidate.parentTaskId || !byId.has(candidate.parentTaskId)).sort(byCreation);
+  const runIndex = runs.findIndex((candidate) => candidate.taskId === root.taskId);
+
+  const parentTaskId = byId.get(task.taskId)?.parentTaskId ?? task.parentTaskId;
+  const turnIndex = parentTaskId
+    ? sessionTasks.filter((candidate) => candidate.parentTaskId === parentTaskId).sort(byCreation)
+      .findIndex((candidate) => candidate.taskId === task.taskId)
+    : -1;
+
+  // Strictly narrower than `conversationId`, which the summary already
+  // carries for the Open Task exit — no new exposure surface.
+  const conversationId = rendererSafeIdentifier(task.conversationId, 160);
+
+  return {
+    ...(runIndex >= 0 ? { runOrdinal: runIndex + 1 } : {}),
+    ...(turnIndex >= 0 ? { turnOrdinal: turnIndex + 1 } : {}),
+    ...(conversationId ? { conversationShortId: conversationId.slice(0, CONVERSATION_SHORT_ID_CHARS) } : {}),
+  };
+}
+
+function taskSummary(
+  task: DashboardTaskRecord,
+  identity: CogSeedTaskIdentity = {},
+): CogSeedRendererTaskSummary {
   const title = rendererTaskTitle(task);
   return {
     taskId: task.taskId,
@@ -401,9 +548,25 @@ function taskSummary(task: CogSeedTaskRecord, hasWorkflowStep = false): CogSeedR
     updatedAt: task.updatedAt,
     ...(rendererSafeIdentifier(task.errorCode) ? { errorCode: rendererSafeIdentifier(task.errorCode) } : {}),
     ...(task.executionKind ? { executionKind: task.executionKind } : {}),
+    // The Open Task exit. `detailsHtml()` prefers this summary over the board
+    // task, so omitting it here made the button vanish on the *healthy* path
+    // and appear only when the detail read failed and the UI fell back to the
+    // board task — the exit existed exactly when it was least useful
+    // (RC-P0-07).
+    ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+    // Exposed for every executionKind, not just group-chat: CogSeed-native
+    // retry already wrote this field (lifecycle.ts), but the projection never
+    // surfaced it, so the link was invisible everywhere (RC-P1-09).
+    ...(task.retryOfTaskId ? { retryOfTaskId: task.retryOfTaskId } : {}),
+    // The conversation is gone; `conversationId` was withheld upstream so no
+    // dead exit is offered (RC-P1-14, decision (c)).
+    ...(task.conversationUnavailable ? { conversationUnavailable: true } : {}),
     ...(rendererSafeIdentifier(task.agentId) ? { agentId: rendererSafeIdentifier(task.agentId) } : {}),
+    // Card identity (RC-P0-13). Empty when the caller has no session context
+    // to order against — a single-task reply cannot know its own ordinal.
+    ...identity,
     ...(task.skillVersionPinStatus ? { skillVersionPinStatus: task.skillVersionPinStatus } : {}),
-    actions: taskActions(task, hasWorkflowStep),
+    actions: taskActions(task),
   };
 }
 
@@ -474,7 +637,7 @@ function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskI
 function normalizeActionInput(payload: unknown): { action: CogSeedRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
   const raw = asObject(payload);
   const action = boundedString(raw.action, 'action', 20) as CogSeedRendererTaskAction;
-  if (!['retry', 'skip', 'resume', 'abort'].includes(action)) throw new Error('invalid CogSeed task action');
+  if (!['retry', 'resume', 'abort'].includes(action)) throw new Error('invalid CogSeed task action');
   const taskId = raw.taskId === undefined ? undefined : assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
   const requestId = raw.requestId === undefined ? undefined : assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const reason = boundedString(raw.reason, 'reason', 500, false);
@@ -503,9 +666,71 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
   const abortGroupChat = deps.abortGroupChat ?? (async (userId, conversationId) => (await import('../group_chat')).abort(userId, conversationId));
   const retryGroupChat = deps.retryGroupChat ?? (async (input) => (await import('../group_chat')).retryFailedTurn(input));
 
-  const visibleDashboardTasks = async (userId: string, tasks: CogSeedTaskRecord[]): Promise<CogSeedTaskRecord[]> => {
+  // One Run Center refresh fires `cogseed.task.list` and `cogseed.session.list`
+  // concurrently, and each used to trigger its own full directory scan. Sharing
+  // the in-flight promise collapses them into one scan with zero staleness —
+  // both projections then also describe the exact same snapshot, which the two
+  // independent scans did not guarantee. The entry is dropped as soon as the
+  // scan settles, so nothing is ever served from a cache (RC-P1-15).
+  const inFlightTaskScans = new Map<string, Promise<CogSeedTaskRecord[]>>();
+  const scanTasks = (userId: string): Promise<CogSeedTaskRecord[]> => {
+    const pending = inFlightTaskScans.get(userId);
+    if (pending) return pending;
+    const scan = listTasks(userId);
+    inFlightTaskScans.set(userId, scan);
+    void scan.catch(() => undefined).then(() => {
+      if (inFlightTaskScans.get(userId) === scan) inFlightTaskScans.delete(userId);
+    });
+    return scan;
+  };
+
+  // Retention window for the two dashboard list views. Detail views
+  // deliberately do NOT apply it: a task that has aged off the board must still
+  // be reachable through its session (spec §12 / RC-P1-15).
+  const dashboardWindow = (): ListCogSeedTasksOptions => ({
+    limit: DASHBOARD_TASK_LIMIT,
+    since: new Date(Date.now() - DASHBOARD_TASK_WINDOW_DAYS * 86_400_000).toISOString(),
+  });
+  /**
+   * Dashboard task list plus how many records the retention window elided.
+   *
+   * That count is the only honest way to tell "you have no tasks" apart from
+   * "your tasks are older than the board's window" — from `tasks: []` alone the
+   * two are indistinguishable, and showing "No tasks" to someone who has a
+   * hundred is the misleading empty state D5 describes. It is derived from data
+   * already in hand (the same scan, before and after windowing), so it costs
+   * nothing extra.
+   *
+   * Deliberately counts *only* retention. Tasks dropped because their
+   * conversation is gone are a different thing and must not be advertised as
+   * "hidden history the user could go find".
+   */
+  const listDashboardTasks = async (userId: string): Promise<{ tasks: CogSeedTaskRecord[]; retentionHiddenCount: number }> => {
+    const scanned = await scanTasks(userId);
+    const tasks = applyCogSeedTaskWindow(scanned, dashboardWindow());
+    return { tasks, retentionHiddenCount: Math.max(0, scanned.length - tasks.length) };
+  };
+
+  /**
+   * Resolve what a deleted conversation means for the tasks that reference it
+   * (RC-P1-14, decision (c)). The two execution kinds are treated differently
+   * on purpose:
+   *
+   * - **group-chat** — the shadow task is a *projection* of the conversation
+   *   and carries no independent meaning once it is gone, so it is dropped
+   *   from the board entirely. RC-P1-14 also deletes it from disk; this filter
+   *   is what keeps a failed (best-effort) purge from resurrecting ghosts.
+   * - **local-cli / cogseed-native** — `interactive-turn.ts` creates these for
+   *   per-agent follow-up turns, carrying the same `conversationId`. They are
+   *   independent agent-run history and are deliberately NOT deleted, so
+   *   hiding them would throw away records we just chose to keep. They stay
+   *   visible; what goes away is the dead exit — `conversationId` is withheld
+   *   so no Open Conversation button is offered, and `conversationUnavailable`
+   *   lets the UI say why.
+   */
+  const visibleDashboardTasks = async (userId: string, tasks: CogSeedTaskRecord[]): Promise<DashboardTaskRecord[]> => {
     const conversationIds = Array.from(new Set(tasks
-      .filter((task) => task.executionKind === 'group-chat' && task.conversationId)
+      .filter((task) => task.conversationId)
       .map((task) => task.conversationId!)));
     if (!conversationIds.length) return tasks;
     const availability = await Promise.all(conversationIds.map(async (conversationId) => [
@@ -513,7 +738,14 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       await isConversationAvailable(userId, conversationId),
     ] as const));
     const available = new Set(availability.filter(([, exists]) => exists).map(([conversationId]) => conversationId));
-    return tasks.filter((task) => task.executionKind !== 'group-chat' || !task.conversationId || available.has(task.conversationId));
+    const visible: DashboardTaskRecord[] = [];
+    for (const task of tasks) {
+      if (!task.conversationId || available.has(task.conversationId)) { visible.push(task); continue; }
+      if (task.executionKind === 'group-chat') continue;
+      const { conversationId: _gone, ...rest } = task;
+      visible.push({ ...rest, conversationUnavailable: true } as DashboardTaskRecord);
+    }
+    return visible;
   };
 
   return {
@@ -624,8 +856,8 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
 
     async boardProjection(userId: string): Promise<CogSeedRendererBoardProjection> {
       assertCogSeedUserId(userId);
-      const [sessions, allTasks] = await Promise.all([listSessions(userId), listTasks(userId)]);
-      const tasks = await visibleDashboardTasks(userId, allTasks);
+      const [sessions, dashboard] = await Promise.all([listSessions(userId), listDashboardTasks(userId)]);
+      const tasks = await visibleDashboardTasks(userId, dashboard.tasks);
       const sessionById = new Map(sessions.map((session) => [session.sessionId, session]));
       const taskById = new Map(tasks.map((task) => [task.taskId, task]));
       const tasksBySession = new Map<string, CogSeedTaskRecord[]>();
@@ -652,26 +884,30 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         const session = sessionById.get(task.sessionId);
         const groupId = groupIdForTask(task);
         const sessionTitle = rendererSessionTitle(tasksBySession.get(task.sessionId) ?? [task]);
+        // Identity must resolve the conversation exactly as the summary below
+        // does. Reading `task.conversationId` alone would omit the short id on
+        // a task that inherits its conversation from the session — the board
+        // would then offer an Open Task exit for a conversation the identity
+        // claims not to know.
+        // Never fall back to the session's conversation for a task whose own
+        // conversation was withheld — that would hand back the dead exit that
+        // `visibleDashboardTasks` just removed.
+        const conversationId = task.conversationUnavailable
+          ? undefined
+          : (task.conversationId || session?.conversationId);
+        const identity = cogSeedTaskIdentity(
+          { ...task, ...(conversationId ? { conversationId } : {}) },
+          tasksBySession.get(task.sessionId) ?? [task],
+        );
         return {
-          ...taskSummary(task),
+          ...taskSummary(task, identity),
           column: cogSeedRendererBoardColumn(task.status),
           sessionTitle: sessionTitle.title,
           sessionTitleKey: sessionTitle.titleKey,
           ...(groupId ? { groupId } : {}),
-          ...(task.conversationId || session?.conversationId
-            ? { conversationId: task.conversationId || session?.conversationId }
-            : {}),
+          ...(conversationId ? { conversationId } : {}),
         };
       });
-      const counts: Record<CogSeedRendererBoardColumn, number> = {
-        pending: 0,
-        running: 0,
-        attention: 0,
-        completed: 0,
-        archived: 0,
-      };
-      for (const task of boardTasks) counts[task.column] += 1;
-
       const groupIds = Array.from(new Set(tasks.map(groupIdForTask).filter((id): id is string => !!id)));
       const groups: CogSeedRendererBoardGroup[] = groupIds.map((groupId) => {
         const members = tasks.filter((task) => groupIdForTask(task) === groupId);
@@ -693,15 +929,15 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         ...(boardTasks[0]?.updatedAt ? { updatedAt: boardTasks.map((task) => task.updatedAt).sort().at(-1) } : {}),
         tasks: boardTasks,
         groups,
-        counts,
+        retentionHiddenCount: dashboard.retentionHiddenCount,
       };
     },
 
 
     async sessionListProjection(userId: string): Promise<CogSeedRendererSessionSummary[]> {
       assertCogSeedUserId(userId);
-      const [sessions, allTasks] = await Promise.all([listSessions(userId), listTasks(userId)]);
-      const tasks = await visibleDashboardTasks(userId, allTasks);
+      const [sessions, dashboard] = await Promise.all([listSessions(userId), listDashboardTasks(userId)]);
+      const tasks = await visibleDashboardTasks(userId, dashboard.tasks);
       return sessions
         .map((session) => ({ session, tasks: tasks.filter((task) => task.sessionId === session.sessionId) }))
         .filter((entry) => entry.tasks.length > 0)
@@ -716,11 +952,26 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       const resolvedSessionId = sessionId || requestedTask?.sessionId;
       const session = resolvedSessionId ? await readSession(userId, assertCogSeedSessionId(resolvedSessionId)) : null;
       if (!session) return { session: null, collaboration: null };
-      if (session.conversationId && !await isConversationAvailable(userId, session.conversationId)) {
+      // Unwindowed on purpose: an aged-out task must stay reachable here.
+      const tasks = await visibleDashboardTasks(userId, await scanTasks(userId));
+      const directTasks = tasks.filter((task) => task.sessionId === session.sessionId);
+      // A deleted conversation only hides the session when nothing survived it.
+      //
+      // This used to bail on the deleted conversation alone, which was correct
+      // while every task in such a session was a group-chat shadow record.
+      // Decision (c) changed that: `local-cli` / `cogseed-native` tasks survive
+      // a conversation deletion on purpose and the board keeps showing them,
+      // but this early return still blanked their detail — a card the user
+      // could see could not be opened (found by RC-T04).
+      //
+      // `directTasks` is the discriminator, not emptiness on its own: a session
+      // with no tasks *yet* must still project its summary, which is what a
+      // bare `!directTasks.length` guard broke.
+      if (session.conversationId
+        && !directTasks.length
+        && !await isConversationAvailable(userId, session.conversationId)) {
         return { session: null, collaboration: null };
       }
-      const tasks = await visibleDashboardTasks(userId, await listTasks(userId));
-      const directTasks = tasks.filter((task) => task.sessionId === session.sessionId);
       const collaboration = directTasks.length
         ? await this.collaborationSnapshot(userId, taskId ? { taskId } : { sessionId: session.sessionId })
         : null;
@@ -730,11 +981,20 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
     async collaborationSnapshot(userId: string, payload: unknown): Promise<CogSeedRendererCollaborationSnapshot> {
       assertCogSeedUserId(userId);
       const input = normalizeProjectionInput(payload);
-      const allTasks = await visibleDashboardTasks(userId, await listTasks(userId));
-      let selected = input.taskId ? await readTask(userId, input.taskId) : null;
-      if (selected?.executionKind === 'group-chat' && selected.conversationId
-        && !await isConversationAvailable(userId, selected.conversationId)) {
-        throw new Error('Group Chat conversation is unavailable');
+      // Unwindowed on purpose: see sessionProjection.
+      const allTasks = await visibleDashboardTasks(userId, await scanTasks(userId));
+      // `readTask` bypasses `visibleDashboardTasks`, so the selected record has
+      // to be run through the same conversation resolution — otherwise the
+      // detail pane keeps offering the dead exit the board just dropped
+      // (RC-P1-14, decision (c)).
+      let selected: DashboardTaskRecord | null = input.taskId
+        ? (await visibleDashboardTasks(userId, [await readTask(userId, input.taskId)].filter(Boolean) as CogSeedTaskRecord[]))[0] ?? null
+        : null;
+      if (input.taskId && !selected) {
+        // Only a group-chat task can be filtered away outright, and only
+        // because its conversation is gone.
+        const raw = await readTask(userId, input.taskId);
+        if (raw) throw new Error('Group Chat conversation is unavailable');
       }
       if (!selected && input.sessionId) {
         selected = [...allTasks].filter((task) => task.sessionId === input.sessionId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null;
@@ -743,8 +1003,8 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       const session = await readSession(userId, selected.sessionId);
       if (!session) throw new Error('CogSeed session not found');
 
-      const related: CogSeedTaskRecord[] = [];
-      const visit = (task: CogSeedTaskRecord) => {
+      const related: DashboardTaskRecord[] = [];
+      const visit = (task: DashboardTaskRecord) => {
         if (related.some((item) => item.taskId === task.taskId)) return;
         related.push(task);
         for (const child of allTasks.filter((candidate) => candidate.parentTaskId === task.taskId)) visit(child);
@@ -795,8 +1055,20 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
           : workflowRun && scope ? readWorkflowEvents(scope, 0, 200) : Promise.resolve([]),
         listSessions(userId),
       ]);
-      const workflowStepIds = new Set(workflowRun?.steps.map((step) => step.result_ref).filter(Boolean) ?? []);
-      const tasks = related.map((task) => taskSummary(task, workflowStepIds.has(task.taskId)));
+      // Ordinals are computed against the *whole* session, not `related` —
+      // `related` is the selected run's subtree, so ordering against it would
+      // make every run "Run 1" (RC-P0-13).
+      const identityScope = (sessionId: string): CogSeedTaskRecord[] => allTasks.filter((task) => task.sessionId === sessionId);
+      // Same conversation resolution as `boardProjection`, so a task's identity
+      // reads identically on both screens.
+      const identityFor = (task: CogSeedTaskRecord): CogSeedTaskIdentity => {
+        const conversationId = task.conversationId || session.conversationId;
+        return cogSeedTaskIdentity(
+          { ...task, ...(conversationId ? { conversationId } : {}) },
+          identityScope(task.sessionId),
+        );
+      };
+      const tasks = related.map((task) => taskSummary(task, identityFor(task)));
       const directSessionTasks = allTasks.filter((task) => task.sessionId === session.sessionId);
       const sessionView = sessionSummary(session, directSessionTasks);
       const eventLists = await Promise.all(related.map((task) => readEvents(userId, task.taskId, 0, 200)));
@@ -900,7 +1172,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       const reviews: CogSeedRendererReviewSummary[] = (workflowContext?.gates ?? []).map((gate) => ({
         gateId: gate.id,
         stepId: gate.step_id,
-        name: 'Review gate',
+        nameKey: 'run_center.review_gate',
         status: gate.status,
         ...(gate.review_decision ? { reviewDecision: gate.review_decision } : {}),
         ...(rendererSafeIdentifier(gate.reviewed_by) ? { reviewedBy: rendererSafeIdentifier(gate.reviewed_by) } : {}),
@@ -923,14 +1195,13 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         ...(event.gate_id ? { gateId: event.gate_id } : {}),
         createdAt: event.created_at,
       }));
-      const hasSelectedWorkflowStep = workflow.steps.some((step) => step.stepId === selected.taskId);
-      const primaryActions = taskActions(selected, hasSelectedWorkflowStep);
+      const primaryActions = taskActions(selected);
       return {
         schemaVersion: 1,
         sessionId: session.sessionId,
         updatedAt: [selected.updatedAt, ...related.map((task) => task.updatedAt), session.updatedAt].sort().at(-1) ?? session.updatedAt,
         session: sessionView,
-        task: taskSummary(selected, hasSelectedWorkflowStep),
+        task: taskSummary(selected, identityFor(selected)),
         actors,
         tasks,
         workflow,
@@ -951,7 +1222,6 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       assertCogSeedUserId(userId);
       const input = normalizeActionInput(payload);
       if (!input.taskId) throw new Error('taskId required');
-      if (input.action === 'skip') throw new Error('CogSeed workflow skip requires a workflow step scope');
       const task = await readTask(userId, input.taskId);
       if (!task) throw new Error('CogSeed task not found');
       if (task.executionKind === 'group-chat') {
@@ -967,6 +1237,9 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
             failedMessageId: task.groupChatMessageId,
             visibleText: input.reason || t('dashboard.retry_user_message'),
             requestId: input.requestId,
+            // Links the run this starts back to the task being retried, so the
+            // board can show them as two attempts at one job (RC-P1-09).
+            retryOfCogSeedTaskId: task.taskId,
           });
           if (!retried.ok) throw new Error(retried.error || 'Group Chat retry failed');
         } else {

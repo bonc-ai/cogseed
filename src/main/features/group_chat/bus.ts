@@ -1957,6 +1957,12 @@ export interface EnqueueParams {
   failure_code?: string;
   /** Durable host action id used to make retry/continuation enqueue idempotent. */
   actionRequestId?: string;
+  /**
+   * Set when this enqueue is a Run Center retry of a failed turn. Carried only
+   * so the observed-run projection can link the new parent task to the failed
+   * one (RC-P1-09); Group Chat execution itself never reads it.
+   */
+  retryOfCogSeedTaskId?: string;
   model_text?: string;
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
@@ -2659,6 +2665,7 @@ async function _enqueueBody(
         conversationId: cid,
         runId: state.taskRun.runId,
         sourceMessageId: msg.id,
+        ...(params.retryOfCogSeedTaskId ? { retryOfTaskId: params.retryOfCogSeedTaskId } : {}),
       });
       if (observed) state.taskRun.cogseedTaskId = observed.taskId;
     }

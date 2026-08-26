@@ -44,8 +44,18 @@ describe('CogSeed worker recovery', () => {
     await lifecycle.transitionCogSeedTask(USER, running.taskId, 'running');
 
     const projected: any[] = [];
+    // Startup recovery only reclaims tasks left behind by a *previous* process
+    // (`updatedAt < processStartedAt`), so a task created moments ago inside
+    // this test is deliberately protected. Push the boundary forward to stage
+    // "these were on disk before we booted".
+    //
+    // The boundary must be in `nowIso()`'s format — local, second precision, no
+    // timezone. A `toISOString()` value is UTC and sorts wrongly against task
+    // timestamps under a negative offset, which would silently disable the
+    // guard while leaving this test green.
     const report = await recovery.recoverCogSeedTasks(USER, {
       projectTaskEvent: vi.fn(async (input) => { projected.push(input); }),
+      processStartedAt: '2099-01-01T00:00:00',
     } as any);
 
     expect(report).toMatchObject({ recoveredCount: 2, dispatchedCount: 0 });

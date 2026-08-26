@@ -27048,7 +27048,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .run-center-detail dd { margin: 0; color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .run-center-detail-actions { flex-wrap: wrap; margin-top: 18px; }
 .dashboard-board-scroll { min-height: 0; }
-.dashboard-board-columns { display: grid; grid-template-columns: repeat(4, minmax(190px, 1fr)); gap: 10px; min-width: 820px; }
+.dashboard-board-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
 .dashboard-board-scroll { overflow-x: auto; padding-bottom: 5px; }
 .dashboard-board-column { min-height: 250px; border: 1px solid var(--border); background: var(--surface); }
 .dashboard-board-column > header { justify-content: space-between; min-height: 38px; padding: 0 10px; border-bottom: 1px solid var(--border); gap: 7px; }
@@ -27063,6 +27063,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard-board-card-meta { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }.dashboard-board-card-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-board-group { display: grid; gap: 5px; font-size: 11px; }.dashboard-board-group > span:first-child { display: flex; justify-content: space-between; color: var(--text-2); }.dashboard-board-progress { display: block; height: 4px; overflow: hidden; background: color-mix(in srgb, var(--muted) 16%, transparent); }.dashboard-board-progress i { display: block; height: 100%; background: var(--primary); }.dashboard-board-group small { color: var(--danger); }
 .dashboard-board-column-empty { padding: 16px 6px; color: var(--muted); text-align: center; font-size: 12px; }
+/* A turn whose parent run is no longer in the projection still renders, as its
+   own root, with this marker instead of silently disappearing (RC-P2-20). */
+.run-center-tree-orphan { color: var(--muted); font-size: 11px; }
+/* RC-P1-18 — fields the backend already computed, now actually shown. */
+.run-center-reviews, .run-center-conflicts { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.run-center-reviews > li, .run-center-conflicts > li { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--border); background: var(--surface); }
+.run-center-reviews > li > div, .run-center-conflicts > li > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.run-center-reviews small, .run-center-conflicts small, .run-center-reviews time, .run-center-conflicts time { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.run-center-session-recovery { color: var(--primary); font-size: 11px; }
+.run-center-event-error { color: var(--danger); font-size: 11px; }
 .dashboard-board-archive { margin-top: 14px; }.dashboard-board-archive > button { display: flex; align-items: center; gap: 7px; min-height: 30px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }.dashboard-board-archive > button b { color: var(--muted); }.dashboard-board-archive-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 8px; }
 @media (max-width: 1050px) { .run-center-layout { grid-template-columns: minmax(180px, 0.72fr) minmax(360px, 2fr); }.run-center-details { grid-column: 1 / -1; border-top: 1px solid var(--border); border-left: 0; max-height: 210px; }.run-center-detail dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 720px) { .run-center-shell { padding: 15px; }.run-center-header { align-items: flex-start; }.run-center-tools { align-items: stretch; }.run-center-tools input { width: 100%; }.run-center-layout { grid-template-columns: 1fr; overflow: auto; }.run-center-sessions { max-height: 210px; border-right: 0; border-bottom: 1px solid var(--border); }.run-center-main { min-height: 360px; }.run-center-details { grid-column: auto; }.run-center-timeline li { grid-template-columns: 1fr; gap: 3px; }.run-center-actors li { grid-template-columns: 1fr; align-items: start; }.run-center-detail dl { grid-template-columns: 1fr; } }
