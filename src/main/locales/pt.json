@@ -218,6 +218,8 @@
   "expense_agent.submit.unavailable": "Não foi possível mostrar a confirmação; nada foi enviado.",
   "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu.",
   "cogseed.runtime_failed": "O agente não conseguiu concluir esta resposta. Tente novamente.",
+  "messaging.wake_card.noop_title": "Sem efeito",
+  "messaging.wake_card.noop_detail": "Esta solicitação de ativação não está mais pendente de aprovação (pode já estar aprovada e em execução); este clique não alterou nada.",
   "messaging.direct_chat": "Conversa direta",
   "messaging.new_session_confirmation": "Nova conversa iniciada. O que você gostaria que eu resolva em seguida?",
   "messaging.approval.approve": "Permitido",
