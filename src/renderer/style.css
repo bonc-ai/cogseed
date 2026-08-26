@@ -26871,6 +26871,60 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-badge-stuck { background: rgba(212, 160, 23, 0.16); color: #a07c10; }
 .dash-badge-run { background: rgba(16, 122, 87, 0.12); color: #107a57; }
 
+/* ── 名册卡片：默认极简（名+徽章+累计调用），展开才干活 ── */
+.dash-section-toggle {
+  appearance: none; background: none; border: none; padding: 0;
+  cursor: pointer; display: flex; align-items: center; gap: 6px;
+}
+.dash-section-toggle h3 { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.05em; }
+.dash-section-toggle::before {
+  content: '▾'; color: var(--muted); font-size: 10px;
+  transition: transform 0.12s ease;
+}
+.dash-section-toggle.is-collapsed::before { transform: rotate(-90deg); }
+.dash-roster-body { display: flex; flex-direction: column; gap: 6px; }
+.dash-roster-body.is-collapsed { display: none; }
+.dash-roster-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.dash-roster-name { font-weight: 600; color: var(--text); flex-shrink: 0; }
+.dash-roster-sub { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-roster-calls { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.dash-roster-spacer { flex: 1; }
+.dash-roster-agents { display: flex; flex-direction: column; gap: 6px; }
+.dash-roster-agent {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.dash-roster-agent > summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0;
+  cursor: pointer;
+  list-style: none;
+}
+.dash-roster-agent > summary::-webkit-details-marker { display: none; }
+.dash-roster-agent[open] > summary { border-bottom: 1px solid var(--border); }
+.dash-roster-agent-detail {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 0;
+}
+.dash-model-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.dash-model-row input {
+  min-width: 180px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg, transparent);
+  color: var(--text);
+}
+
 .dash-section { margin-bottom: 28px; }
 .dash-section-head {
   display: flex;

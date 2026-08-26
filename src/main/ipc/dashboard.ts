@@ -10,7 +10,9 @@ import type { UsageDimension } from '../features/usage_ledger';
 import { agentHealthFromTasks, nonTerminalStatuses } from '../features/dashboard_health';
 import { listCogSeedTasks } from '../features/cogseed_backend/task-store';
 import { listExternalGateways } from '../features/p3394_bridge/external-gateways';
+import { detectAll } from '../features/local_agents/registry.js';
 import { listRemoteNodes } from '../features/p3394_bridge/remote-nodes';
+import { listP3394Peers } from '../features/p3394_bridge/app-wiring';
 import { listAgents } from '../features/agents';
 import { listInstances } from '../features/messaging/manager';
 
@@ -42,17 +44,31 @@ export const invokeHandlers: Record<string, Handler> = {
   },
 
   // One round-trip for the overview home: health (from the task ledger),
-  // in-flight tasks, and the roster (gateways / remote nodes / agents /
+  // in-flight tasks, and the roster (external CLI / remote nodes / agents /
   // channel instances). The renderer keeps its per-source detail calls for
   // interactions; this snapshot is the page's first paint.
   'dashboard.overview.snapshot': async (_payload, ctx) => {
-    const [tasks, gateways, remote, agents, instances] = await Promise.all([
+    const [tasks, entries, gateways, remote, agents, instances] = await Promise.all([
       listCogSeedTasks(ctx.userId),
+      detectAll().catch(() => []),
       Promise.resolve(listExternalGateways()).catch(() => []),
       Promise.resolve(listRemoteNodes()).catch(() => []),
       listAgents().catch(() => []),
       listInstances(ctx.userId).catch(() => []),
     ]);
+    // Same roster assembly as p3394.external.list: bound-agent markers from
+    // agent runtimes + the P3394 peer registry (online/disabled state).
+    let bound: Record<string, string[]> = {};
+    try {
+      bound = {};
+      for (const agent of agents) {
+        const rt = agent.runtime as { kind?: string; cli?: string } | undefined;
+        if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
+          (bound[rt.cli] ??= []).push(agent.name || rt.cli);
+        }
+      }
+    } catch { /* best effort */ }
+    const peers = listP3394Peers();
     const running = tasks
       .filter((t) => nonTerminalStatuses.has(t.status))
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
@@ -68,7 +84,12 @@ export const invokeHandlers: Record<string, Handler> = {
     return {
       health: agentHealthFromTasks(tasks),
       runningTasks: running,
-      roster: { gateways, remote, agents, instances },
+      roster: {
+        external: { entries, gateways, bound, peers },
+        remote,
+        agents,
+        instances,
+      },
     };
   },
 };
