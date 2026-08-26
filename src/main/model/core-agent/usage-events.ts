@@ -27,6 +27,8 @@ export interface ModelUsageEvent {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   totalTokens?: number;
+  /** First-token latency in ms relative to turn start; omitted when unrecorded. */
+  firstTokenMs?: number;
   durationMs: number;
   status: 'completed' | 'error' | 'aborted' | 'idle_timeout' | 'empty';
 }

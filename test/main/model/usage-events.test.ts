@@ -42,6 +42,13 @@ describe('model usage event channel', () => {
     expect(received).toEqual([sampleEvent]);
   });
 
+  it('forwards firstTokenMs when provided', () => {
+    const seen: any[] = [];
+    setModelUsageSink((e) => seen.push(e));
+    emitModelUsage({ at: 1, durationMs: 10, status: 'completed', firstTokenMs: 4400 });
+    expect(seen[0].firstTokenMs).toBe(4400);
+  });
+
   it('swallows sink errors so usage logging never breaks the model call', () => {
     const boom = vi.fn(() => { throw new Error('disk full'); });
     setModelUsageSink(boom);
