@@ -2,7 +2,6 @@ import { Mutex } from 'async-mutex';
 
 import { nowIso, readJson, safeId, writeJson } from '../../storage';
 import { userMessagingBindingsFile } from '../../paths';
-import { t } from '../../i18n';
 import * as chats from '../chats';
 import * as spaces from '../spaces';
 import type { InboundEnvelope, MessagingBinding, MessagingBindingsFile, MessagingInstance } from './types';
@@ -91,7 +90,6 @@ function normalizeBinding(key: string, value: unknown): MessagingBinding | null 
     externalChatId,
     ...(externalUserId ? { externalUserId } : {}),
     ...(boundedOptionalText(item.externalChatTitle, 240) ? { externalChatTitle: boundedOptionalText(item.externalChatTitle, 240) } : {}),
-    ...(boundedOptionalText(item.externalUserName, 240) ? { externalUserName: boundedOptionalText(item.externalUserName, 240) } : {}),
     cid: item.cid,
     ...(typeof item.spaceId === 'string' && safeId(item.spaceId) ? { spaceId: item.spaceId } : {}),
     ...(typeof item.projectId === 'string' && safeId(item.projectId) ? { projectId: item.projectId } : {}),
@@ -139,7 +137,6 @@ function refreshBinding(binding: MessagingBinding, envelope: InboundEnvelope): M
     externalChatId: envelope.externalChatId,
     ...(envelope.externalUserId ? { externalUserId: envelope.externalUserId } : {}),
     ...(envelope.externalChatTitle ? { externalChatTitle: envelope.externalChatTitle.slice(0, 240) } : {}),
-    ...(envelope.externalUserName ? { externalUserName: envelope.externalUserName.slice(0, 240) } : {}),
     ...replyContextFromEnvelope(envelope),
     updatedAt: nowIso(),
   };
@@ -148,63 +145,6 @@ function refreshBinding(binding: MessagingBinding, envelope: InboundEnvelope): M
   if (envelope.replyInThread !== true) delete next.replyInThread;
   if (!envelope.contextTokenRef) delete next.contextTokenRef;
   return next;
-}
-
-/** Human-facing conversation title for a messaging binding. Direct chats
- *  label with the peer's display name (Feishu p2p carries no chat title, so
- *  the sender's resolved name is the only human-readable handle); group
- *  chats keep chat title + sender. Never leaks the raw external chat id
- *  (oc_…/ou_…) as the user-visible label. */
-export function conversationTitleForEnvelope(
-  instance: MessagingInstance,
-  envelope: InboundEnvelope,
-): string {
-  const conversationScope = scopeForEnvelope(envelope);
-  const chatLabel = conversationScope === 'group_sender'
-    ? (envelope.externalChatTitle?.trim() || envelope.externalChatId)
-    : (envelope.externalChatTitle?.trim() || envelope.externalUserName?.trim() || t('messaging.direct_chat'));
-  const senderLabel = conversationScope === 'group_sender'
-    ? (envelope.externalUserName?.trim() || envelope.externalUserId)
-    : '';
-  return [instance.displayName, chatLabel, senderLabel].filter(Boolean).join(' · ').slice(0, 120);
-}
-
-/** One-time upgrade for conversations whose title still shows the raw
- *  external chat id (created before name enrichment reached the title
- *  builder), or the name-less fallback form once a name becomes available.
- *  Manual renames always win; anything else re-derives the title from the
- *  enriched envelope. Best-effort: a failed read/write never blocks the
- *  inbound dispatch that called it. */
-async function upgradeIdTitle(
-  uid: string,
-  instance: MessagingInstance,
-  binding: MessagingBinding,
-  envelope: InboundEnvelope,
-): Promise<void> {
-  try {
-    if (!binding.externalChatId) return;
-    const hasName = !!(envelope.externalUserName?.trim() || binding.externalUserName?.trim());
-    if (!hasName) return;
-    const conversation = await chats.getConversation(uid, binding.cid);
-    if (!conversation || conversation.title_manually_set === true) return;
-    const title = conversation.title || '';
-    // Only rewrite titles that still embed the raw id or the name-less
-    // fallback — enriched ones ("飞书 · 张三") and user renames stay.
-    const idForm = title.includes(binding.externalChatId);
-    const fallbackForm = binding.conversationScope !== 'group_sender'
-      && title.endsWith(`· ${t('messaging.direct_chat')}`);
-    if (!idForm && !fallbackForm) return;
-    const labelEnvelope: InboundEnvelope = {
-      ...envelope,
-      externalChatTitle: envelope.externalChatTitle || binding.externalChatTitle,
-      externalUserName: envelope.externalUserName || binding.externalUserName,
-    };
-    const nextTitle = conversationTitleForEnvelope(instance, labelEnvelope);
-    if (!nextTitle || nextTitle === title) return;
-    await chats.updateConversation(uid, binding.cid, { title: nextTitle });
-  } catch {
-    // Title upgrade is cosmetic; never let it break message delivery.
-  }
 }
 
 async function spaceForWorkspace(uid: string, instance: MessagingInstance): Promise<string | undefined> {
@@ -264,7 +204,6 @@ export async function resolveOrCreateBinding(
       const refreshed = refreshBinding(existing, envelope);
       data.bindings[key] = refreshed;
       await writeBindings(uid, data);
-      await upgradeIdTitle(uid, instance, refreshed, envelope);
       return { ...refreshed };
     }
     if (existing) delete data.bindings[key];
@@ -289,11 +228,14 @@ export async function resolveOrCreateBinding(
       if (legacy && legacy.conversationScope === 'legacy') delete data.bindings[oldKey];
     }
 
-    const title = conversationTitleForEnvelope(instance, envelope);
+    const chatLabel = envelope.externalChatTitle?.trim() || envelope.externalChatId;
+    const senderLabel = conversationScope === 'group_sender'
+      ? (envelope.externalUserName?.trim() || envelope.externalUserId)
+      : '';
+    const title = [instance.displayName, chatLabel, senderLabel].filter(Boolean).join(' · ').slice(0, 120);
     const conversation = await chats.createConversation(uid, {
       title,
       ...(spaceId ? { spaceId } : {}),
-      channelPlatform: instance.platform,
     });
     const now = nowIso();
     const binding: MessagingBinding = {
@@ -303,7 +245,6 @@ export async function resolveOrCreateBinding(
       externalChatId: envelope.externalChatId,
       ...(envelope.externalUserId ? { externalUserId: envelope.externalUserId } : {}),
       ...(envelope.externalChatTitle ? { externalChatTitle: envelope.externalChatTitle.slice(0, 240) } : {}),
-      ...(envelope.externalUserName ? { externalUserName: envelope.externalUserName.slice(0, 240) } : {}),
       cid: conversation.conversation_id,
       ...(spaceId ? { spaceId } : {}),
       ...replyContextFromEnvelope(envelope),

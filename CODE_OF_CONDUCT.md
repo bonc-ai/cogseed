@@ -53,7 +53,7 @@ an individual is officially representing the community in public spaces.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at:
 
-**business@bonc.com.cn**
+**security@bonc.com.cn**
 
 All complaints will be reviewed and investigated promptly and fairly.
 

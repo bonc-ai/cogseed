@@ -419,7 +419,6 @@ export function mapClaudeEvent(
             callId: String(part.tool_use_id || ''),
             phase: 'result',
             output: out,
-            ...(part.is_error === true ? { isError: true } : {}),
           },
         };
       }

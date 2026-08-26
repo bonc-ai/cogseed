@@ -19,7 +19,6 @@ import {
 } from '../../util/project-layout';
 import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, nowIso, safeId } from '../../storage';
 import { createLogger } from '../../logger';
-import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { t } from '../../i18n';
 import { logErrorRef } from '../../util/log-redact';
 
@@ -450,9 +449,6 @@ export interface SendInput {
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   recipient_agent_id?: string;
   recipient_origin?: 'user_selection' | 'cli_fallback';
-  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随消息贯穿派发；
-   * 不传时行为与既往完全一致。 */
-  p3394_envelope?: P3394Envelope;
 }
 
 type ValidatedUserRoute = NonNullable<Parameters<typeof enqueue>[0]['userRoute']>;
@@ -733,7 +729,7 @@ async function _resolveMessageReferences(
 export async function send(
   input: SendInput,
 ): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
-  const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card, p3394_envelope } = input;
+  const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
   let userRoute: ValidatedUserRoute | null = null;
@@ -777,7 +773,6 @@ export async function send(
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
       ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
-      ...(p3394_envelope ? { p3394_envelope } : {}),
     });
     // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
     // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。

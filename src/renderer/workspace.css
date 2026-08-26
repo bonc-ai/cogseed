@@ -98,7 +98,6 @@
 .ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
 
-
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
 .ws-more-menu {
@@ -228,8 +227,6 @@
 .ws-artifact-card > em { position: absolute; top: 12px; right: 12px; padding: 3px 6px; border-radius: 5px; color: #547264; background: #edf4f0; font-size: 9px; font-style: normal; }
 .ws-artifact-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 11px; padding-top: 8px; border-top: 1px solid #edf1ef; color: #7f8a83; font-size: 9px; }
 .ws-artifact-card footer button { color: #177d4d; font-size: 10px; }
-/* COGSEED-18：导入产物无「来自」按钮，「打开」仍固定右对齐——与对话产物卡片位置一致 */
-.ws-artifact-card footer [data-ws="open-artifact"] { margin-left: auto; }
 /* 候选产物（AI 产出待确认）：灰显 + 强调确认按钮 */
 .ws-artifact-card.is-candidate { opacity: .72; background: #fbfcfb; }
 .ws-artifact-card.is-candidate:hover { opacity: 1; }
@@ -588,20 +585,3 @@
   .ws-space-grid, .ws-template-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .ws-task-page { grid-template-columns: minmax(480px,1fr) 290px; }
 }
-
-/* COGSEED-18：本地文件夹选择行——与表单输入控件同构（40px 高、同款边框圆角），
-   融合进 ws-form-grid，避免割裂感。 */
-.ws-import-picker {
-  display: flex; align-items: center; gap: 8px; width: 100%; height: 40px;
-  padding: 0 10px; border: 1px solid var(--ws-line-strong); border-radius: 8px;
-  background: #fff; cursor: pointer; outline: none;
-}
-.ws-import-picker:hover { border-color: #6fb18c; }
-.ws-import-picker:focus-visible { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
-.ws-import-icon { flex: 0 0 auto; display: grid; place-items: center; color: #8a938e; }
-.ws-import-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #3d4a42; font-size: 12px; }
-.ws-import-name.is-empty { color: #9aa39e; }
-.ws-import-pick, .ws-import-change { flex: 0 0 auto; font-size: 11px; color: #176f45; }
-.ws-import-clear { flex: 0 0 auto; display: grid; place-items: center; width: 20px; height: 20px; border: none; border-radius: 5px; background: none; color: #9aa39e; cursor: pointer; }
-.ws-import-clear:hover { background: var(--ws-soft); color: #46534b; }
-.ws-import-progress { margin-top: 6px; font-size: 11px; color: #176f45; }

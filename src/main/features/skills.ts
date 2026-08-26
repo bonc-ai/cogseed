@@ -1006,64 +1006,6 @@ async function _overlaySkillSecurity(list: SkillListing[]): Promise<SkillListing
   });
 }
 
-/** 外部技能目录（~/.claude/skills、~/.codex/skills/.system）扫描缓存：
- *  目录 stamp（mtimeMs+size）不变且未过 TTL 时直接复用，避免每次
- *  spaces.list / resources.catalog / runTurn 都同步扫一遍用户主目录。 */
-let _externalSkillCache: { at: number; stamp: string; items: SkillListing[] } | null = null;
-const EXTERNAL_SKILL_CACHE_TTL_MS = 15_000;
-
-function _externalSkillStamp(): string {
-  const roots = [
-    path.join(os.homedir(), '.claude', 'skills'),
-    path.join(os.homedir(), '.codex', 'skills', '.system'),
-  ];
-  let stamp = '';
-  for (const root of roots) {
-    try {
-      const st = fs.statSync(root);
-      stamp += `${root}:${st.mtimeMs}:${st.size};`;
-    } catch {
-      stamp += `${root}:missing;`;
-    }
-  }
-  return stamp;
-}
-
-async function _scanExternalSkills(): Promise<SkillListing[]> {
-  const external: SkillListing[] = [];
-  const roots = [
-    { root: path.join(os.homedir(), '.claude', 'skills'), prefix: 'claude', label: 'Claude' },
-    { root: path.join(os.homedir(), '.codex', 'skills', '.system'), prefix: 'codex', label: 'Codex' },
-  ];
-  for (const { root, prefix, label } of roots) {
-    let entries: import('node:fs').Dirent[];
-    try { entries = await fsp.readdir(root, { withFileTypes: true }); }
-    catch { continue; }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-      const skillMdPath = path.join(root, entry.name, 'SKILL.md');
-      try {
-        const content = await fsp.readFile(skillMdPath, 'utf8');
-        const meta = parseSkillFrontmatter(content);
-        const displayName = (typeof meta.name === 'string' && meta.name.trim()) || entry.name;
-        const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
-        external.push({
-          id: `${prefix}:${entry.name}`,
-          name: `[${label}] ${displayName}`,
-          source: 'custom',
-          description_en: description,
-          description_zh: description,
-          category: 'external',
-          enabled: true,
-        });
-      } catch (err) {
-        log.warn(`failed to read ${label} skill ${entry.name}:`, err);
-      }
-    }
-  }
-  return external;
-}
-
 /** Lightweight skill catalog for reference pickers and relationship indexes.
  *
  * This deliberately omits the deep security-receipt overlay. Callers may use
@@ -1075,13 +1017,78 @@ async function _scanExternalSkills(): Promise<SkillListing[]> {
 export async function listSkillCatalog(): Promise<SkillListing[]> {
   const internal = _overlaySkillEnabled((await _allSkillListingsCached()).filter((s) => !s.ownerAgent));
 
-  // Auto-detect external skills from Claude Code and Codex（带目录 stamp 缓存）
-  const stamp = _externalSkillStamp();
-  if (_externalSkillCache && _externalSkillCache.stamp === stamp && Date.now() - _externalSkillCache.at < EXTERNAL_SKILL_CACHE_TTL_MS) {
-    return [...internal, ..._externalSkillCache.items];
+  // Auto-detect external skills from Claude Code and Codex
+  const external: SkillListing[] = [];
+
+  // Claude Code skills from ~/.claude/skills/
+  try {
+    const claudeSkillsRoot = path.join(os.homedir(), '.claude', 'skills');
+    if (fs.existsSync(claudeSkillsRoot)) {
+      const entries = fs.readdirSync(claudeSkillsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const skillDir = path.join(claudeSkillsRoot, entry.name);
+        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMdPath)) continue;
+
+        try {
+          const content = fs.readFileSync(skillMdPath, 'utf8');
+          const meta = parseSkillFrontmatter(content);
+          const displayName = (typeof meta.name === 'string' && meta.name.trim()) || entry.name;
+          const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
+
+          external.push({
+            id: `claude:${entry.name}`,
+            name: `[Claude] ${displayName}`,
+            source: 'custom',
+            description_en: description,
+            description_zh: description,
+            category: 'external',
+            enabled: true,
+          });
+        } catch (err) {
+          log.warn(`failed to read Claude skill ${entry.name}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('failed to scan Claude Code skills:', err);
   }
-  const external: SkillListing[] = await _scanExternalSkills();
-  _externalSkillCache = { at: Date.now(), stamp, items: external };
+
+  // Codex skills from ~/.codex/skills/.system/
+  try {
+    const codexSkillsRoot = path.join(os.homedir(), '.codex', 'skills', '.system');
+    if (fs.existsSync(codexSkillsRoot)) {
+      const entries = fs.readdirSync(codexSkillsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const skillDir = path.join(codexSkillsRoot, entry.name);
+        const skillMdPath = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillMdPath)) continue;
+
+        try {
+          const content = fs.readFileSync(skillMdPath, 'utf8');
+          const meta = parseSkillFrontmatter(content);
+          const displayName = (typeof meta.name === 'string' && meta.name.trim()) || entry.name;
+          const description = (typeof meta.description === 'string' && meta.description.trim()) || '';
+
+          external.push({
+            id: `codex:${entry.name}`,
+            name: `[Codex] ${displayName}`,
+            source: 'custom',
+            description_en: description,
+            description_zh: description,
+            category: 'external',
+            enabled: true,
+          });
+        } catch (err) {
+          log.warn(`failed to read Codex skill ${entry.name}:`, err);
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('failed to scan Codex skills:', err);
+  }
 
   return [...internal, ...external];
 }

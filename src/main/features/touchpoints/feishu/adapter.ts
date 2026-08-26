@@ -1,5 +1,4 @@
 import { t } from '../../../i18n';
-import { createLogger } from '../../../logger';
 import * as manager from '../../messaging/manager';
 import * as registry from '../../messaging/registry';
 import { buildTouchpointCard } from './card';
@@ -9,8 +8,6 @@ import type {
   TouchpointDeliveryResult,
   TouchpointIntent,
 } from '../types';
-
-const log = createLogger('touchpoints:feishu-adapter');
 
 export type FeishuTouchpointAdapterErrorCode =
   | 'instance_not_found'
@@ -72,14 +69,13 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
       try {
         // Actionable intents go out as interactive cards whose buttons carry
         // signed receipt envelopes; read-only intents stay plain text.
-        // 渠道原生投递：触点是 CogSeed 自身功能，直连 messaging 层幂等投递
-        // 台账。（2026-08-26 理清：此前经 P3394 信封绕路，属叙事耦合。）
         const { entry } = await manager.sendProactive(userId, {
           instanceId,
           recipientId: instance.ownerExternalUserId,
           text: renderFeishuTouchpointText(renderedIntent),
-          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) as unknown as Record<string, import('../../messaging/types').JsonCompatibleValue> } : {}),
+          ...(renderedIntent.actionContract ? { card: buildTouchpointCard(renderedIntent) } : {}),
           sourceKey: `touchpoint:${renderedIntent.intentId}`,
+          signal: null,
         });
         if (!entry.externalDeliveryId) {
           throw new FeishuTouchpointAdapterError('delivery_receipt_missing', 'Feishu delivery receipt is missing.', true);
@@ -87,9 +83,6 @@ export function createFeishuTouchpointAdapter(options: { instanceId: string }): 
         return { externalDeliveryId: entry.externalDeliveryId };
       } catch (error) {
         if (error instanceof FeishuTouchpointAdapterError) throw error;
-        // 底层错误只进日志；抛给上层的错误固定文案——不把渠道侧细节
-        // （可能含消息内容）泄露进错误对象（原有安全语义保留）。
-        log.warn('feishu touchpoint delivery failed', { instanceId, error: String(error) });
         throw new FeishuTouchpointAdapterError('delivery_failed', 'Feishu touchpoint delivery failed.', true);
       }
     },

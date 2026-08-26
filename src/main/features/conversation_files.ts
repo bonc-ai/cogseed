@@ -8,7 +8,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { macosTccSensitivePath } from '../util/macos-tcc';
@@ -34,47 +33,17 @@ export interface ConversationWorkspaceFileList {
 const DEFAULT_MAX_FILES = 5000;
 const DEFAULT_MAX_DEPTH = 12;
 
-/** 并发相同参数调用的 in-flight 去重（渲染层 refreshFiles 风暴 + IPC
- *  无去重叠加时共享同一次遍历）。结果每次都是新鲜数据，不引入陈旧窗口。 */
-const _inflight = new Map<string, Promise<ConversationWorkspaceFileList>>();
-
-function inflightKey(root: string, maxFiles: number, maxDepth: number): string {
-  return `${path.resolve(root || '')}|${maxFiles}|${maxDepth}`;
-}
-
 function toPosixRel(rel: string): string {
   return rel.split(path.sep).filter(Boolean).join('/');
 }
 
-export async function listWorkspaceFiles(
+export function listWorkspaceFiles(
   root: string,
   opts: { maxFiles?: number; maxDepth?: number } = {},
-): Promise<ConversationWorkspaceFileList> {
+): ConversationWorkspaceFileList {
   const rootAbs = path.resolve(root || '');
   const maxFiles = Math.max(1, Math.floor(opts.maxFiles ?? DEFAULT_MAX_FILES));
   const maxDepth = Math.max(0, Math.floor(opts.maxDepth ?? DEFAULT_MAX_DEPTH));
-  const key = inflightKey(rootAbs, maxFiles, maxDepth);
-  const existing = _inflight.get(key);
-  if (existing) return existing;
-  const run = walkWorkspaceFiles(rootAbs, maxFiles, maxDepth).then(
-    (result) => {
-      if (_inflight.get(key) === run) _inflight.delete(key);
-      return result;
-    },
-    (err) => {
-      if (_inflight.get(key) === run) _inflight.delete(key);
-      throw err;
-    },
-  );
-  _inflight.set(key, run);
-  return run;
-}
-
-async function walkWorkspaceFiles(
-  rootAbs: string,
-  maxFiles: number,
-  maxDepth: number,
-): Promise<ConversationWorkspaceFileList> {
   const items: ConversationWorkspaceFile[] = [];
   let truncated = false;
 
@@ -100,7 +69,7 @@ async function walkWorkspaceFiles(
     return { root: rootAbs, items, count: 0, truncated: false, rootExists: false };
   }
 
-  const walk = async (dir: string, depth: number): Promise<void> => {
+  const walk = (dir: string, depth: number): void => {
     if (items.length >= maxFiles) {
       truncated = true;
       return;
@@ -111,7 +80,7 @@ async function walkWorkspaceFiles(
     }
 
     let entries: fs.Dirent[];
-    try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
     catch { return; }
     entries.sort((a, b) => a.name.localeCompare(b.name));
 
@@ -120,14 +89,14 @@ async function walkWorkspaceFiles(
       const abs = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
-        await walk(abs, depth + 1);
+        walk(abs, depth + 1);
         if (items.length >= maxFiles) {
           truncated = true;
           return;
         }
       } else if (e.isFile()) {
         let st: fs.Stats;
-        try { st = await fsp.stat(abs); }
+        try { st = fs.statSync(abs); }
         catch { continue; }
         items.push({
           path: abs,
@@ -144,6 +113,6 @@ async function walkWorkspaceFiles(
     }
   };
 
-  await walk(rootAbs, 0);
+  walk(rootAbs, 0);
   return { root: rootAbs, items, count: items.length, truncated, rootExists: true };
 }

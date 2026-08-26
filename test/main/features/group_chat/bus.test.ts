@@ -213,7 +213,7 @@ const cliRunMock = vi.hoisted(() => ({
 }));
 vi.mock('../../../../src/main/features/local_agents/runner', () => ({
   run: vi.fn(async (opts: any) => {
-    gatewayTurnMock.calls.push(opts);
+    cliRunMock.calls.push(opts);
     const result = cliRunMock.nextResults.length
       ? cliRunMock.nextResults.shift()
       : (cliRunMock.nextResult || { runId: 'mock-run', status: 'completed', output: 'ok' });
@@ -224,23 +224,6 @@ vi.mock('../../../../src/main/features/local_agents/runner', () => ({
       ...(result.error ? { error: result.error } : {}),
     });
     return result;
-  }),
-}));
-
-// 第二期收口：legacy `cli` runtime 读回即网关型，总线派发走
-// runP3394GatewayTurn——cwd/提示词/历史断言改观察这个 mock。
-const gatewayTurnMock = vi.hoisted(() => ({
-  calls: [] as any[],
-  nextResult: null as any,
-  nextResults: [] as any[],
-}));
-vi.mock('../../../../src/main/features/p3394_bridge/p3394-gateway-turn', () => ({
-  runP3394GatewayTurn: vi.fn(async (opts: any) => {
-    gatewayTurnMock.calls.push(opts);
-    return gatewayTurnMock.nextResults.length
-      ? gatewayTurnMock.nextResults.shift()
-      : (gatewayTurnMock.nextResult
-        || { text: 'ok', produced: [] as string[], error: undefined as unknown as undefined });
   }),
 }));
 
@@ -268,7 +251,7 @@ beforeEach(async () => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   process.env.COGSEED_P3394_WAKE_GATE = '0';
   vi.resetModules();
-  gatewayTurnMock.calls.length = 0;
+  cliRunMock.calls.length = 0;
   cliRunMock.nextResult = null;
   cliRunMock.nextResults.length = 0;
   streamProbe.messages.length = 0;
@@ -584,7 +567,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, cid);
 
-    expect(gatewayTurnMock.calls).toHaveLength(0);
+    expect(cliRunMock.calls).toHaveLength(0);
     expect(streamProbe.messages.some((message) => message.includes('普通问题'))).toBe(true);
     expect(config.getCommanderBackendSettings()).toEqual({
       backend: 'cogseed-core-agent',
@@ -1616,10 +1599,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, cid);
 
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    expect(gatewayTurnMock.calls[0].workingDir).toBe(projectDir);
-    expect(gatewayTurnMock.calls[0].prompt).toContain('看一下这个项目');
-    expect(gatewayTurnMock.calls[0].prompt).not.toContain('## Conversation so far');
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(projectDir);
+    expect(cliRunMock.calls[0].prompt).toContain('看一下这个项目');
+    expect(cliRunMock.calls[0].prompt).not.toContain('## Conversation so far');
     const st = await state.readState(TEST_UID, cid);
     expect(st.coding_project_dir).toBe(projectDir);
     expect(st.coding_project_dir_explicit).toBe(true);
@@ -1653,9 +1636,9 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const expected = await convWs.getConversationWorkspacePath(TEST_UID, conv.conversation_id);
     // 目录名跟随空间名（'空间任务'），不再以 sid 命名
     expect(expected).toContain(path.join('cloud', 'spaces', '空间任务', 'workspace'));
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    expect(gatewayTurnMock.calls[0].workingDir).toBe(expected);
-    expect(gatewayTurnMock.calls[0].workingDir).not.toBe(wsDir);
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
+    expect(cliRunMock.calls[0].cwd).not.toBe(wsDir);
     const st = await state.readState(TEST_UID, conv.conversation_id);
     expect(st.coding_project_dir).toBe(expected);
   });
@@ -1686,8 +1669,8 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     await waitForQuiescent(TEST_UID, conv.conversation_id);
 
     // CLI 派发后目录必须已创建——否则 child_process.spawn 因 cwd 缺失抛 ENOENT
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    expect(gatewayTurnMock.calls[0].workingDir).toBe(expected);
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
     expect(fs.statSync(expected).isDirectory()).toBe(true);
   });
 
@@ -1728,8 +1711,8 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, conv.conversation_id);
 
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    expect(gatewayTurnMock.calls[0].workingDir).toBe(expected);
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].cwd).toBe(expected);
     const st = await state.readState(TEST_UID, conv.conversation_id);
     expect(st.coding_project_dir).toBe(expected);
     expect(st.coding_project_dir_explicit).not.toBe(true);
@@ -1741,10 +1724,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     const spec = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
     spec.runtime = { kind: 'cli', cli: 'openclaw' };
     fs.writeFileSync(agentFile, JSON.stringify(spec));
-    gatewayTurnMock.nextResult = {
-      text: '',
-      produced: [],
-      error: 'openclaw exited with code 17 at /Users/user/private-project',
+    cliRunMock.nextResult = {
+      runId: 'failed-run',
+      status: 'failed',
+        error: 'openclaw exited with code 17 at /Users/user/private-project',
     };
 
     const i18n = await import('../../../../src/main/i18n');
@@ -1872,7 +1855,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
       });
       await waitForQuiescent(TEST_UID, cid);
 
-      expect(gatewayTurnMock.calls).toHaveLength(0);
+      expect(cliRunMock.calls).toHaveLength(0);
       const rows = fs.readFileSync(path.join(paths.userChatsDir(TEST_UID), `${cid}.jsonl`), 'utf8')
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(rows).toContainEqual(expect.objectContaining({
@@ -1908,7 +1891,7 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, cid);
 
-    expect(gatewayTurnMock.calls).toHaveLength(0);
+    expect(cliRunMock.calls).toHaveLength(0);
     const st = await state.readState(TEST_UID, cid);
     expect(st.coding_project_dir).toBeUndefined();
 
@@ -1944,10 +1927,10 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, cid);
 
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    // 收口后经网关：会话连续性由网关侧 P3394 session 承担，总线侧仅保证不泄露历史
-    expect(gatewayTurnMock.calls[0].prompt).not.toContain('DO_NOT_PASS_WHEN_RESUMING');
-    expect(gatewayTurnMock.calls[0].prompt).not.toContain('## Conversation so far');
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].resumeSessionId).toBe('thread-123');
+    expect(cliRunMock.calls[0].prompt).not.toContain('DO_NOT_PASS_WHEN_RESUMING');
+    expect(cliRunMock.calls[0].prompt).not.toContain('## Conversation so far');
   });
 
   it('bridges prior visible history when starting a fresh CLI session with existing context', async () => {
@@ -1974,9 +1957,11 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     });
     await waitForQuiescent(TEST_UID, cid);
 
-    expect(gatewayTurnMock.calls).toHaveLength(1);
-    // 收口后经网关：fresh 会话的历史桥接由网关 session 机制承担
-    expect(gatewayTurnMock.calls[0].prompt).toContain('换目录后继续');
+    expect(cliRunMock.calls).toHaveLength(1);
+    expect(cliRunMock.calls[0].resumeSessionId).toBeUndefined();
+    expect(cliRunMock.calls[0].prompt).toContain('## Conversation so far');
+    expect(cliRunMock.calls[0].prompt).toContain('PASS_WHEN_FRESH_WITH_PRIOR_CONTEXT');
+    expect(cliRunMock.calls[0].prompt).toContain('换目录后继续');
   });
 });
 

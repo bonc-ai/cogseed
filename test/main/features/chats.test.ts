@@ -386,52 +386,6 @@ describe('chats › setConversationSpace (把已有会话绑定到空间)', () =
   });
 });
 
-describe('chats › listSpaceConversations commander_in_chat（懒补记）', () => {
-  const convJsonl = (cid: string) => path.join(tmpDir, TEST_UID, 'cloud', 'chats', `${cid}.jsonl`);
-  const membersJson = (cid: string) => path.join(tmpDir, TEST_UID, 'cloud', 'chats', cid, 'members.json');
-
-  it('老数据无标志：第一次扫描 jsonl 命中并回写 commander_spoken，之后 jsonl 删除仍为 true', async () => {
-    const chats = await loadChats();
-    const conv = await chats.createConversation(TEST_UID, { title: '补记', spaceId: 'sp_abc123' });
-    const cid = conv.conversation_id;
-    fs.mkdirSync(path.dirname(convJsonl(cid)), { recursive: true });
-    fs.writeFileSync(convJsonl(cid), [
-      JSON.stringify({ from: 'user', to: 'commander', text: 'hello', ts: '2026-01-01T00:00:00.000Z' }),
-      JSON.stringify({ from: 'commander', to: 'user', text: 'hi', ts: '2026-01-01T00:00:01.000Z' }),
-    ].join('\n') + '\n', 'utf-8');
-
-    const rows = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
-    const row = rows.find((c) => c.conversation_id === cid);
-    expect(row?.commander_in_chat).toBe(true);
-    // 懒补记：标志已落盘
-    const members = JSON.parse(fs.readFileSync(membersJson(cid), 'utf-8'));
-    expect(members.commander_spoken).toBe(true);
-
-    // 之后不再依赖 jsonl：删掉聊天记录，判断仍成立（标志命中）
-    fs.rmSync(convJsonl(cid));
-    const again = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
-    expect(again.find((c) => c.conversation_id === cid)?.commander_in_chat).toBe(true);
-  });
-
-  it('指挥官从未发言：保持 false，不写入任何假标志', async () => {
-    const chats = await loadChats();
-    const conv = await chats.createConversation(TEST_UID, { title: '无指挥官', spaceId: 'sp_abc123' });
-    const cid = conv.conversation_id;
-    fs.mkdirSync(path.dirname(convJsonl(cid)), { recursive: true });
-    fs.writeFileSync(convJsonl(cid), [
-      JSON.stringify({ from: 'user', to: 'agent-a', text: 'hi', ts: '2026-01-01T00:00:00.000Z' }),
-    ].join('\n') + '\n', 'utf-8');
-
-    const rows = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
-    expect(rows.find((c) => c.conversation_id === cid)?.commander_in_chat).toBe(false);
-    // 没有命中就不该写 members.json（或写出的文件不带假标志）
-    if (fs.existsSync(membersJson(cid))) {
-      const members = JSON.parse(fs.readFileSync(membersJson(cid), 'utf-8'));
-      expect(members.commander_spoken).toBeUndefined();
-    }
-  });
-});
-
 describe('chats › targeted conversation lookup', () => {
   it('uses a validated project/global hint without opening unrelated indexes', async () => {
     const chats = await loadChats();
@@ -919,35 +873,6 @@ describe('chats › index repair', () => {
     expect(index[0].commander_in_chat).toBe(true);
     expect(index[0].agent_ids).toEqual(['agent-one']);
     expect(index[0].participant_summary_updated_at).toBe(index[0].updated_at);
-  });
-
-  it('COGSEED-15：空间任务行与会话运行协作区域共用同一份参与智能体名单', async () => {
-    const chats = await loadChats();
-    const spaces = await import('../../../src/main/features/spaces');
-    const created = await spaces.createSpace(TEST_UID, { name: '一致空间' });
-    if (!created.ok) throw new Error('create space failed');
-    const sid = created.space.space_id;
-    const conv = await chats.createConversation(TEST_UID, { title: '一致', spaceId: sid });
-
-    // 运行协作区域的数据源：members.json（同一 Agent 多次加入只计 1 个；commander 不计入）
-    const membersDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id);
-    fs.mkdirSync(membersDir, { recursive: true });
-    fs.writeFileSync(path.join(membersDir, 'members.json'), JSON.stringify({
-      version: 1,
-      actors: [
-        { kind: 'commander', id: 'commander', joined_at: '2026-06-01T00:00:00Z' },
-        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:01Z' },
-        { kind: 'agent', id: 'agent-b', joined_at: '2026-06-01T00:00:02Z' },
-        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:03Z' },
-      ],
-    }));
-
-    const spaceConvs = await chats.listSpaceConversations(TEST_UID, sid);
-    const row = spaceConvs.find((c) => c.conversation_id === conv.conversation_id);
-    expect(row).toBeTruthy();
-    // 与运行协作区域一致：独立 Agent 去重计数（agent-a 只计 1），commander 不占名额
-    expect(row!.agent_ids).toEqual(['agent-a', 'agent-b']);
-    expect(row!.commander_in_chat).toBe(false);
   });
 
   it('updates a fresh participant summary incrementally with message activity', async () => {

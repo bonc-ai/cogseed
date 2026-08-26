@@ -111,18 +111,9 @@ interface Queue {
   running: boolean;
   scheduled: boolean;
   activeKeys: Map<string, number>;
-  /** 待处理 job 的复合键（jobKey|op → Job），enqueue 去重 O(1)。
-   *  与 jobs 数组同步维护；队列大时（整目录导入几千文件）原来的
-   *  q.jobs.find/some 线性查找会退化到 O(n²)。 */
-  pendingJobs: Map<string, Job>;
-  /** 每个 name 的待处理 job 计数（任意 op），reconcile 的占用判断 O(1)。 */
-  pendingNameCounts: Map<string, number>;
 }
 
 const _queues = new Map<string, Queue>();
-
-/** reconcile 进行中的去重：并发 search / status 查询共享同一次扫描。 */
-const _reconcileInFlight = new Map<string, Promise<SpaceLibraryReconcileResult>>();
 
 export const spaceLibraryEvents = new EventEmitter();
 spaceLibraryEvents.setMaxListeners(50);
@@ -180,27 +171,10 @@ function storeFor(uid: string, spaceId: string): vs.VecStore {
 function queueFor(uid: string): Queue {
   let q = _queues.get(uid);
   if (!q) {
-    q = { jobs: [], running: false, scheduled: false, activeKeys: new Map(), pendingJobs: new Map(), pendingNameCounts: new Map() };
+    q = { jobs: [], running: false, scheduled: false, activeKeys: new Map() };
     _queues.set(uid, q);
   }
   return q;
-}
-
-function pendingJobKey(spaceId: string, name: string, op: Job['op']): string {
-  return `${jobKey(spaceId, name)}|${op}`;
-}
-
-function addPendingJob(q: Queue, job: Job): void {
-  q.pendingJobs.set(pendingJobKey(job.spaceId, job.name, job.op), job);
-  q.pendingNameCounts.set(jobKey(job.spaceId, job.name), (q.pendingNameCounts.get(jobKey(job.spaceId, job.name)) || 0) + 1);
-}
-
-function removePendingJob(q: Queue, job: Job): void {
-  q.pendingJobs.delete(pendingJobKey(job.spaceId, job.name, job.op));
-  const key = jobKey(job.spaceId, job.name);
-  const count = q.pendingNameCounts.get(key) || 0;
-  if (count <= 1) q.pendingNameCounts.delete(key);
-  else q.pendingNameCounts.set(key, count - 1);
 }
 
 function retainActiveKey(q: Queue, key: string): void {
@@ -228,12 +202,12 @@ export function enqueue(
   } catch { return; }
   if (op === 'upsert' && !kindFor(safeName)) return;
   const q = queueFor(uid);
-  const duplicate = q.pendingJobs.get(pendingJobKey(sid, safeName, op));
-  if (duplicate) {
-    if (opts.force) duplicate.force = true;
+  const existing = q.jobs.find((j) => j.spaceId === sid && j.name === safeName && j.op === op);
+  if (existing) {
+    if (opts.force) existing.force = true;
     return;
   }
-  const job: Job = {
+  q.jobs.push({
     spaceId: sid,
     name: safeName,
     op,
@@ -241,9 +215,7 @@ export function enqueue(
     enqueuedAt: Date.now(),
     reason: opts.reason || (opts.force ? 'manual' : 'mutation'),
     attempt: Math.max(1, Math.round(opts.attempt || 1)),
-  };
-  q.jobs.push(job);
-  addPendingJob(q, job);
+  });
   if (op === 'upsert') {
     const kind = kindFor(safeName);
     if (kind) emit({ userId: uid, spaceId: sid, name: safeName, relPath: safeName, status: 'pending', kind });
@@ -269,7 +241,6 @@ async function runQueue(uid: string): Promise<void> {
   try {
     while (q.jobs.length) {
       const job = q.jobs.shift()!;
-      removePendingJob(q, job);
       const key = jobKey(job.spaceId, job.name);
       retainActiveKey(q, key);
       try {
@@ -554,25 +525,6 @@ async function describeImage(userId: string, sourceName: string, raw: Buffer): P
 }
 
 export async function reconcile(uid: string, spaceId: string): Promise<SpaceLibraryReconcileResult> {
-  const sid = safeSpaceId(spaceId);
-  const key = `${uid}:${sid}`;
-  const existing = _reconcileInFlight.get(key);
-  if (existing) return existing;
-  const run = reconcileImpl(uid, sid).then(
-    (result) => {
-      if (_reconcileInFlight.get(key) === run) _reconcileInFlight.delete(key);
-      return result;
-    },
-    (err) => {
-      if (_reconcileInFlight.get(key) === run) _reconcileInFlight.delete(key);
-      throw err;
-    },
-  );
-  _reconcileInFlight.set(key, run);
-  return run;
-}
-
-async function reconcileImpl(uid: string, spaceId: string): Promise<SpaceLibraryReconcileResult> {
   const startedAt = Date.now();
   const sid = safeSpaceId(spaceId);
   if (!await spaceExists(uid, sid)) return { enqueuedUpsert: 0, enqueuedDelete: 0, unchanged: 0 };
@@ -593,7 +545,7 @@ async function reconcileImpl(uid: string, spaceId: string): Promise<SpaceLibrary
     const existing = indexedByPath.get(name);
     const key = jobKey(sid, name);
     const ownedByQueue = queue.activeKeys.has(key)
-      || queue.pendingNameCounts.has(key);
+      || queue.jobs.some((job) => jobKey(job.spaceId, job.name) === key);
     const orphanedProcessing = existing?.status === 'processing'
       && !ownedByQueue;
     if (
@@ -717,11 +669,7 @@ export async function search(
   queryVec: number[] | Float32Array,
   opts: vs.VecSearchOpts = {},
 ): Promise<vs.VecSearchHit[]> {
-  // 搜索不再等待全量 reconcile：应用内写入已走 enqueue 即时入队，向量库
-  // 即为最新；外部直接改动的文件由后台 reconcile 收敛——本次调用顺手
-  // 触发（in-flight 合并），下一次搜索可见。避免每次检索都被目录遍历 +
-  // sha1 流式哈希挡在关键路径上。
-  void reconcile(uid, spaceId).catch(() => { /* 后台收敛失败不阻断搜索 */ });
+  await reconcile(uid, spaceId);
   return storeFor(uid, spaceId).search(queryVec, opts);
 }
 
@@ -750,7 +698,6 @@ export async function drain(uid: string): Promise<void> {
 
 export function _resetQueuesForTests(): void {
   _queues.clear();
-  _reconcileInFlight.clear();
   spaceLibraryEvents.removeAllListeners();
   spaceLibraryEvents.setMaxListeners(50);
 }

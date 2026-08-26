@@ -64,11 +64,7 @@ const MAX_BYTES_IMAGE = 20 * 1024 * 1024;
 const MAX_BYTES_PDF = 100 * 1024 * 1024;
 const MAX_BYTES_VIDEO = 200 * 1024 * 1024;
 const MAX_FILENAME_LEN = 200;
-/** 文件树「变更才扫」兜底窗口：指纹一致但缓存超过该时长仍重扫一次，
- *  覆盖指纹感知不到的深层外部改动（如 Finder 往深层子目录放文件）。 */
-const SPACE_TREE_BACKSTOP_MS = 3 * 60_000;
-/** 遍历深度上限：保护极端目录树（导入的历史项目等）不触发超深递归。 */
-const SPACE_TREE_MAX_DEPTH = 24;
+const PROJECT_TREE_CACHE_TTL_MS = 30_000;
 
 export type SpaceFileKind = 'text' | 'pdf' | 'docx' | 'spreadsheet' | 'presentation' | 'image' | 'video';
 
@@ -248,18 +244,14 @@ async function _treeStat(absPath: string): Promise<fs.Stats | null> {
   catch { return null; }
 }
 
-async function walkSpaceTreeAsync(absDir: string, root: string, depth = 0): Promise<SpaceLibraryNode[]> {
-  if (depth > SPACE_TREE_MAX_DEPTH) return [];
+async function walkSpaceTreeAsync(absDir: string, root: string): Promise<SpaceLibraryNode[]> {
   const items = sortDirents(await _treeReadDir(absDir));
   const nodes = await Promise.all(items.map(async (entry): Promise<SpaceLibraryNode | null> => {
     if (entry.name.startsWith('.')) return null;
     const abs = path.join(absDir, entry.name);
     if (entry.isDirectory()) {
-      // 与产物兜底遍历同口径：依赖/缓存目录不进空间文件树（导入整包项目时
-      // 这些目录能把树撑到几万节点，且用户从不浏览）。
-      if (entry.name === 'node_modules' || entry.name === '__pycache__') return null;
       const [children, st] = await Promise.all([
-        walkSpaceTreeAsync(abs, root, depth + 1),
+        walkSpaceTreeAsync(abs, root),
         _treeStat(abs),
       ]);
       if (!st?.isDirectory()) return null;
@@ -312,8 +304,6 @@ async function filesUnderEntry(absPath: string, root: string): Promise<SpaceFile
 
 interface SpaceTreeCacheEntry {
   generation: number;
-  /** 空间文件根目录指纹（mtime:size）——外部直接改动根目录内容时立即失效。 */
-  stamp: string;
   expiresAt: number;
   tree: SpaceLibraryNode[];
 }
@@ -343,24 +333,9 @@ export function invalidateSpaceFileTree(userId: string, spaceId?: string): void 
     _spaceTreeInFlight.delete(key);
     _spaceTreeGeneration.set(key, (_spaceTreeGeneration.get(key) || 0) + 1);
   }
-  // 持久化表同源失效（fire-and-forget；表是派生缓存，失败无害）
-  void import('./workspace_meta').then((m) => {
-    if (spaceId) return m.dropEntry(userId, 'fileTrees', spaceId);
-    return m.dropSection(userId, 'fileTrees');
-  }).catch(() => { /* best-effort */ });
-}
-
-async function _spaceFilesRootStamp(dir: string): Promise<string> {
-  try {
-    const st = await _treeStat(dir);
-    return st ? `${st.mtimeMs}:${st.size}` : 'missing';
-  } catch {
-    return 'missing';
-  }
 }
 
 export async function listSpaceFileTree(userId: string, spaceId: string): Promise<SpaceLibraryNode[]> {
-  const startedAt = Date.now();
   let dir: string;
   let sid: string;
   try {
@@ -371,48 +346,21 @@ export async function listSpaceFileTree(userId: string, spaceId: string): Promis
   const key = _spaceTreeKey(userId, sid);
   const generation = _spaceTreeGeneration.get(key) || 0;
   const cached = _spaceTreeCache.get(key);
-  if (cached && cached.generation === generation) {
-    // 「变更才扫」：根目录指纹一致且未过兜底窗口 → 直接返回缓存。
-    const stamp = await _spaceFilesRootStamp(dir);
-    if (cached.stamp === stamp && cached.expiresAt > Date.now()) {
-      // 性能埋点：缓存命中路径（诊断用，仅计数/时长）。
-      log.info('listSpaceFileTree cache hit', { nodes: cached.tree.length, ms: Date.now() - startedAt });
-      return cached.tree;
-    }
-  }
-  // 持久化元数据表：重启后冷启动直接查表（根目录指纹验证），不再全量递归。
-  const meta = await import('./workspace_meta');
-  const tableStamp = await _spaceFilesRootStamp(dir);
-  const tableEntry = await meta.getEntry<SpaceLibraryNode[]>(userId, 'fileTrees', sid);
-  if (tableEntry && tableEntry.stamp === tableStamp) {
-    _spaceTreeCache.set(key, {
-      generation,
-      stamp: tableStamp,
-      expiresAt: Date.now() + SPACE_TREE_BACKSTOP_MS,
-      tree: tableEntry.data,
-    });
-    log.info('listSpaceFileTree table hit', { nodes: tableEntry.data.length, ms: Date.now() - startedAt });
-    return tableEntry.data;
+  if (cached && cached.generation === generation && cached.expiresAt > Date.now()) {
+    return cached.tree;
   }
   const existing = _spaceTreeInFlight.get(key);
   if (existing) return existing;
-  const run = (async () => {
-    const tree = await walkSpaceTreeAsync(dir, dir);
+  const run = walkSpaceTreeAsync(dir, dir).then((tree) => {
     if ((_spaceTreeGeneration.get(key) || 0) === generation) {
-      const stamp = await _spaceFilesRootStamp(dir);
       _spaceTreeCache.set(key, {
         generation,
-        stamp,
-        expiresAt: Date.now() + SPACE_TREE_BACKSTOP_MS,
+        expiresAt: Date.now() + PROJECT_TREE_CACHE_TTL_MS,
         tree,
       });
     }
-    try {
-      await meta.putEntry(userId, 'fileTrees', sid, await _spaceFilesRootStamp(dir), tree);
-    } catch { /* 表写入失败不阻断 */ }
-    log.info('listSpaceFileTree scanned', { nodes: tree.length, ms: Date.now() - startedAt });
     return tree;
-  })();
+  });
   _spaceTreeInFlight.set(key, run);
   try { return await run; }
   finally {
