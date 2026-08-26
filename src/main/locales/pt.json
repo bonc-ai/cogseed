@@ -218,6 +218,7 @@
   "expense_agent.submit.unavailable": "Não foi possível mostrar a confirmação; nada foi enviado.",
   "expense_agent.submit.cancelled": "O envio foi cancelado; nenhum dado foi enviado ao Feishu.",
   "cogseed.runtime_failed": "O agente não conseguiu concluir esta resposta. Tente novamente.",
+  "messaging.direct_chat": "Conversa direta",
   "messaging.new_session_confirmation": "Nova conversa iniciada. O que você gostaria que eu resolva em seguida?",
   "messaging.approval.approve": "Permitido",
   "messaging.approval.approve_once": "Permitido uma vez",
