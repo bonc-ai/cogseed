@@ -1738,6 +1738,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       providerId: diagnostics.provider || activeProviderId,
       modelId: diagnostics.model || activeModelId,
       ...(diagnostics.usage || {}),
+      ...(typeof diagnostics.firstTextDeltaMs === 'number' ? { firstTokenMs: diagnostics.firstTextDeltaMs } : {}),
       durationMs: Date.now() - runStartedAt,
       status: terminalStatus,
     });
