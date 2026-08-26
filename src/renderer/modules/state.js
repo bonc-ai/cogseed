@@ -315,6 +315,7 @@ function bindStaticHandlers() {
   document.getElementById('auto-btn')?.addEventListener('click', () => _setViewFromSidebar('auto'));
   document.getElementById('recall-btn')?.addEventListener('click', () => _setViewFromSidebar('recall'));
   document.getElementById('connectors-btn')?.addEventListener('click', () => _setViewFromSidebar('connections'));
+  document.getElementById('dashboard-btn')?.addEventListener('click', () => _setViewFromSidebar('dashboard'));
   document.getElementById('workspace-btn')?.addEventListener('click', () => _setViewFromSidebar('workspace'));
   // 设置入口已并入左下角融合面板（account-chip.js 的「设置」菜单项，
   // 通过 window.setView('settings') 切换视图，任何登录态都可达）。
