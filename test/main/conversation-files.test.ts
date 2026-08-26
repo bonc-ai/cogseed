@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe('conversation workspace file listing', () => {
-  it('returns a relative tree snapshot from the current workspace on disk', async () => {
+  it('returns a relative tree snapshot from the current workspace on disk', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       fs.mkdirSync(path.join(dir, 'agent_skill_review'), { recursive: true });
@@ -24,7 +24,7 @@ describe('conversation workspace file listing', () => {
       fs.writeFileSync(path.join(dir, 'agent_skill_review', 'skill_batch.md'), 'skill');
       fs.writeFileSync(path.join(dir, '.hidden.md'), 'hidden');
 
-      const result = await listWorkspaceFiles(dir);
+      const result = listWorkspaceFiles(dir);
 
       expect(result.root).toBe(path.resolve(dir));
       expect(result.rootExists).toBe(true);
@@ -44,13 +44,13 @@ describe('conversation workspace file listing', () => {
     }
   });
 
-  it('reports truncation instead of walking forever on huge workspaces', async () => {
+  it('reports truncation instead of walking forever on huge workspaces', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       fs.writeFileSync(path.join(dir, 'a.md'), 'a');
       fs.writeFileSync(path.join(dir, 'b.md'), 'b');
 
-      const result = await listWorkspaceFiles(dir, { maxFiles: 1 });
+      const result = listWorkspaceFiles(dir, { maxFiles: 1 });
 
       expect(result.items).toHaveLength(1);
       expect(result.truncated).toBe(true);
@@ -60,7 +60,7 @@ describe('conversation workspace file listing', () => {
     }
   });
 
-  it.runIf(process.platform === 'darwin')('reports a skipped scan for macOS privacy-protected workspace roots', async () => {
+  it.runIf(process.platform === 'darwin')('reports a skipped scan for macOS privacy-protected workspace roots', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-conv-files-'));
     try {
       const home = path.join(dir, 'home');
@@ -70,7 +70,7 @@ describe('conversation workspace file listing', () => {
       process.env.HOME = home;
       process.env.COGSEED_TCC_GUARD_FORCE = '1';
 
-      const result = await listWorkspaceFiles(downloads);
+      const result = listWorkspaceFiles(downloads);
 
       expect(result.root).toBe(path.resolve(downloads));
       expect(result.rootExists).toBe(true);

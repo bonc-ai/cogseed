@@ -11,9 +11,9 @@ const log = createLogger('p3394-bridge:registry');
 /** Unified node and capability registry kinds (guide §7.2): independent
  *  agents, sub-agents, task agents, reduced capability nodes (MCP-like),
  *  and model runtimes. Non-agent kinds never masquerade as autonomous. */
-export type P3394NodeKind = 'agent' | 'sub_agent' | 'task_agent' | 'capability' | 'model_runtime' | 'channel_bridge';
+export type P3394NodeKind = 'agent' | 'sub_agent' | 'task_agent' | 'capability' | 'model_runtime';
 
-export const P3394_NODE_KINDS: readonly P3394NodeKind[] = ['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime', 'channel_bridge'] as const;
+export const P3394_NODE_KINDS: readonly P3394NodeKind[] = ['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'] as const;
 
 export type P3394Locality = 'in_process' | 'same_host' | 'enterprise' | 'external';
 

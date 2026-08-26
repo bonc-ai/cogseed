@@ -2106,7 +2106,7 @@ async function _renderAgentDetailRuntime(agent) {
       // Mirror the create-modal behaviour: if the user's current name /
       // description are still the defaults of the previous CLI (or empty),
       // follow the new CLI's defaults. Otherwise, leave their edits alone.
-      const updates = { runtime: { kind: 'p3394-gateway', cli: newCli } };
+      const updates = { runtime: { kind: 'cli', cli: newCli } };
       const lang = (typeof getLang === 'function') ? getLang() : 'en';
       const prev = (typeof getCliDefaults === 'function') ? getCliDefaults(currentType) : null;
       const next2 = (typeof getCliDefaults === 'function') ? getCliDefaults(newCli) : null;
@@ -2662,24 +2662,98 @@ function _refreshExternalCliSelector() {
  *  +停托管网关）与 停用/启用（disable/enable）。数据来自与 CLI 选择器
  *  同一次 p3394.external.list 往返的 peers 快照（不额外拉 IPC）。 */
 async function _renderExternalPanelPeers() {
-  // 第二期迁移（设计 5.2）：外接节点名册整体迁入侧边栏「智能体总览」
-  // Dashboard（启停/停用/移除/添加远端节点都在那边）。创建弹窗里保留
-  // 一个跳转入口，避免两处维护同一份节点管理逻辑。
   const slot = document.getElementById('agent-ext-peers');
   if (!slot) return;
-  slot.innerHTML = `
-    <div class="agents-ext-peers-empty agents-ext-peers-moved">
-      <span>${escapeHtml(t('agents.peers.moved'))}</span>
-      <button type="button" class="btn btn-sm" id="agent-ext-peers-open-dashboard">${escapeHtml(t('agents.peers.open_dashboard'))}</button>
-    </div>`;
-  const openBtn = slot.querySelector('#agent-ext-peers-open-dashboard');
-  if (openBtn) {
-    openBtn.addEventListener('click', async (e) => {
-      e.preventDefault();
-      if (typeof closeAgentModal === 'function') closeAgentModal();
-      if (typeof window.setView === 'function') window.setView('dashboard');
-    });
+  let peers = [];
+  try {
+    // 共享本次 tab 进入时的探测结果（_refreshExternalCliSelector 已用
+    // force 重扫过一次，且 loadExternalPanelData 内部有 in-flight 去重），
+    // 这里不再单独 force——否则每次点击节点操作后的整表单重渲染都会
+    // 再跑一遍完整 detectAll。节点增删后缓存已被 revoke/toggle 置空，
+    // 下一次渲染自然重探。
+    const data = (typeof loadExternalPanelData === 'function')
+      ? await loadExternalPanelData()
+      : null;
+    peers = Array.isArray(data && data.peers) ? data.peers : [];
+  } catch (err) {
+    _agentsLog.warn('p3394 peers load failed', err);
   }
+  // 本机 CogSeed 自身不当作"已接入节点"展示。
+  const visible = peers.filter((p) => p && p.agent_id && p.agent_id !== 'cogseed');
+  const msgEl = document.getElementById('agent-form-msg');
+  if (!visible.length) {
+    slot.innerHTML = `<div class="agents-ext-peers-empty">${escapeHtml(t('agents.peers.none'))}</div>`;
+    return;
+  }
+  const kindLabel = t('agents.peers.kind');
+  const capLabel = t('agents.peers.capabilities');
+  slot.innerHTML = visible.map((peer) => {
+    const agentId = peer.agent_id;
+    const name = peer.display_name || agentId;
+    const online = !!peer.online;
+    const disabled = !!peer.disabled;
+    const stateText = disabled
+      ? t('agents.peers.state_disabled')
+      : (online ? t('agents.peers.state_online') : t('agents.peers.state_offline'));
+    const kind = peer.node_kind ? escapeHtml(String(peer.node_kind)) : 'agent';
+    const capCount = Array.isArray(peer.capabilities) ? peer.capabilities.length : 0;
+    const loc = peer.locality ? escapeHtml(String(peer.locality)) : '';
+    const metaPieces = [];
+    if (loc) metaPieces.push(loc);
+    if (capCount > 0) metaPieces.push(`${capCount} ${escapeHtml(capLabel)}`);
+    const meta = metaPieces.length ? `<span class="agents-ext-peers-meta">${metaPieces.join(' · ')}</span>` : '';
+    const toggleLabel = disabled
+      ? t('agents.peers.action_enable')
+      : t('agents.peers.action_disable');
+    return `
+      <div class="agents-ext-peer-row ${disabled ? 'is-disabled' : ''}">
+        <span class="agents-detail-gateway-dot ${disabled || !online ? 'is-off' : 'is-on'}"></span>
+        <span class="agents-ext-peer-name" title="${escapeHtml(String(agentId))}">${escapeHtml(name)}</span>
+        <span class="agents-ext-peer-state">${escapeHtml(stateText)}</span>
+        <span class="agents-ext-peer-kind" title="${escapeHtml(kindLabel)}">${kind}</span>
+        ${meta}
+        <span class="agents-ext-peer-actions">
+          <button type="button" class="btn btn-sm" data-peer-act="toggle" data-peer-id="${escapeHtml(String(agentId))}" data-peer-disabled="${disabled ? '1' : '0'}">${escapeHtml(toggleLabel)}</button>
+          <button type="button" class="btn btn-sm is-danger" data-peer-act="revoke" data-peer-id="${escapeHtml(String(agentId))}">${escapeHtml(t('agents.peers.action_remove'))}</button>
+        </span>
+      </div>`;
+  }).join('');
+
+  slot.querySelectorAll('[data-peer-act]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const agentId = btn.dataset.peerId;
+      const act = btn.dataset.peerAct;
+      if (!agentId) return;
+      btn.disabled = true;
+      const setMsg = (text, isSuccess) => {
+        if (!msgEl) return;
+        msgEl.textContent = text;
+        msgEl.className = isSuccess ? 'form-msg ok' : 'form-msg err';
+      };
+      try {
+        if (act === 'revoke') {
+          const ok = typeof uiConfirm === 'function'
+            ? await uiConfirm(t('agents.peers.remove_confirm', { name: agentId }))
+            : true;
+          if (!ok) { btn.disabled = false; return; }
+          const res = (typeof revokeP3394Peer === 'function') ? await revokeP3394Peer(agentId) : null;
+          if (res && res.ok) setMsg(t('agents.peers.removed', { name: agentId }), true);
+          else setMsg((res && res.error) || t('agents.peers.action_failed'), false);
+        } else {
+          const nextDisabled = btn.dataset.peerDisabled === '1' ? false : true;
+          const res = (typeof toggleP3394Peer === 'function') ? await toggleP3394Peer(agentId, nextDisabled) : null;
+          if (res && res.ok) setMsg(t('agents.peers.toggled', { name: agentId }), true);
+          else setMsg((res && res.error) || t('agents.peers.action_failed'), false);
+        }
+      } catch (err) {
+        _agentsLog.warn('p3394 peer action failed', { agentId, act, error: err && (err.message || err) });
+        setMsg((err && err.message) || t('agents.peers.action_failed'), false);
+      }
+      btn.disabled = false;
+      void _renderExternalPanelPeers();
+    });
+  });
 }
 
 // Track which CLI defaults are currently reflected in the External-tab

@@ -165,44 +165,6 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
       try {
         getP3394BridgeHandle()?.bindSessionCid?.(envelope.session_id, opts.cid);
       } catch { /* binding is best-effort */ }
-      // 第三期「渠道即节点」：channel_bridge 节点是进程内虚拟节点（无网络
-      // 端点），不走 HTTP dial，直接经 messaging 主动投递并回执。
-      const peerRecord = getP3394BridgeHandle()?.registry.list()
-        .find((candidate) => candidate.identity.agent_id === resolved.agent_id);
-      if (peerRecord?.node_kind === 'channel_bridge') {
-        try {
-          const { deliverToChannelBridge, instanceIdFromChannelBridgeAgentId } = await import('../../features/messaging/channel-bridge');
-          const { sendProactive } = await import('../../features/messaging/manager');
-          const { getInstanceWithSecret } = await import('../../features/messaging/registry');
-          const bridgeInstanceId = instanceIdFromChannelBridgeAgentId(resolved.agent_id) || '';
-          // 白名单来自实例策略（policy.channelBridgeSenderAllowlist；
-          // undefined = 全放行保持现状，数组 = 仅名单内 sender 可发）。
-          const policyLoaded = bridgeInstanceId
-            ? await getInstanceWithSecret(opts.userId, bridgeInstanceId).catch(() => null)
-            : null;
-          const allowlist = (policyLoaded?.instance as { policy?: { channelBridgeSenderAllowlist?: string[] } } | undefined)
-            ?.policy?.channelBridgeSenderAllowlist;
-          const delivered = await deliverToChannelBridge(
-            opts.userId,
-            resolved.agent_id,
-            envelope,
-            sendProactive,
-            async (uid2, instanceId) => {
-              const loaded = await getInstanceWithSecret(uid2, instanceId);
-              const ownerExternalUserId = (loaded?.instance as { ownerExternalUserId?: string } | undefined)?.ownerExternalUserId;
-              return ownerExternalUserId ? { recipientId: ownerExternalUserId } : null;
-            },
-            Array.isArray(allowlist) ? { allowedSenders: allowlist } : undefined,
-          );
-          if (delivered.ok) {
-            return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: 'channel bridge delivered' }) };
-          }
-          const deliverFailure = delivered as Extract<typeof delivered, { ok: false }>;
-          return errResult('E_P3394_SEND_FAILED', deliverFailure.error);
-        } catch (err) {
-          return errResult('E_P3394_SEND_FAILED', (err as Error).message);
-        }
-      }
       try {
         const reply = await hub.sendAndWait(resolved.agent_id, envelope);
         return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: reply.text.slice(0, 24_000) }) };

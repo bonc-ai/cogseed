@@ -22,7 +22,6 @@ import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
-import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
@@ -62,7 +61,6 @@ import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
 import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
-import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
@@ -118,9 +116,6 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
-import * as messagingBindings from '../features/messaging/bindings';
-import * as messagingRegistry from '../features/messaging/registry';
-import { annotateChannelConversations } from '../features/messaging/channel-annotation';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
@@ -633,17 +628,6 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
-  // COGSEED-18：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
-  // 条目无 cid）。仅当调用方显式声明 spaceId 且该空间属于当前用户——防越权。
-  const spaceId = payload?.spaceId;
-  if (typeof spaceId === 'string' && safeId(spaceId) && await spaces.spaceExists(userId, spaceId)) {
-    try {
-      const { spaceContentDir } = await import('../paths');
-      const contentDir = path.resolve(spaceContentDir(userId, spaceId));
-      const target = path.resolve(absPath);
-      if (target === contentDir || target.startsWith(contentDir + path.sep)) return true;
-    } catch { /* fall through */ }
-  }
   const cid = payload?.cid;
   if (typeof cid !== 'string' || !cid) return false;
   // 1) 会话记录过的产物文件（消息 produced[]）
@@ -670,11 +654,11 @@ function _contextTreeHasPath(nodes: contexts.ContextNode[], relPath: string): bo
   return false;
 }
 
-async function _uniqueContextImportPath(rawName: string): Promise<string> {
+function _uniqueContextImportPath(rawName: string): string {
   const name = path.basename(String(rawName || '').trim() || 'artifact');
   const ext = path.extname(name);
   const stem = ext ? name.slice(0, -ext.length) : name;
-  const tree = await contexts.listContextsTree();
+  const tree = contexts.listContextsTree();
   if (!_contextTreeHasPath(tree, name)) return name;
   for (let i = 2; i < 1000; i += 1) {
     const candidate = `${stem}-${i}${ext}`;
@@ -740,7 +724,7 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
 
   const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
     ? payload.targetPath.trim()
-    : await _uniqueContextImportPath(targetName);
+    : _uniqueContextImportPath(targetName);
   const result = contexts.uploadContextFile(relPath, buf);
   if (!result.ok) return result;
   return { ok: true, scope: 'global', path: result.path, bytes: result.bytes };
@@ -923,17 +907,6 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'conversations.list': async ({ mode, active_cid, expanded_projects, project_id, task_id, bucket, offset }, ctx) => {
-    // Channel conversations get their sidebar grouping fields (platform
-    // back-fill via bindings + live display name) on every list response;
-    // persisted fields stay authoritative, the join is display-only.
-    const annotate = async <T extends { conversation_id: string; channel_platform?: string }>(rows: readonly T[]): Promise<T[]> => {
-      if (!rows.length) return [...rows];
-      const [bindings, instances] = await Promise.all([
-        messagingBindings.listBindings(ctx.userId).catch(() => []),
-        messagingRegistry.listInstances(ctx.userId).catch(() => []),
-      ]);
-      return annotateChannelConversations(rows, bindings, instances);
-    };
     if (mode === 'startup') {
       const expandedProjectIds = String(expanded_projects || '')
         .split(',')
@@ -942,40 +915,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         activeConversationId: safeId(active_cid) ? active_cid : undefined,
         expandedProjectIds,
       });
-      if (Array.isArray((result as { conversations?: unknown }).conversations)) {
-        (result as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
-          await annotate((result as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
-      }
       return result;
     }
     if (mode === 'project') {
       if (!safeId(project_id)) throw new Error('invalid project id');
-      const page = await chats.listProjectConversationPage(ctx.userId, project_id, offset);
-      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
-        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
-          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
-      }
-      return page;
+      return chats.listProjectConversationPage(ctx.userId, project_id, offset);
     }
     if (mode === 'auto_task') {
       if (!safeId(task_id)) throw new Error('invalid auto task id');
-      const page = await chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
-      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
-        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
-          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
-      }
-      return page;
+      return chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
     }
     if (mode === 'old_unprojected') {
       if (bucket !== 'last30' && bucket !== 'older') throw new Error('invalid conversation bucket');
-      const page = await chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
-      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
-        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
-          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
-      }
-      return page;
+      return chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
     }
-    return { conversations: await annotate(await chats.listConversations(ctx.userId)) };
+    return { conversations: await chats.listConversations(ctx.userId) };
   },
 
   'conversations.autoTaskCounts': async ({ task_ids } = {}, ctx) => {
@@ -988,22 +942,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!safeId(cid)) throw new Error('invalid cid');
     const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
-    // Same channel annotation as the list endpoints — a freshly hydrated
-    // sidebar row (e.g. external inbound to a brand-new conversation) must
-    // land in its channel group immediately.
-    if (!conv.channel_platform) {
-      const [bindings, instances] = await Promise.all([
-        messagingBindings.listBindings(ctx.userId).catch(() => []),
-        messagingRegistry.listInstances(ctx.userId).catch(() => []),
-      ]);
-      const [annotated] = annotateChannelConversations([conv], bindings, instances);
-      return { conversation: annotated || conv };
-    }
-    const [instances] = await Promise.all([
-      messagingRegistry.listInstances(ctx.userId).catch(() => []),
-    ]);
-    const [annotated] = annotateChannelConversations([conv], [], instances);
-    return { conversation: annotated || conv };
+    return { conversation: conv };
   },
 
   'conversations.history': async (args, ctx) => {
@@ -1084,7 +1023,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         ? path.join(workspaceRoot, state.workspace_dir)
         : workspaceRoot;
     }
-    return await conversationFiles.listWorkspaceFiles(root);
+    return conversationFiles.listWorkspaceFiles(root);
   },
 
   // 引导「工作区目录已被移动或删除」→ 用户重新选择目录后固化到本会话。
@@ -1447,14 +1386,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
   },
 
-  // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
-  // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
-  'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
-    if (!safeId(spaceId)) throw new Error('invalid spaceId');
-    if (typeof sourceDir !== 'string' || !path.isAbsolute(sourceDir)) throw new Error('invalid sourceDir');
-    return spaceImport.importFolderIntoSpace(ctx.userId, spaceId, sourceDir, (p) => {
-      broadcastToRenderer('workspace-import:progress', p);
-    });
+  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { confirmed: result.confirmed };
+  },
+
+  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
+    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
+    if (typeof name !== 'string' || !name) throw new Error('invalid name');
+    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
+    if (!result.ok) throw new Error((result as { error: string }).error);
+    return { rejected: result.rejected };
   },
 
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
@@ -1592,17 +1537,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.files.status': async ({ spaceId, skipReconcile }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
-    // 快照先行：状态/文件列表直接读向量库（毫秒级），全量磁盘 reconcile
-    // 放后台补跑（in-flight 合并），不阻塞页签打开。状态变化经
-    // space.kb.events 实时推送，reconcile 结果并非首屏依赖。
-    if (!skipReconcile) {
-      void spaceLibraryIndexer.reconcile(ctx.userId, spaceId).catch((err) => {
-        log.warn('background space library reconcile failed', {
-          space_id: spaceId,
-          error: (err as Error)?.message || String(err),
-        });
-      });
-    }
+    const reconcile = skipReconcile ? null : await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
     const summary = spaceLibraryIndexer.statusSummary(ctx.userId, spaceId);
     const files = spaceLibraryIndexer.listFiles(ctx.userId, spaceId).map((r) => ({
       name: r.rel_path,
@@ -1614,7 +1549,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       mtime: r.mtime,
       error: r.error || undefined,
     }));
-    return { summary, files, reconcile: null };
+    return { summary, files, reconcile };
   },
 
   'spaces.files.reconcile': async ({ spaceId }, ctx) => {
@@ -3632,7 +3567,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cache.clearAll': async () => ({ bytes_freed: await cacheClearable.clearAllClearable() }),
 
   // ── Contexts (user-owned directory tree; vectorized via kb_indexer) ──
-  'contexts.tree': async () => ({ tree: await contexts.listContextsTree() }),
+  'contexts.tree': async () => ({ tree: contexts.listContextsTree() }),
 
   'contexts.read': async ({ path }) => {
     return contexts.readContextFile(path || '');
@@ -5368,10 +5303,6 @@ const streamHandlers: Record<string, StreamHandler> = {
 
 interface StreamState { cancelled: boolean; controller: AbortController; sender: WebContents }
 const activeStreams = new Map<string, StreamState>();
-/** process 事件批量窗口：16ms 内相邻 delta 打包成一条 IPC 消息。 */
-const STREAM_BATCH_WINDOW_MS = 16;
-/** 单条批量消息最多携带的 process 事件数（防止长时间突发时包过大）。 */
-const STREAM_BATCH_MAX = 64;
 
 /**
  * Resolve the current user context for an IPC request. `user.init` must be
@@ -5400,14 +5331,6 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
-  // Desktop live-refresh rail: every persisted group-chat message (external
-  // channel inbound included — nothing in the renderer holds a stream for
-  // those conversations) is pushed to all windows so the sidebar and the
-  // open conversation can refresh without a manual reload.
-  setGroupChatMessageBroadcaster((info) => {
-    broadcastToRenderer('conversations:updated', info);
-  });
-
   const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');
@@ -5520,36 +5443,8 @@ export function register(): void {
     const envelope = parseStreamEnvelope(request);
     if (!envelope) return;
     const { requestId, channel, payload } = envelope;
-    // 逐 token 的 process 事件每发一条都是一次 IPC 序列化 + 渲染层一次
-    // SSE 解析，流式高峰期（~50 事件/秒 × 若干并发流）会淹没主→渲染
-    // 通道。把相邻的 process 事件打包成数组一次发送，preload 拆包后
-    // 逐个回调 —— 渲染层事件语义与顺序完全不变，只减少消息数。
-    // 非 process 事件（message / turn_end / done / error 等结构事件）
-    // 立即发送，不引入可感知延迟。
-    const pending: unknown[] = [];
-    let flushTimer: NodeJS.Timeout | null = null;
-    const flushBatch = () => {
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
-      if (!pending.length) return;
-      if (event.sender.isDestroyed()) return;
-      const batch = pending.splice(0, pending.length);
-      event.sender.send(`stream:${requestId}`, batch);
-    };
     const out = (ev: unknown) => {
       if (event.sender.isDestroyed()) return;
-      if (ev && typeof ev === 'object' && (ev as { type?: string }).type === 'process') {
-        pending.push(ev);
-        if (pending.length >= STREAM_BATCH_MAX) {
-          flushBatch();
-        } else if (!flushTimer) {
-          flushTimer = setTimeout(flushBatch, STREAM_BATCH_WINDOW_MS);
-        }
-        return;
-      }
-      flushBatch();
       event.sender.send(`stream:${requestId}`, ev);
     };
 

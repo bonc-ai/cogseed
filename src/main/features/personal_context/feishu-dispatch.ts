@@ -98,21 +98,14 @@ export async function dispatchToFeishuHome(
   }
 
   try {
-    // 渠道原生投递：简报是 CogSeed 自身功能，直连 messaging 层幂等投递
-    // 台账。（2026-08-26 理清：此前经 P3394 信封绕路，属叙事耦合。）
-    const { entry } = await sendProactive(uid, {
+    await sendProactive(uid, {
       instanceId: opts.instanceId,
       recipientId: ownerExternalUserId,
       text,
       sourceKey,
       signal: opts.signal ?? null,
     });
-    log.info('briefing dispatched to feishu home', {
-      instanceId: opts.instanceId,
-      textLen: text.length,
-      sourceKey,
-      deliveryId: entry.externalDeliveryId,
-    });
+    log.info('briefing dispatched to feishu home', { instanceId: opts.instanceId, textLen: text.length, sourceKey });
     return { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

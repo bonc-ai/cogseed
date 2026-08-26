@@ -5,14 +5,14 @@
 #   - builtin:manifest:check  builtin resource inventory consistency
 #   - sbom:check            CycloneDX SBOM freshness (needs network)
 #
-# Manual trigger only (Actions -> Run workflow) — run before each release.
-# Not run on every push: SBOM freshness depends on the committed
-# sbom.cdx.json being regenerated (`npm run sbom:generate`) when deps change,
-# so gate it at release time instead of blocking day-to-day development.
+# Runs on the default branch and on manual dispatch only, so feature/MR
+# pipelines are never blocked by these jobs.
 
 name: compliance
 
 on:
+  push:
+    branches: [main, master, develop]
   workflow_dispatch:
 
 jobs:

@@ -233,7 +233,7 @@ describe('PC core regression unit coverage', () => {
     });
     expect(agent?.agent_id).toBeTruthy();
     expect(agent?.output_format).toBe('text');
-    expect(agent?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
+    expect(agent?.runtime).toEqual({ kind: 'cli', cli: 'codex' });
 
     const agentId = agent!.agent_id;
     expect(enabled.isAgentEnabled(TEST_UID, agentId)).toBe(true);

@@ -477,7 +477,7 @@ describe('agents › normalizeAgent', () => {
       runtime: { kind: 'cli', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'] },
     } as any, 'custom');
     expect(norm?.runtime).toEqual({
-      kind: 'p3394-gateway', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'],
+      kind: 'cli', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'],
     });
     expect(a.isCliAgent(norm)).toBe(true);
   });
@@ -521,8 +521,7 @@ describe('agents › normalizeAgent', () => {
       cli_provider_id: 'cp:hermes-local',
     });
     expect(a.isP3394GatewayAgent(norm)).toBe(true);
-    // 收口后网关型也是"本机 CLI 智能体"（UI/项目目录判断共用 isCliAgent）
-    expect(a.isCliAgent(norm)).toBe(true);
+    expect(a.isCliAgent(norm)).toBe(false);
   });
 
   it('normalizes in_process runtime but does not flag as CLI', async () => {
@@ -542,7 +541,7 @@ describe('agents › normalizeAgent', () => {
       runtime: { kind: 'cli', cli: 'claude', custom_args: ['--ok', 42, null, '--other'] as any },
     } as any, 'custom');
     expect(norm?.runtime).toEqual({
-      kind: 'p3394-gateway', cli: 'claude', custom_args: ['--ok', '--other'],
+      kind: 'cli', cli: 'claude', custom_args: ['--ok', '--other'],
     });
   });
 
@@ -574,7 +573,7 @@ describe('agents › normalizeAgent', () => {
     expect(norm?.interface_contract).toEqual({
       version: 1,
       role: 'external_expert',
-      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
+      runtime: { kind: 'cli', cli: 'hermes' },
       io: { input: 'task_message', output: 'final_message_with_artifacts' },
       governance: {
         session_role: 'participant_only',
@@ -599,7 +598,7 @@ describe('agents › normalizeAgent', () => {
       },
     } as any, 'custom');
     expect(norm?.interface_contract.role).toBe('external_expert');
-    expect(norm?.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
+    expect(norm?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'codex' });
     expect(norm?.interface_contract.governance.session_role).toBe('participant_only');
     expect(norm?.interface_contract.governance.uses_mate_skills).toBe(false);
   });
@@ -1234,7 +1233,7 @@ describe('agents › createCustomAgent', () => {
     expect(raw.interface_contract).toEqual({
       version: 1,
       role: 'external_expert',
-      runtime: { kind: 'p3394-gateway', cli: 'codex' },
+      runtime: { kind: 'cli', cli: 'codex' },
       io: { input: 'task_message', output: 'final_message_with_artifacts' },
       governance: {
         session_role: 'participant_only',
@@ -1300,11 +1299,10 @@ describe('agents › countP3394GatewayAgentsByCli (shared-gateway refcount)', ()
     const a = await loadAgents();
 
     await a.createCustomAgent({ name: 'N', description: 'desc', category: 'general' });
-    // in_process runtime is the default and not persisted as runtime.kind.
-    // 收口后创建的 `cli` 型读回即网关型，计入 gateway 绑定统计。
+    // in_process runtime is the default and not persisted as runtime.kind
     await a.createCustomAgent({ name: 'CliLike', description: 'desc', category: 'general', runtime: { kind: 'cli', cli: 'codex' } });
 
-    expect(await a.countP3394GatewayAgentsByCli('codex')).toBe(1);
+    expect(await a.countP3394GatewayAgentsByCli('codex')).toBe(0);
     expect(await a.countP3394GatewayAgentsByCli('hermes')).toBe(0);
     expect(await a.countP3394GatewayAgentsByCli('')).toBe(0);
     expect(await a.countP3394GatewayAgentsByCli(null)).toBe(0);
@@ -1427,7 +1425,7 @@ describe('agents › listAgents', () => {
       name: 'Brief Agent',
       source: 'custom',
       category: 'data',
-      runtime: { kind: 'p3394-gateway', cli: 'codex' },
+      runtime: { kind: 'cli', cli: 'codex' },
       enabled: false,
     });
     expect(summary).not.toHaveProperty('workflow');
@@ -1473,27 +1471,6 @@ describe('agents › listAgents', () => {
     expect(match).toHaveLength(1);
     expect(match[0].source).toBe('marketplace');
     expect(match[0].name).toBe('BuiltDup');
-  });
-
-  it('第二期收口：legacy cli runtime 读回为 p3394-gateway，磁盘迁移并留备份', async () => {
-    writeCustomAgent('legacy-cli-agent', {
-      name: 'Legacy CLI',
-      runtime: { kind: 'cli', cli: 'claude', model: 'sonnet' },
-    });
-    const agentFile = path.join(customAgentsDir(), 'legacy-cli-agent', 'agent.json');
-    const backupFile = `${agentFile}.pre-gateway.bak`;
-    const a = await loadAgents();
-    const list = await a.listAgents();
-    const migrated = list.find((x) => x.agent_id === 'legacy-cli-agent');
-    // 读路径升级：无论磁盘新旧，读出的执行后端只有网关一种
-    expect(migrated?.runtime).toMatchObject({ kind: 'p3394-gateway', cli: 'claude', model: 'sonnet' });
-    // 磁盘迁移：agent.json 回写为网关型
-    const onDisk = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
-    expect(onDisk.runtime).toMatchObject({ kind: 'p3394-gateway', cli: 'claude' });
-    // 原始内容备份，可回滚
-    expect(fs.existsSync(backupFile)).toBe(true);
-    const backup = JSON.parse(fs.readFileSync(backupFile, 'utf8'));
-    expect(backup.runtime).toMatchObject({ kind: 'cli', cli: 'claude' });
   });
 });
 
@@ -1598,7 +1575,7 @@ describe('agents › updateCustomAgent', () => {
     const updated = await a.updateCustomAgent('abc', {
       runtime: { kind: 'cli', cli: 'codex' },
     } as any);
-    expect(updated?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
+    expect(updated?.runtime).toEqual({ kind: 'cli', cli: 'codex' });
   });
 
   it('reconciles interface contract when updating a CLI backend', async () => {
@@ -1616,9 +1593,9 @@ describe('agents › updateCustomAgent', () => {
       runtime: { kind: 'cli', cli: 'hermes' },
     } as any);
     expect(updated?.interface_contract.role).toBe('external_expert');
-    expect(updated?.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(updated?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
     const raw = JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8'));
-    expect(raw.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
+    expect(raw.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
     expect(raw.interface_contract.governance.uses_mate_skills).toBe(false);
   });
 
@@ -1630,12 +1607,12 @@ describe('agents › updateCustomAgent', () => {
     const a = await loadAgents();
     // Attempt with explicit null (drop) — should be ignored.
     const r1 = await a.updateCustomAgent('abc', { runtime: null } as any);
-    expect(r1?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'claude' });
+    expect(r1?.runtime).toEqual({ kind: 'cli', cli: 'claude' });
     // Attempt with kind:'in_process' — also ignored.
     const r2 = await a.updateCustomAgent('abc', {
       runtime: { kind: 'in_process' },
     } as any);
-    expect(r2?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'claude' });
+    expect(r2?.runtime).toEqual({ kind: 'cli', cli: 'claude' });
   });
 
   it('locks runtime kind: in_process agent cannot become cli post-create', async () => {

@@ -50,10 +50,6 @@ export interface Actor {
 export interface MembersFile {
   version: 1;
   actors: Actor[];
-  /** 指挥官是否已说过话。由消息落盘时（bus.appendMain）顺手写入，
-   *  老数据在读取侧懒补记 —— 展示路径据此跳过整份 jsonl 的 commander
-   *  正则扫描（工作空间任务列表等每行一次的全量读由此消失）。 */
-  commander_spoken?: boolean;
 }
 
 export type GroupStatus = 'idle' | 'running' | 'aborted';
@@ -380,55 +376,17 @@ function ensureGroupDir(uid: string, cid: string, projectIdHint?: string | null)
   return d;
 }
 
-/** members.json 解析缓存：按文件指纹（mtimeMs:size）复用解析结果。
- *  任务列表每行要读一次 members，几百个会话时是几百次小文件读——
- *  指纹不变直接复用，把 N 次读压成 0 次。写入路径（writeMembers /
- *  markCommanderSpoken）直接删键，不依赖指纹失效；外部直接改文件
- *  则靠指纹失效。返回浅拷贝，防止调用方 mutate 污染缓存。 */
-const _membersCache = new Map<string, { stamp: string; value: MembersFile }>();
-const MEMBERS_CACHE_MAX = 1024;
-
-function _membersCachePut(file: string, value: MembersFile, stamp: string): void {
-  if (_membersCache.size >= MEMBERS_CACHE_MAX) {
-    const oldest = _membersCache.keys().next().value;
-    if (oldest !== undefined) _membersCache.delete(oldest);
-  }
-  _membersCache.set(file, { stamp, value });
-}
-
-function _cloneMembers(value: MembersFile): MembersFile {
-  return {
-    version: 1,
-    actors: value.actors.slice(),
-    ...(value.commander_spoken ? { commander_spoken: true as const } : {}),
-  };
-}
-
 export async function readMembers(
   uid: string,
   cid: string,
   projectIdHint?: string | null,
 ): Promise<MembersFile> {
   const file = conversationLayout(uid, cid, projectIdHint).membersFile;
-  let stamp = '';
-  try {
-    const st = fs.statSync(file);
-    stamp = `${st.mtimeMs}:${st.size}`;
-  } catch {
-    return { version: 1, actors: [] };
-  }
-  const hit = _membersCache.get(file);
-  if (hit && hit.stamp === stamp) return _cloneMembers(hit.value);
+  if (!fs.existsSync(file)) return { version: 1, actors: [] };
   try {
     const data: any = await readJson(file);
     if (data && typeof data === 'object' && Array.isArray(data.actors)) {
-      const value: MembersFile = {
-        version: 1,
-        actors: data.actors as Actor[],
-        ...(data.commander_spoken === true ? { commander_spoken: true as const } : {}),
-      };
-      _membersCachePut(file, value, stamp);
-      return _cloneMembers(value);
+      return { version: 1, actors: data.actors as Actor[] };
     }
   } catch {
     log.warn('members read failed', {
@@ -448,28 +406,7 @@ async function writeMembers(
   projectIdHint?: string | null,
 ): Promise<void> {
   ensureGroupDir(uid, cid, projectIdHint);
-  const file = conversationLayout(uid, cid, projectIdHint).membersFile;
-  await writeJson(file, m);
-  _membersCache.delete(file);
-}
-
-/** 标记「指挥官已发言」。幂等：已标记过只读一次 members.json 就返回。
- *
- *  与 addMember 一样走 per-(uid,cid) 的 _stateLock —— read-modify-write
- *  若与并发的 addMember 竞争，会互相覆盖对方刚写入的字段
- *  （members.json tmp-rename 竞态，此前真实出现过）。 */
-export async function markCommanderSpoken(
-  uid: string,
-  cid: string,
-  projectIdHint?: string | null,
-): Promise<boolean> {
-  return _stateLock(uid, cid).runExclusive(async () => {
-    const members = await readMembers(uid, cid, projectIdHint);
-    if (members.commander_spoken) return false;
-    members.commander_spoken = true;
-    await writeMembers(uid, cid, members, projectIdHint);
-    return true;
-  });
+  await writeJson(conversationLayout(uid, cid, projectIdHint).membersFile, m);
 }
 
 /** Idempotent. Returns true if the actor was newly added.

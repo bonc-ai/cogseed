@@ -70,11 +70,10 @@ describe('Feishu touchpoint adapter', () => {
     const result = await adapter.send('user-1', intent());
 
     expect(result).toEqual({ externalDeliveryId: 'om_123' });
-    // 渠道原生投递（2026-08-26 理清）：sourceKey 原样直传
     expect(mocks.manager.sendProactive).toHaveBeenCalledWith('user-1', expect.objectContaining({
       instanceId: 'feishu-1',
       recipientId: 'ou_owner',
-      sourceKey: `touchpoint:${intent().intentId}`,
+      sourceKey: 'touchpoint:intent-1',
     }));
   });
 

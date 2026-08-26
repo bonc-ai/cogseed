@@ -37,9 +37,6 @@ export interface P3394GatewayTurnInput {
    *  project workspace context. */
   workingDir?: string;
   signal?: AbortSignal;
-  /** Positive-integer process id of the external agent's gateway process,
-   *  when the transport can surface one. Validated at the bus boundary. */
-  onProcessInfo?: (pid: number) => void;
   onCoordinatorActivity?: (event: { kind: string }) => void;
   onProcess?: (data: Record<string, unknown>) => void;
 }

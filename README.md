@@ -153,7 +153,7 @@ CogSeed is a single-process Electron application with explicit boundaries betwee
 - `src/main/` contains the TypeScript backend, business workflows, storage, model adapters, and controlled tool execution.
 - `src/renderer/` contains the vanilla HTML, CSS, and JavaScript interface. It has no direct Node.js access.
 - `src/main/preload.js` exposes the allow-listed `window.cogseed` bridge. Renderer-to-main communication goes through the canonical IPC invoke and stream paths.
-- Local CLI agents run through the managed P3394 gateway channel (spawned child processes with watchdog self-healing and heartbeat registration); MCP stdio connectors and isolated runtime workers use their own dedicated process gateways. The Agents Overview dashboard unifies builtin agents, local gateways, remote P3394 nodes, and messaging channel instances in one place.
+- Local CLI agents run as managed child processes through one runner; MCP stdio connectors and isolated runtime workers use their own dedicated process gateways.
 
 User-scoped state is separated under the application data container. Sync-eligible private data lives under `data/<uid>/cloud/`, while indexes, caches, credentials, local installations, and other machine-specific state live under `data/<uid>/local/`. Development launchers use an isolated `.cogseed` data root so source builds do not share state with packaged applications.
 

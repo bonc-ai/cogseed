@@ -197,19 +197,10 @@ async function mapRuntimeEvent(
   }
   if (event.type === 'error' && event.status === 'failed') {
     const failed = await transitionCogSeedTask(userId, task.taskId, 'failed', { errorCode: 'runtime_failed' });
-    // Carry the executor's failure detail (gateway/CLI error text, failure
-    // code) into the projected event — without it every failure collapses
-    // into the generic retry notice and the root cause is unrecoverable
-    // from the conversation history alone.
-    const failureDetail = String(event.error || '').trim();
-    const failureCode = typeof event.metadata?.code === 'string' ? event.metadata.code : '';
     await projectTaskEventBestEffort(userId, failed, {
       eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.failed',
-      payload: {
-        ...(failureDetail ? { error: failureDetail.slice(0, 2000) } : {}),
-        ...(failureCode ? { code: failureCode } : {}),
-      },
+      payload: {},
     }, projectTaskEvent);
     return failed;
   }
@@ -221,11 +212,9 @@ async function mapRuntimeEvent(
       });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (kernelEvent === 'tool_result') {
-      const toolError = typeof event.metadata?.error === 'string' ? event.metadata.error.trim() : '';
       const stored = await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'tool.finished', {
         ...(typeof event.metadata?.name === 'string' ? { name: event.metadata.name } : {}),
         ...(typeof event.metadata?.isError === 'boolean' ? { isError: event.metadata.isError } : {}),
-        ...(event.metadata?.isError === true && toolError ? { error: toolError.slice(0, 2000) } : {}),
       });
       await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
     } else if (kernelEvent === 'artifact') {

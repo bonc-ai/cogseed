@@ -1030,9 +1030,9 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   if (kind !== 'cli' && kind !== 'p3394-gateway') return null;
   const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
   if (!cli) return null;
-  // 第二期通道收口：legacy 直连 `cli` runtime 一律读回为网关型——外接只有
-  // 一条执行路径（P3394 网关）。磁盘迁移见 _migrateLegacyCliRuntime。
-  const out: AgentRuntime = { kind: 'p3394-gateway', cli };
+  const out: AgentRuntime = kind === 'p3394-gateway'
+    ? { kind: 'p3394-gateway', cli }
+    : { kind: 'cli', cli };
   if (typeof r.model === 'string' && r.model.trim()) out.model = r.model.trim();
   if (Array.isArray(r.custom_args)) {
     const args = r.custom_args.filter((s): s is string => typeof s === 'string');
@@ -1056,10 +1056,9 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
 
 /** True when this agent runs via a local CLI rather than in-process
  *  core-agent. Single source of truth — group_chat / chats / renderer
- *  all import this rather than re-checking `runtime?.kind` directly.
- *  第二期收口：直连 `cli` 已升级为网关型，两者都算"本机 CLI 智能体"。 */
+ *  all import this rather than re-checking `runtime?.kind` directly. */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
-  return !!agent && (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
+  return !!agent && agent.runtime?.kind === 'cli';
 }
 
 /** True when this agent is a P3394-managed external agent (dispatch goes
@@ -1400,35 +1399,8 @@ function _enrichAgentSpecs(uid: string, specs: Agent[]): Promise<Agent[]> {
 
 /** Read the normalized catalog specs once. Full listings add mutable display
  * overlays below; chat-startup summaries deliberately do not. */
-/**
- * 第二期通道收口：把磁盘上 legacy `runtime.kind === 'cli'` 的 agent.json
- * 一次性迁移为 p3394-gateway。原始内容备份为 `agent.json.pre-gateway.bak`
- * （不覆盖已有备份，可手工回滚）；迁移失败时仅内存升级，不阻塞列表。
- */
-async function _migrateLegacyCliRuntime(file: string, raw: AgentRaw): Promise<AgentRaw> {
-  const rt = raw.runtime as { kind?: string } | null | undefined;
-  if (!rt || typeof rt !== 'object' || rt.kind !== 'cli') return raw;
-  const backup = `${file}.pre-gateway.bak`;
-  const upgraded: AgentRaw = {
-    ...raw,
-    runtime: { ...rt, kind: 'p3394-gateway' },
-    updated_at: new Date().toISOString(),
-  };
-  try {
-    if (!fs.existsSync(backup)) await fsp.copyFile(file, backup);
-    await fsp.writeFile(file, JSON.stringify(upgraded, null, 2) + '\n', 'utf8');
-    log.info('migrated legacy cli runtime to p3394-gateway', { file });
-    return upgraded;
-  } catch (err) {
-    log.warn('legacy cli runtime migration failed; in-memory upgrade only', {
-      file,
-      error: (err as Error).message,
-    });
-    return upgraded;
-  }
-}
-
-async function _listAgentSpecs(): Promise<Agent[]> {  const stamp = _agentDirStamp();
+async function _listAgentSpecs(): Promise<Agent[]> {
+  const stamp = _agentDirStamp();
   let specs: Agent[];
   if (_agentListCache && _agentListCache.stamp === stamp) {
     specs = _agentListCache.data;
@@ -1450,7 +1422,6 @@ async function _listAgentSpecs(): Promise<Agent[]> {  const stamp = _agentDirSta
           if (!fs.existsSync(full)) continue;
           let data: AgentRaw;
           try { data = await readJson<AgentRaw>(full); } catch { continue; }
-          data = await _migrateLegacyCliRuntime(full, data);
           const norm = normalizeAgent(data, source);
           if (!norm) continue;
           if (isMarketplaceSource(source)) {
@@ -2060,8 +2031,8 @@ async function _applyAgentUpdates(
     ? _normalizeRuntime((updates as any).runtime)
     : null;
   const effectiveCli = incomingRuntime
-    ? incomingRuntime.kind === 'p3394-gateway'
-    : (_normalizeRuntime((data as any).runtime)?.kind === 'p3394-gateway');
+    ? incomingRuntime.kind === 'cli'
+    : (_normalizeRuntime((data as any).runtime)?.kind === 'cli');
   if (effectiveCli) {
     if ('workflow' in (updates || {})) delete (updates as any).workflow;
     if ('skill_list' in (updates || {})) delete (updates as any).skill_list;
@@ -2211,10 +2182,10 @@ async function _applyAgentUpdates(
     // detail-page selector; we mirror it here so the rule survives
     // any other update path (tests, future scripts, IPC misuse).
     const existingKind: 'cli' | 'in_process' = data.runtime &&
-      _normalizeRuntime(data.runtime)?.kind === 'p3394-gateway' ? 'cli' : 'in_process';
+      _normalizeRuntime(data.runtime)?.kind === 'cli' ? 'cli' : 'in_process';
     const incomingKind: 'cli' | 'in_process' | null = v === null
       ? 'in_process'
-      : (_normalizeRuntime(v)?.kind === 'p3394-gateway' ? 'cli' : 'in_process');
+      : (_normalizeRuntime(v)?.kind === 'cli' ? 'cli' : 'in_process');
     if (incomingKind !== null && incomingKind !== existingKind) {
       log.warn(`agent ${agentId}: ignored runtime kind switch ${existingKind} → ${incomingKind}`);
     } else if (v === null) {
@@ -2311,7 +2282,7 @@ export async function addCustomAgentMemory(agentId: string, content: string) {
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
   const res = addAgentEntry(getActiveUserId(), agentId, content);
   if (res.ok) _invalidateAgentListCache();
   return res;
@@ -2321,7 +2292,7 @@ export async function removeCustomAgentMemory(agentId: string, oldText: string) 
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
 
   const fileRes = removeAgentEntry(getActiveUserId(), agentId, oldText);
   if (fileRes.ok) {
@@ -2359,7 +2330,7 @@ export async function updateCustomAgentMemory(agentId: string, oldText: string, 
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
   const res = replaceAgentEntry(getActiveUserId(), agentId, oldText, content);
   if (res.ok) _invalidateAgentListCache();
   return res;

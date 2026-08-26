@@ -116,9 +116,6 @@ function mapNonTerminalEvent(
   }
   if (event.type === 'tool-event') {
     const phase = event.phase === 'result' ? 'tool_result' : 'tool_call';
-    const toolErrorText = event.isError === true && typeof event.output === 'string'
-      ? event.output.trim()
-      : '';
     return {
       type: 'event',
       ...base,
@@ -126,9 +123,7 @@ function mapNonTerminalEvent(
       metadata: {
         kernel_event: phase,
         ...(typeof event.tool === 'string' ? { name: event.tool } : {}),
-        ...(typeof event.callId === 'string' && event.callId ? { call_id: event.callId } : {}),
         ...(phase === 'tool_result' ? { isError: event.isError === true } : {}),
-        ...(phase === 'tool_result' && toolErrorText ? { error: toolErrorText.slice(0, 2000) } : {}),
       },
     };
   }
