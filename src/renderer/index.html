@@ -294,6 +294,10 @@
                   </button>
                 </div>
               </div>
+              <!-- 会话统计行（Task 8）：输入区下方常驻显示当前会话的 token
+                   用量折叠结果（轮数/耗时/速率/缓存/上下文占用/费用）。
+                   无带 metrics 的消息时整行 hidden（conversation.js 控制）。 -->
+              <div id="chat-session-stats" class="chat-session-stats" hidden></div>
             </div>
             <!-- Bottom-docked integrated terminal (front-end mock; populated by
                  modules/terminal-panel.js). Toggle via #chat-terminal-toggle. -->
