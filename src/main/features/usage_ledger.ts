@@ -190,3 +190,70 @@ export function resetUsageLedgerForTests(): void {
   disarmIdleTimer();
   buffers.clear();
 }
+
+// ---------------------------------------------------------------------------
+// Aggregation — powers `dashboard.cost.query`.
+
+export type UsageDimension = 'day' | 'agent' | 'conversation';
+
+export interface UsageAggregateBucket {
+  key: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /** Only present when the bucket saw cache data at all — never a fake 0. */
+  cacheHitRate?: number;
+}
+
+export interface UsageAggregateResult {
+  dimension: UsageDimension;
+  /** True when the range contains no records — the UI shows 「未记录」, not 0. */
+  empty: boolean;
+  /** Stats origin, always surfaced (「统计自 … 起」). */
+  since?: string;
+  buckets: UsageAggregateBucket[];
+}
+
+export async function aggregateUsage(
+  uid: string,
+  query: { dimension: UsageDimension; from: number; to: number },
+): Promise<UsageAggregateResult> {
+  const { dimension, from, to } = query;
+  if (dimension !== 'day' && dimension !== 'agent' && dimension !== 'conversation') {
+    throw new Error(`invalid usage dimension: ${String(dimension)}`);
+  }
+  const events = await readUsageEvents(uid, from, to);
+  const since = usageStatsSince(uid);
+  const buckets = new Map<string, UsageAggregateBucket & { sawCache: boolean }>();
+  for (const ev of events) {
+    let key: string;
+    if (dimension === 'day') key = new Date(ev.at).toISOString().slice(0, 10);
+    else if (dimension === 'agent') key = ev.agentId || '(direct)';
+    else key = ev.conversationId || '(no-conversation)';
+    const b = buckets.get(key) || {
+      key, calls: 0, inputTokens: 0, outputTokens: 0,
+      cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, sawCache: false,
+    };
+    b.calls += 1;
+    b.inputTokens += ev.inputTokens || 0;
+    b.outputTokens += ev.outputTokens || 0;
+    b.cacheReadTokens += ev.cacheReadTokens || 0;
+    b.cacheWriteTokens += ev.cacheWriteTokens || 0;
+    b.totalTokens += ev.totalTokens || 0;
+    if (typeof ev.cacheReadTokens === 'number') b.sawCache = true;
+    buckets.set(key, b);
+  }
+  const out = [...buckets.values()]
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map(({ sawCache, ...b }) => {
+      if (sawCache) {
+        const denom = b.inputTokens + b.cacheReadTokens;
+        if (denom > 0) b.cacheHitRate = b.cacheReadTokens / denom;
+      }
+      return b;
+    });
+  return { dimension, empty: events.length === 0, since, buckets: out };
+}

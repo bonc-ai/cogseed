@@ -123,6 +123,7 @@ import * as messagingRegistry from '../features/messaging/registry';
 import { annotateChannelConversations } from '../features/messaging/channel-annotation';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
+import { invokeHandlers as dashboardHandlers } from './dashboard';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
@@ -4874,6 +4875,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // material never crosses this table; status DTOs only.
   ...personalContextHandlers,
   ...touchpointHandlers,
+  // 智能体总览 2.0：成本聚合 / 全局快照 / 协作时间线。只读聚合与订阅，
+  // 不在此层落业务逻辑。
+  ...dashboardHandlers,
   ...desktopWorkbenchHandlers,
 
   // In-app update reminders. Machine-local state; the server contract is
