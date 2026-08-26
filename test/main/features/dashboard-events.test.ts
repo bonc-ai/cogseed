@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   dashboardCollabFromGroupEvent,
   dashboardActivityFromTaskTerminal,
+  dashboardActivityFromGroupEvent,
 } from '../../../src/main/features/dashboard_events';
 import type { GroupEvent } from '../../../src/main/features/group_chat/bus';
 import type { TaskTerminalEvent } from '../../../src/main/features/group_chat/bus';
@@ -68,5 +69,18 @@ describe('dashboard collab mapping', () => {
       kind: 'task_terminal',
       ...terminal,
     });
+  });
+
+  it('fans wake requests out to the activity channel for cross-view visibility', () => {
+    const out = dashboardActivityFromGroupEvent({
+      type: 'wake_request',
+      cid: 'c1',
+      request: { id: 'w1', agent_id: 'researcher', source: 'plan_step', objective: '调研 X', status: 'pending' },
+    } as unknown as GroupEvent);
+    expect(out).toEqual({ kind: 'wake_request', cid: 'c1', agentId: 'researcher', status: 'pending' });
+  });
+
+  it('keeps other group events out of the activity channel', () => {
+    expect(dashboardActivityFromGroupEvent(messageEvent() as GroupEvent)).toBeNull();
   });
 });

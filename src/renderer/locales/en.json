@@ -6110,5 +6110,6 @@
   "dashboard.collab.no_agents": "Plain chat (no external agents dispatched)",
   "dashboard.collab.agents_n": "{n} agents involved",
   "dashboard.collab.dispatches_n": "{n} commander dispatches",
-  "dashboard.collab.dispatch": "dispatch"
+  "dashboard.collab.dispatch": "dispatch",
+  "dashboard.activity.go_decide": "Decide"
 }

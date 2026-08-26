@@ -6110,5 +6110,6 @@
   "dashboard.collab.no_agents": "普通对话（未派发外接智能体）",
   "dashboard.collab.agents_n": "{n} 个智能体参与",
   "dashboard.collab.dispatches_n": "指挥官派发 {n} 次",
-  "dashboard.collab.dispatch": "派发"
+  "dashboard.collab.dispatch": "派发",
+  "dashboard.activity.go_decide": "去处理"
 }

@@ -5015,5 +5015,6 @@
   "dashboard.collab.no_agents": "Conversa simples (sem agentes externos)",
   "dashboard.collab.agents_n": "{n} agentes envolvidos",
   "dashboard.collab.dispatches_n": "{n} despachos do comandante",
-  "dashboard.collab.dispatch": "despacho"
+  "dashboard.collab.dispatch": "despacho",
+  "dashboard.activity.go_decide": "Decidir"
 }

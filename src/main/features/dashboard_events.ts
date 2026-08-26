@@ -65,6 +65,18 @@ export function dashboardCollabFromGroupEvent(ev: GroupEvent): DashboardCollabEv
   };
 }
 
+/** Wake Gate（计划门）事件 → activity 频道：让主页/协作/红点知道
+ * 「有会话在等你确认」。批准/拒绝仍在会话内的确认卡片上做。 */
+export function dashboardActivityFromGroupEvent(ev: GroupEvent): { kind: 'wake_request'; cid: string; agentId: string; status: string } | null {
+  if (ev.type !== 'wake_request') return null;
+  return {
+    kind: 'wake_request',
+    cid: ev.cid,
+    agentId: ev.request?.agent_id || '',
+    status: ev.request?.status || 'pending',
+  };
+}
+
 export function dashboardActivityFromTaskTerminal(event: TaskTerminalEvent) {
   return { kind: 'task_terminal' as const, ...event };
 }
@@ -77,6 +89,8 @@ export function initDashboardEvents(): void {
   subscribeAllGroups((ev) => {
     const collab = dashboardCollabFromGroupEvent(ev);
     if (collab) broadcast('dashboard:collab', collab);
+    const wake = dashboardActivityFromGroupEvent(ev);
+    if (wake) broadcast('dashboard:activity', wake);
   });
   subscribeTaskTerminals((event) => {
     broadcast('dashboard:activity', dashboardActivityFromTaskTerminal(event));
