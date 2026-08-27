@@ -173,10 +173,10 @@ env_key = "OPENAI_API_KEY"` }),
     ]);
   });
 
-  it('probe collects per-model windows when the endpoint volunteers them', async () => {
-    // Aggregator-style gateways embed context_length on each data[] entry;
-    // plain OpenAI-compatible servers omit it and the map stays sparse.
-    // The key below is a runtime-built synthetic value, not a credential.
+  it('probe collects per-model abilities when the endpoint volunteers them', async () => {
+    // Aggregator-style gateways embed context_length / modality info on each
+    // data[] entry; plain OpenAI-compatible servers omit them and the map
+    // stays sparse. The key below is a runtime-built synthetic value.
     const probeKey = ['probe', UID].join('-');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       data: [
@@ -184,6 +184,9 @@ env_key = "OPENAI_API_KEY"` }),
         { id: 'vendor/small-model', context_window: 65_536 },
         { id: 'vendor/opaque-model' },
         { id: 'vendor/liar-model', context_length: 'huge' },
+        { id: 'vendor/eyes-model', input_modalities: ['text', 'image'] },
+        { id: 'vendor/artist-model', modality: 'text->image' },
+        { id: 'vendor/omni-model', architecture: { input_modalities: ['text', 'image'] }, context_length: 131_072 },
       ],
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
     try {
@@ -191,11 +194,20 @@ env_key = "OPENAI_API_KEY"` }),
       const res = await probeProviderModels('openai', 'https://relay.example/v1', probeKey);
       expect(res.ok).toBe(true);
       if (!res.ok) return;
-      expect(res.models).toEqual(['vendor/big-model', 'vendor/small-model', 'vendor/opaque-model', 'vendor/liar-model']);
-      expect(res.windows).toEqual({
-        'vendor/big-model': 2_097_152,
-        'vendor/small-model': 65_536,
+      expect(res.models).toEqual([
+        'vendor/big-model', 'vendor/small-model', 'vendor/opaque-model',
+        'vendor/liar-model', 'vendor/eyes-model', 'vendor/artist-model', 'vendor/omni-model',
+      ]);
+      expect(res.abilities).toEqual({
+        'vendor/big-model': { contextWindow: 2_097_152 },
+        'vendor/small-model': { contextWindow: 65_536 },
+        // input_modalities containing 'image' → vision understanding.
+        'vendor/eyes-model': { vision: true },
+        // "text->image" is a GENERATOR: input side has no image → not vision.
+        'vendor/omni-model': { contextWindow: 131_072, vision: true },
       });
+      // The artist generator says nothing usable — absent, not false.
+      expect(res.abilities['vendor/artist-model']).toBeUndefined();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -224,11 +236,15 @@ env_key = "OPENAI_API_KEY"` }),
       UID, ['hermes:winprobe'], home,
       { 'hermes:winprobe': ['vendor/big-model', 'vendor/plain-model'] },
       undefined,
-      { 'hermes:winprobe': { 'vendor/big-model': 2_097_152 } },
+      undefined,
+      { 'hermes:winprobe': {
+        'vendor/big-model': { contextWindow: 2_097_152, vision: false },
+        'vendor/plain-model': { vision: true },
+      } },
     );
     expect(providers.listCustomProviders(UID)[0].models).toEqual([
-      { id: 'vendor/big-model', contextWindow: 2_097_152, maxTokens: 8_192 },
-      { id: 'vendor/plain-model', contextWindow: 131_072, maxTokens: 8_192 },
+      { id: 'vendor/big-model', contextWindow: 2_097_152, maxTokens: 8_192, vision: false },
+      { id: 'vendor/plain-model', contextWindow: 131_072, maxTokens: 8_192, vision: true },
     ]);
   });
 });

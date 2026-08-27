@@ -2765,6 +2765,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return groupChat.listCollaborationConflicts(ctx.userId, cid);
   },
 
+  'groupChat.collabOverview': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    return { overview: await groupChat.collabOverview(ctx.userId, cid, conv?.project_id ?? projectIdHint) };
+  },
+
   'groupChat.resolveCollaborationConflict': async (args, ctx) => {
     const { cid, conflictId, decision, selected_proposal_ids, text, reason } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
@@ -4171,7 +4180,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, windowsByExternalId } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, abilitiesByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
@@ -4181,20 +4190,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
       ? baseUrlsByExternalId
       : undefined;
-    // Probed per-model context windows (sparse; aggregator endpoints only).
-    // Validate one level deep: { [externalId]: { [modelId]: positive int } }.
-    let windows: Record<string, Record<string, number>> | undefined;
-    if (windowsByExternalId && typeof windowsByExternalId === 'object' && !Array.isArray(windowsByExternalId)) {
-      for (const [extId, map] of Object.entries(windowsByExternalId)) {
+    // Probed per-model abilities (sparse; aggregator endpoints only).
+    // Validate one level deep: { [externalId]: { [modelId]: { contextWindow?, vision? } } }.
+    let abilities: Record<string, Record<string, { contextWindow?: number; vision?: boolean }>> | undefined;
+    if (abilitiesByExternalId && typeof abilitiesByExternalId === 'object' && !Array.isArray(abilitiesByExternalId)) {
+      for (const [extId, map] of Object.entries(abilitiesByExternalId)) {
         if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
-        const clean: Record<string, number> = {};
-        for (const [modelId, w] of Object.entries(map)) {
-          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) clean[modelId] = w;
+        const clean: Record<string, { contextWindow?: number; vision?: boolean }> = {};
+        for (const [modelId, raw] of Object.entries(map)) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const a: { contextWindow?: number; vision?: boolean } = {};
+          const w = (raw as Record<string, unknown>).contextWindow;
+          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) a.contextWindow = w;
+          const v = (raw as Record<string, unknown>).vision;
+          if (typeof v === 'boolean') a.vision = v;
+          if (a.contextWindow !== undefined || a.vision !== undefined) clean[modelId] = a;
         }
-        if (Object.keys(clean).length) (windows || (windows = {}))[extId] = clean;
+        if (Object.keys(clean).length) (abilities || (abilities = {}))[extId] = clean;
       }
     }
-    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, windows);
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, undefined, abilities);
   },
   'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
     if (typeof cli !== 'string' || !cli) {

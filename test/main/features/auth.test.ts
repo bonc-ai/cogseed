@@ -816,16 +816,21 @@ describe('auth › listModels', () => {
       models: [
         { id: 'deepseek/deepseek-v4-flash-vision-exp', contextWindow: 131_072, maxTokens: 8_192 },
         { id: 'hand-tuned-model', contextWindow: 262_144, maxTokens: 8_192 },
+        { id: 'blind-model', contextWindow: 131_072, maxTokens: 8_192, vision: false },
       ],
     });
     if (!created.ok) throw new Error(created.error);
 
     const a = await import('../../../src/main/features/auth');
     const { models } = await a.listModels(`cp:${created.id}`);
-    // Stored default + catalog hit → catalog's 1M answers.
+    // Stored default + catalog hit → catalog's 1M answers; unknown vision
+    // (undefined in store) resolves from the catalog too.
     expect(models.find((m) => m.id === 'deepseek/deepseek-v4-flash-vision-exp')?.contextWindow).toBe(1_048_576);
+    expect(models.find((m) => m.id === 'deepseek/deepseek-v4-flash-vision-exp')?.vision).toBe(true);
     // User-typed non-default value is respected verbatim.
     expect(models.find((m) => m.id === 'hand-tuned-model')?.contextWindow).toBe(262_144);
+    // Stored vision === false is explicit (probe/user) — never overridden.
+    expect(models.find((m) => m.id === 'blind-model')?.vision).toBe(false);
   });
 });
 
