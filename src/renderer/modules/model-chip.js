@@ -252,7 +252,9 @@ function _modelChipRenderChip(chip) {
   }
   const overrideMarker = cfg.modelOverridden || cfg.effortOverridden;
   chip.classList.toggle('is-override', !!overrideMarker);
-  chip.title = t('exec_config.title');
+  chip.title = cliMode
+    ? t('exec_config.effort_cli_note')
+    : t('exec_config.title');
 }
 
 // ─── Menu ─────────────────────────────────────────────────────────────────
@@ -335,53 +337,45 @@ function _renderExecConfigMenu(menu, anchor) {
   header.title = t('exec_config.title');
   menu.appendChild(header);
 
+  // CLI 场景不套「模型/推理强度」分节框架——header 已经说明了执行方式，
+  // 下面就是一个扁平的「当前 + 候选」模型列表，说明文字垫底。此前把候选
+  // 列表异步追加到 effort 节后面，读起来像"未配置模型"报错挂在推理强度
+  // 节下，信息层级是坏的。
+  if (cfg.mode === 'cli') {
+    _renderCliModelOptions(menu, anchor, target, cfg);
+    return;
+  }
+
   // ── Model section ──
   _menuSectionLabel(menu, 'exec_config.section_model');
 
-  // Summary row only when it adds information the provider list can't show:
-  // a task override (badge + reset affordance) or a CLI runtime. Otherwise
-  // the provider rows below already mark the active pick as「当前」and a
-  // duplicate line would read as two different entries.
-  if (cfg.mode === 'cli' || cfg.modelOverridden) {
+  if (cfg.modelOverridden) {
+    // Task override in effect: show it with its badge and a reset row.
     const currentModelEl = document.createElement('div');
-    currentModelEl.className = 'model-chip-menu-item' + (cfg.modelOverridden ? ' is-override' : '');
+    currentModelEl.className = 'model-chip-menu-item is-override';
     currentModelEl.innerHTML =
       '<span class="model-chip-menu-main">' +
       `<span class="model-chip-menu-name">${escapeHtml(cfg.modelLabel || t('exec_config.no_model'))}</span>` +
-      (cfg.modelOverridden ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.task_override_badge'))}</span>` : '') +
+      `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.task_override_badge'))}</span>` +
       '</span>' +
-      `<span class="model-chip-menu-sub">${escapeHtml(cfg.providerLabel || (cfg.mode === 'cli' ? t('exec_config.cli_runtime', { cli: cfg.providerLabel }) : ''))}</span>`;
+      `<span class="model-chip-menu-sub">${escapeHtml(cfg.providerLabel || '')}</span>`;
     menu.appendChild(currentModelEl);
+    const reset = document.createElement('div');
+    reset.className = 'model-chip-menu-item model-chip-menu-item--action';
+    reset.innerHTML = `<span class="model-chip-menu-main"><span class="model-chip-menu-name">${escapeHtml(t('exec_config.reset_model'))}</span></span>`;
+    reset.addEventListener('click', () => {
+      _clearModelOverride(target);
+      _closeModelMenu();
+    });
+    menu.appendChild(reset);
   }
-
-  if (cfg.mode === 'cli') {
-    // CLI agent: model options come from the CLI's own model table
-    // (same list the agent settings page uses).
-    _renderCliModelOptions(menu, anchor, cfg);
-  } else if (cfg.model || _modelChipEntries.length) {
-    // Reset-to-default row (only meaningful when a task override exists).
-    if (cfg.modelOverridden) {
-      const reset = document.createElement('div');
-      reset.className = 'model-chip-menu-item model-chip-menu-item--action';
-      reset.innerHTML = `<span class="model-chip-menu-main"><span class="model-chip-menu-name">${escapeHtml(t('exec_config.reset_model'))}</span></span>`;
-      reset.addEventListener('click', () => {
-        _clearModelOverride(target);
-        _closeModelMenu();
-      });
-      menu.appendChild(reset);
-    }
+  if (cfg.model || _modelChipEntries.length) {
     _renderApiProviderRows(menu, anchor, target, cfg);
   }
 
   // ── Effort section ──
   _menuSectionLabel(menu, 'exec_config.section_effort');
-
-  if (cfg.mode === 'cli') {
-    const note = document.createElement('div');
-    note.className = 'model-chip-menu-note';
-    note.textContent = t('exec_config.effort_cli_note');
-    menu.appendChild(note);
-  } else {
+  {
     // Segmented one-row picker — four stacked rows made the menu tall and
     // visually heavy; pills read instantly and halve the effort-section
     // height. Disabled pills keep the reason in their tooltip + the note.
@@ -605,48 +599,74 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
 /** CLI agent model options: static model table per CLI type (same source
  *  as the agent settings page); the agent's saved runtime.model stays the
  *  default, a pick here is a task override. */
-function _renderCliModelOptions(menu, anchor, cfg) {
+async function _renderCliModelOptions(menu, anchor, target, cfg) {
   const agent = cfg.agent;
   const cliType = (agent && agent.runtime && agent.runtime.cli) || '';
-  const container = document.createElement('div');
-  container.className = 'model-chip-menu-loading';
-  container.textContent = t('common.loading');
-  menu.appendChild(container);
+  const savedModel = (agent && agent.runtime && agent.runtime.model) || '';
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'model-chip-menu-loading';
+  loadingEl.textContent = t('common.loading');
+  menu.appendChild(loadingEl);
 
-  window.cogseed.invoke('localAgents.listModels', { type: cliType }).then((res) => {
-    if (!menu.isConnected) return;
-    container.remove();
-    const models = (res && Array.isArray(res.models)) ? res.models : [];
-    if (!models.length) {
-      const note = document.createElement('div');
-      note.className = 'model-chip-menu-note';
-      note.textContent = t('exec_config.cli_no_models');
-      menu.appendChild(note);
-      return;
-    }
-    if (cfg.modelOverridden) {
-      const reset = document.createElement('div');
-      reset.className = 'model-chip-menu-item model-chip-menu-item--action';
-      reset.innerHTML = `<span class="model-chip-menu-main"><span class="model-chip-menu-name">${escapeHtml(t('exec_config.reset_model'))}</span></span>`;
-      reset.addEventListener('click', () => {
-        _clearModelOverride(_chipTargetForElement(anchor));
-        _closeModelMenu();
-      });
-      menu.appendChild(reset);
-    }
-    models.forEach((m) => {
-      const id = String(m && typeof m === 'object' ? (m.id || '') : String(m || ''));
-      if (!id) return;
-      const label = String((m && m.label) || id);
-      const isCurrent = cfg.model === id;
-      const item = document.createElement('div');
-      item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
-      item.innerHTML =
-        '<span class="model-chip-menu-main">' +
-        `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
-        (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
-        '</span>';
-      item.addEventListener('click', () => {
+  let models = [];
+  try {
+    const res = await window.cogseed.invoke('localAgents.listModels', { type: cliType });
+    if (res && Array.isArray(res.models)) models = res.models;
+  } catch (_) { /* treat as scan failure below */ }
+  // Menu may have been closed while loading.
+  if (!menu.isConnected) return;
+  loadingEl.remove();
+
+  // 扫描不到该 CLI 的模型表（第三方配置我们拿不到）就不渲染列表了——
+  // 一句话交代执行配置完全由 CLI 自己决定，比一个"未配置模型"的空架子诚实。
+  if (!models.length) {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('exec_config.cli_no_models', { cli: cliType });
+    menu.appendChild(note);
+    return;
+  }
+
+  // 扫描到 → 一个扁平的「当前 + 候选」列表。第一行是生效基线（Agent 绑定
+  // 的 runtime.model；没绑则显示「CLI 默认」），点击即清除本次任务的临时
+  // 覆盖回到基线；下面是该 CLI 可选的全部模型，点击仅对当前任务生效。
+  const currentId = cfg.model || savedModel || '';
+  const listHost = document.createElement('div');
+  menu.appendChild(listHost);
+
+  const addItem = ({ label, sub, isCurrent, isOverride, onClick }) => {
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item'
+      + (isCurrent ? ' is-default' : '')
+      + (isOverride ? ' is-override' : '');
+    item.innerHTML =
+      '<span class="model-chip-menu-main">' +
+      `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
+      (isOverride ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.task_override_badge'))}</span>` : '') +
+      '</span>' +
+      (sub ? `<span class="model-chip-menu-sub">${escapeHtml(sub)}</span>` : '');
+    if (onClick) item.addEventListener('click', onClick);
+    listHost.appendChild(item);
+  };
+
+  addItem({
+    label: savedModel || t('exec_config.cli_default_model'),
+    sub: t('exec_config.cli_runtime', { cli: cliType }),
+    isCurrent: !cfg.model,
+    onClick: () => {
+      _clearModelOverride(target);
+      _closeModelMenu();
+    },
+  });
+  for (const m of models) {
+    const id = String(m && typeof m === 'object' ? (m.id || '') : String(m || ''));
+    if (!id || id === savedModel) continue;
+    const label = String((m && m.label) || id);
+    addItem({
+      label,
+      isCurrent: cfg.model === id,
+      isOverride: cfg.model === id,
+      onClick: () => {
         try {
           if (typeof setExecOverride === 'function') {
             const ov = getExecOverride(_chipTargetForElement(anchor)) || {};
@@ -657,18 +677,15 @@ function _renderCliModelOptions(menu, anchor, cfg) {
           _modelChipLog.warn('cli model pick failed', { error: (err && err.message) || String(err) });
         }
         _closeModelMenu();
-      });
-      menu.appendChild(item);
+      },
     });
-    _positionModelMenu(menu, anchor);
-  }).catch(() => {
-    if (!menu.isConnected) return;
-    container.remove();
-    const note = document.createElement('div');
-    note.className = 'model-chip-menu-note';
-    note.textContent = t('exec_config.cli_no_models');
-    menu.appendChild(note);
-  });
+  }
+
+  const note = document.createElement('div');
+  note.className = 'model-chip-menu-note';
+  note.textContent = t('exec_config.effort_cli_note');
+  menu.appendChild(note);
+  _positionModelMenu(menu, anchor);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────
