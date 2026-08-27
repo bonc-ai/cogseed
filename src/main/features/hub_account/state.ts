@@ -28,8 +28,8 @@ export interface HubAccountState {
   /** Local identity is bound to the Hub account. */
   bound: boolean;
   bound_at?: string;
-  /** Last known account lifecycle status (active / suspended / pending_deletion). */
-  account_status?: 'active' | 'suspended' | 'pending_deletion' | 'deleted';
+  /** Last known account lifecycle status (active / suspended / pending_deletion / processing / deleted). */
+  account_status?: 'active' | 'suspended' | 'pending_deletion' | 'processing' | 'deleted';
   /** Encrypted HubSession blob (see tokens.ts). */
   session_enc?: string;
   /** Pending OAuth state for an in-flight login (survives app restart). */
