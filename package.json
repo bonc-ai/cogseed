@@ -38,7 +38,7 @@
     "sbom:check": "node scripts/sbom-check.cjs",
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
-    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs && node scripts/fetch-sherpa-onnx.mjs",
     "prepare": "node scripts/install-git-hooks.mjs",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
@@ -175,6 +175,14 @@
         "filter": [
           "**/*",
           "!*.tar.gz"
+        ]
+      },
+      {
+        "from": "resources/sherpa-onnx",
+        "to": "sherpa-onnx",
+        "filter": [
+          "**/*",
+          "!*.tar.bz2"
         ]
       },
       {

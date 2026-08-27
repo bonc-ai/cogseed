@@ -29,6 +29,7 @@ function main() {
     '--arch', process.arch,
   ]);
   run('embedding model', 'scripts/fetch-embedding-model.mjs');
+  run('sherpa-onnx ASR model', 'scripts/fetch-sherpa-onnx.mjs');
   run('OfficeCLI', 'scripts/fetch-officecli.cjs');
   if (process.platform === 'win32') {
     run('Windows VC runtime', 'scripts/fetch-win-vc-runtime.cjs', [
