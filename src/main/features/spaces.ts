@@ -1141,56 +1141,26 @@ export async function resolveSpaceScope(
 }
 
 /**
- * 情境空间「角色画像」注入：会话挂空间 + 空间有主模板 → 读主+副角色模板文件
- * （个人本体唯一事实来源）的有值字段，格式化为「当前角色画像」块，由 runner 注入
- * system prompt。主角色优先，副角色字段排后；空坑不注入；任何失败 → ''（静默降级）。
+ * 情境空间「角色画像」注入：会话挂空间 + 空间有主模板 → 由 Personal Ontology
+ * 按 template id 返回已格式化的「当前角色画像」块，交给 runner 注入 system prompt。
+ *
+ * Workspace 这一侧只负责「这个空间绑了哪些角色模板」和调用时机；画像怎么存、
+ * 分节字段怎么组织、空坑与来源标记怎么处理，全部在 PO contract 内部完成
+ * （见 personal_ontology_contract.ts::getRoleProfileForRuntime）。任何失败在
+ * contract 内部已降级为空串，这里不再重复兜底。
  */
 export async function formatRoleProfileForSystemPrompt(
   uid: string,
   spaceId: string | null | undefined,
 ): Promise<string> {
-  try {
-    if (!spaceId) return '';
-    const space = await _readSpace(uid, spaceId);
-    const primary = space?.primary_template_id || space?.template_id;
-    if (!primary) return '';
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const tmpl = await import('./personal_ontology_template_files');
-
-    // 收集所有需要读的模板 id（主+副，去重）
-    const allTemplateIds = [primary];
-    if (space?.secondary_template_ids?.length) {
-      for (const sid of space.secondary_template_ids) {
-        if (sid && sid !== primary) allTemplateIds.push(sid);
-      }
-    }
-
-    const allLines: string[] = [];
-    for (const tid of allTemplateIds) {
-      const text = tmpl.readTemplateFileText(uid, tid);
-      if (!text) continue;
-      const content = tmpl.parseTemplateContent(text);
-      const tpl = getRoleTemplate(tid);
-      const tplName = (tpl && tpl.name) || tid;
-      const lines: string[] = [];
-      for (const sec of content.sections) {
-        for (const [fieldName, values] of Object.entries(sec.fields)) {
-          if (!values.length) continue; // 空坑不注入
-          lines.push(`- ${sec.title} · ${fieldName}: ${values.map((v) => v.value).join('、')}`);
-        }
-      }
-      if (lines.length) {
-        allLines.push(`### 角色「${tplName}」`, ...lines);
-      }
-    }
-    if (!allLines.length) return ''; // 全空坑 → 不注入空画像
-
-    return [
-      `## 当前角色画像`,
-      `本空间绑定了以下角色模板；以下为已记录的个人画像（来源：个人本体角色模板文件，随候选确认更新）：`,
-      ...allLines,
-    ].join('\n');
-  } catch {
-    return ''; // 静默降级
+  if (!spaceId) return '';
+  const space = await _readSpace(uid, spaceId).catch(() => null);
+  const primary = space?.primary_template_id || space?.template_id;
+  if (!primary) return '';
+  const templateIds = [primary];
+  for (const sid of space?.secondary_template_ids ?? []) {
+    if (sid && sid !== primary) templateIds.push(sid);
   }
+  const { getRoleProfileForRuntime } = await import('./personal_ontology_contract');
+  return getRoleProfileForRuntime(uid, templateIds);
 }
