@@ -32,7 +32,9 @@ function extractFunction(name: string): string {
 
 // Minimal DOM stand-ins: _mountMsgMeta only needs createElement, the node's
 // dataset/className/textContent/title, plus querySelector/appendChild on the
-// message host (`ph`).
+// message host (`ph`). Meta lives INSIDE the `[data-role="msg-actions"]` row
+// (2026-08-27: same line as the copy/quote icons, right-aligned), so
+// querySelector resolves both `[data-role=...]` lookups against children.
 function makeNode(): Record<string, unknown> {
   return {
     children: [] as Array<Record<string, unknown>>,
@@ -41,10 +43,11 @@ function makeNode(): Record<string, unknown> {
     textContent: '',
     title: '',
     querySelector(sel: string) {
-      if (sel !== '[data-role="msg-meta"]') return null;
+      const m = /^\[data-role="([^"]+)"\]$/.exec(sel);
+      if (!m) return null;
       const node = this as Record<string, unknown>;
       return (node.children as Array<Record<string, unknown>>)
-        .find((c) => (c.dataset as Record<string, string>).role === 'msg-meta') || null;
+        .find((c) => (c.dataset as Record<string, string>).role === m[1]) || null;
     },
     appendChild(child: Record<string, unknown>) {
       (this.children as Array<Record<string, unknown>>).push(child);
@@ -84,16 +87,30 @@ const FULL_METRICS = {
 describe('conversation message metrics line', () => {
   it('has hover-show CSS next to the chat-msg-actions rules', () => {
     expect(styleSource).toContain('.chat-msg-meta');
-    expect(styleSource).toContain('#panel-conversation .chat-message:hover > .chat-msg-meta');
-    expect(styleSource).toContain('#panel-conversation .chat-message:focus-within > .chat-msg-meta');
+    // Meta lives inside the actions row, so the reveal selectors are
+    // descendant (not direct-child) lookups.
+    expect(styleSource).toContain('#panel-conversation .chat-message:hover .chat-msg-meta');
+    expect(styleSource).toContain('#panel-conversation .chat-message:focus-within .chat-msg-meta');
+    // Right-aligned on the icons' line: flex order + auto margin.
+    expect(styleSource).toMatch(/\.chat-msg-meta\s*\{[^}]*order:\s*9/);
+    expect(styleSource).toMatch(/\.chat-msg-meta\s*\{[^}]*margin-left:\s*auto/);
   });
 
-  it('renders a single msg-meta node for messages with metrics', () => {
+  it('renders a single msg-meta node inside the actions row', () => {
     const mount = loadMountMsgMeta();
     const ph = makeNode() as { children: Array<Record<string, unknown>>; appendChild(c: Record<string, unknown>): unknown };
     mount(ph, FULL_METRICS);
+    // The lazily-created actions row is the meta's only container on ph.
     expect(ph.children.length).toBe(1);
-    const meta = ph.children[0] as { className: string; dataset: Record<string, string>; textContent: string; title: string };
+    const row = ph.children[0] as {
+      className: string;
+      dataset: Record<string, string>;
+      children: Array<Record<string, unknown>>;
+    };
+    expect(row.className).toBe('chat-msg-actions');
+    expect(row.dataset.role).toBe('msg-actions');
+    expect(row.children.length).toBe(1);
+    const meta = row.children[0] as { className: string; dataset: Record<string, string>; textContent: string; title: string };
     expect(meta.className).toBe('chat-msg-meta');
     expect(meta.dataset.role).toBe('msg-meta');
     // All four locale keys participate: duration, ttft, rate, tokens.
@@ -108,6 +125,7 @@ describe('conversation message metrics line', () => {
     // Idempotent re-mount (e.g. finalize then refresh) updates, never duplicates.
     mount(ph, FULL_METRICS);
     expect(ph.children.length).toBe(1);
+    expect(row.children.length).toBe(1);
   });
 
   it('produces no msg-meta node for messages without metrics', () => {
