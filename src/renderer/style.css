@@ -10310,23 +10310,33 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    focus-within with the same rhythm as .chat-bubble-actions above. Lives
    INSIDE the .chat-msg-actions row (2026-08-27 feedback): right-aligned on
    the same line as the copy/quote icons — order keeps it right of the icons
-   regardless of mount order, margin-left:auto pushes it to the row's edge. */
+   regardless of mount order, margin-left:auto pushes it to the row's edge.
+   Segment language matches the session stats bar below: muted label (.k) +
+   mono value (.v), no dividers at this size. */
 .chat-msg-meta {
   display: none;
   order: 9;
   margin-left: auto;
   min-width: 0;
-  font-size: 12px;
-  color: var(--text-tertiary, #9aa3ad);
-  padding: 0 4px;
+  gap: 10px;
+  align-items: baseline;
   user-select: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chat-msg-meta .mseg { display: inline-flex; align-items: baseline; gap: 4px; }
+.chat-msg-meta .k { font-size: 10.5px; color: var(--muted); }
+.chat-msg-meta .v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
 #panel-conversation .chat-message:hover .chat-msg-meta,
 #panel-conversation .chat-message:focus-within .chat-msg-meta {
-  display: block;
+  display: flex;
 }
 
 /* Session stats line (Task 8) — lives under the composer input area, always
@@ -10339,22 +10349,39 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 /* Same box as the composer card: JS (_refreshSessionStats) copies the card's
    rendered width onto this element each refresh — the card shrink-wraps to
    its content, so a static CSS width can't track it (2026-08-27 alignment
-   feedback). margin:auto keeps it centered as a pure-CSS fallback. */
+   feedback). margin:auto keeps it centered as a pure-CSS fallback.
+   Quiet readout styling: label (.k, muted) + mono value (.v) per segment,
+   hairline dividers between segments — deliberately NOT pill chips, these
+   are readouts, not interactive controls. */
 .chat-session-stats {
   display: flex;
-  gap: 8px;
+  gap: 0;
   max-width: 100%;
   margin: 0 auto;
-  font-size: 12px;
-  color: var(--text-tertiary, #9aa3ad);
-  padding: 4px 2px 2px;
+  padding: 7px 4px 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   user-select: none;
 }
+.chat-session-stats .seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0 11px;
+  border-left: 1px solid var(--border-strong);
+}
+.chat-session-stats .seg:first-child { padding-left: 2px; border-left: none; }
+.chat-session-stats .seg .k { font-size: 11px; color: var(--muted); }
+.chat-session-stats .seg .v {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
 .chat-session-stats[hidden] { display: none; }
-.chat-session-stats .seg-hot { color: var(--danger, #d64545); }
+.chat-session-stats .seg-hot .v { color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {
