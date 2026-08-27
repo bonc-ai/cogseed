@@ -4896,10 +4896,12 @@
   "settings.custom_providers.fetch_models_title": "Buscar modelos de \"{name}\"",
   "settings.custom_providers.fetch_models_loading": "Solicitando a lista de modelos ao serviço…",
   "settings.custom_providers.fetch_models_failed": "Falha ao buscar: {error}",
-  "settings.custom_providers.fetch_models_hint": "Marque os modelos a adicionar (os existentes não podem ser repetidos). Janela de contexto e limite de saída usam padrões — edite após importar se necessário.",
+  "settings.custom_providers.fetch_models_hint": "Marque os modelos a adicionar (os existentes não podem ser repetidos). Metadados como a janela de contexto são preenchidos automaticamente: primeiro os campos extras do serviço, depois o catálogo interno; o que continuar desconhecido usa padrões editáveis após a importação.",
   "settings.custom_providers.fetch_models_existing": "existente",
   "settings.custom_providers.fetch_models_import": "Importar selecionados ({count})",
   "settings.custom_providers.fetch_models_done": "{count} modelos importados",
   "settings.custom_providers.fetch_models_partial": "Importação parcial ({ok}); falha: {error}",
-  "exec_config.cli_model_note": "O modelo é definido pela configuração do próprio \"{cli}\"; o CogSeed ainda não pode escolher um."
+  "exec_config.cli_model_note": "O modelo é definido pela configuração do próprio \"{cli}\"; o CogSeed ainda não pode escolher um.",
+  "settings.custom_providers.cap_reasoning": "raciocínio",
+  "settings.custom_providers.cap_vision": "visão"
 }

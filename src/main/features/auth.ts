@@ -1178,29 +1178,38 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
-    // Custom providers build their runtime Model with `reasoning: false`
-    // (see model/core-agent/custom_provider_runtime.ts) — mirror that here
-    // so the UI's effort gating matches what the wire actually accepts.
+    // 方案 C：reasoning 标注按识别结果（与 custom_provider_runtime 的
+    // 透传判定同一数据源）——识别为支持推理的模型，UI 解锁档位且请求
+    // 真的会带 reasoning_effort；识别不出的保持 undefined（UI 显示能力
+    // 未知并禁用低/高），不再写死 false。
     const custom = customProviderForId(loadProfiles(), id);
-    return {
-      models: (custom?.models || []).map((model) => {
-        const abilities = publicModelAbilitiesFor(model.id);
-        const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
-          ? model.contextWindow : null;
-        const resolvedWindow = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
-          ? (abilities.contextWindow ?? stored)
-          : stored;
-        const resolvedVision = typeof model.vision === 'boolean'
-          ? model.vision : abilities.vision;
-        return {
-          id: model.id,
-          name: model.id,
-          ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
-          ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
-          reasoning: false,
-        };
-      }),
-    };
+    const models = custom?.models || [];
+    const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
+    // reasoning 标注按识别结果（识别器不可用时省略该字段，与运行时不透传
+    // 的行为一致）；contextWindow/vision 透传不依赖识别器（目录解析独立）。
+    let recognizer: typeof import('../model/model_id_recognition') | null = null;
+    try {
+      recognizer = await import('../model/model_id_recognition');
+    } catch { recognizer = null; }
+    for (const model of models) {
+      const abilities = publicModelAbilitiesFor(model.id);
+      const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+        ? model.contextWindow : null;
+      const resolvedWindow = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+        ? (abilities.contextWindow ?? stored)
+        : stored;
+      const resolvedVision = typeof model.vision === 'boolean'
+        ? model.vision : abilities.vision;
+      const recognized = recognizer ? await recognizer.recognizeModelByIdReady(model.id) : null;
+      out.push({
+        id: model.id,
+        name: model.id,
+        ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
+        ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
+        ...(recognized?.reasoning !== undefined ? { reasoning: recognized.reasoning } : {}),
+      });
+    }
+    return { models: out };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>

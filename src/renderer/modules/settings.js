@@ -1488,9 +1488,16 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
     const isExisting = existing.has(row.id);
     const rowEl = document.createElement('label');
     rowEl.className = 'settings-custom-provider-fetch-row' + (isExisting ? ' is-existing' : '');
+    // 能力徽标（A/B 层补全的数据）：导入前即可见支持什么。
+    const badges = [
+      row.reasoning === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_reasoning'))}</span>` : '',
+      row.vision === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_vision'))}</span>` : '',
+      row.contextWindow ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(row.contextWindow) }))}</span>` : '',
+    ].filter(Boolean).join('');
     rowEl.innerHTML = `
       <input type="checkbox" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
       <span class="settings-custom-provider-fetch-name">${escapeHtml(row.name ? `${row.name} (${row.id})` : row.id)}</span>
+      ${badges}
       ${isExisting ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.fetch_models_existing'))}</span>` : ''}
     `;
     listEl.appendChild(rowEl);
@@ -1513,14 +1520,19 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
       .filter((id) => !existing.has(id));
     if (!picked.length) return;
     importButton.disabled = true;
+    // 服务/目录给出的元数据（A/B 层）随导入落库；窗口值没给时保持默认，
+    // 用户可在导入后的编辑表单里改。reasoning/vision 不入库——运行时按
+    // 同一识别逻辑动态判定，与 UI 标注天然一致。
+    const metaById = new Map((res.models || []).map((row) => [row.id, row]));
     let imported = 0;
     let firstError = '';
     for (const id of picked) {
-      const normalized = _settingsNormalizeCustomProviderModel({
-        id,
-        contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
-      });
+      const meta = metaById.get(id) || {};
+      // 归一化校验要求 maxTokens <= contextWindow：服务只给了窗口时把
+      // 默认输出上限钳到窗口内，避免导入失败。
+      const contextWindow = meta.contextWindow || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
+      const maxTokens = meta.maxTokens || Math.min(_CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS, contextWindow);
+      const normalized = _settingsNormalizeCustomProviderModel({ id, contextWindow, maxTokens });
       if (!normalized.ok) { if (!firstError) firstError = `${id}: ${normalized.error}`; continue; }
       const added = await _settingsCallCustomProvider('customProviders.model.add', {
         providerId: provider.id,
