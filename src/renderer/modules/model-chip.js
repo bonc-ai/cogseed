@@ -325,17 +325,15 @@ function _renderExecConfigMenu(menu, anchor) {
   const cfg = _effectiveExecConfig(target);
   menu.innerHTML = '';
 
+  // Compact single-line header: title carries the scope note (task-only)
+  // so no subheader row is needed.
   const header = document.createElement('div');
   header.className = 'model-chip-menu-header';
-  header.textContent = t('exec_config.menu_title');
-  menu.appendChild(header);
-
-  const sub = document.createElement('div');
-  sub.className = 'model-chip-menu-subheader';
-  sub.textContent = cfg.mode === 'cli'
+  header.textContent = cfg.mode === 'cli'
     ? t('exec_config.subheader_cli', { name: (cfg.agent && cfg.agent.name) || '' })
-    : t('exec_config.subheader_task');
-  menu.appendChild(sub);
+    : t('exec_config.menu_title');
+  header.title = t('exec_config.title');
+  menu.appendChild(header);
 
   // ── Model section ──
   _menuSectionLabel(menu, 'exec_config.section_model');
@@ -384,38 +382,41 @@ function _renderExecConfigMenu(menu, anchor) {
     note.textContent = t('exec_config.effort_cli_note');
     menu.appendChild(note);
   } else {
+    // Segmented one-row picker — four stacked rows made the menu tall and
+    // visually heavy; pills read instantly and halve the effort-section
+    // height. Disabled pills keep the reason in their tooltip + the note.
     const supports = cfg.model ? cfg.reasoning : false;
+    const activeEffort = cfg.effort || 'auto';
+    const seg = document.createElement('div');
+    seg.className = 'model-chip-menu-segmented';
+    _EFFORT_OPTIONS.forEach((level) => {
+      const isActive = activeEffort === level;
+      const unavailable = (level === 'low' || level === 'high') && !supports;
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'model-chip-seg-btn'
+        + (isActive ? ' is-active' : '')
+        + (unavailable ? ' is-disabled' : '');
+      pill.textContent = t('model_effort.' + level);
+      if (unavailable) {
+        pill.disabled = true;
+        pill.title = t('model_effort.unsupported_title');
+      }
+      if (!unavailable) {
+        pill.addEventListener('click', () => {
+          _setTaskEffort(target, level);
+          _closeModelMenu();
+        });
+      }
+      seg.appendChild(pill);
+    });
+    menu.appendChild(seg);
     if (cfg.model && !supports) {
       const note = document.createElement('div');
       note.className = 'model-chip-menu-note';
       note.textContent = t('model_effort.unsupported_hint');
       menu.appendChild(note);
     }
-    const activeEffort = cfg.effort || 'auto';
-    _EFFORT_OPTIONS.forEach((level) => {
-      const isActive = activeEffort === level;
-      const unavailable = (level === 'low' || level === 'high') && !supports;
-      const item = document.createElement('div');
-      item.className = 'model-chip-menu-item'
-        + (isActive ? ' is-default' : '')
-        + (unavailable ? ' is-disabled' : '');
-      if (unavailable) item.title = t('model_effort.unsupported_title');
-      item.innerHTML =
-        '<span class="model-chip-menu-main">' +
-        `<span class="model-chip-menu-name">${escapeHtml(t('model_effort.' + level))}</span>` +
-        (isActive
-          ? `<span class="model-chip-menu-default">${escapeHtml(cfg.effortOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
-          : '') +
-        '</span>' +
-        (unavailable ? `<span class="model-chip-menu-sub">${escapeHtml(t('model_effort.unsupported_hint'))}</span>` : '');
-      if (!unavailable) {
-        item.addEventListener('click', () => {
-          _setTaskEffort(target, level);
-          _closeModelMenu();
-        });
-      }
-      menu.appendChild(item);
-    });
   }
 }
 
