@@ -13,19 +13,48 @@
  * 内置模板字段清单是产品拍板的契约（v1.0.0），渲染层“空坑”和技能“建议字段”
  * 候选池都以此为准 —— 修改字段清单属于产品变更，需要同步
  * `resources/builtin/system/skills/personal-ontology-candidate-builder/`。
+ *
+ * ## Schema identity（migration 的地基）
+ *
+ * catalog 是 schema authority；已安装的模板文件是实例 schema 与 A-box 的载体。
+ * 两者靠 `id`（稳定）+ `title`/`name`（可变显示名）+ `previous_names`（历史名
+ * 集合）对齐，规则见 `personal_ontology_migration.ts`。
+ *
+ * 改动本文件的三条硬约束：
+ * 1. 已发布的 `id` 永不修改、永不复用 —— 它是跨版本认坑的唯一依据；
+ * 2. 改显示名时，把旧名加进该坑的 `previous_names`，不要新造一个 id；
+ * 3. 任何改动后 `validateRoleTemplateCatalog()` 必须仍然返回空数组
+ *    （单测 `role_template_identity.test.ts` 守着这条）。
  */
 
 export interface TemplateField {
+  /**
+   * 稳定 schema identity（模板内唯一）。**改 `name` 不等于改 identity** ——
+   * 显示名可以随产品调整，`id` 一经发布不得再改；migration 靠它认出
+   * “还是同一个坑”。id 只活在 catalog 里，**不写进用户 markdown 文件**
+   * （那份文件用户可手改、可跨端同步，写进去的 id 不是可信身份）。
+   */
+  id: string;
   name: string;
   /** 可选：字段用途说明，渲染层展示在表单视图的字段名旁。 */
   description?: string;
   /** R-box：关系字段，值用 `A → B` 格式；App 不校验、不拆分。 */
   isRelation?: boolean;
+  /**
+   * 这个坑历史上叫过的所有名字（**集合语义，不是逐版本链**）。旧实例文件里
+   * 的字段名命中其中任何一个，就解析到本 identity —— 所以 v1 用户和 v4 用户
+   * 走同一次单跳 reconcile，不需要按版本顺序重放。
+   */
+  previous_names?: string[];
 }
 
 export interface PresetGroup {
+  /** 稳定 schema identity（模板内唯一）。语义同 TemplateField.id。 */
+  id: string;
   title: string;
   description?: string;
+  /** 历史分节名集合；语义同 TemplateField.previous_names。 */
+  previous_names?: string[];
   fields: TemplateField[];
 }
 
@@ -57,84 +86,94 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "learning_background",
         title: "学习背景",
         description: "",
         fields: [
-                    { name: "教育阶段" },
-          { name: "专业与学习方向" }
+                    { id: "education_stage", name: "教育阶段" },
+          { id: "major_and_study_direction", name: "专业与学习方向" }
         ],
       },
       {
+        id: "goals_and_pace",
         title: "目标与节奏",
         description: "",
         fields: [
-                    { name: "学习目标" },
-          { name: "学习风格" },
-          { name: "学习节奏" }
+                    { id: "learning_goals", name: "学习目标" },
+          { id: "learning_style", name: "学习风格" },
+          { id: "learning_pace", name: "学习节奏" }
         ],
       },
       {
+        id: "time_and_constraints",
         title: "时间与约束",
         description: "",
         fields: [
-                    { name: "可用时间" },
-          { name: "时间约束" }
+                    { id: "available_time", name: "可用时间" },
+          { id: "time_constraints", name: "时间约束" }
         ],
       },
       {
+        id: "mastery_state",
         title: "掌握状态",
         description: "",
         fields: [
-                    { name: "优势与薄弱领域" }
+                    { id: "strengths_and_weaknesses", name: "优势与薄弱领域" }
         ],
       },
       {
+        id: "academic_integrity",
         title: "学术诚信",
         description: "",
         fields: [
-                    { name: "学术诚信边界" }
+                    { id: "academic_integrity_boundary", name: "学术诚信边界" }
         ],
       },
       {
+        id: "term_and_courses",
         title: "学期与课程",
         description: "",
         fields: [
-                    { name: "学期／学习周期" },
-          { name: "课程清单" },
-          { name: "教学要求" }
+                    { id: "term_or_study_cycle", name: "学期／学习周期" },
+          { id: "course_list", name: "课程清单" },
+          { id: "teaching_requirements", name: "教学要求" }
         ],
       },
       {
+        id: "tasks_and_deadlines",
         title: "任务与期限",
         description: "",
         fields: [
-                    { name: "作业" },
-          { name: "考试" },
-          { name: "截止时间" }
+                    { id: "assignments", name: "作业" },
+          { id: "exams", name: "考试" },
+          { id: "deadlines", name: "截止时间" }
         ],
       },
       {
+        id: "materials_and_mastery",
         title: "材料与掌握",
         description: "",
         fields: [
-                    { name: "获准学习材料" },
-          { name: "知识掌握状态" }
+                    { id: "approved_materials", name: "获准学习材料" },
+          { id: "knowledge_mastery_state", name: "知识掌握状态" }
         ],
       },
       {
+        id: "plan_and_records",
         title: "计划与记录",
         description: "",
         fields: [
-                    { name: "学习计划" },
-          { name: "完成记录" }
+                    { id: "study_plan", name: "学习计划" },
+          { id: "completion_records", name: "完成记录" }
         ],
       },
       {
+        id: "collaboration_relations",
         title: "协作关系",
         description: "",
         fields: [
-                    { name: "教师与同伴" },
-          { name: "协作项目" }
+                    { id: "teachers_and_peers", name: "教师与同伴" },
+          { id: "collaborative_projects", name: "协作项目" }
         ],
       },
     ],
@@ -151,87 +190,97 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "identity_and_domain",
         title: "身份与领域",
         description: "",
         fields: [
-                    { name: "机构与职位" },
-          { name: "学科" },
-          { name: "研究领域与主题" }
+                    { id: "institution_and_position", name: "机构与职位" },
+          { id: "discipline", name: "学科" },
+          { id: "research_area_and_topics", name: "研究领域与主题" }
         ],
       },
       {
+        id: "methods_and_tools",
         title: "方法与工具",
         description: "",
         fields: [
-                    { name: "方法偏好" },
-          { name: "研究工具" }
+                    { id: "method_preference", name: "方法偏好" },
+          { id: "research_tools", name: "研究工具" }
         ],
       },
       {
+        id: "publishing_and_writing",
         title: "发表与写作",
         description: "",
         fields: [
-                    { name: "目标期刊／会议" },
-          { name: "写作与引用偏好" }
+                    { id: "target_venues", name: "目标期刊／会议" },
+          { id: "writing_and_citation_preference", name: "写作与引用偏好" }
         ],
       },
       {
+        id: "ethics_and_data",
         title: "伦理与数据",
         description: "",
         fields: [
-                    { name: "伦理与数据边界" },
-          { name: "伦理审批引用" }
+                    { id: "ethics_and_data_boundary", name: "伦理与数据边界" },
+          { id: "ethics_approval_ref", name: "伦理审批引用" }
         ],
       },
       {
+        id: "research_questions",
         title: "研究问题",
         description: "",
         fields: [
-                    { name: "研究问题" },
-          { name: "术语本体" }
+                    { id: "research_question", name: "研究问题" },
+          { id: "terminology_ontology", name: "术语本体" }
         ],
       },
       {
+        id: "literature_and_evidence",
         title: "文献与证据",
         description: "",
         fields: [
-                    { name: "文献库引用" },
-          { name: "纳入标准" },
-          { name: "排除标准" },
-          { name: "证据矩阵" }
+                    { id: "literature_library_ref", name: "文献库引用" },
+          { id: "inclusion_criteria", name: "纳入标准" },
+          { id: "exclusion_criteria", name: "排除标准" },
+          { id: "evidence_matrix", name: "证据矩阵" }
         ],
       },
       {
+        id: "theory_and_method",
         title: "理论与方法",
         description: "",
         fields: [
-                    { name: "理论与假设" },
-          { name: "研究方法" }
+                    { id: "theory_and_hypotheses", name: "理论与假设" },
+          { id: "research_method", name: "研究方法" }
         ],
       },
       {
+        id: "reproducibility",
         title: "复现",
         description: "",
         fields: [
-                    { name: "数据集引用" },
-          { name: "分析环境" },
-          { name: "分析版本" }
+                    { id: "dataset_ref", name: "数据集引用" },
+          { id: "analysis_environment", name: "分析环境" },
+          { id: "analysis_version", name: "分析版本" }
         ],
       },
       {
+        id: "collaboration_and_progress",
         title: "协作与进度",
         description: "",
         fields: [
-                    { name: "合作者与分工" },
-          { name: "研究里程碑" }
+                    { id: "collaborators_and_roles", name: "合作者与分工" },
+          { id: "research_milestones", name: "研究里程碑" }
         ],
       },
       {
+        id: "citation_and_review",
         title: "引用与评审",
         description: "",
         fields: [
-                    { name: "引用记录" },
-          { name: "审稿记录" }
+                    { id: "citation_records", name: "引用记录" },
+          { id: "review_records", name: "审稿记录" }
         ],
       },
     ],
@@ -248,88 +297,98 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "professional_background",
         title: "专业背景",
         description: "",
         fields: [
-                    { name: "行业专长" },
-          { name: "技术专长" }
+                    { id: "industry_expertise", name: "行业专长" },
+          { id: "technical_expertise", name: "技术专长" }
         ],
       },
       {
+        id: "duties_and_authority",
         title: "职责与权限",
         description: "",
         fields: [
-                    { name: "交付职责" },
-          { name: "交付决策权" }
+                    { id: "delivery_duties", name: "交付职责" },
+          { id: "delivery_decision_authority", name: "交付决策权" }
         ],
       },
       {
+        id: "communication_and_escalation",
         title: "沟通与升级",
         description: "",
         fields: [
-                    { name: "方案沟通偏好" },
-          { name: "风险升级方式" }
+                    { id: "solution_communication_preference", name: "方案沟通偏好" },
+          { id: "risk_escalation_method", name: "风险升级方式" }
         ],
       },
       {
+        id: "tools_and_boundaries",
         title: "工具与边界",
         description: "",
         fields: [
-                    { name: "常用技术与工具" },
-          { name: "客户数据与生产边界" }
+                    { id: "common_tech_and_tools", name: "常用技术与工具" },
+          { id: "client_data_and_prod_boundary", name: "客户数据与生产边界" }
         ],
       },
       {
+        id: "client_and_goals",
         title: "客户与目标",
         description: "",
         fields: [
-                    { name: "客户／账户" },
-          { name: "业务目标" },
-          { name: "成功标准" }
+                    { id: "client_or_account", name: "客户／账户" },
+          { id: "business_goals", name: "业务目标" },
+          { id: "success_criteria", name: "成功标准" }
         ],
       },
       {
+        id: "client_and_organization",
         title: "客户与组织",
         description: "",
         fields: [
-                    { name: "干系人" },
-          { name: "决策链" }
+                    { id: "stakeholders", name: "干系人" },
+          { id: "decision_chain", name: "决策链" }
         ],
       },
       {
+        id: "current_state_and_integration",
         title: "现状与集成",
         description: "",
         fields: [
-                    { name: "现有系统" },
-          { name: "数据源" },
-          { name: "接口清单" },
-          { name: "现有流程" }
+                    { id: "existing_systems", name: "现有系统" },
+          { id: "data_sources", name: "数据源" },
+          { id: "interface_list", name: "接口清单" },
+          { id: "existing_processes", name: "现有流程" }
         ],
       },
       {
+        id: "environment_and_compliance",
         title: "环境与合规",
         description: "",
         fields: [
-                    { name: "部署环境" },
-          { name: "安全与合规要求" }
+                    { id: "deployment_environment", name: "部署环境" },
+          { id: "security_and_compliance_requirements", name: "安全与合规要求" }
         ],
       },
       {
+        id: "solution_and_plan",
         title: "方案与计划",
         description: "",
         fields: [
-                    { name: "方案范围" },
-          { name: "方案取舍" },
-          { name: "关键依赖" }
+                    { id: "solution_scope", name: "方案范围" },
+          { id: "solution_tradeoffs", name: "方案取舍" },
+          { id: "key_dependencies", name: "关键依赖" }
         ],
       },
       {
+        id: "delivery_and_acceptance",
         title: "交付与验收",
         description: "",
         fields: [
-                    { name: "交付里程碑" },
-          { name: "验收标准" },
-          { name: "风险与问题" }
+                    { id: "delivery_milestones", name: "交付里程碑" },
+          { id: "acceptance_criteria", name: "验收标准" },
+          { id: "risks_and_issues", name: "风险与问题" }
         ],
       },
     ],
@@ -346,79 +405,88 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "duties_and_experience",
         title: "职责与经验",
         description: "",
         fields: [
-                    { name: "负责产品／业务域" },
-          { name: "产品职责" },
-          { name: "用户与行业经验" }
+                    { id: "owned_product_domain", name: "负责产品／业务域" },
+          { id: "product_duties", name: "产品职责" },
+          { id: "user_and_industry_experience", name: "用户与行业经验" }
         ],
       },
       {
+        id: "methods_and_preferences",
         title: "方法与偏好",
         description: "",
         fields: [
-                    { name: "常用产品方法" },
-          { name: "常用产品工具" },
-          { name: "沟通与交付偏好" }
+                    { id: "common_product_methods", name: "常用产品方法" },
+          { id: "common_product_tools", name: "常用产品工具" },
+          { id: "communication_and_delivery_preference", name: "沟通与交付偏好" }
         ],
       },
       {
+        id: "judgment_boundaries",
         title: "判断边界",
         description: "",
         fields: [
-                    { name: "产品原则" }
+                    { id: "product_principles", name: "产品原则" }
         ],
       },
       {
+        id: "product_basics",
         title: "产品基础",
         description: "",
         fields: [
-                    { name: "产品名称" },
-          { name: "产品定位" },
-          { name: "产品阶段" },
-          { name: "当前版本" }
+                    { id: "product_name", name: "产品名称" },
+          { id: "product_positioning", name: "产品定位" },
+          { id: "product_stage", name: "产品阶段" },
+          { id: "current_version", name: "当前版本" }
         ],
       },
       {
+        id: "users_and_scenarios",
         title: "用户与场景",
         description: "",
         fields: [
-                    { name: "目标用户／ICP" },
-          { name: "核心使用场景" }
+                    { id: "target_users_icp", name: "目标用户／ICP" },
+          { id: "core_use_cases", name: "核心使用场景" }
         ],
       },
       {
+        id: "goals_and_metrics",
         title: "目标与指标",
         description: "",
         fields: [
-                    { name: "业务目标" },
-          { name: "核心指标" },
-          { name: "Evaluation口径" }
+                    { id: "business_goals", name: "业务目标" },
+          { id: "core_metrics", name: "核心指标" },
+          { id: "evaluation_definition", name: "Evaluation口径" }
         ],
       },
       {
+        id: "evidence_and_decisions",
         title: "证据与决策",
         description: "",
         fields: [
-                    { name: "需求证据引用" }
+                    { id: "requirement_evidence_ref", name: "需求证据引用" }
         ],
       },
       {
+        id: "roadmap_and_dependencies",
         title: "规划与依赖",
         description: "",
         fields: [
-                    { name: "路线图与优先级" },
-          { name: "关键依赖" }
+                    { id: "roadmap_and_priorities", name: "路线图与优先级" },
+          { id: "key_dependencies", name: "关键依赖" }
         ],
       },
       {
+        id: "collaboration_and_decisions",
         title: "协作与决策",
         description: "",
         fields: [
-                    { name: "干系人" },
-          { name: "决策记录" },
-          { name: "待决策项" }
+                    { id: "stakeholders", name: "干系人" },
+          { id: "decision_records", name: "决策记录" },
+          { id: "pending_decisions", name: "待决策项" }
         ],
       },
     ],
@@ -435,83 +503,92 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "duties_and_authority",
         title: "职责与权限",
         description: "",
         fields: [
-                    { name: "项目决策权" },
-          { name: "项目管理职责" },
-          { name: "资源承诺边界" }
+                    { id: "project_decision_authority", name: "项目决策权" },
+          { id: "project_management_duties", name: "项目管理职责" },
+          { id: "resource_commitment_boundary", name: "资源承诺边界" }
         ],
       },
       {
+        id: "methods_and_preferences",
         title: "方法与偏好",
         description: "",
         fields: [
-                    { name: "常用方法论" },
-          { name: "汇报偏好" }
+                    { id: "common_methodologies", name: "常用方法论" },
+          { id: "reporting_preference", name: "汇报偏好" }
         ],
       },
       {
+        id: "risk_and_planning",
         title: "风险与计划",
         description: "",
         fields: [
-                    { name: "风险容忍度" },
-          { name: "升级规则" },
-          { name: "计划颗粒度" }
+                    { id: "risk_tolerance", name: "风险容忍度" },
+          { id: "escalation_rules", name: "升级规则" },
+          { id: "plan_granularity", name: "计划颗粒度" }
         ],
       },
       {
+        id: "project_basics",
         title: "项目基础",
         description: "",
         fields: [
-                    { name: "项目名称" },
-          { name: "项目目标" }
+                    { id: "project_name", name: "项目名称" },
+          { id: "project_goals", name: "项目目标" }
         ],
       },
       {
+        id: "scope_and_deliverables",
         title: "范围与交付",
         description: "",
         fields: [
-                    { name: "项目范围" },
-          { name: "非项目范围" },
-          { name: "交付物" },
-          { name: "WBS／工作包" }
+                    { id: "project_scope", name: "项目范围" },
+          { id: "out_of_scope", name: "非项目范围" },
+          { id: "deliverables", name: "交付物" },
+          { id: "wbs_work_packages", name: "WBS／工作包" }
         ],
       },
       {
+        id: "schedule_and_resources",
         title: "计划与资源",
         description: "",
         fields: [
-                    { name: "里程碑" },
-          { name: "干系人与RACI" },
-          { name: "资源约束" }
+                    { id: "milestones", name: "里程碑" },
+          { id: "stakeholders_and_raci", name: "干系人与RACI" },
+          { id: "resource_constraints", name: "资源约束" }
         ],
       },
       {
+        id: "risk_and_execution",
         title: "风险与执行",
         description: "",
         fields: [
-                    { name: "依赖" },
-          { name: "风险台账" },
-          { name: "问题台账" },
-          { name: "行动项" }
+                    { id: "dependencies", name: "依赖" },
+          { id: "risk_register", name: "风险台账" },
+          { id: "issue_register", name: "问题台账" },
+          { id: "action_items", name: "行动项" }
         ],
       },
       {
+        id: "change_and_decisions",
         title: "变更与决策",
         description: "",
         fields: [
-                    { name: "变更记录" },
-          { name: "决策记录" },
-          { name: "审批记录" }
+                    { id: "change_records", name: "变更记录" },
+          { id: "decision_records", name: "决策记录" },
+          { id: "approval_records", name: "审批记录" }
         ],
       },
       {
+        id: "status_reporting",
         title: "状态汇报",
         description: "",
         fields: [
-                    { name: "当前状态" },
-          { name: "汇报周期" }
+                    { id: "current_status", name: "当前状态" },
+          { id: "reporting_cadence", name: "汇报周期" }
         ],
       },
     ],
@@ -528,72 +605,80 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "duties_and_audience",
         title: "职责与受众",
         description: "",
         fields: [
-                    { name: "负责文档域" },
-          { name: "目标受众经验" }
+                    { id: "owned_doc_domain", name: "负责文档域" },
+          { id: "target_audience_experience", name: "目标受众经验" }
         ],
       },
       {
+        id: "writing_preferences",
         title: "写作偏好",
         description: "",
         fields: [
-                    { name: "写作风格" },
-          { name: "语气" }
+                    { id: "writing_style", name: "写作风格" },
+          { id: "tone", name: "语气" }
         ],
       },
       {
+        id: "terminology_and_structure",
         title: "术语与结构",
         description: "",
         fields: [
-                    { name: "术语偏好" },
-          { name: "信息架构方法" },
-          { name: "术语表" },
-          { name: "概念关系" },
-          { name: "文档地图" }
+                    { id: "terminology_preference", name: "术语偏好" },
+          { id: "information_architecture_method", name: "信息架构方法" },
+          { id: "glossary", name: "术语表" },
+          { id: "concept_relations", name: "概念关系" },
+          { id: "doc_map", name: "文档地图" }
         ],
       },
       {
+        id: "publishing_and_boundaries",
         title: "发布与边界",
         description: "",
         fields: [
-                    { name: "评审与发布流程" },
-          { name: "代码示例边界" },
-          { name: "来源使用边界" }
+                    { id: "review_and_release_process", name: "评审与发布流程" },
+          { id: "code_sample_boundary", name: "代码示例边界" },
+          { id: "source_usage_boundary", name: "来源使用边界" }
         ],
       },
       {
+        id: "product_and_version",
         title: "产品与版本",
         description: "",
         fields: [
-                    { name: "产品／系统" },
-          { name: "适用版本" }
+                    { id: "product_or_system", name: "产品／系统" },
+          { id: "applicable_versions", name: "适用版本" }
         ],
       },
       {
+        id: "audience_and_content",
         title: "受众与内容",
         description: "",
         fields: [
-                    { name: "目标受众" }
+                    { id: "target_audience", name: "目标受众" }
         ],
       },
       {
+        id: "source_governance",
         title: "来源治理",
         description: "",
         fields: [
-                    { name: "权威来源" },
-          { name: "来源优先级" }
+                    { id: "authoritative_sources", name: "权威来源" },
+          { id: "source_priority", name: "来源优先级" }
         ],
       },
       {
+        id: "change_and_review",
         title: "变更与评审",
         description: "",
         fields: [
-                    { name: "变更记录" },
-          { name: "影响范围" },
-          { name: "未决问题" },
-          { name: "评审意见" }
+                    { id: "change_records", name: "变更记录" },
+          { id: "impact_scope", name: "影响范围" },
+          { id: "open_questions", name: "未决问题" },
+          { id: "review_comments", name: "评审意见" }
         ],
       },
     ],
@@ -610,86 +695,96 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "role_coverage",
         title: "岗位覆盖",
         description: "",
         fields: [
-                    { name: "负责岗位族" },
-          { name: "负责职级" }
+                    { id: "owned_job_families", name: "负责岗位族" },
+          { id: "owned_job_levels", name: "负责职级" }
         ],
       },
       {
+        id: "process_and_authority",
         title: "流程与权限",
         description: "",
         fields: [
-                    { name: "招聘流程" },
-          { name: "招聘决策权限" }
+                    { id: "hiring_process", name: "招聘流程" },
+          { id: "hiring_decision_authority", name: "招聘决策权限" }
         ],
       },
       {
+        id: "assessment_preferences",
         title: "评估偏好",
         description: "",
         fields: [
-                    { name: "常用评估方式" }
+                    { id: "common_assessment_methods", name: "常用评估方式" }
         ],
       },
       {
+        id: "compliance_boundaries",
         title: "合规边界",
         description: "",
         fields: [
-                    { name: "合法筛选边界" },
-          { name: "禁止使用的特征" }
+                    { id: "lawful_screening_boundary", name: "合法筛选边界" },
+          { id: "prohibited_attributes", name: "禁止使用的特征" }
         ],
       },
       {
+        id: "communication_preferences",
         title: "沟通偏好",
         description: "",
         fields: [
-                    { name: "沟通偏好" }
+                    { id: "communication_preference", name: "沟通偏好" }
         ],
       },
       {
+        id: "position_basics",
         title: "职位基础",
         description: "",
         fields: [
-                    { name: "职位需求ID" },
-          { name: "职位名称" },
-          { name: "职位目标" },
-          { name: "JD版本" }
+                    { id: "requisition_id", name: "职位需求ID" },
+          { id: "position_title", name: "职位名称" },
+          { id: "position_goals", name: "职位目标" },
+          { id: "jd_version", name: "JD版本" }
         ],
       },
       {
+        id: "qualification_criteria",
         title: "资格标准",
         description: "",
         fields: [
-                    { name: "必需资格" },
-          { name: "期望资格" },
-          { name: "资格权重" },
-          { name: "证据标准" }
+                    { id: "required_qualifications", name: "必需资格" },
+          { id: "preferred_qualifications", name: "期望资格" },
+          { id: "qualification_weights", name: "资格权重" },
+          { id: "evidence_standards", name: "证据标准" }
         ],
       },
       {
+        id: "candidate_materials",
         title: "候选材料",
         description: "",
         fields: [
-                    { name: "候选材料引用" }
+                    { id: "candidate_material_ref", name: "候选材料引用" }
         ],
       },
       {
+        id: "candidate_process",
         title: "候选流程",
         description: "",
         fields: [
-                    { name: "流程阶段" },
-          { name: "面试记录" },
-          { name: "反馈记录" },
-          { name: "招聘决定与理由" }
+                    { id: "process_stages", name: "流程阶段" },
+          { id: "interview_records", name: "面试记录" },
+          { id: "feedback_records", name: "反馈记录" },
+          { id: "hiring_decision_and_rationale", name: "招聘决定与理由" }
         ],
       },
       {
+        id: "data_governance",
         title: "数据治理",
         description: "",
         fields: [
-                    { name: "数据保留策略" },
-          { name: "访问范围" }
+                    { id: "data_retention_policy", name: "数据保留策略" },
+          { id: "access_scope", name: "访问范围" }
         ],
       },
     ],
@@ -706,97 +801,109 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '0.2.0-review.1',
     preset_groups: [
       {
+        id: "technical_expertise",
         title: "技术专长",
         description: "",
         fields: [
-                    { name: "语言与框架" },
-          { name: "技术专长" }
+                    { id: "languages_and_frameworks", name: "语言与框架" },
+          { id: "technical_expertise", name: "技术专长" }
         ],
       },
       {
+        id: "coding_preferences",
         title: "编码偏好",
         description: "",
         fields: [
-                    { name: "编码偏好" },
-          { name: "评审偏好" }
+                    { id: "coding_preference", name: "编码偏好" },
+          { id: "review_preference", name: "评审偏好" }
         ],
       },
       {
+        id: "quality_standards",
         title: "质量标准",
         description: "",
         fields: [
-                    { name: "测试与质量标准" }
+                    { id: "test_and_quality_standards", name: "测试与质量标准" }
         ],
       },
       {
+        id: "tools_and_workflow",
         title: "工具与流程",
         description: "",
         fields: [
-                    { name: "常用工具与工作流" }
+                    { id: "common_tools_and_workflow", name: "常用工具与工作流" }
         ],
       },
       {
+        id: "permission_boundaries",
         title: "权限边界",
         description: "",
         fields: [
-                    { name: "变更权限" },
-          { name: "凭证与网络边界" }
+                    { id: "change_authority", name: "变更权限" },
+          { id: "credential_and_network_boundary", name: "凭证与网络边界" }
         ],
       },
       {
+        id: "codebase",
         title: "代码库",
         description: "",
         fields: [
-                    { name: "仓库引用" },
-          { name: "模块范围" }
+                    { id: "repository_ref", name: "仓库引用" },
+          { id: "module_scope", name: "模块范围" }
         ],
       },
       {
+        id: "architecture_and_dependencies",
         title: "架构与依赖",
         description: "",
         fields: [
-                    { name: "架构摘要" },
-          { name: "技术栈" },
-          { name: "依赖" }
+                    { id: "architecture_summary", name: "架构摘要" },
+          { id: "tech_stack", name: "技术栈" },
+          { id: "dependencies", name: "依赖" }
         ],
       },
       {
+        id: "conventions_and_decisions",
         title: "规范与决策",
         description: "",
         fields: [
-                    { name: "编码规范" },
-          { name: "ADR引用" }
+                    { id: "coding_conventions", name: "编码规范" },
+          { id: "adr_ref", name: "ADR引用" }
         ],
       },
       {
+        id: "build_and_test",
         title: "构建与测试",
         description: "",
         fields: [
-                    { name: "构建命令" },
-          { name: "测试命令" }
+                    { id: "build_commands", name: "构建命令" },
+          { id: "test_commands", name: "测试命令" }
         ],
       },
       {
+        id: "issues_and_changes",
         title: "问题与变更",
         description: "",
         fields: [
-                    { name: "问题／缺陷引用" },
-          { name: "变更状态" }
+                    { id: "issue_or_defect_ref", name: "问题／缺陷引用" },
+          { id: "change_status", name: "变更状态" }
         ],
       },
       {
+        id: "environments_and_credentials",
         title: "环境与权限",
         description: "",
         fields: [
-                    { name: "环境引用" },
-          { name: "凭证引用" }
+                    { id: "environment_ref", name: "环境引用" },
+          { id: "credential_ref", name: "凭证引用" }
         ],
       },
       {
+        id: "release_governance",
         title: "发布治理",
         description: "",
         fields: [
-                    { name: "发布Gate" }
+                    { id: "release_gate", name: "发布Gate" }
         ],
       },
     ],
@@ -813,51 +920,56 @@ const BUILTIN_TEMPLATES: RoleTemplate[] = [
     version: '1.0.0',
     preset_groups: [
         {
+          id: "shop_and_category",
           title: "店铺与品类",
           fields: [
-            { name: "店铺类型" },
-            { name: "主营类目" },
-            { name: "目标人群" },
-            { name: "价格带" },
-            { name: "平台" },
+            { id: "shop_type", name: "店铺类型" },
+            { id: "main_category", name: "主营类目" },
+            { id: "target_audience_group", name: "目标人群" },
+            { id: "price_band", name: "价格带" },
+            { id: "platform", name: "平台" },
           ],
         },
         {
+          id: "selection_and_products",
           title: "选品与商品",
           fields: [
-            { name: "在售商品" },
-            { name: "选品标准" },
-            { name: "竞品名单" },
-            { name: "毛利目标" },
-            { name: "库存方式" },
+            { id: "active_products", name: "在售商品" },
+            { id: "selection_criteria", name: "选品标准" },
+            { id: "competitor_list", name: "竞品名单" },
+            { id: "gross_margin_target", name: "毛利目标" },
+            { id: "inventory_model", name: "库存方式" },
           ],
         },
         {
+          id: "content_and_channels",
           title: "内容与渠道",
           fields: [
-            { name: "主推渠道" },
-            { name: "内容形式" },
-            { name: "发布节奏" },
-            { name: "账号定位" },
-            { name: "素材库" },
+            { id: "primary_channels", name: "主推渠道" },
+            { id: "content_formats", name: "内容形式" },
+            { id: "publishing_cadence", name: "发布节奏" },
+            { id: "account_positioning", name: "账号定位" },
+            { id: "asset_library", name: "素材库" },
           ],
         },
         {
+          id: "data_and_targets",
           title: "数据与目标",
           fields: [
-            { name: "月销目标" },
-            { name: "核心指标" },
-            { name: "广告预算" },
-            { name: "复盘习惯" },
+            { id: "monthly_sales_target", name: "月销目标" },
+            { id: "core_metrics", name: "核心指标" },
+            { id: "ad_budget", name: "广告预算" },
+            { id: "retrospective_habit", name: "复盘习惯" },
           ],
         },
         {
+          id: "aesthetics_and_brand",
           title: "审美与品牌",
           fields: [
-            { name: "品牌调性" },
-            { name: "视觉风格" },
-            { name: "禁忌元素" },
-            { name: "参考店铺" },
+            { id: "brand_tone", name: "品牌调性" },
+            { id: "visual_style", name: "视觉风格" },
+            { id: "forbidden_elements", name: "禁忌元素" },
+            { id: "reference_shops", name: "参考店铺" },
           ],
         }
     ],
@@ -961,4 +1073,94 @@ export function getRoleTemplate(templateId: string): RoleTemplate | undefined {
   if (!templateId) return undefined;
   const found = BUILTIN_TEMPLATES.find((t) => t.template_id === templateId);
   return found ? JSON.parse(JSON.stringify(found)) : undefined;
+}
+
+// ── Catalog 自检 ───────────────────────────────────────────────────────────
+
+/**
+ * 一条 catalog identity 违规。`templateId` 之外的字段按违规类型出现。
+ * 这些是**编译期就该拦下的作者错误**，不是运行期状态，所以只在单测与开发期
+ * 断言里消费；运行路径不为它们做降级处理。
+ */
+export interface RoleTemplateCatalogIssue {
+  kind:
+    /** 同一模板内两个分节用了同一个 section id。 */
+    | 'duplicate_section_id'
+    /** 同一模板内两个字段用了同一个 field id（作用域是整模板，因为跨分节移动
+     *  要靠 field id 认坑）。 */
+    | 'duplicate_field_id'
+    /** id 不是稳定标识该有的形状（小写字母开头 + 小写字母/数字/下划线）。 */
+    | 'malformed_id'
+    /** 显示名为空。 */
+    | 'empty_display_name'
+    /** 一个历史名同时被两个 identity 声明，或与另一个 identity 的当前名撞车
+     *  —— 解析时无法判定归属，必须由作者消歧。 */
+    | 'ambiguous_previous_name'
+    /** 同一模板内两个分节 / 两个字段用了同一个显示名：名字寻址会撞。 */
+    | 'duplicate_display_name';
+  templateId: string;
+  detail: string;
+}
+
+const ID_RE = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * 校验 catalog 的 identity 约束（见文件头三条硬约束）。返回空数组 = 合法。
+ *
+ * 歧义判定按「解析作用域」分别做：分节名在整模板内解析，字段名在其所属分节内
+ * 解析 —— 所以两个不同分节里的字段可以同名（现网就有：「技术专长」在 fde 和
+ * software_engineer 的不同分节各出现一次），但同一分节内不行。
+ */
+export function validateRoleTemplateCatalog(
+  templates: ReadonlyArray<RoleTemplate> = BUILTIN_TEMPLATES,
+): RoleTemplateCatalogIssue[] {
+  const issues: RoleTemplateCatalogIssue[] = [];
+  const add = (kind: RoleTemplateCatalogIssue['kind'], templateId: string, detail: string) =>
+    issues.push({ kind, templateId, detail });
+
+  for (const t of templates) {
+    const sectionIds = new Set<string>();
+    const sectionTitles = new Set<string>();
+    const fieldIds = new Set<string>();
+    // 分节名解析表：名字（当前名或历史名）→ 声明它的 section id。
+    const sectionNameOwner = new Map<string, string>();
+
+    for (const sec of t.preset_groups) {
+      if (!ID_RE.test(sec.id || '')) add('malformed_id', t.template_id, `section id "${sec.id}"`);
+      if (!String(sec.title || '').trim()) add('empty_display_name', t.template_id, `section "${sec.id}"`);
+      if (sectionIds.has(sec.id)) add('duplicate_section_id', t.template_id, `section id "${sec.id}"`);
+      sectionIds.add(sec.id);
+      if (sectionTitles.has(sec.title)) add('duplicate_display_name', t.template_id, `section title "${sec.title}"`);
+      sectionTitles.add(sec.title);
+
+      for (const name of [sec.title, ...(sec.previous_names || [])]) {
+        const owner = sectionNameOwner.get(name);
+        if (owner && owner !== sec.id) {
+          add('ambiguous_previous_name', t.template_id, `section name "${name}" claimed by both "${owner}" and "${sec.id}"`);
+        }
+        sectionNameOwner.set(name, sec.id);
+      }
+
+      // 字段名解析表是**分节内**的，每节重置。
+      const fieldNameOwner = new Map<string, string>();
+      const fieldNames = new Set<string>();
+      for (const f of sec.fields) {
+        if (!ID_RE.test(f.id || '')) add('malformed_id', t.template_id, `field id "${f.id}" in section "${sec.id}"`);
+        if (!String(f.name || '').trim()) add('empty_display_name', t.template_id, `field "${f.id}"`);
+        if (fieldIds.has(f.id)) add('duplicate_field_id', t.template_id, `field id "${f.id}"`);
+        fieldIds.add(f.id);
+        if (fieldNames.has(f.name)) add('duplicate_display_name', t.template_id, `field name "${f.name}" in section "${sec.id}"`);
+        fieldNames.add(f.name);
+
+        for (const name of [f.name, ...(f.previous_names || [])]) {
+          const owner = fieldNameOwner.get(name);
+          if (owner && owner !== f.id) {
+            add('ambiguous_previous_name', t.template_id, `field name "${name}" in section "${sec.id}" claimed by both "${owner}" and "${f.id}"`);
+          }
+          fieldNameOwner.set(name, f.id);
+        }
+      }
+    }
+  }
+  return issues;
 }
