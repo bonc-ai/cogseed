@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as anchorFeature from '../features/anchor';
 import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
@@ -960,6 +961,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
   'cogseed.kb.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.anchor.resolve': async (payload, ctx) => anchorFeature.anchorResolveIpc(ctx.userId, payload),
   'cogseed.kb.sources': async (_payload, ctx) => cogseedBackend.cogseedIpcService.kbSources(ctx.userId),
   'cogseed.connector.tools': async (payload, ctx) => cogseedBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
   'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedBackend.cogseedIpcService.sessions(ctx.userId) }),
