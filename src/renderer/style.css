@@ -16601,6 +16601,55 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+/* 远端模型发现（fetch from service）：结果勾选列表。 */
+.settings-custom-provider-fetch-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.settings-custom-provider-fetch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.settings-custom-provider-fetch-row:last-child { border-bottom: 0; }
+.settings-custom-provider-fetch-row.is-existing {
+  cursor: default;
+  background: var(--surface-2);
+}
+.settings-custom-provider-fetch-row.is-existing .settings-custom-provider-fetch-name {
+  color: var(--muted);
+}
+.settings-custom-provider-fetch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.settings-custom-provider-fetch-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.settings-custom-provider-fetch-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  color: var(--danger);
+  font-size: 13px;
+}
 .settings-custom-provider-detail-model-row {
   display: flex;
   align-items: center;

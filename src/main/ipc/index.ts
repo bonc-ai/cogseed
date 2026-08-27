@@ -4569,6 +4569,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.providerId, 'providerId', 120),
     boundedText(args?.modelId, 'modelId', 200),
   ),
+  // 远端模型发现（统一执行入口配套）：调服务自己的 list-models 端点，
+  // 只读不落库——渲染层展示列表，用户勾选后经 model.add 导入。
+  'customProviders.fetchModels': async (args, ctx) => customProviders.fetchCustomProviderModels(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };

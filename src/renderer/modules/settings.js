@@ -1423,6 +1423,13 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   }
   const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
   addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
+  // 远端模型发现：调服务自己的 list-models 端点拉全量清单，勾选导入。
+  const fetchModelsButton = document.createElement('button');
+  fetchModelsButton.type = 'button';
+  fetchModelsButton.className = 'btn';
+  fetchModelsButton.innerHTML = `${_settingsIconHtml('refresh', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.fetch_models'))}</span>`;
+  fetchModelsButton.addEventListener('click', () => _settingsOpenCustomProviderFetchModels(provider));
+  addModelButton?.parentNode?.appendChild(fetchModelsButton);
 
   actions.innerHTML = '';
   const closeButton = document.createElement('button');
@@ -1434,8 +1441,104 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
 }
 
-async function _settingsSetCustomProviderEnabled(provider, enabled) {
-  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+/** 远端模型发现视图：打开即向服务发起 list-models 请求，结果按勾选导入。
+ *  已在本地的模型标记「已存在」不可重复勾选；导入走 customProviders.model.add
+ *  逐个落库（窗口/输出上限用默认值，可在导入后按需编辑）。 */
+async function _settingsOpenCustomProviderFetchModels(provider) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !provider?.id) return;
+  _settingsSetCustomProviderModalView('fetch-models', provider, null, false);
+  title.textContent = t('settings.custom_providers.fetch_models_title', { name: provider.name || provider.id });
+  body.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.fetch_models_loading'))}</div>`;
+  actions.innerHTML = '';
+
+  const existing = new Set(_settingsCustomProviderModels(provider).map((model) => model.id));
+  const res = await _settingsCallCustomProvider('customProviders.fetchModels', { providerId: provider.id });
+  // Modal may have been closed / navigated while the request was in flight.
+  const viewActive = _settingsState.customProviderModalView
+    && _settingsState.customProviderModalView.providerId === provider.id
+    && _settingsState.customProviderModalView.kind === 'fetch-models'
+    && overlay.classList.contains('open');
+  if (!viewActive) return;
+  if (!res || !res.ok) {
+    body.innerHTML = `
+      <div class="settings-custom-provider-fetch-error">
+        ${_settingsIconHtml('warning', 'ui-icon')}
+        <span>${escapeHtml(t('settings.custom_providers.fetch_models_failed', { error: (res && res.error) || '' }))}</span>
+      </div>`;
+    const closeButton = document.createElement('button');
+    closeButton.className = 'btn';
+    closeButton.textContent = t('common.close');
+    closeButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+    actions.appendChild(closeButton);
+    return;
+  }
+
+  const rows = (res.models || []).slice(0, 200);
+  const selectable = rows.filter((row) => !existing.has(row.id));
+  body.innerHTML = `
+    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(t('settings.custom_providers.fetch_models_hint'))}</p>
+    <div class="settings-custom-provider-fetch-list" id="settings-custom-provider-fetch-list"></div>
+  `;
+  const listEl = body.querySelector('#settings-custom-provider-fetch-list');
+  for (const row of rows) {
+    const isExisting = existing.has(row.id);
+    const rowEl = document.createElement('label');
+    rowEl.className = 'settings-custom-provider-fetch-row' + (isExisting ? ' is-existing' : '');
+    rowEl.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
+      <span class="settings-custom-provider-fetch-name">${escapeHtml(row.name ? `${row.name} (${row.id})` : row.id)}</span>
+      ${isExisting ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.fetch_models_existing'))}</span>` : ''}
+    `;
+    listEl.appendChild(rowEl);
+  }
+
+  actions.innerHTML = '';
+  const cancelButton = document.createElement('button');
+  cancelButton.className = 'btn';
+  cancelButton.textContent = t('common.cancel');
+  cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+  actions.appendChild(cancelButton);
+  const importButton = document.createElement('button');
+  importButton.className = 'btn btn-primary';
+  importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: selectable.length });
+  importButton.disabled = selectable.length === 0;
+  importButton.addEventListener('click', async () => {
+    if (importButton.disabled) return;
+    const picked = [...listEl.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')]
+      .map((input) => input.value)
+      .filter((id) => !existing.has(id));
+    if (!picked.length) return;
+    importButton.disabled = true;
+    let imported = 0;
+    let firstError = '';
+    for (const id of picked) {
+      const normalized = _settingsNormalizeCustomProviderModel({
+        id,
+        contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+      });
+      if (!normalized.ok) { if (!firstError) firstError = `${id}: ${normalized.error}`; continue; }
+      const added = await _settingsCallCustomProvider('customProviders.model.add', {
+        providerId: provider.id,
+        model: normalized.model,
+      });
+      if (added && added.ok) imported += 1;
+      else if (!firstError) firstError = `${id}: ${(added && added.error) || 'failed'}`;
+    }
+    if (imported > 0) await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed) _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    if (firstError) _settingsCustomProviderModalStatus('error', t('settings.custom_providers.fetch_models_partial', { ok: imported, error: firstError }));
+    else if (imported > 0) _settingsCustomProviderModalStatus('', t('settings.custom_providers.fetch_models_done', { count: imported }));
+  });
+  actions.appendChild(importButton);
+}
+
+async function _settingsSetCustomProviderEnabled(provider, enabled) {  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
   return _settingsWithCustomProviderAction(`provider:enabled:${provider.id}`, async () => {
     if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
       _settingsCustomProviderModalStatus('', t(enabled ? 'settings.custom_providers.enabling' : 'settings.custom_providers.disabling'));

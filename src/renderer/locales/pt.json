@@ -4893,5 +4893,14 @@
   "agents.exec_follow_global": "Seguir padrão global",
   "agents.exec_defaults_hint": "O modelo e o esforço de raciocínio que este agente usa por padrão. Ajustes temporários numa conversa nunca alteram estes padrões.",
   "exec_config.effort_cli_forward_note": "O esforço de raciocínio é enviado com a tarefa para \"{cli}\" (auto = seguir o padrão da própria CLI).",
-  "exec_config.effort_cli_off_unavailable": "\"{cli}\" não tem um interruptor confiável de desligar o raciocínio — escolha auto ou ajuste o nível."
+  "exec_config.effort_cli_off_unavailable": "\"{cli}\" não tem um interruptor confiável de desligar o raciocínio — escolha auto ou ajuste o nível.",
+  "settings.custom_providers.fetch_models": "Buscar do serviço",
+  "settings.custom_providers.fetch_models_title": "Buscar modelos de \"{name}\"",
+  "settings.custom_providers.fetch_models_loading": "Solicitando a lista de modelos ao serviço…",
+  "settings.custom_providers.fetch_models_failed": "Falha ao buscar: {error}",
+  "settings.custom_providers.fetch_models_hint": "Marque os modelos a adicionar (os existentes não podem ser repetidos). Janela de contexto e limite de saída usam padrões — edite após importar se necessário.",
+  "settings.custom_providers.fetch_models_existing": "existente",
+  "settings.custom_providers.fetch_models_import": "Importar selecionados ({count})",
+  "settings.custom_providers.fetch_models_done": "{count} modelos importados",
+  "settings.custom_providers.fetch_models_partial": "Importação parcial ({ok}); falha: {error}"
 }
