@@ -733,6 +733,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
     ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
   }) : [];
 
   // Recall ability-asset search tool (search_ability_assets). Read-only, no
