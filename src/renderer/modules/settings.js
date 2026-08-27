@@ -80,6 +80,7 @@ async function loadSettings() {
   if (typeof initSettingsTabs === 'function') initSettingsTabs();
   _settingsBindConfiguredToggle();
   _settingsBindLanguageOnce();
+  _settingsBindThinkingOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
   _settingsBindContextsEntryOnce();
@@ -469,6 +470,53 @@ function _settingsBindLanguageOnce() {
   });
 }
 
+// ── Global default thinking strength (unified execution entry) ──
+// The composer's exec-config chip is task-scoped only; the GLOBAL default
+// lives here. Options mirror prefs.getThinkingLevel/setThinkingLevel.
+let _settingsThinkingSel = null; // _aiSelectMount api
+
+const _SETTINGS_THINKING_OPTIONS = [
+  { value: 'auto', label: '' },
+  { value: 'off', label: '' },
+  { value: 'low', label: '' },
+  { value: 'high', label: '' },
+];
+
+function _settingsThinkingLabels() {
+  // Resolve through t() at render time so an in-flight language switch
+  // relabels the options without a page reload.
+  return _SETTINGS_THINKING_OPTIONS.map((o) => ({
+    value: o.value,
+    label: t('model_effort.' + o.value),
+  }));
+}
+
+function _settingsBindThinkingOnce() {
+  const el = document.getElementById('settings-thinking-select');
+  if (!el) return;
+  const apply = (level) => {
+    if (_settingsThinkingSel) _settingsThinkingSel.setValue(level);
+    return;
+  };
+  _settingsThinkingSel = _aiSelectMount(el, {
+    options: _settingsThinkingLabels(),
+    value: 'auto',
+  });
+  _settingsThinkingSel.onChange(async (next) => {
+    if (!['auto', 'off', 'low', 'high'].includes(next)) return;
+    try {
+      await window.cogseed.invoke('prefs.setThinkingLevel', { level: next });
+      _settingsLog.info('thinking level changed', { level: next });
+      if (typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+    } catch (err) {
+      _settingsLog.warn('setThinkingLevel failed', { error: (err && err.message) || String(err) });
+    }
+  });
+  window.cogseed.invoke('prefs.getThinkingLevel').then((res) => {
+    if (res && res.level) apply(res.level);
+  }).catch(() => {});
+}
+
 function _settingsSyncLanguageRadio() {
   // Function name kept for caller-side compatibility; semantics is now "sync dropdown value".
   const cur = (typeof getLang === 'function') ? getLang() : 'zh';
@@ -480,6 +528,11 @@ function _settingsSyncLanguageRadio() {
 // isn't refreshed by applyDomI18n's data-i18n sweep).
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
+  // Unified execution entry: thinking-strength option labels resolve
+  // through t(), so re-apply them on language switches.
+  if (_settingsThinkingSel && typeof _settingsThinkingSel.setOptions === 'function') {
+    _settingsThinkingSel.setOptions(_settingsThinkingLabels());
+  }
   _settingsRenderLocalExec();
   _settingsRenderPicker();
   _settingsRenderEntries();
