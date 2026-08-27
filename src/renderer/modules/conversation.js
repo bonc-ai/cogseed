@@ -7183,9 +7183,6 @@ function _clearConversationBodyForAuthorization(cid, state = 'metadata_only') {
   _groupPlaceholders.clear();
   _latestInFlight.delete(cid);
   _updateConvSendUI(cid);
-  if (window.ConversationInfo && typeof window.ConversationInfo.setAuthorizationState === 'function') {
-    window.ConversationInfo.setAuthorizationState(cid, state);
-  }
   void _renderChatAuthorizationBar(cid);
 }
 
@@ -7193,7 +7190,7 @@ if (typeof window !== 'undefined') {
   window._clearConversationBodyForAuthorization = _clearConversationBodyForAuthorization;
 }
 
-// ── 输入框下方三级权限条 ──────────────────────────────────────────────
+// ── 输入框下方三级权限下拉框 ──────────────────────────────────────────
 // 完全访问 = 全部权限（含 execute）；允许访问（受限）= 读/搜权限（无 execute）；
 // 不允许 = 撤销授权（正文锁定）。仅当会话绑定 agent 主体时显示。
 function _authLevels() {
@@ -7260,12 +7257,12 @@ function _authorizationLevelFromState(state) {
   return hasExecute ? 'full' : 'limited';
 }
 
-/** 查询并渲染权限条。 */
+/** 查询并渲染下拉框。 */
 async function _renderChatAuthorizationBar(cid, convMeta) {
   const bar = _authorizationBarEl();
   if (!bar) return;
   const subject = _conversationAgentSubject(cid, convMeta);
-  // 无绑定 agent 主体 → 隐藏权限条
+  // 无绑定 agent 主体 → 隐藏下拉框
   if (!subject) {
     bar.hidden = true;
     delete bar.dataset.subject;
@@ -7273,9 +7270,10 @@ async function _renderChatAuthorizationBar(cid, convMeta) {
   }
   bar.hidden = false;
   bar.dataset.subject = JSON.stringify(subject);
-  const options = bar.querySelector('.chat-authorization-bar-options');
-  if (!options) return;
-  options.dataset.busy = '1';
+  const select = bar.querySelector('.chat-authorization-bar-select');
+  const hintEl = bar.querySelector('.chat-authorization-bar-hint');
+  if (!select) return;
+  select.dataset.busy = '1';
   let current = 'deny';
   try {
     const state = await window.cogseed.invoke('authorization.state', {
@@ -7286,29 +7284,26 @@ async function _renderChatAuthorizationBar(cid, convMeta) {
   } catch (err) {
     _convLog.warn('authorization bar state failed', { cid, error: err && err.message });
   }
-  options.innerHTML = _authLevels().map((level) => `
-    <button type="button" class="chat-authorization-bar-option${current === level.id ? ' is-current' : ''}"
-            data-authorization-level="${level.id}"
-            title="${escapeHtml(level.hint)}"
-            aria-pressed="${current === level.id ? 'true' : 'false'}">
-      <span class="chat-authorization-bar-option-label">${escapeHtml(level.label)}</span>
-      <span class="chat-authorization-bar-option-hint">${escapeHtml(level.hint)}</span>
-    </button>`).join('');
-  delete options.dataset.busy;
+  const levels = _authLevels();
+  select.innerHTML = levels.map((level) => `<option value="${level.id}" title="${escapeHtml(level.hint)}">${escapeHtml(level.label)}</option>`).join('');
+  select.value = current;
+  const currentLevel = levels.find((l) => l.id === current);
+  if (hintEl) hintEl.textContent = currentLevel ? currentLevel.hint : '';
+  delete select.dataset.busy;
 }
 
-/** 执行授权/撤销操作，成功后刷新权限条 + 同步右侧面板 + 正文。 */
+/** 执行授权/撤销操作，成功后刷新下拉框 + 正文。 */
 async function _applyAuthorizationLevel(cid, levelId) {
   const bar = _authorizationBarEl();
-  const options = bar && bar.querySelector('.chat-authorization-bar-options');
-  if (!options || options.dataset.busy === '1') return;
+  const select = bar && bar.querySelector('.chat-authorization-bar-select');
+  if (!select || select.dataset.busy === '1') return;
   const level = _authLevels().find((l) => l.id === levelId);
   // 优先用渲染时缓存的 subject（含 history 接口的完整元数据），兜底重查列表
   let subject = null;
   try { subject = bar.dataset.subject ? JSON.parse(bar.dataset.subject) : null; } catch (_) { subject = null; }
   if (!subject) subject = _conversationAgentSubject(cid);
   if (!level || !subject) return;
-  options.dataset.busy = '1';
+  select.dataset.busy = '1';
   try {
     if (level.id === 'deny') {
       await window.cogseed.invoke('authorization.revoke', subject);
@@ -7330,37 +7325,27 @@ async function _applyAuthorizationLevel(cid, levelId) {
       }
     }
     await _renderChatAuthorizationBar(cid);
-    if (window.ConversationInfo && typeof window.ConversationInfo.refresh === 'function') {
-      window.ConversationInfo.refresh(cid, { silent: true });
-    }
   } catch (err) {
     if (typeof uiToast === 'function') uiToast((err && err.message) || '授权操作失败', { variant: 'warning' });
     await _renderChatAuthorizationBar(cid);
   } finally {
-    delete options.dataset.busy;
+    delete select.dataset.busy;
   }
 }
 
-/** 绑定权限条事件（幂等，一次即可）。 */
+/** 绑定下拉框 change 事件（幂等，一次即可）。 */
 function _bindChatAuthorizationBar() {
   if (_authorizationBarBound) return;
   const bar = _authorizationBarEl();
   if (!bar) return;
   _authorizationBarBound = true;
-  bar.addEventListener('click', (ev) => {
-    const option = ev.target.closest('[data-authorization-level]');
-    if (option) {
-      ev.preventDefault();
-      const levelId = option.dataset.authorizationLevel;
+  const select = bar.querySelector('.chat-authorization-bar-select');
+  if (select) {
+    select.addEventListener('change', () => {
+      const levelId = select.value;
       if (levelId && currentCid) void _applyAuthorizationLevel(currentCid, levelId);
-      return;
-    }
-    const refreshBtn = ev.target.closest('#chat-authorization-bar-refresh');
-    if (refreshBtn && currentCid) {
-      ev.preventDefault();
-      void _renderChatAuthorizationBar(currentCid);
-    }
-  });
+    });
+  }
 }
 
 function _membersRequestUrl(cid) {

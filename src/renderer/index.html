@@ -204,13 +204,6 @@
                         title="Agent status" aria-label="Agent status" aria-expanded="false">
                   <span data-ui-icon="users" data-ui-icon-class="chat-header-details-icon"></span>
                 </button>
-                <button type="button" class="chat-header-details-btn chat-authorization-btn" id="chat-authorization-btn"
-                        data-i18n-title="conversation_info.authorization.toggle_title"
-                        data-i18n-aria-label="conversation_info.authorization.toggle_title"
-                        title="访问权限" aria-label="访问权限" aria-expanded="false">
-                  <span data-ui-icon="shield" data-ui-icon-class="chat-header-details-icon"></span>
-                  <span class="chat-authorization-label" data-i18n="conversation_info.authorization.toggle_title">访问权限</span>
-                </button>
                 <button type="button" class="chat-header-menu-btn" id="chat-header-menu-btn"
                         data-i18n-title="chat.more_actions" data-i18n-aria-label="chat.more_actions"
                         title="更多操作" aria-label="更多操作">
@@ -296,16 +289,13 @@
                     <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
                   </button>
                 </div>
-                <!-- 会话访问权限条：输入框下方三级权限选择（完全访问 / 允许访问受限 /
+                <!-- 会话访问权限下拉框：输入框下方三级权限选择（完全访问 / 允许访问受限 /
                      不允许）。由 conversation.js 的 _renderChatAuthorizationBar()
                      渲染与刷新；仅当会话绑定 agent 主体时显示。 -->
                 <div class="chat-authorization-bar" id="chat-authorization-bar" hidden>
-                  <span class="chat-authorization-bar-label" data-i18n="chat.authorization.label">访问权限</span>
-                  <div class="chat-authorization-bar-options" role="group" aria-label="访问权限"></div>
-                  <button type="button" class="chat-authorization-bar-refresh" id="chat-authorization-bar-refresh"
-                          data-i18n-title="chat.authorization.refresh" title="刷新状态" aria-label="刷新状态">
-                    <span data-ui-icon="refresh" data-ui-icon-class="chat-authorization-bar-refresh-icon"></span>
-                  </button>
+                  <label class="chat-authorization-bar-label" for="chat-authorization-select" data-i18n="chat.authorization.label">访问权限</label>
+                  <select class="chat-authorization-bar-select" id="chat-authorization-select"></select>
+                  <span class="chat-authorization-bar-hint" id="chat-authorization-bar-hint" aria-live="polite"></span>
                 </div>
               </div>
             </div>
