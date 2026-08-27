@@ -153,3 +153,66 @@ describe('material_search › hybrid fusion', () => {
     expect(res.summary.join(' ')).toContain('total=0');
   });
 });
+
+describe('material_search › attachment side (4.3)', () => {
+  async function stageTextAttachment(cid: string, name: string, content: string) {
+    const { attachmentDirForCid } = await import('../../../../src/main/features/chat_attachments');
+    const dir = attachmentDirForCid(TEST_UID, cid);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, name), content);
+  }
+
+  it('surfaces an in-scope text attachment as source=attachment when enabled', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/material-search');
+    await stageTextAttachment('conv-a', 'meeting-notes.txt',
+      'Standup notes: the ZQX-ATT adapter landed and the parser pipeline is green.');
+    await insertFile('notes/alpha.md', [
+      { title: 'a1', content: 'The alpha protocol handles authentication tokens.', embedding: fakeVec(1) },
+    ]);
+
+    const res = await mod.searchMaterials({
+      userId: TEST_UID,
+      cid: 'conv-a',
+      attachments: true,
+      query: 'ZQX-ATT',
+      k: 10,
+    });
+
+    const att = res.hits.find((h) => h.source === 'attachment');
+    expect(att).toBeTruthy();
+    expect(att!.scope).toBe('conversation');
+    expect(att!.path).toBe('meeting-notes.txt');
+    expect(att!.chunkIdx).toBe(0);
+    expect(att!.keywordScore).toBeDefined();
+    expect(att!.score).toBeGreaterThan(0);
+    expect(res.summary.join(' ')).toContain('attachments hits=');
+  });
+
+  it('does not include attachments unless the attachments flag is set', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/material-search');
+    await stageTextAttachment('conv-b', 'secret.txt', 'the ZQX-SEC term lives only in the attachment');
+
+    const res = await mod.searchMaterials({
+      userId: TEST_UID,
+      cid: 'conv-b',
+      query: 'ZQX-SEC',
+      k: 10,
+    });
+
+    expect(res.hits.some((h) => h.source === 'attachment')).toBe(false);
+  });
+
+  it('rich (non-text) attachment without a file-indexer cache is skipped, not an error', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/material-search');
+    await stageTextAttachment('conv-c', 'doc.pdf', '%PDF-1.4 not really text');
+    // No file-indexer cache exists for the pdf → skipped silently.
+    const res = await mod.searchMaterials({
+      userId: TEST_UID,
+      cid: 'conv-c',
+      attachments: true,
+      query: 'not really',
+      k: 10,
+    });
+    expect(res.hits.some((h) => h.source === 'attachment' && h.path === 'doc.pdf')).toBe(false);
+  });
+});
