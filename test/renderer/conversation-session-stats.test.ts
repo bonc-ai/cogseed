@@ -79,6 +79,9 @@ function makeHarness(opts: {
         if (sel !== '#chat-history .chat-message.assistant') return [];
         return opts.messages.filter(Boolean);
       },
+      // Composer-card width sync (2026-08-27 alignment): the stub has no
+      // composer card, so the sync is skipped.
+      querySelector: () => null,
     },
     t: (k: string, vars: Record<string, unknown>) => `${k}|${vars ? JSON.stringify(vars) : ''}`,
     localStorage: {

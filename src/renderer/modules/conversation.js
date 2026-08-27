@@ -8981,20 +8981,38 @@ function _refreshSessionStats() {
     const costSpan = box.lastElementChild;
     if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
   }
+  // 与输入卡左右边缘对齐（2026-08-27 反馈）。卡宽随内容收缩（max-content
+  // 行为），CSS 定宽追不上，直接按卡片当前盒宽设定统计行宽，margin auto
+  // 居中后两边自然齐平；is-project 全宽变体同样适用。
+  const composerCard = document.querySelector('.chat-input-area');
+  if (composerCard) {
+    const cw = composerCard.getBoundingClientRect().width;
+    if (cw > 0) box.style.width = `${Math.round(cw)}px`;
+  }
 }
 
 // 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
 // gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
+// 挂在操作行（[data-role=msg-actions]）内右对齐——与复制/引用图标同一行
+// （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
+// _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
 function _mountMsgMeta(ph, metrics) {
   const line = window.conversationMetrics
     ? window.conversationMetrics.messageMetricsLine(metrics) : null;
   if (!line) return;
-  let meta = ph.querySelector('[data-role="msg-meta"]');
+  let row = ph.querySelector('[data-role="msg-actions"]');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'chat-msg-actions';
+    row.dataset.role = 'msg-actions';
+    ph.appendChild(row);
+  }
+  let meta = row.querySelector('[data-role="msg-meta"]');
   if (!meta) {
     meta = document.createElement('div');
     meta.className = 'chat-msg-meta';
     meta.dataset.role = 'msg-meta';
-    ph.appendChild(meta);
+    row.appendChild(meta);
   }
   const parts = [];
   parts.push(t('chat.metrics.duration', { d: window.conversationMetrics.formatDuration(line.durationMs) }));
