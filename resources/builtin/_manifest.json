@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "720ae41ede32f0264e227813f6478ed19954bdf8bcc7c032e26baa7fd86bcdf5",
+  "content_tree_sha256": "1c7c737d8bcac50f609aea853996c975c0b2ba96a1f5d07cc1aedc5af3167df1",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6214,8 +6214,8 @@
     },
     {
       "path": "system/skills/_system.json",
-      "bytes": 499,
-      "sha256": "6812f5b45c4e59bfe0501eb992bcd79eb3745ef59deb7f4da1faeff5703e5dcd"
+      "bytes": 585,
+      "sha256": "fd65eb0570c88ca5388362a19239e41a39e136fa8477291b1da71df52b57c017"
     },
     {
       "path": "system/skills/agent-creator/_meta.json",
@@ -6246,6 +6246,61 @@
       "path": "system/skills/coding/SKILL.md",
       "bytes": 5697,
       "sha256": "ddd5b68b17951998f0f5b858a557c866f1d1b78d9b7fc721f0dab948fb2baa6e"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/_meta.json",
+      "bytes": 64,
+      "sha256": "d2bee9993e1c8882832a03b54127e08a7f96e534f56c938597e32b3eecd76bde"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/evals/evals.json",
+      "bytes": 238,
+      "sha256": "b81e7a8b9901b1e2be57394a4b32b737529c4c20386510415029cafef25aaa23"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/eval-cases.yaml",
+      "bytes": 426,
+      "sha256": "7dba1fe416dccc9b78ef61771238c2549e7aab48237e08cb154b82c280db0843"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/governance-boundaries.md",
+      "bytes": 567,
+      "sha256": "df72c7881a8041c37216565572de6bb052064fb7d76b12fe2265e451455bd07c"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/input-contract.md",
+      "bytes": 915,
+      "sha256": "90f265ed6f012a75e92cf54efed61489eb78d22cf20d714bf1840370596c0fbf"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/kstar-evolution.md",
+      "bytes": 424,
+      "sha256": "56007b6083e107b6c80425936b35cac06878969354b62dab70022e753cec84d7"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/ontology-mapping.md",
+      "bytes": 760,
+      "sha256": "47db8e89b96fd0a067fa8bd2135506b5fdce2e9b24c849794def3f95bd001dcc"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/output-contract.md",
+      "bytes": 894,
+      "sha256": "c7ff7803d0c50730986fe4efb68f9b8f30ffddf9abdea28f855e5f00c8fee1ba"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/skill-spec.yaml",
+      "bytes": 629,
+      "sha256": "0763ef327dae400cd40d48a4fc17933475af791932f5349efef58248a907e1b6"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/references/validation-contract.md",
+      "bytes": 660,
+      "sha256": "72d7c83681a5bf9af6429929b43b05084a0b8b8edaa5d8fb553322ffd8067bb2"
+    },
+    {
+      "path": "system/skills/grounded-material-qa/SKILL.md",
+      "bytes": 3289,
+      "sha256": "9e6d39c1777881fc713f1b0a15cd02d30efb1ba9710d42b9d87da85fe0ba78c0"
     },
     {
       "path": "system/skills/package-installer/_meta.json",
@@ -6386,6 +6441,10 @@
       {
         "id": "coding",
         "update_at": 1784298779287
+      },
+      {
+        "id": "grounded-material-qa",
+        "update_at": 1787831433158
       },
       {
         "id": "package-installer",
