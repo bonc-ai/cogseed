@@ -4881,9 +4881,7 @@
   "exec_config.no_model": "モデル未設定",
   "exec_config.cli_default_model": "CLIデフォルト",
   "exec_config.cli_badge": "CLI",
-  "exec_config.cli_runtime": "外部CLI：{cli}",
-  "exec_config.effort_cli_note": "推論強度は外部CLI自身の構成で決まり、CogSeedはここでは上書きしません。",
-  "exec_config.cli_no_models": "「{cli}」の利用可能なモデルリストを検出できませんでした——実行時はそのCLI自身の既定モデルと推論設定を使用します。",
+  "exec_config.effort_cli_note": "モデルと推論強度はいずれも外部CLI自身の構成で決まり、CogSeed はここでは上書きしません。",
   "exec_config.no_reasoning_note": "推論強度非対応",
   "settings.thinking.title": "既定の推論強度",
   "settings.thinking.sub": "チャット実行の既定の思考強度（グローバル既定）。会話内では入力欄右側の実行構成チップで一時的に調整でき、現在のタスクにのみ影響します。",
@@ -4902,5 +4900,6 @@
   "settings.custom_providers.fetch_models_existing": "既存",
   "settings.custom_providers.fetch_models_import": "選択をインポート（{count}）",
   "settings.custom_providers.fetch_models_done": "{count} 個のモデルをインポートしました",
-  "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}"
+  "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}",
+  "exec_config.cli_model_note": "モデルは「{cli}」自身の構成で決まり、CogSeed からは指定できません。"
 }
