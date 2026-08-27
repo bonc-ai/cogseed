@@ -801,6 +801,32 @@ describe('auth › listModels', () => {
     expect(plain?.contextWindow).toBe(131_072);
     expect(sized?.contextWindow).toBe(262_144);
   });
+
+  it('surfaces the catalog window over a stored default (legacy-row fallback)', async () => {
+    // Rows imported before catalog resolution carry the 128K guess; listModels
+    // must answer with the catalog value for known models without rewriting
+    // the store. Explicit non-default values are the user's and stay as-is.
+    const providers = await import('../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(TEST_UID, {
+      name: 'Legacy Window Relay',
+      protocol: 'openai',
+      baseUrl: 'https://legacy-window.example/v1',
+      // Runtime-built synthetic value, not a credential.
+      apiKey: ['legacy-window', TEST_UID].join('-'),
+      models: [
+        { id: 'deepseek/deepseek-v4-flash-vision-exp', contextWindow: 131_072, maxTokens: 8_192 },
+        { id: 'hand-tuned-model', contextWindow: 262_144, maxTokens: 8_192 },
+      ],
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const a = await import('../../../src/main/features/auth');
+    const { models } = await a.listModels(`cp:${created.id}`);
+    // Stored default + catalog hit → catalog's 1M answers.
+    expect(models.find((m) => m.id === 'deepseek/deepseek-v4-flash-vision-exp')?.contextWindow).toBe(1_048_576);
+    // User-typed non-default value is respected verbatim.
+    expect(models.find((m) => m.id === 'hand-tuned-model')?.contextWindow).toBe(262_144);
+  });
 });
 
 describe('auth › custom providers', () => {

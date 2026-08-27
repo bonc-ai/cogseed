@@ -4171,7 +4171,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, windowsByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
@@ -4181,7 +4181,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
       ? baseUrlsByExternalId
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
+    // Probed per-model context windows (sparse; aggregator endpoints only).
+    // Validate one level deep: { [externalId]: { [modelId]: positive int } }.
+    let windows: Record<string, Record<string, number>> | undefined;
+    if (windowsByExternalId && typeof windowsByExternalId === 'object' && !Array.isArray(windowsByExternalId)) {
+      for (const [extId, map] of Object.entries(windowsByExternalId)) {
+        if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+        const clean: Record<string, number> = {};
+        for (const [modelId, w] of Object.entries(map)) {
+          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) clean[modelId] = w;
+        }
+        if (Object.keys(clean).length) (windows || (windows = {}))[extId] = clean;
+      }
+    }
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, windows);
   },
   'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
     if (typeof cli !== 'string' || !cli) {

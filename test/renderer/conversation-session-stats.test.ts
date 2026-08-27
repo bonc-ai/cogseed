@@ -102,6 +102,8 @@ function makeHarness(opts: {
     localStorage: {
       getItem: (k: string) => (k === 'dashboard-price-table' ? opts.priceRaw ?? null : null),
     },
+    // Width sync touches the real composer card; this suite has none — stub.
+    _syncStatsWidthToComposer: () => {},
   };
   const refresh = vm.runInNewContext(`
     ${extractFunction('_userPriceForStats')}

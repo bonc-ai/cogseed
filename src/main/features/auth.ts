@@ -83,6 +83,7 @@ import {
   providerRecommended,
   sortProviderIds,
 } from '../model/provider_catalog';
+import { publicContextWindowFor } from '../model/public_model_catalog';
 import {
   assertModelProviderAllowed,
   isModelProviderAllowed,
@@ -1170,14 +1171,22 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     const custom = customProviderForId(loadProfiles(), id);
     // contextWindow 透传：自定义 provider 模型本就存有窗口值（设置界面可
     // 配），渲染层会话统计行的上下文占用分母靠它（2026-08-27 反馈补齐）。
+    // 存量兜底：导入早期落库的窗口恒为默认猜测值，与默认相等且目录确知
+    // 真实窗口时，读取侧以目录值为准（不重写存储；用户手改过的值必然
+    // ≠ 默认，不受影响）。
     return {
-      models: (custom?.models || []).map((model) => ({
-        id: model.id,
-        name: model.id,
-        ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
-          ? { contextWindow: model.contextWindow }
-          : {}),
-      })),
+      models: (custom?.models || []).map((model) => {
+        const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+          ? model.contextWindow : null;
+        const resolved = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+          ? (publicContextWindowFor(model.id) ?? stored)
+          : stored;
+        return {
+          id: model.id,
+          name: model.id,
+          ...(resolved ? { contextWindow: resolved } : {}),
+        };
+      }),
     };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };

@@ -338,4 +338,27 @@ describe('custom providers', () => {
     const anthropic = (await auth.listProviders()).providers.find((provider) => provider.id === 'anthropic');
     expect(anthropic?.profiles).toHaveLength(1);
   });
+
+  it('inherits catalog windows for known models instead of the 128K default', async () => {
+    // Importer rows carry bare model ids with no window data; for models the
+    // public catalog knows (deepseek-v4-flash-vision-exp = 1M, confirmed
+    // 2026-08-27), normalization must resolve the real window. Unknown ids
+    // keep the conservative default — never guessed.
+    const providers = await import('../../../src/main/features/custom_providers');
+    const result = providers.addCustomProvider(UID, {
+      name: 'Aggregator Relay',
+      protocol: 'openai',
+      baseUrl: 'https://aggr.example/v1',
+      apiKey: ['aggr', UID].join('-'),
+      models: [
+        'deepseek/deepseek-v4-flash-vision-exp',
+        'totally-unknown-model',
+      ],
+    });
+    if (!result.ok) throw new Error(result.error);
+    const listed = providers.listCustomProviders(UID);
+    const windows = Object.fromEntries(listed[0].models.map((m) => [m.id, m.contextWindow]));
+    expect(windows['deepseek/deepseek-v4-flash-vision-exp']).toBe(1_048_576);
+    expect(windows['totally-unknown-model']).toBe(131_072);
+  });
 });
