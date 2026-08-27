@@ -97,3 +97,42 @@ describe('role-template boundary › M6 模板目录只剩 PO 一个出口', () 
     }
   });
 });
+
+describe('role-template boundary › M2 渲染层不再拼接 PO 复合 id', () => {
+  const agents = read('src/renderer/modules/agents.js');
+
+  it('agents.js 不再出现 `${...}::${...}` 形式的 ref 拼接', () => {
+    expect(agents).not.toMatch(/\$\{[^}]*\}::\$\{[^}]*\}/);
+  });
+
+  it('agents.js 不再持有 PO 内部 group_id', () => {
+    const code = stripComments(agents);
+    expect(code).not.toContain('group.group_id');
+    expect(code).not.toContain('t.group_id');
+    expect(code).not.toContain("invoke('personalOntology.groups.list'");
+  });
+
+  it('chat-use.js 保持不变：ref 仍是不透明字符串，不解析分节语法', () => {
+    const chatUse = stripComments(read('src/renderer/modules/chat-use.js'));
+    expect(chatUse).not.toContain('SECTION_REF_SEP');
+    expect(chatUse).not.toContain("split('::')");
+    expect(chatUse).toContain("invoke('personalOntology.groups.read'");
+  });
+
+  it('SECTION_REF_SEP 只存在于 PO 内部实现，不出现在任何渲染层文件', () => {
+    const rendererDir = path.join(REPO, 'src/renderer/modules');
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.js')) continue;
+        if (fs.readFileSync(full, 'utf8').includes('SECTION_REF_SEP')) {
+          offenders.push(path.relative(REPO, full));
+        }
+      }
+    };
+    walk(rendererDir);
+    expect(offenders).toEqual([]);
+  });
+});

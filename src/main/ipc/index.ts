@@ -3159,12 +3159,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
-    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
+    // 三种入参都要读得出来：contract opaque ref（@ Picker 新路径）、复合 id
+    // （groupId::分节，历史草稿里的存量 token）、普通 group id。readOntologyEntry
+    // 内部按 ref 前缀分流后统一走 readContentById，chat-use 侧零改动。
+    const contract = await import('../features/personal_ontology_contract');
+    return contract.readOntologyEntry(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // 可 @ 引用的本体条目（普通分组 + 已安装模板的分节）。返回的 ref 是
+  // PO contract 生成的 opaque 句柄：渲染层原样存、原样回传，不解析、不拼接。
+  'personalOntology.entries.list': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { entries: await contract.listOntologyEntries(ctx.userId) };
   },
 
   // ── Personal Ontology Role Templates (角色模板) ──
