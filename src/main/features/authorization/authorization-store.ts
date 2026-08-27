@@ -14,7 +14,7 @@ function normalizeGrant(value: unknown): AuthorizationGrant | null {
   if (typeof row.id !== 'string' || typeof row.resourceId !== 'string' || typeof row.subjectId !== 'string'
     || !['agent', 'project', 'session'].includes(String(row.resourceType))
     || !['user', 'agent', 'session'].includes(String(row.subjectType))
-    || !['active', 'revoked', 'expired'].includes(String(row.status))
+    || !['active', 'revoked'].includes(String(row.status))
     || !Array.isArray(row.permissions) || !row.permissions.every(validPermission)
     || !Number.isSafeInteger(row.version) || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') return null;
   return { ...row, permissions: [...new Set(row.permissions)] } as unknown as AuthorizationGrant;

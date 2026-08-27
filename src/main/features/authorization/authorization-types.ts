@@ -4,7 +4,7 @@ export const AUTHORIZATION_RESOURCE_TYPES = ['agent', 'project', 'session'] as c
 export type AuthorizationResourceType = (typeof AUTHORIZATION_RESOURCE_TYPES)[number];
 export const AUTHORIZATION_SUBJECT_TYPES = ['user', 'agent', 'session'] as const;
 export type AuthorizationSubjectType = (typeof AUTHORIZATION_SUBJECT_TYPES)[number];
-export type AuthorizationStatus = 'active' | 'revoked' | 'expired';
+export type AuthorizationStatus = 'active' | 'revoked';
 
 export interface AuthorizationGrant {
   id: string;
@@ -18,7 +18,6 @@ export interface AuthorizationGrant {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
-  expiresAt?: string;
 }
 
 export interface AuthorizationCheckInput {
@@ -34,7 +33,7 @@ export interface AuthorizationCheckInput {
 
 export interface AuthorizationDecision {
   allowed: boolean;
-  reason: 'user-owner' | 'grant' | 'missing-grant' | 'revoked' | 'expired';
+  reason: 'user-owner' | 'grant' | 'missing-grant' | 'revoked';
   grantId?: string;
   version: number;
 }
@@ -62,7 +61,7 @@ export interface AuthorizationLease {
 }
 
 export class AuthorizationError extends Error {
-  readonly code: 'AUTHORIZATION_REQUIRED' | 'AUTHORIZATION_REVOKED' | 'AUTHORIZATION_EXPIRED';
+  readonly code: 'AUTHORIZATION_REQUIRED' | 'AUTHORIZATION_REVOKED';
   constructor(input: { code: AuthorizationError['code']; message?: string }) {
     super(input.message || input.code);
     this.name = 'AuthorizationError';

@@ -1057,7 +1057,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         conversation: { ...conv, ...runtime, agent_enabled },
         history: [],
         next_cursor: null,
-        authorizationState: authorizationDecision.reason === 'revoked' || authorizationDecision.reason === 'expired'
+        authorizationState: authorizationDecision.reason === 'revoked'
           ? 'revoked'
           : 'metadata_only',
         requiredPermission: 'body.read',

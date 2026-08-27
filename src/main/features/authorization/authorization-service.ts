@@ -7,7 +7,7 @@ const revokedResources = new Map<string, Set<AbortController>>();
 const resourceKey = (userId: string, type: AuthorizationResourceType, id: string) => `${userId}:${type}:${id}`;
 
 function isCurrent(grant: AuthorizationGrant): boolean {
-  return grant.status === 'active' && (!grant.expiresAt || grant.expiresAt > new Date().toISOString());
+  return grant.status === 'active';
 }
 
 function matchingGrant(grants: AuthorizationGrant[], input: AuthorizationCheckInput): AuthorizationGrant | undefined {
@@ -36,7 +36,6 @@ export async function decide(input: AuthorizationCheckInput): Promise<Authorizat
   if (grant) return { allowed: true, reason: 'grant', grantId: grant.id, version: grant.version };
   const prior = grants.find((item) => item.resourceType === input.resourceType && item.resourceId === input.resourceId
     && item.subjectType === input.subjectType && item.subjectId === input.subjectId);
-  if (prior?.status === 'expired') return { allowed: false, reason: 'expired', grantId: prior.id, version: prior.version };
   if (prior?.status === 'revoked') return { allowed: false, reason: 'revoked', grantId: prior.id, version: prior.version };
   return { allowed: false, reason: 'missing-grant', version: 0 };
 }
@@ -52,7 +51,7 @@ export async function state(input: AuthorizationCheckInput): Promise<Authorizati
       || (input.resourceType === 'session' && input.parentAgentId && grant.resourceType === 'agent' && grant.resourceId === input.parentAgentId)),
     subject: { type: input.subjectType, id: input.subjectId },
     decision,
-    authorizationState: decision.allowed ? 'authorized' : (decision.reason === 'revoked' || decision.reason === 'expired' ? 'revoked' : 'metadata_only'),
+    authorizationState: decision.allowed ? 'authorized' : (decision.reason === 'revoked' ? 'revoked' : 'metadata_only'),
     requiredPermission: input.permission,
   };
 }
@@ -83,7 +82,7 @@ export async function revoke(userId: string, input: Omit<AuthorizationCheckInput
 export async function acquireReadLease(input: AuthorizationCheckInput, controller?: AbortController): Promise<AuthorizationLease> {
   const decision = await decide(input);
   if (!decision.allowed) {
-    const code = decision.reason === 'revoked' ? 'AUTHORIZATION_REVOKED' : decision.reason === 'expired' ? 'AUTHORIZATION_EXPIRED' : 'AUTHORIZATION_REQUIRED';
+    const code = decision.reason === 'revoked' ? 'AUTHORIZATION_REVOKED' : 'AUTHORIZATION_REQUIRED';
     throw new AuthorizationError({ code, message: `authorization required for ${input.permission}` });
   }
   const lease: AuthorizationLease = { key: `lease-${genId12()}`, ...input, grantId: decision.grantId, version: decision.version };
