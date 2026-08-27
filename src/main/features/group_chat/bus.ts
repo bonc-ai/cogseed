@@ -11265,6 +11265,9 @@ async function _runCliAgentTurn(opts: {
     // Unified execution entry: per-task override wins over the agent's
     // saved runtime.model for THIS turn only.
     model: cliModelForTurn,
+    // Per-task reasoning effort — consumed by the backends with a concrete
+    // switch (claude env / codex config override); other CLIs ignore it.
+    ...(opts.item.execConfig?.effort ? { thinkingLevel: opts.item.execConfig.effort } : {}),
     customArgs: runtime.custom_args,
     ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,
