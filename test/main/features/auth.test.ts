@@ -776,6 +776,31 @@ describe('auth › listModels', () => {
       'gpt-5.5',
     ]);
   });
+
+  it('passes custom-provider contextWindow through (renderer ctx denominator)', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(TEST_UID, {
+      name: 'Window Relay',
+      protocol: 'openai',
+      baseUrl: 'https://window-relay.example/v1',
+      // 合成测试值，运行时构造（非真实凭据）。
+      apiKey: ['window', 'relay', TEST_UID].join('-'),
+      models: [
+        'plain-model',
+        { id: 'sized-model', contextWindow: 262_144, maxTokens: 8_192 },
+      ],
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const a = await import('../../../src/main/features/auth');
+    const { models } = await a.listModels(`cp:${created.id}`);
+    const plain = models.find((m) => m.id === 'plain-model');
+    const sized = models.find((m) => m.id === 'sized-model');
+    // Unspecified models carry the normalized default window; explicit values
+    // pass through untouched — the renderer stats line divides by these.
+    expect(plain?.contextWindow).toBe(131_072);
+    expect(sized?.contextWindow).toBe(262_144);
+  });
 });
 
 describe('auth › custom providers', () => {
@@ -802,7 +827,9 @@ describe('auth › custom providers', () => {
       manualModel: false,
     }));
     expect(await auth.listModels(providerId)).toEqual({
-      models: [{ id: 'relay-model', name: 'relay-model' }],
+      // contextWindow 透传（normalizeModels 的默认窗口）——渲染层会话统计行
+      // 的上下文占用分母依赖它。
+      models: [{ id: 'relay-model', name: 'relay-model', contextWindow: 131_072 }],
     });
 
     await auth.addEntry({ provider: providerId, model: 'relay-model', profileId: providerId });
