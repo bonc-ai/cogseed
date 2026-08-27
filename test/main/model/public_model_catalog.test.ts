@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PUBLIC_PROVIDER_MODELS, publicContextWindowFor } from '../../../src/main/model/public_model_catalog';
+import { PUBLIC_PROVIDER_MODELS, publicContextWindowFor, publicModelAbilitiesFor } from '../../../src/main/model/public_model_catalog';
 
 describe('public model catalog', () => {
   it('contains only public providers with unique model ids', () => {
@@ -62,9 +62,26 @@ describe('publicContextWindowFor', () => {
   });
 
   it('returns undefined instead of guessing for unknown or windowless ids', () => {
-    expect(publicContextWindowFor('deepseek-v4-pro')).toBeUndefined(); // catalog has the id but no window
+    expect(publicContextWindowFor('glm-5.1')).toBeUndefined(); // catalog has the id but no confirmed window
     expect(publicContextWindowFor('no-such-model')).toBeUndefined();
     expect(publicContextWindowFor('vendor/')).toBeUndefined();
     expect(publicContextWindowFor('')).toBeUndefined();
+  });
+
+  it('carries the officially verified DeepSeek V4 and GLM-5.2 specs', () => {
+    // 2026-08-28 verification round: DeepSeek pricing page (1M ctx / 384K
+    // out, text models are visionless) and bigmodel.cn GLM-5.2 page
+    // (1M ctx / 128K out, text-model category).
+    expect(publicContextWindowFor('deepseek-v4-pro')).toBe(1_048_576);
+    expect(publicContextWindowFor('deepseek-v4-flash')).toBe(1_048_576);
+    expect(publicModelAbilitiesFor('deepseek-v4-pro')).toEqual({
+      contextWindow: 1_048_576, maxTokens: 393_216, vision: false,
+    });
+    expect(publicModelAbilitiesFor('glm-5.2')).toEqual({
+      contextWindow: 1_048_576, maxTokens: 131_072, vision: false,
+    });
+    expect(publicModelAbilitiesFor('deepseek/deepseek-v4-flash')).toEqual({
+      contextWindow: 1_048_576, maxTokens: 393_216, vision: false,
+    });
   });
 });
