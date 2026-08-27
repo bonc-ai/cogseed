@@ -2764,6 +2764,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return groupChat.listCollaborationConflicts(ctx.userId, cid);
   },
 
+  'groupChat.collabOverview': async (args, ctx) => {
+    const { cid } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    const projectIdHint = conversationProjectHint(args);
+    const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
+    if (!conv) throw new Error('conversation not found');
+    return { overview: await groupChat.collabOverview(ctx.userId, cid, conv?.project_id ?? projectIdHint) };
+  },
+
   'groupChat.resolveCollaborationConflict': async (args, ctx) => {
     const { cid, conflictId, decision, selected_proposal_ids, text, reason } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
