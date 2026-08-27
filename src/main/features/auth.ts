@@ -1163,12 +1163,22 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
-export async function listModels(providerId: string): Promise<{ models: { id: string; name: string }[] }> {
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
     const custom = customProviderForId(loadProfiles(), id);
-    return { models: (custom?.models || []).map((model) => ({ id: model.id, name: model.id })) };
+    // contextWindow 透传：自定义 provider 模型本就存有窗口值（设置界面可
+    // 配），渲染层会话统计行的上下文占用分母靠它（2026-08-27 反馈补齐）。
+    return {
+      models: (custom?.models || []).map((model) => ({
+        id: model.id,
+        name: model.id,
+        ...(Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+          ? { contextWindow: model.contextWindow }
+          : {}),
+      })),
+    };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
