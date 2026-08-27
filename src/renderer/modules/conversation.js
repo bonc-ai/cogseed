@@ -8946,14 +8946,24 @@ function _refreshSessionStats() {
     const costSpan = box.lastElementChild;
     if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
   }
-  // 与输入卡左右边缘对齐（2026-08-27 反馈）。卡宽随内容收缩（max-content
-  // 行为），CSS 定宽追不上，直接按卡片当前盒宽设定统计行宽，margin auto
-  // 居中后两边自然齐平；is-project 全宽变体同样适用。
-  const composerCard = document.querySelector('.chat-input-area');
-  if (composerCard) {
-    const cw = composerCard.getBoundingClientRect().width;
-    if (cw > 0) box.style.width = `${Math.round(cw)}px`;
+  _syncStatsWidthToComposer();
+}
+
+// 统计行与输入卡左右边缘实时对齐（2026-08-27 反馈）。卡宽随内容收缩
+// （chip 增删、附件条出现都会变），CSS 定宽追不上；此处每次刷新直读卡宽
+// 同步一次，并挂 ResizeObserver 让后续卡片尺寸变化即时跟随（首次 observe
+// 也会回调一次）。vm 测试环境无 ResizeObserver，守卫跳过。
+let _statsComposerObserver = null;
+function _syncStatsWidthToComposer() {
+  const box = document.getElementById('chat-session-stats');
+  const card = document.querySelector('.chat-input-area');
+  if (!box || !card) return;
+  if (!_statsComposerObserver && typeof ResizeObserver !== 'undefined') {
+    _statsComposerObserver = new ResizeObserver(() => _syncStatsWidthToComposer());
+    _statsComposerObserver.observe(card);
   }
+  const cw = card.getBoundingClientRect().width;
+  if (cw > 0) box.style.width = `${Math.round(cw)}px`;
 }
 
 // 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自

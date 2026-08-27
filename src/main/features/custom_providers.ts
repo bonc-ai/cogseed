@@ -31,6 +31,7 @@ import {
   type CustomProvider,
   type CustomProviderModel,
 } from './auth';
+import { publicContextWindowFor } from '../model/public_model_catalog';
 import { createLogger } from '../logger';
 
 const log = createLogger('custom-providers');
@@ -117,10 +118,16 @@ function normalizeModel(
   if (id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH) {
     throw new Error(`model id must be at most ${MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH} characters`);
   }
+  // Window fallback chain: explicit value → catalog (known model) → default
+  // guess. The catalog beat-out prevents importer rows (CC Switch hints carry
+  // only ids) from silently carrying a wrong 128K default for models whose
+  // real window is public knowledge.
   const contextWindow = normalizePositiveSafeInteger(
     candidate.contextWindow,
     'contextWindow',
-    fallback?.contextWindow ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    fallback?.contextWindow
+      ?? publicContextWindowFor(id)
+      ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
     MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   );
   const maxTokens = normalizePositiveSafeInteger(
@@ -512,6 +519,7 @@ export async function syncFromCcSwitch(
   home?: string,
   modelsByExternalId?: Record<string, string[]>,
   baseUrlsByExternalId?: Record<string, string>,
+  windowsByExternalId?: Record<string, Record<string, number>>,
 ): Promise<CcSwitchSyncResult> {
   // Lazy require to keep better-sqlite3 out of the module load path for
   // callers that never import from CC Switch.
@@ -535,13 +543,37 @@ export async function syncFromCcSwitch(
         const needsKey = !apiKey || !!it.needsKey;
         // Prefer the live-probed model list (passed from the preview step);
         // fall back to the config hints when probing wasn't possible.
-        const importedModels = normalizeModels(modelsByExternalId?.[it.externalId] || it.models || []);
+        // Probed windows (aggregator endpoints volunteer them) ride along as
+        // the highest-priority window source — normalizeModel then applies
+        // explicit > probe > catalog > default.
+        const rawModels: unknown[] = modelsByExternalId?.[it.externalId] || it.models || [];
+        const probeWindows = windowsByExternalId?.[it.externalId] || it.modelWindows || {};
+        const importedModels = normalizeModels(rawModels.map((m) => {
+          if (typeof m !== 'string') return m;
+          const w = probeWindows[m];
+          return Number.isSafeInteger(w) && (w as number) > 0 && (w as number) <= MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW
+            ? { id: m, contextWindow: w }
+            : m;
+        }));
         const existing = customProviders.find((provider) => provider.source === 'ccswitch' && provider.externalId === it.externalId);
         let provider: CustomProvider;
         if (existing) {
           const existingMetadata = new Map(existing.models.map((model) => [model.id, model]));
           const mergedModels = importedModels.length
-            ? importedModels.map((model) => existingMetadata.get(model.id) || model)
+            ? importedModels.map((model) => {
+              const prev = existingMetadata.get(model.id);
+              if (!prev) return model;
+              // A stored window equal to the default is an unconfirmed guess
+              // (importers historically had no window source) — replace it
+              // when this import resolved a better value (probe field or
+              // catalog match inside normalizeModel). User-entered values
+              // that differ from the default are deliberate: never touch.
+              if (prev.contextWindow === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+                && model.contextWindow !== DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW) {
+                return { ...prev, contextWindow: model.contextWindow };
+              }
+              return prev;
+            })
             : existing.models;
           Object.assign(existing, {
             name: it.name || existing.name,
@@ -657,6 +689,10 @@ export async function previewCcSwitchImport(userId: string): Promise<
       if (probe.ok) {
         item.models = probe.models;
         item.modelsProbe = true;
+        // Windows volunteered by the endpoint (aggregators only; sparse).
+        if (probe.windows && Object.keys(probe.windows).length) {
+          item.modelWindows = probe.windows;
+        }
         // Pin the real API base discovered by the probe (CC Switch configs
         // often store a bare host without the /v1 segment).
         if (probe.baseUrl) item.baseUrl = probe.baseUrl;
