@@ -8957,23 +8957,41 @@ function _refreshSessionStats() {
     ? window.getCurrentModelContextWindow() : null;
   const price = _userPriceForStats();
   const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
+  // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
   const segs = [];
-  segs.push(t('chat.stats.counts', { turns: f.turns, steps: f.steps }));
-  if (f.llmMs > 0) segs.push(t('chat.stats.llm', { d: window.conversationMetrics.formatDuration(f.llmMs) }));
-  if (f.ttftAvgText) segs.push(t('chat.stats.speed', { ttft: f.ttftAvgText, r: f.rateText || '' }).trim());
-  if (f.cacheHitText) segs.push(t('chat.stats.cache', { p: f.cacheHitText }));
-  if (f.ctxText) segs.push({ text: t('chat.stats.ctx', { v: f.ctxText }), hot: f.ctxHot });
-  segs.push(t('chat.stats.tokens', { i: f.inText, o: f.outText }));
-  if (f.costText) segs.push(t('chat.stats.cost', { c: f.costText }));
+  segs.push({ v: t('chat.stats.counts', { turns: f.turns, steps: f.steps }) });
+  if (f.llmMs > 0) {
+    segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
+  }
+  if (f.ttftAvgText) {
+    segs.push({
+      k: t('chat.stats.speedK'),
+      v: f.rateText
+        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
+        : f.ttftAvgText,
+    });
+  }
+  if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
   box.innerHTML = '';
   box.hidden = false;
   segs.forEach((s) => {
-    const span = document.createElement('span');
-    const hot = typeof s === 'object';
-    const text = hot ? s.text : s;
-    span.textContent = text;
-    span.className = hot && s.hot ? 'seg-hot' : '';
-    box.appendChild(span);
+    const seg = document.createElement('span');
+    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    box.appendChild(seg);
   });
   // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
   // 单价、无模型名，title 不带模型字段。
@@ -9014,12 +9032,28 @@ function _mountMsgMeta(ph, metrics) {
     meta.dataset.role = 'msg-meta';
     row.appendChild(meta);
   }
+  // 分段结构与会话统计行同一视觉语言：.mseg > (.k 浅色标签 + .v mono 数值)。
   const parts = [];
-  parts.push(t('chat.metrics.duration', { d: window.conversationMetrics.formatDuration(line.durationMs) }));
-  if (line.latencyText) parts.push(t('chat.metrics.ttft', { s: line.latencyText }));
-  if (line.rateText) parts.push(t('chat.metrics.rate', { r: line.rateText }));
-  if (line.inText) parts.push(t('chat.metrics.tokens', { i: line.inText, o: line.outText }));
-  meta.textContent = parts.join(' · ');
+  parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
+  if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
+  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
+  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  meta.textContent = '';
+  parts.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = 'mseg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    meta.appendChild(seg);
+  });
   if (line.titleLines.length) meta.title = line.titleLines.join('\n');
   // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
   // appendChatMessage 尾部；Task 8）。

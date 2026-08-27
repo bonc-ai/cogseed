@@ -13,7 +13,7 @@ const conversationMetrics = require('../../src/renderer/modules/conversation-met
 };
 
 const STATS_KEYS = [
-  'counts', 'llm', 'speed', 'cache', 'ctx', 'tokens', 'cost', 'costTitle',
+  'counts', 'llmK', 'speedK', 'speedV', 'cacheK', 'ctxK', 'tokK', 'tokV', 'cost', 'costTitle',
 ] as const;
 
 function extractFunction(name: string): string {
@@ -36,8 +36,23 @@ function extractFunction(name: string): string {
 
 type Node = Record<string, unknown>;
 
+// Segment span: .seg containing optional .k label + .v value children.
+// textContent aggregates children like the real DOM.
 function makeSpan(): Node {
-  return { textContent: '', className: '', title: '' };
+  const span: Node & { children: Node[] } = {
+    children: [],
+    className: '',
+    title: '',
+    appendChild(child: Node) { span.children.push(child); return child; },
+  };
+  Object.defineProperty(span, 'textContent', {
+    get() {
+      const own = (span as { text?: string }).text || '';
+      return own + span.children.map((c) => String(c.textContent)).join('');
+    },
+    set(text: string) { (span as { text?: string }).text = text; },
+  });
+  return span;
 }
 
 function makeBox(): Node & { hidden: boolean; children: Node[] } {
@@ -159,16 +174,16 @@ describe('conversation session stats line', () => {
     expect(h.box.hidden).toBe(false);
     const texts = h.box.children.map((c) => String(c.textContent));
     expect(texts.some((s) => s.startsWith('chat.stats.counts|'))).toBe(true);
-    expect(texts.some((s) => s.startsWith('chat.stats.llm|'))).toBe(true);
-    expect(texts.some((s) => s.startsWith('chat.stats.speed|'))).toBe(true);
-    expect(texts.some((s) => s.startsWith('chat.stats.cache|'))).toBe(true);
-    expect(texts.some((s) => s.startsWith('chat.stats.ctx|'))).toBe(true);
-    expect(texts.some((s) => s.startsWith('chat.stats.tokens|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.llmK|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.speedK|') && s.includes('chat.stats.speedV|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.cacheK|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.ctxK|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokV|'))).toBe(true);
     // price in=1 out=2 (cache units absent → 0): (100K*1 + 10K*2)/1M = ¥0.12
     expect(texts).toContain('chat.stats.cost|{"c":"¥0.12"}');
     // 110K/128K ≈ 86% ≥ 80% threshold → ctx segment carries the hot class.
-    const hot = h.box.children.find((c) => String(c.textContent).startsWith('chat.stats.ctx|')) as { className: string };
-    expect(hot.className).toBe('seg-hot');
+    const hot = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { className: string };
+    expect(hot.className).toBe('seg seg-hot');
     // Cost span explains it is a local-price estimate, not a bill.
     const cost = h.box.children[h.box.children.length - 1] as { title: string; textContent: string };
     expect(cost.textContent).toContain('¥0.12');
@@ -185,11 +200,11 @@ describe('conversation session stats line', () => {
   it('omits the context denominator when the window is unknown (honest omission)', () => {
     const h = makeHarness({ messages: [assistantMsg(METRICS)], contextWindow: null });
     h.refresh();
-    const ctx = h.box.children.find((c) => String(c.textContent).startsWith('chat.stats.ctx|')) as { textContent: string; className: string };
+    const ctx = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { textContent: string; className: string };
     // Only the used amount shows (no /window·% part), and it is not hot.
     expect(ctx.textContent).toContain('110K');
     expect(ctx.textContent).not.toContain('%');
-    expect(ctx.className).toBe('');
+    expect(ctx.className).toBe('seg');
   });
 
   it('declares chat.stats.* keys in all four locales', () => {
