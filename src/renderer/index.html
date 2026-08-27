@@ -184,12 +184,15 @@
                  `_refreshChatHeader()` in conversation.js. -->
             <div class="chat-header" id="chat-header">
               <div class="chat-header-main">
+                <nav class="chat-header-breadcrumb" id="chat-header-breadcrumb" aria-label="面包屑导航" hidden></nav>
+                <div class="chat-header-main-inline">
                 <div class="chat-header-title-row">
                   <h1 class="chat-header-title" id="chat-header-title"></h1>
                   <input type="text" class="chat-header-title-input" id="chat-header-title-input"
                          autocomplete="off" spellcheck="false" hidden />
                 </div>
                 <div class="chat-header-meta" id="chat-header-meta"></div>
+                </div>
               </div>
               <div class="chat-header-actions">
                 <button type="button" class="chat-header-details-btn" id="chat-terminal-toggle"
