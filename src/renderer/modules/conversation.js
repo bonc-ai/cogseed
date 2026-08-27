@@ -3557,6 +3557,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.welcome_pending === true ? { welcome_pending: true } : {}),
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
+    ...(gm.collab_summary ? { collab_summary: gm.collab_summary } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
@@ -8996,11 +8997,34 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
   const planAnnHtml = message._plan_announcement
     ? `<div class="chat-plan-announce">${_uiIconHtml('clipboard-list', 'ui-icon chat-plan-announce-icon')}<span>${escapeHtml(t('chat.plan_announce'))}</span></div>` : '';
+  // COGSEED-61: 终态协作汇总卡（system_kind='collab_summary'）。折叠头部
+  // 展示结论与步骤完成度；正文（markdown 汇总）仍走常规渲染管线。
+  const collabSummaryHead = message.collab_summary
+    ? (() => {
+      const s = message.collab_summary;
+      const conclusionKey = s.conclusion === 'all_steps_done' ? 'all_done'
+        : s.conclusion === 'cancelled' ? 'cancelled' : 'failed';
+      const totals = s.step_totals || {};
+      return `<details class="chat-collab-summary">` +
+        `<summary>${_uiIconHtml('check-circle', 'ui-icon chat-collab-summary-icon')}<span>${escapeHtml(t('chat.collab_summary.title'))}</span>` +
+        `<span class="chat-collab-summary-chip is-${escapeHtml(String(s.conclusion || ''))}">${escapeHtml(t(`chat.collab_summary.${conclusionKey}`))}</span>` +
+        `<span class="chat-collab-summary-count">${escapeHtml(t('chat.collab_summary.count', { completed: totals.completed || 0, total: totals.total || 0 }))}</span></summary>` +
+        `<div class="chat-collab-summary-body">` +
+        (Array.isArray(s.contributions) && s.contributions.length
+          ? `<ul class="chat-collab-summary-contribs">` + s.contributions.map((c) => `<li><span class="chat-collab-summary-contrib-name">${escapeHtml(String(c.actor_name || c.actor_id || ''))}</span><span>${escapeHtml([
+            t('chat.collab_summary.steps_done', { count: c.steps_completed || 0 }),
+            c.retries ? t('chat.collab_summary.retries', { count: c.retries }) : '',
+            (c.produced_files || []).length ? t('chat.collab_summary.files', { count: c.produced_files.length }) : '',
+          ].filter(Boolean).join(' · '))}</span></li>`).join('') + `</ul>`
+          : '') +
+        (s.final_result ? `<div class="chat-collab-summary-final">${escapeHtml(String(s.final_result))}</div>` : '') +
+        `</div></details>`;
+    })() : '';
   // Deliverables mount last inside the bubble as a footer strip. The separate
   // action row remains for created-agent/skill links and message actions.
   msgDiv.innerHTML = `
     ${headerHtml}
-    <div class="chat-bubble">${planAnnHtml}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
+    <div class="chat-bubble">${planAnnHtml}${collabSummaryHead}${p3394BadgeHtml}${evidenceHtml}${spaceAssetRefsHtml}${contentHtml}${spaceDraftHtml}${welcomeCarryHtml}${attachmentsHtml}${recallCitationsHtml}</div>
     <div class="chat-msg-actions" data-role="msg-actions">${createdAgentHtml}${createdSkillHtml}</div>
   `;
   if (typeof opts.msgIndex === 'number') msgDiv.dataset.msgIndex = String(opts.msgIndex);

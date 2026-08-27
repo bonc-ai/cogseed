@@ -6352,6 +6352,160 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-size: 12px;
   color: var(--text-muted);
 }
+/* COGSEED-61: 本地群聊协作 sections（拆解/交接/异常/汇总） */
+.conversation-info-collab-objective {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.conversation-info-collab-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.conversation-info-collab-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(14, 159, 110, 0.12);
+  color: var(--primary);
+}
+.conversation-info-collab-status.is-failed,
+.conversation-info-collab-status.is-cancelled {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger, #ef4444);
+}
+.conversation-info-collab-status.is-blocked {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+.conversation-info-collab-counts {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.conversation-info-collab-steps,
+.conversation-info-collab-handoffs,
+.conversation-info-collab-outputs,
+.conversation-info-collab-anomalies,
+.conversation-info-collab-contribs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.conversation-info-collab-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+}
+.conversation-info-collab-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+  align-self: center;
+}
+.conversation-info-collab-step.is-completed .conversation-info-collab-step-dot { background: var(--primary); }
+.conversation-info-collab-step.is-running .conversation-info-collab-step-dot { background: #f59e0b; animation: cogseed-collab-pulse 1.2s ease-in-out infinite; }
+.conversation-info-collab-step.is-failed .conversation-info-collab-step-dot { background: var(--danger, #ef4444); }
+.conversation-info-collab-step.is-skipped .conversation-info-collab-step-dot { background: var(--text-muted); }
+.conversation-info-collab-step-title { font-weight: 600; color: var(--text); }
+.conversation-info-collab-step-actor,
+.conversation-info-collab-step-dep {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.conversation-info-collab-retry {
+  font-size: 10px;
+  font-weight: 700;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.14);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: 4px;
+}
+.conversation-info-collab-handoff {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.conversation-info-collab-handoff-route { font-weight: 650; color: var(--text); }
+.conversation-info-collab-handoff-kind {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+.conversation-info-collab-handoff.is-handback .conversation-info-collab-handoff-kind {
+  background: rgba(14, 159, 110, 0.12);
+  color: var(--primary);
+}
+.conversation-info-collab-handoff-note,
+.conversation-info-collab-output {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.conversation-info-collab-output { display: flex; gap: 8px; font-size: 12px; }
+.conversation-info-collab-output-actor { font-weight: 650; color: var(--text); flex: none; }
+.conversation-info-collab-subhead {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.conversation-info-collab-anomaly {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.conversation-info-collab-anomaly-kind {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0 6px;
+  border-radius: 999px;
+  flex: none;
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger, #ef4444);
+}
+.conversation-info-collab-anomaly.is-retry .conversation-info-collab-anomaly-kind { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+.conversation-info-collab-anomaly.is-cancel .conversation-info-collab-anomaly-kind { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
+.conversation-info-collab-anomaly.is-degraded .conversation-info-collab-anomaly-kind { background: rgba(168, 85, 247, 0.14); color: #7e22ce; }
+.conversation-info-collab-anomaly-detail { color: var(--text); }
+.conversation-info-collab-anomaly-impact { font-size: 11px; color: var(--danger, #ef4444); }
+.conversation-info-collab-contribs li { display: flex; gap: 8px; font-size: 12px; flex-wrap: wrap; }
+.conversation-info-collab-contrib-name { font-weight: 650; color: var(--text); flex: none; }
+.conversation-info-collab-final {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: rgba(14, 159, 110, 0.06);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+@keyframes cogseed-collab-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .conversation-info-collaboration-agent-activity-body {
   display: grid;
   gap: 10px;
@@ -10739,6 +10893,66 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   width: 14px;
   height: 14px;
   color: var(--primary);
+}
+
+/* COGSEED-61: end-of-run collaboration summary card (collab_summary message) */
+.chat-collab-summary {
+  margin-bottom: 8px;
+  border: 1px solid var(--border-soft, #e5e7eb);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: rgba(14, 159, 110, 0.04);
+}
+.chat-collab-summary summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-collab-summary summary::-webkit-details-marker { display: none; }
+.chat-collab-summary-icon { width: 14px; height: 14px; color: var(--primary); }
+.chat-collab-summary-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(14, 159, 110, 0.12);
+  color: var(--primary);
+}
+.chat-collab-summary-chip.is-cancelled,
+.chat-collab-summary-chip.is-failed {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger, #ef4444);
+}
+.chat-collab-summary-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.chat-collab-summary-body { margin-top: 8px; display: grid; gap: 6px; }
+.chat-collab-summary-contribs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.chat-collab-summary-contribs li {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.chat-collab-summary-contrib-name { font-weight: 650; color: var(--text); flex: none; }
+.chat-collab-summary-final {
+  font-size: 12.5px;
+  color: var(--text);
+  border-left: 3px solid var(--primary);
+  padding-left: 10px;
 }
 
 .chat-bubble {

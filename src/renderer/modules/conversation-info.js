@@ -327,6 +327,7 @@ const ConversationInfo = (() => {
       attachments: Array.isArray(attachmentData.items) ? attachmentData.items : [],
       runtime: activity.runtime || null,
       actors: Array.isArray(activity.actors) ? activity.actors : [],
+      collabOverview: activity.collabOverview || null,
       collaboration: activity.runtime && activity.runtime.collaboration ? activity.runtime.collaboration : null,
       wakeRequests: Array.isArray(wakeData.requests) ? wakeData.requests : [],
       protocolEvents: Array.isArray(protocolData.events) ? protocolData.events : (Array.isArray(protocolData.protocol_events) ? protocolData.protocol_events : []),
@@ -339,17 +340,20 @@ const ConversationInfo = (() => {
   }
 
   async function _loadAgentActivitySnapshot(cid) {
-    if (!cid) return { actors: [], runtime: {} };
+    if (!cid) return { actors: [], runtime: {}, collabOverview: null };
     const membersUrl = typeof _membersRequestUrl === 'function'
       ? _membersRequestUrl(cid)
       : `/api/conversations/${encodeURIComponent(cid)}/members`;
-    const [membersRes, runtimeRes] = await Promise.all([
+    const [membersRes, runtimeRes, collabOverviewRes] = await Promise.all([
       _fetchJson(membersUrl).catch(() => null),
       _fetchJson(`/api/conversations/${encodeURIComponent(cid)}/runtime`).catch(() => null),
+      // COGSEED-61: 本地群聊协作总览投影（拆解/分工/交接/异常/汇总）。
+      _fetchJson(`/api/conversations/${encodeURIComponent(cid)}/collaboration/overview`).catch(() => null),
     ]);
     return {
       actors: membersRes && Array.isArray(membersRes.actors) ? membersRes.actors : [],
       runtime: runtimeRes || {},
+      collabOverview: collabOverviewRes && collabOverviewRes.overview ? collabOverviewRes.overview : null,
     };
   }
 
@@ -473,6 +477,7 @@ const ConversationInfo = (() => {
         ..._snapshot,
         actors: Array.isArray(activity.actors) ? activity.actors : [],
         runtime: activity.runtime || {},
+        collabOverview: activity.collabOverview || null,
         collaboration: activity.runtime && activity.runtime.collaboration
           ? activity.runtime.collaboration
           : _snapshot.collaboration,
@@ -1048,10 +1053,12 @@ const ConversationInfo = (() => {
     const attentionItems = _collectCollaborationAttentionItems();
     const hasAgentActivity = _deriveAgentActivityRows(_snapshot).length > 0;
     const hasAttention = attentionItems.length > 0;
+    const localOverview = _snapshot.collabOverview || null;
+    const hasLocalRun = !!(localOverview && localOverview.available);
     const hasTask = !!collaboration && !!collaboration.objective;
 
     // 完全无实质内容（无任务 / 无参与者 / 无待处理，且不在加载/报错中）：空态。
-    if (!hasTask && !hasAgentActivity && !hasAttention && !cogseedState.loading && !cogseedState.error) {
+    if (!hasTask && !hasAgentActivity && !hasAttention && !hasLocalRun && !cogseedState.loading && !cogseedState.error) {
       return `<div class="conversation-info-empty">${escapeHtml(_label('conversation_info.collaboration.empty', 'No active collaboration yet.'))}</div>`;
     }
 
@@ -1060,11 +1067,156 @@ const ConversationInfo = (() => {
     const cogseedHtml = (cogseedState.session || cogseedState.loading || cogseedState.error)
       ? _safeSection(() => _renderCogSeedOverview(), loadFailed)
       : '';
+    const localTaskHtml = hasLocalRun ? _safeSection(() => _renderLocalCollabTaskSection(localOverview), loadFailed) : '';
+    const localHandoffHtml = hasLocalRun && (localOverview.handoffs || []).length + (localOverview.outputs || []).length > 0
+      ? _safeSection(() => _renderLocalCollabHandoffSection(localOverview), loadFailed)
+      : '';
+    const localAnomalyHtml = hasLocalRun && (localOverview.anomalies || []).length > 0
+      ? _safeSection(() => _renderLocalCollabAnomalySection(localOverview), loadFailed)
+      : '';
+    const localSummaryHtml = hasLocalRun && localOverview.summary
+      ? _safeSection(() => _renderLocalCollabSummarySection(localOverview.summary), loadFailed)
+      : '';
     const taskHtml = hasTask ? _safeSection(() => _renderCollaborationTaskOverview(collaboration, runtime), loadFailed) : '';
     const agentHtml = hasAgentActivity ? _safeSection(() => _renderCollaborationAgentActivitySection(), loadFailed) : '';
     const attentionHtml = hasAttention ? _safeSection(() => _renderCollaborationAttentionSection(attentionItems), loadFailed) : '';
 
-    return `<div class="conversation-info-collaboration">${header}${cogseedHtml}${taskHtml}${agentHtml}${attentionHtml}</div>`;
+    return `<div class="conversation-info-collaboration">${header}${cogseedHtml}${localTaskHtml}${localHandoffHtml}${localAnomalyHtml}${localSummaryHtml}${taskHtml}${agentHtml}${attentionHtml}</div>`;
+  }
+
+  // ── COGSEED-61: 本地群聊协作 sections（拆解/交接/异常/汇总）──────────
+
+  function _collabStatusLabel(status) {
+    const known = ['created', 'running', 'blocked', 'failed', 'completed', 'cancelled'];
+    const key = known.includes(String(status)) ? String(status) : 'running';
+    return _label(`conversation_info.collaboration.run_status.${key}`, key);
+  }
+
+  function _collabStepStatusToken(status) {
+    return String(status || '').replace(/[^a-z0-9_-]/gi, '') || 'pending';
+  }
+
+  /** 任务拆解总览：目标 + 状态 + 步骤列表（含依赖与重试角标）。 */
+  function _renderLocalCollabTaskSection(overview) {
+    const steps = Array.isArray(overview.steps) ? overview.steps : [];
+    const progress = overview.progress || { total: 0, completed: 0, running: 0, pending: 0, failed: 0, skipped: 0 };
+    const titleById = new Map(steps.map((step) => [step.id, step.title]));
+    const stepRows = steps.map((step) => {
+      const deps = (step.depends_on || [])
+        .map((id) => titleById.get(id) || id)
+        .filter(Boolean);
+      const retryBadge = step.attempts > 1
+        ? `<span class="conversation-info-collab-retry" title="${escapeHtml(_label('conversation_info.collaboration.retry_count', 'Retried {count} times', { count: step.attempts - 1 }))}">↻${step.attempts - 1}</span>`
+        : '';
+      const actor = step.actor_name ? `<span class="conversation-info-collab-step-actor">${escapeHtml(step.actor_name)}</span>` : '';
+      const depNote = deps.length
+        ? `<span class="conversation-info-collab-step-dep">${escapeHtml(_label('conversation_info.collaboration.depends_on', 'depends on {step}', { step: deps.join('、') }))}</span>`
+        : '';
+      return `<li class="conversation-info-collab-step is-${_collabStepStatusToken(step.status)}">` +
+        `<span class="conversation-info-collab-step-dot"></span>` +
+        `<span class="conversation-info-collab-step-title">${escapeHtml(step.title || step.id)}${retryBadge}</span>` +
+        `${actor}${depNote}` +
+        `</li>`;
+    }).join('');
+    const progressText = _label('conversation_info.collaboration.steps_progress', '{completed}/{total} steps completed', {
+      completed: progress.completed,
+      total: progress.total,
+    });
+    const stateCounts = [
+      progress.running ? _label('conversation_info.collaboration.state_running', 'running {count}', { count: progress.running }) : '',
+      progress.pending ? _label('conversation_info.collaboration.state_pending', 'waiting {count}', { count: progress.pending }) : '',
+      progress.failed ? _label('conversation_info.collaboration.state_failed', 'failed {count}', { count: progress.failed }) : '',
+      progress.skipped ? _label('conversation_info.collaboration.state_skipped', 'skipped {count}', { count: progress.skipped }) : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="conversation-info-collaboration-section">` +
+      `<div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_task_breakdown', 'Task breakdown'))}</div>` +
+      `<div class="conversation-info-collab-objective">${escapeHtml(String(overview.run && overview.run.objective || ''))}</div>` +
+      `<div class="conversation-info-collab-meta"><span class="conversation-info-collab-status is-${_collabStepStatusToken(overview.run && overview.run.status)}">${escapeHtml(_collabStatusLabel(overview.run && overview.run.status))}</span><span>${escapeHtml(progressText)}</span></div>` +
+      (stateCounts ? `<div class="conversation-info-collab-counts">${escapeHtml(stateCounts)}</div>` : '') +
+      (stepRows ? `<ul class="conversation-info-collab-steps">${stepRows}</ul>` : '') +
+      `</div>`;
+  }
+
+  function _collabHandoffKindLabel(kind) {
+    if (kind === 'dispatch') return _label('conversation_info.collaboration.handoff.dispatch', 'dispatched');
+    if (kind === 'handback') return _label('conversation_info.collaboration.handoff.handback', 'returned');
+    return _label('conversation_info.collaboration.handoff.context_update', 'context updated');
+  }
+
+  /** 上下文交接与结果回收时间线。 */
+  function _renderLocalCollabHandoffSection(overview) {
+    const handoffs = (overview.handoffs || []).slice(-12).reverse();
+    const outputs = overview.outputs || [];
+    const rows = handoffs.map((item) => {
+      const from = item.from_name || item.from;
+      const to = item.to_name || item.to;
+      return `<li class="conversation-info-collab-handoff is-${escapeHtml(String(item.kind || ''))}">` +
+        `<span class="conversation-info-collab-handoff-route">${escapeHtml(String(from))} → ${escapeHtml(String(to))}</span>` +
+        `<span class="conversation-info-collab-handoff-kind">${escapeHtml(_collabHandoffKindLabel(item.kind))}</span>` +
+        (item.note ? `<span class="conversation-info-collab-handoff-note">${escapeHtml(item.note)}</span>` : '') +
+        `</li>`;
+    }).join('');
+    const outputRows = outputs.slice(-8).reverse().map((item) => {
+      const who = item.actor_name || item.actor_id || '';
+      return `<li class="conversation-info-collab-output"><span class="conversation-info-collab-output-actor">${escapeHtml(String(who))}</span><span>${escapeHtml(item.summary || '')}</span></li>`;
+    }).join('');
+    return `<div class="conversation-info-collaboration-section">` +
+      `<div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_handoffs', 'Handoffs & outputs'))}</div>` +
+      (rows ? `<ul class="conversation-info-collab-handoffs">${rows}</ul>` : '') +
+      (outputRows ? `<div class="conversation-info-collab-subhead">${escapeHtml(_label('conversation_info.collaboration.recovered_outputs', 'Recovered results'))}</div><ul class="conversation-info-collab-outputs">${outputRows}</ul>` : '') +
+      `</div>`;
+  }
+
+  function _collabAnomalyKindLabel(kind) {
+    if (kind === 'failure') return _label('conversation_info.collaboration.anomaly.failure', 'failure');
+    if (kind === 'retry') return _label('conversation_info.collaboration.anomaly.retry', 'retry');
+    if (kind === 'cancel') return _label('conversation_info.collaboration.anomaly.cancel', 'cancelled');
+    return _label('conversation_info.collaboration.anomaly.degraded', 'degraded');
+  }
+
+  /** 失败 / 重试 / 取消 / 降级聚合与对整体任务的影响。 */
+  function _renderLocalCollabAnomalySection(overview) {
+    const rows = (overview.anomalies || []).slice(-10).reverse().map((item) => {
+      const impact = Array.isArray(item.impact) && item.impact.length
+        ? `<span class="conversation-info-collab-anomaly-impact">${escapeHtml(_label('conversation_info.collaboration.anomaly.impact', 'affects: {steps}', { steps: item.impact.join('、') }))}</span>`
+        : '';
+      const who = item.actor_id ? `<span class="conversation-info-collab-anomaly-actor">${escapeHtml(String(item.actor_id))}</span>` : '';
+      return `<li class="conversation-info-collab-anomaly is-${escapeHtml(String(item.kind || ''))}">` +
+        `<span class="conversation-info-collab-anomaly-kind">${escapeHtml(_collabAnomalyKindLabel(item.kind))}</span>` +
+        `${who}` +
+        `<span class="conversation-info-collab-anomaly-detail">${escapeHtml(item.detail || '')}</span>` +
+        `${impact}` +
+        `</li>`;
+    }).join('');
+    return `<div class="conversation-info-collaboration-section">` +
+      `<div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_anomalies', 'Issues along the way'))}</div>` +
+      `<ul class="conversation-info-collab-anomalies">${rows}</ul>` +
+      `</div>`;
+  }
+
+  function _collabConclusionLabel(conclusion) {
+    if (conclusion === 'all_steps_done') return _label('conversation_info.collaboration.summary.all_done', 'All steps completed');
+    if (conclusion === 'cancelled') return _label('conversation_info.collaboration.summary.cancelled', 'Cancelled');
+    return _label('conversation_info.collaboration.summary.failed', 'Failed');
+  }
+
+  /** 终态协作汇总：结论 + 各 Agent 贡献 + 最终结果。 */
+  function _renderLocalCollabSummarySection(summary) {
+    const contributions = (summary.contributions || []).map((item) => {
+      const parts = [
+        _label('conversation_info.collaboration.summary.steps_done', '{count} steps', { count: item.steps_completed }),
+      ];
+      if (item.retries) parts.push(_label('conversation_info.collaboration.summary.retries', '{count} retries', { count: item.retries }));
+      if ((item.produced_files || []).length) parts.push(_label('conversation_info.collaboration.summary.files', '{count} files', { count: item.produced_files.length }));
+      return `<li><span class="conversation-info-collab-contrib-name">${escapeHtml(String(item.actor_name || item.actor_id))}</span><span>${escapeHtml(parts.join(' · '))}</span></li>`;
+    }).join('');
+    return `<div class="conversation-info-collaboration-section conversation-info-collab-summary">` +
+      `<div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.collaboration.section_summary', 'Collaboration summary'))}</div>` +
+      `<div class="conversation-info-collab-meta"><span class="conversation-info-collab-status is-${escapeHtml(String(summary.conclusion || ''))}">${escapeHtml(_collabConclusionLabel(summary.conclusion))}</span>` +
+      `<span>${escapeHtml(_label('conversation_info.collaboration.steps_progress', '{completed}/{total} steps completed', { completed: summary.step_totals ? summary.step_totals.completed : 0, total: summary.step_totals ? summary.step_totals.total : 0 }))}</span></div>` +
+      (contributions ? `<ul class="conversation-info-collab-contribs">${contributions}</ul>` : '') +
+      (summary.final_result ? `<div class="conversation-info-collab-final">${escapeHtml(String(summary.final_result))}</div>` : '') +
+      `</div>`;
   }
 
   function _protocolEventData(event) {
@@ -1919,7 +2071,7 @@ const ConversationInfo = (() => {
     _open = false;
     _resumeEvidenceCid = '';
     _carriedRunsExpanded = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collabOverview: null, collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';
