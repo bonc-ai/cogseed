@@ -41,6 +41,7 @@ import {
   type CollaborationSnapshot,
   type ResolveContextConflictSelectionInput,
 } from './collaboration';
+import { buildCollabOverview, type CollabOverview } from './collab_overview';
 import { buildRetryResumeModelText } from './retry_resume';
 import type { KstarTaskLifecycleSnapshot } from '../kstar/lifecycle-adapter';
 
@@ -107,6 +108,19 @@ export async function listCollaborationConflicts(userId: string, cid: string) {
     ok: true as const,
     conflicts: collaboration?.active_conflicts || [],
   };
+}
+
+/** COGSEED-61: local group-chat collaboration overview projection for the
+ *  renderer — task breakdown, per-agent state, handoffs, anomalies and the
+ *  lazily generated end-of-run summary. Read path is projection-only; the
+ *  summary write happens at most once per run (idempotent). */
+export async function collabOverview(
+  userId: string,
+  cid: string,
+  projectIdHint?: string | null,
+): Promise<CollabOverview> {
+  if (!safeId(cid)) throw new Error('invalid cid');
+  return buildCollabOverview(userId, cid, projectIdHint);
 }
 
 export async function resolveCollaborationConflict(
