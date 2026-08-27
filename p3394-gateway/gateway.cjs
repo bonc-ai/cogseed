@@ -644,6 +644,23 @@ function sanitizeStreamText(raw) {
 }
 
 // ── oneshot 模式：每消息 spawn CLI（可取消） ──
+
+// ── CogSeed 扩展：extensions.execution_prefs（单轮执行偏好透传） ──
+// CogSeed 主机可按轮次携带 { reasoning_effort }（low|high）。旧版宿主不发
+// 该字段 → undefined，行为与既往完全一致；未知/白名单外的值一律视为"跟随
+// CLI 自身默认"。仅 claude 系 runtime 消费（MAX_THINKING_TOKENS env）；其他
+// CLI 无已知开关，prefs 被安全忽略。档位→token 预算为启发式映射，与 CogSeed
+// 本地直连 backend 保持同一份取值。
+const EXEC_EFFORT_TOKENS = { low: '8192', high: '32000' };
+function executionPrefsFor(envelope) {
+  const ext = (envelope && envelope.extensions) || {};
+  const prefs = ext.execution_prefs;
+  if (!prefs || typeof prefs !== 'object') return null;
+  const effort = typeof prefs.reasoning_effort === 'string' ? prefs.reasoning_effort.trim().toLowerCase() : '';
+  if (!Object.prototype.hasOwnProperty.call(EXEC_EFFORT_TOKENS, effort)) return null;
+  return { maxThinkingTokens: EXEC_EFFORT_TOKENS[effort] };
+}
+
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
 function runAgent(message, taskId, cwd, onStream, onProgress, extraArgs) {
@@ -1164,7 +1181,12 @@ class StreamJsonRuntime {
         ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []),
         ...(Array.isArray(extraArgs) ? extraArgs : [])];
       return new Promise((resolve, reject) => {
-        const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+        // execPrefs（CogSeed 扩展）：单轮推理强度 → MAX_THINKING_TOKENS env；
+        // 无 prefs 时保持 CLI 自身默认（进程环境不覆盖）。
+        const childEnv = (opts && opts.execPrefs && opts.execPrefs.maxThinkingTokens)
+          ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: opts.execPrefs.maxThinkingTokens })
+          : undefined;
+        const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
         this.active.set(cancelKey, child);
         let lineBuf = '';
         let accumulated = '';
@@ -1311,9 +1333,11 @@ class ClaudePersistentRuntime {
     return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra];
   }
 
-  _spawn(sessionId, cwd) {
-    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null };
-    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, stdio: ['pipe', 'pipe', 'pipe'] });
+  _spawn(sessionId, cwd, maxThinkingTokens) {
+    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, maxThinkingTokens: maxThinkingTokens || null };
+    // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env）。
+    const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
+    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {
@@ -1456,12 +1480,21 @@ class ClaudePersistentRuntime {
     const hint = (opts && opts.peerCallHint) || '';
     const cancelKey = (opts && opts.taskId) || messageId;
     const cwd = (opts && opts.cwd) || process.cwd();
+    // 本轮的推理强度预算：与常驻进程已固化值不同时必须重启进程（env 是
+    // spawn 时定死的，进程活着改不了）；重启后首轮由 transcript 恢复上下文。
+    // 在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
+    const wantThinking = (opts && opts.execPrefs) ? opts.execPrefs.maxThinkingTokens : null;
     let entry = this.sessions.get(sessionId);
+    if (entry && entry.maxThinkingTokens !== (wantThinking || null) && !entry.turn) {
+      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      this._dropSession(sessionId);
+      entry = null;
+    }
     const fresh = !entry || entry.child.exitCode !== null || !entry.child.stdin.writable;
     if (fresh) {
       // 新进程（首次/上次进程已退出/被取消）：首轮回放 transcript，保证
       // 跨 gateway 重启与进程重建后的上下文不丢（常驻进程内后续轮自动延续）。
-      entry = this._spawn(sessionId, cwd);
+      entry = this._spawn(sessionId, cwd, wantThinking);
     } else if (entry.cwd !== cwd) {
       throw new Error('p3394_session_cwd_conflict');
     }
@@ -2023,7 +2056,8 @@ async function handleEnvelope(envelope) {
     }
     // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
     if (peerHintThisTurn && hintMark) {
       try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
     }

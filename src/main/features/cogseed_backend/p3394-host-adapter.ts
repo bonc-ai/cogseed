@@ -72,7 +72,16 @@ export function buildP3394OutboundEnvelope(
   peer: string,
   message: string,
   sourceKey: string,
-  opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string; references?: P3394OutboundReference[] } = {},
+  opts: {
+    scopeKey?: string;
+    parts?: P3394PayloadPart[];
+    goal?: string;
+    workingDir?: string;
+    references?: P3394OutboundReference[];
+    /** Unified execution entry：单轮推理档位，进信封私有扩展；仅 claude
+     * 网关运行时消费（见 gateway executionPrefsFor）。 */
+    executionPrefs?: { reasoningEffort?: 'off' | 'low' | 'high' };
+  } = {},
 ): P3394Envelope {
   // @alias 便利写法（§7.2）：peer 参数允许 "@hermes"，剥前缀后由注册表
   // 按 alias/agent_id 解析；解析与身份验证仍在协商链（fail-closed）。
@@ -117,6 +126,11 @@ export function buildP3394OutboundEnvelope(
         : {}),
       ...(opts.workingDir && opts.workingDir.trim()
         ? { working_dir: opts.workingDir.trim() }
+        : {}),
+      // CogSeed 私有扩展（对端旧版忽略未知 extension 字段，向后兼容）：
+      // 单轮执行偏好。仅 claude 网关 runtime 消费 reasoning_effort。
+      ...(opts.executionPrefs?.reasoningEffort
+        ? { execution_prefs: { reasoning_effort: opts.executionPrefs.reasoningEffort } }
         : {}),
     },
   };

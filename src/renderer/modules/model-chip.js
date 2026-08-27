@@ -99,29 +99,35 @@ function _isCliAgent(agent) {
  *  global default. Returns:
  *  { mode:'cli'|'api', model, modelLabel, provider, providerLabel,
  *    effort, effortOverridden, modelOverridden, reasoning } */
+// CogSeed 能把推理强度真实下发的 CLI：claude（网关 runtime 与本地直连都
+// 会消费 MAX_THINKING_TOKENS）。codex 的主路径是 ChatGPT app-server 私有
+// 协议、无可验证的每轮参数槽——不放假开关。其余 CLI 同理保持说明文案。
+const CLI_EFFORT_SUPPORTED = new Set(['claude']);
+
 function _effectiveExecConfig(target) {
   const recipient = (typeof getChatRecipient === 'function') ? getChatRecipient(target) : { kind: 'commander' };
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
   // CLI-backed local agent: model comes from the agent's runtime (task
-  // override may swap it for this task). Reasoning effort stays the CLI's
-  // own configuration — the active execution path is the P3394 gateway,
-  // whose envelope has no execution-prefs slot yet, so a picker here would
-  // be a dead control. Revisit when the envelope carries execution prefs.
+  // override may swap it for this task). Reasoning effort is forwarded per
+  // task only where a real switch exists.
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
+    const cliType = (agent.runtime && agent.runtime.cli) || '';
+    const effortSupported = CLI_EFFORT_SUPPORTED.has(cliType);
     const model = override.model || agent.runtime.model || '';
     return {
       mode: 'cli',
       model,
       modelLabel: override.modelLabel || model || '',
       provider: '',
-      providerLabel: (agent.runtime && agent.runtime.cli) || '',
-      effort: null,
-      effortOverridden: false,
+      providerLabel: cliType,
+      effort: override.effort || null,
+      effortOverridden: !!override.effort,
+      effortSupported,
       modelOverridden: !!override.model,
-      reasoning: false,
+      reasoning: effortSupported,
       agent,
     };
   }
@@ -242,11 +248,16 @@ function _modelChipRenderChip(chip) {
   }
   if (effortEl) {
     if (cliMode) {
-      // CLI agent: effort is owned by the external CLI — show the badge as
-      // the reason instead of a changeable value.
-      effortEl.textContent = t('exec_config.cli_badge');
-      effortEl.classList.add('is-cli');
-      effortEl.classList.remove('is-override');
+      // claude：选了档位就显示档位（本次任务徽标态）；否则显示 CLI 徽标。
+      if (cfg.effort) {
+        effortEl.textContent = _execEffortLabel(cfg.effort);
+        effortEl.classList.add('is-override');
+        effortEl.classList.remove('is-cli');
+      } else {
+        effortEl.textContent = t('exec_config.cli_badge');
+        effortEl.classList.add('is-cli');
+        effortEl.classList.remove('is-override');
+      }
     } else {
       const displayEffort = cfg.effort || 'auto';
       effortEl.textContent = _execEffortLabel(displayEffort);
@@ -619,10 +630,14 @@ async function _renderCliModelOptions(menu, anchor, target, cfg) {
   // 扫描不到该 CLI 的模型表（第三方配置我们拿不到）就不渲染列表了——
   // 一句话交代执行配置完全由 CLI 自己决定，比一个"未配置模型"的空架子诚实。
   if (!models.length) {
-    const note = document.createElement('div');
-    note.className = 'model-chip-menu-note';
-    note.textContent = t('exec_config.cli_no_models', { cli: cliType });
-    menu.appendChild(note);
+    if (cfg.effortSupported) {
+      _renderCliEffortSegmented(menu, anchor, cfg, cliType);
+    } else {
+      const note = document.createElement('div');
+      note.className = 'model-chip-menu-note';
+      note.textContent = t('exec_config.cli_no_models', { cli: cliType });
+      menu.appendChild(note);
+    }
     return;
   }
 
@@ -680,11 +695,52 @@ async function _renderCliModelOptions(menu, anchor, target, cfg) {
     });
   }
 
+  if (cfg.effortSupported) {
+    _renderCliEffortSegmented(menu, anchor, cfg, cliType);
+  } else {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('exec_config.effort_cli_note');
+    menu.appendChild(note);
+  }
+  _positionModelMenu(menu, anchor);
+}
+
+/** claude 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
+ *  把档位写进信封 execution_prefs，网关 claude runtime 转换为
+ *  MAX_THINKING_TOKENS 环境变量注入。 */
+function _renderCliEffortSegmented(menu, anchor, cfg, cliType) {
+  const target = _chipTargetForElement(anchor);
+  const seg = document.createElement('div');
+  seg.className = 'model-chip-menu-segmented';
+  _EFFORT_OPTIONS.forEach((level) => {
+    const isActive = (cfg.effort || 'auto') === level;
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'model-chip-seg-btn' + (isActive ? ' is-active' : '');
+    pill.textContent = t('model_effort.' + level);
+    pill.addEventListener('click', () => {
+      try {
+        const ov = getExecOverride(target) || {};
+        if (level === 'auto') {
+          const { effort, ...rest } = ov;
+          setExecOverride(target, Object.keys(rest).length ? rest : null);
+        } else {
+          setExecOverride(target, { ...ov, effort: level });
+        }
+        _modelChipRenderAll();
+      } catch (err) {
+        _modelChipLog.warn('cli effort pick failed', { error: (err && err.message) || String(err) });
+      }
+      _closeModelMenu();
+    });
+    seg.appendChild(pill);
+  });
+  menu.appendChild(seg);
   const note = document.createElement('div');
   note.className = 'model-chip-menu-note';
-  note.textContent = t('exec_config.effort_cli_note');
+  note.textContent = t('exec_config.effort_cli_forward_note', { cli: cliType });
   menu.appendChild(note);
-  _positionModelMenu(menu, anchor);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────

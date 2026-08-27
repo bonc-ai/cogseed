@@ -5013,5 +5013,6 @@
   "agents.exec_default_model": "Modelo padrão",
   "agents.exec_default_thinking": "Esforço de raciocínio padrão",
   "agents.exec_follow_global": "Seguir padrão global",
-  "agents.exec_defaults_hint": "O modelo e o esforço de raciocínio que este agente usa por padrão. Ajustes temporários numa conversa nunca alteram estes padrões."
+  "agents.exec_defaults_hint": "O modelo e o esforço de raciocínio que este agente usa por padrão. Ajustes temporários numa conversa nunca alteram estes padrões.",
+  "exec_config.effort_cli_forward_note": "O esforço de raciocínio é enviado com a tarefa para \"{cli}\" (auto = seguir o padrão da própria CLI)."
 }
