@@ -4828,6 +4828,59 @@ async function runActorTurnBody(
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
       const { getLocalExecMode } = await import("../permissions");
+      // Vision fallback seam (2026-08-27, 子安口径): if this turn carries
+      // images and the receiving model is KNOWN vision-incapable, the
+      // registered pluggable handler returns MODEL-FACING instructions
+      // (image facts + on-disk paths + which vision tools to call — vision
+      // model reroute / vision MCP, shape deliberately open). The model then
+      // acts on its own agency. No handler or unknown capability keeps
+      // today's pass-through behavior.
+      if (turnImages.length) {
+        const { applyVisionFallbackIfBlind } = await import("../vision_fallback");
+        const chatAttachments = await import("../chat_attachments");
+        // Enrich inline images with name + on-disk path (processors read the
+        // original bytes from disk, not the compressed inline payload).
+        // buildAttachmentManifest packs images in attachment order, so pair
+        // them positionally; unmatched entries stay anonymous.
+        const imageNames: string[] = [];
+        for (const rawName of item.attachments || []) {
+          const resolved = chatAttachments.resolveAttachmentAbsPath(uid, cid, String(rawName));
+          if (resolved.ok && resolved.kind === "image") imageNames.push(String(rawName));
+        }
+        const enrichedImages = turnImages.map((img, i) => {
+          const name = imageNames[i];
+          if (!name) return { ...img };
+          const r = chatAttachments.resolveAttachmentAbsPath(uid, cid, name);
+          return r.ok ? { ...img, name, absPath: r.absPath } : { ...img };
+        });
+        const fallback = await applyVisionFallbackIfBlind({
+          userId: uid,
+          conversationId: cid,
+          messageText,
+          images: enrichedImages,
+          resolveAbilities: async () => {
+            const auth = await import("../auth");
+            const { entries } = await auth.listEntries();
+            const current = entries && entries[0];
+            if (!current || !current.provider || !current.model) return null;
+            const res = await auth.listModels(current.provider);
+            const hit = (res.models || []).find((m) => m && m.id === current.model);
+            return hit
+              ? { providerId: current.provider, modelId: current.model, ...(hit.vision !== undefined ? { vision: hit.vision } : {}) }
+              : null;
+          },
+        });
+        if (fallback) {
+          messageText = fallback.messageText;
+          turnImages = fallback.images as typeof turnImages;
+          if (fallback.note) {
+            appendProcessItem(processItems, {
+              type: "event",
+              event: { stream: "attachment", data: { phase: "vision-fallback", note: fallback.note } },
+            });
+          }
+        }
+      }
       const executionLifecycle = createLifecycleSink(uid, {
         executionId: `turn-${item.turnId}`,
         kind: "core-agent",
