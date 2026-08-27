@@ -36,24 +36,34 @@ function extractFunction(name: string): string {
 // (2026-08-27: same line as the copy/quote icons, right-aligned), so
 // querySelector resolves both `[data-role=...]` lookups against children.
 function makeNode(): Record<string, unknown> {
-  return {
-    children: [] as Array<Record<string, unknown>>,
+  const node: Record<string, unknown> & { children: Array<Record<string, unknown>> } = {
+    children: [],
     dataset: {},
     className: '',
-    textContent: '',
     title: '',
+    appendChild(child: Record<string, unknown>) {
+      node.children.push(child);
+      return child;
+    },
     querySelector(sel: string) {
       const m = /^\[data-role="([^"]+)"\]$/.exec(sel);
       if (!m) return null;
-      const node = this as Record<string, unknown>;
-      return (node.children as Array<Record<string, unknown>>)
+      return node.children
         .find((c) => (c.dataset as Record<string, string>).role === m[1]) || null;
     },
-    appendChild(child: Record<string, unknown>) {
-      (this.children as Array<Record<string, unknown>>).push(child);
-      return child;
-    },
   };
+  Object.defineProperty(node, 'textContent', {
+    get() {
+      const own = (node as { text?: string }).text || '';
+      return own + node.children.map((c) => String(c.textContent)).join('');
+    },
+    set(text: string) {
+      // `= ''` clears children like the real DOM (idempotent re-mount path).
+      (node as { text?: string }).text = text;
+      if (text === '') node.children.length = 0;
+    },
+  });
+  return node;
 }
 
 function loadMountMsgMeta(): (ph: Record<string, unknown>, metrics: unknown) => void {
@@ -110,15 +120,25 @@ describe('conversation message metrics line', () => {
     expect(row.className).toBe('chat-msg-actions');
     expect(row.dataset.role).toBe('msg-actions');
     expect(row.children.length).toBe(1);
-    const meta = row.children[0] as { className: string; dataset: Record<string, string>; textContent: string; title: string };
+    const meta = row.children[0] as {
+      className: string;
+      dataset: Record<string, string>;
+      title: string;
+      children: Array<Record<string, unknown>>;
+    };
     expect(meta.className).toBe('chat-msg-meta');
     expect(meta.dataset.role).toBe('msg-meta');
-    // All four locale keys participate: duration, ttft, rate, tokens.
-    expect(meta.textContent).toContain('chat.metrics.duration|');
-    expect(meta.textContent).toContain('chat.metrics.ttft|');
-    expect(meta.textContent).toContain('chat.metrics.rate|');
-    expect(meta.textContent).toContain('chat.metrics.tokens|');
-    expect(meta.textContent).toContain(' · ');
+    // Segment structure: .mseg > (.k label + .v mono value) — the same
+    // label/value language as the session stats bar.
+    const segTexts = (meta.children as Array<Record<string, unknown>>).map((seg) => {
+      const parts = (seg.children as Array<Record<string, unknown>>)
+        .map((c) => String(c.textContent)).join('+');
+      return `${String(seg.className)}:${parts}`;
+    });
+    expect(segTexts.some((s) => s.startsWith('mseg:') && s.includes('chat.metrics.durationK|'))).toBe(true);
+    expect(segTexts.some((s) => s.includes('chat.metrics.ttftK|'))).toBe(true);
+    expect(segTexts.some((s) => s.includes('chat.metrics.rate|'))).toBe(true);
+    expect(segTexts.some((s) => s.includes('chat.metrics.tokensK|') && s.includes('chat.metrics.tokensV|'))).toBe(true);
     // Hover tooltip carries the cache breakdown lines.
     expect(meta.title).toContain('缓存读 8K tok');
 
@@ -126,6 +146,7 @@ describe('conversation message metrics line', () => {
     mount(ph, FULL_METRICS);
     expect(ph.children.length).toBe(1);
     expect(row.children.length).toBe(1);
+    expect((meta.children as Array<Record<string, unknown>>).length).toBe(4);
   });
 
   it('produces no msg-meta node for messages without metrics', () => {
@@ -144,10 +165,11 @@ describe('conversation message metrics line', () => {
         path.join(__dirname, `../../src/renderer/locales/${locale}.json`),
         'utf8',
       )) as Record<string, string>;
-      expect(raw['chat.metrics.duration'], `${locale}.duration`).toBeTruthy();
-      expect(raw['chat.metrics.ttft'], `${locale}.ttft`).toBeTruthy();
+      expect(raw['chat.metrics.durationK'], `${locale}.durationK`).toBeTruthy();
+      expect(raw['chat.metrics.ttftK'], `${locale}.ttftK`).toBeTruthy();
       expect(raw['chat.metrics.rate'], `${locale}.rate`).toBeTruthy();
-      expect(raw['chat.metrics.tokens'], `${locale}.tokens`).toBeTruthy();
+      expect(raw['chat.metrics.tokensK'], `${locale}.tokensK`).toBeTruthy();
+      expect(raw['chat.metrics.tokensV'], `${locale}.tokensV`).toBeTruthy();
     }
   });
 
