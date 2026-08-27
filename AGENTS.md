@@ -132,9 +132,9 @@ Attachments:
 - New `window.cogseed.*` APIs require a main IPC handler; renderer shim routes are centralized.
 - Markdown rendering uses `renderMarkdown`; dashboard directives and schema references change together.
 - Do not append cache-busting query strings to renderer resources.
-- Renderer icons are centralized in `modules/icons.js`; do not hard-code SVG paths or use emoji icons.
-- Reuse shared UI classes and modifiers. Do not create near-duplicate cards/buttons/chips.
-- Before adding overlays/popovers/dialogs, check existing z-index tiers.
+- Renderer icons come from `modules/icons.js` through `uiIconHtml(...)`, `uiIconButton(...)`, or `hydrateUiIcons(...)`; add missing icon names there instead of hard-coding SVG paths or using emoji icons.
+- Shared Renderer primitives are `uiButton(...)`, `uiIconButton(...)`, `uiField(...)`, `uiForm(...)`, `uiEmptyState(...)`, `uiModalController(...)`, and `uiPageHeader(...)`; extend these seams instead of adding page-local button, form, empty-state, modal, or page-header variants.
+- Renderer layers use `--z-base`, `--z-raised`, `--z-sticky`, `--z-popover`, `--z-tour`, `--z-overlay`, `--z-modal`, `--z-modal-popover`, `--z-command`, and `--z-toast`, in that order; do not add literal `z-index` values outside `tokens.css`.
 - Keydown action shortcuts in inputs/textareas must ignore IME composition (`e.isComposing || e.keyCode === 229`).
 - Long-running user actions need visible progress; read-heavy network views should use stale-while-revalidate when staleness is acceptable.
 

@@ -19,6 +19,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "readme:check": "node scripts/check-readme-links.mjs",
+    "tokens:check": "node scripts/check-design-tokens.mjs",
+    "tokens:update": "node scripts/check-design-tokens.mjs --update",
     "test": "npm run test:js && npm run test:resources",
     "test:js": "node scripts/run-tests.mjs run",
     "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test -q",

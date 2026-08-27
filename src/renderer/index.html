@@ -9,10 +9,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CogSeed</title>
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
+  <link rel="stylesheet" href="./tokens.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
+  <link rel="stylesheet" href="./ui-components.css" />
   <script>
     // macOS 无边框窗口（main/index.ts: titleBarStyle hiddenInset）：红绿灯
     // 悬浮在内容上，CSS 据此声明红绿灯让位与各视图顶部条的窗口拖拽区。
@@ -1090,18 +1092,14 @@
            opened from the project-detail page's Automation tab). -->
       <section class="panel" id="panel-auto">
         <div class="auto-view">
-          <div class="auto-header">
-            <span class="auto-title-text" data-i18n="auto.title">Auto</span>
-            <span class="auto-header-count" id="auto-header-count"></span>
-            <button type="button" class="btn btn-sm auto-header-add" id="auto-add-btn" data-i18n="auto.add_btn">+ Create</button>
-          </div>
+          <div id="auto-page-header"></div>
           <div class="auto-scroll">
             <div class="auto-intro" data-i18n="auto.subtitle">Run tasks on a schedule and let AI handle the repetitive work</div>
             <div class="auto-sync-note" id="auto-sync-note" hidden></div>
+            <div class="auto-page-state" id="auto-page-state" aria-live="polite"></div>
             <div class="auto-list" id="auto-list"></div>
             <!-- Starter-template grid, painted by auto.js when the list is empty. -->
             <div class="auto-templates" id="auto-templates" hidden></div>
-            <div class="auto-empty empty" id="auto-empty" data-i18n="auto.empty">No auto tasks yet</div>
           </div>
         </div>
       </section>
@@ -1705,53 +1703,66 @@
   <!-- Auto-task create / edit modal (see modules/auto.js). Reused by the
        Automation tab AND the project-detail page's "自动化" tab. Opens via
        `window.openAutoTaskDialog({ task?, projectId?, onSaved? })`. -->
-  <div class="modal-overlay ui-dialog-overlay" id="auto-task-dialog-overlay" style="display:none">
-    <div class="modal ui-dialog auto-task-dialog modal-standard" role="dialog" aria-modal="true" aria-labelledby="auto-task-dialog-title">
-      <div class="modal-title ui-dialog-title auto-task-dialog-title" id="auto-task-dialog-title" data-i18n="auto.create_section_title">New auto task</div>
-      <div class="modal-body auto-task-dialog-body">
+  <div class="modal-overlay ui-dialog-overlay ui-modal-overlay" id="auto-task-dialog-overlay" data-ui-modal-root="true" style="display:none">
+    <section class="modal ui-dialog ui-modal ui-modal--lg auto-task-dialog modal-standard" role="dialog" aria-modal="true" aria-labelledby="auto-task-dialog-title">
+      <header class="ui-modal__header">
+        <div class="ui-modal__heading">
+          <h2 class="modal-title ui-dialog-title ui-modal__title auto-task-dialog-title" id="auto-task-dialog-title" data-i18n="auto.create_section_title">New auto task</h2>
+        </div>
+        <div id="auto-dialog-close-slot"></div>
+      </header>
+      <div class="modal-body ui-modal__body auto-task-dialog-body">
         <!-- Composer chrome cloned 1:1 from #new-chat-input-area. -->
-        <div class="new-chat-input-wrapper auto-composer-wrapper">
-          <div class="new-chat-input-area">
-            <div class="chat-input-overlay">
-              <div class="chat-attachments" id="auto-task-attachments" style="display:none"></div>
-            </div>
-            <textarea id="auto-task-input" rows="2" maxlength="8000"
-                      data-i18n-placeholder="auto.content_placeholder"
-                      placeholder="Type @ to choose agents, skills, connectors, Library files."></textarea>
-            <div class="chat-bottom-bar">
-              <button type="button" class="chat-attach-btn" id="auto-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
-              <span class="chat-composer-divider" aria-hidden="true"></span>
-              <button type="button" class="chat-recipient-chip" id="auto-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
-                <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
-                <span class="chat-recipient-name" id="auto-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
-              </button>
+        <div class="ui-field ui-form__item ui-form__item--wide auto-content-field">
+          <div class="ui-field__label-row">
+            <label for="auto-task-input" data-i18n="auto.content_label">Task content</label>
+            <span class="ui-field__requirement" data-i18n="common.required">Required</span>
+          </div>
+          <div class="new-chat-input-wrapper auto-composer-wrapper">
+            <div class="new-chat-input-area">
+              <div class="chat-input-overlay">
+                <div class="chat-attachments" id="auto-task-attachments" style="display:none"></div>
+              </div>
+              <textarea id="auto-task-input" rows="2" maxlength="8000"
+                        data-i18n-placeholder="auto.content_placeholder"
+                        placeholder="Type @ to choose agents, skills, connectors, Library files."></textarea>
+              <div class="chat-bottom-bar">
+                <button type="button" class="chat-attach-btn" id="auto-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
+                <span class="chat-composer-divider" aria-hidden="true"></span>
+                <button type="button" class="chat-recipient-chip" id="auto-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
+                  <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
+                  <span class="chat-recipient-name" id="auto-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         <div class="auto-schedule-row">
-          <div class="form-row auto-schedule-cell">
-            <label data-i18n="auto.freq_label">Frequency</label>
-            <div id="auto-freq-select"></div>
+          <div class="form-row ui-field auto-schedule-cell">
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-freq-label" data-i18n="auto.freq_label">Frequency</span></div>
+            <div class="ui-select-host" id="auto-freq-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-date" hidden>
-            <label data-i18n="auto.date_label">Date</label>
-            <input type="date" id="auto-date-input" />
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-date" hidden>
+            <div class="ui-field__label-row"><label for="auto-date-input" data-i18n="auto.date_label">Date</label></div>
+            <input class="form-input ui-control" type="date" id="auto-date-input" />
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-weekday" hidden>
-            <label data-i18n="auto.weekday_label">Weekday</label>
-            <div id="auto-weekday-select"></div>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-weekday" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-weekday-label" data-i18n="auto.weekday_label">Weekday</span></div>
+            <div class="ui-select-host" id="auto-weekday-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-monthly-day" hidden>
-            <label data-i18n="auto.day_label">Day</label>
-            <div id="auto-monthly-day-select"></div>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-monthly-day" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-monthly-day-label" data-i18n="auto.day_label">Day</span></div>
+            <div class="ui-select-host" id="auto-monthly-day-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-time" hidden>
-            <label data-i18n="auto.time_label">Time</label>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-time" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-time-label" data-i18n="auto.time_label">Time</span></div>
             <div class="auto-time-row">
-              <div id="auto-hour-select"></div>
+              <span class="ui-visually-hidden" id="auto-hour-label" data-i18n="auto.hour_label">Hour</span>
+              <div class="ui-select-host" id="auto-hour-select"></div>
               <span class="auto-time-sep">:</span>
-              <div id="auto-minute-select"></div>
+              <span class="ui-visually-hidden" id="auto-minute-label" data-i18n="auto.minute_label">Minute</span>
+              <div class="ui-select-host" id="auto-minute-select"></div>
             </div>
           </div>
         </div>
@@ -1762,36 +1773,37 @@
              - hidden when the user has no projects at all (no options to
                pick from — the "default = none" outcome is automatic)
              - otherwise visible, defaulting to "no project" (`value=''`). -->
-        <div class="form-row" id="auto-row-project" hidden>
-          <label data-i18n="auto.project_label">Project</label>
-          <div id="auto-project-select"></div>
+        <div class="form-row ui-field" id="auto-row-project" hidden>
+          <div class="ui-field__label-row"><span class="ui-field__label" id="auto-project-label" data-i18n="auto.project_label">Project</span></div>
+          <div class="ui-select-host" id="auto-project-select"></div>
         </div>
 
-        <div class="form-row" id="auto-row-run-device" hidden>
-          <label data-i18n="auto.run_label">Run</label>
-          <div id="auto-run-device-select"></div>
+        <div class="form-row ui-field" id="auto-row-run-device" hidden>
+          <div class="ui-field__label-row"><span class="ui-field__label" id="auto-run-device-label" data-i18n="auto.run_label">Run</span></div>
+          <div class="ui-select-host" id="auto-run-device-select"></div>
         </div>
 
-        <div class="form-row">
-          <label data-i18n="auto.title_label">Title (optional)</label>
-          <input type="text" id="auto-title-input"
+        <div class="form-row ui-field">
+          <div class="ui-field__label-row">
+            <label for="auto-title-input" data-i18n="auto.title_label">Title (optional)</label>
+            <span class="ui-field__requirement" data-i18n="common.optional">Optional</span>
+          </div>
+          <input class="form-input ui-control ui-input" type="text" id="auto-title-input"
                  data-i18n-placeholder="auto.title_placeholder" />
         </div>
 
-        <div class="form-row">
+        <div class="form-row ui-field">
           <label class="auto-enabled-label">
             <input type="checkbox" id="auto-enabled-input" checked />
             <span data-i18n="auto.enabled_label">Enabled</span>
           </label>
         </div>
 
+        <div class="auto-dialog-error" id="auto-dialog-error" role="alert" hidden></div>
       </div>
 
-      <div class="modal-actions">
-        <button type="button" class="btn" id="auto-dialog-cancel-btn" data-i18n="auto.cancel_btn">Cancel</button>
-        <button type="button" class="btn btn-primary" id="auto-submit-btn" data-i18n="auto.create_btn">Create</button>
-      </div>
-    </div>
+      <footer class="modal-actions ui-modal__footer" id="auto-dialog-actions"></footer>
+    </section>
   </div>
 
   <!-- Library "new directory" modal. Text-file creation no longer
@@ -1903,6 +1915,11 @@
   <script src="./modules/chat-input-form.js"></script>
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
+  <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-form.js"></script>
+  <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/ui-page-header.js"></script>
+  <script src="./modules/ui-modal.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
   <script src="./modules/chat-file-viewer.js"></script>
   <script src="./modules/md-view-edit.js"></script>

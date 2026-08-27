@@ -1,0 +1,6 @@
+interface:
+  display_name: "CogSeed 组件变更"
+  short_description: "规范共享组件、预览矩阵、测试与真实页面接入的完整变更流程"
+  default_prompt: "使用 $cogseed-component-change 调整 CogSeed 组件，并保持产品清单、生产实现、预览用例、测试与真实页面证据一致。"
+policy:
+  allow_implicit_invocation: true
