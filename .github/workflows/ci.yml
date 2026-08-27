@@ -33,6 +33,7 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run readme:check
+      - run: npm run tokens:check
       - run: npm run builtin:manifest:check
       - name: Email hygiene gate (release gate)
         run: |

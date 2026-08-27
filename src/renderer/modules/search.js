@@ -14,6 +14,7 @@ let _searchResults = [];
 let _searchActiveIdx = -1;
 let _searchLastQuery = '';
 let _searchLastError = null;
+let _searchPreviousFocus = null;
 
 function _bindGlobalSearch() {
   document.getElementById('sidebar-search-btn')?.addEventListener('click', openGlobalSearch);
@@ -65,6 +66,7 @@ function _setSearchTab(tab) {
 function openGlobalSearch() {
   const overlay = document.getElementById('search-overlay');
   if (!overlay) return;
+  _searchPreviousFocus = document.activeElement;
   overlay.style.display = '';
   const input = document.getElementById('search-input');
   if (input) {
@@ -96,6 +98,19 @@ function closeGlobalSearch() {
   if (q) _saveSearchHistoryEntry(q);
   overlay.style.display = 'none';
   if (_searchTimer) { clearTimeout(_searchTimer); _searchTimer = null; }
+  let returnTarget = _searchPreviousFocus;
+  _searchPreviousFocus = null;
+  if (returnTarget && (returnTarget.matches?.('[role="dialog"]')
+      || returnTarget.matches?.('[data-ui-modal-root]'))) {
+    const modalRoot = returnTarget.closest?.('[data-ui-modal-root]') || returnTarget;
+    returnTarget = modalRoot.querySelector(
+      'textarea:not([disabled]), input:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) || returnTarget;
+  }
+  if (returnTarget && typeof returnTarget.focus === 'function'
+      && document.contains(returnTarget) && returnTarget.offsetParent !== null) {
+    returnTarget.focus();
+  }
 }
 
 function _scheduleSearch(query) {
