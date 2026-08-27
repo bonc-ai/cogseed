@@ -5,9 +5,12 @@
 // user adjust them for THIS conversation only:
 //
 //   recipient = Commander      → global default entry + global effort pref
-//   recipient = local Agent    → the agent's own defaults (agent settings),
-//                                CLI agents use their runtime.model and have
-//                                no effort control (the CLI decides)
+//   recipient = local Agent    → the agent's own defaults (agent settings).
+//                                CLI-backed agents (方案 B): the model is the
+//                                CLI's own decision (the gateway envelope has
+//                                no model slot) — no model picker, only the
+//                                reasoning-effort pills for CLIs with a real
+//                                switch (claude)
 //   recipient = API model pick → that exact model
 //
 // Any change here is a per-task override (`chat.execOverrideByCid`): it
@@ -98,7 +101,7 @@ function _isCliAgent(agent) {
  *  Mirrors the main-process priority: task override > agent default >
  *  global default. Returns:
  *  { mode:'cli'|'api', model, modelLabel, provider, providerLabel,
- *    effort, effortOverridden, modelOverridden, reasoning } */
+ *    effort, effortOverridden, effortSupported, modelOverridden } */
 // CogSeed 能把推理强度真实下发的 CLI：claude（网关信封与本地直连都消费
 // MAX_THINKING_TOKENS）。codex 的直连 backend 虽有 model_reasoning_effort
 // 实现，但用户实际走的 P3394 网关路径（gateway.cjs 驱动 app-server）尚无
@@ -110,24 +113,24 @@ function _effectiveExecConfig(target) {
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
-  // CLI-backed local agent: model comes from the agent's runtime (task
-  // override may swap it for this task). Reasoning effort is forwarded per
-  // task only where a real switch exists.
+  // CLI-backed local agent（方案 B）：模型不可控——P3394 网关信封没有
+  // model 栏位，实际模型由 CLI 自身配置决定。既不显示 runtime.model
+  // （网关不消费它，显示即误导）也不接受任务级 model 覆盖（假开关）。
+  // 推理强度按 CLI 是否有真实开关（claude）决定可否调整。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
     const effortSupported = CLI_EFFORT_SUPPORTED.has(cliType);
-    const model = override.model || agent.runtime.model || '';
     return {
       mode: 'cli',
-      model,
-      modelLabel: override.modelLabel || model || '',
+      model: '',
+      modelLabel: t('exec_config.cli_default_model'),
       provider: '',
       providerLabel: cliType,
       effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
       effortOverridden: override.effort === 'low' || override.effort === 'high',
       effortSupported,
-      modelOverridden: !!override.model,
+      modelOverridden: false,
       agent,
     };
   }
@@ -352,13 +355,23 @@ function _renderExecConfigMenu(menu, anchor) {
   header.title = t('exec_config.title');
   menu.appendChild(header);
 
-  // CLI 场景不套「模型/推理强度」分节框架——header 已经说明了执行方式，
-  // 下面就是一个扁平的「当前 + 候选」模型列表，说明文字垫底。此前把候选
-  // 列表异步追加到 effort 节后面，读起来像"未配置模型"报错挂在推理强度
-  // 节下，信息层级是坏的。能转发推理档位的 CLI（claude / codex）由列表
-  // 渲染器附带分段选择；其余 CLI 保持说明文字。
+  // CLI 场景（方案 B：模型不可控、不放假开关）——外接智能体实际用的模型
+  // 由 CLI 自身配置决定，P3394 网关信封没有 model 栏位，CogSeed 无法指定。
+  // 菜单只保留真实生效的控件：claude 的推理档位分段；其余 CLI 仅说明。
   if (cfg.mode === 'cli') {
-    _renderCliModelOptions(menu, anchor, target, cfg);
+    const cliType = cfg.providerLabel || '';
+    if (cfg.effortSupported) {
+      const modelNote = document.createElement('div');
+      modelNote.className = 'model-chip-menu-note';
+      modelNote.textContent = t('exec_config.cli_model_note', { cli: cliType });
+      menu.appendChild(modelNote);
+      _renderCliEffortSegmented(menu, anchor, cfg, cliType);
+    } else {
+      const note = document.createElement('div');
+      note.className = 'model-chip-menu-note';
+      note.textContent = t('exec_config.effort_cli_note');
+      menu.appendChild(note);
+    }
     return;
   }
 
@@ -603,106 +616,6 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
     });
     menu.appendChild(item);
   });
-  _positionModelMenu(menu, anchor);
-}
-
-/** CLI agent model options: static model table per CLI type (same source
- *  as the agent settings page); the agent's saved runtime.model stays the
- *  default, a pick here is a task override. */
-async function _renderCliModelOptions(menu, anchor, target, cfg) {
-  const agent = cfg.agent;
-  const cliType = (agent && agent.runtime && agent.runtime.cli) || '';
-  const savedModel = (agent && agent.runtime && agent.runtime.model) || '';
-  const loadingEl = document.createElement('div');
-  loadingEl.className = 'model-chip-menu-loading';
-  loadingEl.textContent = t('common.loading');
-  menu.appendChild(loadingEl);
-
-  let models = [];
-  try {
-    const res = await window.cogseed.invoke('localAgents.listModels', { type: cliType });
-    if (res && Array.isArray(res.models)) models = res.models;
-  } catch (_) { /* treat as scan failure below */ }
-  // Menu may have been closed while loading.
-  if (!menu.isConnected) return;
-  loadingEl.remove();
-
-  // 扫描不到该 CLI 的模型表（第三方配置我们拿不到）就不渲染列表了——
-  // 一句话交代执行配置完全由 CLI 自己决定，比一个"未配置模型"的空架子诚实。
-  if (!models.length) {
-    if (cfg.effortSupported) {
-      _renderCliEffortSegmented(menu, anchor, cfg, cliType);
-    } else {
-      const note = document.createElement('div');
-      note.className = 'model-chip-menu-note';
-      note.textContent = t('exec_config.cli_no_models', { cli: cliType });
-      menu.appendChild(note);
-    }
-    return;
-  }
-
-  // 扫描到 → 一个扁平的「当前 + 候选」列表。第一行是生效基线（Agent 绑定
-  // 的 runtime.model；没绑则显示「CLI 默认」），点击即清除本次任务的临时
-  // 覆盖回到基线；下面是该 CLI 可选的全部模型，点击仅对当前任务生效。
-  const currentId = cfg.model || savedModel || '';
-  const listHost = document.createElement('div');
-  menu.appendChild(listHost);
-
-  const addItem = ({ label, sub, isCurrent, isOverride, onClick }) => {
-    const item = document.createElement('div');
-    item.className = 'model-chip-menu-item'
-      + (isCurrent ? ' is-default' : '')
-      + (isOverride ? ' is-override' : '');
-    item.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
-      (isOverride ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.task_override_badge'))}</span>` : '') +
-      '</span>' +
-      (sub ? `<span class="model-chip-menu-sub">${escapeHtml(sub)}</span>` : '');
-    if (onClick) item.addEventListener('click', onClick);
-    listHost.appendChild(item);
-  };
-
-  addItem({
-    label: savedModel || t('exec_config.cli_default_model'),
-    sub: t('exec_config.cli_runtime', { cli: cliType }),
-    isCurrent: !cfg.model,
-    onClick: () => {
-      _clearModelOverride(target);
-      _closeModelMenu();
-    },
-  });
-  for (const m of models) {
-    const id = String(m && typeof m === 'object' ? (m.id || '') : String(m || ''));
-    if (!id || id === savedModel) continue;
-    const label = String((m && m.label) || id);
-    addItem({
-      label,
-      isCurrent: cfg.model === id,
-      isOverride: cfg.model === id,
-      onClick: () => {
-        try {
-          if (typeof setExecOverride === 'function') {
-            const ov = getExecOverride(_chipTargetForElement(anchor)) || {};
-            setExecOverride(_chipTargetForElement(anchor), { ...ov, model: id, modelLabel: label });
-          }
-          _modelChipRenderAll();
-        } catch (err) {
-          _modelChipLog.warn('cli model pick failed', { error: (err && err.message) || String(err) });
-        }
-        _closeModelMenu();
-      },
-    });
-  }
-
-  if (cfg.effortSupported) {
-    _renderCliEffortSegmented(menu, anchor, cfg, cliType);
-  } else {
-    const note = document.createElement('div');
-    note.className = 'model-chip-menu-note';
-    note.textContent = t('exec_config.effort_cli_note');
-    menu.appendChild(note);
-  }
   _positionModelMenu(menu, anchor);
 }
 

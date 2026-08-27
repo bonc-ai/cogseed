@@ -48,16 +48,24 @@ describe('unified execution entry — picker scope', () => {
     expect(agents).toMatch(/data-kind="agent"/);
   });
 
-  it('the exec-config chip follows the recipient: CLI agents resolve their runtime model', () => {
+  it('plan B: CLI agents expose NO model picker — models are the CLI\'s own decision', () => {
     const chip = read('src/renderer/modules/model-chip.js');
-    // 左侧选中外部智能体时，右侧配置管理的即是该智能体的 runtime.model；
-    // 推理强度归外部 CLI 管，menu 显示 CLI 说明而非可选值。
-    expect(chip).toMatch(/override\.model \|\| agent\.runtime\.model/);
-    expect(chip).toMatch(/mode: 'cli'/);
+    const conv = read('src/renderer/modules/conversation.js');
+    // 网关信封没有 model 栏位，CLI 模型选择是假开关——不允许存在：
+    // 不解析 runtime.model 作为生效值、不渲染模型列表、不请求 CLI 模型目录。
+    expect(chip).not.toMatch(/override\.model \|\| agent\.runtime\.model/);
+    expect(chip).not.toContain('agent.runtime.model ||');
+    expect(chip).not.toContain('_renderCliModelOptions');
+    expect(chip).not.toContain('localAgents.listModels');
+    // chip 统一显示「CLI 默认」+ 说明文案（claude 场景另有模型说明 note）。
+    expect(chip).toContain("t('exec_config.cli_default_model')");
+    expect(chip).toContain("t('exec_config.cli_model_note'");
     expect(chip).toContain("t('exec_config.effort_cli_note')");
-    // Compact menu: effort is a one-row segmented control, no subheader row.
+    // 发送侧：CLI recipient 的历史残留 override.model 不随消息下发。
+    expect(conv).toMatch(/isCliAgentRecipient[\s\S]*?if \(!isCliAgentRecipient\)/);
+    // 真开关保留：claude 的 effort 分段仍在。
     expect(chip).toContain('model-chip-menu-segmented');
-    expect(chip).not.toContain('model-chip-menu-subheader');
+    expect(chip).toContain("t('exec_config.effort_cli_forward_note'");
   });
 });
 
