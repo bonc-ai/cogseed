@@ -49,12 +49,19 @@ function writeCatalog(catalogPath, catalog) {
  * Pick the newest release matching the caller's platform/arch whose version
  * is strictly greater than the caller's current version. Returns null when
  * there is no update.
+ *
+ * `ext` restricts matches to one file extension (e.g. '.zip' for the
+ * auto-update feed); `excludeExt` drops one extension (e.g. '.zip' for the
+ * v1 reminder channel, which serves installers). Both default to no filter.
  */
-function selectLatest({ releases, platform, arch, currentVersion }) {
+function selectLatest({ releases, platform, arch, currentVersion, ext, excludeExt }) {
   const matches = releases.filter((r) => {
     if (!r || typeof r.version !== 'string') return false;
     if (platform && r.platform && r.platform !== platform) return false;
     if (arch && r.arch && r.arch !== arch) return false;
+    const fileExt = typeof r.file === 'string' ? path.extname(r.file).toLowerCase() : '';
+    if (ext && fileExt !== ext.toLowerCase()) return false;
+    if (excludeExt && fileExt === excludeExt.toLowerCase()) return false;
     return true;
   });
   if (!matches.length) return null;
@@ -89,12 +96,18 @@ function releaseToData(release, publicBase) {
 
 /**
  * Add or replace a release in the catalog. Replacements match on
- * version+platform+arch so re-publishing the same artifact (e.g. fixing the
- * dmg) updates in place instead of stacking duplicates.
+ * version+platform+arch+file extension, so re-publishing the same artifact
+ * (e.g. fixing the dmg) updates in place instead of stacking duplicates,
+ * while the dmg and zip of the same release (reminder vs auto-update
+ * channels) coexist as separate entries.
  */
 function upsertRelease(catalog, release) {
-  const key = (r) => `${r.version}|${r.platform || ''}|${r.arch || ''}`;
-  const target = key(release);
+  const fileExt = typeof release.file === 'string' ? path.extname(release.file).toLowerCase() : '';
+  const key = (r) => {
+    const rExt = typeof r.file === 'string' ? path.extname(r.file).toLowerCase() : '';
+    return `${r.version}|${r.platform || ''}|${r.arch || ''}|${rExt}`;
+  };
+  const target = `${release.version}|${release.platform || ''}|${release.arch || ''}|${fileExt}`;
   const without = catalog.releases.filter((r) => key(r) !== target);
   return { releases: [...without, release] };
 }
