@@ -24,6 +24,7 @@ import * as kb from '../../features/kb_vector';
 import * as kbEmbed from '../../features/kb_embed';
 import * as spaceLibrary from '../../features/project_library_indexer';
 import { logErrorRef, maskId } from '../../util/log-redact';
+import { searchMaterials, type MaterialSearchOptions } from './material-search';
 
 const log = createLogger('kb-tools');
 
@@ -463,5 +464,97 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
 
 /** Build the KB tools for one runner. */
 export function createKbTools(opts: KbToolsOpts): AgentTool[] {
-  return [createKbListTool(opts), createKbSearchTool(opts), createKbReadTool(opts)];
+  return [
+    createKbListTool(opts),
+    createKbSearchTool(opts),
+    createKbReadTool(opts),
+    createMaterialSearchTool(opts),
+  ];
+}
+
+/**
+ * `material_search` — hybrid (vector + BM25 keyword) retrieval over the
+ * Library, fusing both signals with RRF. Same read-only posture as
+ * kb_search, but returns a unified hit shape (scope/path/chunkIdx + snippet)
+ * that doubles as the citation anchor for grounded answering
+ * (COGSEED-39 ① Phase 2).
+ */
+function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
+  const hasSpace = !!opts.spaceId;
+  return {
+    name: 'material_search',
+    executionMode: 'parallel',
+    description:
+      'Hybrid search over the user Library (semantic vector + BM25 keyword, fused)'
+      + (hasSpace ? ' (current space + global by default)' : '')
+      + '. Use for grounded Q&A about imported materials: returns the top-k most\n'
+      + 'relevant chunks with a citation anchor (scope + path + chunk index) and a\n'
+      + 'short snippet. Preferred over `kb_search` when the question mixes exact\n'
+      + 'terms/ids (which keyword matching catches) with meaning (which vectors\n'
+      + 'catch). After picking hits, read full chunks with `kb_read` using the\n'
+      + 'returned scope + path.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Free-text query. Natural language works; exact terms/ids help the keyword side.',
+        },
+        k: {
+          type: 'number',
+          description: 'Top-k result count. Default 8, max 30.',
+        },
+        dir: {
+          type: 'string',
+          description: 'Optional: limit search to files under this relative subdirectory.',
+        },
+        path: {
+          type: 'string',
+          description: 'Optional: limit search to one exact Library-relative file path.',
+        },
+        kind: {
+          type: 'string',
+          enum: [...KB_KIND_VALUES],
+          description: 'Optional: restrict to one file kind.',
+        },
+        scope: {
+          type: 'string',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Search scope. Default all = current space Library plus global Library.'
+            : 'Search scope. Only global is available outside a space.',
+        },
+      },
+      required: ['query'],
+    },
+    async execute(input) {
+      const query = String(input.query ?? '').trim();
+      if (!query) return { content: 'material_search: `query` is required', isError: true };
+      const searchOpts: MaterialSearchOptions = {
+        userId: opts.userId,
+        ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        query,
+        ...(input.k !== undefined ? { k: Number(input.k) } : {}),
+        ...(typeof input.dir === 'string' && input.dir.trim() ? { dir: input.dir.trim() } : {}),
+        ...(typeof input.path === 'string' && input.path.trim() ? { path: input.path.trim() } : {}),
+        ...(parseKbKind(input.kind) ? { kind: parseKbKind(input.kind)! } : {}),
+        ...(hasSpace && input.scope !== undefined ? { scope: input.scope as MaterialSearchOptions['scope'] } : {}),
+      };
+
+      const res = await searchMaterials(searchOpts);
+      const lines = [`Material search hits (${res.summary.join('; ')}):`];
+      if (!res.hits.length) {
+        lines.push('No relevant material found for this query.');
+        return { content: lines.join('\n') };
+      }
+      for (const h of res.hits) {
+        const anchor = `[${h.scope}] ${h.path}#chunk ${h.chunkIdx}`;
+        const scores = `score=${h.score.toFixed(3)}`
+          + (h.vectorScore !== undefined ? ` vec=${h.vectorScore.toFixed(3)}` : '')
+          + (h.keywordScore !== undefined ? ` kw=${h.keywordScore.toFixed(3)}` : '');
+        lines.push(`- ${anchor} ${scores}${h.title ? ` · ${h.title}` : ''}\n  ${h.snippet}`);
+      }
+      return { content: lines.join('\n') };
+    },
+  };
 }
