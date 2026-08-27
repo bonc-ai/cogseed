@@ -5097,6 +5097,14 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
+            // Unified execution entry: forward the per-task reasoning effort
+            // in the envelope's CogSeed-private execution_prefs. Only claude
+            // gateway runtime consumes it today (MAX_THINKING_TOKENS) — for
+            // other CLIs the field would be a dead control, so it is only
+            // attached when it will actually be honored.
+            ...(cliRuntime === "claude" && item.execConfig?.effort
+              ? { reasoningEffort: item.execConfig.effort }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
@@ -5148,9 +5156,13 @@ async function runActorTurnBody(
           ? cliAgent.runtime.model
           : undefined;
       const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
+      // effort 只在真实下发的场景写 meta（claude 网关/直连都会消费）；
+      // 其他 CLI 不标注，避免展示一个没生效的配置。
+      const cliEffortForwarded = item.execConfig?.effort && cliRuntime === "claude";
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),
+        ...(cliEffortForwarded ? { effort: item.execConfig.effort } : {}),
       };
       finalText = cliOut.text;
       streamingText = cliOut.text;
