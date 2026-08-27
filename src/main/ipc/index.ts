@@ -2346,25 +2346,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
+    // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
+    // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
+    // PO 的内部结构。
     if (profileTarget !== undefined) {
       if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
-        || !safeId(profileTarget.groupId)
-        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
-        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
-        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        || typeof profileTarget.fieldRef !== 'string'
+        || !safeId(profileTarget.fieldRef)
+        || profileTarget.fieldRef.length > 512) {
         throw new Error('invalid personal profile target');
       }
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
-      ...(profileTarget ? {
-        profileTarget: {
-          groupId: profileTarget.groupId,
-          section: profileTarget.section.trim(),
-          fieldName: profileTarget.fieldName.trim(),
-          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
-        },
-      } : {}),
+      ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
       ok: true,
@@ -3175,6 +3171,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'personalOntology.entries.list': async (_payload, ctx) => {
     const contract = await import('../features/personal_ontology_contract');
     return { entries: await contract.listOntologyEntries(ctx.userId) };
+  },
+
+  // 可写入的角色模板字段落点（已安装 ∩ T-box）。targets[].fieldRef 是 opaque
+  // 写入句柄，调用方只回传它；label 已拼好，渲染层不重组显示名。
+  'personalOntology.templates.fieldTargets': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { targets: await contract.listRoleTemplateFieldTargets(ctx.userId) };
   },
 
   // ── Personal Ontology Role Templates (角色模板) ──

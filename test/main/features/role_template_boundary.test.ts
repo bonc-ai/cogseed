@@ -136,3 +136,43 @@ describe('role-template boundary › M2 渲染层不再拼接 PO 复合 id', () 
     expect(offenders).toEqual([]);
   });
 });
+
+describe('role-template boundary › M3 三元组不再跨 renderer / IPC 往返', () => {
+  it('skills.js 落点下拉的 option value 就是 fieldRef，不再序列化四元组', () => {
+    const skills = stripComments(read('src/renderer/modules/skills.js'));
+    expect(skills).toContain("invoke('personalOntology.templates.fieldTargets')");
+    expect(skills).toContain('target.fieldRef');
+    expect(skills).not.toContain('groupId: template.group_id');
+    expect(skills).not.toContain('encodeURIComponent(JSON.stringify({');
+    expect(skills).not.toContain('personalTemplates');
+  });
+
+  it('skills-bindings.js 只回传 { fieldRef }，不再 JSON.parse 落点', () => {
+    const bindings = stripComments(read('src/renderer/modules/skills-bindings.js'));
+    expect(bindings).toContain('{ fieldRef }');
+    expect(bindings).not.toContain('decodeURIComponent(encoded)');
+    expect(bindings).not.toContain('target.groupId');
+  });
+
+  it('IPC 层不再逐字段校验 PO 内部结构', () => {
+    const ipc = stripComments(read('src/main/ipc/index.ts'));
+    expect(ipc).not.toContain('profileTarget.groupId');
+    expect(ipc).not.toContain('profileTarget.section');
+    expect(ipc).not.toContain('profileTarget.fieldName');
+    expect(ipc).toContain('profileTarget.fieldRef');
+  });
+
+  it('Recall 侧不再持有 PO 内部地址，也不再自建 T-box 白名单', () => {
+    const sync = stripComments(read('src/main/features/recall/personal-profile-sync.ts'));
+    expect(sync).not.toContain('buildContentRef');
+    expect(sync).not.toContain('appendExistingTemplateFieldValueToRef');
+    expect(sync).not.toContain('getRoleTemplate');
+    expect(sync).not.toContain('preset_groups');
+    expect(sync).toContain('isTboxField');
+    expect(sync).toContain('appendRoleTemplateFieldValue');
+
+    const candidateService = stripComments(read('src/main/features/recall/candidate-service.ts'));
+    expect(candidateService).toContain('describeRoleTemplateFieldRef');
+    expect(candidateService).not.toContain("throw new Error('invalid personal profile target group')");
+  });
+});

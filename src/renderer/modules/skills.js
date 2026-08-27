@@ -53,7 +53,7 @@ const _skillsCognitionState = {
   captureSettings: null,
   captureModel: null,
   /** 已安装个人角色模板的字段清单，供 Personal 候选确认时选择直接落点。 */
-  personalTemplates: [],
+  personalFieldTargets: [],
   /** 个人本体分组，供资产编辑时选择本体绑定（ontologyRefs）。
    *  **按需加载**：只在打开资产编辑器时随权威记录一起取，不进四页快照
    *  （`skills-cognition-layout` 有不变量钉住：快照不得加载本体数据）。
@@ -312,26 +312,17 @@ function _captureLinkedAssetIds(capture) {
   return [...new Set(ids)];
 }
 
+// 落点下拉：option 的 value 就是 PO contract 给的 opaque fieldRef，渲染层
+// 不再序列化 { groupId, templateId, section, fieldName } 四元组往返一趟。
+// label 也由 contract 拼好（模板名 · 分节 · 字段），这里不重组显示名。
 function _renderPersonalProfileTarget(candidate) {
   if (candidate?.suggestedType !== 'personal') return '';
-  const templates = (Array.isArray(_skillsCognitionState.personalTemplates)
-    ? _skillsCognitionState.personalTemplates : [])
-    .filter((template) => template && template.installed && template.group_id && Array.isArray(template.sections));
+  const targets = Array.isArray(_skillsCognitionState.personalFieldTargets)
+    ? _skillsCognitionState.personalFieldTargets : [];
   const options = [`<option value="">${escapeHtml(_cognitionText('cognition.personal_profile_target_auto', '自动匹配模板字段'))}</option>`];
-  for (const template of templates) {
-    for (const section of template.sections) {
-      for (const field of (Array.isArray(section.fields) ? section.fields : [])) {
-        const name = typeof field === 'string' ? field : field?.name;
-        if (!name) continue;
-        const value = encodeURIComponent(JSON.stringify({
-          groupId: template.group_id,
-          templateId: template.template_id,
-          section: section.title,
-          fieldName: name,
-        }));
-        options.push(`<option value="${escapeHtml(value)}">${escapeHtml(`${template.name} · ${section.title} · ${name}`)}</option>`);
-      }
-    }
+  for (const target of targets) {
+    if (!target || !target.fieldRef) continue;
+    options.push(`<option value="${escapeHtml(target.fieldRef)}">${escapeHtml(target.label || target.fieldRef)}</option>`);
   }
   return `<label class="cognition-candidate-field cognition-candidate-profile-target"><span>${escapeHtml(_cognitionText('cognition.personal_profile_target', '个人模板落点'))}</span><select data-recall-profile-target>${options.join('')}</select><small class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.personal_profile_target_hint', '不选择时由系统自动匹配；只写入已安装模板字段。'))}</small></label>`;
 }
@@ -4448,7 +4439,7 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalTemplates] = await Promise.allSettled([
+  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalFieldTargets] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.assets.list', { limit: 500 })),
@@ -4458,7 +4449,7 @@ async function loadSkillsCognitionSnapshot() {
     Promise.resolve().then(() => window.cogseed.invoke('recall.teaching.list', { limit: 20 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.settings.get')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.inbox.list')),
-    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.list')),
+    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.fieldTargets')),
   ]);
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
@@ -4495,9 +4486,9 @@ async function loadSkillsCognitionSnapshot() {
   if (recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok) _skillsCognitionState.recentCaptures = recentCaptures.value.captures || [];
   if (teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok) _skillsCognitionState.teachingSignals = teachingSignals.value.signals || [];
   if (inbox.status === 'fulfilled' && inbox.value?.ok) _skillsCognitionState.inboxItems = inbox.value.items || [];
-  if (personalTemplates.status === 'fulfilled' && personalTemplates.value && personalTemplates.value.ok !== false) {
-    _skillsCognitionState.personalTemplates = Array.isArray(personalTemplates.value.templates)
-      ? personalTemplates.value.templates : [];
+  if (personalFieldTargets.status === 'fulfilled' && personalFieldTargets.value && personalFieldTargets.value.ok !== false) {
+    _skillsCognitionState.personalFieldTargets = Array.isArray(personalFieldTargets.value.targets)
+      ? personalFieldTargets.value.targets : [];
   }
   _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
   _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;

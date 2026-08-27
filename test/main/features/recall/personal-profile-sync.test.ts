@@ -293,21 +293,18 @@ describe('Recall personal profile projection', () => {
   it('writes a user-selected template field during the same projection pass', async () => {
     const { templates, row } = await installStudentTemplate();
     const sync = await loadSync();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
     const personal = asset('aa-personal-explicit-target', 'personal', '我是一名程序员，有十年经验。');
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    // 落点只传一个 opaque fieldRef——不再带 groupId/section/fieldName/templateId
+    const fieldRef = contract.buildRoleTemplateFieldRef('student', '学习背景', '专业与学习方向')!;
+    expect(fieldRef).toBeTruthy();
 
     const result = await sync.syncPersonalProfileFromRecallAssets(
       UID,
       { listAssets: async () => [personal], routeAsset },
-      {
-        assetId: personal.id,
-        target: {
-          groupId: row.group_id,
-          section: '学习背景',
-          fieldName: '专业与学习方向',
-          templateId: 'student',
-        },
-      },
+      { assetId: personal.id, target: { fieldRef } },
     );
 
     expect(result).toMatchObject({ eligible: 1, written: 1, failed: [] });
@@ -318,19 +315,39 @@ describe('Recall personal profile projection', () => {
     ]);
   });
 
-  it('rejects an explicit target that is not part of the installed template catalog', async () => {
+  it('rejects an explicit target that is not a valid PO field ref', async () => {
     await installStudentTemplate();
     const sync = await loadSync();
     const personal = asset('aa-personal-invalid-target', 'personal', '不应写入不存在的字段。');
 
+    // 伪造/损坏的句柄解不出落点 → 该资产失败，其余资产不受影响
     const result = await sync.syncPersonalProfileFromRecallAssets(
       UID,
       { listAssets: async () => [personal] },
-      { assetId: personal.id, target: { groupId: 'missing-group', section: '学习背景', fieldName: '职业' } },
+      { assetId: personal.id, target: { fieldRef: 'po1bogus' } },
     );
 
     expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 0 });
     expect(result.failed).toEqual([{ assetId: personal.id, error: 'profile target field not found' }]);
+  });
+
+  it('rejects a well-formed ref whose field is outside the template T-box', async () => {
+    await installStudentTemplate();
+    const sync = await loadSync();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const personal = asset('aa-personal-non-tbox', 'personal', '自定义字段不许自动写。');
+
+    // T-box 外的字段拿不到句柄——白名单在发句柄那一刻就生效了
+    expect(contract.buildRoleTemplateFieldRef('student', '学习背景', '自定义备注')).toBeNull();
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(
+      UID,
+      { listAssets: async () => [personal] },
+      { assetId: personal.id, target: { fieldRef: 'po1' + Buffer.from(JSON.stringify({ k: 'tf', t: 'student', s: '学习背景', f: '自定义备注' })).toString('base64url') } },
+    );
+    expect(result.failed).toEqual([
+      { assetId: personal.id, error: 'field is not declared by the role template' },
+    ]);
   });
 
   it('does not overwrite a manually maintained profile value', async () => {
@@ -661,6 +678,8 @@ describe('personal profile projection is driven from the main process', () => {
       return { eligible: 1, written: 1, skipped: 0, unmatched: 0, failed: [] };
     });
 
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const PROFILE_FIELD_REF = contract.buildRoleTemplateFieldRef('student', '学习背景', '专业与学习方向')!;
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我长期从事程序开发。',
@@ -673,12 +692,7 @@ describe('personal profile projection is driven from the main process', () => {
     });
     const { asset } = await candidates.promoteRecallCandidate(UID, candidate.id, {
       actor: 'user',
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef: PROFILE_FIELD_REF },
     });
 
     expect(asset.type).toBe('personal');
@@ -686,12 +700,7 @@ describe('personal profile projection is driven from the main process', () => {
       userId: UID,
       options: {
         assetId: asset.id,
-        target: {
-          groupId: 'group-student',
-          templateId: 'student',
-          section: '学习背景',
-          fieldName: '专业与学习方向',
-        },
+        target: { fieldRef: PROFILE_FIELD_REF },
       },
     }]);
     spy.mockRestore();

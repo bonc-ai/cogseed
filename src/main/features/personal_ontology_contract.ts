@@ -418,6 +418,32 @@ export async function listRoleTemplateFieldTargets(uid: string): Promise<RoleTem
   return out;
 }
 
+/**
+ * 由 (templateId, 分节, 字段) 构造写入句柄。只对 T-box 声明过的字段发句柄——
+ * 拿不到 fieldRef 就等于「这里不许自动写」，调用方无需再自建白名单。
+ * 非 T-box 字段 / 未知模板 → null。
+ */
+export function buildRoleTemplateFieldRef(
+  templateId: string,
+  section: string,
+  fieldName: string,
+): string | null {
+  if (!isTboxField(templateId, section, fieldName)) return null;
+  return encodeRef({ k: 'tf', t: templateId, s: section, f: fieldName });
+}
+
+/**
+ * 反解写入句柄，**仅供回执/日志展示**。返回值不是地址：调用方不得用它去
+ * 拼内部寻址串，写入一律走 appendRoleTemplateFieldValue。非 tf ref → null。
+ */
+export function describeRoleTemplateFieldRef(
+  fieldRef: string,
+): { templateId: string; section: string; fieldName: string } | null {
+  const decoded = decodeOntologyRef(fieldRef);
+  if (!decoded || decoded.k !== 'tf') return null;
+  return { templateId: decoded.t, section: decoded.s, fieldName: decoded.f };
+}
+
 export interface AppendFieldValueResult {
   ok: boolean;
   error?: string;
