@@ -85,6 +85,7 @@ export type { MemorySearchManager, MemorySearchResult } from "./memory/index.js"
 export { createOpenAIEmbeddingProvider, createGeminiEmbeddingProvider } from "./memory/index.js";
 export type { EmbeddingProvider } from "./memory/index.js";
 export { createMemorySearchTool, createMemoryReadTool } from "./memory/index.js";
+export { bm25Score } from "./memory/index.js";
 
 // Auth (OAuth & credential management)
 export type { AuthCredential, ApiKeyCredential, OAuthCredential, AuthStore } from "./auth/index.js";

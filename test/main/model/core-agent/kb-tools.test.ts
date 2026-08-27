@@ -299,10 +299,17 @@ describe('kb-tools › kb_read', () => {
 });
 
 describe('kb-tools › shape', () => {
-  it('createKbTools returns exactly three tools (list + search + read)', async () => {
+  it('createKbTools returns list + search + read + material_search', async () => {
     const { createKbTools } = await import('../../../../src/main/model/core-agent/kb-tools');
     const tools = createKbTools({ userId: TEST_UID });
-    expect(tools.map((t) => t.name)).toEqual(['kb_list', 'kb_search', 'kb_read']);
+    expect(tools.map((t) => t.name)).toEqual(['kb_list', 'kb_search', 'kb_read', 'material_search']);
+  });
+
+  it('material_search has a query-required schema', async () => {
+    const { createKbTools } = await import('../../../../src/main/model/core-agent/kb-tools');
+    const [, , , materialSearch] = createKbTools({ userId: TEST_UID });
+    expect(materialSearch.name).toBe('material_search');
+    expect(materialSearch.inputSchema?.required).toContain('query');
   });
 
   it('tools have required JSON schema fields', async () => {

@@ -125,6 +125,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'kb_list',       group: 'kb', summary: 'List Library files and indexing status before choosing what to search or read.' },
   { name: 'kb_search',     group: 'kb', summary: 'Semantic search over the user\'s Library.' },
   { name: 'kb_read',       group: 'kb', summary: 'Read source-text chunks from a Library file that kb_search has hit.' },
+  { name: 'material_search', group: 'kb', summary: 'Hybrid (vector + BM25) search over the user Library; returns fused hits with citation anchors (scope/path/chunk).' },
   { name: 'research_rerank', group: 'kb', ownerAgent: DEEP_RESEARCH_AGENT_IDS, summary: 'Semantically rerank candidate research passages against a sub-question by local embedding similarity — the second stage after the deep-research compress skill\'s lexical filter, surfacing on-topic passages that share no keywords. Read-only, local, no Tool Execution Access. Owned by the deep-research + data-research agents (hidden from the commander).' },
 
   // Recall ability assets
