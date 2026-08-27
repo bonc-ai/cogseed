@@ -432,7 +432,10 @@ describe('custom providers › fetchCustomProviderModels', () => {
 
     const gemini = await providers.fetchCustomProviderModels(UID, added.id);
     expect(gemini.ok).toBe(true);
-    if (gemini.ok) expect(gemini.models).toEqual([{ id: 'gemini-relay', name: 'Gemini Relay' }]);
+    // 家族规则识别（B 层）：gemini-* 视觉默认开、推理需 pro/thinking 变体。
+    if (gemini.ok) expect(gemini.models).toEqual([
+      { id: 'gemini-relay', name: 'Gemini Relay', reasoning: false, vision: true },
+    ]);
 
     // Failure path: network error message that embeds the key must be redacted.
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('connect ECONNREFUSED with key gk-live inside'); }));

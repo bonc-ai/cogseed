@@ -6193,10 +6193,12 @@
   "settings.custom_providers.fetch_models_title": "拉取「{name}」的模型列表",
   "settings.custom_providers.fetch_models_loading": "正在向服务请求模型列表…",
   "settings.custom_providers.fetch_models_failed": "拉取失败：{error}",
-  "settings.custom_providers.fetch_models_hint": "勾选要添加的模型（已存在的不可重复添加）；上下文窗口与输出上限先按默认值写入，可在导入后编辑。",
+  "settings.custom_providers.fetch_models_hint": "勾选要添加的模型（已存在的不可重复添加）。上下文窗口等元数据会自动识别补全：优先取服务返回的扩展字段，缺失时按内置模型目录匹配；仍未知的按默认值写入，可在导入后编辑。",
   "settings.custom_providers.fetch_models_existing": "已存在",
   "settings.custom_providers.fetch_models_import": "导入所选（{count}）",
   "settings.custom_providers.fetch_models_done": "已导入 {count} 个模型",
   "settings.custom_providers.fetch_models_partial": "部分导入成功（{ok} 个），失败：{error}",
-  "exec_config.cli_model_note": "模型由「{cli}」自身的配置决定，CogSeed 暂无法为其指定模型。"
+  "exec_config.cli_model_note": "模型由「{cli}」自身的配置决定，CogSeed 暂无法为其指定模型。",
+  "settings.custom_providers.cap_reasoning": "推理",
+  "settings.custom_providers.cap_vision": "视觉"
 }

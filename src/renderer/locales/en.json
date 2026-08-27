@@ -6193,10 +6193,12 @@
   "settings.custom_providers.fetch_models_title": "Fetch models from \"{name}\"",
   "settings.custom_providers.fetch_models_loading": "Requesting the model list from the service…",
   "settings.custom_providers.fetch_models_failed": "Fetch failed: {error}",
-  "settings.custom_providers.fetch_models_hint": "Pick the models to add (existing ones cannot be re-added). Context window and output limit use defaults first — edit them after import if needed.",
+  "settings.custom_providers.fetch_models_hint": "Pick the models to add (existing ones cannot be re-added). Metadata like the context window is filled automatically: extension fields from the service first, then the built-in model catalog; anything still unknown uses defaults you can edit after import.",
   "settings.custom_providers.fetch_models_existing": "existing",
   "settings.custom_providers.fetch_models_import": "Import selected ({count})",
   "settings.custom_providers.fetch_models_done": "Imported {count} models",
   "settings.custom_providers.fetch_models_partial": "Partially imported ({ok}); failed: {error}",
-  "exec_config.cli_model_note": "The model is decided by \"{cli}\"'s own configuration; CogSeed cannot pick one for it yet."
+  "exec_config.cli_model_note": "The model is decided by \"{cli}\"'s own configuration; CogSeed cannot pick one for it yet.",
+  "settings.custom_providers.cap_reasoning": "reasoning",
+  "settings.custom_providers.cap_vision": "vision"
 }

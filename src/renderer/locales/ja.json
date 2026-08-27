@@ -5002,10 +5002,12 @@
   "settings.custom_providers.fetch_models_title": "「{name}」のモデルを取得",
   "settings.custom_providers.fetch_models_loading": "サービスにモデルリストを要求しています…",
   "settings.custom_providers.fetch_models_failed": "取得に失敗しました：{error}",
-  "settings.custom_providers.fetch_models_hint": "追加するモデルにチェック（既存のものは再追加不可）。コンテキスト幅と出力上限は既定値で登録され、インポート後に編集できます。",
+  "settings.custom_providers.fetch_models_hint": "追加するモデルにチェック（既存のものは再追加不可）。コンテキスト幅などのメタデータは自動補完されます：サービスの拡張フィールドを優先し、不足分は内蔵カタログで照合、それでも不明なものは既定値で登録され後から編集できます。",
   "settings.custom_providers.fetch_models_existing": "既存",
   "settings.custom_providers.fetch_models_import": "選択をインポート（{count}）",
   "settings.custom_providers.fetch_models_done": "{count} 個のモデルをインポートしました",
   "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}",
-  "exec_config.cli_model_note": "モデルは「{cli}」自身の構成で決まり、CogSeed からは指定できません。"
+  "exec_config.cli_model_note": "モデルは「{cli}」自身の構成で決まり、CogSeed からは指定できません。",
+  "settings.custom_providers.cap_reasoning": "推論",
+  "settings.custom_providers.cap_vision": "ビジョン"
 }

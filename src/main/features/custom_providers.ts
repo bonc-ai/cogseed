@@ -489,6 +489,15 @@ export async function testCustomProviderModel(
   });
 }
 
+/** First positive safe integer among the candidate metadata fields. */
+function pickPositive(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isSafeInteger(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
 /**
  * List the models a custom provider's service exposes, by calling the
  * service's own "list models" endpoint with the stored credentials.
@@ -503,7 +512,7 @@ export async function testCustomProviderModel(
 export async function fetchCustomProviderModels(
   userId: string,
   id: string,
-): Promise<{ ok: true; models: Array<{ id: string; name?: string }> } | { ok: false; error: string }> {
+): Promise<{ ok: true; models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> } | { ok: false; error: string }> {
   let providerId: string;
   try {
     providerId = normalizeProviderId(id);
@@ -563,7 +572,7 @@ export async function fetchCustomProviderModels(
       : null;
     if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
 
-    const out: Array<{ id: string; name?: string }> = [];
+    const out: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> = [];
     for (const row of rows.slice(0, 500)) {
       if (!row || typeof row !== 'object') continue;
       const record = row as Record<string, unknown>;
@@ -576,10 +585,48 @@ export async function fetchCustomProviderModels(
         : typeof record.displayName === 'string' ? record.displayName : '';
       const name = rawName.trim().slice(0, 120);
       if (out.some((existing) => existing.id === rawId)) continue;
-      out.push(name && name !== rawId ? { id: rawId, name } : { id: rawId });
+      // 非标准扩展字段（A 层——能拿尽拿）：vLLM 的 max_model_len、
+      // OpenRouter 的 context_length / top_provider.max_completion_tokens /
+      // supported_parameters / architecture.input_modalities。没有标准的
+      // 保证，字段存在才取，否则留给识别模块（B 层）补。
+      const contextWindow = pickPositive(record.max_model_len, record.context_length, record.max_context_tokens, record.context_window);
+      const rawTop = record.top_provider as Record<string, unknown> | undefined;
+      const maxTokens = pickPositive(record.max_completion_tokens, record.max_output_tokens, rawTop?.max_completion_tokens);
+      const params = Array.isArray(record.supported_parameters)
+        ? record.supported_parameters.filter((x): x is string => typeof x === 'string')
+        : [];
+      const reasoning = params.length
+        ? params.some((p) => p === 'reasoning' || p === 'reasoning_effort')
+        : undefined;
+      const arch = record.architecture as Record<string, unknown> | undefined;
+      const modalities = (Array.isArray(arch?.input_modalities) ? arch?.input_modalities
+        : Array.isArray(record.input_modalities) ? record.input_modalities : []) as unknown[];
+      const vision = modalities.length
+        ? modalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))
+        : undefined;
+      out.push({
+        id: rawId,
+        ...(name && name !== rawId ? { name } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(vision !== undefined ? { vision } : {}),
+      });
       if (out.length >= 200) break;
     }
     if (!out.length) return { ok: false, error: 'service listed no models' };
+    // B 层：服务没给的元数据，用内置目录/家族规则识别补全（不改服务给的值）。
+    try {
+      const { recognizeModelByIdReady } = await import('../model/model_id_recognition');
+      for (const item of out) {
+        const recognized = await recognizeModelByIdReady(item.id);
+        if (!recognized) continue;
+        if (item.contextWindow === undefined && recognized.contextWindow !== undefined) item.contextWindow = recognized.contextWindow;
+        if (item.maxTokens === undefined && recognized.maxTokens !== undefined) item.maxTokens = recognized.maxTokens;
+        if (item.reasoning === undefined && recognized.reasoning !== undefined) item.reasoning = recognized.reasoning;
+        if (item.vision === undefined && recognized.vision !== undefined) item.vision = recognized.vision;
+      }
+    } catch { /* recognition is best-effort enrichment */ }
     return { ok: true, models: out };
   } catch (error) {
     const message = (error as Error).message || String(error);
