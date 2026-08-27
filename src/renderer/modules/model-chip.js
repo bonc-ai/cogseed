@@ -40,13 +40,18 @@ function _modelSupportsThinking(modelId) {
   return /deepseek|gpt-5|\bo1\b|\bo3\b|claude|thinking|reasoner|kimi|qwen|glm|minimax|seed-2|doubao/.test(id);
 }
 
-/** Reasoning capability for a provider+model pair: explicit catalog value
- *  first, name heuristic as the fallback for unannotated models. */
+/** Reasoning capability for a provider+model pair: explicit value from the
+ *  list-models annotation first (custom providers now carry the recognition
+ *  result). Custom-provider models with NO annotation stay disabled — the
+ *  runtime does not forward reasoning for unrecognized ids either, and a
+ *  name-regex unlock here would be a dead control. Built-in providers keep
+ *  the heuristic fallback for cold catalog entries. */
 function _modelReasoningCapability(provider, model) {
   const table = _modelReasoningByProvider.get(String(provider || ''));
   if (table && Object.prototype.hasOwnProperty.call(table, String(model || ''))) {
     return table[String(model || '')] === true;
   }
+  if (String(provider || '').startsWith('cp:')) return false;
   return _modelSupportsThinking(model);
 }
 
