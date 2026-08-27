@@ -20,8 +20,6 @@ const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 const LOCALE_KEYS = [
-  'chat.recipient_local_agents',
-  'chat.recipient_api_models',
   'exec_config.menu_title',
   'exec_config.section_model',
   'exec_config.section_effort',
@@ -35,24 +33,29 @@ const LOCALE_KEYS = [
   'agents.exec_follow_global',
 ];
 
-describe('unified execution entry — picker grouping', () => {
-  it('renders the two section groups on the chat recipient anchors only', () => {
+describe('unified execution entry — picker scope', () => {
+  it('keeps the recipient picker agent-only — models are the exec-chip\'s job', () => {
     const agents = read('src/renderer/modules/agents.js');
-    expect(agents).toContain('recipient_local_agents');
-    expect(agents).toContain('recipient_api_models');
-    // Grouped rows carry data-kind="model" with provider/model datasets…
-    expect(agents).toMatch(/data-kind="model"/);
-    // …and the dispatch branch routes them to setChatRecipient as kind 'model'.
-    expect(agents).toMatch(/kind === 'model'[\s\S]*?setChatRecipient\(target, \{\s*kind: 'model'/);
-    // The auto modal keeps its agent-only recipient contract.
-    expect(agents).toMatch(/anchorId === 'auto-recipient-chip'\) return;/);
+    // 验收反馈修订：@ 选择器只管「谁执行」，模型一律由右下角执行配置 chip
+    // 管理，否则概念混淆。分组行/下钻逻辑必须不存在于 picker 渲染路径。
+    expect(agents).not.toContain('recipient_api_models');
+    expect(agents).not.toContain('_renderPickerModelGroup');
+    expect(agents).not.toContain('data-kind="model"');
+    // Commander + agents listing intact.
+    expect(agents).toContain('__commander__');
+    expect(agents).toMatch(/data-kind="agent"/);
   });
 
-  it('stocks the model group from the configured entries and allows provider drill-down', () => {
-    const agents = read('src/renderer/modules/agents.js');
-    expect(agents).toContain('_refreshPickerModelEntries');
-    expect(agents).toMatch(/auth\.listModels', \{ provider: providerId \}/);
-    expect(agents).toMatch(/skill-picker-item--back/);
+  it('the exec-config chip follows the recipient: CLI agents resolve their runtime model', () => {
+    const chip = read('src/renderer/modules/model-chip.js');
+    // 左侧选中外部智能体时，右侧配置管理的即是该智能体的 runtime.model；
+    // 推理强度归外部 CLI 管，menu 显示 CLI 说明而非可选值。
+    expect(chip).toMatch(/override\.model \|\| agent\.runtime\.model/);
+    expect(chip).toMatch(/mode: 'cli'/);
+    expect(chip).toContain("t('exec_config.effort_cli_note')");
+    // Compact menu: effort is a one-row segmented control, no subheader row.
+    expect(chip).toContain('model-chip-menu-segmented');
+    expect(chip).not.toContain('model-chip-menu-subheader');
   });
 });
 
