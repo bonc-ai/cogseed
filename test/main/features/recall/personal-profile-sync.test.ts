@@ -706,3 +706,36 @@ describe('personal profile projection is driven from the main process', () => {
     spy.mockRestore();
   });
 });
+
+describe('personal profile projection › catalog 指纹不含 PO 内部寻址', () => {
+  it('no_match 回执在卸载重装（group_id 变化）后仍作数——指纹只看模板与字段清单', async () => {
+    const templates = await import('../../../../src/main/features/personal_ontology_template_files');
+    const sync = await loadSync();
+
+    const first = await installStudentTemplate();
+    const firstGroupId = first.row.group_id;
+    const personal = asset('aa-personal-fingerprint', 'personal', '一条路由不到任何字段的通用偏好。');
+    // flow → 落 no_match 回执，catalogFingerprint 才会参与 isSettledForInput
+    const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    const before = await sync.syncPersonalProfileFromRecallAssets(
+      UID, { listAssets: async () => [personal], routeAsset }, { assetId: personal.id },
+    );
+    expect(before).toMatchObject({ unmatched: 1 });
+    expect(routeAsset).toHaveBeenCalledTimes(1);
+
+    // 卸载重装 → group_id 变了，但模板与字段清单一模一样
+    await templates.uninstallTemplateFile(UID, 'student');
+    await templates.installTemplateFile(UID, 'student');
+    const secondGroupId = templates.readGroups(UID).find((g) => g.template_id === 'student')!.group_id;
+    expect(secondGroupId).not.toBe(firstGroupId);
+
+    // 指纹未变 → 回执仍结算 → 不再重复调用路由（指纹若含 group_id 这里会重跑）
+    routeAsset.mockClear();
+    const after = await sync.syncPersonalProfileFromRecallAssets(
+      UID, { listAssets: async () => [personal], routeAsset }, { assetId: personal.id },
+    );
+    expect(after).toMatchObject({ skipped: 1, unmatched: 0 });
+    expect(routeAsset).not.toHaveBeenCalled();
+  });
+});

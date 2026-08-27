@@ -309,3 +309,38 @@ describe('role-template boundary › 显示名只有 PO 一个事实来源', () 
     expect(groups).toContain("if (groups[idx].template_id) return { ok: false, error: 'role_template_group' };");
   });
 });
+
+describe('role-template boundary › N8 Recall 拥有路由意图，不拥有 PO 寻址与存储', () => {
+  const sync = stripComments(read('src/main/features/recall/personal-profile-sync.ts'));
+
+  it('Recall 不持有台账 group_id（连指纹里也不许有）', () => {
+    expect(sync).not.toContain('template.group_id');
+    expect(sync).not.toContain('groupId:');
+    expect(sync).not.toContain('entry.group_id');
+  });
+
+  it('Recall 不构造 PO 内部地址，也不直接写模板 markdown', () => {
+    expect(sync).not.toContain('buildContentRef');
+    expect(sync).not.toContain('::');
+    expect(sync).not.toContain('appendExistingTemplateFieldValueToRef');
+    expect(sync).not.toContain('writeTextAtomicSync');
+    expect(sync).not.toContain('node:fs');
+  });
+
+  it('最终写入只经 PO contract 的正式写入口', () => {
+    expect(sync).toContain('appendRoleTemplateFieldValue');
+    expect(sync).toContain('buildRoleTemplateFieldRef');
+  });
+
+  it('T-box 合法性由 PO 裁定，Recall 不维护第二套 source of truth', () => {
+    expect(sync).toContain('isTboxField');
+    expect(sync).not.toContain('preset_groups');
+    expect(sync).not.toContain('getRoleTemplate(');
+  });
+
+  it('Recall 保留的只是路由意图所需的字段词汇（catalog 只读，不含地址）', () => {
+    // 允许保留：读 catalog 做 LLM 路由 + 把命中结果换成 fieldRef
+    expect(sync).toContain('listTemplateFileCatalog');
+    expect(sync).toContain('routeAsset');
+  });
+});

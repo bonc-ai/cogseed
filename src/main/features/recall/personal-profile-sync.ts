@@ -120,9 +120,14 @@ function inputFingerprint(asset: RecallAbilityAssetRecord): string {
   }));
 }
 
+/**
+ * 「可路由的字段集合变了没有」的指纹，用于判断一条 no_match 回执是否还作数。
+ * 刻意**不含台账 group_id**：那是 PO 的内部寻址，每次安装由 genId12() 重生成。
+ * 指纹的语义是「模板与字段清单」，不是「PO 把它存在哪一行」。
+ * （N8 边界：Recall 拥有路由意图，不拥有 PO 的寻址与存储结构。）
+ */
 function catalogFingerprint(catalog: TemplateCatalogEntry[]): string {
   const catalogShape = catalog.map((template) => ({
-    groupId: template.group_id,
     templateId: template.template_id,
     sections: template.sections.map((section) => ({ title: section.title, fields: [...section.fields] })),
   }));
