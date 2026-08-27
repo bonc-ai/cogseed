@@ -250,3 +250,41 @@ describe('role-template boundary › M5 candidate-builder 不再直读直写 PO 
     expect(tool).not.toContain('node:fs');
   });
 });
+
+describe('role-template boundary › M4 memory 面板不再解析 PO 模板格式', () => {
+  const memory = read('src/renderer/modules/memory.js');
+
+  it('渲染层的 PO 流水解析器已删', () => {
+    expect(memory).not.toContain('_memParseFlowEntries');
+    expect(memory).not.toContain('## 流水区');
+    expect(memory).not.toContain("split('\\n§\\n')");
+  });
+
+  it('不再有模板表单/流水编辑路径（列表已过滤模板行，这些分支不可达）', () => {
+    expect(memory).not.toContain('isTemplated');
+    expect(memory).not.toContain('_memRenderGroupFormView');
+    expect(memory).not.toContain('_memRenderGroupFlowView');
+    expect(memory).not.toContain('personalOntology.groups.fields.');
+    expect(memory).not.toContain('personalOntology.groups.entries.');
+  });
+
+  it('只保留普通分组的 CRUD 与纯文本编辑', () => {
+    expect(memory).toContain("_memGroups.filter((g) => !g.template_id)");
+    expect(memory).toContain('_memRenderGroupRawView');
+    for (const channel of [
+      'personalOntology.groups.list',
+      'personalOntology.groups.create',
+      'personalOntology.groups.rename',
+      'personalOntology.groups.delete',
+      'personalOntology.groups.read',
+      'personalOntology.groups.write',
+    ]) {
+      expect(memory, `plain-group CRUD keeps ${channel}`).toContain(channel);
+    }
+  });
+
+  it('不再展示 PO 内部标识（template_id / template_version 徽标已删）', () => {
+    expect(memory).not.toContain('memory-group-template-badge');
+    expect(memory).not.toContain('g.template_version');
+  });
+});
