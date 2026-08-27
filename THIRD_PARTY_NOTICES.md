@@ -35,6 +35,7 @@ jimp 1.6.1                            MIT      https://github.com/jimp-dev/jimp
 mammoth 1.12.0                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
 node-pty 1.0.0                        MIT      https://github.com/microsoft/node-pty
 pdfjs-dist 6.2.108                    Apache-2.0  https://mozilla.github.io/pdf.js/
+sherpa-onnx-node 1.13.6               Apache-2.0  https://github.com/k2-fsa/sherpa-onnx
 socks-proxy-agent 8.0.5               MIT      https://github.com/TooTallNate/proxy-agents
 sqlite-vec 0.1.9                      MIT OR Apache-2.0  https://github.com/asg017/sqlite-vec
 tar 7.5.20                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
