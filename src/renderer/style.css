@@ -10477,25 +10477,25 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    visible while a metrics-bearing conversation is open (unlike the per-message
    .chat-msg-meta above, which is hover-revealed). Segments whose context
    occupancy crosses the hot threshold (≥80%) get .seg-hot and the danger
-   color; the project's error token is --danger (--status-error doesn't exist).
-   Same 80%-centered box as .chat-input-area so the line sits flush with the
-   composer card edges (2026-08-27 alignment feedback). */
+   color; the project's error token is --danger (--status-error doesn't exist). */
 /* Same box as the composer card: JS (_refreshSessionStats) copies the card's
    rendered width onto this element each refresh — the card shrink-wraps to
    its content, so a static CSS width can't track it (2026-08-27 alignment
    feedback). margin:auto keeps it centered as a pure-CSS fallback.
+   Content centers inside that width (2026-08-27: left-flush readouts looked
+   misaligned against the card) and wraps instead of truncating when the
+   segments overflow — readouts must never silently lose digits.
    Quiet readout styling: label (.k, muted) + mono value (.v) per segment,
    hairline dividers between segments — deliberately NOT pill chips, these
    are readouts, not interactive controls. */
 .chat-session-stats {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 0;
   max-width: 100%;
   margin: 0 auto;
   padding: 7px 4px 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   user-select: none;
 }
 .chat-session-stats .seg {
