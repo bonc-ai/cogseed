@@ -3,15 +3,15 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
   "version": 1,
-  "serialNumber": "urn:uuid:65395007-3a43-4067-8e8e-15a715b1f348",
+  "serialNumber": "urn:uuid:8b030100-a0bf-497d-9267-cee1ec2c67c0",
   "metadata": {
-    "timestamp": "2026-08-19T17:27:20.305Z",
+    "timestamp": "2026-08-27T17:51:28.832Z",
     "tools": {
       "components": [
         {
           "type": "application",
           "name": "npm",
-          "version": "10.9.8"
+          "version": "11.17.0"
         },
         {
           "type": "application",
@@ -143,8 +143,7 @@
   "components": [
     {
       "type": "library",
-      "name": "pi-ai",
-      "group": "@earendil-works",
+      "name": "@earendil-works/pi-ai",
       "version": "0.79.10",
       "bom-ref": "cogseed@0.0.5|@earendil-works/pi-ai@0.79.10",
       "author": "Mario Zechner",
@@ -199,8 +198,7 @@
     },
     {
       "type": "library",
-      "name": "rebuild",
-      "group": "@electron",
+      "name": "@electron/rebuild",
       "version": "4.2.0",
       "bom-ref": "cogseed@0.0.5|@electron/rebuild@4.2.0",
       "description": "Electron supporting package to rebuild native node modules against the currently installed electron",
@@ -319,8 +317,7 @@
     },
     {
       "type": "library",
-      "name": "js",
-      "group": "@eslint",
+      "name": "@eslint/js",
       "version": "10.0.1",
       "bom-ref": "cogseed@0.0.5|@eslint/js@10.0.1",
       "description": "ESLint JavaScript language implementation",
@@ -378,10 +375,9 @@
     },
     {
       "type": "library",
-      "name": "node-sdk",
-      "group": "@larksuiteoapi",
-      "version": "1.72.0",
-      "bom-ref": "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.72.0",
+      "name": "@larksuiteoapi/node-sdk",
+      "version": "1.73.0",
+      "bom-ref": "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.73.0",
       "author": "mazhe.nerd",
       "description": "larksuite open sdk for nodejs",
       "licenses": [
@@ -392,7 +388,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40larksuiteoapi/node-sdk@1.72.0",
+      "purl": "pkg:npm/%40larksuiteoapi/node-sdk@1.73.0",
       "externalReferences": [
         {
           "url": "git+https://github.com/larksuite/node-sdk.git",
@@ -410,12 +406,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.72.0.tgz",
+          "url": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.73.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "f282a7693c5115134f41f79e1baf7269f74bcd6befaef5e522a5f7411be8cd1d7fea4bd9ca2f62321a7a9700be84c80903f18217031945a76427395413e932bd"
+              "content": "82ce048aea49e91758004246b6e62b095b01ef048c070b540cafa296998e1c3e914ef6ed7225ba01672240ef5ca0e415b8165f87b86f022db974f7c2b27cbf9c"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -430,8 +426,7 @@
     },
     {
       "type": "library",
-      "name": "sdk",
-      "group": "@modelcontextprotocol",
+      "name": "@modelcontextprotocol/sdk",
       "version": "1.29.0",
       "bom-ref": "cogseed@0.0.5|@modelcontextprotocol/sdk@1.29.0",
       "author": "Anthropic, PBC",
@@ -590,8 +585,7 @@
     },
     {
       "type": "library",
-      "name": "adm-zip",
-      "group": "@types",
+      "name": "@types/adm-zip",
       "version": "0.5.8",
       "bom-ref": "cogseed@0.0.5|@types/adm-zip@0.5.8",
       "description": "TypeScript definitions for adm-zip",
@@ -645,8 +639,7 @@
     },
     {
       "type": "library",
-      "name": "node",
-      "group": "@types",
+      "name": "@types/node",
       "version": "25.6.0",
       "bom-ref": "cogseed@0.0.5|@types/node@25.6.0",
       "description": "TypeScript definitions for node",
@@ -726,10 +719,9 @@
     },
     {
       "type": "library",
-      "name": "coverage-v8",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/coverage-v8@4.1.10",
+      "name": "@vitest/coverage-v8",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/coverage-v8@4.1.11",
       "author": "Anthony Fu",
       "description": "V8 coverage provider for Vitest",
       "licenses": [
@@ -740,7 +732,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/coverage-v8@4.1.10",
+      "purl": "pkg:npm/%40vitest/coverage-v8@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/coverage-v8",
@@ -758,12 +750,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/coverage-v8/-/coverage-v8-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/coverage-v8/-/coverage-v8-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "20ce3d1e6b617af6e000ee1a9e9d61c2da13f7061ee7dc342d1d3482bf9e6a01c4f9927994ae2c2cf78ed2e6e0a097302e4e9d7a1537476e0df856c410a0dcf2"
+              "content": "f0c5461059c921c7468dc6df2a67aaf33d296471f426556da15647f50feac14a7ac3216710950132bc3d0c26a3fab6b7bd28469a16af8da94c2213cdc5901473"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -782,8 +774,7 @@
     },
     {
       "type": "library",
-      "name": "aibot-node-sdk",
-      "group": "@wecom",
+      "name": "@wecom/aibot-node-sdk",
       "version": "1.0.7",
       "bom-ref": "cogseed@0.0.5|@wecom/aibot-node-sdk@1.0.7",
       "description": "企业微信智能机器人 Node.js SDK - WebSocket 长连接通道",
@@ -1152,8 +1143,8 @@
     {
       "type": "library",
       "name": "electron",
-      "version": "41.10.5",
-      "bom-ref": "cogseed@0.0.5|electron@41.10.5",
+      "version": "41.10.6",
+      "bom-ref": "cogseed@0.0.5|electron@41.10.6",
       "author": "Electron Community",
       "description": "Build cross platform desktop apps with JavaScript, HTML, and CSS",
       "licenses": [
@@ -1164,7 +1155,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/electron@41.10.5",
+      "purl": "pkg:npm/electron@41.10.6",
       "externalReferences": [
         {
           "url": "git+https://github.com/electron/electron.git",
@@ -1182,12 +1173,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/electron/-/electron-41.10.5.tgz",
+          "url": "https://registry.npmjs.org/electron/-/electron-41.10.6.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "82b4893a12dd75a9d65f551f13c078c40da438e76e5027e9628390d83e33118b5ef25490b6b7751d86d5e3112bb199a6f95fb5437cb30902c1b02c44222c3f41"
+              "content": "34407b4275694f6a7c4bd5398ce08f02d0b2865d568d14ff383bc93fa79cd7f75945499ffc48d854e05bfddb610a6261e1b212aa902ba0627fc514715fb57027"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -1213,7 +1204,7 @@
           "name": "node",
           "group": "@types",
           "version": "24.12.4",
-          "bom-ref": "cogseed@0.0.5|electron@41.10.5|@types/node@24.12.4",
+          "bom-ref": "cogseed@0.0.5|electron@41.10.6|@types/node@24.12.4",
           "description": "TypeScript definitions for node",
           "licenses": [
             {
@@ -1545,8 +1536,8 @@
     {
       "type": "library",
       "name": "mammoth",
-      "version": "1.12.0",
-      "bom-ref": "cogseed@0.0.5|mammoth@1.12.0",
+      "version": "1.12.1",
+      "bom-ref": "cogseed@0.0.5|mammoth@1.12.1",
       "author": "Michael Williamson",
       "description": "Convert Word documents from docx to simple HTML and Markdown",
       "licenses": [
@@ -1557,7 +1548,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/mammoth@1.12.0",
+      "purl": "pkg:npm/mammoth@1.12.1",
       "externalReferences": [
         {
           "url": "git+https://github.com/mwilliamson/mammoth.js.git",
@@ -1575,12 +1566,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/mammoth/-/mammoth-1.12.0.tgz",
+          "url": "https://registry.npmjs.org/mammoth/-/mammoth-1.12.1.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "7309cad5121c45d0cc8b61d1c76117198971a88121d0ea376cb868ae09ec5498b65246d7d7e8cac6e04d47d3c2e7e25a5fb124989c453e6a3a9a32e9a92848db"
+              "content": "9c21fd28a8d68b78d0fa2f1b50ab3b935cab5ed4841a95a017c218933b0531c6e7fb94ba9786d91016f2c7684e404ac58973ee02cf513daeaa8d7571872c7ff2"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -1699,6 +1690,57 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/pdfjs-dist"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "sherpa-onnx-node",
+      "version": "1.13.6",
+      "bom-ref": "cogseed@0.0.5|sherpa-onnx-node@1.13.6",
+      "author": "The next-gen Kaldi team",
+      "description": "Speech-to-text, text-to-speech, speaker diarization, and speech enhancement using Next-gen Kaldi without internet connection",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/sherpa-onnx-node@1.13.6",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/csukuangfj/sherpa-onnx.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/sherpa-onnx-node/-/sherpa-onnx-node-1.13.6.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "1635124124ad4e2ff070baa549c18598d03bc928d6dd0c2ab8970c449d720e40e9069d019965e45e88ab0ee123f3fbf6fc2b38c0b609a7604a68c0fdfb594318"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/sherpa-onnx-node"
         }
       ]
     },
@@ -2127,8 +2169,8 @@
     {
       "type": "library",
       "name": "vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|vitest@4.1.10",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|vitest@4.1.11",
       "author": "Anthony Fu",
       "description": "Next generation testing framework powered by Vite",
       "licenses": [
@@ -2139,7 +2181,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/vitest@4.1.10",
+      "purl": "pkg:npm/vitest@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/vitest",
@@ -2157,12 +2199,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/vitest/-/vitest-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/vitest/-/vitest-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "47d8d44dee52e106f41c27784cdaa90bba0672b32cb0c4465cb5bcd2e6e35ac5bd547e4617ccb56344852d8f406ea4a4ea7b743e73b1e07e16349619d771943f"
+              "content": "7e1002acd5d489d21b19206be4595bb8190eed5582d59c8b9740cee025360eb42800fc57f3862cc6cf877864298a2e656565754388016534eee3d985f80e8477"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -2187,7 +2229,7 @@
           "type": "library",
           "name": "es-module-lexer",
           "version": "2.0.0",
-          "bom-ref": "cogseed@0.0.5|vitest@4.1.10|es-module-lexer@2.0.0",
+          "bom-ref": "cogseed@0.0.5|vitest@4.1.11|es-module-lexer@2.0.0",
           "author": "Guy Bedford",
           "description": "Lexes ES modules returning their import/export metadata",
           "licenses": [
@@ -2231,7 +2273,7 @@
           "type": "library",
           "name": "tinyexec",
           "version": "1.1.1",
-          "bom-ref": "cogseed@0.0.5|vitest@4.1.10|tinyexec@1.1.1",
+          "bom-ref": "cogseed@0.0.5|vitest@4.1.11|tinyexec@1.1.1",
           "author": "James Garbutt",
           "description": "A minimal library for executing processes in Node",
           "licenses": [
@@ -2429,8 +2471,7 @@
     },
     {
       "type": "library",
-      "name": "sdk",
-      "group": "@anthropic-ai",
+      "name": "@anthropic-ai/sdk",
       "version": "0.91.1",
       "bom-ref": "cogseed@0.0.5|@anthropic-ai/sdk@0.91.1",
       "author": "Anthropic",
@@ -2481,8 +2522,7 @@
     },
     {
       "type": "library",
-      "name": "client-bedrock-runtime",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/client-bedrock-runtime",
       "version": "3.1048.0",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/client-bedrock-runtime@3.1048.0",
       "author": "AWS SDK for JavaScript Team",
@@ -2537,8 +2577,7 @@
     },
     {
       "type": "library",
-      "name": "genai",
-      "group": "@google",
+      "name": "@google/genai",
       "version": "1.52.0",
       "bom-ref": "cogseed@0.0.5|@google/genai@1.52.0",
       "licenses": [
@@ -2591,8 +2630,7 @@
     },
     {
       "type": "library",
-      "name": "mistralai",
-      "group": "@mistralai",
+      "name": "@mistralai/mistralai",
       "version": "2.2.6",
       "bom-ref": "cogseed@0.0.5|@mistralai/mistralai@2.2.6",
       "author": "Mistral AI",
@@ -2643,8 +2681,7 @@
     },
     {
       "type": "library",
-      "name": "api",
-      "group": "@opentelemetry",
+      "name": "@opentelemetry/api",
       "version": "1.9.0",
       "bom-ref": "cogseed@0.0.5|@opentelemetry/api@1.9.0",
       "author": "OpenTelemetry Authors",
@@ -2699,8 +2736,7 @@
     },
     {
       "type": "library",
-      "name": "node-http-handler",
-      "group": "@smithy",
+      "name": "@smithy/node-http-handler",
       "version": "4.7.3",
       "bom-ref": "cogseed@0.0.5|@smithy/node-http-handler@4.7.3",
       "author": "AWS SDK for JavaScript Team",
@@ -3018,8 +3054,7 @@
     },
     {
       "type": "library",
-      "name": "cross-spawn-promise",
-      "group": "@malept",
+      "name": "@malept/cross-spawn-promise",
       "version": "2.0.0",
       "bom-ref": "cogseed@0.0.5|@malept/cross-spawn-promise@2.0.0",
       "author": "Mark Lee",
@@ -3894,8 +3929,7 @@
     },
     {
       "type": "library",
-      "name": "node-server",
-      "group": "@hono",
+      "name": "@hono/node-server",
       "version": "1.19.17",
       "bom-ref": "cogseed@0.0.5|@hono/node-server@1.19.17",
       "author": "Yusuke Wada",
@@ -4752,8 +4786,7 @@
     },
     {
       "type": "library",
-      "name": "v8-coverage",
-      "group": "@bcoe",
+      "name": "@bcoe/v8-coverage",
       "version": "1.0.2",
       "bom-ref": "cogseed@0.0.5|@bcoe/v8-coverage@1.0.2",
       "author": "Charles Samborski",
@@ -4812,10 +4845,9 @@
     },
     {
       "type": "library",
-      "name": "utils",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/utils@4.1.10",
+      "name": "@vitest/utils",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/utils@4.1.11",
       "description": "Shared Vitest utility functions",
       "licenses": [
         {
@@ -4825,7 +4857,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/utils@4.1.10",
+      "purl": "pkg:npm/%40vitest/utils@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/utils",
@@ -4843,12 +4875,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/utils/-/utils-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/utils/-/utils-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "7f2f5a9bf1d6c5b686b7f49ac2ba7dd2fb7a63a8d0c1fd515fbedccf7bb0a09c0954c962fded4813044f9cc349eef29f3d3c28d1d89789f9293efc07f6fee718"
+              "content": "cd30951a9c85b0658186594ec8a953c3fbe7afa0fdab1b1f483c9f6f26664f28c7c3937f56ebf31e91e84239b6649ce7e11260c79c38afb5747abebd0a62e03d"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -6588,8 +6620,7 @@
     },
     {
       "type": "library",
-      "name": "extract-zip",
-      "group": "@electron-internal",
+      "name": "@electron-internal/extract-zip",
       "version": "1.0.5",
       "bom-ref": "cogseed@0.0.5|@electron-internal/extract-zip@1.0.5",
       "description": "Fast, safe, native zip extraction for Node.js. Drop-in replacement for extract-zip.",
@@ -6647,8 +6678,7 @@
     },
     {
       "type": "library",
-      "name": "get",
-      "group": "@electron",
+      "name": "@electron/get",
       "version": "5.1.0",
       "bom-ref": "cogseed@0.0.5|@electron/get@5.1.0",
       "author": "Samuel Attard",
@@ -6768,8 +6798,7 @@
     },
     {
       "type": "library",
-      "name": "eslint-utils",
-      "group": "@eslint-community",
+      "name": "@eslint-community/eslint-utils",
       "version": "4.10.1",
       "bom-ref": "cogseed@0.0.5|@eslint-community/eslint-utils@4.10.1",
       "author": "Toru Nagashima",
@@ -6889,8 +6918,7 @@
     },
     {
       "type": "library",
-      "name": "regexpp",
-      "group": "@eslint-community",
+      "name": "@eslint-community/regexpp",
       "version": "4.12.2",
       "bom-ref": "cogseed@0.0.5|@eslint-community/regexpp@4.12.2",
       "author": "Toru Nagashima",
@@ -6949,8 +6977,7 @@
     },
     {
       "type": "library",
-      "name": "config-array",
-      "group": "@eslint",
+      "name": "@eslint/config-array",
       "version": "0.23.5",
       "bom-ref": "cogseed@0.0.5|@eslint/config-array@0.23.5",
       "author": "Nicholas C. Zakas",
@@ -7009,8 +7036,7 @@
     },
     {
       "type": "library",
-      "name": "config-helpers",
-      "group": "@eslint",
+      "name": "@eslint/config-helpers",
       "version": "0.7.0",
       "bom-ref": "cogseed@0.0.5|@eslint/config-helpers@0.7.0",
       "description": "Helper utilities for creating ESLint configuration",
@@ -7068,8 +7094,7 @@
     },
     {
       "type": "library",
-      "name": "core",
-      "group": "@eslint",
+      "name": "@eslint/core",
       "version": "1.2.1",
       "bom-ref": "cogseed@0.0.5|@eslint/core@1.2.1",
       "author": "Nicholas C. Zakas",
@@ -7128,8 +7153,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-kit",
-      "group": "@eslint",
+      "name": "@eslint/plugin-kit",
       "version": "0.7.2",
       "bom-ref": "cogseed@0.0.5|@eslint/plugin-kit@0.7.2",
       "author": "Nicholas C. Zakas",
@@ -7188,8 +7212,7 @@
     },
     {
       "type": "library",
-      "name": "node",
-      "group": "@humanfs",
+      "name": "@humanfs/node",
       "version": "0.16.8",
       "bom-ref": "cogseed@0.0.5|@humanfs/node@0.16.8",
       "author": "Nicholas C. Zakas",
@@ -7248,8 +7271,7 @@
     },
     {
       "type": "library",
-      "name": "module-importer",
-      "group": "@humanwhocodes",
+      "name": "@humanwhocodes/module-importer",
       "version": "1.0.1",
       "bom-ref": "cogseed@0.0.5|@humanwhocodes/module-importer@1.0.1",
       "author": "Nicholas C. Zaks",
@@ -7308,8 +7330,7 @@
     },
     {
       "type": "library",
-      "name": "retry",
-      "group": "@humanwhocodes",
+      "name": "@humanwhocodes/retry",
       "version": "0.4.3",
       "bom-ref": "cogseed@0.0.5|@humanwhocodes/retry@0.4.3",
       "author": "Nicholas C. Zaks",
@@ -7368,8 +7389,7 @@
     },
     {
       "type": "library",
-      "name": "estree",
-      "group": "@types",
+      "name": "@types/estree",
       "version": "1.0.9",
       "bom-ref": "cogseed@0.0.5|@types/estree@1.0.9",
       "description": "TypeScript definitions for estree",
@@ -8447,8 +8467,7 @@
     },
     {
       "type": "library",
-      "name": "tokenizers",
-      "group": "@anush008",
+      "name": "@anush008/tokenizers",
       "version": "0.0.0",
       "bom-ref": "cogseed@0.0.5|@anush008/tokenizers@0.0.0",
       "description": "Multi-arch builds of HuggingFace tokenizers",
@@ -8502,8 +8521,7 @@
     },
     {
       "type": "library",
-      "name": "hub",
-      "group": "@huggingface",
+      "name": "@huggingface/hub",
       "version": "2.11.0",
       "bom-ref": "cogseed@0.0.5|@huggingface/hub@2.11.0",
       "author": "Hugging Face",
@@ -8653,8 +8671,7 @@
     },
     {
       "type": "library",
-      "name": "core",
-      "group": "@jimp",
+      "name": "@jimp/core",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/core@1.6.1",
       "author": "Andrew Lisowski",
@@ -8708,8 +8725,7 @@
     },
     {
       "type": "library",
-      "name": "diff",
-      "group": "@jimp",
+      "name": "@jimp/diff",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/diff@1.6.1",
       "author": "Andrew Lisowski",
@@ -8763,8 +8779,7 @@
     },
     {
       "type": "library",
-      "name": "js-bmp",
-      "group": "@jimp",
+      "name": "@jimp/js-bmp",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/js-bmp@1.6.1",
       "author": "Andrew Lisowski",
@@ -8818,8 +8833,7 @@
     },
     {
       "type": "library",
-      "name": "js-gif",
-      "group": "@jimp",
+      "name": "@jimp/js-gif",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/js-gif@1.6.1",
       "author": "Andrew Lisowski",
@@ -8873,8 +8887,7 @@
     },
     {
       "type": "library",
-      "name": "js-jpeg",
-      "group": "@jimp",
+      "name": "@jimp/js-jpeg",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/js-jpeg@1.6.1",
       "author": "Andrew Lisowski",
@@ -8928,8 +8941,7 @@
     },
     {
       "type": "library",
-      "name": "js-png",
-      "group": "@jimp",
+      "name": "@jimp/js-png",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/js-png@1.6.1",
       "author": "Andrew Lisowski",
@@ -8983,8 +8995,7 @@
     },
     {
       "type": "library",
-      "name": "js-tiff",
-      "group": "@jimp",
+      "name": "@jimp/js-tiff",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/js-tiff@1.6.1",
       "author": "Andrew Lisowski",
@@ -9038,8 +9049,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-blit",
-      "group": "@jimp",
+      "name": "@jimp/plugin-blit",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-blit@1.6.1",
       "author": "Andrew Lisowski",
@@ -9093,8 +9103,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-blur",
-      "group": "@jimp",
+      "name": "@jimp/plugin-blur",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-blur@1.6.1",
       "author": "Andrew Lisowski",
@@ -9148,8 +9157,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-circle",
-      "group": "@jimp",
+      "name": "@jimp/plugin-circle",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-circle@1.6.1",
       "author": "Andrew Lisowski",
@@ -9203,8 +9211,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-color",
-      "group": "@jimp",
+      "name": "@jimp/plugin-color",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-color@1.6.1",
       "author": "Andrew Lisowski",
@@ -9258,8 +9265,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-contain",
-      "group": "@jimp",
+      "name": "@jimp/plugin-contain",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-contain@1.6.1",
       "author": "Andrew Lisowski",
@@ -9313,8 +9319,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-cover",
-      "group": "@jimp",
+      "name": "@jimp/plugin-cover",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-cover@1.6.1",
       "author": "Andrew Lisowski",
@@ -9368,8 +9373,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-crop",
-      "group": "@jimp",
+      "name": "@jimp/plugin-crop",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-crop@1.6.1",
       "author": "Andrew Lisowski",
@@ -9423,8 +9427,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-displace",
-      "group": "@jimp",
+      "name": "@jimp/plugin-displace",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-displace@1.6.1",
       "author": "Andrew Lisowski",
@@ -9478,8 +9481,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-dither",
-      "group": "@jimp",
+      "name": "@jimp/plugin-dither",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-dither@1.6.1",
       "author": "Andrew Lisowski",
@@ -9533,8 +9535,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-fisheye",
-      "group": "@jimp",
+      "name": "@jimp/plugin-fisheye",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-fisheye@1.6.1",
       "author": "Andrew Lisowski",
@@ -9588,8 +9589,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-flip",
-      "group": "@jimp",
+      "name": "@jimp/plugin-flip",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-flip@1.6.1",
       "author": "Andrew Lisowski",
@@ -9643,8 +9643,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-hash",
-      "group": "@jimp",
+      "name": "@jimp/plugin-hash",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-hash@1.6.1",
       "author": "Andrew Lisowski",
@@ -9698,8 +9697,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-mask",
-      "group": "@jimp",
+      "name": "@jimp/plugin-mask",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-mask@1.6.1",
       "author": "Andrew Lisowski",
@@ -9753,8 +9751,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-print",
-      "group": "@jimp",
+      "name": "@jimp/plugin-print",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-print@1.6.1",
       "author": "Andrew Lisowski",
@@ -9808,8 +9805,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-quantize",
-      "group": "@jimp",
+      "name": "@jimp/plugin-quantize",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-quantize@1.6.1",
       "author": "Andrew Lisowski",
@@ -9863,8 +9859,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-resize",
-      "group": "@jimp",
+      "name": "@jimp/plugin-resize",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-resize@1.6.1",
       "author": "Andrew Lisowski",
@@ -9918,8 +9913,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-rotate",
-      "group": "@jimp",
+      "name": "@jimp/plugin-rotate",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-rotate@1.6.1",
       "author": "Andrew Lisowski",
@@ -9973,8 +9967,7 @@
     },
     {
       "type": "library",
-      "name": "plugin-threshold",
-      "group": "@jimp",
+      "name": "@jimp/plugin-threshold",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/plugin-threshold@1.6.1",
       "author": "Andrew Lisowski",
@@ -10028,8 +10021,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@jimp",
+      "name": "@jimp/types",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/types@1.6.1",
       "author": "Andrew Lisowski",
@@ -10083,8 +10075,7 @@
     },
     {
       "type": "library",
-      "name": "utils",
-      "group": "@jimp",
+      "name": "@jimp/utils",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/utils@1.6.1",
       "author": "Andrew Lisowski",
@@ -10138,8 +10129,7 @@
     },
     {
       "type": "library",
-      "name": "xmldom",
-      "group": "@xmldom",
+      "name": "@xmldom/xmldom",
       "version": "0.8.13",
       "bom-ref": "cogseed@0.0.5|@xmldom/xmldom@0.8.13",
       "description": "A pure JavaScript W3C standard-based (XML DOM Level 2 Core) DOMParser and XMLSerializer module.",
@@ -10902,8 +10892,7 @@
     },
     {
       "type": "library",
-      "name": "canvas",
-      "group": "@napi-rs",
+      "name": "@napi-rs/canvas",
       "version": "1.0.7",
       "bom-ref": "cogseed@0.0.5|@napi-rs/canvas@1.0.7",
       "description": "Canvas for Node.js with skia backend",
@@ -10953,6 +10942,58 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/@napi-rs/canvas"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "sherpa-onnx-darwin-arm64",
+      "version": "1.13.6",
+      "bom-ref": "cogseed@0.0.5|sherpa-onnx-darwin-arm64@1.13.6",
+      "author": "The next-gen Kaldi team",
+      "description": "Speech-to-text, text-to-speech, speaker diarization, and speech enhancement using Next-gen Kaldi without internet connection",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/sherpa-onnx-darwin-arm64@1.13.6",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/csukuangfj/sherpa-onnx.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/sherpa-onnx-darwin-arm64/-/sherpa-onnx-darwin-arm64-1.13.6.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "9b740c38650754f525edb00e3dcee826d9b339577341540fb02b938cdb90d8deb3958b970d9bbd35d511dc4af7af16e11dae929966bde1f954c2652c3b56ada3"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/sherpa-onnx-darwin-arm64"
         }
       ]
     },
@@ -11124,8 +11165,7 @@
     },
     {
       "type": "library",
-      "name": "fs-minipass",
-      "group": "@isaacs",
+      "name": "@isaacs/fs-minipass",
       "version": "4.0.1",
       "bom-ref": "cogseed@0.0.5|@isaacs/fs-minipass@4.0.1",
       "author": "Isaac Z. Schlueter",
@@ -11472,8 +11512,7 @@
     },
     {
       "type": "library",
-      "name": "eslint-plugin",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/eslint-plugin",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/eslint-plugin@8.67.0",
       "description": "TypeScript plugin for ESLint",
@@ -11592,8 +11631,7 @@
     },
     {
       "type": "library",
-      "name": "parser",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/parser",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/parser@8.67.0",
       "description": "An ESLint custom parser which leverages TypeScript ESTree",
@@ -11651,8 +11689,7 @@
     },
     {
       "type": "library",
-      "name": "typescript-estree",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/typescript-estree",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/typescript-estree@8.67.0",
       "description": "A parser that converts TypeScript source code into an ESTree compatible form",
@@ -11710,8 +11747,7 @@
     },
     {
       "type": "library",
-      "name": "utils",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/utils",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/utils@8.67.0",
       "description": "Utilities for working with TypeScript + ESLint together",
@@ -11769,10 +11805,9 @@
     },
     {
       "type": "library",
-      "name": "expect",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/expect@4.1.10",
+      "name": "@vitest/expect",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/expect@4.1.11",
       "description": "Jest's expect matchers as a Chai plugin",
       "licenses": [
         {
@@ -11782,7 +11817,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/expect@4.1.10",
+      "purl": "pkg:npm/%40vitest/expect@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/expect",
@@ -11800,12 +11835,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/expect/-/expect-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/expect/-/expect-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "62c0a7faa024d465a340e58512c11c2f680d434ce656642edd3d37a8fe94ca386d99db70b5bb88f830129ffee2401dc71935e4741c0675dcf13e59a2aa5e6f94"
+              "content": "557db1e6f3495c44f8eca005cf011123e29132d4d30925937d230ab16ec9b14b17578a6cabef9edc3bd9a6e4c33a91dcc72b620ecea9da78556f6b550e289463"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -11824,10 +11859,9 @@
     },
     {
       "type": "library",
-      "name": "mocker",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/mocker@4.1.10",
+      "name": "@vitest/mocker",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/mocker@4.1.11",
       "description": "Vitest module mocker implementation",
       "licenses": [
         {
@@ -11837,7 +11871,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/mocker@4.1.10",
+      "purl": "pkg:npm/%40vitest/mocker@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/mocker",
@@ -11855,12 +11889,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/mocker/-/mocker-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/mocker/-/mocker-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "bf4c5a7b3b7e0ca12629f6b1835df795dcc00ebc0b19ded97b531f4104d87efb3c3aa648c1bc72c5a614462bf057bb16cb97ea9f7ac7e6e3ab4a9d3b6e9e383b"
+              "content": "d972550f9e5dd68e40668bace42086292ef883fae23a3f68744b766d0a4255979b947c8776731e165e239745e3536d6cb5fe266e35247b0d9e5d066deb983909"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -11879,10 +11913,9 @@
     },
     {
       "type": "library",
-      "name": "pretty-format",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/pretty-format@4.1.10",
+      "name": "@vitest/pretty-format",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/pretty-format@4.1.11",
       "description": "Fork of pretty-format with support for ESM",
       "licenses": [
         {
@@ -11892,7 +11925,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/pretty-format@4.1.10",
+      "purl": "pkg:npm/%40vitest/pretty-format@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/pretty-format",
@@ -11910,12 +11943,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/pretty-format/-/pretty-format-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/pretty-format/-/pretty-format-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "5b51ec8d21f831743d61f9a684b0282187f51d17de9100869e078881c7a2e8c3f941019651ed20928a5d6506950853be24324cac0246c1ae69469369bf2e0ff1"
+              "content": "ca26733db1934bd4abfc9a4597ccc7adc2240287cd6c557a936d6f22040dfdc63fa3165e5e126fe6c73f3012798c5296996b3ea091f0d145cb66399ff77d7e57"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -11934,10 +11967,9 @@
     },
     {
       "type": "library",
-      "name": "runner",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/runner@4.1.10",
+      "name": "@vitest/runner",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/runner@4.1.11",
       "description": "Vitest test runner",
       "licenses": [
         {
@@ -11947,7 +11979,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/runner@4.1.10",
+      "purl": "pkg:npm/%40vitest/runner@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/runner",
@@ -11965,12 +11997,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/runner/-/runner-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/runner/-/runner-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "20a23a929207f8b9a944ea65c8bc0105a09f32039938cb328156ba040443e9a840d38551b8949ae8e6951bb911bd210c0fcef455df75ad24b0d1e7a0b56c8b1a"
+              "content": "2f3b6f52077030d24c2248f78509e7c620b65f2d73371abddbc5bfc618c22da342cea4d93ae763c1b41feaff489ed6463f0d77da2d8bab6ae04d16470f724737"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -11989,10 +12021,9 @@
     },
     {
       "type": "library",
-      "name": "snapshot",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/snapshot@4.1.10",
+      "name": "@vitest/snapshot",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/snapshot@4.1.11",
       "description": "Vitest snapshot manager",
       "licenses": [
         {
@@ -12002,7 +12033,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/snapshot@4.1.10",
+      "purl": "pkg:npm/%40vitest/snapshot@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/snapshot",
@@ -12020,12 +12051,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/snapshot/-/snapshot-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/snapshot/-/snapshot-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "c5191f393d6aa53022fd38b86352ed7d1737904baac46c39f5e3768cdf6945632d4bf5c37af7a485c152aaf42a8d434692c7e3309bb763ea09fb86299f639a27"
+              "content": "a4dee2927d4e37b87c79ee20200a78033c8afb306d24fcd56ea3a0bb92c2121e1568955b3d072061060920c1903d755e249ab57e77dace2b3b6b9a4534f6a1a2"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -12044,10 +12075,9 @@
     },
     {
       "type": "library",
-      "name": "spy",
-      "group": "@vitest",
-      "version": "4.1.10",
-      "bom-ref": "cogseed@0.0.5|@vitest/spy@4.1.10",
+      "name": "@vitest/spy",
+      "version": "4.1.11",
+      "bom-ref": "cogseed@0.0.5|@vitest/spy@4.1.11",
       "description": "Lightweight Jest compatible spy implementation",
       "licenses": [
         {
@@ -12057,7 +12087,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40vitest/spy@4.1.10",
+      "purl": "pkg:npm/%40vitest/spy@4.1.11",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitest-dev/vitest.git#packages/spy",
@@ -12075,12 +12105,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@vitest/spy/-/spy-4.1.10.tgz",
+          "url": "https://registry.npmjs.org/@vitest/spy/-/spy-4.1.11.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "3cb7ff520be8ab9c0efdbe2bc18091d61d8f488757cfbc2791014c894a4b76d33b97aa6a545710201107c93d7e97e723ee637001f647cea5ea0f28ef3aec1b0f"
+              "content": "6a935afe9ad0cb6a827b2c219e2c4e1cf442806361be0ed3e036a97e5d466a12e9fd1fae8419b970fc85a0d572aac35dda1d672712fa06aa9d22388004beb460"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -12415,8 +12445,8 @@
     {
       "type": "library",
       "name": "vite",
-      "version": "8.1.5",
-      "bom-ref": "cogseed@0.0.5|vite@8.1.5",
+      "version": "8.2.2",
+      "bom-ref": "cogseed@0.0.5|vite@8.2.2",
       "author": "Evan You",
       "description": "Native-ESM powered web dev build tool",
       "licenses": [
@@ -12427,7 +12457,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/vite@8.1.5",
+      "purl": "pkg:npm/vite@8.2.2",
       "externalReferences": [
         {
           "url": "git+https://github.com/vitejs/vite.git#packages/vite",
@@ -12445,12 +12475,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/vite/-/vite-8.1.5.tgz",
+          "url": "https://registry.npmjs.org/vite/-/vite-8.2.2.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "ed42cbc2c09d631fe7472ae9884c2fa9be53147acc559c81b7eae0fce0174fbae08ffcfe0ed4c3c8a15e2c074392e6c3543283f233ac9dd9b2ee6e795dc7d4b3"
+              "content": "70528b57f3d18005252119b95a332327cea3adfb73a6a7201fe52cf834bc988dc20cd887df45a1af3f2e1cbdfe30e2cf020a9b30102a59d00702984e00cfb3fd"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -12576,8 +12606,7 @@
     },
     {
       "type": "library",
-      "name": "sha256-browser",
-      "group": "@aws-crypto",
+      "name": "@aws-crypto/sha256-browser",
       "version": "5.2.0",
       "bom-ref": "cogseed@0.0.5|@aws-crypto/sha256-browser@5.2.0",
       "author": "AWS Crypto Tools Team",
@@ -12627,8 +12656,7 @@
     },
     {
       "type": "library",
-      "name": "sha256-js",
-      "group": "@aws-crypto",
+      "name": "@aws-crypto/sha256-js",
       "version": "5.2.0",
       "bom-ref": "cogseed@0.0.5|@aws-crypto/sha256-js@5.2.0",
       "author": "AWS Crypto Tools Team",
@@ -12682,8 +12710,7 @@
     },
     {
       "type": "library",
-      "name": "core",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/core",
       "version": "3.974.15",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/core@3.974.15",
       "author": "AWS SDK for JavaScript Team",
@@ -12738,8 +12765,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-node",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-node",
       "version": "3.972.47",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-node@3.972.47",
       "author": "AWS SDK for JavaScript Team",
@@ -12794,8 +12820,7 @@
     },
     {
       "type": "library",
-      "name": "eventstream-handler-node",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/eventstream-handler-node",
       "version": "3.972.18",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/eventstream-handler-node@3.972.18",
       "author": "AWS SDK for JavaScript Team",
@@ -12849,8 +12874,7 @@
     },
     {
       "type": "library",
-      "name": "middleware-eventstream",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/middleware-eventstream",
       "version": "3.972.14",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/middleware-eventstream@3.972.14",
       "author": "AWS SDK for JavaScript Team",
@@ -12904,8 +12928,7 @@
     },
     {
       "type": "library",
-      "name": "middleware-websocket",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/middleware-websocket",
       "version": "3.972.23",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/middleware-websocket@3.972.23",
       "author": "AWS SDK for JavaScript Team",
@@ -12959,8 +12982,7 @@
     },
     {
       "type": "library",
-      "name": "token-providers",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/token-providers",
       "version": "3.1048.0",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/token-providers@3.1048.0",
       "author": "AWS SDK for JavaScript Team",
@@ -13015,8 +13037,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/types",
       "version": "3.973.9",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/types@3.973.9",
       "author": "AWS SDK for JavaScript Team",
@@ -13071,8 +13092,7 @@
     },
     {
       "type": "library",
-      "name": "core",
-      "group": "@smithy",
+      "name": "@smithy/core",
       "version": "3.24.5",
       "bom-ref": "cogseed@0.0.5|@smithy/core@3.24.5",
       "author": "AWS Smithy Team",
@@ -13126,8 +13146,7 @@
     },
     {
       "type": "library",
-      "name": "fetch-http-handler",
-      "group": "@smithy",
+      "name": "@smithy/fetch-http-handler",
       "version": "5.4.5",
       "bom-ref": "cogseed@0.0.5|@smithy/fetch-http-handler@5.4.5",
       "author": "AWS SDK for JavaScript Team",
@@ -13182,8 +13201,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@smithy",
+      "name": "@smithy/types",
       "version": "4.14.2",
       "bom-ref": "cogseed@0.0.5|@smithy/types@4.14.2",
       "author": "AWS Smithy Team",
@@ -13347,8 +13365,7 @@
     },
     {
       "type": "library",
-      "name": "semantic-conventions",
-      "group": "@opentelemetry",
+      "name": "@opentelemetry/semantic-conventions",
       "version": "1.41.1",
       "bom-ref": "cogseed@0.0.5|@opentelemetry/semantic-conventions@1.41.1",
       "author": "OpenTelemetry Authors",
@@ -13926,8 +13943,7 @@
     },
     {
       "type": "library",
-      "name": "aspromise",
-      "group": "@protobufjs",
+      "name": "@protobufjs/aspromise",
       "version": "1.1.2",
       "bom-ref": "cogseed@0.0.5|@protobufjs/aspromise@1.1.2",
       "author": "Daniel Wirtz",
@@ -13978,8 +13994,7 @@
     },
     {
       "type": "library",
-      "name": "base64",
-      "group": "@protobufjs",
+      "name": "@protobufjs/base64",
       "version": "1.1.2",
       "bom-ref": "cogseed@0.0.5|@protobufjs/base64@1.1.2",
       "author": "Daniel Wirtz",
@@ -14030,8 +14045,7 @@
     },
     {
       "type": "library",
-      "name": "codegen",
-      "group": "@protobufjs",
+      "name": "@protobufjs/codegen",
       "version": "2.0.5",
       "bom-ref": "cogseed@0.0.5|@protobufjs/codegen@2.0.5",
       "author": "Daniel Wirtz",
@@ -14082,8 +14096,7 @@
     },
     {
       "type": "library",
-      "name": "eventemitter",
-      "group": "@protobufjs",
+      "name": "@protobufjs/eventemitter",
       "version": "1.1.1",
       "bom-ref": "cogseed@0.0.5|@protobufjs/eventemitter@1.1.1",
       "author": "Daniel Wirtz",
@@ -14134,8 +14147,7 @@
     },
     {
       "type": "library",
-      "name": "fetch",
-      "group": "@protobufjs",
+      "name": "@protobufjs/fetch",
       "version": "1.1.1",
       "bom-ref": "cogseed@0.0.5|@protobufjs/fetch@1.1.1",
       "author": "Daniel Wirtz",
@@ -14186,8 +14198,7 @@
     },
     {
       "type": "library",
-      "name": "float",
-      "group": "@protobufjs",
+      "name": "@protobufjs/float",
       "version": "1.0.2",
       "bom-ref": "cogseed@0.0.5|@protobufjs/float@1.0.2",
       "author": "Daniel Wirtz",
@@ -14238,8 +14249,7 @@
     },
     {
       "type": "library",
-      "name": "path",
-      "group": "@protobufjs",
+      "name": "@protobufjs/path",
       "version": "1.1.2",
       "bom-ref": "cogseed@0.0.5|@protobufjs/path@1.1.2",
       "author": "Daniel Wirtz",
@@ -14290,8 +14300,7 @@
     },
     {
       "type": "library",
-      "name": "pool",
-      "group": "@protobufjs",
+      "name": "@protobufjs/pool",
       "version": "1.1.0",
       "bom-ref": "cogseed@0.0.5|@protobufjs/pool@1.1.0",
       "author": "Daniel Wirtz",
@@ -14342,8 +14351,7 @@
     },
     {
       "type": "library",
-      "name": "utf8",
-      "group": "@protobufjs",
+      "name": "@protobufjs/utf8",
       "version": "1.1.1",
       "bom-ref": "cogseed@0.0.5|@protobufjs/utf8@1.1.1",
       "author": "Daniel Wirtz",
@@ -16929,8 +16937,7 @@
     },
     {
       "type": "library",
-      "name": "trace-mapping",
-      "group": "@jridgewell",
+      "name": "@jridgewell/trace-mapping",
       "version": "0.3.31",
       "bom-ref": "cogseed@0.0.5|@jridgewell/trace-mapping@0.3.31",
       "author": "Justin Ridgewell",
@@ -17268,8 +17275,7 @@
     },
     {
       "type": "library",
-      "name": "parser",
-      "group": "@babel",
+      "name": "@babel/parser",
       "version": "7.29.7",
       "bom-ref": "cogseed@0.0.5|@babel/parser@7.29.7",
       "author": "The Babel Team",
@@ -17328,8 +17334,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@babel",
+      "name": "@babel/types",
       "version": "7.29.7",
       "bom-ref": "cogseed@0.0.5|@babel/types@7.29.7",
       "author": "The Babel Team",
@@ -17979,8 +17984,7 @@
     },
     {
       "type": "library",
-      "name": "asar",
-      "group": "@electron",
+      "name": "@electron/asar",
       "version": "3.4.1",
       "bom-ref": "cogseed@0.0.5|@electron/asar@3.4.1",
       "description": "Creating Electron app packages",
@@ -18209,8 +18213,7 @@
     },
     {
       "type": "library",
-      "name": "fuses",
-      "group": "@electron",
+      "name": "@electron/fuses",
       "version": "1.8.0",
       "bom-ref": "cogseed@0.0.5|@electron/fuses@1.8.0",
       "author": "Electron Community",
@@ -18326,8 +18329,7 @@
     },
     {
       "type": "library",
-      "name": "notarize",
-      "group": "@electron",
+      "name": "@electron/notarize",
       "version": "2.5.0",
       "bom-ref": "cogseed@0.0.5|@electron/notarize@2.5.0",
       "author": "Samuel Attard",
@@ -18447,8 +18449,7 @@
     },
     {
       "type": "library",
-      "name": "osx-sign",
-      "group": "@electron",
+      "name": "@electron/osx-sign",
       "version": "1.3.3",
       "bom-ref": "cogseed@0.0.5|@electron/osx-sign@1.3.3",
       "author": "electron",
@@ -18567,8 +18568,7 @@
     },
     {
       "type": "library",
-      "name": "universal",
-      "group": "@electron",
+      "name": "@electron/universal",
       "version": "2.0.3",
       "bom-ref": "cogseed@0.0.5|@electron/universal@2.0.3",
       "author": "Samuel Attard",
@@ -18857,8 +18857,7 @@
     },
     {
       "type": "library",
-      "name": "flatpak-bundler",
-      "group": "@malept",
+      "name": "@malept/flatpak-bundler",
       "version": "0.4.0",
       "bom-ref": "cogseed@0.0.5|@malept/flatpak-bundler@0.4.0",
       "author": "Matt Watson",
@@ -18978,8 +18977,7 @@
     },
     {
       "type": "library",
-      "name": "hashes",
-      "group": "@noble",
+      "name": "@noble/hashes",
       "version": "2.3.0",
       "bom-ref": "cogseed@0.0.5|@noble/hashes@2.3.0",
       "author": "Paul Miller",
@@ -19038,8 +19036,7 @@
     },
     {
       "type": "library",
-      "name": "webcrypto",
-      "group": "@peculiar",
+      "name": "@peculiar/webcrypto",
       "version": "1.7.1",
       "bom-ref": "cogseed@0.0.5|@peculiar/webcrypto@1.7.1",
       "author": "PeculiarVentures",
@@ -19098,8 +19095,7 @@
     },
     {
       "type": "library",
-      "name": "fs-extra",
-      "group": "@types",
+      "name": "@types/fs-extra",
       "version": "9.0.13",
       "bom-ref": "cogseed@0.0.5|@types/fs-extra@9.0.13",
       "description": "TypeScript definitions for fs-extra",
@@ -20769,8 +20765,7 @@
     },
     {
       "type": "library",
-      "name": "debug",
-      "group": "@types",
+      "name": "@types/debug",
       "version": "4.1.13",
       "bom-ref": "cogseed@0.0.5|@types/debug@4.1.13",
       "description": "TypeScript definitions for debug",
@@ -21688,8 +21683,7 @@
     },
     {
       "type": "library",
-      "name": "object-schema",
-      "group": "@eslint",
+      "name": "@eslint/object-schema",
       "version": "3.0.5",
       "bom-ref": "cogseed@0.0.5|@eslint/object-schema@3.0.5",
       "author": "Nicholas C. Zakas",
@@ -21748,8 +21742,7 @@
     },
     {
       "type": "library",
-      "name": "json-schema",
-      "group": "@types",
+      "name": "@types/json-schema",
       "version": "7.0.15",
       "bom-ref": "cogseed@0.0.5|@types/json-schema@7.0.15",
       "description": "TypeScript definitions for json-schema",
@@ -21862,8 +21855,7 @@
     },
     {
       "type": "library",
-      "name": "core",
-      "group": "@humanfs",
+      "name": "@humanfs/core",
       "version": "0.19.2",
       "bom-ref": "cogseed@0.0.5|@humanfs/core@0.19.2",
       "author": "Nicholas C. Zakas",
@@ -21922,8 +21914,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@humanfs",
+      "name": "@humanfs/types",
       "version": "0.15.0",
       "bom-ref": "cogseed@0.0.5|@humanfs/types@0.15.0",
       "author": "Nicholas C. Zakas",
@@ -22092,8 +22083,7 @@
     },
     {
       "type": "library",
-      "name": "esrecurse",
-      "group": "@types",
+      "name": "@types/esrecurse",
       "version": "4.3.1",
       "bom-ref": "cogseed@0.0.5|@types/esrecurse@4.3.1",
       "description": "TypeScript definitions for esrecurse",
@@ -22956,8 +22946,7 @@
     },
     {
       "type": "library",
-      "name": "tokenizers-darwin-universal",
-      "group": "@anush008",
+      "name": "@anush008/tokenizers-darwin-universal",
       "version": "0.0.0",
       "bom-ref": "cogseed@0.0.5|@anush008/tokenizers-darwin-universal@0.0.0",
       "description": "Multi-arch builds of HuggingFace tokenizers",
@@ -23012,8 +23001,7 @@
     },
     {
       "type": "library",
-      "name": "tasks",
-      "group": "@huggingface",
+      "name": "@huggingface/tasks",
       "version": "0.19.90",
       "bom-ref": "cogseed@0.0.5|@huggingface/tasks@0.19.90",
       "author": "Hugging Face",
@@ -23215,8 +23203,7 @@
     },
     {
       "type": "library",
-      "name": "file-ops",
-      "group": "@jimp",
+      "name": "@jimp/file-ops",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.0.5|@jimp/file-ops@1.6.1",
       "author": "Andrew Lisowski",
@@ -24557,8 +24544,7 @@
     },
     {
       "type": "library",
-      "name": "canvas-darwin-arm64",
-      "group": "@napi-rs",
+      "name": "@napi-rs/canvas-darwin-arm64",
       "version": "1.0.7",
       "bom-ref": "cogseed@0.0.5|@napi-rs/canvas-darwin-arm64@1.0.7",
       "description": "Canvas for Node.js with skia backend",
@@ -24672,8 +24658,7 @@
     },
     {
       "type": "library",
-      "name": "darwin-arm64",
-      "group": "@esbuild",
+      "name": "@esbuild/darwin-arm64",
       "version": "0.27.7",
       "bom-ref": "cogseed@0.0.5|@esbuild/darwin-arm64@0.27.7",
       "description": "The macOS ARM 64-bit binary for esbuild, a JavaScript bundler.",
@@ -24768,8 +24753,7 @@
     },
     {
       "type": "library",
-      "name": "scope-manager",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/scope-manager",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/scope-manager@8.67.0",
       "description": "TypeScript scope analyser for ESLint",
@@ -24827,8 +24811,7 @@
     },
     {
       "type": "library",
-      "name": "type-utils",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/type-utils",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/type-utils@8.67.0",
       "description": "Type utilities for working with TypeScript + ESLint together",
@@ -24886,8 +24869,7 @@
     },
     {
       "type": "library",
-      "name": "visitor-keys",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/visitor-keys",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/visitor-keys@8.67.0",
       "description": "Visitor keys used to help traverse the TypeScript-ESTree AST",
@@ -25004,8 +24986,7 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/types",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/types@8.67.0",
       "description": "Types for the TypeScript-ESTree AST spec",
@@ -25063,8 +25044,7 @@
     },
     {
       "type": "library",
-      "name": "project-service",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/project-service",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/project-service@8.67.0",
       "description": "Standalone TypeScript project service wrapper for linting.",
@@ -25122,8 +25102,7 @@
     },
     {
       "type": "library",
-      "name": "tsconfig-utils",
-      "group": "@typescript-eslint",
+      "name": "@typescript-eslint/tsconfig-utils",
       "version": "8.67.0",
       "bom-ref": "cogseed@0.0.5|@typescript-eslint/tsconfig-utils@8.67.0",
       "description": "Utilities for collecting TSConfigs for linting scenarios.",
@@ -25181,8 +25160,7 @@
     },
     {
       "type": "library",
-      "name": "spec",
-      "group": "@standard-schema",
+      "name": "@standard-schema/spec",
       "version": "1.1.0",
       "bom-ref": "cogseed@0.0.5|@standard-schema/spec@1.1.0",
       "author": "Colin McDonnell",
@@ -25237,8 +25215,7 @@
     },
     {
       "type": "library",
-      "name": "chai",
-      "group": "@types",
+      "name": "@types/chai",
       "version": "5.2.3",
       "bom-ref": "cogseed@0.0.5|@types/chai@5.2.3",
       "description": "TypeScript definitions for chai",
@@ -25351,8 +25328,7 @@
     },
     {
       "type": "library",
-      "name": "sourcemap-codec",
-      "group": "@jridgewell",
+      "name": "@jridgewell/sourcemap-codec",
       "version": "1.5.5",
       "bom-ref": "cogseed@0.0.5|@jridgewell/sourcemap-codec@1.5.5",
       "author": "Justin Ridgewell",
@@ -25467,8 +25443,8 @@
     {
       "type": "library",
       "name": "lightningcss",
-      "version": "1.32.0",
-      "bom-ref": "cogseed@0.0.5|lightningcss@1.32.0",
+      "version": "1.33.0",
+      "bom-ref": "cogseed@0.0.5|lightningcss@1.33.0",
       "description": "A CSS parser, transformer, and minifier written in Rust",
       "licenses": [
         {
@@ -25478,7 +25454,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/lightningcss@1.32.0",
+      "purl": "pkg:npm/lightningcss@1.33.0",
       "externalReferences": [
         {
           "url": "git+https://github.com/parcel-bundler/lightningcss.git",
@@ -25496,12 +25472,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.32.0.tgz",
+          "url": "https://registry.npmjs.org/lightningcss/-/lightningcss-1.33.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "357601ce29cdadb95fada3c6cab6cfa03d7d0b587d95f23fd66ce0598bd75137b8d781b3fd7d450f65c165264ceeb453acc03c24bdceb4068689fac82a1439c9"
+              "content": "5a4503ae88ee26cd3192019fdae756c5adf21814713edc54901efd8ba68264b46073b3ccf1f65ef53a2c7cf0dcbc4a5065bb850129c762644b04b51b98b38820"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -25584,8 +25560,8 @@
     {
       "type": "library",
       "name": "rolldown",
-      "version": "1.1.5",
-      "bom-ref": "cogseed@0.0.5|rolldown@1.1.5",
+      "version": "1.2.5",
+      "bom-ref": "cogseed@0.0.5|rolldown@1.2.5",
       "description": "Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API.",
       "licenses": [
         {
@@ -25595,7 +25571,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/rolldown@1.1.5",
+      "purl": "pkg:npm/rolldown@1.2.5",
       "externalReferences": [
         {
           "url": "git+https://github.com/rolldown/rolldown.git#packages/rolldown",
@@ -25613,12 +25589,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/rolldown/-/rolldown-1.1.5.tgz",
+          "url": "https://registry.npmjs.org/rolldown/-/rolldown-1.2.5.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "b7dcf6f5c2635dffefc50f1dca1092a6de87e9a4b01d393c713e48de2cba48c5ee169939981e8f2fa5df0bc3c2c2b3d3c7ddee7702949bd1d1b5e0254c604b88"
+              "content": "543d881393d41b83a3f33cf6546ca4898779c1b9e3748892b0d41bf10bb907e9e8129f80efc9aeda256fa69dbb83c7acd784e4f6ba1f36ce5392ef624024b87c"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -25729,8 +25705,7 @@
     },
     {
       "type": "library",
-      "name": "runtime",
-      "group": "@babel",
+      "name": "@babel/runtime",
       "version": "7.29.7",
       "bom-ref": "cogseed@0.0.5|@babel/runtime@7.29.7",
       "author": "The Babel Team",
@@ -25836,8 +25811,7 @@
     },
     {
       "type": "library",
-      "name": "supports-web-crypto",
-      "group": "@aws-crypto",
+      "name": "@aws-crypto/supports-web-crypto",
       "version": "5.2.0",
       "bom-ref": "cogseed@0.0.5|@aws-crypto/supports-web-crypto@5.2.0",
       "author": "AWS Crypto Tools Team",
@@ -25888,8 +25862,7 @@
     },
     {
       "type": "library",
-      "name": "util",
-      "group": "@aws-crypto",
+      "name": "@aws-crypto/util",
       "version": "5.2.0",
       "bom-ref": "cogseed@0.0.5|@aws-crypto/util@5.2.0",
       "author": "AWS Crypto Tools Team",
@@ -25939,8 +25912,7 @@
     },
     {
       "type": "library",
-      "name": "util-locate-window",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/util-locate-window",
       "version": "3.965.5",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/util-locate-window@3.965.5",
       "author": "AWS SDK for JavaScript Team",
@@ -25994,8 +25966,7 @@
     },
     {
       "type": "library",
-      "name": "util-utf8",
-      "group": "@smithy",
+      "name": "@smithy/util-utf8",
       "version": "2.3.0",
       "bom-ref": "cogseed@0.0.5|@smithy/util-utf8@2.3.0",
       "author": "AWS SDK for JavaScript Team",
@@ -26050,8 +26021,7 @@
     },
     {
       "type": "library",
-      "name": "xml-builder",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/xml-builder",
       "version": "3.972.26",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/xml-builder@3.972.26",
       "author": "AWS SDK for JavaScript Team",
@@ -26106,8 +26076,7 @@
     },
     {
       "type": "library",
-      "name": "lambda-invoke-store",
-      "group": "@aws",
+      "name": "@aws/lambda-invoke-store",
       "version": "0.2.4",
       "bom-ref": "cogseed@0.0.5|@aws/lambda-invoke-store@0.2.4",
       "author": "Amazon Web Services",
@@ -26162,8 +26131,7 @@
     },
     {
       "type": "library",
-      "name": "signature-v4",
-      "group": "@smithy",
+      "name": "@smithy/signature-v4",
       "version": "5.4.5",
       "bom-ref": "cogseed@0.0.5|@smithy/signature-v4@5.4.5",
       "author": "AWS SDK for JavaScript Team",
@@ -26269,8 +26237,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-env",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-env",
       "version": "3.972.41",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-env@3.972.41",
       "author": "AWS SDK for JavaScript Team",
@@ -26325,8 +26292,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-http",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-http",
       "version": "3.972.43",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-http@3.972.43",
       "author": "AWS SDK for JavaScript Team",
@@ -26439,8 +26405,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-ini",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-ini",
       "version": "3.972.46",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-ini@3.972.46",
       "author": "AWS SDK for JavaScript Team",
@@ -26495,8 +26460,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-process",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-process",
       "version": "3.972.41",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-process@3.972.41",
       "author": "AWS SDK for JavaScript Team",
@@ -26551,8 +26515,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-sso",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-sso",
       "version": "3.972.45",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-sso@3.972.45",
       "author": "AWS SDK for JavaScript Team",
@@ -26665,8 +26628,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-web-identity",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-web-identity",
       "version": "3.972.45",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-web-identity@3.972.45",
       "author": "AWS SDK for JavaScript Team",
@@ -26721,8 +26683,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-imds",
-      "group": "@smithy",
+      "name": "@smithy/credential-provider-imds",
       "version": "4.3.6",
       "bom-ref": "cogseed@0.0.5|@smithy/credential-provider-imds@4.3.6",
       "author": "AWS SDK for JavaScript Team",
@@ -26777,8 +26738,7 @@
     },
     {
       "type": "library",
-      "name": "nested-clients",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/nested-clients",
       "version": "3.997.13",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/nested-clients@3.997.13",
       "author": "AWS SDK for JavaScript Team",
@@ -26891,8 +26851,7 @@
     },
     {
       "type": "library",
-      "name": "crc32",
-      "group": "@aws-crypto",
+      "name": "@aws-crypto/crc32",
       "version": "5.2.0",
       "bom-ref": "cogseed@0.0.5|@aws-crypto/crc32@5.2.0",
       "author": "AWS Crypto Tools Team",
@@ -27213,8 +27172,7 @@
     },
     {
       "type": "library",
-      "name": "retry",
-      "group": "@types",
+      "name": "@types/retry",
       "version": "0.12.0",
       "bom-ref": "cogseed@0.0.5|@types/retry@0.12.0",
       "description": "TypeScript definitions for retry",
@@ -28624,8 +28582,7 @@
     },
     {
       "type": "library",
-      "name": "resolve-uri",
-      "group": "@jridgewell",
+      "name": "@jridgewell/resolve-uri",
       "version": "3.1.2",
       "bom-ref": "cogseed@0.0.5|@jridgewell/resolve-uri@3.1.2",
       "author": "Justin Ridgewell",
@@ -28743,8 +28700,7 @@
     },
     {
       "type": "library",
-      "name": "helper-string-parser",
-      "group": "@babel",
+      "name": "@babel/helper-string-parser",
       "version": "7.29.7",
       "bom-ref": "cogseed@0.0.5|@babel/helper-string-parser@7.29.7",
       "author": "The Babel Team",
@@ -28803,8 +28759,7 @@
     },
     {
       "type": "library",
-      "name": "helper-validator-identifier",
-      "group": "@babel",
+      "name": "@babel/helper-validator-identifier",
       "version": "7.29.7",
       "bom-ref": "cogseed@0.0.5|@babel/helper-validator-identifier@7.29.7",
       "author": "The Babel Team",
@@ -30154,8 +30109,7 @@
     },
     {
       "type": "library",
-      "name": "asn1-schema",
-      "group": "@peculiar",
+      "name": "@peculiar/asn1-schema",
       "version": "2.9.3",
       "bom-ref": "cogseed@0.0.5|@peculiar/asn1-schema@2.9.3",
       "author": "PeculiarVentures, LLC",
@@ -30210,8 +30164,7 @@
     },
     {
       "type": "library",
-      "name": "json-schema",
-      "group": "@peculiar",
+      "name": "@peculiar/json-schema",
       "version": "1.1.12",
       "bom-ref": "cogseed@0.0.5|@peculiar/json-schema@1.1.12",
       "author": "PeculiarVentures, Inc",
@@ -30270,8 +30223,7 @@
     },
     {
       "type": "library",
-      "name": "utils",
-      "group": "@peculiar",
+      "name": "@peculiar/utils",
       "version": "2.0.3",
       "bom-ref": "cogseed@0.0.5|@peculiar/utils@2.0.3",
       "author": "PeculiarVentures",
@@ -31410,8 +31362,7 @@
     },
     {
       "type": "library",
-      "name": "ms",
-      "group": "@types",
+      "name": "@types/ms",
       "version": "2.1.0",
       "bom-ref": "cogseed@0.0.5|@types/ms@2.1.0",
       "description": "TypeScript definitions for ms",
@@ -32420,8 +32371,7 @@
     },
     {
       "type": "library",
-      "name": "inflate",
-      "group": "@tokenizer",
+      "name": "@tokenizer/inflate",
       "version": "0.4.1",
       "bom-ref": "cogseed@0.0.5|@tokenizer/inflate@0.4.1",
       "author": "Borewit",
@@ -33046,8 +32996,7 @@
     },
     {
       "type": "library",
-      "name": "deep-eql",
-      "group": "@types",
+      "name": "@types/deep-eql",
       "version": "4.0.2",
       "bom-ref": "cogseed@0.0.5|@types/deep-eql@4.0.2",
       "description": "TypeScript definitions for deep-eql",
@@ -33161,8 +33110,8 @@
     {
       "type": "library",
       "name": "lightningcss-darwin-arm64",
-      "version": "1.32.0",
-      "bom-ref": "cogseed@0.0.5|lightningcss-darwin-arm64@1.32.0",
+      "version": "1.33.0",
+      "bom-ref": "cogseed@0.0.5|lightningcss-darwin-arm64@1.33.0",
       "description": "A CSS parser, transformer, and minifier written in Rust",
       "scope": "optional",
       "licenses": [
@@ -33173,7 +33122,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/lightningcss-darwin-arm64@1.32.0",
+      "purl": "pkg:npm/lightningcss-darwin-arm64@1.33.0",
       "externalReferences": [
         {
           "url": "git+https://github.com/parcel-bundler/lightningcss.git",
@@ -33191,12 +33140,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/lightningcss-darwin-arm64/-/lightningcss-darwin-arm64-1.32.0.tgz",
+          "url": "https://registry.npmjs.org/lightningcss-darwin-arm64/-/lightningcss-darwin-arm64-1.33.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "473786f49bb96da83606fd7f97095526f044deae93b57b247592cb0b27e0e69b7e1cbcfd06a94808eecb64ced51cd4d39ffe4f4611c50528e4e65738726b1c3d"
+              "content": "49c89acfc79e9cd4ca9fd6f7b7bfb1af48a94e9f58c4a418e27a704379ab46e2f404054704bc99c687e168a04056dce6b5167fcd3ca8d3fb68e01d6e586fc38e"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -33333,10 +33282,9 @@
     },
     {
       "type": "library",
-      "name": "types",
-      "group": "@oxc-project",
-      "version": "0.139.0",
-      "bom-ref": "cogseed@0.0.5|@oxc-project/types@0.139.0",
+      "name": "@oxc-project/types",
+      "version": "0.146.0",
+      "bom-ref": "cogseed@0.0.5|@oxc-project/types@0.146.0",
       "author": "Boshen and oxc contributors",
       "description": "Types for Oxc AST nodes",
       "licenses": [
@@ -33347,7 +33295,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40oxc-project/types@0.139.0",
+      "purl": "pkg:npm/%40oxc-project/types@0.146.0",
       "externalReferences": [
         {
           "url": "git+https://github.com/oxc-project/oxc.git#npm/oxc-types",
@@ -33365,12 +33313,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@oxc-project/types/-/types-0.139.0.tgz",
+          "url": "https://registry.npmjs.org/@oxc-project/types/-/types-0.146.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "afd807a61b42b3ed4cec9d29c3a4a7fe187f5a96bf890ace3a4acd02554b17f807abefc22661c858a2945217568dc0fa0886bc89d6abb290ac012897097bc553"
+              "content": "5c2d10b279e155eeec2c85a662674fc3bc793f48785bcbd453736fd724a0597b6f0b3f0d8b3a00129197034b0e628250576465d772e0511007439708e482c248"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -33389,10 +33337,9 @@
     },
     {
       "type": "library",
-      "name": "binding-darwin-arm64",
-      "group": "@rolldown",
-      "version": "1.1.5",
-      "bom-ref": "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.1.5",
+      "name": "@rolldown/binding-darwin-arm64",
+      "version": "1.2.5",
+      "bom-ref": "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.2.5",
       "description": "Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API.",
       "scope": "optional",
       "licenses": [
@@ -33403,7 +33350,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/%40rolldown/binding-darwin-arm64@1.1.5",
+      "purl": "pkg:npm/%40rolldown/binding-darwin-arm64@1.2.5",
       "externalReferences": [
         {
           "url": "git+https://github.com/rolldown/rolldown.git#packages/rolldown",
@@ -33421,12 +33368,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/@rolldown/binding-darwin-arm64/-/binding-darwin-arm64-1.1.5.tgz",
+          "url": "https://registry.npmjs.org/@rolldown/binding-darwin-arm64/-/binding-darwin-arm64-1.2.5.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "e75067c7da4d88c44a49436d05fc9290d27dbcc53d1e1dc8d68cc377a8323cf63369709f9e9b547046715c66059feba5d9db5c3148aa191d586a2d8ad74ba84f"
+              "content": "74ae106a4238da7cd68094f9b26e32e32fcefff0f83b133be7f707dbc44b57e9f320df4063e62c6ee515ad44e394b8d747abe9cb115b4ac6e636e27a04ff6cc3"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -33449,8 +33396,7 @@
     },
     {
       "type": "library",
-      "name": "pluginutils",
-      "group": "@rolldown",
+      "name": "@rolldown/pluginutils",
       "version": "1.0.1",
       "bom-ref": "cogseed@0.0.5|@rolldown/pluginutils@1.0.1",
       "description": "Plugin utilities for Rolldown",
@@ -33504,8 +33450,7 @@
     },
     {
       "type": "library",
-      "name": "util-buffer-from",
-      "group": "@smithy",
+      "name": "@smithy/util-buffer-from",
       "version": "2.2.0",
       "bom-ref": "cogseed@0.0.5|@smithy/util-buffer-from@2.2.0",
       "author": "AWS SDK for JavaScript Team",
@@ -33610,8 +33555,7 @@
     },
     {
       "type": "library",
-      "name": "credential-provider-login",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/credential-provider-login",
       "version": "3.972.45",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/credential-provider-login@3.972.45",
       "author": "AWS SDK for JavaScript Team",
@@ -33666,8 +33610,7 @@
     },
     {
       "type": "library",
-      "name": "signature-v4-multi-region",
-      "group": "@aws-sdk",
+      "name": "@aws-sdk/signature-v4-multi-region",
       "version": "3.996.30",
       "bom-ref": "cogseed@0.0.5|@aws-sdk/signature-v4-multi-region@3.996.30",
       "author": "AWS SDK for JavaScript Team",
@@ -34534,8 +34477,7 @@
     },
     {
       "type": "library",
-      "name": "is",
-      "group": "@sindresorhus",
+      "name": "@sindresorhus/is",
       "version": "4.6.0",
       "bom-ref": "cogseed@0.0.5|@sindresorhus/is@4.6.0",
       "author": "Sindre Sorhus",
@@ -34594,8 +34536,7 @@
     },
     {
       "type": "library",
-      "name": "http-timer",
-      "group": "@szmarczak",
+      "name": "@szmarczak/http-timer",
       "version": "4.0.6",
       "bom-ref": "cogseed@0.0.5|@szmarczak/http-timer@4.0.6",
       "author": "Szymon Marczak",
@@ -34654,8 +34595,7 @@
     },
     {
       "type": "library",
-      "name": "cacheable-request",
-      "group": "@types",
+      "name": "@types/cacheable-request",
       "version": "6.0.3",
       "bom-ref": "cogseed@0.0.5|@types/cacheable-request@6.0.3",
       "description": "TypeScript definitions for cacheable-request",
@@ -34709,8 +34649,7 @@
     },
     {
       "type": "library",
-      "name": "responselike",
-      "group": "@types",
+      "name": "@types/responselike",
       "version": "1.0.3",
       "bom-ref": "cogseed@0.0.5|@types/responselike@1.0.3",
       "description": "TypeScript definitions for responselike",
@@ -35568,8 +35507,7 @@
     },
     {
       "type": "library",
-      "name": "windows-sign",
-      "group": "@electron",
+      "name": "@electron/windows-sign",
       "version": "1.2.2",
       "bom-ref": "cogseed@0.0.5|@electron/windows-sign@1.2.2",
       "author": "Felix Rieseberg",
@@ -36218,8 +36156,7 @@
     },
     {
       "type": "library",
-      "name": "token",
-      "group": "@tokenizer",
+      "name": "@tokenizer/token",
       "version": "0.3.0",
       "bom-ref": "cogseed@0.0.5|@tokenizer/token@0.3.0",
       "author": "Borewit",
@@ -36270,8 +36207,7 @@
     },
     {
       "type": "library",
-      "name": "text-codec",
-      "group": "@borewit",
+      "name": "@borewit/text-codec",
       "version": "0.2.2",
       "bom-ref": "cogseed@0.0.5|@borewit/text-codec@0.2.2",
       "author": "Borewit",
@@ -36362,8 +36298,7 @@
     },
     {
       "type": "library",
-      "name": "is-array-buffer",
-      "group": "@smithy",
+      "name": "@smithy/is-array-buffer",
       "version": "2.2.0",
       "bom-ref": "cogseed@0.0.5|@smithy/is-array-buffer@2.2.0",
       "author": "AWS SDK for JavaScript Team",
@@ -36418,8 +36353,7 @@
     },
     {
       "type": "library",
-      "name": "entities",
-      "group": "@nodable",
+      "name": "@nodable/entities",
       "version": "2.1.1",
       "bom-ref": "cogseed@0.0.5|@nodable/entities@2.1.1",
       "author": "Amit Gupta",
@@ -37410,8 +37344,7 @@
     },
     {
       "type": "library",
-      "name": "http-cache-semantics",
-      "group": "@types",
+      "name": "@types/http-cache-semantics",
       "version": "4.2.0",
       "bom-ref": "cogseed@0.0.5|@types/http-cache-semantics@4.2.0",
       "description": "TypeScript definitions for http-cache-semantics",
@@ -37465,8 +37398,7 @@
     },
     {
       "type": "library",
-      "name": "keyv",
-      "group": "@types",
+      "name": "@types/keyv",
       "version": "3.1.4",
       "bom-ref": "cogseed@0.0.5|@types/keyv@3.1.4",
       "description": "TypeScript definitions for keyv",
@@ -38663,11 +38595,11 @@
         "cogseed@0.0.5|@earendil-works/pi-ai@0.79.10",
         "cogseed@0.0.5|@electron/rebuild@4.2.0",
         "cogseed@0.0.5|@eslint/js@10.0.1",
-        "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.72.0",
+        "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.73.0",
         "cogseed@0.0.5|@modelcontextprotocol/sdk@1.29.0",
         "cogseed@0.0.5|@types/adm-zip@0.5.8",
         "cogseed@0.0.5|@types/node@25.6.0",
-        "cogseed@0.0.5|@vitest/coverage-v8@4.1.10",
+        "cogseed@0.0.5|@vitest/coverage-v8@4.1.11",
         "cogseed@0.0.5|@wecom/aibot-node-sdk@1.0.7",
         "cogseed@0.0.5|7zip-bin@5.2.0",
         "cogseed@0.0.5|adm-zip@0.6.0",
@@ -38675,13 +38607,14 @@
         "cogseed@0.0.5|better-sqlite3@12.10.0",
         "cogseed@0.0.5|electron-builder@26.15.7",
         "cogseed@0.0.5|electron-log@5.4.3",
-        "cogseed@0.0.5|electron@41.10.5",
+        "cogseed@0.0.5|electron@41.10.6",
         "cogseed@0.0.5|eslint@10.8.1",
         "cogseed@0.0.5|fastembed@2.1.0",
         "cogseed@0.0.5|jimp@1.6.1",
-        "cogseed@0.0.5|mammoth@1.12.0",
+        "cogseed@0.0.5|mammoth@1.12.1",
         "cogseed@0.0.5|node-pty@1.0.0",
         "cogseed@0.0.5|pdfjs-dist@6.2.108",
+        "cogseed@0.0.5|sherpa-onnx-node@1.13.6",
         "cogseed@0.0.5|socks-proxy-agent@8.0.5",
         "cogseed@0.0.5|sqlite-vec@0.1.9",
         "cogseed@0.0.5|tar@7.5.20",
@@ -38689,7 +38622,7 @@
         "cogseed@0.0.5|typescript-eslint@8.67.0",
         "cogseed@0.0.5|typescript@6.0.3",
         "cogseed@0.0.5|undici@7.29.0",
-        "cogseed@0.0.5|vitest@4.1.10",
+        "cogseed@0.0.5|vitest@4.1.11",
         "cogseed@0.0.5|ws@8.21.3",
         "cogseed@0.0.5|yaml@2.9.0",
         "cogseed@0.0.5|zod@3.25.76"
@@ -38735,7 +38668,7 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.72.0",
+      "ref": "cogseed@0.0.5|@larksuiteoapi/node-sdk@1.73.0",
       "dependsOn": [
         "cogseed@0.0.5|axios@1.19.0",
         "cogseed@0.0.5|lodash.identity@3.0.0",
@@ -38793,10 +38726,10 @@
       "ref": "cogseed@0.0.5|@types/node@25.6.0|undici-types@7.19.2"
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/coverage-v8@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/coverage-v8@4.1.11",
       "dependsOn": [
         "cogseed@0.0.5|@bcoe/v8-coverage@1.0.2",
-        "cogseed@0.0.5|@vitest/utils@4.1.10",
+        "cogseed@0.0.5|@vitest/utils@4.1.11",
         "cogseed@0.0.5|ast-v8-to-istanbul@1.0.5",
         "cogseed@0.0.5|istanbul-lib-coverage@3.2.2",
         "cogseed@0.0.5|istanbul-lib-report@3.0.1",
@@ -38805,7 +38738,7 @@
         "cogseed@0.0.5|obug@2.1.1",
         "cogseed@0.0.5|std-env@4.2.0",
         "cogseed@0.0.5|tinyrainbow@3.1.0",
-        "cogseed@0.0.5|vitest@4.1.10"
+        "cogseed@0.0.5|vitest@4.1.11"
       ]
     },
     {
@@ -38854,15 +38787,15 @@
       "ref": "cogseed@0.0.5|electron-log@5.4.3"
     },
     {
-      "ref": "cogseed@0.0.5|electron@41.10.5",
+      "ref": "cogseed@0.0.5|electron@41.10.6",
       "dependsOn": [
         "cogseed@0.0.5|@electron-internal/extract-zip@1.0.5",
         "cogseed@0.0.5|@electron/get@5.1.0",
-        "cogseed@0.0.5|electron@41.10.5|@types/node@24.12.4"
+        "cogseed@0.0.5|electron@41.10.6|@types/node@24.12.4"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|electron@41.10.5|@types/node@24.12.4",
+      "ref": "cogseed@0.0.5|electron@41.10.6|@types/node@24.12.4",
       "dependsOn": [
         "cogseed@0.0.5|undici-types@7.16.0"
       ]
@@ -38958,7 +38891,7 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|mammoth@1.12.0",
+      "ref": "cogseed@0.0.5|mammoth@1.12.1",
       "dependsOn": [
         "cogseed@0.0.5|@xmldom/xmldom@0.8.13",
         "cogseed@0.0.5|argparse@1.0.10",
@@ -38982,6 +38915,12 @@
       "ref": "cogseed@0.0.5|pdfjs-dist@6.2.108",
       "dependsOn": [
         "cogseed@0.0.5|@napi-rs/canvas@1.0.7"
+      ]
+    },
+    {
+      "ref": "cogseed@0.0.5|sherpa-onnx-node@1.13.6",
+      "dependsOn": [
+        "cogseed@0.0.5|sherpa-onnx-darwin-arm64@1.13.6"
       ]
     },
     {
@@ -39037,19 +38976,19 @@
       "ref": "cogseed@0.0.5|undici@7.29.0"
     },
     {
-      "ref": "cogseed@0.0.5|vitest@4.1.10",
+      "ref": "cogseed@0.0.5|vitest@4.1.11",
       "dependsOn": [
         "cogseed@0.0.5|@opentelemetry/api@1.9.0",
         "cogseed@0.0.5|@types/node@25.6.0",
-        "cogseed@0.0.5|@vitest/coverage-v8@4.1.10",
-        "cogseed@0.0.5|@vitest/expect@4.1.10",
-        "cogseed@0.0.5|@vitest/mocker@4.1.10",
-        "cogseed@0.0.5|@vitest/pretty-format@4.1.10",
-        "cogseed@0.0.5|@vitest/runner@4.1.10",
-        "cogseed@0.0.5|@vitest/snapshot@4.1.10",
-        "cogseed@0.0.5|@vitest/spy@4.1.10",
-        "cogseed@0.0.5|@vitest/utils@4.1.10",
-        "cogseed@0.0.5|vitest@4.1.10|es-module-lexer@2.0.0",
+        "cogseed@0.0.5|@vitest/coverage-v8@4.1.11",
+        "cogseed@0.0.5|@vitest/expect@4.1.11",
+        "cogseed@0.0.5|@vitest/mocker@4.1.11",
+        "cogseed@0.0.5|@vitest/pretty-format@4.1.11",
+        "cogseed@0.0.5|@vitest/runner@4.1.11",
+        "cogseed@0.0.5|@vitest/snapshot@4.1.11",
+        "cogseed@0.0.5|@vitest/spy@4.1.11",
+        "cogseed@0.0.5|@vitest/utils@4.1.11",
+        "cogseed@0.0.5|vitest@4.1.11|es-module-lexer@2.0.0",
         "cogseed@0.0.5|expect-type@1.3.0",
         "cogseed@0.0.5|magic-string@0.30.21",
         "cogseed@0.0.5|obug@2.1.1",
@@ -39057,18 +38996,18 @@
         "cogseed@0.0.5|picomatch@4.0.5",
         "cogseed@0.0.5|std-env@4.2.0",
         "cogseed@0.0.5|tinybench@2.9.0",
-        "cogseed@0.0.5|vitest@4.1.10|tinyexec@1.1.1",
+        "cogseed@0.0.5|vitest@4.1.11|tinyexec@1.1.1",
         "cogseed@0.0.5|tinyglobby@0.2.17",
         "cogseed@0.0.5|tinyrainbow@3.1.0",
-        "cogseed@0.0.5|vite@8.1.5",
+        "cogseed@0.0.5|vite@8.2.2",
         "cogseed@0.0.5|why-is-node-running@2.3.0"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|vitest@4.1.10|es-module-lexer@2.0.0"
+      "ref": "cogseed@0.0.5|vitest@4.1.11|es-module-lexer@2.0.0"
     },
     {
-      "ref": "cogseed@0.0.5|vitest@4.1.10|tinyexec@1.1.1"
+      "ref": "cogseed@0.0.5|vitest@4.1.11|tinyexec@1.1.1"
     },
     {
       "ref": "cogseed@0.0.5|ws@8.21.3"
@@ -39387,9 +39326,9 @@
       "ref": "cogseed@0.0.5|@bcoe/v8-coverage@1.0.2"
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/utils@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/utils@4.1.11",
       "dependsOn": [
-        "cogseed@0.0.5|@vitest/pretty-format@4.1.10",
+        "cogseed@0.0.5|@vitest/pretty-format@4.1.11",
         "cogseed@0.0.5|convert-source-map@2.0.0",
         "cogseed@0.0.5|tinyrainbow@3.1.0"
       ]
@@ -40146,6 +40085,9 @@
       ]
     },
     {
+      "ref": "cogseed@0.0.5|sherpa-onnx-darwin-arm64@1.13.6"
+    },
+    {
       "ref": "cogseed@0.0.5|agent-base@7.1.4"
     },
     {
@@ -40249,49 +40191,49 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/expect@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/expect@4.1.11",
       "dependsOn": [
         "cogseed@0.0.5|@standard-schema/spec@1.1.0",
         "cogseed@0.0.5|@types/chai@5.2.3",
-        "cogseed@0.0.5|@vitest/spy@4.1.10",
-        "cogseed@0.0.5|@vitest/utils@4.1.10",
+        "cogseed@0.0.5|@vitest/spy@4.1.11",
+        "cogseed@0.0.5|@vitest/utils@4.1.11",
         "cogseed@0.0.5|chai@6.2.2",
         "cogseed@0.0.5|tinyrainbow@3.1.0"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/mocker@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/mocker@4.1.11",
       "dependsOn": [
-        "cogseed@0.0.5|@vitest/spy@4.1.10",
+        "cogseed@0.0.5|@vitest/spy@4.1.11",
         "cogseed@0.0.5|estree-walker@3.0.3",
         "cogseed@0.0.5|magic-string@0.30.21",
-        "cogseed@0.0.5|vite@8.1.5"
+        "cogseed@0.0.5|vite@8.2.2"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/pretty-format@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/pretty-format@4.1.11",
       "dependsOn": [
         "cogseed@0.0.5|tinyrainbow@3.1.0"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/runner@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/runner@4.1.11",
       "dependsOn": [
-        "cogseed@0.0.5|@vitest/utils@4.1.10",
+        "cogseed@0.0.5|@vitest/utils@4.1.11",
         "cogseed@0.0.5|pathe@2.0.3"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/snapshot@4.1.10",
+      "ref": "cogseed@0.0.5|@vitest/snapshot@4.1.11",
       "dependsOn": [
-        "cogseed@0.0.5|@vitest/pretty-format@4.1.10",
-        "cogseed@0.0.5|@vitest/utils@4.1.10",
+        "cogseed@0.0.5|@vitest/pretty-format@4.1.11",
+        "cogseed@0.0.5|@vitest/utils@4.1.11",
         "cogseed@0.0.5|magic-string@0.30.21",
         "cogseed@0.0.5|pathe@2.0.3"
       ]
     },
     {
-      "ref": "cogseed@0.0.5|@vitest/spy@4.1.10"
+      "ref": "cogseed@0.0.5|@vitest/spy@4.1.11"
     },
     {
       "ref": "cogseed@0.0.5|expect-type@1.3.0"
@@ -40319,16 +40261,16 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|vite@8.1.5",
+      "ref": "cogseed@0.0.5|vite@8.2.2",
       "dependsOn": [
         "cogseed@0.0.5|@types/node@25.6.0",
         "cogseed@0.0.5|esbuild@0.27.7",
         "cogseed@0.0.5|fsevents@2.3.3",
         "cogseed@0.0.5|jiti@2.7.0",
-        "cogseed@0.0.5|lightningcss@1.32.0",
+        "cogseed@0.0.5|lightningcss@1.33.0",
         "cogseed@0.0.5|picomatch@4.0.5",
         "cogseed@0.0.5|postcss@8.5.26",
-        "cogseed@0.0.5|rolldown@1.1.5",
+        "cogseed@0.0.5|rolldown@1.2.5",
         "cogseed@0.0.5|tinyglobby@0.2.17",
         "cogseed@0.0.5|tsx@4.21.0",
         "cogseed@0.0.5|yaml@2.9.0"
@@ -41600,10 +41542,10 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|lightningcss@1.32.0",
+      "ref": "cogseed@0.0.5|lightningcss@1.33.0",
       "dependsOn": [
         "cogseed@0.0.5|detect-libc@2.1.2",
-        "cogseed@0.0.5|lightningcss-darwin-arm64@1.32.0"
+        "cogseed@0.0.5|lightningcss-darwin-arm64@1.33.0"
       ]
     },
     {
@@ -41615,10 +41557,10 @@
       ]
     },
     {
-      "ref": "cogseed@0.0.5|rolldown@1.1.5",
+      "ref": "cogseed@0.0.5|rolldown@1.2.5",
       "dependsOn": [
-        "cogseed@0.0.5|@oxc-project/types@0.139.0",
-        "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.1.5",
+        "cogseed@0.0.5|@oxc-project/types@0.146.0",
+        "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.2.5",
         "cogseed@0.0.5|@rolldown/pluginutils@1.0.1"
       ]
     },
@@ -42381,7 +42323,7 @@
       "ref": "cogseed@0.0.5|assertion-error@2.0.1"
     },
     {
-      "ref": "cogseed@0.0.5|lightningcss-darwin-arm64@1.32.0"
+      "ref": "cogseed@0.0.5|lightningcss-darwin-arm64@1.33.0"
     },
     {
       "ref": "cogseed@0.0.5|nanoid@3.3.18"
@@ -42390,10 +42332,10 @@
       "ref": "cogseed@0.0.5|picocolors@1.1.1"
     },
     {
-      "ref": "cogseed@0.0.5|@oxc-project/types@0.139.0"
+      "ref": "cogseed@0.0.5|@oxc-project/types@0.146.0"
     },
     {
-      "ref": "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.1.5"
+      "ref": "cogseed@0.0.5|@rolldown/binding-darwin-arm64@1.2.5"
     },
     {
       "ref": "cogseed@0.0.5|@rolldown/pluginutils@1.0.1"
