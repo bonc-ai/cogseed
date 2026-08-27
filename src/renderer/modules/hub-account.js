@@ -77,6 +77,8 @@ async function _renderHubAccount() {
   }
 
   if (!status) {
+    // 注销流程进行中：状态刷新失败也不打断流程（切窗口后焦点刷新的重渲染）。
+    if (_deletionCtx) { _renderDeletion(card); return; }
     card.innerHTML = `<div class="settings-empty">${_escapeHtml(t('hub.account.unavailable'))}</div>`;
     return;
   }
@@ -90,10 +92,17 @@ async function _renderHubAccount() {
   }
 
   if (!status.signed_in) {
+    // 真实登出/注销（会话已失效）：丢弃进行中的注销流程，呈现未登录态。
+    _stopDeletionCountdown();
+    _deletionCtx = null;
     card.innerHTML = _signedOutCard(status);
     _bindSignIn(card);
     return;
   }
+
+  // 注销流程进行中：保留当前步骤与已填内容，不重建为普通账号卡。
+  // 窗口切换/焦点恢复、i18n 切换、状态广播等触发的重渲染都会走到这里。
+  if (_deletionCtx) { _renderDeletion(card); return; }
 
   let devices = [];
   let consents = [];
@@ -402,7 +411,7 @@ function _deletionStep2Html(ctx) {
         <input class="hub-deletion-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" data-hub-deletion-code value="${_escapeHtml(ctx.code)}" placeholder="${_escapeHtml(t('hub.account.deletion_code_placeholder'))}" />
         ${sendBtn}
       </div>`
-    : `<input class="hub-deletion-input" type="password" data-hub-deletion-password placeholder="${_escapeHtml(t('hub.account.deletion_password_placeholder'))}" />`;
+    : `<input class="hub-deletion-input" type="password" data-hub-deletion-password value="${_escapeHtml(ctx.password)}" placeholder="${_escapeHtml(t('hub.account.deletion_password_placeholder'))}" />`;
   return `
     <div class="hub-deletion-flow">
       <div class="hub-deletion-head">
@@ -424,7 +433,7 @@ function _deletionStep3Html(ctx) {
   const deadline = new Date(Date.now() + days * 24 * 3600 * 1000).toLocaleString();
   const checks = [1, 2, 3].map((i) => `
     <label class="hub-deletion-check">
-      <input type="checkbox" data-hub-deletion-check />
+      <input type="checkbox" data-hub-deletion-check ${ctx.checks[i - 1] ? 'checked' : ''} />
       <span>${_escapeHtml(t(`hub.account.deletion_check_${i}`, { days }))}</span>
     </label>`).join('');
   return `
@@ -435,7 +444,7 @@ function _deletionStep3Html(ctx) {
       </div>
       <div class="hub-alert hub-alert-danger" role="status">${_icon('warning', 'hub-alert-icon')}${_escapeHtml(t('hub.account.deletion_confirm_notice', { deadline }))}</div>
       <div class="hub-deletion-checks">${checks}</div>
-      <input class="hub-deletion-input" type="text" data-hub-deletion-phrase placeholder="${_escapeHtml(t('hub.account.deletion_phrase_placeholder'))}" />
+      <input class="hub-deletion-input" type="text" data-hub-deletion-phrase value="${_escapeHtml(ctx.phrase)}" placeholder="${_escapeHtml(t('hub.account.deletion_phrase_placeholder'))}" />
       ${_deletionErrorHtml(ctx)}
       <div class="hub-actions">
         <button type="button" class="btn btn-sm" data-hub-deletion-back>${_escapeHtml(t('hub.account.deletion_back'))}</button>
@@ -471,6 +480,8 @@ async function _startDeletionFlow(card, opts) {
     method: opts.phoneMasked ? 'sms_code' : 'password',
     code: '',
     password: '',
+    phrase: '',
+    checks: [false, false, false],
     resendAfter: 0,
     error: null,
     busy: false,
@@ -614,12 +625,16 @@ function _bindDeletion(card, ctx) {
   const checks = Array.from(card.querySelectorAll('[data-hub-deletion-check]'));
   const submit = card.querySelector('[data-hub-deletion-submit]');
   if (phrase && submit) {
+    // 重渲染（如窗口切换后的焦点刷新）后恢复已勾选项与已输入短语，
+    // 保证流程状态跨窗口切换保持不变。
+    checks.forEach((c, i) => { c.checked = !!ctx.checks[i]; });
+    phrase.value = ctx.phrase || '';
     const updateSubmit = () => {
       const allChecked = checks.every((c) => c.checked);
       submit.disabled = !(allChecked && phrase.value.trim() === 'DELETE_MY_ACCOUNT');
     };
-    checks.forEach((c) => c.addEventListener('change', updateSubmit));
-    phrase.addEventListener('input', updateSubmit);
+    checks.forEach((c, i) => c.addEventListener('change', () => { ctx.checks[i] = c.checked; updateSubmit(); }));
+    phrase.addEventListener('input', () => { ctx.phrase = phrase.value; updateSubmit(); });
     updateSubmit();
     submit.addEventListener('click', () => {
       void _performDeletion(card, ctx);
