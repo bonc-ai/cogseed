@@ -6031,5 +6031,12 @@
   "dashboard.save_edit": "保存修改",
   "dashboard.edit_saved": "已保存；若修改了地址或令牌，建议重新测试连接",
   "dashboard.edit_failed": "保存失败",
-  "dashboard.form_token_keep": "令牌（留空保留原值）"
+  "dashboard.form_token_keep": "令牌（留空保留原值）",
+  "settings.updates.auto.disabled": "自动更新在开发模式下不可用",
+  "settings.updates.auto.checking": "正在检查新版本…",
+  "settings.updates.auto.downloading": "正在下载更新 {percent}%",
+  "settings.updates.auto.downloaded": "新版本 {version} 已就绪，重启后自动安装",
+  "settings.updates.auto.error": "自动更新检查失败：{message}",
+  "settings.updates.auto.up_to_date": "自动更新：已是最新版本",
+  "settings.updates.auto.install": "重启并安装"
 }

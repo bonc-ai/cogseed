@@ -6031,5 +6031,12 @@
   "dashboard.save_edit": "Save changes",
   "dashboard.edit_saved": "Saved; if endpoint or token changed, re-test the connection",
   "dashboard.edit_failed": "Save failed",
-  "dashboard.form_token_keep": "Token (leave blank to keep)"
+  "dashboard.form_token_keep": "Token (leave blank to keep)",
+  "settings.updates.auto.disabled": "Auto-update is unavailable in dev mode",
+  "settings.updates.auto.checking": "Checking for updates…",
+  "settings.updates.auto.downloading": "Downloading update {percent}%",
+  "settings.updates.auto.downloaded": "Version {version} is ready — restart to install",
+  "settings.updates.auto.error": "Auto-update check failed: {message}",
+  "settings.updates.auto.up_to_date": "Auto-update: you're up to date",
+  "settings.updates.auto.install": "Restart & Install"
 }
