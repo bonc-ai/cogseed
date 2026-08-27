@@ -6192,9 +6192,7 @@
   "exec_config.no_model": "未配置模型",
   "exec_config.cli_default_model": "CLI 默认",
   "exec_config.cli_badge": "CLI",
-  "exec_config.cli_runtime": "外部 CLI：{cli}",
-  "exec_config.effort_cli_note": "推理强度由该外部 CLI 自身的配置决定，CogSeed 不在此覆盖。",
-  "exec_config.cli_no_models": "未能扫描到「{cli}」的可用模型列表——执行时将使用该 CLI 自身的默认模型与推理配置。",
+  "exec_config.effort_cli_note": "模型与推理强度均由该外部 CLI 自身的配置决定，CogSeed 不在此覆盖。",
   "exec_config.no_reasoning_note": "不支持推理强度配置",
   "settings.thinking.title": "默认推理强度",
   "settings.thinking.sub": "对话执行的默认思考强度（全局默认）。会话内可通过输入框右侧的执行配置临时调整，仅影响当前任务。",
@@ -6213,5 +6211,6 @@
   "settings.custom_providers.fetch_models_existing": "已存在",
   "settings.custom_providers.fetch_models_import": "导入所选（{count}）",
   "settings.custom_providers.fetch_models_done": "已导入 {count} 个模型",
-  "settings.custom_providers.fetch_models_partial": "部分导入成功（{ok} 个），失败：{error}"
+  "settings.custom_providers.fetch_models_partial": "部分导入成功（{ok} 个），失败：{error}",
+  "exec_config.cli_model_note": "模型由「{cli}」自身的配置决定，CogSeed 暂无法为其指定模型。"
 }

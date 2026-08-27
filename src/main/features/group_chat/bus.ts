@@ -4838,7 +4838,14 @@ async function runActorTurnBody(
         cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
           ? cliAgent.runtime.model
           : undefined;
-      const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
+      // 方案 B（模型不可控不展示）：网关是外接智能体的实际执行路径，信封
+      // 没有 model 栏位——CLI 实际用哪个模型由它自身配置决定。网关 turn 的
+      // exec_meta 因此不写 model（写了就是"展示 ≠ 实际"）；仅近乎废弃的本地
+      // 直连路径真实消费 runtime.model，那里保留真实值。
+      const cliIsGateway = cliAgent.runtime?.kind === "p3394-gateway";
+      const cliTurnModel = cliIsGateway
+        ? undefined
+        : (item.execConfig?.model || cliRuntimeModel);
       // effort 只在真实下发的场景写 meta（claude 且 low/high——网关与本地
       // 直连都会消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
       const cliEffortForwarded = cliRuntime === "claude"
