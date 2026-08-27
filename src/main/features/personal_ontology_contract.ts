@@ -135,8 +135,17 @@ export function resolveRefToInternalId(uid: string, ref: string): string | null 
  */
 export interface RoleTemplateCatalogEntry {
   templateId: string;
+  /** 默认显示名（中文源串）。有 nameKey 时应优先用 nameKey 本地化后的结果。 */
   name: string;
   description?: string;
+  /**
+   * 显示名的 i18n key。**key 由 PO 给出**，调用方不要自己拼
+   * `ws.role_template.<id>.name` —— 收归前 Workspace 自己拼这个前缀，等于在
+   * PO 之外维护了第二套模板名事实来源。渲染层按 `t(nameKey, name)` 取值即可，
+   * 这样语言切换仍在渲染层实时生效（主进程不跟踪渲染层当前语言）。
+   */
+  nameKey: string;
+  descriptionKey: string;
   version: string;
   bundle?: {
     skillIds?: string[];
@@ -172,6 +181,8 @@ function toCatalogEntry(t: RoleTemplateShape): RoleTemplateCatalogEntry {
     templateId: t.template_id,
     name: t.name,
     ...(t.description ? { description: t.description } : {}),
+    nameKey: `ws.role_template.${t.template_id}.name`,
+    descriptionKey: `ws.role_template.${t.template_id}.description`,
     version: t.version,
     ...(t.bundle
       ? { bundle: { skillIds: [...(t.bundle.skill_ids || [])], agentIds: [...(t.bundle.agent_ids || [])] } }
@@ -241,6 +252,9 @@ export interface RoleScenarioSummary {
   scenarioId: string;
   name: string;
   description: string;
+  /** 显示名/描述的 i18n key（同 RoleTemplateCatalogEntry：key 由 PO 给出）。 */
+  nameKey: string;
+  descriptionKey: string;
   icon: string;
   suggestedPrimaryTemplateId?: string;
   suggestedSecondaryTemplateIds: string[];
@@ -253,6 +267,8 @@ function toScenarioSummary(s: Scenario): RoleScenarioSummary {
     scenarioId: s.scenario_id,
     name: s.name,
     description: s.description,
+    nameKey: `ws.scenario.${s.scenario_id}.name`,
+    descriptionKey: `ws.scenario.${s.scenario_id}.description`,
     icon: s.icon,
     ...(s.suggested_primary_template_id ? { suggestedPrimaryTemplateId: s.suggested_primary_template_id } : {}),
     suggestedSecondaryTemplateIds: [...s.suggested_secondary_template_ids],

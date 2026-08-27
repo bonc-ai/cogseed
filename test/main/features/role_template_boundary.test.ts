@@ -288,3 +288,24 @@ describe('role-template boundary › M4 memory 面板不再解析 PO 模板格�
     expect(memory).not.toContain('g.template_version');
   });
 });
+
+describe('role-template boundary › 显示名只有 PO 一个事实来源', () => {
+  it('Workspace 不再自拼 i18n key 前缀', () => {
+    const ws = stripComments(read('src/renderer/modules/workspace.js'));
+    expect(ws).not.toContain('`ws.role_template.${');
+    expect(ws).not.toContain('`ws.scenario.${');
+    expect(ws).toContain('template.nameKey');
+    expect(ws).toContain('scenario.nameKey');
+  });
+
+  it('key 的构造只在 contract 里', () => {
+    const contract = read('src/main/features/personal_ontology_contract.ts');
+    expect(contract).toContain('nameKey: `ws.role_template.${t.template_id}.name`');
+    expect(contract).toContain('nameKey: `ws.scenario.${s.scenario_id}.name`');
+  });
+
+  it('台账 title 不能再被改写成第三套显示名', () => {
+    const groups = read('src/main/features/personal_ontology_groups.ts');
+    expect(groups).toContain("if (groups[idx].template_id) return { ok: false, error: 'role_template_group' };");
+  });
+});

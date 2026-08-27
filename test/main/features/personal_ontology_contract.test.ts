@@ -62,7 +62,7 @@ describe('PO contract › A 模板目录', () => {
     const rows = await contract.listRoleTemplateSummaries(UID);
     expect(rows.length).toBeGreaterThan(0);
 
-    const allowed = new Set(['templateId', 'name', 'description', 'version', 'installed', 'bundle']);
+    const allowed = new Set(['templateId', 'name', 'description', 'nameKey', 'descriptionKey', 'version', 'installed', 'bundle']);
     for (const row of rows) {
       for (const key of Object.keys(row)) expect(allowed.has(key)).toBe(true);
       if (row.bundle) {
@@ -291,5 +291,32 @@ describe('PO contract › 卸载重装后 group_id 变化不影响 contract', ()
       UID, tmpl.buildContentRef(firstGroupId, '学习背景'), '教育阶段', '博士', '智能',
     );
     expect(res).toEqual({ ok: false, error: 'template group not found' });
+  });
+});
+
+describe('PO contract › 显示名的 i18n key 由 PO 给出', () => {
+  it('模板与场景都带 nameKey / descriptionKey，调用方无需自拼前缀', async () => {
+    const contract = await loadContract();
+    const student = (await contract.listRoleTemplateSummaries(UID)).find((t) => t.templateId === 'student')!;
+    expect(student.nameKey).toBe('ws.role_template.student.name');
+    expect(student.descriptionKey).toBe('ws.role_template.student.description');
+
+    const education = contract.listRoleScenarios().find((s) => s.scenarioId === 'education')!;
+    expect(education.nameKey).toBe('ws.scenario.education.name');
+    expect(education.descriptionKey).toBe('ws.scenario.education.description');
+  });
+
+  it('给出的 key 在渲染层 locale 表里真实存在（zh 与 en 都有）', async () => {
+    const contract = await loadContract();
+    const zh = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/locales/zh.json'), 'utf8'));
+    const en = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../src/renderer/locales/en.json'), 'utf8'));
+    for (const t of await contract.listRoleTemplateSummaries(UID)) {
+      expect(zh[t.nameKey], `zh missing ${t.nameKey}`).toBeTruthy();
+      expect(en[t.nameKey], `en missing ${t.nameKey}`).toBeTruthy();
+    }
+    for (const s of contract.listRoleScenarios()) {
+      expect(zh[s.nameKey], `zh missing ${s.nameKey}`).toBeTruthy();
+      expect(en[s.nameKey], `en missing ${s.nameKey}`).toBeTruthy();
+    }
   });
 });

@@ -248,23 +248,25 @@
   let _templates = [];     // RoleTemplate[]
   let _scenarios = [];     // Scenario[]（教育/写作/职场/自定义，从模板创建区的场景入口）
 
+  // i18n key 由 PO contract 给出（nameKey / descriptionKey），这里只负责取值。
+  // 收归前是 Workspace 自己拼 `ws.role_template.<id>.name` 前缀，等于在 PO 之外
+  // 维护第二套模板名事实来源。本地化仍留在渲染层——语言切换要实时生效，而主
+  // 进程不跟踪渲染层当前语言。
   function _localizeTemplate(template) {
     if (!template || !template.templateId) return template;
-    const prefix = `ws.role_template.${template.templateId}`;
     return {
       ...template,
-      name: _t(`${prefix}.name`, template.name || template.templateId),
-      description: _t(`${prefix}.description`, template.description || ''),
+      name: _t(template.nameKey, template.name || template.templateId),
+      description: _t(template.descriptionKey, template.description || ''),
     };
   }
 
   function _localizeScenario(scenario) {
     if (!scenario || !scenario.scenarioId) return scenario;
-    const prefix = `ws.scenario.${scenario.scenarioId}`;
     return {
       ...scenario,
-      name: _t(`${prefix}.name`, scenario.name || scenario.scenarioId),
-      description: _t(`${prefix}.description`, scenario.description || ''),
+      name: _t(scenario.nameKey, scenario.name || scenario.scenarioId),
+      description: _t(scenario.descriptionKey, scenario.description || ''),
     };
   }
   let _loaded = false;     // 是否已成功加载过（区分「加载中」与「加载失败」）
@@ -1880,11 +1882,11 @@
     const systemNameKey = (() => {
       if (_createScenario) {
         const scenario = _scenarios.find((item) => item.scenarioId === _createScenario);
-        if (scenario && name === scenario.name) return `ws.scenario.${_createScenario}.name`;
+        if (scenario && name === scenario.name) return scenario.nameKey;
       }
       if (_createTemplate) {
         const template = _templates.find((item) => item.templateId === _createTemplate);
-        if (template && name === template.name) return `ws.role_template.${_createTemplate}.name`;
+        if (template && name === template.name) return template.nameKey;
       }
       return undefined;
     })();
