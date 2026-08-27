@@ -622,6 +622,10 @@ async function loadAgents(forceRefresh, opts = {}) {
         });
         _agentsCache = sortedAgents;
         _agentsCacheIsSummary = summary;
+        // Unified execution entry: agent defaults (default_model /
+        // default_thinking) feed the composer's exec-config chip — notify
+        // it whenever the cache is refreshed (includes agent-edit writes).
+        try { window.dispatchEvent(new CustomEvent('cogseed:agents-cache-refreshed')); } catch (_) {}
         // Sidebar conv-row badges read agent icon+color from `_agentsCache`
         // (via `_renderConvAgentStackHtml`). Boot order is loadConversations
         // → loadAgents, so the first sidebar render lands before the cache
@@ -1827,6 +1831,7 @@ function _renderAgentDetail(agent, editing) {
   // without entering edit mode. The header chip was removed because
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
+  _renderAgentDetailExecDefaults(agent);
   _renderAgentDetailProjectDir(agent);
   void _renderAgentDetailGateway(agent);
   const localizedDesc = _agentSummary(agent, lang);
@@ -2152,6 +2157,153 @@ async function _renderAgentDetailRuntime(agent) {
       }
     },
   });
+}
+
+/** Unified execution entry — per-agent default execution config (in-process
+ *  agents only): default model + default thinking strength. Persisted via
+ *  `agents.update({ default_model, default_thinking })`; the composer's
+ *  exec-config chip shows these as the baseline and layers task overrides
+ *  on top without ever writing back here. CLI-backed agents keep their
+ *  model binding on `runtime.model` (create modal / runtime section) and
+ *  manage their own reasoning — nothing to configure here. */
+async function _renderAgentDetailExecDefaults(agent) {
+  const section = document.getElementById('agents-detail-exec-defaults-section');
+  const slot = document.getElementById('agents-detail-exec-defaults');
+  if (!section || !slot) return;
+  slot.innerHTML = '';
+  // Only in-process custom agents are editable; builtin/marketplace/CLI stay hidden.
+  const isCli = agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway';
+  if (isCli || agent.source !== 'custom') {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const FOLLOW_GLOBAL = '__follow_global__';
+  const entries = (typeof window.getModelChipEntries === 'function')
+    ? window.getModelChipEntries()
+    : [];
+  // Unique providers from the configured priority entries.
+  const providers = [];
+  const seenProviders = new Set();
+  for (const e of entries) {
+    if (e && e.provider && !seenProviders.has(e.provider)) {
+      seenProviders.add(e.provider);
+      providers.push(e);
+    }
+  }
+
+  const current = agent.default_model || null;
+
+  slot.innerHTML = `
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_model'))}</span>
+      <span class="ai-select agents-detail-exec-provider"></span>
+      <span class="ai-select agents-detail-exec-model"></span>
+    </div>
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_thinking'))}</span>
+      <span class="ai-select agents-detail-exec-thinking"></span>
+    </div>
+    <div class="agents-detail-exec-hint">${escapeHtml(t('agents.exec_defaults_hint'))}</div>
+  `;
+
+  const providerMount = slot.querySelector('.agents-detail-exec-provider');
+  const modelMount = slot.querySelector('.agents-detail-exec-model');
+  const thinkingMount = slot.querySelector('.agents-detail-exec-thinking');
+
+  let modelSel = null;
+  const currentProvider = current ? current.provider : '';
+  const currentModel = current ? current.model : '';
+
+  const providerOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    ...providers.map((e) => ({ value: e.provider, label: e.providerLabel || e.provider })),
+  ];
+  const providerSel = _aiSelectMount(providerMount, {
+    options: providerOptions,
+    value: currentProvider || FOLLOW_GLOBAL,
+  });
+
+  const setModelSelect = async (providerId, selectedModel) => {
+    if (!modelSel) {
+      modelSel = _aiSelectMount(modelMount, { options: [], value: '' });
+    }
+    if (!providerId) {
+      modelSel.setOptions([
+        { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+      ]);
+      modelSel.setValue(FOLLOW_GLOBAL);
+      return;
+    }
+    modelSel.setOptions([{ value: '__loading__', label: t('common.loading') }]);
+    modelSel.setValue('__loading__');
+    let models = [];
+    try {
+      const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
+      if (res && res.ok && Array.isArray(res.models)) models = res.models;
+    } catch (_) { /* keep empty */ }
+    const options = models
+      .map((m) => (m && typeof m === 'object' ? { value: String(m.id || ''), label: String(m.name || m.id || '') } : null))
+      .filter((o) => o && o.value);
+    if (!options.length) {
+      modelSel.setOptions([{ value: '__none__', label: t('model_chip.no_models') }]);
+      modelSel.setValue('__none__');
+      return;
+    }
+    modelSel.setOptions(options);
+    modelSel.setValue(options.some((o) => o.value === selectedModel) ? selectedModel : options[0].value);
+  };
+
+  const persist = async (updates) => {
+    try {
+      const res = await window.cogseed.invoke('agents.update', { agent_id: agent.agent_id, updates });
+      if (!res || !res.agent) {
+        _agentsLog.warn('agents.update exec defaults failed', { error: res && res.error });
+        return;
+      }
+      if (typeof loadAgents === 'function') await loadAgents(true);
+    } catch (err) {
+      _agentsLog.warn('agents.update exec defaults failed', err);
+    }
+  };
+
+  providerSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) {
+      await persist({ default_model: null });
+      await setModelSelect('', '');
+      return;
+    }
+    await setModelSelect(next, '');
+  });
+
+  // Model select is lazily mounted by setModelSelect; wire its change handler
+  // once via a microtask so `modelSel` is bound.
+  setTimeout(() => {
+    if (!modelSel) return;
+    modelSel.onChange(async (next) => {
+      const providerId = providerSel.getValue ? providerSel.getValue() : currentProvider;
+      if (!providerId || providerId === FOLLOW_GLOBAL || !next || next === '__none__' || next === '__loading__') return;
+      await persist({ default_model: { provider: providerId, model: next } });
+    });
+  }, 0);
+
+  const thinkingOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    { value: 'off', label: t('model_effort.off') },
+    { value: 'low', label: t('model_effort.low') },
+    { value: 'high', label: t('model_effort.high') },
+  ];
+  const thinkingSel = _aiSelectMount(thinkingMount, {
+    options: thinkingOptions,
+    value: agent.default_thinking || FOLLOW_GLOBAL,
+  });
+  thinkingSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) await persist({ default_thinking: null });
+    else if (next === 'off' || next === 'low' || next === 'high') await persist({ default_thinking: next });
+  });
+
+  await setModelSelect(currentProvider, currentModel);
 }
 
 /** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
@@ -3740,6 +3892,18 @@ async function _openAgentPicker(anchorBtn) {
     const search = document.getElementById('agent-picker-search');
     _renderAgentPickerList(search ? search.value : '');
   }).catch(() => {});
+  // Unified execution entry: the recipient pickers also list API-connection
+  // models — refresh the entries cache and repaint when it lands (first
+  // paint already went out with the cached/empty list).
+  if (anchorBtn.id === 'chat-recipient-chip' || anchorBtn.id === 'new-chat-recipient-chip') {
+    _refreshPickerModelEntries().then((changed) => {
+      if (!changed) return;
+      if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
+      if (_agentPickerTab !== 'agents') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderAgentPickerList(search ? search.value : '');
+    });
+  }
 }
 
 function _closeAgentPicker() {
@@ -3817,9 +3981,17 @@ function _renderAgentPickerList(filterText) {
   const isRecipientPicker = anchorId === 'chat-recipient-chip'
     || anchorId === 'new-chat-recipient-chip'
     || anchorId === 'auto-recipient-chip';
+  // Unified execution entry: the two chat recipient anchors also list
+  // API-connection models as a second group. The auto modal keeps its
+  // agent-only recipient contract.
+  const isChatRecipientPicker = anchorId === 'chat-recipient-chip'
+    || anchorId === 'new-chat-recipient-chip';
   const commanderName = t('chat.recipient_commander');
   const commanderMatchesFilter = !q || commanderName.toLowerCase().includes(q);
-  if (!filtered.length && !(isRecipientPicker && commanderMatchesFilter)) {
+  const modelGroupHtml = (isChatRecipientPicker && _pickerModelEntries.length)
+    ? _renderPickerModelGroup(_pickerModelEntries, q)
+    : '';
+  if (!filtered.length && !(isRecipientPicker && commanderMatchesFilter) && !modelGroupHtml) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agents.no_match'))}</div>`;
     return;
   }
@@ -3851,10 +4023,114 @@ function _renderAgentPickerList(filterText) {
   const projectEmptyHint = (!q && _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0)
     ? `<div class="skill-picker-empty-hint">${escapeHtml(t('agents.no_project_agents'))}</div>`
     : '';
-  listEl.innerHTML = projectEmptyHint + commanderHtml
+  // Unified execution entry layout — the two execution-target sections must
+  // BOTH be visible on the first screen of a ~250px-tall popup:
+  //   [API 连接模型] first (compact, 1-3 provider rows — always fully visible),
+  //   [本地 Agent] second (Commander directly follows, then the long
+  //   自定义/平台 agent listing fills the rest of the scroll).
+  const localGroupLabel = isChatRecipientPicker
+    ? `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_local_agents'))}</div>`
+    : '';
+  listEl.innerHTML = projectEmptyHint + modelGroupHtml + localGroupLabel + commanderHtml
     + groupHtml(t('agents.source_custom'), groups.custom)
     + groupHtml(t('agents.source_marketplace'), groups.marketplace);
   _bindAgentPickerListItems(listEl, anchorId);
+}
+
+// ─── Unified execution entry: API-connection model rows ─────────────────
+// One row per configured provider (its current priority entry rides the
+// row); the chevron expands every model of that provider (lazy listModels).
+
+let _pickerModelEntries = [];
+
+async function _refreshPickerModelEntries() {
+  try {
+    const res = await window.cogseed.invoke('auth.listEntries');
+    if (res && res.ok && Array.isArray(res.entries)) {
+      _pickerModelEntries = res.entries;
+      return true;
+    }
+  } catch (_) { /* keep previous cache */ }
+  return false;
+}
+
+function _modelRowMatchesFilter(entry, q) {
+  if (!q) return true;
+  const provider = String(entry.providerLabel || entry.provider || '').toLowerCase();
+  const model = String(entry.modelName || entry.model || '').toLowerCase();
+  return provider.includes(q) || model.includes(q);
+}
+
+function _renderPickerModelGroup(entries, q) {
+  const rows = entries.filter((e) => e && e.provider && e.model && _modelRowMatchesFilter(e, q));
+  if (!rows.length) return '';
+  const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('chevron-right', 'picker-model-expand-icon')
+    : '›';
+  const items = rows.map((entry) => {
+    const provider = entry.providerLabel || entry.provider || '';
+    const model = entry.modelName || entry.model || '';
+    return `
+      <div class="skill-picker-item skill-picker-item--model" data-kind="model"
+           data-id="${escapeHtml(entry.provider)}"
+           data-provider="${escapeHtml(entry.provider)}"
+           data-model="${escapeHtml(entry.model)}"
+           data-name="${escapeHtml(model)}"
+           data-provider-label="${escapeHtml(provider)}">
+        <div class="skill-picker-item-name">${escapeHtml(model)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(provider)}</div>
+        <button type="button" class="picker-model-expand" data-provider="${escapeHtml(entry.provider)}" title="${escapeHtml(t('agent_picker.expand_models'))}">${chevron}</button>
+      </div>`;
+  }).join('');
+  return `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_api_models'))}</div>` + items;
+}
+
+/** Second level: every model of one provider (from auth.listModels, lazy).
+ *  Picking one selects THAT model as the execution target (not merely the
+ *  provider's current entry). Replaces the picker list until back/close. */
+async function _openPickerProviderModels(listEl, anchorId, providerId, providerLabel) {
+  if (!listEl) return;
+  listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+  let models = [];
+  try {
+    const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
+    if (res && res.ok && Array.isArray(res.models)) models = res.models;
+  } catch (_) { /* fall through to empty */ }
+  // Picker may have closed while loading.
+  if (!listEl.isConnected) return;
+  const back = `<div class="skill-picker-item skill-picker-item--back" data-kind="__model_back__">
+      <div class="skill-picker-item-name">‹ ${escapeHtml(t('common.back'))}</div>
+    </div>`;
+  const rows = (models.length ? models : []).map((m) => {
+    const id = String(m && typeof m === 'object' ? (m.id || '') : String(m || ''));
+    if (!id) return '';
+    const name = String((m && m.name) || id);
+    return `
+      <div class="skill-picker-item skill-picker-item--model" data-kind="model"
+           data-id="${escapeHtml(providerId)}/${escapeHtml(id)}"
+           data-provider="${escapeHtml(providerId)}"
+           data-model="${escapeHtml(id)}"
+           data-name="${escapeHtml(name)}"
+           data-provider-label="${escapeHtml(providerLabel || providerId)}">
+        <div class="skill-picker-item-name">${escapeHtml(name)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(providerLabel || providerId)}</div>
+      </div>`;
+  }).join('');
+  listEl.innerHTML = back + (rows || `<div class="skill-picker-empty">${escapeHtml(t('model_chip.no_models'))}</div>`);
+  // Back button restores the grouped list (search box keeps its value).
+  const backBtn = listEl.querySelector('.skill-picker-item--back');
+  backBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const search = document.getElementById('agent-picker-search');
+    _renderAgentPickerList(search ? search.value : '');
+  });
+  for (const el of listEl.querySelectorAll('.skill-picker-item[data-id]')) {
+    if (el.classList.contains('skill-picker-item--back')) continue;
+    el.addEventListener('click', async () => {
+      _closeAgentPicker();
+      await _triggerPickerItem(el.dataset.kind || 'model', el.dataset.id, el.dataset.name, anchorId, el.dataset);
+    });
+  }
 }
 
 function _matchPickerItem(q, name, desc, extra = '') {
@@ -4242,6 +4518,17 @@ function _bindAgentPickerListItems(listEl, anchorId) {
       if (idx >= 0) _setAgentPickerActive(idx);
     });
   }
+  // Unified execution entry: chevron next to an API-model row expands the
+  // provider's full model list (second level).
+  for (const btn of listEl.querySelectorAll('.picker-model-expand')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const providerId = btn.dataset.provider || '';
+      if (!providerId) return;
+      const row = btn.closest('.skill-picker-item--model');
+      _openPickerProviderModels(listEl, anchorId, providerId, row ? (row.dataset.providerLabel || '') : '');
+    });
+  }
   _setAgentPickerActive(0);
 }
 
@@ -4593,6 +4880,33 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
       : (target === 'auto' ? 'auto-task-input' : 'chat-input');
+    _focusInput(document.getElementById(inputId));
+    return;
+  }
+  if (kind === 'model') {
+    // Unified execution entry: an API-connection model becomes the execution
+    // target directly (commander path + per-turn model override — no agent
+    // wrapper). Auto modal keeps agent-only recipients.
+    const ds = dataset || {};
+    const provider = String(ds.provider || '');
+    const model = String(ds.model || '');
+    if (!provider || !model) return;
+    if (anchorId === 'auto-recipient-chip') return;
+    const target = _targetFromPickerAnchor(anchorId);
+    _agentsTrackClick('chat_model_select', {
+      target,
+      provider,
+      model,
+    });
+    setChatRecipient(target, {
+      kind: 'model',
+      provider,
+      model,
+      name: String(itemName || model),
+      providerLabel: ds.providerLabel ? String(ds.providerLabel) : undefined,
+    });
+    _consumeAtKeyChar();
+    const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
     _focusInput(document.getElementById(inputId));
     return;
   }

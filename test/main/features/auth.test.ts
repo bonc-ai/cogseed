@@ -857,10 +857,15 @@ describe('auth › custom providers', () => {
       supportsOAuth: false,
       manualModel: false,
     }));
+    // Unified execution entry: custom-provider models are annotated with
+    // `reasoning: false` — mirroring the runtime Model the chat layer builds
+    // (custom_provider_runtime hard-codes reasoning off), which the composer's
+    // effort gating relies on.
     expect(await auth.listModels(providerId)).toEqual({
       // contextWindow 透传（normalizeModels 的默认窗口）——渲染层会话统计行
-      // 的上下文占用分母依赖它。
-      models: [{ id: 'relay-model', name: 'relay-model', contextWindow: 131_072 }],
+      // 的上下文占用分母依赖它；reasoning: false 镜像 custom_provider_runtime
+      // 的硬编码（effort 门控依赖）。
+      models: [{ id: 'relay-model', name: 'relay-model', contextWindow: 131_072, reasoning: false }],
     });
 
     await auth.addEntry({ provider: providerId, model: 'relay-model', profileId: providerId });

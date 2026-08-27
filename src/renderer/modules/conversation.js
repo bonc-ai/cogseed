@@ -1222,6 +1222,111 @@ let _newChatRecipient = { ..._COMMANDER }; // ephemeral, reset on view-enter
 let _pendingNewChatRecipient = null;        // captured at send time, transferred to new cid
 let _projectChatRecipient = { ..._COMMANDER }; // ephemeral recipient for project detail composer
 const _autoRecipientByCid = new Map(); // cid → transient agent recipient while plan waits on user input
+
+// ─── Unified execution entry: per-task execution overrides ───
+// A task-level override captures what the user picked for THIS conversation
+// in the execution-config chip (model / reasoning effort). It layers on top
+// of the recipient's own defaults (agent.json default_model/default_thinking
+// for agents, global entry rank-1 + global thinking preference otherwise)
+// and never writes back to those defaults — switching conversations or
+// agents leaves them untouched. Persisted per-cid like the recipient map.
+const _EXEC_OVERRIDE_LS_KEY = 'chat.execOverrideByCid';
+let _execOverrideByCid = {};     // { [cid]: {provider?, model?, modelLabel?, effort?} }
+let _newChatExecOverride = null; // ephemeral, transferred to the new cid at send
+let _projectExecOverride = null;
+
+function _loadExecOverrideMap() {
+  try {
+    const raw = localStorage.getItem(_EXEC_OVERRIDE_LS_KEY);
+    if (!raw) return;
+    const v = JSON.parse(raw);
+    if (v && typeof v === 'object') _execOverrideByCid = v;
+  } catch (_) { /* corrupt entry — start fresh */ }
+}
+_loadExecOverrideMap();
+
+function _saveExecOverrideMap() {
+  try { localStorage.setItem(_EXEC_OVERRIDE_LS_KEY, JSON.stringify(_execOverrideByCid)); } catch (_) {}
+}
+
+/** Normalise an override patch: keep only usable fields, drop empties. */
+function _normExecOverride(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  if (raw.provider && typeof raw.provider === 'string' && raw.model && typeof raw.model === 'string') {
+    out.provider = raw.provider;
+    out.model = raw.model;
+    if (typeof raw.modelLabel === 'string' && raw.modelLabel) out.modelLabel = raw.modelLabel;
+  } else if (raw.model && typeof raw.model === 'string') {
+    // CLI-agent override shape: bare model id handed to the external CLI.
+    out.model = raw.model;
+    if (typeof raw.modelLabel === 'string' && raw.modelLabel) out.modelLabel = raw.modelLabel;
+  }
+  if (raw.effort === 'off' || raw.effort === 'low' || raw.effort === 'high') {
+    out.effort = raw.effort;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function _activeExecOverride(target) {
+  if (target === 'new-chat') return _newChatExecOverride;
+  if (target === 'project') return _projectExecOverride;
+  if (currentCid) return _execOverrideByCid[currentCid] || null;
+  return null;
+}
+
+/** Read the CURRENT override (no snapshot variant) — for the config chip UI. */
+function getExecOverride(target) {
+  const ov = _activeExecOverride(target || 'conversation');
+  return ov ? { ...ov } : null;
+}
+
+/** Write / merge the task-level override. `patch === null` clears it. */
+function setExecOverride(target, patch) {
+  const tg = target || 'conversation';
+  if (patch === null || patch === undefined) {
+    if (tg === 'new-chat') _newChatExecOverride = null;
+    else if (tg === 'project') _projectExecOverride = null;
+    else if (currentCid) {
+      delete _execOverrideByCid[currentCid];
+      _saveExecOverrideMap();
+    }
+    if (typeof window !== 'undefined' && typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+    return;
+  }
+  const base = _activeExecOverride(tg) || {};
+  const next = _normExecOverride({ ...base, ...patch });
+  if (tg === 'new-chat') _newChatExecOverride = next;
+  else if (tg === 'project') _projectExecOverride = next;
+  else if (currentCid) {
+    if (next) _execOverrideByCid[currentCid] = next;
+    else delete _execOverrideByCid[currentCid];
+    _saveExecOverrideMap();
+  }
+  if (typeof window !== 'undefined' && typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+}
+
+/** Build the `execution_config` send payload for a target. Returns undefined
+ *  when nothing is overridden (turn falls back to agent/global defaults).
+ *  - recipient kind 'model' (API-connection pick): always sends the chosen
+ *    provider+model — that IS the execution target.
+ *  - otherwise: only fields present in the task-level override travel. */
+function _executionConfigForSend(target, snapshot) {
+  const snap = snapshot || _activeRecipient(target);
+  const ov = _activeExecOverride(target) || {};
+  if (snap && snap.kind === 'model' && snap.provider && snap.model) {
+    return {
+      provider: snap.provider,
+      model: snap.model,
+      ...(ov.effort ? { effort: ov.effort } : {}),
+    };
+  }
+  const cfg = {};
+  if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
+  else if (ov.model) { cfg.model = ov.model; }
+  if (ov.effort) cfg.effort = ov.effort;
+  return Object.keys(cfg).length ? cfg : undefined;
+}
 // The conversation "floor": server-authoritative `StateFile.active_recipient`,
 // mirrored here from every `state_changed` event. The commander sets it via
 // `hand_off_to` (model-decided); the agent's `<handback />`, the user's
@@ -1256,8 +1361,25 @@ function _saveRecipientMap() {
 const _quotesByCid = new Map();   // cid → Array<{ fromActor, fromName, msgId, text, produced[] }>
 
 function _normRecipient(next) {
-  if (!next || (next.kind !== 'commander' && next.kind !== 'agent')) return null;
+  if (!next) return null;
   if (next.kind === 'commander') return { ..._COMMANDER };
+  if (next.kind === 'model') {
+    // Unified execution entry: an API-connection model picked as the
+    // execution target. provider+model identify it; name is the display
+    // label (model name); providerLabel powers tooltips.
+    const provider = String(next.provider || '').trim();
+    const model = String(next.model || '').trim();
+    if (!provider || !model) return null;
+    return {
+      kind: 'model',
+      id: `${provider}/${model}`,
+      provider,
+      model,
+      name: String(next.name || model),
+      ...(next.providerLabel ? { providerLabel: String(next.providerLabel) } : {}),
+    };
+  }
+  if (next.kind !== 'agent') return null;
   const origin = next.origin === 'cli_fallback' || next.origin === 'active_floor'
     ? next.origin
     : undefined;
@@ -1285,7 +1407,14 @@ function _projectIdForConversation(cid) {
   return (conv && conv.project_id) || '';
 }
 
-function _onRecipientChanged(_target) { /* reserved for future hooks */ }
+function _onRecipientChanged(_target) {
+  // Unified execution entry: the exec-config chip resolves its display from
+  // the active recipient (agent defaults / API model pick), so it must
+  // re-render on every recipient change.
+  try {
+    window.dispatchEvent(new CustomEvent('cogseed:recipient-changed', { detail: { target: _target } }));
+  } catch (_) { /* non-DOM context */ }
+}
 
 /** When the active project's bindings change (commander chip → switch
  *  project, or project rename/binding edit while a chat is open), the
@@ -1310,6 +1439,13 @@ function setChatRecipient(target, next, _opts = {}) {
         // Returning to the commander while an agent holds the floor: arm a
         // one-shot `@commander` on the next send so the server resets the floor
         // (the model-owned floor can only be moved by a routed message).
+        if (_serverFloorByCid.get(currentCid)) _pendingFloorResetByCid.add(currentCid);
+      } else if (r.kind === 'model') {
+        // Unified execution entry: an API-connection model executes on the
+        // commander path (no agent actor). Like an explicit return-to-
+        // commander, arm the one-shot floor reset so the message isn't
+        // hijacked by whichever agent currently holds the floor.
+        _recipientByCid[currentCid] = r;
         if (_serverFloorByCid.get(currentCid)) _pendingFloorResetByCid.add(currentCid);
       } else {
         _recipientByCid[currentCid] = r;
@@ -1341,9 +1477,16 @@ function _transferNewChatRecipientTo(cid) {
   if (!_pendingNewChatRecipient) { _pendingNewChatRecipient = null; return; }
   const r = _pendingNewChatRecipient;
   _pendingNewChatRecipient = null;
-  if (r.kind === 'agent') {
+  if (r.kind === 'agent' || r.kind === 'model') {
     _recipientByCid[cid] = r;
     _saveRecipientMap();
+  }
+  // The task-level execution override picked on the landing page follows the
+  // message into the new conversation (unified execution entry).
+  if (_newChatExecOverride) {
+    _execOverrideByCid[cid] = _newChatExecOverride;
+    _saveExecOverrideMap();
+    _newChatExecOverride = null;
   }
 }
 
@@ -1353,6 +1496,9 @@ function _renderRecipientChip(target) {
     const id = tg === 'new-chat' ? 'new-chat-recipient-name' : 'chat-recipient-name';
     const nameEl = document.getElementById(id);
     if (!nameEl) continue;
+    // Stale tooltips from a previous model-recipient render must not linger
+    // on agent/commander renders — reset first, model branch re-sets it.
+    nameEl.closest('.chat-recipient-chip')?.removeAttribute('title');
     const r = _activeRecipient(tg);
     if (r.kind === 'agent' && r.id) {
       // Resolve name from the live registry first — the `r.name` field is
@@ -1366,6 +1512,15 @@ function _renderRecipientChip(target) {
       }
       if (!display) display = r.name || r.id;
       nameEl.textContent = display;
+      nameEl.removeAttribute('data-i18n');
+    } else if (r.kind === 'model' && r.model) {
+      // Unified execution entry: an API-connection model is the execution
+      // target — show the model name; the provider rides the tooltip.
+      nameEl.textContent = r.name || r.model;
+      const chipHost = nameEl.closest('.chat-recipient-chip');
+      if (chipHost) chipHost.title = r.providerLabel
+        ? `${r.providerLabel} · ${r.model}`
+        : `${r.provider} · ${r.model}`;
       nameEl.removeAttribute('data-i18n');
     } else if (typeof currentCid === 'string' && currentCid
       && typeof conversations !== 'undefined' && Array.isArray(conversations)
@@ -1407,7 +1562,12 @@ function onEnterNewChatView() {
   // already chose, and leave the chip alone.
   const input = document.getElementById('new-chat-input');
   const hasDraft = !!(input && input.value);
-  if (!hasDraft) _newChatRecipient = { ..._COMMANDER };
+  if (!hasDraft) {
+    _newChatRecipient = { ..._COMMANDER };
+    // The landing execution override is as ephemeral as the recipient —
+    // a fresh visit starts from defaults (unified execution entry).
+    _newChatExecOverride = null;
+  }
   _renderRecipientChip('new-chat');
   // Empty-state greeting / clock / ready-count — refresh on each view enter
   // so the time-of-day greeting is correct after a long idle session.
@@ -2293,6 +2453,10 @@ function _forgetCidRecipient(cid) {
   if (_recipientByCid[cid]) {
     delete _recipientByCid[cid];
     _saveRecipientMap();
+  }
+  if (_execOverrideByCid[cid]) {
+    delete _execOverrideByCid[cid];
+    _saveExecOverrideMap();
   }
   _autoRecipientByCid.delete(cid);
   _serverFloorByCid.delete(cid);
@@ -3559,6 +3723,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
     ...(gm.metrics ? { metrics: gm.metrics } : {}),
+    ...(gm.exec_meta ? { exec_meta: gm.exec_meta } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -9247,9 +9412,15 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       ? t('chat.recipient_space_builder')
       : resolvedActorLabel || fromLabel || p3394Fallback || t('chat.from_agent_unknown');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
+  // Unified execution entry: the actual execution config persisted with the
+  // message rides the header as a subtle meta chip — 发送前（composer 配置
+  // chip）、执行中（流式占位 meta）、结果（这里）三处展示保持一致。
+  const execMetaHtml = role !== 'user' && message.exec_meta && _formatExecMetaText(message.exec_meta)
+    ? `<span class="chat-msg-exec-meta">${escapeHtml(_formatExecMetaText(message.exec_meta))}</span>`
+    : '';
   const headerHtml = role === 'user'
     ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`
-    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
+    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span>${execMetaHtml}<span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
   const planAnnHtml = message._plan_announcement
     ? `<div class="chat-plan-announce">${_uiIconHtml('clipboard-list', 'ui-icon chat-plan-announce-icon')}<span>${escapeHtml(t('chat.plan_announce'))}</span></div>` : '';
   // Deliverables mount last inside the bubble as a footer strip. The separate
@@ -11625,11 +11796,16 @@ async function handleNewChatSubmit() {
   if (typeof window !== 'undefined' && typeof window.commitNewChatTaskRefs === 'function') {
     await window.commitNewChatTaskRefs(convId);
   }
+  // Unified execution entry: the landing pick (API model recipient and/or
+  // execution-config override) follows the message. Recipient + override were
+  // already transferred to convId above, so resolve against the new cid.
+  const newChatExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
     ..._recipientRoutingFields(recipientSnapshot),
+    ...(newChatExecConfig ? { execution_config: newChatExecConfig } : {}),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11731,11 +11907,13 @@ async function handleChatSubmit() {
       await uiAlert(t('chat.attach_queue_blocked'));
       return;
     }
+    const queuedExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
     enqueueMessage(cid, requestText, null, {
       recipient: recipientSnapshot,
       extra: {
         ...(useSelections.length ? { use_selections: useSelections } : {}),
         ...(references.length ? { references } : {}),
+        ...(queuedExecConfig ? { execution_config: queuedExecConfig } : {}),
       },
     });
     _clearQuotes(cid);
@@ -11767,11 +11945,19 @@ async function handleChatSubmit() {
   // 结构化字段路由而覆盖显式提及 → 仍路由回旧智能体。仅当正文没有前导 @提及
   // 时才附加快照路由字段（普通 chip 选中 / CLI fallback 场景）。
   const hasExplicitMention = _LEADING_MENTION_RE.test(content);
+  // Unified execution entry: per-task model / effort picks (API-connection
+  // model recipient or execution-config chip override). Like the structured
+  // route above, an explicit @mention overrides the chip target — the task
+  // config must not leak onto a differently-routed turn.
+  const executionConfig = hasExplicitMention
+    ? undefined
+    : _executionConfigForSend('conversation', recipientSnapshot);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
     ...(hasExplicitMention ? {} : _recipientRoutingFields(recipientSnapshot)),
+    ...(executionConfig ? { execution_config: executionConfig } : {}),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -12664,6 +12850,11 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
 async function _ensureModelOrCliFallback(cid, target = 'conversation', rawContent = '') {
   const selected = _activeRecipient(target);
   if (selected && selected.kind === 'agent' && selected.id) return true;
+  // Unified execution entry: an API-connection model pick implies the user
+  // came from the configured-providers list — route like a configured model
+  // (a stale entry that lost its key falls back to the default group at
+  // turn time, surfaced by the resolved-runtime event).
+  if (selected && selected.kind === 'model' && selected.provider) return true;
   // A raw mention is an explicit dispatch request of its own. Let main parse
   // and Wake-gate it; automatic CLI fallback must not replace its target.
   if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
@@ -13492,6 +13683,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
     <div class="chat-msg-header">
       <span class="chat-msg-avatar-slot" data-role="from-avatar"></span>
       <span class="chat-msg-from" data-role="from-chip"></span>
+      <span class="chat-msg-exec-meta" data-role="exec-meta" hidden></span>
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
@@ -13534,6 +13726,41 @@ function _createStreamingAssistantMessage(container, opts = {}) {
 function _hideThinking(msg) {
   const thinking = msg.querySelector('[data-role="thinking"]');
   if (thinking) thinking.style.display = 'none';
+}
+
+/** Unified execution entry: format the actual execution config shown on a
+ *  bubble's header meta — "模型 · 强度" for model turns, "CLI · 模型" for
+ *  external CLI turns. Returns '' when there is nothing meaningful. */
+function _formatExecMetaText(meta) {
+  if (!meta || typeof meta !== 'object') return '';
+  const parts = [];
+  const model = String(meta.model || '').trim();
+  const effort = meta.effort === 'off' || meta.effort === 'low' || meta.effort === 'high'
+    ? meta.effort
+    : (meta.effort === 'auto' ? 'auto' : '');
+  const cli = String(meta.cli || '').trim();
+  if (cli) {
+    if (model) parts.push(model);
+    parts.push(cli.toUpperCase());
+    return parts.join(' · ');
+  }
+  if (model) parts.push(model);
+  if (effort) parts.push(t('model_effort.' + effort));
+  return parts.join(' · ');
+}
+
+function _setExecMetaOnHeader(host, meta) {
+  const el = host && host.querySelector ? host.querySelector('[data-role="exec-meta"]') : null;
+  if (!el) return;
+  const text = _formatExecMetaText(meta);
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.hidden = false;
+}
+
+function _setPlaceholderExecMeta(placeholder, data) {
+  if (!placeholder || !data || typeof data !== 'object') return;
+  _setExecMetaOnHeader(placeholder, data);
 }
 
 const _PROCESS_GLYPH_KIND = {
@@ -15592,6 +15819,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       } else if (data.type === 'event') {
         // 事件型 process（工具调用、状态等）同样证明活动但未输出文本。
         _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
+        // Unified execution entry: the turn's actual execution config (model
+        // / effort / CLI) rides a dedicated live-only event — show it on the
+        // placeholder's header meta instead of the process rail.
+        if (data.event && data.event.stream === 'execution') {
+          _setPlaceholderExecMeta(target, data.event.data);
+          return;
+        }
         const before = _processLineCount(target);
         _renderAgentEvent(target, data.event);
         const evt = data.event || {};
