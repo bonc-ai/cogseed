@@ -609,7 +609,8 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
     description:
       'Hybrid search over the user Library (semantic vector + BM25 keyword, fused)'
       + (hasSpace ? ' (current space + global by default)' : '')
-      + '. Use for grounded Q&A about imported materials: returns the top-k most\n'
+      + ', plus this conversation\'s attachments when present.'
+      + ' Use for grounded Q&A about imported materials: returns the top-k most\n'
       + 'relevant chunks with a citation anchor (scope + path + chunk index) and a\n'
       + 'short snippet. Preferred over `kb_search` when the question mixes exact\n'
       + 'terms/ids (which keyword matching catches) with meaning (which vectors\n'
@@ -655,6 +656,7 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
       const searchOpts: MaterialSearchOptions = {
         userId: opts.userId,
         ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
         query,
         ...(input.k !== undefined ? { k: Number(input.k) } : {}),
         ...(typeof input.dir === 'string' && input.dir.trim() ? { dir: input.dir.trim() } : {}),
