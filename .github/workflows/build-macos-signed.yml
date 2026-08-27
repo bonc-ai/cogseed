@@ -1,11 +1,11 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 发布流程: 在 cicd 分支上打 tag (如 v0.0.7) 触发本流程
-#           dev/<用户名> → develop → cicd → 打 tag → CD 打包发布
+# 发布流程: 在 main 分支上打 tag (如 v0.1.3) 触发本流程
+#           本地迭代 → 阶段节点合并进 main → 打 v* tag → CD 打包发布
 # 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
 #
 # 注意: tag 不绑定分支,所以下面加了防呆检查,
-#       只有指向 cicd 分支的 tag 才允许构建发布(见 "校验 tag 来源分支" 步骤)
+#       只有指向 main 分支的 tag 才允许构建发布(见 "校验 tag 来源分支" 步骤)
 
 name: Build & Sign macOS
 
@@ -13,7 +13,7 @@ name: Build & Sign macOS
 on:
   push:
     tags:
-      - 'v*'  # 只在推送 v0.0.7 这样的 tag 时触发构建
+      - 'v*'  # 只在推送 v0.1.3 这样的 tag 时触发构建
   workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮,用于调试)
 
 # 给 workflow 用的默认 GITHUB_TOKEN 加上"可以创建 Release"的权限
@@ -40,22 +40,22 @@ jobs:
 
       # 步骤 1.1b: 校验 tag 来源分支(防呆)
       # tag 本身不绑分支,任何人在任何分支打 v* tag 都会触发本流程。
-      # 这里强制要求:tag 指向的提交必须已经在 cicd 分支上,
-      # 否则直接失败,防止有人误在 dev/develop/main 上打 tag 触发正式发布。
+      # 这里强制要求:tag 指向的提交必须已经在 main 分支上,
+      # 否则直接失败,防止有人误在 dev/develop 等分支上打 tag 触发正式发布。
       # 手动触发(workflow_dispatch)时跳过此检查,方便调试。
-      - name: Verify tag comes from cicd branch
+      - name: Verify tag comes from main branch
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 cicd
-          git fetch origin cicd:refs/remotes/origin/cicd
+          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 main
+          git fetch origin main:refs/remotes/origin/main
 
           # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
-          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
-          if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
-            echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
+          # 即:tag 指向的提交是否已经包含在 main 分支的历史里
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "✅ tag 指向的提交已包含在 main 分支,允许发布"
           else
-            echo "❌ 这个 tag 不在 cicd 分支上,拒绝构建发布"
-            echo "   正确流程: 先把代码合并进 cicd 分支,再在 cicd 上打 tag"
+            echo "❌ 这个 tag 不在 main 分支上,拒绝构建发布"
+            echo "   正确流程: 先把代码合并进 main 分支,再在 main 上打 tag"
             exit 1
           fi
 
@@ -181,11 +181,14 @@ jobs:
 
       # 步骤 6.1: 上传 .dmg 到 GitHub
       # 构建完成后,你可以在 GitHub Actions 页面下载
-      - name: Upload DMG artifact
+      - name: Upload DMG & zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS
-          path: dist/*.dmg
+          # dmg = 手动安装（官网/首次安装）；zip = 自动更新（Squirrel.Mac feed）
+          path: |
+            dist/*.dmg
+            dist/*.zip
           retention-days: 30  # 保留 30 天
 
       # ========================================
@@ -200,7 +203,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
+          # dmg + zip 都挂到 Release：zip 供 hub 自动更新 feed 使用
+          files: |
+            dist/*.dmg
+            dist/*.zip
           # tag 名字就用推送的那个 tag (比如 v0.0.6)
           tag_name: ${{ github.ref_name }}
           # 显式关闭自动生成的更新日志。
