@@ -83,7 +83,7 @@ import {
   providerRecommended,
   sortProviderIds,
 } from '../model/provider_catalog';
-import { publicContextWindowFor } from '../model/public_model_catalog';
+import { publicModelAbilitiesFor } from '../model/public_model_catalog';
 import {
   assertModelProviderAllowed,
   isModelProviderAllowed,
@@ -270,6 +270,9 @@ export interface CustomProviderModel {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  /** Accepts image inputs. undefined = unknown (no guessed default — the
+   *  conservative consumers pass images through when unknown). */
+  vision?: boolean;
 }
 
 export interface CustomProvider {
@@ -616,7 +619,14 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
       ),
       contextWindow,
     );
-    models.push({ id, contextWindow, maxTokens });
+    // vision 只收显式 boolean（probe/用户口径）；未知保持未知，不猜。
+    const rawVision = (metadata as { vision?: unknown }).vision;
+    models.push({
+      id,
+      contextWindow,
+      maxTokens,
+      ...(typeof rawVision === 'boolean' ? { vision: rawVision } : {}),
+    });
     if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
   }
   return models;
@@ -1164,7 +1174,7 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
-export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number }[] }> {
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
@@ -1173,18 +1183,22 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     // 配），渲染层会话统计行的上下文占用分母靠它（2026-08-27 反馈补齐）。
     // 存量兜底：导入早期落库的窗口恒为默认猜测值，与默认相等且目录确知
     // 真实窗口时，读取侧以目录值为准（不重写存储；用户手改过的值必然
-    // ≠ 默认，不受影响）。
+    // ≠ 默认，不受影响）。vision 同理：库里未知而目录确知时读目录值。
     return {
       models: (custom?.models || []).map((model) => {
+        const abilities = publicModelAbilitiesFor(model.id);
         const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
           ? model.contextWindow : null;
-        const resolved = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
-          ? (publicContextWindowFor(model.id) ?? stored)
+        const resolvedWindow = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+          ? (abilities.contextWindow ?? stored)
           : stored;
+        const resolvedVision = typeof model.vision === 'boolean'
+          ? model.vision : abilities.vision;
         return {
           id: model.id,
           name: model.id,
-          ...(resolved ? { contextWindow: resolved } : {}),
+          ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
+          ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
         };
       }),
     };

@@ -357,8 +357,10 @@ describe('custom providers', () => {
     });
     if (!result.ok) throw new Error(result.error);
     const listed = providers.listCustomProviders(UID);
-    const windows = Object.fromEntries(listed[0].models.map((m) => [m.id, m.contextWindow]));
-    expect(windows['deepseek/deepseek-v4-flash-vision-exp']).toBe(1_048_576);
-    expect(windows['totally-unknown-model']).toBe(131_072);
+    const byId = Object.fromEntries(listed[0].models.map((m) => [m.id, m]));
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1_048_576);
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].vision).toBe(true);
+    expect(byId['totally-unknown-model'].contextWindow).toBe(131_072);
+    expect(byId['totally-unknown-model'].vision).toBeUndefined();
   });
 });

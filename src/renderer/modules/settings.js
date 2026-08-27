@@ -1679,9 +1679,10 @@ function _settingsCcswitchRenderProviderDetail(provider) {
         modelsByExternalId: { [provider.externalId]: modelIds },
         // The probe pins the real API base (CC Switch bare-host URLs lack /v1).
         baseUrlsByExternalId: { [provider.externalId]: provider.baseUrl },
-        // Probed context windows ride along (aggregator endpoints volunteer
-        // them; plain OpenAI-compatible ones have none and this stays empty).
-        windowsByExternalId: { [provider.externalId]: provider.modelWindows || {} },
+        // Probed model abilities (context window, vision) ride along —
+        // aggregator endpoints volunteer them; plain OpenAI-compatible ones
+        // have none and this stays empty.
+        abilitiesByExternalId: { [provider.externalId]: provider.modelAbilities || {} },
       });
       if (!syncRes || !syncRes.ok) {
         addBtn.classList.remove('is-loading');
