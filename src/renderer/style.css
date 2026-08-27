@@ -11754,8 +11754,21 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .picker-model-expand-icon { width: 13px; height: 13px; }
 .skill-picker-item--back .skill-picker-item-name { color: var(--muted); font-size: 12px; }
 
-/* Exec-config menu: section labels, subheader, notes, action rows. */
-.model-chip-menu--exec { min-width: 280px; max-width: 360px; }
+/* Exec-config menu: compact — the composer menu should read as a light
+   utility popover, not a panel. Narrower than the generic menu, tighter
+   rows, effort as one segmented pill row. */
+.model-chip-menu--exec { min-width: 240px; max-width: 300px; }
+.model-chip-menu--exec .model-chip-menu-header {
+  padding: 6px 8px 4px;
+}
+.model-chip-menu--exec .model-chip-menu-section {
+  padding: 5px 8px 2px;
+  font-size: 9.5px;
+}
+.model-chip-menu--exec .model-chip-menu-item {
+  padding: 5px 9px;
+  gap: 1px;
+}
 .model-chip-menu-subheader {
   font-size: 11px;
   color: var(--muted);
@@ -11776,12 +11789,44 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-chip-menu-section-extra { font-weight: 500; text-transform: none; letter-spacing: 0; }
 .model-chip-menu-note {
-  padding: 4px 10px 6px;
-  font-size: 11px;
+  padding: 3px 10px 5px;
+  font-size: 10.5px;
   color: var(--muted);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 .model-chip-menu-item--action .model-chip-menu-name { color: var(--primary-text, #5b57d6); }
+
+/* One-row effort picker (自动 / 关闭 / 低 / 高). */
+.model-chip-menu-segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+.model-chip-seg-btn {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
+}
+.model-chip-seg-btn:hover { background: var(--primary-soft); border-color: rgba(91, 87, 214, 0.25); }
+.model-chip-seg-btn.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.model-chip-seg-btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
 
 .workspace-menu {
   z-index: 9999;
