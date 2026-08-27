@@ -441,6 +441,11 @@ export async function createGroup(uid: string, title: string): Promise<GroupResu
   return { ok: true, group: meta };
 }
 
+/**
+ * 普通分组改名。**拒绝模板行**：模板的显示名归 T-box（改名要改模板定义，
+ * 不是改台账），台账 title 只是安装时的拷贝——从这里改会让 groups.md 的
+ * title 与模板目录的 name 分叉，产生第三套显示名事实来源。
+ */
 export async function renameGroup(uid: string, groupId: string, newTitle: string): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const trimmedTitle = String(newTitle || '').trim();
@@ -449,17 +454,25 @@ export async function renameGroup(uid: string, groupId: string, newTitle: string
   const groups = readGroups(uid);
   const idx = groups.findIndex((g) => g.group_id === groupId);
   if (idx === -1) return { ok: false, error: 'group not found' };
+  if (groups[idx].template_id) return { ok: false, error: 'role_template_group' };
 
   groups[idx] = { ...groups[idx], title: trimmedTitle, updated_at: nowIso() };
   writeGroups(uid, groups);
   return { ok: true };
 }
 
+/**
+ * 普通分组删除。**拒绝模板行**：模板的下架路径是
+ * personal_ontology_template_files.ts::uninstallTemplateFile —— 它要归档模板
+ * 文件、按 role_template 标签归档/清理 USER.md 与 MEMORY.md 里的全局记忆。
+ * 从这里删只会 fs.rm 掉文件、不归档、不清理记忆，是不可逆的数据损失。
+ */
 export async function deleteGroup(uid: string, groupId: string): Promise<SimpleResult> {
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const groups = readGroups(uid);
   const idx = groups.findIndex((g) => g.group_id === groupId);
   if (idx === -1) return { ok: false, error: 'group not found' };
+  if (groups[idx].template_id) return { ok: false, error: 'role_template_group' };
 
   const [removed] = groups.splice(idx, 1);
   writeGroups(uid, groups);
@@ -682,9 +695,25 @@ export interface ListGroupFieldsResult {
   error?: string;
 }
 
-/** 模板文件元信息行：`> 模板: <template_id>@<semver>`（与 template_files.ts 同源，
- *  这里做轻量识别，避免 groups ↔ template_files 循环依赖）。 */
-const TEMPLATE_FILE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+)/m;
+/**
+ * 模板文件元信息行：`> 模板: <id>@<semver>[ | 已安装: <ISO>]`。
+ *
+ * **这是全仓库唯一的模板文件判据**（template_files.ts 从这里 import，反向会
+ * 成环：template_files 已经依赖 groups）。收归前 groups 与 template_files 各有
+ * 一份正则，一份带行尾锚点与预发布后缀、一份靠前缀匹配——虽然对当前版本号
+ * 恰好同判（见 role_template_baseline.test.ts B1），但两份定义随时会分叉，
+ * 让同一个文件被两个 reader 判成不同类型。
+ *
+ * 捕获组：1 = template_id，2 = 版本（支持 semver 预发布后缀），3 = 已安装时间。
+ */
+export const TEMPLATE_FILE_META_RE =
+  /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
+
+/** 文件是否携带模板元信息行（= 模板文件，按分节式解析）。 */
+export function isTemplateFileText(text: string): boolean {
+  if (typeof text !== 'string') return false;
+  return text.split('\n').some((line) => TEMPLATE_FILE_META_RE.test(line.trim()));
+}
 
 /** 模板文件（`## 分节` / `### 字段` 分节式）的轻量字段汇总：跨分节合并所有
  *  `### <字段名>` 小节为字段清单（含空坑与值，文件顺序）。仅提取字段名+值；
@@ -729,18 +758,15 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
   const fileText = readTextSafe(abs);
 
   // 模板文件（分节式）→ 跨分节字段汇总（这是模板组的唯一事实来源）
-  if (TEMPLATE_FILE_META_RE.test(fileText)) {
+  if (isTemplateFileText(fileText)) {
     const fields = collectTemplateFileFields(fileText);
     // 标注自定义字段：不在该模板 T-box 清单内的字段（用户升格/自建）
-    let tboxNames: Set<string> | null = null;
+    // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）。
+    // 判据来自 contract 的单一 T-box 能力，不在这里重建一份。
     if (meta.template_id) {
-      const template = getRoleTemplate(meta.template_id);
-      if (template) {
-        tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-      }
-    }
-    if (tboxNames !== null) {
-      for (const f of fields) f.isCustom = !tboxNames.has(f.name);
+      const { listTboxFieldNames } = await import('./personal_ontology_contract');
+      const tboxNames = listTboxFieldNames(meta.template_id);
+      if (tboxNames.size) for (const f of fields) f.isCustom = !tboxNames.has(f.name);
     }
     return { ok: true, fields };
   }

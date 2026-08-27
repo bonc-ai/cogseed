@@ -24,7 +24,6 @@ import { userLocalRoot, userOntologyGroupsDir } from '../paths';
 import { writeTextAtomicSync, safeId, nowIso, readJsonSync } from '../storage';
 import { addEntry as addMemoryEntry, addRoleTemplateMemoryEntry } from './memory';
 import { listGroups } from './personal_ontology_groups';
-import { getRoleTemplate } from './role_templates';
 import { routeCandidateToField } from './personal_ontology_router';
 import {
   listTemplateFileCatalog,
@@ -601,18 +600,12 @@ async function writeCandidateToDestinations(
       if (tpl && tpl.sections.length) {
         // 候选自动通道的白名单：只填模板 T-box 声明过的字段（“有坑填坑”）；
         // 自定义字段只能由用户手动升格创建，候选不得顺手建坑。
-        let tboxFields: Set<string> | null = null;
-        try {
-          const template = getRoleTemplate(tpl.template_id);
-          if (template) {
-            tboxFields = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-          }
-        } catch {
-          tboxFields = null;
-        }
+        // T-box 白名单判据来自 contract（单一实现）；模板未知 → 空集 → 不放行。
+        const { listTboxFieldNames } = await import('./personal_ontology_contract');
+        const tboxFields = listTboxFieldNames(tpl.template_id);
         if (dest.targetField) {
           if (!result.fieldWrites) result.fieldWrites = [];
-          const isTbox = tboxFields === null || tboxFields.has(dest.targetField);
+          const isTbox = tboxFields.has(dest.targetField);
           const sec = isTbox
             ? tpl.sections.find((s) => Object.prototype.hasOwnProperty.call(s.fields, dest.targetField as string))
             : undefined;

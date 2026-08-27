@@ -131,3 +131,39 @@ describe('role-template baseline › B2 枚举外来源标记的解析兼容', (
     expect(tmpl.serializeTemplateContent(content)).toContain('- 硕士 [已生效]');
   });
 });
+
+describe('role-template lifecycle guard › M8 普通 group 路径不得作用于模板行', () => {
+  it('renameGroup 拒绝模板行（显示名归 T-box，不从台账改）', async () => {
+    const tmpl = await loadTemplates();
+    const groups = await loadGroups();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+
+    expect(await groups.renameGroup(UID, row.group_id, '我的学生'))
+      .toEqual({ ok: false, error: 'role_template_group' });
+    // 台账 title 原样
+    expect(tmpl.readGroups(UID).find((g) => g.template_id === 'student')!.title).toBe('学生');
+  });
+
+  it('deleteGroup 拒绝模板行：不 fs.rm 模板文件、不绕过归档与记忆清理', async () => {
+    const tmpl = await loadTemplates();
+    const groups = await loadGroups();
+    await tmpl.installTemplateFile(UID, 'student');
+    const row = tmpl.readGroups(UID).find((g) => g.template_id === 'student')!;
+
+    expect(await groups.deleteGroup(UID, row.group_id))
+      .toEqual({ ok: false, error: 'role_template_group' });
+    // 文件还在，台账行还在 —— 下架只能走 uninstallTemplateFile
+    expect(tmpl.readTemplateFileText(UID, 'student')).toContain('> 模板: student@');
+    expect(tmpl.readGroups(UID).some((g) => g.template_id === 'student')).toBe(true);
+  });
+
+  it('普通分组的 rename / delete 不受影响', async () => {
+    const groups = await loadGroups();
+    const created = await groups.createGroup(UID, '我的随手记');
+    expect(created.ok).toBe(true);
+    const gid = created.group!.group_id;
+    expect(await groups.renameGroup(UID, gid, '改名了')).toEqual({ ok: true });
+    expect(await groups.deleteGroup(UID, gid)).toEqual({ ok: true });
+  });
+});

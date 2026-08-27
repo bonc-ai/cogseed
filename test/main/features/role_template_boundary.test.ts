@@ -176,3 +176,41 @@ describe('role-template boundary › M3 三元组不再跨 renderer / IPC 往返
     expect(candidateService).not.toContain("throw new Error('invalid personal profile target group')");
   });
 });
+
+describe('role-template boundary › M7/M8 PO 内部规则收口', () => {
+  it('模板文件判据只有一份实现，template_files 只做别名', () => {
+    const groups = read('src/main/features/personal_ontology_groups.ts');
+    const files = read('src/main/features/personal_ontology_template_files.ts');
+    expect(groups).toContain('export const TEMPLATE_FILE_META_RE');
+    expect(groups).toContain('export function isTemplateFileText');
+    // template_files 不再自带正则字面量，只 import 别名
+    expect(files).not.toMatch(/const TEMPLATE_META_RE = \//);
+    expect(files).toContain('const TEMPLATE_META_RE = TEMPLATE_FILE_META_RE;');
+    expect(files).toContain('export { isTemplateFileText };');
+  });
+
+  it('T-box 白名单只有 contract 一份，调用方不再自建', () => {
+    for (const file of [
+      'src/main/features/personal_ontology_candidates.ts',
+      'src/main/features/personal_ontology_groups.ts',
+      'src/main/features/personal_ontology_template_files.ts',
+      'src/main/features/recall/personal-profile-sync.ts',
+    ]) {
+      // 只禁「用 preset_groups 重建白名单」；用 T-box 做安装种子（installTemplateFile /
+      // migrateLegacyTemplateGroups 里的 preset_groups.map）是 PO 内部正当用法。
+      const code = stripComments(read(file));
+      expect(code, `${file} must not rebuild the T-box whitelist`)
+        .not.toContain('preset_groups.flatMap');
+      expect(code, `${file} must not re-derive field declaration from preset_groups`)
+        .not.toContain('.preset_groups.some');
+    }
+    expect(read('src/main/features/personal_ontology_contract.ts')).toContain('export function isTboxField');
+    expect(read('src/main/features/personal_ontology_contract.ts')).toContain('export function listTboxFieldNames');
+  });
+
+  it('普通 group 生命周期对模板行设防', () => {
+    const groups = read('src/main/features/personal_ontology_groups.ts');
+    const guards = groups.match(/role_template_group/g) || [];
+    expect(guards.length).toBeGreaterThanOrEqual(2); // renameGroup + deleteGroup
+  });
+});

@@ -38,6 +38,8 @@ import {
   removeField,
   removeEntry,
   listGroupFields,
+  isTemplateFileText,
+  TEMPLATE_FILE_META_RE,
   readGroupContent,
   parseGroupContent,
   resolveGroupContentAbsPathForUser,
@@ -61,8 +63,9 @@ export const MAX_INSTALLED_TEMPLATES = 3;
 /** 复合 id 分隔符：`<group_id>::<分节名>`。普通组 id 不含此分隔符。 */
 export const SECTION_REF_SEP = '::';
 
-/** 模板元信息行：`> 模板: <template_id>@<semver> | 已安装: <ISO>`（版本支持 semver 预发布后缀） */
-const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
+/** 模板元信息行的唯一定义在 personal_ontology_groups.ts —— 这里只做别名，
+ *  不再维护第二份正则。 */
+const TEMPLATE_META_RE = TEMPLATE_FILE_META_RE;
 
 // ── 纯函数：模板文件 parse / serialize ─────────────────────────────────────
 
@@ -84,11 +87,9 @@ export interface TemplateFileContent {
   sections: TemplateSection[];
 }
 
-/** 文件是否携带 `> 模板:` 元信息行（= 模板文件，按分节式解析）。 */
-export function isTemplateFileText(text: string): boolean {
-  if (typeof text !== 'string') return false;
-  return text.split('\n').some((line) => TEMPLATE_META_RE.test(line.trim()));
-}
+/** 文件是否携带 `> 模板:` 元信息行（= 模板文件，按分节式解析）。
+ *  实现在 groups.ts（唯一判据），这里转出供既有调用方使用。 */
+export { isTemplateFileText };
 
 /** 按标题行切块：`^<prefix>\s+(.+)$` 多行模式，返回 {title, body} 序列。 */
 function splitByHeading(text: string, prefix: '##' | '###'): Array<{ title: string; body: string }> {
@@ -620,11 +621,10 @@ export async function appendExistingTemplateFieldValueToRef(
 
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
-  const template = getRoleTemplate(meta.template_id);
-  const declared = template?.preset_groups.some((preset) =>
-    preset.title === section && preset.fields.some((field) => field.name === name),
-  );
-  if (!declared) return { ok: false, error: 'field is not declared by the role template' };
+  const { isTboxField } = await import('./personal_ontology_contract');
+  if (!isTboxField(meta.template_id, section, name)) {
+    return { ok: false, error: 'field is not declared by the role template' };
+  }
 
   return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
@@ -691,13 +691,10 @@ export async function promoteEntryToRef(
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
 
-  // 预判 isCustom：字段名不在该模板 T-box 清单内 → 自定义字段
-  let isCustom = true;
-  const template = getRoleTemplate(meta.template_id);
-  if (template) {
-    const tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-    isCustom = !tboxNames.has(name);
-  }
+  // 预判 isCustom：字段名不在该模板 T-box 清单内 → 自定义字段（判据走 contract）
+  const { listTboxFieldNames } = await import('./personal_ontology_contract');
+  const tboxNames = listTboxFieldNames(meta.template_id);
+  const isCustom = tboxNames.size ? !tboxNames.has(name) : true;
 
   const outcome = await mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
@@ -884,16 +881,14 @@ export async function listFieldsByRef(uid: string, ref: string): Promise<ListFie
   const content = parseTemplateContent(readTemplateFileText(uid, meta.template_id));
   const sec = findSection(content, section);
   if (!sec) return { ok: false, error: 'section not found' };
-  // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）
-  let tboxNames: Set<string> | null = null;
-  const template = getRoleTemplate(meta.template_id);
-  if (template) {
-    tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-  }
+  // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）。
+  // 判据来自 contract 的单一 T-box 能力。
+  const { listTboxFieldNames } = await import('./personal_ontology_contract');
+  const tboxNames = listTboxFieldNames(meta.template_id);
   const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => ({
     name,
     values: sec.fields[name] || [],
-    ...(tboxNames !== null ? { isCustom: !tboxNames.has(name) } : {}),
+    ...(tboxNames.size ? { isCustom: !tboxNames.has(name) } : {}),
   }));
   return { ok: true, fields };
 }
