@@ -99,6 +99,11 @@ export interface Conversation {
    * draft. The bus does not bind to it; group membership is dynamic. */
   agent_id: string;
   skill_id: string;
+  /** Per-conversation agent tool permission mode. Maps to the CLI agent's
+   *  `--permission-mode` (Claude Code / Codex). `full` = bypass permissions
+   *  (current default); `auto_approve` / `ask` require the interactive
+   *  approval UI (phase 2) before they are enforced. */
+  permission_mode?: 'full' | 'auto_approve' | 'ask';
   /** Commander session id (`<uid>-gconv-<cid>`). Stored for cleanup;
    * agents in the group have their own per-(conv,agent) session ids derived
    * via state.buildGmemberSessionId. */
@@ -289,6 +294,9 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
     created_at: createdAt,
     updated_at: updatedAt,
   };
+  if (typeof raw.permission_mode === 'string' && ['full', 'auto_approve', 'ask'].includes(raw.permission_mode)) {
+    out.permission_mode = raw.permission_mode as Conversation['permission_mode'];
+  }
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
   if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;

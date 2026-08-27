@@ -105,8 +105,7 @@ import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as cogseedBackend from '../features/cogseed_backend';
-import * as authorization from '../features/authorization/authorization-service';
-import type { AuthorizationPermission, AuthorizationResourceType, AuthorizationSubjectType } from '../features/authorization/authorization-types';
+import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -165,40 +164,6 @@ function conversationProjectHint(args: Record<string, any>): string | null | und
   if (raw === '' || raw === null) return null;
   if (typeof raw !== 'string' || !safeId(raw)) throw new Error('invalid project id');
   return raw;
-}
-
-function parseAuthorizationSubject(payload: Record<string, unknown>, userId: string): {
-  subjectType: AuthorizationSubjectType;
-  subjectId: string;
-} {
-  const subjectType = payload.authorization_subject_type;
-  const subjectId = payload.authorization_subject_id;
-  if (subjectType === undefined && subjectId === undefined) {
-    return { subjectType: 'user', subjectId: userId };
-  }
-  if ((subjectType !== 'user' && subjectType !== 'agent' && subjectType !== 'session')
-    || typeof subjectId !== 'string' || !safeId(subjectId)) {
-    throw new Error('invalid authorization subject');
-  }
-  return { subjectType, subjectId };
-}
-
-function parseAuthorizationResource(payload: Record<string, unknown>): {
-  resourceType: AuthorizationResourceType;
-  resourceId: string;
-} {
-  const resourceType = payload.resourceType;
-  const resourceId = payload.resourceId;
-  if ((resourceType !== 'agent' && resourceType !== 'project' && resourceType !== 'session')
-    || typeof resourceId !== 'string' || !safeId(resourceId)) {
-    throw new Error('invalid authorization resource');
-  }
-  return { resourceType, resourceId };
-}
-
-function parseAuthorizationPermission(value: unknown): AuthorizationPermission {
-  if (value === 'metadata.read' || value === 'body.read' || value === 'search.read' || value === 'execute') return value;
-  throw new Error('invalid authorization permission');
 }
 
 async function recordDeletedConversationSource(
@@ -916,54 +881,22 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
-  'authorization.state': async (payload, ctx) => {
+  'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
+  'stt.pushAudio': async (payload, ctx) => {
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    const resource = parseAuthorizationResource(raw);
-    const subject = parseAuthorizationSubject(raw, ctx.userId);
-    return authorization.state({
-      userId: ctx.userId,
-      ...resource,
-      ...subject,
-      permission: parseAuthorizationPermission(raw.permission),
-      ...(typeof raw.parentProjectId === 'string' && safeId(raw.parentProjectId)
-        ? { parentProjectId: raw.parentProjectId }
-        : {}),
-      ...(typeof raw.parentAgentId === 'string' && safeId(raw.parentAgentId)
-        ? { parentAgentId: raw.parentAgentId }
-        : {}),
-    });
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    if (typeof raw.chunk !== 'string') throw new Error('invalid audio chunk');
+    const bytes = Buffer.from(raw.chunk, 'base64');
+    if (bytes.length % 2 !== 0) throw new Error('invalid pcm length');
+    const samples = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+    stt.pushAudio(ctx.userId, raw.sessionId, samples);
+    return { ok: true };
   },
-  'authorization.grant': async (payload, ctx) => {
+  'stt.stop': async (payload, ctx) => {
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    const resource = parseAuthorizationResource(raw);
-    const subject = parseAuthorizationSubject(raw, ctx.userId);
-    if (!Array.isArray(raw.permissions) || raw.permissions.length === 0) throw new Error('permissions required');
-    const permissions = raw.permissions.map(parseAuthorizationPermission);
-    return { grant: await authorization.grant(ctx.userId, { ...resource, ...subject, permissions }) };
-  },
-  'authorization.revoke': async (payload, ctx) => {
-    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    const resource = parseAuthorizationResource(raw);
-    const subject = parseAuthorizationSubject(raw, ctx.userId);
-    return { grant: await authorization.revoke(ctx.userId, { ...resource, ...subject }) };
-  },
-  'authorization.assert': async (payload, ctx) => {
-    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-    const resource = parseAuthorizationResource(raw);
-    const subject = parseAuthorizationSubject(raw, ctx.userId);
-    const decision = await authorization.decide({
-      userId: ctx.userId,
-      ...resource,
-      ...subject,
-      permission: parseAuthorizationPermission(raw.permission),
-      ...(typeof raw.parentProjectId === 'string' && safeId(raw.parentProjectId)
-        ? { parentProjectId: raw.parentProjectId }
-        : {}),
-      ...(typeof raw.parentAgentId === 'string' && safeId(raw.parentAgentId)
-        ? { parentAgentId: raw.parentAgentId }
-        : {}),
-    });
-    return { ...decision, authorizationState: decision.allowed ? 'authorized' : 'metadata_only' };
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    return stt.stopSession(ctx.userId, raw.sessionId);
   },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
@@ -1042,6 +975,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { conversation: conv };
   },
 
+  'conversations.setPermissionMode': async (args, ctx) => {
+    const { cid, permission_mode } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+      throw new Error('invalid permission mode');
+    }
+    const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
+  },
+
   'conversations.history': async (args, ctx) => {
     const { cid, limit = 10, before, around_index } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
@@ -1049,41 +993,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const conv = await chats.getConversation(ctx.userId, cid, projectIdHint);
     if (!conv) throw new Error('conversation not found');
     const resolvedProjectId = conv.project_id ?? null;
-    const subject = parseAuthorizationSubject(args, ctx.userId);
-    const authorizationDecision = await authorization.decide({
-      userId: ctx.userId,
-      resourceType: 'session',
-      resourceId: cid,
-      ...subject,
-      permission: 'body.read',
-      ...(resolvedProjectId ? { parentProjectId: resolvedProjectId } : {}),
-      ...(conv.agent_id ? { parentAgentId: conv.agent_id } : {}),
-    });
     // Stamp the conv-bound agent's current enabled state so the renderer can
     // grey out the input + show a banner without making a second IPC round trip.
     // True for unbound (no agent_id) — input always allowed there.
     const agent_enabled = conv.agent_id ? isAgentEnabled(ctx.userId, conv.agent_id) : true;
     const runtime = await groupChat.runtimeStatus(ctx.userId, cid, resolvedProjectId);
-    if (!authorizationDecision.allowed) {
-      return {
-        conversation: { ...conv, ...runtime, agent_enabled },
-        history: [],
-        next_cursor: null,
-        authorizationState: authorizationDecision.reason === 'revoked'
-          ? 'revoked'
-          : 'metadata_only',
-        requiredPermission: 'body.read',
-      };
-    }
-    const authorizationLease = await authorization.acquireReadLease({
-      userId: ctx.userId,
-      resourceType: 'session',
-      resourceId: cid,
-      ...subject,
-      permission: 'body.read',
-      ...(resolvedProjectId ? { parentProjectId: resolvedProjectId } : {}),
-      ...(conv.agent_id ? { parentAgentId: conv.agent_id } : {}),
-    });
     const requestedLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 10)));
     const requestedBefore = Number(before);
     const requestedAroundIndex = Number(around_index);
@@ -1098,11 +1012,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         Number.isSafeInteger(requestedBefore) && requestedBefore >= 0 ? requestedBefore : undefined,
         resolvedProjectId,
       );
-    await authorization.assertLeaseStillValid(authorizationLease);
     return {
       conversation: { ...conv, ...runtime, agent_enabled },
       history: page.history,
-      authorizationState: 'authorized',
       next_cursor: page.nextCursor,
       ...(hasAroundIndex && 'pageStart' in page && 'historyIndexes' in page ? {
         page_start: page.pageStart,
@@ -4963,6 +4875,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  'stt.results': async function* ({ sessionId }, ctx, signal) {
+    if (typeof sessionId !== 'string' || !safeId(sessionId)) {
+      yield { type: 'error', text: 'invalid session id' };
+      return;
+    }
+    let lastPartial = '';
+    while (!signal.aborted) {
+      const partial = stt.currentPartial(ctx.userId, sessionId);
+      if (partial && partial !== lastPartial) {
+        lastPartial = partial;
+        yield { type: 'event', event: { partial } };
+      }
+      if (stt.isSessionDone(ctx.userId, sessionId)) {
+        yield { type: 'event', event: { final: stt.currentFinal(ctx.userId, sessionId) } };
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  },
   /**
    * Read-only aside answer. Deliberately NOT routed through groupChat.send /
    * bus.enqueue: doing so would append to the main transcript and add a second

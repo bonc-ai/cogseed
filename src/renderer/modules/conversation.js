@@ -7317,193 +7317,59 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
   // The sidebar already knows the physical owner. Main treats this only as a
   // validated lookup hint and falls back safely if sync moved the conversation.
   url += `&project_id=${encodeURIComponent(_projectIdForConversation(cid))}`;
-  const recipient = _activeRecipient(cid);
-  if (recipient && recipient.kind === 'agent' && recipient.id) {
-    url += `&authorization_subject_type=agent&authorization_subject_id=${encodeURIComponent(recipient.id)}`;
-  }
   return url;
 }
 
-function _conversationAuthorizationState(data) {
-  const state = String(data?.authorizationState || '').toLowerCase();
-  return state === 'metadata_only' || state === 'revoked' ? state : '';
+// ── 每会话访问权限模式（Claude Code 风格三档）──────────────────────────
+// full = 完全访问（bypass，阶段一真实生效）；auto_approve / ask 需要审批 UI
+// （阶段二），先占位并禁用，不造假生效。
+const _PERMISSION_MODES = [
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
+  { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+];
+
+let _permissionModeSelectBound = false;
+
+function _permissionModeEl() {
+  return document.getElementById('chat-permission-mode-select');
 }
 
-function _clearConversationBodyForAuthorization(cid, state = 'metadata_only') {
-  if (!cid || cid !== currentCid) return;
-  try { abortConvStream(cid); } catch (_) {}
-  const pending = pendingConvs.get(cid);
-  if (pending) pending.aborted = true;
-  const container = document.getElementById('chat-history');
-  if (container) {
-    container.innerHTML = `<div class="empty conversation-authorization-empty">${escapeHtml(state === 'revoked' ? t('chat.authorization.body_revoked', '当前会话授权已撤回，正文暂不可访问') : t('chat.authorization.body_metadata_only', '当前会话仅可查看元数据，正文需要授权'))}</div>`;
-  }
-  _groupPlaceholders.clear();
-  _latestInFlight.delete(cid);
-  _updateConvSendUI(cid);
-  void _renderChatAuthorizationBar(cid);
-}
-
-if (typeof window !== 'undefined') {
-  window._clearConversationBodyForAuthorization = _clearConversationBodyForAuthorization;
-}
-
-// ── 输入框下方三级权限下拉框 ──────────────────────────────────────────
-// 完全访问 = 全部权限（含 execute）；允许访问（受限）= 读/搜权限（无 execute）；
-// 不允许 = 撤销授权（正文锁定）。仅当会话绑定 agent 主体时显示。
-function _authLevels() {
-  return [
-    {
-      id: 'full',
-      label: t('chat.authorization.full', '完全访问'),
-      hint: t('chat.authorization.full_hint', '可读正文、搜索、执行'),
-      permissions: ['metadata.read', 'body.read', 'search.read', 'execute'],
-    },
-    {
-      id: 'limited',
-      label: t('chat.authorization.limited', '允许访问（受限）'),
-      hint: t('chat.authorization.limited_hint', '可读正文、搜索，不能执行'),
-      permissions: ['metadata.read', 'body.read', 'search.read'],
-    },
-    {
-      id: 'deny',
-      label: t('chat.authorization.deny', '不允许'),
-      hint: t('chat.authorization.deny_hint', '仅元数据，正文锁定'),
-      permissions: [],
-    },
-  ];
-}
-
-let _authorizationBarBound = false;
-
-function _authorizationBarEl() {
-  return document.getElementById('chat-authorization-bar');
-}
-
-/** 读取会话绑定的 agent 主体。优先用 convMeta（history 接口的完整元数据），
- *  兜底用 conversations 列表。无绑定返回 null。
- *  注意：IPC 层 parseAuthorizationSubject 读 `authorization_subject_*` 字段，
- *  缺失时 fallback 成当前用户（owner，永远放行）——所以必须显式带上。 */
-function _conversationAgentSubject(cid, convMeta) {
-  if (!cid) return null;
-  const conv = convMeta || (Array.isArray(conversations) ? conversations : [])
-    .find((c) => c && c.conversation_id === cid);
-  const agentId = String((conv && conv.agent_id) || '').trim();
-  if (!agentId) return null;
-  const projectId = String((conv && conv.project_id) || '').trim();
-  return {
-    resourceType: 'session',
-    resourceId: cid,
-    subjectType: 'agent',
-    subjectId: agentId,
-    authorization_subject_type: 'agent',
-    authorization_subject_id: agentId,
-    parentProjectId: projectId || null,
-    parentAgentId: agentId || null,
-  };
-}
-
-/** 根据后端 state 响应推导当前档位。 */
-function _authorizationLevelFromState(state) {
-  if (!state || typeof state !== 'object') return 'deny';
-  const authState = String(state.authorizationState || '');
-  if (authState !== 'authorized') return 'deny';
-  const grants = Array.isArray(state.grants) ? state.grants : [];
-  // 任意 active grant 带 execute → 完全访问；否则按受限（有读权限）
-  const hasExecute = grants.some((g) => g && g.status === 'active'
-    && Array.isArray(g.permissions) && g.permissions.includes('execute'));
-  return hasExecute ? 'full' : 'limited';
-}
-
-/** 查询并渲染下拉框。 */
-async function _renderChatAuthorizationBar(cid, convMeta) {
-  const bar = _authorizationBarEl();
-  if (!bar) return;
-  const subject = _conversationAgentSubject(cid, convMeta);
-  // 无绑定 agent 主体 → 隐藏下拉框
-  if (!subject) {
-    bar.hidden = true;
-    delete bar.dataset.subject;
-    return;
-  }
-  bar.hidden = false;
-  bar.dataset.subject = JSON.stringify(subject);
-  const select = bar.querySelector('.chat-authorization-bar-select');
-  const hintEl = bar.querySelector('.chat-authorization-bar-hint');
+function _renderPermissionModeSelect(convMeta) {
+  const select = _permissionModeEl();
   if (!select) return;
-  select.dataset.busy = '1';
-  let current = 'deny';
-  try {
-    const state = await window.cogseed.invoke('authorization.state', {
-      ...subject,
-      permission: 'body.read',
-    });
-    current = _authorizationLevelFromState(state);
-  } catch (err) {
-    _convLog.warn('authorization bar state failed', { cid, error: err && err.message });
-  }
-  const levels = _authLevels();
-  select.innerHTML = levels.map((level) => `<option value="${level.id}" title="${escapeHtml(level.hint)}">${escapeHtml(level.label)}</option>`).join('');
+  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+    ? convMeta.permission_mode
+    : 'full';
+  const phase2 = (typeof t === 'function' && t('chat.permission.phase2')) || '（阶段二）';
+  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
+  // 默认「完全访问」填 select，此时 escapeHtml 还没就绪，需要安全兜底。
+  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
+  select.innerHTML = _PERMISSION_MODES.map((m) => {
+    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
+    // 阶段一只有「完全访问」可真实生效；另外两档禁用。阶段二提示放进 title，
+    // 避免长文案把 select 撑到最长选项的宽度（选中项只有 4 个字时左右留白很大）。
+    const disabled = m.id !== 'full';
+    const title = disabled ? ` title="${esc(label)}${esc(phase2)}"` : '';
+    return `<option value="${m.id}"${disabled ? ' disabled' : ''}${current === m.id ? ' selected' : ''}${title}>${esc(label)}</option>`;
+  }).join('');
   select.value = current;
-  const currentLevel = levels.find((l) => l.id === current);
-  if (hintEl) hintEl.textContent = currentLevel ? currentLevel.hint : '';
-  delete select.dataset.busy;
 }
 
-/** 执行授权/撤销操作，成功后刷新下拉框 + 正文。 */
-async function _applyAuthorizationLevel(cid, levelId) {
-  const bar = _authorizationBarEl();
-  const select = bar && bar.querySelector('.chat-authorization-bar-select');
-  if (!select || select.dataset.busy === '1') return;
-  const level = _authLevels().find((l) => l.id === levelId);
-  // 优先用渲染时缓存的 subject（含 history 接口的完整元数据），兜底重查列表
-  let subject = null;
-  try { subject = bar.dataset.subject ? JSON.parse(bar.dataset.subject) : null; } catch (_) { subject = null; }
-  if (!subject) subject = _conversationAgentSubject(cid);
-  if (!level || !subject) return;
-  select.dataset.busy = '1';
-  try {
-    if (level.id === 'deny') {
-      await window.cogseed.invoke('authorization.revoke', subject);
-    } else {
-      await window.cogseed.invoke('authorization.grant', {
-        ...subject,
-        permissions: level.permissions,
-      });
+function _bindPermissionModeSelect() {
+  if (_permissionModeSelectBound) return;
+  _permissionModeSelectBound = true;
+  const select = _permissionModeEl();
+  if (!select) return;
+  select.addEventListener('change', async () => {
+    const mode = select.value;
+    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    try {
+      await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
     }
-    // 正文状态同步：不允许 → 清空正文；重新授权 → 重新加载历史
-    if (level.id === 'deny') {
-      _clearConversationBodyForAuthorization(cid, 'revoked');
-    } else {
-      const container = document.getElementById('chat-history');
-      const pending = pendingConvs.get(cid);
-      if (pending && pending.aborted) pending.aborted = false;
-      if (container && cid === currentCid) {
-        await loadConversationHistory(cid, { preserveScroll: true });
-      }
-    }
-    await _renderChatAuthorizationBar(cid);
-  } catch (err) {
-    if (typeof uiToast === 'function') uiToast((err && err.message) || '授权操作失败', { variant: 'warning' });
-    await _renderChatAuthorizationBar(cid);
-  } finally {
-    delete select.dataset.busy;
-  }
-}
-
-/** 绑定下拉框 change 事件（幂等，一次即可）。 */
-function _bindChatAuthorizationBar() {
-  if (_authorizationBarBound) return;
-  const bar = _authorizationBarEl();
-  if (!bar) return;
-  _authorizationBarBound = true;
-  const select = bar.querySelector('.chat-authorization-bar-select');
-  if (select) {
-    select.addEventListener('change', () => {
-      const levelId = select.value;
-      if (levelId && currentCid) void _applyAuthorizationLevel(currentCid, levelId);
-    });
-  }
+  });
 }
 
 function _membersRequestUrl(cid) {
@@ -8033,11 +7899,6 @@ async function loadConversationHistory(cid, opts = {}) {
       await _recoverMissingConversation(cid, 'history');
       return;
     }
-    const authorizationState = _conversationAuthorizationState(data);
-    if (authorizationState) {
-      _clearConversationBodyForAuthorization(cid, authorizationState);
-      return;
-    }
     if (!data.ok) throw new Error(data.error || 'load failed');
     if (cid !== currentCid) return;
     const convMeta = data.conversation || {};
@@ -8155,7 +8016,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // `agent_enabled` on the conversation payload (true when no agent_id).
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
-    void _renderChatAuthorizationBar(cid, convMeta);
+    _renderPermissionModeSelect(convMeta);
     const processingFresh = convMeta.processing === true
       && convMeta.processing_since
       && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
@@ -16549,5 +16410,8 @@ if (typeof window !== 'undefined') {
   } else {
     _initChatSelectionMenu();
   }
-  _bindChatAuthorizationBar();
+  _bindPermissionModeSelect();
+  // 权限 select 现在常驻底部栏（工作空间旁），先按默认「完全访问」填好，
+  // 等历史加载后再由 _renderPermissionModeSelect(convMeta) 精确回填。
+  _renderPermissionModeSelect(null);
 }

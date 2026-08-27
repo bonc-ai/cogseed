@@ -551,9 +551,6 @@ export const projectAutoTaskAttachmentsDir = (uid: string, pid: string, taskId: 
 // users fall back to local uid (the file then sits in cloud/config/ but doesn't actually
 // sync — sync engine is inactive without an account).
 export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConfigDir(uid), 'connectors.json');
-// Explicit Agent / Project / Session grants. This is cloud-domain metadata so
-// the access decision follows the user's workspace data across sync later.
-export const userAuthorizationFile = (uid: string) => path.join(userCloudConfigDir(uid), 'authorization.json');
 
 // ── Local-only per-user (never synced) ───────────────────────────────────
 
@@ -877,6 +874,20 @@ export function embeddingModelDir(): string {
   // itself — filtered out by the line above; in other tsx / node scripts
   // resourcesPath simply does not exist).
   return path.join(PC_ROOT, 'resources', 'embedding-model');
+}
+
+/** Speech-to-text (sherpa-onnx) model directory, shipped via `extraResources`.
+ *
+ *   dev:    PC/resources/sherpa-onnx/
+ *   packed: <app>/Contents/Resources/sherpa-onnx/   (darwin)
+ *           <app>/resources/sherpa-onnx/            (win/linux)
+ */
+export function sttModelDir(): string {
+  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
+    return path.join(rp, 'sherpa-onnx');
+  }
+  return path.join(PC_ROOT, 'resources', 'sherpa-onnx');
 }
 
 /** Runtime binaries shipped via electron-builder `extraResources`.

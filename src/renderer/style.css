@@ -5840,14 +5840,6 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   padding: 12px 14px 16px;
 }
 
-.conversation-authorization-empty {
-  max-width: 420px;
-  margin: auto;
-  padding: 24px;
-  line-height: 1.6;
-  text-align: center;
-}
-
 .run-context {
   display: flex;
   flex-direction: column;
@@ -8069,49 +8061,138 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   margin-left: auto;
 }
 
-/* 会话访问权限下拉框：输入框下方三级权限选择（完全访问 / 允许访问受限 / 不允许）。 */
-.chat-authorization-bar {
+/* 语音输入按钮：发送按钮左侧，录音时图标从麦克风切换为停止方块。 */
+.chat-stt-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.chat-stt-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+.chat-stt-btn.is-recording {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--danger);
+}
+.chat-stt-icon {
+  width: 15px;
+  height: 15px;
+}
+/* 空闲显示麦克风，录音时切换为停止方块 */
+.chat-stt-icon-stop { display: none; }
+.chat-stt-btn.is-recording .chat-stt-icon-mic { display: none; }
+.chat-stt-btn.is-recording .chat-stt-icon-stop { display: inline-block; }
+
+/* 语音输入波形面板：录音时浮在输入框上方，波形随真实音量起伏。 */
+.chat-stt-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 12px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.16);
+  z-index: 40;
+}
+.chat-stt-panel[hidden] { display: none; }
+.chat-stt-wave {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px 8px;
-  border-top: 1px solid var(--border);
-  margin-top: 2px;
+  gap: 3px;
+  height: 44px;
 }
-.chat-authorization-bar[hidden] { display: none; }
-.chat-authorization-bar-label {
-  flex: 0 0 auto;
+.chat-stt-wave span {
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: height 0.09s ease;
+}
+.chat-stt-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.chat-stt-hint {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
+  font-size: 12px;
 }
-.chat-authorization-bar-select {
-  flex: 0 0 auto;
-  min-width: 128px;
-  max-width: 200px;
-  height: 26px;
-  padding: 0 24px 0 8px;
+.chat-stt-cancel {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.chat-stt-cancel:hover { color: var(--text); }
+
+/* 每会话访问权限模式：底部栏里紧贴工作空间 chip 的紧凑下拉（Claude Code 风格三档） */
+.chat-permission-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px 5px 2px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  background: var(--surface-2);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.chat-authorization-bar-select:hover { border-color: var(--primary); }
-.chat-authorization-bar-select:disabled { cursor: wait; opacity: 0.6; }
-.chat-authorization-bar-hint {
-  flex: 1 1 auto;
-  min-width: 0;
+.chat-permission-chip:hover { border-color: var(--primary); }
+/* 聚焦时保留一个轻量边框提示，但去掉原生橙色 focus 环。 */
+.chat-permission-chip:focus-within { border-color: var(--primary); }
+.chat-permission-chip-icon {
+  width: 12px;
+  height: 12px;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.chat-permission-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 18px;
+  max-width: 88px;
+  padding: 0 12px 0 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 9px 9px;
+}
+.chat-permission-select:hover { color: var(--primary-text); }
+.chat-permission-select:focus,
+.chat-permission-select:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 /* Attachments inside message bubbles (history + optimistic append) */
@@ -11321,7 +11402,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 9px;
+  height: 32px;
+  padding: 0 9px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
@@ -11369,22 +11451,37 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    to the right edge. Note the effort chip also carries the .model-chip
    class, so the :not([hidden]) guard matters for both. */
 .model-chip:not([hidden]) + .chat-send-btn { margin-left: 0; }
+/* 会话面板里合成 chip 后面还有语音输入按钮再是发送按钮，此时发送按钮也要
+   收回自己的 margin-left:auto，让 chip/mic/send 一起贴在右侧。 */
+.chat-model-effort-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
-.effort-chip { margin-left: 0; flex-shrink: 0; }
-/* The thinking-strength label is fixed short text; never let flex
-   shrink it (the model chip / workspace chip absorb the squeeze). */
+/* Combined model+effort chip: "model · effort". The effort label is muted
+   secondary text; the "·" separator is a lightweight visual divider. */
+.chat-model-effort-chip .model-chip-label {
+  max-width: 150px;
+}
+.chat-model-effort-sep {
+  color: var(--muted);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
 .effort-chip-label {
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--muted);
+  font-weight: 400;
 }
-.effort-chip.is-unsupported {
+.chat-model-effort-chip.is-unsupported .effort-chip-label {
   opacity: 0.75;
 }
-.effort-chip.is-unsupported:hover {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text-2);
-  cursor: default;
+/* 空态：没有配置模型时显示「未配置模型」，隐藏强度/分隔符/箭头，点按去配置。 */
+.chat-model-effort-chip.is-empty {
+  color: var(--muted);
+}
+.chat-model-effort-chip.is-empty .chat-model-effort-sep,
+.chat-model-effort-chip.is-empty .effort-chip-label,
+.chat-model-effort-chip.is-empty .model-chip-chevron {
+  display: none;
 }
 .model-chip-menu-item.is-disabled {
   opacity: 0.55;
@@ -11393,15 +11490,20 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .model-chip-menu-item.is-disabled:hover { background: transparent; }
 
 .model-chip-menu {
-  min-width: 240px;
+  min-width: 150px;
   max-width: 320px;
   max-height: min(360px, 55vh);
   overflow-y: auto;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 10px 24px rgba(20, 71, 55, .12);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(20, 71, 55, 0.12);
   padding: 6px;
+}
+/* 右侧弹出的子菜单（模型列表 / 思考强度）比主菜单更宽。 */
+.model-chip-submenu {
+  min-width: 240px;
+  max-width: 320px;
 }
 .model-chip-menu-header {
   font-size: 11px;
@@ -11412,62 +11514,38 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 7px 10px 7px 10px;
+  padding: 7px 10px;
   border-radius: 8px;
   cursor: pointer;
   position: relative;
 }
-.model-chip-menu-item:hover { background: #f3f4f6; }
-.model-chip-menu-item.is-default { background: rgba(14, 159, 110, 0.06); }
-.model-chip-menu-arrow {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+.model-chip-menu-item:hover { background: var(--surface-2); }
+.model-chip-menu-item.is-default { background: var(--primary-soft); }
+/* 主菜单入口：模型 / 思考强度，文字与右箭头同行（覆盖上面的 column）。 */
+.model-chip-menu-item.model-chip-menu-trigger {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.model-chip-menu-trigger .model-chip-menu-main {
+  flex: 1 1 auto;
+}
+.model-chip-menu-trigger-chevron {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  flex-shrink: 0;
 }
-.model-chip-menu-arrow:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
-.model-chip-menu-arrow-icon { width: 13px; height: 13px; }
-.model-chip-menu-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin: 0 0 6px 2px;
-  padding: 4px 8px 4px 4px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
+.model-chip-menu-trigger-chevron-icon {
+  width: 13px;
+  height: 13px;
 }
-.model-chip-menu-back:hover { background: #f3f4f6; color: var(--text); }
-.model-chip-menu-back-icon { width: 13px; height: 13px; }
-.model-chip-menu-loading {
-  padding: 12px 10px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-.model-chip-menu-item:hover { background: #f3f4f6; }
-.model-chip-menu-item.is-default { background: rgba(14, 159, 110, 0.06); }
 .model-chip-menu-main {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding-right: 26px;
 }
 .model-chip-menu-rank {
   font-size: 11px;

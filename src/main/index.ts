@@ -1118,10 +1118,10 @@ if (!gotLock) {
     registerKbFileProtocol();
     registerChatMediaProtocol();
     registerChatAppProtocol();
-    // Renderer permission gate. Voice input is stripped from the open-source build, so media
-    // capture is denied; clipboard permissions are kept for copy/paste flows.
+    // Renderer permission gate. Media capture (microphone) is allowed for voice input;
+    // clipboard permissions are kept for copy/paste flows.
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write' || permission === 'media');
     });
     registerIpc();
     const stopTaskNotifications = taskNotifications.startTaskNotifications({
