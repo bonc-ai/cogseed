@@ -241,3 +241,348 @@ export function findFieldIdentityAnywhere(
     },
   };
 }
+
+// ── Detection 的输入形状 ───────────────────────────────────────────────────
+
+/**
+ * 已安装实例的**结构投影**：detection 只需要「有哪些分节、每节有哪些字段、
+ * 每个字段填了几条值」，不需要值本身。刻意做成一个小结构而不是直接吃
+ * `TemplateFileContent`，让 detection 保持成一个可用 fixture 表覆盖的纯函数。
+ */
+export interface InstalledSectionShape {
+  title: string;
+  /** 字段名 + 已填值条数，顺序 = 文件里的出现顺序。 */
+  fields: Array<{ name: string; valueCount: number }>;
+}
+
+export interface InstalledTemplateShape {
+  /** 文件 meta 行里的版本 —— 实例 schema 的**权威**版本。 */
+  version: string;
+  sections: InstalledSectionShape[];
+}
+
+// ── Detection 结果 ─────────────────────────────────────────────────────────
+
+/** catalog 有、实例文件没有的分节（整节新增，字段全是空坑）。 */
+export interface AddedSection {
+  sectionId: string;
+  title: string;
+  /** 插入位置 = catalog 里的分节下标（apply 按它把新节放回正确顺序）。 */
+  catalogIndex: number;
+  fields: Array<{ fieldId: string; name: string }>;
+}
+
+/** catalog 有、实例文件的对应分节里没有的字段（补空坑）。 */
+export interface AddedField {
+  sectionId: string;
+  /** 文件里该分节的标题 —— 可自动执行时它必然等于 catalog 当前 title。 */
+  sectionTitle: string;
+  fieldId: string;
+  name: string;
+  /** catalog 里排在它前面的那个字段的当前名；apply 据此就地插入而不是追加。 */
+  afterName?: string;
+}
+
+/**
+ * 本轮识别得出、但**不执行**的变化。带 `status` 是为了让调用方一眼看出
+ * 「系统知道发生了什么，只是这一版不动手」，而不是被当成 add/delete 混过去。
+ */
+export interface UnsupportedChange {
+  kind: 'rename_section' | 'rename_field' | 'move_field';
+  status: 'requires_manual_or_future_migration';
+  detail: string;
+}
+
+export interface MigrationConflict {
+  kind:
+    /** catalog 里没有这个模板。 */
+    | 'unknown_template'
+    /** 文件解析不出 meta / 分节，拿不到可信的实例 schema。 */
+    | 'file_unparsable'
+    /** 文件版本高于 catalog（跨客户端同步回来的更新版本）：不迁移、不降级。 */
+    | 'version_ahead'
+    /** 名字解析出多个 identity —— 必须由作者消歧，不猜。 */
+    | 'ambiguous_identity'
+    /**
+     * 同一作用域内同时存在「文件里认不出的名字」和「catalog 里缺失的坑」：
+     * 这可能是一次**未声明 previous_names 的改名**。无法与「用户自建字段 +
+     * catalog 新增字段」区分，所以按最保守处理——拒绝，不硬加空坑。
+     */
+    | 'possible_undeclared_rename';
+  detail: string;
+}
+
+export interface RoleTemplateMigrationDetection {
+  templateId: string;
+  /** 实例当前版本（**取自文件**，不是台账）。 */
+  fromVersion: string;
+  /** catalog 当前版本。 */
+  toVersion: string;
+  /** 台账记录的版本；与 fromVersion 不等 = 需要顺带自愈的缓存分叉。 */
+  ledgerVersion?: string;
+  needsMigration: boolean;
+  additions: { sections: AddedSection[]; fields: AddedField[] };
+  renamedSections: Array<{ sectionId: string; from: string; to: string }>;
+  renamedFields: Array<{ sectionId: string; sectionTitle: string; fieldId: string; from: string; to: string }>;
+  movedFields: Array<{ fieldId: string; name: string; fromSection: string; toSectionId: string; toSectionTitle: string }>;
+  /**
+   * 文件里存在、但 catalog 当前认不出的分节/字段。**信息项，不阻断**：
+   * 用户自建字段是一等功能（升格建坑），把它当阻断条件会让所有用过该功能的
+   * 用户永远迁不动。等 `retired_fields` 落地后，这里才能进一步区分
+   * 「产品下架的旧字段」和「用户自建字段」。
+   */
+  unknownInFile: { sections: string[]; fields: Array<{ sectionTitle: string; name: string; valueCount: number }> };
+  conflicts: MigrationConflict[];
+}
+
+/**
+ * 比对「实例文件结构」与「catalog 当前 schema」，输出结构化结果。**只读不写。**
+ *
+ * catalog 不从参数进 —— 它是 schema authority，让调用方传一份进来等于允许
+ * 拿一个假 catalog 去驱动真实文件的迁移。版本口径仍然显式出现在结果的
+ * `toVersion` 里。
+ */
+export function detectRoleTemplateMigration(
+  templateId: string,
+  installed: InstalledTemplateShape,
+  ledgerVersion?: string,
+): RoleTemplateMigrationDetection {
+  const base: RoleTemplateMigrationDetection = {
+    templateId,
+    fromVersion: installed?.version || '',
+    toVersion: '',
+    ...(ledgerVersion ? { ledgerVersion } : {}),
+    needsMigration: false,
+    additions: { sections: [], fields: [] },
+    renamedSections: [],
+    renamedFields: [],
+    movedFields: [],
+    unknownInFile: { sections: [], fields: [] },
+    conflicts: [],
+  };
+
+  const template = getRoleTemplate(templateId);
+  if (!template) {
+    base.conflicts.push({ kind: 'unknown_template', detail: templateId });
+    return base;
+  }
+  base.toVersion = template.version;
+
+  if (!installed || !installed.version || !Array.isArray(installed.sections) || !installed.sections.length) {
+    base.conflicts.push({ kind: 'file_unparsable', detail: 'installed template has no parsable version or sections' });
+    return base;
+  }
+
+  if (compareTemplateVersion(installed.version, template.version) > 0) {
+    base.conflicts.push({
+      kind: 'version_ahead',
+      detail: `installed ${installed.version} is newer than catalog ${template.version}`,
+    });
+    return base;
+  }
+
+  // ── 分节层：文件分节 → catalog identity ────────────────────────────────
+  /** catalog section id → 文件里对应的那一节。 */
+  const matchedSections = new Map<string, InstalledSectionShape>();
+  for (const fileSec of installed.sections) {
+    const res = resolveSectionIdentity(templateId, fileSec.title);
+    if (isIdentityFailure(res)) {
+      if (res.reason === 'ambiguous') {
+        base.conflicts.push({ kind: 'ambiguous_identity', detail: `section "${fileSec.title}": ${res.detail || ''}` });
+      } else {
+        base.unknownInFile.sections.push(fileSec.title);
+      }
+      continue;
+    }
+    // 同一个 catalog 分节被两个文件分节认领（用户手工建了个重名节）→ 不猜。
+    if (matchedSections.has(res.identity.sectionId)) {
+      base.conflicts.push({
+        kind: 'ambiguous_identity',
+        detail: `two file sections resolve to "${res.identity.sectionId}"`,
+      });
+      continue;
+    }
+    matchedSections.set(res.identity.sectionId, fileSec);
+    if (res.matchedBy === 'previous_name') {
+      base.renamedSections.push({ sectionId: res.identity.sectionId, from: fileSec.title, to: res.identity.title });
+    }
+  }
+
+  // ── 字段层 ─────────────────────────────────────────────────────────────
+  for (let i = 0; i < template.preset_groups.length; i++) {
+    const catSec = template.preset_groups[i];
+    const fileSec = matchedSections.get(catSec.id);
+
+    if (!fileSec) {
+      base.additions.sections.push({
+        sectionId: catSec.id,
+        title: catSec.title,
+        catalogIndex: i,
+        fields: catSec.fields.map((f) => ({ fieldId: f.id, name: f.name })),
+      });
+      continue;
+    }
+
+    /** catalog field id → 文件里对应字段名。 */
+    const matchedFields = new Map<string, string>();
+    const unknownHere: Array<{ name: string; valueCount: number }> = [];
+
+    for (const fileField of fileSec.fields) {
+      const res = resolveFieldIdentity(templateId, fileSec.title, fileField.name);
+      if (isIdentityFailure(res)) {
+        if (res.reason === 'ambiguous') {
+          base.conflicts.push({
+            kind: 'ambiguous_identity',
+            detail: `field "${fileSec.title} · ${fileField.name}": ${res.detail || ''}`,
+          });
+          continue;
+        }
+        // 本节里认不出 → 看看它是不是被移到了别的分节（move 本轮不执行，
+        // 但必须认出来，不能当成 delete + add）。
+        const anywhere = findFieldIdentityAnywhere(templateId, fileField.name);
+        if (!isIdentityFailure(anywhere) && anywhere.identity.sectionId !== catSec.id) {
+          base.movedFields.push({
+            fieldId: anywhere.identity.fieldId,
+            name: fileField.name,
+            fromSection: fileSec.title,
+            toSectionId: anywhere.identity.sectionId,
+            toSectionTitle: anywhere.identity.sectionTitle,
+          });
+          continue;
+        }
+        unknownHere.push({ name: fileField.name, valueCount: fileField.valueCount });
+        continue;
+      }
+      if (matchedFields.has(res.identity.fieldId)) {
+        base.conflicts.push({
+          kind: 'ambiguous_identity',
+          detail: `two file fields in "${fileSec.title}" resolve to "${res.identity.fieldId}"`,
+        });
+        continue;
+      }
+      matchedFields.set(res.identity.fieldId, fileField.name);
+      if (res.matchedBy === 'previous_name') {
+        base.renamedFields.push({
+          sectionId: catSec.id,
+          sectionTitle: fileSec.title,
+          fieldId: res.identity.fieldId,
+          from: fileField.name,
+          to: res.identity.name,
+        });
+      }
+    }
+
+    const missing: AddedField[] = [];
+    for (let j = 0; j < catSec.fields.length; j++) {
+      const catField = catSec.fields[j];
+      if (matchedFields.has(catField.id)) continue;
+      // 插到「catalog 里排在它前面、且文件里已经存在」的那个字段之后。
+      let afterName: string | undefined;
+      for (let k = j - 1; k >= 0; k--) {
+        const prev = matchedFields.get(catSec.fields[k].id);
+        if (prev) { afterName = prev; break; }
+      }
+      missing.push({
+        sectionId: catSec.id,
+        sectionTitle: fileSec.title,
+        fieldId: catField.id,
+        name: catField.name,
+        ...(afterName ? { afterName } : {}),
+      });
+    }
+
+    // 同一分节里既有「认不出的名字」又有「缺失的坑」→ 可能是未声明的改名。
+    if (unknownHere.length && missing.length) {
+      base.conflicts.push({
+        kind: 'possible_undeclared_rename',
+        detail: `section "${fileSec.title}": unknown [${unknownHere.map((u) => u.name).join(', ')}] alongside missing [${missing.map((m) => m.name).join(', ')}]`,
+      });
+    }
+    base.additions.fields.push(...missing);
+    for (const u of unknownHere) {
+      base.unknownInFile.fields.push({ sectionTitle: fileSec.title, name: u.name, valueCount: u.valueCount });
+    }
+  }
+
+  // 分节层的同类嫌疑：文件里有认不出的节，catalog 又有节缺失。
+  if (base.unknownInFile.sections.length && base.additions.sections.length) {
+    base.conflicts.push({
+      kind: 'possible_undeclared_rename',
+      detail: `unknown sections [${base.unknownInFile.sections.join(', ')}] alongside missing sections [${base.additions.sections.map((s) => s.title).join(', ')}]`,
+    });
+  }
+
+  base.needsMigration = Boolean(
+    base.additions.sections.length
+      || base.additions.fields.length
+      || base.renamedSections.length
+      || base.renamedFields.length
+      || base.movedFields.length
+      || base.conflicts.length
+      || compareTemplateVersion(installed.version, template.version) !== 0,
+  );
+
+  return base;
+}
+
+// ── Migration Plan ─────────────────────────────────────────────────────────
+
+export interface RoleTemplateMigrationPlan {
+  templateId: string;
+  fromVersion: string;
+  toVersion: string;
+  ledgerVersion?: string;
+  additions: { sections: AddedSection[]; fields: AddedField[] };
+  unsupportedChanges: UnsupportedChange[];
+  conflicts: MigrationConflict[];
+  /**
+   * 唯一的执行闸门：无冲突、无本轮不支持的变化，且确有可做的事。
+   * 有任何一条 rename / move 被识别出来 → false，本轮**拒绝升级版本号**，
+   * 实例如实停在旧版本，而不是留下一个半迁移 schema。
+   */
+  canAutoApply: boolean;
+  /**
+   * 结构已经和 catalog 一致，只差版本号。两种来源：catalog 只改了文案；
+   * 或者上次迁移「文件已写、台账未更新」中途崩溃（见 apply 的自愈说明）。
+   */
+  versionOnly: boolean;
+}
+
+/** detection → plan。纯函数：这一步本身就是 dry-run，不需要额外开关。 */
+export function planRoleTemplateMigration(
+  detection: RoleTemplateMigrationDetection,
+): RoleTemplateMigrationPlan {
+  const unsupportedChanges: UnsupportedChange[] = [
+    ...detection.renamedSections.map((r) => ({
+      kind: 'rename_section' as const,
+      status: 'requires_manual_or_future_migration' as const,
+      detail: `section "${r.from}" → "${r.to}" (${r.sectionId})`,
+    })),
+    ...detection.renamedFields.map((r) => ({
+      kind: 'rename_field' as const,
+      status: 'requires_manual_or_future_migration' as const,
+      detail: `field "${r.sectionTitle} · ${r.from}" → "${r.to}" (${r.fieldId})`,
+    })),
+    ...detection.movedFields.map((m) => ({
+      kind: 'move_field' as const,
+      status: 'requires_manual_or_future_migration' as const,
+      detail: `field "${m.name}" moves from "${m.fromSection}" to "${m.toSectionTitle}" (${m.fieldId})`,
+    })),
+  ];
+
+  const hasAdditions = Boolean(detection.additions.sections.length || detection.additions.fields.length);
+  const clean = detection.conflicts.length === 0 && unsupportedChanges.length === 0;
+  const versionOnly = clean && !hasAdditions && detection.needsMigration;
+
+  return {
+    templateId: detection.templateId,
+    fromVersion: detection.fromVersion,
+    toVersion: detection.toVersion,
+    ...(detection.ledgerVersion ? { ledgerVersion: detection.ledgerVersion } : {}),
+    additions: detection.additions,
+    unsupportedChanges,
+    conflicts: detection.conflicts,
+    canAutoApply: clean && detection.needsMigration,
+    versionOnly,
+  };
+}
