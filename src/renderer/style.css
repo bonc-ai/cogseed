@@ -16660,6 +16660,10 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-radius: 4px;
   padding: 1px 6px;
 }
+.settings-custom-provider-fetch-badge.is-cap {
+  color: var(--primary-text, #5b57d6);
+  border-color: rgba(91, 87, 214, 0.35);
+}
 .settings-custom-provider-fetch-error {
   display: flex;
   align-items: center;
