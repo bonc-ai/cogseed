@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "1c7c737d8bcac50f609aea853996c975c0b2ba96a1f5d07cc1aedc5af3167df1",
+  "content_tree_sha256": "7d9fed3be5379520357a7558dedcc74318d94cf86ecdc76f946efebe022bccbe",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6263,34 +6263,34 @@
       "sha256": "7dba1fe416dccc9b78ef61771238c2549e7aab48237e08cb154b82c280db0843"
     },
     {
+      "path": "system/skills/grounded-material-qa/references/evolution.md",
+      "bytes": 424,
+      "sha256": "56007b6083e107b6c80425936b35cac06878969354b62dab70022e753cec84d7"
+    },
+    {
       "path": "system/skills/grounded-material-qa/references/governance-boundaries.md",
       "bytes": 567,
       "sha256": "df72c7881a8041c37216565572de6bb052064fb7d76b12fe2265e451455bd07c"
     },
     {
       "path": "system/skills/grounded-material-qa/references/input-contract.md",
-      "bytes": 915,
-      "sha256": "90f265ed6f012a75e92cf54efed61489eb78d22cf20d714bf1840370596c0fbf"
-    },
-    {
-      "path": "system/skills/grounded-material-qa/references/kstar-evolution.md",
-      "bytes": 424,
-      "sha256": "56007b6083e107b6c80425936b35cac06878969354b62dab70022e753cec84d7"
+      "bytes": 695,
+      "sha256": "52348dab2f8eac3780adc3d090a598bc8aeaba8466479df970af58d7a9211ad6"
     },
     {
       "path": "system/skills/grounded-material-qa/references/ontology-mapping.md",
-      "bytes": 760,
-      "sha256": "47db8e89b96fd0a067fa8bd2135506b5fdce2e9b24c849794def3f95bd001dcc"
+      "bytes": 757,
+      "sha256": "e8d42494fd1aae732275d5e29eeb1fec82d1106d595f91e8d7b4c03c82aa6b41"
     },
     {
       "path": "system/skills/grounded-material-qa/references/output-contract.md",
-      "bytes": 894,
-      "sha256": "c7ff7803d0c50730986fe4efb68f9b8f30ffddf9abdea28f855e5f00c8fee1ba"
+      "bytes": 809,
+      "sha256": "167555b8f95ca7060980592eb0bfba2607cd5e25e2e37363d69cf6730ecfc047"
     },
     {
       "path": "system/skills/grounded-material-qa/references/skill-spec.yaml",
-      "bytes": 629,
-      "sha256": "0763ef327dae400cd40d48a4fc17933475af791932f5349efef58248a907e1b6"
+      "bytes": 325,
+      "sha256": "4d82704cbc5692bf71bf5afc66459a685ecf023e88f52b6c84e41bac164c75ea"
     },
     {
       "path": "system/skills/grounded-material-qa/references/validation-contract.md",

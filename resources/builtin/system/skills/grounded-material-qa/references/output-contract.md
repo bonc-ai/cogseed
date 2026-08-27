@@ -8,7 +8,7 @@ The skill output shape is stable on success and failure:
 | `citations` | list of `path#chunk N` anchors used (string list) |
 | `evidence_status` | `grounded` \| `low_confidence` \| `no_material` |
 | `trace` | step trace for replay (string list) |
-| `audit_refs` | audit ledger references (string list; the runtime appends audit entries, append-only) |
+| `audit_refs` | audit references (string list; the runtime appends audit entries, append-only) |
 
 Failure modes are structured, not silent:
 
@@ -17,5 +17,3 @@ Failure modes are structured, not silent:
   caveat or declines.
 - `unsupported`: a proposed citation does not exist in the evidence; the claim
   is dropped or rewritten before delivery.
-
-`audit_refs` is required — the runtime appends audit entries, append-only.
