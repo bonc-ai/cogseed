@@ -108,10 +108,17 @@
               </div>
               <div class="chat-quote-preview" id="new-chat-quote-preview" style="display:none"></div>
               <textarea id="new-chat-input" data-i18n-placeholder="new_chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors, Library files." rows="2"></textarea>
+              <!-- 语音输入波形面板（新建会话）：录音时显示，波形随真实音量起伏。 -->
+              <div class="chat-stt-panel" id="new-chat-stt-panel" hidden>
+                <div class="chat-stt-wave" id="new-chat-stt-wave" aria-hidden="true"></div>
+                <div class="chat-stt-meta">
+                  <span class="chat-stt-hint" data-i18n="chat.stt.listening">正在聆听…</span>
+                  <button type="button" class="chat-stt-cancel" id="new-chat-stt-cancel" data-i18n="chat.stt.cancel">取消</button>
+                </div>
+              </div>
               <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
                    P11: [+] | divider | [@agent] | [workspace - JS-injected] |
-                   [skill] | spacer | [send]. The open-source build strips
-                   voice input, so send owns the right spacer. -->
+                   [skill] | spacer | [model+effort] [mic] [send]. -->
               <div class="chat-bottom-bar">
                 <button type="button" class="chat-attach-btn" id="new-chat-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
                 <span class="chat-composer-divider" aria-hidden="true"></span>
@@ -129,6 +136,11 @@
                     <span data-ui-icon="x" data-ui-icon-class="chip-close-icon"></span>
                   </button>
                 </div>
+                <button type="button" class="chat-stt-btn" id="new-chat-stt-btn"
+                        data-i18n-title="chat.stt.title" title="语音输入" aria-label="语音输入" aria-pressed="false">
+                  <span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon chat-stt-icon-mic"></span>
+                  <span data-ui-icon="square" data-ui-icon-class="chat-stt-icon chat-stt-icon-stop"></span>
+                </button>
                 <button id="new-chat-send-btn" class="chat-send-btn" data-i18n-title="new_chat.send_title" title="Send">
                   <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                 </button>
@@ -272,6 +284,14 @@
                 </div>
                 <div class="chat-quote-preview" id="chat-quote-preview" style="display:none"></div>
                 <textarea id="chat-input" data-i18n-placeholder="chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors." rows="2"></textarea>
+                <!-- 语音输入波形面板：录音时显示，波形随真实音量起伏。 -->
+                <div class="chat-stt-panel" id="chat-stt-panel" hidden>
+                  <div class="chat-stt-wave" id="chat-stt-wave" aria-hidden="true"></div>
+                  <div class="chat-stt-meta">
+                    <span class="chat-stt-hint" data-i18n="chat.stt.listening">正在聆听…</span>
+                    <button type="button" class="chat-stt-cancel" id="chat-stt-cancel" data-i18n="chat.stt.cancel">取消</button>
+                  </div>
+                </div>
                 <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
                      P11: [+] | divider | [@agent] | [workspace - JS-injected] |
                      [skill] | spacer | [send].                      by `chat-send-btn { margin-left: auto }`. -->
@@ -282,16 +302,27 @@
                     <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
                     <span class="chat-recipient-name" id="chat-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
                   </button>
+                  <!-- 每会话访问权限：紧跟工作空间 chip（JS 注入在 recipient 之后）。 -->
+                  <span class="chat-permission-chip" id="chat-permission-chip" data-i18n-title="chat.permission.title" title="访问权限">
+                    <span data-ui-icon="lock" data-ui-icon-class="chat-permission-chip-icon"></span>
+                    <select class="chat-permission-select" id="chat-permission-mode-select" aria-label="访问权限"></select>
+                  </span>
                   <!-- Workspace chip is injected by user-workspace.js right after
                        the recipient chip — see initUserWorkspace(). -->
                   <div class="chat-skill-chip" id="chat-skill-chip" data-target="conversation" style="display:none">
                     <span class="chip-label"></span>
                     <span class="chip-close" data-i18n-title="chat.chip_remove_title" title="Remove">×</span>
                   </div>
+                  <button type="button" class="chat-stt-btn" id="chat-stt-btn"
+                          data-i18n-title="chat.stt.title" title="语音输入" aria-label="语音输入" aria-pressed="false">
+                    <span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon chat-stt-icon-mic"></span>
+                    <span data-ui-icon="square" data-ui-icon-class="chat-stt-icon chat-stt-icon-stop"></span>
+                  </button>
                   <button id="chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
                     <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                     <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
                   </button>
+                  <!-- 模型 + 思考强度：由 model-chip.js 注入合成 chip，紧跟发送按钮。 -->
                 </div>
               </div>
             </div>
@@ -1935,6 +1966,7 @@
   <script src="./modules/search.js"></script>
   <script src="./modules/user-workspace.js"></script>
   <script src="./modules/model-chip.js"></script>
+  <script src="./modules/stt-input.js"></script>
   <script src="./modules/local-agents.js"></script>
   <!-- DOMPurify must load before utils.js so inline connector SVGs are sanitized, not disabled. -->
   <script src="./vendor/dompurify/purify.min.js"></script>

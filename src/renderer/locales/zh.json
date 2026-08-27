@@ -1771,6 +1771,8 @@
   "model_guard.description": "配置 API Key 或导入完整 CC Switch 凭据后，即可使用模型能力。",
   "model_guard.dismiss": "关闭模型配置提醒",
   "model_chip.title": "当前默认模型：{provider} · {model}。点击切换。",
+  "model_chip.empty_label": "未配置模型",
+  "model_chip.empty_title": "未配置模型，点击前往「设置 → 凭据」配置",
   "model_chip.menu_title": "选择默认模型",
   "model_chip.expand_title": "查看该提供商的全部模型",
   "model_chip.back": "返回",
@@ -6063,5 +6065,18 @@
   "settings.updates.auto.downloaded": "新版本 {version} 已就绪，重启后自动安装",
   "settings.updates.auto.error": "自动更新检查失败：{message}",
   "settings.updates.auto.up_to_date": "自动更新：已是最新版本",
-  "settings.updates.auto.install": "重启并安装"
+  "settings.updates.auto.install": "重启并安装",
+  "chat.permission.label": "访问权限",
+  "chat.permission.title": "访问权限：控制本会话内智能体可执行的工具",
+  "chat.permission.full": "完全访问",
+  "chat.permission.auto_approve": "帮我批准",
+  "chat.permission.ask": "请求批准",
+  "chat.permission.phase2": "（阶段二）",
+  "chat.stt.title": "语音输入",
+  "chat.stt.stop_title": "停止语音输入",
+  "chat.stt.listening": "正在聆听…",
+  "chat.stt.error_permission": "无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许 CogSeed 使用麦克风。",
+  "chat.stt.error_no_mic": "未检测到麦克风设备，请检查麦克风是否连接。",
+  "chat.stt.error_generic": "语音输入启动失败",
+  "chat.stt.cancel": "取消"
 }

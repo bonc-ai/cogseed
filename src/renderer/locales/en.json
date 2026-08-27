@@ -1768,6 +1768,8 @@
   "model_guard.description": "Add an API key or import a complete CC Switch credential to enable model features.",
   "model_guard.dismiss": "Dismiss model setup reminder",
   "model_chip.title": "Current default model: {provider} · {model}. Click to switch.",
+  "model_chip.empty_label": "No model",
+  "model_chip.empty_title": "No model configured — click to open Settings → Credentials",
   "model_chip.menu_title": "Choose default model",
   "model_chip.expand_title": "Show all models of this provider",
   "model_chip.back": "Back",
@@ -6063,5 +6065,18 @@
   "settings.updates.auto.downloaded": "Version {version} is ready — restart to install",
   "settings.updates.auto.error": "Auto-update check failed: {message}",
   "settings.updates.auto.up_to_date": "Auto-update: you're up to date",
-  "settings.updates.auto.install": "Restart & Install"
+  "settings.updates.auto.install": "Restart & Install",
+  "chat.permission.label": "Access permission",
+  "chat.permission.title": "Access permission: controls which tools the agent may run in this conversation",
+  "chat.permission.full": "Full access",
+  "chat.permission.auto_approve": "Auto-approve",
+  "chat.permission.ask": "Ask for approval",
+  "chat.permission.phase2": "(phase 2)",
+  "chat.stt.title": "Voice input",
+  "chat.stt.stop_title": "Stop voice input",
+  "chat.stt.listening": "Listening…",
+  "chat.stt.error_permission": "Cannot access the microphone: allow CogSeed to use the microphone under System Settings → Privacy & Security → Microphone.",
+  "chat.stt.error_no_mic": "No microphone detected. Check that a microphone is connected.",
+  "chat.stt.error_generic": "Voice input failed to start",
+  "chat.stt.cancel": "Cancel"
 }

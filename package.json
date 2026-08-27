@@ -85,6 +85,7 @@
     "mammoth": "^1.12.1",
     "node-pty": "^1.0.0",
     "pdfjs-dist": "^6.2.108",
+    "sherpa-onnx-node": "^1.13.6",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
     "tar": "7.5.20",
