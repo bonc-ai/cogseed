@@ -1,0 +1,6 @@
+# Identity / level / route — repo skill package contract.
+name: grounded-material-qa
+version: 0.1.0
+level: L5                         # L5: handles private data + decision-support answers
+promotion_ceiling: staged         # HARD CAP — never higher than staged
+production_release_allowed: false # HARD LOCK — never true

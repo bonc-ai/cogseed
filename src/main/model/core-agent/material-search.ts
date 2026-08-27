@@ -1,5 +1,5 @@
 /**
- * Material-boundary hybrid search (COGSEED-39 ① Phase 2).
+ * Material-boundary hybrid search (COGSEED-39 ① Phase 2 + 4.3).
  *
  * Retrieval entry for the "reliable Q&A within a material set" workstream:
  * fuses Library vector search (semantic, via the existing sqlite-vec KB)
@@ -13,6 +13,13 @@
  * phases (material-boundary model, answer verification) consume as the
  * citation anchor.
  *
+ * Attachment side (4.3): when `cid` + `attachments` are given, in-scope
+ * conversation attachments participate in the keyword side — plain-text
+ * files read directly, rich documents only when the file-indexer cache
+ * already exists (search stays fast and side-effect free; `kb_read
+ * source="attachment"` extracts on demand). Attachment hits carry
+ * `source: 'attachment'` and `scope: 'conversation'`.
+ *
  * Design notes / reused utilities:
  *   - Vector side mirrors `kb-tools.ts::kb_search` (embed → kb.search on
  *     global + space Library), so behavior stays consistent with the
@@ -20,15 +27,22 @@
  *   - Keyword side reuses `bm25Score` from the core-agent memory hybrid
  *     (loaded dynamically through `#core-agent`, per the dynamic-import
  *     rule); no new scoring implementation.
- *   - No writes: read-only over the KB vector store and the space library.
+ *   - Boundary comes from `material-boundary.ts::resolveMaterialSet`
+ *     (Phase 3): only in-scope attachments are considered.
+ *   - No writes: read-only over the KB vector store, space library, and
+ *     the file-indexer cache.
  *   - `#core-agent` is imported dynamically only (static import is
  *     forbidden in main).
  */
 
+import * as fs from 'node:fs';
 import { createLogger } from '../../logger';
 import * as kb from '../../features/kb_vector';
 import * as kbEmbed from '../../features/kb_embed';
 import * as spaceLibrary from '../../features/project_library_indexer';
+import * as chatAttachments from '../../features/chat_attachments';
+import * as fileIndexer from '../../features/file_indexer';
+import { resolveMaterialSet } from './material-boundary';
 import { logErrorRef, maskId } from '../../util/log-redact';
 
 const log = createLogger('material-search');
@@ -43,12 +57,15 @@ const SNIPPET_CHARS = 600;
 /** Cap on keyword candidates scanned per query (prevents unbounded BM25). */
 const KEYWORD_FILE_CAP = 200;
 const KEYWORD_CHUNK_CAP = 800;
+/** Attachment-side caps (4.3): bounded scanning and per-file text length. */
+const ATTACHMENT_FILE_CAP = 20;
+const ATTACHMENT_CHAR_CAP = 50_000;
 
 export type MaterialScope = 'global' | 'space' | 'all';
 
 export interface MaterialHit {
-  source: 'library';
-  scope: 'global' | 'space';
+  source: 'library' | 'attachment';
+  scope: 'global' | 'space' | 'conversation';
   path: string;
   chunkIdx: number;
   title: string | null;
@@ -71,6 +88,10 @@ export interface MaterialSearchOptions {
   kind?: kb.KbKind;
   vectorWeight?: number;
   keywordWeight?: number;
+  /** Conversation id — when set with `attachments`, in-scope attachments join the keyword side (4.3). */
+  cid?: string;
+  /** Include conversation attachments in retrieval. Requires `cid`. Default false. */
+  attachments?: boolean;
 }
 
 export interface MaterialSearchResult {
@@ -214,6 +235,75 @@ async function keywordCandidates(
 }
 
 /**
+ * Attachment side (4.3): BM25 over in-scope conversation attachments.
+ * Plain-text files read directly; rich documents only when the file-indexer
+ * cache already exists (search must stay fast and side-effect free — the
+ * model can `kb_read source="attachment"` to extract on demand). Each
+ * attachment contributes at most one candidate (chunkIdx 0) capped at
+ * `ATTACHMENT_CHAR_CAP` chars.
+ */
+async function attachmentCandidates(
+  opts: Required<Pick<MaterialSearchOptions, 'userId'>> & MaterialSearchOptions,
+  query: string,
+  bm25Score: (q: string, doc: string) => number,
+): Promise<Array<{ key: string; rank: number; score: number; hit: MaterialHit }>> {
+  if (!opts.attachments || !opts.cid) return [];
+
+  let boundary;
+  try {
+    boundary = await resolveMaterialSet({ userId: opts.userId, cid: opts.cid });
+  } catch (err) {
+    log.warn('material_search: attachment boundary resolve failed', {
+      user_id: maskId(opts.userId),
+      error: logErrorRef(err),
+    });
+    return [];
+  }
+
+  const candidates: Array<{ name: string; text: string; score: number }> = [];
+  let scanned = 0;
+  for (const a of boundary.attachments) {
+    if (!a.inScope || scanned >= ATTACHMENT_FILE_CAP) continue;
+    scanned += 1;
+    const resolved = chatAttachments.resolveAttachmentAbsPath(opts.userId, opts.cid, a.name);
+    if (!resolved.ok) continue;
+    const { absPath } = resolved;
+    let text: string;
+    try {
+      if (fileIndexer.kindOf(absPath) === 'text') {
+        text = fs.readFileSync(absPath, 'utf8');
+      } else {
+        const meta = fileIndexer.getCachedMeta(opts.userId, absPath);
+        if (!meta) continue; // rich document not cached yet — skip in search
+        ({ text } = await fileIndexer.getExtractedText(opts.userId, absPath));
+      }
+    } catch {
+      continue;
+    }
+    if (text.length > ATTACHMENT_CHAR_CAP) text = text.slice(0, ATTACHMENT_CHAR_CAP);
+    const s = bm25Score(query, text);
+    if (s <= 0) continue;
+    candidates.push({ name: a.name, text, score: s });
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.map((c, i) => ({
+    key: hitKey('conversation', c.name, 0),
+    rank: i,
+    score: c.score,
+    hit: {
+      source: 'attachment' as const,
+      scope: 'conversation' as const,
+      path: c.name,
+      chunkIdx: 0,
+      title: null,
+      snippet: snippetOf(c.text),
+      score: 0,
+    },
+  }));
+}
+
+/**
  * Hybrid material search over the Library (global + optional space).
  * Returns fused, top-k hits ordered by RRF score, each with a citation
  * anchor (`scope + path + chunkIdx`) for grounded answering.
@@ -243,11 +333,13 @@ export async function searchMaterials(opts: MaterialSearchOptions): Promise<Mate
 
   let vectorCands: Awaited<ReturnType<typeof vectorCandidates>> = [];
   let keywordCands: Awaited<ReturnType<typeof keywordCandidates>> = [];
+  let attachmentCands: Awaited<ReturnType<typeof attachmentCandidates>> = [];
   try {
     vectorCands = await vectorCandidates(opts, scope, vec);
     // core-agent is dynamic-import-only in main; load the scorer lazily.
     const { bm25Score } = await import('#core-agent');
     keywordCands = await keywordCandidates(opts, scope, query, bm25Score);
+    attachmentCands = await attachmentCandidates(opts, query, bm25Score);
   } catch (err) {
     const msg = (err as Error).message;
     log.warn('material_search query failed', {
@@ -263,7 +355,9 @@ export async function searchMaterials(opts: MaterialSearchOptions): Promise<Mate
   for (const c of vectorCands) {
     fused.set(c.key, { hit: c.hit, vectorRank: c.rank + 1, vectorScore: c.score });
   }
-  for (const c of keywordCands) {
+  // Keyword-side evidence: Library BM25 chunks and attachment hits share the
+  // keyword weight bucket and compete by rank within their own lists.
+  for (const c of [...keywordCands, ...attachmentCands]) {
     const prev = fused.get(c.key);
     if (prev) {
       prev.keywordRank = c.rank + 1;
@@ -291,6 +385,9 @@ export async function searchMaterials(opts: MaterialSearchOptions): Promise<Mate
     summary.push(
       `space total=${spaceSummary.total} ready=${spaceSummary.ready} processing=${spaceSummary.processing} pending=${spaceSummary.pending} failed=${spaceSummary.failed}`,
     );
+  }
+  if (opts.attachments && opts.cid) {
+    summary.push(`attachments hits=${attachmentCands.length}`);
   }
 
   return { hits: ranked, summary };

@@ -26,6 +26,7 @@ import * as spaceLibrary from '../../features/project_library_indexer';
 import { logErrorRef, maskId } from '../../util/log-redact';
 import { searchMaterials, type MaterialSearchOptions } from './material-search';
 import { resolveMaterialSet } from './material-boundary';
+import { askMaterials, formatEvidence } from './ask-materials';
 import * as chatAttachments from '../../features/chat_attachments';
 import * as fileIndexer from '../../features/file_indexer';
 
@@ -507,7 +508,68 @@ export function createKbTools(opts: KbToolsOpts): AgentTool[] {
     createKbReadTool(opts),
     createMaterialSearchTool(opts),
     createMaterialListTool(opts),
+    createAskMaterialsTool(opts),
   ];
+}
+
+/**
+ * `ask_materials` — grounded Q&A evidence service (COGSEED-39 ① Phase 4a).
+ * Runs the material-set hybrid search (Library + attachments), applies a
+ * fused-score threshold, and returns an evidence package with a citation
+ * contract — or an explicit no-material / low-confidence marker. The model
+ * answers ONLY from the evidence and cites `path#chunk N`.
+ */
+function createAskMaterialsTool(opts: KbToolsOpts): AgentTool {
+  const hasSpace = !!opts.spaceId;
+  return {
+    name: 'ask_materials',
+    description:
+      'Grounded Q&A over the material set: hybrid search (Library + this conversation\'s\n'
+      + 'attachments) with a relevance threshold. Returns either an evidence package\n'
+      + 'to answer from — cite every claim as `path#chunk N` — or an explicit\n'
+      + '"no material" / "low confidence" marker. Use for questions about imported\n'
+      + 'materials; do NOT answer material questions from memory or web search\n'
+      + 'without consulting this (or material_search) first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The user\'s question about the materials.',
+        },
+        k: {
+          type: 'number',
+          description: 'Max evidence hits. Default 8, max 30.',
+        },
+        scope: {
+          type: 'string',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Search scope. Default all = current space Library plus global Library.'
+            : 'Search scope. Only global is available outside a space.',
+        },
+        min_score: {
+          type: 'number',
+          description: 'Optional fused-score floor for evidence (default 0.0015). Raise it to demand stronger matches.',
+        },
+      },
+      required: ['question'],
+    },
+    async execute(input) {
+      const question = String(input.question ?? '').trim();
+      if (!question) return { content: 'ask_materials: `question` is required', isError: true };
+      const res = await askMaterials({
+        userId: opts.userId,
+        ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
+        query: question,
+        ...(input.k !== undefined ? { k: Number(input.k) } : {}),
+        ...(hasSpace && input.scope !== undefined ? { scope: input.scope as MaterialSearchOptions['scope'] } : {}),
+        ...(input.min_score !== undefined ? { minScore: Number(input.min_score) } : {}),
+      });
+      return { content: formatEvidence(res) };
+    },
+  };
 }
 
 /**
@@ -609,7 +671,8 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
     description:
       'Hybrid search over the user Library (semantic vector + BM25 keyword, fused)'
       + (hasSpace ? ' (current space + global by default)' : '')
-      + '. Use for grounded Q&A about imported materials: returns the top-k most\n'
+      + ', plus this conversation\'s attachments when present.'
+      + ' Use for grounded Q&A about imported materials: returns the top-k most\n'
       + 'relevant chunks with a citation anchor (scope + path + chunk index) and a\n'
       + 'short snippet. Preferred over `kb_search` when the question mixes exact\n'
       + 'terms/ids (which keyword matching catches) with meaning (which vectors\n'
@@ -655,6 +718,7 @@ function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
       const searchOpts: MaterialSearchOptions = {
         userId: opts.userId,
         ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
         query,
         ...(input.k !== undefined ? { k: Number(input.k) } : {}),
         ...(typeof input.dir === 'string' && input.dir.trim() ? { dir: input.dir.trim() } : {}),
