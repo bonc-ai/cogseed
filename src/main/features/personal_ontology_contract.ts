@@ -128,32 +128,60 @@ export function resolveRefToInternalId(uid: string, ref: string): string | null 
 
 // ── Contract A：模板目录 ───────────────────────────────────────────────────
 
-export interface RoleTemplateSummary {
+/**
+ * 同步的模板目录条目。**不含安装状态**——装态要读台账，纯函数拿不到，也不该
+ * 为了拿它把 resolveSpaceResources 之类的派生函数变成异步。需要装态的调用方
+ * 用 listRoleTemplateSummaries / getRoleTemplateSummary。
+ */
+export interface RoleTemplateCatalogEntry {
   templateId: string;
   name: string;
   description?: string;
   version: string;
-  installed: boolean;
   bundle?: {
     skillIds?: string[];
     agentIds?: string[];
   };
 }
 
-function toSummary(
-  t: { template_id: string; name: string; description: string; version: string; bundle?: { skill_ids: string[]; agent_ids: string[] } },
-  installed: boolean,
-): RoleTemplateSummary {
+export interface RoleTemplateSummary extends RoleTemplateCatalogEntry {
+  installed: boolean;
+}
+
+/** 同步目录（无装态）。供 Workspace 的纯派生函数使用，替代直接 import role_templates。 */
+export function listRoleTemplateCatalog(): RoleTemplateCatalogEntry[] {
+  return listRoleTemplates().map((t) => toCatalogEntry(t));
+}
+
+/** 同步单查（无装态）；未知 id → undefined。 */
+export function getRoleTemplateCatalogEntry(templateId: string): RoleTemplateCatalogEntry | undefined {
+  const t = getRoleTemplate(templateId);
+  return t ? toCatalogEntry(t) : undefined;
+}
+
+interface RoleTemplateShape {
+  template_id: string;
+  name: string;
+  description: string;
+  version: string;
+  bundle?: { skill_ids: string[]; agent_ids: string[] };
+}
+
+function toCatalogEntry(t: RoleTemplateShape): RoleTemplateCatalogEntry {
   return {
     templateId: t.template_id,
     name: t.name,
     ...(t.description ? { description: t.description } : {}),
     version: t.version,
-    installed,
     ...(t.bundle
       ? { bundle: { skillIds: [...(t.bundle.skill_ids || [])], agentIds: [...(t.bundle.agent_ids || [])] } }
       : {}),
   };
+}
+
+
+function toSummary(t: RoleTemplateShape, installed: boolean): RoleTemplateSummary {
+  return { ...toCatalogEntry(t), installed };
 }
 
 /**

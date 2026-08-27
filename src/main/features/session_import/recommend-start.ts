@@ -43,7 +43,7 @@ import { listClaudeSessions } from '../local_agents/claude_sessions.js';
 import { listWorkbuddySessions } from '../local_agents/workbuddy_sessions.js';
 import { listCodexSessions } from './codex-import.js';
 import { listOpencodeSessions } from '../local_agents/opencode_sessions.js';
-import { listScenarios } from '../role_templates.js';
+import { listRoleScenarios } from '../personal_ontology_contract.js';
 
 const log = createLogger('session-import:recommend-start');
 
@@ -275,8 +275,8 @@ const SCENARIO_KEYWORDS: Record<string, string[]> = {
 /** Match a text sample against scenario keywords; return the best scenario
  *  above the confidence floor, or null. Longer keyword wins ties. */
 function matchScenario(sampleText: string): TemplateSuggestion | null {
-  const scenarios = listScenarios();
-  const byId = new Map(scenarios.map(s => [s.scenario_id, s]));
+  const scenarios = listRoleScenarios();
+  const byId = new Map(scenarios.map(s => [s.scenarioId, s]));
   const hay = sampleText.toLowerCase();
 
   let best: TemplateSuggestion | null = null;
@@ -295,7 +295,7 @@ function matchScenario(sampleText: string): TemplateSuggestion | null {
     if (score > (best?.score ?? 0)) {
       best = {
         scenarioId,
-        templateId: scenario.suggested_primary_template_id || '',
+        templateId: scenario.suggestedPrimaryTemplateId || '',
         name: scenario.name,
         matchedKeywords: matched,
         score,

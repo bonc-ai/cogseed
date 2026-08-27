@@ -25,7 +25,12 @@ import { nowIso, readJson, writeJson } from '../storage';
 import { createLogger } from '../logger';
 import { getRendererTable } from '../i18n';
 import { limitNameDisplayText } from '../util/name-limit';
-import { getRoleTemplate, getScenario, type RoleTemplate, type RoleTemplateBundle } from './role_templates';
+import {
+  getRoleTemplateCatalogEntry,
+  getRoleScenario,
+  resolveRoleTemplateId,
+  type RoleTemplateCatalogEntry,
+} from './personal_ontology_contract';
 import type { RecallAbilityAssetRecord } from './recall/candidate-service';
 
 const log = createLogger('spaces');
@@ -96,9 +101,9 @@ export interface SpaceWithMeta extends Space {
 /** 派生结果（纯函数输出）。 */
 export interface SpaceResources {
   /** 解析到的主模板；无模板/模板不存在 = null。 */
-  template: RoleTemplate | null;
+  template: RoleTemplateCatalogEntry | null;
   /** 解析到的副模板列表（最多 2 个）。 */
-  secondary_templates: RoleTemplate[];
+  secondary_templates: RoleTemplateCatalogEntry[];
   /** 模板 bundle ∪ extra，过滤失效、去重保序。 */
   effective_skills: string[];
   effective_agents: string[];
@@ -147,7 +152,7 @@ function systemSpaceNameVariants(key: string): string[] {
     const match = /^ws\.(scenario|role_template)\.([a-z0-9_]+)\.name$/.exec(key);
     if (!match) return [];
     const [, kind, id] = match;
-    const source = kind === 'scenario' ? getScenario(id) : getRoleTemplate(id);
+    const source = kind === 'scenario' ? getRoleScenario(id) : getRoleTemplateCatalogEntry(id);
     if (!source) return [];
     add(source.name);
   }
@@ -183,28 +188,6 @@ function normaliseAssetRef(raw: unknown): SpaceAssetRef | undefined {
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
 
-/** 从模板文件文本解析捆绑声明行（自定义模板，一期"复制改"产物）。
- *  声明格式（模板文件元信息区，置于 `> 模板: <id>@<ver>` 之后）：
- *    `> 捆绑技能: sk-a, sk-b`
- *    `> 捆绑智能体: ag-1`
- *  无声明行 → 空捆绑。纯函数，不 import template_files（避免循环依赖）。 */
-export function parseTemplateFileBundle(text: string): RoleTemplateBundle {
-  const bundle: RoleTemplateBundle = { skill_ids: [], agent_ids: [] };
-  if (!text) return bundle;
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^>\s*捆绑技能\s*:\s*(.*)$/.exec(line);
-    if (m) {
-      bundle.skill_ids = m[1].split(',').map((s) => s.trim()).filter(Boolean);
-      continue;
-    }
-    const ma = /^>\s*捆绑智能体\s*:\s*(.*)$/.exec(line);
-    if (ma) {
-      bundle.agent_ids = ma[1].split(',').map((s) => s.trim()).filter(Boolean);
-    }
-  }
-  return bundle;
-}
-
 /** 空间 → 资源派生（纯函数，同步）。
  *  @param space  空间（可部分：primary_template_id/extra_skills/extra_agents）
  *  @param valid  当前用户可见资源的 id 集合（调用方从 listSkills/listAgents 构造）
@@ -225,29 +208,27 @@ export function resolveSpaceResources(
   const primary = space.primary_template_id || space.template_id;
   const secondary = space.secondary_template_ids ?? [];
 
-  let template: RoleTemplate | null = null;
-  const secondaryTemplates: RoleTemplate[] = [];
+  let template: RoleTemplateCatalogEntry | null = null;
+  const secondaryTemplates: RoleTemplateCatalogEntry[] = [];
   const bundleSkills: string[] = [];
   const bundleAgents: string[] = [];
+  const collectBundle = (entry: RoleTemplateCatalogEntry) => {
+    bundleSkills.push(...(entry.bundle?.skillIds ?? []));
+    bundleAgents.push(...(entry.bundle?.agentIds ?? []));
+  };
 
   // 主模板
   if (primary) {
-    template = getRoleTemplate(primary) ?? null;
-    if (template?.bundle) {
-      bundleSkills.push(...template.bundle.skill_ids);
-      bundleAgents.push(...template.bundle.agent_ids);
-    }
+    template = getRoleTemplateCatalogEntry(primary) ?? null;
+    if (template) collectBundle(template);
   }
   // 副模板（去重：排除与主模板相同的 id）
   for (const sid of secondary) {
     if (sid === primary) continue;
-    const st = getRoleTemplate(sid);
+    const st = getRoleTemplateCatalogEntry(sid);
     if (st) {
       secondaryTemplates.push(st);
-      if (st.bundle) {
-        bundleSkills.push(...st.bundle.skill_ids);
-        bundleAgents.push(...st.bundle.agent_ids);
-      }
+      collectBundle(st);
     }
   }
 
@@ -740,16 +721,18 @@ export async function createSpaceFromDraft(
   const secondaryTemplateIds: string[] = [];
   let bundleSkillIds = new Set<string>();
   let bundleAgentIds = new Set<string>();
-  const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
-  const resolveTpl = (raw: string): string | undefined =>
-    resolveDraftResourceId(tpls.map((t) => ({ id: t.template_id, name: t.name })), raw);
+  // 模板引用解析（id 精确 → 显示名模糊）由 PO contract 负责，Workspace 不再
+  // 自建一份目录匹配；bundle 也从 contract 的目录条目读，不碰 T-box 结构。
+  const collectDraftBundle = (entry: RoleTemplateCatalogEntry) => {
+    (entry.bundle?.skillIds || []).forEach((id) => bundleSkillIds.add(id));
+    (entry.bundle?.agentIds || []).forEach((id) => bundleAgentIds.add(id));
+  };
   if (draft.primary_template_id) {
-    const resolved = resolveTpl(draft.primary_template_id);
-    if (resolved) {
+    const resolved = resolveRoleTemplateId(draft.primary_template_id);
+    const tpl = resolved ? getRoleTemplateCatalogEntry(resolved) : undefined;
+    if (resolved && tpl) {
       templateId = resolved;
-      const tpl = tpls.find((t) => t.template_id === resolved)!;
-      (tpl.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
-      (tpl.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      collectDraftBundle(tpl);
       if (resolved !== draft.primary_template_id) corrections.push(`角色模板「${draft.primary_template_id}」已按名称解析为「${tpl.name}」`);
     } else {
       corrections.push(`角色模板「${draft.primary_template_id}」不存在，已忽略（空间将不套模板，可在空间设置里改）`);
@@ -758,12 +741,11 @@ export async function createSpaceFromDraft(
   for (const sid of draft.secondary_template_ids || []) {
     if (!sid || sid === templateId || secondaryTemplateIds.includes(sid)) continue;
     if (secondaryTemplateIds.length >= 2) { corrections.push('副模板超过 2 个，仅保留前 2 个'); break; }
-    const resolved = resolveTpl(sid);
-    if (resolved) {
+    const resolved = resolveRoleTemplateId(sid);
+    const st = resolved ? getRoleTemplateCatalogEntry(resolved) : undefined;
+    if (resolved && st) {
       secondaryTemplateIds.push(resolved);
-      const st = tpls.find((t) => t.template_id === resolved)!;
-      (st.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
-      (st.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      collectDraftBundle(st);
       if (resolved !== sid) corrections.push(`副模板「${sid}」已按名称解析为「${st.name}」`);
     } else {
       corrections.push(`副模板「${sid}」不存在，已忽略`);

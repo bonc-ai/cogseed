@@ -44,3 +44,56 @@ describe('role-template boundary › M1 Workspace 不再直读 PO 模板文件',
     expect(spaces).toContain('personal_ontology_contract');
   });
 });
+
+describe('role-template boundary › M6 模板目录只剩 PO 一个出口', () => {
+  const ipc = stripComments(read('src/main/ipc/index.ts'));
+
+  it('spaces.templates.list / spaces.scenarios.list 已下线', () => {
+    for (const file of [
+      'src/main/ipc/index.ts',
+      'src/renderer/modules/workspace.js',
+      'src/renderer/modules/conversation.js',
+      'src/renderer/modules/onboarding.js',
+    ]) {
+      const source = read(file);
+      expect(source, `${file} must not use spaces.templates.list`).not.toContain('spaces.templates.list');
+      expect(source, `${file} must not use spaces.scenarios.list`).not.toContain('spaces.scenarios.list');
+    }
+  });
+
+  it('目录出口走 contract，IPC 层不再直连 T-box 常量', () => {
+    expect(ipc).toContain("'personalOntology.templates.catalog'");
+    expect(ipc).toContain("'personalOntology.scenarios.list'");
+    expect(ipc).not.toContain('role_templates');
+  });
+
+  it('Workspace / 会话导入 / 空间构建师都不再 import role_templates', () => {
+    for (const file of [
+      'src/main/features/spaces.ts',
+      'src/main/features/session_import/welcome-message.ts',
+      'src/main/features/session_import/recommend-start.ts',
+      'src/main/features/group_chat/bus.ts',
+    ]) {
+      expect(stripComments(read(file)), `${file} must not import role_templates`)
+        .not.toContain('role_templates');
+    }
+  });
+
+  it('Workspace 侧不再自带 PO markdown parser（parseTemplateFileBundle 已删）', () => {
+    const spaces = read('src/main/features/spaces.ts');
+    expect(spaces).not.toContain('parseTemplateFileBundle');
+    expect(spaces).not.toContain('捆绑技能');
+  });
+
+  it('preset_groups 不出现在任何渲染层代码里', () => {
+    for (const file of [
+      'src/renderer/modules/workspace.js',
+      'src/renderer/modules/conversation.js',
+      'src/renderer/modules/onboarding.js',
+      'src/renderer/modules/agents.js',
+      'src/renderer/modules/skills.js',
+    ]) {
+      expect(read(file), `${file} must not know preset_groups`).not.toContain('preset_groups');
+    }
+  });
+});

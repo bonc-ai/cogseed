@@ -3,7 +3,8 @@
 //   空间中心（我的空间 + 从模板创建）→ 空间详情（任务/产物/资产三页签 + 配置抽屉）
 //   → 任务页（对话 + 产物/资产面板 + composer）+ 新建空间弹窗 + 能力选择弹窗。
 // 接线状态：
-//   ✅ 空间列表 / 模板列表 = 真实 IPC（spaces.list / spaces.templates.list）
+//   ✅ 空间列表 = spaces.list；模板/场景目录 = PO contract
+//      （personalOntology.templates.catalog / personalOntology.scenarios.list）
 //   ✅ 能力配置 = 真实目录（role=角色模板、task=agents.list、skill=skills.list，bundle 预选+解析名字）
 //   ✅ 创建空间 = spaces.create + spaces.resources.add（额外勾选写入 extra_*）
 //   ⏳ 空间详情「任务/产物/资产」数据源 = 后端尚无「空间→任务→产物/资产」聚合模型，暂用空态
@@ -248,21 +249,21 @@
   let _scenarios = [];     // Scenario[]（教育/写作/职场/自定义，从模板创建区的场景入口）
 
   function _localizeTemplate(template) {
-    if (!template || !template.template_id) return template;
-    const prefix = `ws.role_template.${template.template_id}`;
+    if (!template || !template.templateId) return template;
+    const prefix = `ws.role_template.${template.templateId}`;
     return {
       ...template,
-      name: _t(`${prefix}.name`, template.name || template.template_id),
+      name: _t(`${prefix}.name`, template.name || template.templateId),
       description: _t(`${prefix}.description`, template.description || ''),
     };
   }
 
   function _localizeScenario(scenario) {
-    if (!scenario || !scenario.scenario_id) return scenario;
-    const prefix = `ws.scenario.${scenario.scenario_id}`;
+    if (!scenario || !scenario.scenarioId) return scenario;
+    const prefix = `ws.scenario.${scenario.scenarioId}`;
     return {
       ...scenario,
-      name: _t(`${prefix}.name`, scenario.name || scenario.scenario_id),
+      name: _t(`${prefix}.name`, scenario.name || scenario.scenarioId),
       description: _t(`${prefix}.description`, scenario.description || ''),
     };
   }
@@ -330,7 +331,7 @@
 
   /** 能力目录（按 kind）：role=角色模板、task=AI 团队、skill=技能库。 */
   function _abilityCatalog(kind) {
-    if (kind === 'role') return _templates.map((t) => ({ id: t.template_id, name: t.name, desc: t.description || '' }));
+    if (kind === 'role') return _templates.map((t) => ({ id: t.templateId, name: t.name, desc: t.description || '' }));
     if (kind === 'task') return _agentCatalog;
     return _skillCatalog;
   }
@@ -348,8 +349,8 @@
     // fold in the CLI probe result when it arrives.
     const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
       _invoke('spaces.list'),
-      _invoke('spaces.templates.list'),
-      _invoke('spaces.scenarios.list'),
+      _invoke('personalOntology.templates.catalog'),
+      _invoke('personalOntology.scenarios.list'),
       _invoke('skills.list'),
       _invoke('agents.list'),
     ]);
@@ -652,16 +653,16 @@
   }
 
   function _templateCardHtml(t) {
-    const skillN = (t.bundle && t.bundle.skill_ids ? t.bundle.skill_ids.length : 0);
-    const agentN = (t.bundle && t.bundle.agent_ids ? t.bundle.agent_ids.length : 0);
+    const skillN = (t.bundle && t.bundle.skillIds ? t.bundle.skillIds.length : 0);
+    const agentN = (t.bundle && t.bundle.agentIds ? t.bundle.agentIds.length : 0);
     return `
-    <article class="ws-template-card" data-ws="create-from-tpl" data-tpl="${escapeHtml(t.template_id)}">
+    <article class="ws-template-card" data-ws="create-from-tpl" data-tpl="${escapeHtml(t.templateId)}">
       <div class="ws-template-mark">${escapeHtml((t.name || _t('ws.template_mark', '模')).charAt(0))}</div>
       <h3>${escapeHtml(t.name)}</h3>
       <p>${escapeHtml(t.description || '')}</p>
       <div class="ws-template-bottom">
         <span>${escapeHtml(_t('ws.template_counts', '{skills} 个 Skill · {agents} 个 Agent', { skills: skillN, agents: agentN }))}</span>
-        <button data-ws="use-tpl" data-tpl="${escapeHtml(t.template_id)}">${_t('ws.use_template', '用此模板创建')}</button>
+        <button data-ws="use-tpl" data-tpl="${escapeHtml(t.templateId)}">${_t('ws.use_template', '用此模板创建')}</button>
       </div>
     </article>`;
   }
@@ -669,12 +670,12 @@
   /** 场景建议角色组合标签（如「学生 + 学者」）。 */
   function _sceneTplLabel(sc) {
     const names = [];
-    if (sc.suggested_primary_template_id) {
-      const tpl = _templates.find((t) => t.template_id === sc.suggested_primary_template_id);
+    if (sc.suggestedPrimaryTemplateId) {
+      const tpl = _templates.find((t) => t.templateId === sc.suggestedPrimaryTemplateId);
       if (tpl) names.push(tpl.name);
     }
-    for (const sid of sc.suggested_secondary_template_ids || []) {
-      const tpl = _templates.find((t) => t.template_id === sid);
+    for (const sid of sc.suggestedSecondaryTemplateIds || []) {
+      const tpl = _templates.find((t) => t.templateId === sid);
       if (tpl) names.push(tpl.name);
     }
     return names.join(' + ');
@@ -684,13 +685,13 @@
   function _sceneCardHtml(sc) {
     const tplLabel = _sceneTplLabel(sc);
     return `
-    <article class="ws-template-card ws-scene-card" data-ws="create-from-scene" data-scene="${escapeHtml(sc.scenario_id)}">
+    <article class="ws-template-card ws-scene-card" data-ws="create-from-scene" data-scene="${escapeHtml(sc.scenarioId)}">
       <div class="ws-template-mark">${escapeHtml(sc.icon || _t('ws.scene_mark', '场'))}</div>
       <h3>${escapeHtml(sc.name)}</h3>
       <p>${escapeHtml(sc.description || '')}</p>
       <div class="ws-template-bottom">
         <span>${tplLabel ? `${escapeHtml(tplLabel)} · ` : ''}${_t('ws.scene_tag', '场景')}</span>
-        <button data-ws="use-scene" data-scene="${escapeHtml(sc.scenario_id)}">${_t('ws.use_scene', '用此场景创建')}</button>
+        <button data-ws="use-scene" data-scene="${escapeHtml(sc.scenarioId)}">${_t('ws.use_scene', '用此场景创建')}</button>
       </div>
     </article>`;
   }
@@ -1014,10 +1015,10 @@
     // 角色 = 主/副模板名（主在前，副在后）；task/skill = 模板 bundle ∪ extra（与后端 resolveSpaceResources 并集语义一致）
     const tmpls = [sp.primary_template_id || sp.template_id, ...(sp.secondary_template_ids || [])]
       .filter(Boolean)
-      .map((id) => _templates.find((t) => t.template_id === id))
+      .map((id) => _templates.find((t) => t.templateId === id))
       .filter((t) => !!t);
-    const bundleSkills = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])));
-    const bundleAgents = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])));
+    const bundleSkills = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.skillIds : [])));
+    const bundleAgents = new Set(tmpls.flatMap((t) => (t.bundle ? t.bundle.agentIds : [])));
     const pick = {
       role: tmpls.map((t) => t.name).filter(Boolean),
       task: _resolveCatalog('task', [...bundleAgents, ...(sp.extra_agents || [])]).map((o) => o.name),
@@ -1076,16 +1077,16 @@
    *  自动带出每个角色的模板内置能力，不再只显示初始预填的单一模板。 */
   function _abilityPicksWithBundle(kind) {
     const roles = _abilityPicks.role || [];
-    const roleTmpls = _templates.filter((t) => roles.includes(t.template_id));
+    const roleTmpls = _templates.filter((t) => roles.includes(t.templateId));
     const bundle = new Set(roleTmpls.flatMap((t) => (t.bundle
-      ? (kind === 'task' ? t.bundle.agent_ids : kind === 'skill' ? t.bundle.skill_ids : [])
+      ? (kind === 'task' ? t.bundle.agentIds : kind === 'skill' ? t.bundle.skillIds : [])
       : [])));
     const manual = (_abilityPicks[kind] || []).filter((id) => !bundle.has(id));
     return [...bundle, ...manual];
   }
 
   function _renderCreateModal() {
-    const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
+    const tpl = _templates.find((t) => t.templateId === _createTemplate) || null;
     const cap = {
       role: { label: _t('ws.kind_role', '角色'), picked: _resolveCatalog('role', _abilityPicks.role) },
       task: { label: _t('ws.kind_task_agent', 'Task Agent'), picked: _resolveCatalog('task', _abilityPicksWithBundle('task')) },
@@ -1196,10 +1197,10 @@
     const kind = _abilityKind;
     const list = _abilityCatalog(kind) || [];
     // 模板 bundle 内置项：全部已选角色（主+副）模板的 bundle 并集，固定开启、不可移除
-    const roleTmpls = _templates.filter((t) => (_abilityPicks.role || []).includes(t.template_id));
+    const roleTmpls = _templates.filter((t) => (_abilityPicks.role || []).includes(t.templateId));
     const bundleIds = new Set([
-      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])),
-      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])),
+      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agentIds : [])),
+      ...roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skillIds : [])),
     ]);
     // 显示层合并视图：task/skill 的内置项（角色模板 bundle 并集）也显示为已选
     // （固定开启不可移除，data-bundled 拦截点击）；role 原样取 picks。
@@ -1273,10 +1274,10 @@
     const kind = _editAbilityKind;
     const list = _abilityCatalog(kind) || [];
     const sp = _space();
-    const tmpls = _templates.filter((t) => t && sp && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
-      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const tmpls = _templates.filter((t) => t && sp && (t.templateId === sp.primary_template_id || t.templateId === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.templateId)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
-      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+      ? (kind === 'task' ? t.bundle.agentIds : t.bundle.skillIds) : [])));
     const picked = _editAbilityPicks || [];
     const kindLabel = kind === 'task' ? 'Task Agent' : 'Skill';
     return `
@@ -1392,11 +1393,11 @@
           <div class="ws-ability-pane">
             <div class="ws-option-grid">
               ${list.length ? list.map((o) => {
-                const selected = o.template_id === current;
+                const selected = o.templateId === current;
                 return `
-                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="pick-role" data-id="${escapeHtml(o.template_id)}">
+                <button class="ws-option-card ${selected ? 'selected' : ''}" data-ws="pick-role" data-id="${escapeHtml(o.templateId)}">
                   <span class="ws-check">${selected ? '✓' : ''}</span>
-                  <div><strong>${escapeHtml(o.name || o.template_id)}</strong>${o.description ? `<p>${escapeHtml(o.description)}</p>` : ''}</div>
+                  <div><strong>${escapeHtml(o.name || o.templateId)}</strong>${o.description ? `<p>${escapeHtml(o.description)}</p>` : ''}</div>
                 </button>`;
               }).join('') : `<div class="ws-empty">${_t('ws.no_role_templates', '暂无可用模板')}</div>`}
             </div>
@@ -1415,10 +1416,10 @@
     const sp = _space();
     if (!sp) return;
     _editAbilityKind = kind;
-    const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
-      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const tmpls = _templates.filter((t) => t && (t.templateId === sp.primary_template_id || t.templateId === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.templateId)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
-      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+      ? (kind === 'task' ? t.bundle.agentIds : t.bundle.skillIds) : [])));
     const extras = kind === 'task' ? (sp.extra_agents || []) : (sp.extra_skills || []);
     _editAbilityPicks = [...new Set([...bundleIds, ...extras])];
     _editAbilityBefore = extras.slice();
@@ -1433,10 +1434,10 @@
     const kind = _editAbilityKind;
     // IPC 契约只接受 'agent' | 'skill'；内部 UI 语义 task（Task Agent 分组）映射为 agent。
     const ipcKind = kind === 'task' ? 'agent' : kind;
-    const tmpls = _templates.filter((t) => t && (t.template_id === sp.primary_template_id || t.template_id === sp.template_id
-      || (sp.secondary_template_ids || []).includes(t.template_id)));
+    const tmpls = _templates.filter((t) => t && (t.templateId === sp.primary_template_id || t.templateId === sp.template_id
+      || (sp.secondary_template_ids || []).includes(t.templateId)));
     const bundleIds = new Set(tmpls.flatMap((t) => (t.bundle
-      ? (kind === 'task' ? t.bundle.agent_ids : t.bundle.skill_ids) : [])));
+      ? (kind === 'task' ? t.bundle.agentIds : t.bundle.skillIds) : [])));
     const nextExtras = (_editAbilityPicks || []).filter((id) => !bundleIds.has(id));
     const beforeSet = new Set(_editAbilityBefore || []);
     const nextSet = new Set(nextExtras);
@@ -1596,7 +1597,7 @@
     root.querySelectorAll('[data-ws="continue"]').forEach((el) => el.addEventListener('click', () => _go('space', { spaceId: el.dataset.space })));
     root.querySelectorAll('[data-ws="create-from-tpl"], [data-ws="use-tpl"]').forEach((el) => el.addEventListener('click', () => _openCreate(el.dataset.tpl)));
     root.querySelectorAll('[data-ws="create-from-scene"], [data-ws="use-scene"]').forEach((el) => el.addEventListener('click', () => {
-      _openCreateFromScene(_scenarios.find((s) => s.scenario_id === el.dataset.scene));
+      _openCreateFromScene(_scenarios.find((s) => s.scenarioId === el.dataset.scene));
     }));
     root.querySelectorAll('[data-ws="space-more"]').forEach((el) => el.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1868,9 +1869,9 @@
     const secondary = roles.slice(1, 3);
     // 模板 bundle 内置：全部已选角色（主+副）模板的 bundle 并集
     // （后端 resolveSpaceResources 派生，无需 extra 存储）
-    const roleTmpls = _templates.filter((t) => roles.includes(t.template_id));
-    const bundleSkills = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skill_ids : [])));
-    const bundleAgents = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agent_ids : [])));
+    const roleTmpls = _templates.filter((t) => roles.includes(t.templateId));
+    const bundleSkills = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.skillIds : [])));
+    const bundleAgents = new Set(roleTmpls.flatMap((t) => (t.bundle ? t.bundle.agentIds : [])));
     // 额外勾选（超出 bundle）创建后写入 extra_*
     const extraSkills = (_abilityPicks.skill || []).filter((id) => !bundleSkills.has(id));
     const extraAgents = (_abilityPicks.task || []).filter((id) => !bundleAgents.has(id));
@@ -1878,11 +1879,11 @@
     // Preserve a semantic key only while the prefilled system name is untouched.
     const systemNameKey = (() => {
       if (_createScenario) {
-        const scenario = _scenarios.find((item) => item.scenario_id === _createScenario);
+        const scenario = _scenarios.find((item) => item.scenarioId === _createScenario);
         if (scenario && name === scenario.name) return `ws.scenario.${_createScenario}.name`;
       }
       if (_createTemplate) {
-        const template = _templates.find((item) => item.template_id === _createTemplate);
+        const template = _templates.find((item) => item.templateId === _createTemplate);
         if (template && name === template.name) return `ws.role_template.${_createTemplate}.name`;
       }
       return undefined;
@@ -1964,13 +1965,13 @@
     _createScenario = null;
     // 从模板创建：模板本身即主角色（picks[0]），bundle 的 skill/agent 一并预选；
     // 角色 picks 有序：第 1 个 = 主角色，其余 = 副角色（与 _createSpace 分配一致）。
-    const tpl = _templates.find((t) => t.template_id === _createTemplate) || null;
+    const tpl = _templates.find((t) => t.templateId === _createTemplate) || null;
     _createName = tpl ? tpl.name : '';
     _createInstruction = tpl ? (tpl.description || '') : '';
     _abilityPicks = {
-      role: tpl ? [tpl.template_id] : [],
-      task: (tpl && tpl.bundle ? tpl.bundle.agent_ids : []) || [],
-      skill: (tpl && tpl.bundle ? tpl.bundle.skill_ids : []) || [],
+      role: tpl ? [tpl.templateId] : [],
+      task: (tpl && tpl.bundle ? tpl.bundle.agentIds : []) || [],
+      skill: (tpl && tpl.bundle ? tpl.bundle.skillIds : []) || [],
     };
     _createOpen = true;
     _abilityOpen = false;
@@ -1985,12 +1986,12 @@
   function _openCreateFromScene(sc) {
     if (!sc) return;
     _createTemplate = null; // 场景是组合，不是单一模板（不套 bundle 预选）
-    _createScenario = sc.scenario_id || null;
+    _createScenario = sc.scenarioId || null;
     _createName = sc.name || '';
     _createInstruction = '';
     const roles = [];
-    if (sc.suggested_primary_template_id) roles.push(sc.suggested_primary_template_id);
-    for (const sid of sc.suggested_secondary_template_ids || []) {
+    if (sc.suggestedPrimaryTemplateId) roles.push(sc.suggestedPrimaryTemplateId);
+    for (const sid of sc.suggestedSecondaryTemplateIds || []) {
       if (roles.length >= 3) break;
       if (!roles.includes(sid)) roles.push(sid);
     }
@@ -2047,14 +2048,14 @@
       _reRender();
       return;
     }
-    const previousTemplate = _templates.find((item) => item.template_id === _createTemplate) || null;
-    const previousScenario = _scenarios.find((item) => item.scenario_id === _createScenario) || null;
+    const previousTemplate = _templates.find((item) => item.templateId === _createTemplate) || null;
+    const previousScenario = _scenarios.find((item) => item.scenarioId === _createScenario) || null;
     const templateNameUntouched = !!previousTemplate && _createName === previousTemplate.name;
     const templateInstructionUntouched = !!previousTemplate && _createInstruction === (previousTemplate.description || '');
     const scenarioNameUntouched = !!previousScenario && _createName === previousScenario.name;
     await _loadData();
-    const nextTemplate = _templates.find((item) => item.template_id === _createTemplate) || null;
-    const nextScenario = _scenarios.find((item) => item.scenario_id === _createScenario) || null;
+    const nextTemplate = _templates.find((item) => item.templateId === _createTemplate) || null;
+    const nextScenario = _scenarios.find((item) => item.scenarioId === _createScenario) || null;
     if (templateNameUntouched && nextTemplate) _createName = nextTemplate.name;
     if (templateInstructionUntouched && nextTemplate) _createInstruction = nextTemplate.description || '';
     if (scenarioNameUntouched && nextScenario) _createName = nextScenario.name;

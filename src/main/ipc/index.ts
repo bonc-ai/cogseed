@@ -60,7 +60,6 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
-import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -1424,16 +1423,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { removed: result.removed };
   },
 
-  // 模板选择器数据源（含 bundle 静态预览；内置模板 v1.1.0）
-  'spaces.templates.list': async (_payload, _ctx) => {
-    const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
-    return { templates };
+  // 模板目录：唯一正式出口在 Personal Ontology。返回 RoleTemplateSummary
+  // （templateId/name/description/version/installed/bundle），**不含**
+  // preset_groups / sections / 字段值 / group_id —— 见 personal_ontology_contract.ts。
+  'personalOntology.templates.catalog': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { templates: await contract.listRoleTemplateSummaries(ctx.userId) };
   },
 
-  // 情境入口场景列表（教育/写作/职场+自定义，M2）
-  'spaces.scenarios.list': async (_payload, _ctx) => {
-    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
-    return { scenarios };
+  // 情境入口场景列表（教育/写作/职场+自定义）。场景归属未裁决，先统一从 contract 出。
+  'personalOntology.scenarios.list': async (_payload, _ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { scenarios: contract.listRoleScenarios() };
   },
 
   // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
@@ -3133,12 +3134,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
     const groups = await personalOntologyGroups.listGroups(ctx.userId);
-    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）。显示名的唯一来源是
+    // contract 的目录条目——不再让调用方各自查 T-box 常量。
+    const contract = await import('../features/personal_ontology_contract');
     for (const g of groups) {
-      if (g.template_id) {
-        const template = getRoleTemplate(g.template_id);
-        if (template) g.template_name = template.name;
-      }
+      if (!g.template_id) continue;
+      const entry = contract.getRoleTemplateCatalogEntry(g.template_id);
+      if (entry) g.template_name = entry.name;
     }
     return { groups };
   },
