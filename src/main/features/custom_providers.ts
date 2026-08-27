@@ -489,9 +489,106 @@ export async function testCustomProviderModel(
   });
 }
 
+/**
+ * List the models a custom provider's service exposes, by calling the
+ * service's own "list models" endpoint with the stored credentials.
+ * OpenAI-compatible: `GET {baseUrl}/models` (baseUrl convention already
+ * carries the version segment, same as the chat endpoint). Anthropic:
+ * `GET {baseUrl}/v1/models`. Gemini: `GET {baseUrl}/v1beta/models`.
+ *
+ * Read-only: nothing is imported — the renderer shows the list and the
+ * user picks what to add. The API key comes from the provider's stored
+ * config (never a literal) and is excluded from every error message.
+ */
+export async function fetchCustomProviderModels(
+  userId: string,
+  id: string,
+): Promise<{ ok: true; models: Array<{ id: string; name?: string }> } | { ok: false; error: string }> {
+  let providerId: string;
+  try {
+    providerId = normalizeProviderId(id);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+
+  // Same trust level as the provider's chat traffic: the user configured
+  // this exact URL; we only additionally pin the scheme to http(s) so a
+  // hand-edited store entry can't turn the fetch into a file:// read.
+  let base: URL;
+  try {
+    base = new URL(provider.baseUrl);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') {
+      return { ok: false, error: 'base URL must be http(s)' };
+    }
+  } catch {
+    return { ok: false, error: 'invalid base URL' };
+  }
+
+  const trimmed = provider.baseUrl.replace(/\/+$/, '');
+  let url: string;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (provider.protocol === 'openai' || provider.protocol === 'openai-responses') {
+    url = `${trimmed}/models`;
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  } else if (provider.protocol === 'anthropic') {
+    url = `${trimmed}/v1/models`;
+    headers['x-api-key'] = provider.apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    url = `${trimmed}/v1beta/models`;
+    headers['x-goog-api-key'] = provider.apiKey;
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return { ok: false, error: `service responded ${response.status}` };
+    }
+    const text = await response.text();
+    if (text.length > 2_000_000) return { ok: false, error: 'response too large' };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { ok: false, error: 'service did not return JSON (is the URL/protocol correct?)' };
+    }
+    const rows = parsed && typeof parsed === 'object'
+      ? ((parsed as { data?: unknown; models?: unknown }).data
+        ?? (parsed as { models?: unknown }).models)
+      : null;
+    if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
+
+    const out: Array<{ id: string; name?: string }> = [];
+    for (const row of rows.slice(0, 500)) {
+      if (!row || typeof row !== 'object') continue;
+      const record = row as Record<string, unknown>;
+      // gemini reports `name: "models/<id>"`; openai/anthropic use `id`.
+      let rawId = typeof record.id === 'string' ? record.id
+        : typeof record.name === 'string' ? record.name : '';
+      rawId = rawId.replace(/^models\//, '').trim().slice(0, 120);
+      if (!rawId) continue;
+      const rawName = typeof record.display_name === 'string' ? record.display_name
+        : typeof record.displayName === 'string' ? record.displayName : '';
+      const name = rawName.trim().slice(0, 120);
+      if (out.some((existing) => existing.id === rawId)) continue;
+      out.push(name && name !== rawId ? { id: rawId, name } : { id: rawId });
+      if (out.length >= 200) break;
+    }
+    if (!out.length) return { ok: false, error: 'service listed no models' };
+    return { ok: true, models: out };
+  } catch (error) {
+    const message = (error as Error).message || String(error);
+    return { ok: false, error: message.includes(provider.apiKey) ? 'request failed' : `request failed: ${message}` };
+  }
+}
+
 /** Preset protocol choices for the add form's dialect selector. */
-export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {
-  return [
+export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {  return [
     { id: 'anthropic', label: 'Anthropic (Claude)' },
     { id: 'openai', label: 'OpenAI' },
     { id: 'gemini', label: 'Gemini' },
