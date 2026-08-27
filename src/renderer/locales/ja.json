@@ -4999,5 +4999,14 @@
   "agents.exec_follow_global": "グローバル既定に従う",
   "agents.exec_defaults_hint": "このエージェントが既定で使用するモデルと推論強度。会話内の一時的な調整でこの既定値が変更されることはありません。",
   "exec_config.effort_cli_forward_note": "推論強度はタスクとともに「{cli}」へ送られます（自動 = CLI自身の既定設定に従う）。",
-  "exec_config.effort_cli_off_unavailable": "「{cli}」には確実な思考オフのスイッチがなく、自動または段位の調整のみ可能です。"
+  "exec_config.effort_cli_off_unavailable": "「{cli}」には確実な思考オフのスイッチがなく、自動または段位の調整のみ可能です。",
+  "settings.custom_providers.fetch_models": "サービスから取得",
+  "settings.custom_providers.fetch_models_title": "「{name}」のモデルを取得",
+  "settings.custom_providers.fetch_models_loading": "サービスにモデルリストを要求しています…",
+  "settings.custom_providers.fetch_models_failed": "取得に失敗しました：{error}",
+  "settings.custom_providers.fetch_models_hint": "追加するモデルにチェック（既存のものは再追加不可）。コンテキスト幅と出力上限は既定値で登録され、インポート後に編集できます。",
+  "settings.custom_providers.fetch_models_existing": "既存",
+  "settings.custom_providers.fetch_models_import": "選択をインポート（{count}）",
+  "settings.custom_providers.fetch_models_done": "{count} 個のモデルをインポートしました",
+  "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}"
 }

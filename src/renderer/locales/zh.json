@@ -6190,5 +6190,14 @@
   "agents.exec_follow_global": "跟随全局默认",
   "agents.exec_defaults_hint": "该 Agent 执行任务时的默认模型与推理强度。会话内的临时调整不会修改这里的默认值。",
   "exec_config.effort_cli_forward_note": "推理强度将随任务下发给「{cli}」执行（自动 = 跟随 CLI 自身默认配置）。",
-  "exec_config.effort_cli_off_unavailable": "「{cli}」没有可靠的“关闭思考”开关，此处只能选自动或调高低档位。"
+  "exec_config.effort_cli_off_unavailable": "「{cli}」没有可靠的“关闭思考”开关，此处只能选自动或调高低档位。",
+  "settings.custom_providers.fetch_models": "从服务拉取",
+  "settings.custom_providers.fetch_models_title": "拉取「{name}」的模型列表",
+  "settings.custom_providers.fetch_models_loading": "正在向服务请求模型列表…",
+  "settings.custom_providers.fetch_models_failed": "拉取失败：{error}",
+  "settings.custom_providers.fetch_models_hint": "勾选要添加的模型（已存在的不可重复添加）；上下文窗口与输出上限先按默认值写入，可在导入后编辑。",
+  "settings.custom_providers.fetch_models_existing": "已存在",
+  "settings.custom_providers.fetch_models_import": "导入所选（{count}）",
+  "settings.custom_providers.fetch_models_done": "已导入 {count} 个模型",
+  "settings.custom_providers.fetch_models_partial": "部分导入成功（{ok} 个），失败：{error}"
 }
