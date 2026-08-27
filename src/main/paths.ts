@@ -551,6 +551,9 @@ export const projectAutoTaskAttachmentsDir = (uid: string, pid: string, taskId: 
 // users fall back to local uid (the file then sits in cloud/config/ but doesn't actually
 // sync — sync engine is inactive without an account).
 export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConfigDir(uid), 'connectors.json');
+// Explicit Agent / Project / Session grants. This is cloud-domain metadata so
+// the access decision follows the user's workspace data across sync later.
+export const userAuthorizationFile = (uid: string) => path.join(userCloudConfigDir(uid), 'authorization.json');
 
 // ── Local-only per-user (never synced) ───────────────────────────────────
 

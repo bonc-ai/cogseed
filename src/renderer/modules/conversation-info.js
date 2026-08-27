@@ -25,6 +25,9 @@ const ConversationInfo = (() => {
   let _loadingSource = '';
   let _loadingSeq = 0;
   let _error = '';
+  let _authorizationState = null;
+  let _sessionAuthorizationState = null;
+  let _authorizationScope = 'session';
   let _fileMenuScrollHost = null;
   // 接续准备依据归属的会话（showResumeEvidence 写入）；refresh 覆盖 snapshot
   // 时据此判断依据是否仍属于当前会话，避免跨会话残留。
@@ -1752,20 +1755,132 @@ const ConversationInfo = (() => {
       _refreshTabCounts();
       return;
     }
-    body.innerHTML = _renderRunContext();
+    body.innerHTML = _renderAuthorizationPanel() + _renderRunContext();
     // Hydrate any data-ui-icon placeholders that the renderers emitted.
     if (typeof window !== 'undefined' && typeof window.hydrateUiIcons === 'function') {
       window.hydrateUiIcons(body);
     }
   }
 
+  function _authorizationResource(scope = _authorizationScope) {
+    const conversation = _snapshot.conversation || {};
+    const agentId = String(conversation.agent_id || '').trim();
+    const projectId = String(conversation.project_id || '').trim();
+    const resourceType = scope === 'project' ? 'project' : (scope === 'agent' ? 'agent' : 'session');
+    const resourceId = scope === 'project' ? projectId : (scope === 'agent' ? agentId : String(_cid || ''));
+    return {
+      resourceType,
+      resourceId,
+      subjectType: 'agent',
+      subjectId: agentId,
+      authorization_subject_type: 'agent',
+      authorization_subject_id: agentId,
+      permission: 'body.read',
+      parentProjectId: projectId || null,
+      parentAgentId: agentId || null,
+    };
+  }
+
+  function _authorizationScopeOptions() {
+    const session = _authorizationResource('session');
+    const project = _authorizationResource('project');
+    const agent = _authorizationResource('agent');
+    return [
+      { id: 'session', label: _label('conversation_info.authorization.scope.session', '当前会话'), hint: _label('conversation_info.authorization.scope.session_hint', '仅此会话'), resource: session, available: !!session.resourceId },
+      { id: 'project', label: _label('conversation_info.authorization.scope.project', '当前项目'), hint: _label('conversation_info.authorization.scope.project_hint', '项目内会话'), resource: project, available: !!project.resourceId },
+      { id: 'agent', label: _label('conversation_info.authorization.scope.agent', '当前主体'), hint: _label('conversation_info.authorization.scope.agent_hint', '关联会话'), resource: agent, available: !!agent.resourceId },
+    ];
+  }
+
+  function _authorizationStatus(state) {
+    const value = String(state?.authorizationState || 'metadata_only');
+    return {
+      value,
+      authorized: value === 'authorized',
+      revoked: value === 'revoked',
+    };
+  }
+
+  function _renderAuthorizationPanel() {
+    const options = _authorizationScopeOptions();
+    const selected = options.find((item) => item.id === _authorizationScope) || options[0];
+    const resource = selected.resource;
+    const hasSubject = !!resource.subjectId;
+    const status = _authorizationStatus(_authorizationState);
+    const authorized = status.authorized;
+    const revoked = status.revoked;
+    const scopeName = selected.label;
+    const heading = _label('conversation_info.authorization.title', '访问权限');
+    const scopeLabel = _label('conversation_info.authorization.scope_label', '授权范围');
+    const label = revoked
+      ? _label('conversation_info.authorization.status.revoked', '已撤回')
+      : (authorized
+        ? _label('conversation_info.authorization.status.authorized', '已授权')
+        : _label('conversation_info.authorization.status.locked', '未授权'));
+    const detail = !hasSubject
+      ? _label('conversation_info.authorization.detail.no_subject', '当前会话尚未绑定可授权主体。')
+      : (authorized
+        ? _label('conversation_info.authorization.detail.authorized', '已允许读取{scope}范围内的正文。', { scope: scopeName })
+        : (revoked
+          ? _label('conversation_info.authorization.detail.revoked', '已停止{scope}范围内的新正文读取。', { scope: scopeName })
+          : _label('conversation_info.authorization.detail.locked', '该主体当前只能查看{scope}范围的元数据。', { scope: scopeName })));
+    const scopeHtml = options.map((item) => `<button type="button" class="conversation-authorization-scope${item.id === selected.id ? ' is-selected' : ''}" data-authorization-scope="${item.id}"${item.available ? '' : ' disabled'} aria-pressed="${item.id === selected.id ? 'true' : 'false'}"><span>${escapeHtml(item.label)}</span><small>${escapeHtml(item.hint)}</small></button>`).join('');
+    const action = !hasSubject
+      ? `<span class="conversation-authorization-unavailable">${escapeHtml(_label('conversation_info.authorization.unavailable', '绑定主体后可设置读取范围'))}</span>`
+      : (authorized
+        ? `<button type="button" class="conversation-authorization-action is-danger" data-authorization-action="revoke">${escapeHtml(_label('conversation_info.authorization.action.revoke', '撤回{scope}授权', { scope: scopeName }))}</button>`
+        : `<button type="button" class="conversation-authorization-action" data-authorization-action="grant">${escapeHtml(_label('conversation_info.authorization.action.grant', '授权{scope}读取', { scope: scopeName }))}</button>`);
+    return `<section class="conversation-authorization-panel" aria-label="${escapeHtml(heading)}">
+      <div class="conversation-authorization-heading"><div><div class="conversation-authorization-title">${escapeHtml(heading)}</div><div class="conversation-authorization-detail">${escapeHtml(detail)}</div></div><span class="conversation-authorization-status is-${authorized ? 'authorized' : (revoked ? 'revoked' : 'locked')}">${escapeHtml(label)}</span></div>
+      <div class="conversation-authorization-scope-label">${escapeHtml(scopeLabel)}</div>
+      <div class="conversation-authorization-scopes" role="group" aria-label="${escapeHtml(scopeLabel)}">${scopeHtml}</div>
+      <dl class="conversation-authorization-rows"><div><dt>${escapeHtml(_label('conversation_info.authorization.row.resource', '资源'))}</dt><dd>${escapeHtml(scopeName)}</dd></div><div><dt>${escapeHtml(_label('conversation_info.authorization.row.subject', '主体'))}</dt><dd>${escapeHtml(hasSubject ? _label('conversation_info.authorization.row.subject_current', '当前主体') : _label('conversation_info.authorization.row.subject_unbound', '未绑定'))}</dd></div><div><dt>${escapeHtml(_label('conversation_info.authorization.row.capability', '能力'))}</dt><dd>${escapeHtml(_label('conversation_info.authorization.row.capability_value', '正文读取'))}</dd></div></dl>
+      <div class="conversation-authorization-actions">${action}</div>
+    </section>`;
+  }
+
+  async function _refreshAuthorization(cid, scope = _authorizationScope) {
+    const target = cid || _cid;
+    if (!target || target !== _cid) return;
+    const resource = _authorizationResource(scope);
+    if (!resource.subjectId || !resource.resourceId || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (scope === _authorizationScope) {
+        _authorizationState = { authorizationState: 'metadata_only' };
+        _renderBody();
+      }
+      return;
+    }
+    try {
+      const state = await window.cogseed.invoke('authorization.state', resource);
+      if (target !== _cid) return;
+      if (scope === 'session') _sessionAuthorizationState = state || null;
+      if (scope === _authorizationScope) {
+        _authorizationState = state || null;
+        _syncChrome();
+        _renderBody();
+      }
+    } catch (err) {
+      _infoLog.warn('authorization state refresh failed', { cid: target, error: err && err.message });
+    }
+  }
+
   function _syncChrome() {
     const panel = document.getElementById('conversation-info-panel');
     const toggle = document.getElementById('conversation-info-toggle');
+    const authorizationToggle = document.getElementById('chat-authorization-btn');
     if (panel) panel.hidden = !_open;
     if (toggle) {
       toggle.classList.toggle('is-active', _open);
       toggle.setAttribute('aria-expanded', _open ? 'true' : 'false');
+    }
+    if (authorizationToggle) {
+      authorizationToggle.classList.toggle('is-active', _open);
+      authorizationToggle.setAttribute('aria-expanded', _open ? 'true' : 'false');
+      authorizationToggle.classList.remove('is-authorized', 'is-revoked', 'is-unavailable');
+      const sessionState = _authorizationStatus(_sessionAuthorizationState);
+      if (!_authorizationResource('session').subjectId) authorizationToggle.classList.add('is-unavailable');
+      else if (sessionState.authorized) authorizationToggle.classList.add('is-authorized');
+      else if (sessionState.revoked) authorizationToggle.classList.add('is-revoked');
     }
   }
 
@@ -1823,6 +1938,7 @@ const ConversationInfo = (() => {
         cogseed: _snapshot.cogseed || { session: null, collaboration: null, sessions: [], loading: false, error: '' },
         resumeEvidence: keepResume ? _snapshot.resumeEvidence : null,
       };
+      void _refreshAuthorization(target, _authorizationScope);
       if (!keepResume) _resumeEvidenceCid = '';
       _error = '';
       void _primeCogSeedProjection(target, { render: silent }).catch(() => {});
@@ -1917,6 +2033,9 @@ const ConversationInfo = (() => {
   function bind(cid) {
     _cid = cid || null;
     _open = false;
+    _authorizationState = null;
+    _sessionAuthorizationState = null;
+    _authorizationScope = 'session';
     _resumeEvidenceCid = '';
     _carriedRunsExpanded = false;
     _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
@@ -2242,11 +2361,19 @@ const ConversationInfo = (() => {
 
   function _bindDom() {
     const toggle = document.getElementById('conversation-info-toggle');
+    const authorizationToggle = document.getElementById('chat-authorization-btn');
     const close = document.getElementById('conversation-info-close');
     const body = document.getElementById('conversation-info-body');
     if (toggle && toggle.dataset.bound !== '1') {
       toggle.dataset.bound = '1';
       toggle.addEventListener('click', () => _setOpen(!_open));
+    }
+    if (authorizationToggle && authorizationToggle.dataset.bound !== '1') {
+      authorizationToggle.dataset.bound = '1';
+      authorizationToggle.addEventListener('click', () => {
+        _setOpen(true);
+        void _refreshAuthorization(_cid);
+      });
     }
     if (close && close.dataset.bound !== '1') {
       close.dataset.bound = '1';
@@ -2255,6 +2382,53 @@ const ConversationInfo = (() => {
     if (body && body.dataset.bound !== '1') {
       body.dataset.bound = '1';
       body.addEventListener('click', (ev) => {
+        const authorizationScope = ev.target.closest('[data-authorization-scope]');
+        if (authorizationScope) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const nextScope = authorizationScope.dataset.authorizationScope;
+          if (nextScope !== 'session' && nextScope !== 'project' && nextScope !== 'agent') return;
+          const resource = _authorizationResource(nextScope);
+          if (!resource.resourceId) return;
+          _authorizationScope = nextScope;
+          _authorizationState = null;
+          _renderBody();
+          void _refreshAuthorization(_cid, nextScope);
+          return;
+        }
+        const authorizationAction = ev.target.closest('[data-authorization-action]');
+        if (authorizationAction) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const action = authorizationAction.dataset.authorizationAction;
+          authorizationAction.disabled = true;
+          const resource = _authorizationResource(_authorizationScope);
+          const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
+            ? window.cogseed.invoke.bind(window.cogseed)
+            : null;
+          if (!invoke || !resource.subjectId || !resource.resourceId) {
+            authorizationAction.disabled = false;
+            return;
+          }
+          const operation = action === 'revoke'
+            ? invoke('authorization.revoke', resource)
+            : invoke('authorization.grant', {
+              ...resource,
+              permissions: ['metadata.read', 'body.read', 'search.read'],
+            });
+          operation.then(() => {
+            if (action === 'revoke' && typeof window._clearConversationBodyForAuthorization === 'function') {
+              if (_authorizationScope === 'session') window._clearConversationBodyForAuthorization(_cid, 'revoked');
+            }
+            return Promise.all([
+              _refreshAuthorization(_cid, _authorizationScope),
+              _authorizationScope === 'session' ? Promise.resolve() : _refreshAuthorization(_cid, 'session'),
+            ]);
+          }).catch((err) => {
+            if (typeof uiToast === 'function') uiToast((err && err.message) || '授权操作失败', { variant: 'warning' });
+          }).finally(() => { authorizationAction.disabled = false; });
+          return;
+        }
         const runContextTab = ev.target.closest('[data-run-context-tab]');
         if (runContextTab) {
           ev.preventDefault();
@@ -2560,7 +2734,7 @@ const ConversationInfo = (() => {
       _snapshot = { ..._snapshot, executions: list };
       const body = document.getElementById('conversation-info-body');
       if (body) {
-        body.innerHTML = _renderRunContext();
+        body.innerHTML = _renderAuthorizationPanel() + _renderRunContext();
         if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(body);
       }
     } catch (_) { /* 刷新失败保持现状 */ }
@@ -2587,6 +2761,13 @@ const ConversationInfo = (() => {
     showResumeEvidence,
     refreshExecutions,
     openFileMenu,
+    setAuthorizationState(cid, state) {
+      if (!cid || cid !== _cid) return;
+      _authorizationState = { authorizationState: state };
+      _sessionAuthorizationState = { authorizationState: state };
+      _syncChrome();
+      _renderBody();
+    },
   };
 })();
 

@@ -60,6 +60,9 @@ describe('global search conversation navigation', () => {
       encodeURIComponent,
       HISTORY_PAGE_SIZE: 10,
       _projectIdForConversation: () => 'p1',
+      // _historyRequestUrl now consults the active recipient so it can attach
+      // the authorization subject for agent-bound conversations. No agent here.
+      _activeRecipient: () => null,
     };
     vm.createContext(context);
     vm.runInContext(extractFunction(conversationSource, '_historyRequestUrl'), context);
