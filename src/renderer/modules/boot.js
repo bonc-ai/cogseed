@@ -421,7 +421,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
-                : view === 'dashboard' ? 'panel-dashboard'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
                 : view === 'marketplace' ? 'panel-marketplace'
@@ -433,7 +432,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
-  document.getElementById('dashboard-btn')?.classList.toggle('active', view === 'dashboard');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
     window.setChipSettingsActive(view === 'settings');
@@ -448,12 +446,6 @@ function setView(view, cid, opts = {}) {
   if (view === 'memory') {
     _loadViewFeature('settings', 'memory', () => {
       if (typeof renderMemoryPage === 'function') renderMemoryPage();
-    });
-  }
-  // 智能体总览（第二期 Dashboard）：模块懒加载，进视图才拉数据。
-  if (view === 'dashboard') {
-    _loadViewFeature('dashboard', 'dashboard', () => {
-      if (typeof renderDashboard === 'function') renderDashboard();
     });
   }
   if (view === 'conversation' && cid) {

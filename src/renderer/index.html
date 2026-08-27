@@ -46,7 +46,6 @@
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
-        <button class="sidebar-btn" id="dashboard-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.dashboard">智能体总览</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
@@ -662,71 +661,6 @@
             <button type="button" class="btn btn-sm btn-primary" data-mp-detail-install></button>
           </div>
           <div class="marketplace-detail-body" data-mp-detail-body></div>
-        </div>
-      </section>
-
-      <!-- Dashboard — 智能体总览（第二期）：内置 / 外接·本机 / 外接·远端 三分区
-           统一管理。数据由 modules/dashboard.js 懒加载渲染。样式复用全局
-           .btn 体系与主题变量，卡片行 + 胶囊徽章对齐 connections 面板设计语言。 -->
-      <section class="panel" id="panel-dashboard">
-        <div class="dash-container">
-          <div class="dash-inner">
-            <header class="dash-header">
-              <div class="dash-header-titles">
-                <h2 data-i18n="dashboard.title">智能体总览</h2>
-                <p class="dash-subtitle" data-i18n="dashboard.subtitle">统一管理内置、本机与远端的智能体</p>
-              </div>
-              <div class="dash-header-actions">
-                <button type="button" class="btn btn-sm" id="dash-refresh-btn" data-i18n="dashboard.refresh">刷新</button>
-              </div>
-            </header>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.builtin_section">内置智能体</h3>
-              </div>
-              <div class="dash-list" id="dash-builtin-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.local_section">外接 · 本机</h3>
-                <button type="button" class="btn btn-sm" data-dash-action="add-local" data-i18n="dashboard.add_local">+ 添加本机 CLI</button>
-              </div>
-              <div class="dash-list" id="dash-local-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.remote_section">外接 · 远端</h3>
-              </div>
-              <div class="dash-list" id="dash-remote-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-              <details class="dash-remote-form">
-                <summary><span data-i18n="dashboard.add_remote">+ 添加远端节点</span></summary>
-                <form class="dash-form" id="dash-remote-form">
-                  <label><span data-i18n="dashboard.form_label">名称</span><input type="text" id="dash-remote-label" placeholder="老王的 Hermes" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_endpoint">地址</span><input type="text" id="dash-remote-endpoint" placeholder="http://192.168.1.20:8444" autocomplete="off" spellcheck="false"></label>
-                  <label><span data-i18n="dashboard.form_token">令牌</span><input type="password" id="dash-remote-token" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_identity">期望身份（可选）</span><input type="text" id="dash-remote-identity" placeholder="agent_id" autocomplete="off" spellcheck="false"></label>
-                  <div class="dash-form-actions">
-                    <button type="submit" class="btn btn-sm btn-primary" id="dash-remote-submit" data-i18n="dashboard.form_submit">测试并添加</button>
-                  </div>
-                  <div class="dash-form-status" id="dash-remote-status" role="status"></div>
-                </form>
-              </details>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.channels_section">通讯渠道</h3>
-              </div>
-              <div class="dash-list" id="dash-channel-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-          </div>
         </div>
       </section>
 
