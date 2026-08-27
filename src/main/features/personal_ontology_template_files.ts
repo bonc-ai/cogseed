@@ -261,6 +261,13 @@ export async function installTemplateFile(
   const abs = templateFileAbsPath(uid, templateId);
   let restored_from_archive = false;
   let restored_memory_count = 0;
+  /**
+   * 台账要记的是**这个实例实际是哪一版**，不是「装的时候 catalog 是哪一版」。
+   * 从归档恢复时文件是原样写回的（含它自己的 `> 模板: id@ver` 行），所以版本
+   * 必须从恢复内容里读，否则会出现「文件 v1 / 台账 v2」的贴错标签——未来任何
+   * version mismatch 判断都会从一个撒谎的底账出发。
+   */
+  let installedVersion = template.version;
   try {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (restoreData) {
@@ -268,6 +275,13 @@ export async function installTemplateFile(
       if (archived != null) {
         writeTextAtomicSync(abs, archived); // 恢复旧数据（字段值/流水原样）
         restored_from_archive = true;
+        // 复用唯一的模板 parser 读回真实版本；解析不出（归档缺/坏 meta 行）时
+        // 退回当前 catalog version —— 台账的 `- 模板:` 行只在版本非空且是合法
+        // semver 时才写得出（serializeGroupsMarkdown + TEMPLATE_REF_RE），
+        // 填空串或杜撰一个历史版本都会让这一行整体失效、该行不再被当作模板行。
+        const parsedVersion = parseTemplateContent(archived).version;
+        if (parsedVersion) installedVersion = parsedVersion;
+        else log.warn('restore: archived template has no parsable version meta; falling back to catalog version', { uid, templateId, fallback: template.version });
       }
     }
     if (!restored_from_archive) {
@@ -309,12 +323,16 @@ export async function installTemplateFile(
     created_at: now,
     updated_at: now,
     template_id: templateId,
-    template_version: template.version,
+    template_version: installedVersion,
   };
   groups.push(meta);
   writeGroups(uid, groups);
   notifyGroupUpserted(uid, relPath);
-  log.info('ontology template file installed', { uid, templateId, restored_from_archive, restored_memory_count });
+  log.info('ontology template file installed', {
+    uid, templateId, restored_from_archive, restored_memory_count,
+    installed_version: installedVersion,
+    catalog_version: template.version,
+  });
   return { ok: true, created: [meta], conflict_groups: conflictGroups, restored_from_archive, restored_memory_count };
 }
 
