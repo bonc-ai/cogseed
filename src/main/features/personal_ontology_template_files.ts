@@ -353,6 +353,65 @@ export function templateArchiveDir(uid: string): string {
 }
 
 /**
+ * schema migration 的备份目录：`.personal_ontology_groups/_migration_<ts>/`。
+ *
+ * **前缀必须与卸载归档的 `_backup_` 分开。** `listArchiveDirs` 按
+ * `/^_backup_\d+$/` 收集目录，`readTemplateArchive` 再从中挑最新的
+ * `<templateId>.md` 在重装时原样写回。migration 备份如果也叫 `_backup_`，
+ * 一次「卸载 → 重装并恢复原数据」就可能捡到一份迁移中间态的旧版本文件 ——
+ * 而且只在特定操作序列下出现，很难复现。
+ * `_backup_` 属于 uninstall/restore 生命周期，`_migration_` 属于 schema
+ * 迁移生命周期，两者不共享发现路径（由 role_template_migration_backup 测试锁住）。
+ */
+export function templateMigrationBackupDir(uid: string): string {
+  return path.join(userOntologyGroupsDir(uid), `_migration_${Date.now()}`);
+}
+
+/**
+ * 迁移前把当前模板文件**复制**（不是移动）一份到 `_migration_<ts>/`。
+ * 复制而非移动：移动会在「已备份、新文件还没写」的窗口里让活文件短暂消失。
+ * 返回备份目录绝对路径；源文件不存在 → null（没东西可备份，交由上层判断）。
+ */
+export function backupTemplateFileForMigration(uid: string, templateId: string): string | null {
+  const src = templateFileAbsPath(uid, templateId);
+  if (!fs.existsSync(src)) return null;
+  const dir = templateMigrationBackupDir(uid);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(src, path.join(dir, `${templateId}.md`));
+  return dir;
+}
+
+/** 该用户下现存的 migration 备份目录（新的在前）。保留策略与测试用。 */
+export function listMigrationBackupDirs(uid: string): string[] {
+  try {
+    const base = userOntologyGroupsDir(uid);
+    if (!fs.existsSync(base)) return [];
+    return fs.readdirSync(base, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^_migration_\d+$/.test(entry.name))
+      .map((entry) => path.join(base, entry.name))
+      .sort((a, b) => Number(path.basename(b).replace('_migration_', '')) - Number(path.basename(a).replace('_migration_', '')));
+  } catch {
+    return [];
+  }
+}
+
+/** 每个模板保留最近 N 份迁移备份；更老的删掉（用户数据目录要参与同步，
+ *  不设保留策略的备份目录会无限增长）。 */
+export const MAX_MIGRATION_BACKUPS = 3;
+
+export function pruneMigrationBackups(uid: string, templateId: string, keep = MAX_MIGRATION_BACKUPS): void {
+  const withTemplate = listMigrationBackupDirs(uid)
+    .filter((dir) => fs.existsSync(path.join(dir, `${templateId}.md`)));
+  for (const dir of withTemplate.slice(keep)) {
+    try {
+      fs.rmSync(path.join(dir, `${templateId}.md`), { force: true });
+      // 目录空了才删目录 —— 同一份备份目录里可能还有别的模板。
+      if (!fs.readdirSync(dir).length) fs.rmdirSync(dir);
+    } catch { /* 清理失败不影响迁移结果 */ }
+  }
+}
+
+/**
  * 卸载角色模板：把 `<template_id>.md` 整体移到归档目录（**数据保留**，可重装
  * 恢复），并从台账移除该组。`archiveMemory` 时，该角色来源的全局记忆条目
  * （USER.md/MEMORY.md 中带 role_template 标签的）一并归档到
