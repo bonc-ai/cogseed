@@ -1433,6 +1433,14 @@ function setChatRecipient(target, next, _opts = {}) {
   } else if (target === 'project') {
     _projectChatRecipient = r;
   } else if (currentCid) {
+    // 任务级执行配置跟随「当前选中的接收者」：换执行者（含切回指挥官）即清空
+    // 旧的临时覆盖，否则「给上一个目标调的模型/强度」会被新目标继承——验收中
+    // 「选中 ClaudeCode 却显示 deepseek」就是这条泄漏。
+    const prev = _activeRecipient('conversation');
+    const targetChanged = !prev
+      || prev.kind !== r.kind
+      || (r.kind === 'agent' ? prev.id !== r.id : true);
+    if (_opts.auto !== true && targetChanged) setExecOverride('conversation', null);
     if (_opts.auto === true) {
       if (r.kind === 'agent') _autoRecipientByCid.set(currentCid, { ...r, origin: 'active_floor' });
       else _autoRecipientByCid.delete(currentCid);
