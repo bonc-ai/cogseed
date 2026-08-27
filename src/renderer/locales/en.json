@@ -6204,5 +6204,14 @@
   "agents.exec_follow_global": "Follow global default",
   "agents.exec_defaults_hint": "The model and reasoning effort this agent runs with by default. Temporary adjustments inside a conversation never change these defaults.",
   "exec_config.effort_cli_forward_note": "The reasoning effort is sent with the task to \"{cli}\" (auto = follow the CLI's own default).",
-  "exec_config.effort_cli_off_unavailable": "\"{cli}\" has no reliable thinking-off switch — pick auto or adjust the level instead."
+  "exec_config.effort_cli_off_unavailable": "\"{cli}\" has no reliable thinking-off switch — pick auto or adjust the level instead.",
+  "settings.custom_providers.fetch_models": "Fetch from service",
+  "settings.custom_providers.fetch_models_title": "Fetch models from \"{name}\"",
+  "settings.custom_providers.fetch_models_loading": "Requesting the model list from the service…",
+  "settings.custom_providers.fetch_models_failed": "Fetch failed: {error}",
+  "settings.custom_providers.fetch_models_hint": "Pick the models to add (existing ones cannot be re-added). Context window and output limit use defaults first — edit them after import if needed.",
+  "settings.custom_providers.fetch_models_existing": "existing",
+  "settings.custom_providers.fetch_models_import": "Import selected ({count})",
+  "settings.custom_providers.fetch_models_done": "Imported {count} models",
+  "settings.custom_providers.fetch_models_partial": "Partially imported ({ok}); failed: {error}"
 }
