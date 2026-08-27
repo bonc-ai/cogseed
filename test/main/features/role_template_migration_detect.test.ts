@@ -204,19 +204,49 @@ describe('detection › 本轮不支持的变化必须被认出来，而不是�
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
 
-  it('同一分节里「认不出的名字」+「缺失的坑」→ 疑似未声明改名，拒绝', async () => {
+  it('字段层的疑似未声明改名只报告、不阻断（与用户自建字段无法区分）', async () => {
     setCatalog('2.0.0', [
       { id: 'background', title: '学习背景', fields: [{ id: 'major', name: '专业与方向' }] },
     ]);
     const { detectRoleTemplateMigration, planRoleTemplateMigration } = await load();
-    // 作者把「专业」改成「专业与方向」却忘了声明 previous_names
+    // 作者把「专业」改成「专业与方向」却忘了声明 previous_names。
+    // 这在数据上与「用户自建了『专业』+ catalog 新增『专业与方向』」完全同形，
+    // 而后者是常态 —— 拿它去拦住已判定安全的补坑，代价是所有用过升格建坑的
+    // 用户永远收不到新字段。补空坑不动旧值，所以按报告处理。
     const det = detectRoleTemplateMigration('student', installed('1.0.0', { 学习背景: [['专业', 1]] }));
 
-    expect(det.conflicts.map((c) => c.kind)).toContain('possible_undeclared_rename');
-    expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
+    expect(det.suspectedFieldRenames).toEqual([
+      { sectionTitle: '学习背景', unknown: ['专业'], missing: ['专业与方向'] },
+    ]);
+    expect(det.conflicts).toEqual([]);
+    expect(planRoleTemplateMigration(det).canAutoApply).toBe(true);
+    // 旧字段不在 additions 里，也不会被删——它只是留在文件里变成 custom
+    expect(det.additions.fields.map((f) => f.name)).toEqual(['专业与方向']);
+    expect(det.unknownInFile.fields).toEqual([
+      { sectionTitle: '学习背景', name: '专业', valueCount: 1 },
+    ]);
   });
 
-  it('分节层的疑似未声明改名同样拒绝', async () => {
+  it('用户自建字段 + catalog 新增字段（同一分节）仍然照常补坑', async () => {
+    setCatalog('2.0.0', [
+      {
+        id: 'background',
+        title: '学习背景',
+        fields: [
+          { id: 'major', name: '专业' },
+          { id: 'direction', name: '当前研究方向' },
+        ],
+      },
+    ]);
+    const { detectRoleTemplateMigration, planRoleTemplateMigration } = await load();
+    const det = detectRoleTemplateMigration('student', installed('1.0.0', {
+      学习背景: [['专业', 1], ['我的自建字段', 2]],
+    }));
+    expect(planRoleTemplateMigration(det).canAutoApply).toBe(true);
+    expect(det.additions.fields.map((f) => f.name)).toEqual(['当前研究方向']);
+  });
+
+  it('分节层的疑似未声明改名仍然阻断（用户造不出模板分节）', async () => {
     setCatalog('2.0.0', [
       { id: 'background', title: '教育背景', fields: [{ id: 'major', name: '专业' }] },
     ]);
@@ -225,6 +255,7 @@ describe('detection › 本轮不支持的变化必须被认出来，而不是�
     expect(det.conflicts.map((c) => c.kind)).toContain('possible_undeclared_rename');
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
+
 });
 
 describe('detection › 阻断条件', () => {
@@ -265,11 +296,17 @@ describe('detection › 阻断条件', () => {
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
 
-  it('台账版本与文件版本分叉时如实带出来', async () => {
+  it('台账版本与文件版本分叉 → 文件为权威，且这本身就需要一次自愈', async () => {
     setCatalog('2.0.0', V1_CATALOG);
-    const { detectRoleTemplateMigration } = await load();
+    const { detectRoleTemplateMigration, planRoleTemplateMigration } = await load();
     const det = detectRoleTemplateMigration('student', installed('2.0.0', { 学习背景: ['专业'] }), '1.0.0');
     expect(det.fromVersion).toBe('2.0.0'); // 文件是权威
     expect(det.ledgerVersion).toBe('1.0.0');
+    // 结构与版本都已到位，只有台账缓存落后：不做成 needsMigration 的话，
+    // 「文件已写、台账未更新」的崩溃窗口永远修不回来。
+    expect(det.needsMigration).toBe(true);
+    const plan = planRoleTemplateMigration(det);
+    expect(plan.versionOnly).toBe(true);
+    expect(plan.canAutoApply).toBe(true);
   });
 });

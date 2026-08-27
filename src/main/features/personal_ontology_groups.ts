@@ -279,6 +279,17 @@ const GROUP_FIELD_LABELS: Record<string, string> = {
  *  版本支持标准 semver 预发布后缀，如 `1.1.0` / `0.2.0-review.1`）。 */
 const TEMPLATE_REF_RE = /^([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 
+/**
+ * 这个版本串写进台账 `- 模板:` 行之后还能被读回来吗？
+ *
+ * 写入前必须过这一关：非法版本会让整行匹配不上 TEMPLATE_REF_RE，
+ * 于是该行**整体失效**——group_id 与文件都还在，但它不再被当作模板行，
+ * 模板静默退化成一个普通记忆分组。判据从同一个正则派生，不另立一份。
+ */
+export function isValidTemplateVersion(version: string): boolean {
+  return TEMPLATE_REF_RE.test(`x@${String(version ?? '')}`);
+}
+
 export function parseGroupsMarkdown(text: string): GroupMeta[] {
   const blocks = text.split(/\n(?=###\s+\S)/).map((b) => b.trim()).filter((b) => b.startsWith('### '));
   const out: GroupMeta[] = [];

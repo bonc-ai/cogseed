@@ -56,7 +56,7 @@ export { readGroups };
 
 const log = createLogger('personal-ontology-template-files');
 
-const MAX_FILE_BYTES = 200 * 1024 * 1024;
+export const MAX_FILE_BYTES = 200 * 1024 * 1024;
 /** 角色模板安装上限：每人最多 3 个（产品规则，防去向面板/空间选择过载）。 */
 export const MAX_INSTALLED_TEMPLATES = 3;
 

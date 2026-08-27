@@ -18,6 +18,29 @@
  */
 
 import { getRoleTemplate, type RoleTemplate, type PresetGroup, type TemplateField } from './role_templates';
+import { safeId, writeTextAtomicSync, nowIso } from '../storage';
+import { createLogger } from '../logger';
+import { fileEditLock } from '../util/locks';
+import {
+  isValidTemplateVersion,
+  writeGroups,
+  notifyGroupUpserted,
+  type FieldValue,
+} from './personal_ontology_groups';
+import {
+  MAX_FILE_BYTES,
+  backupTemplateFileForMigration,
+  parseTemplateContent,
+  pruneMigrationBackups,
+  readGroups,
+  readTemplateFileText,
+  serializeTemplateContent,
+  templateFileAbsPath,
+  type TemplateFileContent,
+  type TemplateSection,
+} from './personal_ontology_template_files';
+
+const log = createLogger('personal-ontology-migration');
 
 // ── 版本比较 ───────────────────────────────────────────────────────────────
 
@@ -304,9 +327,13 @@ export interface MigrationConflict {
     /** 名字解析出多个 identity —— 必须由作者消歧，不猜。 */
     | 'ambiguous_identity'
     /**
-     * 同一作用域内同时存在「文件里认不出的名字」和「catalog 里缺失的坑」：
-     * 这可能是一次**未声明 previous_names 的改名**。无法与「用户自建字段 +
-     * catalog 新增字段」区分，所以按最保守处理——拒绝，不硬加空坑。
+     * 文件里有认不出的**分节**，catalog 又恰好有分节缺失：很可能是一次
+     * 未声明 `previous_names` 的分节改名。分节层按最保守处理——拒绝。
+     *
+     * 为什么分节拦、字段不拦（见 `suspectedFieldRenames`）：用户没有任何入口
+     * 能凭空造一个模板分节（`promoteEntryToRef` 必须落在已存在的分节上），
+     * 所以「认不出的分节」本身就是异常信号；而「认不出的字段」是用户升格建坑
+     * 的正常产物，天天都有。
      */
     | 'possible_undeclared_rename';
   detail: string;
@@ -332,6 +359,19 @@ export interface RoleTemplateMigrationDetection {
    * 「产品下架的旧字段」和「用户自建字段」。
    */
   unknownInFile: { sections: string[]; fields: Array<{ sectionTitle: string; name: string; valueCount: number }> };
+  /**
+   * 疑似未声明 `previous_names` 的**字段**改名：同一分节里既有认不出的名字、
+   * 又有缺失的坑。**不阻断**，只报出来供日志排查。
+   *
+   * 它和「用户自建了一个字段 + catalog 恰好也新增了一个字段」在数据上完全
+   * 同形，而后者是常态。让一个无法判定的信号去拦住一条已经判定安全的路径，
+   * 结果是所有用过「升格建坑」的用户永远收不到新字段 —— 这个代价远大于收益：
+   * 就算真的是未声明改名，补一个空坑也不会动旧值（旧值留在原字段里，只是变成
+   * custom），等作者补上 `previous_names` 之后仍可由真正的 rename migration
+   * 接手。真正能判定的改名（声明过 `previous_names` 的）走 renamedFields，
+   * 那条是阻断的。
+   */
+  suspectedFieldRenames: Array<{ sectionTitle: string; unknown: string[]; missing: string[] }>;
   conflicts: MigrationConflict[];
 }
 
@@ -358,6 +398,7 @@ export function detectRoleTemplateMigration(
     renamedFields: [],
     movedFields: [],
     unknownInFile: { sections: [], fields: [] },
+    suspectedFieldRenames: [],
     conflicts: [],
   };
 
@@ -491,11 +532,13 @@ export function detectRoleTemplateMigration(
       });
     }
 
-    // 同一分节里既有「认不出的名字」又有「缺失的坑」→ 可能是未声明的改名。
+    // 同一分节里既有「认不出的名字」又有「缺失的坑」→ 疑似未声明的字段改名。
+    // 如实记下来，但**不阻断**（理由见 suspectedFieldRenames 的注释）。
     if (unknownHere.length && missing.length) {
-      base.conflicts.push({
-        kind: 'possible_undeclared_rename',
-        detail: `section "${fileSec.title}": unknown [${unknownHere.map((u) => u.name).join(', ')}] alongside missing [${missing.map((m) => m.name).join(', ')}]`,
+      base.suspectedFieldRenames.push({
+        sectionTitle: fileSec.title,
+        unknown: unknownHere.map((u) => u.name),
+        missing: missing.map((m) => m.name),
       });
     }
     base.additions.fields.push(...missing);
@@ -519,7 +562,10 @@ export function detectRoleTemplateMigration(
       || base.renamedFields.length
       || base.movedFields.length
       || base.conflicts.length
-      || compareTemplateVersion(installed.version, template.version) !== 0,
+      || compareTemplateVersion(installed.version, template.version) !== 0
+      // 台账缓存与文件权威分叉也算「有事要做」——否则「文件已写、台账未更新」
+      // 的崩溃窗口永远自愈不了：结构和版本都已到位，只有缓存落后。
+      || Boolean(ledgerVersion && ledgerVersion !== installed.version),
   );
 
   return base;
@@ -585,4 +631,337 @@ export function planRoleTemplateMigration(
     canAutoApply: clean && detection.needsMigration,
     versionOnly,
   };
+}
+
+// ── Apply（只执行纯新增）───────────────────────────────────────────────────
+
+export interface ApplyMigrationResult {
+  ok: boolean;
+  templateId: string;
+  /**
+   * `migrated`        文件被重写（补坑 / 只更新版本行）+ 台账同步；
+   * `ledger_repaired` 文件本来就已经是目标版本与目标结构，只补台账缓存
+   *                   （上一次迁移「文件已写、台账未更新」中途崩溃的自愈路径）；
+   * `noop`            无事可做；
+   * `refused`         识别到本轮不支持的变化或冲突 —— **不升级版本号**；
+   * `failed`          执行中出错 —— 文件与台账都保持迁移前状态。
+   */
+  outcome: 'migrated' | 'ledger_repaired' | 'noop' | 'refused' | 'failed';
+  fromVersion?: string;
+  toVersion?: string;
+  addedSections?: number;
+  addedFields?: number;
+  refusal?: { unsupportedChanges: UnsupportedChange[]; conflicts: MigrationConflict[] };
+  backupDir?: string;
+  error?: string;
+}
+
+/** 模板文件内容 → detection 需要的结构投影。 */
+export function toInstalledShape(content: TemplateFileContent): InstalledTemplateShape {
+  return {
+    version: content.version,
+    sections: (content.sections || []).map((s) => ({
+      title: s.title,
+      fields: Object.keys(s.fields || {}).map((name) => ({
+        name,
+        valueCount: (s.fields[name] || []).length,
+      })),
+    })),
+  };
+}
+
+/** 在内存里施加 additions。**只加不改**：已有字段的值数组连引用都不碰。 */
+function applyAdditions(content: TemplateFileContent, plan: RoleTemplateMigrationPlan): void {
+  // 1) 补字段：按 afterName 就地插入，保持 catalog 的字段顺序。
+  //    JS 对象保留字符串 key 的插入顺序，所以重建 fields 即重排显示顺序。
+  const bySection = new Map<string, AddedField[]>();
+  for (const add of plan.additions.fields) {
+    const arr = bySection.get(add.sectionTitle) || [];
+    arr.push(add);
+    bySection.set(add.sectionTitle, arr);
+  }
+  for (const [sectionTitle, adds] of bySection) {
+    const sec = content.sections.find((s) => s.title === sectionTitle);
+    if (!sec) continue; // validate 会兜住；这里不静默造节
+    const rebuilt: Record<string, FieldValue[]> = {};
+    // catalog 里排在所有已存在字段之前的新坑，插到最前。
+    for (const add of adds.filter((a) => !a.afterName)) rebuilt[add.name] = [];
+    for (const name of Object.keys(sec.fields)) {
+      rebuilt[name] = sec.fields[name];
+      for (const add of adds.filter((a) => a.afterName === name)) rebuilt[add.name] = [];
+    }
+    // 落位不了的（afterName 指向的字段本身也是新加的）→ 追加到末尾：
+    // 宁可顺序不完美，也不能丢坑。
+    for (const add of adds) {
+      if (!Object.prototype.hasOwnProperty.call(rebuilt, add.name)) rebuilt[add.name] = [];
+    }
+    sec.fields = rebuilt;
+  }
+
+  // 2) 补分节：按 catalog 下标插回原位（下标升序处理，插入后位置才对得上）。
+  for (const add of [...plan.additions.sections].sort((a, b) => a.catalogIndex - b.catalogIndex)) {
+    const section: TemplateSection = {
+      title: add.title,
+      fields: Object.fromEntries(add.fields.map((f) => [f.name, [] as FieldValue[]])),
+      flowEntries: [],
+    };
+    const at = Math.min(add.catalogIndex, content.sections.length);
+    content.sections.splice(at, 0, section);
+  }
+}
+
+/** 迁移前后的可比快照：`分节\u0000字段` → 值条数，分节 → 流水条数。 */
+function snapshot(content: TemplateFileContent): {
+  fields: Map<string, number>;
+  flow: Map<string, number>;
+  totalValues: number;
+} {
+  const fields = new Map<string, number>();
+  const flow = new Map<string, number>();
+  let totalValues = 0;
+  for (const sec of content.sections || []) {
+    flow.set(sec.title, sec.flowEntries.length);
+    for (const name of Object.keys(sec.fields || {})) {
+      const n = (sec.fields[name] || []).length;
+      // 用 NUL 连接：分节名与字段名都可能含空格，拿空格当分隔会让两个不同的
+      // (分节, 字段) 撞成同一个 key，快照比对就会漏掉真实差异。
+      fields.set(`${sec.title}\u0000${name}`, n);
+      totalValues += n;
+    }
+  }
+  return { fields, flow, totalValues };
+}
+
+const label = (key: string) => key.replace('\u0000', ' · ');
+
+/**
+ * 后置校验。任何一条不过 → 不写盘、不升级版本。这里是「只加不改」这条承诺的
+ * 唯一执行者：它比较的是**迁移前后的实际内容**，而不是复述 plan 说了什么。
+ */
+function validateMigrated(
+  before: TemplateFileContent,
+  after: TemplateFileContent,
+  plan: RoleTemplateMigrationPlan,
+  template: RoleTemplate,
+): string | null {
+  const b = snapshot(before);
+  const a = snapshot(after);
+
+  if (a.totalValues < b.totalValues) return `value count shrank: ${b.totalValues} to ${a.totalValues}`;
+
+  for (const [key, count] of b.fields) {
+    if (!a.fields.has(key)) return `field disappeared: ${label(key)}`;
+    if (a.fields.get(key) !== count) {
+      return `field value count changed: ${label(key)} ${count} to ${a.fields.get(key)}`;
+    }
+  }
+  for (const [title, count] of b.flow) {
+    if (a.flow.get(title) !== count) return `flow entries changed in section "${title}"`;
+  }
+
+  // catalog 当前声明的每个坑都必须在文件里 —— 这才是「补坑」的验收标准。
+  for (const catSec of template.preset_groups) {
+    const sec = after.sections.find((s) => s.title === catSec.title);
+    if (!sec) return `catalog section missing after migration: ${catSec.title}`;
+    for (const f of catSec.fields) {
+      if (!Object.prototype.hasOwnProperty.call(sec.fields, f.name)) {
+        return `catalog field missing after migration: ${catSec.title} · ${f.name}`;
+      }
+    }
+  }
+
+  const expectedNew = plan.additions.fields.length
+    + plan.additions.sections.reduce((n, s) => n + s.fields.length, 0);
+  if (a.fields.size !== b.fields.size + expectedNew) {
+    return `unexpected field count: ${b.fields.size} + ${expectedNew} != ${a.fields.size}`;
+  }
+
+  if (after.version !== plan.toVersion) return `serialized version mismatch: ${after.version}`;
+  if (!isValidTemplateVersion(plan.toVersion)) return `target version is not a writable semver: ${plan.toVersion}`;
+  return null;
+}
+
+/**
+ * 执行一次 schema migration。**整份文件只有一次 `writeTextAtomicSync`** ——
+ * 所有变更先在内存里的 `TemplateFileContent` 上做完、校验完，最后一次性换上去，
+ * 所以磁盘上只存在「迁移前」和「迁移后」两种状态，没有半迁移文件。
+ *
+ * 顺序：锁 → 锁内重读并重新 detect → 备份 → 内存 apply → validate →
+ * 原子写文件 → 更新台账 → 通知索引 → 清理旧备份。
+ *
+ * 文件写成功、台账没来得及更新就崩溃：下一次 detect 读的是**文件**版本，
+ * 会发现结构与版本都已到位，于是走 `ledger_repaired` 只补台账，不重复迁移。
+ * 这就是「文件优先于台账」的红利 —— 自愈不需要额外的修复代码。
+ */
+export async function applyRoleTemplateMigration(
+  uid: string,
+  templateId: string,
+): Promise<ApplyMigrationResult> {
+  if (!safeId(uid)) return { ok: false, templateId, outcome: 'failed', error: 'invalid uid' };
+
+  const abs = templateFileAbsPath(uid, templateId);
+  return fileEditLock(abs).runExclusive(async (): Promise<ApplyMigrationResult> => {
+    // 锁内重读：锁外算出的任何 plan 都只是预判，期间可能有手填/自动写入落过盘。
+    const text = readTemplateFileText(uid, templateId);
+    if (!text) return { ok: false, templateId, outcome: 'failed', error: 'template file not found' };
+
+    const row = readGroups(uid).find((g) => g.template_id === templateId);
+    if (!row) return { ok: false, templateId, outcome: 'failed', error: 'template is not installed' };
+
+    const before = parseTemplateContent(text);
+    const detection = detectRoleTemplateMigration(templateId, toInstalledShape(before), row.template_version);
+    const plan = planRoleTemplateMigration(detection);
+
+    if (!detection.needsMigration) {
+      return { ok: true, templateId, outcome: 'noop', fromVersion: plan.fromVersion, toVersion: plan.toVersion };
+    }
+    if (!plan.canAutoApply) {
+      log.info('role template migration refused; instance stays on its real version', {
+        uid,
+        templateId,
+        fromVersion: plan.fromVersion,
+        toVersion: plan.toVersion,
+        unsupported: plan.unsupportedChanges.map((c) => c.kind),
+        conflicts: plan.conflicts.map((c) => c.kind),
+      });
+      return {
+        ok: false,
+        templateId,
+        outcome: 'refused',
+        fromVersion: plan.fromVersion,
+        toVersion: plan.toVersion,
+        refusal: { unsupportedChanges: plan.unsupportedChanges, conflicts: plan.conflicts },
+      };
+    }
+
+    const template = getRoleTemplate(templateId);
+    if (!template) return { ok: false, templateId, outcome: 'failed', error: 'template not found' };
+
+    // 不阻断，但必须留痕：这是唯一能事后发现「作者改名忘了声明 previous_names」
+    // 的地方。只记分节名与计数，不记字段名（用户自建字段名属于用户内容）。
+    if (detection.suspectedFieldRenames.length) {
+      log.warn('role template migration: unrecognised field names alongside missing slots', {
+        uid,
+        templateId,
+        sections: detection.suspectedFieldRenames.map((s) => ({
+          section: s.sectionTitle,
+          unknown: s.unknown.length,
+          missing: s.missing.length,
+        })),
+      });
+    }
+
+    /** 台账缓存对齐到文件的真实版本。 */
+    const syncLedger = (version: string) => {
+      const groups = readGroups(uid);
+      const idx = groups.findIndex((g) => g.group_id === row.group_id);
+      if (idx === -1) return;
+      groups[idx] = { ...groups[idx], template_version: version, updated_at: nowIso() };
+      writeGroups(uid, groups);
+    };
+
+    // 文件本来就已经是目标版本 + 目标结构 → 只有台账这份缓存落后了。
+    if (plan.versionOnly && before.version === plan.toVersion) {
+      syncLedger(plan.toVersion);
+      log.info('role template ledger version repaired from file', {
+        uid, templateId, ledgerWas: row.template_version, version: plan.toVersion,
+      });
+      return {
+        ok: true,
+        templateId,
+        outcome: 'ledger_repaired',
+        fromVersion: plan.fromVersion,
+        toVersion: plan.toVersion,
+      };
+    }
+
+    let backupDir: string | undefined;
+    try {
+      backupDir = backupTemplateFileForMigration(uid, templateId) || undefined;
+
+      const after = parseTemplateContent(text); // 独立的第二份，before 保持原样供比对
+      applyAdditions(after, plan);
+      after.version = plan.toVersion;
+
+      const problem = validateMigrated(before, after, plan, template);
+      if (problem) {
+        log.warn('role template migration failed validation; nothing written', { uid, templateId, problem });
+        return { ok: false, templateId, outcome: 'failed', error: problem, backupDir };
+      }
+
+      const next = serializeTemplateContent(after);
+      const bytes = Buffer.byteLength(next, 'utf8');
+      if (bytes > MAX_FILE_BYTES) {
+        return { ok: false, templateId, outcome: 'failed', error: 'migrated file exceeds size limit', backupDir };
+      }
+      // round-trip：写下去的字节必须还能被同一个 parser 读回同样的东西，
+      // 否则「内存里对了」等于没对。
+      const roundTrip = parseTemplateContent(next);
+      const rtProblem = validateMigrated(before, roundTrip, plan, template);
+      if (rtProblem || roundTrip.template_id !== templateId) {
+        return {
+          ok: false,
+          templateId,
+          outcome: 'failed',
+          error: `round-trip check failed: ${rtProblem || 'template_id mismatch'}`,
+          backupDir,
+        };
+      }
+
+      // ── 唯一一次写文件 ──
+      writeTextAtomicSync(abs, next);
+      // ── 文件落盘之后才轮到台账（缓存跟着权威走）──
+      syncLedger(plan.toVersion);
+      notifyGroupUpserted(uid, `.personal_ontology_groups/${templateId}.md`);
+      pruneMigrationBackups(uid, templateId);
+
+      log.info('role template schema migrated', {
+        uid,
+        templateId,
+        fromVersion: plan.fromVersion,
+        toVersion: plan.toVersion,
+        addedSections: plan.additions.sections.length,
+        addedFields: plan.additions.fields.length,
+      });
+      return {
+        ok: true,
+        templateId,
+        outcome: 'migrated',
+        fromVersion: plan.fromVersion,
+        toVersion: plan.toVersion,
+        addedSections: plan.additions.sections.length,
+        addedFields: plan.additions.fields.length,
+        backupDir,
+      };
+    } catch (err) {
+      log.warn('role template migration threw; file and ledger left untouched', {
+        uid, templateId, error: (err as Error).message,
+      });
+      return { ok: false, templateId, outcome: 'failed', error: (err as Error).message, backupDir };
+    }
+  });
+}
+
+/**
+ * 对该用户所有已安装模板跑一遍 detect then apply。
+ * 单个模板失败不影响其它模板：schema 迁移是逐模板独立的事务。
+ */
+export async function reconcileInstalledRoleTemplates(uid: string): Promise<ApplyMigrationResult[]> {
+  if (!safeId(uid)) return [];
+  const out: ApplyMigrationResult[] = [];
+  let templateIds: string[];
+  try {
+    templateIds = readGroups(uid).filter((g) => g.template_id).map((g) => g.template_id as string);
+  } catch (err) {
+    log.warn('role template reconcile: ledger unreadable', { uid, error: (err as Error).message });
+    return [];
+  }
+  for (const templateId of templateIds) {
+    try {
+      out.push(await applyRoleTemplateMigration(uid, templateId));
+    } catch (err) {
+      out.push({ ok: false, templateId, outcome: 'failed', error: (err as Error).message });
+    }
+  }
+  return out;
 }
