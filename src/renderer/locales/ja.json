@@ -4999,5 +4999,6 @@
   "agents.exec_default_model": "既定モデル",
   "agents.exec_default_thinking": "既定の推論強度",
   "agents.exec_follow_global": "グローバル既定に従う",
-  "agents.exec_defaults_hint": "このエージェントが既定で使用するモデルと推論強度。会話内の一時的な調整でこの既定値が変更されることはありません。"
+  "agents.exec_defaults_hint": "このエージェントが既定で使用するモデルと推論強度。会話内の一時的な調整でこの既定値が変更されることはありません。",
+  "exec_config.effort_cli_forward_note": "推論強度はタスクとともに「{cli}」へ送られます（自動 = CLI自身の既定設定に従う）。"
 }

@@ -6190,5 +6190,6 @@
   "agents.exec_default_model": "默认模型",
   "agents.exec_default_thinking": "默认推理强度",
   "agents.exec_follow_global": "跟随全局默认",
-  "agents.exec_defaults_hint": "该 Agent 执行任务时的默认模型与推理强度。会话内的临时调整不会修改这里的默认值。"
+  "agents.exec_defaults_hint": "该 Agent 执行任务时的默认模型与推理强度。会话内的临时调整不会修改这里的默认值。",
+  "exec_config.effort_cli_forward_note": "推理强度将随任务下发给「{cli}」执行（自动 = 跟随 CLI 自身默认配置）。"
 }

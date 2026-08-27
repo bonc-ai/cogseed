@@ -6190,5 +6190,6 @@
   "agents.exec_default_model": "Default model",
   "agents.exec_default_thinking": "Default reasoning effort",
   "agents.exec_follow_global": "Follow global default",
-  "agents.exec_defaults_hint": "The model and reasoning effort this agent runs with by default. Temporary adjustments inside a conversation never change these defaults."
+  "agents.exec_defaults_hint": "The model and reasoning effort this agent runs with by default. Temporary adjustments inside a conversation never change these defaults.",
+  "exec_config.effort_cli_forward_note": "The reasoning effort is sent with the task to \"{cli}\" (auto = follow the CLI's own default)."
 }
