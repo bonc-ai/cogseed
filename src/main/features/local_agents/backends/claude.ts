@@ -30,10 +30,27 @@ import {
 
 const log = createLogger('local-agents:claude');
 
+/**
+ * Claude Code reads its thinking budget from the documented
+ * `MAX_THINKING_TOKENS` env var. The official docs define the variable but
+ * not tiered presets, so these budgets are our heuristic mapping: unset
+ * ('off') keeps the CLI's own default (usually no extended thinking), the
+ * tiers raise the budget without touching anything else in the session.
+ */
+const CLAUDE_THINKING_TOKENS: Record<'low' | 'high', string> = {
+  low: '8192',
+  high: '32000',
+};
+
 export const claudeBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildClaudeArgs(opts);
-    const child = spawnCli(opts.binPath, args, opts.cwd, undefined, opts.providerEnv);
+    // 'off' → unset: claude has no hard "disable thinking" switch, so the
+    // best honest behavior is to leave the CLI's own default alone.
+    const effortEnv = opts.thinkingLevel && opts.thinkingLevel !== 'off'
+      ? { MAX_THINKING_TOKENS: CLAUDE_THINKING_TOKENS[opts.thinkingLevel] }
+      : undefined;
+    const child = spawnCli(opts.binPath, args, opts.cwd, undefined, opts.providerEnv, effortEnv);
     const detachAbort = bindAbort(child, opts.signal);
     const tail = new StderrTail();
     const startedAt = Date.now();

@@ -105,7 +105,10 @@ function _effectiveExecConfig(target) {
   const defaultEntry = _modelChipEntries[0] || null;
 
   // CLI-backed local agent: model comes from the agent's runtime (task
-  // override may swap it); effort is owned by the external CLI.
+  // override may swap it for this task). Reasoning effort stays the CLI's
+  // own configuration — the active execution path is the P3394 gateway,
+  // whose envelope has no execution-prefs slot yet, so a picker here would
+  // be a dead control. Revisit when the envelope carries execution prefs.
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const model = override.model || agent.runtime.model || '';
@@ -115,7 +118,7 @@ function _effectiveExecConfig(target) {
       modelLabel: override.modelLabel || model || '',
       provider: '',
       providerLabel: (agent.runtime && agent.runtime.cli) || '',
-      effort: null,           // CLI decides its own reasoning config
+      effort: null,
       effortOverridden: false,
       modelOverridden: !!override.model,
       reasoning: false,
@@ -243,6 +246,7 @@ function _modelChipRenderChip(chip) {
       // the reason instead of a changeable value.
       effortEl.textContent = t('exec_config.cli_badge');
       effortEl.classList.add('is-cli');
+      effortEl.classList.remove('is-override');
     } else {
       const displayEffort = cfg.effort || 'auto';
       effortEl.textContent = _execEffortLabel(displayEffort);
@@ -340,36 +344,20 @@ function _renderExecConfigMenu(menu, anchor) {
   // CLI 场景不套「模型/推理强度」分节框架——header 已经说明了执行方式，
   // 下面就是一个扁平的「当前 + 候选」模型列表，说明文字垫底。此前把候选
   // 列表异步追加到 effort 节后面，读起来像"未配置模型"报错挂在推理强度
-  // 节下，信息层级是坏的。
+  // 节下，信息层级是坏的。能转发推理档位的 CLI（claude / codex）由列表
+  // 渲染器附带分段选择；其余 CLI 保持说明文字。
   if (cfg.mode === 'cli') {
     _renderCliModelOptions(menu, anchor, target, cfg);
     return;
   }
 
   // ── Model section ──
+  // 一层平铺：列出全部已配置的服务条目，当前生效的打勾；有任务级覆盖时该行
+  // 加「本次任务」徽标，再次点击即取消覆盖回到跟随默认。不再有摘要行 /
+  // "恢复默认"操作行——同一个模型出现两次只会让人分不清哪个能点。
   _menuSectionLabel(menu, 'exec_config.section_model');
 
-  if (cfg.modelOverridden) {
-    // Task override in effect: show it with its badge and a reset row.
-    const currentModelEl = document.createElement('div');
-    currentModelEl.className = 'model-chip-menu-item is-override';
-    currentModelEl.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(cfg.modelLabel || t('exec_config.no_model'))}</span>` +
-      `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.task_override_badge'))}</span>` +
-      '</span>' +
-      `<span class="model-chip-menu-sub">${escapeHtml(cfg.providerLabel || '')}</span>`;
-    menu.appendChild(currentModelEl);
-    const reset = document.createElement('div');
-    reset.className = 'model-chip-menu-item model-chip-menu-item--action';
-    reset.innerHTML = `<span class="model-chip-menu-main"><span class="model-chip-menu-name">${escapeHtml(t('exec_config.reset_model'))}</span></span>`;
-    reset.addEventListener('click', () => {
-      _clearModelOverride(target);
-      _closeModelMenu();
-    });
-    menu.appendChild(reset);
-  }
-  if (cfg.model || _modelChipEntries.length) {
+  if (_modelChipEntries.length || cfg.model) {
     _renderApiProviderRows(menu, anchor, target, cfg);
   }
 
@@ -463,10 +451,14 @@ function _renderApiProviderRows(menu, anchor, target, cfg) {
     item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
     const provider = entry.providerLabel || entry.provider || '';
     const model = entry.modelName || entry.model || '';
+    // 当前行的徽标语义：跟随默认 → 「当前」；来自任务级覆盖 → 「本次任务」。
+    // 再点一次当前行 = 取消覆盖、回到跟随默认（不需要单独的恢复入口）。
     item.innerHTML =
       '<span class="model-chip-menu-main">' +
       `<span class="model-chip-menu-name">${escapeHtml(model)}</span>` +
-      (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
+      (isCurrent
+        ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
+        : '') +
       '</span>' +
       `<span class="model-chip-menu-sub">${escapeHtml(provider)}</span>`;
     const expand = document.createElement('button');
@@ -480,6 +472,13 @@ function _renderApiProviderRows(menu, anchor, target, cfg) {
     });
     item.appendChild(expand);
     item.addEventListener('click', () => {
+      if (isCurrent) {
+        if (cfg.modelOverridden) {
+          _clearModelOverride(target);
+        }
+        _closeModelMenu();
+        return;
+      }
       _applyModelPick(target, cfg, entry.provider, entry.model, model, entry.providerLabel);
       _closeModelMenu();
     });
