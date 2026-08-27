@@ -214,3 +214,39 @@ describe('role-template boundary › M7/M8 PO 内部规则收口', () => {
     expect(guards.length).toBeGreaterThanOrEqual(2); // renameGroup + deleteGroup
   });
 });
+
+describe('role-template boundary › M5 candidate-builder 不再直读直写 PO 文件', () => {
+  const skill = read('resources/builtin/system/skills/personal-ontology-candidate-builder/SKILL.md');
+
+  it('不再指示技能去读 groups.md / <template_id>.md 推断字段', () => {
+    expect(skill).not.toContain('groups.md` 中带 `- 模板:` 行');
+    expect(skill).not.toContain('.personal_ontology_groups/groups.md');
+    // 只剩「禁止」语境里提到这个目录
+    const mentions = skill.split('\n').filter((line) => line.includes('.personal_ontology_groups/'));
+    for (const line of mentions) {
+      expect(line, `unexpected instruction touching PO files: ${line}`).toMatch(/禁止|不得|只能通过/);
+    }
+  });
+
+  it('不再指示技能往模板文件写 [候选池: ...] / [已生效] 标记', () => {
+    expect(skill).not.toContain('同步改为 `[候选池:');
+    expect(skill).not.toContain('三方同步');
+    expect(skill).toContain('禁止改写个人本体的任何文件');
+  });
+
+  it('字段清单改走正式只读工具', () => {
+    expect(skill).toContain('personal_ontology_fields');
+    const catalog = read('src/main/model/core-agent/tool-catalog.ts');
+    expect(catalog).toContain("name: 'personal_ontology_fields'");
+    const runner = read('src/main/model/core-agent/runner.ts');
+    expect(runner).toContain('createPersonalOntologyTools');
+  });
+
+  it('工具本身只经 contract 取数，不碰 PO 内部文件', () => {
+    const tool = stripComments(read('src/main/model/core-agent/personal-ontology-tools.ts'));
+    expect(tool).toContain('personal_ontology_contract');
+    expect(tool).not.toContain('readTemplateFileText');
+    expect(tool).not.toContain('readGroups');
+    expect(tool).not.toContain('node:fs');
+  });
+});

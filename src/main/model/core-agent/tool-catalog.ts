@@ -131,6 +131,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'research_rerank', group: 'kb', ownerAgent: DEEP_RESEARCH_AGENT_IDS, summary: 'Semantically rerank candidate research passages against a sub-question by local embedding similarity — the second stage after the deep-research compress skill\'s lexical filter, surfacing on-topic passages that share no keywords. Read-only, local, no Tool Execution Access. Owned by the deep-research + data-research agents (hidden from the commander).' },
 
   // Recall ability assets
+  { name: 'personal_ontology_fields', group: 'recall', summary: 'List the fillable fields of the user\'s installed role templates (个人本体挖空表单), so a candidate can be routed to a concrete field by opaque field_ref.' },
   { name: 'search_ability_assets', group: 'recall', summary: 'Semantic search over the user\'s ability asset pool (沉淀的可复用经验/规则/模板/方法；全量只读，含所有空间与全局资产).' },
 
   // Conversation history

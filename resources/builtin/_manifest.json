@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "7d9fed3be5379520357a7558dedcc74318d94cf86ecdc76f946efebe022bccbe",
+  "content_tree_sha256": "a4483ab06b68dd864abe8a048b4285fcfdd6e6d330a98d29bff47c59dc56b80f",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6409,8 +6409,8 @@
     },
     {
       "path": "system/skills/personal-ontology-candidate-builder/SKILL.md",
-      "bytes": 10482,
-      "sha256": "d98e9fb4e0d31e936ccf6b877bd2ab27bad8352af989d0d31a0ec92090ab6a09"
+      "bytes": 11135,
+      "sha256": "b55592f667168cf3e7bef47f61dac7285e93802581d9a8ea3e2b6788b5cec3ea"
     },
     {
       "path": "system/skills/skill-creator/_meta.json",
