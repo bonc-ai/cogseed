@@ -44,6 +44,10 @@ export interface P3394GatewayTurnInput {
   /** T1 引用信封化：本轮消息携带的结构化引用快照，进信封
    *  payload.metadata.references（正文文本已含人类可读版）。 */
   references?: P3394OutboundReference[];
+  /** Per-task reasoning effort (unified execution entry). Carried in the
+   *  envelope's CogSeed-private extensions.execution_prefs; only the claude
+   *  gateway runtime consumes it today. */
+  reasoningEffort?: 'off' | 'low' | 'high';
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -135,6 +139,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     ...(input.goal && input.goal.trim() ? { goal: input.goal.trim() } : {}),
     ...(input.references && input.references.length ? { references: input.references } : {}),
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+    ...(input.reasoningEffort ? { executionPrefs: { reasoningEffort: input.reasoningEffort } } : {}),
   });
   let envelope = buildEnvelope();
   let streamed = false;
