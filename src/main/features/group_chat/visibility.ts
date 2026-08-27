@@ -126,9 +126,23 @@ export interface GroupMessage {
    * message and recipient so a replay/re-dispatch reuses the original value. */
   p3394?: { recipient_epochs: Record<string, number> };
   /** Stable actor-execution id that produced this record. Live process,
-   * terminal bus events, persisted history and renderer placeholders all use
-   * this value to refer to the same reply. Older records may omit it. */
+   *  terminal bus events, persisted history and renderer placeholders all use
+   *  this value to refer to the same reply. Older records may omit it. */
   turn_id?: string;
+  /** Actual execution configuration for this actor reply (unified execution
+   *  entry): the model / thinking strength that ran this turn. Emitted as a
+   *  process event at turn start AND persisted here so a history reload can
+   *  rerender the same meta on the bubble. Older records omit it. */
+  exec_meta?: {
+    provider?: string;
+    model?: string;
+    /** 'auto' = provider default (no explicit thinking override). */
+    effort?: "off" | "low" | "high" | "auto";
+    /** CLI runtime id when this turn ran on an external CLI agent. */
+    cli?: string;
+    /** Human-facing label of the provider at execution time. */
+    provider_label?: string;
+  };
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */

@@ -971,6 +971,7 @@ export function modelTurnContextForLog(input: {
   fileReadOnlyExtraRoots?: readonly string[];
   cacheRetention?: string;
   thinkingLevel?: string;
+  modelOverride?: { provider: string; model: string };
   nested?: boolean;
   hasAbortSignal?: boolean;
   drainSteer?: unknown;
@@ -1023,6 +1024,9 @@ export function modelTurnContextForLog(input: {
     file_read_only_extra_root_count: input.fileReadOnlyExtraRoots?.length || 0,
     cache_retention: input.cacheRetention || undefined,
     thinking_level: input.thinkingLevel || undefined,
+    model_override: input.modelOverride
+      ? `${input.modelOverride.provider}/${input.modelOverride.model}`
+      : undefined,
     nested: !!input.nested,
     has_abort_signal: !!input.hasAbortSignal,
     has_drain_steer: typeof input.drainSteer === 'function',
@@ -1082,6 +1086,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     onSkillInvoked,
     cacheRetention,
     thinkingLevel,
+    modelOverride,
     nested = false,
     drainSteer,
     toolAccess,
@@ -1115,6 +1120,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     fileReadOnlyExtraRoots,
     cacheRetention,
     thinkingLevel,
+    modelOverride,
     nested,
     hasAbortSignal: !!abortSignal,
     drainSteer,
@@ -1304,6 +1310,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       sessionId,
       systemPrompt,
       userId,
+      ...(modelOverride ? { modelOverride } : {}),
       ...(disableTools ? { disableTools: true } : {}),
       ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       agentId,

@@ -1174,16 +1174,14 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
-export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean }[] }> {
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
+    // Custom providers build their runtime Model with `reasoning: false`
+    // (see model/core-agent/custom_provider_runtime.ts) — mirror that here
+    // so the UI's effort gating matches what the wire actually accepts.
     const custom = customProviderForId(loadProfiles(), id);
-    // contextWindow 透传：自定义 provider 模型本就存有窗口值（设置界面可
-    // 配），渲染层会话统计行的上下文占用分母靠它（2026-08-27 反馈补齐）。
-    // 存量兜底：导入早期落库的窗口恒为默认猜测值，与默认相等且目录确知
-    // 真实窗口时，读取侧以目录值为准（不重写存储；用户手改过的值必然
-    // ≠ 默认，不受影响）。vision 同理：库里未知而目录确知时读目录值。
     return {
       models: (custom?.models || []).map((model) => {
         const abilities = publicModelAbilitiesFor(model.id);
@@ -1199,6 +1197,7 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
           name: model.id,
           ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
           ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
+          reasoning: false,
         };
       }),
     };
@@ -1206,12 +1205,30 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
+  const annotate = async (models: { id: string; name: string }[]) => {
+    const out: { id: string; name: string; reasoning?: boolean }[] = [];
+    let mod: Awaited<ReturnType<typeof ca>> | null = null;
+    for (const m of models) {
+      let reasoning: boolean | undefined;
+      try {
+        mod = mod || await ca();
+        const resolved = resolveConfiguredPiModel(mod, id, m.id);
+        reasoning = resolved?.model && typeof (resolved.model as { reasoning?: unknown }).reasoning === 'boolean'
+          ? (resolved.model as { reasoning?: boolean }).reasoning
+          : undefined;
+      } catch {
+        reasoning = undefined;
+      }
+      out.push(reasoning === undefined ? m : { ...m, reasoning });
+    }
+    return out;
+  };
   const curated = curatedModelsFor(id);
-  if (curated.length) return { models: allowed(curated) };
+  if (curated.length) return { models: await annotate(allowed(curated)) };
   try {
     const mod = await ca();
     const raw = mod.listPiModels(id) || [];
-    return { models: allowed(pickLatestGenerations(raw as any[], 2)) };
+    return { models: await annotate(allowed(pickLatestGenerations(raw as any[], 2))) };
   } catch {
     return { models: [] };
   }
@@ -2549,6 +2566,31 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
     });
   }
   return choices;
+}
+
+/**
+ * Resolve the chat entry group for an explicit per-task model override
+ * (unified execution entry: user picked a specific provider+model for this
+ * conversation). Reuses `pickChatEntryGroup`'s candidate filtering
+ * (enabled providers, cooldown, resolvable keys), then narrows to the
+ * entries of the requested provider with `model` replaced by the requested
+ * id — the API key / base URL stay provider-level, only the model id is
+ * per-request.
+ *
+ * Returns null when the provider has no usable entry (unknown provider,
+ * no credentials, everything cooled down). Callers fall back to the
+ * default group in that case so a stale override never hard-fails a turn.
+ */
+export async function pickChatEntryGroupForModelOverride(
+  override: { provider: string; model: string },
+): Promise<ChatEntryChoice[] | null> {
+  const providerId = String(override?.provider || '').trim();
+  const modelId = String(override?.model || '').trim();
+  if (!providerId || !modelId) return null;
+  const group = await pickChatEntryGroup();
+  const matching = group.filter((c) => c.provider === providerId);
+  if (!matching.length) return null;
+  return matching.map((c) => ({ ...c, model: modelId }));
 }
 
 /**
