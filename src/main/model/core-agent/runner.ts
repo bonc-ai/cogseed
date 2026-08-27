@@ -22,6 +22,7 @@ import * as path from 'node:path';
 
 import {
   pickChatEntryGroup,
+  pickChatEntryGroupForModelOverride,
   bumpEntryLastUsed,
   hasConfiguredModel,
   getConfiguredModelCooldown,
@@ -188,6 +189,11 @@ export interface BuildRunnerParams {
   sessionId: string;
   systemPrompt?: string;
   userId?: string;
+  /** Per-task model override from the unified execution entry. Resolved via
+   *  `pickChatEntryGroupForModelOverride`; when the provider has no usable
+   *  entry the default group runs and the resolved runtime reports the
+   *  model that actually executed. */
+  modelOverride?: { provider: string; model: string };
   /** Use an in-memory Session so utility model calls leave no resumable transcript. */
   ephemeralSession?: boolean;
   /** Conversation id. Used by file-tools to scope read_file / search_file
@@ -432,7 +438,25 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // loading core-agent / scanning skills / opening a session file. Gives
   // a clear user message instead of the Anthropic SDK's "Could not
   // resolve authentication method".
-  const group = await pickChatEntryGroup();
+  // Per-task override (unified execution entry): narrow the group to the
+  // requested provider with its model replaced. A provider with no usable
+  // entry (credentials removed, cooled down) falls back to the default
+  // priority group rather than failing the turn — the runtime resolution
+  // callback then reports what actually ran, keeping the UI honest.
+  let group = await pickChatEntryGroup();
+  if (params.modelOverride) {
+    try {
+      const overridden = await pickChatEntryGroupForModelOverride(params.modelOverride);
+      if (overridden && overridden.length) {
+        group = overridden;
+        log.info(`model override applied provider=${params.modelOverride.provider} model=${params.modelOverride.model}`);
+      } else {
+        log.warn(`model override ignored (no usable entry) provider=${params.modelOverride.provider} — falling back to default group`);
+      }
+    } catch (err) {
+      log.warn(`model override resolution failed — falling back to default group: ${(err as Error).message}`);
+    }
+  }
   const primary: ChatEntryChoice | undefined = group[0];
   if (!primary && !process.env.ANTHROPIC_API_KEY) {
     const oauthExpiredMessage = getConfiguredModelOAuthExpiredMessage();

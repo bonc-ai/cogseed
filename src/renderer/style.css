@@ -11644,6 +11644,114 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   white-space: nowrap;
 }
 
+/* ─── Unified execution entry ────────────────────────────────────────── */
+
+/* Bubble header meta: the actual execution config (model · effort / CLI)
+   shown on streaming placeholders and persisted replies alike. */
+.chat-msg-exec-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  background: var(--surface-2, #f4f5f7);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Composer exec-config chip: model label + effort badge in one chip. */
+.exec-config-effort {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.exec-config-effort.is-cli {
+  background: transparent;
+  border-style: dashed;
+}
+.exec-config-effort.is-override,
+.model-chip.is-override .exec-config-effort.is-override {
+  color: var(--primary-text, #5b57d6);
+  border-color: rgba(91, 87, 214, 0.35);
+}
+.model-chip.is-override {
+  border-color: rgba(91, 87, 214, 0.35);
+}
+
+/* Section-grouped picker (本地 Agent / API 连接模型). Section headers are
+   the PRIMARY navigation (10px source labels like 自定义/平台 are secondary
+   noise inside a section), so they get real weight and stick to the top of
+   the scrolling list while that section is in view. */
+.skill-picker-group-label--section {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+  margin-top: 6px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--text-2, #374151);
+}
+.skill-picker-item--model { position: relative; }
+.picker-model-expand {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.picker-model-expand:hover { background: #eceef2; color: var(--text); }
+.picker-model-expand-icon { width: 13px; height: 13px; }
+.skill-picker-item--back .skill-picker-item-name { color: var(--muted); font-size: 12px; }
+
+/* Exec-config menu: section labels, subheader, notes, action rows. */
+.model-chip-menu--exec { min-width: 280px; max-width: 360px; }
+.model-chip-menu-subheader {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.model-chip-menu-section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #9ca3af;
+}
+.model-chip-menu-section-extra { font-weight: 500; text-transform: none; letter-spacing: 0; }
+.model-chip-menu-note {
+  padding: 4px 10px 6px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.model-chip-menu-item--action .model-chip-menu-name { color: var(--primary-text, #5b57d6); }
+
 .workspace-menu {
   z-index: 9999;
   min-width: 200px;

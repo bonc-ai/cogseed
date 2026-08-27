@@ -1193,6 +1193,10 @@ interface QueueItem {
   workflow_step_id?: string;
   /** Sender-assigned epoch persisted on the source GroupMessage. */
   incomingEpoch?: number;
+  /** Per-task execution config (unified execution entry) captured on the
+   *  triggering user message. Consumed by runActorTurnBody to override the
+   *  model / thinking strength for THIS turn only. */
+  execConfig?: TurnExecutionConfig;
 }
 
 type TurnAbortSource =
@@ -2045,6 +2049,20 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
 
 // ── enqueue ──────────────────────────────────────────────────────────────
 
+/** Per-task execution configuration chosen in the unified execution entry
+ *  (composer). Every field is optional; absent fields fall through to the
+ *  agent's own defaults, then to the global defaults. Originates from the
+ *  renderer send stream, validated at the IPC boundary. */
+export interface TurnExecutionConfig {
+  /** Explicit provider id (built-in or `cp:<id>` custom). */
+  provider?: string;
+  /** Explicit model id under that provider. */
+  model?: string;
+  /** Explicit thinking strength. 'auto' never travels down this path —
+   *  the renderer omits the field when the user wants provider default. */
+  effort?: 'off' | 'low' | 'high';
+}
+
 export interface EnqueueParams {
   uid: string;
   cid: string;
@@ -2107,12 +2125,21 @@ export interface EnqueueParams {
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
   /** Trusted user route. The IPC/group facade validates composer selections;
-   * retry and edit flows derive their target from persisted history. It stays
-   * off the persisted message schema and bypasses raw-mention Wake approval. */
+   *  retry and edit flows derive their target from persisted history. It stays
+   *  off the persisted message schema and bypasses raw-mention Wake approval. */
   userRoute?: {
     agentId: string;
     origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
   };
+  /** Per-task execution config from the unified execution entry (renderer
+   *  composer). Validated at the IPC boundary; applied on top of agent /
+   *  global defaults at turn time. Only rides live queue items — the visible
+   *  outcome lands on the end-of-turn message as `exec_meta`. */
+  executionConfig?: TurnExecutionConfig;
+  /** Actual execution config to persist on this message (unified execution
+   *  entry). Set by runTurn on the actor's end-of-turn message so a history
+   *  reload can rerender the same meta on the bubble. */
+  exec_meta?: GroupMessage["exec_meta"];
   /** Trusted external-channel inbound (P3394 bridge): keeps the
    * user-message abort-reset and task-run lifecycle semantics for a message
    * that persists under the peer agent's own actor identity. Only the
@@ -2739,6 +2766,7 @@ async function _enqueueBody(
     ...(params.process && params.process.length
       ? { process: params.process }
       : {}),
+    ...(params.exec_meta ? { exec_meta: params.exec_meta } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.turn_end ? { turn_end: true as const } : {}),
@@ -2933,6 +2961,7 @@ async function _enqueueBody(
       ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
       ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
+      ...(params.executionConfig ? { execConfig: params.executionConfig } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
         : {}),
@@ -4209,6 +4238,15 @@ async function runActorTurnBody(
   // extraTools — the LLM stream is replaced below by `runCliAgentTurn`.
   // Hoisted here so the branch below can read it without re-fetching.
   let cliAgent: import("../agents").Agent | null = null;
+  // The full agent spec for the acting agent (null for commander / worker).
+  // Hoisted like `cliAgent` so the turn executor can read per-agent default
+  // model / thinking strength (unified execution entry) without re-fetching.
+  let turnAgentSpec: import("../agents").Agent | null = null;
+  // Actual execution config for this turn (unified execution entry). Filled
+  // by the resolved-runtime callback (in-process) or at CLI launch, emitted
+  // as a live `execution` process event, and persisted on the end-of-turn
+  // message as `exec_meta`.
+  let turnExecMeta: GroupMessage["exec_meta"] | null = null;
   let actorInteractive = false;
   // Commander loop bubbles: split a commander turn into reasoning segments at
   // each VISIBLE dispatch boundary. `flush` is wired up after `streamingText`
@@ -4383,8 +4421,10 @@ async function runActorTurnBody(
     }
     if (agentsFeat.isCliAgent(agent) || agentsFeat.isP3394GatewayAgent(agent)) {
       cliAgent = agent;
+      turnAgentSpec = agent;
       systemPrompt = ""; // unused on CLI / P3394-gateway path
     } else {
+      turnAgentSpec = agent;
       systemPrompt = await buildAgentInGroupSystemPrompt(
         uid,
         cid,
@@ -4968,9 +5008,15 @@ async function runActorTurnBody(
               ...(event ? { event } : {}),
             });
           } else if (data.type === "event") {
-            const event = processEventForPersistence(data.event);
-            if (event)
-              appendProcessItem(processItems, { type: "event", event });
+            // Execution-config events (unified execution entry) are live-only:
+            // they ride the bus for the streaming bubble's meta row and are
+            // persisted as `exec_meta` on the end-of-turn message instead.
+            const stream = (data as { event?: { stream?: string } }).event?.stream;
+            if (stream !== "execution") {
+              const persisted = processEventForPersistence(data.event);
+              if (persisted)
+                appendProcessItem(processItems, { type: "event", event: persisted });
+            }
           }
           // For the live wire: `delta` streams into the placeholder
           // bubble (token-by-token); other shapes feed the process
@@ -5094,6 +5140,18 @@ async function runActorTurnBody(
             onProcess: forwardProcess,
           });
       for (const p of cliOut.produced || []) await onFileWritten(p);
+      // Unified execution entry: record what this CLI turn actually ran with
+      // (persisted as exec_meta on the end-of-turn message). Mirrors the
+      // per-turn model choice inside _runCliAgentTurn (override > runtime.model).
+      const cliRuntimeModel =
+        cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          ? cliAgent.runtime.model
+          : undefined;
+      const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
+      turnExecMeta = {
+        ...(cliTurnModel ? { model: cliTurnModel } : {}),
+        ...(cliRuntime ? { cli: cliRuntime } : {}),
+      };
       finalText = cliOut.text;
       streamingText = cliOut.text;
       // P3394 gateway turns currently report no metrics (no runner.ts done
@@ -5214,9 +5272,22 @@ async function runActorTurnBody(
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });
-      // User-selected thinking strength ('auto' = no override; let the
-      // provider default / model decide).
-      const turnThinkingLevel = thinkingLevelForRun();
+      // Unified execution entry — effective thinking strength priority:
+      // per-task override (renderer composer) > agent default (agent.json
+      // `default_thinking`) > global preference. 'auto' = no override; let
+      // the provider default / model decide.
+      const turnThinkingLevel: "auto" | "off" | "low" | "high"
+        = item.execConfig?.effort
+          ?? turnAgentSpec?.default_thinking
+          ?? thinkingLevelForRun();
+      // Effective model override priority: per-task override > agent
+      // default (`default_model`). Commander / in-process agents only —
+      // CLI turns apply their own model below (runtime.model + override).
+      const turnModelOverride = item.execConfig?.provider && item.execConfig?.model
+        ? { provider: item.execConfig.provider, model: item.execConfig.model }
+        : turnAgentSpec?.default_model
+          ? { ...turnAgentSpec.default_model }
+          : undefined;
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -5227,6 +5298,7 @@ async function runActorTurnBody(
         // User-selected thinking strength ('auto' = no override; let the
         // provider default / model decide).
         ...(turnThinkingLevel !== "auto" ? { thinkingLevel: turnThinkingLevel } : {}),
+        ...(turnModelOverride ? { modelOverride: turnModelOverride } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
         turnId: item.turnId,
@@ -5243,11 +5315,40 @@ async function runActorTurnBody(
             candidate_ids: receipt.candidateIds,
           });
         },
-        ...(isCommander ? {
-          onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
-            commanderResolvedRuntime = runtime;
-          },
-        } : {}),
+        // Every in-process turn reports its resolved runtime (actual
+        // provider/model after override / fallback). Commander keeps its
+        // existing collector; all actors also emit the live execution-config
+        // process event so the renderer can show "actually running with X ·
+        // effort Y" on the streaming bubble (unified execution entry).
+        onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
+          if (isCommander) commanderResolvedRuntime = runtime;
+          turnExecMeta = {
+            provider: runtime.providerId,
+            model: runtime.modelId,
+            effort: turnThinkingLevel,
+          };
+          emit(state, {
+            type: "process",
+            cid,
+            actor: actor.id,
+            turn_id: item.turnId,
+            data: {
+              type: "event",
+              event: {
+                stream: "execution",
+                data: {
+                  phase: "config",
+                  actor: actor.id,
+                  agent_id: actor.id,
+                  provider: runtime.providerId,
+                  model: runtime.modelId,
+                  effort: turnThinkingLevel,
+                  runtime: "model",
+                },
+              },
+            },
+          });
+        },
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
@@ -6187,6 +6288,8 @@ async function runActorTurnBody(
         ? { recall_citations: persistedRecallCitations }
         : {}),
       ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
+      // Unified execution entry: persist what actually ran on this turn.
+      ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
       // Final segment index when this turn was split at visible-dispatch
       // boundaries; lets the renderer finalize the last per-segment placeholder.
       ...(segState.flushedAny ? { seg: segState.seg } : {}),
@@ -11378,6 +11481,27 @@ async function _runCliAgentTurn(opts: {
     { kind: "cli" }
   >;
 
+  // Unified execution entry: a per-task model override replaces the CLI's
+  // bound model for THIS turn only (runtime.model is the agent's saved
+  // default). CLI overrides carry a bare model id (no provider — the model
+  // is passed to the external CLI directly). Thinking strength is NOT
+  // overridable on CLI turns — the external CLI manages its own reasoning.
+  const cliModelForTurn = opts.item.execConfig?.model || runtime.model;
+  opts.onProcess({
+    type: "event",
+    event: {
+      stream: "execution",
+      data: {
+        phase: "config",
+        actor: opts.actor.id,
+        agent_id: opts.agent.agent_id,
+        ...(cliModelForTurn ? { model: cliModelForTurn } : {}),
+        cli: runtime.cli,
+        runtime: "cli",
+      },
+    },
+  });
+
   // Required-input gate: a CLI agent never runs an LLM, so the form-emit
   // logic in `chat_agent_in_group.md` (where in-process agents check their
   // inputs_schema and emit `<agent-input-form>` themselves) doesn't fire.
@@ -11460,7 +11584,9 @@ async function _runCliAgentTurn(opts: {
     agentName: opts.agent.name || opts.agent.agent_id,
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     cli: runtime.cli as import("../local_agents/registry").LocalCliType,
-    model: runtime.model,
+    // Unified execution entry: per-task override wins over the agent's
+    // saved runtime.model for THIS turn only.
+    model: cliModelForTurn,
     customArgs: runtime.custom_args,
     ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,
