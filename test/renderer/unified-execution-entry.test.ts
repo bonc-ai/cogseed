@@ -2,11 +2,12 @@
 //
 // Pins the acceptance-critical wiring as source contracts (DOM-free, same
 // pattern as composer-controls.test.ts):
-//   1. one picker, two groups —「本地 Agent」and「API 连接模型」both render
-//      from the @ recipient picker, and picking a model routes through
-//      setChatRecipient(kind:'model')
-//   2. the composer's exec-config chip is TASK-scoped: it must not write the
-//      global default entry (reorderEntries/updateEntryModel) or the global
+//   1. the recipient picker is AGENT-ONLY — models and their config belong
+//      to the composer's exec-config chip on the right（验收修订：左侧只管
+//      「谁执行」）；when a CLI agent is selected that same chip manages the
+//      agent's runtime.model
+//   2. the exec-config chip is TASK-scoped: it must not write the global
+//      default entry (reorderEntries/updateEntryModel) or the global
 //      thinking preference (setThinkingLevel); those live in settings
 //   3. the send path attaches execution_config; persisted replies carry
 //      exec_meta and bubbles render the meta row
@@ -24,8 +25,9 @@ const LOCALE_KEYS = [
   'exec_config.section_model',
   'exec_config.section_effort',
   'exec_config.task_override_badge',
-  'exec_config.reset_model',
   'exec_config.effort_cli_note',
+  'exec_config.effort_cli_forward_note',
+  'exec_config.effort_cli_off_unavailable',
   'exec_config.no_reasoning_note',
   'settings.thinking.title',
   'agents.exec_default_model',

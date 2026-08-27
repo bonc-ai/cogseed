@@ -6170,13 +6170,11 @@
   "chat.stats.tokV": "↑{i} ↓{o}",
   "exec_config.title": "本次任务的执行配置（模型 · 推理强度）。修改仅对当前会话生效，不影响 Agent 默认配置与全局默认。",
   "exec_config.menu_title": "执行配置（本次任务）",
-  "exec_config.subheader_task": "选择项仅对当前会话生效",
   "exec_config.subheader_cli": "{name} 由外部 CLI 执行",
   "exec_config.section_model": "模型",
   "exec_config.section_effort": "推理强度",
   "exec_config.task_override_badge": "本次任务",
   "exec_config.current_badge": "当前",
-  "exec_config.reset_model": "恢复默认（跟随 Agent / 全局设置）",
   "exec_config.no_model": "未配置模型",
   "exec_config.cli_default_model": "CLI 默认",
   "exec_config.cli_badge": "CLI",
@@ -6191,5 +6189,6 @@
   "agents.exec_default_thinking": "默认推理强度",
   "agents.exec_follow_global": "跟随全局默认",
   "agents.exec_defaults_hint": "该 Agent 执行任务时的默认模型与推理强度。会话内的临时调整不会修改这里的默认值。",
-  "exec_config.effort_cli_forward_note": "推理强度将随任务下发给「{cli}」执行（自动 = 跟随 CLI 自身默认配置）。"
+  "exec_config.effort_cli_forward_note": "推理强度将随任务下发给「{cli}」执行（自动 = 跟随 CLI 自身默认配置）。",
+  "exec_config.effort_cli_off_unavailable": "「{cli}」没有可靠的“关闭思考”开关，此处只能选自动或调高低档位。"
 }

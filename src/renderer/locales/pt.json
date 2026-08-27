@@ -4979,13 +4979,11 @@
   "chat.stats.tokV": "↑{i} ↓{o}",
   "exec_config.title": "Configuração de execução desta tarefa (modelo · esforço de raciocínio). As alterações valem apenas para esta conversa — os padrões do agente e o padrão global não mudam.",
   "exec_config.menu_title": "Configuração de execução (esta tarefa)",
-  "exec_config.subheader_task": "As escolhas valem apenas para esta conversa",
   "exec_config.subheader_cli": "{name} executa em uma CLI externa",
   "exec_config.section_model": "Modelo",
   "exec_config.section_effort": "Esforço de raciocínio",
   "exec_config.task_override_badge": "esta tarefa",
   "exec_config.current_badge": "atual",
-  "exec_config.reset_model": "Restaurar padrão (seguir agente / configuração global)",
   "exec_config.no_model": "Nenhum modelo configurado",
   "exec_config.cli_default_model": "Padrão da CLI",
   "exec_config.cli_badge": "CLI",
@@ -5000,5 +4998,6 @@
   "agents.exec_default_thinking": "Esforço de raciocínio padrão",
   "agents.exec_follow_global": "Seguir padrão global",
   "agents.exec_defaults_hint": "O modelo e o esforço de raciocínio que este agente usa por padrão. Ajustes temporários numa conversa nunca alteram estes padrões.",
-  "exec_config.effort_cli_forward_note": "O esforço de raciocínio é enviado com a tarefa para \"{cli}\" (auto = seguir o padrão da própria CLI)."
+  "exec_config.effort_cli_forward_note": "O esforço de raciocínio é enviado com a tarefa para \"{cli}\" (auto = seguir o padrão da própria CLI).",
+  "exec_config.effort_cli_off_unavailable": "\"{cli}\" não tem um interruptor confiável de desligar o raciocínio — escolha auto ou ajuste o nível."
 }

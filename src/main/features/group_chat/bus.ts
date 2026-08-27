@@ -4752,10 +4752,12 @@ async function runActorTurnBody(
                 : "",
             // Unified execution entry: forward the per-task reasoning effort
             // in the envelope's CogSeed-private execution_prefs. Only claude
-            // gateway runtime consumes it today (MAX_THINKING_TOKENS) — for
-            // other CLIs the field would be a dead control, so it is only
-            // attached when it will actually be honored.
-            ...(cliRuntime === "claude" && item.execConfig?.effort
+            // gateway runtime consumes it today (MAX_THINKING_TOKENS), and
+            // only low/high are expressible there ('off' has no reliable
+            // claude switch — the UI disables it; guard here so a stale
+            // override can never leak a value the gateway would drop).
+            ...((cliRuntime === "claude"
+              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high"))
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
@@ -4809,9 +4811,10 @@ async function runActorTurnBody(
           ? cliAgent.runtime.model
           : undefined;
       const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
-      // effort 只在真实下发的场景写 meta（claude 网关/直连都会消费）；
-      // 其他 CLI 不标注，避免展示一个没生效的配置。
-      const cliEffortForwarded = item.execConfig?.effort && cliRuntime === "claude";
+      // effort 只在真实下发的场景写 meta（claude 且 low/high——网关与本地
+      // 直连都会消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
+      const cliEffortForwarded = cliRuntime === "claude"
+        && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),
@@ -11146,8 +11149,10 @@ async function _runCliAgentTurn(opts: {
   // Unified execution entry: a per-task model override replaces the CLI's
   // bound model for THIS turn only (runtime.model is the agent's saved
   // default). CLI overrides carry a bare model id (no provider — the model
-  // is passed to the external CLI directly). Thinking strength is NOT
-  // overridable on CLI turns — the external CLI manages its own reasoning.
+  // is passed to the external CLI directly). Reasoning effort is forwarded
+  // per task too, but ONLY for CLIs with a real switch (see the runner.run
+  // thinkingLevel filter below — claude today); other CLIs keep their own
+  // reasoning configuration.
   const cliModelForTurn = opts.item.execConfig?.model || runtime.model;
   opts.onProcess({
     type: "event",
@@ -11249,9 +11254,18 @@ async function _runCliAgentTurn(opts: {
     // Unified execution entry: per-task override wins over the agent's
     // saved runtime.model for THIS turn only.
     model: cliModelForTurn,
-    // Per-task reasoning effort — consumed by the backends with a concrete
-    // switch (claude env / codex config override); other CLIs ignore it.
-    ...(opts.item.execConfig?.effort ? { thinkingLevel: opts.item.execConfig.effort } : {}),
+    // Per-task reasoning effort — forwarded ONLY for CLIs with a verified
+    // switch. claude consumes MAX_THINKING_TOKENS on both execution paths
+    // (gateway envelope + this direct one). codex's backend has a
+    // model_reasoning_effort implementation ready, but its MAIN path is the
+    // P3394 gateway (ChatGPT app-server driven by gateway.cjs) which has no
+    // effort slot yet — filtering here keeps UI / envelope / direct / meta
+    // four layers consistent (claude-only) instead of honoring effort on a
+    // path the user cannot predict.
+    ...((runtime.cli === "claude"
+      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high"))
+      ? { thinkingLevel: opts.item.execConfig.effort }
+      : {}),
     customArgs: runtime.custom_args,
     ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,

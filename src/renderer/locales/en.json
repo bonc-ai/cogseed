@@ -6170,13 +6170,11 @@
   "chat.stats.tokV": "↑{i} ↓{o}",
   "exec_config.title": "Execution config for this task (model · reasoning effort). Changes apply to this conversation only — agent defaults and the global default stay untouched.",
   "exec_config.menu_title": "Execution config (this task)",
-  "exec_config.subheader_task": "Picks apply to this conversation only",
   "exec_config.subheader_cli": "{name} runs on an external CLI",
   "exec_config.section_model": "Model",
   "exec_config.section_effort": "Reasoning effort",
   "exec_config.task_override_badge": "this task",
   "exec_config.current_badge": "current",
-  "exec_config.reset_model": "Reset to default (follow agent / global settings)",
   "exec_config.no_model": "No model configured",
   "exec_config.cli_default_model": "CLI default",
   "exec_config.cli_badge": "CLI",
@@ -6191,5 +6189,6 @@
   "agents.exec_default_thinking": "Default reasoning effort",
   "agents.exec_follow_global": "Follow global default",
   "agents.exec_defaults_hint": "The model and reasoning effort this agent runs with by default. Temporary adjustments inside a conversation never change these defaults.",
-  "exec_config.effort_cli_forward_note": "The reasoning effort is sent with the task to \"{cli}\" (auto = follow the CLI's own default)."
+  "exec_config.effort_cli_forward_note": "The reasoning effort is sent with the task to \"{cli}\" (auto = follow the CLI's own default).",
+  "exec_config.effort_cli_off_unavailable": "\"{cli}\" has no reliable thinking-off switch — pick auto or adjust the level instead."
 }
