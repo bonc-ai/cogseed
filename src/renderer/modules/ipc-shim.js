@@ -121,6 +121,7 @@ const _IPC_ROUTES = [
   ['GET',    /^\/api\/conversations\/([^/]+)\/members$/,   'groupChat.listMembers',      ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/runtime$/,   'groupChat.runtimeStatus',    ['cid']],
   ['GET',    /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts$/, 'groupChat.listCollaborationConflicts', ['cid']],
+  ['GET',    /^\/api\/conversations\/([^/]+)\/collaboration\/overview$/, 'groupChat.collabOverview', ['cid']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/collaboration\/conflicts\/([^/]+)\/resolve$/, 'groupChat.resolveCollaborationConflict', ['cid', 'conflictId']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/collaboration\/gates\/([^/]+)\/review$/, 'groupChat.reviewCollaborationGate', ['cid', 'gateId']],
   ['POST',   /^\/api\/conversations\/([^/]+)\/events\/stream$/, 'groupChat.events',      ['cid'], { stream: true }],
