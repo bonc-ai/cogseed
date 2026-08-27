@@ -4993,13 +4993,11 @@
   "chat.stats.tokV": "↑{i} ↓{o}",
   "exec_config.title": "このタスクの実行構成（モデル・推論強度）。変更は現在の会話のみに適用され、エージェントの既定値やグローバル既定には影響しません。",
   "exec_config.menu_title": "実行構成（このタスク）",
-  "exec_config.subheader_task": "選択は現在の会話のみに適用",
   "exec_config.subheader_cli": "{name} は外部CLIで実行されます",
   "exec_config.section_model": "モデル",
   "exec_config.section_effort": "推論強度",
   "exec_config.task_override_badge": "このタスク",
   "exec_config.current_badge": "現在",
-  "exec_config.reset_model": "既定に戻す（エージェント/グローバル設定に従う）",
   "exec_config.no_model": "モデル未設定",
   "exec_config.cli_default_model": "CLIデフォルト",
   "exec_config.cli_badge": "CLI",
@@ -5014,5 +5012,6 @@
   "agents.exec_default_thinking": "既定の推論強度",
   "agents.exec_follow_global": "グローバル既定に従う",
   "agents.exec_defaults_hint": "このエージェントが既定で使用するモデルと推論強度。会話内の一時的な調整でこの既定値が変更されることはありません。",
-  "exec_config.effort_cli_forward_note": "推論強度はタスクとともに「{cli}」へ送られます（自動 = CLI自身の既定設定に従う）。"
+  "exec_config.effort_cli_forward_note": "推論強度はタスクとともに「{cli}」へ送られます（自動 = CLI自身の既定設定に従う）。",
+  "exec_config.effort_cli_off_unavailable": "「{cli}」には確実な思考オフのスイッチがなく、自動または段位の調整のみ可能です。"
 }

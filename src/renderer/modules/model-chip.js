@@ -99,9 +99,10 @@ function _isCliAgent(agent) {
  *  global default. Returns:
  *  { mode:'cli'|'api', model, modelLabel, provider, providerLabel,
  *    effort, effortOverridden, modelOverridden, reasoning } */
-// CogSeed 能把推理强度真实下发的 CLI：claude（网关 runtime 与本地直连都
-// 会消费 MAX_THINKING_TOKENS）。codex 的主路径是 ChatGPT app-server 私有
-// 协议、无可验证的每轮参数槽——不放假开关。其余 CLI 同理保持说明文案。
+// CogSeed 能把推理强度真实下发的 CLI：claude（网关信封与本地直连都消费
+// MAX_THINKING_TOKENS）。codex 的直连 backend 虽有 model_reasoning_effort
+// 实现，但用户实际走的 P3394 网关路径（gateway.cjs 驱动 app-server）尚无
+// 强度槽位，主机侧已统一 claude-only 过滤——不放假开关。其余 CLI 同理。
 const CLI_EFFORT_SUPPORTED = new Set(['claude']);
 
 function _effectiveExecConfig(target) {
@@ -123,11 +124,10 @@ function _effectiveExecConfig(target) {
       modelLabel: override.modelLabel || model || '',
       provider: '',
       providerLabel: cliType,
-      effort: override.effort || null,
-      effortOverridden: !!override.effort,
+      effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
+      effortOverridden: override.effort === 'low' || override.effort === 'high',
       effortSupported,
       modelOverridden: !!override.model,
-      reasoning: effortSupported,
       agent,
     };
   }
@@ -708,32 +708,41 @@ async function _renderCliModelOptions(menu, anchor, target, cfg) {
 
 /** claude 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
  *  把档位写进信封 execution_prefs，网关 claude runtime 转换为
- *  MAX_THINKING_TOKENS 环境变量注入。 */
+ *  MAX_THINKING_TOKENS 环境变量注入。「关闭」对 claude 不可表达（无可靠的
+ *  禁用思考入口），置灰防语义欺骗——选它实际等于「自动」。 */
 function _renderCliEffortSegmented(menu, anchor, cfg, cliType) {
   const target = _chipTargetForElement(anchor);
   const seg = document.createElement('div');
   seg.className = 'model-chip-menu-segmented';
   _EFFORT_OPTIONS.forEach((level) => {
     const isActive = (cfg.effort || 'auto') === level;
+    const unavailable = level === 'off';
     const pill = document.createElement('button');
     pill.type = 'button';
-    pill.className = 'model-chip-seg-btn' + (isActive ? ' is-active' : '');
+    pill.className = 'model-chip-seg-btn'
+      + (isActive ? ' is-active' : '')
+      + (unavailable ? ' is-disabled' : '');
     pill.textContent = t('model_effort.' + level);
-    pill.addEventListener('click', () => {
-      try {
-        const ov = getExecOverride(target) || {};
-        if (level === 'auto') {
-          const { effort, ...rest } = ov;
-          setExecOverride(target, Object.keys(rest).length ? rest : null);
-        } else {
-          setExecOverride(target, { ...ov, effort: level });
+    if (unavailable) {
+      pill.disabled = true;
+      pill.title = t('exec_config.effort_cli_off_unavailable', { cli: cliType });
+    } else {
+      pill.addEventListener('click', () => {
+        try {
+          const ov = getExecOverride(target) || {};
+          if (level === 'auto') {
+            const { effort, ...rest } = ov;
+            setExecOverride(target, Object.keys(rest).length ? rest : null);
+          } else {
+            setExecOverride(target, { ...ov, effort: level });
+          }
+          _modelChipRenderAll();
+        } catch (err) {
+          _modelChipLog.warn('cli effort pick failed', { error: (err && err.message) || String(err) });
         }
-        _modelChipRenderAll();
-      } catch (err) {
-        _modelChipLog.warn('cli effort pick failed', { error: (err && err.message) || String(err) });
-      }
-      _closeModelMenu();
-    });
+        _closeModelMenu();
+      });
+    }
     seg.appendChild(pill);
   });
   menu.appendChild(seg);

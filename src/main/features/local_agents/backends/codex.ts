@@ -532,6 +532,12 @@ function buildCodexArgs(opts: BackendRunOptions): string[] {
   // Codex's own value set is minimal|low|medium|high (see
   // session_import/codex-import.ts parsing model_reasoning_effort); our
   // 'off' maps to 'minimal', low/high map 1:1.
+  // NOTE: the host currently filters thinkingLevel to claude-only before
+  // reaching this backend (bus.ts direct path + gateway path) because the
+  // user-facing codex route is the P3394 gateway (app-server driven by
+  // gateway.cjs) which has no effort slot yet. This implementation stays
+  // ready for when the gateway path catches up — then lift the host-side
+  // filter and enable the UI control together.
   if (opts.thinkingLevel) {
     const codexEffort = opts.thinkingLevel === 'off' ? 'minimal' : opts.thinkingLevel;
     args.push('-c', `model_reasoning_effort="${codexEffort}"`);
