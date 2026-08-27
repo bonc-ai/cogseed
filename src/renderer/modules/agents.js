@@ -3545,7 +3545,7 @@ function _findInputAreaTop(anchorEl) {
   return null;
 }
 
-function _positionPopoverAboveOrBelow(popover, anchorEl) {
+function _positionPopoverAboveOrBelow(popover, anchorEl, opts = {}) {
   // Make invisible but laid out so we can measure it before positioning.
   popover.style.display = 'flex';
   popover.style.left = '-9999px';
@@ -3560,7 +3560,11 @@ function _positionPopoverAboveOrBelow(popover, anchorEl) {
   // own top. This keeps the popover from overlapping the textarea on
   // chat panels while still working for any other future anchor.
   const aboveRef = _findInputAreaTop(anchorEl);
-  const refTop = aboveRef !== null ? aboveRef : rect.top;
+  // Recipient chips want the popover ANCHORED TO THE BUTTON itself —
+  // aligning to the input area leaves it floating ~100px above the chip
+  // (验收反馈两轮「位置不对」的根因), because the input-area box extends
+  // far above the button row.
+  const refTop = (opts.anchorToButton ? null : aboveRef) ?? rect.top;
   const availAbove = refTop - margin - gap;
   const availBelow = window.innerHeight - rect.bottom - margin - gap;
   const preferAbove = popRect.height <= availAbove || availAbove >= availBelow;
@@ -3885,7 +3889,12 @@ async function _openAgentPicker(anchorBtn) {
   // Paint the cached Agent shell in the same interaction frame. Other tabs
   // own their script/data loads and cannot delay this first frame.
   _setAgentPickerTab('agents', { focusSearch: false });
-  _positionPopoverAboveOrBelow(picker, anchorBtn);
+  // Recipient pickers anchor to the @ button itself (紧贴按钮上方弹出)。
+  _positionPopoverAboveOrBelow(picker, anchorBtn, {
+    anchorToButton: anchorBtn.id === 'chat-recipient-chip'
+      || anchorBtn.id === 'new-chat-recipient-chip'
+      || anchorBtn.id === 'auto-recipient-chip',
+  });
   setTimeout(() => document.getElementById('agent-picker-search')?.focus(), 30);
   // Project bindings affect Agent visibility, so refresh them independently
   // and repaint only if this picker session is still current.
