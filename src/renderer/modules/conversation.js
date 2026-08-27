@@ -1322,8 +1322,19 @@ function _executionConfigForSend(target, snapshot) {
     };
   }
   const cfg = {};
-  if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
-  else if (ov.model) { cfg.model = ov.model; }
+  // 方案 B：外接 CLI 智能体的模型由 CLI 自身配置决定（网关信封无 model
+  // 栏位），model 覆盖对其是假开关——历史残留的 override.model 不下发，
+  // 只有 effort（claude 真实消费）继续旅行。
+  const isCliAgentRecipient = snap && snap.kind === 'agent' && snap.id
+    && (() => {
+      const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
+      const a = list.find((x) => x && x.agent_id === snap.id);
+      return !!(a && a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'));
+    })();
+  if (!isCliAgentRecipient) {
+    if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
+    else if (ov.model) { cfg.model = ov.model; }
+  }
   if (ov.effort) cfg.effort = ov.effort;
   return Object.keys(cfg).length ? cfg : undefined;
 }
