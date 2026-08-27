@@ -41,7 +41,10 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
   ],
   zai: [
-    { id: 'glm-5.2', name: 'GLM-5.2' },
+    // GLM-5.2 规格：官方模型页 1M 上下文、128K 最大输出，归类文本模型
+    // （docs.bigmodel.cn/cn/guide/models/text/glm-5.2，2026-08-28 查证）→
+    // vision=false；首个多模态是 GLM-5.3-Flash。glm-5.1 无官方数字，不标。
+    { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, maxTokens: 131_072, vision: false },
     { id: 'glm-5.1', name: 'GLM-5.1' },
   ],
   moonshot: [
@@ -65,10 +68,11 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'MiniMax-M2.7', name: 'MiniMax 2.7' },
   ],
   deepseek: [
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    // 窗口与视觉口径来源：子安确认（2026-08-27），deepseek-v4-pro/flash 文本版
-    // 无权威数字故不标 —— 目录只收确凿数据，不猜。
+    // pro/flash 规格：官方定价页 1M 上下文 / 384K 最大输出（api-docs.deepseek.
+    // com/zh-cn/quick_start/pricing，2026-08-28 查证）；官方 Vision 指南仅
+    // vision-exp 接受图片 → 文本版 vision=false。vision-exp 窗口为子安口径。
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576, maxTokens: 393_216, vision: false },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576, maxTokens: 393_216, vision: false },
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
   ],
   doubao: [
@@ -85,14 +89,14 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
     { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (preview)' },
     { id: 'google/gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
-    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-    { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576, maxTokens: 393_216, vision: false },
+    { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576, maxTokens: 393_216, vision: false },
     { id: 'deepseek/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
     { id: 'moonshotai/kimi-k2.7-code', name: 'Kimi K2.7 Code' },
     { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
     { id: 'qwen/qwen3.7-max', name: 'Qwen3.7 Max' },
     { id: 'qwen/qwen3-coder-next', name: 'Qwen3 Coder Next' },
-    { id: 'z-ai/glm-5.2', name: 'GLM-5.2' },
+    { id: 'z-ai/glm-5.2', name: 'GLM-5.2', contextWindow: 1_048_576, maxTokens: 131_072, vision: false },
     { id: 'z-ai/glm-5.1', name: 'GLM-5.1' },
     { id: 'minimax/minimax-m3', name: 'MiniMax 3' },
     { id: 'minimax/minimax-m2.7', name: 'MiniMax 2.7' },
