@@ -1095,6 +1095,7 @@
   "conversation_info.collaboration.handoff.dispatch": "割り当て",
   "conversation_info.collaboration.handoff.handback": "返却",
   "conversation_info.collaboration.handoff.context_update": "コンテキスト更新",
+  "conversation_info.collaboration.handoff.context_target": "共有コンテキスト",
   "conversation_info.collaboration.recovered_outputs": "回収した成果",
   "conversation_info.collaboration.anomaly.failure": "失敗",
   "conversation_info.collaboration.anomaly.retry": "再試行",

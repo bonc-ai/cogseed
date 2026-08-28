@@ -1095,6 +1095,7 @@
   "conversation_info.collaboration.handoff.dispatch": "designado",
   "conversation_info.collaboration.handoff.handback": "retornado",
   "conversation_info.collaboration.handoff.context_update": "contexto atualizado",
+  "conversation_info.collaboration.handoff.context_target": "contexto compartilhado",
   "conversation_info.collaboration.recovered_outputs": "Resultados recuperados",
   "conversation_info.collaboration.anomaly.failure": "falha",
   "conversation_info.collaboration.anomaly.retry": "nova tentativa",

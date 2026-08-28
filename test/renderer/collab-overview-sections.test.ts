@@ -109,6 +109,7 @@ describe('local collab overview locale contract', () => {
     'conversation_info.collaboration.handoff.dispatch',
     'conversation_info.collaboration.handoff.handback',
     'conversation_info.collaboration.handoff.context_update',
+    'conversation_info.collaboration.handoff.context_target',
     'conversation_info.collaboration.recovered_outputs',
     'conversation_info.collaboration.anomaly.failure',
     'conversation_info.collaboration.anomaly.retry',

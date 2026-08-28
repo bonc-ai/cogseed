@@ -1196,6 +1196,7 @@
   "conversation_info.collaboration.handoff.dispatch": "已派发",
   "conversation_info.collaboration.handoff.handback": "已交回",
   "conversation_info.collaboration.handoff.context_update": "上下文更新",
+  "conversation_info.collaboration.handoff.context_target": "共享上下文",
   "conversation_info.collaboration.recovered_outputs": "回收的结果",
   "conversation_info.collaboration.anomaly.failure": "失败",
   "conversation_info.collaboration.anomaly.retry": "重试",
