@@ -1,5 +1,5 @@
 /**
- * Pluggable vision-fallback seam (2026-08-27, 子安定调).
+ * Pluggable vision-fallback seam (2026-08-27, product call).
  *
  * When a turn carries image attachments but the receiving model is KNOWN to
  * be vision-incapable (vision === false from the model-abilities chain), the
@@ -13,7 +13,7 @@
  *
  * No handler registered (the default today): images pass through unchanged —
  * exactly the pre-seam behavior. The concrete processor shape stays open on
- * purpose (子安: 视觉工具不固化形式).
+ * purpose (product call: 视觉工具不固化形式).
  */
 
 import { createLogger } from '../logger';
