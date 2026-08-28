@@ -312,7 +312,63 @@ describe('spaces › 附件落位与主流 coding agent 一致（上传不进空
   });
 });
 
+describe('spaces › 产物信息补全（v0.1：文件大小 + Agent 归属）', () => {
+  it('produced 产物携带大小与消息 from 精确归属；附件携带大小', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '信息补全空间' });
+    if (!created.ok) throw new Error('create failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(UID, { title: '产出', spaceId: sid });
+
+    const wsRoot = path.join(tmpDir, UID, 'userWorkSpace', '产出');
+    fs.mkdirSync(wsRoot, { recursive: true });
+    const docx = path.join(wsRoot, '成果.docx');
+    fs.writeFileSync(docx, 'hello-world-content');
+
+    const msgFile = path.join(tmpDir, UID, 'cloud', 'chats', `${conv.conversation_id}.jsonl`);
+    fs.appendFileSync(msgFile, JSON.stringify({
+      id: 'm1', from: 'agent_abc', ts: new Date().toISOString(), text: 'x', produced: [docx],
+    }) + '\n');
+    // 附件
+    const attDir = path.join(tmpDir, UID, 'cloud', 'chat_attachments', conv.conversation_id);
+    fs.mkdirSync(attDir, { recursive: true });
+    fs.writeFileSync(path.join(attDir, '资料.pdf'), 'abcd');
+
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, sid);
+    const produced = artifacts.find((a) => a.name === '成果.docx');
+    expect(produced).toBeTruthy();
+    expect(produced?.size).toBe(fs.statSync(docx).size);
+    expect(produced?.agentId).toBe('agent_abc'); // 精确归属来自消息 from
+
+    const attachment = artifacts.find((a) => a.name === '资料.pdf');
+    expect(attachment).toBeTruthy();
+    expect(attachment?.size).toBe(4);
+  });
+
+  it('artifact meta.agentId 写入精确归属，size 取 index.html', async () => {
+    const spaces = await import('../../../src/main/features/spaces');
+    const chats = await import('../../../src/main/features/chats');
+    const created = await spaces.createSpace(UID, { name: '网页归属空间' });
+    if (!created.ok) throw new Error('create failed');
+    const conv = await chats.createConversation(UID, { title: 'web', spaceId: created.space.space_id });
+    const artDir = path.join(tmpDir, UID, 'cloud', 'chat_artifacts', conv.conversation_id, 'demo-web');
+    fs.mkdirSync(artDir, { recursive: true });
+    fs.writeFileSync(path.join(artDir, 'index.html'), '<html>body-content</html>');
+    fs.writeFileSync(path.join(artDir, '__cogseed-meta.json'), JSON.stringify({ title: '演示网页', agentId: 'agent_web', createdAt: new Date().toISOString() }));
+
+    const artifacts = await (await import('../../../src/main/features/spaces_artifacts')).listSpaceArtifacts(UID, created.space.space_id);
+    const entry = artifacts.find((a) => a.artifactId === 'demo-web');
+    expect(entry).toBeTruthy();
+    expect(entry?.agentId).toBe('agent_web');
+    // 首次聚合会触发空间化迁移（全局 → 空间目录），条目 path 指向迁移后的落点
+    expect(entry?.path).toBeTruthy();
+    expect(entry?.size).toBe(fs.statSync(entry?.path as string).size);
+  });
+});
+
 describe('spaces › 兜底遍历护栏（工作目录解析异常防全盘遍历）', () => {
+
   it('isUnsafeWorkspaceRoot：主目录/盘根/.cogseed 目录拦截，正常项目目录放行', async () => {
     const arts = await import('../../../src/main/features/spaces_artifacts');
     expect(arts.isUnsafeWorkspaceRoot(os.homedir())).toBe(true); // 事故场景：整个主目录

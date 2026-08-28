@@ -131,6 +131,12 @@ export interface SpaceArtifactEntry {
   path?: string;
   /** 仅 artifact：产物目录 id。 */
   artifactId?: string;
+  /** 文件大小（字节），列表展示用。 */
+  size?: number;
+  /** 精确产出者 actor id（produced 消息的 from / artifact meta.agentId）。 */
+  agentId?: string;
+  /** 来源会话的参与 Agent 列表（精确归属缺失时的回退）。 */
+  agentIds?: string[];
 }
 
 // ── 产物列表缓存 ─────────────────────────────────────────────────────────
@@ -203,7 +209,19 @@ async function _spaceArtifactsStamp(uid: string, spaceId: string): Promise<strin
   return parts.join(';');
 }
 
-async function scanAttachments(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): Promise<void> {
+/** 会话参与 Agent 列表（可安全共享的不可变拷贝）。 */
+function _agentListOf(agentMap: Map<string, string[]>, cid: string): string[] | undefined {
+  const ids = agentMap.get(cid);
+  return ids && ids.length ? [...ids] : undefined;
+}
+
+async function scanAttachments(
+  uid: string,
+  spaceId: string,
+  cid: string,
+  out: SpaceArtifactEntry[],
+  agentMap?: Map<string, string[]>,
+): Promise<void> {
   // 附件可能落在两处：空间目录（v5 迁移的历史项目数据）+ 全局会话附件目录（新上传）。
   // 都扫一遍按文件名去重，保证产物列表完整（引用时以 source_cid+文件名走跨任务引用链路）。
   const dirs = [spaceChatAttachmentDir(uid, spaceId, cid), chatAttachmentDir(uid, cid)];
@@ -219,16 +237,28 @@ async function scanAttachments(uid: string, spaceId: string, cid: string, out: S
       const ext = path.extname(e.name).toLowerCase();
       if (!ALLOWED_EXTENSIONS.has(ext)) continue;
       let mtime = 0;
-      try { mtime = Math.floor((await fsp.stat(path.join(dir, e.name))).mtimeMs / 1000); } catch { /* keep 0 */ }
+      let size: number | undefined;
+      try {
+        const st = await fsp.stat(path.join(dir, e.name));
+        mtime = Math.floor(st.mtimeMs / 1000);
+        size = st.size;
+      } catch { /* keep 0 */ }
       out.push({
         name: e.name, type: 'attachment', ext, sourceSessionId: cid, time: mtime,
         source: 'attachment', confirmed: true, path: path.join(dir, e.name),
+        size, agentIds: agentMap ? _agentListOf(agentMap, cid) : undefined,
       });
     }
   }
 }
 
-async function scanArtifacts(uid: string, spaceId: string, cid: string, out: SpaceArtifactEntry[]): Promise<void> {
+async function scanArtifacts(
+  uid: string,
+  spaceId: string,
+  cid: string,
+  out: SpaceArtifactEntry[],
+  agentMap?: Map<string, string[]>,
+): Promise<void> {
   // 双目录：空间目录（v5 迁移）+ 全局 chat_artifacts（新产出；无 project 的会话落全局根）
   const dirs = [spaceChatArtifactCidDir(uid, spaceId, cid), chatArtifactCidDir(uid, cid)];
   const seenArt = new Set<string>();
@@ -244,19 +274,27 @@ async function scanArtifacts(uid: string, spaceId: string, cid: string, out: Spa
       const artDir = path.join(cidDir, artifactId);
       let name = artifactId;
       let time = 0;
+      let agentId = '';
       try {
         const raw = await fsp.readFile(path.join(artDir, ARTIFACT_META_FILENAME), 'utf8');
-        const meta = JSON.parse(raw) as { title?: unknown; createdAt?: unknown };
+        const meta = JSON.parse(raw) as { title?: unknown; createdAt?: unknown; agentId?: unknown };
         if (typeof meta?.title === 'string' && meta.title.trim()) name = meta.title.trim();
+        if (typeof meta?.agentId === 'string' && meta.agentId.trim()) agentId = meta.agentId.trim();
         const t = Date.parse(String(meta?.createdAt || ''));
         if (Number.isFinite(t)) time = Math.floor(t / 1000);
       } catch { /* missing / malformed meta */ }
       if (!time) {
         try { time = Math.floor((await fsp.stat(artDir)).mtimeMs / 1000); } catch { /* keep 0 */ }
       }
+      let size: number | undefined;
+      try {
+        const entryFile = path.join(artDir, 'index.html');
+        size = (await fsp.stat(entryFile)).size;
+      } catch { /* keep undefined */ }
       out.push({
         name, type: 'artifact', ext: '.html', sourceSessionId: cid, time, artifactId,
         source: 'artifact', confirmed: true, path: path.join(artDir, 'index.html'),
+        size, agentId: agentId || undefined, agentIds: agentMap ? _agentListOf(agentMap, cid) : undefined,
       });
     }
   }
@@ -305,9 +343,10 @@ async function scanProducedFiles(
   cid: string,
   out: SpaceArtifactEntry[],
   walkedWorkspaces?: Set<string>,
+  agentMap?: Map<string, string[]>,
 ): Promise<void> {
   const seen = new Set(out.map((o) => o.name));
-  const add = async (abs: string, name: string): Promise<void> => {
+  const add = async (abs: string, name: string, producer?: string): Promise<void> => {
     if (!name || seen.has(name)) return;
     const ext = path.extname(name).toLowerCase();
     // 宽扩展名：附件上传白名单之外，工作区产物放行旧 Office / svg / 压缩包 / html 等
@@ -318,17 +357,19 @@ async function scanProducedFiles(
     seen.add(name);
     out.push({
       name, type: 'attachment', ext, sourceSessionId: cid, time: Math.floor(st.mtimeMs / 1000),
-      source: 'produced', confirmed: true, path: abs,
+      source: 'produced', confirmed: true, path: abs, size: st.size,
+      agentId: producer || undefined, agentIds: agentMap ? _agentListOf(agentMap, cid) : undefined,
     });
   };
   // 1. 消息 produced[]（已登记为产物的文件；取最近一段即可，产物都产生在会话尾部）
   try {
     const messages = await getMessages(uid, cid, 300);
     for (const m of messages) {
+      const producer = typeof m.from === 'string' && m.from.trim() ? m.from.trim() : '';
       for (const raw of m.produced || []) {
         const p = typeof raw === 'string' ? raw : '';
         if (!p) continue;
-        await add(p, path.basename(p));
+        await add(p, path.basename(p), producer);
       }
     }
   } catch (err) {
@@ -392,10 +433,16 @@ async function scanImportedFiles(uid: string, spaceId: string, out: SpaceArtifac
       if (e.isDirectory()) { await walk(full); continue; }
       if (!e.isFile()) continue;
       let mtime = 0;
-      try { mtime = Math.floor((await fsp.stat(full)).mtimeMs / 1000); } catch { /* keep 0 */ }
+      let size: number | undefined;
+      try {
+        const st = await fsp.stat(full);
+        mtime = Math.floor(st.mtimeMs / 1000);
+        size = st.size;
+      } catch { /* keep 0 */ }
       out.push({
         name: e.name, type: 'attachment', ext: path.extname(e.name).toLowerCase(),
         sourceSessionId: '', time: mtime, source: 'import', confirmed: true, path: full,
+        size,
       });
     }
   };
@@ -435,12 +482,19 @@ export async function listSpaceArtifacts(uid: string, spaceId: string): Promise<
     _migratedSpaces.add(spaceId);
   }
   const conversations = await listSpaceConversations(uid, spaceId);
+  // 会话 → 参与 Agent 列表（产物归属回退依据；精确归属来自消息 from / artifact meta.agentId）
+  const agentMap = new Map<string, string[]>();
+  for (const c of conversations) {
+    if (!c.conversation_id) continue;
+    const ids = Array.isArray((c as { agent_ids?: string[] }).agent_ids) ? (c as { agent_ids?: string[] }).agent_ids as string[] : [];
+    agentMap.set(c.conversation_id, ids.filter((x) => typeof x === 'string' && x));
+  }
   const out: SpaceArtifactEntry[] = [];
   const walkedWorkspaces = new Set<string>();
   for (const c of conversations) {
-    await scanAttachments(uid, spaceId, c.conversation_id, out);
-    await scanArtifacts(uid, spaceId, c.conversation_id, out);
-    await scanProducedFiles(uid, spaceId, c.conversation_id, out, walkedWorkspaces);
+    await scanAttachments(uid, spaceId, c.conversation_id, out, agentMap);
+    await scanArtifacts(uid, spaceId, c.conversation_id, out, agentMap);
+    await scanProducedFiles(uid, spaceId, c.conversation_id, out, walkedWorkspaces, agentMap);
   }
   await scanImportedFiles(uid, spaceId, out);
   out.sort((a, b) => b.time - a.time);
