@@ -618,6 +618,7 @@
   "chat.pin_failed": "Failed to update pin state. Try again or refresh the task list.",
   "chat.plan_announce": "Execution Plan",
   "chat.collab_summary.title": "Collaboration summary",
+  "chat.collab_summary.system_label": "Collaboration record",
   "chat.collab_summary.all_done": "All done",
   "chat.collab_summary.cancelled": "Cancelled",
   "chat.collab_summary.failed": "Failed",

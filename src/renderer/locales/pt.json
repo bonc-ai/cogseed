@@ -560,6 +560,7 @@
   "chat.pin_failed": "Falha ao atualizar o estado do PIN. Tente novamente ou atualize a lista de tarefas.",
   "chat.plan_announce": "Plano de Execução",
   "chat.collab_summary.title": "Resumo da colaboração",
+  "chat.collab_summary.system_label": "Registro de colaboração",
   "chat.collab_summary.all_done": "Tudo concluído",
   "chat.collab_summary.cancelled": "Cancelado",
   "chat.collab_summary.failed": "Falhou",

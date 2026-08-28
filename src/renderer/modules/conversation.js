@@ -8986,12 +8986,16 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   const p3394Fallback = typeof headerActorId === 'string' && headerActorId.startsWith('p3394_')
     ? headerActorId.slice(7)
     : '';
-  const headerName = role === 'user'
+  let headerName = role === 'user'
     ? ''
     : isSpaceBuilderCid
       ? t('chat.recipient_space_builder')
       : resolvedActorLabel || fromLabel || p3394Fallback || t('chat.from_agent_unknown');
-  const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
+  // COGSEED-61: 协作汇总记录是宿主生成的系统消息——不冒充任何 Actor 发言，
+  // 头部用系统标签（无头像、无 Agent 链接）。
+  const isCollabSummaryMsg = message._system_kind === 'collab_summary';
+  if (isCollabSummaryMsg) headerName = t('chat.collab_summary.system_label');
+  const avatarHtml = role === 'user' || isCollabSummaryMsg ? '' : _renderActorAvatarHtml(headerActorId);
   const headerHtml = role === 'user'
     ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`
     : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;

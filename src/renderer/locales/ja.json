@@ -560,6 +560,7 @@
   "chat.pin_failed": "固定状態の更新に失敗しました。もう一度試すか、タスク一覧を再読み込みしてください。",
   "chat.plan_announce": "実行計画",
   "chat.collab_summary.title": "コラボレーション概要",
+  "chat.collab_summary.system_label": "コラボレーション記録",
   "chat.collab_summary.all_done": "すべて完了",
   "chat.collab_summary.cancelled": "キャンセル済み",
   "chat.collab_summary.failed": "失敗",
