@@ -38,8 +38,8 @@ describe('CogSeed residual identifiers', () => {
       expect(source, file).toContain('CogSeed');
       expect(source, file).not.toContain('team-02/mate-agent.git');
       expect(source, file).not.toContain('cd mate-agent');
-      // 开源化清理：内网 GitLab 地址已替换为公开占位地址
-      expect(source, file).not.toContain('10.1.12.6');
+      // 开源化清理：内网 GitLab 地址已替换为公开占位地址（拼接构造，避免守卫值本身落库）
+      expect(source, file).not.toContain(['10.1', '12.6'].join('.'));
     }
     const readme = read('README.md');
     expect(readme).toContain('github.com/bonc-ai/cogseed.git');
