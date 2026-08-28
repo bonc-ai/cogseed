@@ -27315,3 +27315,23 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dash-form-status.err { color: var(--danger); }
 .dash-form-status.ok { color: var(--success); }
 .dash-form-status.pending { color: var(--muted); }
+
+/* COGSEED-61: synthesis wake cue — centered system status line */
+.chat-collab-synthesis-wake {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 10px auto;
+  max-width: 80%;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+}
+.chat-collab-synthesis-wake::before,
+.chat-collab-synthesis-wake::after {
+  content: "";
+  flex: 1;
+  max-width: 120px;
+  height: 1px;
+  background: var(--border-soft, #e5e7eb);
+}

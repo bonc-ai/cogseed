@@ -82,6 +82,17 @@ describe('chat collab summary card (conversation.js)', () => {
     expect(conversationSource).toContain('...(gm.collab_summary ? { collab_summary: gm.collab_summary } : {})');
   });
 
+  it('renders the synthesis wake cue as a centered system line, not a user bubble', () => {
+    expect(conversationSource).toContain("message._system_kind === 'collab_synthesis_wake'");
+    expect(conversationSource).toContain('chat-collab-synthesis-wake');
+    expect(conversationSource).toContain("t('chat.collab_summary.synthesis_pending')");
+  });
+
+  it('hides the collab summary markdown body (card-only render)', () => {
+    expect(conversationSource).toContain("message._system_kind === 'collab_summary'");
+    expect(conversationSource).toContain('displayContent = ''');
+  });
+
   it('renders the details card with conclusion chip, contributions and final result', () => {
     expect(conversationSource).toContain('chat-collab-summary');
     expect(conversationSource).toContain("t('chat.collab_summary.title')");
@@ -130,6 +141,8 @@ describe('local collab overview locale contract', () => {
     'chat.collab_summary.steps_done',
     'chat.collab_summary.retries',
     'chat.collab_summary.files',
+    'chat.collab_summary.system_label',
+    'chat.collab_summary.synthesis_pending',
   ];
 
   it.each(['en', 'zh', 'ja', 'pt'])('defines all collab overview keys in %s', (locale) => {

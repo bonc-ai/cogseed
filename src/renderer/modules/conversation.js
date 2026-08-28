@@ -8829,6 +8829,22 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     return null;
   }
 
+  // COGSEED-61: 回笼合成提示（collab_synthesis_wake）是宿主发给 Commander
+  // 的内部控制指令——渲染为居中系统状态行，绝不冒充用户气泡。
+  if (message && message._system_kind === 'collab_synthesis_wake') {
+    let line = container.querySelector('.chat-collab-synthesis-wake:last-of-type');
+    if (!line || line.dataset.msgId !== String(message._msg_id || '')) {
+      const el = document.createElement('div');
+      el.className = 'chat-collab-synthesis-wake';
+      if (message._msg_id) el.dataset.msgId = String(message._msg_id);
+      el.textContent = t('chat.collab_summary.synthesis_pending');
+      container.appendChild(el);
+      if (autoScroll) _stickBottomIfPinned(container);
+      line = el;
+    }
+    return line;
+  }
+
   // Dedupe by `_msg_id`: when the user switches conv tabs during a
   // streaming turn, the same persisted message can reach the renderer
   // twice — once via `loadConversationHistory` reading jsonl on
@@ -8883,6 +8899,11 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (!isHtmlSnippet) {
     if (role === 'user') displayContent = _stripUserStructuralBlocksForDisplay(rawContent);
     else if (role === 'assistant') displayContent = _stripSurvivingStructuralBlocks(rawContent);
+  }
+  // COGSEED-61: 协作记录消息只渲染折叠卡——text 正文是给纯文本消费方（导
+  // 出/搜索）的 fallback，展开成 markdown 会跟在 Commander 交付后面重复一遍。
+  if (message && message._system_kind === 'collab_summary') {
+    displayContent = '';
   }
   // P3394 node messages: `[来自 P3394 节点 <node>] <text>` → node badge card.
   let p3394BadgeHtml = '';

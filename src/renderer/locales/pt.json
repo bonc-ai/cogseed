@@ -561,6 +561,7 @@
   "chat.plan_announce": "Plano de Execução",
   "chat.collab_summary.title": "Resumo da colaboração",
   "chat.collab_summary.system_label": "Registro de colaboração",
+  "chat.collab_summary.synthesis_pending": "Todas as subtarefas concluídas — sintetizando a entrega…",
   "chat.collab_summary.all_done": "Tudo concluído",
   "chat.collab_summary.cancelled": "Cancelado",
   "chat.collab_summary.failed": "Falhou",

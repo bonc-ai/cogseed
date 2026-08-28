@@ -189,9 +189,11 @@ async function maybeFinalizeRun(uid: string, cid: string): Promise<void> {
       fromActorId: USER_ID,
       internalControl: true,
       forceTo: [COMMANDER_ID],
+      // 系统状态行（渲染层居中展示），绝不冒充用户发言。
+      system_kind: "collab_synthesis_wake",
       // Terse user-visible cue; the full instruction rides on model_text
       // (system-created messages keep the human line short).
-      text: "所有子任务已完成，等待汇总交付。",
+      text: "所有子任务已完成，正在汇总交付。",
       model_text: SYNTHESIS_WAKE_MODEL_TEXT,
     });
     log.info(`synthesis wake sent uid=${uid} cid=${cid} run=${run.id}`);

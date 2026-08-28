@@ -1958,8 +1958,10 @@ export interface EnqueueParams {
   failure_kind?: GroupMessageFailureKind;
   failure_code?: string;
   model_text?: string;
-  /** Host-verified failed-turn continuation. Kept off the persisted message
-   * schema; it only controls how the recipient worker opens its session. */
+  /** Host-authored system discriminator persisted on the message (e.g. the
+   * COGSEED-61 synthesis wake cue renders as a centered status line, not a
+   * user bubble). */
+  system_kind?: GroupMessage["system_kind"];
   resumeActiveTurn?: boolean;
   /** Skip KSTAR requirement routing + Recall projection gating for this
    *  enqueue. Used by the resume path so confirming a projection does not
@@ -2572,6 +2574,7 @@ async function _enqueueBody(
     ...(rewrittenText.includes('<kstar-review>')
       ? { system_kind: 'kstar_review' as const }
       : {}),
+    ...(params.system_kind ? { system_kind: params.system_kind } : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
     ...(params.model_text && params.model_text.trim()
