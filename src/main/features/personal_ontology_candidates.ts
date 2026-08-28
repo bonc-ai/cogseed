@@ -37,6 +37,7 @@ import {
   type TemplateSection,
 } from './personal_ontology_template_files';
 import { createLogger } from '../logger';
+import type { FieldTargetStatus } from './personal_ontology_contract';
 
 const log = createLogger('personal-ontology-candidates');
 
@@ -65,7 +66,21 @@ export interface ConfirmCandidateResult {
   groups?: Array<{ groupId: string; ok: boolean; error?: string }>;
   /** 阶段 B：每条填坑尝试（appendFieldValue）的结果；`ok:false` = 该组无此
    *  字段，已回退流水区（流水区结果在 `groups` 里）。无 targetField 时缺省。 */
-  fieldWrites?: Array<{ groupId: string; fieldName: string; ok: boolean; error?: string }>;
+  fieldWrites?: Array<{
+    groupId: string;
+    /** 候选/用户给的字段名（原样回显，不是换算后的名字）。 */
+    fieldName: string;
+    ok: boolean;
+    error?: string;
+    /**
+     * 历史名换算的结果分档。产品行为不变（命不中一律回退流水区），但**回退的
+     * 原因不再被吞成一句 `field not found`** —— 退役、歧义、认不出是三种不同的
+     * 处置，日志/回执里分不出来就没法查。缺省（无 targetField 时）不带。
+     */
+    targetStatus?: FieldTargetStatus;
+    /** 换算后真正写入的字段名；仅在与 fieldName 不同时出现。 */
+    resolvedFieldName?: string;
+  }>;
 }
 
 /** 候选类型。`preference`（偏好）是一等公民，不再藏在 relation 里。 */
@@ -547,6 +562,63 @@ async function resolveTemplateGroupSections(
 }
 
 /**
+ * 候选的「建议字段」→ 当前 schema 下的真实落点。
+ *
+ * `target_field` 是**长期存在候选池里**的一个裸字段名（`- 建议字段:` 行，候选生成
+ * 那一刻的 schema）。候选还没确认、角色模板先做了 rename / move 迁移时，拿旧字面量
+ * 去文件里找只会落空 —— 值退回流水区、预选无声消失。这里在消费的那一刻做一次换算。
+ *
+ * **候选文件本身不动**：不重写 candidates.md，不批量迁移存量，换算只发生在读取侧。
+ *
+ * 换算走 PO contract 的 resolveRoleTemplateFieldTarget（唯一那道 identity 阶梯），
+ * 这里不自建第二套名字兼容逻辑。普通记忆分组没有角色模板 schema，原样返回。
+ */
+async function resolveCandidateFieldTarget(
+  uid: string,
+  groupRef: string,
+  targetField: string,
+): Promise<{ ref: string; fieldName: string; section?: string; status: FieldTargetStatus; resolved: boolean }> {
+  const { groupId: baseId, section } = splitContentRef(groupRef);
+  const tpl = await resolveTemplateGroupSections(uid, baseId);
+  // 普通组：没有角色模板 schema，无从换算，行为与改动前完全一致。
+  if (!tpl) return { ref: groupRef, fieldName: targetField, status: 'current_name', resolved: true };
+
+  const { resolveRoleTemplateFieldTarget, isResolvedFieldTarget } =
+    await import('./personal_ontology_contract');
+  // 复合 ref 自带分节上下文；模板整组（候选没有分节概念）则不给，让它走全模板解析。
+  const res = resolveRoleTemplateFieldTarget(tpl.template_id, targetField, section || undefined);
+  // 认不出 / 退役 / 歧义 → 不是可写落点。**必须在这里断掉**：候选自动通道只填
+  // T-box 声明过的坑，不得顺手写用户自建字段，也不得复活退役字段。
+  if (!isResolvedFieldTarget(res)) {
+    return { ref: groupRef, fieldName: targetField, status: res.status, resolved: false };
+  }
+  return {
+    ref: section ? buildContentRef(baseId, res.section as string) : groupRef,
+    fieldName: res.fieldName as string,
+    section: res.section,
+    status: res.status,
+    resolved: true,
+  };
+}
+
+/** 命不中落点时的可观测记录：四种原因分开，不吞成一句 field not found。 */
+function recordFieldTargetMiss(
+  result: ConfirmCandidateResult,
+  uid: string,
+  candidateId: string,
+  groupId: string,
+  targetField: string,
+  status: FieldTargetStatus,
+): void {
+  result.fieldWrites!.push({
+    groupId, fieldName: targetField, ok: false, error: 'field not found', targetStatus: status,
+  });
+  log.warn('candidate field target unresolved, falling back to flow', {
+    uid, candidateId, groupId, targetField, targetStatus: status,
+  });
+}
+
+/**
  * 把一条候选实际写入所有请求的去向（全局记忆 + 0..N 个记忆分组）。不改候选池，
  * 纯粹的“写”这一步 —— 候选池的增删由调用方（confirmCandidate）
  * 负责，方便批量场景复用同一份落地逻辑。
@@ -599,29 +671,33 @@ async function writeCandidateToDestinations(
       const tpl = await resolveTemplateGroupSections(uid, groupId);
       if (tpl && tpl.sections.length) {
         // 候选自动通道的白名单：只填模板 T-box 声明过的字段（“有坑填坑”）；
-        // 自定义字段只能由用户手动升格创建，候选不得顺手建坑。
-        // T-box 白名单判据来自 contract（单一实现）；模板未知 → 空集 → 不放行。
-        const { listTboxFieldNames } = await import('./personal_ontology_contract');
-        const tboxFields = listTboxFieldNames(tpl.template_id);
+        // 自定义字段只能由用户手动升格创建，候选不得顺手建坑。判据与历史名换算
+        // 都来自 contract（单一实现）；模板未知 / 认不出 → 不放行。
         if (dest.targetField) {
           if (!result.fieldWrites) result.fieldWrites = [];
-          const isTbox = tboxFields.has(dest.targetField);
-          const sec = isTbox
-            ? tpl.sections.find((s) => Object.prototype.hasOwnProperty.call(s.fields, dest.targetField as string))
-            : undefined;
+          const target = await resolveCandidateFieldTarget(uid, groupId, dest.targetField);
+          // 先按 catalog 当前分节找，再退回“文件里哪一节有这个字段就写哪一节”——
+          // 后者是换算之前的既有行为，实例文件与 catalog 暂时不同步时不该变坏。
+          const has = (sec: TemplateSection) =>
+            Object.prototype.hasOwnProperty.call(sec.fields, target.fieldName);
+          const sec = !target.resolved
+            ? undefined
+            : tpl.sections.find((x) => has(x) && x.title === target.section) || tpl.sections.find(has);
           if (sec) {
-            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
+            const res = await appendFieldValueToRef(uid, `${groupId}::${sec.title}`, target.fieldName, text, source, dest.projectId ?? candidate.project_id);
             result.fieldWrites.push({
               groupId,
               fieldName: dest.targetField as string,
               ok: res.ok,
+              targetStatus: target.status,
+              ...(target.fieldName !== dest.targetField ? { resolvedFieldName: target.fieldName } : {}),
               ...(res.error ? { error: res.error } : {}),
             });
             if (res.ok) anySucceeded = true;
             else log.warn('candidate template field write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
             continue; // 已尝试填坑，不再写流水区
           }
-          result.fieldWrites.push({ groupId, fieldName: dest.targetField, ok: false, error: 'field not found' });
+          recordFieldTargetMiss(result, uid, candidate.candidate_id, groupId, dest.targetField, target.status);
         }
         const res = await appendFlowEntryToRef(uid, `${groupId}::${tpl.sections[0].title}`, text);
         if (!result.groups) result.groups = [];
@@ -639,26 +715,30 @@ async function writeCandidateToDestinations(
       // 预检查实现，避免与 §3.2“appendFieldValue 字段小节不存在则创建”冲突。
       if (dest.targetField) {
         if (!result.fieldWrites) result.fieldWrites = [];
+        // 复合 ref（gid::分节）指向的是模板分节，历史名要先换算；普通组原样。
+        const target = await resolveCandidateFieldTarget(uid, groupId, dest.targetField);
         let fieldExists = false;
         try {
-          const fieldsRes = await listFieldsByRef(uid, groupId);
-          fieldExists = !!fieldsRes.fields?.some((f) => f.name === dest.targetField);
+          const fieldsRes = target.resolved ? await listFieldsByRef(uid, target.ref) : undefined;
+          fieldExists = !!fieldsRes?.fields?.some((f) => f.name === target.fieldName);
         } catch {
           fieldExists = false;
         }
         if (fieldExists) {
-          const res = await appendFieldValueToRef(uid, groupId, dest.targetField, text, source, dest.projectId ?? candidate.project_id);
+          const res = await appendFieldValueToRef(uid, target.ref, target.fieldName, text, source, dest.projectId ?? candidate.project_id);
           result.fieldWrites.push({
             groupId,
             fieldName: dest.targetField as string,
             ok: res.ok,
+            targetStatus: target.status,
+            ...(target.fieldName !== dest.targetField ? { resolvedFieldName: target.fieldName } : {}),
             ...(res.error ? { error: res.error } : {}),
           });
           if (res.ok) anySucceeded = true;
           else log.warn('candidate field write failed', { uid, candidateId: candidate.candidate_id, groupId, error: res.error });
           continue; // 已尝试填坑，不再写流水区
         }
-        result.fieldWrites.push({ groupId, fieldName: dest.targetField, ok: false, error: 'field not found' });
+        recordFieldTargetMiss(result, uid, candidate.candidate_id, groupId, dest.targetField, target.status);
       }
       const res = await appendFlowEntryToRef(uid, groupId, text);
       if (!result.groups) result.groups = [];

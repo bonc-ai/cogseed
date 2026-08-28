@@ -321,6 +321,39 @@ export function resolveRetiredFieldIdentity(
 }
 
 /**
+ * 全模板范围找退役字段 identity（不限分节）。与 findFieldIdentityAnywhere 对称：
+ * 调用方手里只有一个**裸字段名**、没有分节上下文时（候选的「建议字段」就是这种
+ * 形状），要分清「这名字是官方声明退役的历史字段」和「压根认不出」，就得跨分节
+ * 找一遍 retired_fields。跨分节同名退役字段照实报 ambiguous，不猜。
+ */
+export function findRetiredFieldIdentityAnywhere(
+  templateId: string,
+  fieldName: string,
+): IdentityResolution<RetiredFieldIdentity> {
+  const template = getRoleTemplate(templateId);
+  if (!template) return { ok: false, reason: 'unknown_template' };
+  const flat = template.preset_groups.flatMap((sec) =>
+    (sec.retired_fields || []).map((r) => ({ sec, r })));
+  const res = pickUnique(
+    flat,
+    ({ r }) => (r.previous_names?.includes(fieldName) ? 'previous_name' : null),
+    ({ r }) => r.id,
+  );
+  if (isIdentityFailure(res)) return res;
+  return {
+    ok: true,
+    matchedBy: 'previous_name',
+    identity: {
+      sectionId: res.identity.sec.id,
+      sectionTitle: res.identity.sec.title,
+      fieldId: res.identity.r.id,
+      matchedName: fieldName,
+      ...(res.identity.r.retired_in ? { retiredIn: res.identity.r.retired_in } : {}),
+    },
+  };
+}
+
+/**
  * 三态判定。在役优先于退役（catalog 若把一个退役字段重新启用，它就是 active）。
  * 未知模板 / 认不出的分节 → custom：拿不到官方依据时，只能说「这不是官方字段」，
  * 不能反过来说「这是官方退役字段」。

@@ -46,6 +46,7 @@ import {
 import { listGroups } from './personal_ontology_groups';
 import {
   findFieldIdentityAnywhere,
+  findRetiredFieldIdentityAnywhere,
   isIdentityFailure,
   resolveFieldIdentity,
   resolveRetiredFieldIdentity,
@@ -549,6 +550,113 @@ export interface AppendFieldValueResult {
   fieldName?: string;
 }
 
+/**
+ * 历史字段名换算的结果分档。**四种失败必须分开**：调用方（候选确认、自动写入）
+ * 的产品行为可以都是「回退流水区」，但回退的**原因**不能吞成一句「没找到」——
+ * 退役、歧义、认不出是三种完全不同的处置，日志里分不出来就没法查。
+ *
+ * `current_name`              名字就是 catalog 当前名，行为与换算之前完全一致
+ * `historical_name_resolved`  命中 previous_names，已换算到当前分节 + 当前字段名
+ * `retired_target`            catalog 明确声明退役：值可读，但不再是可写落点
+ * `ambiguous_target`          多个 identity 认领同一个历史名 —— 不猜
+ * `missing_target`            catalog 认不出（用户自建字段，或作者忘了声明退役）
+ */
+export type FieldTargetStatus =
+  | 'current_name'
+  | 'historical_name_resolved'
+  | 'retired_target'
+  | 'ambiguous_target'
+  | 'missing_target';
+
+export interface FieldTargetResolution {
+  status: FieldTargetStatus;
+  /** 命中时（current_name / historical_name_resolved）：catalog 当前的分节标题。 */
+  section?: string;
+  /** 命中时：catalog 当前的字段名。 */
+  fieldName?: string;
+}
+
+/** 命中档（拿得到当前落点）。 */
+export function isResolvedFieldTarget(res: FieldTargetResolution): boolean {
+  return res.status === 'current_name' || res.status === 'historical_name_resolved';
+}
+
+/**
+ * 历史字段名 → catalog 当前在役坑位，**PO 对外的唯一换算入口**。
+ *
+ * 长期持久化的落点（技能绑定里的 profileTarget、候选池的「建议字段」）记的都是
+ * 签发那一刻的名字。schema 迁移做过 rename / move 之后拿旧字面量去问 isTboxField
+ * 只会得到 false —— 一条配好的落点从此静默失效。调用方不要自己拼名字兼容逻辑，
+ * 一律走这里。
+ *
+ * `section` 可省：候选的「建议字段」只存了一个裸字段名，没有分节上下文。给了
+ * section 就在分节内解析 —— 字段名只在其所属分节内唯一，这是主判据。
+ *
+ * `allowCrossSection` 决定给了 section 却在该分节内找不到时，要不要放开到全模板
+ * 再找一次（= 认「字段被移到别的分节」这件事）。**默认关**，因为只凭
+ * (分节名, 字段名) 两个字符串，「这字段被移走了」和「这字段本来就长在别的分节」
+ * 是分不开的 —— 放开就会把用户明确选定的分节偷偷改掉。
+ *
+ * 只有**签发时校验过这对搭配**的地址才可以开：tf ref 由 buildRoleTemplateFieldRef
+ * 签发，签发那一刻 (分节, 字段) 一定同时成立，所以之后配不上必然是 schema 动过。
+ * 反过来，候选的「建议字段」是个没跟分节一起校验过的裸名字，不能开。
+ *
+ * 解析阶梯与 detectRoleTemplateMigration 的字段层同一套口径，任一层 ambiguous
+ * 都直接失败：猜错等于把用户的值写进别人的坑。
+ */
+export function resolveRoleTemplateFieldTarget(
+  templateId: string,
+  fieldName: string,
+  section?: string,
+  allowCrossSection = false,
+): FieldTargetResolution {
+  // 当前字面名的 fast path。绝大多数落点走这条，行为与换算之前逐字相同。
+  if (section && isTboxField(templateId, section, fieldName)) {
+    return { status: 'current_name', section, fieldName };
+  }
+
+  if (section) {
+    const scoped = resolveFieldIdentity(templateId, section, fieldName);
+    if (!isIdentityFailure(scoped)) {
+      return {
+        status: scoped.matchedBy === 'current_name' ? 'current_name' : 'historical_name_resolved',
+        section: scoped.identity.sectionTitle,
+        fieldName: scoped.identity.name,
+      };
+    }
+    if (scoped.reason === 'ambiguous') return { status: 'ambiguous_target' };
+  }
+
+  // 无分节上下文，或分节内找不到且允许跨分节（字段被移到了别的分节）→ 全模板找。
+  if (!section || allowCrossSection) {
+    const anywhere = findFieldIdentityAnywhere(templateId, fieldName);
+    if (!isIdentityFailure(anywhere)) {
+      return {
+        status: anywhere.matchedBy === 'current_name' ? 'current_name' : 'historical_name_resolved',
+        section: anywhere.identity.sectionTitle,
+        fieldName: anywhere.identity.name,
+      };
+    }
+    if (anywhere.reason === 'ambiguous') return { status: 'ambiguous_target' };
+  }
+
+  // 不是在役字段 → catalog 有没有明确声明它退役。
+  const retired = section
+    ? resolveRetiredFieldIdentity(templateId, section, fieldName)
+    : findRetiredFieldIdentityAnywhere(templateId, fieldName);
+  if (!isIdentityFailure(retired)) return { status: 'retired_target' };
+  if (retired.reason === 'ambiguous') return { status: 'ambiguous_target' };
+  // 给了分节却在该分节里没找到退役声明时，再跨分节看一眼：字段可能是先被移走、
+  // 后来才退役的，退役声明挂在新分节下。
+  if (section && allowCrossSection) {
+    const retiredAnywhere = findRetiredFieldIdentityAnywhere(templateId, fieldName);
+    if (!isIdentityFailure(retiredAnywhere)) return { status: 'retired_target' };
+    if (retiredAnywhere.reason === 'ambiguous') return { status: 'ambiguous_target' };
+  }
+
+  return { status: 'missing_target' };
+}
+
 type FieldSlotHit = { ok: true; section: string; fieldName: string };
 type FieldSlotMiss = { ok: false; error: string };
 type FieldSlotResolution = FieldSlotHit | FieldSlotMiss;
@@ -563,49 +671,26 @@ function isSlotFailure(slot: FieldSlotResolution): slot is FieldSlotMiss {
 }
 
 /**
- * tf ref 里记着的 (分节名, 字段名) → catalog 当前在役坑位的 (分节名, 字段名)。
- *
- * fieldRef 会被**长期持久化**（技能绑定里的 profileTarget 就是用户配一次、之后
- * 一直用），里面存的是签发那一刻的名字。分节改名 / 字段改名 / 字段跨分节移动的
- * schema 迁移跑过之后，直接拿旧字面量去问 isTboxField 只会得到 false —— 一条配好
- * 的落点规则从此静默写不进去，而且报的还是「这字段不是模板声明的」这种不会自愈
- * 的错。这里补上按 stable identity 的换算。
- *
- * 解析阶梯与 detectRoleTemplateMigration 的字段层完全同一套口径：
- *   1. 当前字面名 —— 绝大多数 ref 走这条，行为与改动前逐字相同；
- *   2. 分节内解析（resolveFieldIdentity）—— 覆盖分节改名、字段改名及两者同时；
- *   3. 全模板解析（findFieldIdentityAnywhere）—— 覆盖字段被移到别的分节；
- *   4. 退役声明（resolveRetiredFieldIdentity）—— 官方历史字段，明确不可写。
- * 任一层报 ambiguous 都**直接失败，不猜**：猜错等于把用户的值写进别人的坑。
- *
- * 出口只有 accept() 一个，isTboxField 仍是可写落点的唯一判据 —— 换算只负责把
- * 历史名换成当前名，不负责放宽白名单。
+ * tf ref 里记着的 (分节名, 字段名) → 可写落点，或一个说得清原因的拒绝。
+ * 换算本身走 resolveRoleTemplateFieldTarget（PO 唯一那道阶梯），这里只负责把
+ * 四档结果翻译成写入通道的错误语义。
  */
 function resolveFieldRefSlot(
   templateId: string,
   section: string,
   fieldName: string,
 ): FieldSlotResolution {
-  const accept = (sec: string, name: string): FieldSlotResolution => (
-    isTboxField(templateId, sec, name)
-      ? { ok: true, section: sec, fieldName: name }
-      : { ok: false, error: 'field is not declared by the role template' }
-  );
-
-  if (isTboxField(templateId, section, fieldName)) return accept(section, fieldName);
-
-  const scoped = resolveFieldIdentity(templateId, section, fieldName);
-  if (!isIdentityFailure(scoped)) return accept(scoped.identity.sectionTitle, scoped.identity.name);
-  if (scoped.reason === 'not_found') {
-    const anywhere = findFieldIdentityAnywhere(templateId, fieldName);
-    if (!isIdentityFailure(anywhere)) {
-      return accept(anywhere.identity.sectionTitle, anywhere.identity.name);
-    }
+  // 跨分节开：tf ref 签发时 (分节, 字段) 一定同时成立过，之后配不上必然是 schema 动过。
+  const res = resolveRoleTemplateFieldTarget(templateId, fieldName, section, true);
+  if (isResolvedFieldTarget(res)) {
+    // isTboxField 仍是可写落点的唯一判据 —— 换算只把历史名换成当前名，不放宽白名单。
+    return isTboxField(templateId, res.section, res.fieldName)
+      ? { ok: true, section: res.section, fieldName: res.fieldName }
+      : { ok: false, error: 'field is not declared by the role template' };
   }
-
   // 退役与「认不出」必须分开报：退役字段的值仍然可读，只是不再是可写落点，
   // 说成「不是模板声明的字段」等于把官方历史沉淀说成一次脏数据。
-  if (!isIdentityFailure(resolveRetiredFieldIdentity(templateId, section, fieldName))) {
+  if (res.status === 'retired_target') {
     return { ok: false, error: 'field is retired and no longer writable' };
   }
   return { ok: false, error: 'field is not declared by the role template' };
