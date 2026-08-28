@@ -30,8 +30,9 @@ export default defineConfig({
     // oversubscribe local dev machines and make otherwise healthy tests trip
     // the 5s default timeout in full-suite runs.
     maxWorkers: testWorkers,
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
+    // CI 全套件并发负载下 30s 会偶发误伤（本地通过、CI 超时）；给足余量。
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
