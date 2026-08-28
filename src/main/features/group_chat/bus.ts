@@ -1890,10 +1890,21 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
   };
   if (!existing) {
     await appendMain(input.uid, input.cid, msg, {
-      senderKind: 'agent',
+      senderKind: "agent",
       senderId: input.agentId,
       agentIds: [input.agentId],
     });
+    // COGSEED-61: backend-executed agents (p3394 gateway / local CLI wake
+    // tasks) project their reply through this path instead of a bus turn, so
+    // nothing else settles their prepared dispatch workflow step. Best-effort
+    // — the settle module swallows its own errors.
+    void settleExternalAgentHandback(
+      input.uid,
+      input.cid,
+      input.agentId,
+      text,
+      input.failureKind ? { failed: true } : undefined,
+    );
   }
   const allActorIds = Array.from(new Set([
     input.agentId,

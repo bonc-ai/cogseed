@@ -44,6 +44,7 @@ export async function settleExternalAgentHandback(
   cid: string,
   actorId: string,
   replyText: string,
+  opts?: { failed?: boolean },
 ): Promise<void> {
   try {
     const run = await readActiveWorkflowRun(uid, cid);
@@ -70,11 +71,11 @@ export async function settleExternalAgentHandback(
         status: "completed",
       }).catch(() => undefined);
     }
-    await finishNestedDispatchStep(uid, cid, step.id, {
-      result: resultHead(replyText),
-    });
+    await finishNestedDispatchStep(uid, cid, step.id, opts?.failed
+      ? { error: resultHead(replyText) || "Agent task failed." }
+      : { result: resultHead(replyText) });
     log.info(
-      `external handback settled uid=${uid} cid=${cid} actor=${actorId} step=${step.id}`,
+      `external handback settled uid=${uid} cid=${cid} actor=${actorId} step=${step.id} failed=${!!opts?.failed}`,
     );
   } catch (err) {
     log.warn(
