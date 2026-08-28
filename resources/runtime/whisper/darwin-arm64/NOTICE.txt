@@ -1,0 +1,23 @@
+Bundled whisper.cpp runtime
+===========================
+
+CogSeed invokes whisper.cpp as a separate process for local VideoStudio speech
+transcription. The runtime version is 1.8.6.
+
+whisper.cpp source and license:
+  https://github.com/ggml-org/whisper.cpp/tree/v1.8.6
+  MIT; see LICENSE.whisper.cpp.
+
+Multilingual Whisper base-q5_1 model:
+  https://huggingface.co/ggerganov/whisper.cpp
+  Derived from OpenAI Whisper; MIT; see LICENSE.model.
+
+The Windows CLI is the official whisper.cpp x64 release. Its required Microsoft
+Visual C++ runtime DLLs are deployed application-locally beside whisper-cli;
+CogSeed does not install or modify the machine-wide Visual C++ Redistributable.
+Microsoft redistributable terms apply:
+  https://visualstudio.microsoft.com/license-terms/
+
+
+The macOS CLIs are static target-native builds whose pinned source, toolchain,
+flags, sizes, and hashes are documented in vendor/whisper/v1.8.6/BUILD.md.

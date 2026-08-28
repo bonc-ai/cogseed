@@ -6108,13 +6108,13 @@ async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
   const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
     import("../skills"),
     import("../agents"),
-    import("../role_templates"),
+    import("../personal_ontology_contract"),
   ]);
   const [skills, agents, templates, scenarios] = await Promise.all([
     skillsFeat.listSkills(),
     agentsFeat.listAgents().catch(() => []),
-    templatesFeat.listRoleTemplates(),
-    templatesFeat.listScenarios(),
+    templatesFeat.listRoleTemplateCatalog(),
+    templatesFeat.listRoleScenarios(),
   ]);
   const clip = (s: string, n = 90) => {
     const t = String(s || "").replace(/\s+/g, " ").trim();
@@ -6139,14 +6139,14 @@ async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
       }).join("\n")
     : "（暂无可用智能体）";
   const templatesBlock = templates.length
-    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
+    ? templates.map((t) => `- ${t.name}（id: ${t.templateId}）— ${clip(t.description || "")}`).join("\n")
     : "（暂无角色模板）";
   const scenariosBlock = scenarios.length
     ? scenarios.map((s) => {
-        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
-          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
+        const extra = s.suggestedSecondaryTemplateIds?.length
+          ? `，可配模板: ${s.suggestedSecondaryTemplateIds.join("/")}`
           : "";
-        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
+        return `- ${s.name}（id: ${s.scenarioId}）— ${clip(s.description || "")}${extra}`;
       }).join("\n")
     : "（暂无场景）";
   const main = renderPromptWithSharedRules(

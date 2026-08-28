@@ -60,7 +60,6 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
-import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
 import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
@@ -1526,16 +1525,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { removed: result.removed };
   },
 
-  // 模板选择器数据源（含 bundle 静态预览；内置模板 v1.1.0）
-  'spaces.templates.list': async (_payload, _ctx) => {
-    const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
-    return { templates };
+  // 模板目录：唯一正式出口在 Personal Ontology。返回 RoleTemplateSummary
+  // （templateId/name/description/version/installed/bundle），**不含**
+  // preset_groups / sections / 字段值 / group_id —— 见 personal_ontology_contract.ts。
+  'personalOntology.templates.catalog': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { templates: await contract.listRoleTemplateSummaries(ctx.userId) };
   },
 
-  // 情境入口场景列表（教育/写作/职场+自定义，M2）
-  'spaces.scenarios.list': async (_payload, _ctx) => {
-    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
-    return { scenarios };
+  // 情境入口场景列表（教育/写作/职场+自定义）。场景归属未裁决，先统一从 contract 出。
+  'personalOntology.scenarios.list': async (_payload, _ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { scenarios: contract.listRoleScenarios() };
   },
 
   // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
@@ -2489,25 +2490,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
+    // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
+    // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
+    // PO 的内部结构。
     if (profileTarget !== undefined) {
       if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
-        || !safeId(profileTarget.groupId)
-        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
-        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
-        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        || typeof profileTarget.fieldRef !== 'string'
+        || !safeId(profileTarget.fieldRef)
+        || profileTarget.fieldRef.length > 512) {
         throw new Error('invalid personal profile target');
       }
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
-      ...(profileTarget ? {
-        profileTarget: {
-          groupId: profileTarget.groupId,
-          section: profileTarget.section.trim(),
-          fieldName: profileTarget.fieldName.trim(),
-          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
-        },
-      } : {}),
+      ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
       ok: true,
@@ -3290,12 +3287,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
     const groups = await personalOntologyGroups.listGroups(ctx.userId);
-    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）。显示名的唯一来源是
+    // contract 的目录条目——不再让调用方各自查 T-box 常量。
+    const contract = await import('../features/personal_ontology_contract');
     for (const g of groups) {
-      if (g.template_id) {
-        const template = getRoleTemplate(g.template_id);
-        if (template) g.template_name = template.name;
-      }
+      if (!g.template_id) continue;
+      const entry = contract.getRoleTemplateCatalogEntry(g.template_id);
+      if (entry) g.template_name = entry.name;
     }
     return { groups };
   },
@@ -3314,12 +3312,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
-    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
+    // 三种入参都要读得出来：contract opaque ref（@ Picker 新路径）、复合 id
+    // （groupId::分节，历史草稿里的存量 token）、普通 group id。readOntologyEntry
+    // 内部按 ref 前缀分流后统一走 readContentById，chat-use 侧零改动。
+    const contract = await import('../features/personal_ontology_contract');
+    return contract.readOntologyEntry(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // 可 @ 引用的本体条目（普通分组 + 已安装模板的分节）。返回的 ref 是
+  // PO contract 生成的 opaque 句柄：渲染层原样存、原样回传，不解析、不拼接。
+  'personalOntology.entries.list': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { entries: await contract.listOntologyEntries(ctx.userId) };
+  },
+
+  // 可写入的角色模板字段落点（已安装 ∩ T-box）。targets[].fieldRef 是 opaque
+  // 写入句柄，调用方只回传它；label 已拼好，渲染层不重组显示名。
+  'personalOntology.templates.fieldTargets': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { targets: await contract.listRoleTemplateFieldTargets(ctx.userId) };
   },
 
   // ── Personal Ontology Role Templates (角色模板) ──

@@ -23,7 +23,7 @@ import { createLogger } from '../../logger';
 import { hasConfiguredModel } from '../auth';
 import { listAbilityAssets } from '../recall/asset-service';
 import { getSpace } from '../spaces';
-import { getRoleTemplate } from '../role_templates';
+import { getRoleTemplateCatalogEntry } from '../personal_ontology_contract';
 import { listSkills } from '../skills';
 import { readContinuationSnapshot } from '../task_continuation';
 
@@ -115,8 +115,8 @@ async function spaceTemplateSkills(
     const ids = new Set<string>();
     const collect = (tplId?: string) => {
       if (!tplId) return;
-      const tpl = getRoleTemplate(tplId);
-      if (tpl?.bundle) tpl.bundle.skill_ids.forEach((id) => ids.add(id));
+      const tpl = getRoleTemplateCatalogEntry(tplId);
+      tpl?.bundle?.skillIds?.forEach((id) => ids.add(id));
     };
     collect(primary);
     secondary.forEach(collect);

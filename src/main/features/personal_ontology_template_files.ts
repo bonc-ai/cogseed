@@ -38,6 +38,8 @@ import {
   removeField,
   removeEntry,
   listGroupFields,
+  isTemplateFileText,
+  TEMPLATE_FILE_META_RE,
   readGroupContent,
   parseGroupContent,
   resolveGroupContentAbsPathForUser,
@@ -54,15 +56,16 @@ export { readGroups };
 
 const log = createLogger('personal-ontology-template-files');
 
-const MAX_FILE_BYTES = 200 * 1024 * 1024;
+export const MAX_FILE_BYTES = 200 * 1024 * 1024;
 /** 角色模板安装上限：每人最多 3 个（产品规则，防去向面板/空间选择过载）。 */
 export const MAX_INSTALLED_TEMPLATES = 3;
 
 /** 复合 id 分隔符：`<group_id>::<分节名>`。普通组 id 不含此分隔符。 */
 export const SECTION_REF_SEP = '::';
 
-/** 模板元信息行：`> 模板: <template_id>@<semver> | 已安装: <ISO>`（版本支持 semver 预发布后缀） */
-const TEMPLATE_META_RE = /^>\s*模板:\s*([a-z0-9_-]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s*\|\s*已安装:\s*(.+))?$/;
+/** 模板元信息行的唯一定义在 personal_ontology_groups.ts —— 这里只做别名，
+ *  不再维护第二份正则。 */
+const TEMPLATE_META_RE = TEMPLATE_FILE_META_RE;
 
 // ── 纯函数：模板文件 parse / serialize ─────────────────────────────────────
 
@@ -84,11 +87,9 @@ export interface TemplateFileContent {
   sections: TemplateSection[];
 }
 
-/** 文件是否携带 `> 模板:` 元信息行（= 模板文件，按分节式解析）。 */
-export function isTemplateFileText(text: string): boolean {
-  if (typeof text !== 'string') return false;
-  return text.split('\n').some((line) => TEMPLATE_META_RE.test(line.trim()));
-}
+/** 文件是否携带 `> 模板:` 元信息行（= 模板文件，按分节式解析）。
+ *  实现在 groups.ts（唯一判据），这里转出供既有调用方使用。 */
+export { isTemplateFileText };
 
 /** 按标题行切块：`^<prefix>\s+(.+)$` 多行模式，返回 {title, body} 序列。 */
 function splitByHeading(text: string, prefix: '##' | '###'): Array<{ title: string; body: string }> {
@@ -222,6 +223,23 @@ export interface InstallTemplateFileResult {
   restored_from_archive?: boolean;
   /** 随模板恢复的全局记忆条目数。 */
   restored_memory_count?: number;
+  /**
+   * 从归档恢复出一个**旧版本实例**之后的 schema reconcile 结果。
+   * 只有走了 restore 且恢复出来的版本落后于 catalog 时才出现。
+   *
+   * `outcome === 'refused'` 时安装仍然成功，但实例如实停在旧版本：这一版
+   * 只做纯新增，改名/移动要等后续能力。上层据此可以给出「已安装，但字段表
+   * 还是旧版」这种可区分的提示，而不是让用户拿到一个看起来正常、写入却
+   * 处处落空的模板。
+   */
+  migration?: {
+    outcome: 'migrated' | 'ledger_repaired' | 'noop' | 'refused' | 'failed';
+    fromVersion?: string;
+    toVersion?: string;
+    /** refused 时本轮不支持的变化种类（去重）。 */
+    unsupported?: string[];
+    error?: string;
+  };
   error?: string;
 }
 
@@ -260,6 +278,13 @@ export async function installTemplateFile(
   const abs = templateFileAbsPath(uid, templateId);
   let restored_from_archive = false;
   let restored_memory_count = 0;
+  /**
+   * 台账要记的是**这个实例实际是哪一版**，不是「装的时候 catalog 是哪一版」。
+   * 从归档恢复时文件是原样写回的（含它自己的 `> 模板: id@ver` 行），所以版本
+   * 必须从恢复内容里读，否则会出现「文件 v1 / 台账 v2」的贴错标签——未来任何
+   * version mismatch 判断都会从一个撒谎的底账出发。
+   */
+  let installedVersion = template.version;
   try {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if (restoreData) {
@@ -267,6 +292,13 @@ export async function installTemplateFile(
       if (archived != null) {
         writeTextAtomicSync(abs, archived); // 恢复旧数据（字段值/流水原样）
         restored_from_archive = true;
+        // 复用唯一的模板 parser 读回真实版本；解析不出（归档缺/坏 meta 行）时
+        // 退回当前 catalog version —— 台账的 `- 模板:` 行只在版本非空且是合法
+        // semver 时才写得出（serializeGroupsMarkdown + TEMPLATE_REF_RE），
+        // 填空串或杜撰一个历史版本都会让这一行整体失效、该行不再被当作模板行。
+        const parsedVersion = parseTemplateContent(archived).version;
+        if (parsedVersion) installedVersion = parsedVersion;
+        else log.warn('restore: archived template has no parsable version meta; falling back to catalog version', { uid, templateId, fallback: template.version });
       }
     }
     if (!restored_from_archive) {
@@ -308,13 +340,65 @@ export async function installTemplateFile(
     created_at: now,
     updated_at: now,
     template_id: templateId,
-    template_version: template.version,
+    template_version: installedVersion,
   };
   groups.push(meta);
   writeGroups(uid, groups);
   notifyGroupUpserted(uid, relPath);
-  log.info('ontology template file installed', { uid, templateId, restored_from_archive, restored_memory_count });
-  return { ok: true, created: [meta], conflict_groups: conflictGroups, restored_from_archive, restored_memory_count };
+  log.info('ontology template file installed', {
+    uid, templateId, restored_from_archive, restored_memory_count,
+    installed_version: installedVersion,
+    catalog_version: template.version,
+  });
+
+  /**
+   * 恢复出来的是旧 schema 实例 → **在返回成功之前**把它 reconcile 到当前
+   * catalog。否则用户重装完拿到的是一个字段表停在旧版的模板：新字段既不显示
+   * 也写不进，而界面上一切正常。
+   *
+   * 动态 import 是为了断开 template_files ↔ migration 的运行期循环依赖
+   * （与本文件里 contract 的用法一致）。
+   */
+  let migration: InstallTemplateFileResult['migration'];
+  if (restored_from_archive && installedVersion !== template.version) {
+    try {
+      const { applyRoleTemplateMigration } = await import('./personal_ontology_migration');
+      const res = await applyRoleTemplateMigration(uid, templateId);
+      migration = {
+        outcome: res.outcome,
+        ...(res.fromVersion ? { fromVersion: res.fromVersion } : {}),
+        ...(res.toVersion ? { toVersion: res.toVersion } : {}),
+        ...(res.refusal
+          ? { unsupported: [...new Set(res.refusal.unsupportedChanges.map((c) => c.kind))] }
+          : {}),
+        ...(res.error ? { error: res.error } : {}),
+      };
+      if (res.outcome !== 'migrated' && res.outcome !== 'noop' && res.outcome !== 'ledger_repaired') {
+        log.warn('restored role template stays on its old schema version', {
+          uid, templateId, outcome: res.outcome,
+          fromVersion: res.fromVersion, toVersion: res.toVersion,
+        });
+      }
+    } catch (err) {
+      // reconcile 失败不回滚安装：文件与台账都还是那份如实的旧版本实例，
+      // 没有半迁移状态；下一次 detect 会再试。
+      migration = { outcome: 'failed', error: (err as Error).message };
+      log.warn('restored role template reconcile threw; instance kept at its restored version', {
+        uid, templateId, error: (err as Error).message,
+      });
+    }
+  }
+
+  // 台账行可能已被 migration 改过版本号，回读一次再返回，别把过期副本交出去。
+  const finalMeta = readGroups(uid).find((g) => g.group_id === meta.group_id) || meta;
+  return {
+    ok: true,
+    created: [finalMeta],
+    conflict_groups: conflictGroups,
+    restored_from_archive,
+    restored_memory_count,
+    ...(migration ? { migration } : {}),
+  };
 }
 
 // ── 卸载 / 归档 ─────────────────────────────────────────────────────────────
@@ -331,6 +415,65 @@ export interface UninstallTemplateFileResult {
 /** 模板文件归档目录：`.personal_ontology_groups/_backup_<ts>/`（与既有备份先例同构）。 */
 export function templateArchiveDir(uid: string): string {
   return path.join(userOntologyGroupsDir(uid), `_backup_${Date.now()}`);
+}
+
+/**
+ * schema migration 的备份目录：`.personal_ontology_groups/_migration_<ts>/`。
+ *
+ * **前缀必须与卸载归档的 `_backup_` 分开。** `listArchiveDirs` 按
+ * `/^_backup_\d+$/` 收集目录，`readTemplateArchive` 再从中挑最新的
+ * `<templateId>.md` 在重装时原样写回。migration 备份如果也叫 `_backup_`，
+ * 一次「卸载 → 重装并恢复原数据」就可能捡到一份迁移中间态的旧版本文件 ——
+ * 而且只在特定操作序列下出现，很难复现。
+ * `_backup_` 属于 uninstall/restore 生命周期，`_migration_` 属于 schema
+ * 迁移生命周期，两者不共享发现路径（由 role_template_migration_backup 测试锁住）。
+ */
+export function templateMigrationBackupDir(uid: string): string {
+  return path.join(userOntologyGroupsDir(uid), `_migration_${Date.now()}`);
+}
+
+/**
+ * 迁移前把当前模板文件**复制**（不是移动）一份到 `_migration_<ts>/`。
+ * 复制而非移动：移动会在「已备份、新文件还没写」的窗口里让活文件短暂消失。
+ * 返回备份目录绝对路径；源文件不存在 → null（没东西可备份，交由上层判断）。
+ */
+export function backupTemplateFileForMigration(uid: string, templateId: string): string | null {
+  const src = templateFileAbsPath(uid, templateId);
+  if (!fs.existsSync(src)) return null;
+  const dir = templateMigrationBackupDir(uid);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(src, path.join(dir, `${templateId}.md`));
+  return dir;
+}
+
+/** 该用户下现存的 migration 备份目录（新的在前）。保留策略与测试用。 */
+export function listMigrationBackupDirs(uid: string): string[] {
+  try {
+    const base = userOntologyGroupsDir(uid);
+    if (!fs.existsSync(base)) return [];
+    return fs.readdirSync(base, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^_migration_\d+$/.test(entry.name))
+      .map((entry) => path.join(base, entry.name))
+      .sort((a, b) => Number(path.basename(b).replace('_migration_', '')) - Number(path.basename(a).replace('_migration_', '')));
+  } catch {
+    return [];
+  }
+}
+
+/** 每个模板保留最近 N 份迁移备份；更老的删掉（用户数据目录要参与同步，
+ *  不设保留策略的备份目录会无限增长）。 */
+export const MAX_MIGRATION_BACKUPS = 3;
+
+export function pruneMigrationBackups(uid: string, templateId: string, keep = MAX_MIGRATION_BACKUPS): void {
+  const withTemplate = listMigrationBackupDirs(uid)
+    .filter((dir) => fs.existsSync(path.join(dir, `${templateId}.md`)));
+  for (const dir of withTemplate.slice(keep)) {
+    try {
+      fs.rmSync(path.join(dir, `${templateId}.md`), { force: true });
+      // 目录空了才删目录 —— 同一份备份目录里可能还有别的模板。
+      if (!fs.readdirSync(dir).length) fs.rmdirSync(dir);
+    } catch { /* 清理失败不影响迁移结果 */ }
+  }
 }
 
 /**
@@ -620,11 +763,10 @@ export async function appendExistingTemplateFieldValueToRef(
 
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
-  const template = getRoleTemplate(meta.template_id);
-  const declared = template?.preset_groups.some((preset) =>
-    preset.title === section && preset.fields.some((field) => field.name === name),
-  );
-  if (!declared) return { ok: false, error: 'field is not declared by the role template' };
+  const { isTboxField } = await import('./personal_ontology_contract');
+  if (!isTboxField(meta.template_id, section, name)) {
+    return { ok: false, error: 'field is not declared by the role template' };
+  }
 
   return mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
@@ -691,13 +833,10 @@ export async function promoteEntryToRef(
   const meta = findTemplateMeta(uid, groupId);
   if (!meta) return { ok: false, error: 'template group not found' };
 
-  // 预判 isCustom：字段名不在该模板 T-box 清单内 → 自定义字段
-  let isCustom = true;
-  const template = getRoleTemplate(meta.template_id);
-  if (template) {
-    const tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-    isCustom = !tboxNames.has(name);
-  }
+  // 预判 isCustom：字段名不在该模板 T-box 清单内 → 自定义字段（判据走 contract）
+  const { listTboxFieldNames } = await import('./personal_ontology_contract');
+  const tboxNames = listTboxFieldNames(meta.template_id);
+  const isCustom = tboxNames.size ? !tboxNames.has(name) : true;
 
   const outcome = await mutateTemplateFile(uid, groupId, meta.template_id, (content) => {
     const sec = findSection(content, section);
@@ -884,17 +1023,18 @@ export async function listFieldsByRef(uid: string, ref: string): Promise<ListFie
   const content = parseTemplateContent(readTemplateFileText(uid, meta.template_id));
   const sec = findSection(content, section);
   if (!sec) return { ok: false, error: 'section not found' };
-  // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）
-  let tboxNames: Set<string> | null = null;
-  const template = getRoleTemplate(meta.template_id);
-  if (template) {
-    tboxNames = new Set(template.preset_groups.flatMap((p) => p.fields.map((f) => f.name)));
-  }
-  const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => ({
-    name,
-    values: sec.fields[name] || [],
-    ...(tboxNames !== null ? { isCustom: !tboxNames.has(name) } : {}),
-  }));
+  // 三态标注（active / retired / custom），判据来自 contract 的单一 T-box 能力。
+  const { roleTemplateFieldStatus } = await import('./personal_ontology_contract');
+  const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => {
+    const status = roleTemplateFieldStatus(meta.template_id, sec.title, name);
+    return {
+      name,
+      values: sec.fields[name] || [],
+      sectionTitle: sec.title,
+      status,
+      isCustom: status !== 'active', // 派生别名，保留给还没换到三态的渲染层
+    };
+  });
   return { ok: true, fields };
 }
 
@@ -1044,7 +1184,15 @@ export async function migrateLegacyTemplateGroups(uid: string): Promise<MigrateL
 
 export interface TemplateStatusSection {
   title: string;
-  fields: Array<{ name: string; values: FieldValue[] }>;
+  fields: Array<{
+    name: string;
+    values: FieldValue[];
+    /**
+     * T-box 归属三态。`retired` = 官方历史字段（catalog 已声明退役，值保留但
+     * 不再可写）；`custom` = 用户自建。两者都不是可写落点，但展示语义不同。
+     */
+    status: 'active' | 'retired' | 'custom';
+  }>;
 }
 
 export interface TemplateStatus {
@@ -1068,6 +1216,7 @@ export interface TemplateStatus {
  */
 export async function listTemplateStatus(uid: string): Promise<TemplateStatus[]> {
   if (!safeId(uid)) return [];
+  const { roleTemplateFieldStatus: fieldStatus } = await import('./personal_ontology_contract');
   const rows = readGroups(uid).filter((g) => g.template_id);
   return listRoleTemplates().map((t) => {
     const row = rows.find((r) => r.template_id === t.template_id);
@@ -1077,7 +1226,11 @@ export async function listTemplateStatus(uid: string): Promise<TemplateStatus[]>
       if (text) {
         sections = parseTemplateContent(text).sections.map((s) => ({
           title: s.title,
-          fields: Object.keys(s.fields).map((name) => ({ name, values: s.fields[name] || [] })),
+          fields: Object.keys(s.fields).map((name) => ({
+            name,
+            values: s.fields[name] || [],
+            status: fieldStatus(t.template_id, s.title, name),
+          })),
         }));
       }
     }
