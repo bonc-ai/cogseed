@@ -64,8 +64,16 @@ export const MAX_INSTALLED_TEMPLATES = 3;
 export const SECTION_REF_SEP = '::';
 
 /** 模板元信息行的唯一定义在 personal_ontology_groups.ts —— 这里只做别名，
- *  不再维护第二份正则。 */
-const TEMPLATE_META_RE = TEMPLATE_FILE_META_RE;
+ *  不再维护第二份正则。
+ *
+ *  惰性取值而非模块顶层直接读导出绑定：本模块与 groups 之间存在间接循环
+ *  依赖，当整套测试按不同顺序加载时，模块顶层访问对方尚未完成初始化的
+ *  `const` 导出会触发 TDZ（`Cannot access ... before initialization`）。 */
+let templateMetaReCache: RegExp | null = null;
+function getTemplateMetaRe(): RegExp {
+  templateMetaReCache ??= TEMPLATE_FILE_META_RE;
+  return templateMetaReCache;
+}
 
 // ── 纯函数：模板文件 parse / serialize ─────────────────────────────────────
 
@@ -137,7 +145,7 @@ export function parseTemplateContent(text: string): TemplateFileContent {
       title = h[1].trim();
       continue;
     }
-    const m = line.match(TEMPLATE_META_RE);
+    const m = line.match(getTemplateMetaRe());
     if (m) {
       template_id = m[1];
       version = m[2];
