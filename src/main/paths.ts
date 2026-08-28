@@ -880,6 +880,20 @@ export function embeddingModelDir(): string {
   return path.join(PC_ROOT, 'resources', 'embedding-model');
 }
 
+/** Speech-to-text (sherpa-onnx) model directory, shipped via `extraResources`.
+ *
+ *   dev:    PC/resources/sherpa-onnx/
+ *   packed: <app>/Contents/Resources/sherpa-onnx/   (darwin)
+ *           <app>/resources/sherpa-onnx/            (win/linux)
+ */
+export function sttModelDir(): string {
+  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
+    return path.join(rp, 'sherpa-onnx');
+  }
+  return path.join(PC_ROOT, 'resources', 'sherpa-onnx');
+}
+
 /** Runtime binaries shipped via electron-builder `extraResources`.
  *
  *   dev:    PC/resources/runtime/
