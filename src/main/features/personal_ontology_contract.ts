@@ -410,9 +410,11 @@ export interface RoleTemplateFieldTarget {
 }
 
 /**
- * 可写入落点清单 = 已安装模板 ∩ T-box 声明字段。
- * 与自动写入通道（appendRoleTemplateFieldValue）共用同一份 T-box 判据，
- * 所以「下拉里能选到」等价于「写得进去」。
+ * 可写入落点清单 = 已安装模板 ∩ T-box 声明字段 ∩ **实例文件里真实存在的坑**。
+ *
+ * 三个条件缺一不可，而且必须与 buildRoleTemplateFieldRef / 自动写入通道用
+ * 同一套判据 —— 「下拉里能选到」必须严格等价于「写得进去」。这里天然满足：
+ * 它遍历的就是实例文件的分节与字段（listTemplateStatus 从文件读）。
  */
 export async function listRoleTemplateFieldTargets(uid: string): Promise<RoleTemplateFieldTarget[]> {
   if (!safeId(uid)) return [];
@@ -435,17 +437,46 @@ export async function listRoleTemplateFieldTargets(uid: string): Promise<RoleTem
 }
 
 /**
- * 由 (templateId, 分节, 字段) 构造写入句柄。只对 T-box 声明过的字段发句柄——
- * 拿不到 fieldRef 就等于「这里不许自动写」，调用方无需再自建白名单。
- * 非 T-box 字段 / 未知模板 → null。
+ * 由 (templateId, 分节, 字段) 构造写入句柄。
+ *
+ * **签发前必须验到实例文件里真的有这个坑**，不能只看 catalog。只看 T-box 时，
+ * catalog 新增了字段而实例还没迁移，这里照样会签出一个句柄，拿去
+ * appendRoleTemplateFieldValue 却撞上 `field not found` —— 一个签得出来却写
+ * 不进去的 ref 是最难查的那类 bug：路由说命中了，落点也「有」，值就是不出现。
+ *
+ * 判据与 listRoleTemplateFieldTargets 完全一致：T-box 声明 + 模板已安装 +
+ * 实例文件里存在该分节与字段。任一不满足 → null，等于「这里不许自动写」。
  */
-export function buildRoleTemplateFieldRef(
+export async function buildRoleTemplateFieldRef(
+  uid: string,
   templateId: string,
   section: string,
   fieldName: string,
-): string | null {
+): Promise<string | null> {
+  if (!safeId(uid)) return null;
   if (!isTboxField(templateId, section, fieldName)) return null;
+  if (!installedFieldExists(uid, templateId, section, fieldName)) return null;
   return encodeRef({ k: 'tf', t: templateId, s: section, f: fieldName });
+}
+
+/**
+ * 实例文件里是否真的存在 (分节, 字段) 这个坑。
+ * 未安装 / 文件缺失 / 分节或字段不存在 → false。
+ */
+function installedFieldExists(
+  uid: string,
+  templateId: string,
+  section: string,
+  fieldName: string,
+): boolean {
+  try {
+    const text = readTemplateFileText(uid, templateId);
+    if (!text) return false;
+    const sec = parseTemplateContent(text).sections.find((s) => s.title === section);
+    return Boolean(sec && Object.prototype.hasOwnProperty.call(sec.fields, fieldName));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -488,6 +519,11 @@ export async function appendRoleTemplateFieldValue(
   }
   const row = readGroups(uid).find((g) => g.template_id === decoded.t);
   if (!row) return { ok: false, error: 'role template is not installed' };
+  // T-box 声明了、实例文件里却还没有这个坑 = schema 迁移还没跑到。这与
+  // 「这个字段不许自动写」是两回事，错误码必须分开：前者会自愈，后者不会。
+  if (!installedFieldExists(uid, decoded.t, decoded.s, decoded.f)) {
+    return { ok: false, error: 'template_migration_pending' };
+  }
 
   const res = await appendExistingTemplateFieldValueToRef(
     uid,

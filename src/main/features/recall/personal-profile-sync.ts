@@ -328,9 +328,12 @@ async function syncAsset(
         await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
         return 'unmatched';
       }
-      fieldRef = buildRoleTemplateFieldRef(matches[0].template_id, decision.group_title, decision.field_name);
+      fieldRef = await buildRoleTemplateFieldRef(
+        userId, matches[0].template_id, decision.group_title, decision.field_name,
+      );
       if (!fieldRef) {
-        // 路由命中的字段不在 T-box 内（自定义字段）——自动通道不许建/填它
+        // 路由命中的字段不在 T-box 内（自定义字段），或实例文件里还没有这个坑
+        // （schema 迁移未跑到）——两种情况自动通道都不许建/填它
         await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
         return 'unmatched';
       }

@@ -298,7 +298,7 @@ describe('Recall personal profile projection', () => {
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
 
     // 落点只传一个 opaque fieldRef——不再带 groupId/section/fieldName/templateId
-    const fieldRef = contract.buildRoleTemplateFieldRef('student', '学习背景', '专业与学习方向')!;
+    const fieldRef = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '专业与学习方向'))!;
     expect(fieldRef).toBeTruthy();
 
     const result = await sync.syncPersonalProfileFromRecallAssets(
@@ -338,7 +338,7 @@ describe('Recall personal profile projection', () => {
     const personal = asset('aa-personal-non-tbox', 'personal', '自定义字段不许自动写。');
 
     // T-box 外的字段拿不到句柄——白名单在发句柄那一刻就生效了
-    expect(contract.buildRoleTemplateFieldRef('student', '学习背景', '自定义备注')).toBeNull();
+    expect(await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '自定义备注')).toBeNull();
 
     const result = await sync.syncPersonalProfileFromRecallAssets(
       UID,
@@ -435,8 +435,11 @@ describe('Recall personal profile projection', () => {
       },
     });
 
-    expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 0 });
-    expect(result.failed).toEqual([{ assetId: personal.id, error: 'field not found' }]);
+    // 落点在路由途中被删掉 → 签发阶段就拿不到句柄，归为 unmatched 而不是
+    // 写入失败：现在「签得出 fieldRef」等价于「写得进去」，所以撞不到
+    // append 的 `field not found` 了。字段仍然不会被重建，这是本用例的本意。
+    expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 1 });
+    expect(result.failed).toEqual([]);
     const fields = await templates.listFieldsByRef(UID, ref);
     expect(fields.fields?.some((field) => field.name === '教育阶段')).toBe(false);
     expect(templates.readTemplateFileText(UID, 'student')).not.toContain(personal.statement);
@@ -678,8 +681,11 @@ describe('personal profile projection is driven from the main process', () => {
       return { eligible: 1, written: 1, skipped: 0, unmatched: 0, failed: [] };
     });
 
+    // 签发落点句柄现在要验实例文件里真的有这个坑，所以先把模板装起来
+    await installStudentTemplate();
     const contract = await import('../../../../src/main/features/personal_ontology_contract');
-    const PROFILE_FIELD_REF = contract.buildRoleTemplateFieldRef('student', '学习背景', '专业与学习方向')!;
+    const PROFILE_FIELD_REF = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '专业与学习方向'))!;
+    expect(PROFILE_FIELD_REF).toBeTruthy();
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我长期从事程序开发。',
