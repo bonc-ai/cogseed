@@ -161,6 +161,7 @@ import {
   type CoordinatorAccessRequest,
 } from "./coordinator_admission";
 import { buildRetryResumeModelText } from "./retry_resume";
+import { settleExternalAgentHandback } from "./collab_settle";
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
 import { selectVisibleProducedFiles } from "../produced_files";
@@ -2631,6 +2632,13 @@ async function _enqueueBody(
     senderId: fromActorId,
     agentIds: to.filter((id) => !RESERVED_IDS.has(id)),
   });
+  // COGSEED-61: an external-agent inbound IS that agent's dispatch handback
+  // (gateway agents execute outside the in-process nested-dispatch lifecycle,
+  // so nothing else settles their prepared workflow step). Best-effort — the
+  // settle module swallows its own errors and never blocks the inbound.
+  if (params.externalInbound === true && fromKind === "agent") {
+    void settleExternalAgentHandback(uid, cid, fromActorId, params.text || "");
+  }
   if (state.taskRun) {
     if (fromActorId === USER_ID && !state.taskRun.anchorMessageId) {
       state.taskRun.anchorMessageId = msg.id;
