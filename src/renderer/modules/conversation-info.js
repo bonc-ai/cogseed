@@ -1149,7 +1149,9 @@ const ConversationInfo = (() => {
     const outputs = overview.outputs || [];
     const rows = handoffs.map((item) => {
       const from = item.from_name || item.from;
-      const to = item.to_name || item.to;
+      const to = item.kind === 'context_update'
+        ? _label('conversation_info.collaboration.handoff.context_target', 'shared context')
+        : (item.to_name || item.to);
       return `<li class="conversation-info-collab-handoff is-${escapeHtml(String(item.kind || ''))}">` +
         `<span class="conversation-info-collab-handoff-route">${escapeHtml(String(from))} → ${escapeHtml(String(to))}</span>` +
         `<span class="conversation-info-collab-handoff-kind">${escapeHtml(_collabHandoffKindLabel(item.kind))}</span>` +

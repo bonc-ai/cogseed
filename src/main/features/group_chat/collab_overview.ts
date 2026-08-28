@@ -32,6 +32,7 @@ import {
   readCollaborationEvents,
   readWorkflowRun,
 } from "./collaboration";
+import { broadcastPersistedGroupMessage } from "./bus";
 import { readMembers, type Actor } from "./state";
 import {
   appendVisible,
@@ -243,6 +244,7 @@ export async function buildCollabOverview(
     readActiveSharedTaskContext(uid, cid).catch(() => null),
     loadTail(uid, cid, projectIdHint),
   ]);
+  const events = await readCollaborationEvents(uid, cid, 300).catch(() => [] as CollaborationEvent[]);
   const stepActorNames = new Map<string, string>();
   for (const step of run.steps) {
     if (step.actor_id && step.actor_name) stepActorNames.set(step.actor_id, step.actor_name);
@@ -250,9 +252,9 @@ export async function buildCollabOverview(
 
   projectSteps(overview, run, stepActorNames, tail.memberById);
   projectActors(overview, run, tail, stepActorNames);
-  projectHandoffs(overview, run, tail, stepActorNames);
+  projectHandoffs(overview, run, tail, events, stepActorNames);
   projectOutputs(overview, context, stepActorNames);
-  await projectAnomalies(overview, uid, cid, run, tail, stepActorNames);
+  projectAnomalies(overview, run, tail, events);
 
   overview.summary = await ensureCollabSummary(uid, cid, run, context, tail, overview, projectIdHint);
   return overview;
@@ -342,6 +344,7 @@ function projectHandoffs(
   overview: CollabOverview,
   run: WorkflowRun,
   tail: MessageTail,
+  events: CollaborationEvent[],
   stepActorNames: Map<string, string>,
 ): void {
   const rows: CollabHandoff[] = [];
@@ -377,6 +380,20 @@ function projectHandoffs(
       });
     }
   }
+  // 共享上下文更新（context_patch_applied）：Agent 向 SharedTaskContext 提交
+  // 补丁也是一次可追溯的「交接」——接收方是共享上下文本身。
+  for (const event of events) {
+    if (event.run_id !== run.id || event.type !== "context_patch_applied") continue;
+    rows.push({
+      ts: event.created_at,
+      from: String(event.actor_id || "commander"),
+      from_name: nameOf(String(event.actor_id || "commander")),
+      to: "context",
+      kind: "context_update",
+      note: compact(event.summary, 120),
+    });
+  }
+  rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   overview.handoffs = rows.slice(-60);
 }
 
@@ -402,16 +419,13 @@ function projectOutputs(
   overview.outputs = rows.slice(-40);
 }
 
-async function projectAnomalies(
+function projectAnomalies(
   overview: CollabOverview,
-  uid: string,
-  cid: string,
   run: WorkflowRun,
   tail: MessageTail,
-  stepActorNames: Map<string, string>,
-): Promise<void> {
+  events: CollaborationEvent[],
+): void {
   const rows: CollabOverviewAnomaly[] = [];
-  const stepById = new Map(run.steps.map((step) => [step.id, step]));
 
   // 步骤级失败与重试（引擎 attempts 是权威来源）。
   for (const step of run.steps) {
@@ -422,7 +436,7 @@ async function projectAnomalies(
         actor_id: step.actor_id || undefined,
         step_id: step.id,
         detail: step.result_summary || lastFailureText(step),
-        impact: downstreamImpact(run, step.id, stepById),
+        impact: downstreamImpact(run, step.id),
       });
     }
     const attempts = step.attempts?.length || 0;
@@ -437,8 +451,7 @@ async function projectAnomalies(
     }
   }
 
-  // 事件流补充：中止与上下文补丁（重试事件在 attempts 里已覆盖）。
-  const events = await readCollaborationEvents(uid, cid, 300).catch(() => [] as CollaborationEvent[]);
+  // 事件流补充：中止与交接收尾失败（重试在 attempts 里已覆盖）。
   for (const event of events) {
     if (event.run_id !== run.id) continue;
     if (event.type === "workflow_aborted") {
@@ -477,7 +490,6 @@ async function projectAnomalies(
 
   rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   overview.anomalies = rows.slice(-50);
-  void stepActorNames;
 }
 
 function lastFailureText(step: WorkflowStep): string {
@@ -488,11 +500,7 @@ function lastFailureText(step: WorkflowStep): string {
 }
 
 /** 依赖反查：某步骤失败后，被它阻塞的下游步骤标题。 */
-function downstreamImpact(
-  run: WorkflowRun,
-  stepId: string,
-  stepById: Map<string, WorkflowStep>,
-): string[] | undefined {
+function downstreamImpact(run: WorkflowRun, stepId: string): string[] | undefined {
   const affected: string[] = [];
   const visit = (origin: string) => {
     for (const step of run.steps) {
@@ -504,7 +512,6 @@ function downstreamImpact(
     }
   };
   visit(stepId);
-  void stepById;
   return affected.length ? affected : undefined;
 }
 
@@ -691,6 +698,15 @@ async function writeSummaryMessage(
   await appendJsonlAtomic<GroupMessage>(layout.messageFile, msg);
   const memberIds = Array.from(tail.memberById.keys()).filter((id) => id !== "user");
   await appendVisible(uid, cid, msg, Array.from(new Set([...memberIds, "commander"])), projectIdHint);
+  // 实时可见：汇总消息不走 bus 流式路径，主动发桌面推送让正在看会话的
+  // 渲染层重读消息（否则要等用户切走再切回才能看到汇总卡）。
+  broadcastPersistedGroupMessage({
+    uid,
+    cid,
+    msgId: msg.id,
+    from: msg.from,
+    turnEnd: false,
+  });
 }
 
 function conclusionText(conclusion: CollabSummaryRecord["conclusion"]): string {

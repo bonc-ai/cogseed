@@ -3,6 +3,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+const busMocks = vi.hoisted(() => ({
+  broadcastPersistedGroupMessage: vi.fn(),
+}));
+vi.mock("../../../../src/main/features/group_chat/bus", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/main/features/group_chat/bus")>();
+  return {
+    ...actual,
+    broadcastPersistedGroupMessage: busMocks.broadcastPersistedGroupMessage,
+  };
+});
+
 let tmpDir: string;
 let prevWs: string | undefined;
 const TEST_UID = "u1";
@@ -98,6 +109,7 @@ beforeEach(async () => {
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = path.join(tmpDir, "data");
   vi.resetModules();
+  busMocks.broadcastPersistedGroupMessage.mockClear();
   await setupEnv();
 });
 
@@ -287,6 +299,41 @@ describe("collab_overview › end-of-run summary", () => {
     const m = await loadModule();
     const overview = await m.buildCollabOverview(TEST_UID, TEST_CID);
     expect(overview.summary!.conclusion).toBe("cancelled");
+  });
+
+  it("projects context_patch_applied events as shared-context handoff rows", async () => {
+    writeJsonp(path.join(collabDir(), "active.json"), { version: 1, run_id: "wf-1", context_id: "wctx-1", updated_at: "2026-08-27T10:00:00.000Z" });
+    writeJsonp(path.join(collabDir(), "workflow_runs", "wf-1.json"), makeRun([
+      { id: "s1", title: "Fetch", status: "running", actor_id: "agent-a" },
+    ]));
+    appendMessageLine(path.join(collabDir(), "events.jsonl"), {
+      version: 1, id: "wevt-1", cid: TEST_CID, run_id: "wf-1", type: "context_patch_applied",
+      actor_id: "agent-a", summary: "added fact: dataset refreshed", created_at: "2026-08-27T10:12:00.000Z",
+    });
+    const m = await loadModule();
+    const overview = await m.buildCollabOverview(TEST_UID, TEST_CID);
+    const ctxRow = overview.handoffs.find((h) => h.kind === "context_update");
+    expect(ctxRow).toBeTruthy();
+    expect(ctxRow!.from).toBe("agent-a");
+    expect(ctxRow!.to).toBe("context");
+    expect(ctxRow!.note).toContain("dataset refreshed");
+  });
+
+  it("broadcasts the persisted summary message for live renderer updates", async () => {
+    seedTerminalFixture("running", [
+      { id: "s1", title: "Fetch", status: "completed", actor_id: "agent-a" },
+    ]);
+    const m = await loadModule();
+    const overview = await m.buildCollabOverview(TEST_UID, TEST_CID);
+    expect(overview.summary).not.toBeNull();
+    expect(busMocks.broadcastPersistedGroupMessage).toHaveBeenCalledTimes(1);
+    const call = busMocks.broadcastPersistedGroupMessage.mock.calls[0][0];
+    expect(call.cid).toBe(TEST_CID);
+    expect(call.from).toBe("commander");
+    expect(typeof call.msgId).toBe("string");
+    // 幂等路径不重复广播
+    await m.buildCollabOverview(TEST_UID, TEST_CID);
+    expect(busMocks.broadcastPersistedGroupMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not generate a summary while steps are still open", async () => {

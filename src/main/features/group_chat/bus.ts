@@ -258,6 +258,20 @@ export function setGroupChatMessageBroadcaster(fn: GroupChatMessageBroadcaster |
   messageBroadcaster = fn;
 }
 
+/** Fire the desktop `conversations:updated` push for a persisted group
+ *  message. Shared by the bus's own append path and host-authored status
+ *  records persisted outside the bus (e.g. the COGSEED-61 collab summary)
+ *  so the renderer stays live for messages it never streamed. */
+export function broadcastPersistedGroupMessage(info: GroupChatMessageBroadcast): void {
+  if (!messageBroadcaster) return;
+  try {
+    messageBroadcaster(info);
+    log.info(`desktop message broadcast uid=${info.uid} cid=${info.cid} msg=${info.msgId} from=${info.from}`);
+  } catch {
+    // A broken broadcast listener must never take the bus down.
+  }
+}
+
 /** Minimal HTML escape for embedding raw error strings inside the
  *  failure-style `<span>` we emit on stream errors. Keeps `<`/`>`/`&`/`"`
  *  out of the renderer's markdown-ish rendering pass without pulling in
@@ -2647,20 +2661,13 @@ async function _enqueueBody(
   // conversation stay live even when no per-request stream is attached
   // (which is exactly the external-inbound case: nothing in the renderer
   // subscribed to this conversation's bus events).
-  if (messageBroadcaster) {
-    try {
-      messageBroadcaster({
-        uid,
-        cid,
-        msgId,
-        from: fromActorId,
-        turnEnd: params.turn_end === true,
-      });
-      log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
-    } catch {
-      // A broken broadcast listener must never take the bus down.
-    }
-  }
+  broadcastPersistedGroupMessage({
+    uid,
+    cid,
+    msgId,
+    from: fromActorId,
+    turnEnd: params.turn_end === true,
+  });
 
   emit(state, {
     type: "message",
