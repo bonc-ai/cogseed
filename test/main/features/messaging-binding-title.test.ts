@@ -32,8 +32,8 @@ function envelope(partial: Partial<InboundEnvelope>): InboundEnvelope {
 
 describe('messaging/bindings — conversationTitleForEnvelope', () => {
   it('私聊：enrich 到发送者名时标题用名字', () => {
-    const title = conversationTitleForEnvelope(instance, envelope({ externalUserName: '牛保康' }));
-    expect(title).toBe('飞书 · 牛保康');
+    const title = conversationTitleForEnvelope(instance, envelope({ externalUserName: '张三' }));
+    expect(title).toBe('飞书 · 张三');
     expect(title).not.toContain('oc_');
     expect(title).not.toContain('ou_');
   });
@@ -48,7 +48,7 @@ describe('messaging/bindings — conversationTitleForEnvelope', () => {
   it('私聊：externalChatTitle 优先于发送者名', () => {
     const title = conversationTitleForEnvelope(instance, envelope({
       externalChatTitle: '置顶会话',
-      externalUserName: '牛保康',
+      externalUserName: '张三',
     }));
     expect(title).toBe('飞书 · 置顶会话');
   });
