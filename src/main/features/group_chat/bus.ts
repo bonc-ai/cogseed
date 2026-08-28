@@ -77,6 +77,7 @@ import {
   type ChatUseSelection,
   type ChatMessageReference,
   type GroupMessageFailureKind,
+  type GroupMessageMetrics,
   type MarketplaceInstallRequest,
   type RecallMessageCitation,
   type WakeRequestSummary,
@@ -1999,6 +2000,10 @@ export interface EnqueueParams {
    * end-of-turn message. Renderer uses it to finalize the exact placeholder
    * that collected this turn's process / delta events. */
   turn_id?: string;
+  /** Usage/timing metrics for the settled assistant reply this enqueue
+   *  persists. Passed through to the persisted GroupMessage; absent on
+   *  user messages and host status rows. */
+  metrics?: GroupMessageMetrics;
   /** QueueItem.msgId for the actor execution that produced this message —
    * the id of the (user/commander) message that triggered the turn. Carried
    * on live bus events only (never persisted) so consumers such as the
@@ -2595,6 +2600,7 @@ async function _enqueueBody(
       ? { process: params.process }
       : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
+    ...(params.metrics ? { metrics: params.metrics } : {}),
   };
 
   if (state.taskRun && params.kstarTerminalProvenance) {
@@ -4385,6 +4391,14 @@ async function runActorTurnBody(
     turnFailureCode = code;
   };
   let agentRunTimingData: Record<string, unknown> | undefined;
+  // Wall-clock moment the terminal agent_run_result event arrived — the
+  // internal-link anchor for rebuilding startedAt (completedAt - duration_ms)
+  // and firstTokenAt (startedAt + first_token_ms) on the persisted reply.
+  let agentRunResultAt: number | undefined;
+  // Settled-reply metrics for the CLI-backed turn (assembled inside
+  // _runCliAgentTurn off the runner's done event). Undefined on internal
+  // model turns — those derive metrics from agentRunTimingData instead.
+  let cliTurnMetrics: GroupMessageMetrics | undefined;
   // Wire the commander segment flush now that `streamingText` exists. Called
   // from a visible-dispatch tool BEFORE the dispatched agent runs, so the
   // commander's reasoning since the last flush is persisted as its own `seg`
@@ -4735,6 +4749,9 @@ async function runActorTurnBody(
       for (const p of cliOut.produced || []) await onFileWritten(p);
       finalText = cliOut.text;
       streamingText = cliOut.text;
+      // P3394 gateway turns currently report no metrics (no runner.ts done
+      // event on that path) — the read degrades to undefined there.
+      cliTurnMetrics = (cliOut as { metrics?: GroupMessageMetrics }).metrics;
       if (cliOut.error) {
         // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
         // 原始后端错误只进日志，不透给渲染层。
@@ -4786,6 +4803,59 @@ async function runActorTurnBody(
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
       const { getLocalExecMode } = await import("../permissions");
+      // Vision fallback seam (2026-08-27, 子安口径): if this turn carries
+      // images and the receiving model is KNOWN vision-incapable, the
+      // registered pluggable handler returns MODEL-FACING instructions
+      // (image facts + on-disk paths + which vision tools to call — vision
+      // model reroute / vision MCP, shape deliberately open). The model then
+      // acts on its own agency. No handler or unknown capability keeps
+      // today's pass-through behavior.
+      if (turnImages.length) {
+        const { applyVisionFallbackIfBlind } = await import("../vision_fallback");
+        const chatAttachments = await import("../chat_attachments");
+        // Enrich inline images with name + on-disk path (processors read the
+        // original bytes from disk, not the compressed inline payload).
+        // buildAttachmentManifest packs images in attachment order, so pair
+        // them positionally; unmatched entries stay anonymous.
+        const imageNames: string[] = [];
+        for (const rawName of item.attachments || []) {
+          const resolved = chatAttachments.resolveAttachmentAbsPath(uid, cid, String(rawName));
+          if (resolved.ok && resolved.kind === "image") imageNames.push(String(rawName));
+        }
+        const enrichedImages = turnImages.map((img, i) => {
+          const name = imageNames[i];
+          if (!name) return { ...img };
+          const r = chatAttachments.resolveAttachmentAbsPath(uid, cid, name);
+          return r.ok ? { ...img, name, absPath: r.absPath } : { ...img };
+        });
+        const fallback = await applyVisionFallbackIfBlind({
+          userId: uid,
+          conversationId: cid,
+          messageText,
+          images: enrichedImages,
+          resolveAbilities: async () => {
+            const auth = await import("../auth");
+            const { entries } = await auth.listEntries();
+            const current = entries && entries[0];
+            if (!current || !current.provider || !current.model) return null;
+            const res = await auth.listModels(current.provider);
+            const hit = (res.models || []).find((m) => m && m.id === current.model);
+            return hit
+              ? { providerId: current.provider, modelId: current.model, ...(hit.vision !== undefined ? { vision: hit.vision } : {}) }
+              : null;
+          },
+        });
+        if (fallback) {
+          messageText = fallback.messageText;
+          turnImages = fallback.images as typeof turnImages;
+          if (fallback.note) {
+            appendProcessItem(processItems, {
+              type: "event",
+              event: { stream: "attachment", data: { phase: "vision-fallback", note: fallback.note } },
+            });
+          }
+        }
+      }
       const executionLifecycle = createLifecycleSink(uid, {
         executionId: `turn-${item.turnId}`,
         kind: "core-agent",
@@ -4948,6 +5018,7 @@ async function runActorTurnBody(
             inner && typeof inner === "object"
               ? (inner as Record<string, unknown>)
               : undefined;
+          agentRunResultAt = agentRunTimingData ? Date.now() : undefined;
           if (actor.kind !== "worker") {
             emit(state, {
               type: "agent_run_result",
@@ -5667,6 +5738,51 @@ async function runActorTurnBody(
 
   let persistedMsg: GroupMessage | null = null;
   if (outcome.kind === "persist") {
+    // Task 5: usage/timing metrics for this settled reply. CLI turns arrive
+    // fully assembled from _runCliAgentTurn (runner attaches startedAt /
+    // firstTokenAt to the terminal done event); internal model turns rebuild
+    // them from the agent_run_result payload — duration_ms anchors startedAt,
+    // first_token_ms anchors firstTokenAt relative to it. Fields the source
+    // didn't report are omitted, never fabricated.
+    let replyMetrics: GroupMessageMetrics | undefined;
+    if (cliTurnMetrics) {
+      replyMetrics = cliTurnMetrics;
+    } else if (agentRunTimingData) {
+      const durationMs = Number(agentRunTimingData.duration_ms);
+      const completedAt = agentRunResultAt ?? Date.now();
+      const startedAt =
+        Number.isFinite(durationMs) && durationMs >= 0
+          ? completedAt - durationMs
+          : turnStartedAt;
+      const firstTokenMs = Number(agentRunTimingData.first_token_ms);
+      const usageIn =
+        agentRunTimingData.usage &&
+        typeof agentRunTimingData.usage === "object"
+          ? (agentRunTimingData.usage as Record<string, unknown>)
+          : undefined;
+      const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
+      if (typeof usageIn?.inputTokens === "number")
+        usageOut.inputTokens = usageIn.inputTokens;
+      if (typeof usageIn?.outputTokens === "number")
+        usageOut.outputTokens = usageIn.outputTokens;
+      if (typeof usageIn?.cacheReadTokens === "number")
+        usageOut.cacheReadTokens = usageIn.cacheReadTokens;
+      if (typeof usageIn?.cacheWriteTokens === "number")
+        usageOut.cacheWriteTokens = usageIn.cacheWriteTokens;
+      const toolCalls = Number(agentRunTimingData.tool_calls);
+      replyMetrics = {
+        startedAt,
+        firstTokenAt:
+          Number.isFinite(firstTokenMs) && firstTokenMs >= 0
+            ? startedAt + firstTokenMs
+            : null,
+        completedAt,
+        ...(Object.keys(usageOut).length ? { usage: usageOut } : {}),
+        ...(Number.isFinite(toolCalls) && toolCalls > 0
+          ? { toolCalls }
+          : {}),
+      };
+    }
     const tailProcessItems = processItems.slice(segState.processStart);
     const persistedRecallCitations: RecallMessageCitation[] = (
       !outcome.failureKind && !errText && !aborted
@@ -5733,6 +5849,7 @@ async function runActorTurnBody(
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
       turn_id: item.turnId,
+      ...(replyMetrics ? { metrics: replyMetrics } : {}),
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
@@ -10900,6 +11017,11 @@ async function _runCliAgentTurn(opts: {
   failureKind?: GroupMessageFailureKind;
   failureCode?: string;
   infrastructureFailure?: boolean;
+  /** Settled-reply metrics assembled from the runner's terminal done event
+   *  (startedAt/firstTokenAt + backend usage) plus the local tool-call count.
+   *  Absent when no backend done event carried metrics (missing CLI,
+   *  pre-dispatch rejection — nothing real ran). */
+  metrics?: GroupMessageMetrics;
 }> {
   const runtime = opts.agent.runtime as Extract<
     NonNullable<import("../agents").AgentRuntime>,
@@ -10962,6 +11084,10 @@ async function _runCliAgentTurn(opts: {
   let resultText = "";
   let aborted = false;
   let backendSessionId: string | undefined;
+  // Task 5 metrics inputs: tool-call count (tool-event phase="use") and the
+  // terminal done event's timing/usage payload.
+  let cliToolCalls = 0;
+  let cliDoneMetrics: GroupMessageMetrics | undefined;
   const produced = new Set<string>();
   const pendingToolPaths = new Map<string, string[]>();
   // Set when the CLI rejects our `--resume <id>` (e.g. claude code's
@@ -11022,6 +11148,7 @@ async function _runCliAgentTurn(opts: {
           break;
         case "tool-event":
           if ((e as any).phase === "use") {
+            cliToolCalls += 1;
             const paths = extractWritablePathsFromCliTool(
               e as any,
               opts.workingDir,
@@ -11094,13 +11221,58 @@ async function _runCliAgentTurn(opts: {
             },
           });
           break;
-        case "done":
+        case "done": {
           if (typeof (e as any).output === "string")
             resultText = (e as any).output as string;
           if ((e as any).status === "cancelled") aborted = true;
           if (typeof (e as any).sessionId === "string")
             backendSessionId = (e as any).sessionId as string;
+          // Task 5: settle reply metrics off the runner-attached
+          // startedAt/firstTokenAt plus the backend's usage totals (input /
+          // output / cacheRead / cacheCreate → GroupMessageMetrics.usage).
+          const doneEv = e as {
+            metrics?: { startedAt?: unknown; firstTokenAt?: unknown };
+            usage?: {
+              input?: unknown;
+              output?: unknown;
+              cacheRead?: unknown;
+              cacheCreate?: unknown;
+            };
+          };
+          if (
+            doneEv.metrics &&
+            typeof doneEv.metrics.startedAt === "number" &&
+            Number.isFinite(doneEv.metrics.startedAt)
+          ) {
+            const usageIn =
+              doneEv.usage && typeof doneEv.usage === "object"
+                ? doneEv.usage
+                : undefined;
+            const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
+            if (typeof usageIn?.input === "number")
+              usageOut.inputTokens = usageIn.input;
+            if (typeof usageIn?.output === "number")
+              usageOut.outputTokens = usageIn.output;
+            if (typeof usageIn?.cacheRead === "number")
+              usageOut.cacheReadTokens = usageIn.cacheRead;
+            if (typeof usageIn?.cacheCreate === "number")
+              usageOut.cacheWriteTokens = usageIn.cacheCreate;
+            cliDoneMetrics = {
+              startedAt: doneEv.metrics.startedAt,
+              firstTokenAt:
+                typeof doneEv.metrics.firstTokenAt === "number" &&
+                Number.isFinite(doneEv.metrics.firstTokenAt)
+                  ? doneEv.metrics.firstTokenAt
+                  : null,
+              completedAt: Date.now(),
+              ...(Object.keys(usageOut).length
+                ? { usage: usageOut }
+                : {}),
+              ...(cliToolCalls > 0 ? { toolCalls: cliToolCalls } : {}),
+            };
+          }
           break;
+        }
         default:
           opts.onProcess({
             type: "event",
@@ -11161,6 +11333,7 @@ async function _runCliAgentTurn(opts: {
       failureKind: "runtime",
       failureCode: "cli_session_persistence_failed",
       infrastructureFailure: true,
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "missing_cli") {
@@ -11183,6 +11356,7 @@ async function _runCliAgentTurn(opts: {
       produced: Array.from(produced),
       failureKind: "dependency",
       failureCode: result.cliError || "missing_cli",
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "cancelled") {
@@ -11190,6 +11364,7 @@ async function _runCliAgentTurn(opts: {
       text: resultText || accText,
       aborted: true,
       produced: Array.from(produced),
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "failed" || result.status === "timeout") {
@@ -11226,6 +11401,7 @@ async function _runCliAgentTurn(opts: {
       produced: Array.from(produced),
       failureKind: "runtime",
       failureCode: result.status === "timeout" ? "cli_timeout" : "cli_failed",
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   const finalText = resultText || accText;
@@ -11233,9 +11409,14 @@ async function _runCliAgentTurn(opts: {
     return {
       text: t("cli_agent.slash_no_output", { cmd: slashCommandName }),
       produced: Array.from(produced),
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
-  return { text: finalText, produced: Array.from(produced) };
+  return {
+    text: finalText,
+    produced: Array.from(produced),
+    ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
+  };
 }
 
 function normalizeCliProducedPaths(

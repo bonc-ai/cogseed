@@ -6152,5 +6152,20 @@
   "auto.saving": "Saving…",
   "auto.task_count": "{n} tasks",
   "common.optional": "Optional",
-  "common.required": "Required"
+  "common.required": "Required",
+  "chat.metrics.rate": "{r} tok/s",
+  "chat.stats.counts": "{turns} turns · {steps} steps",
+  "chat.stats.cost": "≈{c}",
+  "chat.stats.costTitle": "Estimated from your default unit prices — not the billed amount",
+  "chat.metrics.durationK": "Time",
+  "chat.metrics.ttftK": "TTFT",
+  "chat.metrics.tokensK": "Token",
+  "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.stats.llmK": "LLM",
+  "chat.stats.speedK": "TTFT",
+  "chat.stats.speedV": "{ttft} · {r} tok/s",
+  "chat.stats.cacheK": "Cache",
+  "chat.stats.ctxK": "Context",
+  "chat.stats.tokK": "Token",
+  "chat.stats.tokV": "↑{i} ↓{o}"
 }

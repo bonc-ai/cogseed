@@ -4961,5 +4961,20 @@
   "dashboard.save_edit": "Salvar alterações",
   "dashboard.edit_saved": "Salvo; se endereço ou token mudaram, teste novamente",
   "dashboard.edit_failed": "Falha ao salvar",
-  "dashboard.form_token_keep": "Token (deixe em branco para manter)"
+  "dashboard.form_token_keep": "Token (deixe em branco para manter)",
+  "chat.metrics.rate": "{r} tok/s",
+  "chat.stats.counts": "{turns} turnos · {steps} passos",
+  "chat.stats.cost": "≈{c}",
+  "chat.stats.costTitle": "Estimativa com seus preços unitários padrão — não é o valor faturado",
+  "chat.metrics.durationK": "Duração",
+  "chat.metrics.ttftK": "1º token",
+  "chat.metrics.tokensK": "Token",
+  "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.stats.llmK": "LLM",
+  "chat.stats.speedK": "1º token",
+  "chat.stats.speedV": "{ttft} · {r} tok/s",
+  "chat.stats.cacheK": "Cache",
+  "chat.stats.ctxK": "Contexto",
+  "chat.stats.tokK": "Token",
+  "chat.stats.tokV": "↑{i} ↓{o}"
 }

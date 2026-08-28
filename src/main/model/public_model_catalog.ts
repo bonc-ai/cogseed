@@ -8,10 +8,14 @@ export interface ProviderModelEntry {
   id: string;
   name: string;
   /** Bundled model metadata to clone when this advertised id is newer than
-   * the model runtime shipped by a client. The request still uses `id`. */
+   *  the model runtime shipped by a client. The request still uses `id`. */
   template?: string;
   contextWindow?: number;
   maxTokens?: number;
+  /** Accepts image inputs. Only set when confirmed (official docs, endpoint
+   *  modality field, or 子安's explicit word) — unknown stays undefined and
+   *  consumers treat it as "assume yes" to avoid breaking working paths. */
+  vision?: boolean;
 }
 
 export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderModelEntry[]>> = {
@@ -63,6 +67,9 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
   deepseek: [
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    // 窗口与视觉口径来源：子安确认（2026-08-27），deepseek-v4-pro/flash 文本版
+    // 无权威数字故不标 —— 目录只收确凿数据，不猜。
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
@@ -80,6 +87,7 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'google/gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
     { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
     { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'deepseek/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
     { id: 'moonshotai/kimi-k2.7-code', name: 'Kimi K2.7 Code' },
     { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
     { id: 'qwen/qwen3.7-max', name: 'Qwen3.7 Max' },
@@ -92,3 +100,55 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'xiaomi/mimo-v2.5', name: 'Xiaomi MiMo V2.5' },
   ],
 };
+
+/**
+ * Resolve a model id to its catalog contextWindow, if the catalog knows it.
+ * Tries the exact id first, then retries with any `vendor/` prefix stripped,
+ * so aggregator ids (`deepseek/deepseek-v4-flash-vision-exp`) hit their
+ * home-namespace entry (`deepseek-v4-flash-vision-exp`). Namespace is
+ * deliberately ignored on the prefix retry — the window is a property of the
+ * underlying model, not of who resells it.
+ *
+ * Returns undefined for unknown models. Callers fall back to their own
+ * default; this function never guesses.
+ */
+export function publicContextWindowFor(modelId: string): number | undefined {
+  return publicModelCatalogEntryFor(modelId)?.contextWindow;
+}
+
+/** Catalog lookup result for one model id — every field optional, unknown
+ *  fields simply absent. Same exact-id → strip-`vendor/`-prefix matching as
+ *  publicContextWindowFor. */
+export interface PublicModelAbilities {
+  contextWindow?: number;
+  maxTokens?: number;
+  vision?: boolean;
+}
+
+export function publicModelAbilitiesFor(modelId: string): PublicModelAbilities {
+  const entry = publicModelCatalogEntryFor(modelId);
+  if (!entry) return {};
+  return {
+    ...(typeof entry.contextWindow === 'number' ? { contextWindow: entry.contextWindow } : {}),
+    ...(typeof entry.maxTokens === 'number' ? { maxTokens: entry.maxTokens } : {}),
+    ...(typeof entry.vision === 'boolean' ? { vision: entry.vision } : {}),
+  };
+}
+
+function publicModelCatalogEntryFor(modelId: string): ProviderModelEntry | undefined {
+  const id = String(modelId || '').trim();
+  if (!id) return undefined;
+  const lookup = (needle: string): ProviderModelEntry | undefined => {
+    for (const entries of Object.values(PUBLIC_PROVIDER_MODELS)) {
+      for (const entry of entries) {
+        if (entry.id === needle) return entry;
+      }
+    }
+    return undefined;
+  };
+  const direct = lookup(id);
+  if (direct) return direct;
+  const slash = id.indexOf('/');
+  if (slash > 0 && slash < id.length - 1) return lookup(id.slice(slash + 1));
+  return undefined;
+}
