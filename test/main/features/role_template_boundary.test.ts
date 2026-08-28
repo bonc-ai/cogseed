@@ -183,9 +183,12 @@ describe('role-template boundary › M7/M8 PO 内部规则收口', () => {
     const files = read('src/main/features/personal_ontology_template_files.ts');
     expect(groups).toContain('export const TEMPLATE_FILE_META_RE');
     expect(groups).toContain('export function isTemplateFileText');
-    // template_files 不再自带正则字面量，只 import 别名
+    // template_files 不再自带正则字面量，只 import 别名。别名惰性初始化
+    // （与 groups 存在间接循环依赖，模块顶层直接读导出绑定在特定加载顺序
+    // 下会触发 TDZ，见 personal_ontology_template_files.ts 内注释）。
     expect(files).not.toMatch(/const TEMPLATE_META_RE = \//);
-    expect(files).toContain('const TEMPLATE_META_RE = TEMPLATE_FILE_META_RE;');
+    expect(files).toContain('templateMetaReCache ??= TEMPLATE_FILE_META_RE;');
+    expect(files).toContain('line.match(getTemplateMetaRe())');
     expect(files).toContain('export { isTemplateFileText };');
   });
 
