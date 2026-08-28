@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PUBLIC_PROVIDER_MODELS } from '../../../src/main/model/public_model_catalog';
+import { PUBLIC_PROVIDER_MODELS, publicContextWindowFor } from '../../../src/main/model/public_model_catalog';
 
 describe('public model catalog', () => {
   it('contains only public providers with unique model ids', () => {
@@ -45,5 +45,26 @@ describe('public model catalog', () => {
       contextWindow: 1048576,
       maxTokens: 131072,
     });
+  });
+});
+
+describe('publicContextWindowFor', () => {
+  it('resolves exact ids across namespaces', () => {
+    expect(publicContextWindowFor('kimi-k3')).toBe(1_048_576);
+    expect(publicContextWindowFor('gpt-5.6-sol')).toBe(372_000);
+  });
+
+  it('resolves aggregator-prefixed ids to their home-namespace entry', () => {
+    // deepseek/deepseek-v4-flash-vision-exp is stored only as
+    // deepseek-v4-flash-vision-exp in the deepseek namespace — the window
+    // belongs to the model, not the reseller (2026-08-27: suban confirmed 1M).
+    expect(publicContextWindowFor('deepseek/deepseek-v4-flash-vision-exp')).toBe(1_048_576);
+  });
+
+  it('returns undefined instead of guessing for unknown or windowless ids', () => {
+    expect(publicContextWindowFor('deepseek-v4-pro')).toBeUndefined(); // catalog has the id but no window
+    expect(publicContextWindowFor('no-such-model')).toBeUndefined();
+    expect(publicContextWindowFor('vendor/')).toBeUndefined();
+    expect(publicContextWindowFor('')).toBeUndefined();
   });
 });

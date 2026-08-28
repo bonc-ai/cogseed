@@ -14,7 +14,7 @@ let prevBuiltin: string | undefined;
 
 const EXPENSE_AGENT_ID = 'c045605cb916';
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-expense-agent-seed-'));
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevBuiltin = process.env.COGSEED_BUILTIN_ROOT;
@@ -26,6 +26,10 @@ beforeEach(() => {
   );
   postJsonMock.mockReset();
   vi.resetModules();
+
+  // 设置引导为已完成状态，允许 marketplace seed
+  const onboardingState = await import('../../../src/main/features/onboarding_state');
+  onboardingState.setOnboardingCompleted(true);
 });
 
 afterEach(() => {

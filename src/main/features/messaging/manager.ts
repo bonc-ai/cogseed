@@ -728,13 +728,30 @@ async function handleCardAction(uid: string, action: CardActionEnvelope): Promis
   if (action.action === 'approve' || action.action === 'approve_once'
     || action.action === 'approve_session' || action.action === 'approve_always') {
     const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'approve' });
-    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_approval_failed' };
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Idempotent re-click: the wake already advanced past approval (it was
+      // approved earlier and may already be executing). Settle the card so
+      // the operator sees feedback instead of a silent no-op button.
+      if (/cannot be approved from (approved|executed|executing)/.test(reasonText)) {
+        void finalizeApprovalCard(uid, action);
+        return { accepted: true, duplicate: false };
+      }
+      void finalizeFailedCard(uid, action, reasonText || 'wake_approval_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_approval_failed' };
+    }
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
   if (action.action === 'deny') {
     const decision = await wakeController.decideWakeRequest(uid, { requestId: wakeId, decision: 'reject' });
-    if (decision.ok === false) return { accepted: false, duplicate: false, reason: decision.error || 'wake_rejection_failed' };
+    if (decision.ok === false) {
+      const reasonText = String(decision.error || '');
+      // Denying an already-approved/executed wake is a legitimate miss (the
+      // operator was too late) — still surface why instead of silence.
+      void finalizeFailedCard(uid, action, reasonText || 'wake_rejection_failed');
+      return { accepted: false, duplicate: false, reason: reasonText || 'wake_rejection_failed' };
+    }
     void finalizeApprovalCard(uid, action);
     return { accepted: true, duplicate: false };
   }
@@ -841,6 +858,33 @@ async function finalizeApprovalCard(uid: string, action: CardActionEnvelope): Pr
     await adapter.updateCard(action.externalMessageId, buildResolvedApprovalCard(action.action));
   } catch (error) {
     log.warn('messaging approval card finalize failed', {
+      instanceId: action.instanceId,
+      error: (error as Error).message,
+    });
+  }
+}
+
+/** Terminal card for a wake button click that could not take effect (e.g.
+ *  re-clicking approve after the wake already executed). Without this the
+ *  click is a silent no-op from the operator's point of view. */
+async function finalizeFailedCard(uid: string, action: CardActionEnvelope, reason: string): Promise<void> {
+  const runtime = runtimes.get(uid)?.get(action.instanceId);
+  if (!runtime || !isCurrentRuntime(uid, runtime)) return;
+  const adapter = runtime.adapter;
+  if (!isCardAdapter(adapter)) return;
+  try {
+    await adapter.updateCard(action.externalMessageId, {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { content: t('messaging.wake_card.noop_title'), tag: 'plain_text' },
+        template: 'grey',
+      },
+      elements: [
+        { tag: 'markdown', content: `**${t('messaging.wake_card.noop_detail')}**\n\n\`${reason.slice(0, 300)}\`` },
+      ],
+    });
+  } catch (error) {
+    log.warn('messaging failed card finalize failed', {
       instanceId: action.instanceId,
       error: (error as Error).message,
     });

@@ -125,9 +125,13 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'kb_list',       group: 'kb', summary: 'List Library files and indexing status before choosing what to search or read.' },
   { name: 'kb_search',     group: 'kb', summary: 'Semantic search over the user\'s Library.' },
   { name: 'kb_read',       group: 'kb', summary: 'Read source-text chunks from a Library file that kb_search has hit.' },
+  { name: 'material_search', group: 'kb', summary: 'Hybrid (vector + BM25) search over the user Library; returns fused hits with citation anchors (scope/path/chunk).' },
+  { name: 'material_list', group: 'kb', summary: 'List the full material boundary for the conversation (Library + attachments + space artifacts), each marked in-scope or out-of-scope.' },
+  { name: 'ask_materials', group: 'kb', summary: 'Grounded Q&A evidence service over the material set (Library + attachments): returns evidence to answer from with citations, or an explicit no-material/low-confidence marker.' },
   { name: 'research_rerank', group: 'kb', ownerAgent: DEEP_RESEARCH_AGENT_IDS, summary: 'Semantically rerank candidate research passages against a sub-question by local embedding similarity — the second stage after the deep-research compress skill\'s lexical filter, surfacing on-topic passages that share no keywords. Read-only, local, no Tool Execution Access. Owned by the deep-research + data-research agents (hidden from the commander).' },
 
   // Recall ability assets
+  { name: 'personal_ontology_fields', group: 'recall', summary: 'List the fillable fields of the user\'s installed role templates (个人本体挖空表单), so a candidate can be routed to a concrete field by opaque field_ref.' },
   { name: 'search_ability_assets', group: 'recall', summary: 'Semantic search over the user\'s ability asset pool (沉淀的可复用经验/规则/模板/方法；全量只读，含所有空间与全局资产).' },
 
   // Conversation history

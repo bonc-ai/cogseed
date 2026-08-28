@@ -50,6 +50,7 @@ describe('system skills reconciliation', () => {
       ['agent-creator', 'created'],
       ['autotask-creator', 'created'],
       ['coding', 'created'],
+      ['grounded-material-qa', 'created'],
       ['package-installer', 'created'],
       ['personal-ontology-candidate-builder', 'created'],
       ['skill-creator', 'created'],
@@ -78,6 +79,7 @@ describe('system skills reconciliation', () => {
       ['agent-creator', 'created'],
       ['autotask-creator', 'created'],
       ['coding', 'created'],
+      ['grounded-material-qa', 'created'],
       ['package-installer', 'created'],
       ['personal-ontology-candidate-builder', 'created'],
       ['skill-creator', 'created'],
@@ -98,7 +100,7 @@ describe('system skills reconciliation', () => {
     await systemSkills.reconcileAllForActiveUser();
     fs.writeFileSync(path.join(paths.userSystemSkillDir(UID, 'agent-creator'), '_system.json'), '{}');
     const skipped = await systemSkills.reconcileAllForActiveUser();
-    expect(skipped.map((r) => r.action)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+    expect(skipped.map((r) => r.action)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
     expect(fs.existsSync(path.join(paths.userSystemSkillDir(UID, 'agent-creator'), '_system.json'))).toBe(false);
 
     const skillManifest = paths.userSystemSkillsManifestFile(UID);

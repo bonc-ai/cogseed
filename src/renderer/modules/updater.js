@@ -1,7 +1,7 @@
 // ─── In-app update reminders ─────────────────────────────────────────────
 // Resident module (loaded with the shell, like account-chip.js) so the
 // reminder banner can surface on any view. Owns:
-//   - Settings › 通用 › 更新 group: current version, manual check, download
+//   - Settings › 关于我们 pane: current version, manual check, download
 //     with live progress, "open installer" once verified, "skip this version".
 //   - A global banner driven by main's `updates:available` push (boot-time
 //     silent check surfaced a new version).
@@ -25,6 +25,7 @@
     statusVars: null,
     statusKind: '',      // '' | 'error'
     bannerInfo: null,    // info shown in the global banner (dismissed → null)
+    autoStatus: null,    // AutoUpdateStatus pushed from main (updates:auto)
   };
 
   // ── helpers ────────────────────────────────────────────────────────────
@@ -107,10 +108,45 @@
     text.textContent = _progressText(p, _state.info);
   }
 
+  function _renderAuto() {
+    const row = _id('updater-auto-row');
+    const text = _id('updater-auto-text');
+    const btn = _id('updater-auto-install-btn');
+    if (!row || !text || !btn) return;
+    const st = _state.autoStatus;
+    if (!st) {
+      row.hidden = true;
+      return;
+    }
+    btn.hidden = st.state !== 'downloaded';
+    if (st.state === 'disabled') {
+      row.hidden = true; // 开发模式：不展示自动更新行，走 v1 手动流程
+      return;
+    }
+    row.hidden = false;
+    const keyFor = {
+      idle: 'settings.updates.auto.up_to_date',
+      checking: 'settings.updates.auto.checking',
+      downloading: 'settings.updates.auto.downloading',
+      downloaded: 'settings.updates.auto.downloaded',
+      error: 'settings.updates.auto.error',
+    };
+    const key = keyFor[st.state];
+    if (key) {
+      text.textContent = t(key, {
+        percent: st.percent != null ? String(st.percent) : '0',
+        version: st.version || '',
+        message: st.message || '',
+      });
+      text.className = 'settings-updater-status' + (st.state === 'error' ? ' settings-updater-status-error' : '');
+    }
+  }
+
   function _renderAll() {
     _renderStatus();
     _renderActions();
     _renderProgress();
+    _renderAuto();
   }
 
   /** Re-sync the whole settings surface from the latest known state. */
@@ -259,17 +295,22 @@
     _id('updater-download-btn').addEventListener('click', () => { void _download(); });
     _id('updater-open-btn').addEventListener('click', () => { void _openInstaller(); });
     _id('updater-skip-btn').addEventListener('click', () => { void _skipVersion(); });
+    _id('updater-auto-install-btn').addEventListener('click', () => {
+      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
+        void window.cogseed.invoke('updates.autoInstall', {});
+      }
+    });
   }
 
   function _bindBanner() {
     _id('updater-banner-view-btn').addEventListener('click', () => {
       _hideBanner();
-      // Open Settings › 通用 where the update group lives.
+      // Open Settings › 关于我们 where the update group lives.
       if (typeof window.setView === 'function') {
         try { window.setView('settings'); } catch (_) { /* fall through */ }
       }
       if (typeof window.activateSettingsTab === 'function') {
-        try { window.activateSettingsTab('general'); } catch (_) { /* non-fatal */ }
+        try { window.activateSettingsTab('about'); } catch (_) { /* non-fatal */ }
       }
       _refreshSettings();
     });
@@ -295,6 +336,11 @@
         _showBanner(payload.info);
         _refreshSettings();
       });
+      window.cogseed.onPushEvent('updates:auto', (status) => {
+        if (!status) return;
+        _state.autoStatus = status;
+        _renderAuto();
+      });
       window.cogseed.onPushEvent('updates:progress', (p) => {
         if (!p || !_state.downloading) return;
         _state.progress = {
@@ -310,6 +356,16 @@
     }
     // Fill the current-version label once (cheap, local).
     _refreshSettings();
+    if (typeof window.cogseed.invoke === 'function') {
+      window.cogseed.invoke('updates.autoStatus', {})
+        .then((res) => {
+          if (res && res.ok && res.status) {
+            _state.autoStatus = res.status;
+            _renderAuto();
+          }
+        })
+        .catch(() => { /* non-fatal */ });
+    }
     window.addEventListener('i18n-change', () => {
       _renderAll();
       if (_state.bannerInfo) _showBanner(_state.bannerInfo);

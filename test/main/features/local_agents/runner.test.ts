@@ -569,4 +569,52 @@ describe('local_agents/runner', () => {
     expect(result.status).toBe('failed');
     expect(result.error).toMatch(/not implemented/);
   });
+
+  describe('CLI run timing metrics on done events', () => {
+    // Timing stamps ride on done.metrics for the group-chat persistence
+    // layer. (Ledger booking of done.usage lives on the usage-ledger line,
+    // not in this branch.)
+    it('stamps metrics with firstTokenAt null when no text-delta preceded done', async () => {
+      mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+      mockBackendImpl = async ({ onEvent }) => {
+        onEvent({ type: 'done', status: 'completed', output: '', durationMs: 1 });
+      };
+      const runner = await loadRunner();
+      const events: any[] = [];
+      const result = await runner.run({
+        uid: TEST_UID, cid: 'c', agentId: 'agent-x',
+        cli: 'claude', prompt: 'p', cwd: tmpDir,
+        signal: new AbortController().signal,
+        onEvent: e => events.push(e),
+      });
+      expect(result.status).toBe('completed');
+      const done = events.find(e => e.type === 'done');
+      expect(done).toBeDefined();
+      expect(done.metrics).toBeDefined();
+      expect(typeof done.metrics.startedAt).toBe('number');
+      expect(done.metrics.firstTokenAt).toBeNull();
+    });
+
+    it('records metrics.firstTokenAt when a text-delta precedes done', async () => {
+      mockDetect.mockResolvedValue({ type: 'claude', available: true, path: '/fake/claude', version: '2.0.0' });
+      mockBackendImpl = async ({ onEvent }) => {
+        onEvent({ type: 'text-delta', text: 'hello' });
+        onEvent({ type: 'done', status: 'completed', output: 'hello', durationMs: 5 });
+      };
+      const runner = await loadRunner();
+      const events: any[] = [];
+      const result = await runner.run({
+        uid: TEST_UID, cid: 'c', agentId: 'agent-x',
+        cli: 'claude', prompt: 'p', cwd: tmpDir,
+        signal: new AbortController().signal,
+        onEvent: e => events.push(e),
+      });
+      expect(result.status).toBe('completed');
+      const done = events.find(e => e.type === 'done');
+      expect(done.metrics).toBeDefined();
+      expect(typeof done.metrics.startedAt).toBe('number');
+      expect(typeof done.metrics.firstTokenAt).toBe('number');
+      expect(done.metrics.firstTokenAt).toBeGreaterThanOrEqual(done.metrics.startedAt);
+    });
+  });
 });

@@ -10,7 +10,7 @@ let testVariant = '';
 describe('P3394 node -> AI team projection', () => {
   let tmpDir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-proj-'));
     prevWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
     process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
@@ -20,6 +20,10 @@ describe('P3394 node -> AI team projection', () => {
     // 每次运行唯一变体：投影状态文件按变体目录隔离，杜绝跨测试/跨运行污染。
     testVariant = 'p3394-proj-test-' + Math.random().toString(36).slice(2, 10);
     process.env.COGSEED_RUNTIME_VARIANT = testVariant;
+
+    // 设置引导为已完成状态，允许 CLI Agent 投影
+    const onboardingState = await import('../../../../src/main/features/onboarding_state');
+    onboardingState.setOnboardingCompleted(true);
   });
 
   afterEach(() => {

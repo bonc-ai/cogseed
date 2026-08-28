@@ -66,6 +66,10 @@ export interface CcSwitchImportItem {
   /** True when `models` came from a live probe of the endpoint's model-list
    *  API (authoritative). False = probe failed and config hints remain. */
   modelsProbe?: boolean;
+  /** Per-model abilities volunteered by the probed endpoint (aggregators
+   *  only): contextWindow from `context_length`/`context_window`, vision from
+   *  modality fields. Sparse by design: absent ids had nothing to say. */
+  modelAbilities?: Record<string, { contextWindow?: number; vision?: boolean }>;
   notes?: string;
   websiteUrl?: string;
   /** True when CC Switch stored no usable key for this row (e.g. codex rows
@@ -393,7 +397,7 @@ export async function probeProviderModels(
   baseUrl: string,
   apiKey: string,
   timeoutMs = 10000,
-): Promise<{ ok: true; models: string[]; baseUrl: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; models: string[]; abilities: Record<string, ProbedModelAbilities>; baseUrl: string } | { ok: false; error: string }> {
   const base = String(baseUrl || '').trim().replace(/\/+$/, '');
   if (!/^https?:\/\//.test(base) || !String(apiKey || '').trim()) {
     return { ok: false, error: 'missing_base_or_key' };
@@ -426,6 +430,9 @@ export async function probeProviderModels(
       }
       const payload = await res.json().catch(() => null) as Record<string, unknown> | null;
       const models = extractModelIds(payload, protocol);
+      // Ability data rides along when the endpoint volunteers it (aggregators
+      // only — plain OpenAI-compatible servers have no such fields).
+      const abilities = extractModelAbilities(payload);
       // Empty list is still authoritative: the endpoint answered. The probe
       // also pins the REAL api base (endpoint minus the /models suffix):
       // CC Switch base_url values often lack the version segment (e.g.
@@ -433,7 +440,7 @@ export async function probeProviderModels(
       // the runtime's /chat/completions routing.
       let apiBase = endpoint.replace(/\/models$/, '');
       if (protocol === 'anthropic') apiBase = apiBase.replace(/\/v1$/, '');
-      return { ok: true, models, baseUrl: apiBase };
+      return { ok: true, models, abilities, baseUrl: apiBase };
     } catch (err) {
       lastError = (err instanceof Error && err.name === 'AbortError') ? 'timeout' : 'network';
     } finally {
@@ -488,4 +495,58 @@ function extractModelIds(payload: Record<string, unknown> | null, protocol: stri
     }
   }
   return out;
+}
+
+/** Collect per-model abilities when the endpoint volunteers them.
+ *  The OpenAI protocol itself has no such fields, but aggregator-style
+ *  gateways (OpenRouter et al.) embed `context_length` / `context_window`
+ *  and modality info (`input_modalities`, `architecture.input_modalities`,
+ *  `modality`) on each `data[]` entry. Only positive safe integers and
+ *  arrays containing 'image' are accepted; an endpoint that lies or omits
+ *  the fields simply yields nothing here and callers fall back to the
+ *  catalog/default chain. */
+export interface ProbedModelAbilities {
+  contextWindow?: number;
+  vision?: boolean;
+}
+
+function extractModelAbilities(payload: Record<string, unknown> | null): Record<string, ProbedModelAbilities> {
+  const abilities: Record<string, ProbedModelAbilities> = {};
+  const rows = payload && Array.isArray(payload.data)
+    ? (payload.data as unknown[])
+    : (payload && Array.isArray(payload.models) ? (payload.models as unknown[]) : []);
+  for (const entry of rows) {
+    if (!entry || typeof entry !== 'object') continue;
+    const row = entry as Record<string, unknown>;
+    const id = typeof row.id === 'string' ? row.id.trim()
+      : (typeof row.name === 'string' ? row.name.trim() : '');
+    if (!id || abilities[id]) continue;
+    const item: ProbedModelAbilities = {};
+    for (const field of ['context_length', 'context_window'] as const) {
+      const v = row[field];
+      if (typeof v === 'number' && Number.isSafeInteger(v) && v > 0) {
+        item.contextWindow = v;
+        break;
+      }
+    }
+    const inputModalities: unknown[] = [];
+    if (Array.isArray(row.input_modalities)) inputModalities.push(...row.input_modalities);
+    const arch = row.architecture;
+    if (arch && typeof arch === 'object' && Array.isArray((arch as Record<string, unknown>).input_modalities)) {
+      inputModalities.push(...((arch as Record<string, unknown>).input_modalities as unknown[]));
+    }
+    if (typeof row.modality === 'string') {
+      // OpenRouter's `modality` is "input->output": only the INPUT side says
+      // whether the model accepts images ("text->image" generators don't).
+      inputModalities.push(row.modality.split('->')[0]);
+    }
+    if (inputModalities.length) {
+      // Vision understanding = accepts image INPUT alongside text.
+      if (inputModalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))) {
+        item.vision = true;
+      }
+    }
+    if (item.contextWindow !== undefined || item.vision !== undefined) abilities[id] = item;
+  }
+  return abilities;
 }
