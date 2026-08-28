@@ -3250,7 +3250,8 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionTree();
 
-    expect(host.innerHTML).toContain('树上还没有叶片');
+    // 空态已升级为「认知种子」首播引导，不再显示旧文案。
+    expect(host.innerHTML).toContain('你的认知种子已经准备好');
     expect(host.innerHTML).not.toContain('cognition-tree-leaf');
   });
 
