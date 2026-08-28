@@ -810,7 +810,7 @@ async function generateProposal(
     built = await buildRunner({
       sessionId: `memory-extract-recall-skill-${asset.id}`,
       userId,
-      systemPrompt: prompts.load('recall_skill_draft'),
+      systemPrompt: prompts.load('recall_skill_prompt'),
       disableTools: true,
       ephemeralSession: true,
       skillList: [],
