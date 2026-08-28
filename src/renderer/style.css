@@ -26991,6 +26991,55 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   transition: width 0.2s ease;
 }
 
+/* ─── 关于我们（设置 › 关于我们 pane）──────────────────────────────────
+   版本信息 + 更新操作从「通用」页移入独立标签页；卡片形态与更新原型对齐。 */
+.settings-about-card {
+  max-width: 720px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-about-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+}
+.settings-about-icon {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  object-fit: cover;
+}
+.settings-about-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about-name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.settings-about-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.settings-about-rows {
+  display: grid;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.settings-about-rows:empty {
+  display: none;
+}
+
 /* ─── 智能体总览 Dashboard（panel-dashboard）──────────────────────────
    第二期。按钮复用全局 .btn 体系（不另造 .dash-btn）；颜色/圆角全部走
    主题变量；卡片行 + 胶囊徽章对齐 connections / agents 面板的设计语言。 */
