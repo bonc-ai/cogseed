@@ -54,10 +54,11 @@ function _loadSidebarCollapse() {
         spaces: raw.spaces === true,
         recent: raw.recent === true,
         spaceGroups: (raw.spaceGroups && typeof raw.spaceGroups === 'object') ? raw.spaceGroups : {},
+        channelGroups: (raw.channelGroups && typeof raw.channelGroups === 'object') ? raw.channelGroups : {},
       };
     }
   } catch (_) {}
-  return { pinned: false, spaces: false, recent: false, spaceGroups: {} };
+  return { pinned: false, spaces: false, recent: false, spaceGroups: {}, channelGroups: {} };
 }
 function _saveSidebarCollapse() {
   try { localStorage.setItem(_SIDEBAR_COLLAPSE_KEY, JSON.stringify(_sidebarCollapse)); } catch (_) {}
@@ -1993,11 +1994,11 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('personalOntology.templates.catalog'),
       window.cogseed.invoke('skills.list'),
       window.cogseed.invoke('agents.list'),
     ]);
-    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
+    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.templateId, t.name || t.templateId]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
     _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
   } catch (_) { return; }
@@ -3557,6 +3558,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
+    ...(gm.metrics ? { metrics: gm.metrics } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -6777,6 +6779,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       renderConversationList();
     });
   });
+  // 侧栏「消息渠道」折叠组切换（飞书/微信等；状态持久化 localStorage）
+  container.querySelectorAll('[data-conv-channel-toggle="1"]').forEach((btn) => {
+    if (btn.dataset.channelBound === '1') return;
+    btn.dataset.channelBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const platform = btn.dataset.convChannel || '';
+      if (!platform) return;
+      _sidebarCollapse.channelGroups[platform] = !_sidebarCollapse.channelGroups[platform];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
   // 侧栏空间行 ⋯ 菜单（置顶/重命名/在访达中显示/删除）
   container.querySelectorAll('[data-conv-space-more]').forEach((el) => {
     if (el.dataset.moreBound === '1') return;
@@ -7015,6 +7031,72 @@ function _renderSpaceSidebarGroup(sp, convs) {
     })).join('')}`;
 }
 
+// ── 消息渠道分组（飞书/微信等渠道会话在「最近任务」tab 的聚合展示）──
+// 渠道会话 = conversations 列表里带 channel_platform 的行（主进程列表响应
+// 标注：新会话创建时落盘 + 存量经 binding join 兜底）。分组只收非置顶的
+// 渠道会话（用户置顶 = 想常驻顶部，不进组）。折叠状态持久化
+// _sidebarCollapse.channelGroups[platform]，默认展开。
+const CHANNEL_SIDEBAR_ICONS = {
+  feishu_lark: 'feishu',
+  wechat_personal: 'wechat',
+  wecom: 'wecom',
+  telegram: 'telegram',
+};
+const CHANNEL_SIDEBAR_NAMES = {
+  feishu_lark: '飞书',
+  wechat_personal: '微信',
+  wecom: '企业微信',
+  telegram: 'Telegram',
+};
+function _channelGroupLabel(platform, convs) {
+  const first = (convs || []).find(Boolean);
+  const live = first && typeof first.channel_name === 'string' && first.channel_name.trim();
+  return live || CHANNEL_SIDEBAR_NAMES[platform] || platform;
+}
+function _channelGroupIcon(platform) {
+  return CHANNEL_SIDEBAR_ICONS[platform] || 'message-square';
+}
+/** 渠道分组区：每组一个可折叠组头（图标+渠道名+会话数）+ 组内会话行。
+ *  组间按组内最新活跃倒序；组内排序复用置顶/最近的比较器。 */
+function _renderChannelSidebarGroups(channelConvs) {
+  if (!channelConvs.length) return '';
+  const byPlatform = new Map();
+  for (const conv of channelConvs) {
+    const platform = conv.channel_platform;
+    if (!platform) continue;
+    if (!byPlatform.has(platform)) byPlatform.set(platform, []);
+    byPlatform.get(platform).push(conv);
+  }
+  const groups = Array.from(byPlatform.entries())
+    .map(([platform, convs]) => ({ platform, convs }))
+    .sort((a, b) => {
+      const latest = (list) => list.reduce((acc, c) => {
+        const at = (c && (c.last_active_at || c.updated_at)) || '';
+        return at > acc ? at : acc;
+      }, '');
+      return latest(b.convs).localeCompare(latest(a.convs));
+    });
+  return groups.map(({ platform, convs }) => {
+    const collapsed = !!_sidebarCollapse.channelGroups[platform];
+    const label = _channelGroupLabel(platform, convs);
+    // 与「最近任务」等分区头同构（conv-list-space-title + fold 按钮 +
+    // 渐变线 + 计数徽章），保证侧栏所有标题行视觉一致；渠道差异只保留
+    // 标签前的渠道图标与组内会话数徽章。
+    return `
+    <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
+      <button type="button" class="conv-list-section-fold" data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
+        aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+        <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
+        <span class="conv-list-section-label">${escapeHtml(label)}</span>
+      </button>
+      <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-list-section-rule" aria-hidden="true"></span>
+    </div>
+    ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
+  }).join('');
+}
+
 /** 分区标题行：可折叠（data-sidebar-fold）+ 可选右侧操作按钮（data-sidebar-action）。 */
 function _renderSidebarSectionHeader(section, label, opts = {}) {
   const collapsed = !!_sidebarCollapse[section];
@@ -7167,8 +7249,16 @@ function renderConversationList() {
         parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
       }
     }
+    // ② 渠道分组区（飞书/微信等渠道会话；置顶的渠道会话留在置顶区不进组）
+    const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
+    const plainRecent = channelConvs.length
+      ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
+      : recent;
+    if (channelConvs.length) {
+      parts.push(_renderChannelSidebarGroups(channelConvs));
+    }
     // ③ 最近任务区（平铺，无时间桶标题）
-    if (recent.length || hasDeferredRecent) {
+    if (plainRecent.length || hasDeferredRecent) {
       parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
         action: 'new-task',
         actionTitle: t('sidebar.new_task', '新建任务'),
@@ -7176,7 +7266,7 @@ function renderConversationList() {
       }));
       if (!_sidebarCollapse.recent) {
         if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-        parts.push(_renderConversationFlatList(recent, {
+        parts.push(_renderConversationFlatList(plainRecent, {
           bucketScope: 'sidebar',
           loadMore: _sidebarHasMoreOld(),
           loadMoreBucket: 'last30',
@@ -7337,6 +7427,58 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
   return url;
 }
 
+// ── 每会话访问权限模式（Claude Code 风格三档）──────────────────────────
+// full = 完全访问（bypass，阶段一真实生效）；auto_approve / ask 需要审批 UI
+// （阶段二），先占位并禁用，不造假生效。
+const _PERMISSION_MODES = [
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
+  { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+];
+
+let _permissionModeSelectBound = false;
+
+function _permissionModeEl() {
+  return document.getElementById('chat-permission-mode-select');
+}
+
+function _renderPermissionModeSelect(convMeta) {
+  const select = _permissionModeEl();
+  if (!select) return;
+  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+    ? convMeta.permission_mode
+    : 'full';
+  const phase2 = (typeof t === 'function' && t('chat.permission.phase2')) || '（阶段二）';
+  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
+  // 默认「完全访问」填 select，此时 escapeHtml 还没就绪，需要安全兜底。
+  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
+  select.innerHTML = _PERMISSION_MODES.map((m) => {
+    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
+    // 阶段一只有「完全访问」可真实生效；另外两档禁用。阶段二提示放进 title，
+    // 避免长文案把 select 撑到最长选项的宽度（选中项只有 4 个字时左右留白很大）。
+    const disabled = m.id !== 'full';
+    const title = disabled ? ` title="${esc(label)}${esc(phase2)}"` : '';
+    return `<option value="${m.id}"${disabled ? ' disabled' : ''}${current === m.id ? ' selected' : ''}${title}>${esc(label)}</option>`;
+  }).join('');
+  select.value = current;
+}
+
+function _bindPermissionModeSelect() {
+  if (_permissionModeSelectBound) return;
+  _permissionModeSelectBound = true;
+  const select = _permissionModeEl();
+  if (!select) return;
+  select.addEventListener('change', async () => {
+    const mode = select.value;
+    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    try {
+      await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
+    }
+  });
+}
+
 function _membersRequestUrl(cid) {
   return `/api/conversations/${encodeURIComponent(cid)}/members?project_id=${encodeURIComponent(_projectIdForConversation(cid))}`;
 }
@@ -7478,6 +7620,8 @@ async function _loadOlderConversationHistory(cid, before) {
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
       container.insertBefore(fragment, row.nextSibling);
+      // 更早历史也是离屏 fragment 装载，插入后补刷会话统计行（Task 8）。
+      _refreshSessionStats();
       _removeSupersededInterruptionBubbles(container);
       _setLoadEarlierHistory(container, cid, nextCursor);
       _restoreOlderHistoryPrependScroll(container, previousScrollHeight, previousScrollTop);
@@ -7950,6 +8094,10 @@ async function loadConversationHistory(cid, opts = {}) {
       }));
       container.appendChild(historyFragment);
     }
+    // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
+    // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
+    // 会话统计行（Task 8）。
+    _refreshSessionStats();
     _mountCollaborationStatusCard(container, convMeta.collaboration || null);
     if (window.CompanionRepro && typeof window.CompanionRepro.mount === 'function') {
       void window.CompanionRepro.mount(cid);
@@ -7981,6 +8129,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // `agent_enabled` on the conversation payload (true when no agent_id).
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
+    _renderPermissionModeSelect(convMeta);
     const processingFresh = convMeta.processing === true
       && convMeta.processing_since
       && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
@@ -8095,6 +8244,9 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!preserveScroll) {
       container.innerHTML = `<div class="empty">${escapeHtml(t('chat.load_failed', { msg: e.message || '' }))}</div>`;
     }
+    // 加载失败时消息区只剩占位——统计行随之隐藏，避免残留上个会话的数据
+    // （Task 8）。preserveScroll 的部分重载保留现有消息，刷新结果不变。
+    _refreshSessionStats();
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
   }
 }
@@ -8725,6 +8877,199 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// ─── 会话统计行（输入框下方，Task 8）────────────────────────────────────
+// 折叠当前会话所有带 metrics 的 assistant 消息：轮数/步数、LLM 总耗时、
+// 首 token 平均与速率、缓存命中、上下文占用、token 合计与费用。常驻显示
+// （不受消息级 .chat-msg-meta 的 hover 显隐影响）；无带 metrics 的消息整行
+// hidden；窗口/单价未知就省略对应段——诚实省略，不编数字。
+
+// 单价复用 dashboard 成本页同一 localStorage key（'dashboard-price-table'，
+// 实测结构 { [modelId]: { in: ¥/1M, out: ¥/1M } }，成本页保存时只写 '*'
+// 默认条目、无模型名，也无 cacheRead/cacheWrite 单价），不另立存储。
+// 结构对不上或没有可用的 '*'/'default' 条目 → 返回 null（不显示费用段）。
+function _userPriceForStats() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dashboard-price-table') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const def = raw['*'] || raw.default;
+    if (!def || typeof def !== 'object') return null;
+    const pin = Number(def.in);
+    const pout = Number(def.out);
+    const hasIn = Number.isFinite(pin) && pin > 0;
+    const hasOut = Number.isFinite(pout) && pout > 0;
+    if (!hasIn && !hasOut) return null;
+    // 现场价格表没有缓存单价（成本页同样只按 in/out 折算）→ 按 0 计，
+    // 费用是下界估算，费用段的 title 已注明非账单金额。
+    return { in: hasIn ? pin : 0, out: hasOut ? pout : 0, cacheRead: 0, cacheWrite: 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+// 当前模型 contextWindow：渲染层没有现成全局，走已有 auth.* IPC（不新造）
+// ——auth.listEntries[0] 是默认模型（与 model-chip 同源），auth.listModels
+// 的 curated 分支透传 contextWindow；未策展/custom provider 的 fallback
+// 分支没有该字段 → null，统计行只显示已用量。结果缓存 60s（负结果也在
+// 内，避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
+let _statsModelWindowCache = null; // { value: number|null, at: ms }
+function getCurrentModelContextWindow() {
+  const now = Date.now();
+  if (!_statsModelWindowCache || now - _statsModelWindowCache.at > 60_000) {
+    _statsModelWindowCache = {
+      value: _statsModelWindowCache ? _statsModelWindowCache.value : null,
+      at: now,
+    };
+    _fetchCurrentModelContextWindow();
+  }
+  return _statsModelWindowCache.value;
+}
+async function _fetchCurrentModelContextWindow() {
+  try {
+    const entries = await window.cogseed.invoke('auth.listEntries');
+    const current = entries && entries.ok && Array.isArray(entries.entries)
+      ? entries.entries[0] : null;
+    if (!current || !current.provider || !current.model) return;
+    const res = await window.cogseed.invoke('auth.listModels', { provider: current.provider });
+    const models = res && res.ok && Array.isArray(res.models) ? res.models : [];
+    const hit = models.find((m) => m && typeof m === 'object' && m.id === current.model);
+    const cw = hit && Number.isSafeInteger(hit.contextWindow) && hit.contextWindow > 0
+      ? hit.contextWindow : null;
+    _statsModelWindowCache = { value: cw, at: Date.now() };
+    if (cw) _refreshSessionStats();
+  } catch (_) {
+    // 取不到保持现状（null 或旧值）——只显示已用量。
+  }
+}
+window.getCurrentModelContextWindow = getCurrentModelContextWindow;
+
+// 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
+// ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
+// 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
+function _refreshSessionStats() {
+  const box = document.getElementById('chat-session-stats');
+  if (!box || !window.conversationMetrics) return;
+  const list = [];
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    if (el._msgMetrics) list.push(el._msgMetrics);
+  });
+  if (!list.length) { box.hidden = true; return; }
+  const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
+    ? window.getCurrentModelContextWindow() : null;
+  const price = _userPriceForStats();
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
+  // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
+  const segs = [];
+  segs.push({ v: t('chat.stats.counts', { turns: f.turns, steps: f.steps }) });
+  if (f.llmMs > 0) {
+    segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
+  }
+  if (f.ttftAvgText) {
+    segs.push({
+      k: t('chat.stats.speedK'),
+      v: f.rateText
+        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
+        : f.ttftAvgText,
+    });
+  }
+  if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
+  box.innerHTML = '';
+  box.hidden = false;
+  segs.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    box.appendChild(seg);
+  });
+  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
+  // 单价、无模型名，title 不带模型字段。
+  if (f.costText) {
+    const costSpan = box.lastElementChild;
+    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+  }
+  _syncStatsWidthToComposer();
+}
+
+// 统计行与输入卡左右边缘实时对齐（2026-08-27 反馈）。卡宽随内容收缩
+// （chip 增删、附件条出现都会变），CSS 定宽追不上；此处每次刷新直读卡宽
+// 同步一次，并挂 ResizeObserver 让后续卡片尺寸变化即时跟随（首次 observe
+// 也会回调一次）。vm 测试环境无 ResizeObserver，守卫跳过。
+let _statsComposerObserver = null;
+function _syncStatsWidthToComposer() {
+  const box = document.getElementById('chat-session-stats');
+  const card = document.querySelector('.chat-input-area');
+  if (!box || !card) return;
+  if (!_statsComposerObserver && typeof ResizeObserver !== 'undefined') {
+    _statsComposerObserver = new ResizeObserver(() => _syncStatsWidthToComposer());
+    _statsComposerObserver.observe(card);
+  }
+  const cw = card.getBoundingClientRect().width;
+  if (cw > 0) box.style.width = `${Math.round(cw)}px`;
+}
+
+// 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
+// gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
+// 挂在操作行（[data-role=msg-actions]）内右对齐——与复制/引用图标同一行
+// （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
+// _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
+function _mountMsgMeta(ph, metrics) {
+  const line = window.conversationMetrics
+    ? window.conversationMetrics.messageMetricsLine(metrics) : null;
+  if (!line) return;
+  let row = ph.querySelector('[data-role="msg-actions"]');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'chat-msg-actions';
+    row.dataset.role = 'msg-actions';
+    ph.appendChild(row);
+  }
+  let meta = row.querySelector('[data-role="msg-meta"]');
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.className = 'chat-msg-meta';
+    meta.dataset.role = 'msg-meta';
+    row.appendChild(meta);
+  }
+  // 分段结构与会话统计行同一视觉语言：.mseg > (.k 浅色标签 + .v mono 数值)。
+  const parts = [];
+  parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
+  if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
+  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
+  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  meta.textContent = '';
+  parts.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = 'mseg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    meta.appendChild(seg);
+  });
+  if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+  // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
+  // appendChatMessage 尾部；Task 8）。
+  _refreshSessionStats();
+}
+
 function appendChatMessage(message, autoScroll = true, opts = {}) {
   const container = opts.container
     ? (typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container)
@@ -8955,6 +9300,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (historyHydration) container.appendChild(msgDiv);
   else _insertByTimestamp(container, msgDiv);
   if (role === 'user') _moveUserBeforeOrphanLivePlaceholder(container, msgDiv);
+  // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
+  // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
+  msgDiv._msgMetrics = message.metrics || null;
+  _mountMsgMeta(msgDiv, message.metrics);
+  // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
+  // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
+  _refreshSessionStats();
   if (!isHtmlSnippet && typeof typesetMath === 'function') {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
@@ -14875,6 +15227,11 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     ph.appendChild(actionsRow);
   }
 
+  // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
+  // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
+  ph._msgMetrics = gm.metrics || null;
+  _mountMsgMeta(ph, gm.metrics);
+
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.
   const gmCreated = _normalizeCreatedAgents(gm);
   if (gmCreated) {
@@ -14965,6 +15322,19 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   _scheduleConversationInfoFileRefresh(cid);
 }
 
+// Msg ids recently rendered through a live bus stream (in-app send / open
+// conversation observer). The `conversations:updated` desktop push consults
+// this to avoid double-rendering messages the renderer already appended.
+const _recentLiveBusMsgIds = new Set();
+const _recentLiveBusMsgOrder = [];
+function _rememberLiveBusMsgId(id) {
+  if (!id || _recentLiveBusMsgIds.has(id)) return;
+  _recentLiveBusMsgIds.add(id);
+  _recentLiveBusMsgOrder.push(id);
+  while (_recentLiveBusMsgOrder.length > 200) _recentLiveBusMsgIds.delete(_recentLiveBusMsgOrder.shift());
+}
+window.__cogseedLiveBusTracker = { has: (id) => _recentLiveBusMsgIds.has(id) };
+
 // Group-chat bus event router. Each event is one of:
 //   { type: 'message', cid, msg: GroupMessage, turn_id? }
 //   { type: 'process', cid, actor, turn_id?, data: { type, text?, event? } }
@@ -14975,6 +15345,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 //   { type: 'aborted', cid }
 function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {}) {
   if (!evData || typeof evData !== 'object') return;
+  if (evData.type === 'message' && evData.msg) _rememberLiveBusMsgId(evData.msg.id);
   if (evData.type === 'agent_run_result') {
     if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
       void window.ConversationInfo.refreshAgentActivity(cid);
@@ -16379,4 +16750,8 @@ if (typeof window !== 'undefined') {
   } else {
     _initChatSelectionMenu();
   }
+  _bindPermissionModeSelect();
+  // 权限 select 现在常驻底部栏（工作空间旁），先按默认「完全访问」填好，
+  // 等历史加载后再由 _renderPermissionModeSelect(convMeta) 精确回填。
+  _renderPermissionModeSelect(null);
 }

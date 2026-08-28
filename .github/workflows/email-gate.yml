@@ -3,7 +3,7 @@
 # Personal emails (gmail / qq / 163 / corporate-personal / *.local) must never
 # enter public commit history. Every commit in a PR must use a noreply address:
 #   {GitHubUserID}+{username}@users.noreply.github.com
-# or a sanctioned team address (business@bonc.com.cn).
+# or a sanctioned team address (see the allowlist below).
 #
 # This gate is fast (<5s): it only inspects commit author emails, no build.
 # It runs on every PR targeting develop (and is also wired into cicd's verify).
@@ -37,7 +37,7 @@ jobs:
             echo "$bad"
             echo ""
             echo "Fix: set git config user.email to {GitHubUserID}+{username}@users.noreply.github.com"
-            echo "  e.g. git config --global user.email 12345678+octocat@users.noreply.github.com"
+            echo "  e.g. git config --global user.email {GitHubUserID}+{username}@users.noreply.github.com"
             echo "  then amend/rebase the offending commits."
             exit 1
           fi

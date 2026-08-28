@@ -16,7 +16,7 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     const end = wsSource.indexOf('function _openCreateFromScene', start);
     expect(start).toBeGreaterThan(-1);
     const body = wsSource.slice(start, end);
-    expect(body).toContain('role: tpl ? [tpl.template_id] : []');
+    expect(body).toContain('role: tpl ? [tpl.templateId] : []');
     expect(body).not.toContain('role: []');
   });
 
@@ -29,7 +29,7 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     expect(body).toContain('const primary = roles[0] || undefined;');
     expect(body).toContain('const secondary = roles.slice(1, 3);');
     // bundle 预选跟随全部已选角色（主+副）模板并集
-    expect(body).toContain('const roleTmpls = _templates.filter((t) => roles.includes(t.template_id));');
+    expect(body).toContain('const roleTmpls = _templates.filter((t) => roles.includes(t.templateId));');
     // 旧逻辑：手动勾的角色被 filter 降为副 —— 已移除
     expect(body).not.toContain('roles.filter((r) => r !== primary)');
     expect(body).not.toContain('_createTemplate || roles[0]');
@@ -67,7 +67,7 @@ describe('workspace role picks (1 primary + up to 2 secondary)', () => {
     const fn = wsSource.slice(start, start + 700);
     expect(fn).toContain('function _abilityPicksWithBundle(kind)');
     // 并集来源 = 全部已选角色模板（不是 _createTemplate 单模板）
-    expect(fn).toContain('_templates.filter((t) => roles.includes(t.template_id))');
+    expect(fn).toContain('_templates.filter((t) => roles.includes(t.templateId))');
     // 内置项在前、手动 extra 在后；手动项不重复
     expect(fn).toContain('[...bundle, ...manual]');
     expect(fn).toContain('(_abilityPicks[kind] || []).filter((id) => !bundle.has(id))');

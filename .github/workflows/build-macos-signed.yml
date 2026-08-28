@@ -1,6 +1,6 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 发布流程: 在 cicd 分支上打 tag (如 v0.0.7) 触发本流程
+# 发布流程: 在 cicd 分支上打 tag (如 v0.0.6) 触发本流程
 #           dev/<用户名> → develop → cicd → 打 tag → CD 打包发布
 # 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
 #
@@ -13,7 +13,7 @@ name: Build & Sign macOS
 on:
   push:
     tags:
-      - 'v*'  # 只在推送 v0.0.7 这样的 tag 时触发构建
+      - 'v*'  # 只在推送 v0.1.3 这样的 tag 时触发构建
   workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮,用于调试)
 
 # 给 workflow 用的默认 GITHUB_TOKEN 加上"可以创建 Release"的权限
@@ -50,7 +50,7 @@ jobs:
           git fetch origin cicd:refs/remotes/origin/cicd
 
           # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
-          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
+          # 即:tag 指向的提交是否已经包含在 main 分支的历史里
           if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
             echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
           else
@@ -181,11 +181,14 @@ jobs:
 
       # 步骤 6.1: 上传 .dmg 到 GitHub
       # 构建完成后,你可以在 GitHub Actions 页面下载
-      - name: Upload DMG artifact
+      - name: Upload DMG & zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS
-          path: dist/*.dmg
+          # dmg = 手动安装（官网/首次安装）；zip = 自动更新（Squirrel.Mac feed）
+          path: |
+            dist/*.dmg
+            dist/*.zip
           retention-days: 30  # 保留 30 天
 
       # ========================================
@@ -200,7 +203,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
+          # dmg + zip 都挂到 Release：zip 供 hub 自动更新 feed 使用
+          files: |
+            dist/*.dmg
+            dist/*.zip
           # tag 名字就用推送的那个 tag (比如 v0.0.6)
           tag_name: ${{ github.ref_name }}
           # 显式关闭自动生成的更新日志。

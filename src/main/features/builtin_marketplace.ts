@@ -651,6 +651,17 @@ export async function seedBuiltinMarketplaceForUser(
   };
   if (!safeId(uid) || !_canContinue(opts)) return result;
 
+  // 检查引导是否完成，未完成则跳过自动安装内置 Agent
+  try {
+    const onboardingState = await import('./onboarding_state');
+    if (!onboardingState.getOnboardingCompleted()) {
+      log.info('skip builtin marketplace seed: onboarding not completed yet');
+      return result;
+    }
+  } catch (err) {
+    log.warn('onboarding check failed, proceeding with seed', { error: (err as Error).message });
+  }
+
   const manifest = await readInstalls(uid);
   const installedAgents = new Set(manifest.agents.map((a) => a.id));
   const installedSkills = new Set(manifest.skills.map((s) => s.id));

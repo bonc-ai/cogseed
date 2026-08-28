@@ -11,7 +11,9 @@
  *   hub-account.consents       → { consents }
  *   hub-account.set_consent    → { consent }
  *   hub-account.revoke_consent → { consent }
- *   hub-account.delete_account → { deletion }
+ *   hub-account.deletion_impact      → { impact }
+ *   hub-account.deletion_send_code   → { sent }
+ *   hub-account.delete_account       → { deletion }
  *
  * Errors surface as `HubApiError` with the Hub service error `code`
  * (e.g. `AUTH_REQUIRED`, `BINDING_ALREADY_EXISTS`); the IPC envelope
@@ -19,7 +21,7 @@
  */
 import * as hubAccount from '../features/hub_account';
 import { HubApiError } from '../features/hub_account';
-import { assertHubAccountReleaseEnabled } from '../features/hub_account/gate';
+import { assertHubAccountReleaseEnabled, isHubAccountReleaseEnabled } from '../features/hub_account/gate';
 import { broadcastHubStateChanged } from '../features/hub_account/account-events';
 
 function assertString(value: unknown, name: string): string {
@@ -33,7 +35,12 @@ function requireReleaseGate(): void {
 
 export const invokeHandlers = {
   'hub-account.status': async (_payload: unknown, ctx: { userId: string }) => ({
-    status: await hubAccount.getHubStatus(ctx.userId),
+    // release_enabled 由本地发布 Gate 判定（渲染端据此决定展示登录卡还是关闭提示）；
+    // 不随服务端状态走，保证 Gate 关闭时 UI 立即正确。
+    status: {
+      ...(await hubAccount.getHubStatus(ctx.userId)),
+      release_enabled: isHubAccountReleaseEnabled(),
+    },
   }),
 
   'hub-account.start_login': async (_payload: unknown, ctx: { userId: string }) => {
@@ -88,10 +95,35 @@ export const invokeHandlers = {
     return { consent: await hubAccount.revokeConsent(ctx.userId, scope) };
   },
 
-  'hub-account.delete_account': async (payload: { confirmation?: unknown }, ctx: { userId: string }) => {
+  'hub-account.deletion_impact': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    return { impact: await hubAccount.getDeletionImpact(ctx.userId) };
+  },
+
+  'hub-account.deletion_send_code': async (_payload: unknown, ctx: { userId: string }) => {
+    requireReleaseGate();
+    return { sent: await hubAccount.sendDeletionCode(ctx.userId) };
+  },
+
+  'hub-account.delete_account': async (
+    payload: { confirmation?: unknown; reauth_method?: unknown; code?: unknown; password?: unknown },
+    ctx: { userId: string },
+  ) => {
     requireReleaseGate();
     const confirmation = assertString(payload?.confirmation, 'confirmation');
-    const result = await hubAccount.deleteHubAccount(ctx.userId, confirmation);
+    if (confirmation !== 'DELETE_MY_ACCOUNT') throw new Error('invalid confirmation');
+    const method = payload?.reauth_method;
+    if (method !== 'sms_code' && method !== 'password') throw new Error('invalid reauth_method');
+    const body: import('../features/hub_account/types').HubDeleteAccountRequest = {
+      confirmation: 'DELETE_MY_ACCOUNT',
+      reauth_method: method,
+    };
+    if (method === 'sms_code') {
+      body.code = assertString(payload?.code, 'code');
+    } else {
+      body.password = assertString(payload?.password, 'password');
+    }
+    const result = await hubAccount.deleteHubAccount(ctx.userId, body);
     broadcastHubStateChanged({ reason: 'account_deleted' });
     return { deletion: result };
   },

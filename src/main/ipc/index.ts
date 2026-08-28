@@ -60,8 +60,8 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
-import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
+import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
@@ -105,6 +105,7 @@ import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as cogseedBackend from '../features/cogseed_backend';
+import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -117,6 +118,9 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import * as messagingBindings from '../features/messaging/bindings';
+import * as messagingRegistry from '../features/messaging/registry';
+import { annotateChannelConversations } from '../features/messaging/channel-annotation';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
@@ -418,8 +422,54 @@ function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   return null;
 }
 
-function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string): string {
+// 卡片视图会为可视卡片批量请求 Office 预览：按 path+size+mtime 做进程内
+// LRU 缓存（上限 24 条），同一文件重复预览/卡片来回滚动不重复解析。
+const _officePreviewCache = new Map<string, { at: number; html: string; kind: string }>();
+const OFFICE_PREVIEW_CACHE_MAX = 24;
+
+function _officePreviewCacheGet(key: string): { html: string; kind: string } | null {
+  const hit = _officePreviewCache.get(key);
+  if (!hit) return null;
+  hit.at = Date.now();
+  return { html: hit.html, kind: hit.kind };
+}
+
+function _officePreviewCachePut(key: string, html: string, kind: string): void {
+  _officePreviewCache.set(key, { at: Date.now(), html, kind });
+  if (_officePreviewCache.size <= OFFICE_PREVIEW_CACHE_MAX) return;
+  let oldestKey = '';
+  let oldestAt = Infinity;
+  for (const [k, v] of _officePreviewCache) {
+    if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+  }
+  if (oldestKey) _officePreviewCache.delete(oldestKey);
+}
+
+function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string, opts?: { compact?: boolean }): string {
   const safeTitle = _escapePreviewHtml(title || 'Office preview');
+  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
+  const compactCss = opts?.compact ? `
+  <style>
+    body { background: #fff; font-size: 11px; }
+    .office-preview { padding: 0; min-height: 0; }
+    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
+    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
+    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
+    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
+    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
+    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
+    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
+    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
+    .office-spreadsheet { padding: 6px; }
+    .office-sheet { margin: 0 0 10px; padding: 8px; }
+    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
+    .office-table-wrap { max-height: none; }
+    .office-table-wrap td { min-width: 60px; }
+    .office-presentation { padding: 6px; gap: 8px; }
+    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
+    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
+    .office-slide-body p:first-child { font-size: 14px; }
+  </style>` : '';
   return `<!doctype html>
 <html>
 <head>
@@ -573,6 +623,7 @@ function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: st
       .office-slide-body p:first-child { font-size: 22px; }
     }
   </style>
+  ${compactCss}
 </head>
 <body>
   <main class="office-preview office-${kind}">
@@ -880,6 +931,23 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
+  'stt.pushAudio': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    if (typeof raw.chunk !== 'string') throw new Error('invalid audio chunk');
+    const bytes = Buffer.from(raw.chunk, 'base64');
+    if (bytes.length % 2 !== 0) throw new Error('invalid pcm length');
+    const samples = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+    stt.pushAudio(ctx.userId, raw.sessionId, samples);
+    return { ok: true };
+  },
+  'stt.stop': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    return stt.stopSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -919,6 +987,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'conversations.list': async ({ mode, active_cid, expanded_projects, project_id, task_id, bucket, offset }, ctx) => {
+    // Channel conversations get their sidebar grouping fields (platform
+    // back-fill via bindings + live display name) on every list response;
+    // persisted fields stay authoritative, the join is display-only.
+    const annotate = async <T extends { conversation_id: string; channel_platform?: string }>(rows: readonly T[]): Promise<T[]> => {
+      if (!rows.length) return [...rows];
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      return annotateChannelConversations(rows, bindings, instances);
+    };
     if (mode === 'startup') {
       const expandedProjectIds = String(expanded_projects || '')
         .split(',')
@@ -927,21 +1006,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         activeConversationId: safeId(active_cid) ? active_cid : undefined,
         expandedProjectIds,
       });
+      if (Array.isArray((result as { conversations?: unknown }).conversations)) {
+        (result as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((result as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
       return result;
     }
     if (mode === 'project') {
       if (!safeId(project_id)) throw new Error('invalid project id');
-      return chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      const page = await chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'auto_task') {
       if (!safeId(task_id)) throw new Error('invalid auto task id');
-      return chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      const page = await chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'old_unprojected') {
       if (bucket !== 'last30' && bucket !== 'older') throw new Error('invalid conversation bucket');
-      return chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      const page = await chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
-    return { conversations: await chats.listConversations(ctx.userId) };
+    return { conversations: await annotate(await chats.listConversations(ctx.userId)) };
   },
 
   'conversations.autoTaskCounts': async ({ task_ids } = {}, ctx) => {
@@ -953,6 +1051,32 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const { cid } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
     const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    // Same channel annotation as the list endpoints — a freshly hydrated
+    // sidebar row (e.g. external inbound to a brand-new conversation) must
+    // land in its channel group immediately.
+    if (!conv.channel_platform) {
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      const [annotated] = annotateChannelConversations([conv], bindings, instances);
+      return { conversation: annotated || conv };
+    }
+    const [instances] = await Promise.all([
+      messagingRegistry.listInstances(ctx.userId).catch(() => []),
+    ]);
+    const [annotated] = annotateChannelConversations([conv], [], instances);
+    return { conversation: annotated || conv };
+  },
+
+  'conversations.setPermissionMode': async (args, ctx) => {
+    const { cid, permission_mode } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+      throw new Error('invalid permission mode');
+    }
+    const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
   },
@@ -1259,7 +1383,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkillCatalog(),
       agents.listAgents(),
     ]);
-    return { skills: skillRows, agents: agentRows };
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = agentRows;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = agentRows.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { skills: skillRows, agents: filteredAgents };
   },
 
   'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
@@ -1367,24 +1504,39 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgents().catch(() => []),
       skills.listSkillCatalog().catch(() => []),
     ]);
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = sAgents;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = sAgents.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
     const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
       skills: new Set(sSkills.map((s) => s.id)),
-      agents: new Set(sAgents.map((a) => a.agent_id)),
+      agents: new Set(filteredAgents.map((a) => a.agent_id)),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { removed: result.removed };
   },
 
-  // 模板选择器数据源（含 bundle 静态预览；内置模板 v1.1.0）
-  'spaces.templates.list': async (_payload, _ctx) => {
-    const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
-    return { templates };
+  // 模板目录：唯一正式出口在 Personal Ontology。返回 RoleTemplateSummary
+  // （templateId/name/description/version/installed/bundle），**不含**
+  // preset_groups / sections / 字段值 / group_id —— 见 personal_ontology_contract.ts。
+  'personalOntology.templates.catalog': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { templates: await contract.listRoleTemplateSummaries(ctx.userId) };
   },
 
-  // 情境入口场景列表（教育/写作/职场+自定义，M2）
-  'spaces.scenarios.list': async (_payload, _ctx) => {
-    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
-    return { scenarios };
+  // 情境入口场景列表（教育/写作/职场+自定义）。场景归属未裁决，先统一从 contract 出。
+  'personalOntology.scenarios.list': async (_payload, _ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { scenarios: contract.listRoleScenarios() };
   },
 
   // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
@@ -1396,6 +1548,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.artifacts.list': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
+  },
+
+  // 删除空间产物（产物页「更多」→ 删除产物）。破坏性操作由渲染层二次确认；
+  // 这里以空间产物列表为准重新解析目标（path 或 artifactId 精确命中），拒绝
+  // 任意外部路径。web artifact 删除整个产物目录，文件产物删除文件本身
+  // （macOS 走废纸篓，其余平台回退 rm）。删除后失效产物缓存与文件索引。
+  'spaces.artifacts.delete': async ({ spaceId, path: targetPath, artifactId, cid } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof targetPath !== 'string' || !targetPath) throw new Error('missing path');
+    const wanted = path.resolve(targetPath);
+    const entries = await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId);
+    const target = entries.find((e) => (
+      (e.path && path.resolve(e.path) === wanted)
+      || (typeof artifactId === 'string' && artifactId && e.artifactId === artifactId)
+    ));
+    if (!target || !target.path) throw new Error('artifact not found in space');
+    // web artifact → 删除整个产物目录；文件 → 删除文件本身
+    let victim = path.resolve(target.path);
+    if (target.type === 'artifact') victim = path.dirname(victim);
+    let st: fs.Stats;
+    try { st = fs.statSync(victim); }
+    catch { return { ok: false, error: 'not_found' }; }
+    try {
+      if (typeof shell.trashItem === 'function') await shell.trashItem(victim);
+      else if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+      else fs.unlinkSync(victim);
+    } catch (err) {
+      try {
+        if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+        else fs.unlinkSync(victim);
+      }
+      catch {
+        return { ok: false, error: String((err as Error).message || 'delete failed') };
+      }
+    }
+    spacesArtifacts.invalidateSpaceArtifacts(spaceId);
+    try {
+      const fileIndexer = require('../features/file_indexer') as { invalidateFileCache?: (userId: string, absPath: string) => void };
+      fileIndexer.invalidateFileCache?.(ctx.userId, victim);
+    } catch { /* cache invalidation is best-effort */ }
+    void cid;
+    return { ok: true, path: victim };
   },
 
   // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
@@ -2296,25 +2490,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
+    // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
+    // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
+    // PO 的内部结构。
     if (profileTarget !== undefined) {
       if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
-        || !safeId(profileTarget.groupId)
-        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
-        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
-        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        || typeof profileTarget.fieldRef !== 'string'
+        || !safeId(profileTarget.fieldRef)
+        || profileTarget.fieldRef.length > 512) {
         throw new Error('invalid personal profile target');
       }
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
-      ...(profileTarget ? {
-        profileTarget: {
-          groupId: profileTarget.groupId,
-          section: profileTarget.section.trim(),
-          fieldName: profileTarget.fieldName.trim(),
-          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
-        },
-      } : {}),
+      ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
       ok: true,
@@ -2943,11 +3133,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // catalog and reopen every agent.json. Actual definition mutations,
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
-    return {
-      agents: summary === true || summary === '1'
-        ? await agents.listAgentSummaries()
-        : await agents.listAgents(),
-    };
+    let agentList = summary === true || summary === '1'
+      ? await agents.listAgentSummaries()
+      : await agents.listAgents();
+
+    // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
+    // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
+    if (!onboardingState.getOnboardingCompleted()) {
+      agentList = agentList.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        // 过滤掉所有 CLI 类型的 Agent
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { agents: agentList };
   },
 
   'agents.get': async ({ agent_id }) => {
@@ -3084,12 +3287,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
     const groups = await personalOntologyGroups.listGroups(ctx.userId);
-    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）。显示名的唯一来源是
+    // contract 的目录条目——不再让调用方各自查 T-box 常量。
+    const contract = await import('../features/personal_ontology_contract');
     for (const g of groups) {
-      if (g.template_id) {
-        const template = getRoleTemplate(g.template_id);
-        if (template) g.template_name = template.name;
-      }
+      if (!g.template_id) continue;
+      const entry = contract.getRoleTemplateCatalogEntry(g.template_id);
+      if (entry) g.template_name = entry.name;
     }
     return { groups };
   },
@@ -3108,12 +3312,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
-    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
+    // 三种入参都要读得出来：contract opaque ref（@ Picker 新路径）、复合 id
+    // （groupId::分节，历史草稿里的存量 token）、普通 group id。readOntologyEntry
+    // 内部按 ref 前缀分流后统一走 readContentById，chat-use 侧零改动。
+    const contract = await import('../features/personal_ontology_contract');
+    return contract.readOntologyEntry(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // 可 @ 引用的本体条目（普通分组 + 已安装模板的分节）。返回的 ref 是
+  // PO contract 生成的 opaque 句柄：渲染层原样存、原样回传，不解析、不拼接。
+  'personalOntology.entries.list': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { entries: await contract.listOntologyEntries(ctx.userId) };
+  },
+
+  // 可写入的角色模板字段落点（已安装 ∩ T-box）。targets[].fieldRef 是 opaque
+  // 写入句柄，调用方只回传它；label 已拼好，渲染层不重组显示名。
+  'personalOntology.templates.fieldTargets': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { targets: await contract.listRoleTemplateFieldTargets(ctx.userId) };
   },
 
   // ── Personal Ontology Role Templates (角色模板) ──
@@ -4121,7 +4342,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, abilitiesByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
@@ -4131,7 +4352,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
       ? baseUrlsByExternalId
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
+    // Probed per-model abilities (sparse; aggregator endpoints only).
+    // Validate one level deep: { [externalId]: { [modelId]: { contextWindow?, vision? } } }.
+    let abilities: Record<string, Record<string, { contextWindow?: number; vision?: boolean }>> | undefined;
+    if (abilitiesByExternalId && typeof abilitiesByExternalId === 'object' && !Array.isArray(abilitiesByExternalId)) {
+      for (const [extId, map] of Object.entries(abilitiesByExternalId)) {
+        if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+        const clean: Record<string, { contextWindow?: number; vision?: boolean }> = {};
+        for (const [modelId, raw] of Object.entries(map)) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const a: { contextWindow?: number; vision?: boolean } = {};
+          const w = (raw as Record<string, unknown>).contextWindow;
+          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) a.contextWindow = w;
+          const v = (raw as Record<string, unknown>).vision;
+          if (typeof v === 'boolean') a.vision = v;
+          if (a.contextWindow !== undefined || a.vision !== undefined) clean[modelId] = a;
+        }
+        if (Object.keys(clean).length) (abilities || (abilities = {}))[extId] = clean;
+      }
+    }
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, undefined, abilities);
   },
   'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
     if (typeof cli !== 'string' || !cli) {
@@ -4712,6 +4952,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (st.size > MAX_OFFICE_PREVIEW_BYTES) {
       return { ok: false, error: 'too_large', size: st.size, cap: MAX_OFFICE_PREVIEW_BYTES };
     }
+    const cacheKey = `${norm}:${st.size}:${st.mtimeMs}:${payload?.mode === 'card' ? 'card' : 'full'}`;
+    const cached = _officePreviewCacheGet(cacheKey);
+    if (cached) return { ok: true, html: cached.html, kind: cached.kind, size: st.size, cached: true };
+    const compact = payload?.mode === 'card';
 
     try {
       const buf = fs.readFileSync(norm);
@@ -4726,7 +4970,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const { pptxBufferToHtml } = await import('../util/extract-office');
         fragment = pptxBufferToHtml(buf);
       }
-      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>');
+      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
+      _officePreviewCachePut(cacheKey, html, kind);
       return { ok: true, html, kind, size: st.size };
     } catch (err) {
       return { ok: false, error: String((err as Error).message || 'preview failed') };
@@ -4856,6 +5101,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  'stt.results': async function* ({ sessionId }, ctx, signal) {
+    if (typeof sessionId !== 'string' || !safeId(sessionId)) {
+      yield { type: 'error', text: 'invalid session id' };
+      return;
+    }
+    let lastPartial = '';
+    while (!signal.aborted) {
+      const partial = stt.currentPartial(ctx.userId, sessionId);
+      if (partial && partial !== lastPartial) {
+        lastPartial = partial;
+        yield { type: 'event', event: { partial } };
+      }
+      if (stt.isSessionDone(ctx.userId, sessionId)) {
+        yield { type: 'event', event: { final: stt.currentFinal(ctx.userId, sessionId) } };
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  },
   /**
    * Read-only aside answer. Deliberately NOT routed through groupChat.send /
    * bus.enqueue: doing so would append to the main transcript and add a second
@@ -5351,6 +5615,14 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
+  // Desktop live-refresh rail: every persisted group-chat message (external
+  // channel inbound included — nothing in the renderer holds a stream for
+  // those conversations) is pushed to all windows so the sidebar and the
+  // open conversation can refresh without a manual reload.
+  setGroupChatMessageBroadcaster((info) => {
+    broadcastToRenderer('conversations:updated', info);
+  });
+
   const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');

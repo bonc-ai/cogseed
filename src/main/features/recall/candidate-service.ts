@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { describeRoleTemplateFieldRef } from '../personal_ontology_contract';
 import * as personalOntologyCandidates from '../personal_ontology_candidates';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -319,16 +320,17 @@ export class SemanticDedupUnavailableError extends Error {
 
 const MAX_SOURCE_SESSION_IDS = 50;
 
+/**
+ * 落点只有一个 opaque fieldRef。这里只做「是不是一个 PO 认得的写入句柄」，
+ * 不解析、不重建其内部结构——分节/字段/装态/T-box 由 PO 在写入时判定。
+ */
 function normalizePersonalProfileTarget(value: PersonalProfileTarget | undefined): PersonalProfileTarget | undefined {
   if (value === undefined) return undefined;
-  if (!value || !safeId(value.groupId)) throw new Error('invalid personal profile target group');
-  const section = typeof value.section === 'string' ? value.section.trim() : '';
-  const fieldName = typeof value.fieldName === 'string' ? value.fieldName.trim() : '';
-  if (!section || section.length > 200) throw new Error('invalid personal profile target section');
-  if (!fieldName || fieldName.length > 200) throw new Error('invalid personal profile target field');
-  const templateId = value.templateId === undefined ? undefined : String(value.templateId).trim();
-  if (templateId !== undefined && !safeId(templateId)) throw new Error('invalid personal profile target template');
-  return { groupId: value.groupId, section, fieldName, ...(templateId ? { templateId } : {}) };
+  const fieldRef = value && typeof value.fieldRef === 'string' ? value.fieldRef.trim() : '';
+  if (!fieldRef || !describeRoleTemplateFieldRef(fieldRef)) {
+    throw new Error('invalid personal profile target');
+  }
+  return { fieldRef };
 }
 
 function sourceSessionIdsFrom(refs: CognitionSourceRef[]): string[] {

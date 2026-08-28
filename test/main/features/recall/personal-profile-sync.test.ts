@@ -293,21 +293,18 @@ describe('Recall personal profile projection', () => {
   it('writes a user-selected template field during the same projection pass', async () => {
     const { templates, row } = await installStudentTemplate();
     const sync = await loadSync();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
     const personal = asset('aa-personal-explicit-target', 'personal', '我是一名程序员，有十年经验。');
     const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    // 落点只传一个 opaque fieldRef——不再带 groupId/section/fieldName/templateId
+    const fieldRef = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '专业与学习方向'))!;
+    expect(fieldRef).toBeTruthy();
 
     const result = await sync.syncPersonalProfileFromRecallAssets(
       UID,
       { listAssets: async () => [personal], routeAsset },
-      {
-        assetId: personal.id,
-        target: {
-          groupId: row.group_id,
-          section: '学习背景',
-          fieldName: '专业与学习方向',
-          templateId: 'student',
-        },
-      },
+      { assetId: personal.id, target: { fieldRef } },
     );
 
     expect(result).toMatchObject({ eligible: 1, written: 1, failed: [] });
@@ -318,19 +315,39 @@ describe('Recall personal profile projection', () => {
     ]);
   });
 
-  it('rejects an explicit target that is not part of the installed template catalog', async () => {
+  it('rejects an explicit target that is not a valid PO field ref', async () => {
     await installStudentTemplate();
     const sync = await loadSync();
     const personal = asset('aa-personal-invalid-target', 'personal', '不应写入不存在的字段。');
 
+    // 伪造/损坏的句柄解不出落点 → 该资产失败，其余资产不受影响
     const result = await sync.syncPersonalProfileFromRecallAssets(
       UID,
       { listAssets: async () => [personal] },
-      { assetId: personal.id, target: { groupId: 'missing-group', section: '学习背景', fieldName: '职业' } },
+      { assetId: personal.id, target: { fieldRef: 'po1bogus' } },
     );
 
     expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 0 });
     expect(result.failed).toEqual([{ assetId: personal.id, error: 'profile target field not found' }]);
+  });
+
+  it('rejects a well-formed ref whose field is outside the template T-box', async () => {
+    await installStudentTemplate();
+    const sync = await loadSync();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const personal = asset('aa-personal-non-tbox', 'personal', '自定义字段不许自动写。');
+
+    // T-box 外的字段拿不到句柄——白名单在发句柄那一刻就生效了
+    expect(await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '自定义备注')).toBeNull();
+
+    const result = await sync.syncPersonalProfileFromRecallAssets(
+      UID,
+      { listAssets: async () => [personal] },
+      { assetId: personal.id, target: { fieldRef: 'po1' + Buffer.from(JSON.stringify({ k: 'tf', t: 'student', s: '学习背景', f: '自定义备注' })).toString('base64url') } },
+    );
+    expect(result.failed).toEqual([
+      { assetId: personal.id, error: 'field is not declared by the role template' },
+    ]);
   });
 
   it('does not overwrite a manually maintained profile value', async () => {
@@ -418,8 +435,11 @@ describe('Recall personal profile projection', () => {
       },
     });
 
-    expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 0 });
-    expect(result.failed).toEqual([{ assetId: personal.id, error: 'field not found' }]);
+    // 落点在路由途中被删掉 → 签发阶段就拿不到句柄，归为 unmatched 而不是
+    // 写入失败：现在「签得出 fieldRef」等价于「写得进去」，所以撞不到
+    // append 的 `field not found` 了。字段仍然不会被重建，这是本用例的本意。
+    expect(result).toMatchObject({ eligible: 1, written: 0, unmatched: 1 });
+    expect(result.failed).toEqual([]);
     const fields = await templates.listFieldsByRef(UID, ref);
     expect(fields.fields?.some((field) => field.name === '教育阶段')).toBe(false);
     expect(templates.readTemplateFileText(UID, 'student')).not.toContain(personal.statement);
@@ -661,6 +681,11 @@ describe('personal profile projection is driven from the main process', () => {
       return { eligible: 1, written: 1, skipped: 0, unmatched: 0, failed: [] };
     });
 
+    // 签发落点句柄现在要验实例文件里真的有这个坑，所以先把模板装起来
+    await installStudentTemplate();
+    const contract = await import('../../../../src/main/features/personal_ontology_contract');
+    const PROFILE_FIELD_REF = (await contract.buildRoleTemplateFieldRef(UID, 'student', '学习背景', '专业与学习方向'))!;
+    expect(PROFILE_FIELD_REF).toBeTruthy();
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
     const candidate = await candidates.saveRecallCandidate(UID, {
       judgment: '我长期从事程序开发。',
@@ -673,12 +698,7 @@ describe('personal profile projection is driven from the main process', () => {
     });
     const { asset } = await candidates.promoteRecallCandidate(UID, candidate.id, {
       actor: 'user',
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef: PROFILE_FIELD_REF },
     });
 
     expect(asset.type).toBe('personal');
@@ -686,14 +706,42 @@ describe('personal profile projection is driven from the main process', () => {
       userId: UID,
       options: {
         assetId: asset.id,
-        target: {
-          groupId: 'group-student',
-          templateId: 'student',
-          section: '学习背景',
-          fieldName: '专业与学习方向',
-        },
+        target: { fieldRef: PROFILE_FIELD_REF },
       },
     }]);
     spy.mockRestore();
+  });
+});
+
+describe('personal profile projection › catalog 指纹不含 PO 内部寻址', () => {
+  it('no_match 回执在卸载重装（group_id 变化）后仍作数——指纹只看模板与字段清单', async () => {
+    const templates = await import('../../../../src/main/features/personal_ontology_template_files');
+    const sync = await loadSync();
+
+    const first = await installStudentTemplate();
+    const firstGroupId = first.row.group_id;
+    const personal = asset('aa-personal-fingerprint', 'personal', '一条路由不到任何字段的通用偏好。');
+    // flow → 落 no_match 回执，catalogFingerprint 才会参与 isSettledForInput
+    const routeAsset = vi.fn(async () => ({ action: 'flow' as const }));
+
+    const before = await sync.syncPersonalProfileFromRecallAssets(
+      UID, { listAssets: async () => [personal], routeAsset }, { assetId: personal.id },
+    );
+    expect(before).toMatchObject({ unmatched: 1 });
+    expect(routeAsset).toHaveBeenCalledTimes(1);
+
+    // 卸载重装 → group_id 变了，但模板与字段清单一模一样
+    await templates.uninstallTemplateFile(UID, 'student');
+    await templates.installTemplateFile(UID, 'student');
+    const secondGroupId = templates.readGroups(UID).find((g) => g.template_id === 'student')!.group_id;
+    expect(secondGroupId).not.toBe(firstGroupId);
+
+    // 指纹未变 → 回执仍结算 → 不再重复调用路由（指纹若含 group_id 这里会重跑）
+    routeAsset.mockClear();
+    const after = await sync.syncPersonalProfileFromRecallAssets(
+      UID, { listAssets: async () => [personal], routeAsset }, { assetId: personal.id },
+    );
+    expect(after).toMatchObject({ skipped: 1, unmatched: 0 });
+    expect(routeAsset).not.toHaveBeenCalled();
   });
 });

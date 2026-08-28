@@ -22,7 +22,6 @@ vi.mock('../../../src/main/features/agents', () => ({
 // 纯函数直接静态导入（无 WS_ROOT 依赖）
 import {
   resolveSpaceResources,
-  parseTemplateFileBundle,
   type Space,
 } from '../../../src/main/features/spaces';
 
@@ -79,7 +78,7 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
       agents: new Set(['3bf780cd23be', '54f102b6c1ee', '5a5fe1598ed0', 'ag-1']),
     };
     const r = resolveSpaceResources(space, valid);
-    expect(r.template?.template_id).toBe('student');
+    expect(r.template?.templateId).toBe('student');
     expect(r.effective_skills).toEqual(['0e847fc8685e', '3def7f0eb34a', '4a8054f512e9', '4bb1813c8335', 'aef5bf07573f', 'sk-a', 'sk-b']);
     expect(r.effective_agents).toEqual(['3bf780cd23be', '54f102b6c1ee', '5a5fe1598ed0', 'ag-1']);
     expect(r.invalid_refs.skills).toEqual([]);
@@ -196,9 +195,9 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
       ]),
     };
     const r = resolveSpaceResources(space, valid);
-    expect(r.template?.template_id).toBe('student');
+    expect(r.template?.templateId).toBe('student');
     expect(r.secondary_templates.length).toBe(1);
-    expect(r.secondary_templates[0].template_id).toBe('scholar');
+    expect(r.secondary_templates[0].templateId).toBe('scholar');
     // 两模板 skill 并集 (5+5+1=11) 全部有效
     expect(r.effective_skills.length).toBe(11);
     // 两模板 agent 并集 (3+3=6) 全部有效
@@ -223,7 +222,7 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
     const r = resolveSpaceResources(space, valid);
     // secondary_templates 不含同 id 的主模板
     expect(r.secondary_templates.length).toBe(1);
-    expect(r.secondary_templates[0].template_id).toBe('scholar');
+    expect(r.secondary_templates[0].templateId).toBe('scholar');
     // 不重复计数
     expect(r.effective_skills.length).toBe(10);
   });
@@ -236,36 +235,9 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
       agents: new Set(['3bf780cd23be','54f102b6c1ee','5a5fe1598ed0']),
     };
     const r = resolveSpaceResources(space, valid);
-    expect(r.template?.template_id).toBe('student');
+    expect(r.template?.templateId).toBe('student');
     expect(r.secondary_templates).toEqual([]);
     expect(r.effective_skills.length).toBe(6);
-  });
-});
-
-describe('spaces › parseTemplateFileBundle（自定义模板捆绑声明）', () => {
-  it('解析 `> 捆绑技能:` / `> 捆绑智能体:` 声明行', () => {
-    const text = [
-      '> 模板: my-tpl@1.0.0',
-      '> 捆绑技能: sk-a, sk-b',
-      '> 捆绑智能体: ag-1',
-      '',
-      '## 课程',
-      '### 课程名称',
-    ].join('\n');
-    const b = parseTemplateFileBundle(text);
-    expect(b).toEqual({ skill_ids: ['sk-a', 'sk-b'], agent_ids: ['ag-1'] });
-  });
-
-  it('无声明行 → 空捆绑', () => {
-    const b = parseTemplateFileBundle('## 课程\n### 课程名称\n');
-    expect(b).toEqual({ skill_ids: [], agent_ids: [] });
-  });
-
-  it('声明行值带逗号/空白被拆分与 trim', () => {
-    const text = '> 捆绑技能:  sk-a ,  sk-b  \n> 捆绑智能体: ag-1, ag-2';
-    const b = parseTemplateFileBundle(text);
-    expect(b.skill_ids).toEqual(['sk-a', 'sk-b']);
-    expect(b.agent_ids).toEqual(['ag-1', 'ag-2']);
   });
 });
 

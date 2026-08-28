@@ -35,6 +35,7 @@ jimp 1.6.1                            MIT      https://github.com/jimp-dev/jimp
 mammoth 1.12.0                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
 node-pty 1.0.0                        MIT      https://github.com/microsoft/node-pty
 pdfjs-dist 6.2.108                    Apache-2.0  https://mozilla.github.io/pdf.js/
+sherpa-onnx-node 1.13.6               Apache-2.0  https://github.com/k2-fsa/sherpa-onnx
 socks-proxy-agent 8.0.5               MIT      https://github.com/TooTallNate/proxy-agents
 sqlite-vec 0.1.9                      MIT OR Apache-2.0  https://github.com/asg017/sqlite-vec
 tar 7.5.20                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
@@ -251,3 +252,24 @@ recorded in package-lock.json. When upgrading a dependency, refresh the
 corresponding retained file(s) and update the version, copyright, source,
 and license entries together. The original package license files under
 node_modules remain authoritative for an installed checkout.
+
+
+--------------------------------------------------------------------
+9. Development npm dependencies
+--------------------------------------------------------------------
+
+The following packages are build/test tooling used to develop and verify
+CogSeed. They are not distributed with the packaged application.
+
+@electron/rebuild 4.2.0                MIT        https://github.com/electron/rebuild
+@eslint/js 10.0.1                      MIT        https://github.com/eslint/eslint
+@types/adm-zip 0.5.8                   MIT        https://github.com/DefinitelyTyped/DefinitelyTyped
+@types/node 25.6.0                     MIT        https://github.com/DefinitelyTyped/DefinitelyTyped
+@vitest/coverage-v8 4.1.11             MIT        https://github.com/vitest-dev/vitest
+7zip-bin 5.2.0                         MIT        https://github.com/develar/7zip-bin
+electron 41.10.6                       MIT        https://github.com/electron/electron
+electron-builder 26.15.7                MIT        https://github.com/electron-userland/electron-builder
+eslint 10.9.0                          MIT        https://github.com/eslint/eslint
+typescript 6.0.3                       Apache-2.0 https://github.com/microsoft/TypeScript
+typescript-eslint 8.67.0               MIT        https://github.com/typescript-eslint/typescript-eslint
+vitest 4.1.11                          MIT        https://github.com/vitest-dev/vitest

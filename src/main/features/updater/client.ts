@@ -37,7 +37,7 @@ import { createLogger } from '../../logger';
 import { fetchWithRetry } from '../../util/retry';
 import { compareVersions } from '../../util/app-version-compat';
 import { requireCogSeedApiBase } from '../api_base';
-import { withCommonHeaders } from '../api_common';
+import { CLIENT_HEADER_NAMES, withCommonHeaders } from '../api_common';
 import { userUpdaterDownloadsDir } from '../../paths';
 import {
   markReminded,
@@ -56,6 +56,25 @@ const log = createLogger('updater');
 
 const LATEST_CHECK_TIMEOUT_MS = 15_000;
 const DOWNLOAD_EXTENSIONS_ALLOWED = new Set(['.dmg', '.zip']);
+
+/**
+ * Headers for the updates endpoints. The updates contract
+ * (docs/design/updates-api.md, updates-server catalog) uses node-style
+ * platform tokens darwin/win32/linux, while the shared client header carries
+ * the app's own taxonomy ('mac'/'windows'/'pc') for other business APIs —
+ * an unmapped 'mac' matches no catalog entry and silently reports "up to
+ * date", so the update channel maps the token explicitly.
+ */
+function updaterRequestHeaders(): Record<string, string> {
+  const contractPlatform: Record<string, string> = {
+    darwin: 'darwin',
+    win32: 'win32',
+    linux: 'linux',
+  };
+  const headers = withCommonHeaders();
+  headers[CLIENT_HEADER_NAMES.platform] = contractPlatform[process.platform] || process.platform;
+  return headers;
+}
 
 export interface CheckOptions {
   /** Manual (settings-page) check: bypasses the reminder throttle and
@@ -115,7 +134,7 @@ async function _fetchLatest(): Promise<UpdateInfo | null> {
   const url = `${base}/updates/latest`;
   const res = await fetchWithRetry(`updater:${url}`, url, {
     method: 'GET',
-    headers: withCommonHeaders(),
+    headers: updaterRequestHeaders(),
   }, {
     timeoutMs: LATEST_CHECK_TIMEOUT_MS,
     timeoutMessage: `updater:latest timed out after ${LATEST_CHECK_TIMEOUT_MS / 1000}s`,

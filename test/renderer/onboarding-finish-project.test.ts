@@ -79,7 +79,7 @@ describe('onboarding invisible workspace matching (space semantics)', () => {
     const { context, calls, loadProjectsCalls, loadConversationProjectCalls } = loadOnboardingRenderer();
     vm.runInContext('_csImportedConversationIds = ["c1", "c2"];', context);
 
-    const scenario = { scenario_id: 'workplace', name: '职场', icon: '💼', suggested_secondary_template_ids: ['project_manager', 'fde'] };
+    const scenario = { scenarioId: 'workplace', name: '职场', icon: '💼', suggestedSecondaryTemplateIds: ['project_manager', 'fde'] };
     await vm.runInContext(`_csEnsureWorkspaceFromScenario(${JSON.stringify(scenario)}, "product_manager", "职场", undefined, "ws.scenario.workplace.name")`, context);
 
     const spacesCreate = calls.find(([channel]) => channel === 'spaces.create');
@@ -129,7 +129,7 @@ describe('onboarding invisible workspace matching (space semantics)', () => {
       { space_id: 'scenario-space', name: '职场', primary_template_id: 'product_manager' },
     ];
 
-    await vm.runInContext('_csEnsureWorkspaceFromScenario({scenario_id:"workplace",name:"职场",icon:"💼",suggested_secondary_template_ids:["project_manager","fde"]}, "product_manager", "职场")', context);
+    await vm.runInContext('_csEnsureWorkspaceFromScenario({scenarioId:"workplace",name:"职场",icon:"💼",suggestedSecondaryTemplateIds:["project_manager","fde"]}, "product_manager", "职场")', context);
 
     // 复用「职场」空间，而非旧「产品经理」空间；不应调用 spaces.create。
     expect(calls.some(([c]) => c === 'spaces.create')).toBe(false);

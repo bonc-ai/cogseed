@@ -95,14 +95,14 @@
 .ws-space-icon.blue { color: #477394; background: #eaf2f7; }
 .ws-space-name h3 { font-size: 14px; font-weight: 650; color: #253129; }
 .ws-space-name small { display: block; margin-top: 3px; color: #8a938e; font-size: 11px; }
-.ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
+.ws-more { position: relative; z-index: var(--z-raised); width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
 
 
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
 .ws-more-menu {
-  position: absolute; top: 32px; right: 0; z-index: 6; min-width: 172px; padding: 6px;
+  position: absolute; top: 32px; right: 0; z-index: var(--z-raised); min-width: 172px; padding: 6px;
   border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
   box-shadow: 0 10px 28px rgba(25,43,33,.12);
 }
@@ -169,7 +169,7 @@
 /* ── 空间详情 ── */
 .ws-space-page { display: grid; grid-template-columns: minmax(0,1fr); position: relative; min-height: 100%; }
 .ws-space-main { min-width: 0; }
-.ws-space-head { position: sticky; top: 0; z-index: 4; padding: 20px 28px 0; border-bottom: 1px solid var(--ws-line); background: #fff; }
+.ws-space-head { position: sticky; top: 0; z-index: var(--z-sticky); padding: 20px 28px 0; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-space-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .ws-space-head-row > div:last-child { display: flex; gap: 7px; }
 /* 空间详情「返回空间中心」（返回上级） */
@@ -217,26 +217,6 @@
 .ws-info-note > span { display: grid; place-items: center; flex: none; width: 17px; height: 17px; border-radius: 50%; color: #177f4d; background: #e3f3e9; font-size: 11px; }
 .ws-info-note strong { color: #536158; }
 
-.ws-artifact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
-.ws-artifact-card { position: relative; display: grid; grid-template-columns: 43px minmax(0,1fr); gap: 11px; min-height: 130px; padding: 14px; border: 1px solid var(--ws-line); border-radius: 12px; background: #fff; }
-.ws-file-icon { display: grid; place-items: center; width: 42px; height: 46px; border-radius: 7px; color: #278759; background: #e9f7f0; font-size: 9px; font-weight: 700; }
-.ws-file-icon.xlsx { color: #337656; background: #e6f2eb; }
-.ws-file-icon.pptx { color: #8a603f; background: #f5ede7; }
-.ws-file-icon.html { color: #477394; background: #eaf2f7; }
-.ws-artifact-card h3 { margin: 0 46px 5px 0; color: #314038; font-size: 12px; line-height: 1.45; }
-.ws-artifact-card p { margin: 0; color: #69766e; font-size: 10px; line-height: 1.55; }
-.ws-artifact-card > em { position: absolute; top: 12px; right: 12px; padding: 3px 6px; border-radius: 5px; color: #547264; background: #edf4f0; font-size: 9px; font-style: normal; }
-.ws-artifact-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 11px; padding-top: 8px; border-top: 1px solid #edf1ef; color: #7f8a83; font-size: 9px; }
-.ws-artifact-card footer button { color: #177d4d; font-size: 10px; }
-/* COGSEED-18：导入产物无「来自」按钮，「打开」仍固定右对齐——与对话产物卡片位置一致 */
-.ws-artifact-card footer [data-ws="open-artifact"] { margin-left: auto; }
-/* 候选产物（AI 产出待确认）：灰显 + 强调确认按钮 */
-.ws-artifact-card.is-candidate { opacity: .72; background: #fbfcfb; }
-.ws-artifact-card.is-candidate:hover { opacity: 1; }
-.ws-artifact-card.is-candidate > em { color: #b45309; background: #fdf3e3; }
-.ws-artifact-card.is-candidate .ws-file-icon { background: #f1f4f2; color: #9aa49d; }
-.ws-confirm-artifact { color: #b45309 !important; font-weight: 650; }
-
 .ws-asset-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; padding: 3px; border-radius: 9px; background: #edf3ef; }
 .ws-asset-filters button { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; padding: 0 9px; border-radius: 6px; color: #758179; font-size: 10px; }
 .ws-asset-filters button:hover { color: #237a50; }
@@ -257,7 +237,7 @@
 
 /* ── 配置抽屉 ── */
 .ws-config-panel {
-  position: absolute; z-index: 22; top: 0; right: 0; bottom: 0;
+  position: absolute; z-index: var(--z-popover); top: 0; right: 0; bottom: 0;
   width: min(360px, calc(100% - 40px));
   display: flex; flex-direction: column;
   border-left: 1px solid var(--ws-line); background: #f7f9f8;
@@ -396,7 +376,7 @@
 
 /* 引用选择器浮层 */
 .ws-ref-scrim {
-  position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center;
   background: rgba(18,32,25,.34); backdrop-filter: blur(2px);
   /* 同 .ws-scrim：退出 macOS 窗口拖拽区命中，避免弹窗控件被拖拽带吞点击 */
   -webkit-app-region: no-drag;
@@ -474,7 +454,7 @@
    覆盖在它上面的弹窗按钮的鼠标事件（典型：新建空间弹窗右上角叉号，弹窗顶满
    高时叉号落进顶部拖拽带，点了没反应、连 mousedown 都进不了页面）。
    no-drag 让整个弹窗子树退出拖拽命中，保证弹窗内所有控件可点。 */
-.ws-scrim { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
+.ws-scrim { position: fixed; inset: 0; z-index: var(--z-overlay); display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
 .ws-dialog { display: flex; flex-direction: column; width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-dialog-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-dialog-head > div { display: flex; align-items: center; gap: 10px; }
@@ -513,7 +493,7 @@
 .ws-dialog-foot small { max-width: 430px; color: #78857d; font-size: 10px; line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: 8px; }
 
-.ws-ability-scrim { z-index: 210; background: rgba(25,36,30,.46); }
+.ws-ability-scrim { z-index: var(--z-overlay); background: rgba(25,36,30,.46); }
 .ws-ability-dialog { display: flex; flex-direction: column; width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-ability-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-ability-head h2 { font-size: 16px; font-weight: 700; color: #1f2b24; }
@@ -576,7 +556,7 @@
 
 /* ── toast ── */
 .ws-toast {
-  position: fixed; left: 50%; bottom: 26px; z-index: 999;
+  position: fixed; left: 50%; bottom: 26px; z-index: var(--z-toast);
   padding: 9px 14px; border-radius: 8px; color: #fff; background: rgba(31,42,35,.92);
   font-size: 11px; transform: translate(-50%, 8px); opacity: 0;
   transition: opacity .16s ease, transform .16s ease; pointer-events: none;
@@ -605,3 +585,285 @@
 .ws-import-clear { flex: 0 0 auto; display: grid; place-items: center; width: 20px; height: 20px; border: none; border-radius: 5px; background: none; color: #9aa39e; cursor: pointer; }
 .ws-import-clear:hover { background: var(--ws-soft); color: #46534b; }
 .ws-import-progress { margin-top: 6px; font-size: 11px; color: #176f45; }
+
+/* ─── 产物页 v0.1（原型 1:1：查找工具栏 + 紧凑列表/卡片 + 预览抽屉）───
+   命名 ws-art-*，仅作用于产物 pane；任务/资产页样式不受影响。 */
+
+.ws-space-pane--artifacts { max-width: 1280px; }
+
+/* 查找工具栏 */
+.ws-art-toolbar {
+  padding: 16px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-line);
+  border-radius: 14px;
+  margin-bottom: 22px;
+}
+.ws-art-toolbar-main { display: grid; grid-template-columns: minmax(280px, 1fr) auto; gap: 14px; }
+.ws-art-search-wrap { position: relative; display: block; }
+.ws-art-search-icon {
+  position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; color: #8b9992; pointer-events: none;
+}
+.ws-art-search-icon .ui-icon { width: 15px; height: 15px; }
+.ws-art-search {
+  width: 100%; height: 42px; border: 1px solid var(--ws-line); border-radius: 10px;
+  background: #fbfdfc; padding: 0 14px 0 40px; color: var(--ws-ink); font-size: 13px;
+}
+.ws-art-search::placeholder { color: #8b9992; }
+.ws-art-search:hover, .ws-art-search:focus { border-color: #9fc8b3; background: #fff; outline: none; }
+.ws-art-toolbar-controls { display: flex; align-items: center; gap: 8px; }
+.ws-art-select {
+  height: 42px; min-width: 132px; border: 1px solid var(--ws-line); border-radius: 10px;
+  background: #fff; padding: 0 32px 0 12px; color: var(--ws-ink); font-size: 12px; cursor: pointer;
+}
+.ws-art-select:hover, .ws-art-select:focus { border-color: #9fc8b3; outline: none; }
+.ws-art-view-toggle {
+  display: inline-flex; padding: 3px; border: 1px solid var(--ws-line); border-radius: 10px;
+  background: var(--ws-soft);
+}
+.ws-art-view-toggle button {
+  width: 36px; min-height: 34px; display: grid; place-items: center;
+  border-radius: 7px; color: #6e7d76; font-size: 15px; line-height: 1;
+}
+.ws-art-view-toggle button:hover { color: #314038; }
+.ws-art-view-toggle button.active { background: #fff; color: var(--ws-accent-dark); box-shadow: 0 1px 3px rgba(24,55,40,.12); }
+.ws-art-toolbar-secondary {
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--ws-line-soft, #e9efec);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.ws-art-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.ws-art-chips button {
+  height: 32px; border: 1px solid transparent; border-radius: 16px;
+  background: transparent; padding: 0 12px; color: #66736b; font-size: 12px;
+}
+.ws-art-chips button:hover { background: var(--ws-soft); color: var(--ws-ink); }
+.ws-art-chips button.active {
+  border-color: #b9d9c8; background: #eaf7f0; color: #0d653d; font-weight: 600;
+}
+.ws-art-summary { color: #66736b; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* 分组 + 列表 */
+.ws-art-content { display: flex; flex-direction: column; gap: 28px; }
+.ws-art-group-title {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+  color: var(--ws-ink); font-size: 14px; font-weight: 650;
+}
+.ws-art-group-title span { color: #8b9992; font-weight: 500; font-variant-numeric: tabular-nums; }
+.ws-art-list-shell {
+  background: var(--ws-surface); border: 1px solid var(--ws-line); border-radius: 14px; overflow: visible;
+}
+
+/* ── 虚拟滚动（列表视图）：撑杆 + 绝对定位窗口行 + 浮动分组头 ── */
+.ws-art-vlist { position: relative; }
+.ws-art-vspacer { pointer-events: none; }
+.ws-art-vhead, .ws-art-vrow, .ws-art-vsticky { position: absolute; left: 0; right: 0; }
+.ws-art-vhead { height: 42px; display: flex; align-items: flex-end; }
+.ws-art-vhead .ws-art-group-title { margin: 0; }
+.ws-art-vrow { height: 72px; }
+.ws-art-vrow .ws-artifact-row {
+  height: 72px; min-height: 72px;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-line-soft, #e9efec); border-top: 0; border-left: 0; border-right: 0;
+  border-radius: 0;
+}
+.ws-art-vrow:first-of-type .ws-artifact-row { border-top: 1px solid var(--ws-line-soft, #e9efec); }
+.ws-art-vsticky {
+  height: 42px; display: flex; align-items: flex-end; z-index: var(--z-sticky);
+  background: #f5f7f6; border-bottom: 1px solid var(--ws-line-soft, #e9efec);
+}
+.ws-art-vsticky .ws-art-group-title { margin: 0; }
+/* 分组首行圆角还原（窗口内按相邻行判断代价高，简化：首尾行给顶部圆角） */
+.ws-art-vwindow > .ws-art-vhead:first-child + .ws-art-vrow .ws-artifact-row,
+.ws-art-vwindow > .ws-art-vrow:first-child .ws-artifact-row {
+  border-top-left-radius: 12px; border-top-right-radius: 12px;
+}
+.ws-artifact-row {
+  position: relative; min-height: 72px;
+  display: grid; grid-template-columns: minmax(320px, 1fr) minmax(230px, .7fr) 100px 110px;
+  align-items: center; gap: 18px; padding: 10px 16px;
+  border-bottom: 1px solid var(--ws-line-soft, #e9efec); cursor: pointer;
+}
+.ws-artifact-row:last-child { border-bottom: 0; }
+.ws-artifact-row:hover { background: #f8fbf9; }
+.ws-artifact-row:focus-visible { outline: 2px solid rgba(23, 125, 77, .35); outline-offset: -2px; }
+.ws-art-file-main { min-width: 0; display: flex; align-items: center; gap: 12px; }
+.ws-art-file-icon {
+  flex: 0 0 auto; width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 10px; background: #eaf7f0; color: var(--ws-accent-dark);
+  font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "PingFang SC", monospace;
+}
+.ws-art-file-icon.ext-xlsx, .ws-art-file-icon.ext-xlsm { background: #eef7ef; color: #1e7f3d; }
+.ws-art-file-icon.ext-pptx, .ws-art-file-icon.ext-pptm { background: #fdf2ec; color: #c25e2a; }
+.ws-art-file-icon.ext-html, .ws-art-file-icon.ext-htm, .ws-art-file-icon.ext-md { background: #ecf2fb; color: #3563a6; }
+.ws-art-file-icon.ext-pdf { background: #fdeeec; color: #c0442f; }
+.ws-art-file-namewrap { min-width: 0; }
+/* 与全站标题同一血统：中文苹方黑体 + 苹方拉丁（英文文件名不再被全局 Inter 渲染成
+   另一种气质，与任务页/空间卡标题的黑体一致，消除割裂感） */
+.ws-artifact-row, .ws-artifact-card, .ws-art-drawer-title {
+  font-family: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+}
+.ws-art-file-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px; font-weight: 650; color: var(--ws-ink);
+}
+.ws-art-file-meta { margin-top: 5px; color: #66736b; font-size: 11px; }
+.ws-art-source { min-width: 0; }
+.ws-art-source-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #3c4c44; font-size: 11px; }
+.ws-art-source-meta { margin-top: 5px; color: #8c958f; font-size: 11px; }
+.ws-art-type-size { color: #8c958f; font-size: 11px; }
+.ws-art-type-size strong { display: block; margin-bottom: 4px; color: #435249; font-size: 11px; font-weight: 650; }
+.ws-art-row-actions { position: relative; display: flex; justify-content: flex-end; align-items: center; gap: 4px; }
+.ws-art-open {
+  height: 34px; border-radius: 8px; color: var(--ws-accent-dark);
+  padding: 0 10px; font-size: 11px; font-weight: 600;
+}
+.ws-art-open:hover { background: #eaf7f0; }
+.ws-art-more { width: 34px; height: 34px; min-height: 34px; display: grid; place-items: center; border-radius: 8px; color: #66736b; }
+.ws-art-more:hover { background: var(--ws-soft); color: var(--ws-ink); }
+.ws-art-more .ui-icon { width: 16px; height: 16px; }
+
+/* 更多菜单 */
+.ws-art-more-menu {
+  position: absolute; z-index: var(--z-popover); right: 0; top: calc(100% + 4px); width: 164px;
+  padding: 6px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
+  box-shadow: 0 8px 24px rgba(24, 55, 40, .12);
+}
+.ws-art-more-menu button {
+  width: 100%; height: 36px; border-radius: 7px; padding: 0 10px;
+  font-size: 12px; color: #314038; text-align: left;
+}
+.ws-art-more-menu button:hover, .ws-art-more-menu button:focus-visible { background: var(--ws-soft); }
+.ws-art-more-menu button.ws-art-danger { color: #b42318; }
+.ws-art-more-menu button.ws-art-danger:hover { background: #fdf0ef; }
+
+/* 失效文件：行内标红 + 标签（大厂「文件已移动」就近提示） */
+.ws-artifact-row.is-broken .ws-art-file-name,
+.ws-artifact-card.is-broken .ws-art-file-name { color: #b42318; }
+.ws-art-broken-tag {
+  display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  background: #fdecea; color: #b42318; font-size: 10px; font-weight: 600;
+  vertical-align: 1px; letter-spacing: 0;
+}
+.ws-artifact-row.is-broken .ws-art-file-meta,
+.ws-artifact-card.is-broken .ws-art-file-meta { color: #b42318; }
+.ws-art-drawer-broken { margin: 4px 0 0; color: #b42318; font-size: 12px; font-weight: 600; }
+
+/* 卡片视图 */
+.ws-art-grid-shell { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.ws-artifact-card {
+  position: relative; border: 1px solid var(--ws-line); border-radius: 14px;
+  background: var(--ws-surface); cursor: pointer; overflow: visible;
+}
+.ws-artifact-card:hover { border-color: #b7cfc2; box-shadow: 0 4px 12px rgba(24,55,40,.06); }
+.ws-artifact-card:focus-visible { outline: 2px solid rgba(23, 125, 77, .35); outline-offset: 2px; }
+.ws-art-card-preview {
+  height: 132px; display: grid; place-items: center;
+  border-bottom: 1px solid var(--ws-line-soft, #e9efec);
+  border-radius: 14px 14px 0 0; background: #f2f6f4; overflow: hidden;
+}
+.ws-art-card-thumb { width: 100%; height: 100%; object-fit: cover; }
+.ws-art-card-preview-box { display: grid; place-items: center; width: 100%; height: 100%; }
+.ws-art-card-preview-box.is-live { display: block; background: #fff; }
+.ws-art-card-frame {
+  width: 100%; height: 100%; border: 0; background: #fff;
+  pointer-events: none; /* 点击穿透到卡片行，不拦截「打开」；完整交互进抽屉 */
+}
+.ws-art-card-text {
+  width: 100%; height: 100%; background: #fff; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 5px; overflow: hidden;
+  font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #314038;
+}
+.ws-art-card-text span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-art-grid-sentinel { height: 8px; }
+.ws-art-paper {
+  width: 108px; height: 86px; padding: 14px 12px; background: #fff;
+  border: 1px solid #dfe7e3; box-shadow: 0 2px 6px rgba(24,55,40,.08);
+}
+.ws-art-paper-title { width: 60%; height: 6px; background: #91bba4; margin-bottom: 10px; }
+.ws-art-paper-line { height: 4px; margin-bottom: 6px; background: #dce6e1; }
+.ws-art-paper-line.short { width: 68%; }
+.ws-art-card-body { padding: 14px; }
+.ws-art-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.ws-art-card-head .ws-art-file-namewrap { flex: 1; }
+.ws-art-card-body > .ws-art-source-label { margin-top: 12px; }
+.ws-art-card-foot {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ws-line-soft, #e9efec);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.ws-art-card-foot .ws-art-row-actions { margin-right: -6px; }
+
+/* 骨架屏（与列表结构一致，避免加载跳动） */
+.ws-art-skeleton {
+  min-height: 72px; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  border-bottom: 1px solid var(--ws-line-soft, #e9efec);
+}
+.ws-art-skeleton:last-child { border-bottom: 0; }
+.ws-art-skeleton-icon { width: 42px; height: 42px; border-radius: 10px; background: #edf2ef; }
+.ws-art-skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.ws-art-skeleton-line { height: 10px; border-radius: 5px; background: #edf2ef; width: 90%; }
+.ws-art-skeleton-line.w60 { width: 60%; }
+.ws-art-skeleton-line.w40 { width: 40%; }
+
+/* 空态 */
+.ws-art-empty {
+  padding: 72px 24px; border: 1px solid var(--ws-line); border-radius: 14px;
+  background: var(--ws-surface); text-align: center;
+}
+.ws-art-empty h3 { margin: 0 0 8px; font-size: 17px; color: var(--ws-ink); }
+.ws-art-empty p { margin: 0; color: #66736b; font-size: 13px; }
+
+/* 预览抽屉 */
+.ws-art-drawer-backdrop {
+  position: fixed; z-index: var(--z-overlay); inset: 0; display: none; background: rgba(18, 31, 24, .24);
+}
+.ws-art-drawer-backdrop.open { display: block; }
+.ws-art-drawer {
+  position: absolute; right: 0; top: 0; bottom: 0; width: min(520px, 92vw);
+  display: flex; flex-direction: column; background: #fff;
+  box-shadow: -12px 0 32px rgba(16, 40, 28, .12);
+}
+.ws-art-drawer-head { display: flex; align-items: center; gap: 12px; padding: 20px; border-bottom: 1px solid var(--ws-line); }
+.ws-art-drawer-title { min-width: 0; flex: 1; }
+.ws-art-drawer-title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; color: var(--ws-ink); }
+.ws-art-drawer-title p { margin: 5px 0 0; color: #66736b; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-art-drawer-close { width: 40px; height: 40px; min-height: 40px; display: grid; place-items: center; border-radius: 8px; color: #46534b; }
+.ws-art-drawer-close:hover { background: var(--ws-soft); }
+.ws-art-drawer-close .ui-icon { width: 16px; height: 16px; }
+.ws-art-drawer-content { flex: 1; overflow: auto; padding: 28px; background: #f3f6f4; }
+.ws-art-preview { min-height: 620px; background: #fff; box-shadow: 0 4px 16px rgba(24,55,40,.08); display: flex; flex-direction: column; }
+.ws-art-preview.is-media { display: block; }
+.ws-art-preview.is-media .chat-file-viewer-html, .ws-art-preview.is-media .chat-file-viewer-pdf { width: 100%; height: 620px; border: 0; }
+.ws-art-preview.is-media .chat-file-viewer-image { max-width: 100%; display: block; margin: 0 auto; }
+.ws-art-preview-frame { width: 100%; height: 620px; border: 0; background: #fff; }
+.ws-art-preview-text {
+  flex: 1; margin: 0; padding: 24px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.7; color: #314038;
+}
+.ws-art-preview-loading { padding: 32px; text-align: center; color: #8b9992; font-size: 13px; }
+.ws-art-preview-fallback {
+  flex: 1; min-height: 240px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; padding: 32px; text-align: center;
+}
+.ws-art-preview-fallback-icon { color: #b7c4bd; }
+.ws-art-preview-fallback-icon .ui-icon { width: 40px; height: 40px; }
+.ws-art-preview-fallback strong { color: #435249; font-size: 14px; }
+.ws-art-preview-fallback p { margin: 0; color: #8b9992; font-size: 12px; }
+.ws-art-drawer-foot { padding: 14px 20px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--ws-line); }
+
+/* 响应式（与原型断点一致） */
+@media (max-width: 1100px) {
+  .ws-art-toolbar-main { grid-template-columns: 1fr; }
+  .ws-art-toolbar-controls { flex-wrap: wrap; }
+  .ws-artifact-row { grid-template-columns: minmax(280px, 1fr) minmax(210px, .7fr) 100px; }
+  .ws-artifact-row .ws-art-type-size { display: none; }
+  .ws-art-grid-shell { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .ws-artifact-row { grid-template-columns: 1fr auto; gap: 10px; }
+  .ws-artifact-row .ws-art-source { grid-column: 1 / -1; padding-left: 54px; margin-top: -8px; }
+  .ws-artifact-row .ws-art-row-actions { grid-column: 2; grid-row: 1; }
+  .ws-art-grid-shell { grid-template-columns: 1fr; }
+  .ws-art-select { min-width: 0; flex: 1 1 140px; }
+}

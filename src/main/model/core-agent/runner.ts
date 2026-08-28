@@ -58,6 +58,7 @@ import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createRecallTools } from './recall-tools';
+import { createPersonalOntologyTools } from './personal-ontology-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
 import { createP3394Tools } from './p3394-tools';
@@ -733,6 +734,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const kbTools = uid && !params.disableTools ? createKbTools({
     userId: uid,
     ...(params.spaceId ? { spaceId: params.spaceId } : {}),
+    ...(params.cid ? { cid: params.cid } : {}),
   }) : [];
 
   // Recall ability-asset search tool (search_ability_assets). Read-only, no
@@ -740,6 +742,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   // the LLM can actively consult the GLOBAL asset pool (product design
   // 2026-08-17: 注入只显示本空间资产，全局池的使用交给主动检索).
   const recallTools = uid && !params.disableTools ? createRecallTools({
+    userId: uid,
+  }) : [];
+
+  // Personal Ontology read-only tools (personal_ontology_fields). Gives skills
+  // the installed role-template field list through the PO contract instead of
+  // shelling out to read groups.md / <template_id>.md by hand.
+  const personalOntologyTools = uid && !params.disableTools ? createPersonalOntologyTools({
     userId: uid,
   }) : [];
 
@@ -888,6 +897,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...recallTools,
+    ...personalOntologyTools,
     ...chatHistoryTools,
     ...messagingTools,
     ...p3394Tools,
