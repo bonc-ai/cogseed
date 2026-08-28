@@ -4803,7 +4803,7 @@ async function runActorTurnBody(
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
       const { getLocalExecMode } = await import("../permissions");
-      // Vision fallback seam (2026-08-27, 子安口径): if this turn carries
+      // Vision fallback seam (2026-08-27, product call): if this turn carries
       // images and the receiving model is KNOWN vision-incapable, the
       // registered pluggable handler returns MODEL-FACING instructions
       // (image facts + on-disk paths + which vision tools to call — vision
