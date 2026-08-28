@@ -144,6 +144,40 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
+  // ── 工作空间 tab 冷启动预热 ─────────────────────────────────────────────
+  // workspace.js 原本是点击 tab 时才注入的懒加载脚本（3000 行/172KB），
+  // 每次打开软件后第一次点「工作空间」都要现场取代码 + 解析，产生可感知
+  // 延迟。这里改成打开软件时就把脚本注入好（只加载、不渲染），首次点击
+  // 只剩数据 IPC，跟同会话第二次点击一样快。
+  // requestIdleCallback 等主线程空闲再装，不挤占首帧；4s 兜底保证必装。
+  {
+    const _warmWorkspaceFeature = () => {
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      Promise.resolve(loader('workspace'))
+        .then(() => {
+          // 数据同样预热：在隐藏面板里先渲染一遍（不可见），首次点击只剩
+          // 极短刷新；本机 CLI 探测也提前完成，新建空间弹窗的基础 Agent
+          // 不再后补。用户已手动进入工作空间/面包屑已请求打开指定空间时跳过，
+          // 避免与点击路径的 renderWorkspace 并发互相覆盖。
+          if (currentView !== 'workspace' && currentView !== 'spaces'
+            && !window.__cogseedPendingOpenSpace
+            && typeof window.renderWorkspace === 'function') {
+            Promise.resolve(window.renderWorkspace()).catch(() => {});
+          }
+        })
+        .catch((err) => {
+          _bootLog.warn('workspace warmup load failed', { error: (err && err.message) || String(err) });
+        });
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(_warmWorkspaceFeature, { timeout: 4000 });
+    } else {
+      setTimeout(_warmWorkspaceFeature, 500);
+    }
+  }
   // First-run walkthrough: fire-and-forget so it never blocks first paint.
   // It reads the machine-local onboarding marker and only lifts the overlay
   // on a device that hasn't completed it yet. Runs after the last view is
