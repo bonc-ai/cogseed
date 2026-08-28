@@ -19,6 +19,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "readme:check": "node scripts/check-readme-links.mjs",
+    "tokens:check": "node scripts/check-design-tokens.mjs",
+    "tokens:update": "node scripts/check-design-tokens.mjs --update",
     "test": "npm run test:js && npm run test:resources",
     "test:js": "node scripts/run-tests.mjs run",
     "test:resources": "node scripts/run-python-tests.mjs resources/builtin resources/test -q",
@@ -38,7 +40,7 @@
     "sbom:check": "node scripts/sbom-check.cjs",
     "rebuild:sqlite:electron": "node scripts/ensure-sqlite-electron-abi.mjs",
     "rebuild:pty:electron": "node scripts/ensure-node-pty-electron-abi.mjs",
-    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs",
+    "postinstall": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs && node scripts/fetch-embedding-model.mjs && node scripts/fetch-sherpa-onnx.mjs",
     "prepare": "node scripts/install-git-hooks.mjs",
     "prepack": "node scripts/ensure-dev-dependencies.cjs",
     "test:resources:setup": "node scripts/setup-python-test-env.mjs",
@@ -85,6 +87,7 @@
     "mammoth": "^1.12.1",
     "node-pty": "^1.0.0",
     "pdfjs-dist": "^6.2.108",
+    "sherpa-onnx-node": "^1.13.6",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
     "tar": "7.5.20",
@@ -174,6 +177,14 @@
         "filter": [
           "**/*",
           "!*.tar.gz"
+        ]
+      },
+      {
+        "from": "resources/sherpa-onnx",
+        "to": "sherpa-onnx",
+        "filter": [
+          "**/*",
+          "!*.tar.bz2"
         ]
       },
       {

@@ -1098,6 +1098,18 @@ if (!gotLock) {
   registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });
   app.whenReady().then(async () => {
     await runBootSelfCheck();
+
+    // 版本迁移：检测版本变化，自动清理旧数据
+    try {
+      const { runVersionMigration } = await import('./features/version_migration');
+      const migrationResult = await runVersionMigration();
+      if (migrationResult.migrated) {
+        log.info('version migration completed', migrationResult);
+      }
+    } catch (err) {
+      log.warn('version migration failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+
     // Source-run macOS uses Electron.app's own Info.plist, so set the dock
     // icon at runtime. Packaged builds still pick up the configured icns.
     if (process.platform === 'darwin' && app.dock) {
@@ -1119,10 +1131,10 @@ if (!gotLock) {
     registerKbFileProtocol();
     registerChatMediaProtocol();
     registerChatAppProtocol();
-    // Renderer permission gate. Voice input is stripped from the open-source build, so media
-    // capture is denied; clipboard permissions are kept for copy/paste flows.
+    // Renderer permission gate. Media capture (microphone) is allowed for voice input;
+    // clipboard permissions are kept for copy/paste flows.
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write' || permission === 'media');
     });
     registerIpc();
     const stopTaskNotifications = taskNotifications.startTaskNotifications({

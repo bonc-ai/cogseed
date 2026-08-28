@@ -58,6 +58,7 @@ import { createOfficeTools } from './office-tools';
 import { officeCliAvailable } from '../../features/office/office_engine';
 import { createKbTools } from './kb-tools';
 import { createRecallTools } from './recall-tools';
+import { createPersonalOntologyTools } from './personal-ontology-tools';
 import { createChatHistoryTools } from './chat-history-tools';
 import { createMessagingTools } from './messaging-tools';
 import { createP3394Tools } from './p3394-tools';
@@ -744,6 +745,13 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     userId: uid,
   }) : [];
 
+  // Personal Ontology read-only tools (personal_ontology_fields). Gives skills
+  // the installed role-template field list through the PO contract instead of
+  // shelling out to read groups.md / <template_id>.md by hand.
+  const personalOntologyTools = uid && !params.disableTools ? createPersonalOntologyTools({
+    userId: uid,
+  }) : [];
+
   // Conversation-history tools (chat_search + chat_read). Commander-only:
   // agent workers receive the material they need through their visibility
   // slice / dispatcher payload and must never browse full conversation logs.
@@ -889,6 +897,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ...fileTools,
     ...kbTools,
     ...recallTools,
+    ...personalOntologyTools,
     ...chatHistoryTools,
     ...messagingTools,
     ...p3394Tools,

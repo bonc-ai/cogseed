@@ -1994,11 +1994,11 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('personalOntology.templates.catalog'),
       window.cogseed.invoke('skills.list'),
       window.cogseed.invoke('agents.list'),
     ]);
-    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
+    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.templateId, t.name || t.templateId]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
     _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
   } catch (_) { return; }
@@ -7426,6 +7426,58 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
   return url;
 }
 
+// ── 每会话访问权限模式（Claude Code 风格三档）──────────────────────────
+// full = 完全访问（bypass，阶段一真实生效）；auto_approve / ask 需要审批 UI
+// （阶段二），先占位并禁用，不造假生效。
+const _PERMISSION_MODES = [
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
+  { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+];
+
+let _permissionModeSelectBound = false;
+
+function _permissionModeEl() {
+  return document.getElementById('chat-permission-mode-select');
+}
+
+function _renderPermissionModeSelect(convMeta) {
+  const select = _permissionModeEl();
+  if (!select) return;
+  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+    ? convMeta.permission_mode
+    : 'full';
+  const phase2 = (typeof t === 'function' && t('chat.permission.phase2')) || '（阶段二）';
+  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
+  // 默认「完全访问」填 select，此时 escapeHtml 还没就绪，需要安全兜底。
+  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
+  select.innerHTML = _PERMISSION_MODES.map((m) => {
+    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
+    // 阶段一只有「完全访问」可真实生效；另外两档禁用。阶段二提示放进 title，
+    // 避免长文案把 select 撑到最长选项的宽度（选中项只有 4 个字时左右留白很大）。
+    const disabled = m.id !== 'full';
+    const title = disabled ? ` title="${esc(label)}${esc(phase2)}"` : '';
+    return `<option value="${m.id}"${disabled ? ' disabled' : ''}${current === m.id ? ' selected' : ''}${title}>${esc(label)}</option>`;
+  }).join('');
+  select.value = current;
+}
+
+function _bindPermissionModeSelect() {
+  if (_permissionModeSelectBound) return;
+  _permissionModeSelectBound = true;
+  const select = _permissionModeEl();
+  if (!select) return;
+  select.addEventListener('change', async () => {
+    const mode = select.value;
+    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    try {
+      await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
+    }
+  });
+}
+
 function _membersRequestUrl(cid) {
   return `/api/conversations/${encodeURIComponent(cid)}/members?project_id=${encodeURIComponent(_projectIdForConversation(cid))}`;
 }
@@ -8070,6 +8122,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // `agent_enabled` on the conversation payload (true when no agent_id).
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
+    _renderPermissionModeSelect(convMeta);
     const processingFresh = convMeta.processing === true
       && convMeta.processing_since
       && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
@@ -16482,4 +16535,8 @@ if (typeof window !== 'undefined') {
   } else {
     _initChatSelectionMenu();
   }
+  _bindPermissionModeSelect();
+  // 权限 select 现在常驻底部栏（工作空间旁），先按默认「完全访问」填好，
+  // 等历史加载后再由 _renderPermissionModeSelect(convMeta) 精确回填。
+  _renderPermissionModeSelect(null);
 }

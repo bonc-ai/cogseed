@@ -21,7 +21,7 @@ let prevWs: string | undefined;
 let prevBuiltin: string | undefined;
 const TEST_AGENT_ID = '111111111111';
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-builtin-marketplace-'));
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevBuiltin = process.env.COGSEED_BUILTIN_ROOT;
@@ -29,6 +29,10 @@ beforeEach(() => {
   process.env.COGSEED_BUILTIN_ROOT = path.join(tmpDir, 'builtin');
   postJsonMock.mockReset();
   vi.resetModules();
+
+  // 设置引导为已完成状态，允许 marketplace seed
+  const onboardingState = await import('../../../src/main/features/onboarding_state');
+  onboardingState.setOnboardingCompleted(true);
 });
 
 afterEach(() => {

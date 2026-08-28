@@ -2831,12 +2831,9 @@ describe('Recall cognition renderer flow', () => {
   it('passes the selected personal-template field through candidate confirmation', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];
-    const target = {
-      groupId: 'group-student',
-      templateId: 'student',
-      section: '学习背景',
-      fieldName: '专业与学习方向',
-    };
+    // 落点只是一个 opaque fieldRef：渲染层原样读、原样回传，不解析
+    const fieldRef = 'po1eyJrIjoidGYifQ';
+    const target = { fieldRef };
     const panel: any = {
       dataset: {},
       addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
@@ -2845,7 +2842,7 @@ describe('Recall cognition renderer flow', () => {
     };
     const card: any = {
       querySelector: (selector: string) => selector === '[data-recall-profile-target]'
-        ? { value: encodeURIComponent(JSON.stringify(target)) }
+        ? { value: fieldRef }
         : null,
     };
     const button: any = {
