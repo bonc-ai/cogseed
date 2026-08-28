@@ -34,13 +34,23 @@
     const title = document.createElement('span');
     title.className = 'anchored-source-title';
     title.textContent = '原文位置';
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'anchored-source-jump';
+    jump.textContent = '在阅读器打开';
+    jump.setAttribute('aria-label', '在阅读器打开');
+    jump.addEventListener('click', () => {
+      const isReader = dialog.classList.toggle('anchored-source-dialog--reader');
+      jump.textContent = isReader ? '返回定位' : '在阅读器打开';
+      meta.hidden = isReader;
+    });
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'anchored-source-close';
     close.textContent = '×';
     close.setAttribute('aria-label', '关闭');
     close.addEventListener('click', () => overlay.hidden = true);
-    header.append(title, close);
+    header.append(title, jump, close);
 
     const meta = document.createElement('div');
     meta.className = 'anchored-source-meta';
@@ -127,6 +137,19 @@
       padding: 10px 16px; border-bottom: 1px solid rgba(128,128,128,.3);
     }
     .anchored-source-title { font-weight: 600; }
+    .anchored-source-jump {
+      margin-left: auto; margin-right: 10px; border: 1px solid rgba(128,128,128,.4);
+      background: transparent; color: inherit; font-size: 12px; padding: 3px 10px;
+      border-radius: 6px; cursor: pointer;
+    }
+    .anchored-source-jump:hover { background: rgba(128,128,128,.12); }
+    .anchored-source-dialog--reader {
+      width: min(1100px, 96vw); max-height: 92vh;
+    }
+    .anchored-source-dialog--reader .anchored-source-body { padding: 28px 44px; }
+    .anchored-source-dialog--reader .anchored-source-text {
+      font-family: inherit; font-size: 15px; line-height: 2; color: inherit;
+    }
     .anchored-source-close {
       border: 0; background: transparent; font-size: 20px; cursor: pointer; line-height: 1;
     }

@@ -318,6 +318,7 @@ function _lazyFeaturePanel(view) {
     : view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
     : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+    : view === 'kb' ? 'panel-kb'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'auto' ? 'panel-auto'
@@ -420,6 +421,7 @@ function setView(view, cid, opts = {}) {
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+                : view === 'kb' ? 'panel-kb'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'dashboard' ? 'panel-dashboard'
                 : view === 'memory' ? 'panel-memory'
@@ -430,6 +432,7 @@ function setView(view, cid, opts = {}) {
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
+  document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
@@ -623,6 +626,14 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('workspace-tab-load', () => {
       _loadViewFeature('workspace', 'workspace', () => {
         if (typeof renderWorkspace === 'function') renderWorkspace();
+      });
+    });
+  } else if (view === 'kb') {
+    currentCid = null;
+    _deferSidebarNavWork('kb-tab-load', () => {
+      _loadViewFeature('kb', 'kb', () => {
+        if (typeof renderKbEco === 'function') renderKbEco();
+        if (typeof renderKbWorkbench === 'function') renderKbWorkbench();
       });
     });
   } else if (view === 'settings') {

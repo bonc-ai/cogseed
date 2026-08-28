@@ -19,6 +19,8 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
+import * as kbQa from '../features/kb_qa';
+import * as kbSummary from '../features/kb_summary';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
@@ -3922,6 +3924,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return _writeTextToLibrary(payload, ctx);
   },
 
+  // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。
+  // 懒生成 + 库指纹缓存（features/kb_summary）；失败降级为文件清单。
+  // dir=个人库；spaceId=空间库（共享知识库）。
+  'kb.summary': async ({ dir, spaceId }, ctx) => {
+    const res = await kbSummary.kbSummarize(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
   // ── Knowledge base (vector store) ──
   // Snapshot of what's in `kb_files`: status summary + per-file rows.
   // Renderer subscribes to the `kb.events` stream (below) for incremental
@@ -5159,6 +5184,40 @@ const streamHandlers: Record<string, StreamHandler> = {
           // Explain-only: no skills in the prompt and NO tools at all. The
           // `disableTools` flag is what actually enforces this — `maxToolLoops: 0`
           // would be dropped as falsy and leave the full tool set attached.
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
+  // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
+  // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
+  'kbqa.askStream': async function* ({ space_id, question, k }, ctx, signal) {
+    const q = String(question ?? '').trim();
+    if (!q) {
+      yield { type: 'error', text: 'empty question' };
+      return;
+    }
+    try {
+      const events = kbQa.kbAskStream(ctx.userId, {
+        spaceId: space_id ? String(space_id) : null,
+        question: q,
+        k: typeof k === 'number' ? k : undefined,
+      }, {
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
           abortSignal: signal,

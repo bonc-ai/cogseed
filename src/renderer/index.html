@@ -44,6 +44,7 @@
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
+        <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span><span class="sidebar-btn-chip kb-new-chip" data-i18n="sidebar.kb_new">新</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
         <button class="sidebar-btn" id="dashboard-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.dashboard">智能体总览</span></button>
@@ -1142,6 +1143,11 @@
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
       <section class="panel" id="panel-workspace">
         <div class="ws-view" id="ws-view"></div>
+      </section>
+
+      <!-- Knowledge Base (知识库工作台：生态 rail + 三栏，由 kb-eco.js / kb-workbench.js 渲染) -->
+      <section class="panel" id="panel-kb">
+        <div class="kb-view" id="kb-view"></div>
       </section>
 
       <!-- Settings -->
