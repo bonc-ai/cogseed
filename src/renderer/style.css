@@ -254,7 +254,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
    条内控件可点。覆盖工作空间/自动化/认知资产/市场/AI团队/技能/上下文
    搜索等页面的顶部条与连接/设置的标签条。 */
 .is-macos .ws-page-top,
-.is-macos .auto-header,
+.is-macos .ui-page-header,
 .is-macos .skills-cognition-header,
 .is-macos .marketplace-header,
 .is-macos .agents-grid-header,
@@ -270,10 +270,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .is-macos .ws-page-top textarea,
 .is-macos .ws-page-top a,
 .is-macos .ws-page-top label,
-.is-macos .auto-header button,
-.is-macos .auto-header input,
-.is-macos .auto-header select,
-.is-macos .auto-header a,
+.is-macos .ui-page-header button,
+.is-macos .ui-page-header input,
+.is-macos .ui-page-header select,
+.is-macos .ui-page-header a,
 .is-macos .skills-cognition-header button,
 .is-macos .skills-cognition-header input,
 .is-macos .skills-cognition-header select,
@@ -2770,6 +2770,22 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   letter-spacing: 0;
   line-height: 18px;
   text-align: center;
+}
+/* 消息渠道分组（飞书/微信等）：标题行完全复用 conv-list-space-title 分区头
+   样式（字体/行高/折叠箭头/渐变线同款），渠道差异只有标签前的图标位。 */
+.conv-channel-group-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  width: 15px;
+  height: 15px;
+}
+.conv-channel-group-icon .ui-icon,
+.conv-channel-group-icon svg,
+.conv-channel-group-icon img {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 /* 侧栏「置顶 / 空间 / 最近」分区标题（分区级标签，比时间桶标题更醒目）。
    大厂风格：克制的分组标签 —— 小字号、中字重、中性灰，无分隔线，靠留白分区。 */
@@ -8061,6 +8077,140 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   margin-left: auto;
 }
 
+/* 语音输入按钮：发送按钮左侧，录音时图标从麦克风切换为停止方块。 */
+.chat-stt-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.chat-stt-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary-text);
+}
+.chat-stt-btn.is-recording {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+  color: var(--danger);
+}
+.chat-stt-icon {
+  width: 15px;
+  height: 15px;
+}
+/* 空闲显示麦克风，录音时切换为停止方块 */
+.chat-stt-icon-stop { display: none; }
+.chat-stt-btn.is-recording .chat-stt-icon-mic { display: none; }
+.chat-stt-btn.is-recording .chat-stt-icon-stop { display: inline-block; }
+
+/* 语音输入波形面板：录音时浮在输入框上方，波形随真实音量起伏。 */
+.chat-stt-panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 12px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.16);
+  z-index: 40;
+}
+.chat-stt-panel[hidden] { display: none; }
+.chat-stt-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 44px;
+}
+.chat-stt-wave span {
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: height 0.09s ease;
+}
+.chat-stt-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.chat-stt-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-stt-cancel {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.chat-stt-cancel:hover { color: var(--text); }
+
+/* 每会话访问权限模式：底部栏里紧贴工作空间 chip 的紧凑下拉（Claude Code 风格三档） */
+.chat-permission-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 2px 5px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.chat-permission-chip:hover { border-color: var(--primary); }
+/* 聚焦时保留一个轻量边框提示，但去掉原生橙色 focus 环。 */
+.chat-permission-chip:focus-within { border-color: var(--primary); }
+.chat-permission-chip-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.chat-permission-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 18px;
+  max-width: 88px;
+  padding: 0 12px 0 0;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 9px 9px;
+}
+.chat-permission-select:hover { color: var(--primary-text); }
+.chat-permission-select:focus,
+.chat-permission-select:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 /* Attachments inside message bubbles (history + optimistic append) */
 .chat-msg-attachments {
   display: flex;
@@ -10266,7 +10416,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   transform: translateY(-2px);
   transition: max-width 150ms ease, max-height 150ms ease, opacity 120ms ease, transform 150ms ease;
 }
-#panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+/* ":has(:not(...))" keeps the collapsed-margin treatment for rows holding
+   only the collapsible icon group — the usage meta line (below) also lives
+   in this row but is display:none until hover, so it must not count as
+   content. */
+#panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
   margin-top: 0;
   transition: margin-top 150ms ease;
 }
@@ -10280,11 +10434,88 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   pointer-events: auto;
   transform: translateY(0);
 }
-#panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions:only-child),
-#panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+#panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))),
+#panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
   margin-top: 5px;
 }
 #panel-conversation .chat-message.user > .chat-msg-actions { justify-content: flex-end; }
+
+/* Message-level token usage meta line — hidden by default, shows on hover /
+   focus-within with the same rhythm as .chat-bubble-actions above. Lives
+   INSIDE the .chat-msg-actions row (2026-08-27 feedback): right-aligned on
+   the same line as the copy/quote icons — order keeps it right of the icons
+   regardless of mount order, margin-left:auto pushes it to the row's edge.
+   Segment language matches the session stats bar below: muted label (.k) +
+   mono value (.v), no dividers at this size. */
+.chat-msg-meta {
+  display: none;
+  order: 9;
+  margin-left: auto;
+  min-width: 0;
+  gap: 10px;
+  align-items: baseline;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-msg-meta .mseg { display: inline-flex; align-items: baseline; gap: 4px; }
+.chat-msg-meta .k { font-size: 10.5px; color: var(--muted); }
+.chat-msg-meta .v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+#panel-conversation .chat-message:hover .chat-msg-meta,
+#panel-conversation .chat-message:focus-within .chat-msg-meta {
+  display: flex;
+}
+
+/* Session stats line (Task 8) — lives under the composer input area, always
+   visible while a metrics-bearing conversation is open (unlike the per-message
+   .chat-msg-meta above, which is hover-revealed). Segments whose context
+   occupancy crosses the hot threshold (≥80%) get .seg-hot and the danger
+   color; the project's error token is --danger (--status-error doesn't exist). */
+/* Same box as the composer card: JS (_refreshSessionStats) copies the card's
+   rendered width onto this element each refresh — the card shrink-wraps to
+   its content, so a static CSS width can't track it (2026-08-27 alignment
+   feedback). margin:auto keeps it centered as a pure-CSS fallback.
+   Content centers inside that width (2026-08-27: left-flush readouts looked
+   misaligned against the card) and wraps instead of truncating when the
+   segments overflow — readouts must never silently lose digits.
+   Quiet readout styling: label (.k, muted) + mono value (.v) per segment,
+   hairline dividers between segments — deliberately NOT pill chips, these
+   are readouts, not interactive controls. */
+.chat-session-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 7px 4px 2px;
+  user-select: none;
+}
+.chat-session-stats .seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0 11px;
+  border-left: 1px solid var(--border-strong);
+}
+.chat-session-stats .seg:first-child { padding-left: 2px; border-left: none; }
+.chat-session-stats .seg .k { font-size: 11px; color: var(--muted); }
+.chat-session-stats .seg .v {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.chat-session-stats[hidden] { display: none; }
+.chat-session-stats .seg-hot .v { color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {
@@ -11268,7 +11499,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 9px;
+  height: 32px;
+  padding: 0 9px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
@@ -11316,22 +11548,37 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    to the right edge. Note the effort chip also carries the .model-chip
    class, so the :not([hidden]) guard matters for both. */
 .model-chip:not([hidden]) + .chat-send-btn { margin-left: 0; }
+/* 会话面板里合成 chip 后面还有语音输入按钮再是发送按钮，此时发送按钮也要
+   收回自己的 margin-left:auto，让 chip/mic/send 一起贴在右侧。 */
+.chat-model-effort-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
-.effort-chip { margin-left: 0; flex-shrink: 0; }
-/* The thinking-strength label is fixed short text; never let flex
-   shrink it (the model chip / workspace chip absorb the squeeze). */
+/* Combined model+effort chip: "model · effort". The effort label is muted
+   secondary text; the "·" separator is a lightweight visual divider. */
+.chat-model-effort-chip .model-chip-label {
+  max-width: 150px;
+}
+.chat-model-effort-sep {
+  color: var(--muted);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
 .effort-chip-label {
   flex-shrink: 0;
   white-space: nowrap;
+  color: var(--muted);
+  font-weight: 400;
 }
-.effort-chip.is-unsupported {
+.chat-model-effort-chip.is-unsupported .effort-chip-label {
   opacity: 0.75;
 }
-.effort-chip.is-unsupported:hover {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text-2);
-  cursor: default;
+/* 空态：没有配置模型时显示「未配置模型」，隐藏强度/分隔符/箭头，点按去配置。 */
+.chat-model-effort-chip.is-empty {
+  color: var(--muted);
+}
+.chat-model-effort-chip.is-empty .chat-model-effort-sep,
+.chat-model-effort-chip.is-empty .effort-chip-label,
+.chat-model-effort-chip.is-empty .model-chip-chevron {
+  display: none;
 }
 .model-chip-menu-item.is-disabled {
   opacity: 0.55;
@@ -11340,15 +11587,20 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .model-chip-menu-item.is-disabled:hover { background: transparent; }
 
 .model-chip-menu {
-  min-width: 240px;
+  min-width: 150px;
   max-width: 320px;
   max-height: min(360px, 55vh);
   overflow-y: auto;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 10px 24px rgba(20, 71, 55, .12);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(20, 71, 55, 0.12);
   padding: 6px;
+}
+/* 右侧弹出的子菜单（模型列表 / 思考强度）比主菜单更宽。 */
+.model-chip-submenu {
+  min-width: 240px;
+  max-width: 320px;
 }
 .model-chip-menu-header {
   font-size: 11px;
@@ -11359,62 +11611,38 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 7px 10px 7px 10px;
+  padding: 7px 10px;
   border-radius: 8px;
   cursor: pointer;
   position: relative;
 }
-.model-chip-menu-item:hover { background: #f3f4f6; }
-.model-chip-menu-item.is-default { background: rgba(14, 159, 110, 0.06); }
-.model-chip-menu-arrow {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+.model-chip-menu-item:hover { background: var(--surface-2); }
+.model-chip-menu-item.is-default { background: var(--primary-soft); }
+/* 主菜单入口：模型 / 思考强度，文字与右箭头同行（覆盖上面的 column）。 */
+.model-chip-menu-item.model-chip-menu-trigger {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.model-chip-menu-trigger .model-chip-menu-main {
+  flex: 1 1 auto;
+}
+.model-chip-menu-trigger-chevron {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  flex-shrink: 0;
 }
-.model-chip-menu-arrow:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
-.model-chip-menu-arrow-icon { width: 13px; height: 13px; }
-.model-chip-menu-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin: 0 0 6px 2px;
-  padding: 4px 8px 4px 4px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
+.model-chip-menu-trigger-chevron-icon {
+  width: 13px;
+  height: 13px;
 }
-.model-chip-menu-back:hover { background: #f3f4f6; color: var(--text); }
-.model-chip-menu-back-icon { width: 13px; height: 13px; }
-.model-chip-menu-loading {
-  padding: 12px 10px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-.model-chip-menu-item:hover { background: #f3f4f6; }
-.model-chip-menu-item.is-default { background: rgba(14, 159, 110, 0.06); }
 .model-chip-menu-main {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding-right: 26px;
 }
 .model-chip-menu-rank {
   font-size: 11px;
@@ -14879,6 +15107,31 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .hub-account-id-sub { font-size: 12px; color: var(--muted); }
 
+/* CogSeed ID + 掩码手机号（账号身份元信息，PRD PHONE-06） */
+.hub-account-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 3px;
+}
+.hub-account-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.hub-account-meta-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.hub-account-meta .hub-account-id-value,
+.hub-account-phone {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-soft, var(--muted));
+  font-family: var(--font-mono);
+}
+
 /* Generic card */
 .hub-card {
   background: var(--surface);
@@ -15040,6 +15293,89 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   margin-top: 6px;
   padding-top: 14px;
 }
+
+/* ── 注销流程（P3394 DEL-01~04：影响说明 → 重新认证 → 二次确认）── */
+.hub-deletion-flow { padding: 2px 0 6px; }
+.hub-deletion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.hub-deletion-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.hub-deletion-step { font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); }
+.hub-deletion-desc { font-size: 12.5px; color: var(--muted); margin: 0 0 12px; line-height: 1.6; }
+.hub-deletion-impact-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hub-deletion-impact-row:last-child { border-bottom: none; }
+.hub-deletion-impact-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.hub-deletion-impact-desc { font-size: 12px; color: var(--muted); }
+.hub-deletion-impact-effects {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-soft, var(--muted));
+  line-height: 1.5;
+}
+.hub-deletion-impact-immediate { color: var(--danger); }
+.hub-deletion-impact-final { color: var(--muted); }
+.hub-deletion-local-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 10px;
+}
+.hub-deletion-reauth-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-soft, var(--muted));
+  margin-bottom: 10px;
+}
+.hub-deletion-code-row { display: flex; gap: 8px; }
+.hub-deletion-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.hub-deletion-input:focus {
+  outline: 2px solid rgba(14, 159, 110, 0.34);
+  outline-offset: 1px;
+}
+.hub-deletion-code-row .hub-deletion-input { flex: 1; margin-bottom: 10px; }
+.hub-deletion-code-row .btn { flex: none; margin-bottom: 10px; }
+.hub-deletion-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.hub-deletion-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.hub-deletion-check input { margin-top: 2px; }
+.hub-alert-danger { background: #fef2f2; color: var(--danger); }
 
 /* ── Hub account icon polish (SVG via modules/icons.js) ──────────────── */
 .hub-alert-icon { width: 15px; height: 15px; flex: none; margin-right: 6px; vertical-align: -2px; }
@@ -18433,32 +18769,6 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   background: transparent; /* show body grid */
   min-height: 0;
 }
-/* Single-row page header matching `.agents-grid-header` / `.skills-grid-header`
-   — bold title + count chip on the left, "+ New task" button on the right. */
-.auto-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-.auto-title-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
-.auto-header-count {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--muted);
-}
-.auto-header-count:empty { display: none; }
-.auto-header-add {
-  margin-left: auto;
-}
-
 .auto-scroll {
   flex: 1;
   overflow-y: auto;
@@ -26760,6 +27070,55 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   background: var(--primary);
   border-radius: 999px;
   transition: width 0.2s ease;
+}
+
+/* ─── 关于我们（设置 › 关于我们 pane）──────────────────────────────────
+   版本信息 + 更新操作从「通用」页移入独立标签页；卡片形态与更新原型对齐。 */
+.settings-about-card {
+  max-width: 720px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-about-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+}
+.settings-about-icon {
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  object-fit: cover;
+}
+.settings-about-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about-name {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+.settings-about-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.settings-about-rows {
+  display: grid;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.settings-about-rows:empty {
+  display: none;
 }
 
 /* ─── 智能体总览 Dashboard（panel-dashboard）──────────────────────────

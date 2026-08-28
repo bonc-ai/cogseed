@@ -499,9 +499,9 @@ async function _csRunInvisibleMatching() {
   let matchedScenario = null;
   if (scenarioId) {
     try {
-      const scRes = await window.cogseed.invoke('spaces.scenarios.list', {});
+      const scRes = await window.cogseed.invoke('personalOntology.scenarios.list', {});
       const scenarios = (scRes && scRes.scenarios) || [];
-      const sc = scenarios.find((s) => s && s.scenario_id === scenarioId);
+      const sc = scenarios.find((s) => s && s.scenarioId === scenarioId);
       if (sc) {
         matchedScenario = sc;
         spaceName = _csT(`ws.scenario.${scenarioId}.name`, sc.name || scenarioId);
@@ -580,7 +580,7 @@ async function _csEnsureWorkspaceFromScenario(scenario, primaryTemplateId, space
           name: spaceName,
           ...(systemNameKey ? { system_name_key: systemNameKey } : {}),
           primary_template_id: primaryTemplateId || undefined,
-          secondary_template_ids: (scenario && scenario.suggested_secondary_template_ids) || [],
+          secondary_template_ids: (scenario && scenario.suggestedSecondaryTemplateIds) || [],
           icon: (scenario && scenario.icon) || undefined,
         });
         if (createRes && createRes.space && createRes.space.space_id) {

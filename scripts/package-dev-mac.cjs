@@ -18,7 +18,7 @@ function createDevBuilderConfig(baseConfig = {}, identity = {}, options = {}) {
   config.productName = 'CogSeed Dev';
   if (options.electronDist) config.electronDist = options.electronDist;
   delete config.protocols;
-  config.directories = { ...(config.directories || {}), output: 'dist-dev' };
+  config.directories = { ...(config.directories || {}), output: options.outputDir || 'dist-dev' };
   const files = Array.isArray(config.files) ? [...config.files] : [];
   if (!files.includes('.build/build-info.json')) files.push('.build/build-info.json');
   config.files = files;

@@ -37,6 +37,8 @@ before(async () => {
       { version: '0.0.6', platform: 'darwin', arch: 'x64', file: 'CogSeed-0.0.6-mac-x64.dmg', sha256: 'x', size: 1 },
       { version: '0.0.6', platform: 'win32', arch: 'x64', file: 'CogSeed-0.0.6-win-x64.exe', sha256: 'y', size: 1 },
       { version: '0.0.7-beta.1', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.7-beta.1-mac-arm64.dmg', sha256: 'z', size: 1 },
+      { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.6-mac-arm64.zip', sha256: 'zipsha', size: 2, notes: 'zip release notes', released_at: '2026-08-27T00:00:00Z' },
+      { version: '0.0.8', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.8-mac-arm64.zip', sha256: 'zipsha8', size: 3 },
     ],
   });
   server = createUpdatesServer();
@@ -85,6 +87,72 @@ test('filters by platform and arch', async () => {
   // No linux release at all → no update.
   const linux = await latest({ 'CogSeed-App-Version': '0.0.5', 'CogSeed-Platform': 'linux', 'CogSeed-Arch': 'arm64' });
   assert.equal(linux.body.data, null);
+});
+
+test('v1 latest ignores zip entries even when the zip version is newer', async () => {
+  const { status, body } = await latest({
+    'CogSeed-App-Version': '0.0.5',
+    'CogSeed-Platform': 'darwin',
+    'CogSeed-Arch': 'arm64',
+  });
+  assert.equal(status, 200);
+  // 0.0.8 zip exists but the reminder channel must still serve the newest
+  // installer (0.0.7-beta.1 dmg), never the zip.
+  assert.equal(body.data.latest_version, '0.0.7-beta.1');
+  assert.ok(body.data.url.endsWith('.dmg'));
+});
+
+test('auto-update feed returns the raw Squirrel.Mac shape for the newest zip', async () => {
+  const res = await fetch(`${base}/updates/feed/mac-arm64`);
+  assert.equal(res.status, 200);
+  const feed = await res.json();
+  // NOT the business envelope — the raw {url,name,notes,pub_date} object.
+  assert.equal(feed.url, 'https://updates.example.com/downloads/CogSeed-0.0.8-mac-arm64.zip');
+  assert.equal(feed.name, '0.0.8');
+  assert.equal(typeof feed.notes, 'string');
+  assert.ok(feed.pub_date);
+});
+
+test('auto-update feed gates by the Squirrel User-Agent version (204 = up to date)', async () => {
+  // Electron treats any 200 JSON feed as "update available"; version gating
+  // is server-side via the CFNetwork user-agent token.
+  const newer = await fetch(`${base}/updates/feed/mac-arm64`, {
+    headers: { 'User-Agent': 'CogSeed Dev/0.0.8 CFNetwork/3860.600.21 Darwin/25.5.0' },
+  });
+  assert.equal(newer.status, 204);
+  assert.equal(await newer.text(), '');
+
+  const newerPrerelease = await fetch(`${base}/updates/feed/mac-arm64`, {
+    headers: { 'User-Agent': 'CogSeed Dev/0.0.9-beta.1 CFNetwork/3860.600.21 Darwin/25.5.0' },
+  });
+  assert.equal(newerPrerelease.status, 204);
+
+  const older = await fetch(`${base}/updates/feed/mac-arm64`, {
+    headers: { 'User-Agent': 'CogSeed Dev/0.0.5 CFNetwork/3860.600.21 Darwin/25.5.0' },
+  });
+  assert.equal(older.status, 200);
+  assert.equal((await older.json()).name, '0.0.8');
+
+  // Unparseable / missing UA (curl, older clients) still gets the feed.
+  const curl = await fetch(`${base}/updates/feed/mac-arm64`, { headers: { 'User-Agent': 'curl/8.7.1' } });
+  assert.equal(curl.status, 200);
+});
+
+test('callerVersionFromFeedUserAgent parses the CFNetwork token only', () => {
+  const { callerVersionFromFeedUserAgent } = require('../server.cjs');
+  assert.equal(callerVersionFromFeedUserAgent('CogSeed Dev/0.0.6 CFNetwork/3860.600.21 Darwin/25.5.0'), '0.0.6');
+  assert.equal(callerVersionFromFeedUserAgent('CogSeed%20Dev/0.0.6 CFNetwork/3860.600.21 Darwin/25.5.0'), '0.0.6');
+  assert.equal(callerVersionFromFeedUserAgent('CogSeed/0.0.6-beta.2 CFNetwork/3860.600.21'), '0.0.6-beta.2');
+  assert.equal(callerVersionFromFeedUserAgent('curl/8.7.1'), null);
+  assert.equal(callerVersionFromFeedUserAgent(''), null);
+});
+
+test('auto-update feed passes notes/released_at through and 404s without a zip', async () => {
+  // arm64 newest zip (0.0.8) has no notes/released_at → defaults used;
+  // publish 0.0.6 entry carries explicit values (covered by fixture shape).
+  const missingArch = await fetch(`${base}/updates/feed/mac-x64`);
+  assert.equal(missingArch.status, 404);
+  assert.equal((await missingArch.json()).code, 1);
 });
 
 test('serves artifacts from downloads/ and rejects traversal', async () => {

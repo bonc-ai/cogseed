@@ -743,6 +743,12 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   const cliSessionId = `cli-${opts.cli}-${handle.runId}`;
   const spillDir = sessionToolResultsDir(opts.uid, cliSessionId);
   let lastEventAt = Date.now();
+  // 外接 run 计时打点（2026-08-27）：startedAt=run 创建时刻；首个 text-delta
+  // 记 firstTokenAt。两者随 done 事件挂到 done.metrics 供群聊落盘消费。
+  // 注意：这里不做台账入账（emitModelUsage 属于 usage-ledger 线，未进主线；
+  // 待该线合入后在 done 分支补转发）。
+  const cliRunStartedAt = Date.now();
+  let cliFirstTokenAt: number | null = null;
   const onEvent = (e: LocalEvent) => {
     // Self-emitted idle pulses don't count as "the CLI did something"
     // — without this carve-out we'd reset our own deadline and stop
@@ -771,10 +777,15 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     recordLocalAgentEventForLog(runDiagnostics, e);
     persist.append(handle, e);
     if (e.type === 'text-delta' && typeof e.text === 'string') {
+      if (cliFirstTokenAt === null) cliFirstTokenAt = Date.now();
       streamedOutput += e.text;
       persist.appendOutput(handle, e.text);
     }
     if (e.type === 'done') {
+      (e as { metrics?: { startedAt: number; firstTokenAt: number | null } }).metrics = {
+        startedAt: cliRunStartedAt,
+        firstTokenAt: cliFirstTokenAt,
+      };
       terminal = {
         status: (e.status as RunCliAgentResult['status']) || 'failed',
         output: typeof e.output === 'string' ? e.output : undefined,
