@@ -1994,11 +1994,11 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('personalOntology.templates.catalog'),
       window.cogseed.invoke('skills.list'),
       window.cogseed.invoke('agents.list'),
     ]);
-    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
+    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.templateId, t.name || t.templateId]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
     _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
   } catch (_) { return; }

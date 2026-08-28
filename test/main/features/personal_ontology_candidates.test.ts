@@ -531,7 +531,10 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     const poc = await seedCandidate('cand-hit', '协作项目');
     const res = await poc.confirmCandidate(UID, 'cand-hit', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: true }]);
+    // targetStatus 记的是历史名换算的结果分档；当前名走 current_name。
+    expect(res.fieldWrites).toEqual([
+      { groupId: sectionRef, fieldName: '协作项目', ok: true, targetStatus: 'current_name' },
+    ]);
     expect(res.groups).toBeUndefined(); // 填坑成功，不走流水区
 
     const content = tmpl.readTemplateFileText(UID, 'student');
@@ -547,7 +550,9 @@ describe('personal_ontology_candidates › confirm with targetField routing', ()
     const poc = await seedCandidate('cand-miss', '协作项目'); // 学习背景组没有 协作项目 字段
     const res = await poc.confirmCandidate(UID, 'cand-miss', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '协作项目' });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: false, error: 'field not found' }]);
+    expect(res.fieldWrites).toEqual([
+      { groupId: sectionRef, fieldName: '协作项目', ok: false, error: 'field not found', targetStatus: 'missing_target' },
+    ]);
     expect(res.groups).toEqual([{ groupId: sectionRef, ok: true }]);
 
     const content = tmpl.readTemplateFileText(UID, 'student');
@@ -604,7 +609,10 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     const res = await poc.confirmCandidate(UID, 'cand-llm-1', { toGlobalMemory: false }, { routeWithLlm: true });
     expect(res.ok).toBe(true);
     // LLM 命中 协作关系.协作项目 → toGroupIds 自动加入复合 id（groupId::协作关系）
-    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '协作项目', ok: true }]);
+    // targetStatus 记的是历史名换算的结果分档；当前名走 current_name。
+    expect(res.fieldWrites).toEqual([
+      { groupId: sectionRef, fieldName: '协作项目', ok: true, targetStatus: 'current_name' },
+    ]);
 
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('### 协作项目\n- 喜欢用大白话解释 [智能]');
@@ -619,7 +627,9 @@ describe('personal_ontology_candidates › routeWithLlm integration (router mock
     const poc = await seedCandidate('cand-llm-2');
     const res = await poc.confirmCandidate(UID, 'cand-llm-2', { toGlobalMemory: false, toGroupIds: [sectionRef], targetField: '教师与同伴' }, { routeWithLlm: true });
     expect(res.ok).toBe(true);
-    expect(res.fieldWrites).toEqual([{ groupId: sectionRef, fieldName: '教师与同伴', ok: true }]);
+    expect(res.fieldWrites).toEqual([
+      { groupId: sectionRef, fieldName: '教师与同伴', ok: true, targetStatus: 'current_name' },
+    ]);
     const content = tmpl.readTemplateFileText(UID, 'student');
     expect(content).toContain('### 教师与同伴\n- 喜欢用大白话解释 [候选]');
   });

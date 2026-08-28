@@ -12,13 +12,16 @@ import { safeId } from '../../storage';
 import { assertNotForbiddenToPersist } from '../../util/cognition-sensitivity';
 import { ensurePersonalProfileEntry } from '../memory';
 import {
-  appendExistingTemplateFieldValueToRef,
-  buildContentRef,
   listTemplateFileCatalog,
   type TemplateCatalogEntry,
 } from '../personal_ontology_template_files';
+import {
+  appendRoleTemplateFieldValue,
+  buildRoleTemplateFieldRef,
+  describeRoleTemplateFieldRef,
+  isTboxField,
+} from '../personal_ontology_contract';
 import { routeCandidateToField, type RouteDecision } from '../personal_ontology_router';
-import { getRoleTemplate } from '../role_templates';
 import { listAbilityAssets } from './asset-service';
 import { readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -38,7 +41,6 @@ interface PersonalProfileProjectionRecord extends RecallJsonRecord {
   catalogFingerprint: string;
   status: ProjectionStatus;
   templateId?: string;
-  groupId?: string;
   section?: string;
   fieldName?: string;
   failureMessage?: string;
@@ -74,16 +76,18 @@ export interface PersonalProfileSyncDependencies {
   listAssets?: (userId: string) => Promise<RecallAbilityAssetRecord[]>;
   listCatalog?: (userId: string) => Promise<TemplateCatalogEntry[]>;
   routeAsset?: (userId: string, statement: string, catalog: TemplateCatalogEntry[]) => Promise<RouteDecision>;
-  appendFieldValue?: typeof appendExistingTemplateFieldValueToRef;
+  appendFieldValue?: typeof appendRoleTemplateFieldValue;
   writeProfileEntry?: typeof ensurePersonalProfileEntry;
 }
 
-/** User-selected destination for a personal asset during candidate review. */
+/**
+ * 候选审阅面板里用户选定的落点。跨 renderer / IPC 只传这一个 opaque 句柄——
+ * 收归前这里是 { groupId, section, fieldName, templateId } 四元组，等于把 PO
+ * 内部地址（含每次安装都会变的台账 group_id）当公开契约往返一趟渲染层。
+ * 现在定位、装态、分节/字段存在性与 T-box 白名单全部在 PO 内部完成。
+ */
 export interface PersonalProfileTarget {
-  groupId: string;
-  section: string;
-  fieldName: string;
-  templateId?: string;
+  fieldRef: string;
 }
 
 export interface PersonalProfileSyncOptions {
@@ -116,9 +120,14 @@ function inputFingerprint(asset: RecallAbilityAssetRecord): string {
   }));
 }
 
+/**
+ * 「可路由的字段集合变了没有」的指纹，用于判断一条 no_match 回执是否还作数。
+ * 刻意**不含台账 group_id**：那是 PO 的内部寻址，每次安装由 genId12() 重生成。
+ * 指纹的语义是「模板与字段清单」，不是「PO 把它存在哪一行」。
+ * （N8 边界：Recall 拥有路由意图，不拥有 PO 的寻址与存储结构。）
+ */
 function catalogFingerprint(catalog: TemplateCatalogEntry[]): string {
   const catalogShape = catalog.map((template) => ({
-    groupId: template.group_id,
     templateId: template.template_id,
     sections: template.sections.map((section) => ({ title: section.title, fields: [...section.fields] })),
   }));
@@ -226,19 +235,16 @@ async function syncProfileMemoryAsset(
   }
 }
 
-/** Keep automatic writes inside the built-in role-template T-box. */
+/**
+ * Keep automatic writes inside the built-in role-template T-box.
+ * 判据来自 PO contract（isTboxField），不再在 Recall 侧重建一份 T-box 规则。
+ */
 function tboxCatalog(catalog: TemplateCatalogEntry[]): TemplateCatalogEntry[] {
   const out: TemplateCatalogEntry[] = [];
   for (const entry of catalog) {
-    const template = getRoleTemplate(entry.template_id);
-    if (!template) continue;
-    const fieldsBySection = new Map(template.preset_groups.map((section) => [
-      section.title,
-      new Set(section.fields.map((field) => field.name)),
-    ]));
     const sections = entry.sections.map((section) => ({
       title: section.title,
-      fields: section.fields.filter((field) => fieldsBySection.get(section.title)?.has(field)),
+      fields: section.fields.filter((field) => isTboxField(entry.template_id, section.title, field)),
     })).filter((section) => section.fields.length > 0);
     if (sections.length) out.push({ ...entry, sections });
   }
@@ -253,7 +259,6 @@ async function persistProjection(
   status: ProjectionStatus,
   details: {
     templateId?: string;
-    groupId?: string;
     section?: string;
     fieldName?: string;
     failureMessage?: string;
@@ -273,7 +278,6 @@ async function persistProjection(
       catalogFingerprint: currentCatalogFingerprint,
       status,
       ...(details.templateId ? { templateId: details.templateId } : {}),
-      ...(details.groupId ? { groupId: details.groupId } : {}),
       ...(details.section ? { section: details.section } : {}),
       ...(details.fieldName ? { fieldName: details.fieldName } : {}),
       ...(details.failureMessage ? { failureMessage: details.failureMessage.slice(0, 1_000) } : {}),
@@ -303,43 +307,50 @@ async function syncAsset(
 
     // Recheck at the projection boundary because this writes a second user-data view.
     assertNotForbiddenToPersist([asset.statement]);
-    const decision = target
-      ? { action: 'field' as const, group_title: target.section, field_name: target.fieldName, confidence: 'high' as const }
-      : await deps.routeAsset(userId, asset.statement, catalog);
-    if (decision.failure) throw new Error(`profile routing ${decision.failure}`);
-    if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
-      await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
-      return 'unmatched';
+
+    // 用户显式选定落点 → 直接用它的 fieldRef；否则跑 LLM 路由再把命中的
+    // (模板, 分节, 字段) 交给 PO 换一个 fieldRef。两条路最终都只握一个句柄，
+    // 定位/装态/T-box 判定全在 PO 内部——这里不再拼 group_id::分节。
+    let fieldRef: string | null = null;
+    if (target) {
+      fieldRef = target.fieldRef;
+    } else {
+      const decision = await deps.routeAsset(userId, asset.statement, catalog);
+      if (decision.failure) throw new Error(`profile routing ${decision.failure}`);
+      if (decision.action !== 'field' || !decision.group_title || !decision.field_name) {
+        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+        return 'unmatched';
+      }
+      const matches = catalog.filter((entry) => entry.sections.some((section) =>
+        section.title === decision.group_title && section.fields.includes(decision.field_name!),
+      ));
+      if (matches.length !== 1) {
+        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+        return 'unmatched';
+      }
+      fieldRef = await buildRoleTemplateFieldRef(
+        userId, matches[0].template_id, decision.group_title, decision.field_name,
+      );
+      if (!fieldRef) {
+        // 路由命中的字段不在 T-box 内（自定义字段），或实例文件里还没有这个坑
+        // （schema 迁移未跑到）——两种情况自动通道都不许建/填它
+        await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
+        return 'unmatched';
+      }
     }
 
-    const matches = catalog.filter((entry) => entry.sections.some((section) =>
-      entry.group_id === (target?.groupId || entry.group_id)
-      && section.title === decision.group_title && section.fields.includes(decision.field_name!),
-    ));
-    if (matches.length !== 1) {
-      if (target) throw new Error('profile target field not found');
-      await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'no_match');
-      return 'unmatched';
-    }
-    const template = matches[0];
-    if (target?.templateId && template.template_id !== target.templateId) {
-      throw new Error('profile target template mismatch');
-    }
+    const placement = describeRoleTemplateFieldRef(fieldRef);
+    if (!placement) throw new Error('profile target field not found');
 
-    const write = await deps.appendFieldValue(
-      userId,
-      buildContentRef(template.group_id, decision.group_title),
-      decision.field_name,
-      asset.statement,
-      '智能',
-    );
+    const write = await deps.appendFieldValue(userId, fieldRef, asset.statement, '智能');
     if (!write.ok) throw new Error(write.error || 'profile field write failed');
 
+    // 回执记「值实际落在哪」。fieldRef 是持久化的，schema 改名/移动之后 placement
+    // 反解出来的还是当年那个名字；PO 的写入回执才是换算后的当前落点，优先用它。
     await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'applied', {
-      templateId: template.template_id,
-      groupId: template.group_id,
-      section: decision.group_title,
-      fieldName: decision.field_name,
+      templateId: write.templateId || placement.templateId,
+      section: write.section || placement.section,
+      fieldName: write.fieldName || placement.fieldName,
     });
     return 'written';
   } catch (error) {
@@ -371,7 +382,7 @@ export async function syncPersonalProfileFromRecallAssets(
   const listAssets = dependencies.listAssets || listAbilityAssets;
   const listCatalog = dependencies.listCatalog || listTemplateFileCatalog;
   const routeAsset = dependencies.routeAsset || routeCandidateToField;
-  const appendFieldValue = dependencies.appendFieldValue || appendExistingTemplateFieldValueToRef;
+  const appendFieldValue = dependencies.appendFieldValue || appendRoleTemplateFieldValue;
   const writeProfileEntry = dependencies.writeProfileEntry || ensurePersonalProfileEntry;
 
   const assets = await listAssets(userId);

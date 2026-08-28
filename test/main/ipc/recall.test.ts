@@ -252,24 +252,21 @@ describe('ipc › recall candidate governance', () => {
       },
     });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a', { riskAcknowledged: false });
+    // 落点只透传一个 opaque fieldRef；IPC 层不再逐字段复述 PO 内部结构
+    const fieldRef = 'po1eyJrIjoidGYiLCJ0Ijoic3R1ZGVudCJ9';
     await expect(call('recall.candidates.promote', {
       candidateId: 'cand-personal',
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef },
     })).resolves.toMatchObject({ ok: true });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenLastCalledWith(UID, 'cand-personal', {
       riskAcknowledged: false,
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef },
     });
+    // 形状不对的落点在 IPC 层就被拒（语义判定仍留给 PO 写入口）
+    await expect(call('recall.candidates.promote', {
+      candidateId: 'cand-personal',
+      profileTarget: { groupId: 'group-student', section: '学习背景', fieldName: '专业与学习方向' },
+    })).resolves.toMatchObject({ ok: false, error: 'invalid personal profile target' });
     await expect(call('recall.candidates.ignore', { candidateId: 'cand-a', note: 'not reusable' })).resolves.toMatchObject({ ok: true, candidate: { status: 'ignored' } });
     expect(recallMock.ignoreRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', 'not reusable');
     await expect(call('recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] })).resolves.toMatchObject({ ok: true, failed: [] });
