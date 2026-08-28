@@ -50,7 +50,8 @@ async function installStudentWithValue(value = '硕士'): Promise<string> {
   const target = targets.find((t) => t.label.endsWith('· 教育阶段'))!;
   expect(target).toBeTruthy();
   const w = await contract.appendRoleTemplateFieldValue(UID, target.fieldRef, value, '手动');
-  expect(w).toEqual({ ok: true, templateId: 'student' });
+  // 回执除了模板，还带「值实际落在哪」（ref 记着历史名时是换算后的当前名）。
+  expect(w).toEqual({ ok: true, templateId: 'student', section: '学习背景', fieldName: '教育阶段' });
   return tmpl.readGroups(UID).find((g) => g.template_id === 'student')!.group_id;
 }
 
@@ -276,7 +277,7 @@ describe('PO contract › 卸载重装后 group_id 变化不影响 contract', ()
     expect(read.content).toContain('## 学习背景');
 
     const write = await contract.appendRoleTemplateFieldValue(UID, fieldRef, '博士', '手动');
-    expect(write).toEqual({ ok: true, templateId: 'student' });
+    expect(write).toEqual({ ok: true, templateId: 'student', section: '学习背景', fieldName: '教育阶段' });
     expect(tmpl.readTemplateFileText(UID, 'student')).toContain('- 博士 [手动]');
   });
 

@@ -345,10 +345,12 @@ async function syncAsset(
     const write = await deps.appendFieldValue(userId, fieldRef, asset.statement, '智能');
     if (!write.ok) throw new Error(write.error || 'profile field write failed');
 
+    // 回执记「值实际落在哪」。fieldRef 是持久化的，schema 改名/移动之后 placement
+    // 反解出来的还是当年那个名字；PO 的写入回执才是换算后的当前落点，优先用它。
     await persistProjection(userId, asset, fingerprint, currentCatalogFingerprint, 'applied', {
-      templateId: placement.templateId,
-      section: placement.section,
-      fieldName: placement.fieldName,
+      templateId: write.templateId || placement.templateId,
+      section: write.section || placement.section,
+      fieldName: write.fieldName || placement.fieldName,
     });
     return 'written';
   } catch (error) {

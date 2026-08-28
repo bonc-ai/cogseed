@@ -45,7 +45,10 @@ import {
 } from './personal_ontology_template_files';
 import { listGroups } from './personal_ontology_groups';
 import {
+  findFieldIdentityAnywhere,
   isIdentityFailure,
+  resolveFieldIdentity,
+  resolveRetiredFieldIdentity,
   resolveSectionIdentity,
   roleTemplateFieldStatus as fieldStatus,
   type FieldSlotStatus,
@@ -518,6 +521,11 @@ function installedFieldExists(
 /**
  * 反解写入句柄，**仅供回执/日志展示**。返回值不是地址：调用方不得用它去
  * 拼内部寻址串，写入一律走 appendRoleTemplateFieldValue。非 tf ref → null。
+ *
+ * 这是**纯解码**：ref 是长期持久化的，schema 迁移之后里面可能还是历史名，这里
+ * 会如实原样返回。要「值实际落在哪」请读 appendRoleTemplateFieldValue 的回执
+ * （section / fieldName），别拿这里的名字当结果。保持纯解码是因为 candidate-service
+ * 用它做「这是不是一个 PO 认得的句柄」的形状校验 —— 那道校验不该随 catalog 改名浮动。
  */
 export function describeRoleTemplateFieldRef(
   fieldRef: string,
@@ -532,6 +540,75 @@ export interface AppendFieldValueResult {
   error?: string;
   /** 写入命中的模板（回执/日志用；调用方不得据此构造地址）。 */
   templateId?: string;
+  /**
+   * 实际写入的分节与字段名（回执/日志用；同样不得据此构造地址）。
+   * fieldRef 里记着历史名时，这里是**换算之后的当前名** —— 回执要说值真正
+   * 落在哪，而不是复述句柄里那个当年的名字。
+   */
+  section?: string;
+  fieldName?: string;
+}
+
+type FieldSlotHit = { ok: true; section: string; fieldName: string };
+type FieldSlotMiss = { ok: false; error: string };
+type FieldSlotResolution = FieldSlotHit | FieldSlotMiss;
+
+/**
+ * 失败判定走 type guard，不写 `if (!slot.ok)` —— 仓库的 tsconfig 关了
+ * `strictNullChecks`，`ok: true | false` 的布尔判别式收窄在该模式下不生效。
+ * 同 personal_ontology_migration 的 isIdentityFailure。
+ */
+function isSlotFailure(slot: FieldSlotResolution): slot is FieldSlotMiss {
+  return slot.ok === false;
+}
+
+/**
+ * tf ref 里记着的 (分节名, 字段名) → catalog 当前在役坑位的 (分节名, 字段名)。
+ *
+ * fieldRef 会被**长期持久化**（技能绑定里的 profileTarget 就是用户配一次、之后
+ * 一直用），里面存的是签发那一刻的名字。分节改名 / 字段改名 / 字段跨分节移动的
+ * schema 迁移跑过之后，直接拿旧字面量去问 isTboxField 只会得到 false —— 一条配好
+ * 的落点规则从此静默写不进去，而且报的还是「这字段不是模板声明的」这种不会自愈
+ * 的错。这里补上按 stable identity 的换算。
+ *
+ * 解析阶梯与 detectRoleTemplateMigration 的字段层完全同一套口径：
+ *   1. 当前字面名 —— 绝大多数 ref 走这条，行为与改动前逐字相同；
+ *   2. 分节内解析（resolveFieldIdentity）—— 覆盖分节改名、字段改名及两者同时；
+ *   3. 全模板解析（findFieldIdentityAnywhere）—— 覆盖字段被移到别的分节；
+ *   4. 退役声明（resolveRetiredFieldIdentity）—— 官方历史字段，明确不可写。
+ * 任一层报 ambiguous 都**直接失败，不猜**：猜错等于把用户的值写进别人的坑。
+ *
+ * 出口只有 accept() 一个，isTboxField 仍是可写落点的唯一判据 —— 换算只负责把
+ * 历史名换成当前名，不负责放宽白名单。
+ */
+function resolveFieldRefSlot(
+  templateId: string,
+  section: string,
+  fieldName: string,
+): FieldSlotResolution {
+  const accept = (sec: string, name: string): FieldSlotResolution => (
+    isTboxField(templateId, sec, name)
+      ? { ok: true, section: sec, fieldName: name }
+      : { ok: false, error: 'field is not declared by the role template' }
+  );
+
+  if (isTboxField(templateId, section, fieldName)) return accept(section, fieldName);
+
+  const scoped = resolveFieldIdentity(templateId, section, fieldName);
+  if (!isIdentityFailure(scoped)) return accept(scoped.identity.sectionTitle, scoped.identity.name);
+  if (scoped.reason === 'not_found') {
+    const anywhere = findFieldIdentityAnywhere(templateId, fieldName);
+    if (!isIdentityFailure(anywhere)) {
+      return accept(anywhere.identity.sectionTitle, anywhere.identity.name);
+    }
+  }
+
+  // 退役与「认不出」必须分开报：退役字段的值仍然可读，只是不再是可写落点，
+  // 说成「不是模板声明的字段」等于把官方历史沉淀说成一次脏数据。
+  if (!isIdentityFailure(resolveRetiredFieldIdentity(templateId, section, fieldName))) {
+    return { ok: false, error: 'field is retired and no longer writable' };
+  }
+  return { ok: false, error: 'field is not declared by the role template' };
 }
 
 /**
@@ -550,26 +627,30 @@ export async function appendRoleTemplateFieldValue(
   if (!safeId(uid)) return { ok: false, error: 'invalid uid' };
   const decoded = decodeOntologyRef(fieldRef);
   if (!decoded || decoded.k !== 'tf') return { ok: false, error: 'invalid field ref' };
-  if (!isTboxField(decoded.t, decoded.s, decoded.f)) {
-    return { ok: false, error: 'field is not declared by the role template' };
-  }
+  // ref 里可能是签发那一刻的历史名；先换算到 catalog 当前的在役坑位。
+  const slot = resolveFieldRefSlot(decoded.t, decoded.s, decoded.f);
+  if (isSlotFailure(slot)) return { ok: false, error: slot.error };
   const row = readGroups(uid).find((g) => g.template_id === decoded.t);
   if (!row) return { ok: false, error: 'role template is not installed' };
   // T-box 声明了、实例文件里却还没有这个坑 = schema 迁移还没跑到。这与
   // 「这个字段不许自动写」是两回事，错误码必须分开：前者会自愈，后者不会。
-  if (!installedFieldExists(uid, decoded.t, decoded.s, decoded.f)) {
+  // 判存必须用换算后的当前名：catalog 已改名而实例文件也已迁移时，旧名在文件里
+  // 早就不存在了，拿旧名判存会把一条本该成功的写入误报成迁移未完成。
+  if (!installedFieldExists(uid, decoded.t, slot.section, slot.fieldName)) {
     return { ok: false, error: 'template_migration_pending' };
   }
 
   const res = await appendExistingTemplateFieldValueToRef(
     uid,
-    buildContentRef(row.group_id, decoded.s),
-    decoded.f,
+    buildContentRef(row.group_id, slot.section),
+    slot.fieldName,
     value,
     source,
     project,
   );
-  return res.ok ? { ok: true, templateId: decoded.t } : { ok: false, error: res.error };
+  return res.ok
+    ? { ok: true, templateId: decoded.t, section: slot.section, fieldName: slot.fieldName }
+    : { ok: false, error: res.error };
 }
 
 // ── T-box 白名单（原 candidates.ts::tboxFields / profile-sync::tboxCatalog）──

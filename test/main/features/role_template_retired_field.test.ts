@@ -171,7 +171,9 @@ describe('retired vs custom › 数据与可写性', () => {
     CATALOG = catalogV2Retire();
 
     const res = await contract.appendRoleTemplateFieldValue(UID, ref, '大四', '智能');
-    expect(res).toMatchObject({ ok: false, error: 'field is not declared by the role template' });
+    // 退役与「认不出」分开报：退役字段的值仍然可读，只是不再是可写落点，
+    // 说成「不是模板声明的字段」等于把官方历史沉淀说成一次脏数据。
+    expect(res).toMatchObject({ ok: false, error: 'field is retired and no longer writable' });
   });
 
   it('runtime 角色画像行为不变：退役字段的旧值继续注入', async () => {
