@@ -1,7 +1,7 @@
 // ─── In-app update reminders ─────────────────────────────────────────────
 // Resident module (loaded with the shell, like account-chip.js) so the
 // reminder banner can surface on any view. Owns:
-//   - Settings › 通用 › 更新 group: current version, manual check, download
+//   - Settings › 关于我们 pane: current version, manual check, download
 //     with live progress, "open installer" once verified, "skip this version".
 //   - A global banner driven by main's `updates:available` push (boot-time
 //     silent check surfaced a new version).
@@ -305,12 +305,12 @@
   function _bindBanner() {
     _id('updater-banner-view-btn').addEventListener('click', () => {
       _hideBanner();
-      // Open Settings › 通用 where the update group lives.
+      // Open Settings › 关于我们 where the update group lives.
       if (typeof window.setView === 'function') {
         try { window.setView('settings'); } catch (_) { /* fall through */ }
       }
       if (typeof window.activateSettingsTab === 'function') {
-        try { window.activateSettingsTab('general'); } catch (_) { /* non-fatal */ }
+        try { window.activateSettingsTab('about'); } catch (_) { /* non-fatal */ }
       }
       _refreshSettings();
     });
