@@ -3558,6 +3558,7 @@ function _groupMsgToLegacy(gm) {
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
+    ...(gm.metrics ? { metrics: gm.metrics } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -7619,6 +7620,8 @@ async function _loadOlderConversationHistory(cid, before) {
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
       container.insertBefore(fragment, row.nextSibling);
+      // 更早历史也是离屏 fragment 装载，插入后补刷会话统计行（Task 8）。
+      _refreshSessionStats();
       _removeSupersededInterruptionBubbles(container);
       _setLoadEarlierHistory(container, cid, nextCursor);
       _restoreOlderHistoryPrependScroll(container, previousScrollHeight, previousScrollTop);
@@ -8091,6 +8094,10 @@ async function loadConversationHistory(cid, opts = {}) {
       }));
       container.appendChild(historyFragment);
     }
+    // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
+    // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
+    // 会话统计行（Task 8）。
+    _refreshSessionStats();
     _mountCollaborationStatusCard(container, convMeta.collaboration || null);
     if (window.CompanionRepro && typeof window.CompanionRepro.mount === 'function') {
       void window.CompanionRepro.mount(cid);
@@ -8237,6 +8244,9 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!preserveScroll) {
       container.innerHTML = `<div class="empty">${escapeHtml(t('chat.load_failed', { msg: e.message || '' }))}</div>`;
     }
+    // 加载失败时消息区只剩占位——统计行随之隐藏，避免残留上个会话的数据
+    // （Task 8）。preserveScroll 的部分重载保留现有消息，刷新结果不变。
+    _refreshSessionStats();
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
   }
 }
@@ -8867,6 +8877,199 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// ─── 会话统计行（输入框下方，Task 8）────────────────────────────────────
+// 折叠当前会话所有带 metrics 的 assistant 消息：轮数/步数、LLM 总耗时、
+// 首 token 平均与速率、缓存命中、上下文占用、token 合计与费用。常驻显示
+// （不受消息级 .chat-msg-meta 的 hover 显隐影响）；无带 metrics 的消息整行
+// hidden；窗口/单价未知就省略对应段——诚实省略，不编数字。
+
+// 单价复用 dashboard 成本页同一 localStorage key（'dashboard-price-table'，
+// 实测结构 { [modelId]: { in: ¥/1M, out: ¥/1M } }，成本页保存时只写 '*'
+// 默认条目、无模型名，也无 cacheRead/cacheWrite 单价），不另立存储。
+// 结构对不上或没有可用的 '*'/'default' 条目 → 返回 null（不显示费用段）。
+function _userPriceForStats() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dashboard-price-table') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const def = raw['*'] || raw.default;
+    if (!def || typeof def !== 'object') return null;
+    const pin = Number(def.in);
+    const pout = Number(def.out);
+    const hasIn = Number.isFinite(pin) && pin > 0;
+    const hasOut = Number.isFinite(pout) && pout > 0;
+    if (!hasIn && !hasOut) return null;
+    // 现场价格表没有缓存单价（成本页同样只按 in/out 折算）→ 按 0 计，
+    // 费用是下界估算，费用段的 title 已注明非账单金额。
+    return { in: hasIn ? pin : 0, out: hasOut ? pout : 0, cacheRead: 0, cacheWrite: 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+// 当前模型 contextWindow：渲染层没有现成全局，走已有 auth.* IPC（不新造）
+// ——auth.listEntries[0] 是默认模型（与 model-chip 同源），auth.listModels
+// 的 curated 分支透传 contextWindow；未策展/custom provider 的 fallback
+// 分支没有该字段 → null，统计行只显示已用量。结果缓存 60s（负结果也在
+// 内，避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
+let _statsModelWindowCache = null; // { value: number|null, at: ms }
+function getCurrentModelContextWindow() {
+  const now = Date.now();
+  if (!_statsModelWindowCache || now - _statsModelWindowCache.at > 60_000) {
+    _statsModelWindowCache = {
+      value: _statsModelWindowCache ? _statsModelWindowCache.value : null,
+      at: now,
+    };
+    _fetchCurrentModelContextWindow();
+  }
+  return _statsModelWindowCache.value;
+}
+async function _fetchCurrentModelContextWindow() {
+  try {
+    const entries = await window.cogseed.invoke('auth.listEntries');
+    const current = entries && entries.ok && Array.isArray(entries.entries)
+      ? entries.entries[0] : null;
+    if (!current || !current.provider || !current.model) return;
+    const res = await window.cogseed.invoke('auth.listModels', { provider: current.provider });
+    const models = res && res.ok && Array.isArray(res.models) ? res.models : [];
+    const hit = models.find((m) => m && typeof m === 'object' && m.id === current.model);
+    const cw = hit && Number.isSafeInteger(hit.contextWindow) && hit.contextWindow > 0
+      ? hit.contextWindow : null;
+    _statsModelWindowCache = { value: cw, at: Date.now() };
+    if (cw) _refreshSessionStats();
+  } catch (_) {
+    // 取不到保持现状（null 或旧值）——只显示已用量。
+  }
+}
+window.getCurrentModelContextWindow = getCurrentModelContextWindow;
+
+// 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
+// ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
+// 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
+function _refreshSessionStats() {
+  const box = document.getElementById('chat-session-stats');
+  if (!box || !window.conversationMetrics) return;
+  const list = [];
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    if (el._msgMetrics) list.push(el._msgMetrics);
+  });
+  if (!list.length) { box.hidden = true; return; }
+  const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
+    ? window.getCurrentModelContextWindow() : null;
+  const price = _userPriceForStats();
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
+  // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
+  const segs = [];
+  segs.push({ v: t('chat.stats.counts', { turns: f.turns, steps: f.steps }) });
+  if (f.llmMs > 0) {
+    segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
+  }
+  if (f.ttftAvgText) {
+    segs.push({
+      k: t('chat.stats.speedK'),
+      v: f.rateText
+        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
+        : f.ttftAvgText,
+    });
+  }
+  if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
+  box.innerHTML = '';
+  box.hidden = false;
+  segs.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    box.appendChild(seg);
+  });
+  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
+  // 单价、无模型名，title 不带模型字段。
+  if (f.costText) {
+    const costSpan = box.lastElementChild;
+    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+  }
+  _syncStatsWidthToComposer();
+}
+
+// 统计行与输入卡左右边缘实时对齐（2026-08-27 反馈）。卡宽随内容收缩
+// （chip 增删、附件条出现都会变），CSS 定宽追不上；此处每次刷新直读卡宽
+// 同步一次，并挂 ResizeObserver 让后续卡片尺寸变化即时跟随（首次 observe
+// 也会回调一次）。vm 测试环境无 ResizeObserver，守卫跳过。
+let _statsComposerObserver = null;
+function _syncStatsWidthToComposer() {
+  const box = document.getElementById('chat-session-stats');
+  const card = document.querySelector('.chat-input-area');
+  if (!box || !card) return;
+  if (!_statsComposerObserver && typeof ResizeObserver !== 'undefined') {
+    _statsComposerObserver = new ResizeObserver(() => _syncStatsWidthToComposer());
+    _statsComposerObserver.observe(card);
+  }
+  const cw = card.getBoundingClientRect().width;
+  if (cw > 0) box.style.width = `${Math.round(cw)}px`;
+}
+
+// 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
+// gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
+// 挂在操作行（[data-role=msg-actions]）内右对齐——与复制/引用图标同一行
+// （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
+// _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
+function _mountMsgMeta(ph, metrics) {
+  const line = window.conversationMetrics
+    ? window.conversationMetrics.messageMetricsLine(metrics) : null;
+  if (!line) return;
+  let row = ph.querySelector('[data-role="msg-actions"]');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'chat-msg-actions';
+    row.dataset.role = 'msg-actions';
+    ph.appendChild(row);
+  }
+  let meta = row.querySelector('[data-role="msg-meta"]');
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.className = 'chat-msg-meta';
+    meta.dataset.role = 'msg-meta';
+    row.appendChild(meta);
+  }
+  // 分段结构与会话统计行同一视觉语言：.mseg > (.k 浅色标签 + .v mono 数值)。
+  const parts = [];
+  parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
+  if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
+  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
+  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  meta.textContent = '';
+  parts.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = 'mseg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    meta.appendChild(seg);
+  });
+  if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+  // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
+  // appendChatMessage 尾部；Task 8）。
+  _refreshSessionStats();
+}
+
 function appendChatMessage(message, autoScroll = true, opts = {}) {
   const container = opts.container
     ? (typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container)
@@ -9097,6 +9300,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (historyHydration) container.appendChild(msgDiv);
   else _insertByTimestamp(container, msgDiv);
   if (role === 'user') _moveUserBeforeOrphanLivePlaceholder(container, msgDiv);
+  // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
+  // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
+  msgDiv._msgMetrics = message.metrics || null;
+  _mountMsgMeta(msgDiv, message.metrics);
+  // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
+  // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
+  _refreshSessionStats();
   if (!isHtmlSnippet && typeof typesetMath === 'function') {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
@@ -15016,6 +15226,11 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     actionsRow.dataset.role = 'msg-actions';
     ph.appendChild(actionsRow);
   }
+
+  // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
+  // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
+  ph._msgMetrics = gm.metrics || null;
+  _mountMsgMeta(ph, gm.metrics);
 
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.
   const gmCreated = _normalizeCreatedAgents(gm);

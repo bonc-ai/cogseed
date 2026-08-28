@@ -4342,7 +4342,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, abilitiesByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
@@ -4352,7 +4352,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
       ? baseUrlsByExternalId
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
+    // Probed per-model abilities (sparse; aggregator endpoints only).
+    // Validate one level deep: { [externalId]: { [modelId]: { contextWindow?, vision? } } }.
+    let abilities: Record<string, Record<string, { contextWindow?: number; vision?: boolean }>> | undefined;
+    if (abilitiesByExternalId && typeof abilitiesByExternalId === 'object' && !Array.isArray(abilitiesByExternalId)) {
+      for (const [extId, map] of Object.entries(abilitiesByExternalId)) {
+        if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+        const clean: Record<string, { contextWindow?: number; vision?: boolean }> = {};
+        for (const [modelId, raw] of Object.entries(map)) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const a: { contextWindow?: number; vision?: boolean } = {};
+          const w = (raw as Record<string, unknown>).contextWindow;
+          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) a.contextWindow = w;
+          const v = (raw as Record<string, unknown>).vision;
+          if (typeof v === 'boolean') a.vision = v;
+          if (a.contextWindow !== undefined || a.vision !== undefined) clean[modelId] = a;
+        }
+        if (Object.keys(clean).length) (abilities || (abilities = {}))[extId] = clean;
+      }
+    }
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, undefined, abilities);
   },
   'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
     if (typeof cli !== 'string' || !cli) {

@@ -10416,7 +10416,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   transform: translateY(-2px);
   transition: max-width 150ms ease, max-height 150ms ease, opacity 120ms ease, transform 150ms ease;
 }
-#panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+/* ":has(:not(...))" keeps the collapsed-margin treatment for rows holding
+   only the collapsible icon group — the usage meta line (below) also lives
+   in this row but is display:none until hover, so it must not count as
+   content. */
+#panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
   margin-top: 0;
   transition: margin-top 150ms ease;
 }
@@ -10430,11 +10434,88 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   pointer-events: auto;
   transform: translateY(0);
 }
-#panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions:only-child),
-#panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions:only-child) {
+#panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))),
+#panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
   margin-top: 5px;
 }
 #panel-conversation .chat-message.user > .chat-msg-actions { justify-content: flex-end; }
+
+/* Message-level token usage meta line — hidden by default, shows on hover /
+   focus-within with the same rhythm as .chat-bubble-actions above. Lives
+   INSIDE the .chat-msg-actions row (2026-08-27 feedback): right-aligned on
+   the same line as the copy/quote icons — order keeps it right of the icons
+   regardless of mount order, margin-left:auto pushes it to the row's edge.
+   Segment language matches the session stats bar below: muted label (.k) +
+   mono value (.v), no dividers at this size. */
+.chat-msg-meta {
+  display: none;
+  order: 9;
+  margin-left: auto;
+  min-width: 0;
+  gap: 10px;
+  align-items: baseline;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-msg-meta .mseg { display: inline-flex; align-items: baseline; gap: 4px; }
+.chat-msg-meta .k { font-size: 10.5px; color: var(--muted); }
+.chat-msg-meta .v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+#panel-conversation .chat-message:hover .chat-msg-meta,
+#panel-conversation .chat-message:focus-within .chat-msg-meta {
+  display: flex;
+}
+
+/* Session stats line (Task 8) — lives under the composer input area, always
+   visible while a metrics-bearing conversation is open (unlike the per-message
+   .chat-msg-meta above, which is hover-revealed). Segments whose context
+   occupancy crosses the hot threshold (≥80%) get .seg-hot and the danger
+   color; the project's error token is --danger (--status-error doesn't exist). */
+/* Same box as the composer card: JS (_refreshSessionStats) copies the card's
+   rendered width onto this element each refresh — the card shrink-wraps to
+   its content, so a static CSS width can't track it (2026-08-27 alignment
+   feedback). margin:auto keeps it centered as a pure-CSS fallback.
+   Content centers inside that width (2026-08-27: left-flush readouts looked
+   misaligned against the card) and wraps instead of truncating when the
+   segments overflow — readouts must never silently lose digits.
+   Quiet readout styling: label (.k, muted) + mono value (.v) per segment,
+   hairline dividers between segments — deliberately NOT pill chips, these
+   are readouts, not interactive controls. */
+.chat-session-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 7px 4px 2px;
+  user-select: none;
+}
+.chat-session-stats .seg {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 0 11px;
+  border-left: 1px solid var(--border-strong);
+}
+.chat-session-stats .seg:first-child { padding-left: 2px; border-left: none; }
+.chat-session-stats .seg .k { font-size: 11px; color: var(--muted); }
+.chat-session-stats .seg .v {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.chat-session-stats[hidden] { display: none; }
+.chat-session-stats .seg-hot .v { color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {

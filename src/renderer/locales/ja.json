@@ -4961,5 +4961,20 @@
   "dashboard.save_edit": "変更を保存",
   "dashboard.edit_saved": "保存しました。アドレスやトークンを変えた場合は再テストを推奨",
   "dashboard.edit_failed": "保存に失敗しました",
-  "dashboard.form_token_keep": "トークン（空欄で維持）"
+  "dashboard.form_token_keep": "トークン（空欄で維持）",
+  "chat.metrics.rate": "{r} tok/s",
+  "chat.stats.counts": "{turns}回 · {steps}ステップ",
+  "chat.stats.cost": "≈{c}",
+  "chat.stats.costTitle": "設定したデフォルト単価による概算であり、請求額ではありません",
+  "chat.metrics.durationK": "所用",
+  "chat.metrics.ttftK": "初トークン",
+  "chat.metrics.tokensK": "Token",
+  "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.stats.llmK": "LLM",
+  "chat.stats.speedK": "初トークン",
+  "chat.stats.speedV": "{ttft} · {r} tok/s",
+  "chat.stats.cacheK": "キャッシュ",
+  "chat.stats.ctxK": "コンテキスト",
+  "chat.stats.tokK": "Token",
+  "chat.stats.tokV": "↑{i} ↓{o}"
 }

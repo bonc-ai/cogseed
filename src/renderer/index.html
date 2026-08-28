@@ -327,6 +327,10 @@
                   <!-- 模型 + 思考强度：由 model-chip.js 注入合成 chip，紧跟发送按钮。 -->
                 </div>
               </div>
+              <!-- 会话统计行（Task 8）：输入区下方常驻显示当前会话的 token
+                   用量折叠结果（轮数/耗时/速率/缓存/上下文占用/费用）。
+                   无带 metrics 的消息时整行 hidden（conversation.js 控制）。 -->
+              <div id="chat-session-stats" class="chat-session-stats" hidden></div>
             </div>
             <!-- Bottom-docked integrated terminal (front-end mock; populated by
                  modules/terminal-panel.js). Toggle via #chat-terminal-toggle. -->
@@ -1964,6 +1968,9 @@
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/conv-bucket.js"></script>
   <script src="./modules/recall-projection-card.js"></script>
+  <!-- 纯函数模块：window.conversationMetrics（消息/会话 token 用量格式化）。
+       必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
+  <script src="./modules/conversation-metrics.js"></script>
   <script src="./modules/conversation.js"></script>
   <script src="./modules/artifact-security.js"></script>
   <script src="./modules/chat-artifact.js"></script>
