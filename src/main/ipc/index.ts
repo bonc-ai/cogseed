@@ -1308,7 +1308,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkillCatalog(),
       agents.listAgents(),
     ]);
-    return { skills: skillRows, agents: agentRows };
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = agentRows;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = agentRows.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { skills: skillRows, agents: filteredAgents };
   },
 
   'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
@@ -1416,9 +1429,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgents().catch(() => []),
       skills.listSkillCatalog().catch(() => []),
     ]);
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = sAgents;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = sAgents.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
     const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
       skills: new Set(sSkills.map((s) => s.id)),
-      agents: new Set(sAgents.map((a) => a.agent_id)),
+      agents: new Set(filteredAgents.map((a) => a.agent_id)),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { removed: result.removed };
@@ -2992,11 +3018,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // catalog and reopen every agent.json. Actual definition mutations,
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
-    return {
-      agents: summary === true || summary === '1'
-        ? await agents.listAgentSummaries()
-        : await agents.listAgents(),
-    };
+    let agentList = summary === true || summary === '1'
+      ? await agents.listAgentSummaries()
+      : await agents.listAgents();
+
+    // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
+    // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
+    if (!onboardingState.getOnboardingCompleted()) {
+      agentList = agentList.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        // 过滤掉所有 CLI 类型的 Agent
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { agents: agentList };
   },
 
   'agents.get': async ({ agent_id }) => {
