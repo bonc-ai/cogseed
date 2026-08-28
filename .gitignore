@@ -30,6 +30,10 @@ plan.md
 __pycache__/
 *.py[cod]
 
+# Unrelated project snapshots and inspection material (never commit)
+/.inspect-jiaoyu/
+/builds/
+
 # engine build artifacts
 packages/*/node_modules
 packages/*/dist
