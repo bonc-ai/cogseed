@@ -105,6 +105,7 @@ import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as cogseedBackend from '../features/cogseed_backend';
+import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -421,8 +422,54 @@ function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   return null;
 }
 
-function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string): string {
+// 卡片视图会为可视卡片批量请求 Office 预览：按 path+size+mtime 做进程内
+// LRU 缓存（上限 24 条），同一文件重复预览/卡片来回滚动不重复解析。
+const _officePreviewCache = new Map<string, { at: number; html: string; kind: string }>();
+const OFFICE_PREVIEW_CACHE_MAX = 24;
+
+function _officePreviewCacheGet(key: string): { html: string; kind: string } | null {
+  const hit = _officePreviewCache.get(key);
+  if (!hit) return null;
+  hit.at = Date.now();
+  return { html: hit.html, kind: hit.kind };
+}
+
+function _officePreviewCachePut(key: string, html: string, kind: string): void {
+  _officePreviewCache.set(key, { at: Date.now(), html, kind });
+  if (_officePreviewCache.size <= OFFICE_PREVIEW_CACHE_MAX) return;
+  let oldestKey = '';
+  let oldestAt = Infinity;
+  for (const [k, v] of _officePreviewCache) {
+    if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+  }
+  if (oldestKey) _officePreviewCache.delete(oldestKey);
+}
+
+function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string, opts?: { compact?: boolean }): string {
   const safeTitle = _escapePreviewHtml(title || 'Office preview');
+  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
+  const compactCss = opts?.compact ? `
+  <style>
+    body { background: #fff; font-size: 11px; }
+    .office-preview { padding: 0; min-height: 0; }
+    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
+    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
+    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
+    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
+    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
+    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
+    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
+    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
+    .office-spreadsheet { padding: 6px; }
+    .office-sheet { margin: 0 0 10px; padding: 8px; }
+    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
+    .office-table-wrap { max-height: none; }
+    .office-table-wrap td { min-width: 60px; }
+    .office-presentation { padding: 6px; gap: 8px; }
+    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
+    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
+    .office-slide-body p:first-child { font-size: 14px; }
+  </style>` : '';
   return `<!doctype html>
 <html>
 <head>
@@ -576,6 +623,7 @@ function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: st
       .office-slide-body p:first-child { font-size: 22px; }
     }
   </style>
+  ${compactCss}
 </head>
 <body>
   <main class="office-preview office-${kind}">
@@ -883,6 +931,23 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
+  'stt.pushAudio': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    if (typeof raw.chunk !== 'string') throw new Error('invalid audio chunk');
+    const bytes = Buffer.from(raw.chunk, 'base64');
+    if (bytes.length % 2 !== 0) throw new Error('invalid pcm length');
+    const samples = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+    stt.pushAudio(ctx.userId, raw.sessionId, samples);
+    return { ok: true };
+  },
+  'stt.stop': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    return stt.stopSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -1003,6 +1068,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     ]);
     const [annotated] = annotateChannelConversations([conv], [], instances);
     return { conversation: annotated || conv };
+  },
+
+  'conversations.setPermissionMode': async (args, ctx) => {
+    const { cid, permission_mode } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+      throw new Error('invalid permission mode');
+    }
+    const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
   },
 
   'conversations.history': async (args, ctx) => {
@@ -1307,7 +1383,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkillCatalog(),
       agents.listAgents(),
     ]);
-    return { skills: skillRows, agents: agentRows };
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = agentRows;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = agentRows.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { skills: skillRows, agents: filteredAgents };
   },
 
   'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
@@ -1415,9 +1504,22 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgents().catch(() => []),
       skills.listSkillCatalog().catch(() => []),
     ]);
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = sAgents;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = sAgents.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
     const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
       skills: new Set(sSkills.map((s) => s.id)),
-      agents: new Set(sAgents.map((a) => a.agent_id)),
+      agents: new Set(filteredAgents.map((a) => a.agent_id)),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { removed: result.removed };
@@ -1446,6 +1548,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.artifacts.list': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
+  },
+
+  // 删除空间产物（产物页「更多」→ 删除产物）。破坏性操作由渲染层二次确认；
+  // 这里以空间产物列表为准重新解析目标（path 或 artifactId 精确命中），拒绝
+  // 任意外部路径。web artifact 删除整个产物目录，文件产物删除文件本身
+  // （macOS 走废纸篓，其余平台回退 rm）。删除后失效产物缓存与文件索引。
+  'spaces.artifacts.delete': async ({ spaceId, path: targetPath, artifactId, cid } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof targetPath !== 'string' || !targetPath) throw new Error('missing path');
+    const wanted = path.resolve(targetPath);
+    const entries = await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId);
+    const target = entries.find((e) => (
+      (e.path && path.resolve(e.path) === wanted)
+      || (typeof artifactId === 'string' && artifactId && e.artifactId === artifactId)
+    ));
+    if (!target || !target.path) throw new Error('artifact not found in space');
+    // web artifact → 删除整个产物目录；文件 → 删除文件本身
+    let victim = path.resolve(target.path);
+    if (target.type === 'artifact') victim = path.dirname(victim);
+    let st: fs.Stats;
+    try { st = fs.statSync(victim); }
+    catch { return { ok: false, error: 'not_found' }; }
+    try {
+      if (typeof shell.trashItem === 'function') await shell.trashItem(victim);
+      else if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+      else fs.unlinkSync(victim);
+    } catch (err) {
+      try {
+        if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+        else fs.unlinkSync(victim);
+      }
+      catch {
+        return { ok: false, error: String((err as Error).message || 'delete failed') };
+      }
+    }
+    spacesArtifacts.invalidateSpaceArtifacts(spaceId);
+    try {
+      const fileIndexer = require('../features/file_indexer') as { invalidateFileCache?: (userId: string, absPath: string) => void };
+      fileIndexer.invalidateFileCache?.(ctx.userId, victim);
+    } catch { /* cache invalidation is best-effort */ }
+    void cid;
+    return { ok: true, path: victim };
   },
 
   // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
@@ -2989,11 +3133,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // catalog and reopen every agent.json. Actual definition mutations,
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
-    return {
-      agents: summary === true || summary === '1'
-        ? await agents.listAgentSummaries()
-        : await agents.listAgents(),
-    };
+    let agentList = summary === true || summary === '1'
+      ? await agents.listAgentSummaries()
+      : await agents.listAgents();
+
+    // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
+    // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
+    if (!onboardingState.getOnboardingCompleted()) {
+      agentList = agentList.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        // 过滤掉所有 CLI 类型的 Agent
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { agents: agentList };
   },
 
   'agents.get': async ({ agent_id }) => {
@@ -4776,6 +4933,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (st.size > MAX_OFFICE_PREVIEW_BYTES) {
       return { ok: false, error: 'too_large', size: st.size, cap: MAX_OFFICE_PREVIEW_BYTES };
     }
+    const cacheKey = `${norm}:${st.size}:${st.mtimeMs}:${payload?.mode === 'card' ? 'card' : 'full'}`;
+    const cached = _officePreviewCacheGet(cacheKey);
+    if (cached) return { ok: true, html: cached.html, kind: cached.kind, size: st.size, cached: true };
+    const compact = payload?.mode === 'card';
 
     try {
       const buf = fs.readFileSync(norm);
@@ -4790,7 +4951,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const { pptxBufferToHtml } = await import('../util/extract-office');
         fragment = pptxBufferToHtml(buf);
       }
-      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>');
+      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
+      _officePreviewCachePut(cacheKey, html, kind);
       return { ok: true, html, kind, size: st.size };
     } catch (err) {
       return { ok: false, error: String((err as Error).message || 'preview failed') };
@@ -4920,6 +5082,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  'stt.results': async function* ({ sessionId }, ctx, signal) {
+    if (typeof sessionId !== 'string' || !safeId(sessionId)) {
+      yield { type: 'error', text: 'invalid session id' };
+      return;
+    }
+    let lastPartial = '';
+    while (!signal.aborted) {
+      const partial = stt.currentPartial(ctx.userId, sessionId);
+      if (partial && partial !== lastPartial) {
+        lastPartial = partial;
+        yield { type: 'event', event: { partial } };
+      }
+      if (stt.isSessionDone(ctx.userId, sessionId)) {
+        yield { type: 'event', event: { final: stt.currentFinal(ctx.userId, sessionId) } };
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  },
   /**
    * Read-only aside answer. Deliberately NOT routed through groupChat.send /
    * bus.enqueue: doing so would append to the main transcript and add a second

@@ -148,12 +148,68 @@
     return labels[id] || labels.document;
   }
 
-  /** 产物 → 产物卡。 */
+  /** 文件大小 → 人类可读（KB/MB；B 级极罕见也兜住）。 */
+  function _artifactSizeLabel(size) {
+    const n = Number(size);
+    if (!Number.isFinite(n) || n < 0) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  /** Agent 归属摘要：精确 agentId 优先 → 会话参与 Agent → CogSeed 兜底。 */
+  function _agentSummaryLabel(agentId, agentIds) {
+    const byId = new Map((_agentCatalog || []).map((o) => [o.id, o.name || o.id]));
+    const idToName = (id) => (byId.get(id) || (id === 'commander' ? 'CogSeed' : id));
+    if (typeof agentId === 'string' && agentId) return idToName(agentId);
+    const names = [...new Set((Array.isArray(agentIds) ? agentIds : []).map(idToName).filter(Boolean))];
+    if (!names.length) return 'CogSeed';
+    if (names.length <= 2) return names.join('、');
+    return `${names[0]} ${_t('ws.art_agent_etc', '等 {count} 个', { count: names.length })}`;
+  }
+
+  /** 时间分组：今天 / 昨天 / 本周 / 更早。 */
+  function _artifactTimeGroup(sec) {
+    const t = Number(sec);
+    if (!Number.isFinite(t) || t <= 0) return 'earlier';
+    const now = new Date();
+    const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const tt = t * 1000;
+    if (tt >= d0) return 'today';
+    if (tt >= d0 - 86400000) return 'yesterday';
+    if (tt >= d0 - 7 * 86400000) return 'week';
+    return 'earlier';
+  }
+
+  /** 紧凑时间标签：今天 HH:MM / 昨天 / N 天前 / M月D日。 */
+  function _artifactTimeLabel(sec) {
+    const t = Number(sec);
+    if (!Number.isFinite(t) || t <= 0) return '';
+    const d = new Date(t * 1000);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const tt = d.getTime();
+    if (tt >= d0) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (tt >= d0 - 86400000) return _t('ws.art_yesterday', '昨天');
+    if (tt >= d0 - 7 * 86400000) return _t('ws.art_days_ago', '{count} 天前', { count: Math.floor((d0 - tt) / 86400000) + 1 });
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+
+  /** 产物来源标签（来源任务或本地导入）。 */
+  function _artifactSourceLabel(a) {
+    if (a.sourceKind === 'import') return _t('ws.art_source_import', '本地导入');
+    const title = a.sourceTitle || _t('ws.art_source_deleted', '原任务已删除');
+    return _t('ws.art_from_task', '来自「{title}」', { title });
+  }
+
+  /** 产物 → 产物卡（按原型补全：大小 / Agent / 更新时间 / 分组）。 */
   function _mapArtifact(a) {
     const cid = a.sourceSessionId || '';
     const typeId = _artifactCategoryId(a.ext, a.type);
     return {
-      id: a.artifactId || a.name || '',
+      // 抽屉/菜单定位用唯一 key（绝对路径唯一；导入产物同名文件路径亦唯一）
+      id: a.path || a.artifactId || a.name || '',
       name: a.name || '',
       // 来源显示任务标题（不再是一串 cid 乱码）；跳转仍用 cid
       source: cid,
@@ -164,9 +220,53 @@
       typeId,
       ext: a.ext || '',
       isArtifact: a.type === 'artifact',
+      artifactId: a.artifactId || '',
       sourceKind: a.source || 'attachment',
       path: a.path || '',
+      time: a.time || 0,
+      size: a.size,
+      sizeLabel: _artifactSizeLabel(a.size),
+      agentId: a.agentId || '',
+      agents: _agentSummaryLabel(a.agentId, a.agentIds),
+      timeGroup: _artifactTimeGroup(a.time),
+      timeLabel: _artifactTimeLabel(a.time),
+      broken: !!a.path && _artBrokenPaths.has(a.path),
     };
+  }
+
+  /** 失效探测：后台并发 statPath（限 8 并发，静默），失效文件行内标记。
+   *  探测绑定加载时的空间，切走空间后过期结果丢弃。 */
+  async function _probeArtifactHealth(spaceId) {
+    const seq = ++_artHealthSeq;
+    const list = _artifacts.filter((a) => a && a.path);
+    if (!list.length) return;
+    const payloadOf = (a) => ({ path: a.path, ...(a.source ? { cid: a.source } : {}), spaceId });
+    let i = 0;
+    const missing = [];
+    const worker = async () => {
+      while (i < list.length) {
+        const a = list[i++];
+        try {
+          const res = await _invoke('workspace.statPath', payloadOf(a));
+          if (res && res.exists === false) missing.push(a.path);
+        } catch (_) { /* 单文件探测失败忽略 */ }
+      }
+    };
+    const workers = Math.min(8, list.length);
+    await Promise.all(Array.from({ length: workers }, worker));
+    if (seq !== _artHealthSeq || _detailLoadedFor !== spaceId) return; // 已切走空间
+    if (!missing.length) return;
+    for (const p of missing) _artBrokenPaths.add(p);
+    for (const a of _artifacts) if (a && a.path && _artBrokenPaths.has(a.path)) a.broken = true;
+    if (_view === 'space' && _spaceTab === 'artifacts') _refreshArtifactResults();
+  }
+
+  /** 打开失败即时标记失效（不等下一轮探测）。 */
+  function _markArtifactBroken(a) {
+    if (!a || !a.path) return;
+    _artBrokenPaths.add(a.path);
+    a.broken = true;
+    if (_view === 'space' && _spaceTab === 'artifacts') _refreshArtifactResults();
   }
 
   /** 资产类型（英文 → 中文，供筛选/角标/文案）。 */
@@ -217,6 +317,23 @@
     if (!spaceId || _detailLoadedFor === spaceId) return;
     _artifactFilter = 'all';
     _assetFilter = 'all';
+    // 产物页查找状态随空间切换重置（避免残留上一个空间的筛选困惑）
+    _artifactSearch = '';
+    _artifactSource = 'all';
+    _artifactGroup = 'time';
+    _artifactSort = 'newest';
+    _artifactView = 'list';
+    _artDrawerId = null;
+    _artMenuId = null;
+    _revokeArtPreviewBlob();
+    _artVRows = [];
+    _artVRowTops = [];
+    _artVWinRange = null;
+    _artGridRendered = 0;
+    _artGridGroups = [];
+    _artBrokenPaths = new Set(); // 失效集合随空间隔离
+    _artHealthSeq++;
+    _resetArtScroll(); // 切空间回顶（旧滚动位置对新列表无意义）
     _detailLoadedFor = spaceId; // 先占位：防止并发进入重复加载；产物结果返回时按此判断是否已过期
     const [convRes, assetRes] = await Promise.all([
       _invoke('spaces.conversations.list', { spaceId }),
@@ -231,13 +348,18 @@
     // 资产 tab = 本空间沉淀的认知资产（recall 按 spaceId 过滤；空间可读全局但显示只显示本空间）
     _assets = (Array.isArray(assetRes.assets) ? assetRes.assets : []).map(_mapRecallAsset);
     // 产物后台加载：不阻塞任务/资产首屏；已切走空间则丢弃过期结果
+    _artifactsLoading = true;
+    if (_view === 'space' && _spaceTab === 'artifacts') _reRender(); // 立即渲染骨架屏
     void _invoke('spaces.artifacts.list', { spaceId }).then((artRes) => {
       if (_detailLoadedFor !== spaceId) return;
       _artifacts = (Array.isArray(artRes.artifacts) ? artRes.artifacts : []).map(_mapArtifact);
+      _artifactsLoading = false;
       _reRender();
+      void _probeArtifactHealth(spaceId); // 后台失效探测（静默，完成后就地标记）
     }).catch(() => {
       if (_detailLoadedFor !== spaceId) return;
       _artifacts = [];
+      _artifactsLoading = false;
       _reRender();
     });
   }
@@ -280,8 +402,36 @@
   // 这行注释此前写的是 bindings，导致「绑定后不生效」被误判成用户可见缺陷。
   let _assets = [];
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
+  let _artifactsLoading = false; // 产物聚合在途（渲染列表骨架屏）
   const _ARTIFACT_FILTERS = ['all', 'document', 'spreadsheet', 'presentation', 'web'];
   const _ASSET_FILTERS = ['all', 'personal', 'rule', 'template', 'skill_method'];
+  // ── 产物页查找工具栏状态（原型 v0.1：搜索/来源/分组/排序/视图）────────────
+  let _artifactSearch = '';        // 搜索词（名称 / 来源任务 / Agent）
+  let _artifactSource = 'all';     // 来源任务筛选：'all' | cid | 'import'
+  let _artifactGroup = 'time';     // 分组方式：'time' 按时间 | 'source' 按任务
+  let _artifactSort = 'newest';    // 排序：'newest' | 'oldest' | 'name'
+  let _artifactView = 'list';      // 视图：'list' 列表（默认） | 'grid' 卡片
+  let _artDrawerId = null;         // 打开的预览抽屉产物 key（path）
+  let _artMenuId = null;           // 展开「更多」菜单的产物 key
+  let _artMenuEl = null;           // 展开中的菜单元素（键盘导航用）
+  // ── 虚拟滚动（列表视图，飞书/Notion 同款窗口化渲染）────────────────────
+  let _artVRows = [];              // 扁平行 [{k:'head'|'row', label?, count?, a?, top}]
+  let _artVRowTops = [];           // 各行 top（二分定位用）
+  let _artVWinRange = null;        // 已渲染窗口 {s, e}（未变化不重建）
+  let _artScrollBound = false;     // ws-view 滚动监听只挂一次
+  let _artScrollRaf = 0;
+  // ── 卡片视图分批渲染（每批 60 张 + 哨兵）───────────────────────────────
+  let _artGridRendered = 0;        // 已渲染卡片全局序号上限
+  let _artGridGroups = [];         // [{label, items}] 分组缓存
+  let _artGridSentinel = null;     // 底部哨兵观察器
+  let _artTextMemo = null;         // 文本卡片预览 memo（path → 前 2000 字）
+  let _artDelegationBound = false; // 产物事件委托只注册一次
+  let _artBrokenPaths = new Set(); // 失效文件路径（statPath 探测 + 打开失败即时标记）
+  let _artHealthSeq = 0;           // 失效探测轮次（切空间后过期结果丢弃）
+  const _ART_ROW_H = 72;           // 虚拟行高（与 CSS 严格一致）
+  const _ART_HEAD_H = 42;          // 分组标题行高（与 CSS 严格一致）
+  const _ART_OVERSCAN = 6;         // 窗口外上下各多渲染的行数
+  const _ART_CARD_BATCH = 60;      // 卡片视图每批张数
   // 基础 Agent 候选 = 本机真实安装的 CLI agent（localAgents.list 探测，非硬编码）
   let _baseAgentCatalog = [];     // [{ id: cliType, name: 显示名 }]
   let _baseAgentProbeError = '';  // 探测失败时的提示文案
@@ -731,7 +881,7 @@
               </button>`).join('')}
           </nav>
         </header>
-        <div class="ws-space-pane">
+        <div class="ws-space-pane ${_spaceTab === 'artifacts' ? 'ws-space-pane--artifacts' : ''}">
           ${_renderSpacePane(sp)}
         </div>
       </div>
@@ -938,46 +1088,786 @@
     </div>`;
   }
 
+  // ── 产物页（原型 v0.1：紧凑列表 + 查找工具栏 + 预览抽屉）────────────────
+
+  /** 产物定位（key = 绝对路径，唯一）。 */
+  function _artifactById(id) {
+    return _artifacts.find((a) => a && a.id === id) || null;
+  }
+
+  /** 来源任务筛选候选：空间下产物来源（cid）+ 本地导入。 */
+  function _artifactSourceOptions() {
+    const seen = new Set();
+    const rows = [];
+    for (const a of _artifacts) {
+      if (a.sourceKind === 'import') {
+        if (!seen.has('import')) { seen.add('import'); rows.push({ value: 'import', label: _t('ws.art_source_import', '本地导入') }); }
+      } else if (a.source && !seen.has(a.source)) {
+        seen.add(a.source);
+        rows.push({ value: a.source, label: a.sourceTitle || a.source });
+      }
+    }
+    return rows;
+  }
+
+  /** 组合过滤：类型 + 来源 + 搜索（名称/来源任务/Agent）→ 排序。 */
+  function _filteredArtifacts() {
+    const q = String(_artifactSearch || '').trim().toLowerCase();
+    const items = _artifacts.filter((a) => {
+      const matchType = _artifactFilter === 'all' || a.typeId === _artifactFilter;
+      const matchSource = _artifactSource === 'all'
+        || (_artifactSource === 'import' ? a.sourceKind === 'import' : a.source === _artifactSource);
+      const haystack = `${a.name} ${a.sourceTitle} ${a.agents}`.toLowerCase();
+      return matchType && matchSource && (!q || haystack.includes(q));
+    });
+    items.sort((a, b) => {
+      if (_artifactSort === 'name') return a.name.localeCompare(b.name, typeof getLang === 'function' && getLang() === 'en' ? 'en' : 'zh');
+      if (_artifactSort === 'oldest') return (a.time || 0) - (b.time || 0);
+      return (b.time || 0) - (a.time || 0);
+    });
+    return items;
+  }
+
+  /** 分组：按时间（今天/昨天/本周/更早）或按来源任务（含本地导入）。 */
+  function _groupedArtifacts(items) {
+    if (_artifactGroup === 'source') {
+      const order = [];
+      const map = new Map();
+      for (const it of items) {
+        const key = it.sourceKind === 'import'
+          ? _t('ws.art_source_import', '本地导入')
+          : (it.sourceTitle || _t('ws.art_source_deleted', '原任务已删除'));
+        if (!map.has(key)) { map.set(key, []); order.push(key); }
+        map.get(key).push(it);
+      }
+      return order.map((k) => [k, map.get(k)]);
+    }
+    const labels = {
+      today: _t('ws.art_group_today', '今天'),
+      yesterday: _t('ws.art_group_yesterday', '昨天'),
+      week: _t('ws.art_group_week', '本周'),
+      earlier: _t('ws.art_group_earlier', '更早'),
+    };
+    return ['today', 'yesterday', 'week', 'earlier']
+      .map((k) => [labels[k], items.filter((it) => it.timeGroup === k)])
+      .filter(([, values]) => values.length);
+  }
+
+  function _artifactExtBadge(ext) {
+    const raw = String(ext || '').replace(/^\./, '').toUpperCase();
+    return raw || 'FILE';
+  }
+
+  // ── 虚拟滚动核心（列表视图：只渲染可视窗口 ± overscan）──────────────────
+
+  /** 分组结果拍平成虚拟行（分组标题行 + 产物行），并预计算每行 top。 */
+  function _buildArtVRows(items) {
+    const groups = _groupedArtifacts(items);
+    const rows = [];
+    let top = 0;
+    for (const [label, values] of groups) {
+      rows.push({ k: 'head', label, count: values.length, top });
+      top += _ART_HEAD_H;
+      for (const a of values) {
+        rows.push({ k: 'row', a, top });
+        top += _ART_ROW_H;
+      }
+    }
+    _artVRows = rows;
+    _artVRowTops = rows.map((r) => r.top);
+    return top; // 总高度
+  }
+
+  /** 二分：最后一个 top <= rel 的行下标。 */
+  function _artVRowIndexAt(rel) {
+    const tops = _artVRowTops;
+    let lo = 0;
+    let hi = tops.length - 1;
+    let ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (tops[mid] <= rel) { ans = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return ans;
+  }
+
+  /** idx 之前最近的分组标题行（含 idx 本身）。 */
+  function _artVHeadRowFor(idx) {
+    for (let i = idx; i >= 0; i--) {
+      if (_artVRows[i].k === 'head') return _artVRows[i];
+    }
+    return null;
+  }
+
+  /** idx 之后最近的分组标题行 top（浮动头被下一组「顶走」的边界）。 */
+  function _artVNextHeadTop(idx) {
+    for (let i = idx + 1; i < _artVRows.length; i++) {
+      if (_artVRows[i].k === 'head') return _artVRows[i].top;
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  function _renderArtVRowHtml(r) {
+    if (r.k === 'head') {
+      return `<div class="ws-art-vhead" style="top:${r.top}px"><h2 class="ws-art-group-title">${escapeHtml(r.label)} <span>${r.count}</span></h2></div>`;
+    }
+    return `<div class="ws-art-vrow" style="top:${r.top}px">${_artifactRowHtml(r.a)}</div>`;
+  }
+
+  /** 浮动分组头：贴住视口顶部，接近下一分组时被自然顶走。 */
+  function _updateArtVSticky(rel, startIdx, stickyEl) {
+    if (!stickyEl) return;
+    const first = _artVRows[startIdx];
+    if (!first || first.k === 'head') { stickyEl.style.display = 'none'; return; }
+    const head = _artVHeadRowFor(startIdx);
+    if (!head) { stickyEl.style.display = 'none'; return; }
+    const nextHeadTop = _artVNextHeadTop(startIdx);
+    stickyEl.style.top = `${Math.min(Math.max(rel, 0), nextHeadTop)}px`;
+    stickyEl.style.display = 'block';
+    stickyEl.innerHTML = `<h2 class="ws-art-group-title">${escapeHtml(head.label)} <span>${head.count}</span></h2>`;
+  }
+
+  /** 更新可视窗口：窗口范围变化才重建 DOM；否则只挪浮动头。 */
+  function _updateArtVWindow() {
+    const viewEl = document.getElementById('ws-view');
+    const vlist = document.querySelector('[data-ws="art-vlist"]');
+    const win = document.querySelector('[data-ws="art-vwindow"]');
+    const stickyEl = document.querySelector('[data-ws="art-vsticky"]');
+    if (!viewEl || !vlist || !win || !_artVRows.length) return;
+    const vlistTop = vlist.getBoundingClientRect().top - viewEl.getBoundingClientRect().top + viewEl.scrollTop;
+    const rel = viewEl.scrollTop - vlistTop;
+    const startIdx = Math.max(0, _artVRowIndexAt(Math.max(0, rel) - _ART_OVERSCAN * _ART_ROW_H));
+    const endIdx = Math.min(_artVRows.length - 1, _artVRowIndexAt(rel + viewEl.clientHeight + _ART_OVERSCAN * _ART_ROW_H));
+    if (!(_artVWinRange && _artVWinRange.s === startIdx && _artVWinRange.e === endIdx)) {
+      _artVWinRange = { s: startIdx, e: endIdx };
+      let html = '';
+      for (let i = startIdx; i <= endIdx; i++) html += _renderArtVRowHtml(_artVRows[i]);
+      win.innerHTML = html;
+    }
+    _updateArtVSticky(rel, startIdx, stickyEl);
+  }
+
+  /** 滚动监听（rAF 节流；只挂一次）。 */
+  function _bindArtScroll() {
+    if (_artScrollBound) return;
+    _artScrollBound = true;
+    const viewEl = document.getElementById('ws-view');
+    if (!viewEl || typeof requestAnimationFrame !== 'function') return;
+    viewEl.addEventListener('scroll', () => {
+      if (_artScrollRaf) return;
+      _artScrollRaf = requestAnimationFrame(() => {
+        _artScrollRaf = 0;
+        if (_view === 'space' && _spaceTab === 'artifacts' && _artifactView === 'list') _updateArtVWindow();
+      });
+    }, { passive: true });
+  }
+
+  /** 筛选/排序/分组/视图变化 → 回顶重渲染（窗口缓存作废）。 */
+  function _resetArtScroll() {
+    const viewEl = document.getElementById('ws-view');
+    if (viewEl) viewEl.scrollTop = 0;
+    _artVWinRange = null;
+  }
+
+  // ── 卡片视图分批渲染（每批 60 张 + 底部哨兵）───────────────────────────
+
+  function _expandArtGrid() {
+    if (!_artGridGroups.length) return;
+    const total = _artGridGroups.reduce((n, [, v]) => n + v.length, 0);
+    if (_artGridRendered >= total) return;
+    const next = _artGridRendered + _ART_CARD_BATCH;
+    let gi = 0;
+    for (const shell of document.querySelectorAll('.ws-art-grid-shell[data-art-group-from]')) {
+      const groupItems = _artGridGroups[gi] ? _artGridGroups[gi][1] : [];
+      const from = Number(shell.dataset.artGroupFrom || 0);
+      const addFrom = Math.max(Number(shell.dataset.artGroupShown || 0), 0);
+      const addTo = Math.max(0, Math.min(groupItems.length, next - from));
+      if (addTo > addFrom) {
+        shell.insertAdjacentHTML('beforeend', groupItems.slice(addFrom, addTo).map(_artifactCardHtml).join(''));
+        shell.dataset.artGroupShown = String(addTo);
+      }
+      gi++;
+    }
+    _artGridRendered = next;
+    _initArtCardPreviews(); // 新卡片接入缩略图懒加载
+    if (_artGridRendered >= total) {
+      const sentinel = document.querySelector('[data-ws="art-grid-sentinel"]');
+      if (sentinel) sentinel.remove();
+    }
+  }
+
+  function _initArtGridSentinel() {
+    const sentinel = document.querySelector('[data-ws="art-grid-sentinel"]');
+    if (!sentinel) return;
+    if (!_artGridSentinel) {
+      if (typeof IntersectionObserver === 'undefined') return;
+      _artGridSentinel = new IntersectionObserver((entries) => {
+        if (entries.some((en) => en.isIntersecting)) _expandArtGrid();
+      }, { rootMargin: '600px 0px' });
+    }
+    _artGridSentinel.observe(sentinel);
+  }
+
+  /** chat-media://local 直构（与 chat-file-viewer 同规则；图片缩略图用）。 */
+  function _chatMediaUrlFor(absPath) {
+    let p = String(absPath || '');
+    if (p.includes('\\')) p = p.replace(/\\/g, '/');
+    if (p.startsWith('/')) p = p.slice(1);
+    try {
+      const encoded = p.split('/').map((segment, index) => (
+        index === 0 && /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment)
+      )).join('/');
+      return `chat-media://local/${encoded}`;
+    } catch (_) { return ''; }
+  }
+
+  /** 产物行「打开 + 更多」操作区（列表/卡片共用）。 */
+  function _artifactActionsHtml(a) {
+    return `
+      <div class="ws-art-row-actions">
+        <button type="button" class="ws-art-open" data-ws="art-open" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_open', '打开'))}</button>
+        <button type="button" class="ws-art-more" data-ws="art-more" data-id="${escapeHtml(a.id)}" aria-label="${escapeHtml(_t('ws.art_more', '更多操作'))}" aria-expanded="false">${_icon('more-horizontal', 'ui-icon')}</button>
+        <div class="ws-art-more-menu" role="menu" data-art-menu="${escapeHtml(a.id)}" hidden>${_artifactMenuItemsHtml(a)}</div>
+      </div>`;
+  }
+
+  function _artifactMenuItemsHtml(a) {
+    const items = [
+      `<button type="button" role="menuitem" data-ws="art-action" data-action="ref" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_ref', '引用到新任务'))}</button>`,
+    ];
+    if (a.source) items.push(`<button type="button" role="menuitem" data-ws="art-action" data-action="source" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_view_in_task', '在原任务中查看'))}</button>`);
+    if (a.path) {
+      const revealLabel = a.broken ? _t('ws.art_relocate', '重新定位') : _t('ws.art_action_reveal', '在文件夹中显示');
+      items.push(`<button type="button" role="menuitem" data-ws="art-action" data-action="reveal" data-id="${escapeHtml(a.id)}">${escapeHtml(revealLabel)}</button>`);
+    }
+    items.push(`<button type="button" role="menuitem" class="ws-art-danger" data-ws="art-action" data-action="delete" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_delete', '删除产物'))}</button>`);
+    return items.join('');
+  }
+
+  /** 列表行模板（64-72px 紧凑行，整行可点开；失效文件行内标红提示）。 */
+  function _artifactRowHtml(a) {
+    return `
+      <article class="ws-artifact-row${a.broken ? ' is-broken' : ''}" data-ws="art-row-open" data-id="${escapeHtml(a.id)}" tabindex="0" role="button" aria-label="${escapeHtml(_t('ws.art_open_named', '打开 {name}', { name: a.name }))}">
+        <div class="ws-art-file-main">
+          <div class="ws-art-file-icon ext-${escapeHtml(a.ext.replace(/^\./, '').toLowerCase())}">${escapeHtml(_artifactExtBadge(a.ext))}</div>
+          <div class="ws-art-file-namewrap">
+            <div class="ws-art-file-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}${a.broken ? `<span class="ws-art-broken-tag">${escapeHtml(_t('ws.art_broken_tag', '文件已失效'))}</span>` : ''}</div>
+            <div class="ws-art-file-meta">${a.broken ? escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效')) : `${escapeHtml(_t('ws.art_generated_by', '由 {agent} 生成', { agent: a.agents }))} · ${escapeHtml(a.timeLabel)}`}</div>
+          </div>
+        </div>
+        <div class="ws-art-source">
+          <div class="ws-art-source-label">${escapeHtml(_artifactSourceLabel(a))}</div>
+          <div class="ws-art-source-meta">${escapeHtml(_t('ws.art_traceable', '可追溯至原任务'))}</div>
+        </div>
+        <div class="ws-art-type-size"><strong>${escapeHtml(_artifactExtBadge(a.ext))}</strong>${escapeHtml(a.sizeLabel)}</div>
+        ${_artifactActionsHtml(a)}
+      </article>`;
+  }
+
+  /** 卡片视图模板（P2：图片直接真图；PDF/网页/Office/MD文本先纸张示意，
+   *  滚入视口后懒加载真实预览，带全局预算防止大空间把渲染器拖垮）。 */
+  function _artifactCardHtml(a) {
+    const kind = typeof window.previewKindOf === 'function' ? window.previewKindOf(a.name) : '';
+    const liveKind = kind === 'pdf' || kind === 'html' || kind === 'office'
+      ? kind
+      : (kind === 'markdown' || kind === 'text' ? 'text' : '');
+    const previewBody = kind === 'image' && a.path
+      ? `<img class="ws-art-card-thumb" src="${_chatMediaUrlFor(a.path)}" alt="" loading="lazy" />`
+      : `<div class="ws-art-card-preview-box${liveKind ? ' is-liveable' : ''}" data-art-preview="${liveKind}" data-id="${escapeHtml(a.id)}"><div class="ws-art-paper"><div class="ws-art-paper-title"></div><div class="ws-art-paper-line"></div><div class="ws-art-paper-line"></div><div class="ws-art-paper-line short"></div><div class="ws-art-paper-line"></div></div></div>`;
+    return `
+      <article class="ws-artifact-card${a.broken ? ' is-broken' : ''}" data-ws="art-row-open" data-id="${escapeHtml(a.id)}" tabindex="0" role="button" aria-label="${escapeHtml(_t('ws.art_open_named', '打开 {name}', { name: a.name }))}">
+        <div class="ws-art-card-preview">${previewBody}</div>
+        <div class="ws-art-card-body">
+          <div class="ws-art-card-head">
+            <div class="ws-art-file-icon ext-${escapeHtml(a.ext.replace(/^\./, '').toLowerCase())}">${escapeHtml(_artifactExtBadge(a.ext))}</div>
+            <div class="ws-art-file-namewrap">
+              <div class="ws-art-file-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}${a.broken ? `<span class="ws-art-broken-tag">${escapeHtml(_t('ws.art_broken_tag', '文件已失效'))}</span>` : ''}</div>
+              <div class="ws-art-file-meta">${a.broken ? escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效')) : `${escapeHtml(_artifactExtBadge(a.ext))} · ${escapeHtml(a.sizeLabel)}`}</div>
+            </div>
+          </div>
+          <div class="ws-art-source-label">${escapeHtml(_artifactSourceLabel(a))}</div>
+          <div class="ws-art-source-meta">${a.broken ? escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效')) : `${escapeHtml(_t('ws.art_generated_by', '由 {agent} 生成', { agent: a.agents }))} · ${escapeHtml(a.timeLabel)}`}</div>
+          <div class="ws-art-card-foot"><span class="ws-art-file-meta">${escapeHtml(_t('ws.art_traceable', '可追溯至原任务'))}</span>${_artifactActionsHtml(a)}</div>
+        </div>
+      </article>`;
+  }
+
+  // ── P2 卡片懒加载预览（可视才加载 + 全局预算）───────────────────────────
+  let _artCardObserver = null;
+  let _artCardBudget = 0;
+  const _ART_CARD_PREVIEW_MAX = 24;
+  let _artCardBlobUrls = [];
+
+  function _revokeArtCardBlobs() {
+    for (const url of _artCardBlobUrls) { try { URL.revokeObjectURL(url); } catch (_) { /* ignore */ } }
+    _artCardBlobUrls = [];
+  }
+
+  /** 网格渲染后接入视口观察器：卡片进入可视区才装载真实预览。 */
+  function _initArtCardPreviews() {
+    const cards = document.querySelectorAll('[data-art-preview]');
+    if (!cards.length) return;
+    _artCardBudget = 0;
+    if (!_artCardObserver) {
+      if (typeof IntersectionObserver === 'undefined') return;
+      _artCardObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          _artCardObserver.unobserve(entry.target);
+          if (typeof entry.target.isConnected === 'boolean' && !entry.target.isConnected) continue; // 旧 DOM 残留回调
+          void _loadArtCardPreview(entry.target);
+        }
+      }, { rootMargin: '160px 0px' });
+    }
+    cards.forEach((el) => _artCardObserver.observe(el));
+  }
+
+  /** 单卡真实预览：Office 走服务端紧凑卡片版 HTML（LRU 缓存）；PDF 整页缩略；
+   *  网页走 chat-media；MD/文本走读文本取前几行。 */
+  async function _loadArtCardPreview(el) {
+    const kind = el.dataset.artPreview;
+    const id = el.dataset.id;
+    if (!kind || !id) return;
+    if (_artCardBudget >= _ART_CARD_PREVIEW_MAX) return;
+    const a = _artifactById(id);
+    if (!a || !a.path) return;
+    _artCardBudget++;
+    if (kind === 'office') {
+      try {
+        const res = await _invoke('produced.officePreviewHtml', { ..._artPathPayload(a), mode: 'card' });
+        if (!res || !res.ok) return; // 预览失败 → 保留纸张示意
+        const blob = new Blob([String(res.html || '')], { type: 'text/html;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        _artCardBlobUrls.push(url);
+        el.innerHTML = `<iframe class="ws-art-card-frame" sandbox="" src="${url}" title="${escapeHtml(a.name)}"></iframe>`;
+        el.classList.add('is-live');
+      } catch (_) { /* 保留纸张示意 */ }
+      return;
+    }
+    if (kind === 'pdf') {
+      const url = _chatMediaUrlFor(a.path);
+      if (!url) return;
+      // view=Fit：整页缩略——卡片里一页完整可见（小而全）
+      el.innerHTML = `<iframe class="ws-art-card-frame" sandbox="" src="${url}#toolbar=0&navpanes=0&view=Fit" title="${escapeHtml(a.name)}"></iframe>`;
+      el.classList.add('is-live');
+      return;
+    }
+    if (kind === 'html') {
+      const url = _chatMediaUrlFor(a.path);
+      if (!url) return;
+      el.innerHTML = `<iframe class="ws-art-card-frame" sandbox="allow-scripts" src="${url}" title="${escapeHtml(a.name)}"></iframe>`;
+      el.classList.add('is-live');
+      return;
+    }
+    if (kind === 'text') {
+      try {
+        let text = _artTextMemo ? _artTextMemo.get(a.path) : undefined;
+        if (typeof text !== 'string') {
+          const res = await _invoke('produced.readText', _artPathPayload(a));
+          text = res && res.ok ? String(res.text || '') : '';
+          if (!_artTextMemo) _artTextMemo = new Map();
+          if (_artTextMemo.size > 60) _artTextMemo.clear();
+          _artTextMemo.set(a.path, text.slice(0, 2000));
+        }
+        if (!String(text || '').trim()) return;
+        const lines = String(text).split(/\r?\n/).slice(0, 7)
+          .map((l) => l.trimEnd()).filter((l) => l.trim())
+          .map((l) => escapeHtml(l.length > 60 ? `${l.slice(0, 60)}…` : l));
+        if (!lines.length) return;
+        el.innerHTML = `<div class="ws-art-card-text">${lines.map((l) => `<span>${l}</span>`).join('')}</div>`;
+        el.classList.add('is-live');
+      } catch (_) { /* 保留纸张示意 */ }
+    }
+  }
+
+  /** 预览抽屉（右侧滑出，保留当前上下文；正文展示真实预览或摘要）。 */
+  function _renderArtifactDrawer() {
+    if (!_artDrawerId) return '';
+    const a = _artifactById(_artDrawerId);
+    if (!a) return '';
+    const meta = a.sourceKind === 'import'
+      ? `${escapeHtml(_t('ws.art_source_import', '本地导入'))} · ${escapeHtml(a.timeLabel)}`
+      : `${escapeHtml(_t('ws.art_from_task', '来自「{title}」', { title: a.sourceTitle || _t('ws.art_source_deleted', '原任务已删除') }))} · ${escapeHtml(a.agents)} · ${escapeHtml(a.timeLabel)}`;
+    const brokenHint = a.broken ? `<p class="ws-art-drawer-broken">${escapeHtml(_t('ws.art_broken_meta', '文件已移动或失效'))}</p>` : '';
+    return `
+    <div class="ws-art-drawer-backdrop open" data-ws="art-drawer-close" role="dialog" aria-modal="true" aria-labelledby="ws-art-drawer-name">
+      <aside class="ws-art-drawer" data-ws="noop">
+        <div class="ws-art-drawer-head">
+          <div class="ws-art-file-icon ext-${escapeHtml(a.ext.replace(/^\./, '').toLowerCase())}">${escapeHtml(_artifactExtBadge(a.ext))}</div>
+          <div class="ws-art-drawer-title">
+            <h2 id="ws-art-drawer-name">${escapeHtml(a.name)}</h2>
+            <p>${meta}</p>
+            ${brokenHint}
+          </div>
+          <button type="button" class="ws-art-drawer-close" data-ws="art-drawer-close" aria-label="${escapeHtml(_t('ws.close', '关闭'))}">${_icon('x', 'ui-icon')}</button>
+        </div>
+        <div class="ws-art-drawer-content">
+          <div class="ws-art-preview" id="ws-art-preview-body"></div>
+        </div>
+        <div class="ws-art-drawer-foot">
+          <button type="button" class="ws-secondary" data-ws="art-drawer-action" data-action="ref" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_action_ref', '引用到新任务'))}</button>
+          <button type="button" class="ws-primary" data-ws="art-drawer-action" data-action="open" data-id="${escapeHtml(a.id)}">${escapeHtml(_t('ws.art_open_full', '打开完整文件'))}</button>
+        </div>
+      </aside>
+    </div>`;
+  }
+
   function _renderArtifactsPane() {
-    const items = _artifacts.filter((a) => _artifactFilter === 'all' || a.typeId === _artifactFilter);
-    // COGSEED-16：产物无确认态，产出即正式——不再有候选提示条
-    // 筛选工具栏常驻（空态也要能切回「全部」，否则用户被筛选"卡住"）
+    const typeCounts = Object.fromEntries(_ARTIFACT_FILTERS.map((id) => [
+      id, id === 'all' ? _artifacts.length : _artifacts.filter((a) => a.typeId === id).length,
+    ]));
+    const sourceOptions = _artifactSourceOptions();
+    const items = _filteredArtifacts();
     const toolbarHtml = `
-    <div class="ws-toolbar">
-      <div class="ws-filters ws-filters-compact">
-        ${_ARTIFACT_FILTERS.map((id) => {
-          const label = id === 'all' ? _t('ws.all', '全部') : _artifactCategoryLabel(id);
-          return `<button class="${_artifactFilter === id ? 'active' : ''}" data-ws="artifact-filter" data-type="${id}">${escapeHtml(label)}</button>`;
-        }).join('')}
+    <div class="ws-art-toolbar">
+      <div class="ws-art-toolbar-main">
+        <label class="ws-art-search-wrap">
+          <span class="ws-art-search-icon">${_icon('search', 'ui-icon')}</span>
+          <input class="ws-art-search" data-ws="art-search" value="${escapeHtml(_artifactSearch)}" placeholder="${escapeHtml(_t('ws.art_search_ph', '搜索产物名称、来源任务或 Agent'))}" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="ws-art-toolbar-controls">
+          <select class="ws-art-select" data-ws="art-source-filter" aria-label="${escapeHtml(_t('ws.art_filter_source', '按来源任务筛选'))}">
+            <option value="all">${escapeHtml(_t('ws.art_all_sources', '全部来源任务'))}</option>
+            ${sourceOptions.map((o) => `<option value="${escapeHtml(o.value)}" ${_artifactSource === o.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+          <select class="ws-art-select" data-ws="art-group-mode" aria-label="${escapeHtml(_t('ws.art_group_label', '分组方式'))}">
+            <option value="time" ${_artifactGroup === 'time' ? 'selected' : ''}>${escapeHtml(_t('ws.art_group_time', '按时间分组'))}</option>
+            <option value="source" ${_artifactGroup === 'source' ? 'selected' : ''}>${escapeHtml(_t('ws.art_group_source', '按任务分组'))}</option>
+          </select>
+          <select class="ws-art-select" data-ws="art-sort-mode" aria-label="${escapeHtml(_t('ws.art_sort_label', '排序方式'))}">
+            <option value="newest" ${_artifactSort === 'newest' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_newest', '最近更新'))}</option>
+            <option value="oldest" ${_artifactSort === 'oldest' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_oldest', '最早更新'))}</option>
+            <option value="name" ${_artifactSort === 'name' ? 'selected' : ''}>${escapeHtml(_t('ws.art_sort_name', '按名称排序'))}</option>
+          </select>
+          <div class="ws-art-view-toggle" role="group" aria-label="${escapeHtml(_t('ws.art_view_label', '显示方式'))}">
+            <button type="button" class="${_artifactView === 'list' ? 'active' : ''}" data-ws="art-view" data-view="list" aria-label="${escapeHtml(_t('ws.art_view_list', '列表视图'))}" title="${escapeHtml(_t('ws.art_view_list', '列表视图'))}" aria-pressed="${_artifactView === 'list'}">☷</button>
+            <button type="button" class="${_artifactView === 'grid' ? 'active' : ''}" data-ws="art-view" data-view="grid" aria-label="${escapeHtml(_t('ws.art_view_grid', '卡片视图'))}" title="${escapeHtml(_t('ws.art_view_grid', '卡片视图'))}" aria-pressed="${_artifactView === 'grid'}">▦</button>
+          </div>
+        </div>
+      </div>
+      <div class="ws-art-toolbar-secondary">
+        <div class="ws-art-chips" role="group" aria-label="${escapeHtml(_t('ws.art_filter_type', '按类型筛选'))}">
+          ${_ARTIFACT_FILTERS.map((id) => {
+            const label = id === 'all' ? _t('ws.all', '全部') : _artifactCategoryLabel(id);
+            return `<button type="button" class="${_artifactFilter === id ? 'active' : ''}" data-ws="artifact-filter" data-type="${id}">${escapeHtml(label)} ${typeCounts[id]}</button>`;
+          }).join('')}
+        </div>
+        <div class="ws-art-summary">${_artifactsLoading ? '' : (items.length === _artifacts.length
+          ? _t('ws.art_summary_total', '共 {count} 个产物', { count: items.length })
+          : _t('ws.art_summary_found', '找到 {count} 个产物', { count: items.length }))}</div>
       </div>
     </div>`;
-    if (!_artifacts.length) {
-      return `${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_empty', '该空间暂无产物。')}</div>`;
-    }
-    if (!items.length) {
-      // 有产物但被筛选过滤：提示切回「全部」，避免「暂无产物」误导
-      const filterLabel = _artifactFilter === 'all' ? _t('ws.all', '全部') : _artifactCategoryLabel(_artifactFilter);
-      return `${toolbarHtml}<div class="ws-empty">${_t('ws.artifacts_filtered', '没有符合「{filter}」筛选的产物，切回「全部」查看。', { filter: filterLabel })}</div>`;
-    }
+    // 结果区独立容器：搜索输入走增量刷新，toolbar 与输入框不被销毁
     return `
     ${toolbarHtml}
-    <div class="ws-artifact-grid">
-      ${items.map((a) => {
-        return `
-        <article class="ws-artifact-card">
-          <div class="ws-file-icon ${a.ext.toLowerCase()}">${escapeHtml(a.ext)}</div>
-          <div>
-            <h3>${escapeHtml(a.name)}</h3>
-            <p>${escapeHtml(a.desc)}</p>
-            <footer>
-              ${a.source ? `<button data-ws="open-source" data-cid="${escapeHtml(a.source)}" title="${_t('ws.open_source_task', '打开来源任务')}">${_t('ws.from', '来自')}：${escapeHtml(a.sourceTitle)}</button>` : ''}
-              <button data-ws="open-artifact" data-path="${escapeHtml(a.path)}" data-cid="${escapeHtml(a.source)}">${_t('ws.open', '打开')}</button>
-            </footer>
-          </div>
-          <em>${escapeHtml(a.type)}</em>
-        </article>`;
-      }).join('')}
+    <div class="ws-art-results" data-ws="art-results">${_renderArtifactResultsHtml()}</div>
+    ${_renderArtifactDrawer()}`;
+  }
+
+  /** 结果区 HTML（加载骨架 / 空态 / 无结果 / 虚拟列表 / 分批网格）。 */
+  function _renderArtifactResultsHtml() {
+    const items = _filteredArtifacts();
+    if (_artifactsLoading) {
+      return `<div class="ws-art-list-shell" aria-hidden="true">${Array.from({ length: 6 }, () => `
+        <div class="ws-art-skeleton"><div class="ws-art-skeleton-icon"></div><div class="ws-art-skeleton-lines"><div class="ws-art-skeleton-line w60"></div><div class="ws-art-skeleton-line w40"></div></div></div>`).join('')}</div>`;
+    }
+    if (!_artifacts.length) {
+      return `<div class="ws-art-empty"><h3>${escapeHtml(_t('ws.artifacts_empty', '该空间暂无产物。'))}</h3><p>${escapeHtml(_t('ws.artifacts_empty_hint', '在任务对话中生成的成果会自动沉淀到这里，也可在新建空间时导入本地文件夹。'))}</p></div>`;
+    }
+    if (!items.length) {
+      return `<div class="ws-art-empty"><h3>${escapeHtml(_t('ws.art_none_found', '没有找到匹配的产物'))}</h3><p>${escapeHtml(_t('ws.art_none_found_hint', '可以尝试更换关键词或清除筛选条件。'))}</p></div>`;
+    }
+    const groups = _groupedArtifacts(items);
+    if (_artifactView === 'list') {
+      // 虚拟滚动：总高撑杆 + 浮动分组头 + 可视窗口（滚动时增量更新）
+      const totalH = _buildArtVRows(items);
+      return `
+    <div class="ws-art-content">
+      <div class="ws-art-vlist" data-ws="art-vlist">
+        <div class="ws-art-vspacer" style="height:${totalH}px"></div>
+        <div class="ws-art-vsticky" data-ws="art-vsticky" style="display:none"></div>
+        <div class="ws-art-vwindow" data-ws="art-vwindow"></div>
+      </div>
     </div>`;
+    }
+    // 卡片视图：分批渲染（每批 60 张）+ 底部哨兵，跨组分批
+    _artGridRendered = _ART_CARD_BATCH;
+    _artGridGroups = groups;
+    let from = 0;
+    return `
+    <div class="ws-art-content">
+      ${groups.map(([label, values]) => {
+        const groupFrom = from;
+        from += values.length;
+        const shown = Math.max(0, Math.min(values.length, _artGridRendered - groupFrom));
+        return `
+        <section class="ws-art-group">
+          <h2 class="ws-art-group-title">${escapeHtml(label)} <span>${values.length}</span></h2>
+          <div class="ws-art-grid-shell" data-art-group-from="${groupFrom}" data-art-group-shown="${shown}">
+            ${values.slice(0, shown).map(_artifactCardHtml).join('')}
+          </div>
+        </section>`;
+      }).join('')}
+      ${_artGridRendered < items.length ? '<div class="ws-art-grid-sentinel" data-ws="art-grid-sentinel"></div>' : ''}
+    </div>`;
+  }
+
+  /** 汇总文案（共 N / 找到 N）。 */
+  function _artifactSummaryHtml() {
+    const items = _filteredArtifacts();
+    if (_artifactsLoading) return '';
+    return items.length === _artifacts.length
+      ? _t('ws.art_summary_total', '共 {count} 个产物', { count: items.length })
+      : _t('ws.art_summary_found', '找到 {count} 个产物', { count: items.length });
+  }
+
+  /** 搜索输入/失效标记专用增量刷新：只重建结果区与汇总，工具栏/输入框原地不动
+   *  （保住输入焦点、光标位置与中文输入法组合态；过滤是亚毫秒级）。 */
+  function _refreshArtifactResults() {
+    const box = document.querySelector('[data-ws="art-results"]');
+    if (!box) { _reRender(); return; }
+    _revokeArtCardBlobs();
+    box.innerHTML = _renderArtifactResultsHtml();
+    const summary = document.querySelector('.ws-art-summary');
+    if (summary) summary.textContent = _artifactSummaryHtml();
+    if (_artifactView === 'list') {
+      // 结果区已整体重建（vlist/vwindow 是新元素）：作废窗口缓存强制填充，
+      // 否则行数不变时（如失效标记）新窗口会因缓存命中而留白。
+      _artVWinRange = null;
+      _updateArtVWindow();
+    } else {
+      _initArtCardPreviews();
+      _initArtGridSentinel();
+    }
+  }
+
+  // ── 产物抽屉交互 / 预览 / 业务动作 ───────────────────────────────────────
+
+  let _artPreviewBlobUrl = '';
+  function _revokeArtPreviewBlob() {
+    if (_artPreviewBlobUrl) { try { URL.revokeObjectURL(_artPreviewBlobUrl); } catch (_) { /* ignore */ } _artPreviewBlobUrl = ''; }
+  }
+
+  function _openArtifactDrawer(id) {
+    const a = _artifactById(id);
+    if (!a) return;
+    _artDrawerId = id;
+    _artMenuId = null;
+    _reRender(); // _reRender 检测到抽屉开启会自动装载预览内容
+    const closeBtn = document.querySelector('.ws-art-drawer-close');
+    if (closeBtn) closeBtn.focus();
+  }
+
+  function _closeArtifactDrawer() {
+    if (!_artDrawerId) return;
+    _artDrawerId = null;
+    _revokeArtPreviewBlob();
+    _reRender();
+  }
+
+  function _closeArtMenus() {
+    _artMenuId = null;
+    _artMenuEl = null;
+    document.querySelectorAll('.ws-art-more-menu').forEach((m) => { m.hidden = true; });
+    document.querySelectorAll('[data-ws="art-more"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+  }
+
+  function _toggleArtMenu(btn) {
+    const id = btn && btn.dataset.id;
+    if (!id) return;
+    const willOpen = _artMenuId !== id;
+    _closeArtMenus();
+    if (!willOpen) return;
+    let menu = null;
+    try { menu = document.querySelector(`[data-art-menu="${CSS.escape(id)}"]`); } catch (_) { /* 非法选择器忽略 */ }
+    if (!menu) return;
+    menu.hidden = false;
+    _artMenuId = id;
+    _artMenuEl = menu;
+    btn.setAttribute('aria-expanded', 'true');
+    // 键盘可达：菜单打开即聚焦首项（方向键循环、Enter 执行、Esc 关闭见全局委托）
+    const first = menu.querySelector('[role="menuitem"]');
+    if (first && typeof first.focus === 'function') first.focus();
+  }
+
+  /** 菜单键盘导航（↑↓ 循环、Home/End、Enter 原生触发聚焦项）。 */
+  function _handleArtMenuKeys(e) {
+    if (!_artMenuId || !_artMenuEl) return false;
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return false;
+    const items = Array.from(_artMenuEl.querySelectorAll('[role="menuitem"]')).filter((b) => typeof b.focus === 'function');
+    if (!items.length) return true;
+    const idx = items.indexOf(document.activeElement);
+    let next = 0;
+    if (e.key === 'ArrowDown') next = idx < 0 ? 0 : (idx + 1) % items.length;
+    else if (e.key === 'ArrowUp') next = idx <= 0 ? items.length - 1 : idx - 1;
+    else if (e.key === 'Home') next = 0;
+    else next = items.length - 1;
+    e.preventDefault();
+    items[next].focus();
+    return true;
+  }
+
+  /** IPC payload：路径 + 来源 cid / 空间（主进程放行校验用）。 */
+  function _artPathPayload(a) {
+    return {
+      path: a.path,
+      ...(a.source ? { cid: a.source } : {}),
+      spaceId: _detailSpaceId || '',
+    };
+  }
+
+  function _artPreviewFallbackHtml(message, hint) {
+    return `<div class="ws-art-preview-fallback"><div class="ws-art-preview-fallback-icon">${_icon('file-text', 'ui-icon')}</div><strong>${escapeHtml(message)}</strong><p>${escapeHtml(hint)}</p></div>`;
+  }
+
+  /** 抽屉预览加载：html/pdf/image 走 chat-media；office 走服务端真预览；文本走读文本。 */
+  async function _loadArtifactPreview(a) {
+    const body = document.getElementById('ws-art-preview-body');
+    if (!body || !a || !a.path) return;
+    _revokeArtPreviewBlob();
+    const kind = (typeof window.previewKindOf === 'function') ? window.previewKindOf(a.name) : '';
+    if (kind === 'image' || kind === 'pdf' || kind === 'html') {
+      if (typeof window.renderFilePreviewInto === 'function' && window.renderFilePreviewInto(body, a.path, a.name)) {
+        body.classList.add('is-media');
+        return;
+      }
+    }
+    if (kind === 'office') {
+      body.classList.remove('is-media');
+      body.innerHTML = `<div class="ws-art-preview-loading">${escapeHtml(_t('ws.art_preview_loading', '正在加载预览…'))}</div>`;
+      try {
+        const res = await _invoke('produced.officePreviewHtml', _artPathPayload(a));
+        if (!res || !res.ok) {
+          const reason = res && res.error === 'too_large'
+            ? _t('ws.art_preview_too_large', '文件过大，暂不支持预览')
+            : _t('ws.art_preview_failed', '预览加载失败');
+          body.innerHTML = _artPreviewFallbackHtml(reason, _t('ws.art_preview_failed_hint', '可打开完整文件查看。'));
+          return;
+        }
+        const blob = new Blob([String(res.html || '')], { type: 'text/html;charset=utf-8' });
+        _artPreviewBlobUrl = URL.createObjectURL(blob);
+        body.innerHTML = `<iframe class="ws-art-preview-frame" sandbox="" src="${_artPreviewBlobUrl}" title="${escapeHtml(a.name)}"></iframe>`;
+      } catch (_) {
+        body.innerHTML = _artPreviewFallbackHtml(_t('ws.art_preview_failed', '预览加载失败'), _t('ws.art_preview_failed_hint', '可打开完整文件查看。'));
+      }
+      return;
+    }
+    if (kind === 'markdown' || kind === 'text') {
+      body.classList.remove('is-media');
+      body.innerHTML = `<div class="ws-art-preview-loading">${escapeHtml(_t('ws.art_preview_loading', '正在加载预览…'))}</div>`;
+      try {
+        const res = await _invoke('produced.readText', _artPathPayload(a));
+        if (!res || !res.ok) {
+          const reason = res && res.error === 'too_large'
+            ? _t('ws.art_preview_too_large', '文件过大，暂不支持预览')
+            : _t('ws.art_preview_failed', '预览加载失败');
+          body.innerHTML = _artPreviewFallbackHtml(reason, _t('ws.art_preview_failed_hint', '可打开完整文件查看。'));
+          return;
+        }
+        body.innerHTML = `<pre class="ws-art-preview-text">${escapeHtml(String(res.text || ''))}</pre>`;
+      } catch (_) {
+        body.innerHTML = _artPreviewFallbackHtml(_t('ws.art_preview_failed', '预览加载失败'), _t('ws.art_preview_failed_hint', '可打开完整文件查看。'));
+      }
+      return;
+    }
+    body.classList.remove('is-media');
+    body.innerHTML = _artPreviewFallbackHtml(_t('ws.art_preview_unsupported', '暂不支持预览'), _t('ws.art_preview_unsupported_hint', '该格式暂不支持预览，可打开完整文件查看。'));
+  }
+
+  /** 打开完整文件（系统默认应用）；失败即标记失效并就近提示。 */
+  async function _openArtifactFile(a) {
+    if (!a || !a.path) return;
+    const res = await _invoke('workspace.openFile', _artPathPayload(a));
+    if (res.error) {
+      _markArtifactBroken(a);
+      if (typeof uiToast === 'function') {
+        uiToast(_t('ws.open_failed', '打开失败：{reason}', { reason: res.error }), { variant: 'error' });
+      }
+    }
+  }
+
+  /** 引用到新任务：在当前空间建新任务 + 带上产物引用，随后进入新任务继续工作。 */
+  async function _referenceArtifactToNewTask(a) {
+    if (!a || !_detailSpaceId) return;
+    const res = await _invoke('conversations.create', { spaceId: _detailSpaceId });
+    if (res.error || !res.conversation) {
+      if (typeof uiToast === 'function') uiToast(_t('ws.art_ref_failed', '引用失败：{reason}', { reason: res.error || _t('ws.unknown_error', '未知错误') }), { variant: 'error' });
+      return;
+    }
+    const cid = res.conversation.conversation_id;
+    const reference = {
+      kind: 'artifact',
+      name: a.name,
+      file_name: a.name,
+      ...(a.source ? { source_cid: a.source, source_title: a.sourceTitle || a.source } : {}),
+      ...(a.time ? { source_ts: new Date(a.time * 1000).toISOString() } : {}),
+    };
+    const addRes = await _invoke('conversations.taskRefs.add', { cid, reference });
+    // 同步侧栏缓存（与 _startNewTask 同范式）
+    if (typeof conversations !== 'undefined' && Array.isArray(conversations)
+      && !conversations.some((c) => c && c.conversation_id === cid)) {
+      const conv = { ...res.conversation, last_active_at: new Date().toISOString() };
+      if (res.conversation.space_id) conversations.unshift(conv);
+    }
+    if (typeof renderConversationList === 'function') renderConversationList();
+    _artDrawerId = null;
+    _revokeArtPreviewBlob();
+    _detailLoadedFor = null;
+    _loadSpaceDetail(_detailSpaceId);
+    if (addRes.error) {
+      // 引用失败但任务已建：仍进入任务，提示用户可手动 @ 引用
+      if (typeof uiToast === 'function') uiToast(_t('ws.art_ref_failed', '引用失败：{reason}', { reason: addRes.error }), { variant: 'warning', timeoutMs: 5000 });
+    } else if (typeof uiToast === 'function') {
+      uiToast(_t('ws.art_ref_done', '已引用到新任务'), { variant: 'success' });
+    }
+    if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true });
+  }
+
+  /** 删除产物（破坏性操作品牌化确认；web artifact 删除整个产物目录）。 */
+  async function _deleteArtifact(a) {
+    if (!a || !a.path) return;
+    const ok = await _wsConfirmDanger({
+      title: _t('ws.art_delete_confirm_title', '删除产物'),
+      message: _t('ws.art_delete_confirm', '删除产物「{name}」？该操作会把文件移入废纸篓，无法撤销。', { name: a.name }),
+      dangerLabel: _t('ws.art_delete_confirm_btn', '删除'),
+    });
+    if (!ok) return;
+    const res = await _invoke('spaces.artifacts.delete', { spaceId: _detailSpaceId || '', path: a.path, artifactId: a.artifactId || '' });
+    if (res && res.error) {
+      if (typeof uiToast === 'function') uiToast(_t('ws.art_delete_failed', '删除失败：{reason}', { reason: res.error }), { variant: 'error' });
+      return;
+    }
+    if (_artDrawerId === a.id) { _artDrawerId = null; _revokeArtPreviewBlob(); }
+    if (_artMenuId === a.id) _artMenuId = null;
+    _detailLoadedFor = null;
+    _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+    if (typeof uiToast === 'function') uiToast(_t('ws.art_deleted', '已删除产物'), { variant: 'success' });
+  }
+
+  /** 更多菜单 / 抽屉底部动作分发。 */
+  async function _runArtifactAction(action, id) {
+    const a = _artifactById(id);
+    if (!a) return;
+    if (action === 'open') { await _openArtifactFile(a); return; }
+    if (action === 'ref') { await _referenceArtifactToNewTask(a); return; }
+    if (action === 'source') {
+      if (a.source && typeof setView === 'function') setView('conversation', a.source);
+      return;
+    }
+    if (action === 'reveal') {
+      const res = await _invoke('workspace.revealPath', _artPathPayload(a));
+      if (res && res.error) {
+        _markArtifactBroken(a);
+        if (typeof uiToast === 'function') {
+          uiToast(_t('ws.art_relocate_failed', '文件已不存在，刷新列表后记录会自动移除。'), { variant: 'warning', timeoutMs: 5000 });
+        }
+      } else if (a.broken && typeof uiToast === 'function') {
+        uiToast(_t('ws.art_relocate_done', '已在文件夹中定位'), { variant: 'success' });
+      }
+      return;
+    }
+    if (action === 'delete') { await _deleteArtifact(a); }
   }
 
   function _renderAssetsPane() {
@@ -1540,13 +2430,28 @@
     if (typeof uiToast === 'function') uiToast(_t('ws.pruned', '已清理失效引用'), { variant: 'success' });
   }
 
+  /** 品牌化确认/输入弹层（dialogs.js 全局组件；缺失时回退原生，兜底可用）。 */
+  async function _wsConfirmDanger(opts) {
+    if (typeof uiConfirmDanger === 'function') return uiConfirmDanger(opts);
+    return typeof confirm === 'function' && confirm(opts && opts.message ? opts.message : '');
+  }
+  async function _wsConfirm(opts) {
+    if (typeof uiConfirm === 'function') return uiConfirm(opts);
+    const msg = opts && typeof opts === 'object' ? opts.message : String(opts || '');
+    return typeof confirm === 'function' && confirm(msg);
+  }
+  async function _wsPrompt(message, defaultValue) {
+    if (typeof uiPrompt === 'function') return uiPrompt(message, defaultValue);
+    return typeof prompt === 'function' ? prompt(message, defaultValue) : null;
+  }
+
   /** 重命名空间。 */
   async function _renameSpace() {
     const sp = _space();
     if (!sp) return;
     const currentName = _spaceDisplayName(sp);
-    const next = prompt(_t('ws.rename_prompt', '新的空间名称：'), currentName);
-    if (next === null) return;
+    const next = await _wsPrompt(_t('ws.rename_prompt', '新的空间名称：'), currentName);
+    if (next === null || next === undefined) return;
     const name = String(next || '').trim();
     if (!name || name === currentName) return;
     const res = await _invoke('spaces.update', { spaceId: sp.space_id, name });
@@ -1562,6 +2467,7 @@
   // ── 事件绑定 ──────────────────────────────────────────────────────────────
 
   let _moreMenuDismissBound = false;
+  let _artGlobalBound = false; // 产物页全局监听只注册一次
   /** 点击卡片外关闭「更多」菜单（只注册一次，避免 _bind 重复叠加监听）。 */
   function _bindMoreMenuDismiss() {
     if (_moreMenuDismissBound) return;
@@ -1571,6 +2477,52 @@
         document.querySelectorAll('.ws-more-menu').forEach((m) => { m.hidden = true; });
       }
     });
+  }
+
+  /** 产物页全局监听（只注册一次）：点击别处收起「更多」菜单；Escape 关闭抽屉/菜单。 */
+  function _bindArtifactGlobal() {
+    if (_artGlobalBound) return;
+    _artGlobalBound = true;
+    // 产物交互事件委托（capture 阶段：drawer 内层 stopPropagation 不影响分发；
+    // 虚拟滚动窗口行是增量渲染的，不能逐行绑监听）。
+    document.addEventListener('click', (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (t) {
+        const moreBtn = t.closest('[data-ws="art-more"]');
+        if (moreBtn) { e.stopPropagation(); _toggleArtMenu(moreBtn); return; }
+        const openBtn = t.closest('[data-ws="art-open"]');
+        if (openBtn) { e.stopPropagation(); _openArtifactDrawer(openBtn.dataset.id); return; }
+        const actionBtn = t.closest('[data-ws="art-action"]');
+        if (actionBtn) { e.stopPropagation(); _closeArtMenus(); void _runArtifactAction(actionBtn.dataset.action, actionBtn.dataset.id); return; }
+        const drawerAction = t.closest('[data-ws="art-drawer-action"]');
+        if (drawerAction) { void _runArtifactAction(drawerAction.dataset.action, drawerAction.dataset.id); return; }
+        const drawerClose = t.closest('[data-ws="art-drawer-close"]');
+        if (drawerClose) { _closeArtifactDrawer(); return; }
+        const viewBtn = t.closest('[data-ws="art-view"]');
+        if (viewBtn) { _artifactView = viewBtn.dataset.view; _resetArtScroll(); _reRender(); return; }
+        const filterBtn = t.closest('[data-ws="artifact-filter"]');
+        if (filterBtn) { _artifactFilter = filterBtn.dataset.type; _resetArtScroll(); _reRender(); return; }
+        const row = t.closest('[data-ws="art-row-open"]');
+        if (row && !t.closest('button')) { _openArtifactDrawer(row.dataset.id); return; }
+      }
+      // 点击别处收起「更多」菜单
+      if (!t || !t.closest('[data-ws="art-more"], .ws-art-more-menu')) _closeArtMenus();
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        _closeArtMenus();
+        if (_artDrawerId) _closeArtifactDrawer();
+        return;
+      }
+      // 更多菜单键盘导航（↑↓ 循环 / Home / End）
+      if (_handleArtMenuKeys(e)) return;
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t) return;
+      const row = t.closest('[data-ws="art-row-open"]');
+      if (row && !t.closest('button')) { e.preventDefault(); _openArtifactDrawer(row.dataset.id); }
+    }, true);
+    _bindArtScroll();
   }
 
   let _importProgressBound = false; // COGSEED-18：推送订阅只注册一次（onPushEvent 每次调用都新增 listener）
@@ -1587,6 +2539,7 @@
       });
     }
     _bindMoreMenuDismiss();
+    _bindArtifactGlobal();
     // 弹窗内层：阻止冒泡到 scrim（否则点 dialog 内部会触发关闭）
     root.querySelectorAll('[data-ws="noop"]').forEach((el) => el.addEventListener('click', (e) => e.stopPropagation()));
 
@@ -1609,15 +2562,15 @@
       root.querySelectorAll('.ws-more-menu').forEach((m) => { m.hidden = true; });
       if (menu && !wasOpen) menu.hidden = false;
     }));
-    // 空间卡「⋯」→ 重命名
+    // 空间卡「⋯」→ 重命名（品牌化输入弹层，替代原生 prompt）
     root.querySelectorAll('[data-ws="rename-space"]').forEach((el) => el.addEventListener('click', async (e) => {
       e.stopPropagation();
       const sid = el.dataset.space;
       if (!sid) return;
       const sp = _spaces.find((s) => s.space_id === sid);
       const currentName = _spaceDisplayName(sp);
-      const next = prompt(_t('ws.rename_prompt', '新的空间名称：'), currentName);
-      if (next === null) return;
+      const next = await _wsPrompt(_t('ws.rename_prompt', '新的空间名称：'), currentName);
+      if (next === null || next === undefined) return;
       const name = String(next || '').trim();
       if (!name || (sp && name === currentName)) return;
       const res = await _invoke('spaces.update', { spaceId: sid, name });
@@ -1640,7 +2593,12 @@
       // 任务数：查该空间会话（删除后落到最近任务）
       const listRes = await _invoke('spaces.conversations.list', { spaceId: sid });
       const count = Array.isArray(listRes.conversations) ? listRes.conversations.length : 0;
-      if (!confirm(_t('ws.delete_space_confirm', '删除空间「{name}」？空间内 {count} 个任务将移到「最近任务」，会话本身不会被删除。', { name, count }))) return;
+      const ok = await _wsConfirmDanger({
+        title: _t('ws.delete_space_confirm_title', '删除空间'),
+        message: _t('ws.delete_space_confirm', '删除空间「{name}」？空间内 {count} 个任务将移到「最近任务」，会话本身不会被删除。', { name, count }),
+        dangerLabel: _t('ws.delete_space_confirm_btn', '删除空间'),
+      });
+      if (!ok) return;
       const delRes = await _invoke('spaces.delete', { spaceId: sid });
       if (delRes.error) { _stub(_t('ws.delete_space_failed', '删除空间失败：{reason}', { reason: delRes.error })); return; }
       // 刷新空间列表；若详情正指向被删空间则重置
@@ -1727,12 +2685,16 @@
       if (cid && typeof setView === 'function') setView('conversation', cid);
     }));
 
-    // 任务行「更多」→ 移出空间（解绑会话，回普通列表）
-    root.querySelectorAll('[data-ws="task-more"]').forEach((el) => el.addEventListener('click', (e) => {
+    // 任务行「更多」→ 移出空间（解绑会话，回普通列表；品牌化确认，非破坏性）
+    root.querySelectorAll('[data-ws="task-more"]').forEach((el) => el.addEventListener('click', async (e) => {
       e.stopPropagation(); // 行本身是 open-task 按钮，避免触发打开会话
       const cid = el.dataset.cid;
       if (!cid || !_detailSpaceId) return;
-      if (!confirm(_t('ws.task_unbind_confirm', '把该任务移出当前空间？会话保留，但不再计入该空间的任务列表。'))) return;
+      const ok = await _wsConfirm({
+        message: _t('ws.task_unbind_confirm', '把该任务移出当前空间？会话保留，但不再计入该空间的任务列表。'),
+        okLabel: _t('ws.task_unbind_btn', '移出空间'),
+      });
+      if (!ok) return;
       _unbindTaskFromSpace(cid, _detailSpaceId);
     }));
     root.querySelectorAll('[data-ws="ref-tab"]').forEach((el) => el.addEventListener('click', () => { _refPickerKind = el.dataset.kind; _reRender(); }));
@@ -1741,31 +2703,29 @@
     root.querySelectorAll('[data-ws="save-ref"]').forEach((el) => el.addEventListener('click', () => _saveRefPicker()));
     const refSearch = root.querySelector('[data-ws="ref-search"]');
     if (refSearch) refSearch.addEventListener('input', () => { _refSearch = refSearch.value; _debouncedSearchReRender(); });
-    root.querySelectorAll('[data-ws="artifact-filter"]').forEach((el) => el.addEventListener('click', () => { _artifactFilter = el.dataset.type; _reRender(); }));
     root.querySelectorAll('[data-ws="asset-filter"]').forEach((el) => el.addEventListener('click', () => { _assetFilter = el.dataset.type; _reRender(); }));
-    // 资产卡 × → 撤销（弹确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
+    // ── 产物页查找工具栏（行级交互已改为 document 级事件委托）──
+    // 搜索输入走「增量刷新」：工具栏与输入框原地不动（保焦点/光标/中文输入法），
+    // 只重建结果区与汇总；过滤 200+ 条是亚毫秒级，无需防抖，即时反馈。
+    const artSearch = root.querySelector('[data-ws="art-search"]');
+    if (artSearch) artSearch.addEventListener('input', () => { _artifactSearch = artSearch.value; _resetArtScroll(); _refreshArtifactResults(); });
+    root.querySelectorAll('[data-ws="art-source-filter"]').forEach((el) => el.addEventListener('change', () => { _artifactSource = el.value; _resetArtScroll(); _reRender(); }));
+    root.querySelectorAll('[data-ws="art-group-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactGroup = el.value; _resetArtScroll(); _reRender(); }));
+    root.querySelectorAll('[data-ws="art-sort-mode"]').forEach((el) => el.addEventListener('change', () => { _artifactSort = el.value; _resetArtScroll(); _reRender(); }));
+    // 资产卡 × → 撤销（品牌化确认 → 撤销；撤销后资产从空间列表消失——listAbilityAssetsForSpace 过滤 revoked）
     root.querySelectorAll('[data-ws="revoke-asset"]').forEach((el) => el.addEventListener('click', async () => {
       const assetId = el.dataset.asset;
       if (!assetId) return;
-      if (!confirm(_t('ws.revoke_asset_confirm', '撤销该资产？撤销后将从本空间资产列表移除。'))) return;
+      const ok = await _wsConfirm({
+        message: _t('ws.revoke_asset_confirm', '撤销该资产？撤销后将从本空间资产列表移除。'),
+        okLabel: _t('ws.revoke_asset_btn', '撤销'),
+      });
+      if (!ok) return;
       const res = await _invoke('recall.assets.revoke', { assetId, note: 'user revoke' });
       if (res && res.error) { _stub(_t('ws.revoke_failed', '撤销失败：{reason}', { reason: res.error })); return; }
       _detailLoadedFor = null;
       _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
       if (typeof uiToast === 'function') uiToast(_t('ws.revoked', '已撤销'), { variant: 'warning' });
-    }));
-    // 产物（COGSEED-16：无确认态）：打开文件（系统默认应用）/ 跳来源任务
-    root.querySelectorAll('[data-ws="open-artifact"]').forEach((el) => el.addEventListener('click', async () => {
-      const p = el.dataset.path;
-      const cid = el.dataset.cid;
-      if (!p) { _stub(_t('ws.open_artifact', '打开产物')); return; }
-      // COGSEED-18：导入产物无 cid，带当前空间 spaceId 供主进程校验放行（空间内容目录内文件）
-      const res = await _invoke('workspace.openFile', { path: p, cid: cid || '', spaceId: _detailSpaceId || '' });
-      if (res.error) _stub(_t('ws.open_failed', '打开失败：{reason}', { reason: res.error }));
-    }));
-    root.querySelectorAll('[data-ws="open-source"]').forEach((el) => el.addEventListener('click', () => {
-      const cid = el.dataset.cid;
-      if (cid && typeof setView === 'function') setView('conversation', cid);
     }));
 
     // 任务页
@@ -2020,7 +2980,7 @@
     // 重建前捕获搜索框焦点/光标：innerHTML 全量替换会销毁输入框。
     // 搜索框在打字过程中触发的重建必须把焦点还给用户，否则每敲一次就失焦。
     const active = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
-    const restoreSel = active && (active.matches('[data-ws="center-search"]') || active.matches('[data-ws="ref-search"]'))
+    const restoreSel = active && (active.matches('[data-ws="center-search"]') || active.matches('[data-ws="ref-search"]') || active.matches('[data-ws="art-search"]'))
       ? { sel: active.dataset.ws, pos: typeof active.selectionStart === 'number' ? active.selectionStart : active.value.length }
       : null;
     let html = _render();
@@ -2032,8 +2992,26 @@
     if (_baseAgentEditOpen) html += _renderBaseAgentModal();
     if (_roleEditOpen) html += _renderRoleModal();
     if (_refPickerOpen) html += _renderRefPicker();
+    // 卡片预览的 blob URL 随旧 DOM 一并作废（每次重建前吊销，防内存堆积）
+    _revokeArtCardBlobs();
     root.innerHTML = html;
     _bind(root);
+    if (_view === 'space' && _spaceTab === 'artifacts') {
+      if (_artifactView === 'list') {
+        _updateArtVWindow(); // 按当前滚动位置填充可视窗口
+      } else {
+        _initArtCardPreviews(); // 缩略图懒加载
+        _initArtGridSentinel(); // 分批渲染哨兵
+      }
+    }
+    // 抽屉开着时，任何重建都会清空预览容器 → 容器为空则重新装载预览内容
+    if (_artDrawerId && _view === 'space' && _spaceTab === 'artifacts') {
+      const a = _artifactById(_artDrawerId);
+      if (a) {
+        const body = document.getElementById('ws-art-preview-body');
+        if (!body || !body.childElementCount) void _loadArtifactPreview(a);
+      }
+    }
     if (restoreSel) {
       const el = root.querySelector(`[data-ws="${restoreSel.sel}"]`);
       if (el) {

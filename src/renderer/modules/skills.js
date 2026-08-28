@@ -3482,17 +3482,12 @@ function renderSkillsCognitionTree() {
     ],
   });
   if (!nodes.length) {
+    // 没有已确认的正式资产 → 始终显示「种子」。种子→树只由"是否沉淀出正式资产"
+    // 决定，与是否存在待确认候选无关；若有候选，种子上附带「去处理 N 个候选芽」入口。
     const budEntry = budCount
       ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
       : '';
-    // 空树分两种，给的话也不同：
-    //   一件东西都没有 → 首启种子引导（该从哪儿开始），与「待我处理」的
-    //     首启变体同源——从认知树进来的人先看到的是起点，不是一张空画布；
-    //   有资产但被清空/从未确认 → 「树上还没有叶片」，树的空态如实表达。
-    const emptyBody = _cognitionIsFirstRun()
-      ? _cognitionSeedMarkup()
-      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
-    host.innerHTML = `${hero}${emptyBody}`;
+    host.innerHTML = `${hero}${_cognitionSeedMarkup()}${budEntry}`;
     return;
   }
   host.innerHTML = `${hero}${_renderCognitionTreeContent(stats)}`;
@@ -4087,24 +4082,22 @@ function _renderCognitionTreeFirstPage(items) {
     titleKey: 'cognition.tree_title', title: '这棵树，就是你积累下来的能力',
     hintKey: 'cognition.tree_page_hint', hint: '树只展示正式认知资产。待确认候选是芽，确认后成为浅叶，经过真实复用与证据验证后成为深叶。',
   };
-  if (_cognitionIsFirstRun()) return _cognitionSeedMarkup();
   const stats = _cognitionTreeStats();
   const { tree, nodes, budCount, deepCount } = stats;
   if (tree?.error) {
     return `<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
   }
+  const budEntry = budCount
+    ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
+    : '';
   if (!tree || tree.loading) {
-    // 树数据按需加载。无资产时不需要树——空树就是"还没有叶片"，直接给空态，
-    // 不显示一个会永远转下去的加载中（只有有资产才触发拉树）。
+    // 树数据未就绪：有确认资产才显示加载中；无确认资产直接给种子，避免闪加载。
     return items.length
       ? `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`
-      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span></div>`;
+      : `${_cognitionSeedMarkup()}${budEntry}`;
   }
   if (!nodes.length) {
-    const budEntry = budCount
-      ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
-      : '';
-    return `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
+    return `${_cognitionSeedMarkup()}${budEntry}`;
   }
   const hero = _renderCognitionTaskHero({
     ...treeHeroBase,
