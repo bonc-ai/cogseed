@@ -136,7 +136,7 @@ export function removeRemoteNode(id: unknown): { ok: boolean; expected_identity?
   return { ok: true, expected_identity: node.expected_identity };
 }
 
-/** 编辑远端节点（G-15）：label/期望身份/endpoint/token 任意子集；
+/** 编辑远端节点：label/期望身份/endpoint/token 任意子集；
  * 未传 token 保留原值；endpoint 变更做去重校验。 */
 export function updateRemoteNode(id: unknown, input: {
   label?: unknown;

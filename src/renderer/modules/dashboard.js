@@ -134,7 +134,7 @@
     }).join('');
   }
 
-  // 编辑远端节点（G-15）：行详情展开内嵌编辑表单；未填 token 保留原值。
+  // 编辑远端节点：行详情展开内嵌编辑表单；未填 token 保留原值。
   function editFormHtml(node) {
     return `<form class="dash-form dash-edit-form" data-dash-edit-id="${esc(node.id)}">
       <label><span data-i18n="dashboard.form_label">名称</span><input type="text" name="label" value="${esc(node.label || '')}" autocomplete="off"></label>
@@ -295,7 +295,7 @@
     }
   }
 
-  // 编辑远端节点提交（G-15）：token 留空保留原值；改 endpoint 后提示重测。
+  // 编辑远端节点提交：token 留空保留原值；改 endpoint 后提示重测。
   async function submitEditNodeForm(event) {
     if (event && typeof event.preventDefault === 'function') event.preventDefault();
     const form = event.target;
