@@ -18,13 +18,12 @@
   "style.css": {
     "color": 2178,
     "zIndex": 57,
-    "fontSize": 433,
-    "radius": 277
+    "fontSize": 435,
+    "radius": 279
   },
   "workspace.css": {
-    "color": 449,
-    "zIndex": 8,
+    "color": 511,
     "fontSize": 72,
-    "radius": 58
+    "radius": 71
   }
 }
