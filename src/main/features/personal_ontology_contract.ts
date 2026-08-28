@@ -45,6 +45,8 @@ import {
 } from './personal_ontology_template_files';
 import { listGroups } from './personal_ontology_groups';
 import {
+  isIdentityFailure,
+  resolveSectionIdentity,
   roleTemplateFieldStatus as fieldStatus,
   type FieldSlotStatus,
 } from './personal_ontology_migration';
@@ -127,7 +129,37 @@ export function resolveRefToInternalId(uid: string, ref: string): string | null 
   if (decoded.k === 'g') return decoded.g;
   const row = readGroups(uid).find((g) => g.template_id === decoded.t);
   if (!row) return null;
-  return buildContentRef(row.group_id, decoded.s);
+  return buildContentRef(row.group_id, resolveInstalledSectionTitle(uid, decoded.t, decoded.s));
+}
+
+/**
+ * ref 里记着的分节名 → 该分节在**当前实例文件**里的标题。
+ *
+ * 聊天草稿里的 `ts` token 会长期存活，里面存的是当初那一刻的分节名。分节改名
+ * 迁移之后文件里已经是新标题，旧 token 直接按字面找就会落空。这里补一跳：
+ * 文件里找不到字面名时，用 catalog 的 identity（当前名 + previous_names）
+ * 换算到当前标题再找。
+ *
+ * 换算失败时**原样返回 token 里的名字**，保持既有行为（错误照旧在下游读取时
+ * 报出来），不因为多了这一跳而让原本能用的引用变得不能用。
+ *
+ * 渲染层对这一切无感：它只负责把 opaque ref 原样传回来，rename chain 完全留在
+ * PO 内部 —— 一旦让渲染层知道历史名，模板改名就变成了跨层改动。
+ */
+function resolveInstalledSectionTitle(uid: string, templateId: string, sectionName: string): string {
+  try {
+    const text = readTemplateFileText(uid, templateId);
+    if (!text) return sectionName;
+    const titles = parseTemplateContent(text).sections.map((s) => s.title);
+    if (titles.includes(sectionName)) return sectionName;
+    const identity = resolveSectionIdentity(templateId, sectionName);
+    if (!isIdentityFailure(identity) && titles.includes(identity.identity.title)) {
+      return identity.identity.title;
+    }
+    return sectionName;
+  } catch {
+    return sectionName;
+  }
 }
 
 // ── Contract A：模板目录 ───────────────────────────────────────────────────
