@@ -265,6 +265,78 @@ export function findFieldIdentityAnywhere(
   };
 }
 
+// ── 退役字段与三态 ─────────────────────────────────────────────────────────
+
+export interface RetiredFieldIdentity {
+  sectionId: string;
+  sectionTitle: string;
+  fieldId: string;
+  /** 退役字段没有「当前显示名」，只有历史名；这里给命中的那一个。 */
+  matchedName: string;
+  retiredIn?: string;
+}
+
+/**
+ * 实例文件里的字段属于哪一态。
+ *
+ * `active`   catalog 当前仍声明的正式字段 —— 可写落点。
+ * `retired`  曾经属于官方 T-box、catalog 已用 `retired_fields` 明确声明退役。
+ *            值全部保留、继续可读，但不再是可写落点。
+ * `custom`   用户自己建的字段，从来不属于官方 T-box。
+ *
+ * 关键在于 retired 与 custom 的判据是**catalog 的显式声明**，不是「catalog 里
+ * 找不到」。只凭找不到就判退役，等于把用户自建字段也说成官方历史字段；反过来
+ * 没有这条声明，官方旧字段就会被说成用户自建的——这正是本轮要修的错误行为。
+ */
+export type FieldSlotStatus = 'active' | 'retired' | 'custom';
+
+/** 实例文件里的 (分节名, 字段名) → 退役字段 identity。 */
+export function resolveRetiredFieldIdentity(
+  templateId: string,
+  sectionName: string,
+  fieldName: string,
+): IdentityResolution<RetiredFieldIdentity> {
+  const template = getRoleTemplate(templateId);
+  if (!template) return { ok: false, reason: 'unknown_template' };
+  const sec = resolveSectionIn(template, sectionName);
+  if (isIdentityFailure(sec)) return sec;
+  const retired = pickUnique(
+    sec.identity.retired_fields || [],
+    // 退役字段只有历史名，没有「当前名」；统一按 previous_name 命中。
+    (r) => (r.previous_names?.includes(fieldName) ? 'previous_name' : null),
+    (r) => r.id,
+  );
+  if (isIdentityFailure(retired)) return retired;
+  return {
+    ok: true,
+    matchedBy: 'previous_name',
+    identity: {
+      sectionId: sec.identity.id,
+      sectionTitle: sec.identity.title,
+      fieldId: retired.identity.id,
+      matchedName: fieldName,
+      ...(retired.identity.retired_in ? { retiredIn: retired.identity.retired_in } : {}),
+    },
+  };
+}
+
+/**
+ * 三态判定。在役优先于退役（catalog 若把一个退役字段重新启用，它就是 active）。
+ * 未知模板 / 认不出的分节 → custom：拿不到官方依据时，只能说「这不是官方字段」，
+ * 不能反过来说「这是官方退役字段」。
+ */
+export function roleTemplateFieldStatus(
+  templateId: string,
+  sectionName: string,
+  fieldName: string,
+): FieldSlotStatus {
+  const active = resolveFieldIdentity(templateId, sectionName, fieldName);
+  if (!isIdentityFailure(active)) return 'active';
+  const retired = resolveRetiredFieldIdentity(templateId, sectionName, fieldName);
+  if (!isIdentityFailure(retired)) return 'retired';
+  return 'custom';
+}
+
 // ── Detection 的输入形状 ───────────────────────────────────────────────────
 
 /**

@@ -44,6 +44,10 @@ import {
   readGroups,
 } from './personal_ontology_template_files';
 import { listGroups } from './personal_ontology_groups';
+import {
+  roleTemplateFieldStatus as fieldStatus,
+  type FieldSlotStatus,
+} from './personal_ontology_migration';
 
 const log = createLogger('personal-ontology-contract');
 
@@ -538,6 +542,8 @@ export async function appendRoleTemplateFieldValue(
 
 // ── T-box 白名单（原 candidates.ts::tboxFields / profile-sync::tboxCatalog）──
 
+export type { FieldSlotStatus };
+
 /** 该字段是否由模板 T-box 声明（自动写入通道的唯一判据）。 */
 export function isTboxField(templateId: string, section: string, fieldName: string): boolean {
   const template = getRoleTemplate(templateId);
@@ -545,6 +551,22 @@ export function isTboxField(templateId: string, section: string, fieldName: stri
   return template.preset_groups.some(
     (preset) => preset.title === section && preset.fields.some((f) => f.name === fieldName),
   );
+}
+
+/**
+ * 字段的 T-box 归属三态（active / retired / custom）。这是 PO 对外的唯一判据，
+ * 调用方不要再用「不在 T-box 清单里就是自定义」自行推断 —— 那样分不出
+ * 「产品下架的官方历史字段」和「用户自己建的字段」，而这两者的处置不同：
+ * 前者的值是官方画像的历史沉淀，后者是用户私有约定。
+ *
+ * 两者的共同点只有一条：都**不是可写落点**（见 listRoleTemplateFieldTargets）。
+ */
+export function roleTemplateFieldStatus(
+  templateId: string,
+  section: string,
+  fieldName: string,
+): FieldSlotStatus {
+  return fieldStatus(templateId, section, fieldName);
 }
 
 /** 该模板 T-box 声明的全部字段名（跨分节扁平）。未知模板 → 空集。 */

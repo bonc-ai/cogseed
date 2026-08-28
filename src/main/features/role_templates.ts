@@ -48,6 +48,25 @@ export interface TemplateField {
   previous_names?: string[];
 }
 
+/**
+ * 已退役的官方字段：曾经属于 T-box，现在 catalog 不再声明它，但用户实例里
+ * 很可能还留着值。
+ *
+ * 它存在的唯一理由是**把「产品下架的旧官方字段」和「用户自建字段」区分开**。
+ * 没有这条声明，两者在数据上完全同形（都是 catalog 认不出的名字），旧官方
+ * 字段就会被重新解释成 `custom`——一个用户从没创建过的「自定义字段」。
+ *
+ * 退役不等于删除：值一条不动，只是不再是可写落点。
+ */
+export interface RetiredField {
+  /** 该字段当年的 `id`。**不得与任何在役字段 id 重复，也不得复用**。 */
+  id: string;
+  /** 退役时的显示名 + 更早的历史名。至少要有一个，否则认不出实例里的旧字段。 */
+  previous_names: string[];
+  /** 退役发生在哪个 catalog 版本（纯记录，不参与判定）。 */
+  retired_in?: string;
+}
+
 export interface PresetGroup {
   /** 稳定 schema identity（模板内唯一）。语义同 TemplateField.id。 */
   id: string;
@@ -56,6 +75,8 @@ export interface PresetGroup {
   /** 历史分节名集合；语义同 TemplateField.previous_names。 */
   previous_names?: string[];
   fields: TemplateField[];
+  /** 本分节里已退役的官方字段（见 RetiredField）。 */
+  retired_fields?: RetiredField[];
 }
 
 /**
@@ -1097,7 +1118,9 @@ export interface RoleTemplateCatalogIssue {
      *  —— 解析时无法判定归属，必须由作者消歧。 */
     | 'ambiguous_previous_name'
     /** 同一模板内两个分节 / 两个字段用了同一个显示名：名字寻址会撞。 */
-    | 'duplicate_display_name';
+    | 'duplicate_display_name'
+    /** 退役字段没声明任何历史名 —— 那就永远认不出实例里的它。 */
+    | 'retired_field_without_names';
   templateId: string;
   detail: string;
 }
@@ -1158,6 +1181,26 @@ export function validateRoleTemplateCatalog(
             add('ambiguous_previous_name', t.template_id, `field name "${name}" in section "${sec.id}" claimed by both "${owner}" and "${f.id}"`);
           }
           fieldNameOwner.set(name, f.id);
+        }
+      }
+
+      // 退役字段与在役字段共用同一套 id 空间和同一套名字解析空间：
+      // id 复用会让「同一个坑」指向两个不同的东西；名字撞车会让实例里的一个
+      // 旧字段既像在役又像退役，解析必须能唯一定夺。
+      for (const r of sec.retired_fields || []) {
+        if (!ID_RE.test(r.id || '')) add('malformed_id', t.template_id, `retired field id "${r.id}" in section "${sec.id}"`);
+        if (fieldIds.has(r.id)) add('duplicate_field_id', t.template_id, `retired field id "${r.id}" reuses an active field id`);
+        fieldIds.add(r.id);
+        if (!r.previous_names?.length) {
+          add('retired_field_without_names', t.template_id, `retired field "${r.id}" in section "${sec.id}"`);
+          continue;
+        }
+        for (const name of r.previous_names) {
+          const owner = fieldNameOwner.get(name);
+          if (owner && owner !== r.id) {
+            add('ambiguous_previous_name', t.template_id, `retired field name "${name}" in section "${sec.id}" claimed by both "${owner}" and "${r.id}"`);
+          }
+          fieldNameOwner.set(name, r.id);
         }
       }
     }

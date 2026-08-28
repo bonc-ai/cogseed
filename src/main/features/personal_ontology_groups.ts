@@ -696,8 +696,20 @@ export interface GroupFieldInfo {
   isRelation?: boolean;
   description?: string;
   values: FieldValue[];
-  /** 模板组：字段不在模板 T-box 清单内（用户升格/自建的自定义字段）。 */
+  /**
+   * 模板组：字段的 T-box 归属三态 —— `active`（catalog 当前声明）/
+   * `retired`（官方历史字段，catalog 已明确声明退役）/ `custom`（用户自建）。
+   * 非模板组不带此字段。
+   */
+  status?: 'active' | 'retired' | 'custom';
+  /**
+   * `status !== 'active'` 的派生别名，给还没换到三态的渲染层用。
+   * **新代码请读 `status`**：`isCustom` 分不出「产品下架的官方字段」和
+   * 「用户自建字段」，而这两者的处置完全不同。
+   */
   isCustom?: boolean;
+  /** 模板组：字段所属分节（三态判定要按分节作用域，扁平清单里必须带上）。 */
+  sectionTitle?: string;
 }
 
 export interface ListGroupFieldsResult {
@@ -743,7 +755,9 @@ export function collectTemplateFileFields(text: string): GroupFieldInfo[] {
         const pv = parseFieldValueLine(line);
         if (pv) values.push(pv);
       }
-      out.push({ name, values });
+      // 带上分节名：字段名只在其所属分节内唯一，三态判定必须按分节作用域走，
+      // 扁平清单丢掉分节就只能按名字全模板猜。
+      out.push({ name, values, sectionTitle: sections[i].trim() });
     }
   }
   return out;
@@ -771,13 +785,14 @@ export async function listGroupFields(uid: string, groupId: string): Promise<Lis
   // 模板文件（分节式）→ 跨分节字段汇总（这是模板组的唯一事实来源）
   if (isTemplateFileText(fileText)) {
     const fields = collectTemplateFileFields(fileText);
-    // 标注自定义字段：不在该模板 T-box 清单内的字段（用户升格/自建）
-    // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）。
-    // 判据来自 contract 的单一 T-box 能力，不在这里重建一份。
+    // 三态标注（active / retired / custom）。判据来自 contract 的单一 T-box
+    // 能力，不在这里重建一份。isCustom 作为派生别名保留给旧渲染层。
     if (meta.template_id) {
-      const { listTboxFieldNames } = await import('./personal_ontology_contract');
-      const tboxNames = listTboxFieldNames(meta.template_id);
-      if (tboxNames.size) for (const f of fields) f.isCustom = !tboxNames.has(f.name);
+      const { roleTemplateFieldStatus } = await import('./personal_ontology_contract');
+      for (const f of fields) {
+        f.status = roleTemplateFieldStatus(meta.template_id, f.sectionTitle || '', f.name);
+        f.isCustom = f.status !== 'active';
+      }
     }
     return { ok: true, fields };
   }

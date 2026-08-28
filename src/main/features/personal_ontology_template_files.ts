@@ -1023,15 +1023,18 @@ export async function listFieldsByRef(uid: string, ref: string): Promise<ListFie
   const content = parseTemplateContent(readTemplateFileText(uid, meta.template_id));
   const sec = findSection(content, section);
   if (!sec) return { ok: false, error: 'section not found' };
-  // 自定义字段标记：不在该模板 T-box 清单内的字段（用户升格/自建）。
-  // 判据来自 contract 的单一 T-box 能力。
-  const { listTboxFieldNames } = await import('./personal_ontology_contract');
-  const tboxNames = listTboxFieldNames(meta.template_id);
-  const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => ({
-    name,
-    values: sec.fields[name] || [],
-    ...(tboxNames.size ? { isCustom: !tboxNames.has(name) } : {}),
-  }));
+  // 三态标注（active / retired / custom），判据来自 contract 的单一 T-box 能力。
+  const { roleTemplateFieldStatus } = await import('./personal_ontology_contract');
+  const fields: GroupFieldInfo[] = Object.keys(sec.fields).map((name) => {
+    const status = roleTemplateFieldStatus(meta.template_id, sec.title, name);
+    return {
+      name,
+      values: sec.fields[name] || [],
+      sectionTitle: sec.title,
+      status,
+      isCustom: status !== 'active', // 派生别名，保留给还没换到三态的渲染层
+    };
+  });
   return { ok: true, fields };
 }
 
@@ -1181,7 +1184,15 @@ export async function migrateLegacyTemplateGroups(uid: string): Promise<MigrateL
 
 export interface TemplateStatusSection {
   title: string;
-  fields: Array<{ name: string; values: FieldValue[] }>;
+  fields: Array<{
+    name: string;
+    values: FieldValue[];
+    /**
+     * T-box 归属三态。`retired` = 官方历史字段（catalog 已声明退役，值保留但
+     * 不再可写）；`custom` = 用户自建。两者都不是可写落点，但展示语义不同。
+     */
+    status: 'active' | 'retired' | 'custom';
+  }>;
 }
 
 export interface TemplateStatus {
@@ -1205,6 +1216,7 @@ export interface TemplateStatus {
  */
 export async function listTemplateStatus(uid: string): Promise<TemplateStatus[]> {
   if (!safeId(uid)) return [];
+  const { roleTemplateFieldStatus: fieldStatus } = await import('./personal_ontology_contract');
   const rows = readGroups(uid).filter((g) => g.template_id);
   return listRoleTemplates().map((t) => {
     const row = rows.find((r) => r.template_id === t.template_id);
@@ -1214,7 +1226,11 @@ export async function listTemplateStatus(uid: string): Promise<TemplateStatus[]>
       if (text) {
         sections = parseTemplateContent(text).sections.map((s) => ({
           title: s.title,
-          fields: Object.keys(s.fields).map((name) => ({ name, values: s.fields[name] || [] })),
+          fields: Object.keys(s.fields).map((name) => ({
+            name,
+            values: s.fields[name] || [],
+            status: fieldStatus(t.template_id, s.title, name),
+          })),
         }));
       }
     }
