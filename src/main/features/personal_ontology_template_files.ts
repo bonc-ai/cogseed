@@ -223,6 +223,23 @@ export interface InstallTemplateFileResult {
   restored_from_archive?: boolean;
   /** 随模板恢复的全局记忆条目数。 */
   restored_memory_count?: number;
+  /**
+   * 从归档恢复出一个**旧版本实例**之后的 schema reconcile 结果。
+   * 只有走了 restore 且恢复出来的版本落后于 catalog 时才出现。
+   *
+   * `outcome === 'refused'` 时安装仍然成功，但实例如实停在旧版本：这一版
+   * 只做纯新增，改名/移动要等后续能力。上层据此可以给出「已安装，但字段表
+   * 还是旧版」这种可区分的提示，而不是让用户拿到一个看起来正常、写入却
+   * 处处落空的模板。
+   */
+  migration?: {
+    outcome: 'migrated' | 'ledger_repaired' | 'noop' | 'refused' | 'failed';
+    fromVersion?: string;
+    toVersion?: string;
+    /** refused 时本轮不支持的变化种类（去重）。 */
+    unsupported?: string[];
+    error?: string;
+  };
   error?: string;
 }
 
@@ -333,7 +350,55 @@ export async function installTemplateFile(
     installed_version: installedVersion,
     catalog_version: template.version,
   });
-  return { ok: true, created: [meta], conflict_groups: conflictGroups, restored_from_archive, restored_memory_count };
+
+  /**
+   * 恢复出来的是旧 schema 实例 → **在返回成功之前**把它 reconcile 到当前
+   * catalog。否则用户重装完拿到的是一个字段表停在旧版的模板：新字段既不显示
+   * 也写不进，而界面上一切正常。
+   *
+   * 动态 import 是为了断开 template_files ↔ migration 的运行期循环依赖
+   * （与本文件里 contract 的用法一致）。
+   */
+  let migration: InstallTemplateFileResult['migration'];
+  if (restored_from_archive && installedVersion !== template.version) {
+    try {
+      const { applyRoleTemplateMigration } = await import('./personal_ontology_migration');
+      const res = await applyRoleTemplateMigration(uid, templateId);
+      migration = {
+        outcome: res.outcome,
+        ...(res.fromVersion ? { fromVersion: res.fromVersion } : {}),
+        ...(res.toVersion ? { toVersion: res.toVersion } : {}),
+        ...(res.refusal
+          ? { unsupported: [...new Set(res.refusal.unsupportedChanges.map((c) => c.kind))] }
+          : {}),
+        ...(res.error ? { error: res.error } : {}),
+      };
+      if (res.outcome !== 'migrated' && res.outcome !== 'noop' && res.outcome !== 'ledger_repaired') {
+        log.warn('restored role template stays on its old schema version', {
+          uid, templateId, outcome: res.outcome,
+          fromVersion: res.fromVersion, toVersion: res.toVersion,
+        });
+      }
+    } catch (err) {
+      // reconcile 失败不回滚安装：文件与台账都还是那份如实的旧版本实例，
+      // 没有半迁移状态；下一次 detect 会再试。
+      migration = { outcome: 'failed', error: (err as Error).message };
+      log.warn('restored role template reconcile threw; instance kept at its restored version', {
+        uid, templateId, error: (err as Error).message,
+      });
+    }
+  }
+
+  // 台账行可能已被 migration 改过版本号，回读一次再返回，别把过期副本交出去。
+  const finalMeta = readGroups(uid).find((g) => g.group_id === meta.group_id) || meta;
+  return {
+    ok: true,
+    created: [finalMeta],
+    conflict_groups: conflictGroups,
+    restored_from_archive,
+    restored_memory_count,
+    ...(migration ? { migration } : {}),
+  };
 }
 
 // ── 卸载 / 归档 ─────────────────────────────────────────────────────────────

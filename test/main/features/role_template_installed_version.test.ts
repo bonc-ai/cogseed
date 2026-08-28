@@ -20,7 +20,7 @@ import * as path from 'node:path';
 // 可变 T-box：模拟 catalog 升级。只替换目录读取，不改任何生产逻辑。
 let CATALOG: Array<{
   template_id: string; name: string; description: string; version: string;
-  preset_groups: Array<{ title: string; fields: Array<{ name: string }> }>;
+  preset_groups: Array<{ id: string; title: string; fields: Array<{ id: string; name: string }> }>;
   bundle?: { skill_ids: string[]; agent_ids: string[] };
 }> = [];
 
@@ -47,13 +47,16 @@ let prevWs: string | undefined;
 const UID = 'test-user-installed-version';
 
 function catalogAt(version: string, extraField?: string) {
-  const fields = [{ name: '专业' }, ...(extraField ? [{ name: extraField }] : [])];
+  const fields = [
+    { id: 'major', name: '专业' },
+    ...(extraField ? [{ id: 'extra', name: extraField }] : []),
+  ];
   return [{
     template_id: 'probe',
     name: '探针角色',
     description: '版本探针',
     version,
-    preset_groups: [{ title: '背景', fields }],
+    preset_groups: [{ id: 'background', title: '背景', fields }],
     bundle: { skill_ids: [], agent_ids: [] },
   }];
 }
@@ -103,7 +106,7 @@ describe('installed_version › Case 1 普通安装', () => {
 });
 
 describe('installed_version › Case 2 跨版本 restore', () => {
-  it('archive v1 + catalog v2 → 文件与台账都是 v1，且 catalog≠installed 是合法状态', async () => {
+  it('archive v1 + catalog v2（纯新增）→ install 返回前已 reconcile 到 v2，旧值不动', async () => {
     const t = await loadTemplates();
 
     // v1 安装并填一条值，确保归档里有真实内容
@@ -114,33 +117,69 @@ describe('installed_version › Case 2 跨版本 restore', () => {
     )).ok).toBe(true);
     expect(fileVersion(t.readTemplateFileText(UID, 'probe'))).toBe('1.0.0');
 
-    // 卸载归档 → catalog 升到 v2（并新增一个字段，证明恢复的是旧 schema）
+    // 卸载归档 → catalog 升到 v2 并新增一个字段
     expect((await t.uninstallTemplateFile(UID, 'probe')).ok).toBe(true);
     CATALOG = catalogAt('2.0.0', '当前研究方向');
 
     const re = await t.installTemplateFile(UID, 'probe', true);
     expect(re.ok).toBe(true);
     expect(re.restored_from_archive).toBe(true);
+    // 恢复出来的是旧 schema → 必须在返回成功之前 reconcile 掉，否则用户拿到的是
+    // 一个新字段既不显示也写不进、界面却一切正常的模板。
+    expect(re.migration).toMatchObject({ outcome: 'migrated', fromVersion: '1.0.0', toVersion: '2.0.0' });
 
     const text = t.readTemplateFileText(UID, 'probe');
-    // 恢复的是 v1 内容：旧值在、v2 新字段不在
-    expect(text).toContain('- 认知科学 [手动]');
-    expect(text).not.toContain('### 当前研究方向');
+    expect(text).toContain('- 认知科学 [手动]');   // 恢复的旧值一字不改
+    expect(text).toContain('### 当前研究方向');     // v2 新字段补成空坑
 
-    // 核心断言：文件与台账必须一致，且都是恢复文件自身的版本
+    expect(fileVersion(text)).toBe('2.0.0');
+    expect(await ledgerVersion()).toBe('2.0.0');
+
+    const status = (await t.listTemplateStatus(UID)).find((s) => s.template_id === 'probe')!;
+    expect(status.installed_version).toBe('2.0.0');
+    // 返回的台账副本必须是 migration 之后的，不能是安装那一刻的过期快照
+    expect(re.created?.[0]?.template_version).toBe('2.0.0');
+
+    // 两个 reader 不得再对同一实例给出不同版本
+    const cat = await t.listTemplateFileCatalog(UID);
+    expect(cat.find((c) => c.template_id === 'probe')?.version).toBe('2.0.0');
+  });
+
+  it('archive v1 + catalog v2（含本轮不支持的改名）→ 如实停在 v1，catalog≠installed 是合法状态', async () => {
+    const t = await loadTemplates();
+    expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
+    const row = t.readGroups(UID).find((g) => g.template_id === 'probe')!;
+    expect((await t.appendFieldValueToRef(
+      UID, t.buildContentRef(row.group_id, '背景'), '专业', '认知科学', '手动',
+    )).ok).toBe(true);
+    expect((await t.uninstallTemplateFile(UID, 'probe')).ok).toBe(true);
+
+    // v2 把「专业」改名成「专业与研究方向」——本轮不执行改名
+    CATALOG = catalogAt('2.0.0');
+    CATALOG[0].preset_groups[0].fields = [
+      { id: 'major', name: '专业与研究方向', previous_names: ['专业'] } as any,
+    ];
+
+    const re = await t.installTemplateFile(UID, 'probe', true);
+    // 安装本身成功；但实例如实停在旧版本，并给出可区分的状态
+    expect(re.ok).toBe(true);
+    expect(re.restored_from_archive).toBe(true);
+    expect(re.migration).toMatchObject({ outcome: 'refused', unsupported: ['rename_field'] });
+
+    const text = t.readTemplateFileText(UID, 'probe');
+    expect(text).toContain('- 认知科学 [手动]');
+    expect(text).toContain('### 专业');
+    expect(text).not.toContain('### 专业与研究方向'); // 没有留下半迁移 schema
+
     expect(fileVersion(text)).toBe('1.0.0');
     expect(await ledgerVersion()).toBe('1.0.0');
 
     const status = (await t.listTemplateStatus(UID)).find((s) => s.template_id === 'probe')!;
     expect(status.installed_version).toBe('1.0.0');
-    // catalog version 与 installed_version 允许真实不等 —— 这正是未来
-    // version mismatch 判断需要的状态，而不是被抹平成同一个值。
+    // catalog version 与 installed_version 真实不等 —— 这是合法且可识别的状态，
+    // 不是被抹平成同一个值。
     expect(status.version).toBe('2.0.0');
     expect(status.version).not.toBe(status.installed_version);
-
-    // 两个 reader 不得再对同一实例给出不同版本
-    const cat = await t.listTemplateFileCatalog(UID);
-    expect(cat.find((c) => c.template_id === 'probe')?.version).toBe('1.0.0');
   });
 
   it('归档缺少可解析的 version meta → 退回当前 catalog version，台账模板标记不丢', async () => {

@@ -285,6 +285,19 @@ describe('detection › 阻断条件', () => {
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
 
+  it('catalog 缺 id / id 非法 → malformed_catalog_identity，直接拒绝', async () => {
+    // 一批 undefined id 会把所有坑折叠成同一个 identity：于是「每个坑都已匹配」，
+    // 检测不出任何缺失，migration 静默什么都不做 —— 必须在这里就断掉。
+    setCatalog('2.0.0', [
+      { title: '学习背景', fields: [{ name: '专业' }, { name: '当前研究方向' }] } as any,
+    ]);
+    const { detectRoleTemplateMigration, planRoleTemplateMigration } = await load();
+    const det = detectRoleTemplateMigration('student', installed('1.0.0', { 学习背景: ['专业'] }));
+    expect(det.conflicts.map((c) => c.kind)).toEqual(['malformed_catalog_identity']);
+    expect(det.additions).toEqual({ sections: [], fields: [] });
+    expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
+  });
+
   it('名字解析歧义 → ambiguous_identity，不猜', async () => {
     setCatalog('2.0.0', [
       { id: 's1', title: '教育背景', previous_names: ['背景'], fields: [{ id: 'f1', name: 'x' }] },

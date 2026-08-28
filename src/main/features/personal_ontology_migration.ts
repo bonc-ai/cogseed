@@ -327,6 +327,13 @@ export interface MigrationConflict {
     /** 名字解析出多个 identity —— 必须由作者消歧，不猜。 */
     | 'ambiguous_identity'
     /**
+     * catalog 里有分节/字段缺 `id` 或 id 形状非法。这是作者错误，运行期必须
+     * 直接拒绝：identity 全靠 id 区分，一批 `undefined` 会把所有坑折叠成同一个
+     * identity，于是「每个坑都已匹配」，检测不出任何缺失，静默什么都不做。
+     * `validateRoleTemplateCatalog()` 在开发期拦它，这里是运行期的第二道门。
+     */
+    | 'malformed_catalog_identity'
+    /**
      * 文件里有认不出的**分节**，catalog 又恰好有分节缺失：很可能是一次
      * 未声明 `previous_names` 的分节改名。分节层按最保守处理——拒绝。
      *
@@ -408,6 +415,19 @@ export function detectRoleTemplateMigration(
     return base;
   }
   base.toVersion = template.version;
+
+  const idShape = /^[a-z][a-z0-9_]*$/;
+  const badIds: string[] = [];
+  for (const sec of template.preset_groups || []) {
+    if (!idShape.test(sec.id || '')) badIds.push(`section "${sec.title}"`);
+    for (const f of sec.fields || []) {
+      if (!idShape.test(f.id || '')) badIds.push(`field "${sec.title} · ${f.name}"`);
+    }
+  }
+  if (badIds.length) {
+    base.conflicts.push({ kind: 'malformed_catalog_identity', detail: badIds.join(', ') });
+    return base;
+  }
 
   if (!installed || !installed.version || !Array.isArray(installed.sections) || !installed.sections.length) {
     base.conflicts.push({ kind: 'file_unparsable', detail: 'installed template has no parsable version or sections' });
