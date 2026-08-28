@@ -95,14 +95,14 @@
 .ws-space-icon.blue { color: #477394; background: #eaf2f7; }
 .ws-space-name h3 { font-size: 14px; font-weight: 650; color: #253129; }
 .ws-space-name small { display: block; margin-top: 3px; color: #8a938e; font-size: 11px; }
-.ws-more { position: relative; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
+.ws-more { position: relative; z-index: var(--z-raised); width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: #777b84; }
 .ws-more:hover { background: var(--ws-soft); }
 
 
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
 .ws-more-menu {
-  position: absolute; top: 32px; right: 0; z-index: 6; min-width: 172px; padding: 6px;
+  position: absolute; top: 32px; right: 0; z-index: var(--z-raised); min-width: 172px; padding: 6px;
   border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
   box-shadow: 0 10px 28px rgba(25,43,33,.12);
 }
@@ -169,7 +169,7 @@
 /* ── 空间详情 ── */
 .ws-space-page { display: grid; grid-template-columns: minmax(0,1fr); position: relative; min-height: 100%; }
 .ws-space-main { min-width: 0; }
-.ws-space-head { position: sticky; top: 0; z-index: 4; padding: 20px 28px 0; border-bottom: 1px solid var(--ws-line); background: #fff; }
+.ws-space-head { position: sticky; top: 0; z-index: var(--z-sticky); padding: 20px 28px 0; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-space-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .ws-space-head-row > div:last-child { display: flex; gap: 7px; }
 /* 空间详情「返回空间中心」（返回上级） */
@@ -237,7 +237,7 @@
 
 /* ── 配置抽屉 ── */
 .ws-config-panel {
-  position: absolute; z-index: 22; top: 0; right: 0; bottom: 0;
+  position: absolute; z-index: var(--z-popover); top: 0; right: 0; bottom: 0;
   width: min(360px, calc(100% - 40px));
   display: flex; flex-direction: column;
   border-left: 1px solid var(--ws-line); background: #f7f9f8;
@@ -376,7 +376,7 @@
 
 /* 引用选择器浮层 */
 .ws-ref-scrim {
-  position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center;
+  position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center;
   background: rgba(18,32,25,.34); backdrop-filter: blur(2px);
   /* 同 .ws-scrim：退出 macOS 窗口拖拽区命中，避免弹窗控件被拖拽带吞点击 */
   -webkit-app-region: no-drag;
@@ -454,7 +454,7 @@
    覆盖在它上面的弹窗按钮的鼠标事件（典型：新建空间弹窗右上角叉号，弹窗顶满
    高时叉号落进顶部拖拽带，点了没反应、连 mousedown 都进不了页面）。
    no-drag 让整个弹窗子树退出拖拽命中，保证弹窗内所有控件可点。 */
-.ws-scrim { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
+.ws-scrim { position: fixed; inset: 0; z-index: var(--z-overlay); display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
 .ws-dialog { display: flex; flex-direction: column; width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-dialog-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-dialog-head > div { display: flex; align-items: center; gap: 10px; }
@@ -493,7 +493,7 @@
 .ws-dialog-foot small { max-width: 430px; color: #78857d; font-size: 10px; line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: 8px; }
 
-.ws-ability-scrim { z-index: 210; background: rgba(25,36,30,.46); }
+.ws-ability-scrim { z-index: var(--z-overlay); background: rgba(25,36,30,.46); }
 .ws-ability-dialog { display: flex; flex-direction: column; width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-ability-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-ability-head h2 { font-size: 16px; font-weight: 700; color: #1f2b24; }
@@ -556,7 +556,7 @@
 
 /* ── toast ── */
 .ws-toast {
-  position: fixed; left: 50%; bottom: 26px; z-index: 999;
+  position: fixed; left: 50%; bottom: 26px; z-index: var(--z-toast);
   padding: 9px 14px; border-radius: 8px; color: #fff; background: rgba(31,42,35,.92);
   font-size: 11px; transform: translate(-50%, 8px); opacity: 0;
   transition: opacity .16s ease, transform .16s ease; pointer-events: none;
@@ -669,7 +669,7 @@
 }
 .ws-art-vrow:first-of-type .ws-artifact-row { border-top: 1px solid var(--ws-line-soft, #e9efec); }
 .ws-art-vsticky {
-  height: 42px; display: flex; align-items: flex-end; z-index: 6;
+  height: 42px; display: flex; align-items: flex-end; z-index: var(--z-sticky);
   background: #f5f7f6; border-bottom: 1px solid var(--ws-line-soft, #e9efec);
 }
 .ws-art-vsticky .ws-art-group-title { margin: 0; }
@@ -726,7 +726,7 @@
 
 /* 更多菜单 */
 .ws-art-more-menu {
-  position: absolute; z-index: 30; right: 0; top: calc(100% + 4px); width: 164px;
+  position: absolute; z-index: var(--z-popover); right: 0; top: calc(100% + 4px); width: 164px;
   padding: 6px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
   box-shadow: 0 8px 24px rgba(24, 55, 40, .12);
 }
@@ -816,7 +816,7 @@
 
 /* 预览抽屉 */
 .ws-art-drawer-backdrop {
-  position: fixed; z-index: 400; inset: 0; display: none; background: rgba(18, 31, 24, .24);
+  position: fixed; z-index: var(--z-overlay); inset: 0; display: none; background: rgba(18, 31, 24, .24);
 }
 .ws-art-drawer-backdrop.open { display: block; }
 .ws-art-drawer {
