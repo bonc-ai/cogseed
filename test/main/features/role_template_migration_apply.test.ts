@@ -206,15 +206,15 @@ describe('add-field migration › 幂等与拒绝', () => {
     expect(second).toMatchObject({ ok: true, outcome: 'noop' });
   });
 
-  it('catalog 有未支持的改名 → refused，版本原地不动，文件一个字节都不改', async () => {
+  it('catalog 出现字段合并 → refused，版本原地不动，文件一个字节都不改', async () => {
     const { t } = await installV1WithUserData();
     const before = t.readTemplateFileText(UID, 'probe');
 
-    // 声明式改名：专业 → 专业与研究方向
+    // 「专业」与用户那个自建字段同时落到一个 catalog 字段上 = 合并，本轮不猜
     CATALOG = catalogV1();
     CATALOG[0].version = '2.0.0';
     CATALOG[0].preset_groups[0].fields = [
-      { id: 'major', name: '专业与研究方向', previous_names: ['专业'] },
+      { id: 'major', name: '专业', previous_names: ['我的自建字段'] },
     ];
 
     const { applyRoleTemplateMigration } = await loadMig();
@@ -223,7 +223,7 @@ describe('add-field migration › 幂等与拒绝', () => {
     expect(res.ok).toBe(false);
     expect(res.outcome).toBe('refused');
     expect(res.refusal!.unsupportedChanges[0]).toMatchObject({
-      kind: 'rename_field',
+      kind: 'merge_field',
       status: 'requires_manual_or_future_migration',
     });
     // 不留半迁移状态：文件与台账都还是 v1
@@ -362,11 +362,14 @@ describe('reconcileInstalledRoleTemplates', () => {
     expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
     expect((await t.installTemplateFile(UID, 'other')).ok).toBe(true);
 
-    // probe 走纯新增；other 走未支持的改名
+    // probe 走纯新增；other 走未支持的拆分
     CATALOG[0].version = '2.0.0';
     CATALOG[0].preset_groups[0].fields.push({ id: 'direction', name: '当前研究方向' });
     CATALOG[1].version = '2.0.0';
-    CATALOG[1].preset_groups[0].fields = [{ id: 'f', name: '字段新名', previous_names: ['字段'] }];
+    CATALOG[1].preset_groups[0].fields = [
+      { id: 'f', name: '字段甲', previous_names: ['字段'] },
+      { id: 'f2', name: '字段乙', previous_names: ['字段'] },
+    ];
 
     const { reconcileInstalledRoleTemplates } = await loadMig();
     const results = await reconcileInstalledRoleTemplates(UID);

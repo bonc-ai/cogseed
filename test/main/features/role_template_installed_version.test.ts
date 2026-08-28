@@ -145,7 +145,7 @@ describe('installed_version › Case 2 跨版本 restore', () => {
     expect(cat.find((c) => c.template_id === 'probe')?.version).toBe('2.0.0');
   });
 
-  it('archive v1 + catalog v2（含本轮不支持的改名）→ 如实停在 v1，catalog≠installed 是合法状态', async () => {
+  it('archive v1 + catalog v2（含本轮不支持的拆分）→ 如实停在 v1，catalog≠installed 是合法状态', async () => {
     const t = await loadTemplates();
     expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
     const row = t.readGroups(UID).find((g) => g.template_id === 'probe')!;
@@ -154,22 +154,23 @@ describe('installed_version › Case 2 跨版本 restore', () => {
     )).ok).toBe(true);
     expect((await t.uninstallTemplateFile(UID, 'probe')).ok).toBe(true);
 
-    // v2 把「专业」改名成「专业与研究方向」——本轮不执行改名
+    // v2 把「专业」拆成两个字段 —— 值该跟谁走没有依据，本轮拒绝
     CATALOG = catalogAt('2.0.0');
     CATALOG[0].preset_groups[0].fields = [
-      { id: 'major', name: '专业与研究方向', previous_names: ['专业'] } as any,
+      { id: 'major', name: '专业甲', previous_names: ['专业'] } as any,
+      { id: 'major2', name: '专业乙', previous_names: ['专业'] } as any,
     ];
 
     const re = await t.installTemplateFile(UID, 'probe', true);
     // 安装本身成功；但实例如实停在旧版本，并给出可区分的状态
     expect(re.ok).toBe(true);
     expect(re.restored_from_archive).toBe(true);
-    expect(re.migration).toMatchObject({ outcome: 'refused', unsupported: ['rename_field'] });
+    expect(re.migration).toMatchObject({ outcome: 'refused', unsupported: ['split_field'] });
 
     const text = t.readTemplateFileText(UID, 'probe');
     expect(text).toContain('- 认知科学 [手动]');
     expect(text).toContain('### 专业');
-    expect(text).not.toContain('### 专业与研究方向'); // 没有留下半迁移 schema
+    expect(text).not.toContain('### 专业甲'); // 没有留下半迁移 schema
 
     expect(fileVersion(text)).toBe('1.0.0');
     expect(await ledgerVersion()).toBe('1.0.0');

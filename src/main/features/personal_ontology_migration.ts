@@ -370,20 +370,46 @@ export interface AddedSection {
 /** catalog 有、实例文件的对应分节里没有的字段（补空坑）。 */
 export interface AddedField {
   sectionId: string;
-  /** 文件里该分节的标题 —— 可自动执行时它必然等于 catalog 当前 title。 */
+  /** catalog 当前的分节标题（迁移后文件里也是这个）。 */
   sectionTitle: string;
   fieldId: string;
   name: string;
-  /** catalog 里排在它前面的那个字段的当前名；apply 据此就地插入而不是追加。 */
-  afterName?: string;
 }
 
 /**
- * 本轮识别得出、但**不执行**的变化。带 `status` 是为了让调用方一眼看出
+ * 迁移后**应该长成的样子**：分节顺序、字段顺序、以及每个坑的来源指针。
+ * 值不在这里，由 apply 按 `from` 从旧内容整块搬过去。
+ *
+ * 这是 plan 的执行骨架，也是未来 UI dry-run 能直接渲染的东西。有了它，
+ * apply 不需要再回头查 catalog，就不会出现「plan 说的」和「apply 做的」
+ * 各算一遍、两边悄悄分叉。retired / custom 字段不在骨架里 —— 它们不由
+ * catalog 声明，apply 会把它们按原顺序跟在各自分节的在役字段之后。
+ */
+export interface MigrationTargetSection {
+  sectionId: string;
+  /** catalog 当前标题（迁移后文件里的标题）。 */
+  title: string;
+  /** 迁移前文件里的标题；整节新增时缺省。 */
+  fromTitle?: string;
+  fields: Array<{
+    fieldId: string;
+    /** catalog 当前字段名（迁移后文件里的字段名）。 */
+    name: string;
+    /** 迁移前它在文件里的位置；新补的空坑没有来源。 */
+    from?: { sectionTitle: string; name: string };
+  }>;
+}
+
+/**
+ * 识别得出、但**不执行**的变化。带 `status` 是为了让调用方一眼看出
  * 「系统知道发生了什么，只是这一版不动手」，而不是被当成 add/delete 混过去。
+ *
+ * 现在只剩合并与拆分：这两类都要回答「值怎么并 / 怎么拆、留哪个顺序」，
+ * 而 schema diff 本身答不出来 —— 猜错就是把用户的值搬进错误的坑，且事后
+ * 无从分辨。rename / move / retire 已经有确定语义，不再进这个清单。
  */
 export interface UnsupportedChange {
-  kind: 'rename_section' | 'rename_field' | 'move_field';
+  kind: 'merge_field' | 'merge_section' | 'split_field' | 'split_section';
   status: 'requires_manual_or_future_migration';
   detail: string;
 }
@@ -430,7 +456,28 @@ export interface RoleTemplateMigrationDetection {
   additions: { sections: AddedSection[]; fields: AddedField[] };
   renamedSections: Array<{ sectionId: string; from: string; to: string }>;
   renamedFields: Array<{ sectionId: string; sectionTitle: string; fieldId: string; from: string; to: string }>;
-  movedFields: Array<{ fieldId: string; name: string; fromSection: string; toSectionId: string; toSectionTitle: string }>;
+  movedFields: Array<{
+    fieldId: string;
+    /** 文件里当前的字段名（可能同时还要改名，见 renamedFields）。 */
+    name: string;
+    fromSectionId: string;
+    fromSectionTitle: string;
+    toSectionId: string;
+    toSectionTitle: string;
+  }>;
+  /**
+   * 实例里存在、catalog 已明确声明退役的官方字段。**不是待办操作**：值原地
+   * 保留，只是语义从 active 变成 retired（不再可写）。列在这里是为了让
+   * 「退役」与「用户自建」在 plan 里就分得开，而不是都掉进 unknownInFile。
+   */
+  retiredFields: Array<{
+    sectionId: string;
+    sectionTitle: string;
+    fieldId: string;
+    name: string;
+    valueCount: number;
+    retiredIn?: string;
+  }>;
   /**
    * 文件里存在、但 catalog 当前认不出的分节/字段。**信息项，不阻断**：
    * 用户自建字段是一等功能（升格建坑），把它当阻断条件会让所有用过该功能的
@@ -451,7 +498,11 @@ export interface RoleTemplateMigrationDetection {
    * 那条是阻断的。
    */
   suspectedFieldRenames: Array<{ sectionTitle: string; unknown: string[]; missing: string[] }>;
+  /** 识别到但本轮不执行的变化（合并 / 拆分）。非空 → 拒绝自动迁移。 */
+  unsupportedChanges: UnsupportedChange[];
   conflicts: MigrationConflict[];
+  /** 执行骨架（见 MigrationTargetSection）。canAutoApply 为 false 时不可用。 */
+  target: MigrationTargetSection[];
 }
 
 /**
@@ -460,6 +511,10 @@ export interface RoleTemplateMigrationDetection {
  * catalog 不从参数进 —— 它是 schema authority，让调用方传一份进来等于允许
  * 拿一个假 catalog 去驱动真实文件的迁移。版本口径仍然显式出现在结果的
  * `toVersion` 里。
+ *
+ * 解析分三趟，而不是「按 catalog 分节逐节比对」：字段可能**跨分节移动**，
+ * 一趟式比对会在原分节把它记成 move、又在目标分节把它记成 add，同一个
+ * field_id 出现两次，apply 就会既搬走又新建一个空坑。
  */
 export function detectRoleTemplateMigration(
   templateId: string,
@@ -476,9 +531,12 @@ export function detectRoleTemplateMigration(
     renamedSections: [],
     renamedFields: [],
     movedFields: [],
+    retiredFields: [],
     unknownInFile: { sections: [], fields: [] },
     suspectedFieldRenames: [],
+    unsupportedChanges: [],
     conflicts: [],
+    target: [],
   };
 
   const template = getRoleTemplate(templateId);
@@ -514,24 +572,31 @@ export function detectRoleTemplateMigration(
     return base;
   }
 
-  // ── 分节层：文件分节 → catalog identity ────────────────────────────────
+  // ── 第一趟：分节层 ─────────────────────────────────────────────────────
   /** catalog section id → 文件里对应的那一节。 */
   const matchedSections = new Map<string, InstalledSectionShape>();
   for (const fileSec of installed.sections) {
     const res = resolveSectionIdentity(templateId, fileSec.title);
     if (isIdentityFailure(res)) {
       if (res.reason === 'ambiguous') {
-        base.conflicts.push({ kind: 'ambiguous_identity', detail: `section "${fileSec.title}": ${res.detail || ''}` });
+        // 一个旧分节名被多个 catalog 分节认领 = 一次拆分。本轮不猜怎么拆。
+        base.unsupportedChanges.push({
+          kind: 'split_section',
+          status: 'requires_manual_or_future_migration',
+          detail: `section "${fileSec.title}" is claimed by ${res.detail || 'multiple sections'}`,
+        });
       } else {
         base.unknownInFile.sections.push(fileSec.title);
       }
       continue;
     }
-    // 同一个 catalog 分节被两个文件分节认领（用户手工建了个重名节）→ 不猜。
     if (matchedSections.has(res.identity.sectionId)) {
-      base.conflicts.push({
-        kind: 'ambiguous_identity',
-        detail: `two file sections resolve to "${res.identity.sectionId}"`,
+      // 两个文件分节落到同一个 catalog 分节 = 一次合并。合并需要决定「两边的
+      // 同名字段怎么并、顺序按谁」，没有 metadata 就是猜，本轮拒绝。
+      base.unsupportedChanges.push({
+        kind: 'merge_section',
+        status: 'requires_manual_or_future_migration',
+        detail: `sections "${matchedSections.get(res.identity.sectionId)!.title}" and "${fileSec.title}" both resolve to "${res.identity.sectionId}"`,
       });
       continue;
     }
@@ -541,7 +606,98 @@ export function detectRoleTemplateMigration(
     }
   }
 
-  // ── 字段层 ─────────────────────────────────────────────────────────────
+  /** 文件分节标题 → 它命中的 catalog section id（第二趟判断 move 要用）。 */
+  const fileSectionToCatalogId = new Map<string, string>();
+  for (const [sectionId, fileSec] of matchedSections) fileSectionToCatalogId.set(fileSec.title, sectionId);
+
+  // ── 第二趟：字段层，全局一次 ───────────────────────────────────────────
+  /** catalog field id → 它现在待在文件的哪里。 */
+  const placements = new Map<string, {
+    fromSectionId: string;
+    fromSectionTitle: string;
+    fromName: string;
+    valueCount: number;
+  }>();
+  /** 文件分节标题 → 该节里 catalog 认不出的字段。 */
+  const unknownBySection = new Map<string, Array<{ name: string; valueCount: number }>>();
+
+  for (const [fromSectionId, fileSec] of matchedSections) {
+    for (const fileField of fileSec.fields) {
+      // 1) 先在本分节内找在役字段（字段名只在其所属分节内唯一，这是主判据）
+      const scoped = resolveFieldIdentity(templateId, fileSec.title, fileField.name);
+      let identity: FieldIdentity | null = null;
+      if (!isIdentityFailure(scoped)) {
+        identity = scoped.identity;
+      } else if (scoped.reason === 'ambiguous') {
+        base.unsupportedChanges.push({
+          kind: 'split_field',
+          status: 'requires_manual_or_future_migration',
+          detail: `field "${fileSec.title} · ${fileField.name}" is claimed by ${scoped.detail || 'multiple fields'}`,
+        });
+        continue;
+      } else {
+        // 2) 本节找不到 → 是不是被移到了别的分节（靠 field_id 认，不靠名字猜）
+        const anywhere = findFieldIdentityAnywhere(templateId, fileField.name);
+        if (!isIdentityFailure(anywhere)) {
+          identity = anywhere.identity;
+        } else if (anywhere.reason === 'ambiguous') {
+          // 跨分节同名字段是合法的，所以这里的歧义定不了归属 —— 不猜。
+          base.conflicts.push({
+            kind: 'ambiguous_identity',
+            detail: `field "${fileSec.title} · ${fileField.name}" matches several fields: ${anywhere.detail || ''}`,
+          });
+          continue;
+        }
+      }
+
+      if (identity) {
+        const seen = placements.get(identity.fieldId);
+        if (seen) {
+          // 两个文件字段落到同一个 catalog 字段 = 一次合并。值怎么并、留哪个
+          // 顺序，都要产品决定，不猜。
+          base.unsupportedChanges.push({
+            kind: 'merge_field',
+            status: 'requires_manual_or_future_migration',
+            detail: `fields "${seen.fromSectionTitle} · ${seen.fromName}" and "${fileSec.title} · ${fileField.name}" both resolve to "${identity.fieldId}"`,
+          });
+          continue;
+        }
+        placements.set(identity.fieldId, {
+          fromSectionId,
+          fromSectionTitle: fileSec.title,
+          fromName: fileField.name,
+          valueCount: fileField.valueCount,
+        });
+        continue;
+      }
+
+      // 3) 不是在役字段 → 看 catalog 有没有明确声明它已退役
+      const retired = resolveRetiredFieldIdentity(templateId, fileSec.title, fileField.name);
+      if (!isIdentityFailure(retired)) {
+        base.retiredFields.push({
+          sectionId: fromSectionId,
+          sectionTitle: fileSec.title,
+          fieldId: retired.identity.fieldId,
+          name: fileField.name,
+          valueCount: fileField.valueCount,
+          ...(retired.identity.retiredIn ? { retiredIn: retired.identity.retiredIn } : {}),
+        });
+        continue;
+      }
+
+      // 4) 既非在役也没声明退役 → 用户自建（或作者忘了声明），原样留着，不猜
+      const arr = unknownBySection.get(fileSec.title) || [];
+      arr.push({ name: fileField.name, valueCount: fileField.valueCount });
+      unknownBySection.set(fileSec.title, arr);
+      base.unknownInFile.fields.push({
+        sectionTitle: fileSec.title,
+        name: fileField.name,
+        valueCount: fileField.valueCount,
+      });
+    }
+  }
+
+  // ── 第三趟：按 catalog 结算缺什么、改了什么、搬到哪 ─────────────────────
   for (let i = 0; i < template.preset_groups.length; i++) {
     const catSec = template.preset_groups[i];
     const fileSec = matchedSections.get(catSec.id);
@@ -553,79 +709,64 @@ export function detectRoleTemplateMigration(
         catalogIndex: i,
         fields: catSec.fields.map((f) => ({ fieldId: f.id, name: f.name })),
       });
+      base.target.push({
+        sectionId: catSec.id,
+        title: catSec.title,
+        fields: catSec.fields.map((f) => ({ fieldId: f.id, name: f.name })),
+      });
       continue;
     }
 
-    /** catalog field id → 文件里对应字段名。 */
-    const matchedFields = new Map<string, string>();
-    const unknownHere: Array<{ name: string; valueCount: number }> = [];
-
-    for (const fileField of fileSec.fields) {
-      const res = resolveFieldIdentity(templateId, fileSec.title, fileField.name);
-      if (isIdentityFailure(res)) {
-        if (res.reason === 'ambiguous') {
-          base.conflicts.push({
-            kind: 'ambiguous_identity',
-            detail: `field "${fileSec.title} · ${fileField.name}": ${res.detail || ''}`,
-          });
-          continue;
-        }
-        // 本节里认不出 → 看看它是不是被移到了别的分节（move 本轮不执行，
-        // 但必须认出来，不能当成 delete + add）。
-        const anywhere = findFieldIdentityAnywhere(templateId, fileField.name);
-        if (!isIdentityFailure(anywhere) && anywhere.identity.sectionId !== catSec.id) {
-          base.movedFields.push({
-            fieldId: anywhere.identity.fieldId,
-            name: fileField.name,
-            fromSection: fileSec.title,
-            toSectionId: anywhere.identity.sectionId,
-            toSectionTitle: anywhere.identity.sectionTitle,
-          });
-          continue;
-        }
-        unknownHere.push({ name: fileField.name, valueCount: fileField.valueCount });
-        continue;
-      }
-      if (matchedFields.has(res.identity.fieldId)) {
-        base.conflicts.push({
-          kind: 'ambiguous_identity',
-          detail: `two file fields in "${fileSec.title}" resolve to "${res.identity.fieldId}"`,
-        });
-        continue;
-      }
-      matchedFields.set(res.identity.fieldId, fileField.name);
-      if (res.matchedBy === 'previous_name') {
-        base.renamedFields.push({
-          sectionId: catSec.id,
-          sectionTitle: fileSec.title,
-          fieldId: res.identity.fieldId,
-          from: fileField.name,
-          to: res.identity.name,
-        });
-      }
-    }
+    const targetSection: MigrationTargetSection = {
+      sectionId: catSec.id,
+      title: catSec.title,
+      fromTitle: fileSec.title,
+      fields: [],
+    };
+    base.target.push(targetSection);
 
     const missing: AddedField[] = [];
-    for (let j = 0; j < catSec.fields.length; j++) {
-      const catField = catSec.fields[j];
-      if (matchedFields.has(catField.id)) continue;
-      // 插到「catalog 里排在它前面、且文件里已经存在」的那个字段之后。
-      let afterName: string | undefined;
-      for (let k = j - 1; k >= 0; k--) {
-        const prev = matchedFields.get(catSec.fields[k].id);
-        if (prev) { afterName = prev; break; }
+    for (const catField of catSec.fields) {
+      const at = placements.get(catField.id);
+      if (!at) {
+        missing.push({
+          sectionId: catSec.id,
+          sectionTitle: catSec.title,
+          fieldId: catField.id,
+          name: catField.name,
+        });
+        targetSection.fields.push({ fieldId: catField.id, name: catField.name });
+        continue;
       }
-      missing.push({
-        sectionId: catSec.id,
-        sectionTitle: fileSec.title,
+      targetSection.fields.push({
         fieldId: catField.id,
         name: catField.name,
-        ...(afterName ? { afterName } : {}),
+        from: { sectionTitle: at.fromSectionTitle, name: at.fromName },
       });
+      if (at.fromSectionId !== catSec.id) {
+        base.movedFields.push({
+          fieldId: catField.id,
+          name: at.fromName,
+          fromSectionId: at.fromSectionId,
+          fromSectionTitle: at.fromSectionTitle,
+          toSectionId: catSec.id,
+          toSectionTitle: catSec.title,
+        });
+      }
+      if (at.fromName !== catField.name) {
+        base.renamedFields.push({
+          sectionId: catSec.id,
+          sectionTitle: catSec.title,
+          fieldId: catField.id,
+          from: at.fromName,
+          to: catField.name,
+        });
+      }
     }
 
     // 同一分节里既有「认不出的名字」又有「缺失的坑」→ 疑似未声明的字段改名。
     // 如实记下来，但**不阻断**（理由见 suspectedFieldRenames 的注释）。
+    const unknownHere = unknownBySection.get(fileSec.title) || [];
     if (unknownHere.length && missing.length) {
       base.suspectedFieldRenames.push({
         sectionTitle: fileSec.title,
@@ -634,12 +775,10 @@ export function detectRoleTemplateMigration(
       });
     }
     base.additions.fields.push(...missing);
-    for (const u of unknownHere) {
-      base.unknownInFile.fields.push({ sectionTitle: fileSec.title, name: u.name, valueCount: u.valueCount });
-    }
   }
 
-  // 分节层的同类嫌疑：文件里有认不出的节，catalog 又有节缺失。
+  // 分节层的同类嫌疑：文件里有认不出的节，catalog 又有节缺失。字段层放行、
+  // 分节层拦住的理由见 possible_undeclared_rename 的注释。
   if (base.unknownInFile.sections.length && base.additions.sections.length) {
     base.conflicts.push({
       kind: 'possible_undeclared_rename',
@@ -653,6 +792,7 @@ export function detectRoleTemplateMigration(
       || base.renamedSections.length
       || base.renamedFields.length
       || base.movedFields.length
+      || base.unsupportedChanges.length
       || base.conflicts.length
       || compareTemplateVersion(installed.version, template.version) !== 0
       // 台账缓存与文件权威分叉也算「有事要做」——否则「文件已写、台账未更新」
@@ -671,12 +811,18 @@ export interface RoleTemplateMigrationPlan {
   toVersion: string;
   ledgerVersion?: string;
   additions: { sections: AddedSection[]; fields: AddedField[] };
+  renamedSections: RoleTemplateMigrationDetection['renamedSections'];
+  renamedFields: RoleTemplateMigrationDetection['renamedFields'];
+  movedFields: RoleTemplateMigrationDetection['movedFields'];
+  retiredFields: RoleTemplateMigrationDetection['retiredFields'];
   unsupportedChanges: UnsupportedChange[];
   conflicts: MigrationConflict[];
+  /** 执行骨架；apply 只消费它，不再回头查 catalog。 */
+  target: MigrationTargetSection[];
   /**
-   * 唯一的执行闸门：无冲突、无本轮不支持的变化，且确有可做的事。
-   * 有任何一条 rename / move 被识别出来 → false，本轮**拒绝升级版本号**，
-   * 实例如实停在旧版本，而不是留下一个半迁移 schema。
+   * 唯一的执行闸门：无冲突、无不支持的变化（合并/拆分），且确有可做的事。
+   * 为 false 时**拒绝升级版本号**，实例如实停在旧版本，而不是留下一个
+   * 半迁移 schema。
    */
   canAutoApply: boolean;
   /**
@@ -690,27 +836,17 @@ export interface RoleTemplateMigrationPlan {
 export function planRoleTemplateMigration(
   detection: RoleTemplateMigrationDetection,
 ): RoleTemplateMigrationPlan {
-  const unsupportedChanges: UnsupportedChange[] = [
-    ...detection.renamedSections.map((r) => ({
-      kind: 'rename_section' as const,
-      status: 'requires_manual_or_future_migration' as const,
-      detail: `section "${r.from}" → "${r.to}" (${r.sectionId})`,
-    })),
-    ...detection.renamedFields.map((r) => ({
-      kind: 'rename_field' as const,
-      status: 'requires_manual_or_future_migration' as const,
-      detail: `field "${r.sectionTitle} · ${r.from}" → "${r.to}" (${r.fieldId})`,
-    })),
-    ...detection.movedFields.map((m) => ({
-      kind: 'move_field' as const,
-      status: 'requires_manual_or_future_migration' as const,
-      detail: `field "${m.name}" moves from "${m.fromSection}" to "${m.toSectionTitle}" (${m.fieldId})`,
-    })),
-  ];
-
-  const hasAdditions = Boolean(detection.additions.sections.length || detection.additions.fields.length);
-  const clean = detection.conflicts.length === 0 && unsupportedChanges.length === 0;
-  const versionOnly = clean && !hasAdditions && detection.needsMigration;
+  const hasStructuralWork = Boolean(
+    detection.additions.sections.length
+      || detection.additions.fields.length
+      || detection.renamedSections.length
+      || detection.renamedFields.length
+      || detection.movedFields.length,
+  );
+  const clean = detection.conflicts.length === 0 && detection.unsupportedChanges.length === 0;
+  // retiredFields 不算「有结构活要干」：它不动文件，只是把语义从 active 换成
+  // retired。所以「只有退役」的升级仍然是 versionOnly，一次写版本行就够。
+  const versionOnly = clean && !hasStructuralWork && detection.needsMigration;
 
   return {
     templateId: detection.templateId,
@@ -718,8 +854,13 @@ export function planRoleTemplateMigration(
     toVersion: detection.toVersion,
     ...(detection.ledgerVersion ? { ledgerVersion: detection.ledgerVersion } : {}),
     additions: detection.additions,
-    unsupportedChanges,
+    renamedSections: detection.renamedSections,
+    renamedFields: detection.renamedFields,
+    movedFields: detection.movedFields,
+    retiredFields: detection.retiredFields,
+    unsupportedChanges: detection.unsupportedChanges,
     conflicts: detection.conflicts,
+    target: detection.target,
     canAutoApply: clean && detection.needsMigration,
     versionOnly,
   };
@@ -743,6 +884,10 @@ export interface ApplyMigrationResult {
   toVersion?: string;
   addedSections?: number;
   addedFields?: number;
+  renamedSections?: number;
+  renamedFields?: number;
+  movedFields?: number;
+  retiredFields?: number;
   refusal?: { unsupportedChanges: UnsupportedChange[]; conflicts: MigrationConflict[] };
   backupDir?: string;
   error?: string;
@@ -762,115 +907,211 @@ export function toInstalledShape(content: TemplateFileContent): InstalledTemplat
   };
 }
 
-/** 在内存里施加 additions。**只加不改**：已有字段的值数组连引用都不碰。 */
-function applyAdditions(content: TemplateFileContent, plan: RoleTemplateMigrationPlan): void {
-  // 1) 补字段：按 afterName 就地插入，保持 catalog 的字段顺序。
-  //    JS 对象保留字符串 key 的插入顺序，所以重建 fields 即重排显示顺序。
-  const bySection = new Map<string, AddedField[]>();
-  for (const add of plan.additions.fields) {
-    const arr = bySection.get(add.sectionTitle) || [];
-    arr.push(add);
-    bySection.set(add.sectionTitle, arr);
-  }
-  for (const [sectionTitle, adds] of bySection) {
-    const sec = content.sections.find((s) => s.title === sectionTitle);
-    if (!sec) continue; // validate 会兜住；这里不静默造节
-    const rebuilt: Record<string, FieldValue[]> = {};
-    // catalog 里排在所有已存在字段之前的新坑，插到最前。
-    for (const add of adds.filter((a) => !a.afterName)) rebuilt[add.name] = [];
-    for (const name of Object.keys(sec.fields)) {
-      rebuilt[name] = sec.fields[name];
-      for (const add of adds.filter((a) => a.afterName === name)) rebuilt[add.name] = [];
-    }
-    // 落位不了的（afterName 指向的字段本身也是新加的）→ 追加到末尾：
-    // 宁可顺序不完美，也不能丢坑。
-    for (const add of adds) {
-      if (!Object.prototype.hasOwnProperty.call(rebuilt, add.name)) rebuilt[add.name] = [];
-    }
-    sec.fields = rebuilt;
-  }
-
-  // 2) 补分节：按 catalog 下标插回原位（下标升序处理，插入后位置才对得上）。
-  for (const add of [...plan.additions.sections].sort((a, b) => a.catalogIndex - b.catalogIndex)) {
-    const section: TemplateSection = {
-      title: add.title,
-      fields: Object.fromEntries(add.fields.map((f) => [f.name, [] as FieldValue[]])),
-      flowEntries: [],
-    };
-    const at = Math.min(add.catalogIndex, content.sections.length);
-    content.sections.splice(at, 0, section);
-  }
-}
-
-/** 迁移前后的可比快照：`分节\u0000字段` → 值条数，分节 → 流水条数。 */
-function snapshot(content: TemplateFileContent): {
-  fields: Map<string, number>;
-  flow: Map<string, number>;
-  totalValues: number;
-} {
-  const fields = new Map<string, number>();
-  const flow = new Map<string, number>();
-  let totalValues = 0;
-  for (const sec of content.sections || []) {
-    flow.set(sec.title, sec.flowEntries.length);
-    for (const name of Object.keys(sec.fields || {})) {
-      const n = (sec.fields[name] || []).length;
-      // 用 NUL 连接：分节名与字段名都可能含空格，拿空格当分隔会让两个不同的
-      // (分节, 字段) 撞成同一个 key，快照比对就会漏掉真实差异。
-      fields.set(`${sec.title}\u0000${name}`, n);
-      totalValues += n;
-    }
-  }
-  return { fields, flow, totalValues };
-}
-
+/** `分节 \u0000 字段` 复合 key。分节名与字段名都可能含空格，用 NUL 才不会撞。 */
+const slotKey = (sectionTitle: string, fieldName: string) => `${sectionTitle}\u0000${fieldName}`;
 const label = (key: string) => key.replace('\u0000', ' · ');
 
 /**
- * 后置校验。任何一条不过 → 不写盘、不升级版本。这里是「只加不改」这条承诺的
- * 唯一执行者：它比较的是**迁移前后的实际内容**，而不是复述 plan 说了什么。
+ * 按 plan 的执行骨架重建整份内容。**只搬不改**：值数组是整块引用过去的，
+ * 一条都不新增、不删除、不重写；变的只有它挂在哪个分节标题、哪个字段名下。
+ *
+ * 重建而不是就地增删改，是因为 add / rename / move 混在一起时，就地操作的
+ * 中间态会互相踩：先改名会撞上还没搬走的同名字段，先搬走又会让改名找不到源。
+ * 重建没有中间态 —— 目标结构是一次算出来的，旧内容只被读取。
+ */
+function buildMigratedContent(
+  before: TemplateFileContent,
+  plan: RoleTemplateMigrationPlan,
+): { content?: TemplateFileContent; error?: string } {
+  const fileSecByTitle = new Map(before.sections.map((s) => [s.title, s] as const));
+
+  // 先把所有「被骨架认领的来源」标记完，再开始产出。分两趟是必须的：
+  // 字段可能从靠后的分节搬到靠前的分节，一趟式会在处理来源分节时把它当成
+  // 「没人要的遗留字段」原地留下，于是搬走一份、又留下一份。
+  const claimed = new Set<string>();
+  for (const t of plan.target) {
+    for (const f of t.fields) {
+      if (f.from) claimed.add(slotKey(f.from.sectionTitle, f.from.name));
+    }
+  }
+
+  const sections: TemplateSection[] = [];
+  const emittedTitles = new Set<string>();
+
+  const emitSection = (title: string, fields: Record<string, FieldValue[]>, flowEntries: string[]): string | null => {
+    if (emittedTitles.has(title)) return `duplicate section title after migration: ${title}`;
+    emittedTitles.add(title);
+    sections.push({ title, fields, flowEntries });
+    return null;
+  };
+
+  for (const t of plan.target) {
+    const src = t.fromTitle ? fileSecByTitle.get(t.fromTitle) : undefined;
+    if (t.fromTitle && !src) return { error: `source section missing: ${t.fromTitle}` };
+
+    const fields: Record<string, FieldValue[]> = {};
+    for (const f of t.fields) {
+      if (Object.prototype.hasOwnProperty.call(fields, f.name)) {
+        return { error: `duplicate field name in section "${t.title}": ${f.name}` };
+      }
+      if (!f.from) {
+        fields[f.name] = []; // 新补的空坑
+        continue;
+      }
+      const fromSec = fileSecByTitle.get(f.from.sectionTitle);
+      const values = fromSec?.fields[f.from.name];
+      if (!values) return { error: `source field missing: ${label(slotKey(f.from.sectionTitle, f.from.name))}` };
+      fields[f.name] = values; // 整块搬，不复制不修改
+    }
+
+    // 该分节里 catalog 没认领的字段（retired + custom）按原顺序跟在后面。
+    // 它们装着用户数据，退役/自建都不是删除的理由。
+    if (src) {
+      for (const name of Object.keys(src.fields)) {
+        if (claimed.has(slotKey(src.title, name))) continue;
+        if (Object.prototype.hasOwnProperty.call(fields, name)) {
+          return { error: `field name collision in section "${t.title}": ${name}` };
+        }
+        fields[name] = src.fields[name];
+      }
+    }
+
+    const err = emitSection(t.title, fields, src ? src.flowEntries : []);
+    if (err) return { error: err };
+  }
+
+  // catalog 认不出的分节原样保留（用户数据），排在 catalog 分节之后。
+  const targetSources = new Set(plan.target.map((t) => t.fromTitle).filter(Boolean) as string[]);
+  for (const s of before.sections) {
+    if (targetSources.has(s.title)) continue;
+    const fields: Record<string, FieldValue[]> = {};
+    for (const name of Object.keys(s.fields)) {
+      if (claimed.has(slotKey(s.title, name))) continue; // 已被搬到某个 catalog 分节
+      fields[name] = s.fields[name];
+    }
+    const err = emitSection(s.title, fields, s.flowEntries);
+    if (err) return { error: err };
+  }
+
+  return {
+    content: {
+      title: before.title,
+      template_id: before.template_id,
+      version: plan.toVersion,
+      installed_at: before.installed_at,
+      sections,
+    },
+  };
+}
+
+/** 全文件的值清单（含来源与项目标记），排序后可直接做多重集比较。 */
+function valueInventory(content: TemplateFileContent): string[] {
+  const out: string[] = [];
+  for (const sec of content.sections || []) {
+    for (const name of Object.keys(sec.fields || {})) {
+      for (const fv of sec.fields[name] || []) {
+        out.push(`${fv.value}\u0000${fv.source}\u0000${fv.project ?? ''}`);
+      }
+    }
+  }
+  return out.sort();
+}
+
+/** 全文件的流水条目清单，同样用于多重集比较。 */
+function flowInventory(content: TemplateFileContent): string[] {
+  return (content.sections || []).flatMap((s) => s.flowEntries || []).sort();
+}
+
+/**
+ * 后置校验。任何一条不过 → 不写盘、不升级版本。
+ *
+ * 骨干是一条极强又极简的不变式：**迁移从不新增、删除或改写任何一条值**，
+ * 所以迁移前后全文件的值多重集必须**完全相等**（不是「不减少」）。
+ * add 只加空坑、rename 只改名、move 只换分节、retire 什么都不动 —— 任何一条
+ * 值内容或条数发生变化，都说明搬运出了错。
  */
 function validateMigrated(
   before: TemplateFileContent,
   after: TemplateFileContent,
   plan: RoleTemplateMigrationPlan,
-  template: RoleTemplate,
 ): string | null {
-  const b = snapshot(before);
-  const a = snapshot(after);
-
-  if (a.totalValues < b.totalValues) return `value count shrank: ${b.totalValues} to ${a.totalValues}`;
-
-  for (const [key, count] of b.fields) {
-    if (!a.fields.has(key)) return `field disappeared: ${label(key)}`;
-    if (a.fields.get(key) !== count) {
-      return `field value count changed: ${label(key)} ${count} to ${a.fields.get(key)}`;
-    }
-  }
-  for (const [title, count] of b.flow) {
-    if (a.flow.get(title) !== count) return `flow entries changed in section "${title}"`;
+  const bv = valueInventory(before);
+  const av = valueInventory(after);
+  if (bv.length !== av.length) return `value count changed: ${bv.length} to ${av.length}`;
+  for (let i = 0; i < bv.length; i++) {
+    if (bv[i] !== av[i]) return `value set changed around "${label(bv[i])}"`;
   }
 
-  // catalog 当前声明的每个坑都必须在文件里 —— 这才是「补坑」的验收标准。
-  for (const catSec of template.preset_groups) {
-    const sec = after.sections.find((s) => s.title === catSec.title);
-    if (!sec) return `catalog section missing after migration: ${catSec.title}`;
-    for (const f of catSec.fields) {
-      if (!Object.prototype.hasOwnProperty.call(sec.fields, f.name)) {
-        return `catalog field missing after migration: ${catSec.title} · ${f.name}`;
+  const bf = flowInventory(before);
+  const af = flowInventory(after);
+  if (bf.length !== af.length) return `flow entry count changed: ${bf.length} to ${af.length}`;
+  for (let i = 0; i < bf.length; i++) {
+    if (bf[i] !== af[i]) return 'flow entries changed';
+  }
+
+  // 逐坑核对：同一个 field_id 迁移前后的值序列必须逐条相同（含 source/project）。
+  // 多重集相等只保证「值没丢」，这一条保证「值没串门」。
+  const afterSecByTitle = new Map(after.sections.map((s) => [s.title, s] as const));
+  const beforeSecByTitle = new Map(before.sections.map((s) => [s.title, s] as const));
+  for (const t of plan.target) {
+    const dst = afterSecByTitle.get(t.title);
+    if (!dst) return `target section missing after migration: ${t.title}`;
+    for (const f of t.fields) {
+      const got = dst.fields[f.name];
+      if (!got) return `target field missing after migration: ${t.title} · ${f.name}`;
+      if (!f.from) {
+        if (got.length) return `newly added slot is not empty: ${t.title} · ${f.name}`;
+        continue;
+      }
+      const src = beforeSecByTitle.get(f.from.sectionTitle)?.fields[f.from.name] || [];
+      if (got.length !== src.length) {
+        return `field ${f.fieldId} value count changed: ${src.length} to ${got.length}`;
+      }
+      for (let i = 0; i < src.length; i++) {
+        if (got[i].value !== src[i].value
+          || got[i].source !== src[i].source
+          || (got[i].project ?? undefined) !== (src[i].project ?? undefined)) {
+          return `field ${f.fieldId} value or metadata changed at index ${i}`;
+        }
       }
     }
   }
 
-  const expectedNew = plan.additions.fields.length
-    + plan.additions.sections.reduce((n, s) => n + s.fields.length, 0);
-  if (a.fields.size !== b.fields.size + expectedNew) {
-    return `unexpected field count: ${b.fields.size} + ${expectedNew} != ${a.fields.size}`;
+  // 退役字段的值必须一条不动（退役只改语义，不动数据）。
+  for (const r of plan.retiredFields) {
+    const target = plan.target.find((t) => t.sectionId === r.sectionId);
+    const dst = afterSecByTitle.get(target ? target.title : r.sectionTitle);
+    const got = dst?.fields[r.name];
+    if (!got) return `retired field disappeared: ${r.sectionTitle} · ${r.name}`;
+    if (got.length !== r.valueCount) {
+      return `retired field ${r.fieldId} value count changed: ${r.valueCount} to ${got.length}`;
+    }
   }
 
   if (after.version !== plan.toVersion) return `serialized version mismatch: ${after.version}`;
   if (!isValidTemplateVersion(plan.toVersion)) return `target version is not a writable semver: ${plan.toVersion}`;
   return null;
+}
+
+/**
+ * 不动点校验：拿迁移结果再跑一遍 detect，必须已经无事可做。
+ *
+ * 这一条同时证明三件事：catalog 声明的每个坑都落到了实例里；没有任何
+ * field_id 出现两次（否则会报 merge）；再跑一次迁移是 noop（幂等）。
+ * 比逐条重述 plan 干了什么可靠 —— 它检查的是结果本身。
+ */
+function validateFixedPoint(templateId: string, after: TemplateFileContent): string | null {
+  const again = detectRoleTemplateMigration(templateId, toInstalledShape(after));
+  const leftovers = [
+    ...again.additions.sections.map((x) => `add section ${x.title}`),
+    ...again.additions.fields.map((x) => `add field ${x.sectionTitle} · ${x.name}`),
+    ...again.renamedSections.map((x) => `rename section ${x.from}`),
+    ...again.renamedFields.map((x) => `rename field ${x.from}`),
+    ...again.movedFields.map((x) => `move field ${x.name}`),
+    ...again.unsupportedChanges.map((x) => x.kind),
+    ...again.conflicts.map((x) => x.kind),
+  ];
+  return leftovers.length ? `migration is not a fixed point: ${leftovers.join(', ')}` : null;
 }
 
 /**
@@ -926,8 +1167,9 @@ export async function applyRoleTemplateMigration(
       };
     }
 
-    const template = getRoleTemplate(templateId);
-    if (!template) return { ok: false, templateId, outcome: 'failed', error: 'template not found' };
+    if (!getRoleTemplate(templateId)) {
+      return { ok: false, templateId, outcome: 'failed', error: 'template not found' };
+    }
 
     // 不阻断，但必须留痕：这是唯一能事后发现「作者改名忘了声明 previous_names」
     // 的地方。只记分节名与计数，不记字段名（用户自建字段名属于用户内容）。
@@ -971,11 +1213,14 @@ export async function applyRoleTemplateMigration(
     try {
       backupDir = backupTemplateFileForMigration(uid, templateId) || undefined;
 
-      const after = parseTemplateContent(text); // 独立的第二份，before 保持原样供比对
-      applyAdditions(after, plan);
-      after.version = plan.toVersion;
+      const built = buildMigratedContent(before, plan);
+      if (built.error || !built.content) {
+        log.warn('role template migration could not be built; nothing written', { uid, templateId, problem: built.error });
+        return { ok: false, templateId, outcome: 'failed', error: built.error || 'build failed', backupDir };
+      }
+      const after = built.content;
 
-      const problem = validateMigrated(before, after, plan, template);
+      const problem = validateMigrated(before, after, plan) || validateFixedPoint(templateId, after);
       if (problem) {
         log.warn('role template migration failed validation; nothing written', { uid, templateId, problem });
         return { ok: false, templateId, outcome: 'failed', error: problem, backupDir };
@@ -989,7 +1234,7 @@ export async function applyRoleTemplateMigration(
       // round-trip：写下去的字节必须还能被同一个 parser 读回同样的东西，
       // 否则「内存里对了」等于没对。
       const roundTrip = parseTemplateContent(next);
-      const rtProblem = validateMigrated(before, roundTrip, plan, template);
+      const rtProblem = validateMigrated(before, roundTrip, plan) || validateFixedPoint(templateId, roundTrip);
       if (rtProblem || roundTrip.template_id !== templateId) {
         return {
           ok: false,
@@ -1007,24 +1252,18 @@ export async function applyRoleTemplateMigration(
       notifyGroupUpserted(uid, `.personal_ontology_groups/${templateId}.md`);
       pruneMigrationBackups(uid, templateId);
 
-      log.info('role template schema migrated', {
-        uid,
-        templateId,
-        fromVersion: plan.fromVersion,
-        toVersion: plan.toVersion,
+      const counts = {
         addedSections: plan.additions.sections.length,
         addedFields: plan.additions.fields.length,
-      });
-      return {
-        ok: true,
-        templateId,
-        outcome: 'migrated',
-        fromVersion: plan.fromVersion,
-        toVersion: plan.toVersion,
-        addedSections: plan.additions.sections.length,
-        addedFields: plan.additions.fields.length,
-        backupDir,
+        renamedSections: plan.renamedSections.length,
+        renamedFields: plan.renamedFields.length,
+        movedFields: plan.movedFields.length,
+        retiredFields: plan.retiredFields.length,
       };
+      log.info('role template schema migrated', {
+        uid, templateId, fromVersion: plan.fromVersion, toVersion: plan.toVersion, ...counts,
+      });
+      return { ok: true, templateId, outcome: 'migrated', fromVersion: plan.fromVersion, toVersion: plan.toVersion, ...counts, backupDir };
     } catch (err) {
       log.warn('role template migration threw; file and ledger left untouched', {
         uid, templateId, error: (err as Error).message,

@@ -65,7 +65,7 @@ describe('detection › 纯新增', () => {
     expect(det.fromVersion).toBe('1.0.0');
     expect(det.toVersion).toBe('2.0.0');
     expect(det.additions.fields).toEqual([
-      { sectionId: 'background', sectionTitle: '学习背景', fieldId: 'direction', name: '当前研究方向', afterName: '专业' },
+      { sectionId: 'background', sectionTitle: '学习背景', fieldId: 'direction', name: '当前研究方向' },
     ]);
     expect(det.additions.sections).toEqual([]);
     expect(det.conflicts).toEqual([]);
@@ -90,7 +90,7 @@ describe('detection › 纯新增', () => {
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(true);
   });
 
-  it('新字段插在 catalog 顺序里的正确位置（afterName 指向前一个已存在字段）', async () => {
+  it('执行骨架按 catalog 顺序排列字段，新坑落在正确位置', async () => {
     setCatalog('2.0.0', [
       {
         id: 'background',
@@ -104,12 +104,18 @@ describe('detection › 纯新增', () => {
     ]);
     const { detectRoleTemplateMigration } = await load();
     const det = detectRoleTemplateMigration('student', installed('1.0.0', { 学习背景: ['专业'] }));
-    // 「教育阶段」排在已存在的「专业」之前 → 没有 afterName（插到最前）
-    expect(det.additions.fields[0]).toEqual({
-      sectionId: 'background', sectionTitle: '学习背景', fieldId: 'stage', name: '教育阶段',
-    });
-    // 「研究方向」排在「专业」之后
-    expect(det.additions.fields[1]).toMatchObject({ fieldId: 'direction', afterName: '专业' });
+
+    // 顺序由 target 骨架给定（catalog 顺序），apply 直接照着建，不用再算插入点
+    expect(det.target).toEqual([{
+      sectionId: 'background',
+      title: '学习背景',
+      fromTitle: '学习背景',
+      fields: [
+        { fieldId: 'stage', name: '教育阶段' },
+        { fieldId: 'major', name: '专业', from: { sectionTitle: '学习背景', name: '专业' } },
+        { fieldId: 'direction', name: '研究方向' },
+      ],
+    }]);
   });
 });
 
@@ -149,8 +155,8 @@ describe('detection › noop 与版本自愈', () => {
   });
 });
 
-describe('detection › 本轮不支持的变化必须被认出来，而不是当成 add/delete', () => {
-  it('已声明的字段改名 → rename_field，拒绝自动执行', async () => {
+describe('detection › rename / move 被认出来并可自动执行（Phase 2）', () => {
+  it('已声明的字段改名 → rename_field，且不被当成 delete + add', async () => {
     setCatalog('2.0.0', [
       {
         id: 'background',
@@ -168,13 +174,15 @@ describe('detection › 本轮不支持的变化必须被认出来，而不是�
     expect(det.additions.fields).toEqual([]);
 
     const plan = planRoleTemplateMigration(det);
-    expect(plan.canAutoApply).toBe(false);
-    expect(plan.unsupportedChanges).toEqual([
-      { kind: 'rename_field', status: 'requires_manual_or_future_migration', detail: expect.stringContaining('专业') },
-    ]);
+    expect(plan.canAutoApply).toBe(true);
+    expect(plan.unsupportedChanges).toEqual([]);
+    // 骨架把旧名指向新名，值由 apply 整块搬过去
+    expect(plan.target[0].fields[0]).toEqual({
+      fieldId: 'major', name: '专业与研究方向', from: { sectionTitle: '学习背景', name: '专业' },
+    });
   });
 
-  it('已声明的分节改名 → rename_section，拒绝自动执行', async () => {
+  it('已声明的分节改名 → rename_section，整节不被当成 delete + add', async () => {
     setCatalog('2.0.0', [
       { id: 'background', title: '教育背景', previous_names: ['学习背景'], fields: [{ id: 'major', name: '专业' }] },
     ]);
@@ -183,7 +191,8 @@ describe('detection › 本轮不支持的变化必须被认出来，而不是�
 
     expect(det.renamedSections).toEqual([{ sectionId: 'background', from: '学习背景', to: '教育背景' }]);
     expect(det.additions.sections).toEqual([]);
-    expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
+    expect(planRoleTemplateMigration(det).canAutoApply).toBe(true);
+    expect(det.target[0]).toMatchObject({ title: '教育背景', fromTitle: '学习背景' });
   });
 
   it('字段被移到别的分节 → move_field，不当成 delete + add', async () => {
@@ -197,11 +206,18 @@ describe('detection › 本轮不支持的变化必须被认出来，而不是�
       目标与节奏: [],
     }));
 
-    expect(det.movedFields).toEqual([
-      { fieldId: 'major', name: '专业', fromSection: '学习背景', toSectionId: 'pace', toSectionTitle: '目标与节奏' },
-    ]);
+    expect(det.movedFields).toEqual([{
+      fieldId: 'major',
+      name: '专业',
+      fromSectionId: 'background',
+      fromSectionTitle: '学习背景',
+      toSectionId: 'pace',
+      toSectionTitle: '目标与节奏',
+    }]);
     expect(det.unknownInFile.fields).toEqual([]);
-    expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
+    // 关键：移动过去的字段不能同时又被记成目标分节的「新增空坑」
+    expect(det.additions.fields).toEqual([]);
+    expect(planRoleTemplateMigration(det).canAutoApply).toBe(true);
   });
 
   it('字段层的疑似未声明改名只报告、不阻断（与用户自建字段无法区分）', async () => {
@@ -298,14 +314,14 @@ describe('detection › 阻断条件', () => {
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
 
-  it('名字解析歧义 → ambiguous_identity，不猜', async () => {
+  it('一个旧分节名被多个 catalog 分节认领 = 拆分 → split_section，拒绝', async () => {
     setCatalog('2.0.0', [
       { id: 's1', title: '教育背景', previous_names: ['背景'], fields: [{ id: 'f1', name: 'x' }] },
       { id: 's2', title: '工作背景', previous_names: ['背景'], fields: [{ id: 'f2', name: 'y' }] },
     ]);
     const { detectRoleTemplateMigration, planRoleTemplateMigration } = await load();
     const det = detectRoleTemplateMigration('student', installed('1.0.0', { 背景: ['x'] }));
-    expect(det.conflicts.map((c) => c.kind)).toContain('ambiguous_identity');
+    expect(det.unsupportedChanges.map((c) => c.kind)).toContain('split_section');
     expect(planRoleTemplateMigration(det).canAutoApply).toBe(false);
   });
 
