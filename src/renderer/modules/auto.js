@@ -96,8 +96,11 @@ function _autoAttachDisplayName(item) {
 
 let _autoTasks = [];           // last fetched global list
 let _autoLoadedOnce = false;
-let _autoFormMounted = false;  // _aiSelectMount only once
+let _autoFormMounted = false;  // shared dialog chrome + _aiSelectMount only once
 let _autoEditingTaskId = null; // null = create mode, taskId = edit mode
+let _autoModalController = null;
+let _autoPageState = 'loading';
+let _autoI18nBound = false;
 // Current device fingerprint — fetched lazily on first row render. Used to
 // decide which device chip to show ("this device" vs. the task's stored hostname).
 let _autoCurrentDevice = null; // { id, name } | null
@@ -793,11 +796,71 @@ function _autoApplyTemplate(tplId) {
   _autoTrackClick('auto_template_pick', { template_id: tpl.id });
 }
 
+function _autoBindPageActions(container) {
+  if (!container) return;
+  container.querySelectorAll('[data-auto-page-action]').forEach((button) => {
+    if (button.dataset.bound === '1') return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', () => {
+      const action = button.dataset.autoPageAction;
+      if (action === 'retry') loadAutoList(true);
+      else if (action === 'create') openAutoTaskDialog({});
+    });
+  });
+}
+
+function _autoRenderPageHeader(count = _autoTasks.length) {
+  const root = document.getElementById('auto-page-header');
+  if (!root || typeof uiPageHeader !== 'function') return;
+  const shouldRestoreActionFocus = root.contains(document.activeElement);
+  root.innerHTML = uiPageHeader({
+    title: t('auto.title'),
+    meta: count > 0 ? t('auto.task_count', { n: count }) : '',
+    actions: [{
+      label: t('auto.add_btn'),
+      icon: 'plus',
+      attrs: { 'data-auto-page-action': 'create' },
+    }],
+  });
+  _autoBindPageActions(root);
+  if (typeof hydrateUiIcons === 'function') hydrateUiIcons(root);
+  if (shouldRestoreActionFocus) root.querySelector('[data-auto-page-action="create"]')?.focus();
+}
+
+function _autoRenderPageState(state) {
+  const container = document.getElementById('auto-page-state');
+  if (!container) return;
+  _autoPageState = state;
+  container.className = `auto-page-state auto-page-state--${state}`;
+  container.hidden = state === 'list';
+  if (state === 'loading') {
+    container.innerHTML = `<div class="auto-loading-state" role="status"><span class="auto-loading-state__spinner" aria-hidden="true"></span><span>${escapeHtml(t('auto.loading'))}</span></div>`;
+  } else if (state === 'error') {
+    container.innerHTML = `<section class="auto-error-state"><div class="auto-error-state__icon" aria-hidden="true">${typeof uiIconHtml === 'function' ? uiIconHtml('warning', '') : ''}</div><h3>${escapeHtml(t('auto.load_failed_title'))}</h3><p>${escapeHtml(t('auto.load_failed_hint'))}</p>${uiButton({ label: t('common.retry'), role: 'secondary', icon: 'refresh', attrs: { 'data-auto-page-action': 'retry' } })}</section>`;
+  } else if (state === 'empty') {
+    container.innerHTML = uiEmptyState({
+      kind: 'actionable',
+      icon: 'clock',
+      title: t('auto.empty_title'),
+      hint: t('auto.empty_subtitle'),
+      action: {
+        label: t('auto.add_btn'),
+        role: 'primary',
+        icon: 'plus',
+        attrs: { 'data-auto-page-action': 'create' },
+      },
+    });
+  } else {
+    container.innerHTML = '';
+  }
+  _autoBindPageActions(container);
+  if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
+}
+
 /** Render the starter-template grid into `container`.
- *  `compact` (tasks already exist) drops the big centered hero for a small
- *  "add from template" heading, so the grid can live under the task list and
- *  stay reachable instead of vanishing after the first task. The empty state
- *  keeps the full hero. Rebuilt on each render; cheap and keeps i18n fresh. */
+ *  `compact` (tasks already exist) changes spacing only. The actionable empty
+ *  state is rendered separately, so template cards remain an independent
+ *  "from template" section instead of becoming extra EmptyState actions. */
 function _autoRenderTemplates(container, opts = {}) {
   if (!container) return;
   const compact = !!opts.compact;
@@ -817,13 +880,7 @@ function _autoRenderTemplates(container, opts = {}) {
       + meta
       + `</span></button>`;
   }).join('');
-  const head = compact
-    ? `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`
-    : `<div class="auto-tpl-hero">`
-      + `<span class="auto-tpl-hero-ico">${iconHtml('clock', 'auto-tpl-hero-clock')}</span>`
-      + `<div class="auto-tpl-hero-title">${escapeHtml(t('auto.empty_title'))}</div>`
-      + `<div class="auto-tpl-hero-sub">${escapeHtml(t('auto.empty_subtitle'))}</div>`
-      + `</div>`;
+  const head = `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`;
   container.classList.toggle('is-compact', compact);
   container.innerHTML = head + `<div class="auto-tpl-grid">${cards}</div>`;
   if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
@@ -836,10 +893,14 @@ function _autoRenderTemplates(container, opts = {}) {
 
 async function loadAutoList(force) {
   const listEl = document.getElementById('auto-list');
-  const emptyEl = document.getElementById('auto-empty');
   if (!listEl) return;
-  await _refreshAutoSyncNotice();
+  _autoRenderPageHeader();
   if (_autoLoadedOnce && !force) return;
+  _autoRenderPageState('loading');
+  listEl.innerHTML = '';
+  const tplEl = document.getElementById('auto-templates');
+  if (tplEl) tplEl.hidden = true;
+  await _refreshAutoSyncNotice();
   // Fetch device fingerprint in parallel with the task list so the device
   // chip can paint on the first render.
   await _ensureAutoCurrentDevice();
@@ -850,24 +911,25 @@ async function loadAutoList(force) {
   } catch (err) {
     _autoTasks = [];
     _autoLog.warn('list failed', err);
-    if (typeof uiAlert === 'function') uiAlert(t('auto.load_failed', { reason: (err && err.message) || err }));
+    _autoLoadedOnce = true;
+    _autoRenderPageHeader(0);
+    _autoRenderPageState('error');
+    return;
   }
   _autoLoadedOnce = true;
-  listEl.innerHTML = '';
-  const headerCount = document.getElementById('auto-header-count');
   const n = _autoTasks.length;
-  if (headerCount) headerCount.textContent = n > 0 ? String(n) : '';
-  const tplEl = document.getElementById('auto-templates');
+  _autoRenderPageHeader(n);
   // Templates stay reachable at all times: full hero when empty, compact
   // "add from template" strip under the list once tasks exist.
-  if (emptyEl) emptyEl.style.display = 'none';
   if (!_autoTasks.length) {
+    _autoRenderPageState('empty');
     if (tplEl) {
       _autoRenderTemplates(tplEl, { compact: false });
       tplEl.hidden = false;
     }
     return;
   }
+  _autoRenderPageState('list');
   const onEdit = (task) => openAutoTaskDialog({ task });
   const afterChange = () => loadAutoList(true);
   for (const task of _autoTasks) {
@@ -1116,6 +1178,118 @@ function _autoStripComposerUseTokens(value) {
   return out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/g, '');
 }
 
+function _autoLinkSelect(api, labelId, ariaLabel, required) {
+  const trigger = api && api.el ? api.el.querySelector('.ai-select-trigger') : null;
+  if (!trigger) return;
+  const valueLabel = api.el.querySelector('.ai-select-label');
+  if (valueLabel && api.el.id) valueLabel.id = `${api.el.id}-selected-value`;
+  const labelledBy = [labelId, valueLabel && valueLabel.id].filter(Boolean).join(' ');
+  if (labelledBy) trigger.setAttribute('aria-labelledby', labelledBy);
+  if (ariaLabel) trigger.setAttribute('aria-label', ariaLabel);
+  if (required) trigger.setAttribute('aria-required', 'true');
+}
+
+function _autoRefreshSelectAccessibility() {
+  _autoLinkSelect(_autoFreqSel, 'auto-freq-label', '', true);
+  _autoLinkSelect(_autoWeekdaySel, 'auto-weekday-label', '', true);
+  _autoLinkSelect(_autoMonthlyDaySel, 'auto-monthly-day-label', '', true);
+  _autoLinkSelect(_autoHourSel, 'auto-hour-label', '', true);
+  _autoLinkSelect(_autoMinuteSel, 'auto-minute-label', '', true);
+  _autoLinkSelect(_autoProjectSel, 'auto-project-label', '', false);
+  _autoLinkSelect(_autoRunDeviceSel, 'auto-run-device-label', '', false);
+}
+
+function _autoRenderDialogChrome() {
+  const closeSlot = document.getElementById('auto-dialog-close-slot');
+  const actions = document.getElementById('auto-dialog-actions');
+  if (closeSlot && !document.getElementById('auto-dialog-close-btn')) {
+    closeSlot.innerHTML = uiIconButton({
+      icon: 'x',
+      label: t('common.close'),
+      attrs: { id: 'auto-dialog-close-btn' },
+    });
+  }
+  if (actions && !document.getElementById('auto-submit-btn')) {
+    actions.innerHTML = uiButton({
+      label: t('auto.cancel_btn'),
+      role: 'secondary',
+      attrs: { id: 'auto-dialog-cancel-btn' },
+    }) + uiButton({
+      label: t(_autoEditingTaskId ? 'auto.save_btn' : 'auto.create_btn'),
+      role: 'primary',
+      attrs: { id: 'auto-submit-btn' },
+    });
+  }
+
+  const closeBtn = document.getElementById('auto-dialog-close-btn');
+  if (closeBtn) {
+    closeBtn.setAttribute('aria-label', t('common.close'));
+    closeBtn.setAttribute('title', t('common.close'));
+    if (closeBtn.dataset.bound !== '1') {
+      closeBtn.dataset.bound = '1';
+      closeBtn.addEventListener('click', () => _hideAutoDialog('close'));
+    }
+  }
+  const cancelBtn = document.getElementById('auto-dialog-cancel-btn');
+  if (cancelBtn) {
+    const label = cancelBtn.querySelector('.ui-button__label');
+    if (label) label.textContent = t('auto.cancel_btn');
+    if (cancelBtn.dataset.bound !== '1') {
+      cancelBtn.dataset.bound = '1';
+      cancelBtn.addEventListener('click', () => _hideAutoDialog('cancel'));
+    }
+  }
+  const submitBtn = document.getElementById('auto-submit-btn');
+  if (submitBtn) {
+    if (submitBtn.dataset.bound !== '1') {
+      submitBtn.dataset.bound = '1';
+      submitBtn.addEventListener('click', () => _autoSubmitForm());
+    }
+    if (submitBtn.dataset.busy !== 'true') {
+      const label = submitBtn.querySelector('.ui-button__label');
+      if (label) label.textContent = t(_autoEditingTaskId ? 'auto.save_btn' : 'auto.create_btn');
+    }
+  }
+}
+
+function _autoSetSubmitBusy(busy) {
+  const submitBtn = document.getElementById('auto-submit-btn');
+  if (!submitBtn) return;
+  submitBtn.dataset.busy = busy ? 'true' : 'false';
+  submitBtn.disabled = Boolean(busy);
+  submitBtn.classList.toggle('is-loading', Boolean(busy));
+  if (busy) submitBtn.setAttribute('aria-busy', 'true');
+  else submitBtn.removeAttribute('aria-busy');
+  const label = submitBtn.querySelector('.ui-button__label');
+  if (label) {
+    label.textContent = t(busy
+      ? (_autoEditingTaskId ? 'auto.saving' : 'auto.creating')
+      : (_autoEditingTaskId ? 'auto.save_btn' : 'auto.create_btn'));
+  }
+}
+
+function _autoSetFormError(message, target) {
+  const error = document.getElementById('auto-dialog-error');
+  const candidates = [
+    document.getElementById('auto-task-input'),
+    document.getElementById('auto-date-input'),
+  ].filter(Boolean);
+  candidates.forEach((control) => {
+    control.removeAttribute('aria-invalid');
+    if (control.getAttribute('aria-describedby') === 'auto-dialog-error') {
+      control.removeAttribute('aria-describedby');
+    }
+  });
+  if (!error) return;
+  const text = String(message || '').trim();
+  error.textContent = text;
+  error.hidden = !text;
+  if (!text || !target) return;
+  target.setAttribute('aria-invalid', 'true');
+  target.setAttribute('aria-describedby', 'auto-dialog-error');
+  if (typeof target.focus === 'function') target.focus();
+}
+
 
 function _mountAutoForm() {
   const panel = document.getElementById('panel-auto');
@@ -1185,6 +1359,7 @@ function _mountAutoForm() {
       options: [],
       value: '',
     });
+    _autoRefreshSelectAccessibility();
   }
 
 
@@ -1194,19 +1369,20 @@ function _mountAutoForm() {
     dateInput.value = _autoLocalDateInputValue(new Date().toISOString());
   }
 
-  // Bind buttons.
-  const ta = document.getElementById('auto-task-input');
-  const submitBtn = document.getElementById('auto-submit-btn');
-  if (submitBtn && submitBtn.dataset.bound !== '1') {
-    submitBtn.dataset.bound = '1';
-    submitBtn.addEventListener('click', () => _autoSubmitForm());
-  }
-  // Modal cancel — closes the dialog without saving. Reset happens on the
-  // next open so the form starts fresh.
-  const dialogCancelBtn = document.getElementById('auto-dialog-cancel-btn');
-  if (dialogCancelBtn && dialogCancelBtn.dataset.bound !== '1') {
-    dialogCancelBtn.dataset.bound = '1';
-    dialogCancelBtn.addEventListener('click', () => _hideAutoDialog());
+  _autoRenderDialogChrome();
+  if (!_autoModalController && typeof uiModalController === 'function') {
+    const overlay = document.getElementById('auto-task-dialog-overlay');
+    _autoModalController = uiModalController({
+      overlay,
+      dialog: overlay && overlay.querySelector('[role="dialog"]'),
+      initialFocus: '#auto-task-input',
+      fallbackFocus: () => document.querySelector('[data-auto-page-action="create"]'),
+      onClose: () => {
+        _autoLockedProjectId = '';
+        _autoOnSaved = null;
+        _autoSetFormError('');
+      },
+    });
   }
   // Attach button → file picker → upload to the task's attachment dir.
   // Pre-allocate the task id on first attach so subsequent submissions
@@ -1219,7 +1395,10 @@ function _mountAutoForm() {
   _bindAutoDropAttach();
 
   // Keep i18n labels updating on lang switch.
-  window.addEventListener('i18n-change', _autoRepaintLabels);
+  if (!_autoI18nBound) {
+    window.addEventListener('i18n-change', _autoRepaintLabels);
+    _autoI18nBound = true;
+  }
 
   _bindAutoTitleNameLimit();
   _autoFormMounted = true;
@@ -1719,14 +1898,14 @@ function _autoRepaintLabels() {
       ? 'auto.edit_section_title'
       : 'auto.create_section_title');
   }
-  const submitBtn = document.getElementById('auto-submit-btn');
-  if (submitBtn) {
-    submitBtn.textContent = t(_autoEditingTaskId ? 'auto.save_btn' : 'auto.create_btn');
-  }
-  const cancelBtn = document.getElementById('auto-dialog-cancel-btn');
-  if (cancelBtn) cancelBtn.textContent = t('auto.cancel_btn');
+  _autoRenderDialogChrome();
+  _autoRefreshSelectAccessibility();
   _autoRefreshRunDevicePicker();
   _paintAutoSyncNotice();
+  _autoRenderPageHeader();
+  _autoRenderPageState(_autoPageState);
+  const templates = document.getElementById('auto-templates');
+  if (templates && !templates.hidden) _autoRenderTemplates(templates, { compact: _autoTasks.length > 0 });
 }
 
 function _autoResetForm() {
@@ -1736,6 +1915,8 @@ function _autoResetForm() {
   _autoCurrentRecipient = { kind: 'commander' };
   _autoCurrentTaskId = '';
   _autoCurrentAttachments = [];
+  _autoSetFormError('');
+  _autoSetSubmitBusy(false);
   _autoSetComposerValue('');
   const titleInput = document.getElementById('auto-title-input');
   if (titleInput) {
@@ -1769,6 +1950,8 @@ function _autoResetForm() {
 function openAutoTaskDialog(opts = {}) {
   if (!_autoFormMounted) _mountAutoForm();
   _refreshAutoSyncNotice().catch(() => {});
+  _autoSetFormError('');
+  _autoSetSubmitBusy(false);
   const task = opts.task || null;
   _autoLockedProjectId = _autoValidProjectId((opts.projectId && typeof opts.projectId === 'string') ? opts.projectId : '');
   _autoOnSaved = (typeof opts.onSaved === 'function') ? opts.onSaved : null;
@@ -1795,23 +1978,12 @@ function openAutoTaskDialog(opts = {}) {
 }
 
 function _showAutoDialog() {
-  const overlay = document.getElementById('auto-task-dialog-overlay');
-  if (!overlay) return;
   _paintAutoSyncNotice();
-  overlay.style.display = 'flex';
-  overlay.classList.add('open');
-  const ta = document.getElementById('auto-task-input');
-  if (ta) setTimeout(() => ta.focus(), 50);
+  if (_autoModalController) _autoModalController.open(document.activeElement);
 }
 
-function _hideAutoDialog() {
-  const overlay = document.getElementById('auto-task-dialog-overlay');
-  if (overlay) {
-    overlay.style.display = 'none';
-    overlay.classList.remove('open');
-  }
-  _autoLockedProjectId = '';
-  _autoOnSaved = null;
+function _hideAutoDialog(reason = 'close') {
+  if (_autoModalController) _autoModalController.close(reason);
 }
 
 /** Hydrate the form fields from an existing task — used by edit mode. */
@@ -1875,9 +2047,13 @@ async function _autoSubmitForm() {
   const dateInput = document.getElementById('auto-date-input');
   if (!ta || !submitBtn || !_autoFreqSel || !_autoHourSel || !_autoMinuteSel) return;
 
+  _autoSetFormError('');
   const rawContent = (ta.value || '').trim();
   const content = _autoStripComposerUseTokens(rawContent).trim();
-  if (!content) { await uiAlert(t('auto.invalid_content')); return; }
+  if (!content) {
+    _autoSetFormError(t('auto.invalid_content'), ta);
+    return;
+  }
   const messageParts = (typeof chatUseMessagePartsFromText === 'function')
     ? chatUseMessagePartsFromText(rawContent)
     : null;
@@ -1889,7 +2065,8 @@ async function _autoSubmitForm() {
   const hour = parseInt(_autoHourSel.getValue() || '0', 10);
   const minute = parseInt(_autoMinuteSel.getValue() || '0', 10);
   if (!(hour >= 0 && hour <= 23) || !(minute >= 0 && minute <= 59)) {
-    await uiAlert(t('auto.invalid_schedule')); return;
+    _autoSetFormError(t('auto.invalid_schedule'), document.getElementById('auto-date-input'));
+    return;
   }
 
   const type = _autoFreqSel.getValue();
@@ -1897,7 +2074,10 @@ async function _autoSubmitForm() {
   if (type === 'one_time') {
     const raw = dateInput ? dateInput.value : '';
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw).trim());
-    if (!m) { await uiAlert(t('auto.invalid_schedule')); return; }
+    if (!m) {
+      _autoSetFormError(t('auto.invalid_schedule'), dateInput);
+      return;
+    }
     // Build the target in local time so the date/hour/minute the user picked
     // matches the wall-clock they expect, then store as ISO (UTC).
     const target = new Date(
@@ -1909,7 +2089,10 @@ async function _autoSubmitForm() {
       0,
       0,
     );
-    if (Number.isNaN(target.getTime())) { await uiAlert(t('auto.invalid_schedule')); return; }
+    if (Number.isNaN(target.getTime())) {
+      _autoSetFormError(t('auto.invalid_schedule'), dateInput);
+      return;
+    }
     schedule = { type: 'one_time', at: target.toISOString() };
   } else if (type === 'daily') {
     schedule = { type: 'daily', hour, minute };
@@ -1920,7 +2103,8 @@ async function _autoSubmitForm() {
     const day = _autoMonthlyDaySel ? parseInt(_autoMonthlyDaySel.getValue() || '1', 10) : 1;
     schedule = { type: 'monthly', day: Number.isInteger(day) && day >= 1 ? day : 1, hour, minute };
   } else {
-    await uiAlert(t('auto.invalid_schedule')); return;
+    _autoSetFormError(t('auto.invalid_schedule'), document.getElementById('auto-date-input'));
+    return;
   }
 
   const projectId = _autoSelectedProjectId();
@@ -1942,7 +2126,7 @@ async function _autoSubmitForm() {
     content_length: content.length,
   });
 
-  submitBtn.disabled = true;
+  _autoSetSubmitBusy(true);
   try {
     const attachmentNames = readyAttachments.map((a) => a.name);
     const recipientField = _autoCurrentRecipient.kind === 'agent'
@@ -1992,7 +2176,7 @@ async function _autoSubmitForm() {
       _autoTrackError(isUpdate ? 'auto_task_update' : 'auto_task_create', {
         error_type: 'api',
       });
-      await uiAlert(t('auto.save_failed', { reason: (res && res.error) || '' }));
+      _autoSetFormError(t('auto.save_failed', { reason: (res && res.error) || '' }), ta);
       return;
     }
     const savedTask = res.task;
@@ -2030,9 +2214,9 @@ async function _autoSubmitForm() {
     _autoTrackError(isUpdate ? 'auto_task_update' : 'auto_task_create', {
       error_type: 'ipc',
     });
-    await uiAlert(t('auto.save_failed', { reason: (err && err.message) || err }));
+    _autoSetFormError(t('auto.save_failed', { reason: (err && err.message) || err }), ta);
   } finally {
-    submitBtn.disabled = false;
+    _autoSetSubmitBusy(false);
   }
 }
 
@@ -2045,15 +2229,16 @@ if (typeof window !== 'undefined') {
   window.refreshAutoProjectOptions = _autoRefreshProjectOptions;
   window._autoUploadFilesFromComposer = _autoUploadFiles;
   window._autoAttachLibraryFile = _autoAttachLibraryFile;
-  const bindAutoAddButton = () => {
-    const addBtn = document.getElementById('auto-add-btn');
-    if (addBtn && addBtn.dataset.bound !== '1') {
-      addBtn.dataset.bound = '1';
-      addBtn.addEventListener('click', () => openAutoTaskDialog({}));
+  const bindAutoPage = () => {
+    _autoRenderPageHeader();
+    _autoRenderPageState(_autoPageState);
+    if (!_autoI18nBound) {
+      window.addEventListener('i18n-change', _autoRepaintLabels);
+      _autoI18nBound = true;
     }
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAutoAddButton, { once: true });
-  else bindAutoAddButton();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindAutoPage, { once: true });
+  else bindAutoPage();
 }
 
 // ─── Boot-time fire subscription ─────────────────────────────────────────

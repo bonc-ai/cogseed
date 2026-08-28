@@ -106,6 +106,7 @@ import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as cogseedBackend from '../features/cogseed_backend';
+import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -931,6 +932,23 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
+  'stt.pushAudio': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    if (typeof raw.chunk !== 'string') throw new Error('invalid audio chunk');
+    const bytes = Buffer.from(raw.chunk, 'base64');
+    if (bytes.length % 2 !== 0) throw new Error('invalid pcm length');
+    const samples = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+    stt.pushAudio(ctx.userId, raw.sessionId, samples);
+    return { ok: true };
+  },
+  'stt.stop': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    return stt.stopSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -1051,6 +1069,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     ]);
     const [annotated] = annotateChannelConversations([conv], [], instances);
     return { conversation: annotated || conv };
+  },
+
+  'conversations.setPermissionMode': async (args, ctx) => {
+    const { cid, permission_mode } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+      throw new Error('invalid permission mode');
+    }
+    const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    return { conversation: conv };
   },
 
   'conversations.history': async (args, ctx) => {
@@ -4999,6 +5028,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  'stt.results': async function* ({ sessionId }, ctx, signal) {
+    if (typeof sessionId !== 'string' || !safeId(sessionId)) {
+      yield { type: 'error', text: 'invalid session id' };
+      return;
+    }
+    let lastPartial = '';
+    while (!signal.aborted) {
+      const partial = stt.currentPartial(ctx.userId, sessionId);
+      if (partial && partial !== lastPartial) {
+        lastPartial = partial;
+        yield { type: 'event', event: { partial } };
+      }
+      if (stt.isSessionDone(ctx.userId, sessionId)) {
+        yield { type: 'event', event: { final: stt.currentFinal(ctx.userId, sessionId) } };
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  },
   /**
    * Read-only aside answer. Deliberately NOT routed through groupChat.send /
    * bus.enqueue: doing so would append to the main transcript and add a second

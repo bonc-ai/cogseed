@@ -1,0 +1,155 @@
+/* CogSeed first-version design tokens.
+ *
+ * This file is the production-facing token source for the UX quality spike.
+ * Existing renderer aliases remain available so adoption can happen module by
+ * module. New shared components use the semantic layer below.
+ */
+
+:root {
+  /* Base colors */
+  --color-brand: #0E9F6E;
+  --color-brand-hover: #0A7A55;
+  --color-brand-soft: #E2F5EC;
+  --color-ink: #14281E;
+  --color-ink-2: #3E5A4C;
+  --color-muted: #6E8578;
+  --color-faint: #A3B8AC;
+  --color-line: rgba(24, 84, 60, 0.09);
+  --color-line-strong: rgba(24, 84, 60, 0.18);
+  --color-surface: #FFFFFF;
+  --color-surface-2: #EDF3EF;
+  --color-surface-3: #DCE5DF;
+  --color-bg: #FBFDFC;
+  --color-white: #FFFFFF;
+  --color-success: #16A34A;
+  --color-success-soft: #DCFCE7;
+  --color-warning: #D97706;
+  --color-warning-soft: #FEF3C7;
+  --color-warning-text: #92400E;
+  --color-danger: #DC2626;
+  --color-danger-hover: #B91C1C;
+  --color-danger-soft: #FEF2F2;
+  --color-danger-line: rgba(220, 38, 38, 0.30);
+  --color-danger-action-hover: rgba(220, 38, 38, 0.06);
+  --color-control-stop: #5B6470;
+  --color-control-stop-hover: #46505B;
+  --color-scrim: rgba(20, 71, 55, 0.50);
+  --color-command-scrim: rgba(20, 71, 55, 0.40);
+  --color-focus-halo: rgba(14, 159, 110, 0.12);
+  --color-grid-line: rgba(14, 159, 110, 0.035);
+
+  /* Typography: local system fonts only. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-size-1: 11px;
+  --font-size-2: 12px;
+  --font-size-3: 13px;
+  --font-size-4: 14px;
+  --font-size-5: 16px;
+  --font-size-6: 20px;
+  --font-size-display: 32px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.2;
+  --line-height-row: 1.35;
+  --line-height-title: 1.4;
+  --line-height-body: 1.6;
+  --tracking-display: -0.025em;
+  --tracking-title: -0.01em;
+  --tracking-normal: 0;
+
+  /* 4px spacing grid. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Base radii and semantic radius aliases. */
+  --radius-1: 6px;
+  --radius-2: 8px;
+  --radius-3: 12px;
+  --radius-pill: 999px;
+  --radius-chip: var(--radius-1);
+  --radius-control: var(--radius-2);
+  --radius-card: var(--radius-3);
+  --radius-dialog: var(--radius-3);
+
+  /* Elevation and focus */
+  --shadow-card: 0 1px 2px rgba(20, 71, 55, 0.04), 0 8px 24px rgba(20, 71, 55, 0.06);
+  --shadow-card-hover: 0 4px 16px rgba(20, 71, 55, 0.06);
+  --shadow-composer: 0 4px 32px rgba(24, 84, 60, 0.06), 0 1px 0 rgba(255, 255, 255, 0.70) inset;
+  --shadow-dialog: 0 20px 40px rgba(0, 0, 0, 0.12);
+  --focus-width: 2px;
+  --focus-offset: 2px;
+
+  /* Motion */
+  --duration-control: 120ms;
+  --duration-ui: 150ms;
+  --easing-ui: ease;
+
+  /* Layer order is the contract; large values keep migration safe. */
+  --z-base: 0;
+  --z-raised: 5;
+  --z-sticky: 20;
+  --z-popover: 1000;
+  --z-tour: 9000;
+  --z-overlay: 10000;
+  --z-modal: 12000;
+  --z-modal-popover: 14000;
+  --z-command: 16000;
+  --z-toast: 20000;
+
+  /* Semantic component layer */
+  --text-body: var(--color-ink);
+  --text-heading: var(--color-ink);
+  --text-secondary: var(--color-ink-2);
+  --text-muted: var(--color-muted);
+  --text-faint: var(--color-faint);
+  --surface-app: var(--color-bg);
+  --surface-card: var(--color-surface);
+  --surface-subtle: var(--color-surface-2);
+  --surface-raised: var(--color-surface);
+  --line-default: var(--color-line);
+  --line-strong: var(--color-line-strong);
+  --control-primary-bg: var(--color-brand);
+  --control-primary-bg-hover: var(--color-brand-hover);
+  --control-primary-text: var(--color-white);
+  --control-secondary-bg: var(--color-surface);
+  --control-secondary-bg-hover: var(--color-surface-2);
+  --control-secondary-text: var(--color-ink);
+  --control-danger-bg-hover: var(--color-danger-action-hover);
+  --control-danger-text: var(--color-danger);
+  --status-success-bg: var(--color-success-soft);
+  --status-success-text: var(--color-success);
+  --status-warning-bg: var(--color-warning-soft);
+  --status-warning-text: var(--color-warning-text);
+  --status-danger-bg: var(--color-danger-soft);
+  --status-danger-text: var(--color-danger);
+
+  /* Compatibility aliases for gradual migration. */
+  --bg: var(--color-bg);
+  --surface: var(--color-surface);
+  --surface-2: var(--color-surface-2);
+  --surface-3: var(--color-surface-3);
+  --text: var(--color-ink);
+  --text-2: var(--color-ink-2);
+  --text-3: var(--color-muted);
+  --muted: var(--color-muted);
+  --border: var(--color-line);
+  --border-strong: var(--color-line-strong);
+  --primary: var(--color-brand);
+  --primary-hover: var(--color-brand-hover);
+  --primary-soft: var(--color-brand-soft);
+  --primary-text: var(--color-brand-hover);
+  --success: var(--color-success);
+  --success-soft: var(--color-success-soft);
+  --warn: var(--color-warning);
+  --danger: var(--color-danger);
+  --danger-hover: var(--color-danger-hover);
+  --control-stop: var(--color-control-stop);
+  --control-stop-hover: var(--color-control-stop-hover);
+}

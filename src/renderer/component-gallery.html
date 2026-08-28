@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CogSeed 首版组件预览</title>
+  <link rel="stylesheet" href="./tokens.css" />
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./ui-components.css" />
+  <link rel="stylesheet" href="./component-gallery.css" />
+</head>
+<body class="component-gallery-body">
+  <div class="gallery-shell">
+    <aside class="gallery-rail" aria-label="组件预览导航">
+      <div class="gallery-brand">
+        <img src="../resources/icons/logo.png" alt="" draggable="false" />
+        <div>
+          <strong>CogSeed</strong>
+          <span>交付基准 / v0.1</span>
+        </div>
+      </div>
+
+      <div class="gallery-gate">
+        <span class="gallery-gate__eyebrow">当前 Gate</span>
+        <strong>状态矩阵可逐项验收</strong>
+        <span>真实 token · CSS · 原生 JS</span>
+      </div>
+
+      <nav class="gallery-nav">
+        <a href="#foundations"><span>FND</span>基础标尺</a>
+        <a href="#page-header"><span>PH</span>PageHeader</a>
+        <a href="#buttons"><span>BTN</span>Button</a>
+        <a href="#icon-buttons"><span>IB</span>IconButton</a>
+        <a href="#form-controls"><span>FRM</span>Input · Select · Form</a>
+        <a href="#empty-states"><span>EMP</span>EmptyState</a>
+        <a href="#modals"><span>MOD</span>Modal</a>
+        <a href="#automation"><span>AUTO</span>自动化组合态</a>
+      </nav>
+
+      <div class="gallery-coverage" aria-label="首版范围">
+        <span>首版范围</span>
+        <strong>9 / 9 已定义</strong>
+        <small>本页不证明真实业务页面已经迁移。</small>
+      </div>
+    </aside>
+
+    <main class="gallery-main">
+      <header class="gallery-intro">
+        <div class="gallery-intro__copy">
+          <span class="gallery-kicker">SPIKE / UX QUALITY BASELINE</span>
+          <h1>不是看起来像组件，<br />而是每个状态都能被勾选。</h1>
+          <p>本页直接加载 Renderer 的生产 token、组件 CSS 与原生 JS。产品在这里确认目标态，研发在这里核对实现，最终验收仍回到真实 Electron 页面。</p>
+        </div>
+        <dl class="gallery-intro__facts">
+          <div><dt>视觉基线</dt><dd>收敛现有 CogSeed</dd></div>
+          <div><dt>首个样板</dt><dd>自动化</dd></div>
+          <div><dt>禁止进入</dt><dd>React · Google Fonts</dd></div>
+        </dl>
+      </header>
+
+      <section class="gallery-section" id="foundations">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">FND</span>
+          <div><h2>基础标尺</h2><p>只展示本轮已裁决且会被首版组件使用的值。</p></div>
+        </div>
+        <div class="gallery-foundation-grid">
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>颜色语义</strong><span>品牌 ≠ 成功</span></div>
+            <div class="gallery-swatches">
+              <div><i class="is-brand"></i><span>品牌操作<code>#0E9F6E</code></span></div>
+              <div><i class="is-success"></i><span>完成成功<code>#16A34A</code></span></div>
+              <div><i class="is-warning"></i><span>需要注意<code>#FEF3C7</code></span></div>
+              <div><i class="is-danger"></i><span>危险与失败<code>#FEF2F2</code></span></div>
+            </div>
+          </article>
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>字号与节奏</strong><span>正文不小于 11px</span></div>
+            <div class="gallery-type-scale">
+              <p class="is-size-6">20 / 页面强调标题</p>
+              <p class="is-size-5">16 / 页面与弹窗标题</p>
+              <p class="is-size-4">14 / 正文与表单</p>
+              <p class="is-size-3">13 / 按钮与说明</p>
+              <p class="is-size-2">12 / 元数据</p>
+              <p class="is-size-1">11 / 最小辅助信息</p>
+            </div>
+          </article>
+          <article class="gallery-specimen gallery-specimen--wide">
+            <div class="gallery-specimen__label"><strong>间距、圆角与层级</strong><span>4px 栅格 · 6/8/12 · 顺序是契约</span></div>
+            <div class="gallery-foundation-row">
+              <div class="gallery-space-scale" aria-label="间距标尺">
+                <i class="s1"></i><i class="s2"></i><i class="s3"></i><i class="s4"></i><i class="s5"></i><i class="s6"></i>
+              </div>
+              <div class="gallery-radius-scale" aria-label="圆角标尺">
+                <i class="r1">6</i><i class="r2">8</i><i class="r3">12</i><i class="rp">∞</i>
+              </div>
+              <code class="gallery-layer-order">base &lt; popover &lt; modal &lt; modal-popover &lt; command &lt; toast</code>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="gallery-section" id="page-header">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">PH</span>
+          <div><h2>PageHeader</h2><p>标题、数量和页面操作保持在同一行；不提供副标题插槽，所有操作统一为 secondary / sm。</p></div>
+        </div>
+        <div class="gallery-stack" id="page-header-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="buttons">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">BTN</span>
+          <div><h2>Button</h2><p>4 个角色 × 2 个尺寸 × 6 个可核对状态，不暴露 padding、字号或圆角。</p></div>
+        </div>
+        <div class="gallery-matrix-wrap" id="button-matrix"></div>
+      </section>
+
+      <section class="gallery-section" id="icon-buttons">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">IB</span>
+          <div><h2>IconButton</h2><p>图标来自统一图标集；缺少 accessible name 时组件直接拒绝渲染。</p></div>
+        </div>
+        <div class="gallery-matrix-wrap" id="icon-button-matrix"></div>
+      </section>
+
+      <section class="gallery-section" id="form-controls">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">FRM</span>
+          <div><h2>Input · Select · Form</h2><p>所有 Select 统一使用原项目 AiSelect；同一套行为覆盖简单选项、说明、图标与弹窗浮层。</p></div>
+        </div>
+        <div class="gallery-form-audit">
+          <strong>采用策略</strong>
+          <span>原生 Input / Textarea：兼容 <code>.form-input</code></span>
+          <span>所有 Select：统一使用现有 AiSelect</span>
+          <span>简单场景只传 label/value；复杂场景按需增加 hint/icon</span>
+        </div>
+        <div class="gallery-control-grid">
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>Input / Textarea</strong><span>默认 · 悬停 · 焦点 · 禁用 · 只读 · 错误</span></div>
+            <div class="gallery-control-states" id="input-control-states"></div>
+          </article>
+          <article class="gallery-specimen">
+            <div class="gallery-specimen__label"><strong>Select / AiSelect</strong><span>默认 · 焦点 · 禁用 · 错误 · 带说明</span></div>
+            <div class="gallery-control-states" id="select-control-states"></div>
+          </article>
+          <article class="gallery-specimen gallery-specimen--wide">
+            <div class="gallery-specimen__label"><strong>复合 Form</strong><span>字段语义、两列布局、局部错误与统一操作区</span></div>
+            <div class="gallery-form-demo" id="form-composition-specimen"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="gallery-section" id="empty-states">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">EMP</span>
+          <div><h2>EmptyState</h2><p>A 安静告知、B 解释原因、C 引导行动；C 型只能有一个主要操作。</p></div>
+        </div>
+        <div class="gallery-empty-grid" id="empty-state-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="modals">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">MOD</span>
+          <div><h2>Modal</h2><p>点击打开真实组件。请实际检查 ESC、Tab/Shift+Tab、滚动锁定、焦点返回与 Cmd/Ctrl+K。</p></div>
+        </div>
+        <div class="gallery-modal-launchers" id="modal-launchers"></div>
+        <div class="gallery-behavior-strip">
+          <span>ESC 关闭</span><span>焦点圈定</span><span>关闭后返回</span><span>背景锁定</span><span>内层浮层先关</span><span>Cmd+K 位于弹窗上方</span>
+        </div>
+      </section>
+
+      <section class="gallery-section" id="automation">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">AUTO</span>
+          <div><h2>自动化页面组合态</h2><p>组件不是孤立样式。这里用同一套组件核对列表、加载、空、失败四种页面结果。</p></div>
+        </div>
+        <div class="gallery-state-tabs" role="tablist" aria-label="自动化页面状态" id="automation-state-tabs"></div>
+        <div class="gallery-automation-frame" id="automation-preview"></div>
+      </section>
+
+      <footer class="gallery-footer">
+        <span>CogSeed UX Quality Spike</span>
+        <span>产品目标态 ≠ 正式实现、QA 或发布证明</span>
+      </footer>
+    </main>
+  </div>
+
+  <div class="gallery-command-overlay" id="gallery-command-overlay" hidden>
+    <div class="gallery-command" role="dialog" aria-modal="true" aria-label="全局搜索预览">
+      <span data-ui-icon="search" aria-hidden="true"></span>
+      <input id="gallery-command-input" type="text" placeholder="搜索任务与认知资产…" autocomplete="off" />
+      <button type="button" id="gallery-command-close" aria-label="关闭全局搜索"><span data-ui-icon="x"></span></button>
+    </div>
+  </div>
+
+  <script src="./modules/icons.js"></script>
+  <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-form.js"></script>
+  <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/ui-page-header.js"></script>
+  <script src="./modules/ui-modal.js"></script>
+  <script src="./modules/utils.js"></script>
+  <script src="./component-gallery.js"></script>
+</body>
+</html>

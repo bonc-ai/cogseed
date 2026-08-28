@@ -1,9 +1,9 @@
-// ─── Composer model chip + thinking-effort chip ───────────────────────
-// Injected into each composer bottom-bar, right-aligned next to the send
-// button. The model chip shows the current default model (first priority
-// entry) and opens a menu to promote any configured model. The effort
-// chip next to it picks the thinking strength (reasoning effort) for chat
-// calls; its options adapt to the current model's reasoning support.
+// ─── Composer model chip (model name + thinking effort) ───────────────
+// A single Codex-style chip injected into each composer bottom-bar,
+// right-aligned next to the send button. It shows the current default
+// model and thinking strength together ("model · effort") and opens one
+// menu to switch either. Effort options adapt to the model's reasoning
+// support.
 
 const _modelChipLog = createLogger('model-chip');
 
@@ -44,10 +44,10 @@ async function refreshModelChipEffort() {
   }
 }
 
-function _createModelChip(target) {
+function _createCombinedChip(target) {
   const chip = document.createElement('button');
   chip.type = 'button';
-  chip.className = 'model-chip';
+  chip.className = 'model-chip chat-model-effort-chip';
   chip.dataset.modelTarget = target;
   chip.hidden = true; // shown once entries exist
   const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
@@ -55,6 +55,8 @@ function _createModelChip(target) {
     : '';
   chip.innerHTML =
     '<span class="model-chip-label"></span>' +
+    '<span class="chat-model-effort-sep">·</span>' +
+    '<span class="effort-chip-label"></span>' +
     chevron;
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -63,101 +65,70 @@ function _createModelChip(target) {
   return chip;
 }
 
-function _createEffortChip(target) {
-  const chip = document.createElement('button');
-  chip.type = 'button';
-  chip.className = 'model-chip effort-chip';
-  chip.dataset.effortTarget = target;
-  chip.hidden = true; // shown once entries exist
-  const chevron = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-    ? window.uiIconHtml('chevron-down', 'model-chip-chevron')
-    : '';
-  chip.innerHTML =
-    '<span class="model-chip-label effort-chip-label"></span>' +
-    chevron;
-  chip.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _toggleEffortMenu(chip);
-  });
-  return chip;
-}
-
 function _mountModelChipInBar(bar, target) {
   if (!bar) return null;
-  const existing = Array.from(bar.querySelectorAll(`.model-chip[data-model-target="${target}"]`));
-  const chip = existing[0] || _createModelChip(target);
+  const existing = Array.from(bar.querySelectorAll(`.chat-model-effort-chip[data-model-target="${target}"]`));
+  const chip = existing[0] || _createCombinedChip(target);
   for (const duplicate of existing.slice(1)) duplicate.remove();
 
-  const effortExisting = Array.from(bar.querySelectorAll(`.effort-chip[data-effort-target="${target}"]`));
-  const effortChip = effortExisting[0] || _createEffortChip(target);
-  for (const duplicate of effortExisting.slice(1)) duplicate.remove();
-
-  // Right-aligned: model chip → effort chip → send button. The model chip
-  // owns the flex auto-space; both chips sit flush next to the send button.
+  // Right-aligned: combined chip → (mic) → send button. The chip owns the flex
+  // auto-space (margin-left: auto); the mic and send stay flush on its right.
   const sendBtn = bar.querySelector('.chat-send-btn');
-  if (sendBtn) {
-    if (effortChip.parentNode !== bar) bar.insertBefore(effortChip, sendBtn);
-    if (chip.parentNode !== bar || chip.nextElementSibling !== effortChip) {
-      bar.insertBefore(chip, effortChip);
+  const micBtn = bar.querySelector('.chat-stt-btn');
+  const anchor = micBtn || sendBtn;
+  if (anchor) {
+    if (chip.parentNode !== bar || chip.nextElementSibling !== anchor) {
+      bar.insertBefore(chip, anchor);
     }
   } else if (!chip.parentNode) {
     bar.appendChild(chip);
-    bar.appendChild(effortChip);
   }
   return chip;
 }
 
 function _modelChipRenderAll() {
-  document.querySelectorAll('.model-chip[data-model-target]').forEach((chip) => _modelChipRenderChip(chip));
-  document.querySelectorAll('.effort-chip[data-effort-target]').forEach((chip) => _modelChipRenderEffortChip(chip));
+  document.querySelectorAll('.chat-model-effort-chip[data-model-target]').forEach((chip) => _renderCombinedChip(chip));
 }
 
-function _modelChipRenderChip(chip) {
+function _renderCombinedChip(chip) {
   const current = _modelChipEntries[0];
-  if (!current) { chip.hidden = true; return; }
+  const labelEl = chip.querySelector('.model-chip-label');
+  if (!current) {
+    // 没有配置任何模型：不造假，显示一个空态入口，点击带用户去配置。
+    chip.hidden = false;
+    chip.classList.add('is-empty');
+    if (labelEl) labelEl.textContent = t('model_chip.empty_label');
+    chip.title = t('model_chip.empty_title');
+    return;
+  }
+  chip.classList.remove('is-empty');
   chip.hidden = false;
   const provider = current.providerLabel || current.provider || '';
   const model = current.modelName || current.model || '';
-  const labelEl = chip.querySelector('.model-chip-label');
-  // Single line, same height as the recipient/workspace chips. Only the
-  // model name is shown: provider names can be long (custom providers are
-  // often named after their API host), which would push the composer
-  // toolbar onto a second line. The full "provider · model" pair stays in
-  // the hover tooltip below.
+  const effortEl = chip.querySelector('.effort-chip-label');
+  // Only the model name + effort level are shown: provider names can be long
+  // (custom providers are often named after their API host), which would push
+  // the composer toolbar onto a second line. The full "provider · model" pair
+  // stays in the hover tooltip.
   if (labelEl) labelEl.textContent = model;
-  chip.title = t('model_chip.title', { provider, model });
-}
-
-function _modelChipRenderEffortChip(chip) {
-  const current = _modelChipEntries[0];
-  if (!current) { chip.hidden = true; return; }
-  chip.hidden = false;
-  const labelEl = chip.querySelector('.effort-chip-label');
-  const model = current.modelName || current.model || '';
-  if (labelEl) labelEl.textContent = t('model_effort.label', { level: t('model_effort.' + _modelChipEffort) });
+  if (effortEl) effortEl.textContent = t('model_effort.' + _modelChipEffort);
   const supports = _modelSupportsThinking(model);
+  const modelTitle = t('model_chip.title', { provider, model });
   chip.title = supports
-    ? t('model_effort.title')
-    : t('model_effort.unsupported_title');
+    ? modelTitle + ' ' + t('model_effort.title')
+    : modelTitle + ' ' + t('model_effort.unsupported_title');
   chip.classList.toggle('is-unsupported', !supports);
 }
 
-function _toggleEffortMenu(anchor) {
-  const old = document.getElementById('model-effort-menu');
-  if (old) { _closeModelMenu(); return; }
+function _renderEffortOptions(container) {
   const current = _modelChipEntries[0];
   if (!current) return;
   const supports = _modelSupportsThinking(current.modelName || current.model || '');
 
-  const menu = document.createElement('div');
-  menu.id = 'model-effort-menu';
-  menu.className = 'model-chip-menu';
-  anchor.classList.add('model-chip--open');
-
   const header = document.createElement('div');
   header.className = 'model-chip-menu-header';
   header.textContent = t('model_effort.menu_title');
-  menu.appendChild(header);
+  container.appendChild(header);
 
   _EFFORT_OPTIONS.forEach((level) => {
     const isActive = _modelChipEffort === level;
@@ -177,11 +148,8 @@ function _toggleEffortMenu(anchor) {
         if (level !== _modelChipEffort) _setModelChipEffort(level);
       });
     }
-    menu.appendChild(item);
+    container.appendChild(item);
   });
-
-  _positionModelMenu(menu, anchor);
-  _bindModelMenuDismiss(menu, anchor);
 }
 
 async function _setModelChipEffort(level) {
@@ -215,7 +183,8 @@ function _positionModelMenu(menu, anchor) {
 
 function _bindModelMenuDismiss(menu, anchor) {
   const onDocDown = (e) => {
-    if (!menu.contains(e.target) && !anchor.contains(e.target)) _closeModelMenu();
+    const sub = document.getElementById('model-chip-submenu');
+    if (!menu.contains(e.target) && !(sub && sub.contains(e.target)) && !anchor.contains(e.target)) _closeModelMenu();
   };
   const onKey = (e) => {
     if (e.key === 'Escape') { _closeModelMenu(); e.preventDefault(); }
@@ -226,18 +195,39 @@ function _bindModelMenuDismiss(menu, anchor) {
   document.addEventListener('keydown', onKey, true);
 }
 
+function _makeMenuTrigger(label, chevronIcon, onClick) {
+  const item = document.createElement('div');
+  item.className = 'model-chip-menu-item model-chip-menu-trigger';
+  item.innerHTML =
+    '<span class="model-chip-menu-main">' +
+    `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
+    '</span>' +
+    `<span class="model-chip-menu-trigger-chevron">${chevronIcon}</span>`;
+  item.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return item;
+}
+
 function _renderModelMenuRoot(menu, anchor) {
   menu.innerHTML = '';
-  const entries = _modelChipEntries;
+  const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
+    ? window.uiIconHtml('chevron-right', 'model-chip-menu-trigger-chevron-icon')
+    : '›';
 
+  // 主菜单只放两个入口：模型 / 思考强度。点哪个，才在右侧弹出对应的子菜单
+  // （用户只有明确点某一个时才展开，不默认平铺）。
+  menu.appendChild(_makeMenuTrigger(t('model_chip.menu_title'), chevronIcon, () => _openSubmenu(menu, 'model')));
+  menu.appendChild(_makeMenuTrigger(t('model_effort.menu_title'), chevronIcon, () => _openSubmenu(menu, 'effort')));
+}
+
+function _renderModelOptions(container) {
+  const entries = _modelChipEntries;
   const header = document.createElement('div');
   header.className = 'model-chip-menu-header';
   header.textContent = t('model_chip.menu_title');
-  menu.appendChild(header);
-
-  const chevronIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-    ? window.uiIconHtml('chevron-right', 'model-chip-menu-arrow-icon')
-    : '›';
+  container.appendChild(header);
 
   entries.forEach((entry, idx) => {
     const isDefault = idx === 0;
@@ -252,129 +242,55 @@ function _renderModelMenuRoot(menu, anchor) {
       (isDefault ? `<span class="model-chip-menu-default">${escapeHtml(t('model_chip.default_badge'))}</span>` : '') +
       '</span>' +
       `<span class="model-chip-menu-sub">${escapeHtml(provider)}</span>`;
-    // Expand button: shows every model this provider has configured, so the
-    // user can switch directly without leaving the menu.
-    const expand = document.createElement('button');
-    expand.type = 'button';
-    expand.className = 'model-chip-menu-arrow';
-    expand.innerHTML = chevronIcon;
-    expand.title = t('model_chip.expand_title');
-    expand.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _openProviderModels(menu, anchor, entry, idx);
-    });
-    item.appendChild(expand);
-
     item.addEventListener('click', () => {
       _closeModelMenu();
       if (!isDefault) _promoteModelEntry(entry);
     });
-    menu.appendChild(item);
+    container.appendChild(item);
   });
 }
 
-// Second level: all models of one provider. Picking one switches the
-// default entry to that model (and promotes the provider to rank 1).
-async function _openProviderModels(menu, anchor, entry, idx) {
-  menu.innerHTML = '';
-
-  const back = document.createElement('button');
-  back.type = 'button';
-  back.className = 'model-chip-menu-back';
-  const backIcon = (typeof window !== 'undefined' && typeof window.uiIconHtml === 'function')
-    ? window.uiIconHtml('chevron-left', 'model-chip-menu-back-icon')
-    : '‹ ';
-  back.innerHTML = backIcon + `<span>${escapeHtml(t('model_chip.back'))}</span>`;
-  back.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _renderModelMenuRoot(menu, anchor);
-    _positionModelMenu(menu, anchor);
-  });
-  menu.appendChild(back);
-
-  const header = document.createElement('div');
-  header.className = 'model-chip-menu-header';
-  header.textContent = entry.providerLabel || entry.provider || '';
-  menu.appendChild(header);
-
-  const loading = document.createElement('div');
-  loading.className = 'model-chip-menu-loading';
-  loading.textContent = t('model_chip.loading_models');
-  menu.appendChild(loading);
-  _positionModelMenu(menu, anchor);
-
-  let models = [];
-  try {
-    const res = await window.cogseed.invoke('auth.listModels', { provider: entry.provider });
-    models = (res && res.ok && Array.isArray(res.models)) ? res.models : [];
-  } catch (err) {
-    _modelChipLog.warn('list models failed', { error: (err && err.message) || String(err) });
-  }
-  // Menu may have been closed while loading.
-  if (!menu.isConnected) return;
-  loading.remove();
-
-  if (!models.length) {
-    const empty = document.createElement('div');
-    empty.className = 'model-chip-menu-loading';
-    empty.textContent = t('model_chip.no_models');
-    menu.appendChild(empty);
-    _positionModelMenu(menu, anchor);
-    return;
-  }
-
-  const currentModel = entry.modelName || entry.model || '';
-  models.forEach((m) => {
-    const id = String(m && typeof m === 'object' ? (m.id || m.name || '') : m || '');
-    if (!id) return;
-    const isCurrent = id === entry.model || id === currentModel;
-    const item = document.createElement('div');
-    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
-    item.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(m.name || m.id || id)}</span>` +
-      (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('model_chip.default_badge'))}</span>` : '') +
-      '</span>';
-    item.addEventListener('click', () => {
-      _closeModelMenu();
-      if (!isCurrent) _switchEntryModel(entry, idx, id);
-      else if (idx !== 0) _promoteModelEntry(entry);
-    });
-    menu.appendChild(item);
-  });
-  _positionModelMenu(menu, anchor);
+function _closeSubmenu() {
+  const sub = document.getElementById('model-chip-submenu');
+  if (sub) sub.remove();
 }
 
-// Switch the default model: update this entry's model, then promote the
-// entry to rank 1 so the change takes effect immediately.
-async function _switchEntryModel(entry, idx, modelId) {
-  try {
-    const up = await window.cogseed.invoke('auth.updateEntryModel', {
-      entryId: entry.entryId,
-      model: modelId,
-    });
-    if (!up || !up.ok) {
-      _modelChipLog.warn('switch model failed', { error: up && up.error });
-      return;
-    }
-    if (idx !== 0) {
-      const orderedIds = [
-        entry.entryId,
-        ..._modelChipEntries.filter((e) => e.entryId !== entry.entryId).map((e) => e.entryId),
-      ];
-      await window.cogseed.invoke('auth.reorderEntries', { orderedIds });
-    }
-  } catch (err) {
-    _modelChipLog.warn('switch model failed', { error: (err && err.message) || String(err) });
+function _positionSubmenu(sub, menu) {
+  const rect = menu.getBoundingClientRect();
+  sub.style.position = 'fixed';
+  sub.style.zIndex = '12001';
+  const subWidth = sub.offsetWidth || 240;
+  const spaceRight = window.innerWidth - rect.right - 6;
+  if (spaceRight >= subWidth) {
+    sub.style.left = (rect.right + 6) + 'px';
+  } else {
+    sub.style.left = Math.max(8, rect.left - subWidth - 6) + 'px';
   }
-  await refreshModelChipEntries();
+  const subHeight = sub.offsetHeight || 200;
+  sub.style.top = Math.min(rect.top, window.innerHeight - subHeight - 8) + 'px';
+}
+
+function _openSubmenu(menu, kind) {
+  _closeSubmenu();
+  const sub = document.createElement('div');
+  sub.id = 'model-chip-submenu';
+  sub.className = 'model-chip-menu model-chip-submenu';
+  if (kind === 'model') _renderModelOptions(sub);
+  else _renderEffortOptions(sub);
+  document.body.appendChild(sub);
+  _positionSubmenu(sub, menu);
 }
 
 function _toggleModelMenu(anchor) {
+  const entries = _modelChipEntries;
+  if (!entries.length) {
+    // 空态：没有模型可切换，直接带用户去「设置 → 凭据」配置模型。
+    if (typeof setView === 'function') setView('settings');
+    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    return;
+  }
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
-  const entries = _modelChipEntries;
-  if (!entries.length) return;
 
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
@@ -387,7 +303,8 @@ function _toggleModelMenu(anchor) {
 }
 
 function _closeModelMenu() {
-  const menu = document.getElementById('model-chip-menu') || document.getElementById('model-effort-menu');
+  _closeSubmenu();
+  const menu = document.getElementById('model-chip-menu');
   if (!menu) return;
   document.removeEventListener('mousedown', menu._onDocDown, true);
   document.removeEventListener('keydown', menu._onKey, true);
