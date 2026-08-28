@@ -288,6 +288,66 @@ describe('add-field migration › 崩溃自愈（文件已 v2、台账仍 v1）'
   });
 });
 
+describe('add-field migration › 崩溃窗口 W1（备份已写、文件未写）', () => {
+  it('下次 detect 照常完整重跑，不因残留备份而错乱', async () => {
+    const { t } = await installV1WithUserData();
+    const before = t.readTemplateFileText(UID, 'probe');
+
+    // 模拟上一次迁移在「备份已复制、文件还没写」时崩溃：只留下一份备份
+    const staleBackup = t.backupTemplateFileForMigration(UID, 'probe')!;
+    expect(fs.existsSync(path.join(staleBackup, 'probe.md'))).toBe(true);
+    expect(t.readTemplateFileText(UID, 'probe')).toBe(before); // 活文件没被动过
+
+    CATALOG = catalogV2AddField();
+    const { applyRoleTemplateMigration } = await loadMig();
+    const res = await applyRoleTemplateMigration(UID, 'probe');
+
+    expect(res).toMatchObject({ ok: true, outcome: 'migrated', addedFields: 1 });
+    expect(fileVersion(t.readTemplateFileText(UID, 'probe'))).toBe('2.0.0');
+    expect(t.readTemplateFileText(UID, 'probe')).toContain('软件工程');
+  });
+
+  it('备份不会无限增长：超出保留份数的旧备份被清理', async () => {
+    const t = await loadFiles();
+    expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
+
+    // 反复「崩溃」留下 5 份备份
+    for (let i = 0; i < 5; i++) {
+      t.backupTemplateFileForMigration(UID, 'probe');
+      await new Promise((r) => setTimeout(r, 2)); // 让时间戳不同
+    }
+    expect(t.listMigrationBackupDirs(UID).length).toBe(5);
+
+    CATALOG = catalogV2AddField();
+    const { applyRoleTemplateMigration } = await loadMig();
+    expect((await applyRoleTemplateMigration(UID, 'probe')).outcome).toBe('migrated');
+
+    // 本次迁移自己那份 + 保留策略 → 不超过上限
+    expect(t.listMigrationBackupDirs(UID).length).toBeLessThanOrEqual(t.MAX_MIGRATION_BACKUPS);
+  });
+});
+
+describe('add-field migration › 台账自愈是幂等的', () => {
+  it('reconcileInstalledRoleTemplates 修完台账后再跑一次是 noop', async () => {
+    const t = await loadFiles();
+    expect((await t.installTemplateFile(UID, 'probe')).ok).toBe(true);
+
+    // 只把台账版本掰歪（文件仍是真实的 1.0.0）
+    const groups = t.readGroups(UID);
+    groups.find((g) => g.template_id === 'probe')!.template_version = '0.9.0';
+    const { writeGroups } = await import('../../../src/main/features/personal_ontology_groups');
+    writeGroups(UID, groups);
+
+    const { reconcileInstalledRoleTemplates } = await loadMig();
+    const first = await reconcileInstalledRoleTemplates(UID);
+    expect(first[0]).toMatchObject({ ok: true, outcome: 'ledger_repaired', toVersion: '1.0.0' });
+    expect(await ledgerVersion()).toBe('1.0.0');
+
+    const second = await reconcileInstalledRoleTemplates(UID);
+    expect(second[0]).toMatchObject({ ok: true, outcome: 'noop' });
+  });
+});
+
 describe('reconcileInstalledRoleTemplates', () => {
   it('逐模板独立：一个拒绝不影响另一个迁移成功', async () => {
     const t = await loadFiles();
