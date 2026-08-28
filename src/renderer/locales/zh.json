@@ -618,6 +618,7 @@
   "chat.pin_failed": "置顶状态更新失败，请重试或刷新任务列表。",
   "chat.plan_announce": "执行计划",
   "chat.collab_summary.title": "协作汇总",
+  "chat.collab_summary.system_label": "协作记录",
   "chat.collab_summary.all_done": "全部完成",
   "chat.collab_summary.cancelled": "已取消",
   "chat.collab_summary.failed": "失败",

@@ -161,7 +161,7 @@ import {
   type CoordinatorAccessRequest,
 } from "./coordinator_admission";
 import { buildRetryResumeModelText } from "./retry_resume";
-import { settleExternalAgentHandback } from "./collab_settle";
+import { settleExternalAgentHandback, finalizeCollabRunAfterCommanderTurn } from "./collab_settle";
 import { isAgentEnabled, readDisabledSets } from "../component_enabled";
 import { finalizeProducedFile } from "../produced_output_hooks";
 import { selectVisibleProducedFiles } from "../produced_files";
@@ -2643,6 +2643,17 @@ async function _enqueueBody(
     senderId: fromActorId,
     agentIds: to.filter((id) => !RESERVED_IDS.has(id)),
   });
+  // COGSEED-61: the commander's synthesis turn just persisted (turn-end
+  // message to the user) — if a synthesis wake marker is outstanding, the
+  // multi-agent run is complete and its collaboration summary should be
+  // generated right now, directly after the deliverable.
+  if (
+    fromActorId === COMMANDER_ID &&
+    to.includes(USER_ID) &&
+    params.turn_end === true
+  ) {
+    void finalizeCollabRunAfterCommanderTurn(uid, cid);
+  }
   // COGSEED-61: an external-agent inbound IS that agent's dispatch handback
   // (gateway agents execute outside the in-process nested-dispatch lifecycle,
   // so nothing else settles their prepared workflow step). Best-effort — the
