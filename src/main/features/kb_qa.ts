@@ -1,8 +1,8 @@
 /**
  * KB grounded Q&A (知识库模块 S2，计划书 v1.3 §S2).
  *
- * One-call stream for "基于知识库提问": runs `askMaterials` (COGSEED-39 ①
- * hybrid retrieval + threshold), then either streams an LLM answer grounded
+ * One-call stream for "基于知识库提问": runs `askMaterials` (hybrid
+ * retrieval + threshold), then either streams an LLM answer grounded
  * ONLY in the returned evidence (each claim carries a `path#chunk N`
  * citation anchor), or says plainly that the material set has nothing —
  * no fabrication, no web fallback (same protocol as ask_materials).
@@ -113,7 +113,7 @@ export async function* kbAskStream(
       userId,
       message: question,
       systemPrompt,
-      sessionId: `kb-${userId}`,
+      sessionId: `aside-kbqa-${userId}`,
     })) {
       if (event.type === 'delta' && event.text) {
         answer += event.text;

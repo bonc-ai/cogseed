@@ -198,9 +198,9 @@ describe('KB workbench (S1 skeleton)', () => {
   it('renders the S2 QA pane and fills the model dropdown from real config', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
-    await vi.waitFor(() => {
-      expect(els['kb-wb-right'].innerHTML).toContain('kb-qa-messages');
-    });
+    // 右区结构（解析卡 + 消息区）在初始 DOM 一次性构建，运行期不再重建
+    expect(els['kb-workbench'].innerHTML).toContain('kb-qa-messages');
+    expect(els['kb-workbench'].innerHTML).toContain('kb-wb-analysis-card');
     await vi.waitFor(() => {
       expect(els['kb-qa-model'].innerHTML).toContain('DeepSeek Chat');
     });

@@ -84,6 +84,41 @@ export function parseSummaryJson(text: string): { docs: KbDocPoint[]; oneLiner: 
   return { docs, oneLiner, mindmap: { root, kids } };
 }
 
+/** 收集当前库 ready 文档的要点行（kb_summary / kb_mindmap 共用同源）。 */
+export function collectReadyDocLines(
+  userId: string,
+  opts: { dir?: string | null; spaceId?: string | null },
+): string[] {
+  const dir = opts?.dir || null;
+  const spaceId = opts?.spaceId || null;
+  const isSpace = !!spaceId;
+  let ready;
+  if (isSpace) {
+    ready = spaceLibrary
+      .listFiles(userId, spaceId)
+      .filter((f) => f.status === 'ready')
+      .slice(0, FILES_CAP);
+  } else {
+    ready = kbVector
+      .listFiles(userId)
+      .filter((f) => f.status === 'ready')
+      .filter((f) => !dir || f.rel_path === dir || f.rel_path.startsWith(`${dir}/`))
+      .slice(0, FILES_CAP);
+  }
+  const docLines: string[] = [];
+  for (const f of ready) {
+    const chunks = isSpace
+      ? spaceLibrary.readFileChunks(userId, spaceId, f.rel_path)
+      : kbVector.readFileChunks(userId, f.rel_path);
+    const head = (chunks || [])
+      .slice(0, CHUNKS_PER_FILE)
+      .map((c) => (c.title ? `${c.title}：` : '') + String(c.content || '').slice(0, CHUNK_CHAR_CAP))
+      .join('\n');
+    docLines.push(`## ${f.rel_path}\n${head.slice(0, DOC_CHAR_CAP)}`);
+  }
+  return docLines;
+}
+
 export async function kbSummarize(
   userId: string,
   opts: { dir?: string | null; spaceId?: string | null },
@@ -123,24 +158,14 @@ export async function kbSummarize(
     return degraded;
   }
 
-  const docLines: string[] = [];
-  for (const f of ready) {
-    const chunks = isSpace
-      ? spaceLibrary.readFileChunks(userId, spaceId, f.rel_path)
-      : kbVector.readFileChunks(userId, f.rel_path);
-    const head = (chunks || [])
-      .slice(0, CHUNKS_PER_FILE)
-      .map((c) => (c.title ? `${c.title}：` : '') + String(c.content || '').slice(0, CHUNK_CHAR_CAP))
-      .join('\n');
-    docLines.push(`## ${f.rel_path}\n${head.slice(0, DOC_CHAR_CAP)}`);
-  }
+  const docLines = collectReadyDocLines(userId, { dir, spaceId });
 
   try {
     const res = await deps.complete({
       userId,
       message: `请整理以下知识库文档要点：\n\n${docLines.join('\n\n')}`,
       systemPrompt: SUMMARY_SYSTEM_PROMPT,
-      sessionId: `kb-summary-${userId}`,
+      sessionId: `aside-kbsummary-${userId}`,
     });
     if (!res.ok) throw new Error(res.error || 'model failed');
     const parsed = parseSummaryJson(res.text);

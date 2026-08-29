@@ -1,39 +1,50 @@
-// ─── 知识库生态外壳（rail + 子视图容器）— classic script (window.renderKbEco) ───
-// 计划书 v1.3 §四.1：总入口 = 侧边栏「自动化」后「知识库」按钮 → 进入知识库生态，
-// 生态内 52px rail（知识库/笔记/发现/浏览/Agent/菜单）细分各子视图。
-// S1：知识库=已落地（绿点）；笔记/发现=S4（灰点）；浏览/Agent/菜单=预留（灰点）。
+// ─── 知识库生态外壳（顶部横向工具栏 + 子视图容器）— classic script ───
+// 计划书 v1.3 §四.1：总入口 = 侧边栏「自动化」后「知识库」按钮 → 进入知识库生态。
+// v2（按产品评审建议）：移除 52px 图标竖栏 → 6 个入口迁移为**第二栏顶部的横向
+// 工具栏**（图标+文字，可切紧凑「仅图标」，localStorage 记忆），释放横向空间。
 (function () {
+  // 只保留已落地入口（知识库/笔记/发现）；浏览/Agent/菜单为预留项，不展示避免误导。
   const ECO_NAV = [
     { key: 'kb', icon: 'book-open', label: '知识库', status: 'ok' },
     { key: 'notes', icon: 'file-text', label: '笔记', status: 'ok' },
     { key: 'discover', icon: 'sparkles', label: '发现', status: 'ok' },
-    { key: 'browse', icon: 'globe', label: '浏览 · 预留', status: 'soon' },
   ];
-  const ECO_TAIL = [
-    { key: 'agent', icon: 'brain-circuit', label: 'Agent 工作台 · 预留', status: 'soon' },
-    { key: 'menu', icon: 'settings', label: '菜单 · 预留', status: 'soon' },
-  ];
+  const COMPACT_KEY = 'cogseed.kb.eco.compact';
+  let _compact = false;
+  try { _compact = localStorage.getItem(COMPACT_KEY) === '1'; } catch (_) { /* ignore */ }
 
   function _kbIcon(name) {
     if (typeof window.uiIconHtml === 'function') {
-      return window.uiIconHtml(name, 'kb-rail-icon');
+      return window.uiIconHtml(name, 'kb-eco-icon');
     }
-    return '<span class="kb-rail-icon">◈</span>';
+    return '<span class="kb-eco-icon">◈</span>';
+  }
+
+  function _mainLabel(label) {
+    return String(label).split(' · ')[0];
   }
 
   function _navBtn(item, active) {
-    return `<button type="button" class="kb-rail-btn${active ? ' active' : ''}" data-kb-eco="${item.key}"
+    return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
       title="${item.label}" aria-label="${item.label}">
-      <span class="kb-sdot is-${item.status}"></span>${_kbIcon(item.icon)}</button>`;
+      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span></button>`;
+  }
+
+  function _applyCompact() {
+    document.querySelectorAll('.kb-eco').forEach((el) => el.classList.toggle('kb-eco--compact', _compact));
+    const btn = document.getElementById('kb-eco-compact');
+    if (btn) btn.title = _compact ? '切换为「图标 + 文字」' : '切换为「仅图标」';
   }
 
   function renderKbEco() {
     const host = document.getElementById('kb-view');
     if (!host || host.querySelector('.kb-eco')) return;
     const nav = ECO_NAV.map((b, i) => _navBtn(b, i === 0)).join('');
-    const tail = ECO_TAIL.map((b) => _navBtn(b, false)).join('');
     host.innerHTML = `<div class="kb-eco">
-      <nav class="kb-rail">${nav}<div class="kb-rail-spacer"></div>${tail}</nav>
+      <div class="kb-eco-topnav">
+        <div class="kb-eco-tabs">${nav}</div>
+        <button type="button" class="kb-eco-compact" id="kb-eco-compact" title="切换为「仅图标」">≡</button>
+      </div>
       <div class="kb-eco-body">
         <div class="kb-workbench" id="kb-workbench"></div>
         <div class="kb-eco-pane" id="kb-notes" hidden></div>
@@ -43,6 +54,12 @@
     host.querySelectorAll('[data-kb-eco]').forEach((btn) => {
       btn.addEventListener('click', () => _activateEco(btn.dataset.kbEco));
     });
+    document.getElementById('kb-eco-compact')?.addEventListener('click', () => {
+      _compact = !_compact;
+      try { localStorage.setItem(COMPACT_KEY, _compact ? '1' : '0'); } catch (_) { /* ignore */ }
+      _applyCompact();
+    });
+    _applyCompact();
   }
 
   function _activateEco(key) {
@@ -76,9 +93,9 @@
       }
       return;
     }
-    const item = [...ECO_NAV, ...ECO_TAIL].find((b) => b.key === key);
+    const item = ECO_NAV.find((b) => b.key === key);
     if (typeof uiToast === 'function') {
-      uiToast(`「${item ? item.label : key}」模块预留`, { variant: 'info' });
+      uiToast(`「${item ? _mainLabel(item.label) : key}」模块预留`, { variant: 'info' });
     }
   }
 

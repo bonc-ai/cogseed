@@ -21,6 +21,7 @@ import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
+import * as kbMindmap from '../features/kb_mindmap';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
@@ -3871,6 +3872,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { files: results };
   },
 
+  // 导入整个文件夹：目录选择器 → 递归收集白名单文件 → 按目录结构镜像导入到库。
+  'contexts.pickAndUploadDir': async ({ targetDir } = {}) => {
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const target = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      if (contexts.hasHiddenContextPathSegment(target)) {
+        results.push({ ok: false, name: f.rel, target, reason: 'hidden' });
+        continue;
+      }
+      try {
+        const r = await contexts.importContextFileFromPath(target, f.abs);
+        results.push({ name: f.rel, target, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
+  },
+
   'contexts.mkdir': async ({ path }) => {
     return contexts.createContextDir(path || '');
   },
@@ -3945,6 +3978,68 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       },
     });
     return res;
+  },
+
+  // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
+  'kb.mindmap': async ({ dir, spaceId, force }, ctx) => {
+    const res = await kbMindmap.kbMindmap(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
+  'kb.mindmap.save': async ({ key, root }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k || !root || typeof root.label !== 'string') return { ok: false };
+    kbMindmap.saveMindmap(k, root as never);
+    return { ok: true, savedAt: kbMindmap.listMindmaps().find((m) => m.key === k)?.savedAt ?? Date.now() };
+  },
+  'kb.mindmap.list': async () => {
+    return { ok: true, items: kbMindmap.listMindmaps() };
+  },
+  'kb.mindmap.load': async ({ key }, ctx) => {
+    const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
+    return { ok: root !== null, root };
+  },
+
+  // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
+  'kb.mindmap.exportPdf': async ({ html }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(source);
+      await win.loadURL(dataUrl);
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出脑图 PDF',
+        defaultPath: `mindmap-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      console.error('[kb.mindmap.exportPdf] failed:', err);
+      return { ok: false };
+    }
   },
 
   // ── Knowledge base (vector store) ──
