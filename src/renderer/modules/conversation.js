@@ -9410,7 +9410,18 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     // '(stopped)' in en, '（已中断）' in zh).
     const isAbortStub = bodyText === '（已中断）' || bodyText === '(stopped)' || bodyText === '';
     const expanded = isAbortStub || isHtmlSnippet;
-    _renderPersistedProcess(msgDiv, message.process, { expanded });
+    // conv-core：chat-stream 面板接管完成态过程显示（统一过程 UI，老
+    // details 折叠卡退役）；面板函数不可用时走老路径兜底。面板默认展开
+    // （过程可见），不传 expanded。
+    if (typeof window.chatStreamRenderPersisted === 'function'
+        && window.chatStreamRenderPersisted(currentCid, msgDiv, message.process, {
+          actorName: String(message.from || message.actor || ''),
+          turnId: message.turn_id || (message._msg_id ? `m:${message._msg_id}` : undefined),
+        })) {
+      // 面板已重建，跳过老 details 渲染。
+    } else {
+      _renderPersistedProcess(msgDiv, message.process, { expanded });
+    }
   }
 
   if (autoScroll) {
@@ -15598,16 +15609,24 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         // _EXT_SLOW_SWITCH_MS）；有实际文本输出后由 delta 分支取消。
         _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
         const evt = data.event && data.event.stream ? data.event : null;
-        const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
         if (evt) _setProcessSummaryRuntimeFromEvent(target, evt);
-        _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);
+        // conv-core：chat-stream 过程面板接管该会话的过程显示后，老 rail
+        // 不再重复画行（面板卡片是唯一过程 UI；activity/慢检测逻辑保留）。
+        const _chatPanelOwns = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_chatPanelOwns) {
+          const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
+          _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);
+        }
         if (evt) _streamingUpdateActivityFromEvent(target, evt);
         else _streamingUpdateActivity(target, t('chat.activity_working'));
       } else if (data.type === 'event') {
         // 事件型 process（工具调用、状态等）同样证明活动但未输出文本。
         _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
         const before = _processLineCount(target);
-        _renderAgentEvent(target, data.event);
+        const _chatPanelOwnsEvt = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_chatPanelOwnsEvt) _renderAgentEvent(target, data.event);
         const evt = data.event || {};
         // 9.1 会话区域统一框架：把 plan 事件实时转发给顶部执行计划轨道
         // （plan-rail.js）。消息流内的 plan-announce 标签保持不变。
@@ -15615,9 +15634,11 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
             && typeof window.planRail.onPlanEvent === 'function') {
           window.planRail.onPlanEvent(cid, evt);
         }
-        const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
-        if (line && _processLineCount(target) <= before) {
-          _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));
+        if (!_chatPanelOwnsEvt) {
+          const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
+          if (line && _processLineCount(target) <= before) {
+            _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));
+          }
         }
         _streamingUpdateActivityFromEvent(target, evt);
       }
