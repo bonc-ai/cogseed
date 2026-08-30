@@ -221,4 +221,30 @@ describe('chat-stream module', () => {
     expect(card).toBeTruthy();
     expect(card!.innerHTML).not.toContain('cs-interaction-actions');
   });
+
+  it('bash 审批桥接：镜像卡挂同 cid 面板，dismiss 撤卡，无面板时跳过', () => {
+    const bridge = g.window.chatStreamBridgeBashPermission as (i: unknown) => void;
+    const dismiss = g.window.chatStreamDismissBashPermission as (id: string) => void;
+
+    // 无面板：静默跳过不抛错。
+    expect(() => bridge({ request_id: 'bp-1', cid: 'c-9', command: 'rm -rf x' })).not.toThrow();
+
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    bridge({
+      request_id: 'bp-1', cid: 'c-1', agent_name: 'coder',
+      command: 'rm -rf dist', reasons: ['dangerous_delete'],
+    });
+    const body = inserts[0].node.querySelector('.cs-panel-body')!;
+    const card = body.children.find((c) => (c.dataset as Record<string, string>).csInteraction === 'bp-1');
+    expect(card).toBeTruthy();
+    const detail = card!.children.find((c) => c.className.includes('cs-interaction-detail'));
+    expect(detail!.textContent).toContain('rm -rf dist');
+    const reasons = card!.children.find((c) => c.className.includes('cs-interaction-reasons'));
+    expect(reasons!.textContent).toContain('dangerous_delete');
+    const actions = card!.children.find((c) => c.className.includes('cs-interaction-actions'))!;
+    expect(actions.children).toHaveLength(3);
+
+    dismiss('bp-1');
+    expect(card!.className).toContain('closed');
+  });
 });
