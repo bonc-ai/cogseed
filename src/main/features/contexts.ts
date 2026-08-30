@@ -829,7 +829,17 @@ export function renameContextEntry(srcRel: string, dstRel: string): Result<{ src
   let src: string; let dst: string;
   try { src = resolvePath(srcRel, { mustExist: true }); dst = resolvePath(dstRel); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  if (fs.existsSync(dst)) return { ok: false, error: 'destination already exists' };
+  // 大小写不敏感文件系统（macOS 默认）上 fs.existsSync(dst) 会命中 src 自身：
+  // 仅大小写变体（test → Test）是同一条目（同 inode），应放行；真正的同名（不同 inode）才报已存在。
+  if (fs.existsSync(dst)) {
+    let sameEntry = false;
+    try {
+      const s = fs.statSync(src);
+      const d = fs.statSync(dst);
+      sameEntry = typeof s.ino === 'number' && s.ino !== 0 && s.ino === d.ino;
+    } catch { /* stat 失败视为不同条目 */ }
+    if (!sameEntry) return { ok: false, error: 'destination already exists' };
+  }
   const srcIsFile = fs.statSync(src).isFile();
   if (srcIsFile && !isAllowedName(path.basename(dst))) {
     return { ok: false, error: 'destination has unsupported extension' };

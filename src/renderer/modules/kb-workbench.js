@@ -12,7 +12,7 @@
     currentLib: '',
     dirStack: [], // 相对库根的目录路径段（'' = 库根）
     filter: '',
-    sort: 'name', // name | type
+    sort: 'updated', // updated | size | type | name（对齐 ima 排序维度）
     rendered: false,
     streamHandle: null,
     loading: false,
@@ -25,11 +25,13 @@
     mmBg: 'dots', // 背景 dots=点阵 | plain=纯白 | none=无
     mmSearchHits: new Set(), // 脑内搜索命中节点 idx
     mmViewMode: 'graph', // graph=图形 | outline=大纲
+    treeGroups: new Set(), // 已折叠的库树组名（个人知识库/共享知识库/订阅知识库）
     expanded: new Set(), // 已展开的文件夹相对路径（内联展开/折叠）
     spaces: [],
     spaceId: null,
     spaceName: '',
     spaceFiles: [],
+    filePerms: {}, // 共享库文件成员权限（会话内：path → view_export|view_only|hidden）
   };
 
   const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };
@@ -56,6 +58,8 @@
     send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
+    more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4M12 2v13"/>',
   };
   function _svg(name) {
     return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
@@ -152,35 +156,55 @@
   function _renderTree() {
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
-    const libsHtml = _state.libs.map((l) =>
-      `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
-        ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
-    ).join('');
-    const empty = libsHtml ? '' : '<div class="kb-tree-empty">暂无知识库，点击上方 ＋ 创建</div>';
-    const spacesHtml = _state.spaces.map((sp) =>
-      `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-        ${_icon('folder-open', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share">共享</span></div>`
-    ).join('');
-    tree.innerHTML = `
-      <div class="kb-tree-group">
-        <div class="kb-tree-group-label"><span>▶</span><span class="kb-tree-group-name">个人知识库</span><button type="button" class="kb-tree-plus" id="kb-new-lib" title="创建个人知识库">＋</button></div>
-        <div class="kb-tree-items">${libsHtml || empty}</div>
-      </div>
-      <div class="kb-tree-group">
-        <div class="kb-tree-group-label"><span>▶</span><span class="kb-tree-group-name">共享知识库</span></div>
-        <div class="kb-tree-items">${spacesHtml || '<div class="kb-tree-placeholder">暂无共享空间</div>'}</div>
-      </div>
-      <div class="kb-tree-group">
-        <div class="kb-tree-group-label"><span>▶</span><span class="kb-tree-group-name">订阅知识库</span></div>
-        <div class="kb-tree-items"><div class="kb-tree-placeholder">订阅 · S4 上线</div></div>
+    const groups = [
+      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.map((l) =>
+        `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
+          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
+      ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
+      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.map((sp) =>
+        `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
+          ${_icon('folder-open', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share">共享</span></div>`
+      ).join('') || '<div class="kb-tree-placeholder">暂无共享空间</div>' },
+      { key: '订阅知识库', label: '订阅知识库', plus: false, html: '<div class="kb-tree-placeholder">订阅 · S4 上线</div>' },
+    ];
+    const groupHtml = groups.map((g) => {
+      const open = !_state.treeGroups.has(g.key);
+      return `<div class="kb-tree-group">
+        <div class="kb-tree-group-label" data-kb-group="${_esc(g.key)}" title="${open ? '收起' : '展开'}">
+          <span class="kb-tree-caret">${open ? '▼' : '▶'}</span><span class="kb-tree-group-name">${_esc(g.label)}</span>
+          ${g.plus ? `<button type="button" class="kb-tree-plus" id="${_esc(g.btnId || 'kb-new-lib')}" title="${_esc(g.btnTitle || '创建')}">＋</button>` : ''}
+        </div>
+        ${open ? `<div class="kb-tree-items">${g.html}</div>` : ''}
       </div>`;
+    }).join('');
+    tree.innerHTML = groupHtml;
+    tree.querySelectorAll('[data-kb-group]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.kb-tree-plus')) return;
+        const key = el.dataset.kbGroup;
+        if (_state.treeGroups.has(key)) _state.treeGroups.delete(key);
+        else _state.treeGroups.add(key);
+        _renderTree();
+      });
+    });
     tree.querySelectorAll('[data-kb-lib]').forEach((el) => {
       el.addEventListener('click', () => _selectLib(el.dataset.kbLib));
+      // 个人库行：右键 → 重命名 / 删除
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        _kbRowMenu(el.dataset.kbLib, true, e.clientX, e.clientY);
+      });
     });
     tree.querySelectorAll('[data-kb-space]').forEach((el) => {
       el.addEventListener('click', () => _selectSpace(el.dataset.kbSpace));
+      // 共享库行：右键 → 重命名 / 删除
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
+      });
     });
-    tree.querySelector('#kb-new-lib')?.addEventListener('click', _createLib);
+    tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
+    tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
   }
 
   // 共享知识库（空间库）：spaces.files.status 只读浏览 + 问答/解析走 space 模式。
@@ -242,17 +266,341 @@
     }
   }
 
+  // ── 创建共享知识库（对标 ima：名称*/封面/描述/加入方式/成员权限/推荐问题）──
+  let _kbShareDialog = null;
+  let _kbShareCover = ''; // 封面 base64（'' = 默认）
+
+  function _createSharedSpace() {
+    _kbShareCloseDialog();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-dlg-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-dlg">
+        <button type="button" class="kb-share-dlg-close" title="关闭">✕</button>
+        <h3 class="kb-share-dlg-title">创建共享知识库</h3>
+        <div class="kb-share-form">
+          <div class="kb-share-field">
+            <label class="kb-share-label">名称 <span class="kb-share-required">*</span></label>
+            <input type="text" class="kb-share-input" id="kb-share-name" placeholder="请输入知识库名称" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="kb-share-field">
+            <label class="kb-share-label">封面</label>
+            <div class="kb-share-cover">
+              <div class="kb-share-cover-preview" id="kb-share-cover-preview"><span class="kb-share-cover-default">📁</span></div>
+              <button type="button" class="kb-share-cover-edit" id="kb-share-cover-edit" title="上传 / 更换知识库封面">✎</button>
+              <input type="file" id="kb-share-cover-file" accept="image/*" hidden />
+            </div>
+          </div>
+          <div class="kb-share-field">
+            <label class="kb-share-label">描述</label>
+            <textarea class="kb-share-input" id="kb-share-desc" rows="3" placeholder="为你的共享知识库填写描述"></textarea>
+          </div>
+          <div class="kb-share-field">
+            <label class="kb-share-label">加入方式</label>
+            <div class="kb-share-select-wrap">
+              <select class="kb-share-select" id="kb-share-join">
+                <option value="direct">直接加入</option>
+                <option value="apply">申请加入（管理员批准）</option>
+                <option value="invite">仅邀请加入</option>
+              </select>
+            </div>
+          </div>
+          <div class="kb-share-field">
+            <label class="kb-share-label">成员权限</label>
+            <div class="kb-share-perm" id="kb-share-perm">
+              <button type="button" class="kb-share-perm-trigger" id="kb-share-perm-trigger">
+                <span class="kb-share-perm-label" id="kb-share-perm-label">内容可查看和导出</span><span class="kb-share-caret">▾</span>
+              </button>
+              <div class="kb-share-perm-menu" id="kb-share-perm-menu" hidden>
+                <div class="kb-share-perm-item is-selected" data-perm="view_export">✓ 内容可查看和导出</div>
+                <div class="kb-share-perm-item" data-perm="view_only">内容可查看但不可导出</div>
+                <div class="kb-share-perm-item" data-perm="hidden">内容不可查看</div>
+              </div>
+            </div>
+          </div>
+          <div class="kb-share-field">
+            <label class="kb-share-label">设置推荐问题</label>
+            <textarea class="kb-share-input" id="kb-share-questions" rows="2" placeholder="为你的知识库预设推荐问题（每行一个）"></textarea>
+          </div>
+        </div>
+        <div class="kb-share-dlg-actions">
+          <button type="button" class="kb-share-btn kb-share-btn-ghost" id="kb-share-cancel">取消</button>
+          <button type="button" class="kb-share-btn kb-share-btn-primary" id="kb-share-ok" disabled>确定</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    _kbShareDialog = overlay;
+    _kbShareCover = '';
+
+    const nameInput = overlay.querySelector('#kb-share-name');
+    const okBtn = overlay.querySelector('#kb-share-ok');
+    const syncOk = () => { okBtn.disabled = !String(nameInput.value || '').trim(); };
+    nameInput.addEventListener('input', syncOk);
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !okBtn.disabled) _kbShareSubmit();
+    });
+
+    // 封面上传
+    const coverFile = overlay.querySelector('#kb-share-cover-file');
+    overlay.querySelector('#kb-share-cover-edit').addEventListener('click', (e) => { e.stopPropagation(); coverFile.click(); });
+    coverFile.addEventListener('change', () => {
+      const f = coverFile.files && coverFile.files[0];
+      if (!f) return;
+      if (f.size > 3 * 1024 * 1024) {
+        if (typeof uiToast === 'function') uiToast('封面图片过大，请选择 3MB 以内的图片', { variant: 'warning' });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        _kbShareCover = String(reader.result || '');
+        const preview = overlay.querySelector('#kb-share-cover-preview');
+        preview.innerHTML = `<img src="${_esc(_kbShareCover)}" alt="cover" />`;
+        preview.classList.add('has-img');
+      };
+      reader.readAsDataURL(f);
+    });
+
+    // 成员权限下拉
+    const permMenu = overlay.querySelector('#kb-share-perm-menu');
+    overlay.querySelector('#kb-share-perm-trigger').addEventListener('click', (e) => {
+      e.stopPropagation();
+      permMenu.hidden = !permMenu.hidden;
+    });
+    permMenu.querySelectorAll('.kb-share-perm-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        permMenu.querySelectorAll('.kb-share-perm-item').forEach((x) => x.classList.remove('is-selected'));
+        item.classList.add('is-selected');
+        overlay.querySelector('#kb-share-perm-label').textContent = item.textContent.replace(/^\s*✓\s*/, '');
+        permMenu.hidden = true;
+      });
+    });
+
+    overlay.querySelector('#kb-share-cancel').addEventListener('click', _kbShareCloseDialog);
+    overlay.querySelector('.kb-share-dlg-close').addEventListener('click', _kbShareCloseDialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) _kbShareCloseDialog(); });
+    overlay.addEventListener('click', (e) => {
+      if (!e.target.closest('#kb-share-perm')) permMenu.hidden = true;
+    });
+    okBtn.addEventListener('click', _kbShareSubmit);
+    setTimeout(() => nameInput.focus(), 50);
+  }
+
+  async function _kbShareSubmit() {
+    const overlay = _kbShareDialog;
+    if (!overlay) return;
+    const name = String(overlay.querySelector('#kb-share-name').value || '').trim();
+    if (!name) return;
+    const desc = String(overlay.querySelector('#kb-share-desc').value || '').trim();
+    const joinMode = overlay.querySelector('#kb-share-join').value;
+    const permItem = overlay.querySelector('.kb-share-perm-item.is-selected');
+    const memberPermission = permItem ? permItem.dataset.perm : 'view_export';
+    const questions = String(overlay.querySelector('#kb-share-questions').value || '')
+      .split(/\n+/).map((q) => q.trim()).filter(Boolean).slice(0, 10);
+    const okBtn = overlay.querySelector('#kb-share-ok');
+    okBtn.disabled = true;
+    okBtn.textContent = '创建中…';
+    try {
+      const res = await window.cogseed.invoke('spaces.create', {
+        name,
+        shared: true,
+        join_mode: joinMode,
+        member_permission: memberPermission,
+        description: desc || undefined,
+        cover: _kbShareCover || undefined,
+        recommended_questions: questions.length ? questions : undefined,
+      });
+      if (res && res.ok === false) throw new Error(res.error || 'create failed');
+      _kbShareCloseDialog();
+      if (typeof uiToast === 'function') uiToast('共享知识库已创建', { variant: 'success', timeoutMs: 2000 });
+      await _loadAll();
+      if (res && res.space && res.space.space_id) _selectSpace(res.space.space_id);
+    } catch (err) {
+      _log.warn('create shared space failed', err);
+      okBtn.disabled = false;
+      okBtn.textContent = '确定';
+      if (typeof uiToast === 'function') uiToast('创建失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  function _kbShareCloseDialog() {
+    if (_kbShareDialog) {
+      _kbShareDialog.remove();
+      _kbShareDialog = null;
+    }
+  }
+
   // 空态：居中插图 + 大号主按钮（保留库头部骨架，不一片白板）
+  // 空库（左侧无库）→ 创建知识库；库内无内容 → 「去这里添加」引导打开导入菜单
   function _emptyStateHtml(kind) {
     const createBtn = kind === 'lib'
       ? '<button type="button" class="kb-empty-btn" id="kb-empty-create">＋ 创建知识库</button>'
-      : '<button type="button" class="kb-empty-btn" id="kb-empty-create">＋ 创建知识库</button>';
+      : '<button type="button" class="kb-empty-btn" id="kb-empty-add">＋ 添加内容</button><button type="button" class="kb-empty-btn kb-empty-btn-ghost" id="kb-empty-import-dir">＋ 上传文件夹</button>';
     return `<div class="kb-empty">
       <div class="kb-empty-illus">${_icon('book-open', 'kb-empty-ico')}</div>
-      <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '这个知识库还没有内容'}</div>
-      <div class="kb-empty-sub">${kind === 'lib' ? '创建一个知识库，或导入资料开始使用' : '导入文件，让 AI 帮你解析与问答'}</div>
-      ${createBtn}
+      <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '知识库什么也没有，去这里添加'}</div>
+      <div class="kb-empty-sub">${kind === 'lib' ? '创建一个知识库，或导入资料开始使用' : '支持文件、文件夹、网页、笔记等多种方式导入'}</div>
+      <div class="kb-empty-actions">${createBtn}</div>
     </div>`;
+  }
+
+  // 空态按钮绑定：空库 → 创建；库内空 → 「添加内容」打开导入菜单 + 上传文件夹
+  function _bindEmptyActions(isSpace) {
+    const create = document.getElementById('kb-empty-create');
+    if (create) create.addEventListener('click', _createLib);
+    const add = document.getElementById('kb-empty-add');
+    if (add) add.addEventListener('click', () => {
+      const b = document.getElementById('kb-wb-import');
+      if (b) b.click();
+    });
+    const imp = document.getElementById('kb-empty-import');
+    if (imp) imp.addEventListener('click', isSpace ? _importSpaceFiles : _importFiles);
+    const impDir = document.getElementById('kb-empty-import-dir');
+    if (impDir) impDir.addEventListener('click', isSpace ? _importSpaceDir : _importDir);
+  }
+
+  // 共享库（空间）上传文件：spaces.files.pickAndUpload
+  async function _importSpaceFiles() {
+    if (!_state.spaceId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    try {
+      const res = await window.cogseed.invoke('spaces.files.pickAndUpload', { spaceId: _state.spaceId, targetDir: '' });
+      if (res && res.ok === false) {
+        if (typeof uiToast === 'function') uiToast('上传失败：' + _esc(res.error || 'unknown'), { variant: 'error' });
+        return;
+      }
+      if (typeof uiToast === 'function') uiToast('已上传，开始索引…', { variant: 'success', timeoutMs: 1500 });
+      _loadSpaceFiles(_state.spaceId);
+    } catch (err) {
+      _log.warn('space upload failed', err);
+      if (typeof uiToast === 'function') uiToast('上传取消或失败', { variant: 'warning' });
+    }
+  }
+
+  // 共享库（空间）上传文件夹：spaces.files.pickAndUploadDir（镜像目录结构导入）
+  async function _importSpaceDir() {
+    if (!_state.spaceId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    try {
+      const res = await window.cogseed.invoke('spaces.files.pickAndUploadDir', { spaceId: _state.spaceId, targetDir: '' });
+      if (!res) return;
+      if (res.canceled) return;
+      const imported = Number(res.imported) || 0;
+      const scanned = Number(res.scanned) || 0;
+      if (typeof uiToast === 'function') {
+        uiToast(imported ? `已导入 ${imported} 个文件（扫描 ${scanned}）` : '所选文件夹没有可导入的文件', {
+          variant: imported ? 'success' : 'warning', timeoutMs: 2500,
+        });
+      }
+      _loadSpaceFiles(_state.spaceId);
+    } catch (err) {
+      _log.warn('space import dir failed', err);
+      if (typeof uiToast === 'function') uiToast('导入文件夹失败', { variant: 'error' });
+    }
+  }
+
+  // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
+  async function _kbNewFolder() {
+    const name = typeof uiPrompt === 'function' ? await uiPrompt('新建文件夹名称：', '') : window.prompt('新建文件夹名称：', '');
+    if (!name || !name.trim()) return;
+    const clean = String(name).trim().replace(/[\\/:*?"<>|]/g, '_');
+    try {
+      if (_state.spaceId) {
+        const res = await window.cogseed.invoke('spaces.files.mkdir', { spaceId: _state.spaceId, path: clean });
+        if (res && res.ok === false) throw new Error(res.error || 'mkdir failed');
+      } else {
+        const target = `${_state.currentLib || ''}/${clean}`;
+        const res = await window.cogseed.invoke('contexts.mkdir', { path: target });
+        if (res && res.ok === false) throw new Error(res.error || 'mkdir failed');
+        _state.expanded.add(_state.currentLib || '');
+      }
+      if (typeof uiToast === 'function') uiToast('文件夹已创建', { variant: 'success', timeoutMs: 1500 });
+      _loadAll();
+    } catch (err) {
+      _log.warn('new folder failed', err);
+      if (typeof uiToast === 'function') uiToast('创建失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  // 导入菜单「新建笔记」：在库内创建一篇 Markdown 笔记
+  async function _kbNewNote() {
+    const title = typeof uiPrompt === 'function' ? await uiPrompt('笔记标题：', '') : window.prompt('笔记标题：', '');
+    const name = (title && title.trim()) ? String(title).trim() : `笔记-${Date.now()}`;
+    const fileName = `${name.replace(/[\\/:*?"<>|]/g, '_')}.md`;
+    const content = `# ${name}\n\n`;
+    try {
+      if (_state.spaceId) {
+        const res = await window.cogseed.invoke('spaces.files.createText', { spaceId: _state.spaceId, name: fileName });
+        if (res && res.ok === false) throw new Error(res.error || 'create failed');
+      } else {
+        const path = `${_state.currentLib || ''}/${fileName}`;
+        const res = await window.cogseed.invoke('contexts.write', { path, content });
+        if (res && res.ok === false) throw new Error(res.error || 'create failed');
+      }
+      if (typeof uiToast === 'function') uiToast(`笔记「${fileName}」已创建`, { variant: 'success', timeoutMs: 2000 });
+      _loadAll();
+    } catch (err) {
+      _log.warn('new note failed', err);
+      if (typeof uiToast === 'function') uiToast('创建笔记失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  // 导入菜单「网页链接」：抓取网页 → 存为 Markdown 到当前库
+  async function _kbImportWebUrl() {
+    const url = typeof uiPrompt === 'function' ? await uiPrompt('输入网页链接（http/https）：', 'https://') : window.prompt('输入网页链接：', 'https://');
+    if (!url || !url.trim()) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    if (typeof uiToast === 'function') uiToast('正在抓取网页内容…', { variant: 'info' });
+    try {
+      const res = await window.cogseed.invoke('kb.importWebUrl', {
+        dir: _state.spaceId ? null : (_state.currentLib || null),
+        spaceId: _state.spaceId || null,
+        url: String(url).trim(),
+      });
+      if (!res || res.ok === false) {
+        if (typeof uiToast === 'function') uiToast('导入失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+        return;
+      }
+      if (typeof uiToast === 'function') uiToast(`已导入网页：${res.fileName || ''}`, { variant: 'success', timeoutMs: 2500 });
+      if (_state.spaceId) _loadSpaceFiles(_state.spaceId); else _loadAll();
+    } catch (err) {
+      _log.warn('web import failed', err);
+      if (typeof uiToast === 'function') uiToast('导入失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  // 导入菜单「个人知识库」：把其他个人库的内容复制进当前库
+  async function _kbMigrateLib() {
+    if (!_state.currentLib) {
+      if (typeof uiToast === 'function') uiToast('请先选择目标知识库', { variant: 'warning' });
+      return;
+    }
+    const sources = (_state.libs || []).map((l) => l.name).filter((n) => n !== _state.currentLib);
+    if (!sources.length) {
+      if (typeof uiToast === 'function') uiToast('没有其他可迁移的个人知识库', { variant: 'warning' });
+      return;
+    }
+    const prompt = typeof uiPrompt === 'function' ? uiPrompt : (m, d) => Promise.resolve(window.prompt(m, d));
+    const src = await prompt(`从哪个个人知识库迁移内容到「${_state.currentLib}」？\n可选：${sources.join('、')}`, '');
+    if (!src || !src.trim()) return;
+    const clean = String(src).trim();
+    if (!sources.includes(clean)) {
+      if (typeof uiToast === 'function') uiToast('源知识库不存在', { variant: 'warning' });
+      return;
+    }
+    try {
+      const res = await window.cogseed.invoke('kb.migrateLib', { from: clean, to: _state.currentLib });
+      if (!res || res.ok === false) {
+        if (typeof uiToast === 'function') uiToast('迁移失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+        return;
+      }
+      if (typeof uiToast === 'function') uiToast(`已从「${clean}」迁移到「${_state.currentLib}」，正在重新索引…`, { variant: 'success', timeoutMs: 2500 });
+      await _loadAll();
+      window.cogseed.invoke('kb.reconcile', {}).catch(() => {});
+    } catch (err) {
+      _log.warn('migrate lib failed', err);
+      if (typeof uiToast === 'function') uiToast('迁移失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
   }
 
   // ── 文件列表 ──
@@ -269,17 +617,51 @@
     const q = _state.filter.trim().toLowerCase();
     const parts = [];
     if (lib) _renderNodeRows(parts, lib.children || [], 0, lib.path || _state.currentLib, q);
-    list.innerHTML = parts.join('') || _emptyStateHtml('file');
-    if (!parts.length) document.getElementById('kb-empty-create')?.addEventListener('click', _createLib);
+    // 底部：没有更多内容了（对齐 ima 列表结束提示）
+    const endTip = parts.length ? '<div class="kb-files-end">没有更多内容了</div>' : '';
+    list.innerHTML = (parts.join('') + endTip) || _emptyStateHtml('file');
+    if (!parts.length) _bindEmptyActions(false);
 
     list.querySelectorAll('[data-kb-dir]').forEach((el) => {
       el.addEventListener('click', () => _toggleDir(el.dataset.kbDir));
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        _kbRowMenu(el.dataset.kbDir, true, e.clientX, e.clientY);
+      });
     });
     list.querySelectorAll('[data-kb-file]').forEach((el) => {
       el.addEventListener('click', () => _openFile(el.dataset.kbFile));
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+      });
+      const moreBtn = el.querySelector('.kb-mini-btn[title="更多"]');
+      if (moreBtn) moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+      });
     });
     _renderCount(lib ? _countFiles(lib) : 0);
     _renderRight();
+  }
+
+  // 文件排序（对齐 ima：更新时间/大小/类型/名称）
+  function _sortFiles(list) {
+    const s = _state.sort;
+    const arr = list.slice();
+    if (s === 'updated') arr.sort((a, b) => (Number(b.mtime) || 0) - (Number(a.mtime) || 0));
+    else if (s === 'size') arr.sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0));
+    else if (s === 'type') arr.sort((a, b) => _extLabel(a.name).localeCompare(_extLabel(b.name)) || String(a.name).localeCompare(String(b.name)));
+    else arr.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return arr;
+  }
+
+  // 日期（mtime 秒 → M/D）
+  function _fmtDate(ms) {
+    if (!ms) return '';
+    const d = new Date(Number(ms) * 1000);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getMonth() + 1}/${d.getDate()}`;
   }
 
   function _renderNodeRows(parts, children, level, parentPath, q) {
@@ -288,14 +670,9 @@
       .filter((n) => n.type === 'dir')
       .filter((n) => !q || n.name.toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name));
-    const files = (children || [])
+    const files = _sortFiles((children || [])
       .filter((n) => n.type === 'file')
-      .filter((n) => !q || n.name.toLowerCase().includes(q));
-    if (_state.sort === 'type') {
-      files.sort((a, b) => _extLabel(a.name).localeCompare(_extLabel(b.name)) || a.name.localeCompare(b.name));
-    } else {
-      files.sort((a, b) => a.name.localeCompare(b.name));
-    }
+      .filter((n) => !q || n.name.toLowerCase().includes(q)));
     for (const d of dirs) {
       const path = `${parentPath}/${d.name}`;
       const open = _state.expanded.has(path);
@@ -317,6 +694,7 @@
         <span class="kb-file-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
         <span class="kb-file-name">${_esc(f.name)}</span>
         <span class="kb-file-meta">${_esc(_extLabel(f.name))}</span>
+        <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${_statusChip(rel)}
         <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
       </div>`);
@@ -331,10 +709,8 @@
 
   function _renderSpaceFiles(list) {
     const q = _state.filter.trim().toLowerCase();
-    const files = _state.spaceFiles
-      .filter((f) => !q || (f.name || f.path || '').toLowerCase().includes(q))
-      .slice()
-      .sort((a, b) => (a.name || a.path).localeCompare(b.name || b.path));
+    const files = _sortFiles(_state.spaceFiles
+      .filter((f) => !q || (f.name || f.path || '').toLowerCase().includes(q)));
     let html = '';
     for (const f of files) {
       const status = f.status || 'pending';
@@ -347,22 +723,30 @@
         <span class="kb-file-icon is-${_extClass(f.name || f.path)}">${_extLabel(f.name || f.path)}</span>
         <span class="kb-file-name">${_esc(f.name || f.path)}</span>
         <span class="kb-file-meta">${_esc(_extLabel(f.name || f.path))}</span>
+        <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
         ${chip}
         <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
       </div>`;
     }
+    // 底部：没有更多内容了（对齐 ima 列表结束提示）
+    if (files.length) html += '<div class="kb-files-end">没有更多内容了</div>';
     if (!html) html = _emptyStateHtml('file');
     list.innerHTML = html;
-    document.getElementById('kb-empty-create')?.addEventListener('click', _createLib);
+    _bindEmptyActions(true);
     list.querySelectorAll('[data-kb-space-file]').forEach((el) => {
       el.addEventListener('click', () => {
         if (typeof uiToast === 'function') uiToast('空间库原文查看：后续版本支持', { variant: 'info' });
+      });
+      // 共享库文件右键：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除（对齐 ima）
+      el.addEventListener('contextmenu', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        _kbSpaceFileMenu(el.dataset.kbSpaceFile, e.clientX, e.clientY);
       });
     });
     const crumb = document.getElementById('kb-wb-crumb');
     if (crumb) crumb.hidden = true;
     const count = document.getElementById('kb-wb-count');
-    if (count) count.textContent = `内容(${files.length})`;
+    if (count) count.textContent = String(files.length);
     _renderRight();
   }
 
@@ -414,7 +798,7 @@
 
   function _renderCount(n) {
     const el = document.getElementById('kb-wb-count');
-    if (el) el.textContent = `内容(${n})`;
+    if (el) el.textContent = String(n);
   }
 
   function _openFile(relPath) {
@@ -449,14 +833,50 @@
   // ── 右区（S2：基于知识库问答；AI 解析卡 S3 填充）──
   function _renderRight() {
     const body = document.getElementById('kb-wb-right');
+    // 手动解析按钮：每次渲染右区恢复可点击（生成中由 _loadSummary 禁用）
+    const analyzeBtn = document.getElementById('kb-analyze-btn');
+    if (analyzeBtn) {
+      analyzeBtn.disabled = false;
+      if (!analyzeBtn.dataset.bound) {
+        analyzeBtn.dataset.bound = '1';
+        analyzeBtn.addEventListener('click', () => _loadSummary());
+      }
+    }
     const isSpace = !!_state.spaceId;
     const dispName = isSpace ? _state.spaceName : (_state.currentLib || '知识库');
     const nameEl = document.getElementById('kb-wb-lib-name');
     if (nameEl) nameEl.textContent = dispName;
     const cover = document.getElementById('kb-wb-lib-cover');
-    if (cover) cover.textContent = (dispName || '书').trim().charAt(0) || '书';
+    if (cover) cover.style.background = isSpace
+      ? 'linear-gradient(135deg, #BFF0DD, #7FDCB8)'
+      : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
     if (tagEl) tagEl.textContent = isSpace ? '共享知识库' : '个人知识库';
+    // 创建者（单用户客户端 = 本人）+ 描述（共享库有 description，否则占位提示）
+    const ownerEl = document.getElementById('kb-wb-owner-name');
+    if (ownerEl) ownerEl.textContent = '我';
+    const avatarEl = document.getElementById('kb-wb-owner-avatar');
+    if (avatarEl) avatarEl.textContent = (dispName || '我').trim().charAt(0);
+    const descEl = document.getElementById('kb-wb-lib-desc');
+    if (descEl) {
+      const sp = isSpace ? _state.spaces.find((x) => x.space_id === _state.spaceId) : null;
+      const desc = sp && sp.description ? String(sp.description) : '';
+      descEl.textContent = desc || '快来填写描述吧~';
+      descEl.classList.toggle('is-empty', !desc);
+    }
+    const membersEl = document.getElementById('kb-wb-members');
+    if (membersEl) {
+      // 成员入口仅共享知识库显示（个人知识库单用户，无成员概念）
+      membersEl.style.display = isSpace ? '' : 'none';
+      if (isSpace) {
+        membersEl.textContent = '1 加入';
+        if (!membersEl.dataset.bound) {
+          membersEl.dataset.bound = '1';
+          membersEl.style.cursor = 'pointer';
+          membersEl.addEventListener('click', () => _kbMembersDialog());
+        }
+      }
+    }
     const rightLib = document.getElementById('kb-wb-right-lib');
     if (rightLib) rightLib.textContent = dispName;
     if (!body) return;
@@ -468,7 +888,6 @@
       sub.textContent = `当前库：${_esc(dispName)} · ${count} 个内容`;
     }
     _maybeShowQaHint();
-    _loadSummary();
   }
 
   // ── AI 解析（S3：kb.summary → 逐文档要点 + 一句话总结 + 脑图骨架）──
@@ -477,7 +896,13 @@
     if (!card) return;
     const lib = _state.currentLib || '';
     const key = _state.spaceId ? `space:${_state.spaceId}` : lib;
-    if (_state.summaryLib === key) return; // 同一库已解析过（缓存命中）
+    // 手动触发：打开/切库不再自动跑 LLM（避免后台推理占满 CPU）
+    const btn = document.getElementById('kb-analyze-btn');
+    if (btn) btn.disabled = true; // 生成中禁用
+    if (_state.summaryLib === key) {
+      if (btn) btn.disabled = false;
+      return; // 同一库已解析过（缓存命中）
+    }
     _state.summaryLib = key;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
       card.innerHTML = '<div class="kb-wb-right-card-title">✨ AI 解析本知识库</div><div class="kb-wb-right-placeholder">解析服务不可用</div>';
@@ -494,10 +919,16 @@
       dir: _state.spaceId ? null : (lib || null),
       spaceId: _state.spaceId || null,
     })
-      .then((res) => { if (res) _renderAnalysis(res); })
+      .then((res) => {
+        const b2 = document.getElementById('kb-analyze-btn');
+        if (b2) b2.disabled = false;
+        if (res) _renderAnalysis(res);
+      })
       .catch(() => {
+        const b2 = document.getElementById('kb-analyze-btn');
+        if (b2) b2.disabled = false;
         const h = card.querySelector('.kb-wb-right-placeholder');
-        if (h) h.textContent = '解析失败，请稍后重试（点击 ⟳ 刷新）。';
+        if (h) h.textContent = '解析失败，请点击「✨ 生成 AI 解析」重试。';
       });
   }
 
@@ -1522,19 +1953,60 @@
         <section class="kb-wb-mid">
           <div class="kb-wb-mid-head">
             <div class="kb-wb-lib-head">
-              <div class="kb-wb-lib-cover" id="kb-wb-lib-cover">书</div>
+              <div class="kb-wb-lib-cover" id="kb-wb-lib-cover"><span class="kb-wb-cover-icon">📁</span></div>
               <div class="kb-wb-lib-meta">
                 <div class="kb-wb-lib-name" id="kb-wb-lib-name">知识库</div>
-                <div class="kb-wb-lib-sub"><span class="kb-wb-tag" id="kb-wb-lib-tag">个人知识库</span><span id="kb-wb-count">内容(0)</span></div>
+                <div class="kb-wb-lib-owner" id="kb-wb-lib-owner"><span class="kb-wb-owner-avatar" id="kb-wb-owner-avatar">我</span><span class="kb-wb-owner-name" id="kb-wb-owner-name">我</span></div>
+                <div class="kb-wb-lib-desc" id="kb-wb-lib-desc">快来填写描述吧~</div>
+                <div class="kb-wb-lib-sub">
+                  <span class="kb-wb-tag" id="kb-wb-lib-tag">个人知识库</span>
+                  <span class="kb-wb-members" id="kb-wb-members">1 加入</span>
+                </div>
+              </div>
+              <div class="kb-wb-lib-actions">
+                <button type="button" class="kb-wb-icon-btn" id="kb-wb-share" title="分享知识库">${_svg('share')}</button>
+                <div class="kb-wb-more">
+                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-more-btn" title="更多">${_svg('more')}</button>
+                  <div class="kb-wb-more-menu" id="kb-wb-more-menu" hidden>
+                    <div class="kb-wb-more-item" data-more="refresh">刷新</div>
+                    <div class="kb-wb-more-item" data-more="rename">重命名</div>
+                    <div class="kb-wb-more-item is-danger" data-more="delete">删除到回收站</div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="kb-wb-mid-sub">
-              <input id="kb-wb-search-input" placeholder="搜索库内文件…" autocomplete="off">
+              <div class="kb-wb-content-title">内容(<span id="kb-wb-count">0</span>)</div>
+              <input id="kb-wb-search-input" placeholder="搜索文档…" autocomplete="off">
               <div class="kb-wb-tools">
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-sort" title="排序：名称">${_svg('sort')}</button>
+                <div class="kb-wb-sort">
+                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-sort" title="排序">${_svg('sort')}</button>
+                  <div class="kb-wb-sort-menu" id="kb-wb-sort-menu" hidden>
+                    <div class="kb-wb-sort-item is-selected" data-sort="updated">✓ 更新时间</div>
+                    <div class="kb-wb-sort-item" data-sort="size">大小</div>
+                    <div class="kb-wb-sort-item" data-sort="type">类型</div>
+                    <div class="kb-wb-sort-item" data-sort="name">名称</div>
+                  </div>
+                </div>
                 <button type="button" class="kb-wb-icon-btn" id="kb-wb-refresh" title="刷新（重新索引）">${_svg('refresh')}</button>
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-import" title="导入文件">${_svg('upload')}</button>
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-import-dir" title="导入文件夹">${_icon('folder-open', 'kb-ico')}</button>
+                <div class="kb-wb-import-wrap">
+                  <button type="button" class="kb-wb-icon-btn" id="kb-wb-import" title="导入内容">${_svg('upload')}</button>
+                  <div class="kb-wb-import-menu" id="kb-wb-import-menu" hidden>
+                    <div class="kb-wb-import-item" data-imp="file">📄 本地文件</div>
+                    <div class="kb-wb-import-item" data-imp="dir">📁 本地文件夹</div>
+                    <div class="kb-wb-import-item" data-imp="kblib">📚 个人知识库</div>
+                    <div class="kb-wb-import-item" data-imp="url">🔗 网页链接</div>
+                    <div class="kb-wb-import-has-sub">
+                      <div class="kb-wb-import-item" data-imp="note">🗒 笔记 <span class="kb-import-caret">▸</span></div>
+                      <div class="kb-wb-import-sub" id="kb-wb-import-note-sub" hidden>
+                        <div class="kb-wb-import-item" data-imp="note-new">✏️ 新建笔记</div>
+                        <div class="kb-wb-import-item" data-imp="note-import">📥 导入笔记</div>
+                      </div>
+                    </div>
+                    <div class="kb-wb-import-item" data-imp="audio">🎙 录音纪要</div>
+                    <div class="kb-wb-import-item" data-imp="folder">🗂 新建文件夹</div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="kb-wb-crumb" id="kb-wb-crumb" hidden></div>
@@ -1547,7 +2019,7 @@
             <div class="kb-wb-right-card" id="kb-wb-analysis-card">
               <div class="kb-wb-right-card-title">✨ AI 解析本知识库</div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
-              <div class="kb-wb-right-placeholder">正在解析…</div>
+              <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>
             </div>
             <div class="kb-qa-messages" id="kb-qa-messages"></div>
           </div>
@@ -1626,14 +2098,97 @@
       _state.filter = e.target.value;
       _renderFiles();
     });
-    document.getElementById('kb-wb-sort')?.addEventListener('click', () => {
-      _state.sort = _state.sort === 'name' ? 'type' : 'name';
-      _renderFiles();
-      if (typeof uiToast === 'function') uiToast(`排序：${_state.sort === 'name' ? '名称' : '类型'}`, { variant: 'info' });
+    // 排序下拉（对齐 ima：更新时间/大小/类型/名称）
+    const sortMenu = document.getElementById('kb-wb-sort-menu');
+    document.getElementById('kb-wb-sort')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (sortMenu) sortMenu.hidden = !sortMenu.hidden;
+    });
+    document.querySelectorAll('.kb-wb-sort-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _state.sort = item.dataset.sort;
+        document.querySelectorAll('.kb-wb-sort-item').forEach((x) => x.classList.remove('is-selected'));
+        item.classList.add('is-selected');
+        if (sortMenu) sortMenu.hidden = true;
+        _renderFiles();
+        const label = { updated: '更新时间', size: '大小', type: '类型', name: '名称' }[_state.sort] || _state.sort;
+        if (typeof uiToast === 'function') uiToast(`排序：${label}`, { variant: 'info' });
+      });
+    });
+    // 分享 + 更多菜单
+    document.getElementById('kb-wb-share')?.addEventListener('click', () => {
+      if (typeof uiToast === 'function') uiToast('分享功能开发中（即将支持链接/邀请）', { variant: 'info' });
+    });
+    const moreMenu = document.getElementById('kb-wb-more-menu');
+    document.getElementById('kb-wb-more-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (moreMenu) moreMenu.hidden = !moreMenu.hidden;
+    });
+    document.querySelectorAll('.kb-wb-more-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (moreMenu) moreMenu.hidden = true;
+        const act = item.dataset.more;
+        if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast('已刷新', { variant: 'info' }); }
+        else if (act === 'rename') {
+          if (_state.spaceId) _kbRenameSpace(_state.spaceId);
+          else if (_state.currentLib) _kbRename(_state.currentLib, true);
+        }
+        else if (act === 'delete') {
+          if (_state.spaceId) _kbDeleteSpace(_state.spaceId);
+          else if (_state.currentLib) _kbDelete(_state.currentLib);
+        }
+        else if (typeof uiToast === 'function') uiToast('该操作暂不可用', { variant: 'info' });
+      });
     });
     document.getElementById('kb-wb-refresh')?.addEventListener('click', () => _loadAll());
-    document.getElementById('kb-wb-import')?.addEventListener('click', _importFiles);
-    document.getElementById('kb-wb-import-dir')?.addEventListener('click', _importDir);
+    // 导入按钮 → 多级导入菜单（对齐 ima：本地文件/文件夹/网页/笔记/新建文件夹等）
+    const importMenu = document.getElementById('kb-wb-import-menu');
+    const importNoteSub = document.getElementById('kb-wb-import-note-sub');
+    document.getElementById('kb-wb-import')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (importMenu) importMenu.hidden = !importMenu.hidden;
+    });
+    document.querySelectorAll('.kb-wb-import-item').forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const act = item.dataset.imp;
+        if (!act || act === 'note') return;
+        if (importMenu) importMenu.hidden = true;
+        const isSpace = !!_state.spaceId;
+        if (act === 'file') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
+        else if (act === 'dir') { if (isSpace) _importSpaceDir(); else _importDir(); }
+        else if (act === 'url') _kbImportWebUrl();
+        else if (act === 'kblib') _kbMigrateLib();
+        else if (act === 'note-new') _kbNewNote();
+        else if (act === 'note-import') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
+        else if (act === 'folder') _kbNewFolder();
+        else if (typeof uiToast === 'function') uiToast('该导入渠道即将上线', { variant: 'info' });
+      });
+    });
+    // 笔记 → 二级子菜单（悬浮展开 + 点击 toggle，向右弹出）
+    const noteWrap = importMenu ? importMenu.querySelector('.kb-wb-import-has-sub') : null;
+    if (noteWrap && importNoteSub) {
+      noteWrap.addEventListener('mouseenter', () => { importNoteSub.hidden = false; });
+      noteWrap.addEventListener('mouseleave', () => { importNoteSub.hidden = true; });
+      const noteToggle = noteWrap.querySelector('[data-imp="note"]');
+      if (noteToggle) {
+        noteToggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          importNoteSub.hidden = !importNoteSub.hidden;
+        });
+      }
+      importNoteSub.querySelectorAll('.kb-wb-import-item').forEach((item) => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const act = item.dataset.imp;
+          if (importMenu) importMenu.hidden = true;
+          if (act === 'note-new') _kbNewNote();
+          else if (act === 'note-import') { if (_state.spaceId) _importSpaceFiles(); else _importFiles(); }
+        });
+      });
+    }
     document.getElementById('kb-qa-send')?.addEventListener('click', () => _submitQa());
     document.getElementById('kb-qa-input')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1664,6 +2219,12 @@
       if (om) om.hidden = true;
       const lm = document.getElementById('kb-mm-layout-menu');
       if (lm) lm.hidden = true;
+      const sm = document.getElementById('kb-wb-sort-menu');
+      if (sm) sm.hidden = true;
+      const mm = document.getElementById('kb-wb-more-menu');
+      if (mm) mm.hidden = true;
+      const im = document.getElementById('kb-wb-import-menu');
+      if (im) im.hidden = true;
     });
     document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
       document.getElementById('kb-mm-overlay').hidden = true;
@@ -1831,6 +2392,328 @@
     } catch (err) {
       _log.warn('import failed', err);
       if (typeof uiToast === 'function') uiToast('导入取消或失败', { variant: 'warning' });
+    }
+  }
+
+  // ── 资料库管理能力并入知识库（方案 A：复用 contexts.* IPC，主进程零改动）──
+  // 新建目标目录：与导入一致（当前库根 / 内联展开的最新目录兜底）
+  // 同级重名检测：目标名称是否已存在于同一目录（重命名前预检查，避免 EEXIST 报错）
+  function _kbSiblingExists(parent, name) {
+    if (!parent) return (_state.tree || []).some((n) => n.name === name);
+    const lib = _findLibNode(_state.currentLib);
+    if (!lib) return false;
+    let node = lib;
+    for (const seg of String(parent).split('/').filter(Boolean)) {
+      if (seg === lib.name) continue; // 跳过库前缀
+      const next = (node.children || []).find((n) => n.name === seg);
+      if (!next) return false;
+      node = next;
+    }
+    return (node.children || []).some((n) => n.name === name);
+  }
+
+  // 知识库文件扩展名白名单（与主进程 contexts ALLOWED_EXTS 对齐，用于重命名预校验）
+  const _KB_ALLOWED_EXTS = new Set([
+    '.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.log',
+    '.html', '.htm', '.xml', '.toml', '.ini', '.conf',
+    '.py', '.pyi', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+    '.sh', '.bash', '.zsh', '.ps1', '.cmd', '.bat', '.rb', '.go', '.rs', '.java', '.kt',
+    '.c', '.cpp', '.cc', '.h', '.hpp', '.css', '.scss', '.less',
+    '.sql', '.graphql', '.gql',
+    '.pdf', '.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm',
+    '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  ]);
+  const _KB_FORBIDDEN_CHARS = /[\\/:*?"<>|]/;
+
+  // 重命名名字预校验：返回错误提示（'' 表示合法）
+  function _kbValidateName(name, isFile) {
+    if (_KB_FORBIDDEN_CHARS.test(name)) return '名称不能包含 / \\ : * ? " < > | 字符';
+    if (name.startsWith('.')) return '名称不能以 . 开头';
+    if (isFile) {
+      const ext = '.' + String(name).split('.').pop().toLowerCase();
+      if (!_KB_ALLOWED_EXTS.has(ext)) return '文件名需保留支持的扩展名（.md .txt .pdf .docx .xlsx .pptx 等）';
+    }
+    let w = 0;
+    for (const ch of name) w += /[\u4e00-\u9fff\uac00-\ud7af\u3040-\u30ff]/.test(ch) ? 2 : 1;
+    if (w > 100) return '名称过长，请缩短';
+    return '';
+  }
+
+  async function _kbRename(path, isDir) {
+    const cur = String(path || '').split('/').pop() || '';
+    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名：', cur) : window.prompt('重命名：', cur);
+    if (!next || !next.trim() || next.trim() === cur) return;
+    // 父路径：仅当 path 含斜杠时才取前缀；顶层条目（如库 "2"）父路径为空
+    const slashIdx = String(path || '').lastIndexOf('/');
+    const parent = slashIdx >= 0 ? String(path).slice(0, slashIdx) : '';
+    const newName = String(next).trim();
+    // 名字预校验：非法字符 / 点开头 / 文件扩展名 / 长度
+    const bad = _kbValidateName(newName, !isDir);
+    if (bad) {
+      if (typeof uiToast === 'function') uiToast('重命名失败：' + bad, { variant: 'warning' });
+      return;
+    }
+    const dst = parent ? `${parent}/${newName}` : newName;
+    // 预检查：同级已有同名条目 → 直接提示，不发 IPC
+    if (_kbSiblingExists(parent, newName)) {
+      if (typeof uiToast === 'function') uiToast('重命名失败：该名称已存在，请换一个名称', { variant: 'warning' });
+      return;
+    }
+    try {
+      const res = await window.cogseed.invoke('contexts.rename', { src: path, dst });
+      if (res && res.ok === false) {
+        const msg = String(res.error || '');
+        if (typeof uiToast === 'function') {
+          let friendly = null;
+          if (/already exists|exists|eexist|enotempty/i.test(msg)) friendly = '该名称已存在，请换一个名称';
+          else if (/unsupported extension/i.test(msg)) friendly = '文件名需保留支持的扩展名（.md .txt .pdf .docx 等）';
+          else if (/invalid character/i.test(msg)) friendly = '名称含非法字符';
+          else if (/invalid path segment/i.test(msg)) friendly = '名称无效，请检查是否包含非法路径';
+          else if (/hidden entries are reserved/i.test(msg)) friendly = '名称不能以 . 开头';
+          else if (/too long/i.test(msg)) friendly = '名称过长，请缩短';
+          else if (/eacces|eperm/i.test(msg)) friendly = '没有权限重命名';
+          uiToast(friendly ? '重命名失败：' + friendly : '重命名失败：' + _esc(msg), { variant: 'error' });
+        }
+        return;
+      }
+      // 重命名的是当前选中的库 → 同步选中态，避免跳回第一个库
+      if (!_state.spaceId && _state.currentLib === path) _state.currentLib = dst;
+      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      _loadAll();
+    } catch (err) { _log.warn('rename failed', err); if (typeof uiToast === 'function') uiToast('重命名失败', { variant: 'error' }); }
+  }
+
+  async function _kbDelete(path) {
+    const name = String(path || '').split('/').pop() || path || '';
+    let ok = false;
+    try {
+      ok = typeof uiConfirmDanger === 'function'
+        ? await uiConfirmDanger({ title: '删除到回收站', message: `确认删除「${name}」？删除后可在回收站恢复。`, dangerLabel: '删除', cancelLabel: '取消' })
+        : window.confirm(`确认删除「${name}」？`);
+    } catch (_) { return; }
+    if (!ok) return;
+    try {
+      const res = await window.cogseed.invoke('contexts.delete', { path });
+      if (res && res.ok === false) { if (typeof uiToast === 'function') uiToast('删除失败：' + _esc(res.error || 'unknown'), { variant: 'error' }); return; }
+      if (typeof uiToast === 'function') uiToast('已删除到回收站（设置 → 回收站可恢复）', { variant: 'success', timeoutMs: 3000 });
+      _loadAll();
+    } catch (err) { _log.warn('delete failed', err); if (typeof uiToast === 'function') uiToast('删除失败', { variant: 'error' }); }
+  }
+
+  function _kbReveal(path) {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    window.cogseed.invoke('contexts.reveal', { path }).catch(() => {});
+  }
+
+  // 右键 / ⋯ 菜单（body 级浮层）
+  let _kbMenuEl = null;
+  function _kbMenuShow(items, x, y) {
+    _kbMenuHide();
+    const el = document.createElement('div');
+    el.className = 'kb-ctx-menu';
+    el.innerHTML = items.map((it) =>
+      `<button type="button" class="kb-ctx-menu-item${it.danger ? ' is-danger' : ''}" data-kb-ctx="${_esc(String(it.key))}">${_esc(it.label)}</button>`
+    ).join('');
+    el.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+    el.style.top = Math.min(y, window.innerHeight - items.length * 34 - 12) + 'px';
+    document.body.appendChild(el);
+    _kbMenuEl = el;
+    el.addEventListener('click', (e) => {
+      const btn = e.target.closest('.kb-ctx-menu-item');
+      if (!btn) return;
+      const key = btn.dataset.kbCtx;
+      _kbMenuHide();
+      const item = items.find((i) => i.key === key);
+      if (item && item.fn) item.fn();
+    });
+    setTimeout(() => document.addEventListener('click', _kbMenuHideOnce, { once: true }), 0);
+  }
+  function _kbMenuHideOnce() { _kbMenuHide(); }
+  function _kbMenuHide() {
+    if (_kbMenuEl) { _kbMenuEl.remove(); _kbMenuEl = null; }
+  }
+
+  function _kbRowMenu(path, isDir, x, y) {
+    const items = [
+      { key: 'rename', label: '✏️ 重命名', fn: () => _kbRename(path, isDir) },
+      { key: 'delete', label: '🗑 删除到回收站', danger: true, fn: () => _kbDelete(path) },
+    ];
+    if (!isDir) items.push({ key: 'reveal', label: '📂 在文件夹中显示', fn: () => _kbReveal(path) });
+    _kbMenuShow(items, x, y);
+  }
+
+  // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
+  function _kbSpaceMenu(spaceId, x, y) {
+    _kbMenuShow([
+      { key: 'rename', label: '✏️ 重命名', fn: () => _kbRenameSpace(spaceId) },
+      { key: 'members', label: '👥 知识库成员', fn: () => _kbMembersDialog(spaceId) },
+      { key: 'delete', label: '🗑 删除共享知识库', danger: true, fn: () => _kbDeleteSpace(spaceId) },
+    ], x, y);
+  }
+
+  // ── 共享库文件右键菜单（对齐 ima：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除）──
+  function _kbSpaceFileMenu(path, x, y) {
+    _kbMenuHide();
+    const el = document.createElement('div');
+    el.className = 'kb-ctx-menu kb-file-menu';
+    el.innerHTML = `
+      <div class="kb-ctx-menu-item" data-fm="pin">📌 置顶</div>
+      <div class="kb-ctx-menu-item" data-fm="tag">🏷 编辑标签</div>
+      <div class="kb-ctx-menu-item" data-fm="rename">✏️ 重命名</div>
+      <div class="kb-ctx-menu-item kb-has-sub" data-fm="perm">🔐 成员权限 <span class="kb-import-caret">▸</span>
+        <div class="kb-ctx-sub" data-sub="perm">
+          <div class="kb-ctx-menu-item is-selected" data-perm="view_export">✓ 内容可查看和导出</div>
+          <div class="kb-ctx-menu-item" data-perm="view_only">内容可查看但不可导出</div>
+          <div class="kb-ctx-menu-item" data-perm="hidden">内容不可查看</div>
+        </div>
+      </div>
+      <div class="kb-ctx-menu-item" data-fm="move">➡ 移动到</div>
+      <div class="kb-ctx-menu-item" data-fm="copy">⧉ 复制到</div>
+      <div class="kb-ctx-menu-item is-danger" data-fm="del">🗑 删除</div>`;
+    el.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+    el.style.top = Math.min(y, window.innerHeight - 300) + 'px';
+    document.body.appendChild(el);
+    _kbMenuEl = el;
+    const close = () => { el.remove(); _kbMenuEl = null; };
+    const permLabel = { view_export: '内容可查看和导出', view_only: '内容可查看但不可导出', hidden: '内容不可查看' };
+    el.addEventListener('click', (e) => {
+      const subItem = e.target.closest('.kb-ctx-sub .kb-ctx-menu-item');
+      if (subItem) {
+        e.stopPropagation();
+        const perm = subItem.dataset.perm;
+        _state.filePerms = _state.filePerms || {};
+        _state.filePerms[path] = perm;
+        subItem.closest('.kb-ctx-sub').querySelectorAll('.kb-ctx-menu-item').forEach((x) => x.classList.remove('is-selected'));
+        subItem.classList.add('is-selected');
+        close();
+        if (typeof uiToast === 'function') uiToast(`已设置成员权限：${permLabel[perm] || perm}`, { variant: 'success', timeoutMs: 2000 });
+        return;
+      }
+      const item = e.target.closest('.kb-ctx-menu-item');
+      if (!item) return;
+      const act = item.dataset.fm;
+      close();
+      if (act === 'pin') { if (typeof uiToast === 'function') uiToast('置顶：即将上线', { variant: 'info' }); }
+      else if (act === 'tag') { if (typeof uiToast === 'function') uiToast('编辑标签：即将上线', { variant: 'info' }); }
+      else if (act === 'rename') _kbRenameSpaceFile(path);
+      else if (act === 'move') { if (typeof uiToast === 'function') uiToast('移动到：即将上线', { variant: 'info' }); }
+      else if (act === 'copy') { if (typeof uiToast === 'function') uiToast('复制到：即将上线', { variant: 'info' }); }
+      else if (act === 'del') _kbDeleteSpaceFile(path);
+    });
+    const hasSub = el.querySelector('.kb-has-sub');
+    if (hasSub) {
+      const sub = hasSub.querySelector('.kb-ctx-sub');
+      hasSub.addEventListener('mouseenter', () => { sub.classList.add('show'); });
+      hasSub.addEventListener('mouseleave', () => { sub.classList.remove('show'); });
+    }
+    setTimeout(() => document.addEventListener('click', function once(e) {
+      if (!el.contains(e.target)) { close(); document.removeEventListener('click', once); }
+    }), 0);
+  }
+
+  async function _kbRenameSpaceFile(path) {
+    const cur = String(path || '').split('/').pop() || '';
+    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名文件：', cur) : window.prompt('重命名文件：', cur);
+    if (!next || !next.trim() || next.trim() === cur) return;
+    try {
+      const res = await window.cogseed.invoke('spaces.files.rename', { spaceId: _state.spaceId, oldName: path, name: String(next).trim() });
+      if (res && res.ok === false) throw new Error(res.error || 'rename failed');
+      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      _loadSpaceFiles(_state.spaceId);
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast('重命名失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  async function _kbDeleteSpaceFile(path) {
+    const name = String(path || '').split('/').pop() || path || '';
+    let ok = false;
+    try {
+      ok = typeof uiConfirmDanger === 'function'
+        ? await uiConfirmDanger({ title: '删除文件', message: `确认删除「${name}」？`, dangerLabel: '删除', cancelLabel: '取消' })
+        : window.confirm(`确认删除「${name}」？`);
+    } catch (_) { return; }
+    if (!ok) return;
+    try {
+      const res = await window.cogseed.invoke('spaces.files.delete', { spaceId: _state.spaceId, name: path });
+      if (res && res.ok === false) throw new Error(res.error || 'delete failed');
+      if (typeof uiToast === 'function') uiToast('已删除', { variant: 'success', timeoutMs: 1500 });
+      _loadSpaceFiles(_state.spaceId);
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast('删除失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  // ── 知识库成员弹窗（对齐 ima：标题+图标 / 搜索 / 创建者列表）──
+  function _kbMembersDialog() {
+    _kbMenuHide();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-members-overlay';
+    overlay.innerHTML = `
+      <div class="kb-members-dlg">
+        <button type="button" class="kb-members-close" title="关闭">✕</button>
+        <div class="kb-members-title">👥 知识库成员</div>
+        <div class="kb-members-search"><input type="text" placeholder="搜索知识库成员" autocomplete="off" /></div>
+        <div class="kb-members-list">
+          <div class="kb-members-item">
+            <span class="kb-members-avatar">我</span>
+            <span class="kb-members-name">我</span>
+            <span class="kb-members-role">创建者</span>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-members-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('.kb-members-search input').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      overlay.querySelectorAll('.kb-members-item').forEach((item) => {
+        const name = item.querySelector('.kb-members-name').textContent.toLowerCase();
+        item.style.display = q && !name.includes(q) ? 'none' : '';
+      });
+    });
+  }
+
+  async function _kbRenameSpace(spaceId) {
+    const sp = _state.spaces.find((s) => s.space_id === spaceId);
+    const cur = (sp && sp.name) || '';
+    const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名共享知识库：', cur) : window.prompt('重命名共享知识库：', cur);
+    if (!next || !next.trim() || next.trim() === cur) return;
+    try {
+      const res = await window.cogseed.invoke('spaces.update', { spaceId, name: String(next).trim() });
+      if (res && res.ok === false) throw new Error(res.error || 'rename failed');
+      if (_state.spaceId === spaceId) _state.spaceName = String(next).trim();
+      if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
+      _loadAll();
+    } catch (err) {
+      _log.warn('rename space failed', err);
+      if (typeof uiToast === 'function') uiToast('重命名失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+    }
+  }
+
+  async function _kbDeleteSpace(spaceId) {
+    const sp = _state.spaces.find((s) => s.space_id === spaceId);
+    const name = (sp && sp.name) || spaceId;
+    let ok = false;
+    try {
+      ok = typeof uiConfirmDanger === 'function'
+        ? await uiConfirmDanger({ title: '删除共享知识库', message: `确认删除共享知识库「${name}」及其全部内容？删除后不可恢复。`, dangerLabel: '删除', cancelLabel: '取消' })
+        : window.confirm(`确认删除共享知识库「${name}」及其全部内容？删除后不可恢复。`);
+    } catch (_) { return; }
+    if (!ok) return;
+    try {
+      const res = await window.cogseed.invoke('spaces.delete', { spaceId });
+      if (res && res.ok === false) throw new Error(res.error || 'delete failed');
+      if (_state.spaceId === spaceId) {
+        _state.spaceId = null;
+        _state.spaceName = '';
+        _state.spaceFiles = [];
+      }
+      if (typeof uiToast === 'function') uiToast('已删除共享知识库', { variant: 'success', timeoutMs: 2000 });
+      _loadAll();
+    } catch (err) {
+      _log.warn('delete space failed', err);
+      if (typeof uiToast === 'function') uiToast('删除失败：' + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 
