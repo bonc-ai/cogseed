@@ -32,6 +32,10 @@ import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import {
+  createChatEventProjectorState,
+  projectUpstreamEvent,
+} from '../features/chat_events/project-upstream';
+import {
   respondInteraction,
   setInteractionBroadcast,
 } from '../features/chat_events/interaction-hub';
@@ -5638,11 +5642,19 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    yield* skills.streamSendToSkillChat(ctx.userId, id, text, {
+    // conv-core M3.4：skills 聊天流并行下发 chat.* 结构化事件（与主会话
+    // 同契约），渲染层 chat-stream 面板统一消费。
+    const projector = createChatEventProjectorState({ turnId: `skill-${id}-${Date.now()}`, cid: id, actorId: id });
+    for await (const ev of skills.streamSendToSkillChat(ctx.userId, id, text, {
       abortSignal: signal,
       ...(atts.length ? { attachments: atts } : {}),
       ...(modelText ? { modelText } : {}),
-    });
+    })) {
+      for (const chatEvent of projectUpstreamEvent(projector, ev)) {
+        yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
+      }
+      yield ev;
+    }
   },
 
   'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
@@ -5657,11 +5669,18 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    yield* agents.streamSendToAgentEditChat(ctx.userId, id, text, {
+    // conv-core M3.4：agents 聊天流同上。
+    const projector = createChatEventProjectorState({ turnId: `agent-${id}-${Date.now()}`, cid: id, actorId: id });
+    for await (const ev of agents.streamSendToAgentEditChat(ctx.userId, id, text, {
       abortSignal: signal,
       ...(atts.length ? { attachments: atts } : {}),
       ...(modelText ? { modelText } : {}),
-    });
+    })) {
+      for (const chatEvent of projectUpstreamEvent(projector, ev)) {
+        yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
+      }
+      yield ev;
+    }
   },
 
   'space.kb.events': async function* ({ spaceId }, ctx, signal) {

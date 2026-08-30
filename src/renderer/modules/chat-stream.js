@@ -76,9 +76,28 @@ function _csCreatePanel(cid, turnId, actorId) {
     toggle.setAttribute('aria-expanded', String(!open));
   });
 
+  // 就近取消（矩阵 #6）：面板运行中显示「停止」，复用主输入区停止按钮的
+  // 完整 abort 链（streaming 态下点击发送按钮即中止）——不另铺 IPC。
+  const stop = document.createElement('button');
+  stop.type = 'button';
+  stop.className = 'cs-panel-stop';
+  stop.textContent = '停止';
+  stop.title = '中止本轮执行';
+  stop.addEventListener('click', () => {
+    const mainStop = document.querySelector('.chat-send-btn.streaming');
+    if (mainStop) {
+      mainStop.click();
+      return;
+    }
+    // 主按钮不在 streaming 态（如派单后台轮次）——面板自身标记，
+    // 由 conversation 的 cancel 管线收尾。
+    _csSetPanelState(panel, 'cancelled');
+  });
+
   header.appendChild(spinner);
   header.appendChild(title);
   header.appendChild(state);
+  header.appendChild(stop);
   header.appendChild(toggle);
 
   const body = document.createElement('div');
@@ -112,6 +131,8 @@ function _csSetPanelState(panel, status, error) {
   panel.className = _csPanelClass(status);
   const spinner = panel.querySelector('.cs-spinner');
   if (spinner) spinner.style.display = status === 'completed' || status === 'failed' || status === 'cancelled' ? 'none' : '';
+  const stopBtn = panel.querySelector('.cs-panel-stop');
+  if (stopBtn) stopBtn.style.display = status === 'completed' || status === 'failed' || status === 'cancelled' ? 'none' : '';
   const stateEl = panel.querySelector('[data-cs-state]');
   if (stateEl) {
     const label = status === 'completed' ? '已完成'
