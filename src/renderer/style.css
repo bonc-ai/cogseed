@@ -326,6 +326,13 @@ html.is-macos body.sidebar-collapsed .sidebar-logo {
   z-index: 6;
   -webkit-app-region: no-drag;
 }
+/* Panel-scoped top strips sit above page content; raise each page header so
+   its tabs and actions keep their own drag/no-drag behavior. */
+.is-macos .connections-tabs,
+.is-macos .ws-page-top {
+  position: relative;
+  z-index: 6;
+}
 
 /* 收起侧边栏（窄图标条）：body.sidebar-collapsed 由 sidebar-resize.js 切换。
    只保留主按钮图标，隐藏文字 / 会话列表 / 搜索；logo 行只留 logo + 展开按钮。 */
@@ -3248,7 +3255,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-guard-slot:empty { display: none; }
 
-/* Compact model reminder, shown on every view except Settings when no
+/* Compact model reminder, shown only on the new-chat home when no
    (provider, model, credential) entry has been configured. */
 .model-guard-banner {
   display: flex;
@@ -3271,13 +3278,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-guard-dismiss {
   position: absolute;
-  top: 7px;
-  left: 8px;
+  top: 4px;
+  left: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -3337,9 +3344,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-guard-banner .model-guard-cta:hover { background: #d97e09; }
 
-/* Hide the banner when the user is already on the settings page (they're
-   at the fix spot anyway). Uses :has() — Electron's Chromium supports it. */
-.main-content:has(#panel-settings.active) .model-guard-banner { display: none !important; }
+/* This reminder belongs to the landing page. Other tabs keep their own
+   model-action guards without carrying a floating banner over page actions. */
+.main-content:not(:has(#panel-new-chat.active)) .model-guard-slot { display: none; }
 
 .panel {
   display: none;
