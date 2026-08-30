@@ -31,6 +31,10 @@ import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
+import {
+  respondInteraction,
+  setInteractionBroadcast,
+} from '../features/chat_events/interaction-hub';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import { P3394IpcChannel } from '../features/p3394_bridge/ipc-channel';
@@ -936,6 +940,18 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
+  // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
+  'chat.interaction.reply': async (payload, _ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const interactionId = typeof raw.interaction_id === 'string' ? raw.interaction_id : '';
+    if (!interactionId) return { ok: false, handled: false };
+    const handled = respondInteraction(interactionId, {
+      decision: raw.decision,
+      answer: raw.answer,
+    });
+    return { ok: true, handled };
+  },
   'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
   'stt.pushAudio': async (payload, ctx) => {
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
@@ -5225,6 +5241,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // The runtime ensures a terminal `{ type: 'done' }` is always sent, even on
 // unexpected throws.
 
+// conv-core M2：活跃会话流注册表。interaction-hub 的广播按 `${uid}:${cid}`
+// 找到当前活跃的 sendStream，把交互事件塞进它的队列（同会话并发流以后到
+// 者为准——会话串行，正常只有一条活跃流）。
+const _activeChatInteractionStreams = new Map<string, (event: unknown) => void>();
+setInteractionBroadcast((uid, event) => {
+  const push = _activeChatInteractionStreams.get(`${uid}:${(event as { cid?: string }).cid}`);
+  if (push) push(event);
+});
+
 const streamHandlers: Record<string, StreamHandler> = {
   'stt.results': async function* ({ sessionId }, ctx, signal) {
     if (typeof sessionId !== 'string' || !safeId(sessionId)) {
@@ -5370,6 +5395,15 @@ const streamHandlers: Record<string, StreamHandler> = {
     // chat.* 结构化事件（conv-core 事件契约）：与老 stream:'group' 并行下发，
     // 渲染层 chat-stream 组件群消费；老消费方不受影响。
     const chatProjector = new GroupEventChatProjector();
+    // 双向交互（M2）：interaction-hub 的 requested/closed 事件经活跃流
+    // 注册表路由进本会话流（uid+cid 匹配），与投影事件同通道下发。
+    const interactionBuf: unknown[] = [];
+    const interactionStreamKey = `${ctx.userId}:${cid}`;
+    const pushInteraction = (event: unknown) => {
+      interactionBuf.push(event);
+      notify();
+    };
+    _activeChatInteractionStreams.set(interactionStreamKey, pushInteraction);
     let wake: (() => void) | null = null;
     let cancelled = signal.aborted;
     const notify = () => {
@@ -5430,6 +5464,9 @@ const streamHandlers: Record<string, StreamHandler> = {
     void sendPromise;
     try {
       drainLoop: while (!cancelled) {
+        while (interactionBuf.length) {
+          yield { type: 'event', event: { stream: 'chat', data: interactionBuf.shift() } };
+        }
         while (buf.length) {
           const ev = buf.shift()!;
           relayCount += 1;
@@ -5462,6 +5499,7 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     } finally {
       log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
+      _activeChatInteractionStreams.delete(interactionStreamKey);
       try { unsub(); } catch { /* ignore */ }
       try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
     }

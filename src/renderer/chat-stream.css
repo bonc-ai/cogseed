@@ -77,6 +77,30 @@
 .cs-usage { color: #777; }
 .cs-ctx-warn { color: rgb(202, 138, 4); font-weight: 600; }
 
+/* 交互卡（M2 审批/提问） */
+.cs-interaction .cs-interaction-prompt { font-weight: 600; }
+.cs-interaction-detail {
+  margin: 4px 0; padding: 6px 8px; border-radius: 6px;
+  background: rgba(0, 0, 0, .05); font-size: 11.5px;
+  white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto;
+}
+.cs-interaction-actions, .cs-interactions-input-row {
+  display: flex; gap: 6px; margin-top: 6px; align-items: center;
+}
+.cs-btn {
+  border: 1px solid rgba(127, 127, 127, .35); border-radius: 7px;
+  background: #fff; padding: 4px 12px; font-size: 12.5px; cursor: pointer;
+}
+.cs-btn:hover { background: rgba(127, 127, 127, .08); }
+.cs-btn.ok { border-color: rgb(22, 163, 74); color: rgb(22, 128, 61); }
+.cs-btn.danger { border-color: rgb(220, 38, 38); color: rgb(185, 28, 28); }
+.cs-interaction-input {
+  flex: 1; min-width: 0; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid rgba(127, 127, 127, .35); font-size: 12.5px;
+}
+.cs-interaction.closed { opacity: .55; }
+.cs-interaction.closed .cs-interaction-prompt { font-weight: 400; }
+
 @media (prefers-color-scheme: dark) {
   .cs-card { background: rgba(255, 255, 255, .04); }
   .cs-card-out pre, .cs-diff-body { background: rgba(0, 0, 0, .28); }

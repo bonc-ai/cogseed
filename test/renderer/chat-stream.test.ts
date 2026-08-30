@@ -42,6 +42,25 @@ function makeEl(tag: string): StubEl {
     parentNode: null,
     connected: true,
     get isConnected() { return el.connected; },
+  get classList() {
+    return {
+      add(cls: string) { if (!(` ${el.className} `).includes(` ${cls} `)) el.className = `${el.className} ${cls}`.trim(); },
+      remove(cls: string) { el.className = (` ${el.className} `).replace(` ${cls} `, ' ').trim(); },
+      toggle(cls: string) { if ((` ${el.className} `).includes(` ${cls} `)) this.remove(cls); else this.add(cls); },
+    };
+  },
+  querySelectorAll(sel: string): StubEl[] {
+    const byTag = sel.match(/^(button|input)$/);
+    const out: StubEl[] = [];
+    const walk = (node: StubEl) => {
+      for (const child of node.children) {
+        if (byTag && child.tagName.toLowerCase() === byTag[1]) out.push(child);
+        walk(child);
+      }
+    };
+    walk(el);
+    return out;
+  },
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     addEventListener(_type: string, _fn: () => void) { /* stub */ },
     setAttribute() { /* stub */ },
@@ -56,11 +75,13 @@ function makeEl(tag: string): StubEl {
       const byClass = sel.match(/^\.([\w-]+)$/);
       const byDataState = sel.match(/^\[data-cs-state\]$/);
       const byDataItem = sel.match(/^\[data-cs-item="([^"]+)"\]$/);
+      const byDataInteraction = sel.match(/^\[data-cs-interaction="([^"]+)"\]$/);
       const walk = (node: StubEl): StubEl | null => {
         for (const child of node.children) {
           if (byClass && (` ${child.className} `).includes(` ${byClass[1]} `)) return child;
           if (byDataState && child.dataset.csState !== undefined) return child;
           if (byDataItem && child.dataset.csItem === byDataItem[1]) return child;
+          if (byDataInteraction && child.dataset.csInteraction === byDataInteraction[1]) return child;
           const nested = walk(child);
           if (nested) return nested;
         }
@@ -162,5 +183,42 @@ describe('chat-stream module', () => {
 
     expect(() => handle(null)).not.toThrow();
     expect(() => handle({ type: 'chat.future' })).not.toThrow();
+  });
+
+  it('interaction.requested 渲染审批卡，closed 撤卡禁用', () => {
+    const replies: unknown[] = [];
+    g.window.cogseed = { invoke: (_ch: string, payload: unknown) => { replies.push(payload); return Promise.resolve({ ok: true }); } };
+
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({
+      type: 'chat.interaction.requested', turnId: 'T1', interactionId: 'ix-1', kind: 'approval',
+      prompt: '执行危险命令？', detail: 'rm -rf dist', timeoutMs: 30000, approvalCategory: 'bash',
+    });
+
+    const body = inserts[0].node.querySelector('.cs-panel-body')!;
+    const card = body.children.find((c) => (c.dataset as Record<string, string>).csInteraction === 'ix-1');
+    expect(card).toBeTruthy();
+    // detail 以 <pre> 文本呈现（DOM 构建，不走 innerHTML）。
+    const detail = card!.children.find((c) => c.className.includes('cs-interaction-detail'));
+    expect(detail!.textContent).toContain('rm -rf dist');
+    const actions = card!.children.find((c) => c.className.includes('cs-interaction-actions'))!;
+    const deny = actions.children.find((b) => (b.textContent || '') === '拒绝')! as StubEl & { handlers: Record<string, () => void> };
+    // 点击链路依赖真实 DOM 事件，stub 环境只验证按钮存在与文案。
+    expect(deny).toBeTruthy();
+
+    handle({ type: 'chat.interaction.closed', interactionId: 'ix-1', reason: 'answered' });
+    expect(card!.className).toContain('closed');
+  });
+
+  it('interaction 提问卡渲染输入行', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({
+      type: 'chat.interaction.requested', turnId: 'T2', interactionId: 'q-1', kind: 'question',
+      prompt: '用哪个分支？', timeoutMs: 30000,
+    });
+    const body = inserts[0].node.querySelector('.cs-panel-body')!;
+    const card = body.children.find((c) => (c.dataset as Record<string, string>).csInteraction === 'q-1');
+    expect(card).toBeTruthy();
+    expect(card!.innerHTML).not.toContain('cs-interaction-actions');
   });
 });

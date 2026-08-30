@@ -144,6 +144,8 @@ export const chatInteractionRequestedSchema = z.object({
   timeoutMs: z.number().positive(),
   /** approval 专用：动作类别，UI 图标用。 */
   approvalCategory: z.enum(['bash', 'fileWrite', 'externalService']).optional(),
+  /** 路由用：ipc 层把事件送进对应会话的活跃流。 */
+  cid: z.string().min(1).optional(),
 });
 
 /** 交互结束（用户已回复或超时关闭）。渲染层据此撤卡。 */
@@ -152,6 +154,8 @@ export const chatInteractionClosedSchema = z.object({
   interactionId: z.string().min(1),
   /** 谁关的：用户回复 / 超时 / Turn 取消连带。 */
   reason: z.enum(['answered', 'timeout', 'turnCancelled']),
+  /** 路由用，与 requested 对称。 */
+  cid: z.string().min(1).optional(),
 });
 
 /** SSE 通道下发的统一事件联合。chatItemEventSchema 带 superRefine（按
