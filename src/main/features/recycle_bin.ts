@@ -1975,7 +1975,9 @@ export async function restoreRecycleBatch(
   }
   reactivated = Array.from(new Set([...reactivated, ...restoredMetadataPaths]));
 
-  if (failed.length > 0 || (restored.length > 0 && skipped.length > 0)) {
+  const didWork = restored.length > 0 || skipped.length > 0 || restoredMetadataPaths.length > 0 || reactivated.length > 0;
+  if (failed.length > 0 || !didWork) {
+    // 有文件恢复失败（或零进展）→ 保留批次供重试
     log.warn('restore recycle batch partially completed; keeping batch for retry', {
       user_id: maskId(uid),
       batch_id: logBatchId(batchId),
@@ -1987,8 +1989,26 @@ export async function restoreRecycleBatch(
       skipped_paths: logPathRefs(skipped),
       failed_paths: logPathRefs(failed),
     });
+  } else {
+    // 无失败（恢复成功或目标已存在 = 已恢复状态）→ 消费（删除）批次，回收站不再残留
+    try {
+      await fsp.rm(batchDir(uid, batchId), { recursive: true, force: true });
+      log.info('restore recycle batch consumed (fully restored)', {
+        user_id: maskId(uid),
+        batch_id: logBatchId(batchId),
+        restored: restored.length,
+        skipped: skipped.length,
+        reactivated: reactivated.length,
+      });
+    } catch (err) {
+      log.warn('restore recycle batch cleanup failed', {
+        user_id: maskId(uid),
+        batch_id: logBatchId(batchId),
+        error: logRecycleErrorRef(err),
+      });
+    }
   }
-  log.info('restored recycle batch without consuming it', {
+  log.info('restored recycle batch processed', {
     user_id: maskId(uid),
     batch_id: logBatchId(batchId),
     restored: restored.length,

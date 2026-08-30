@@ -242,6 +242,13 @@ describe('KB workbench (S1 skeleton)', () => {
   it('renders the S3 analysis card (docs + one-liner + mindmap action)', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
+    // AI 解析为手动触发：点击「✨ 生成 AI 解析」按钮后才生成（等待 _loadAll 渲染后按钮出现）
+    let btn;
+    await vi.waitFor(() => {
+      btn = els['kb-analyze-btn'];
+      expect(btn).toBeTruthy();
+    });
+    btn._listeners.click();
     await vi.waitFor(() => {
       expect(els['kb-wb-analysis-card'].innerHTML).toContain('A 要点');
     });
