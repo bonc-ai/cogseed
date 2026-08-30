@@ -66,9 +66,11 @@ function makeEl(tag: string): StubEl {
     setAttribute() { /* stub */ },
     appendChild(child) { el.children.push(child); child.parentNode = el; return child; },
     insertBefore(node, before) {
-      const idx = el.children.indexOf(before);
-      el.children.splice(idx < 0 ? el.children.length : idx, 0, node);
-      node.parentNode = el;
+      // 经 bind(target) 转发时必须落在 target 上（闭包 el 只作默认宿主）。
+      const host: StubEl = this && Array.isArray((this as StubEl).children) ? this as StubEl : el;
+      const idx = host.children.indexOf(before);
+      host.children.splice(idx < 0 ? host.children.length : idx, 0, node);
+      node.parentNode = host;
       return node;
     },
     querySelector(sel) {
@@ -89,7 +91,13 @@ function makeEl(tag: string): StubEl {
       };
       return walk(el);
     },
-    remove() { el.connected = false; },
+    remove() {
+      el.connected = false;
+      if (el.parentNode && Array.isArray(el.parentNode.children)) {
+        const i = el.parentNode.children.indexOf(el);
+        if (i >= 0) el.parentNode.children.splice(i, 1);
+      }
+    },
   };
   return el;
 }
@@ -264,5 +272,44 @@ describe('chat-stream module', () => {
     const labels = actions.children.map((b) => b.textContent);
     expect(labels).toContain('总是允许');
     expect(labels).not.toContain('本任务内允许');
+  });
+
+  it('chatStreamHasPanel 按 cid 判定；历史重建：tool start/end 合并一卡、默认收起、幂等', () => {
+    const hasPanel = g.window.chatStreamHasPanel as (c: string) => boolean;
+    expect(hasPanel('c-1')).toBe(false);
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    expect(hasPanel('c-1')).toBe(true);
+    expect(hasPanel('c-other')).toBe(false);
+
+    const render = g.window.chatStreamRenderPersisted as (c: string, m: unknown, i: unknown, o?: unknown) => boolean;
+    const msgDiv = makeEl('div');
+    root.appendChild(msgDiv);
+    const items = [
+      { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 't1', name: 'Bash', arguments: { command: 'ls' } } } },
+      { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 't1', name: 'Bash', output: 'ok' } } },
+      { type: 'progress', text: '思考中' },
+    ];
+    expect(render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' })).toBe(true);
+
+    const panel = root.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
+    expect(panel).toBeTruthy();
+    const body = panel.querySelector('.cs-panel-body')!;
+    const cards = body.children.filter((c) => c.className.includes('cs-toolExecution'));
+    expect(cards).toHaveLength(1);
+    expect(cards[0].innerHTML).toContain('ok');
+    expect(panel.className).toContain('done');
+    // 默认展开（过程可见）；显式 expanded:false 才收起。
+    expect(body.style.display).not.toBe('none');
+    render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1', expanded: false });
+    const collapsed = root.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
+    expect(collapsed.querySelector('.cs-panel-body')!.style.display).toBe('none');
+
+    // 同 turnId 重建幂等：旧面板移除、只留一个。
+    render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' });
+    const panels = root.children.filter((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1');
+    expect(panels).toHaveLength(1);
+
+    // 空数组/缺父节点返回 false。
+    expect(render('c-1', msgDiv, [], {})).toBe(false);
   });
 });

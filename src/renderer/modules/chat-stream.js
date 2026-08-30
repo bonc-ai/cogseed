@@ -440,6 +440,86 @@ window.chatStreamDismissBashPermission = function chatStreamDismissBashPermissio
   }
 };
 
+/** 该会话是否存在活跃面板——conversation.js 据此停画老过程 rail（去重）。 */
+window.chatStreamHasPanel = function chatStreamHasPanel(cid) {
+  for (const [key, panel] of _csPanels.entries()) {
+    if (panel.isConnected && key.startsWith(`${cid}::`)) return true;
+  }
+  return false;
+};
+
+/**
+ * 完成/历史态重建：从消息持久化的 process items（老格式 progress/event）
+ * 重建 Turn 过程面板，插在消息元素之前。conv-core 统一过程 UI——
+ * _renderPersistedProcess 检测到本函数可用时全部委托过来，老 details
+ * 折叠卡退役（chat-stream.js 加载失败的极端场景仍走老路径兜底）。
+ */
+window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDiv, items, opts) {
+  if (!Array.isArray(items) || !items.length || !msgDiv || !msgDiv.parentNode) return false;
+  try {
+    const actorName = (opts && opts.actorName) || '';
+    const turnKey = _csPanelKey(cid, (opts && opts.turnId) || (msgDiv.dataset && msgDiv.dataset.msgId) || `hist-${Date.now()}`);
+    // 同一消息重复重建（刷新/回滚重放）幂等：先移除旧面板。
+    const existing = _csPanels.get(turnKey);
+    if (existing) existing.remove();
+
+    const panel = _csCreatePanel(cid, turnKey, actorName);
+    const body = panel.querySelector('.cs-panel-body');
+    const toolCards = new Map();
+    for (const item of items) {
+      const evt = item && (item.event || null);
+      const data = evt && evt.stream === 'tool' ? (evt.data || {}) : null;
+      if (data && typeof data === 'object') {
+        const toolId = String(data.id || '');
+        const itemId = `${turnKey}:tool:${toolId || Math.random().toString(36).slice(2, 8)}`;
+        const payload = {
+          toolName: String(data.name || 'tool'),
+          ...(typeof data.arguments === 'object' && data.arguments
+            ? { argsSummary: JSON.stringify(data.arguments).slice(0, 120) }
+            : (typeof data.arguments === 'string' ? { argsSummary: data.arguments.slice(0, 120) } : {})),
+          ...(typeof data.output === 'string' ? { output: data.output.slice(0, 4000) } : {}),
+          ...(typeof data.result_preview === 'string' && !data.output
+            ? { output: data.result_preview.slice(0, 4000) } : {}),
+          ...(data.isError === true
+            ? { error: typeof data.errorCode === 'string' ? data.errorCode : 'tool_error' } : {}),
+        };
+        const status = data.phase === 'end'
+          ? (data.isError === true ? 'failed' : 'completed')
+          : 'inProgress';
+        const card = _csEnsureItemCard(body, itemId, 'toolExecution');
+        _csRenderToolCard(card, payload, status);
+        toolCards.set(toolId, itemId);
+        continue;
+      }
+      // progress 纯文本与其余事件流（context/compaction/runtime…）→ 思考条。
+      const text = (item && typeof item.text === 'string' && item.text)
+        || (evt && evt.stream ? `[${evt.stream}] ${String((evt.data && evt.data.phase) || '')}`.trim() : '');
+      if (!text) continue;
+      const card = _csEnsureItemCard(body, `${turnKey}:r:${_csPanels.size}:${Math.random().toString(36).slice(2, 8)}`, 'reasoning');
+      _csRenderReasoningCard(card, { text });
+    }
+    if (!body.children.length) { panel.remove(); return false; }
+    _csSetPanelState(panel, 'completed');
+    // 完成态默认展开（过程可见是 conv-core 的核心诉求）；用户可一键收起。
+    // 老线程回放不想全展开时，调用方传 expanded:false 显式收起。
+    if (opts && opts.expanded === false) {
+      const bodyEl = panel.querySelector('.cs-panel-body');
+      const toggle = panel.querySelector('.cs-panel-toggle');
+      if (bodyEl && toggle) {
+        bodyEl.style.display = 'none';
+        toggle.textContent = '展开';
+        toggle.setAttribute('aria-expanded', 'false');
+      }
+    }
+    msgDiv.parentNode.insertBefore(panel, msgDiv);
+    _csPanels.set(turnKey, panel);
+    return true;
+  } catch (err) {
+    _csLog.warn('persisted process rebuild failed', { error: String(err && err.message || err) });
+    return false;
+  }
+};
+
 /** 视图切换/历史重建时丢弃全部面板（conversation.js 重建消息列表后调用）。 */
 window.chatStreamReset = function chatStreamReset() {
   for (const panel of _csPanels.values()) panel.remove();
