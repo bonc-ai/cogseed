@@ -141,7 +141,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userContextsDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -1404,8 +1404,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: filteredAgents };
   },
 
-  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref });
+  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1676,6 +1676,37 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       }
     }
     return { ok: true, files: results };
+  },
+
+  // 共享知识库（空间）文件夹导入：目录选择器 → 递归收集白名单文件 → 镜像目录结构导入。
+  'spaces.files.pickAndUploadDir': async ({ spaceId, targetDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const targetName = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      try {
+        const r = await spaceFiles.importSpaceFileFromPath(ctx.userId, spaceId, targetName, f.abs);
+        results.push({ name: f.rel, target: targetName, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target: targetName, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      ok: true,
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
   },
 
   'spaces.files.createText': async ({ spaceId, name }, ctx) => {
@@ -4039,6 +4070,75 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     } catch (err) {
       console.error('[kb.mindmap.exportPdf] failed:', err);
       return { ok: false };
+    }
+  },
+
+  // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
+  'kb.importWebUrl': async ({ dir, spaceId, url } = {}, ctx) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: '请输入有效的 http/https 链接' };
+    let resp: Response;
+    try {
+      resp = await fetch(u, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+    } catch (err) {
+      return { ok: false, error: '抓取失败：' + ((err as Error)?.message || String(err)) };
+    }
+    if (!resp.ok) return { ok: false, error: '抓取失败：HTTP ' + resp.status };
+    const html = await resp.text();
+    const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1]
+      ?.replace(/<[^>]+>/g, '').trim() || new URL(u).hostname || u;
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ').trim().slice(0, 30000);
+    const safeTitle = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 50) || '网页';
+    const fileName = `网页-${safeTitle}-${Date.now()}.md`;
+    const content = `# ${title}\n\n> 来源：${u}\n\n${text || '（网页无正文内容）'}\n`;
+    try {
+      if (spaceId) {
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const created = await spaceFiles.createSpaceTextFile(ctx.userId, spaceId, fileName);
+        if (!created.ok) return { ok: false, error: (created as { error?: string }).error || 'create failed' };
+        const updated = await spaceFiles.updateSpaceTextFile(ctx.userId, spaceId, fileName, content);
+        if (!updated.ok) return { ok: false, error: (updated as { error?: string }).error || 'write failed' };
+      } else {
+        const base = typeof dir === 'string' && dir ? String(dir).replace(/^\/+|\/+$/g, '') : '';
+        const res = contexts.writeContextFileForUser(ctx.userId, base ? `${base}/${fileName}` : fileName, content);
+        if (!res.ok) return { ok: false, error: (res as { error?: string }).error };
+      }
+      return { ok: true, fileName };
+    } catch (err) {
+      return { ok: false, error: '写入失败：' + ((err as Error)?.message || String(err)) };
+    }
+  },
+
+  // 个人知识库迁移：把源库（from）的全部内容复制进目标库（to），随后由 kb.reconcile 重建索引。
+  'kb.migrateLib': async ({ from, to } = {}, ctx) => {
+    const f = String(from || '').trim();
+    const t = String(to || '').trim();
+    if (!f || !t || f === t) return { ok: false, error: '源库与目标库不能相同' };
+    const root = userContextsDir(ctx.userId);
+    const src = path.join(root, f);
+    const dst = path.join(root, t);
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return { ok: false, error: '源知识库不存在' };
+    if (!fs.existsSync(dst) || !fs.statSync(dst).isDirectory()) return { ok: false, error: '目标知识库不存在' };
+    try {
+      fs.cpSync(src, dst, { recursive: true, force: true });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: '迁移失败：' + ((err as Error)?.message || String(err)) };
     }
   },
 
