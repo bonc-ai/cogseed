@@ -28,6 +28,13 @@
   color: #666; font-size: 12px; padding: 2px 6px; border-radius: 6px;
 }
 .cs-panel-toggle:hover { background: rgba(127, 127, 127, .12); }
+.cs-panel-stop {
+  margin-left: auto; border: 1px solid rgba(220, 38, 38, .4); cursor: pointer;
+  background: transparent; color: rgb(185, 28, 28); font-size: 12px;
+  padding: 2px 10px; border-radius: 6px;
+}
+.cs-panel-stop:hover { background: rgba(239, 68, 68, .1); }
+.cs-panel-toggle { margin-left: 0; }
 
 .cs-spinner {
   width: 10px; height: 10px; border-radius: 50%;
