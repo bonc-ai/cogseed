@@ -25,7 +25,10 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/auto.js' },
   ],
   'run-center': [
+    { src: './vendor/chartjs/chart.umd.min.js' },
     { src: './modules/run-center-board.js' },
+    { src: './modules/run-center-overview.js' },
+    { src: './modules/run-center-agents.js' },
     { src: './modules/run-center.js' },
   ],
   contexts: [
@@ -56,9 +59,6 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   workspace: [
     { src: './modules/workspace.js' },
-  ],
-  dashboard: [
-    { src: './modules/dashboard.js' },
   ],
 });
 

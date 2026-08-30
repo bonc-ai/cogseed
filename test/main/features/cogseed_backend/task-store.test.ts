@@ -45,6 +45,7 @@ describe('CogSeed task and session store', () => {
       ownerId: USER_A,
       executionId: expect.stringMatching(/^cogseed-exec-/),
       requestId: 'req-store-a',
+      requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       task: 'Summarize the selected file.',
       profileId: 'openai-compatible:cogseed',
       status: 'created',
@@ -59,6 +60,22 @@ describe('CogSeed task and session store', () => {
     await expect(store.readCogSeedTask(USER_B, result.task.taskId)).resolves.toBeNull();
     const events = await import("../../../../src/main/features/cogseed_backend/event-store");
     await expect(events.readCogSeedTaskEvents(USER_A, result.task.taskId, 0, 10)).resolves.toEqual([expect.objectContaining({ type: "task.created", sequence: 1, payload: { requestId: "req-store-a" } })]);
+  });
+
+  it('rejects a persisted task whose lifecycle status is outside the schema', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const created = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-invalid-status',
+      task: 'Reject an unknown persisted lifecycle state.',
+    });
+    const file = paths.cogseedTaskFile(USER_A, created.task.taskId);
+    const persisted = JSON.parse(fs.readFileSync(file, 'utf8'));
+    persisted.status = 'paused';
+    fs.writeFileSync(file, JSON.stringify(persisted));
+
+    await expect(store.readCogSeedTask(USER_A, created.task.taskId)).rejects.toThrow(/malformed CogSeed task/i);
+    await expect(store.listCogSeedTasks(USER_A)).rejects.toThrow(/malformed CogSeed task/i);
   });
 
   it('claims each request exactly once and returns the existing task on repeat start', async () => {
@@ -78,13 +95,27 @@ describe('CogSeed task and session store', () => {
     })).rejects.toThrow(/payload conflict/i);
   });
 
-  it('keeps legacy request claims readable while fingerprinting all new claims', async () => {
+  it('repairs a stripped modern claim fingerprint while keeping fully legacy records readable', async () => {
     const store = await backend();
     const paths = await backendPaths();
     const created = await store.createCogSeedTask(USER_A, { requestId: 'req-legacy-claim', task: 'Original request.' });
     const claimFile = paths.cogseedRequestClaimFile(USER_A, 'req-legacy-claim');
-    const claim = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
+    const taskFile = paths.cogseedTaskFile(USER_A, created.task.taskId);
+    let claim = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
     expect(claim.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    delete claim.requestFingerprint;
+    fs.writeFileSync(claimFile, JSON.stringify(claim));
+
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-legacy-claim',
+      task: 'Original request.',
+    })).resolves.toMatchObject({ created: false, task: { taskId: created.task.taskId } });
+    claim = JSON.parse(fs.readFileSync(claimFile, 'utf8'));
+    expect(claim.requestFingerprint).toBe(created.task.requestFingerprint);
+
+    const legacyTask = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+    delete legacyTask.requestFingerprint;
+    fs.writeFileSync(taskFile, JSON.stringify(legacyTask));
     delete claim.requestFingerprint;
     fs.writeFileSync(claimFile, JSON.stringify(claim));
 
@@ -92,6 +123,135 @@ describe('CogSeed task and session store', () => {
       requestId: 'req-legacy-claim',
       task: 'Legacy replay keeps its historical behavior.',
     })).resolves.toMatchObject({ created: false, task: { taskId: created.task.taskId } });
+  });
+
+  it('repairs a unique task written before its request claim without duplicating creation artifacts', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const input = { requestId: 'req-orphan-repair', task: 'Repair this interrupted creation.' };
+    const created = await store.createCogSeedTask(USER_A, input);
+    const claimFile = paths.cogseedRequestClaimFile(USER_A, input.requestId);
+    const eventFile = paths.cogseedTaskEventsFile(USER_A, created.task.taskId);
+    const sessionFile = paths.cogseedSessionFile(USER_A, created.task.sessionId);
+
+    fs.rmSync(claimFile);
+    fs.rmSync(eventFile);
+    const session = JSON.parse(fs.readFileSync(sessionFile, 'utf8'));
+    delete session.activeTaskId;
+    fs.writeFileSync(sessionFile, JSON.stringify(session));
+
+    await expect(store.readCogSeedTaskByRequestId(USER_A, input.requestId)).resolves.toMatchObject({
+      taskId: created.task.taskId,
+    });
+
+    const repaired = await store.createCogSeedTask(USER_A, input);
+    const replay = await store.createCogSeedTask(USER_A, input);
+
+    expect(repaired).toMatchObject({ created: false, task: { taskId: created.task.taskId } });
+    expect(replay).toMatchObject({ created: false, task: { taskId: created.task.taskId } });
+    expect(await store.listCogSeedTasks(USER_A)).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(claimFile, 'utf8'))).toMatchObject({
+      taskId: created.task.taskId,
+      requestFingerprint: created.task.requestFingerprint,
+    });
+    await expect(store.readCogSeedSession(USER_A, created.task.sessionId)).resolves.toMatchObject({
+      activeTaskId: created.task.taskId,
+    });
+    await expect(events.readCogSeedTaskEvents(USER_A, created.task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.created', payload: { requestId: input.requestId } }),
+    ]);
+  });
+
+  it('repairs a legacy orphan even when old recovery wrote the first lifecycle event', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const input = { requestId: 'req-orphan-recovered-first', task: 'Repair after an interrupted admission.' };
+    const created = await store.createCogSeedTask(USER_A, input);
+    fs.rmSync(paths.cogseedRequestClaimFile(USER_A, input.requestId));
+    fs.rmSync(paths.cogseedTaskEventsFile(USER_A, created.task.taskId));
+
+    await lifecycle.markCogSeedTaskRecoverable(USER_A, created.task.taskId, 'worker_restart');
+    await expect(store.createCogSeedTask(USER_A, input)).resolves.toMatchObject({
+      created: false,
+      task: { taskId: created.task.taskId, status: 'recoverable' },
+    });
+
+    expect(JSON.parse(fs.readFileSync(paths.cogseedRequestClaimFile(USER_A, input.requestId), 'utf8'))).toMatchObject({
+      taskId: created.task.taskId,
+      requestFingerprint: created.task.requestFingerprint,
+    });
+    await expect(events.readCogSeedTaskEvents(USER_A, created.task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.recoverable', payload: { errorCode: 'worker_restart' } }),
+    ]);
+  });
+
+  it('rejects a conflicting replay when repairing a missing request claim', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const created = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-orphan-conflict',
+      task: 'Original orphan payload.',
+    });
+    const claimFile = paths.cogseedRequestClaimFile(USER_A, 'req-orphan-conflict');
+    fs.rmSync(claimFile);
+
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-orphan-conflict',
+      task: 'Conflicting orphan payload.',
+    })).rejects.toThrow(/payload conflict/i);
+    expect(await store.listCogSeedTasks(USER_A)).toEqual([
+      expect.objectContaining({ taskId: created.task.taskId, task: 'Original orphan payload.' }),
+    ]);
+    expect(fs.existsSync(claimFile)).toBe(false);
+  });
+
+  it('fails closed when one request has multiple orphan tasks', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const first = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-multiple-orphans',
+      task: 'First orphan.',
+    });
+    const second = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-other-orphan',
+      task: 'Second orphan.',
+    });
+    const secondFile = paths.cogseedTaskFile(USER_A, second.task.taskId);
+    const secondRecord = JSON.parse(fs.readFileSync(secondFile, 'utf8'));
+    secondRecord.requestId = first.task.requestId;
+    fs.writeFileSync(secondFile, JSON.stringify(secondRecord));
+    fs.rmSync(paths.cogseedRequestClaimFile(USER_A, first.task.requestId));
+    fs.rmSync(paths.cogseedRequestClaimFile(USER_A, second.task.requestId));
+
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: first.task.requestId,
+      task: first.task.task,
+    })).rejects.toThrow(/multiple CogSeed tasks/i);
+    expect(await store.listCogSeedTasks(USER_A)).toHaveLength(2);
+    expect(fs.existsSync(paths.cogseedRequestClaimFile(USER_A, first.task.requestId))).toBe(false);
+  });
+
+  it('fails closed for a legacy orphan whose request fingerprint cannot be reconstructed', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const created = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-legacy-orphan',
+      task: 'Legacy orphan payload.',
+    });
+    const taskFile = paths.cogseedTaskFile(USER_A, created.task.taskId);
+    const record = JSON.parse(fs.readFileSync(taskFile, 'utf8'));
+    delete record.requestFingerprint;
+    fs.writeFileSync(taskFile, JSON.stringify(record));
+    fs.rmSync(paths.cogseedRequestClaimFile(USER_A, created.task.requestId));
+
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: created.task.requestId,
+      task: created.task.task,
+    })).rejects.toThrow(/fingerprint is unavailable/i);
+    expect(await store.listCogSeedTasks(USER_A)).toHaveLength(1);
   });
 
   it('persists formal Agent identity and maps a commander conversation alias to the durable member session', async () => {

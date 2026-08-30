@@ -116,6 +116,10 @@ export interface GroupMessage {
    * terminal bus events, persisted history and renderer placeholders all use
    * this value to refer to the same reply. Older records may omit it. */
   turn_id?: string;
+  /** Durable terminal marker for one actor execution. Live events already
+   * carry `turn_end`; persisting the bit lets crash recovery distinguish a
+   * completed turn from an intermediate segment with the same `turn_id`. */
+  turn_end?: true;
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */

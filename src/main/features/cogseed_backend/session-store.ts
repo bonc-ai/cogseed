@@ -438,7 +438,7 @@ export async function listCogSeedSessions(userId: string): Promise<CogSeedSessio
     try {
       const session = await readCogSeedSession(userId, sessionId);
       if (session) sessions.push(session);
-    } catch (error) {
+    } catch {
       throw new Error('malformed CogSeed session');
     }
   }

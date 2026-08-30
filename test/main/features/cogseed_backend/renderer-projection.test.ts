@@ -249,6 +249,7 @@ describe('CogSeed renderer-safe projections', () => {
       readSession: vi.fn(async (_userId: string, sessionId: string) => sessionId === groupSession.sessionId ? groupSession : null),
       readEvents: vi.fn(async (_userId: string, taskId: string) => taskId === reviewer.taskId ? [groupChatToolEvent] : []),
       isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 2),
       readGroupChatWorkflowRun: vi.fn(async () => ({
         version: 1,
         id: 'wf-actor-test',
@@ -349,6 +350,132 @@ describe('CogSeed renderer-safe projections', () => {
     expect(board.tasks.every((task) => task.groupId === groupParent.taskId)).toBe(true);
   });
 
+  it('labels one-Agent conversations separately from multi-Agent Group Chats and keeps the open-task link', async () => {
+    const conversationSession = {
+      ...session,
+      sessionId: 'cogseed-session-gconv-single-agent',
+      conversationId: 'single-agent-conversation',
+    };
+    const conversationTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-single-agent',
+      sessionId: conversationSession.sessionId,
+      executionKind: 'group-chat' as const,
+      conversationId: conversationSession.conversationId,
+      groupChatRunId: 'run-single-agent',
+    };
+    const deps = {
+      listSessions: vi.fn(async () => [conversationSession]),
+      listTasks: vi.fn(async () => [conversationTask]),
+      readTask: vi.fn(async () => conversationTask),
+      readSession: vi.fn(async () => conversationSession),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+    };
+    const singleAgent = createCogSeedIpcService({
+      ...deps,
+      countConversationAgents: vi.fn(async () => 1),
+    } as any);
+
+    await expect(singleAgent.sessionListProjection('renderer-user')).resolves.toEqual([
+      expect.objectContaining({
+        titleKey: 'run_center.task_kind_agent_conversation',
+        conversationId: conversationSession.conversationId,
+        conversationMode: 'agent',
+        participantCount: 1,
+      }),
+    ]);
+    await expect(singleAgent.boardProjection('renderer-user')).resolves.toMatchObject({
+      tasks: [expect.objectContaining({
+        titleKey: 'run_center.task_kind_agent_conversation',
+        sourceKind: 'agent-conversation',
+        conversationId: conversationSession.conversationId,
+        conversationMode: 'agent',
+        participantCount: 1,
+      })],
+    });
+    await expect(singleAgent.collaborationSnapshot('renderer-user', { taskId: conversationTask.taskId })).resolves.toMatchObject({
+      task: {
+        titleKey: 'run_center.task_kind_agent_conversation',
+        sourceKind: 'agent-conversation',
+        conversationId: conversationSession.conversationId,
+      },
+    });
+
+    const multiAgent = createCogSeedIpcService({
+      ...deps,
+      countConversationAgents: vi.fn(async () => 2),
+    } as any);
+    await expect(multiAgent.boardProjection('renderer-user')).resolves.toMatchObject({
+      tasks: [expect.objectContaining({
+        titleKey: 'run_center.task_kind_group_chat',
+        sourceKind: 'group-chat',
+        conversationMode: 'group',
+        participantCount: 2,
+      })],
+    });
+  });
+
+  it('projects execution binding and delivery state without runtime-private values', async () => {
+    const boundSession = {
+      ...session,
+      sessionId: 'cogseed-session-bound-cli',
+      runtimeSessionId: 'private-runtime-session-do-not-leak',
+      conversationId: 'run-center-bound-cli',
+    };
+    const boundTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-bound-cli',
+      sessionId: boundSession.sessionId,
+      runtimeSessionId: boundSession.runtimeSessionId,
+      executionId: 'cogseed-exec-bound-cli',
+      runtimeRunId: 'private-runtime-run-do-not-leak',
+      status: 'completed' as const,
+      task: 'Use token=do-not-leak in /Users/private/repository',
+      conversationId: boundSession.conversationId,
+      agentId: 'codex-agent',
+      coordinationId: undefined,
+      executionKind: 'local-cli' as const,
+      resultDeliveryState: 'delivered' as const,
+      localCli: { cli: 'codex', model: 'private-model', customArgs: ['--secret', 'do-not-leak'] },
+      workingDir: '/Users/private/repository',
+    };
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [boundSession]),
+      listTasks: vi.fn(async () => [boundTask]),
+      readTask: vi.fn(async () => boundTask),
+      readSession: vi.fn(async () => boundSession),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 1),
+    } as any);
+
+    const board = await service.boardProjection('renderer-user');
+    expect(board.tasks).toEqual([expect.objectContaining({
+      taskId: boundTask.taskId,
+      executionId: 'cogseed-exec-bound-cli',
+      runtimeKind: 'codex',
+      conversationMode: 'agent',
+      participantCount: 1,
+      resumable: false,
+      resultDeliveryState: 'delivered',
+      agentId: 'codex-agent',
+      conversationId: boundSession.conversationId,
+    })]);
+    const serialized = JSON.stringify(board);
+    for (const value of ['token=do-not-leak', '/Users/private', 'private-runtime-session', 'private-runtime-run', 'private-model', '--secret']) {
+      expect(serialized).not.toContain(value);
+    }
+    await expect(service.collaborationSnapshot('renderer-user', { taskId: boundTask.taskId })).resolves.toMatchObject({
+      actors: [{
+        actorId: 'codex-agent',
+        role: 'member_agent',
+        taskId: boundTask.taskId,
+        status: 'completed',
+      }],
+    });
+  });
+
   it('hides deleted Group Chat conversations while keeping non-chat tasks visible', async () => {
     const deletedSession = { ...session, sessionId: 'cogseed-session-gconv-deleted', conversationId: 'deleted-conversation' };
     const deletedTask = {
@@ -378,6 +505,62 @@ describe('CogSeed renderer-safe projections', () => {
       session: null,
       collaboration: null,
     });
+  });
+
+  it('enforces visible task IDs and session/task binding for detail projections', async () => {
+    const visibleSession = {
+      ...session,
+      sessionId: 'cogseed-session-visible-detail',
+      conversationId: undefined,
+    };
+    const hiddenSession = {
+      ...session,
+      sessionId: 'cogseed-session-hidden-detail',
+      conversationId: 'run-center-hidden-detail',
+    };
+    const visibleTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-visible-detail',
+      sessionId: visibleSession.sessionId,
+      conversationId: undefined,
+    };
+    const hiddenTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-hidden-detail',
+      sessionId: hiddenSession.sessionId,
+      executionKind: 'group-chat' as const,
+      conversationId: hiddenSession.conversationId,
+    };
+    const tasks = [visibleTask, hiddenTask];
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [visibleSession, hiddenSession]),
+      listTasks: vi.fn(async () => tasks),
+      readTask: vi.fn(async (_userId: string, taskId: string) => tasks.find((task) => task.taskId === taskId) ?? null),
+      readSession: vi.fn(async (_userId: string, sessionId: string) => [visibleSession, hiddenSession].find((item) => item.sessionId === sessionId) ?? null),
+      isConversationAvailable: vi.fn(async () => false),
+    } as any);
+
+    await expect(service.sessionProjection('renderer-user', { taskId: hiddenTask.taskId })).resolves.toEqual({
+      session: null,
+      collaboration: null,
+    });
+    await expect(service.collaborationSnapshot('renderer-user', { taskId: hiddenTask.taskId })).rejects.toThrow('task not found');
+    await expect(service.collaborationSnapshot('renderer-user', {
+      sessionId: visibleSession.sessionId,
+      taskId: hiddenTask.taskId,
+    })).rejects.toThrow('task not found');
+
+    await expect(service.sessionProjection('renderer-user', {
+      sessionId: hiddenSession.sessionId,
+      taskId: visibleTask.taskId,
+    })).resolves.toEqual({
+      session: null,
+      collaboration: null,
+    });
+    await expect(service.collaborationSnapshot('renderer-user', {
+      sessionId: hiddenSession.sessionId,
+      taskId: visibleTask.taskId,
+    })).rejects.toThrow('session/task mismatch');
   });
 
   it('omits sessions without tasks and sorts real runs by latest task activity', async () => {

@@ -885,14 +885,21 @@ async function ensureKstarWakeProjectionConfirmed(
 
 const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
   'cogseed.task.abort': async (payload, ctx) => cogseedBackend.cogseedIpcService.abort(ctx.userId, payload),
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
+  'cogseed.agent.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.agents(ctx.userId),
+  'cogseed.dashboard.diagnostics': async (_payload, ctx) => cogseedBackend.cogseedIpcService.diagnostics(ctx.userId),
+  'cogseed.worktree.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.worktrees(ctx.userId),
+  'cogseed.worktree.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.createWorktree(ctx.userId, payload),
+  'cogseed.worktree.remove': async (payload, ctx) => cogseedBackend.cogseedIpcService.removeWorktree(ctx.userId, payload),
   'cogseed.connector.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.connectors(ctx.userId),
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
@@ -4959,6 +4966,10 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   'cogseed.task.events': async function* (payload, ctx, signal) {
     yield* cogseedBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
+  },
+
+  'cogseed.dashboard.watch': async function* (_payload, ctx, signal) {
+    yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
   },
 
   'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {

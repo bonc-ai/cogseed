@@ -28,6 +28,8 @@ export interface CollaborationEngine {
   skipStep(scope: CollaborationScope, runId: string, stepId: string, reason?: string): Promise<WorkflowStep>;
   resumeRun(scope: CollaborationScope, runId: string, reason?: string): Promise<WorkflowRun>;
   abortRun(scope: CollaborationScope, runId: string, reason?: string): Promise<WorkflowRun>;
+  reviewGate(scope: CollaborationScope, runId: string, gateId: string, decision: 'approve' | 'reject', reason?: string): Promise<SharedTaskContext>;
+  dismissConflict(scope: CollaborationScope, runId: string, conflictId: string, reason?: string): Promise<SharedTaskContext>;
 }
 
 export function createCollaborationEngine(deps: CollaborationEngineDeps): CollaborationEngine {
@@ -150,6 +152,63 @@ export function createCollaborationEngine(deps: CollaborationEngineDeps): Collab
         catch (error) { log.warn('collaboration step cancellation failed after abort', { error: logErrorRef(error), step_id: step.id }); }
       }
       return output;
+    },
+    async reviewGate(scope, runId, gateId, decision, reason) {
+      let output!: SharedTaskContext; let committed!: CollaborationEvent;
+      await deps.store.withLock(scope, async () => {
+        const loaded = await load(scope, runId);
+        const gate = loaded.context.gates.find((item) => item.id === gateId);
+        if (!gate) throw new Error('collaboration gate not found');
+        const timestamp = now();
+        gate.review_decision = decision === 'approve' ? 'approved' : 'rejected';
+        gate.reviewed_by = 'user';
+        gate.reviewed_at = timestamp;
+        if (reason?.trim()) gate.review_reason = reason.trim();
+        else delete gate.review_reason;
+        gate.status = decision === 'approve' ? 'passed' : 'failed';
+        if (decision === 'reject' && gate.review_reason) gate.reason = gate.review_reason;
+        if (decision === 'reject') { loaded.run.status = 'blocked'; loaded.run.phase = 'gate_rejected'; }
+        const reconciled = reconcileStepBlockers(loaded.run, loaded.context);
+        reconciled.run.updated_at = timestamp;
+        reconciled.context.revision += 1;
+        reconciled.context.phase = reconciled.run.phase;
+        reconciled.context.updated_at = timestamp;
+        output = reconciled.context;
+        committed = event(scope, reconciled.run, 'gate_reviewed', {
+          actor_id: 'user',
+          step_id: gate.step_id,
+          gate_id: gate.id,
+          summary: gate.review_reason || gate.name,
+          payload: { decision: gate.review_decision, status: gate.status },
+        });
+        await persist(scope, reconciled.run, reconciled.context, committed);
+      });
+      await publish(scope, committed); return output;
+    },
+    async dismissConflict(scope, runId, conflictId, reason) {
+      let output!: SharedTaskContext; let committed!: CollaborationEvent;
+      await deps.store.withLock(scope, async () => {
+        const loaded = await load(scope, runId);
+        const conflict = loaded.context.conflicts.find((item) => item.id === conflictId);
+        if (!conflict) throw new Error('context conflict not found');
+        if (conflict.status === 'resolved' || conflict.status === 'dismissed') throw new Error('context conflict is already closed');
+        const timestamp = now();
+        conflict.status = 'dismissed';
+        conflict.updated_at = timestamp;
+        const reconciled = reconcileStepBlockers(loaded.run, loaded.context);
+        reconciled.run.updated_at = timestamp;
+        reconciled.context.revision += 1;
+        reconciled.context.phase = reconciled.run.phase;
+        reconciled.context.updated_at = timestamp;
+        output = reconciled.context;
+        committed = event(scope, reconciled.run, 'conflict_status_updated', {
+          actor_id: 'user',
+          summary: reason?.trim() || undefined,
+          payload: { conflict_id: conflict.id, status: conflict.status },
+        });
+        await persist(scope, reconciled.run, reconciled.context, committed);
+      });
+      await publish(scope, committed); return output;
     },
   };
 }

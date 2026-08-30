@@ -2124,6 +2124,23 @@ describe('group_chat bus › abort', () => {
       (bus as any)._setBackendConversationCancellerForTest(null);
     }
   });
+
+  it('does not report a clean group abort when Backend task cancellation fails', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    bus.subscribe(TEST_UID, TEST_CID, () => {});
+    (bus as any)._setBackendConversationCancellerForTest(async () => {
+      throw new Error('injected Backend cancellation failure');
+    });
+
+    try {
+      await expect(bus.abort(TEST_UID, TEST_CID)).rejects.toThrow(/Backend task cancellation failed/i);
+      await expect(state.readState(TEST_UID, TEST_CID)).resolves.toMatchObject({ status: 'aborted' });
+    } finally {
+      (bus as any)._setBackendConversationCancellerForTest(null);
+      await bus.dropConv(TEST_UID, TEST_CID);
+    }
+  });
 });
 
 describe('group_chat bus › processItemsAreRoutingOnly (abort promotion guard)', () => {

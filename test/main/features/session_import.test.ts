@@ -29,6 +29,11 @@ vi.mock('../../../src/main/model/client', () => ({
   },
   async chatWithModel() { return { ok: true, text: '', error: '', aborted: false }; },
 }));
+// Welcome generation may fall back to an installed local CLI when no API
+// model is configured. This pipeline test must not launch a real user tool.
+vi.mock('../../../src/main/features/local_agents/fallback-picker', () => ({
+  pickBestCliForFallback: vi.fn(async () => null),
+}));
 
 let tmpDir: string;
 let homeDir: string;

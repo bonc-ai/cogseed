@@ -22,6 +22,11 @@ async function scopeFor(userId: string, parentRequestId: string) {
   const coordinationId = `cogseed-coord-${parent.taskId.slice('cogseed-task-'.length)}`; const record = await readCogSeedCoordination(userId, coordinationId); if (!record?.workflowRunId) throw new Error('CogSeed workflow not found');
   return { scope: { ownerId: userId, domain: 'cogseed' as const, scopeId: coordinationId }, runId: record.workflowRunId };
 }
+async function scopeForCoordination(userId: string, coordinationId: string) {
+  const record = await readCogSeedCoordination(userId, coordinationId);
+  if (!record?.workflowRunId) throw new Error('CogSeed workflow not found');
+  return { scope: { ownerId: userId, domain: 'cogseed' as const, scopeId: record.coordinationId }, runId: record.workflowRunId };
+}
 
 export interface StartCogSeedCommanderTaskInput extends Omit<StartCogSeedTaskInput, 'sessionId'> {
   conversationId: string;
@@ -39,6 +44,10 @@ export const cogseedControlService = {
   async skipStep(userId: string, parentRequestId: string, stepId: string, reason?: string) { const found = await scopeFor(userId, parentRequestId); return engine().skipStep(found.scope, found.runId, stepId, reason); },
   async resume(userId: string, parentRequestId: string, reason?: string) { const found = await scopeFor(userId, parentRequestId); return engine().resumeRun(found.scope, found.runId, reason); },
   async workflow(userId: string, parentRequestId: string) { const found = await scopeFor(userId, parentRequestId); return createCogSeedCollaborationStore().readRun(found.scope, found.runId); },
+  async retryCoordinationStep(userId: string, coordinationId: string, stepId: string) { const found = await scopeForCoordination(userId, coordinationId); const retried = await engine().retryStep(found.scope, found.runId, stepId); return engine().startStep(found.scope, found.runId, retried.step.id); },
+  async skipCoordinationStep(userId: string, coordinationId: string, stepId: string, reason?: string) { const found = await scopeForCoordination(userId, coordinationId); return engine().skipStep(found.scope, found.runId, stepId, reason); },
+  async reviewCoordinationGate(userId: string, coordinationId: string, gateId: string, decision: 'approve' | 'reject', reason?: string) { const found = await scopeForCoordination(userId, coordinationId); return engine().reviewGate(found.scope, found.runId, gateId, decision, reason); },
+  async dismissCoordinationConflict(userId: string, coordinationId: string, conflictId: string, reason?: string) { const found = await scopeForCoordination(userId, coordinationId); return engine().dismissConflict(found.scope, found.runId, conflictId, reason); },
 
   async session(userId: string, sessionId: string) {
     return readCogSeedSession(userId, sessionId);

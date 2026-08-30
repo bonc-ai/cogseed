@@ -35,20 +35,25 @@ const taskSummary = (status = 'running') => ({
   title: 'Do work.',
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:00:01.000Z',
-  actions: { retry: status === 'failed' || status === 'cancelled', skip: false, resume: status === 'recoverable', abort: status !== 'completed' && status !== 'failed' && status !== 'cancelled' },
+  actions: { retry: status === 'failed' || status === 'cancelled', skip: false, resume: status === 'recoverable', recoverResult: false, abort: status !== 'completed' && status !== 'failed' && status !== 'cancelled' },
 });
 
 const cogseedService = {
   start: vi.fn(async () => taskSummary()),
+  reassign: vi.fn(async () => ({ ...taskSummary(), taskId: 'cogseed-task-linked', requestId: 'req-ipc-linked' })),
   read: vi.fn(async () => taskSummary()),
   cancel: vi.fn(async () => taskSummary('cancelled')),
   abort: vi.fn(async () => taskSummary('cancelled')),
   retry: vi.fn(async () => ({ ...taskSummary('created'), taskId: 'cogseed-task-retry', requestId: 'req-ipc-retry' })),
   resume: vi.fn(async () => taskSummary('recoverable')),
   action: vi.fn(async () => ({ schemaVersion: 1, sessionId: 'cogseed-session-ipc', updatedAt: '2026-08-05T00:00:04.000Z', session: { sessionId: 'cogseed-session-ipc' }, task: taskSummary('running'), actors: [], tasks: [], workflow: { childTaskIds: [], steps: [] }, recovery: { recoverable: false, taskIds: [] }, timeline: [], actions: taskSummary('running').actions })),
+  collaborationAction: vi.fn(async () => ({ schemaVersion: 1, sessionId: 'cogseed-session-ipc', updatedAt: '2026-08-05T00:00:04.000Z', session: { sessionId: 'cogseed-session-ipc' }, task: taskSummary('running'), actors: [], tasks: [], workflow: { childTaskIds: [], steps: [] }, reviews: [], conflicts: [], activity: [], recovery: { recoverable: false, taskIds: [] }, timeline: [], actions: taskSummary('running').actions })),
   events: vi.fn(async () => ({ events: [{ eventId: 'cogseed-event-1', taskId: 'cogseed-task-ipc', sessionId: 'cogseed-session-ipc', sequence: 1, type: 'task.started', createdAt: '2026-08-05T00:00:00.000Z', payload: { summary: 'started' } }], afterSequence: 0 })),
   streamEvents: vi.fn(async function* () {
     yield { type: 'event', event: { eventId: 'cogseed-event-1', taskId: 'cogseed-task-ipc', sessionId: 'cogseed-session-ipc', sequence: 1 } };
+  }),
+  streamDashboardChanges: vi.fn(async function* () {
+    yield { type: 'change', change: { schemaVersion: 1, revision: 1, changeKind: 'task', taskId: 'cogseed-task-ipc', sessionId: 'cogseed-session-ipc', occurredAt: '2026-08-05T00:00:01.000Z', domains: ['tasks', 'sessions', 'agents', 'collaboration'] } };
   }),
   board: vi.fn(async () => ({
     schemaVersion: 1,
@@ -56,6 +61,11 @@ const cogseedService = {
     groups: [],
     counts: { pending: 0, running: 1, attention: 0, completed: 0, archived: 0 },
   })),
+  agents: vi.fn(async () => ({ schemaVersion: 1, updatedAt: '2026-08-27T00:00:00.000Z', agents: [], runtimes: [], channels: [] })),
+  diagnostics: vi.fn(async () => ({ schemaVersion: 1, generatedAt: '2026-08-26T00:00:00.000Z', taskCount: 1, sessionCount: 1, activeTaskCount: 1, attentionTaskCount: 0, sourceCounts: { cogseed: 1, agent: 0, 'local-cli': 0, 'p3394-gateway': 0, 'group-chat': 0 }, statusCounts: { running: 1 }, errorCodes: [], runtime: { activeTaskCount: 1, stateMatchesProjection: true }, coverage: { liveInvalidation: true, payloadRedaction: true, manualRefresh: true } })),
+  worktrees: vi.fn(async () => ({ schemaVersion: 1, repository: { path: '/safe/repository', branch: 'develop' }, worktrees: [] })),
+  createWorktree: vi.fn(async () => ({ path: '/safe/cogseed-worktree-dev-test', name: 'cogseed-worktree-dev-test', branch: 'dev/test', head: 'abc123', dirty: false, verifiable: true })),
+  removeWorktree: vi.fn(async () => ({ removed: true, path: '/safe/cogseed-worktree-dev-test', branch: 'dev/test' })),
   sessions: vi.fn(async () => [{ sessionId: 'cogseed-session-ipc', createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:01.000Z', taskCount: 1, activeTaskCount: 1, latestStatus: 'running', hasRecovery: false }]),
   session: vi.fn(async () => ({
     session: { sessionId: 'cogseed-session-ipc', createdAt: '2026-08-05T00:00:00.000Z', updatedAt: '2026-08-05T00:00:01.000Z', taskCount: 1, activeTaskCount: 1, latestStatus: 'running', hasRecovery: false },
@@ -95,22 +105,36 @@ async function stream(channel: string, payload: unknown = {}) {
 describe('Mate Agent backend IPC channels', () => {
   it('routes task invoke operations through the active user scoped Mate service', async () => {
     await expect(call('cogseed.task.start', { requestId: 'req-ipc', task: 'Do work.', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', requestId: 'req-ipc' });
+    await expect(call('cogseed.task.reassign', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-linked', agentId: 'review-agent', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-linked' });
     await expect(call('cogseed.task.read', { taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', status: 'running' });
     await expect(call('cogseed.task.cancel', { taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', status: 'cancelled' });
     await expect(call('cogseed.task.retry', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-retry', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-retry' });
     await expect(call('cogseed.task.resume', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-resume', continuation: 'Continue.', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', status: 'recoverable' });
     await expect(call('cogseed.task.events', { taskId: 'cogseed-task-ipc', afterSequence: 0, uid: 'attacker' })).resolves.toMatchObject({ ok: true, events: [expect.objectContaining({ eventId: 'cogseed-event-1' })] });
     await expect(call('cogseed.task.list', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, schemaVersion: 1, tasks: [expect.objectContaining({ column: 'running' })] });
+    await expect(call('cogseed.agent.list', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, schemaVersion: 1, agents: [], runtimes: [], channels: [] });
+    await expect(call('cogseed.dashboard.diagnostics', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskCount: 1, runtime: { stateMatchesProjection: true } });
+    await expect(call('cogseed.worktree.list', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, repository: { branch: 'develop' }, worktrees: [] });
+    await expect(call('cogseed.worktree.create', { branch: 'dev/test', baseRef: 'develop', uid: 'attacker' })).resolves.toMatchObject({ ok: true, branch: 'dev/test', verifiable: true });
+    await expect(call('cogseed.worktree.remove', { path: '/safe/cogseed-worktree-dev-test', expectedBranch: 'dev/test', uid: 'attacker' })).resolves.toMatchObject({ ok: true, removed: true, branch: 'dev/test' });
     await expect(call('cogseed.task.action', { action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, sessionId: 'cogseed-session-ipc', workflow: expect.objectContaining({ childTaskIds: [] }) });
+    await expect(call('cogseed.collaboration.action', { action: 'approve-gate', taskId: 'cogseed-task-ipc', targetId: 'gate-1', uid: 'attacker' })).resolves.toMatchObject({ ok: true, sessionId: 'cogseed-session-ipc' });
 
     expect(cogseedService.start).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc', task: 'Do work.', uid: 'attacker' }));
+    expect(cogseedService.reassign).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc-linked', agentId: 'review-agent', uid: 'attacker' }));
     expect(cogseedService.read).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', uid: 'attacker' }));
     expect(cogseedService.cancel).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', uid: 'attacker' }));
     expect(cogseedService.retry).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc-retry', uid: 'attacker' }));
     expect(cogseedService.resume).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', requestId: 'req-ipc-resume', continuation: 'Continue.', uid: 'attacker' }));
     expect(cogseedService.events).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', uid: 'attacker' }));
     expect(cogseedService.board).toHaveBeenCalledWith(TEST_UID);
+    expect(cogseedService.agents).toHaveBeenCalledWith(TEST_UID);
+    expect(cogseedService.diagnostics).toHaveBeenCalledWith(TEST_UID);
+    expect(cogseedService.worktrees).toHaveBeenCalledWith(TEST_UID);
+    expect(cogseedService.createWorktree).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ branch: 'dev/test', uid: 'attacker' }));
+    expect(cogseedService.removeWorktree).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ expectedBranch: 'dev/test', uid: 'attacker' }));
     expect(cogseedService.action).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' }));
+    expect(cogseedService.collaborationAction).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ action: 'approve-gate', targetId: 'gate-1', uid: 'attacker' }));
   });
 
   it('streams Mate task events over the existing cogseed.stream transport', async () => {
@@ -121,6 +145,17 @@ describe('Mate Agent backend IPC channels', () => {
       { type: 'event', event: expect.objectContaining({ eventId: 'cogseed-event-1' }) },
       { type: 'done' },
     ]);
+  });
+
+  it('streams privacy-safe Dashboard invalidations over the existing transport', async () => {
+    const sent = await stream('cogseed.dashboard.watch');
+
+    expect(cogseedService.streamDashboardChanges).toHaveBeenCalledWith(TEST_UID, expect.any(AbortSignal));
+    expect(sent).toEqual([
+      { type: 'change', change: expect.objectContaining({ changeKind: 'task', taskId: 'cogseed-task-ipc', domains: ['tasks', 'sessions', 'agents', 'collaboration'] }) },
+      { type: 'done' },
+    ]);
+    expect(JSON.stringify(sent)).not.toContain('payload');
   });
 
   it('does not expose hidden Core or fallback controls as IPC channels', async () => {

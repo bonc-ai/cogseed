@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { genId12, nowIso, safeId, writeJson } from '../../storage';
-import { appendCogSeedTaskEvent } from './event-store';
+import { appendCogSeedTaskEvent, readCogSeedTaskEvents } from './event-store';
 import { fileEditLock } from '../../util/locks';
 import {
   assertCogSeedRequestId,
@@ -19,15 +19,14 @@ import {
   getOrCreateCogSeedAgentSession,
   getOrCreateCogSeedSession,
   readCogSeedSession,
-  listCogSeedSessions,
   setCogSeedSessionActiveTask,
-  setCogSeedSessionDisplayName,
 } from './session-store';
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import {
   COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
   type CogSeedRequestClaim,
   type CogSeedSessionRecord,
+  type CogSeedTaskEventType,
   type CogSeedTaskRecord,
   type CogSeedLocalCliConfig,
   type CogSeedTaskSkillVersionPin,
@@ -35,6 +34,17 @@ import {
 import { listSkillVersions } from '../skills/version-store';
 import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
+
+const COGSEED_TASK_STATUSES = new Set<string>([
+  'created',
+  'queued',
+  'running',
+  'waiting_user',
+  'completed',
+  'failed',
+  'cancelled',
+  'recoverable',
+]);
 
 export {
   getOrCreateCogSeedAgentSession,
@@ -174,6 +184,13 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli' && row.executionKind !== 'group-chat') {
     throw new Error('malformed CogSeed task');
   }
+  if (row.resultDeliveryState !== undefined
+    && row.resultDeliveryState !== 'not-applicable'
+    && row.resultDeliveryState !== 'pending'
+    && row.resultDeliveryState !== 'delivered'
+    && row.resultDeliveryState !== 'pending-recovery') {
+    throw new Error('malformed CogSeed task');
+  }
   for (const key of ['groupChatRunId', 'groupChatTurnId', 'groupChatSourceMessageId', 'groupChatMessageId', 'groupChatWorkflowRunId', 'groupChatWorkflowStepId'] as const) {
     if (row[key] !== undefined && (typeof row[key] !== 'string' || !safeId(row[key]))) {
       throw new Error('malformed CogSeed task');
@@ -222,12 +239,17 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   }
   if (row.executionKind === 'local-cli' && row.localCli === undefined) throw new Error('malformed CogSeed task');
   assertCogSeedRequestId(row.requestId);
+  if (row.requestFingerprint !== undefined
+    && (typeof row.requestFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(row.requestFingerprint))) {
+    throw new Error('malformed CogSeed task');
+  }
   if (row.lastResumeRequestId !== undefined) assertCogSeedRequestId(String(row.lastResumeRequestId));
   if (row.lastResumeRequestFingerprint !== undefined
     && (typeof row.lastResumeRequestFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(row.lastResumeRequestFingerprint))) {
     throw new Error('malformed CogSeed task');
   }
-  if (typeof row.task !== 'string' || typeof row.status !== 'string' || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') {
+  if (typeof row.task !== 'string' || typeof row.status !== 'string' || !COGSEED_TASK_STATUSES.has(row.status)
+    || typeof row.createdAt !== 'string' || typeof row.updatedAt !== 'string') {
     throw new Error('malformed CogSeed task');
   }
   return row as unknown as CogSeedTaskRecord;
@@ -277,6 +299,147 @@ function createRequestFingerprint(input: CreateCogSeedTaskInput, normalizedTask:
   });
 }
 
+function requestClaimForTask(
+  userId: string,
+  task: CogSeedTaskRecord,
+  requestFingerprint: string,
+): CogSeedRequestClaim {
+  return {
+    schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+    requestId: task.requestId,
+    taskId: task.taskId,
+    ownerId: userId,
+    createdAt: task.createdAt,
+    requestFingerprint,
+  };
+}
+
+async function repairTaskCreationArtifacts(
+  userId: string,
+  task: CogSeedTaskRecord,
+  newlyCreated = false,
+): Promise<void> {
+  const firstEvents = await readCogSeedTaskEvents(userId, task.taskId, 0, 1);
+  const firstEvent = firstEvents[0];
+  if (firstEvent?.type === 'task.created'
+    && firstEvent.payload.requestId !== undefined
+    && firstEvent.payload.requestId !== task.requestId) {
+    throw new Error('CogSeed task creation event is inconsistent');
+  }
+  if (firstEvent && firstEvent.type !== 'task.created' && task.status === 'created') {
+    throw new Error('CogSeed task creation event is inconsistent');
+  }
+
+  const session = await readCogSeedSession(userId, task.sessionId);
+  if (!session) throw new Error('CogSeed task references a missing session');
+  if (session.activeTaskId !== task.taskId) {
+    const currentActive = session.activeTaskId
+      ? await readCogSeedTask(userId, session.activeTaskId)
+      : null;
+    const shouldRepairPointer = newlyCreated
+      || !currentActive
+      || (!firstEvent && currentActive.createdAt < task.createdAt);
+    if (shouldRepairPointer) {
+      await setCogSeedSessionActiveTask(userId, task.sessionId, task.taskId);
+    }
+  }
+
+  if (!firstEvent) {
+    await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'task.created', {
+      requestId: task.requestId,
+    });
+  }
+}
+
+/** Repair the artifacts that make an admitted task safe to recover. This is
+ * intentionally idempotent so boot recovery can call it before changing a
+ * freshly-created task's lifecycle state. */
+export async function ensureCogSeedTaskCreationArtifacts(
+  userId: string,
+  task: CogSeedTaskRecord,
+): Promise<void> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(task.taskId);
+  await repairTaskCreationArtifacts(userId, task);
+}
+
+const STATUS_EVENT: Readonly<Partial<Record<CogSeedTaskRecord['status'], CogSeedTaskEventType>>> = {
+  queued: 'task.queued',
+  running: 'task.started',
+  waiting_user: 'task.waiting_user',
+  completed: 'task.completed',
+  failed: 'task.failed',
+  cancelled: 'task.cancelled',
+  recoverable: 'task.recoverable',
+};
+
+const EVENT_STATUS = new Map<CogSeedTaskEventType, CogSeedTaskRecord['status']>([
+  ['task.created', 'created'],
+  ['task.queued', 'queued'],
+  ['task.started', 'running'],
+  ['task.waiting_user', 'waiting_user'],
+  ['task.completed', 'completed'],
+  ['task.failed', 'failed'],
+  ['task.cancelled', 'cancelled'],
+  ['task.recoverable', 'recoverable'],
+]);
+
+function repairPayloadForTask(
+  task: CogSeedTaskRecord,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  if ((task.status === 'failed' || task.status === 'recoverable') && task.errorCode) {
+    return { errorCode: task.errorCode, ...override };
+  }
+  return override;
+}
+
+/**
+ * Reconcile the process-crash window between the atomic task JSON rename and
+ * the matching JSONL append. This never invents intermediate states: it only
+ * appends the event that describes the already-durable current task status.
+ */
+export async function ensureCogSeedTaskLifecycleArtifact(
+  userId: string,
+  taskId: string,
+  payload: Record<string, unknown> = {},
+): Promise<boolean> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const file = cogseedTaskFile(userId, taskId);
+  return fileEditLock(file).runExclusive(async () => {
+    const task = await readCogSeedTask(userId, taskId);
+    if (!task) throw new Error('CogSeed task not found');
+    const expectedType = STATUS_EVENT[task.status];
+    if (!expectedType) return false;
+
+    let afterSequence = 0;
+    let last: import('./types').CogSeedTaskEvent | undefined;
+    for (;;) {
+      const batch = await readCogSeedTaskEvents(userId, taskId, afterSequence, 500);
+      for (const event of batch) {
+        if (EVENT_STATUS.has(event.type)) last = event;
+      }
+      if (batch.length < 500) break;
+      afterSequence = batch[batch.length - 1].sequence;
+    }
+    if (last?.type === expectedType) return false;
+
+    const lastStatus = last ? EVENT_STATUS.get(last.type) : undefined;
+    if (lastStatus === 'completed' || lastStatus === 'failed' || lastStatus === 'cancelled') {
+      throw new Error(`CogSeed task/event terminal state conflict: ${lastStatus} -> ${task.status}`);
+    }
+    await appendCogSeedTaskEvent(
+      userId,
+      task.taskId,
+      task.sessionId,
+      expectedType,
+      repairPayloadForTask(task, payload),
+    );
+    return true;
+  });
+}
+
 export async function readCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord | null> {
   assertCogSeedUserId(userId);
   assertCogSeedTaskId(taskId);
@@ -308,15 +471,73 @@ export async function updateCogSeedTask(
   });
 }
 
+/** Persist one task mutation and its lifecycle event as one recoverable local
+ * operation. A normal append failure restores the prior task record while the
+ * task-file lock still excludes competing transitions. */
+export async function updateCogSeedTaskWithEvent(
+  userId: string,
+  taskId: string,
+  mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord | Promise<CogSeedTaskRecord>,
+  event: { type: CogSeedTaskEventType; payload: Record<string, unknown> },
+): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const file = cogseedTaskFile(userId, taskId);
+  return fileEditLock(file).runExclusive(async () => {
+    const current = await readCogSeedTask(userId, taskId);
+    if (!current) throw new Error('CogSeed task not found');
+    const next = await mutate(current);
+    if (next === current) return current;
+    const validated = validateTask(userId, next, taskId);
+    await writeJson(file, validated);
+    try {
+      await appendCogSeedTaskEvent(userId, taskId, validated.sessionId, event.type, event.payload);
+      return validated;
+    } catch (error) {
+      await writeJson(file, current);
+      throw error;
+    }
+  });
+}
+
+/** Append an execution-progress event only while the task is still active.
+ * Taking the task lock before the event lock matches lifecycle transitions and
+ * prevents a late Runtime callback from being written after a terminal event. */
+export async function appendCogSeedTaskEventIfActive(
+  userId: string,
+  taskId: string,
+  type: CogSeedTaskEventType,
+  payload: Record<string, unknown>,
+): Promise<import('./types').CogSeedTaskEvent | null> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const file = cogseedTaskFile(userId, taskId);
+  return fileEditLock(file).runExclusive(async () => {
+    const task = await readCogSeedTask(userId, taskId);
+    if (!task) throw new Error('CogSeed task not found');
+    // Runtime progress belongs only to an execution that still owns an active
+    // state. Lifecycle events for created/queued/recoverable use the separate
+    // atomic task+event transition path and must not be appended here.
+    if (task.status !== 'running' && task.status !== 'waiting_user') return null;
+    return appendCogSeedTaskEvent(userId, taskId, task.sessionId, type, payload);
+  });
+}
+
 
 export async function readCogSeedTaskByRequestId(userId: string, requestId: string): Promise<CogSeedTaskRecord | null> {
   assertCogSeedUserId(userId);
   const claimFile = cogseedRequestClaimFile(userId, assertCogSeedRequestId(requestId));
   try {
     const claim = validateClaim(userId, requestId, JSON.parse(await fs.readFile(claimFile, 'utf8')));
-    return readCogSeedTask(userId, claim.taskId);
+    const task = await readCogSeedTask(userId, claim.taskId);
+    if (!task) throw new Error('CogSeed request claim references a missing task');
+    return task;
   } catch (error) {
-    if (isEnoent(error)) return null;
+    if (isEnoent(error)) {
+      const orphaned = (await listCogSeedTasks(userId)).filter((task) => task.requestId === requestId);
+      if (orphaned.length > 1) throw new Error('multiple CogSeed tasks found for request ID');
+      return orphaned[0] ?? null;
+    }
     if (error instanceof SyntaxError) throw new Error('malformed CogSeed request claim');
     throw error;
   }
@@ -377,14 +598,50 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       if (claim.requestFingerprint && claim.requestFingerprint !== requestFingerprint) {
         throw new Error('CogSeed request ID payload conflict');
       }
-      const existing = await readCogSeedTask(userId, claim.taskId);
+      let existing = await readCogSeedTask(userId, claim.taskId);
       if (!existing) throw new Error('CogSeed request claim references a missing task');
+      if (existing.requestId !== requestId) throw new Error('CogSeed request claim references a mismatched task');
+      if (claim.requestFingerprint && existing.requestFingerprint
+        && claim.requestFingerprint !== existing.requestFingerprint) {
+        throw new Error('CogSeed request fingerprint mismatch');
+      }
+      const persistedFingerprint = claim.requestFingerprint ?? existing.requestFingerprint;
+      if (persistedFingerprint && persistedFingerprint !== requestFingerprint) {
+        throw new Error('CogSeed request ID payload conflict');
+      }
+      if (!existing.requestFingerprint && claim.requestFingerprint) {
+        existing = await updateCogSeedTask(userId, existing.taskId, (current) => ({
+          ...current,
+          requestFingerprint: claim.requestFingerprint,
+        }));
+      }
+      if (!claim.requestFingerprint && existing.requestFingerprint) {
+        await writeJson(claimFile, requestClaimForTask(userId, existing, existing.requestFingerprint));
+      }
+      await repairTaskCreationArtifacts(userId, existing);
       return { task: existing, created: false };
     } catch (error) {
       if (!isEnoent(error)) {
         if (error instanceof SyntaxError) throw new Error('malformed CogSeed request claim');
         throw error;
       }
+    }
+
+    const orphaned = (await listCogSeedTasks(userId)).filter((candidate) => candidate.requestId === requestId);
+    if (orphaned.length > 1) {
+      throw new Error('multiple CogSeed tasks found for request ID; refusing automatic claim repair');
+    }
+    if (orphaned.length === 1) {
+      const existing = orphaned[0];
+      if (!existing.requestFingerprint) {
+        throw new Error('CogSeed orphan task request fingerprint is unavailable');
+      }
+      if (existing.requestFingerprint !== requestFingerprint) {
+        throw new Error('CogSeed request ID payload conflict');
+      }
+      await writeJson(claimFile, requestClaimForTask(userId, existing, existing.requestFingerprint));
+      await repairTaskCreationArtifacts(userId, existing);
+      return { task: existing, created: false };
     }
 
     const requestedAgentId = input.agentId ? assertCogSeedAgentId(String(input.agentId)) : undefined;
@@ -424,12 +681,16 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       runtimeSessionId: session.runtimeSessionId,
       executionId: 'cogseed-exec-' + genId12(),
       requestId,
+      requestFingerprint,
       ownerId: userId,
       status: 'created',
       task,
       ...(requestedConversationId ? { conversationId: requestedConversationId } : {}),
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       ...(input.executionKind ? { executionKind: input.executionKind } : {}),
+      ...(requestedConversationId && requestedAgentId && input.executionKind !== 'group-chat'
+        ? { resultDeliveryState: 'pending' as const }
+        : {}),
       ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}),
       ...(input.groupChatTurnId ? { groupChatTurnId: input.groupChatTurnId } : {}),
       ...(input.groupChatSourceMessageId ? { groupChatSourceMessageId: input.groupChatSourceMessageId } : {}),
@@ -463,18 +724,10 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       createdAt,
       updatedAt: createdAt,
     };
-    const claim: CogSeedRequestClaim = {
-      schemaVersion: COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
-      requestId,
-      taskId: taskRecord.taskId,
-      ownerId: userId,
-      createdAt,
-      requestFingerprint,
-    };
+    const claim = requestClaimForTask(userId, taskRecord, requestFingerprint);
     await writeJson(cogseedTaskFile(userId, taskRecord.taskId), taskRecord);
+    await repairTaskCreationArtifacts(userId, taskRecord, true);
     await writeJson(claimFile, claim);
-    await setCogSeedSessionActiveTask(userId, session.sessionId, taskRecord.taskId);
-    await appendCogSeedTaskEvent(userId, taskRecord.taskId, taskRecord.sessionId, 'task.created', { requestId });
     return { task: taskRecord, created: true };
   });
 }

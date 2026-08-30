@@ -143,6 +143,8 @@ export interface Conversation {
   /** Record-level conflict clock for aggregate `_index.json` merges. */
   _sync_rev?: number;
   _sync_device_id?: string;
+  /** Main-process-only generation fence for retained terminal result delivery. */
+  _cogseed_result_generation?: string;
   created_at: string;
   updated_at: string;
   /** Derived from group_chat state.json at read time; never persisted on
@@ -335,6 +337,10 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {
     out._sync_device_id = raw[RECORD_SYNC_DEVICE_FIELD];
   }
+  if (typeof raw._cogseed_result_generation === 'string'
+    && /^cogseed-generation-[A-Za-z0-9_-]+$/.test(raw._cogseed_result_generation)) {
+    out._cogseed_result_generation = raw._cogseed_result_generation;
+  }
   return out;
 }
 
@@ -468,6 +474,7 @@ const CLEARABLE_CONVERSATION_FIELDS = [
   'pin_state_updated_at',
   'title_manually_set',
   'deleted_at',
+  '_cogseed_result_generation',
 ] as const satisfies readonly (keyof Conversation)[];
 
 function hasOwn(obj: object, key: PropertyKey): boolean {
@@ -2008,6 +2015,51 @@ export async function getConversation(
   return target.find((c) => c.conversation_id === cid) || null;
 }
 
+export type CogSeedConversationDeliveryBinding =
+  | { state: 'missing' }
+  | { state: 'deleted'; generation?: string }
+  | { state: 'active'; generation?: string };
+
+/** Read the durable destination fence without using the user-facing list,
+ * which intentionally filters tombstones. */
+export async function readCogSeedConversationDeliveryBinding(
+  userId: string,
+  cid: string,
+): Promise<CogSeedConversationDeliveryBinding> {
+  if (!safeId(cid)) return { state: 'missing' };
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    if (!target) return { state: 'missing' } as const;
+    const generation = target.conversation._cogseed_result_generation;
+    return isDeletedConversation(target.conversation)
+      ? { state: 'deleted' as const, ...(generation ? { generation } : {}) }
+      : { state: 'active' as const, ...(generation ? { generation } : {}) };
+  });
+}
+
+/** Lazily fence legacy active conversations when the first v2 result is
+ * retained. A deleted row is never revived by this migration. */
+export async function ensureCogSeedConversationDeliveryGeneration(
+  userId: string,
+  cid: string,
+): Promise<string | null> {
+  if (!safeId(cid)) return null;
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    if (!target || isDeletedConversation(target.conversation)) return null;
+    if (target.conversation._cogseed_result_generation) {
+      return target.conversation._cogseed_result_generation;
+    }
+    const generation = `cogseed-generation-${genId12()}`;
+    const next = _stampConversationSync(userId, {
+      ...target.conversation,
+      _cogseed_result_generation: generation,
+    });
+    await store.persistTarget(target, next);
+    return generation;
+  });
+}
+
 export interface CreateConversationOptions {
   kind?: ConversationKind;
   agentId?: string;
@@ -2024,6 +2076,9 @@ export interface CreateConversationOptions {
    *  minted the id. Must be a `safeId`; if it collides with an existing conv,
    *  that conv is returned unchanged. Defaults to a fresh generated id. */
   conversationId?: string;
+  /** Internal import-only escape hatch. Explicit ids do not normally revive a
+   * user-deleted Conversation. */
+  reviveDeleted?: boolean;
   /** Set by `features/auto_tasks.ts::_fireTask` so the conversation carries
    *  a back-link to the task that spawned it. Used by the renderer for the
    *  clock-icon prefix and the auto-tab expand-panel grouping. */
@@ -2051,10 +2106,14 @@ function normaliseConversationTitle(raw: unknown): string {
 
 export async function createConversation(userId: string, {
   kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
-  channelPlatform = '', imported = false, needs_welcome = false,
+  channelPlatform = '', imported = false, needs_welcome = false, reviveDeleted = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
-  const outcome = await _withConversationIndexStore(userId, async (store) => {
+  const conversationGuard = explicitCid
+    ? await import('./cogseed_backend/conversation-operation-guard')
+    : null;
+  const create = async (): Promise<Conversation> => {
+    const outcome = await _withConversationIndexStore(userId, async (store) => {
     if (explicitCid) {
       // Externally supplied ids must retain global collision semantics. This
       // rare path may inspect all compact roots; generated ids below do not.
@@ -2063,11 +2122,13 @@ export async function createConversation(userId: string, {
         return { conversation: existing.conversation, action: 'existing' as const };
       }
       if (existing) {
+        if (!reviveDeleted) throw new conversationGuard!.CogSeedConversationUnavailableError();
         const current = existing.conversation;
         const previousProjectId = current.project_id;
         const now = nowIso();
         const revived: Conversation = _stampConversationSync(userId, {
           ...current,
+          _cogseed_result_generation: `cogseed-generation-${genId12()}`,
           title: title ? normaliseConversationTitle(title) : (current.title || t('chat.default_title')),
           kind,
           agent_id: agentId || current.agent_id || '',
@@ -2102,6 +2163,7 @@ export async function createConversation(userId: string, {
     const now = nowIso();
     const created: Conversation = _stampConversationSync(userId, {
       conversation_id: cid,
+      _cogseed_result_generation: `cogseed-generation-${genId12()}`,
       title: normaliseConversationTitle(title),
       kind,
       agent_id: agentId || '',
@@ -2121,29 +2183,37 @@ export async function createConversation(userId: string, {
     });
     await store.insert(_conversationRootKey(created.project_id), created);
     return { conversation: created, action: 'created' as const };
-  });
+    });
 
-  const conv = outcome.conversation;
-  if (outcome.action === 'existing') return conv;
+    const conv = outcome.conversation;
+    if (outcome.action === 'existing') return conv;
 
   // 空间内新建会话会让空间产物列表多一个新来源：主动失效产物缓存，
   // 避免下次打开产物 tab 还显示旧列表（动态 import 避免与 spaces_artifacts 成环）。
-  if (spaceId) {
-    try {
-      await import('./spaces_artifacts').then((m) => m.invalidateSpaceArtifacts(spaceId));
-    } catch { /* best-effort：失效失败只是多一次全量扫描 */ }
-  }
+    if (spaceId) {
+      try {
+        await import('./spaces_artifacts').then((m) => m.invalidateSpaceArtifacts(spaceId));
+      } catch { /* best-effort：失效失败只是多一次全量扫描 */ }
+    }
 
   // Touch jsonl so subsequent reads don't 404.
-  const msgFile = conversationMessageFile(userId, conv.conversation_id, conv.project_id ?? null);
-  await fsp.mkdir(path.dirname(msgFile), { recursive: true });
-  await fsp.writeFile(msgFile, '', { flag: 'a' });
-  if (outcome.action === 'revived') {
-    log.info(`revived user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || outcome.previousProjectId || '-'}`);
-  } else {
-    log.info(`created user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || '-'}`);
-  }
-  return conv;
+    const msgFile = conversationMessageFile(userId, conv.conversation_id, conv.project_id ?? null);
+    await fsp.mkdir(path.dirname(msgFile), { recursive: true });
+    await fsp.writeFile(msgFile, '', { flag: 'a' });
+    if (outcome.action === 'revived') {
+      log.info(`revived user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || outcome.previousProjectId || '-'}`);
+    } else {
+      log.info(`created user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || '-'}`);
+    }
+    return conv;
+  };
+  if (!explicitCid) return create();
+  return conversationGuard!.withCogSeedConversationCreation(
+    userId,
+    explicitCid,
+    { reviveDeleted },
+    create,
+  );
 }
 
 export async function updateConversation(
@@ -2352,20 +2422,42 @@ async function _purgeDeletedConversationFiles(userId: string, cid: string, remov
   // own machine-local session files (~/.claude/...) are left alone;
   // claude self-GCs.
   try {
-    const cliSessions = require('./local_agents/sessions');
-    if (typeof cliSessions?.clearForConversation === 'function') {
-      await cliSessions.clearForConversation(userId, cid);
-    }
+    const cliSessions = await import('./local_agents/sessions');
+    await cliSessions.clearForConversation(userId, cid);
   } catch (err) { log.warn(`purge cli sessions user=${userId} cid=${cid}: ${(err as Error).message}`); }
+
+  // Pending terminal results remain execution-owned after the destination is
+  // deleted. Recovery may report the missing destination, but must not destroy
+  // the only durable copy or recreate the conversation implicitly.
 
   log.info(`deleted user=${userId} cid=${cid}`);
 }
 
-export async function deleteConversation(
+async function prepareConversationDeletion(
   userId: string,
   cid: string,
   projectIdHint?: string | null,
-): Promise<boolean> {
+): Promise<{
+  removed: Conversation | null;
+  settled: Promise<void>;
+}> {
+  let settled = Promise.resolve();
+  let markTombstoned = () => {};
+  const tombstoned = new Promise<void>((resolve) => { markTombstoned = resolve; });
+  try {
+    const { cogseedRuntimeController } = await import('./cogseed_backend/runtime-controller');
+    const cancellation = await cogseedRuntimeController.cancelConversationTasksForDeletion(userId, cid);
+    settled = Promise.all([cancellation.settled, tombstoned]).then(async () => {
+      try {
+        await cogseedRuntimeController.reconcileConversationResultDeliveries(userId, cid);
+      } catch (error) {
+        log.warn(`pending result reconciliation failed user=${userId} cid=${cid}: ${(error as Error).message}`);
+      }
+    });
+  } catch {
+    log.warn('Unable to stop CogSeed tasks before deleting a conversation');
+    throw new Error('Unable to stop CogSeed tasks before deleting the conversation');
+  }
   let removed: Conversation | null = null;
   const found = await _withConversationIndexStore(userId, async (store) => {
     const target = await store.findTarget(cid, projectIdHint);
@@ -2386,9 +2478,27 @@ export async function deleteConversation(
     }
     return true;
   });
-  if (!found || !removed) return false;
-  await _purgeDeletedConversationFiles(userId, cid, removed);
-  return true;
+  markTombstoned();
+  return { removed: found ? removed : null, settled };
+}
+
+export async function deleteConversation(
+  userId: string,
+  cid: string,
+  projectIdHint?: string | null,
+): Promise<boolean> {
+  const { withCogSeedConversationDeletionPhases } = await import('./cogseed_backend/conversation-operation-guard');
+  let removed: Conversation | null = null;
+  return withCogSeedConversationDeletionPhases(
+    userId,
+    cid,
+    async () => {
+      const prepared = await prepareConversationDeletion(userId, cid, projectIdHint);
+      removed = prepared.removed;
+      return { removed: !!prepared.removed, settled: prepared.settled };
+    },
+    async () => _purgeDeletedConversationFiles(userId, cid, removed!),
+  );
 }
 
 /** Read raw group messages from `<cid>.jsonl`. UI uses this for initial

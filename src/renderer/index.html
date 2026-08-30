@@ -45,7 +45,6 @@
         <button class="sidebar-btn" id="run-center-btn"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行中心</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
-        <button class="sidebar-btn" id="dashboard-btn"><span data-ui-icon="layout-grid" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.dashboard">智能体总览</span></button>
       </div>
       <div class="sidebar-conversation-nav">
         <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
@@ -70,7 +69,6 @@
            data-i18n-title="sidebar.resize_title"
            title="Drag to resize · double-click to reset"></div>
     </aside>
-
     <main class="main-content">
       <div class="main-top-actions">
         <div class="model-guard-slot" id="model-guard-slot"></div>
@@ -287,7 +285,9 @@
                        the recipient chip — see initUserWorkspace(). -->
                   <div class="chat-skill-chip" id="chat-skill-chip" data-target="conversation" style="display:none">
                     <span class="chip-label"></span>
-                    <span class="chip-close" data-i18n-title="chat.chip_remove_title" title="Remove">×</span>
+                    <button type="button" class="chip-close" data-i18n-title="chat.chip_remove_title" data-i18n-aria-label="chat.chip_remove_title" title="Remove" aria-label="Remove">
+                      <span data-ui-icon="x" data-ui-icon-class="chip-close-icon"></span>
+                    </button>
                   </div>
                   <button id="chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
                     <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
@@ -629,75 +629,11 @@
         </div>
       </section>
 
-      <!-- Dashboard — 智能体总览（第二期）：内置 / 外接·本机 / 外接·远端 三分区
-           统一管理。数据由 modules/dashboard.js 懒加载渲染。样式复用全局
-           .btn 体系与主题变量，卡片行 + 胶囊徽章对齐 connections 面板设计语言。 -->
-      <section class="panel" id="panel-dashboard">
-        <div class="dash-container">
-          <div class="dash-inner">
-            <header class="dash-header">
-              <div class="dash-header-titles">
-                <h2 data-i18n="dashboard.title">智能体总览</h2>
-                <p class="dash-subtitle" data-i18n="dashboard.subtitle">统一管理内置、本机与远端的智能体</p>
-              </div>
-              <div class="dash-header-actions">
-                <button type="button" class="btn btn-sm" id="dash-refresh-btn" data-i18n="dashboard.refresh">刷新</button>
-              </div>
-            </header>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.builtin_section">内置智能体</h3>
-              </div>
-              <div class="dash-list" id="dash-builtin-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.local_section">外接 · 本机</h3>
-                <button type="button" class="btn btn-sm" data-dash-action="add-local" data-i18n="dashboard.add_local">+ 添加本机 CLI</button>
-              </div>
-              <div class="dash-list" id="dash-local-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.remote_section">外接 · 远端</h3>
-              </div>
-              <div class="dash-list" id="dash-remote-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-              <details class="dash-remote-form">
-                <summary><span data-i18n="dashboard.add_remote">+ 添加远端节点</span></summary>
-                <form class="dash-form" id="dash-remote-form">
-                  <label><span data-i18n="dashboard.form_label">名称</span><input type="text" id="dash-remote-label" placeholder="老王的 Hermes" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_endpoint">地址</span><input type="text" id="dash-remote-endpoint" placeholder="http://192.168.1.20:8444" autocomplete="off" spellcheck="false"></label>
-                  <label><span data-i18n="dashboard.form_token">令牌</span><input type="password" id="dash-remote-token" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_identity">期望身份（可选）</span><input type="text" id="dash-remote-identity" placeholder="agent_id" autocomplete="off" spellcheck="false"></label>
-                  <div class="dash-form-actions">
-                    <button type="submit" class="btn btn-sm btn-primary" id="dash-remote-submit" data-i18n="dashboard.form_submit">测试并添加</button>
-                  </div>
-                  <div class="dash-form-status" id="dash-remote-status" role="status"></div>
-                </form>
-              </details>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.channels_section">通讯渠道</h3>
-              </div>
-              <div class="dash-list" id="dash-channel-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- Connections — 连接：Agent / MCP与工具 / 数据源 / 触点 / 模型与额度。
            MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
       <section class="panel" id="panel-connections">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="connections-container">
           <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="连接">
             <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
@@ -1109,11 +1045,13 @@
 
       <!-- Run Center: private Task/Event projections only, loaded on demand. -->
       <section class="panel" id="panel-run-center">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div id="run-center-root"></div>
       </section>
 
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
       <section class="panel" id="panel-workspace">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="ws-view" id="ws-view"></div>
       </section>
 

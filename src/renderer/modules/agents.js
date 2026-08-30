@@ -799,6 +799,8 @@ function renderAgentsGrid(agents) {
     const deliveryCount = _agentDeliveryCount(a);
     const descClass = desc ? 'agent-card-desc' : 'agent-card-desc is-empty';
     const descText = desc || t('agents.placeholder_unset');
+    const agentName = a.name || t('agents.unnamed');
+    const openLabel = `${t('agents.manage_tooltip')}: ${agentName}`;
     const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
     const avatarHtml = renderAvatarHtml(a.icon, a.color, {
       size: 32,
@@ -817,10 +819,11 @@ function renderAgentsGrid(agents) {
     const provenanceChips = _isAgentPlatformSource(a.source) ? _agentPlatformStatusChipsHtml(a) : '';
     return `
       <div class="agent-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(a.agent_id)}" data-source="${escapeHtml(a.source || '')}">
+        <button type="button" class="agent-card-open" data-agent-open aria-label="${escapeHtml(openLabel)}"></button>
         <div class="agent-card-header">
           ${avatarHtml}
           <div class="agent-card-title">
-            <span class="agent-card-name">${escapeHtml(a.name || t('agents.unnamed'))}</span>
+            <span class="agent-card-name">${escapeHtml(agentName)}</span>
             ${metaHtml ? `<span class="agent-card-meta">${metaHtml}</span>` : ''}
           </div>
           ${moreBtn}
@@ -2677,7 +2680,7 @@ async function _renderExternalPanelPeers() {
     openBtn.addEventListener('click', async (e) => {
       e.preventDefault();
       if (typeof closeAgentModal === 'function') closeAgentModal();
-      if (typeof window.setView === 'function') window.setView('dashboard');
+      if (typeof window.setView === 'function') window.setView('run-center', undefined, { runCenterView: 'agents' });
     });
   }
 }
@@ -3786,7 +3789,12 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  let agents = (_agentsCache || []).filter((a) => a.enabled !== false);
+  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+  let agents = (_agentsCache || []).filter((a) => {
+    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
+    const runtime = a.runtime;
+    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
+  });
   // Project scope: only show agents bound to the active context's project.
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
   // rule). `null` = no project scope, full listing.

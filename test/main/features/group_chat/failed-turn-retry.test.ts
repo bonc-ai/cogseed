@@ -4,6 +4,36 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const storageFaults = vi.hoisted(() => ({
+  failCompletedRetryClaimWrite: false,
+  failPendingRetryClaimWrite: false,
+}));
+
+vi.mock('../../../../src/main/storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/storage')>();
+  return {
+    ...actual,
+    writeJson: async (...args: Parameters<typeof actual.writeJson>) => {
+      const [file, value] = args;
+      if (storageFaults.failPendingRetryClaimWrite
+        && String(file).includes('dashboard-retry-claims')
+        && value && typeof value === 'object'
+        && (value as { status?: unknown }).status === 'pending') {
+        storageFaults.failPendingRetryClaimWrite = false;
+        throw new Error('simulated failure after target claim persistence');
+      }
+      if (storageFaults.failCompletedRetryClaimWrite
+        && String(file).includes('dashboard-retry-claims')
+        && value && typeof value === 'object'
+        && (value as { status?: unknown }).status === 'completed') {
+        storageFaults.failCompletedRetryClaimWrite = false;
+        throw new Error('simulated retry claim completion failure');
+      }
+      return actual.writeJson(...args);
+    },
+  };
+});
+
 let tmpDir: string;
 let previousWorkspace: string | undefined;
 
@@ -14,6 +44,8 @@ beforeEach(async () => {
   previousWorkspace = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
+  storageFaults.failCompletedRetryClaimWrite = false;
+  storageFaults.failPendingRetryClaimWrite = false;
   const users = await import('../../../../src/main/features/users');
   users.activateUser(UID);
 });
@@ -50,6 +82,14 @@ async function writeAttempt(cid: string, failure: Record<string, unknown>) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`);
   return rows;
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for retry turn');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe('group_chat failed-turn smart retry', () => {
@@ -343,5 +383,332 @@ describe('group_chat failed-turn smart retry', () => {
       .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     expect(rows.filter((row) => row.action_request_id === input.requestId)).toHaveLength(1);
     await groupChat.dropConv(UID, cid);
+  });
+
+  it('allows only one request ID to claim the same failed message concurrently', async () => {
+    const cid = 'retry-target-claim-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const base = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+    };
+
+    const results = await Promise.all([
+      groupChat.retryFailedTurn({ ...base, requestId: 'req-dashboard-target-a' }),
+      groupChat.retryFailedTurn({ ...base, requestId: 'req-dashboard-target-b' }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      { ok: false, error: 'retry target already claimed' },
+    ]);
+    const layout = await import('../../../../src/main/util/project-layout');
+    const rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    expect(rows.filter((row) => (
+      row.action_request_id === 'req-dashboard-target-a'
+      || row.action_request_id === 'req-dashboard-target-b'
+    ))).toHaveLength(1);
+    await groupChat.dropConv(UID, cid);
+  });
+
+  it('lets a fresh request ID take over when only the target claim persisted before the message', async () => {
+    const cid = 'retry-target-before-message-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const interruptedInput = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-target-before-message-a',
+    };
+    const recoveryInput = {
+      ...interruptedInput,
+      requestId: 'req-dashboard-target-before-message-b',
+    };
+    let releaseTurn = () => {};
+    const holdTurn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let startedTurns = 0;
+    bus._setActorTurnPreBodyHookForTest(async () => {
+      startedTurns += 1;
+      await holdTurn;
+    });
+
+    try {
+      storageFaults.failPendingRetryClaimWrite = true;
+      expect(await groupChat.retryFailedTurn(interruptedInput)).toEqual({
+        ok: false,
+        error: 'simulated failure after target claim persistence',
+      });
+      const layout = await import('../../../../src/main/util/project-layout');
+      let rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      expect(rows.filter((row) => row.action_request_id)).toHaveLength(0);
+      expect(fs.existsSync(path.join(
+        layout.conversationLayout(UID, cid).groupDir,
+        'dashboard-retry-target-claims',
+        `${cid}-failed.json`,
+      ))).toBe(true);
+      expect(fs.existsSync(path.join(
+        layout.conversationLayout(UID, cid).groupDir,
+        'dashboard-retry-claims',
+        `${interruptedInput.requestId}.json`,
+      ))).toBe(false);
+
+      const recovered = await groupChat.retryFailedTurn(recoveryInput);
+      expect(recovered).toMatchObject({
+        ok: true,
+        mode: 'restart',
+        msg: { action_request_id: recoveryInput.requestId },
+      });
+      await waitUntil(() => startedTurns === 1);
+      await expect(groupChat.retryFailedTurn(interruptedInput)).resolves.toEqual({
+        ok: false,
+        error: 'retry target already claimed',
+      });
+      expect(startedTurns).toBe(1);
+      rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      expect(rows.filter((row) => (
+        row.action_request_id === interruptedInput.requestId
+        || row.action_request_id === recoveryInput.requestId
+      ))).toHaveLength(1);
+    } finally {
+      bus._setActorTurnPreBodyHookForTest(null);
+      releaseTurn();
+      await waitUntil(() => bus.isQuiescent(UID, cid), 5_000).catch(() => undefined);
+      await groupChat.dropConv(UID, cid);
+    }
+  });
+
+  it('lets a fresh request ID take over one persisted retry after failure before queue insertion', async () => {
+    const cid = 'retry-persisted-before-queue-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const interruptedInput = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-persisted-before-queue-a',
+    };
+    const recoveryInput = {
+      ...interruptedInput,
+      requestId: 'req-dashboard-persisted-before-queue-b',
+    };
+    let releaseTurn = () => {};
+    const holdTurn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let startedTurns = 0;
+    bus._setBeforeQueueDispatchForTest(() => {
+      throw new Error('simulated failure before queue insertion');
+    });
+    bus._setActorTurnPreBodyHookForTest(async () => {
+      startedTurns += 1;
+      await holdTurn;
+    });
+
+    try {
+      const interrupted = await groupChat.retryFailedTurn(interruptedInput);
+      expect(interrupted).toEqual({
+        ok: false,
+        error: 'simulated failure before queue insertion',
+      });
+      bus._setBeforeQueueDispatchForTest(null);
+
+      const recovered = await groupChat.retryFailedTurn(recoveryInput);
+      expect(recovered).toMatchObject({
+        ok: true,
+        mode: 'restart',
+        msg: { action_request_id: interruptedInput.requestId },
+      });
+      await waitUntil(() => startedTurns === 1);
+      const replay = await groupChat.retryFailedTurn(recoveryInput);
+      expect(replay).toMatchObject({ ok: true, msg: { id: recovered.msg?.id } });
+      expect(startedTurns).toBe(1);
+
+      const layout = await import('../../../../src/main/util/project-layout');
+      const rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      expect(rows.filter((row) => (
+        row.action_request_id === interruptedInput.requestId
+        || row.action_request_id === recoveryInput.requestId
+      ))).toHaveLength(1);
+    } finally {
+      bus._setBeforeQueueDispatchForTest(null);
+      bus._setActorTurnPreBodyHookForTest(null);
+      releaseTurn();
+      await waitUntil(() => bus.isQuiescent(UID, cid), 5_000).catch(() => undefined);
+      await groupChat.dropConv(UID, cid);
+    }
+  });
+
+  it('does not replay a persisted retry whose stable turn already completed', async () => {
+    const cid = 'retry-completed-before-takeover-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const firstInput = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-completed-takeover-a',
+    };
+
+    try {
+      const layout = await import('../../../../src/main/util/project-layout');
+      const { cogSeedRequestFingerprint } = await import('../../../../src/main/features/cogseed_backend/request-fingerprint');
+      const fingerprint = cogSeedRequestFingerprint('retry', {
+        cid,
+        failedMessageId: firstInput.failedMessageId,
+        visibleText: firstInput.visibleText,
+      });
+      const dispatchTurnId = `turn-retry-${fingerprint.slice(0, 24)}`;
+      const canonicalMessageId = `${cid}-canonical`;
+      const targetClaimFile = path.join(
+        layout.conversationLayout(UID, cid).groupDir,
+        'dashboard-retry-target-claims',
+        `${cid}-failed.json`,
+      );
+      fs.mkdirSync(path.dirname(targetClaimFile), { recursive: true });
+      fs.writeFileSync(targetClaimFile, JSON.stringify({
+        schemaVersion: 1,
+        requestId: firstInput.requestId,
+        fingerprint,
+        failedMessageId: firstInput.failedMessageId,
+        mode: 'restart',
+        dispatchTurnId,
+        canonicalRequestId: firstInput.requestId,
+        messageId: canonicalMessageId,
+        createdAt: '2026-07-20T10:01:30.000Z',
+        updatedAt: '2026-07-20T10:01:30.000Z',
+      }));
+      const completedMessageId = `${cid}-completed`;
+      fs.appendFileSync(layout.conversationMessageFile(UID, cid), [
+        JSON.stringify({
+          id: canonicalMessageId,
+          ts: '2026-07-20T10:01:30.000Z',
+          from: 'user',
+          to: ['commander'],
+          text: firstInput.visibleText,
+          action_request_id: firstInput.requestId,
+        }),
+        JSON.stringify({
+          id: completedMessageId,
+          ts: '2026-07-20T10:02:00.000Z',
+          from: 'commander',
+          to: ['user'],
+          text: 'Done.',
+          turn_id: dispatchTurnId,
+          turn_end: true,
+        }),
+      ].join('\n') + '\n');
+      const deletion = await groupChat.deleteMessages(UID, cid, [completedMessageId]);
+      expect(deletion).toEqual({
+        ok: true,
+        deleted: [completedMessageId],
+      });
+      const completedTombstone = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+        .find((row) => row.id === completedMessageId);
+      expect(completedTombstone).toMatchObject({
+        text: '',
+        deleted_by_user: true,
+        turn_id: dispatchTurnId,
+        turn_end: true,
+      });
+
+      const takeover = await groupChat.retryFailedTurn({
+        ...firstInput,
+        requestId: 'req-dashboard-completed-takeover-b',
+      });
+      expect(takeover).toEqual({ ok: false, error: 'retry target already claimed' });
+      expect(bus.isQuiescent(UID, cid)).toBe(true);
+    } finally {
+      await groupChat.dropConv(UID, cid);
+    }
+  });
+
+  it('fails closed when a persisted target claim is malformed', async () => {
+    const cid = 'retry-corrupt-target-claim-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const layout = await import('../../../../src/main/util/project-layout');
+    const targetClaimFile = path.join(
+      layout.conversationLayout(UID, cid).groupDir,
+      'dashboard-retry-target-claims',
+      `${cid}-failed.json`,
+    );
+    fs.mkdirSync(path.dirname(targetClaimFile), { recursive: true });
+    fs.writeFileSync(targetClaimFile, JSON.stringify({ schemaVersion: 1, requestId: '../bad' }));
+    const groupChat = await import('../../../../src/main/features/group_chat');
+
+    const result = await groupChat.retryFailedTurn({
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-corrupt-target',
+    });
+
+    expect(result).toEqual({ ok: false, error: 'malformed Group Chat retry target claim' });
+    const rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    expect(rows.filter((row) => row.action_request_id)).toHaveLength(0);
+    await groupChat.dropConv(UID, cid);
+  });
+
+  it('repairs a pending retry claim when the message persisted before completion bookkeeping failed', async () => {
+    const cid = 'retry-claim-repair-cid';
+    await writeAttempt(cid, { failure_kind: 'config', failure_code: 'model_not_configured' });
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const input = {
+      userId: UID,
+      cid,
+      failedMessageId: `${cid}-failed`,
+      visibleText: 'Continue',
+      requestId: 'req-dashboard-retry-claim-repair',
+    };
+
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    let releaseTurn = () => {};
+    const holdTurn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let startedTurns = 0;
+    bus._setActorTurnPreBodyHookForTest(async () => {
+      startedTurns += 1;
+      await holdTurn;
+    });
+
+    try {
+      storageFaults.failCompletedRetryClaimWrite = true;
+      const interrupted = await groupChat.retryFailedTurn(input);
+      await waitUntil(() => startedTurns === 1);
+      const recovered = await groupChat.retryFailedTurn(input);
+
+      expect(interrupted).toEqual({
+        ok: false,
+        error: 'simulated retry claim completion failure',
+      });
+      expect(recovered).toMatchObject({
+        ok: true,
+        mode: 'restart',
+        msg: { action_request_id: input.requestId },
+      });
+      expect(startedTurns).toBe(1);
+      const layout = await import('../../../../src/main/util/project-layout');
+      const rows = fs.readFileSync(layout.conversationMessageFile(UID, cid), 'utf8')
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      expect(rows.filter((row) => row.action_request_id === input.requestId)).toHaveLength(1);
+    } finally {
+      bus._setActorTurnPreBodyHookForTest(null);
+      releaseTurn();
+      await waitUntil(() => bus.isQuiescent(UID, cid), 5_000).catch(() => undefined);
+      await groupChat.dropConv(UID, cid);
+    }
   });
 });

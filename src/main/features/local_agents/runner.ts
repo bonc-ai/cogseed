@@ -575,6 +575,8 @@ export interface RunCliAgentOpts {
   uid: string;
   cid: string;
   agentId: string;
+  /** CogSeed attempt correlation. Never forwarded as a CLI argument. */
+  executionId?: string;
   /** Display name for permission dialogs; falls back to agentId. */
   agentName?: string;
   /** Conversation project scope, when the CLI turn belongs to a project. */

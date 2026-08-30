@@ -368,8 +368,35 @@ async function initUser() {
 
 function setView(view, cid, opts = {}) {
   const openPersonalOntology = view === 'personal-ontology';
+  const openLegacyAgentDashboard = view === 'dashboard';
+  // Keep deep links and persisted callers using the pre-unification routes
+  // inside Run Center. The Run Center controller owns the secondary mode/tab
+  // mapping, while boot only needs to select the shared panel.
+  const legacyRunCenterView = view === 'board' || view === 'runs' || view === 'collaboration'
+    ? view : null;
+  // The restored five-tab vocabulary can also arrive as a direct deep link.
+  // Keep `agents` out of this list because that route still owns the global
+  // Connections/Agents surface outside Run Center.
+  const directRunCenterView = ['overview', 'tasks', 'sessions', 'history', 'execution'].includes(view)
+    ? view : null;
+  const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
+  // Keep the legacy expression explicit: callers that pass a secondary
+  // Run Center route still take precedence over the requested panel view.
+  const effectiveRunCenterView = legacyRunCenterView || requestedRunCenterView;
+  const normalizedRunCenterView = directRunCenterView || effectiveRunCenterView;
+  // The pre-unification `runs` route opened the execution-history surface.
+  // Keep that deep link stable while the visible Run Center `runs` tab opens
+  // the actionable queue through its own in-panel activation.
+  const runCenterInitialView = legacyRunCenterView === 'runs'
+    ? 'history' : normalizedRunCenterView;
   if (openPersonalOntology) view = 'recall';
+  if (openLegacyAgentDashboard) view = 'run-center';
+  if (legacyRunCenterView) view = 'run-center';
+  if (directRunCenterView) view = 'run-center';
   if (view === 'evolution') view = 'skills';
+  if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
+    window.stopRunCenterWatch();
+  }
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
@@ -389,7 +416,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
                 : view === 'settings' ? 'panel-settings'
-                : view === 'dashboard' ? 'panel-dashboard'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
                 : view === 'marketplace' ? 'panel-marketplace'
@@ -402,7 +428,6 @@ function setView(view, cid, opts = {}) {
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
-  document.getElementById('dashboard-btn')?.classList.toggle('active', view === 'dashboard');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。
   if (typeof window.setChipSettingsActive === 'function') {
     window.setChipSettingsActive(view === 'settings');
@@ -419,15 +444,9 @@ function setView(view, cid, opts = {}) {
       if (typeof renderMemoryPage === 'function') renderMemoryPage();
     });
   }
-  // 智能体总览（第二期 Dashboard）：模块懒加载，进视图才拉数据。
-  if (view === 'dashboard') {
-    _loadViewFeature('dashboard', 'dashboard', () => {
-      if (typeof renderDashboard === 'function') renderDashboard();
-    });
-  }
   if (view === 'run-center') {
     _loadViewFeature('run-center', 'run-center', () => {
-      if (typeof renderRunCenter === 'function') renderRunCenter();
+      if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView);
     });
   }
   if (view === 'conversation' && cid) {

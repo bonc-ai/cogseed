@@ -32,6 +32,7 @@ export type CogSeedTaskStatus =
   | 'recoverable';
 
 export type CogSeedTaskExecutionKind = 'cogseed-native' | 'local-cli' | 'group-chat';
+export type CogSeedResultDeliveryState = 'not-applicable' | 'pending' | 'delivered' | 'pending-recovery';
 
 export interface CogSeedLocalCliConfig {
   cli: string;
@@ -60,12 +61,19 @@ export interface CogSeedTaskRecord {
   runtimeRunId?: string;
   runtimeWorkerId?: string;
   requestId: string;
+  /** Internal SHA-256 of the canonical create request. It allows a request
+   * claim interrupted after the task write to be repaired without storing a
+   * second copy of the request payload. */
+  requestFingerprint?: string;
   ownerId: string;
   status: CogSeedTaskStatus;
   task: string;
   conversationId?: string;
   agentId?: string;
   executionKind?: CogSeedTaskExecutionKind;
+  /** Delivery of the terminal result into the bound CogSeed conversation.
+   * Raw output remains in the execution path and is never copied into dashboard DTOs. */
+  resultDeliveryState?: CogSeedResultDeliveryState;
   /** Privacy-safe Group Chat correlation ids. Message bodies are never copied here. */
   groupChatRunId?: string;
   groupChatTurnId?: string;
