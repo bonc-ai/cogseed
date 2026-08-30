@@ -190,6 +190,94 @@ function _csRenderUsageCard(card, payload) {
   card.innerHTML = `<div class="cs-usage">${bits.join(' · ')}</div>`;
 }
 
+// ── 交互卡（M2：审批/提问） ────────────────────────────────────────────────
+
+function _csReplyInteraction(interactionId, payload) {
+  const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
+    ? window.cogseed.invoke
+    : null;
+  if (!invoke) return;
+  invoke('chat.interaction.reply', { interaction_id: interactionId, ...payload })
+    .catch((err) => _csLog.warn('interaction reply failed', {
+      interactionId,
+      error: String(err && err.message || err),
+    }));
+}
+
+function _csRenderInteractionCard(body, ev) {
+  let card = body.querySelector(`[data-cs-interaction="${CSS.escape(ev.interactionId)}"]`);
+  if (card) return card;
+  card = document.createElement('div');
+  card.className = `cs-card cs-interaction ${ev.kind}`;
+  card.dataset.csInteraction = ev.interactionId;
+
+  const head = document.createElement('div');
+  head.className = 'cs-card-head';
+  const ico = document.createElement('span');
+  ico.className = 'cs-card-ico inProgress';
+  ico.textContent = ev.kind === 'approval' ? '⚠️' : '❓';
+  const promptEl = document.createElement('span');
+  promptEl.className = 'cs-interaction-prompt';
+  promptEl.textContent = ev.prompt;
+  head.appendChild(ico);
+  head.appendChild(promptEl);
+  card.appendChild(head);
+
+  if (ev.detail) {
+    const detail = document.createElement('pre');
+    detail.className = 'cs-interaction-detail';
+    detail.textContent = ev.detail;
+    card.appendChild(detail);
+  }
+
+  if (ev.kind === 'approval') {
+    const actions = document.createElement('div');
+    actions.className = 'cs-interaction-actions';
+    for (const [decision, label, tone] of [
+      ['allow', '允许', 'ok'],
+      ['allowAlways', '总是允许', ''],
+      ['deny', '拒绝', 'danger'],
+    ]) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `cs-btn ${tone}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        _csReplyInteraction(ev.interactionId, { decision });
+      });
+      actions.appendChild(btn);
+    }
+    card.appendChild(actions);
+  } else {
+    const row = document.createElement('div');
+    row.className = 'cs-interactions-input-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cs-interaction-input';
+    input.placeholder = '输入回复…';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        _csReplyInteraction(ev.interactionId, { answer: input.value });
+        input.disabled = true;
+      }
+    });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cs-btn ok';
+    btn.textContent = '回答';
+    btn.addEventListener('click', () => {
+      _csReplyInteraction(ev.interactionId, { answer: input.value });
+      input.disabled = true;
+    });
+    row.appendChild(input);
+    row.appendChild(btn);
+    card.appendChild(row);
+  }
+
+  body.appendChild(card);
+  return card;
+}
+
 // ── 事件入口（conversation.js 调用） ───────────────────────────────────────
 
 window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatEvent) {
@@ -215,7 +303,22 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       if (panel) _csSetPanelState(panel, chatEvent.status, chatEvent.error);
       return;
     }
-    // interaction.requested/closed 在 M2 接入（见 ledger）。
+    if (chatEvent.type === 'chat.interaction.requested') {
+      const { body } = _csEnsurePanel(cid, anchor, chatEvent.turnId);
+      _csRenderInteractionCard(body, chatEvent);
+      return;
+    }
+    if (chatEvent.type === 'chat.interaction.closed') {
+      for (const panel of _csPanels.values()) {
+        const card = panel.querySelector(`[data-cs-interaction="${CSS.escape(chatEvent.interactionId)}"]`);
+        if (card) {
+          card.classList.add('closed');
+          card.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
+          return;
+        }
+      }
+      return;
+    }
   } catch (err) {
     _csLog.warn('chat-stream render failed', { error: String(err && err.message || err) });
   }
