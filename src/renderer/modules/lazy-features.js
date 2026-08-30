@@ -66,6 +66,9 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/kb-notes.js' },
     { src: './modules/kb-discover.js' },
   ],
+  plugins: [
+    { src: './modules/plugins.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();

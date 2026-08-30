@@ -86,6 +86,23 @@ function activateConnectionsTab(name) {
     }
   }
 
+  // 插件 tab 承载插件中心（外部包管理 + 插件自带工作台）。plugins.js 属于
+  // `plugins` 懒加载包；进入 tab 才加载，避免拖慢聊天首屏。
+  if (target === 'plugins') {
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    Promise.resolve(typeof loader === 'function' ? loader('plugins') : undefined)
+      .then(() => {
+        if (typeof window.renderPlugins === 'function') window.renderPlugins();
+      })
+      .catch((err) => {
+        if (typeof createLogger === 'function') {
+          createLogger('connections').warn('plugins load failed', {
+            error: (err && err.message) || String(err),
+          });
+        }
+      });
+  }
+
   // 技能 tab 承载技能市场与外部 Skill 库（可用资源，不是个人认知资产）。
   // 技能库的渲染函数在 skills.js，属于 `skills` 懒加载包。
   if (target === 'skills') {

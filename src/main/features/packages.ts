@@ -307,7 +307,7 @@ export function runPackageProcessForTest(
   });
 }
 
-function buildPackageCommandEnv(uid: string, pcDir: string): NodeJS.ProcessEnv {
+export function buildPackageCommandEnv(uid: string, pcDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...bundledRuntimeEnv(),
@@ -333,6 +333,90 @@ function buildPackageCommandEnv(uid: string, pcDir: string): NodeJS.ProcessEnv {
     env.PATH = [pathEntries.join(path.delimiter), existingPath].filter(Boolean).join(path.delimiter);
   }
   return env;
+}
+
+/**
+ * UI-initiated install. Unlike enable/disable/update/remove, install needs a
+ * human confirmation of the exact command before it runs: the renderer shows
+ * the source + name in a confirm modal first, then calls `packages.install`.
+ * Deps consent stays OFF (the D3 dependency-consent flow remains on the
+ * commander/CLI path); a package that needs npm/pip deps must be installed
+ * (or consented) from the CLI.
+ */
+export interface PackageInstallInput {
+  source: string;
+  name: string;
+}
+
+export function validatePackageInstallInput(raw: unknown): { ok: boolean; source?: string; name?: string; error?: string } {
+  if (!raw || typeof raw !== 'object') return { ok: false, error: 'invalid input' };
+  const input = raw as Record<string, unknown>;
+  const source = typeof input.source === 'string' ? input.source.trim() : '';
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!source || source.length > 2000 || /[\u0000-\u001f\u007f]/.test(source)) {
+    return { ok: false, error: 'invalid source' };
+  }
+  if (source.startsWith('-') || source.startsWith('--')) return { ok: false, error: 'invalid source' };
+  let looksLocal = false;
+  try { looksLocal = fs.existsSync(source) && fs.statSync(source).isDirectory(); } catch { looksLocal = false; }
+  let looksUrl = false;
+  try {
+    const u = new URL(source);
+    looksUrl = u.protocol === 'https:' || u.protocol === 'http:';
+  } catch { /* not a URL */ }
+  if (!looksLocal && !looksUrl) {
+    return { ok: false, error: 'source must be an existing local directory or an http(s) URL' };
+  }
+  if (!name || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..')) {
+    return { ok: false, error: 'invalid package name' };
+  }
+  return { ok: true, source, name };
+}
+
+export function runPackageInstall(uid: string, raw: unknown): Promise<PackageActionResult> {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const validated = validatePackageInstallInput(raw);
+    const finish = (result: PackageActionResult) => {
+      const fields = {
+        command: 'install',
+        package_name: validated.name || '',
+        result: result.ok ? 'success' : 'failure',
+        duration_ms: Date.now() - startedAt,
+        ...(result.error ? { error_message: result.error } : {}),
+      };
+      if (result.ok) log.info('package install result', fields);
+      else log.warn('package install result', fields);
+      resolve(result);
+    };
+    if (!validated.ok) {
+      log.warn('package install rejected', { reason: validated.error, duration_ms: Date.now() - startedAt });
+      resolve({ ok: false, stdout: '', error: validated.error });
+      return;
+    }
+    log.info('package install start', { package_name: validated.name });
+    let pcDir = PC_ROOT;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+      const { app } = require('electron') as typeof import('electron');
+      if (app && app.isPackaged) pcDir = PC_ROOT.replace(/\bapp\.asar\b/, 'app.asar.unpacked');
+    } catch { /* not in electron (tests) */ }
+    const node = process.env.COGSEED_TEST_NODE || process.execPath;
+    const script = path.join(pcDir, 'bin', 'cogseed-pkg.cjs');
+    // No --consent-deps: dependency install stays on the commander/CLI path.
+    void runPackageProcessForTest(node, [script, 'install', validated.source, '--name', validated.name], {
+      env: buildPackageCommandEnv(uid, pcDir),
+    }).then((result) => {
+      if (result.error) {
+        finish({ ok: false, stdout: result.stdout, error: result.error });
+        return;
+      }
+      if (result.code === 0) { finish({ ok: true, stdout: result.stdout }); return; }
+      let error = result.stderr.trim();
+      try { const j = JSON.parse(error.slice(error.indexOf('{'))); if (j && j.error) error = j.error; } catch { /* keep raw */ }
+      finish({ ok: false, stdout: result.stdout, error: error || `cogseed-pkg exited ${result.code}` });
+    });
+  });
 }
 
 export function runPackageCommand(uid: string, command: string, name: string): Promise<PackageActionResult> {
@@ -405,6 +489,112 @@ function isFile(p: string): boolean {
   try { return fs.statSync(p).isFile(); } catch { return false; }
 }
 
+// ── Plugin manifest (whitelisted UI-facing subset) ───────────────────────
+
+export interface PackageManifestUi {
+  manifest_version?: string;
+  kind?: string;
+  name?: { zh?: string; en?: string };
+  description?: { zh?: string; en?: string };
+  version?: string;
+  audience_roles?: string[];
+  license?: { model?: string; unit?: string };
+  ui?: { entry?: string; commands?: string[] };
+}
+
+function sanitiseManifest(raw: unknown): PackageManifestUi | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  const out: PackageManifestUi = {};
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : undefined);
+  const manifestVersion = str(m.manifest_version);
+  if (manifestVersion) out.manifest_version = manifestVersion;
+  const kind = str(m.kind);
+  if (kind) out.kind = kind;
+  const name = m.name;
+  if (name && typeof name === 'object') {
+    const n = name as Record<string, unknown>;
+    const zh = str(n.zh); const en = str(n.en);
+    if (zh || en) out.name = { ...(zh ? { zh } : {}), ...(en ? { en } : {}) };
+  } else if (str(name)) {
+    out.name = { en: str(name) };
+  }
+  const description = m.description;
+  if (description && typeof description === 'object') {
+    const d = description as Record<string, unknown>;
+    const zh = typeof d.zh === 'string' ? d.zh.trim().slice(0, 500) : '';
+    const en = typeof d.en === 'string' ? d.en.trim().slice(0, 500) : '';
+    if (zh || en) out.description = { ...(zh ? { zh } : {}), ...(en ? { en } : {}) };
+  }
+  const version = str(m.version);
+  if (version) out.version = version;
+  if (Array.isArray(m.audience_roles)) {
+    const roles = m.audience_roles.filter((r): r is string => typeof r === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(r)).slice(0, 8);
+    if (roles.length) out.audience_roles = roles;
+  }
+  const license = m.license;
+  if (license && typeof license === 'object') {
+    const l = license as Record<string, unknown>;
+    const model = str(l.model); const unit = str(l.unit);
+    if (model || unit) out.license = { ...(model ? { model } : {}), ...(unit ? { unit } : {}) };
+  }
+  const ui = m.ui;
+  if (ui && typeof ui === 'object') {
+    const u = ui as Record<string, unknown>;
+    const entry = typeof u.entry === 'string' ? u.entry.trim() : '';
+    const commands = Array.isArray(u.commands)
+      ? u.commands.filter((c): c is string => typeof c === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(c)).slice(0, 64)
+      : [];
+    if (entry || commands.length) out.ui = { ...(entry ? { entry } : {}), ...(commands.length ? { commands } : {}) };
+  }
+  return out;
+}
+
+/** Read a package's `manifest.json` (whitelisted fields only; never the
+ *  package.json used by the installer registry). Missing/corrupt → null. */
+export function readPackageManifest(uid: string, name: string): PackageManifestUi | null {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || name.includes('..')) return null;
+  try {
+    const file = path.join(userPackageDir(uid, name), 'manifest.json');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return sanitiseManifest(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/** Skill ids (directory names) a package contributes through its own
+ *  skill_roots. Order follows the roots declaration. */
+export function listPackageSkills(uid: string, pkg: PackageEntry): string[] {
+  const pkgDir = userPackageDir(uid, pkg.name);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rel of pkg.skill_roots) {
+    if (rel === '.') {
+      if (isFile(path.join(pkgDir, 'SKILL.md')) && !seen.has(pkg.name)) {
+        seen.add(pkg.name);
+        out.push(pkg.name);
+      }
+      continue;
+    }
+    const root = path.join(pkgDir, rel);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (seen.has(entry.name)) continue;
+      if (!isFile(path.join(root, entry.name, 'SKILL.md'))) continue;
+      seen.add(entry.name);
+      out.push(entry.name);
+    }
+  }
+  return out;
+}
+
 function normalizeGithubRepoKey(raw: unknown): string {
   const s = String(raw || '').trim();
   if (!s) return '';
@@ -454,28 +644,7 @@ function packageDisplayName(uid: string, pkg: PackageEntry): string {
 }
 
 function countPackageSkills(uid: string, pkg: PackageEntry): number {
-  const pkgDir = userPackageDir(uid, pkg.name);
-  const seen = new Set<string>();
-  for (const rel of pkg.skill_roots) {
-    if (rel === '.') {
-      const skillDir = path.resolve(pkgDir);
-      if (isFile(path.join(skillDir, 'SKILL.md'))) seen.add(skillDir);
-      continue;
-    }
-    const root = path.join(pkgDir, rel);
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const skillDir = path.resolve(root, entry.name);
-      if (isFile(path.join(skillDir, 'SKILL.md'))) seen.add(skillDir);
-    }
-  }
-  return seen.size;
+  return listPackageSkills(uid, pkg).length;
 }
 
 /** Package rows for the management UI. */
@@ -489,20 +658,28 @@ export interface PackageUiRow {
   skill_count: number;
   bin_names: string[];
   updated_at?: string;
+  manifest?: PackageManifestUi;
+  has_ui?: boolean;
 }
 
 export function listPackagesForUi(uid: string): PackageUiRow[] {
-  return readPackagesRegistry(uid).packages.map((p) => ({
-    name: p.name,
-    display_name: packageDisplayName(uid, p),
-    kind: p.kind,
-    enabled: p.enabled !== false,
-    ...(p.repo_url ? { repo_url: p.repo_url } : {}),
-    ...(p.commit ? { commit: p.commit.slice(0, 12) } : {}),
-    skill_count: countPackageSkills(uid, p),
-    bin_names: p.bin_entries.map((b) => b.name),
-    ...(p.updated_at ? { updated_at: p.updated_at } : {}),
-  }));
+  return readPackagesRegistry(uid).packages.map((p) => {
+    const manifest = readPackageManifest(uid, p.name);
+    const hasUi = !!(manifest?.ui && typeof manifest.ui.entry === 'string' && manifest.ui.entry);
+    return {
+      name: p.name,
+      display_name: packageDisplayName(uid, p),
+      kind: p.kind,
+      enabled: p.enabled !== false,
+      ...(p.repo_url ? { repo_url: p.repo_url } : {}),
+      ...(p.commit ? { commit: p.commit.slice(0, 12) } : {}),
+      skill_count: countPackageSkills(uid, p),
+      bin_names: p.bin_entries.map((b) => b.name),
+      ...(p.updated_at ? { updated_at: p.updated_at } : {}),
+      ...(manifest ? { manifest } : {}),
+      ...(hasUi ? { has_ui: true } : {}),
+    };
+  });
 }
 
 /** The shim dir to prepend to the bash tool PATH, or null when no enabled
