@@ -324,6 +324,103 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
   }
 };
 
+// ── bash 审批桥接（M2.1：敏感操作审批进入消息流上下文） ────────────────────
+//
+// bash:permission 弹窗（bash_permission.js）照常工作；本桥接把同一请求
+// 镜像成当前会话过程面板里的审批卡——用户在消息流上下文里看到"哪一步
+// 在等什么批准"，点卡上按钮与点弹窗等效（同走 bash.permission_response，
+// 主进程幂等：先到者生效）。无活跃面板（不在聊天视图）时静默跳过。
+
+function _csReplyBashPermission(requestId, decision) {
+  const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
+    ? window.cogseed.invoke
+    : null;
+  if (!invoke) return;
+  invoke('bash.permission_response', { request_id: requestId, decision })
+    .catch((err) => _csLog.warn('bash permission reply failed', {
+      requestId,
+      error: String(err && err.message || err),
+    }));
+}
+
+window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(info) {
+  if (!info || typeof info !== 'object' || !info.request_id || !info.cid) return;
+  try {
+    // cid 匹配的最近面板（审批发生在该会话的执行中）。
+    let target = null;
+    for (const [key, panel] of _csPanels.entries()) {
+      if (panel.isConnected && key.startsWith(`${info.cid}::`)) target = panel;
+    }
+    if (!target) return;
+    const body = target.querySelector('.cs-panel-body');
+    if (!body) return;
+
+    let card = body.querySelector(`[data-cs-interaction="${CSS.escape(info.request_id)}"]`);
+    if (card) return;
+    card = document.createElement('div');
+    card.className = 'cs-card cs-interaction approval';
+    card.dataset.csInteraction = info.request_id;
+
+    const head = document.createElement('div');
+    head.className = 'cs-card-head';
+    const ico = document.createElement('span');
+    ico.className = 'cs-card-ico inProgress';
+    ico.textContent = '⚠️';
+    const promptEl = document.createElement('span');
+    promptEl.className = 'cs-interaction-prompt';
+    const what = info.command || info.operation || '敏感操作';
+    promptEl.textContent = `${info.agent_name || info.agent_id || 'agent'} 请求：${what}`;
+    head.appendChild(ico);
+    head.appendChild(promptEl);
+    card.appendChild(head);
+
+    if (info.command || info.subject) {
+      const detail = document.createElement('pre');
+      detail.className = 'cs-interaction-detail';
+      detail.textContent = String(info.command || info.subject);
+      card.appendChild(detail);
+    }
+    if (Array.isArray(info.reasons) && info.reasons.length) {
+      const reasons = document.createElement('div');
+      reasons.className = 'cs-interaction-reasons';
+      reasons.textContent = `风险：${info.reasons.join('、')}`;
+      card.appendChild(reasons);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'cs-interaction-actions';
+    for (const [decision, label, tone] of [
+      ['allow_once', '允许一次', 'ok'],
+      ['allow_run', '本任务内允许', ''],
+      ['deny', '拒绝', 'danger'],
+    ]) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `cs-btn ${tone}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        _csReplyBashPermission(info.request_id, decision);
+      });
+      actions.appendChild(btn);
+    }
+    card.appendChild(actions);
+    body.appendChild(card);
+  } catch (err) {
+    _csLog.warn('bash permission bridge failed', { error: String(err && err.message || err) });
+  }
+};
+
+window.chatStreamDismissBashPermission = function chatStreamDismissBashPermission(requestId) {
+  for (const panel of _csPanels.values()) {
+    const card = panel.querySelector(`[data-cs-interaction="${CSS.escape(requestId)}"]`);
+    if (card) {
+      card.classList.add('closed');
+      card.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
+      return;
+    }
+  }
+};
+
 /** 视图切换/历史重建时丢弃全部面板（conversation.js 重建消息列表后调用）。 */
 window.chatStreamReset = function chatStreamReset() {
   for (const panel of _csPanels.values()) panel.remove();

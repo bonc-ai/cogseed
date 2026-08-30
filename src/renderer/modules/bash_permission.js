@@ -336,6 +336,10 @@ async function _showBashPermissionDialog(info) {
       request_id: info.request_id,
       decision,
     });
+    // conv-core M2.1：弹窗路径已答复，撤掉过程面板里的镜像卡（若存在）。
+    if (typeof window.chatStreamDismissBashPermission === 'function') {
+      try { window.chatStreamDismissBashPermission(info.request_id); } catch (_e) { /* ignore */ }
+    }
   } catch (err) {
     _bashPermLog.warn('bash permission response failed', { error: err && err.message });
   }
@@ -359,6 +363,11 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
     window.cogseed.onPushEvent('bash:permission', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
       _bashPermQueue.push(info);
+      // conv-core M2.1：同一请求镜像到会话过程面板（消息流上下文审批），
+      // 无活跃面板时 chat-stream 内部静默跳过，弹窗照常。
+      if (typeof window.chatStreamBridgeBashPermission === 'function') {
+        try { window.chatStreamBridgeBashPermission(info); } catch (_e) { /* 镜像失败不影响弹窗 */ }
+      }
       _drainBashPermissionQueue();
     });
   } catch (_err) { /* push channel unavailable; bash calls deny on timeout */ }
