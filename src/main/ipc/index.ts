@@ -19,9 +19,13 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
+import * as kbQa from '../features/kb_qa';
+import * as kbSummary from '../features/kb_summary';
+import * as kbMindmap from '../features/kb_mindmap';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as anchorFeature from '../features/anchor';
 import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
@@ -960,6 +964,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
   'cogseed.kb.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.anchor.resolve': async (payload, ctx) => anchorFeature.anchorResolveIpc(ctx.userId, payload),
   'cogseed.kb.sources': async (_payload, ctx) => cogseedBackend.cogseedIpcService.kbSources(ctx.userId),
   'cogseed.connector.tools': async (payload, ctx) => cogseedBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
   'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedBackend.cogseedIpcService.sessions(ctx.userId) }),
@@ -3867,6 +3872,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { files: results };
   },
 
+  // 导入整个文件夹：目录选择器 → 递归收集白名单文件 → 按目录结构镜像导入到库。
+  'contexts.pickAndUploadDir': async ({ targetDir } = {}) => {
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const target = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      if (contexts.hasHiddenContextPathSegment(target)) {
+        results.push({ ok: false, name: f.rel, target, reason: 'hidden' });
+        continue;
+      }
+      try {
+        const r = await contexts.importContextFileFromPath(target, f.abs);
+        results.push({ name: f.rel, target, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
+  },
+
   'contexts.mkdir': async ({ path }) => {
     return contexts.createContextDir(path || '');
   },
@@ -3918,6 +3955,91 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'library.writeText': async (payload, ctx) => {
     return _writeTextToLibrary(payload, ctx);
+  },
+
+  // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。
+  // 懒生成 + 库指纹缓存（features/kb_summary）；失败降级为文件清单。
+  // dir=个人库；spaceId=空间库（共享知识库）。
+  'kb.summary': async ({ dir, spaceId }, ctx) => {
+    const res = await kbSummary.kbSummarize(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
+  'kb.mindmap': async ({ dir, spaceId, force }, ctx) => {
+    const res = await kbMindmap.kbMindmap(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
+  'kb.mindmap.save': async ({ key, root }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k || !root || typeof root.label !== 'string') return { ok: false };
+    kbMindmap.saveMindmap(k, root as never);
+    return { ok: true, savedAt: kbMindmap.listMindmaps().find((m) => m.key === k)?.savedAt ?? Date.now() };
+  },
+  'kb.mindmap.list': async () => {
+    return { ok: true, items: kbMindmap.listMindmaps() };
+  },
+  'kb.mindmap.load': async ({ key }, ctx) => {
+    const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
+    return { ok: root !== null, root };
+  },
+
+  // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
+  'kb.mindmap.exportPdf': async ({ html }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(source);
+      await win.loadURL(dataUrl);
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出脑图 PDF',
+        defaultPath: `mindmap-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      console.error('[kb.mindmap.exportPdf] failed:', err);
+      return { ok: false };
+    }
   },
 
   // ── Knowledge base (vector store) ──
@@ -5157,6 +5279,40 @@ const streamHandlers: Record<string, StreamHandler> = {
           // Explain-only: no skills in the prompt and NO tools at all. The
           // `disableTools` flag is what actually enforces this — `maxToolLoops: 0`
           // would be dropped as falsy and leave the full tool set attached.
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
+  // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
+  // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
+  'kbqa.askStream': async function* ({ space_id, question, k }, ctx, signal) {
+    const q = String(question ?? '').trim();
+    if (!q) {
+      yield { type: 'error', text: 'empty question' };
+      return;
+    }
+    try {
+      const events = kbQa.kbAskStream(ctx.userId, {
+        spaceId: space_id ? String(space_id) : null,
+        question: q,
+        k: typeof k === 'number' ? k : undefined,
+      }, {
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
           abortSignal: signal,

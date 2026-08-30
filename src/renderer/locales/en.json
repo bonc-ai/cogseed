@@ -2725,6 +2725,8 @@
   "sidebar.alert_sync_pro_required": "Membership needed",
   "sidebar.alert_sync_quota_full": "Storage full",
   "sidebar.auto": "Auto",
+  "sidebar.kb": "Knowledge Base",
+  "sidebar.kb_new": "New",
   "sidebar.bucket.last30": "Last 30 days",
   "sidebar.bucket.last7": "Last 7 days",
   "sidebar.bucket.older": "Older",

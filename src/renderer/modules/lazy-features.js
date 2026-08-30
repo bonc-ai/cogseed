@@ -53,6 +53,12 @@ const _rendererFeatureManifest = Object.freeze({
   workspace: [
     { src: './modules/workspace.js' },
   ],
+  kb: [
+    { src: './modules/kb-eco.js' },
+    { src: './modules/kb-workbench.js' },
+    { src: './modules/kb-notes.js' },
+    { src: './modules/kb-discover.js' },
+  ],
   dashboard: [
     { src: './modules/dashboard.js' },
   ],
