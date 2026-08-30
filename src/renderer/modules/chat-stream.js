@@ -343,13 +343,32 @@ function _csReplyBashPermission(requestId, decision) {
     }));
 }
 
-window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(info) {
-  if (!info || typeof info !== 'object' || !info.request_id || !info.cid) return;
+function _csReplyBridgePermission(requestId, decision) {
+  const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
+    ? window.cogseed.invoke
+    : null;
+  if (!invoke) return;
+  invoke('bridge.permission_response', {
+    request_id: requestId,
+    allow: decision !== 'deny',
+    always: decision === 'allow_always',
+  })
+    .catch((err) => _csLog.warn('bridge permission reply failed', {
+      requestId,
+      error: String(err && err.message || err),
+    }));
+}
+
+window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(info, opts) {
+  const source = opts && opts.source === 'bridge' ? 'bridge' : 'bash';
+  if (!info || typeof info !== 'object' || !info.request_id) return;
   try {
-    // cid 匹配的最近面板（审批发生在该会话的执行中）。
+    // cid 匹配的最近面板（审批发生在该会话的执行中）；bridge 请求的 info
+    // 无 cid 时挂最近活跃面板。
     let target = null;
     for (const [key, panel] of _csPanels.entries()) {
-      if (panel.isConnected && key.startsWith(`${info.cid}::`)) target = panel;
+      if (!panel.isConnected) continue;
+      if (info.cid ? key.startsWith(`${info.cid}::`) : true) target = panel;
     }
     if (!target) return;
     const body = target.querySelector('.cs-panel-body');
@@ -389,17 +408,17 @@ window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(
 
     const actions = document.createElement('div');
     actions.className = 'cs-interaction-actions';
-    for (const [decision, label, tone] of [
-      ['allow_once', '允许一次', 'ok'],
-      ['allow_run', '本任务内允许', ''],
-      ['deny', '拒绝', 'danger'],
-    ]) {
+    const reply = source === 'bridge' ? _csReplyBridgePermission : _csReplyBashPermission;
+    const buttonSet = source === 'bridge'
+      ? [['allow_once', '允许一次', 'ok'], ['allow_always', '总是允许', ''], ['deny', '拒绝', 'danger']]
+      : [['allow_once', '允许一次', 'ok'], ['allow_run', '本任务内允许', ''], ['deny', '拒绝', 'danger']];
+    for (const [decision, label, tone] of buttonSet) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `cs-btn ${tone}`;
       btn.textContent = label;
       btn.addEventListener('click', () => {
-        _csReplyBashPermission(info.request_id, decision);
+        reply(info.request_id, decision);
       });
       actions.appendChild(btn);
     }

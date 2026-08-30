@@ -247,4 +247,22 @@ describe('chat-stream module', () => {
     dismiss('bp-1');
     expect(card!.className).toContain('closed');
   });
+
+  it('bridge 审批镜像：总是允许按钮、回复走 bridge 通道', () => {
+    const replies: Array<[string, unknown]> = [];
+    g.window.cogseed = {
+      invoke: (ch: string, payload: unknown) => { replies.push([ch, payload]); return Promise.resolve({ ok: true }); },
+    };
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const bridge = g.window.chatStreamBridgeBashPermission as (i: unknown, o?: unknown) => void;
+    bridge({ request_id: 'br-1', operation: '外部服务调用 mail.send' }, { source: 'bridge' });
+
+    const body = inserts[0].node.querySelector('.cs-panel-body')!;
+    const card = body.children.find((c) => (c.dataset as Record<string, string>).csInteraction === 'br-1');
+    expect(card).toBeTruthy();
+    const actions = card!.children.find((c) => c.className.includes('cs-interaction-actions'))!;
+    const labels = actions.children.map((b) => b.textContent);
+    expect(labels).toContain('总是允许');
+    expect(labels).not.toContain('本任务内允许');
+  });
 });
