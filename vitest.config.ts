@@ -30,8 +30,14 @@ export default defineConfig({
     // oversubscribe local dev machines and make otherwise healthy tests trip
     // the 5s default timeout in full-suite runs.
     maxWorkers: testWorkers,
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
+    // CI 全套件并发负载下 30s 会偶发误伤（本地通过、CI 超时）；给足余量。
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
+    // CI 单机满载时 worker 会持续刷 console 日志（electron-log、agent-runner
+    // 等），Vitest 在 worker 收尾关闭 rpc 时会撞上 "Closing rpc while
+    // onUserConsoleLog was pending" 的未处理错误，让全绿套件退出码变 1。
+    // CI 下静默测试 console 消除该竞态；本地保留输出便于调试。
+    silent: !!process.env.CI,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

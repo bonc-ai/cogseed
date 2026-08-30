@@ -3242,6 +3242,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   flex: 1 1 0;
   padding-left: clamp(220px, 14vw, 240px);
   box-sizing: border-box;
+  /* 槽位只负责占位，不拦截鼠标事件：slot 因 flex:1 撑满的空隙会盖住
+     工作空间等页面右侧按钮（如「新建空间」），导致点不动。 */
+  pointer-events: none;
 }
 .model-guard-slot:empty { display: none; }
 
@@ -3263,6 +3266,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: #604d2b;
   position: relative;
   overflow: visible;
+  /* banner 本体恢复鼠标事件（slot 已置为 none），CTA / 关闭按钮可点。 */
+  pointer-events: auto;
 }
 .model-guard-dismiss {
   position: absolute;

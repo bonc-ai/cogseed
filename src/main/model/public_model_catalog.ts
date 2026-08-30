@@ -13,7 +13,7 @@ export interface ProviderModelEntry {
   contextWindow?: number;
   maxTokens?: number;
   /** Accepts image inputs. Only set when confirmed (official docs, endpoint
-   *  modality field, or 子安's explicit word) — unknown stays undefined and
+   *  modality field, or the product owner's explicit word) — unknown stays undefined and
    *  consumers treat it as "assume yes" to avoid breaking working paths. */
   vision?: boolean;
 }
@@ -67,7 +67,7 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
   deepseek: [
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    // 窗口与视觉口径来源：子安确认（2026-08-27），deepseek-v4-pro/flash 文本版
+    // 窗口与视觉口径来源：产品确认（2026-08-27），deepseek-v4-pro/flash 文本版
     // 无权威数字故不标 —— 目录只收确凿数据，不猜。
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
   ],

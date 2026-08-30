@@ -411,6 +411,10 @@ function setView(view, cid, opts = {}) {
   if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
     closeExpenseWorkbench();
   }
+  // 切离会话 / 新建会话面板时停止正在进行的语音输入，避免麦克风在别的模块继续收音。
+  if (view !== 'conversation' && view !== 'new-chat' && typeof window.__stopSttInputRecording === 'function') {
+    window.__stopSttInputRecording();
+  }
   _saveLastView(view, cid);
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
