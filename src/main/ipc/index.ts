@@ -30,6 +30,7 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import { P3394IpcChannel } from '../features/p3394_bridge/ipc-channel';
@@ -5366,6 +5367,9 @@ const streamHandlers: Record<string, StreamHandler> = {
     // state, since on-disk state.json briefly shows 'idle' in the gap
     // between an actor finishing and the next one's wake.
     const buf: GroupEvent[] = [];
+    // chat.* 结构化事件（conv-core 事件契约）：与老 stream:'group' 并行下发，
+    // 渲染层 chat-stream 组件群消费；老消费方不受影响。
+    const chatProjector = new GroupEventChatProjector();
     let wake: (() => void) | null = null;
     let cancelled = signal.aborted;
     const notify = () => {
@@ -5435,6 +5439,9 @@ const streamHandlers: Record<string, StreamHandler> = {
               firstProcessLogged = true;
               log.info(`sendStream first process cid=${cid} actor=${(ev as any).actor || ''} kind=${(ev as any).data?.type || ''}`);
             }
+          }
+          for (const chatEvent of chatProjector.project(ev)) {
+            yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
           }
           yield { type: 'event', event: { stream: 'group', data: ev } };
         }
