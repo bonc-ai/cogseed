@@ -59,6 +59,8 @@ describe('new chat home surface', () => {
     expect(css).toContain('.new-chat-external-agent-btn');
     expect(css).toContain('.main-top-actions');
     expect(css).toMatch(/\.model-guard-banner\s*{[\s\S]*?height:\s*56px;/);
+    expect(css).toMatch(/\.model-guard-dismiss\s*{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
+    expect(css).toMatch(/\.main-content:not\(:has\(#panel-new-chat\.active\)\) \.model-guard-slot\s*{\s*display:\s*none;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-rich-editor\s*{[\s\S]*?min-height:\s*80px;[\s\S]*?font-size:\s*16px;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-input-rich-wrap textarea\.chat-rich-source\s*{[\s\S]*?position:\s*absolute;[\s\S]*?width:\s*1px;[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);
     expect(css).toMatch(/\.chat-rich-editor\s*{[\s\S]*?outline:\s*none;/);
