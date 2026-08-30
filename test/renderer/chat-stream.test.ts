@@ -137,6 +137,19 @@ describe('chat-stream module', () => {
 
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } });
     expect(inserts).toHaveLength(1);
+    // 面板 header 含停止（运行中可见）与收起按钮。
+    const panel = inserts[0].node;
+    expect(panel.querySelector('.cs-panel-stop')).toBeTruthy();
+    expect(panel.querySelector('.cs-panel-toggle')).toBeTruthy();
+  });
+
+  it('turn.completed 后停止按钮隐藏', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const panel = inserts[0].node;
+    const stop = panel.querySelector('.cs-panel-stop')!;
+    expect(stop.style.display).not.toBe('none');
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    expect(stop.style.display).toBe('none');
   });
 
   it('toolExecution 三相位更新同一卡片', () => {
