@@ -32,7 +32,11 @@ export async function withLocalImportLock<T>(key: string, worker: () => Promise<
   }
 }
 
-export async function inspectLocalImportSource(absPath: string, maxBytes: number): Promise<LocalImportSource> {
+export async function inspectLocalImportSource(
+  absPath: string,
+  maxBytes: number,
+  opts?: { skipHash?: boolean },
+): Promise<LocalImportSource> {
   if (!path.isAbsolute(absPath)) throw Object.assign(new Error('source path must be absolute'), { code: 'E_IMPORT_SOURCE' });
   const lst = await fsp.lstat(absPath);
   if (lst.isSymbolicLink() || !lst.isFile()) {
@@ -43,6 +47,10 @@ export async function inspectLocalImportSource(absPath: string, maxBytes: number
       code: 'E_FILE_TOO_LARGE',
       bytes: lst.size,
     });
+  }
+  // 批量导入场景（如个人库→空间）不需要内容哈希做去重，跳过可省一次全文件读取。
+  if (opts?.skipHash) {
+    return { absPath, bytes: lst.size, mtimeMs: lst.mtimeMs, sha1: '' };
   }
   const hash = crypto.createHash('sha1');
   const stream = fs.createReadStream(absPath);
