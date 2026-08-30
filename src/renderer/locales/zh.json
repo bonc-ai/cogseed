@@ -6506,7 +6506,7 @@
   "plugins.config_saved": "配置已保存",
   "plugins.config_saved_id": "配置已保存（识别为 {id}）",
   "plugins.config_server": "平台地址",
-  "plugins.config_server_hint": "例如 http://localhost:3000 或线上地址。",
+  "plugins.config_server_hint": "由密钥自带，无需手填。",
   "plugins.config_student_id": "学生/教师 ID",
   "plugins.config_student_id_hint": "教师身份填教师 ID；身份由平台按密钥绑定，不可伪造。",
   "plugins.config_student_id_hint_auto": "留空自动识别（按密钥，不可伪造）。",
@@ -6562,5 +6562,10 @@
   "plugins.subtitle_status": "查看插件安装与授权状态。日常使用：在对话里直接说需求，智能体会调用插件完成操作。",
   "plugins.title": "插件",
   "plugins.update": "更新",
-  "plugins.workbench": "工作台"
+  "plugins.workbench": "工作台",
+  "plugins.config_server_embedded": "（由密钥自带）",
+  "plugins.config_server_hint_legacy": "仅老格式密钥需要手填；新版密钥自带地址。",
+  "plugins.new_version": "新版本 v{ver}",
+  "plugins.new_version_short": "v{ver}",
+  "plugins.detail_new_version": "新版本"
 }

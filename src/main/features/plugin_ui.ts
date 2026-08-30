@@ -338,6 +338,49 @@ export async function savePluginRuntimeConfig(
   if (!pkg) return { ok: false, error: 'package not installed' };
   if (!raw || typeof raw !== 'object') return { ok: false, error: 'invalid config' };
   const input = raw as Record<string, unknown>;
+
+  // 一键粘贴支持两种自带地址的形式：
+  //   1) v2 密钥前缀 `eduseed1.<base64url(平台地址)>.<随机>` —— 平台生成时写入
+  //      自己服务器的地址（换服务器自动换），这里拆出地址；整串仍是 api_key
+  //      （平台认证对整串做哈希）。
+  //   2) JSON 接入信息 {"server":"…","api_key":"…"}（/companion 兼容形式）。
+  if (typeof input.api_key === 'string') {
+    const pasted = input.api_key.trim();
+    if (pasted.startsWith('{')) {
+      try {
+        const blob = JSON.parse(pasted) as Record<string, unknown>;
+        const blobKey = typeof blob.api_key === 'string' && blob.api_key.trim() ? blob.api_key.trim() : '';
+        const blobServer = typeof blob.server === 'string' && blob.server.trim() ? blob.server.trim() : '';
+        if (!blobKey || !blobServer) {
+          return { ok: false, error: '接入信息格式不正确（需要 {"server":"…","api_key":"…"}）' };
+        }
+        input.api_key = blobKey;
+        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
+          input.server_url = blobServer;
+        }
+      } catch {
+        return { ok: false, error: '接入信息格式不正确（需要合法 JSON）' };
+      }
+    } else if (pasted.startsWith('eduseed1.')) {
+      const rest = pasted.slice('eduseed1.'.length);
+      const dot = rest.indexOf('.');
+      if (dot <= 0) {
+        return { ok: false, error: '密钥格式不正确（eduseed1 前缀不完整）' };
+      }
+      try {
+        const origin = Buffer.from(rest.slice(0, dot), 'base64url').toString('utf8');
+        if (!validatePlatformServerUrl(origin)) {
+          return { ok: false, error: '密钥内嵌的平台地址不合法' };
+        }
+        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
+          input.server_url = origin;
+        }
+      } catch {
+        return { ok: false, error: '密钥内嵌的平台地址无法解析' };
+      }
+    }
+  }
+
   // Merge over the stored config so an omitted key (e.g. the write-only
   // api_key left blank in the form) keeps its existing value.
   const out: PluginRuntimeConfig = { ...readPluginRuntimeConfig(uid, name) };
@@ -373,11 +416,13 @@ export async function savePluginRuntimeConfig(
         // 平台可达但拒绝/无法解析 → key 大概率无效，硬拒（不能拿旧身份配新 key）。
         return {
           ok: false,
-          error: '无法识别身份：请检查平台地址与 API Key，或手动填写角色与 ID',
+          error: '无法识别身份：请检查 API Key 是否正确（建议使用平台最新生成的新版密钥）',
         };
       }
       out.role = identity.role;
       out.student_id = identity.person_id;
+      // 换 key 后身份可能换人：清掉旧身份遗留的班级字段（班级由平台侧掌握）。
+      if (keyProvided) delete out.cohort;
     } catch (err) {
       // 平台不可达（离线/维护）：仅当本次显式给了角色+ID 才允许落盘兜底，
       // 否则拒绝（缺身份的配置会导致运行时必填项缺失）。
@@ -390,7 +435,7 @@ export async function savePluginRuntimeConfig(
         });
         return {
           ok: false,
-          error: `无法连接平台识别身份（${(err as Error).message}）：请检查平台地址，或手动填写角色与 ID`,
+          error: `无法连接平台识别身份（${(err as Error).message}）：请检查密钥对应的平台是否在线`,
         };
       }
       log.warn('plugin identity resolve failed — saving explicit fallback', {
@@ -431,6 +476,7 @@ export interface PluginUiInfoResult {
   ui?: { entry: string; commands: string[] };
   config: {
     configured: boolean;
+    key_format?: 'v2' | 'legacy';
     server_url?: string;
     role?: string;
     student_id?: string;
@@ -460,6 +506,8 @@ export function pluginUiInfo(uid: string, name: string): { ok: boolean; info?: P
     ...(uiInfo ? { ui: { entry: uiInfo.entry, commands: uiInfo.commands } } : {}),
     config: {
       configured: !!config.api_key,
+      // v2 密钥自带平台地址 → 前端隐藏地址输入框；老格式 key 才显示。
+      key_format: (config.api_key || '').startsWith('eduseed1.') ? 'v2' : 'legacy',
       ...(config.server_url ? { server_url: config.server_url } : {}),
       ...(config.role ? { role: config.role } : {}),
       ...(config.student_id ? { student_id: config.student_id } : {}),

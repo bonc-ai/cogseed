@@ -196,6 +196,28 @@ describe('plugin_ui › runtime config store', () => {
     }
   });
 
+  it('parses the v2 key prefix and auto-fills server_url (key carries its server)', async () => {
+    const { savePluginRuntimeConfig, readPluginRuntimeConfig } = await loadPluginUi();
+    installPkg('withui');
+    const origin = 'https://edu.example.com';
+    const b64 = Buffer.from(origin, 'utf8').toString('base64url');
+    const v2key = `eduseed1.${b64}.nseap-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, agent_id: 'student-companion-S-3', role: 'student', person_id: 'S-3' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      const res = await savePluginRuntimeConfig(TEST_UID, 'withui', { api_key: v2key });
+      expect(res.ok).toBe(true);
+      const stored = readPluginRuntimeConfig(TEST_UID, 'withui');
+      expect(stored.server_url).toBe(origin);
+      expect(stored.api_key).toBe(v2key); // 整串保存（平台对整串做哈希）
+      expect(stored.role).toBe('student');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('rejects the save when identity resolution fails and no role/id was given', async () => {
     const { savePluginRuntimeConfig } = await loadPluginUi();
     installPkg('withui');

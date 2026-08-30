@@ -6506,7 +6506,7 @@
   "plugins.config_saved": "Configuration saved",
   "plugins.config_saved_id": "Configuration saved (identified as {id})",
   "plugins.config_server": "Platform URL",
-  "plugins.config_server_hint": "e.g. http://localhost:3000 or your production URL.",
+  "plugins.config_server_hint": "Carried by the key — no manual entry needed.",
   "plugins.config_student_id": "Student / teacher ID",
   "plugins.config_student_id_hint": "Teachers enter their teacher ID; the platform binds identity to the key and cannot be spoofed.",
   "plugins.config_student_id_hint_auto": "Leave empty to auto-detect from your key (unspoofable).",
@@ -6562,5 +6562,10 @@
   "plugins.subtitle_status": "Check plugin install and license status. For daily use, just ask in a conversation — the agent calls the plugin to get things done.",
   "plugins.title": "Plugins",
   "plugins.update": "Update",
-  "plugins.workbench": "Workbench"
+  "plugins.workbench": "Workbench",
+  "plugins.config_server_embedded": " (embedded in the key)",
+  "plugins.config_server_hint_legacy": "Only legacy keys need this; new keys carry their own address.",
+  "plugins.new_version": "New version v{ver}",
+  "plugins.new_version_short": "v{ver}",
+  "plugins.detail_new_version": "New version"
 }

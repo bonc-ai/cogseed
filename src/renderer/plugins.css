@@ -273,3 +273,17 @@
   color: var(--text-secondary, #6b7280);
   font-size: 13px;
 }
+
+/* 识别结果（只读展示） */
+.plugins-config-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+}
+.plugins-config-identity-label { color: var(--text-tertiary, #9ca3af); }
+.plugins-config-identity-value {
+  color: var(--text-primary, #1f2937);
+  font-weight: 600;
+}

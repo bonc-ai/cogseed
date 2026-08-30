@@ -472,56 +472,40 @@
   function _configSectionHtml(info) {
     const cfg = info.config || {};
     const configured = !!cfg.configured;
+    // 极简表单：只填平台地址 + API Key。角色/学号由平台按 key 自动识别
+    // （whoami），只读展示；班级由平台侧掌握，无需本地配置。
+    const identityLine = configured
+      ? `<div class="plugins-config-identity">
+          <span class="plugins-config-identity-label">${_esc(_t('plugins.config_identity', '识别结果'))}</span>
+          <span class="plugins-config-identity-value">${_esc(cfg.role === 'teacher' ? _t('plugins.config_role_teacher', '教师') : _t('plugins.config_role_student', '学生'))} · ${_esc(cfg.student_id || '')}</span>
+        </div>`
+      : '';
+    // 平台地址不再需要任何输入：全部使用新版密钥（地址由密钥自带）。
+    // 已识别出的地址只读展示，方便确认连的是哪个平台。
+    const serverLine = cfg.server_url
+      ? `<div class="plugins-config-identity">
+          <span class="plugins-config-identity-label">${_esc(_t('plugins.config_server', '平台地址'))}</span>
+          <span class="plugins-config-identity-value">${_esc(cfg.server_url)}${_esc(_t('plugins.config_server_embedded', '（由密钥自带）'))}</span>
+        </div>`
+      : '';
     const fields = [
-      uiField({
-        id: 'plugins-config-server',
-        label: _t('plugins.config_server', '平台地址'),
-        hint: _t('plugins.config_server_hint', '例如 http://localhost:3000 或线上地址。'),
-        control: { kind: 'input', type: 'text', value: cfg.server_url || '', placeholder: 'http://localhost:3000' },
-      }),
+      serverField,
       uiField({
         id: 'plugins-config-key',
         label: _t('plugins.config_key', 'API Key'),
         hint: configured ? _t('plugins.config_key_set', '已配置（只写不回显，留空保持不变）') : _t('plugins.config_key_unset', '未配置'),
         control: { kind: 'input', type: 'password', value: '', placeholder: configured ? '••••••••' : '' },
       }),
-      uiField({
-        id: 'plugins-config-role',
-        label: _t('plugins.config_role', '角色'),
-        hint: _t('plugins.config_role_hint', '默认自动识别：平台按你的密钥判定学生/教师。'),
-        control: {
-          kind: 'select',
-          value: cfg.role === 'teacher' ? 'teacher' : (cfg.role === 'student' ? 'student' : ''),
-          options: [
-            { value: '', label: _t('plugins.config_role_auto', '自动识别（推荐）') },
-            { value: 'student', label: _t('plugins.config_role_student', '学生') },
-            { value: 'teacher', label: _t('plugins.config_role_teacher', '教师') },
-          ],
-        },
-      }),
-      uiField({
-        id: 'plugins-config-student',
-        label: _t('plugins.config_student_id', '学生/教师 ID'),
-        hint: configured && cfg.student_id
-          ? _t('plugins.config_student_id_set', '当前：{id}；重新填写 API Key 保存后会按新密钥重新识别', { id: cfg.student_id })
-          : _t('plugins.config_student_id_hint_auto', '留空自动识别（按密钥，不可伪造）。'),
-        control: { kind: 'input', type: 'text', value: cfg.student_id || '' },
-      }),
-      uiField({
-        id: 'plugins-config-cohort',
-        label: _t('plugins.config_cohort', '班级（可选）'),
-        control: { kind: 'input', type: 'text', value: cfg.cohort || '' },
-      }),
     ].join('');
     return `<div class="plugins-detail-section plugins-config-section">
       <h3 class="plugins-detail-section-title">${_esc(_t('plugins.config_title', '平台配置'))}</h3>
-      <p class="plugins-config-note">${_esc(_t('plugins.config_note_auto', '只填平台地址和 API Key 即可：角色与身份由平台按密钥自动识别，密钥只存本机，不会出现在对话或日志里。'))}</p>
+      <p class="plugins-config-note">${_esc(_t('plugins.config_note_auto', '只填平台地址和 API Key 即可：角色与身份由平台按密钥自动识别。密钥只存本机，不会出现在对话或日志里。'))}</p>
       <div class="plugins-config-status">
         ${configured
           ? `<span class="plugins-badge is-on">${_esc(_t('plugins.config_configured', '已配置'))}</span>`
           : `<span class="plugins-badge is-off">${_esc(_t('plugins.config_not_configured', '未配置'))}</span>`}
-        <span class="plugins-config-summary">${_esc(cfg.role || '')} · ${_esc(cfg.student_id || '')}</span>
       </div>
+      ${identityLine}
       <div class="plugins-config-fields">${fields}</div>
       <div class="plugins-config-actions">
         ${_btn({ label: _t('plugins.config_save', '保存配置'), role: 'primary', attrs: { 'data-plugins-config-action': 'save' } })}
@@ -538,15 +522,10 @@
       el.addEventListener('click', async () => {
         const action = el.dataset.pluginsConfigAction;
         if (action === 'save') {
-          const roleValue = configSection.querySelector('#plugins-config-role').value;
-          const studentValue = configSection.querySelector('#plugins-config-student').value.trim();
+          // 只提交平台地址 + API Key；身份由主进程按新 key 自动识别。
           const config = {
-            server_url: configSection.querySelector('#plugins-config-server').value.trim(),
+            // 只提交 API Key：地址由密钥自带（主进程从 key 前缀解析）。
             api_key: configSection.querySelector('#plugins-config-key').value.trim(),
-            // 留空 = 自动识别（按密钥从平台反查），不覆盖已存值。
-            ...(roleValue ? { role: roleValue } : {}),
-            ...(studentValue ? { student_id: studentValue } : {}),
-            cohort: configSection.querySelector('#plugins-config-cohort').value.trim(),
           };
           const keyInput = configSection.querySelector('#plugins-config-key');
           const res = await _invoke('packages.ui.save-config', { name: _detailName, config });
@@ -565,6 +544,7 @@
           }
           return;
         }
+
         if (action === 'test') {
           const btn = el;
           btn.disabled = true;
