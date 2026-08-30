@@ -14859,6 +14859,12 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
     // streaming bubble" model entirely. Process events go on the rail of
     // the streaming placeholder bubble (msg) until the first `message`
     // arrives, then on the most-recent rendered bubble for that actor.
+    if (inner.stream === 'chat' && inner.data && typeof window.chatStreamHandleEvent === 'function') {
+      // conv-core 结构化事件：chat-stream 过程面板（工具卡/思考/Diff/用量），
+      // 与下方 group 老协议并行渲染。
+      window.chatStreamHandleEvent(cid, msg, inner.data);
+      return;
+    }
     if (inner.stream === 'group' && inner.data) {
       _handleGroupBusEvent(cid, msg, inner.data, { archive });
       return;
