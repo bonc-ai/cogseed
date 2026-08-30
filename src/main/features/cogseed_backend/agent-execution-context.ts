@@ -4,6 +4,18 @@ import { assertCogSeedAgentId, assertCogSeedConversationId, assertCogSeedUserId 
 import type { RuntimeTextContext } from '../cogseed_runtime/protocol';
 
 const MAX_AGENT_CONTEXT_CHARS = 24_000;
+const COGSEED_EXECUTABLE_CLI_RUNTIMES = new Set([
+  'claude',
+  'codex',
+  'openclaw',
+  'opencode',
+  'hermes',
+  'workbuddy',
+]);
+
+export function isCogSeedAgentRuntimeSupported(runtime: AgentRuntime | null | undefined): boolean {
+  return !runtime || runtime.kind === 'in_process' || COGSEED_EXECUTABLE_CLI_RUNTIMES.has(runtime.cli);
+}
 
 export interface CogSeedAgentExecutionContext {
   agentId: string;
@@ -50,6 +62,8 @@ export async function resolveCogSeedAgentExecutionContext(
   const load = deps.getAgentForChatDispatch ?? (await import('../agents')).getAgentForChatDispatch;
   const agent = await load(userId, safeAgentId);
   if (!agent || agent.agent_id !== safeAgentId) throw new Error('CogSeed Agent is unavailable');
+  const runtime = agent.runtime ?? { kind: 'in_process' as const };
+  if (!isCogSeedAgentRuntimeSupported(runtime)) throw new Error('CogSeed Agent runtime is not executable');
   const skillList = agent.skill_list === undefined ? undefined : cleanList(agent.skill_list);
   return {
     agentId: safeAgentId,
@@ -57,7 +71,7 @@ export async function resolveCogSeedAgentExecutionContext(
     workflow: String(agent.workflow || '').trim(),
     ...(skillList !== undefined ? { skillList } : {}),
     interactive: true,
-    runtime: agent.runtime ?? { kind: 'in_process' },
+    runtime,
     ...(String(agent.description_en || agent.description_zh || '').trim()
       ? { description: String(agent.description_en || agent.description_zh).trim() }
       : {}),

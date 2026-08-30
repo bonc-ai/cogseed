@@ -190,6 +190,7 @@ describe('ipc › conversations.sendStream', () => {
       cid: 'c123abc',
       failedMessageId: 'failed-message-1',
       visibleText: 'Continue',
+      requestId: expect.stringMatching(/^req-chat-retry-/),
     }]);
     expect(groupChatMock.sendCalls).toEqual([]);
 

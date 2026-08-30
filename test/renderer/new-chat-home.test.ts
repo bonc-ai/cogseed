@@ -48,6 +48,16 @@ describe('new chat home surface', () => {
     expect(html).toContain('data-i18n-title="chat.recipient_picker_title_with_library"');
     expect(html).toContain('data-i18n-aria-label="chat.chip_remove_title"');
     expect(html).toContain('data-ui-icon="x"');
+    expect(html).toMatch(/id="chat-skill-chip"[\s\S]*?<button type="button" class="chip-close"[\s\S]*?data-i18n-aria-label="chat\.chip_remove_title"/);
+    expect(html).not.toMatch(/id="chat-skill-chip"[\s\S]*?<span class="chip-close"/);
+  });
+
+  it('keeps only the visible rich composer in the keyboard and accessibility trees', () => {
+    const conversation = read('src/renderer/modules/conversation.js');
+
+    expect(conversation).toContain("textarea.setAttribute('aria-hidden', 'true')");
+    expect(conversation).toContain('textarea.tabIndex = -1');
+    expect(conversation).toContain("editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || placeholder)");
   });
 
   it('keeps the home layout constraints aligned with the synced PC surface', () => {

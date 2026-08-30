@@ -24,6 +24,13 @@ const _rendererFeatureManifest = Object.freeze({
   auto: [
     { src: './modules/auto.js' },
   ],
+  'run-center': [
+    { src: './vendor/chartjs/chart.umd.min.js' },
+    { src: './modules/run-center-board.js' },
+    { src: './modules/run-center-overview.js' },
+    { src: './modules/run-center-agents.js' },
+    { src: './modules/run-center.js' },
+  ],
   contexts: [
     { src: './modules/library-transfer.js' },
     { src: './modules/contexts.js' },
@@ -58,9 +65,6 @@ const _rendererFeatureManifest = Object.freeze({
     { src: './modules/kb-workbench.js' },
     { src: './modules/kb-notes.js' },
     { src: './modules/kb-discover.js' },
-  ],
-  dashboard: [
-    { src: './modules/dashboard.js' },
   ],
 });
 

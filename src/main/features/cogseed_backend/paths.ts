@@ -58,6 +58,33 @@ export function cogseedBackendLocalRoot(userId: string): string {
   return cogseedAgentLocalRoot(userId);
 }
 
+export function cogseedPendingResultDeliveriesDirectory(userId: string): string {
+  return path.join(cogseedBackendLocalRoot(assertCogSeedUserId(userId)), 'pending-result-deliveries');
+}
+
+export function cogseedPendingResultDeliveryFile(userId: string, executionId: string): string {
+  if (!safeId(executionId) || !executionId.startsWith('cogseed-exec-')) throw new Error('invalid CogSeed execution id');
+  return path.join(cogseedPendingResultDeliveriesDirectory(userId), `${executionId}.json`);
+}
+
+export function cogseedUndeliverableResultsDirectory(userId: string): string {
+  return path.join(cogseedBackendLocalRoot(assertCogSeedUserId(userId)), 'undeliverable-results');
+}
+
+export function cogseedUndeliverableResultFile(userId: string, archiveId: string): string {
+  if (!safeId(archiveId)) throw new Error('invalid CogSeed undeliverable result id');
+  return path.join(cogseedUndeliverableResultsDirectory(userId), `${archiveId}.json`);
+}
+
+export function cogseedResultDeliveryLeasesDirectory(userId: string): string {
+  return path.join(cogseedBackendLocalRoot(assertCogSeedUserId(userId)), 'result-delivery-leases');
+}
+
+export function cogseedResultDeliveryLeaseFile(userId: string, executionId: string): string {
+  if (!safeId(executionId) || !executionId.startsWith('cogseed-exec-')) throw new Error('invalid CogSeed execution id');
+  return path.join(cogseedResultDeliveryLeasesDirectory(userId), `${executionId}.lease`);
+}
+
 export function cogseedTasksDirectory(userId: string): string {
   return cogseedAgentTasksDir(assertCogSeedUserId(userId));
 }

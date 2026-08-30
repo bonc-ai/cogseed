@@ -1025,12 +1025,15 @@ function _initMentionMirror(textarea) {
   editor.setAttribute('aria-multiline', 'true');
   editor.dataset.richInputId = textarea.id || '';
   editor.dataset.placeholder = textarea.getAttribute('placeholder') || '';
+  editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || editor.dataset.placeholder);
 
   // Insert wrap in place of textarea, move textarea inside.
   textarea.parentNode.insertBefore(wrap, textarea);
   wrap.appendChild(editor);
   wrap.appendChild(textarea);
   textarea.classList.add('chat-rich-source');
+  textarea.setAttribute('aria-hidden', 'true');
+  textarea.tabIndex = -1;
 
   let lastPlaceholder = '';
   const api = _chatRichCreateApi(textarea, editor);
@@ -1040,6 +1043,7 @@ function _initMentionMirror(textarea) {
     if (placeholder !== lastPlaceholder) {
       lastPlaceholder = placeholder;
       editor.dataset.placeholder = placeholder;
+      editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || placeholder);
     }
     api.renderFromTextarea();
   };
@@ -11432,7 +11436,10 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
     if (failedMessageId) {
       payload = {
         content: t('chat.retry_user_message'),
-        extra: { retry_message_id: failedMessageId },
+        extra: {
+          retry_message_id: failedMessageId,
+          retry_request_id: `req-chat-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
       };
     } else {
       // Compatibility for an unpersisted/legacy live failure with no stable
