@@ -2539,6 +2539,8 @@
   "sidebar.alert_sync_quota_full": "Armazenamento cheio",
   "sidebar.apps": "Meus aplicativos",
   "sidebar.auto": "Automático",
+  "sidebar.kb": "Base de conhecimento",
+  "sidebar.kb_new": "Novo",
   "sidebar.bucket.last30": "Últimos 30 dias",
   "sidebar.bucket.last7": "Últimos 7 dias",
   "sidebar.bucket.older": "Mais velho",

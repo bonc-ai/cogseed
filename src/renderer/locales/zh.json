@@ -2728,6 +2728,8 @@
   "sidebar.alert_sync_pro_required": "需要会员",
   "sidebar.alert_sync_quota_full": "空间已满",
   "sidebar.auto": "自动化",
+  "sidebar.kb": "知识库",
+  "sidebar.kb_new": "新",
   "sidebar.bucket.last30": "30 天内",
   "sidebar.bucket.last7": "7 天内",
   "sidebar.bucket.older": "更早",

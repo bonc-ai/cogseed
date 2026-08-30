@@ -2539,6 +2539,8 @@
   "sidebar.alert_sync_quota_full": "容量不足",
   "sidebar.apps": "マイアプリ",
   "sidebar.auto": "自動化",
+  "sidebar.kb": "ナレッジベース",
+  "sidebar.kb_new": "新規",
   "sidebar.bucket.last30": "30日以内",
   "sidebar.bucket.last7": "7日以内",
   "sidebar.bucket.older": "それ以前",
