@@ -9,6 +9,9 @@
   background: rgba(127, 127, 127, .06);
   font-size: 12.5px;
   overflow: hidden;
+  /* chat-history 是固定高度的滚动 column flex 容器：不设 no-shrink 时面板
+     会被 flex 压缩到几像素高（执行中内容撑不住、完成态只剩一条线）。 */
+  flex-shrink: 0;
 }
 .cs-panel.running { border-color: rgba(59, 130, 246, .45); }
 .cs-panel.failed { border-color: rgba(220, 38, 38, .5); }
