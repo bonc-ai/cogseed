@@ -300,6 +300,10 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
     legacyActivity.style.display = 'none';
     anchor.dataset.activityDone = '1';
   }
+  // 占位气泡里的三点打字动画同理（flow 已在跑，三点是重复活性指示）。
+  const legacyThinking = bubble && bubble.querySelector
+    ? bubble.querySelector('.stream-thinking') : null;
+  if (legacyThinking) legacyThinking.style.display = 'none';
   // 运行中正文都在时间线里：气泡此时是空的，把空底条藏掉（视觉对齐 CLI：
   // 运行中没有空泡壳），收尾交回正文时恢复。
   if (bubble && _csBubbleLooksEmpty(bubble)) {
