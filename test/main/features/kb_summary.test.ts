@@ -109,4 +109,21 @@ describe('kb_summary', () => {
     const c = _internals.fingerprint([{ path: 'a', mtime: 1, chunks: 3 }, { path: 'b', mtime: 2, chunks: 1 }]);
     expect(c).not.toBe(a);
   });
+
+  it('dedups concurrent in-flight summary calls for the same lib (single LLM call)', async () => {
+    listFilesMock.mockReturnValue([readyFile('lib/a.md'), readyFile('lib/b.md')]);
+    readChunksMock.mockReturnValue([{ chunk_idx: 0, title: null, content: '要点内容' }]);
+    let resolveModel: ((v: { ok: boolean; text: string; error: string }) => void) | null = null;
+    const complete = vi.fn(() => new Promise((res) => { resolveModel = res; }));
+    const deps = { complete: complete as never };
+    // 同 key 并发两次调用
+    const p1 = kbSummarize('u1', { dir: 'lib', spaceId: null }, deps as never);
+    const p2 = kbSummarize('u1', { dir: 'lib', spaceId: null }, deps as never);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(complete).toHaveBeenCalledTimes(1); // 只触发一次 LLM
+    resolveModel!({ ok: true, text: SAMPLE_JSON, error: '' });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.oneLiner).toBe('这个库围绕主题 X。');
+    expect(r2.oneLiner).toBe('这个库围绕主题 X。');
+  });
 });

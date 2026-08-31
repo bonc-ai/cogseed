@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | Draft — 待实施 |
 | 版本 | 1.0 |
-| 基线 commit | `c1f2234b`（分支 `dev/shiyuxuan-cognition-ui-gap`） |
+| 基线 commit | `c1f2234b` |
 | 依据 | 全文结论均来自当前仓库代码走查，逐条给出 `文件:行` |
 | 适用范围 | `src/main/features/role_templates.ts` 及其全部运行时消费方 |
 

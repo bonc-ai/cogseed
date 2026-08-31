@@ -489,9 +489,153 @@ export async function testCustomProviderModel(
   });
 }
 
+/** First positive safe integer among the candidate metadata fields. */
+function pickPositive(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isSafeInteger(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+/**
+ * List the models a custom provider's service exposes, by calling the
+ * service's own "list models" endpoint with the stored credentials.
+ * OpenAI-compatible: `GET {baseUrl}/models` (baseUrl convention already
+ * carries the version segment, same as the chat endpoint). Anthropic:
+ * `GET {baseUrl}/v1/models`. Gemini: `GET {baseUrl}/v1beta/models`.
+ *
+ * Read-only: nothing is imported — the renderer shows the list and the
+ * user picks what to add. The API key comes from the provider's stored
+ * config (never a literal) and is excluded from every error message.
+ */
+export async function fetchCustomProviderModels(
+  userId: string,
+  id: string,
+): Promise<{ ok: true; models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> } | { ok: false; error: string }> {
+  let providerId: string;
+  try {
+    providerId = normalizeProviderId(id);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+
+  // Same trust level as the provider's chat traffic: the user configured
+  // this exact URL; we only additionally pin the scheme to http(s) so a
+  // hand-edited store entry can't turn the fetch into a file:// read.
+  let base: URL;
+  try {
+    base = new URL(provider.baseUrl);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') {
+      return { ok: false, error: 'base URL must be http(s)' };
+    }
+  } catch {
+    return { ok: false, error: 'invalid base URL' };
+  }
+
+  const trimmed = provider.baseUrl.replace(/\/+$/, '');
+  let url: string;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (provider.protocol === 'openai' || provider.protocol === 'openai-responses') {
+    url = `${trimmed}/models`;
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  } else if (provider.protocol === 'anthropic') {
+    url = `${trimmed}/v1/models`;
+    headers['x-api-key'] = provider.apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    url = `${trimmed}/v1beta/models`;
+    headers['x-goog-api-key'] = provider.apiKey;
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return { ok: false, error: `service responded ${response.status}` };
+    }
+    const text = await response.text();
+    if (text.length > 2_000_000) return { ok: false, error: 'response too large' };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { ok: false, error: 'service did not return JSON (is the URL/protocol correct?)' };
+    }
+    const rows = parsed && typeof parsed === 'object'
+      ? ((parsed as { data?: unknown; models?: unknown }).data
+        ?? (parsed as { models?: unknown }).models)
+      : null;
+    if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
+
+    const out: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> = [];
+    for (const row of rows.slice(0, 500)) {
+      if (!row || typeof row !== 'object') continue;
+      const record = row as Record<string, unknown>;
+      // gemini reports `name: "models/<id>"`; openai/anthropic use `id`.
+      let rawId = typeof record.id === 'string' ? record.id
+        : typeof record.name === 'string' ? record.name : '';
+      rawId = rawId.replace(/^models\//, '').trim().slice(0, 120);
+      if (!rawId) continue;
+      const rawName = typeof record.display_name === 'string' ? record.display_name
+        : typeof record.displayName === 'string' ? record.displayName : '';
+      const name = rawName.trim().slice(0, 120);
+      if (out.some((existing) => existing.id === rawId)) continue;
+      // 非标准扩展字段（A 层——能拿尽拿）：vLLM 的 max_model_len、
+      // OpenRouter 的 context_length / top_provider.max_completion_tokens /
+      // supported_parameters / architecture.input_modalities。没有标准的
+      // 保证，字段存在才取，否则留给识别模块（B 层）补。
+      const contextWindow = pickPositive(record.max_model_len, record.context_length, record.max_context_tokens, record.context_window);
+      const rawTop = record.top_provider as Record<string, unknown> | undefined;
+      const maxTokens = pickPositive(record.max_completion_tokens, record.max_output_tokens, rawTop?.max_completion_tokens);
+      const params = Array.isArray(record.supported_parameters)
+        ? record.supported_parameters.filter((x): x is string => typeof x === 'string')
+        : [];
+      const reasoning = params.length
+        ? params.some((p) => p === 'reasoning' || p === 'reasoning_effort')
+        : undefined;
+      const arch = record.architecture as Record<string, unknown> | undefined;
+      const modalities = (Array.isArray(arch?.input_modalities) ? arch?.input_modalities
+        : Array.isArray(record.input_modalities) ? record.input_modalities : []) as unknown[];
+      const vision = modalities.length
+        ? modalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))
+        : undefined;
+      out.push({
+        id: rawId,
+        ...(name && name !== rawId ? { name } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(vision !== undefined ? { vision } : {}),
+      });
+      if (out.length >= 200) break;
+    }
+    if (!out.length) return { ok: false, error: 'service listed no models' };
+    // B 层：服务没给的元数据，用内置目录/家族规则识别补全（不改服务给的值）。
+    try {
+      const { recognizeModelByIdReady } = await import('../model/model_id_recognition');
+      for (const item of out) {
+        const recognized = await recognizeModelByIdReady(item.id);
+        if (!recognized) continue;
+        if (item.contextWindow === undefined && recognized.contextWindow !== undefined) item.contextWindow = recognized.contextWindow;
+        if (item.maxTokens === undefined && recognized.maxTokens !== undefined) item.maxTokens = recognized.maxTokens;
+        if (item.reasoning === undefined && recognized.reasoning !== undefined) item.reasoning = recognized.reasoning;
+        if (item.vision === undefined && recognized.vision !== undefined) item.vision = recognized.vision;
+      }
+    } catch { /* recognition is best-effort enrichment */ }
+    return { ok: true, models: out };
+  } catch (error) {
+    const message = (error as Error).message || String(error);
+    return { ok: false, error: message.includes(provider.apiKey) ? 'request failed' : `request failed: ${message}` };
+  }
+}
+
 /** Preset protocol choices for the add form's dialect selector. */
-export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {
-  return [
+export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {  return [
     { id: 'anthropic', label: 'Anthropic (Claude)' },
     { id: 'openai', label: 'OpenAI' },
     { id: 'gemini', label: 'Gemini' },

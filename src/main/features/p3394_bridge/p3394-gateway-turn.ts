@@ -38,6 +38,10 @@ export interface P3394GatewayTurnInput {
    *  Without this an external agent may fall back to `/` and lose its
    *  project workspace context. */
   workingDir?: string;
+  /** Per-task reasoning effort (unified execution entry). Carried in the
+   *  envelope's CogSeed-private extensions.execution_prefs; only the claude
+   *  gateway runtime consumes it today. */
+  reasoningEffort?: 'off' | 'low' | 'high';
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -122,6 +126,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
     scopeKey: input.cid,
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+    ...(input.reasoningEffort ? { executionPrefs: { reasoningEffort: input.reasoningEffort } } : {}),
   });
   let envelope = buildEnvelope();
   let streamed = false;

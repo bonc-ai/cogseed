@@ -993,13 +993,29 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       },
     )).then(async (task) => {
       if (task.resultDeliveryState === 'delivered' || task.resultDeliveryState === 'not-applicable') return task;
-      const outcome = await reconcileCogSeedExecutionResult(userId, task.executionId!, {
+      let outcome = await reconcileCogSeedExecutionResult(userId, task.executionId!, {
         store: resultDeliveryStore,
         projectTaskEvent,
         allowInactiveExecutionRecovery,
         isExecutionActive: (taskId) => activeRuns.has(taskId),
         leaseWaitMs: 1_000,
       });
+      if (outcome.status === 'pending' && outcome.reason === 'execution-active') {
+        // 预检（任务操作锁内）与 reconcile 的内部重读之间存在 TOCTOU 窗口：
+        // 负载下任务状态可能恰好被并发结算推进到中间态，reconcile 因此误判
+        // execution-active。这里重读一次任务，若已是终态/recoverable 则重试
+        // 一次 reconcile，而不是把可恢复的瞬态当作硬失败抛给调用方。
+        const current = await readCogSeedTask(userId, task.taskId);
+        if (current && (terminal(current) || current.status === 'recoverable')) {
+          outcome = await reconcileCogSeedExecutionResult(userId, task.executionId!, {
+            store: resultDeliveryStore,
+            projectTaskEvent,
+            allowInactiveExecutionRecovery,
+            isExecutionActive: (taskId) => activeRuns.has(taskId),
+            leaseWaitMs: 1_000,
+          });
+        }
+      }
       if (outcome.task && (outcome.status === 'delivered' || outcome.status === 'cleaned'
         || outcome.status === 'quarantined')) return outcome.task;
       if (outcome.status === 'lease-busy') throw new Error('CogSeed result delivery is already in progress');

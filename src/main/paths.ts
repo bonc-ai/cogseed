@@ -764,6 +764,14 @@ export const userPackagesBinDir       = (uid: string) => path.join(userPackagesD
 export const userPackageSkillsDir = (uid: string) => path.join(userLocalRoot(uid), 'package_skills');
 export const userPackageSkillDir  = (uid: string, name: string) => path.join(userPackageSkillsDir(uid), name);
 
+// ── Plugin UI runtime config (machine-private, main+UI-owned) ───────────
+// `<uid>/local/packages/.secrets/<pkg>.json` holds a plugin-provided-UI
+// runtime's credentials (e.g. EDUSEED_* platform keys). Kept OUTSIDE the
+// verbatim package tree (cogseed-pkg.cjs must never read/write it) and
+// OUTSIDE cloud/ (keys are machine-private). Written only by
+// `features/plugin_ui.ts`; the renderer may only see a masked flag.
+export const userPackageSecretsDir = (uid: string) => path.join(userPackagesDir(uid), '.secrets');
+
 // ── Global skill roots (machine-global, read-only, outside WS_ROOT) ─────
 // Skills the user already keeps for OTHER agent hosts on this machine, read
 // purely for interop: `~/.claude/skills` (claude-code) and `~/.codex/skills`

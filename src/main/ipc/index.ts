@@ -3914,6 +3914,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return contexts.uploadContextFile(target, buf);
   },
 
+  // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
+  'kbqa.attachPick': async ({ extensions } = {}) => {
+    const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
+    const picked = await _pickLocalFiles('选择附件', rawExts, true);
+    const files = picked.map((filePath) => {
+      let bytes = 0;
+      try { bytes = fs.statSync(filePath).size; } catch { bytes = 0; }
+      return { name: path.basename(filePath), path: filePath, size: bytes };
+    });
+    return { files };
+  },
+
   'contexts.pickAndUpload': async ({ targetDir } = {}) => {
     const picked = await _pickLocalFiles('Choose files', CONTEXT_PICK_EXTENSIONS, true, /* seedWorkspaceOnFirstOpen */ true);
     const results = [];
@@ -4050,11 +4062,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
-  'kb.mindmap': async ({ dir, spaceId, force }, ctx) => {
+  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
+  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
     const res = await kbMindmap.kbMindmap(ctx.userId, {
       dir: typeof dir === 'string' && dir ? dir : null,
       spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
       force: force === true,
+      text: typeof text === 'string' && text ? text : null,
     }, {
       complete: async (opts) => {
         const r = await modelClient.chatWithModel({
@@ -4084,6 +4098,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'kb.mindmap.load': async ({ key }, ctx) => {
     const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
     return { ok: root !== null, root };
+  },
+
+  // 脑图弹出独立窗口：新开一个无边框 BrowserWindow 展示 SVG，适合大屏深度查看
+  'kb.mindmap.popout': async ({ html }) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false, error: 'no html' };
+    try {
+      const win = new BrowserWindow({
+        width: 900, height: 640, minWidth: 480, minHeight: 320,
+        title: '脑图',
+        backgroundColor: '#ffffff',
+        webPreferences: { sandbox: true },
+      });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      win.on('closed', () => { /* no-op */ });
+      return { ok: true };
+    } catch (err) {
+      log.warn('mindmap popout failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false, error: 'popout failed' };
+    }
   },
 
   // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
@@ -4569,6 +4603,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.providerId, 'providerId', 120),
     boundedText(args?.modelId, 'modelId', 200),
   ),
+  // 远端模型发现（统一执行入口配套）：调服务自己的 list-models 端点，
+  // 只读不落库——渲染层展示列表，用户勾选后经 model.add 导入。
+  'customProviders.fetchModels': async (args, ctx) => customProviders.fetchCustomProviderModels(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };
@@ -4872,6 +4912,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // Skill listing reflects enable/disable + remove immediately.
     try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
     return result;
+  },
+  // UI-initiated install: the renderer already showed the exact command in a
+  // confirm modal (the UI's version of the CLI consent face). Deps consent
+  // stays off; the CLI path remains the only way to consent dependencies.
+  'packages.install': async (payload: { source?: unknown; name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.source !== 'string' || typeof payload?.name !== 'string') {
+      throw new Error('invalid source/name');
+    }
+    const pkgs = await import('../features/packages');
+    const result = await pkgs.runPackageInstall(ctx.userId, { source: payload.source, name: payload.name });
+    try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
+    return result;
+  },
+  // ── Plugin-provided UI (plan §B) ────────────────────────────────────────
+  // The iframe-hosted plugin page talks to the renderer via postMessage; the
+  // renderer forwards through these handlers. Only allowlisted methods exist
+  // (see features/plugin_ui.ts); api keys are injected main-side and never
+  // returned to the renderer.
+  'packages.ui.info': async (payload: { name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    const info = await ui.pluginUiInfo(ctx.userId, payload.name);
+    const { createLogger } = await import('../logger');
+    createLogger('plugin-ui-info').info('packages.ui.info served', {
+      package_name: payload.name,
+      ok: info.ok,
+      skill_count: info.info?.skills?.length ?? -1,
+      error: (info as { error?: string }).error ?? undefined,
+    });
+    return info.ok ? { ok: true as const, info: info.info } : info;
+  },
+  'packages.ui.invoke': async (payload: { name?: unknown; method?: unknown; params?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string' || typeof payload?.method !== 'string') {
+      throw new Error('invalid name/method');
+    }
+    const ui = await import('../features/plugin_ui');
+    return ui.dispatchPluginUiInvoke(ctx.userId, payload.name, payload.method, payload.params);
+  },
+  'packages.ui.save-config': async (payload: { name?: unknown; config?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    return ui.savePluginRuntimeConfig(ctx.userId, payload.name, payload.config);
   },
   // Open-tier skills (external packages + global folders) for the read-only
   // "From packages & global folders" group in the skills panel. External and
@@ -5433,7 +5515,7 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
@@ -5444,6 +5526,8 @@ const streamHandlers: Record<string, StreamHandler> = {
         spaceId: space_id ? String(space_id) : null,
         question: q,
         k: typeof k === 'number' ? k : undefined,
+        attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
+        history: Array.isArray(history) ? history.filter((h: any) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : undefined,
       }, {
         stream: (opts) => modelClient.streamChatWithModel({
           userId: opts.userId,
@@ -5473,7 +5557,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -5491,6 +5575,19 @@ const streamHandlers: Record<string, StreamHandler> = {
         || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
       yield { type: 'error', text: 'invalid recipient route' };
       return;
+    }
+    // Per-task execution config (unified execution entry). Shape-check here;
+    // the group-chat facade re-validates and drops stale/unknown values.
+    if (execution_config !== undefined) {
+      const ec: any = execution_config;
+      const badShape = !ec || typeof ec !== 'object'
+        || (ec.provider !== undefined && typeof ec.provider !== 'string')
+        || (ec.model !== undefined && typeof ec.model !== 'string')
+        || (ec.effort !== undefined && ec.effort !== 'off' && ec.effort !== 'low' && ec.effort !== 'high');
+      if (badShape) {
+        yield { type: 'error', text: 'invalid execution config' };
+        return;
+      }
     }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
@@ -5558,6 +5655,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
                 ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
+                ...(execution_config ? { execution_config } : {}),
               });
       } catch (err) {
         sendErr = err;

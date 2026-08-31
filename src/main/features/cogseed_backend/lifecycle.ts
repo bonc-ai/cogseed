@@ -38,6 +38,20 @@ export function isCogSeedTaskActiveStatus(status: CogSeedTaskStatus): boolean {
   return status === 'created' || status === 'queued' || status === 'running' || status === 'waiting_user';
 }
 
+export async function archiveCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  return updateCogSeedTaskWithEvent(userId, taskId, (task) => {
+    if (task.archivedAt) return task;
+    if (task.status !== 'failed') throw new Error('Only failed CogSeed tasks can be archived');
+    if (task.resultDeliveryState === 'pending' || task.resultDeliveryState === 'pending-recovery') {
+      throw new Error('CogSeed task result must be recovered before archiving');
+    }
+    const archivedAt = nowIso();
+    return { ...task, archivedAt, updatedAt: archivedAt };
+  }, { type: 'task.archived', payload: {} });
+}
+
 function safeErrorCode(value: unknown): string | undefined {
   const code = typeof value === 'string' ? value.trim() : '';
   return code && code.length <= 120 && /^[A-Za-z0-9_.:-]+$/.test(code) ? code : undefined;

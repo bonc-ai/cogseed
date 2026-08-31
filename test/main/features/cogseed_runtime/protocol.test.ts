@@ -334,4 +334,22 @@ describe('CogSeed Runtime protocol normalization', () => {
     expect(prompt).not.toContain('gconv-');
     expect(prompt).not.toContain('cloud/chats');
   });
+
+  it('falls back to working_dir as a read-only root when no context or attachment is provided', () => {
+    const root = tmpRoot();
+    const workDir = path.join(root, 'workspace');
+    fs.mkdirSync(workDir, { recursive: true });
+
+    const result = normalizeRuntimeRunRequest('runtime-protocol-user', {
+      task: 'Plan this project from my workspace.',
+      working_dir: workDir,
+    }, { allowedRoots: [root] });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error);
+    // 无附件的纯文字任务，工作空间目录必须作为只读根兜底，否则 search_files /
+    // grep_files 会因 read_only_roots 为空触发 E_RUNTIME_NO_ROOTS。
+    expect(result.request.read_only_roots).toContain(workDir);
+    expect(result.request.writable_roots).toEqual([workDir]);
+  });
 });
