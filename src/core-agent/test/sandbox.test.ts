@@ -12,6 +12,11 @@ import {
   defaultShellForPlatform,
   killProcessTree,
 } from "../src/sandbox/executor.js";
+import {
+  windowsSandboxMode,
+  windowsSandboxLauncherPath,
+  windowsStrongSandboxAvailable,
+} from "../src/sandbox/windows-sandbox.js";
 
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const IS_WINDOWS = process.platform === "win32";
@@ -273,6 +278,46 @@ describe("killProcessTree", () => {
 
     expect(processKill).toHaveBeenCalledWith(-4321, "SIGKILL");
     expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("Windows strong sandbox gating", () => {
+  it("parses COGSEED_WINDOWS_SANDBOX_MODE", () => {
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "" })).toBe("auto");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "strong" })).toBe("strong");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "fallback" })).toBe("fallback");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "nonsense" })).toBe("auto");
+  });
+
+  it("reports availability from the explicit test override", () => {
+    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "1" })).toBe(true);
+    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "0" })).toBe(false);
+  });
+
+  it("locates the strong sandbox launcher script in the repo layout", () => {
+    const launcher = windowsSandboxLauncherPath();
+    expect(launcher).not.toBeNull();
+    return expect(fs.access(launcher as string)).resolves.toBeUndefined();
+  });
+
+  it("fails closed on win32 when strong mode is requested but unavailable", async () => {
+    if (process.platform !== "win32") return;
+    const oldMode = process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+    const oldForce = process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+    process.env.COGSEED_WINDOWS_SANDBOX_MODE = "strong";
+    process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = "0";
+    try {
+      const sandbox = new SandboxExecutor({
+        workingDir: os.tmpdir(),
+        allowedDirs: [os.tmpdir()],
+      });
+      await expect(sandbox.execute("echo hello")).rejects.toThrow("strong sandbox unavailable");
+    } finally {
+      if (oldMode === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_MODE = oldMode;
+      if (oldForce === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = oldForce;
+    }
   });
 });
 

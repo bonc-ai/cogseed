@@ -77,6 +77,10 @@ describe('diagnose-local-agents: search dirs mirror registry.ts', () => {
     expect(dirs).toContain('C:\\Users\\tester\\AppData\\Roaming\\npm');
     expect(dirs).toContain('C:\\Users\\tester\\AppData\\Local\\Microsoft\\WindowsApps');
     expect(dirs.some((d) => d.includes('OpenAI\\Codex\\bin'))).toBe(true);
+    expect(dirs).toContain('C:\\Users\\tester\\AppData\\Local\\OpenAI\\Codex\\bin\\*');
+
+    const wbDirs = localCliSearchDirs('workbuddy', 'win32', env, 'C:\\Users\\tester');
+    expect(wbDirs.some((d) => d.includes('WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin'))).toBe(true);
   });
 
   it('expands version-manager wildcard segments only when the tail exists', async () => {
@@ -104,7 +108,14 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     const found = await whichBin('claude', { extraDirs: [tmp], env: { PATH: '' } });
     expect(found).toBe(good);
     const notFound = await whichBin('codex', { extraDirs: [tmp], env: { PATH: '' } });
-    expect(notFound).toBeNull();
+    if (process.platform === 'win32') {
+      // Windows has no POSIX exec bit: a present file is a valid candidate.
+      expect(notFound).toBe(bad);
+      fs.rmSync(bad, { force: true });
+      expect(await whichBin('codex', { extraDirs: [tmp], env: { PATH: '' } })).toBeNull();
+    } else {
+      expect(notFound).toBeNull();
+    }
   });
 
   it('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {

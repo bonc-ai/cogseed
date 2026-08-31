@@ -35,7 +35,7 @@ fs.writeFileSync(fakeCli, [
   "const msg = process.argv.includes('{message}') ? 'unresolved' : (process.argv[2] || '');",
   "const finish = () => { process.stdout.write('FAKE-REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); };",
   "if (process.env.FAKE_CLI_WRITE_OUT === '1') {",
-  "  const m = msg.match(/(\\S*workspace\\/in\\/\\S+)/);",
+  "  const m = msg.match(/(\\S*workspace[\\\\/]in[\\\\/]\\S+)/);",
   "  if (m) { const outDir = require('path').dirname(m[1]).replace(/in$/, 'out'); try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(require('path').join(outDir, 'result.txt'), 'OUT-ARTIFACT-' + n); } catch {} }",
   "}",
   "const sleepMs = (msg.match(/SLEEP-(\\d+)/) || [])[1];",
@@ -164,7 +164,7 @@ async function main() {
   ] }, idempotency_key: 'idem6' };
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: artEnv }, GATEWAY_TOKEN);
   await sleep(1200);
-  check('入站工件落盘并提示路径', received.some((e) => e.session_id === 's6' && (e.payload.parts[0].text || '').includes('input.txt') && (e.payload.parts[0].text || '').includes('workspace/in')));
+  check('入站工件落盘并提示路径', received.some((e) => e.session_id === 's6' && (e.payload.parts[0].text || '').includes('input.txt') && /workspace[\\/]in/.test(e.payload.parts[0].text || '')));
 
   // Artifact 出站：Agent 运行期间写入 workspace/out/ 的文件随回复回传（digest 校验）
   const outArtifact = received.find((e) => e.session_id === 's6' && e.payload.parts.some((p) => p.type === 'resource'));
@@ -565,7 +565,14 @@ async function main() {
 
   gateway.kill('SIGTERM');
   cogseedServer.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // Windows sometimes still holds the temp dir until child processes have
+  // fully exited; retry instead of failing a green protocol run on cleanup.
+  await sleep(500);
+  try {
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    console.warn('(smoke) temp dir cleanup warning: ' + (error && error.message));
+  }
   if (failures.length) {
     console.error('FAILED: ' + failures.join(', '));
     console.error(gatewayLog);

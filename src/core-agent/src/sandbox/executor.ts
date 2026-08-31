@@ -13,6 +13,12 @@ import {
   ProcessOutputCapture,
   type StreamedToolOutput,
 } from "./output-capture.js";
+import {
+  warnWindowsSandboxUnavailable,
+  windowsSandboxMode,
+  windowsStrongSandboxAvailable,
+  wrapWindowsStrongSandbox,
+} from "./windows-sandbox.js";
 
 const log = createLogger("sandbox");
 
@@ -82,6 +88,7 @@ export interface ShellInvocation {
 type SpawnInvocation = {
   command: string;
   args: string[];
+  envPatch?: Record<string, string>;
 };
 
 function windowsSystem32Tool(name: string): string {
@@ -279,6 +286,47 @@ function maybeWrapWithMacWriteSandbox(
     command: "/usr/bin/sandbox-exec",
     args: ["-p", macWriteSandboxProfile(dirs), invocation.command, ...invocation.args],
   };
+}
+
+let warnedWindowsFallback = false;
+
+/**
+ * Platform dispatch for the OS-enforced write sandbox. macOS uses
+ * sandbox-exec; Windows can only enforce writes through a restricted,
+ * low-integrity token, which requires an elevated process or privileged
+ * broker. Strong mode fails closed when that capability is missing; the
+ * default keeps the legacy behavior with a one-time warning.
+ */
+function maybeWrapWithWriteSandbox(
+  invocation: ShellInvocation,
+  allowedDirs: readonly string[] | undefined,
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): SpawnInvocation {
+  const dirs = uniqueSandboxDirs(allowedDirs);
+  if (!dirs.length) return invocation;
+  if (platform === "darwin") {
+    return maybeWrapWithMacWriteSandbox(invocation, dirs);
+  }
+  if (platform === "win32") {
+    if (windowsStrongSandboxAvailable()) {
+      const wrapped = wrapWindowsStrongSandbox(command, dirs, invocation.kind);
+      return {
+        command: wrapped.command,
+        args: wrapped.args,
+        envPatch: wrapped.envPatch,
+      };
+    }
+    const mode = windowsSandboxMode();
+    if (mode === "strong") {
+      throw new Error(warnWindowsSandboxUnavailable(mode));
+    }
+    if (!warnedWindowsFallback) {
+      warnedWindowsFallback = true;
+      warnWindowsSandboxUnavailable(mode);
+    }
+  }
+  return invocation;
 }
 
 function decodedTextScore(text: string): number {
@@ -574,10 +622,14 @@ export class SandboxExecutor {
         env.SANDBOX_NO_NETWORK = "1";
       }
 
-      const invocation = maybeWrapWithMacWriteSandbox(
+      const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
+        command,
       );
+      if (invocation.envPatch) {
+        Object.assign(env, invocation.envPatch);
+      }
       const child = spawn(invocation.command, invocation.args, {
         cwd,
         env,
@@ -745,10 +797,14 @@ export class SandboxExecutor {
       return { pid: null, error: `cannot open log file: ${(err as Error).message}` };
     }
     try {
-      const invocation = maybeWrapWithMacWriteSandbox(
+      const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
+        command,
       );
+      if (invocation.envPatch) {
+        Object.assign(env, invocation.envPatch);
+      }
       const child = spawn(invocation.command, invocation.args, {
         cwd: this.config.workingDir,
         env,

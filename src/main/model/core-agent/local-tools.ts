@@ -56,6 +56,7 @@ import {
   writeFileTool as coreWriteFileTool,
 } from '../../../core-agent/src/tools/builtin';
 import { buildSandboxEnv, decodeProcessOutput, killProcessTree } from '../../../core-agent/src/sandbox/executor';
+import { windowsStrongSandboxAvailable } from '../../../core-agent/src/sandbox/windows-sandbox';
 import {
   ProcessOutputCapture,
   discardStreamedToolOutput,
@@ -1113,11 +1114,11 @@ async function executeCoreBashWithOutputTracking(
 
   try {
     const direct = parseCogSeedCliInvocation(input, ctx);
-    const macWriteSandboxActive = process.platform === 'darwin'
-      && fs.existsSync('/usr/bin/sandbox-exec')
+    const writeSandboxActive = ((process.platform === 'darwin' && fs.existsSync('/usr/bin/sandbox-exec'))
+      || (process.platform === 'win32' && windowsStrongSandboxAvailable()))
       && Array.isArray(ctx.state.sandboxAllowedDirs)
       && ctx.state.sandboxAllowedDirs.length > 0;
-    const result = direct && !macWriteSandboxActive
+    const result = direct && !writeSandboxActive
       ? await executeDirectCogSeedCli(direct, input, ctx, workingDir)
       : await coreBashTool.execute(input, ctx);
 
