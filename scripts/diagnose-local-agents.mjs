@@ -169,6 +169,11 @@ export function localCliSearchDirs(type, platform = process.platform, env = proc
       dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
       // Some installers use %LOCALAPPDATA%\WorkBuddy directly (no "Programs").
       dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Layout variants (resources\<layer>\cli\bin and direct cli\bin).
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'cli', 'bin'));
     }
     return dirs;
   }

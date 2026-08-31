@@ -322,6 +322,8 @@ describe('local_agents/registry › Windows GUI search paths', () => {
     expect(wbDirs).toEqual(expect.arrayContaining([
       'C:\\Users\\alice\\AppData\\Local\\Programs\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin',
       'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\resources\\*\\cli\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\cli\\bin',
     ]));
   });
 });
