@@ -176,6 +176,16 @@
 .cs-usage-row { padding: 2px 6px; color: #a6adb8; font-size: 12px; }
 .cs-ctx-warn { color: rgb(202, 138, 4); font-weight: 600; }
 
+/* ── 加载中指示：时间线末尾（order 兜底永远最后），终态移除 ── */
+.cs-loading {
+  order: 999;
+  padding: 3px 6px;
+  color: #a6adb8;
+}
+.cs-loading-spinner { display: inline-flex; animation: cs-spin 1s steps(8) infinite; }
+.cs-loading-spinner svg { width: 14px; height: 14px; }
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+
 /* ── 交互卡（审批/提问：有按钮和输入，保留轻边框卡以示可操作） ── */
 .cs-card.cs-interaction {
   border: 1px solid rgba(127, 127, 127, .22);
@@ -225,6 +235,7 @@
   .cs-target { color: #8b93a0; }
   .cs-text { color: var(--text, #e5e7eb); }
   .cs-usage-row { color: #8b93a0; }
+  .cs-loading { color: #8b93a0; }
   .cs-think-full { color: #8b93a0; border-left-color: rgba(255, 255, 255, .16); }
   .cs-row-out pre, .cs-interaction-detail { background: rgba(0, 0, 0, .28); }
   .cs-card.cs-interaction { background: rgba(255, 255, 255, .04); }

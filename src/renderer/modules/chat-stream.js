@@ -31,6 +31,7 @@ function _csPanelKey(cid, turnId) { return `${cid}::${turnId}`; }
 // ── 工具名 → 图标/动词/目标样式映射（视觉对齐 CLI：读取/编辑/运行/MCP…） ──
 const _CS_TOOL_STYLES = [
   [['read_file', 'stat_file', 'read_mate_kb', 'kb_read', 'chat_read', 'office_read'], 'search', '读取', 'path'],
+  [['list_files', 'list_visible_files'], 'folder', '列目录', 'path'],
   [['search_files', 'grep_files', 'kb_search', 'chat_search', 'web_search'], 'search', '搜索', 'text'],
   [['web_fetch'], 'globe', '抓取', 'text'],
   [['write_file', 'office_create', 'create_artifact', 'create_docx', 'create_pptx', 'create_xlsx', 'markdown_to_pdf', 'html_to_pdf', 'generate_image'], 'edit-pencil', '写入', 'path'],
@@ -39,9 +40,15 @@ const _CS_TOOL_STYLES = [
   [['bash', 'exec_command', 'interactive_cli_start', 'interactive_cli_send', 'interactive_cli_read', 'interactive_cli_close'], 'terminal', '运行', 'text'],
   [['browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot'], 'globe', '浏览', 'text'],
   [['run_skill'], 'zap', '技能', 'text'],
+  [['skill_search', 'skill_list'], 'zap', '技能', 'text'],
   [['call_connector_tool', 'list_connector_tools'], 'plug', 'MCP', 'mcp'],
-  [['messaging_send', 'p3394_send'], 'send', '发送', 'text'],
-  [['cogseed_delegate'], 'send', '派单', 'text'],
+  [['messaging_send', 'p3394_send'], 'send', '发送', 'message'],
+  [['cogseed_delegate'], 'send', '派单', 'message'],
+  [['cogseed_tasks', 'auto_tasks_list'], 'list', '任务', 'text'],
+  [['p3394_peers'], 'users', '对端', 'text'],
+  [['kb_list'], 'book-open', '知识库', 'text'],
+  [['material_list'], 'database', '素材', 'text'],
+  [['search_ability_assets'], 'search', '能力', 'text'],
   [['manage_execution_plan'], 'list-ordered', '计划', 'text'],
   [['cross_session_memory'], 'book-open', '记忆', 'text'],
 ];
@@ -76,7 +83,7 @@ function _csParseArgs(argsSummary) {
   } catch { /* 截断/非完整 JSON → 字段扫描 */ }
   // 截断的 JSON 解不动：按字段名直接抠字符串值（截断的命令也能显示前段）。
   const extracted = {};
-  for (const field of ['command', 'query', 'pattern', 'path', 'file_path', 'url', 'connector', 'server', 'tool', 'skill_id']) {
+  for (const field of ['command', 'query', 'pattern', 'path', 'file_path', 'url', 'skill_id', 'peer', 'to', 'target', 'message', 'text', 'content', 'task', 'connector', 'server', 'tool']) {
     const value = _csPartialJsonField(raw, field);
     if (value) extracted[field] = value;
   }
@@ -234,8 +241,15 @@ function _csCreateFlow(cid, turnId, opts) {
   body.className = 'cs-flow-body';
   flow.appendChild(body);
 
-  const host = _csBadgeHost(flow, opts && opts.anchor);
   if (!(opts && opts.noStatus)) {
+    // 运行中的「加载中」指示：时间线末尾（order 兜底永远最后），让用户
+    // 知道过程还在继续；终态时移除。
+    const loading = document.createElement('div');
+    loading.className = 'cs-loading';
+    loading.innerHTML = `<span class="cs-loading-spinner">${_csIco('loader')}</span>`;
+    body.appendChild(loading);
+
+    const host = _csBadgeHost(flow, opts && opts.anchor);
     host.appendChild(_csCreateBadge(flow, opts));
     // 就近停止（矩阵 #6）：仅运行中显示，复用主输入区停止按钮的完整
     // abort 链；主按钮不在 streaming 态（派单后台轮次）时由流自身标记，
@@ -258,7 +272,8 @@ function _csCreateFlow(cid, turnId, opts) {
     _csStartTicker(flow, opts && opts.startedAtMs);
   } else {
     // 历史/完成态：徽章只做收起开关（无计时数据不编造时长）。
-    host.appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
+    _csBadgeHost(flow, opts && opts.anchor)
+      .appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
   }
   return flow;
 }
@@ -329,6 +344,9 @@ function _csSetFlowState(flow, status, error, endedAtMs) {
   flow.classList.remove('running', 'done', 'failed', 'cancelled');
   flow.classList.add(status === 'completed' ? 'done' : status);
   _csStopTicker(flow);
+  // 加载指示随终态退场（过程已结束，没有"还有下一步"）。
+  const loading = flow.querySelector('.cs-loading');
+  if (loading) loading.remove();
   if (flow._csStopBtn) {
     flow._csStopBtn.remove();
     flow._csStopBtn = null;
@@ -380,7 +398,7 @@ function _csFileIcoSpan(fileName) {
 }
 
 /** 目标片段：路径类 → 彩色文件图标 + 文件名 + 目录（均等宽、可截断）；
- *  MCP → 服务名 · 工具名；其余 → 单行等宽摘要。 */
+ *  MCP → 服务名 · 工具名；发送类 → 对端：消息摘要；其余 → 单行等宽摘要。 */
 function _csTargetHtml(targetKind, args, rawSummary) {
   if (targetKind === 'mcp') {
     const server = _csFirstArg(args, ['connector', 'server', 'server_name', 'name'])
@@ -388,6 +406,16 @@ function _csTargetHtml(targetKind, args, rawSummary) {
     const tool = _csFirstArg(args, ['tool', 'tool_name', 'method']);
     return `<span class="cs-file-name">${_csEscapeHtml(server)}</span>`
       + (tool ? `<span class="cs-row-dim">· ${_csEscapeHtml(tool)}</span>` : '');
+  }
+  if (targetKind === 'message') {
+    // 发送/派单：给"用户视角"的目标感——→ 对端：消息前段（而非原始 JSON）。
+    const peer = _csFirstArg(args, ['peer', 'to', 'target', 'agent', 'agent_name', 'agent_id', 'recipient']);
+    const text = _csFirstArg(args, ['message', 'text', 'content', 'task', 'prompt']);
+    const peerPart = peer ? `<span class="cs-file-name">→ ${_csEscapeHtml(peer)}</span>` : '';
+    const bodyPart = text
+      ? `<span class="cs-target">${_csEscapeHtml(text)}</span>`
+      : (rawSummary ? `<span class="cs-target">${_csEscapeHtml(rawSummary)}</span>` : '');
+    return peerPart + bodyPart;
   }
   const path = _csFirstArg(args, ['path', 'file_path', 'filePath', 'file']);
   if (path && (targetKind === 'path' || /[\\/]/.test(path))) {

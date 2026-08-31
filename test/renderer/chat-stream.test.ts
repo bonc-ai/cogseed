@@ -486,6 +486,54 @@ describe('chat-stream module', () => {
     expect(diff!.innerHTML).toContain('cs-diff-line del');
   });
 
+  it('补收的内核工具也有中文动词：列目录/知识库/素材/对端/任务/能力', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    const item = (id: string, name: string, args: string) =>
+      handle({ type: 'chat.item', turnId: 'T1', itemId: id, kind: 'toolExecution', status: 'completed', payload: { toolName: name, argsSummary: args } });
+    item('a1', 'list_files', '{"path":"/tmp/x"}');
+    item('a2', 'kb_list', '{}');
+    item('a3', 'material_list', '{}');
+    item('a4', 'p3394_peers', '{}');
+    item('a5', 'auto_tasks_list', '{"project_id":"__current__"}');
+    item('a6', 'search_ability_assets', '{"query":"harness"}');
+    // stub 里 innerHTML 不反映 appendChild 的子元素：逐行取行内 HTML。
+    const html = bodyOf(flow).children.map((r) => r.innerHTML).join('|');
+    expect(html).toContain('列目录');
+    expect(html).toContain('知识库');
+    expect(html).toContain('素材');
+    expect(html).toContain('对端');
+    expect(html).toContain('任务');
+    expect(html).toContain('能力');
+  });
+
+  it('发送类工具显示「→ 对端：消息摘要」，不摆原始 JSON', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'm1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'p3394_send', argsSummary: '{"peer":"workbuddy","message":"连通性实测：请用一句话确认你已收到这条跨-agent 消息"}' } });
+    const row = bodyOf(flow).children.find((c) => c.dataset.csItem === 'm1')!;
+    expect(row.innerHTML).toContain('发送');
+    expect(row.innerHTML).toContain('→ workbuddy');
+    expect(row.innerHTML).toContain('连通性实测');
+    expect(row.innerHTML).not.toContain('&quot;peer&quot;');
+  });
+
+  it('运行中时间线末尾有加载中指示，终态移除', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    expect(flow.querySelector('.cs-loading')).toBeTruthy();
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    expect(flow.querySelector('.cs-loading')).toBeTruthy();
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    expect(flow.querySelector('.cs-loading')).toBeNull();
+    // 纯文字回合：loading 撤掉后 body 为空 → 连流壳一起撤（既有契约）。
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '只是回答' } });
+    const flow2 = inserts[inserts.length - 1].node;
+    handle({ type: 'chat.turn.completed', turnId: 'T2', status: 'completed', endedAt: '' });
+    expect(flow2.isConnected).toBe(false);
+  });
+
   it('reset 清空活动流；垃圾事件不抛错', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     g.window.chatStreamReset();
