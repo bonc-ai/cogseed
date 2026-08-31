@@ -6,31 +6,23 @@ import {
   findBinRecursively,
   recursiveSearchRoots,
 } from '../../../../src/main/features/local_agents/which';
+import { invalidateCache } from '../../../../src/main/features/local_agents/registry';
 
 describe('which: recursive install-root discovery', () => {
-  it('covers Codex and WorkBuddy app roots on win32', () => {
+  it('scans generic app roots and honors COGSEED_AGENT_SEARCH_ROOTS', () => {
     if (process.platform !== 'win32') return;
-    const roots = recursiveSearchRoots(
-      'codex',
-      {
-        LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local',
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
-      },
-      'C:\\Users\\tester',
-    );
-    expect(roots).toContain('c:\\users\\tester\\appdata\\local\\openai');
-    expect(roots).toContain('c:\\users\\tester\\appdata\\local\\programs\\openai');
-
-    const wbRoots = recursiveSearchRoots(
-      'codebuddy',
-      {
-        LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local',
-        APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
-      },
-      'C:\\Users\\tester',
-    );
-    expect(wbRoots).toContain('c:\\users\\tester\\appdata\\local\\workbuddy');
-    expect(wbRoots).toContain('c:\\users\\tester\\appdata\\local\\programs\\workbuddy');
+    const env = {
+      LOCALAPPDATA: 'C:\\Users\\tester\\AppData\\Local',
+      APPDATA: 'C:\\Users\\tester\\AppData\\Roaming',
+      COGSEED_AGENT_SEARCH_ROOTS: 'D:\\cli\\agents;E:\\more\\cli',
+    };
+    const roots = recursiveSearchRoots('codex', env, 'C:\\Users\\tester');
+    expect(roots).toContain('c:\\users\\tester\\appdata\\local');
+    expect(roots).toContain('c:\\users\\tester\\appdata\\local\\programs');
+    expect(roots).toContain('c:\\users\\tester\\appdata\\roaming');
+    expect(roots).toContain('c:\\users\\tester\\appdata\\roaming\\npm');
+    expect(roots).toContain('d:\\cli\\agents');
+    expect(roots).toContain('e:\\more\\cli');
   });
 
   it('finds a codex binary inside a Windows-app hash directory', async () => {
@@ -48,6 +40,30 @@ describe('which: recursive install-root discovery', () => {
       expect(found?.toLowerCase()).toBe(bin.toLowerCase());
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('clears recursive results when the registry cache is invalidated', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'which-recursive-cache-'));
+    const nested = path.join(root, 'agent', 'bin');
+    fs.mkdirSync(nested, { recursive: true });
+    const base = path.join(nested, process.platform === 'win32' ? 'cache-agent.exe' : 'cache-agent');
+    fs.writeFileSync(base, process.platform === 'win32' ? 'fake' : '#!/bin/sh\n');
+    if (process.platform !== 'win32') fs.chmodSync(base, 0o755);
+    const env = {
+      PATH: '',
+      LOCALAPPDATA: root,
+      APPDATA: root,
+      COGSEED_AGENT_SEARCH_ROOTS: root,
+    };
+    try {
+      await expect(findBinRecursively('cache-agent', { env, home: root })).resolves.toBeTruthy();
+      fs.rmSync(base, { force: true });
+      invalidateCache();
+      await expect(findBinRecursively('cache-agent', { env, home: root })).resolves.toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      invalidateCache();
     }
   });
 });

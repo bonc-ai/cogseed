@@ -227,11 +227,43 @@ function escapeCmdArgument(value, doubleEscapeMetaChars) {
   return escaped;
 }
 
-/** PATH + PATHEXT 查找；绝对路径只做存在性检查。 */
+function windowsSystem32Tool(name) {
+  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  return path.win32.join(root, 'System32', name);
+}
+
+/** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
+function killProcessTree(child, signal = 'SIGTERM') {
+  const pid = child && child.pid;
+  if (pid && process.platform === 'win32') {
+    try {
+      const killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
+      killer.once('error', fallback);
+      killer.once('exit', (code) => { if (code !== 0) fallback(); });
+      if (typeof killer.unref === 'function') killer.unref();
+      return;
+    } catch { /* fall through to direct kill */ }
+  }
+  if (pid && process.platform !== 'win32') {
+    try { process.kill(-pid, signal); return; } catch { /* fall through */ }
+  }
+  try { child.kill(signal); } catch { /* already gone */ }
+}
+
+/** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
 function windowsLookPath(cli) {
   if (!cli) return null;
   if (path.isAbsolute(cli) || cli.includes('\\') || cli.includes('/')) {
-    try { return fs.statSync(cli).isFile() ? cli : null; } catch { return null; }
+    const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+    const candidates = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+    for (const candidate of candidates) {
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+    return null;
   }
   const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
   const pathValue = process.env.PATH || process.env.Path || '';
@@ -393,7 +425,13 @@ function workspaceDirs(sessionId) {
 }
 
 function pathWithinRoot(target, root) {
-  return target === root || target.startsWith(root + path.sep);
+  const normalize = (value) => {
+    const normalized = path.normalize(path.resolve(value));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const normalizedTarget = normalize(target);
+  const normalizedRoot = normalize(root);
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
 }
 
 function configuredWorkingDirRoots() {
@@ -401,7 +439,10 @@ function configuredWorkingDirRoots() {
     .split(path.delimiter)
     .map((value) => value.trim())
     .filter(Boolean)
-    .map((value) => path.resolve(value));
+    .map((value) => {
+      const resolved = path.resolve(value);
+      try { return fs.realpathSync(resolved); } catch { return resolved; }
+    });
 }
 
 /** Resolve the requested CLI cwd without changing the gateway-owned session
@@ -423,9 +464,36 @@ function resolveEnvelopeWorkingDir(envelope, fallback) {
   if (roots.length && !roots.some((root) => pathWithinRoot(requested, root))) {
     throw new Error('working_dir_outside_allowed_roots');
   }
+  // Reject an existing symlink/junction before mkdirSync can follow it. For a
+  // new path, validate its nearest existing ancestor so creation cannot cross
+  // an allowed-root boundary through a symlinked parent.
+  try {
+    const existingReal = fs.realpathSync(requested);
+    if (roots.length && !roots.some((root) => pathWithinRoot(existingReal, root))) {
+      throw new Error('working_dir_outside_allowed_roots');
+    }
+  } catch (error) {
+    if (error && error.message === 'working_dir_outside_allowed_roots') throw error;
+    let ancestor = requested;
+    while (!fs.existsSync(ancestor)) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break;
+      ancestor = parent;
+    }
+    let ancestorReal = ancestor;
+    try { ancestorReal = fs.realpathSync(ancestor); } catch { /* checked below */ }
+    if (roots.length && !roots.some((root) => pathWithinRoot(ancestorReal, root))) {
+      throw new Error('working_dir_outside_allowed_roots');
+    }
+  }
   fs.mkdirSync(requested, { recursive: true });
   if (!fs.statSync(requested).isDirectory()) throw new Error('working_dir_not_directory');
-  return requested;
+  let realRequested;
+  try { realRequested = fs.realpathSync(requested); } catch { realRequested = requested; }
+  if (roots.length && !roots.some((root) => pathWithinRoot(realRequested, root))) {
+    throw new Error('working_dir_outside_allowed_roots');
+  }
+  return realRequested;
 }
 function transcriptFile(sessionId) { return path.join(sessionDir(sessionId), 'transcript.jsonl'); }
 
@@ -596,7 +664,7 @@ const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
 function runAgent(message, taskId, cwd, onStream, onProgress) {
   return new Promise((resolve, reject) => {
-    const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
+    const args = splitArgs(CLI_ARGS).map((part) => part.replace('{message}', message));
     const child = spawnCli(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     if (taskId) activeTasks.set(taskId, child);
     let out = '';
@@ -636,8 +704,8 @@ function runAgent(message, taskId, cwd, onStream, onProgress) {
       onProgress(visible);
     };
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+      killProcessTree(child, 'SIGTERM');
+      setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
       if (taskId) activeTasks.delete(taskId);
       reject(new Error('p3394_agent_timeout'));
     }, TIMEOUT_MS);
@@ -687,7 +755,7 @@ function cancelTask(taskId) {
   const child = activeTasks.get(taskId);
   if (!child) return false;
   cancelledTasks.add(taskId);
-  child.kill('SIGTERM');
+  killProcessTree(child, 'SIGTERM');
   activeTasks.delete(taskId);
   return true;
 }
@@ -714,7 +782,7 @@ const oneshotRuntime = {
   },
   cancel(taskId) { return cancelTask(taskId); },
   close() {
-    for (const child of activeTasks.values()) { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
+    for (const child of activeTasks.values()) killProcessTree(child, 'SIGTERM');
     activeTasks.clear();
   },
 };
@@ -723,9 +791,45 @@ const oneshotRuntime = {
 /** 引号感知的 argv 切分（sscli 模式的 CLI 参数可能含带空格的路径）。 */
 function splitArgs(str) {
   const out = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m;
-  while ((m = re.exec(str)) !== null) out.push(m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[3]));
+  let current = '';
+  let quote = null;
+  let tokenStarted = false;
+  const input = String(str || '');
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (quote === '"') {
+      if (ch === '"') { quote = null; tokenStarted = true; continue; }
+      // Inside double quotes, only quote/backslash escapes are special. This
+      // preserves ordinary Windows paths such as C:\\Program Files\\agent.
+      if (ch === '\\' && (input[i + 1] === '"' || input[i + 1] === '\\')) {
+        current += input[++i];
+      } else {
+        current += ch;
+      }
+      tokenStarted = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") { quote = null; tokenStarted = true; continue; }
+      current += ch;
+      tokenStarted = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; tokenStarted = true; continue; }
+    if (/\s/.test(ch)) {
+      if (tokenStarted) { out.push(current); current = ''; tokenStarted = false; }
+      continue;
+    }
+    // Backslash is literal in Windows paths unless it is clearly escaping a
+    // quote, a backslash, or whitespace in a shell-style argument.
+    if (ch === '\\' && /["'\\\s]/.test(input[i + 1] || '')) {
+      current += input[++i];
+    } else {
+      current += ch;
+    }
+    tokenStarted = true;
+  }
+  if (tokenStarted) out.push(current);
   return out;
 }
 
@@ -885,7 +989,7 @@ class CodexAppServerRuntime {
   }
   close() {
     this.activeTurns.clear();
-    if (this.child) { this.child.kill('SIGTERM'); this.child = null; }
+    if (this.child) { killProcessTree(this.child, 'SIGTERM'); this.child = null; }
   }
 }
 const codexAppServerRuntime = new CodexAppServerRuntime();
@@ -1017,7 +1121,7 @@ class SscliRuntime {
   close() {
     this.closing = true;
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
-    if (this.child) { this.child.kill('SIGTERM'); this.child = null; }
+    if (this.child) { killProcessTree(this.child, 'SIGTERM'); this.child = null; }
   }
 }
 
@@ -1043,7 +1147,7 @@ class StreamJsonRuntime {
     // 不带 [会话历史] 会让 claude 每轮失忆）。
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
-    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [])];
+    const args = [...splitArgs(CLI_ARGS).map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : [])];
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
@@ -1065,8 +1169,8 @@ class StreamJsonRuntime {
         }
       };
       const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+        killProcessTree(child, 'SIGTERM');
+        setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
         finish(new Error('p3394_stream_json_timeout'));
       }, STREAM_JSON_TIMEOUT_MS);
       child.stdout.on('data', (chunk) => {
@@ -1123,12 +1227,12 @@ class StreamJsonRuntime {
   cancel(taskId) {
     const child = this.active.get(taskId);
     if (!child) return false;
-    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    killProcessTree(child, 'SIGTERM');
     this.active.delete(taskId);
     return true;
   }
   close() {
-    for (const child of this.active.values()) { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
+    for (const child of this.active.values()) killProcessTree(child, 'SIGTERM');
     this.active.clear();
   }
 }
@@ -1158,8 +1262,8 @@ class ClaudePersistentRuntime {
     // CLI_ARGS（'-p {message}'）去掉 {message} 占位，追加双工流式参数。
     // streamJsonArgs 已含 --output-format stream-json（claude preset），
     // 缺失时才补，避免重复参数。
-    const base = CLI_ARGS.split(' ').map((part) => part.trim()).filter((part) => part && part !== '{message}');
-    const extra = (preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [];
+    const base = splitArgs(CLI_ARGS).filter((part) => part !== '{message}');
+    const extra = (preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : [];
     const hasOutputFormat = extra.some((part) => part === '--output-format');
     return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra];
   }
@@ -1242,7 +1346,7 @@ class ClaudePersistentRuntime {
       entry.idleTimer = null;
       // 空闲回收：无在途轮次且超时 → 关进程释放内存（下次 deliver 重建）。
       if (!entry.turn) {
-        try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+        killProcessTree(entry.child, 'SIGTERM');
         this._dropSession(sessionId);
       }
     }, CLAUDE_IDLE_RECLAIM_MS);
@@ -1288,7 +1392,7 @@ class ClaudePersistentRuntime {
           const turn = entry.turn;
           entry.turn = null;
           this.turnKeys.delete(cancelKey);
-          try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+          killProcessTree(entry.child, 'SIGTERM');
           this._dropSession(sessionId);
           reject(new Error('p3394_claude_timeout'));
         }, STREAM_JSON_TIMEOUT_MS),
@@ -1323,7 +1427,7 @@ class ClaudePersistentRuntime {
     }
     // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
     // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
-    try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+    killProcessTree(entry.child, 'SIGTERM');
     this._dropSession(sessionId);
     return true;
   }
@@ -1331,7 +1435,7 @@ class ClaudePersistentRuntime {
     for (const entry of this.sessions.values()) {
       if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
       if (entry.turn) { clearTimeout(entry.turn.timer); entry.turn = null; }
-      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      killProcessTree(entry.child, 'SIGTERM');
     }
     this.sessions.clear();
     this.turnKeys.clear();

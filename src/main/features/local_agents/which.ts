@@ -15,7 +15,7 @@
  * drop bare names (PowerShell shims, MinGW, etc.).
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
@@ -58,25 +58,23 @@ export function recursiveSearchRoots(
   home = os.homedir(),
 ): string[] {
   const roots: string[] = [];
-  const localAppData = env.LOCALAPPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Local') : '');
-  const appData = env.APPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Roaming') : '');
+  const extra = String(env.COGSEED_AGENT_SEARCH_ROOTS || '')
+    .split(isWindows ? ';' : ':')
+    .map(s => s.trim())
+    .filter(Boolean);
   if (isWindows) {
+    const localAppData = env.LOCALAPPDATA || (home ? path.win32.join(home, 'AppData', 'Local') : '');
+    const appData = env.APPDATA || (home ? path.win32.join(home, 'AppData', 'Roaming') : '');
     if (localAppData) {
       roots.push(localAppData);
       roots.push(path.win32.join(localAppData, 'Programs'));
-      if (name === 'codex') {
-        roots.push(path.win32.join(localAppData, 'OpenAI'));
-        roots.push(path.win32.join(localAppData, 'Programs', 'OpenAI'));
-      }
-      if (name === 'codebuddy') {
-        roots.push(path.win32.join(localAppData, 'WorkBuddy'));
-        roots.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy'));
-      }
     }
     if (appData) {
       roots.push(appData);
       roots.push(path.win32.join(appData, 'npm'));
     }
+    if (home) roots.push(path.win32.join(home, '.local', 'bin'));
+    roots.push(...extra);
     return [...new Set(roots.map(r => r.toLowerCase()))].filter(Boolean);
   }
   if (home) {
@@ -87,10 +85,19 @@ export function recursiveSearchRoots(
     roots.push(path.posix.join(home, '.cargo'));
   }
   roots.push('/opt/homebrew', '/usr/local');
+  roots.push(...extra);
   return [...new Set(roots)].filter(Boolean);
 }
 
 let recursiveCache: { at: number; key: string; value: string | null } | null = null;
+const whereCache = new Map<string, { at: number; hits: string[] }>();
+const whereInFlight = new Map<string, Promise<string[]>>();
+
+/** Clear recursive discovery caches when callers request a forced rescan. */
+export function invalidateRecursiveCache(): void {
+  recursiveCache = null;
+  whereCache.clear();
+}
 
 /**
  * Installer-layout fallback: when PATH and the standard candidate dirs miss,
@@ -102,55 +109,98 @@ let recursiveCache: { at: number; key: string; value: string | null } | null = n
  */
 export async function findBinRecursively(
   name: string,
-  opts: { env?: NodeJS.ProcessEnv; home?: string } = {},
+  opts: { env?: NodeJS.ProcessEnv; home?: string; timeoutMs?: number } = {},
 ): Promise<string | null> {
   if (!name) return null;
   const env = opts.env ?? process.env;
   const home = opts.home ?? os.homedir();
+  const timeoutMs = opts.timeoutMs ?? 2_500;
   const roots = recursiveSearchRoots(name, env, home);
-  const key = `${process.platform}|${name}|${roots.join(';')}`;
+  const key = `${process.platform}|${name}|${roots.join(';')}|${timeoutMs}`;
   if (recursiveCache && recursiveCache.key === key && Date.now() - recursiveCache.at < 5 * 60_000) {
     return recursiveCache.value;
   }
 
   const resolved = isWindows
-    ? findBinWindowsRecursive(name, roots)
-    : await findBinPosixRecursive(name, roots);
+    ? await findBinWindowsRecursive(name, roots, timeoutMs)
+    : await findBinPosixRecursive(name, roots, timeoutMs);
   recursiveCache = { at: Date.now(), key, value: resolved };
   return resolved;
 }
 
-function findBinWindowsRecursive(name: string, roots: string[]): string | null {
-  const candidates = winExtCandidates().map(ext => name + ext);
+function cachedWhere(root: string, pattern: string, timeoutMs: number): Promise<string[]> {
+  const key = `${root}\u0000${pattern}`;
+  const hit = whereCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return Promise.resolve(hit.hits);
+  const pending = whereInFlight.get(key);
+  if (pending) return pending;
+  const promise = new Promise<string[]>(resolve => {
+    let settled = false;
+    let stdout = '';
+    const finish = (hits: string[]) => {
+      if (settled) return;
+      settled = true;
+      whereCache.set(key, { at: Date.now(), hits });
+      resolve(hits);
+    };
+    let child;
+    try {
+      child = spawn('where.exe', ['/R', root, pattern], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      finish([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      finish([]);
+    }, Math.max(1, timeoutMs));
+    timer.unref?.();
+    child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+    child.on('error', () => { clearTimeout(timer); finish([]); });
+    child.on('close', code => {
+      clearTimeout(timer);
+      finish(code === 0 ? stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean) : []);
+    });
+  }).finally(() => { whereInFlight.delete(key); });
+  whereInFlight.set(key, promise);
+  return promise;
+}
+
+async function findBinWindowsRecursive(name: string, roots: string[], timeoutMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  // `name.*` covers every PATHEXT variant in one query; retain the bare-name
+  // query for extensionless shims. Avoid spawning one `where.exe` per suffix.
+  const patterns = [name, name + '.*'];
   for (const root of roots) {
     try {
       if (!fs.statSync(root).isDirectory()) continue;
     } catch {
       continue;
     }
-    for (const candidate of candidates) {
-      let result;
-      try {
-        result = spawnSync('where.exe', ['/R', root, candidate], {
-          encoding: 'utf8',
-          windowsHide: true,
-          timeout: 10_000,
-        });
-      } catch {
-        continue;
+    for (const pattern of patterns) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) return null;
+      const hits = await cachedWhere(root, pattern, remainingMs);
+      for (const line of hits) {
+        try {
+          if (fs.statSync(line).isFile()) return line;
+        } catch {
+          // stale or deleted hit
+        }
       }
-      if (result.status !== 0) continue;
-      const line = String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).find(Boolean);
-      if (line && fs.existsSync(line) && fs.statSync(line).isFile()) return line;
     }
   }
   return null;
 }
 
-async function findBinPosixRecursive(name: string, roots: string[]): Promise<string | null> {
+async function findBinPosixRecursive(name: string, roots: string[], timeoutMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
   const seen = new Set<string>();
   const walk = async (dir: string, depth: number): Promise<string | null> => {
-    if (depth > 4 || seen.has(dir)) return null;
+    if (depth > 4 || seen.has(dir) || Date.now() > deadline) return null;
     seen.add(dir);
     let entries;
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
