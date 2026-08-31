@@ -25,6 +25,7 @@ interface StubEl {
   appendChild(el: StubEl): StubEl;
   insertBefore(node: StubEl, before: StubEl): StubEl;
   querySelector(sel: string): StubEl | null;
+  closest(sel: string): StubEl | null;
   remove(): void;
   addEventListener(type: string, fn: () => void): void;
   setAttribute(name: string, value: string): void;
@@ -46,8 +47,24 @@ function makeEl(tag: string): StubEl {
     return {
       add(cls: string) { if (!(` ${el.className} `).includes(` ${cls} `)) el.className = `${el.className} ${cls}`.trim(); },
       remove(cls: string) { el.className = (` ${el.className} `).replace(` ${cls} `, ' ').trim(); },
-      toggle(cls: string) { if ((` ${el.className} `).includes(` ${cls} `)) this.remove(cls); else this.add(cls); },
+      contains(cls: string) { return (` ${el.className} `).includes(` ${cls} `); },
+      toggle(cls: string, force?: boolean) {
+        const has = (` ${el.className} `).includes(` ${cls} `);
+        const target = force === undefined ? !has : force;
+        if (target && !has) this.add(cls);
+        if (!target && has) this.remove(cls);
+      },
     };
+  },
+  // 仅支持类选择器（'.cs-panel'）：沿 parentNode 链找最近的匹配祖先。
+  closest(sel: string): StubEl | null {
+    const cls = sel.startsWith('.') ? sel.slice(1) : sel;
+    let node: StubEl | null = el;
+    while (node) {
+      if ((` ${node.className} `).includes(` ${cls} `)) return node;
+      node = node.parentNode;
+    }
+    return null;
   },
   querySelectorAll(sel: string): StubEl[] {
     const byTag = sel.match(/^(button|input)$/);
@@ -126,7 +143,7 @@ describe('chat-stream module', () => {
     g.window = g; // classic script 通过 window.* 挂载
     g.document = { createElement: (tag: string) => makeEl(tag) };
     g.CSS = { escape: (v: string) => v };
-    g.createLogger = () => ({ info() {}, warn() {}, error() {} });
+    g.createLogger = () => ({ info() {}, warn(...a: unknown[]) { console.warn('[chat-stream]', ...a); }, error() {} });
     await import('../../src/renderer/modules/chat-stream.js');
   });
 
@@ -150,6 +167,34 @@ describe('chat-stream module', () => {
     expect(stop.style.display).not.toBe('none');
     handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
     expect(stop.style.display).toBe('none');
+  });
+
+  it('完成自动收缩成摘要行；失败保持展开；点行可重新展开', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', output: 'ok' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { inputTokens: 27928, outputTokens: 102 } });
+    let panel = inserts[0].node;
+    const body = panel.querySelector('.cs-panel-body')!;
+    // 运行中过程可见（展开）。
+    expect(body.style.display).not.toBe('none');
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    // 完成 → 自动收缩：body 隐藏、cs-collapsed、header 摘要含步骤与 token。
+    expect(body.style.display).toBe('none');
+    expect(panel.className).toContain('cs-collapsed');
+    const summary = panel.querySelector('.cs-panel-summary')!;
+    expect(summary.textContent).toContain('1 步');
+    expect(summary.textContent).toContain('bash');
+    expect(summary.textContent).toContain('↑28K');
+    expect(summary.textContent).toContain('↓102');
+
+    // 失败不收缩：过程就是排障信息。
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'f1', kind: 'toolExecution', status: 'failed', payload: { toolName: 'bash', error: 'boom' } });
+    handle({ type: 'chat.turn.completed', turnId: 'T2', status: 'failed', error: 'boom', endedAt: '' });
+    panel = inserts[inserts.length - 1].node;
+    expect(panel.className).toContain('failed');
+    expect(panel.querySelector('.cs-panel-body')!.style.display).not.toBe('none');
   });
 
   it('toolExecution 三相位更新同一卡片', () => {
@@ -311,11 +356,12 @@ describe('chat-stream module', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].innerHTML).toContain('ok');
     expect(panel.className).toContain('done');
-    // 默认展开（过程可见）；显式 expanded:false 才收起。
-    expect(body.style.display).not.toBe('none');
-    render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1', expanded: false });
+    // 完成态默认收起成摘要行；显式 expanded:true 才展开（空正文异常回合）。
+    expect(body.style.display).toBe('none');
+    expect(panel.className).toContain('cs-collapsed');
+    render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1', expanded: true });
     const collapsed = root.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
-    expect(collapsed.querySelector('.cs-panel-body')!.style.display).toBe('none');
+    expect(collapsed.querySelector('.cs-panel-body')!.style.display).not.toBe('none');
 
     // 同 turnId 重建幂等：旧面板移除、只留一个。
     render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' });
