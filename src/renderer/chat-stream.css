@@ -38,12 +38,18 @@
   padding: 2px 9px;
   border-radius: 11px;
   flex: none;
+  /* 失败结论可能很长：限宽 + 内部省略（悬停 title 看全文），不撑宽消息头 */
+  max-width: 42%;
+  min-width: 0;
   user-select: none;
 }
 .cs-badge:hover { background: rgba(127, 127, 127, .09); color: #6f7883; }
-.cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; }
+.cs-badge-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; flex: none; }
 .cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
-.cs-badge-elapsed { font-variant-numeric: tabular-nums; }
+.cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
 .cs-flow.failed .cs-badge { color: rgb(214, 69, 69); }
 .cs-flow.failed .cs-badge:hover { color: rgb(178, 34, 34); }
 .cs-badge-stop {
