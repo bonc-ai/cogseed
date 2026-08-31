@@ -10,7 +10,11 @@ export type { CognitionCatalogKind, CognitionCatalogSource, CognitionSourceActio
 export { cognitionSourceControlId, isCognitionSourceEnabled, listCognitionSourceControls, readCognitionSourceControl } from './source-control';
 export type { CognitionSourceAvailability, CognitionSourceControlRecord, CognitionSourceRemovalImpact, RemoveCognitionSourceResult } from './source-control';
 
-export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, recallCandidateConflictingTypes, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate } from './candidate-service';
+<<<<<<< HEAD
+export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, recallCandidateConflictingTypes, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate, recordRecallCandidateValidation } from './candidate-service';
+=======
+export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate, recordRecallCandidateValidation } from './candidate-service';
+>>>>>>> 2b88b728 (feat(kstar): add lifecycle and execution optimizations)
 export type { AbilityAssetType, RecallAbilityAssetRecord, RecallAssetHandoffReceipt, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
 export { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 export type { AbilityAssetOntologyRef } from './ontology-refs';
