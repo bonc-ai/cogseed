@@ -48,6 +48,16 @@ describe('new chat home surface', () => {
     expect(html).toContain('data-i18n-title="chat.recipient_picker_title_with_library"');
     expect(html).toContain('data-i18n-aria-label="chat.chip_remove_title"');
     expect(html).toContain('data-ui-icon="x"');
+    expect(html).toMatch(/id="chat-skill-chip"[\s\S]*?<button type="button" class="chip-close"[\s\S]*?data-i18n-aria-label="chat\.chip_remove_title"/);
+    expect(html).not.toMatch(/id="chat-skill-chip"[\s\S]*?<span class="chip-close"/);
+  });
+
+  it('keeps only the visible rich composer in the keyboard and accessibility trees', () => {
+    const conversation = read('src/renderer/modules/conversation.js');
+
+    expect(conversation).toContain("textarea.setAttribute('aria-hidden', 'true')");
+    expect(conversation).toContain('textarea.tabIndex = -1');
+    expect(conversation).toContain("editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || placeholder)");
   });
 
   it('keeps the home layout constraints aligned with the synced PC surface', () => {
@@ -59,6 +69,8 @@ describe('new chat home surface', () => {
     expect(css).toContain('.new-chat-external-agent-btn');
     expect(css).toContain('.main-top-actions');
     expect(css).toMatch(/\.model-guard-banner\s*{[\s\S]*?height:\s*56px;/);
+    expect(css).toMatch(/\.model-guard-dismiss\s*{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
+    expect(css).toMatch(/\.main-content:not\(:has\(#panel-new-chat\.active\)\) \.model-guard-slot\s*{\s*display:\s*none;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-rich-editor\s*{[\s\S]*?min-height:\s*80px;[\s\S]*?font-size:\s*16px;/);
     expect(css).toMatch(/\.new-chat-input-area \.chat-input-rich-wrap textarea\.chat-rich-source\s*{[\s\S]*?position:\s*absolute;[\s\S]*?width:\s*1px;[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;/);
     expect(css).toMatch(/\.chat-rich-editor\s*{[\s\S]*?outline:\s*none;/);

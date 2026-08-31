@@ -50,4 +50,17 @@ describe('CogSeed formal Agent execution context', () => {
       isAgentEnabled: vi.fn(() => true),
     })).rejects.toThrow(/unavailable/i);
   });
+
+  it.each(['gemini', 'aider'])('keeps discovered %s CLI Agents out of execution admission', async (cli) => {
+    await expect(resolveCogSeedAgentExecutionContext('user-context', `agent-${cli}`, 'cid-context', {
+      getAgentForChatDispatch: vi.fn(async () => ({
+        agent_id: `agent-${cli}`,
+        name: `${cli} Agent`,
+        workflow: 'Draft only.',
+        category: 'general',
+        runtime: { kind: 'cli', cli },
+      }) as any),
+      isAgentEnabled: vi.fn(() => true),
+    })).rejects.toThrow(/not executable/i);
+  });
 });

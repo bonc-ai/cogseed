@@ -129,6 +129,10 @@ export interface GroupMessage {
    * terminal bus events, persisted history and renderer placeholders all use
    * this value to refer to the same reply. Older records may omit it. */
   turn_id?: string;
+  /** Durable terminal marker for one actor execution. Live events already
+   * carry `turn_end`; persisting the bit lets crash recovery distinguish a
+   * completed turn from an intermediate segment with the same `turn_id`. */
+  turn_end?: true;
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
@@ -144,6 +148,8 @@ export interface GroupMessage {
   failure_kind?: GroupMessageFailureKind;
   /** Stable low-cardinality reason paired with `failure_kind`. */
   failure_code?: string;
+  /** Host action idempotency key. This is a safe correlation id, never user text. */
+  action_request_id?: string;
   /** Internal model-facing text. UI renders `text`; workers use this when
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */
