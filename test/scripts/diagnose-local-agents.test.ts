@@ -97,7 +97,7 @@ describe('diagnose-local-agents: search dirs mirror registry.ts', () => {
 });
 
 describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
-  it('finds an executable via extraDirs and skips non-executables on POSIX', async () => {
+  it.runIf(process.platform !== 'win32')('finds an executable via extraDirs and skips non-executables on POSIX', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-'));
     const good = path.join(tmp, 'claude');
     const bad = path.join(tmp, 'codex');
@@ -108,23 +108,26 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     const found = await whichBin('claude', { extraDirs: [tmp], env: { PATH: '' } });
     expect(found).toBe(good);
     const notFound = await whichBin('codex', { extraDirs: [tmp], env: { PATH: '' } });
-    if (process.platform === 'win32') {
-      // Windows has no POSIX exec bit: a present file is a valid candidate.
-      expect(notFound).toBe(bad);
-      fs.rmSync(bad, { force: true });
-      expect(await whichBin('codex', { extraDirs: [tmp], env: { PATH: '' } })).toBeNull();
-    } else {
-      expect(notFound).toBeNull();
-    }
+    expect(notFound).toBeNull();
   });
 
-  it('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {
+  it.runIf(process.platform !== 'win32')('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-abs-'));
     const abs = path.join(tmp, 'my-claude');
     fs.writeFileSync(abs, '#!/bin/sh\n');
     fs.chmodSync(abs, 0o755);
     expect(await whichBin(abs, { env: { PATH: '' } })).toBe(abs);
     expect(await whichBin(path.join(tmp, 'missing'), { env: { PATH: '' } })).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('skips a bare npm bash shim and falls through to the .cmd shim', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-win-'));
+    const bare = path.join(tmp, 'claude');
+    const cmd = path.join(tmp, 'claude.CMD');
+    fs.writeFileSync(bare, '#!/bin/sh\necho hi\n');
+    fs.writeFileSync(cmd, '@echo off\r\n');
+    const found = await whichBin('claude', { extraDirs: [tmp], env: { PATH: '', PATHEXT: '.CMD' } });
+    expect(found?.toLowerCase()).toBe(cmd.toLowerCase());
   });
 });
 

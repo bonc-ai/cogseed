@@ -299,10 +299,30 @@ async function isExecutableFile(p, platform) {
   try {
     const st = await fsp.stat(p);
     if (!st.isFile()) return false;
-    if (platform === 'win32') return true;
+    if (platform === 'win32') {
+      // 镜像 which.ts：npm 会同时生成无扩展名的 `#!/bin/sh` bash shim 和
+      // `<name>.cmd`。bare shim 无法被 spawn 执行，跳过让 whichBin 命中 .cmd。
+      if (path.extname(p) === '' && await isShebangScript(p)) return false;
+      return true;
+    }
     return (st.mode & 0o111) !== 0;
   } catch {
     return false;
+  }
+}
+
+/** 文件是否以 `#!` 开头（Unix shebang）；Windows spawn 无法直接执行。 */
+async function isShebangScript(p) {
+  let handle;
+  try {
+    handle = await fsp.open(p, 'r');
+    const buf = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(buf, 0, 2, 0);
+    return bytesRead >= 2 && buf[0] === 0x23 /* # */ && buf[1] === 0x21 /* ! */;
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => { /* ignore */ });
   }
 }
 
