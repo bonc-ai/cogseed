@@ -282,12 +282,19 @@ function _modelChipRenderChip(chip) {
 
 // ─── Menu ─────────────────────────────────────────────────────────────────
 
+function _clampMenuLeft(preferredLeft, menuWidth) {
+  const edge = 8;
+  const maxLeft = Math.max(edge, window.innerWidth - menuWidth - edge);
+  return Math.min(Math.max(edge, preferredLeft), maxLeft);
+}
+
 function _positionModelMenu(menu, anchor) {
   const rect = anchor.getBoundingClientRect();
   menu.style.position = 'fixed';
-  menu.style.left = rect.left + 'px';
   menu.style.zIndex = '12000';
   document.body.appendChild(menu);
+  const menuWidth = menu.offsetWidth || 320;
+  menu.style.left = _clampMenuLeft(rect.left, menuWidth) + 'px';
   // Flip above the anchor when there isn't enough room below; clamp to
   // the viewport either way.
   const menuHeight = menu.offsetHeight || 320;
@@ -310,8 +317,12 @@ function _bindModelMenuDismiss(menu, anchor) {
   };
   menu._onDocDown = onDocDown;
   menu._onKey = onKey;
+  const onViewportChange = () => _closeModelMenu();
+  menu._onViewportChange = onViewportChange;
   setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', onViewportChange);
+  document.addEventListener('scroll', onViewportChange, true);
 }
 
 function _closeModelMenu() {
@@ -319,6 +330,8 @@ function _closeModelMenu() {
   if (!menu) return;
   document.removeEventListener('mousedown', menu._onDocDown, true);
   document.removeEventListener('keydown', menu._onKey, true);
+  window.removeEventListener('resize', menu._onViewportChange);
+  document.removeEventListener('scroll', menu._onViewportChange, true);
   menu.remove();
   document.querySelectorAll('.model-chip--open').forEach((el) => el.classList.remove('model-chip--open'));
 }
