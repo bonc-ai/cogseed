@@ -169,6 +169,40 @@ describe('chat-stream module', () => {
     expect(stop.style.display).toBe('none');
   });
 
+  it('时间线接管正文：text 段交错、完成交回清空、finalize 兜底', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '我先查一下：' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', output: 'ok' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '查完了。' } });
+
+    const panel = inserts[0].node;
+    const body = panel.querySelector('.cs-panel-body')!;
+    const segs = body.children.filter((c) => String(c.className).includes('cs-text'));
+    // 文字与工具行交错：两段文字夹一个工具行。
+    expect(segs).toHaveLength(2);
+    expect(segs[0].textContent).toBe('我先查一下：');
+    expect(segs[1].textContent).toBe('查完了。');
+    expect(panel.dataset.csText).toBe('我先查一下：查完了。');
+
+    // turn.completed：交回（_streamingAppendFinalDelta 不在测试环境，走
+    // finalEl fallback 亦无），段移除、聚合清空、面板收缩。
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    expect(panel.querySelectorAll('.cs-text')).toHaveLength(0);
+    expect(panel.dataset.csText).toBeUndefined();
+    expect(panel.classList.contains('cs-collapsed')).toBe(true);
+
+    // finalize 兜底：running 面板（断流场景）被收尾为 cancelled。
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'i2', kind: 'text', status: 'inProgress', payload: { delta: '做到一半' } });
+    const fin = g.window.chatStreamFinalize as (c: string) => void;
+    fin('c-1');
+    const p2 = inserts[inserts.length - 1].node;
+    expect(p2.className).toContain('cs-panel');
+    expect(p2.className).not.toContain('running');
+    expect(p2.querySelectorAll('.cs-text')).toHaveLength(0);
+  });
+
   it('完成自动收缩成摘要行；失败保持展开；点行可重新展开', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: 'ls' } });

@@ -227,11 +227,18 @@ function _csRenderToolCard(card, payload, status) {
   const p = payload || {};
   // 摘要行读取的名称副本（见 _csUpdatePanelSummary）。
   card.dataset.csName = String(p.toolName || 'tool');
+  if (status !== 'completed' && status !== 'failed') card.dataset.csT0 = String(Date.now());
+  else if (card.dataset.csDur === undefined && card.dataset.csT0) {
+    card.dataset.csDur = String(Math.max(0, Date.now() - Number(card.dataset.csT0)));
+  }
+  const dur = card.dataset.csDur
+    ? ` · ${(Number(card.dataset.csDur) / 1000).toFixed(1)}s` : '';
   const parts = [
-    `<div class="cs-card-head">
+    `<div class="cs-row-head">
       <span class="cs-card-ico ${status}">${_csStatusIcon(status)}</span>
       <span class="cs-tool-name">${_csEscapeHtml(p.toolName || 'tool')}</span>
       ${p.argsSummary ? `<span class="cs-tool-args">${_csEscapeHtml(p.argsSummary)}</span>` : ''}
+      <span class="cs-row-dur">${dur}</span>
     </div>`,
   ];
   if (p.error) parts.push(`<div class="cs-card-error">${_csEscapeHtml(p.error)}</div>`);
@@ -239,15 +246,28 @@ function _csRenderToolCard(card, payload, status) {
     parts.push(`<div class="cs-card-out"><pre>${_csEscapeHtml(p.output)}</pre></div>`);
   }
   card.innerHTML = parts.join('');
+  if (!card.dataset.csClickBound) {
+    card.dataset.csClickBound = '1';
+    card.addEventListener('click', () => {
+      const out = card.querySelector('.cs-card-out');
+      if (out) out.style.display = out.style.display === 'none' ? '' : 'none';
+    });
+  }
 }
 
 function _csRenderReasoningCard(card, payload) {
   const text = (payload && payload.text) || '';
   card.innerHTML = `
-    <div class="cs-card-head cs-reason-head">
+    <div class="cs-row-head cs-reason-head">
       <span class="cs-card-ico completed">💭</span>
       <span class="cs-reason-text">${_csEscapeHtml(text)}</span>
     </div>`;
+  if (!card.dataset.csClickBound) {
+    card.dataset.csClickBound = '1';
+    card.addEventListener('click', () => {
+      card.classList.toggle('cs-open');
+    });
+  }
 }
 
 function _csRenderDiffCard(card, payload) {
@@ -259,7 +279,7 @@ function _csRenderDiffCard(card, payload) {
     return `<span class="cs-diff-line ${cls}">${_csEscapeHtml(line)}</span>`;
   }).join('');
   card.innerHTML = `
-    <div class="cs-card-head">
+    <div class="cs-row-head">
       <span class="cs-card-ico completed">✎</span>
       <span class="cs-diff-path">${_csEscapeHtml(p.filePath || '')}</span>
       ${p.summary ? `<span class="cs-diff-summary">${_csEscapeHtml(p.summary)}</span>` : ''}
@@ -379,6 +399,44 @@ function _csRenderInteractionCard(body, ev) {
   return card;
 }
 
+/** 回合收尾：时间线正文交回 conversation 原管道（markdown/结构块保留），
+ *  面板内文字段移除，正文回到消息气泡位。anchor=面板后的流式占位消息。 */
+function _csFinalizePanelText(panel) {
+  const txt = panel.dataset.csText || '';
+  let anchor = null;
+  if (panel.parentNode) {
+    const sibs = Array.from(panel.parentNode.children || []);
+    const idx = sibs.indexOf(panel);
+    if (idx >= 0 && idx + 1 < sibs.length) anchor = sibs[idx + 1];
+  }
+  if (txt && anchor) {
+    try {
+      if (typeof _streamingAppendFinalDelta === 'function') {
+        _streamingAppendFinalDelta(anchor, txt);
+      } else {
+        const finalEl = anchor.querySelector('[data-role="final"]');
+        if (finalEl) finalEl.textContent = txt;
+      }
+    } catch (err) {
+      _csLog.warn('timeline text hand-back failed', { error: String(err && err.message || err) });
+    }
+  }
+  for (const seg of Array.from(panel.querySelectorAll('.cs-text'))) seg.remove();
+  delete panel.dataset.csText;
+}
+
+/** 流结束兜底（conversation 在 reader 循环收尾时调用）：中断/断流时
+ *  running 面板的正文也要交回，防止文字困在面板里随收缩一起藏掉。 */
+window.chatStreamFinalize = function chatStreamFinalize(cid) {
+  for (const [key, panel] of Array.from(_csPanels.entries())) {
+    if (cid && !key.startsWith(`${cid}::`)) continue;
+    if (panel.classList.contains('running')) {
+      _csFinalizePanelText(panel);
+      _csSetPanelState(panel, 'cancelled');
+    }
+  }
+};
+
 // ── 事件入口（conversation.js 调用） ───────────────────────────────────────
 
 window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatEvent) {
@@ -390,8 +448,30 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
     }
     if (chatEvent.type === 'chat.item') {
       const { kind, status, itemId, payload, turnId } = chatEvent;
-      if (kind === 'text') return; // 正文走老 delta 通道，不重复渲染
-      const { body } = _csEnsurePanel(cid, anchor, turnId);
+      const { panel, body } = _csEnsurePanel(cid, anchor, turnId);
+      if (kind === 'text') {
+        // 时间线接管正文（边思考边说边执行的真实交错）：delta 追加到当前
+        // 文字段，遇其它 item 关段；全文聚合在 panel.dataset.csText，回合
+        // 收尾交回 conversation 原管道渲染（markdown/结构块不损失）。
+        const piece = String((payload && payload.delta) || '');
+        panel.dataset.csText = (panel.dataset.csText || '') + piece;
+        const kids = body.children;
+        const last = kids[kids.length - 1];
+        let seg = (last && last.className && String(last.className).includes('cs-text')
+          && last.dataset.csClosed !== '1') ? last : null;
+        if (!seg) {
+          seg = document.createElement('div');
+          seg.className = 'cs-text';
+          body.appendChild(seg);
+          _csUpdatePanelSummary(panel);
+        }
+        seg.textContent += piece;
+        return;
+      }
+      // 非 text item 到达 → 关闭当前文字段（下次正文新开段，保持交错）。
+      const kids2 = body.children;
+      const openSeg = kids2[kids2.length - 1];
+      if (openSeg && String(openSeg.className || '').includes('cs-text')) openSeg.dataset.csClosed = '1';
       const card = _csEnsureItemCard(body, itemId, kind);
       if (kind === 'toolExecution') _csRenderToolCard(card, payload, status);
       else if (kind === 'reasoning') _csRenderReasoningCard(card, payload);
@@ -401,7 +481,10 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
     }
     if (chatEvent.type === 'chat.turn.completed') {
       const panel = _csPanels.get(_csPanelKey(cid, chatEvent.turnId));
-      if (panel) _csSetPanelState(panel, chatEvent.status, chatEvent.error);
+      if (panel) {
+        _csFinalizePanelText(panel);
+        _csSetPanelState(panel, chatEvent.status, chatEvent.error);
+      }
       return;
     }
     if (chatEvent.type === 'chat.interaction.requested') {
