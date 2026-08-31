@@ -146,6 +146,23 @@ export function buildWorldModelForecastRecord(
     snapshotId?: string;
   },
 ): WorldModelForecastRecord {
+  const forecastCreatedAt = input.forecast.forecastCreatedAt || new Date().toISOString();
+  const selected = input.forecast.candidates?.find((candidate) => candidate.id === input.forecast.selectedCandidateId);
+  const riskRank = { low: 1, medium: 2, high: 3 } as const;
+  const riskLevel = [...(input.forecast.predictedRisks || [])]
+    .sort((left, right) => riskRank[right.severity] - riskRank[left.severity])[0]?.severity || 'low';
+  const projectionConfirmedAt = input.projectionConfirmedAt || forecastCreatedAt;
+  const forecast = {
+    ...input.forecast,
+    forecastCreatedAt,
+    forecastConfidence: input.forecast.forecastConfidence ?? (selected ? Math.max(0, Math.min(1, selected.score.total)) : 0),
+    riskLevel: input.forecast.riskLevel || riskLevel,
+    contextFreshness: input.forecast.contextFreshness || {
+      projectionConfirmedAt,
+      projectedAt: forecastCreatedAt,
+      ageMs: Math.max(0, Date.parse(forecastCreatedAt) - Date.parse(projectionConfirmedAt)),
+    },
+  };
   const provenanceComplete = Boolean(
     input.projectionId
     && input.projectionConfirmedAt
@@ -166,7 +183,7 @@ export function buildWorldModelForecastRecord(
     ...(input.snapshotId ? { snapshotId: input.snapshotId } : {}),
     provenanceComplete,
     input: input.simulationInput,
-    forecast: input.forecast,
+    forecast,
     createdAt: new Date().toISOString(),
   };
 }

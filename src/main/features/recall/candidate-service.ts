@@ -122,6 +122,10 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   failureCode?: 'asset_write_failed' | 'source_unavailable' | 'candidate_expired' | 'evidence_insufficient';
   failureMessage?: string;
   failedAt?: string;
+  /** Cross-task effectiveness evidence. Missing fields are legacy records. */
+  validationCount?: number;
+  lastValidatedAt?: string;
+  consecutiveFailures?: number;
   userModifiedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -456,7 +460,7 @@ function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDe
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance result delta');
   const record = value as Record<string, unknown>;
-  if (!['completed', 'failed', 'cancelled', 'waiting_input'].includes(String(record.terminalStatus))) {
+  if (!['completed', 'failed', 'cancelled', 'timed_out', 'waiting_input'].includes(String(record.terminalStatus))) {
     throw new Error('malformed candidate learning provenance result delta');
   }
   if (!Array.isArray(record.acceptanceSignals) || record.acceptanceSignals.length > 100) {
@@ -474,7 +478,7 @@ function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDe
     acceptanceSignals,
     missingPredictedFiles: normalizedStringArray(record.missingPredictedFiles, 'missing predicted files'),
     unexpectedProducedFiles: normalizedStringArray(record.unexpectedProducedFiles, 'unexpected produced files'),
-    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'waiting_input',
+    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input',
   };
 }
 
@@ -1040,6 +1044,29 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
       userModifiedAt: now,
       ...(learningSignal ? { learningSignal } : current.learningSignal ? { learningSignal: current.learningSignal } : {}),
       ...(learningProvenance ? { learningProvenance } : current.learningProvenance ? { learningProvenance: current.learningProvenance } : {}),
+      updatedAt: now,
+    };
+  });
+  return asCandidate(updated);
+}
+
+/** Record an independent execution outcome without changing the candidate's
+ * lifecycle. Promotion and asset governance remain responsible for status;
+ * this counter is only the evidence ledger used to decide maturity or pause. */
+export async function recordRecallCandidateValidation(
+  userId: string,
+  candidateId: string,
+  outcome: 'success' | 'failure',
+): Promise<RecallCandidateRecord> {
+  if (!safeId(candidateId)) throw new Error('invalid candidate id');
+  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
+    if (!current) throw new Error('recall candidate not found');
+    const candidate = asCandidate(current);
+    const now = new Date().toISOString();
+    return {
+      ...candidate,
+      validationCount: (candidate.validationCount || 0) + (outcome === 'success' ? 1 : 0),
+      ...(outcome === 'success' ? { lastValidatedAt: now, consecutiveFailures: 0 } : { consecutiveFailures: (candidate.consecutiveFailures || 0) + 1 }),
       updatedAt: now,
     };
   });

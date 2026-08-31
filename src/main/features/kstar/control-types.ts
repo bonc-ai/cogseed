@@ -42,7 +42,7 @@ export interface KstarForecastProposal {
 }
 
 export interface KstarResultProposal {
-  finalStatus?: 'completed' | 'failed' | 'cancelled';
+  finalStatus?: 'completed' | 'failed' | 'cancelled' | 'timed_out';
   finalText?: string;
   producedFiles?: string[];
   acceptanceEvidence?: string[];

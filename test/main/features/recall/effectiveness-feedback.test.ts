@@ -51,6 +51,7 @@ describe('Recall effectiveness feedback', () => {
 
     expect(positive).toMatchObject({ outcome: 'better', status: 'valid' });
     expect((await assets.readAbilityAsset('user-a', asset.id)).maturity).toBe('effectiveness_validated');
+    await expect((await modules()).candidates.readRecallCandidate('user-a', asset.candidateId)).resolves.toMatchObject({ validationCount: 1, consecutiveFailures: 0, lastValidatedAt: expect.any(String) });
   });
 
   it('records user feedback by taskRunId for successful transfer proofs', async () => {

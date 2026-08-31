@@ -112,7 +112,7 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
 }
 
 export interface KstarCompletionEvidence {
-  finalStatus?: 'completed' | 'failed' | 'cancelled';
+  finalStatus?: 'completed' | 'failed' | 'cancelled' | 'timed_out';
   finalText?: string;
   producedFiles: string[];
   acceptanceEvidence: string[];
