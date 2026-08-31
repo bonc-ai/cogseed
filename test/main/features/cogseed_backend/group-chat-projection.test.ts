@@ -3,6 +3,28 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+const projectionStorageFaults = vi.hoisted(() => ({
+  failCommitAfterSideEffect: false,
+  sideEffectCompleted: false,
+}));
+
+vi.mock('../../../../src/main/storage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/main/storage')>();
+  return {
+    ...actual,
+    writeJson: async (...args: Parameters<typeof actual.writeJson>) => {
+      const [file] = args;
+      if (projectionStorageFaults.failCommitAfterSideEffect
+        && projectionStorageFaults.sideEffectCompleted
+        && String(file).includes(`${path.sep}_projections${path.sep}`)) {
+        projectionStorageFaults.failCommitAfterSideEffect = false;
+        throw new Error('simulated projection state commit failure');
+      }
+      return actual.writeJson(...args);
+    },
+  };
+});
+
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
 
@@ -11,6 +33,8 @@ beforeEach(() => {
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
+  projectionStorageFaults.failCommitAfterSideEffect = false;
+  projectionStorageFaults.sideEffectCompleted = false;
 });
 
 afterEach(() => {
@@ -85,6 +109,77 @@ describe('CogSeed Group Chat projection bridge', () => {
     await bus.dropConv(base.userId, cid);
   });
 
+  it('lets deletion finish while a detached projection waits, then rejects every late side effect', async () => {
+    const userId = 'projection-delete-race-user';
+    const taskId = 'cogseed-task-projection-delete-race';
+    const chats = await import('../../../../src/main/features/chats');
+    const { fileEditLock } = await import('../../../../src/main/util/locks');
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const { createCogSeedGroupChatProjection } = await import(
+      '../../../../src/main/features/cogseed_backend/group-chat-projection'
+    );
+    const conversation = await chats.createConversation(userId, { title: 'Projection deletion race' });
+    const stateFile = paths.cogseedTaskProjectionFile(userId, taskId);
+    let releaseStateLock!: () => void;
+    let stateLockEntered!: () => void;
+    const stateLockGate = new Promise<void>((resolve) => { releaseStateLock = resolve; });
+    const stateLockStarted = new Promise<void>((resolve) => { stateLockEntered = resolve; });
+    const heldStateLock = fileEditLock(stateFile).runExclusive(async () => {
+      stateLockEntered();
+      await stateLockGate;
+    });
+    await stateLockStarted;
+
+    let existenceChecked!: () => void;
+    const checked = new Promise<void>((resolve) => { existenceChecked = resolve; });
+    const appendProcessEvent = vi.fn(async () => undefined);
+    const appendTerminalMessage = vi.fn(async () => true);
+    const projection = createCogSeedGroupChatProjection({
+      async conversationExists(input) {
+        const exists = Boolean(await chats.getConversation(input.userId, input.conversationId));
+        existenceChecked();
+        return exists;
+      },
+      appendProcessEvent,
+      appendTerminalMessage,
+    });
+    const projecting = projection.project({
+      userId,
+      conversationId: conversation.conversation_id,
+      agentId: 'agent-projection-delete-race',
+      taskId,
+      sessionId: 'cogseed-session-projection-delete-race',
+      event: {
+        eventId: 'cogseed-event-projection-delete-race',
+        type: 'task.started',
+        payload: {},
+      },
+    });
+    await checked;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const deleting = chats.deleteConversation(userId, conversation.conversation_id);
+    try {
+      const deletionFinishedPromptly = await Promise.race([
+        deleting.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      expect(deletionFinishedPromptly).toBe(true);
+      expect(await deleting).toBe(true);
+    } finally {
+      releaseStateLock();
+      await heldStateLock;
+    }
+
+    await expect(projecting).resolves.toBe('dropped');
+    expect(appendProcessEvent).not.toHaveBeenCalled();
+    expect(appendTerminalMessage).not.toHaveBeenCalled();
+    expect(fs.existsSync(stateFile)).toBe(false);
+    await expect(chats.getConversation(userId, conversation.conversation_id)).resolves.toBeNull();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fs.existsSync(stateFile)).toBe(false);
+  }, 10_000);
+
   it('does not duplicate a persisted terminal Agent message when projection retries after a partial failure', async () => {
     const chats = await import('../../../../src/main/features/chats');
     const bus = await import('../../../../src/main/features/group_chat/bus');
@@ -117,6 +212,130 @@ describe('CogSeed Group Chat projection bridge', () => {
     expect(messageEvents).toHaveLength(1);
     unsubscribe();
     await bus.dropConv(input.uid, cid);
+  });
+
+  it('treats a user-deleted terminal reply as durable evidence after the projection marker commit fails', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const layout = await import('../../../../src/main/util/project-layout');
+    const { createCogSeedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const userId = 'projection-deleted-retry-user';
+    const conversation = await chats.createConversation(userId, { title: 'Deleted projected terminal retry' });
+    const cid = conversation.conversation_id;
+    const messageEvents: unknown[] = [];
+    const unsubscribe = bus.subscribe(userId, cid, (event) => {
+      if (event.type === 'message') messageEvents.push(event);
+    });
+    const appendTerminalMessage = vi.fn(async (input: {
+      userId: string;
+      conversationId: string;
+      agentId: string;
+      turnId: string;
+      text: string;
+      terminalStatus?: 'completed' | 'failed';
+    }) => {
+      const appended = await bus.appendProjectedAgentMessage({
+        uid: input.userId,
+        cid: input.conversationId,
+        agentId: input.agentId,
+        turnId: input.turnId,
+        text: input.text,
+        ...(input.terminalStatus ? { terminalStatus: input.terminalStatus } : {}),
+      });
+      projectionStorageFaults.sideEffectCompleted = true;
+      return Boolean(appended);
+    });
+    const projection = createCogSeedGroupChatProjection({ appendTerminalMessage });
+    const input = {
+      userId,
+      conversationId: cid,
+      agentId: 'agent-projection-deleted-retry',
+      taskId: 'cogseed-task-projection-deleted-retry',
+      executionId: 'cogseed-exec-projection-deleted-retry',
+      sessionId: 'cogseed-session-projection-deleted-retry',
+      event: {
+        eventId: 'cogseed-event-projection-deleted-retry',
+        type: 'task.completed' as const,
+        payload: { text: 'one terminal answer' },
+      },
+    };
+
+    projectionStorageFaults.failCommitAfterSideEffect = true;
+    await expect(projection.project(input)).rejects.toThrow(/state commit failure/i);
+    const visible = await groupChat.readMessages(userId, cid);
+    expect(visible).toHaveLength(1);
+    await expect(groupChat.deleteMessages(userId, cid, [visible[0].id])).resolves.toMatchObject({
+      ok: true,
+      deleted: [visible[0].id],
+    });
+
+    const afterDelete = fs.readFileSync(layout.conversationMessageFile(userId, cid), 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    expect(afterDelete).toHaveLength(1);
+    expect(afterDelete[0]).toMatchObject({
+      id: visible[0].id,
+      text: '',
+      deleted_by_user: true,
+      turn_id: input.executionId,
+    });
+    expect(afterDelete[0]).not.toHaveProperty('process');
+
+    await expect(projection.project(input)).resolves.toBe('projected');
+    await expect(groupChat.readMessages(userId, cid)).resolves.toEqual([]);
+    const afterRecovery = fs.readFileSync(layout.conversationMessageFile(userId, cid), 'utf8')
+      .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    expect(afterRecovery).toEqual(afterDelete);
+    expect(messageEvents).toHaveLength(1);
+    expect(appendTerminalMessage).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    await bus.dropConv(userId, cid);
+  });
+
+  it('persists a Run Center task as one idempotent user message without dispatching a second executor', async () => {
+    const chats = await import('../../../../src/main/features/chats');
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const groupChat = await import('../../../../src/main/features/group_chat');
+    const visibility = await import('../../../../src/main/features/group_chat/visibility');
+    const conversation = await chats.createConversation('projection-run-center-user', {
+      conversationId: 'run-center-projection-task',
+      title: 'Run Center task',
+      agentId: 'agent-run-center',
+    });
+    const input = {
+      uid: 'projection-run-center-user',
+      cid: conversation.conversation_id,
+      agentId: 'agent-run-center',
+      requestId: 'req-run-center-projection-task',
+      text: 'Inspect the current change.',
+    };
+
+    await Promise.all([
+      bus.appendProjectedUserTaskMessage(input),
+      bus.appendProjectedUserTaskMessage(input),
+    ]);
+    await expect(bus.appendProjectedUserTaskMessage({
+      ...input,
+      agentId: 'agent-run-center-conflict',
+      text: 'Conflicting task body.',
+    })).rejects.toThrow(/payload conflict/i);
+
+    expect(await groupChat.readMessages(input.uid, input.cid)).toEqual([
+      expect.objectContaining({
+        from: 'user',
+        to: [input.agentId],
+        text: input.text,
+        action_request_id: input.requestId,
+      }),
+    ]);
+    expect(await visibility.readSlice(input.uid, input.cid, input.agentId)).toEqual([
+      expect.objectContaining({ from: 'user', text: input.text }),
+    ]);
+    expect(bus.isQuiescent(input.uid, input.cid)).toBe(true);
+    const state = await import('../../../../src/main/features/group_chat/state');
+    expect((await state.readMembers(input.uid, input.cid)).actors.some((actor) => actor.id === 'agent-run-center-conflict')).toBe(false);
+    await bus.dropConv(input.uid, input.cid);
   });
 
   it('retries a terminal projection after a visibility slice write fails', async () => {
@@ -174,6 +393,7 @@ describe('CogSeed Group Chat projection bridge', () => {
       conversationId: 'cid-projection-state',
       agentId: 'agent-projection-state',
       taskId: 'cogseed-task-projection-state',
+      executionId: 'cogseed-exec-projection-state',
       sessionId: 'cogseed-session-projection-state',
     };
 
@@ -185,9 +405,11 @@ describe('CogSeed Group Chat projection bridge', () => {
     expect(processEvents).toHaveLength(1);
     expect(messages).toEqual([expect.objectContaining({
       agentId: 'agent-projection-state',
+      turnId: 'cogseed-exec-projection-state',
       text: 'done',
       process: [{ type: 'progress', text: 'working' }],
     })]);
+    expect(processEvents).toEqual([expect.objectContaining({ turnId: 'cogseed-exec-projection-state' })]);
   });
 
   it('drops events for a deleted conversation without creating projection state', async () => {
@@ -207,6 +429,88 @@ describe('CogSeed Group Chat projection bridge', () => {
       event: { eventId: 'cogseed-event-deleted', type: 'model.delta', payload: { text: 'late' } },
     })).resolves.toBe('dropped');
     expect(appendProcessEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps a terminal event retryable when its Conversation disappears during append', async () => {
+    const { createCogSeedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    let destinationAvailable = false;
+    const appendTerminalMessage = vi.fn(async () => destinationAvailable);
+    const bridge = createCogSeedGroupChatProjection({
+      conversationExists: vi.fn(async () => true),
+      appendProcessEvent: vi.fn(async () => undefined),
+      appendTerminalMessage,
+    });
+    const input = {
+      userId: 'projection-delete-race-user',
+      conversationId: 'cid-delete-race',
+      agentId: 'agent-delete-race',
+      taskId: 'cogseed-task-delete-race',
+      executionId: 'cogseed-exec-delete-race',
+      sessionId: 'cogseed-session-delete-race',
+      event: { eventId: 'cogseed-event-delete-race', type: 'task.completed' as const, payload: { text: 'retained result' } },
+    };
+
+    await expect(bridge.project(input)).rejects.toThrow(/destination disappeared/i);
+    destinationAvailable = true;
+    await expect(bridge.project(input)).resolves.toBe('projected');
+    expect(appendTerminalMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('commits a terminal event marker only after idempotent process and message side effects succeed', async () => {
+    const { createCogSeedGroupChatProjection } = await import('../../../../src/main/features/cogseed_backend/group-chat-projection');
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const input = {
+      userId: 'projection-commit-race-user',
+      conversationId: 'cid-commit-race',
+      agentId: 'agent-commit-race',
+      taskId: 'cogseed-task-commit-race',
+      executionId: 'cogseed-exec-commit-race',
+      sessionId: 'cogseed-session-commit-race',
+      event: {
+        eventId: 'cogseed-event-commit-race',
+        type: 'task.failed' as const,
+        payload: { error: 'simulated failure' },
+      },
+    };
+    const stateFile = paths.cogseedTaskProjectionFile(input.userId, input.taskId);
+    const processSideEffects = new Set<string>();
+    const terminalMessages = new Map<string, string>();
+    let markerVisibleBeforeSideEffects = false;
+    const readProcessedEventIds = () => {
+      if (!fs.existsSync(stateFile)) return [] as string[];
+      return (JSON.parse(fs.readFileSync(stateFile, 'utf8')) as { processedEventIds?: string[] }).processedEventIds ?? [];
+    };
+    const appendProcessEvent = vi.fn(async (event: { turnId: string; kind: string }) => {
+      markerVisibleBeforeSideEffects ||= readProcessedEventIds().includes(input.event.eventId);
+      processSideEffects.add(`${event.turnId}:${event.kind}`);
+    });
+    const appendTerminalMessage = vi.fn(async (message: { turnId: string; text: string }) => {
+      markerVisibleBeforeSideEffects ||= readProcessedEventIds().includes(input.event.eventId);
+      if (!terminalMessages.has(message.turnId)) terminalMessages.set(message.turnId, message.text);
+      projectionStorageFaults.sideEffectCompleted = true;
+      return true;
+    });
+    const bridge = createCogSeedGroupChatProjection({
+      conversationExists: vi.fn(async () => true),
+      appendProcessEvent,
+      appendTerminalMessage,
+    });
+
+    projectionStorageFaults.failCommitAfterSideEffect = true;
+    await expect(bridge.project(input)).rejects.toThrow(/state commit failure/i);
+
+    expect(markerVisibleBeforeSideEffects).toBe(false);
+    expect(readProcessedEventIds()).not.toContain(input.event.eventId);
+    expect(processSideEffects).toEqual(new Set([`${input.executionId}:task.failed`]));
+    expect(terminalMessages.size).toBe(1);
+
+    await expect(bridge.project(input)).resolves.toBe('projected');
+    await expect(bridge.project(input)).resolves.toBe('duplicate');
+    expect(readProcessedEventIds()).toContain(input.event.eventId);
+    expect(processSideEffects).toEqual(new Set([`${input.executionId}:task.failed`]));
+    expect(terminalMessages.size).toBe(1);
+    expect(appendProcessEvent).toHaveBeenCalledTimes(2);
+    expect(appendTerminalMessage).toHaveBeenCalledTimes(2);
   });
 
   it('returns the floor to Commander only for an explicit projected handback marker', async () => {

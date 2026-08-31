@@ -176,6 +176,7 @@ export async function materializeSession(input: MaterializeInput): Promise<Mater
     title: buildTitle(input),
     imported: true,
     needs_welcome: true,
+    reviveDeleted: true,
   });
 
   // Re-importing a conversation that was previously deleted leaves its Recall

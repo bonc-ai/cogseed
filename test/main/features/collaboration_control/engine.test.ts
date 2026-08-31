@@ -42,6 +42,32 @@ describe('Collaboration engine', () => {
     await expect(h.engine.skipStep(scope, 'run-1', 's1', 'not needed')).resolves.toMatchObject({ status: 'skipped' });
     expect(h.read().run.steps[0].status).toBe('skipped');
   });
+
+  it('reviews gates and dismisses conflicts while reconciling blocked steps atomically', async () => {
+    const h = harness();
+    h.read().run.status = 'blocked';
+    h.read().run.phase = 'gate_needs_review';
+    h.read().run.steps[1].status = 'blocked';
+    h.read().run.steps[1].context_dependencies = ['architecture'];
+    h.read().run.steps[1].blocked_by_conflict_ids = ['conf-1'];
+    h.read().context.gates.push({
+      id: 'gate-1', run_id: 'run-1', step_id: 's1', name: 'Review', status: 'needs_review', checks: [], blocks_workflow: true, created_at: 't0',
+    });
+    h.read().context.conflicts.push({
+      id: 'conf-1', conflict_key: 'architecture', type: 'implementation', status: 'awaiting_user', proposal_ids: [], affected_step_ids: ['s2'], created_at: 't0', updated_at: 't0',
+    });
+
+    await h.engine.reviewGate(scope, 'run-1', 'gate-1', 'approve');
+    expect(h.read().context.gates[0]).toMatchObject({ status: 'passed', review_decision: 'approved', reviewed_by: 'user' });
+    expect(h.read().run).toMatchObject({ status: 'running', phase: 'gate_approved' });
+    expect(h.read().run.steps[1].status).toBe('blocked');
+
+    await h.engine.dismissConflict(scope, 'run-1', 'conf-1', 'obsolete');
+    expect(h.read().context.conflicts[0].status).toBe('dismissed');
+    expect(h.read().run.steps[1].status).toBe('pending');
+    expect(h.read().context.revision).toBe(3);
+    expect(h.events.map((event) => event.type)).toEqual(['gate_reviewed', 'conflict_status_updated']);
+  });
 });
 
 it('creates, plans, dispatches, and completes a workflow step through ports', async () => {
