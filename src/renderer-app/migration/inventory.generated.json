@@ -1,0 +1,1230 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "defcd5f55aa7bd9fa2749fe80818eb9cf597a54b",
+  "source": {
+    "rendererRoot": "src/renderer",
+    "indexHtml": "src/renderer/index.html"
+  },
+  "totals": {
+    "firstPartyModules": 89,
+    "vendorJavaScriptFiles": 6,
+    "scriptTags": 68,
+    "externalScriptTags": 65,
+    "inlineScriptTags": 3,
+    "cssFiles": 6,
+    "loc": 79381,
+    "firstPartyLoc": 77071,
+    "directDomCallCount": 3451,
+    "domQueryCallCount": 1993,
+    "globalEventRegistrations": 173,
+    "timerCount": 140,
+    "observerCount": 7,
+    "directIpcCallCount": 427
+  },
+  "assets": {
+    "scriptTags": [
+      {
+        "type": "inline"
+      },
+      {
+        "type": "inline"
+      },
+      {
+        "type": "external",
+        "src": "./modules/logger.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/state.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/dialogs.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/ipc-shim.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/lazy-features.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/i18n.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-use.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/user-error.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/model-guard.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/delete-file-confirm.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/interactive-tour.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/onboarding.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/continue-work.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/boot.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/avatar.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/avatar-picker.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-input-form.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-lightbox.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/icons.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/file-operation-policy.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-file-viewer.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/md-view-edit.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/text-view-edit.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/context-menu.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-md-drawer.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-side-host.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-aside.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-side-browser.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/strip-structural-blocks.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/name-limit.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/conv-bucket.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/recall-projection-card.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/conversation.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/artifact-security.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/chat-artifact.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/plan-rail.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/conversation-info.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/queue-draft.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/connectors.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/connections.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/bridge.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/bash_permission.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/interactive-cli.js"
+      },
+      {
+        "type": "external",
+        "src": "./vendor/xterm/xterm.js"
+      },
+      {
+        "type": "external",
+        "src": "./vendor/xterm/addon-fit.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/terminal-panel.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/search.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/user-workspace.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/model-chip.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/local-agents.js"
+      },
+      {
+        "type": "external",
+        "src": "./vendor/pinyin-firstletter/data.js"
+      },
+      {
+        "type": "external",
+        "src": "./vendor/dompurify/purify.min.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/pinyin-firstletter.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/agents.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/expense-workbench.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/expense-agent-cards.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/auto-title.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/auto-events.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/utils.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/validation-report-view.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/oss.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/settings_tabs.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/account-chip.js"
+      },
+      {
+        "type": "inline"
+      },
+      {
+        "type": "external",
+        "src": "./modules/math.js"
+      },
+      {
+        "type": "external",
+        "src": "./modules/sidebar-resize.js"
+      }
+    ],
+    "stylesheets": [
+      "./vendor/xterm/xterm.css",
+      "./style.css",
+      "./workspace.css",
+      "./recall-local.css",
+      "./onboarding.css"
+    ],
+    "cssFiles": [
+      "src/renderer/execution-card.css",
+      "src/renderer/onboarding.css",
+      "src/renderer/recall-local.css",
+      "src/renderer/style.css",
+      "src/renderer/vendor/xterm/xterm.css",
+      "src/renderer/workspace.css"
+    ],
+    "vendorFiles": [
+      {
+        "file": "src/renderer/vendor/dompurify/purify.min.js",
+        "loc": 3
+      },
+      {
+        "file": "src/renderer/vendor/mathjax/tex-chtml.js",
+        "loc": 0
+      },
+      {
+        "file": "src/renderer/vendor/pinyin-firstletter/data.js",
+        "loc": 8
+      },
+      {
+        "file": "src/renderer/vendor/qrcode-generator/qrcode.js",
+        "loc": 2297
+      },
+      {
+        "file": "src/renderer/vendor/xterm/addon-fit.js",
+        "loc": 1
+      },
+      {
+        "file": "src/renderer/vendor/xterm/xterm.js",
+        "loc": 1
+      }
+    ]
+  },
+  "firstPartyModules": [
+    {
+      "file": "src/renderer/modules/account-chip.js",
+      "loc": 487,
+      "directDomCallCount": 18,
+      "domQueryCallCount": 14,
+      "globalEventRegistrations": 4,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "loc": 5060,
+      "directDomCallCount": 240,
+      "domQueryCallCount": 202,
+      "globalEventRegistrations": 9,
+      "timerCount": 12,
+      "observerCount": 0,
+      "directIpcCallCount": 42
+    },
+    {
+      "file": "src/renderer/modules/artifact-security.js",
+      "loc": 39,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/auto-events.js",
+      "loc": 55,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/auto-title.js",
+      "loc": 74,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "loc": 2278,
+      "directDomCallCount": 98,
+      "domQueryCallCount": 75,
+      "globalEventRegistrations": 6,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 18
+    },
+    {
+      "file": "src/renderer/modules/avatar-picker.js",
+      "loc": 165,
+      "directDomCallCount": 8,
+      "domQueryCallCount": 6,
+      "globalEventRegistrations": 4,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/avatar.js",
+      "loc": 156,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/bash_permission.js",
+      "loc": 329,
+      "directDomCallCount": 14,
+      "domQueryCallCount": 8,
+      "globalEventRegistrations": 2,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 3
+    },
+    {
+      "file": "src/renderer/modules/boot.js",
+      "loc": 590,
+      "directDomCallCount": 19,
+      "domQueryCallCount": 15,
+      "globalEventRegistrations": 1,
+      "timerCount": 5,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/bridge.js",
+      "loc": 62,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/briefing-center.js",
+      "loc": 21,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/chat-artifact.js",
+      "loc": 456,
+      "directDomCallCount": 39,
+      "domQueryCallCount": 5,
+      "globalEventRegistrations": 7,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/chat-aside.js",
+      "loc": 267,
+      "directDomCallCount": 1,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 3
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "loc": 958,
+      "directDomCallCount": 22,
+      "domQueryCallCount": 12,
+      "globalEventRegistrations": 3,
+      "timerCount": 2,
+      "observerCount": 0,
+      "directIpcCallCount": 7
+    },
+    {
+      "file": "src/renderer/modules/chat-input-form.js",
+      "loc": 709,
+      "directDomCallCount": 83,
+      "domQueryCallCount": 3,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/chat-lightbox.js",
+      "loc": 379,
+      "directDomCallCount": 19,
+      "domQueryCallCount": 7,
+      "globalEventRegistrations": 5,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/chat-md-drawer.js",
+      "loc": 169,
+      "directDomCallCount": 9,
+      "domQueryCallCount": 7,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/chat-side-browser.js",
+      "loc": 182,
+      "directDomCallCount": 3,
+      "domQueryCallCount": 3,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/chat-side-host.js",
+      "loc": 165,
+      "directDomCallCount": 2,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 2,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/chat-use.js",
+      "loc": 799,
+      "directDomCallCount": 14,
+      "domQueryCallCount": 9,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/cognition/cognition.js",
+      "loc": 632,
+      "directDomCallCount": 38,
+      "domQueryCallCount": 29,
+      "globalEventRegistrations": 2,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/cognition/pages.js",
+      "loc": 428,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "loc": 205,
+      "directDomCallCount": 8,
+      "domQueryCallCount": 5,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 8
+    },
+    {
+      "file": "src/renderer/modules/connections.js",
+      "loc": 149,
+      "directDomCallCount": 6,
+      "domQueryCallCount": 6,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "loc": 1171,
+      "directDomCallCount": 40,
+      "domQueryCallCount": 26,
+      "globalEventRegistrations": 5,
+      "timerCount": 2,
+      "observerCount": 0,
+      "directIpcCallCount": 9
+    },
+    {
+      "file": "src/renderer/modules/context-menu.js",
+      "loc": 136,
+      "directDomCallCount": 6,
+      "domQueryCallCount": 2,
+      "globalEventRegistrations": 5,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/contexts.js",
+      "loc": 1850,
+      "directDomCallCount": 101,
+      "domQueryCallCount": 69,
+      "globalEventRegistrations": 5,
+      "timerCount": 6,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "loc": 785,
+      "directDomCallCount": 40,
+      "domQueryCallCount": 37,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 12
+    },
+    {
+      "file": "src/renderer/modules/conv-bucket.js",
+      "loc": 32,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "loc": 2564,
+      "directDomCallCount": 41,
+      "domQueryCallCount": 14,
+      "globalEventRegistrations": 5,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 8
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "loc": 16183,
+      "directDomCallCount": 676,
+      "domQueryCallCount": 406,
+      "globalEventRegistrations": 31,
+      "timerCount": 41,
+      "observerCount": 4,
+      "directIpcCallCount": 48
+    },
+    {
+      "file": "src/renderer/modules/delete-file-confirm.js",
+      "loc": 347,
+      "directDomCallCount": 19,
+      "domQueryCallCount": 11,
+      "globalEventRegistrations": 0,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/dialogs.js",
+      "loc": 276,
+      "directDomCallCount": 31,
+      "domQueryCallCount": 9,
+      "globalEventRegistrations": 4,
+      "timerCount": 6,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/execution-card.js",
+      "loc": 189,
+      "directDomCallCount": 17,
+      "domQueryCallCount": 9,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/expense-agent-cards.js",
+      "loc": 259,
+      "directDomCallCount": 40,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/expense-workbench.js",
+      "loc": 85,
+      "directDomCallCount": 17,
+      "domQueryCallCount": 5,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/file-operation-policy.js",
+      "loc": 48,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/hub-account.js",
+      "loc": 389,
+      "directDomCallCount": 12,
+      "domQueryCallCount": 11,
+      "globalEventRegistrations": 2,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/i18n.js",
+      "loc": 196,
+      "directDomCallCount": 6,
+      "domQueryCallCount": 3,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/icons.js",
+      "loc": 245,
+      "directDomCallCount": 2,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/import-check-modal.js",
+      "loc": 199,
+      "directDomCallCount": 7,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 0,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/interactive-cli.js",
+      "loc": 328,
+      "directDomCallCount": 27,
+      "domQueryCallCount": 18,
+      "globalEventRegistrations": 0,
+      "timerCount": 2,
+      "observerCount": 0,
+      "directIpcCallCount": 3
+    },
+    {
+      "file": "src/renderer/modules/interactive-tour.js",
+      "loc": 565,
+      "directDomCallCount": 38,
+      "domQueryCallCount": 22,
+      "globalEventRegistrations": 2,
+      "timerCount": 4,
+      "observerCount": 1,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/ipc-shim.js",
+      "loc": 444,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 4
+    },
+    {
+      "file": "src/renderer/modules/kb-picker.js",
+      "loc": 307,
+      "directDomCallCount": 15,
+      "domQueryCallCount": 12,
+      "globalEventRegistrations": 0,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/lazy-features.js",
+      "loc": 104,
+      "directDomCallCount": 2,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/library-transfer.js",
+      "loc": 265,
+      "directDomCallCount": 16,
+      "domQueryCallCount": 10,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "loc": 348,
+      "directDomCallCount": 10,
+      "domQueryCallCount": 2,
+      "globalEventRegistrations": 0,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 5
+    },
+    {
+      "file": "src/renderer/modules/logger.js",
+      "loc": 131,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 2,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "loc": 2299,
+      "directDomCallCount": 65,
+      "domQueryCallCount": 53,
+      "globalEventRegistrations": 6,
+      "timerCount": 4,
+      "observerCount": 1,
+      "directIpcCallCount": 18
+    },
+    {
+      "file": "src/renderer/modules/math.js",
+      "loc": 122,
+      "directDomCallCount": 6,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/md-view-edit.js",
+      "loc": 793,
+      "directDomCallCount": 17,
+      "domQueryCallCount": 16,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/memory.js",
+      "loc": 1180,
+      "directDomCallCount": 48,
+      "domQueryCallCount": 42,
+      "globalEventRegistrations": 3,
+      "timerCount": 2,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/messaging-settings.js",
+      "loc": 1967,
+      "directDomCallCount": 193,
+      "domQueryCallCount": 7,
+      "globalEventRegistrations": 2,
+      "timerCount": 4,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/model-authorization.js",
+      "loc": 1142,
+      "directDomCallCount": 4,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "loc": 437,
+      "directDomCallCount": 47,
+      "domQueryCallCount": 15,
+      "globalEventRegistrations": 4,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 7
+    },
+    {
+      "file": "src/renderer/modules/model-guard.js",
+      "loc": 207,
+      "directDomCallCount": 5,
+      "domQueryCallCount": 4,
+      "globalEventRegistrations": 4,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 3
+    },
+    {
+      "file": "src/renderer/modules/name-limit.js",
+      "loc": 111,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "loc": 3105,
+      "directDomCallCount": 176,
+      "domQueryCallCount": 148,
+      "globalEventRegistrations": 0,
+      "timerCount": 4,
+      "observerCount": 0,
+      "directIpcCallCount": 45
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "loc": 463,
+      "directDomCallCount": 7,
+      "domQueryCallCount": 6,
+      "globalEventRegistrations": 2,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 6
+    },
+    {
+      "file": "src/renderer/modules/p3394-observability.js",
+      "loc": 44,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/personal-context-center-view.js",
+      "loc": 176,
+      "directDomCallCount": 41,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/personal-context-center.js",
+      "loc": 188,
+      "directDomCallCount": 3,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/personal-context-review.js",
+      "loc": 25,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/personal-ontology.js",
+      "loc": 1090,
+      "directDomCallCount": 29,
+      "domQueryCallCount": 26,
+      "globalEventRegistrations": 1,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/pinyin-firstletter.js",
+      "loc": 54,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/plan-rail.js",
+      "loc": 267,
+      "directDomCallCount": 1,
+      "domQueryCallCount": 1,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/queue-draft.js",
+      "loc": 425,
+      "directDomCallCount": 21,
+      "domQueryCallCount": 15,
+      "globalEventRegistrations": 0,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/recall-information-architecture.js",
+      "loc": 31,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "loc": 175,
+      "directDomCallCount": 4,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 5
+    },
+    {
+      "file": "src/renderer/modules/search.js",
+      "loc": 442,
+      "directDomCallCount": 24,
+      "domQueryCallCount": 23,
+      "globalEventRegistrations": 1,
+      "timerCount": 3,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "loc": 370,
+      "directDomCallCount": 13,
+      "domQueryCallCount": 6,
+      "globalEventRegistrations": 1,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 5
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "loc": 3355,
+      "directDomCallCount": 355,
+      "domQueryCallCount": 185,
+      "globalEventRegistrations": 4,
+      "timerCount": 6,
+      "observerCount": 0,
+      "directIpcCallCount": 61
+    },
+    {
+      "file": "src/renderer/modules/settings_tabs.js",
+      "loc": 39,
+      "directDomCallCount": 4,
+      "domQueryCallCount": 4,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/sidebar-resize.js",
+      "loc": 127,
+      "directDomCallCount": 6,
+      "domQueryCallCount": 4,
+      "globalEventRegistrations": 4,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "loc": 1663,
+      "directDomCallCount": 133,
+      "domQueryCallCount": 48,
+      "globalEventRegistrations": 6,
+      "timerCount": 8,
+      "observerCount": 0,
+      "directIpcCallCount": 27
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "loc": 7812,
+      "directDomCallCount": 210,
+      "domQueryCallCount": 163,
+      "globalEventRegistrations": 1,
+      "timerCount": 8,
+      "observerCount": 0,
+      "directIpcCallCount": 39
+    },
+    {
+      "file": "src/renderer/modules/state.js",
+      "loc": 455,
+      "directDomCallCount": 31,
+      "domQueryCallCount": 29,
+      "globalEventRegistrations": 3,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/strip-structural-blocks.js",
+      "loc": 661,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "loc": 460,
+      "directDomCallCount": 19,
+      "domQueryCallCount": 10,
+      "globalEventRegistrations": 3,
+      "timerCount": 2,
+      "observerCount": 1,
+      "directIpcCallCount": 5
+    },
+    {
+      "file": "src/renderer/modules/text-view-edit.js",
+      "loc": 266,
+      "directDomCallCount": 5,
+      "domQueryCallCount": 5,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/touchpoint-settings-model.js",
+      "loc": 67,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/touchpoint-settings.js",
+      "loc": 421,
+      "directDomCallCount": 11,
+      "domQueryCallCount": 6,
+      "globalEventRegistrations": 3,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/user-error.js",
+      "loc": 76,
+      "directDomCallCount": 0,
+      "domQueryCallCount": 0,
+      "globalEventRegistrations": 0,
+      "timerCount": 0,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/user-workspace.js",
+      "loc": 335,
+      "directDomCallCount": 27,
+      "domQueryCallCount": 10,
+      "globalEventRegistrations": 1,
+      "timerCount": 3,
+      "observerCount": 0,
+      "directIpcCallCount": 2
+    },
+    {
+      "file": "src/renderer/modules/utils.js",
+      "loc": 1899,
+      "directDomCallCount": 58,
+      "domQueryCallCount": 10,
+      "globalEventRegistrations": 8,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    },
+    {
+      "file": "src/renderer/modules/validation-report-view.js",
+      "loc": 226,
+      "directDomCallCount": 5,
+      "domQueryCallCount": 2,
+      "globalEventRegistrations": 1,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 0
+    },
+    {
+      "file": "src/renderer/modules/workspace.js",
+      "loc": 1836,
+      "directDomCallCount": 79,
+      "domQueryCallCount": 75,
+      "globalEventRegistrations": 1,
+      "timerCount": 1,
+      "observerCount": 0,
+      "directIpcCallCount": 1
+    }
+  ]
+}
