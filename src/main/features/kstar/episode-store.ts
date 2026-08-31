@@ -61,7 +61,7 @@ function validateEpisode(userId: string, episodeId: string, value: unknown): Kst
     !Array.isArray(record.evidenceRefs) ||
     typeof record.createdAt !== 'string' ||
     typeof record.updatedAt !== 'string' ||
-    !['completed', 'failed', 'cancelled', 'waiting_input'].includes(String(record.r.status))
+    !['completed', 'failed', 'cancelled', 'timed_out', 'waiting_input'].includes(String(record.r.status))
   ) {
     throw new Error('malformed kstar episode');
   }

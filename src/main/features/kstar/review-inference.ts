@@ -333,7 +333,7 @@ export async function inferKstarReview(
       needsConfirmation: false,
     };
   }
-  if (episode.r.status === 'failed' || episode.r.status === 'cancelled') {
+  if (episode.r.status === 'failed' || episode.r.status === 'cancelled' || episode.r.status === 'timed_out') {
     return {
       review: {
         ...base,
@@ -341,7 +341,7 @@ export async function inferKstarReview(
         deltaA: 'unknown',
         outcome: 'worse_than_expected',
         attribution: 'execution_gap',
-        reason: `The task ended with terminal status ${episode.r.status}${episode.r.failureCode ? ` (${episode.r.failureCode})` : ''}.`,
+        reason: `The task ended with terminal status ${episode.r.status}${episode.r.failureCode ? ` (${episode.r.failureCode})` : ''}; no reusable lesson is inferred from an incomplete execution.`,
         confidence: 0.95,
       },
       reviewState: 'inferred',
