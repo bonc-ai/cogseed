@@ -336,6 +336,9 @@ function _closeModelMenu() {
   document.querySelectorAll('.model-chip--open').forEach((el) => el.classList.remove('model-chip--open'));
 }
 
+// boot.js 在视图/页面切换时通过该全局入口关闭菜单（#125 重构后曾被遗漏）。
+window.closeModelChipMenu = _closeModelMenu;
+
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {
   const old = document.getElementById('model-chip-menu');
