@@ -292,6 +292,14 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
     ? anchor.querySelector('.chat-bubble, [data-role="final"]') : null;
   if (bubble) anchor.insertBefore(flow, bubble);
   else if (anchor && anchor.appendChild) anchor.appendChild(flow);
+  // 老 liveness strip（执行中…+计时+三点动画）与头部徽章职责重复：flow
+  // 一出现就让它退场——activityDone 让它的计时器自清、后续更新早退。
+  const legacyActivity = anchor.querySelector
+    ? anchor.querySelector('[data-role="activity"]') : null;
+  if (legacyActivity) {
+    legacyActivity.style.display = 'none';
+    anchor.dataset.activityDone = '1';
+  }
   // 运行中正文都在时间线里：气泡此时是空的，把空底条藏掉（视觉对齐 CLI：
   // 运行中没有空泡壳），收尾交回正文时恢复。
   if (bubble && _csBubbleLooksEmpty(bubble)) {

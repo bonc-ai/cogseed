@@ -13872,6 +13872,9 @@ function _streamingAppendProgress(msg, text, kindHint, eventName) {
 // reconnects and suppressed worker events can make those incomplete.
 function _streamingUpdateActivity(msg, text) {
   if (!msg || msg.dataset.activityDone === '1') return;
+  // conv-core 活动流的头部徽章（工作中/已工作 + 计时 + 收起开关）已完整
+  // 承接气泡内活性指示，这条老 liveness strip 不再重复显示。
+  if (msg.querySelector('.cs-flow')) return;
   const row = msg.querySelector('[data-role="activity"]');
   if (!row) return;
   if (!msg.dataset.activityStart) {
