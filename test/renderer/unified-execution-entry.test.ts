@@ -48,24 +48,29 @@ describe('unified execution entry — picker scope', () => {
     expect(agents).toMatch(/data-kind="agent"/);
   });
 
-  it('plan B: CLI agents expose NO model picker — models are the CLI\'s own decision', () => {
+  it('external-agent control: CLI agents get a REAL model picker gated by the capability table', () => {
     const chip = read('src/renderer/modules/model-chip.js');
+    const ctl = read('src/renderer/modules/cli-exec-control.js');
     const conv = read('src/renderer/modules/conversation.js');
-    // 网关信封没有 model 栏位，CLI 模型选择是假开关——不允许存在：
-    // 不解析 runtime.model 作为生效值、不渲染模型列表、不请求 CLI 模型目录。
-    expect(chip).not.toMatch(/override\.model \|\| agent\.runtime\.model/);
-    expect(chip).not.toContain('agent.runtime.model ||');
-    expect(chip).not.toContain('_renderCliModelOptions');
-    expect(chip).not.toContain('localAgents.listModels');
-    // chip 统一显示「CLI 默认」+ 说明文案（claude 场景另有模型说明 note）。
-    expect(chip).toContain("t('exec_config.cli_default_model')");
-    expect(chip).toContain("t('exec_config.cli_model_note'");
-    expect(chip).toContain("t('exec_config.effort_cli_note')");
-    // 发送侧：CLI recipient 的历史残留 override.model 不随消息下发。
-    expect(conv).toMatch(/isCliAgentRecipient[\s\S]*?if \(!isCliAgentRecipient\)/);
-    // 真开关保留：claude 的 effort 分段仍在。
+    // 外接智能体执行控制（feat/external-agent-exec-control）：信封已带
+    // execution_prefs.model，能力表内（claude/codex）的 CLI 模型真实可控——
+    // 扫描式模型列表（问 CLI 本身）+ 手输兜底必须存在。
+    expect(chip).toContain('_renderCliModelList');
+    expect(ctl).toContain("'p3394.external.listModels'");
+    expect(ctl).toContain('execControlFor');
+    // 手输兜底：清单外 id 也能用（CLI 接受完整模型名）。
+    expect(ctl).toContain('rememberCustomModel');
+    // 能力表防假开关：模型可控性查表而非硬编码，表外 CLI 不渲染模型区。
+    expect(chip).not.toContain('CLI_EFFORT_SUPPORTED');
+    // 发送侧：能力表内 CLI 的 override.model 随 execution_config 下发
+    // （`cliExec.model` 放行），表外剔除。
+    expect(conv).toContain('cliExec && cliExec.model');
+    // effort 同理由能力表把关（渲染层 + bus 双保险）。
+    expect(conv).toContain('cliExec && cliExec.effort');
+    // 真开关保留：effort 分段仍在。
     expect(chip).toContain('model-chip-menu-segmented');
     expect(chip).toContain("t('exec_config.effort_cli_forward_note'");
+    expect(chip).toContain("t('exec_config.cli_models_scanning')");
   });
 });
 

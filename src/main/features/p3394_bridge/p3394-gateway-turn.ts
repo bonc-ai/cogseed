@@ -24,6 +24,23 @@ export interface P3394GatewayTurnResult {
   failureKind?: string;
   failureCode?: string;
   infrastructureFailure?: boolean;
+  /** Settled-reply metrics from the reply envelope's CLI-reported usage
+   *  (payload.metadata.usage — claude gateway runtime) plus local timing.
+   *  Absent when the gateway/cli reported no usage (older gateways, CLIs
+   *  without usage disclosure). */
+  metrics?: {
+    startedAt: number;
+    firstTokenAt: number | null;
+    completedAt: number;
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      costUsd?: number;
+    };
+    model?: string;
+  };
 }
 
 export interface P3394GatewayTurnInput {
@@ -39,9 +56,13 @@ export interface P3394GatewayTurnInput {
    *  project workspace context. */
   workingDir?: string;
   /** Per-task reasoning effort (unified execution entry). Carried in the
-   *  envelope's CogSeed-private extensions.execution_prefs; only the claude
-   *  gateway runtime consumes it today. */
+   *  envelope's CogSeed-private extensions.execution_prefs; claude (env) and
+   *  codex (thread config) gateway runtimes consume it. */
   reasoningEffort?: 'off' | 'low' | 'high';
+  /** Per-task model pick (unified execution entry · external-agent control).
+   *  Carried in extensions.execution_prefs.model; claude (--model) and codex
+   *  (thread/start model) gateway runtimes consume it. */
+  model?: string;
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -126,7 +147,12 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
     scopeKey: input.cid,
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
-    ...(input.reasoningEffort ? { executionPrefs: { reasoningEffort: input.reasoningEffort } } : {}),
+    ...((input.reasoningEffort || input.model)
+      ? { executionPrefs: {
+          ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+          ...(input.model ? { model: input.model } : {}),
+        } }
+      : {}),
   });
   let envelope = buildEnvelope();
   let streamed = false;
@@ -137,7 +163,33 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   // （hub 回复超时是 5 分钟，排队不该让用户空等这么久），且与用户的 abort
   // 联动：取消立即返回，不拖满等待窗口。
   const SESSION_CONFLICT_WAIT_CAP_MS = 60_000;
-  const send = async (): Promise<{ text: string }> => {
+  // 回合计时/用量：startedAt 在首轮发送前打点；firstTokenAt 以首个 delta 帧
+  // 为准（无流式的 CLI 保持 null）；usage 来自回复信封的
+  // payload.metadata.usage（CLI 自报，数字字段）。
+  const turnStartedAt = Date.now();
+  let firstTokenAt: number | null = null;
+  const extractReplyMetrics = (completedAt: number, replyEnvelope: unknown) => {
+    const meta = (replyEnvelope as { payload?: { metadata?: { usage?: Record<string, unknown>; model?: unknown } } } | undefined)
+      ?.payload?.metadata;
+    const raw = meta?.usage;
+    const usageIn = (raw && typeof raw === 'object') ? raw : undefined;
+    const usage: NonNullable<NonNullable<P3394GatewayTurnResult['metrics']>>['usage'] = {};
+    if (typeof usageIn?.input === 'number') usage.inputTokens = usageIn.input;
+    if (typeof usageIn?.output === 'number') usage.outputTokens = usageIn.output;
+    if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
+    if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
+    if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;
+    const model = (typeof usageIn?.model === 'string' && usageIn.model) || (typeof meta?.model === 'string' ? meta.model : '');
+    const hasUsage = Object.keys(usage).length > 0;
+    return {
+      startedAt: turnStartedAt,
+      firstTokenAt,
+      completedAt,
+      ...(hasUsage ? { usage } : {}),
+      ...(model ? { model } : {}),
+    };
+  };
+  const send = async (): Promise<{ text: string; replyEnvelope?: unknown }> => {
     let waited = false;
     for (;;) {
       if (input.signal?.aborted) {
@@ -154,10 +206,11 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
             input.onProcess?.({ type: 'progress', text: event.text });
             return;
           }
+          if (firstTokenAt === null) firstTokenAt = Date.now();
           streamed = true;
           input.onProcess?.({ type: 'delta', text: event.text });
         });
-        return { text: reply.text.trim() };
+        return { text: reply.text.trim(), replyEnvelope: reply.envelope };
       } catch (firstError) {
         const message = firstError instanceof Error ? firstError.message : String(firstError);
         if (message === 'p3394_session_conflict' && !waited) {
@@ -179,7 +232,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     }
   };
   try {
-    let result: { text: string };
+    let result: { text: string; replyEnvelope?: unknown };
     try {
       result = await send();
     } catch (firstError) {
@@ -196,7 +249,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     // so sending the full body as another delta would duplicate the reply.
     if (!streamed) input.onProcess?.({ type: 'delta', text: result.text });
     input.onProcess?.({ type: 'final', text: result.text });
-    return result;
+    return { text: result.text, metrics: extractReplyMetrics(Date.now(), result.replyEnvelope) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn('P3394 gateway turn failed', { cli: input.cli, nodeId, error: message });

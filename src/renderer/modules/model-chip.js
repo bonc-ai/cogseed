@@ -107,35 +107,41 @@ function _isCliAgent(agent) {
  *  global default. Returns:
  *  { mode:'cli'|'api', model, modelLabel, provider, providerLabel,
  *    effort, effortOverridden, effortSupported, modelOverridden } */
-// CogSeed 能把推理强度真实下发的 CLI：claude（网关信封与本地直连都消费
-// MAX_THINKING_TOKENS）。codex 的直连 backend 虽有 model_reasoning_effort
-// 实现，但用户实际走的 P3394 网关路径（gateway.cjs 驱动 app-server）尚无
-// 强度槽位，主机侧已统一 claude-only 过滤——不放假开关。其余 CLI 同理。
-const CLI_EFFORT_SUPPORTED = new Set(['claude']);
-
+// 外接智能体执行控制：模型/强度的可改性由能力表决定
+// （window.cliExecControl.execControlFor，与主进程 bus 同源）——claude/codex
+// 有真实下发链路（信封 execution_prefs → --model / thread config），其余
+// CLI 不放假开关。
 function _effectiveExecConfig(target) {
   const recipient = (typeof getChatRecipient === 'function') ? getChatRecipient(target) : { kind: 'commander' };
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
-  // CLI-backed local agent（方案 B）：模型不可控——P3394 网关信封没有
-  // model 栏位，实际模型由 CLI 自身配置决定。既不显示 runtime.model
-  // （网关不消费它，显示即误导）也不接受任务级 model 覆盖（假开关）。
-  // 推理强度按 CLI 是否有真实开关（claude）决定可否调整。
+  // CLI-backed local agent：能力表内的 CLI（claude/codex）模型真实可控——
+  // 显示「任务级覆盖 > agent 默认 runtime.model > 跟随 CLI」，选择写任务级
+  // 覆盖（bare model id，随信封下发）。表外 CLI 维持只读（模型由 CLI 自身
+  // 配置决定，不显示误导值）。推理强度按能力表决定可否调整。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
-    const effortSupported = CLI_EFFORT_SUPPORTED.has(cliType);
+    const ctl = (typeof window !== 'undefined' && window.cliExecControl)
+      ? window.cliExecControl.execControlFor(cliType)
+      : { model: false, effort: false };
+    const runtimeModel = (agent.runtime && agent.runtime.model) || '';
+    const modelChoice = (ctl.model && override.model) ? String(override.model)
+      : (ctl.model && runtimeModel) ? String(runtimeModel)
+      : '';
     return {
       mode: 'cli',
-      model: '',
-      modelLabel: t('exec_config.cli_default_model'),
+      cliType,
+      modelSupported: !!ctl.model,
+      model: modelChoice,
+      modelLabel: modelChoice || t('exec_config.cli_default_model'),
       provider: '',
       providerLabel: cliType,
       effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
       effortOverridden: override.effort === 'low' || override.effort === 'high',
-      effortSupported,
-      modelOverridden: false,
+      effortSupported: !!ctl.effort,
+      modelOverridden: !!(ctl.model && override.model),
       agent,
     };
   }
@@ -373,16 +379,18 @@ function _renderExecConfigMenu(menu, anchor) {
   header.title = t('exec_config.title');
   menu.appendChild(header);
 
-  // CLI 场景（方案 B：模型不可控、不放假开关）——外接智能体实际用的模型
-  // 由 CLI 自身配置决定，P3394 网关信封没有 model 栏位，CogSeed 无法指定。
-  // 菜单只保留真实生效的控件：claude 的推理档位分段；其余 CLI 仅说明。
+  // CLI 场景（外接智能体执行控制）——能力表内的 CLI（claude/codex）模型与
+  // 强度真实可控：模型列表来自运行时扫描（问 CLI 本身，IPC
+  // p3394.external.listModels）∪ 静态目录 ∪ 手输记忆；表外 CLI 只保留说明
+  // （不放假开关）。扫描失败 → 回落静态+手输，UI 说明原因。
   if (cfg.mode === 'cli') {
     const cliType = cfg.providerLabel || '';
+    if (cfg.modelSupported) {
+      _menuSectionLabel(menu, 'exec_config.section_model', cfg.cliType || cliType);
+      void _renderCliModelList(menu, anchor, cfg, target, cliType);
+    }
+    _menuSectionLabel(menu, 'exec_config.section_effort');
     if (cfg.effortSupported) {
-      const modelNote = document.createElement('div');
-      modelNote.className = 'model-chip-menu-note';
-      modelNote.textContent = t('exec_config.cli_model_note', { cli: cliType });
-      menu.appendChild(modelNote);
       _renderCliEffortSegmented(menu, anchor, cfg, cliType);
     } else {
       const note = document.createElement('div');
@@ -637,10 +645,132 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
   _positionModelMenu(menu, anchor);
 }
 
+/** CLI 模型列表（扫描式）：打开即触发扫描（有缓存用缓存），列表 =
+ *  扫描 ∪ 静态目录 ∪ 手输记忆；选择写任务级 model 覆盖（bare id），再点
+ *  当前行取消覆盖。底部输入框接受任意模型 id（claude 接受别名与完整 id，
+ *  "or a full model ID"），记入 localStorage 供下次直接选。 */
+async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  if (!ctl) return;
+  const agentId = (cfg.agent && cfg.agent.agent_id) || '';
+
+  const loading = document.createElement('div');
+  loading.className = 'model-chip-menu-loading';
+  loading.textContent = t('exec_config.cli_models_scanning');
+  menu.appendChild(loading);
+  _positionModelMenu(menu, anchor);
+
+  const scan = await ctl.loadCliModels(agentId, cliType);
+  // 菜单可能在扫描期间被关闭（或重开为别的菜单）。
+  if (!menu.isConnected) return;
+  loading.remove();
+
+  const merged = ctl.mergedCliModels(cliType, scan);
+  const applyPick = (modelId, isCustom) => {
+    try {
+      if (typeof setExecOverride !== 'function') return;
+      const ov = getExecOverride(target) || {};
+      const { effort, ...rest } = ov;
+      if (!modelId) {
+        // 「跟随 CLI」= 清除 model 覆盖，保留 effort。
+        setExecOverride(target, effort ? { effort } : null);
+      } else {
+        if (isCustom && ctl) ctl.rememberCustomModel(cliType, modelId);
+        setExecOverride(target, { effort, model: modelId, ...(ov.modelLabel && ov.model === modelId ? { modelLabel: ov.modelLabel } : {}) });
+      }
+      _modelChipRenderAll();
+    } catch (err) {
+      _modelChipLog.warn('cli model pick failed', { error: (err && err.message) || String(err) });
+    }
+    _closeModelMenu();
+  };
+
+  // 扫描状态说明：失败时一行短注（静态/手输仍可用），不阻塞选择。
+  if (scan.state !== 'ready') {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('exec_config.cli_models_scan_fallback', { cli: cliType });
+    menu.appendChild(note);
+  } else if (scan.current) {
+    const cur = document.createElement('div');
+    cur.className = 'model-chip-menu-note';
+    cur.textContent = t('exec_config.cli_models_current', { model: scan.current });
+    menu.appendChild(cur);
+  }
+
+  // 「跟随 CLI」行：清除任务级模型覆盖，回到 CLI 自身默认。
+  const followRow = document.createElement('div');
+  followRow.className = 'model-chip-menu-item' + (!cfg.model ? ' is-default' : '');
+  followRow.innerHTML =
+    '<span class="model-chip-menu-main">' +
+    `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.cli_follow_default'))}</span>` +
+    (!cfg.model ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
+    '</span>';
+  followRow.addEventListener('click', () => applyPick(''));
+  menu.appendChild(followRow);
+
+  merged.forEach((m) => {
+    const isCurrent = cfg.model === m.id;
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
+    item.innerHTML =
+      '<span class="model-chip-menu-main">' +
+      `<span class="model-chip-menu-name">${escapeHtml(m.label)}</span>` +
+      (isCurrent
+        ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
+        : '') +
+      '</span>' +
+      `<span class="model-chip-menu-sub">${escapeHtml(m.id)}</span>`;
+    item.addEventListener('click', () => applyPick(m.id, m.source === 'custom'));
+    menu.appendChild(item);
+  });
+
+  // 手输行：任意模型 id（claude 明确接受 "a full model ID"；codex 同理）。
+  const customRow = document.createElement('div');
+  customRow.className = 'model-chip-menu-custom';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'model-chip-menu-input';
+  input.placeholder = t('exec_config.cli_model_custom_ph');
+  input.maxLength = 200;
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'model-chip-menu-custom-btn';
+  submit.textContent = t('exec_config.cli_model_custom_add');
+  const submitCustom = () => {
+    const id = String(input.value || '').trim();
+    if (!id) return;
+    applyPick(id, true);
+  };
+  submit.addEventListener('click', (e) => { e.stopPropagation(); submitCustom(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); submitCustom(); }
+  });
+  customRow.appendChild(input);
+  customRow.appendChild(submit);
+  menu.appendChild(customRow);
+
+  // 重扫：强制 refresh（网关缓存 + 渲染层缓存都穿透）。
+  const rescan = document.createElement('button');
+  rescan.type = 'button';
+  rescan.className = 'model-chip-menu-rescan';
+  rescan.textContent = t('exec_config.cli_models_rescan');
+  rescan.addEventListener('click', (e) => {
+    e.stopPropagation();
+    void ctl.loadCliModels(agentId, cliType, { refresh: true }).then(() => {
+      _renderExecConfigMenu(menu, anchor);
+      _positionModelMenu(menu, anchor);
+    });
+  });
+  menu.appendChild(rescan);
+  _positionModelMenu(menu, anchor);
+}
+
 /** claude 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
  *  把档位写进信封 execution_prefs，网关 claude runtime 转换为
- *  MAX_THINKING_TOKENS 环境变量注入。「关闭」对 claude 不可表达（无可靠的
- *  禁用思考入口），置灰防语义欺骗——选它实际等于「自动」。 */
+ *  MAX_THINKING_TOKENS 环境变量注入。「关闭」对 CLI 档位不可表达（claude
+ *  无禁用入口；codex 的 minimal 对应"极简"而非关闭），置灰防语义欺骗。 */
 function _renderCliEffortSegmented(menu, anchor, cfg, cliType) {
   const target = _chipTargetForElement(anchor);
   const seg = document.createElement('div');

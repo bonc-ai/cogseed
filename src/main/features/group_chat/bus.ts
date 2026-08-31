@@ -68,6 +68,7 @@ import type {
   StateFile,
 } from "./state";
 import { maxToolLoopsForActorKind } from "./actor-budgets";
+import { execControlFor } from "../local_agents/models";
 import {
   GroupMessage,
   appendVisible,
@@ -5100,15 +5101,17 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
-            // Unified execution entry: forward the per-task reasoning effort
-            // in the envelope's CogSeed-private execution_prefs. Only claude
-            // gateway runtime consumes it today (MAX_THINKING_TOKENS), and
-            // only low/high are expressible there ('off' has no reliable
-            // claude switch — the UI disables it; guard here so a stale
-            // override can never leak a value the gateway would drop).
-            ...((cliRuntime === "claude"
-              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high"))
+            // Unified execution entry · 外接智能体执行控制：按能力表
+            // （execControlFor）转发单轮模型与推理强度——claude/codex 网关
+            // runtime 均有真实消费链路（--model/MAX_THINKING_TOKENS 与
+            // thread/start model + config.model_reasoning_effort）。能力表外
+            // 的 CLI 不下发对应字段（不放假开关）。
+            ...(execControlFor(String(cliRuntime ?? "")).effort
+              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
               ? { reasoningEffort: item.execConfig.effort }
+              : {}),
+            ...(execControlFor(String(cliRuntime ?? "")).model && item.execConfig?.model
+              ? { model: item.execConfig.model }
               : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
@@ -5153,24 +5156,23 @@ async function runActorTurnBody(
             onProcess: forwardProcess,
           });
       for (const p of cliOut.produced || []) await onFileWritten(p);
-      // Unified execution entry: record what this CLI turn actually ran with
-      // (persisted as exec_meta on the end-of-turn message). Mirrors the
-      // per-turn model choice inside _runCliAgentTurn (override > runtime.model).
+      // 方案 B 解除（外接智能体执行控制）：能力表内的 CLI（claude/codex）模型
+      // 真实随信封下发，网关 turn 的 exec_meta 记录实际生效值（任务级覆盖 >
+      // agent 默认 runtime.model）。能力表外的 CLI 维持不写 model（CLI 自决，
+      // 写了就是"展示 ≠ 实际"）。
       const cliRuntimeModel =
         cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
           ? cliAgent.runtime.model
           : undefined;
-      // 方案 B（模型不可控不展示）：网关是外接智能体的实际执行路径，信封
-      // 没有 model 栏位——CLI 实际用哪个模型由它自身配置决定。网关 turn 的
-      // exec_meta 因此不写 model（写了就是"展示 ≠ 实际"）；仅近乎废弃的本地
-      // 直连路径真实消费 runtime.model，那里保留真实值。
       const cliIsGateway = cliAgent.runtime?.kind === "p3394-gateway";
       const cliTurnModel = cliIsGateway
-        ? undefined
+        ? (execControlFor(String(cliRuntime ?? "")).model
+          ? (item.execConfig?.model || cliRuntimeModel)
+          : undefined)
         : (item.execConfig?.model || cliRuntimeModel);
-      // effort 只在真实下发的场景写 meta（claude 且 low/high——网关与本地
-      // 直连都会消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
-      const cliEffortForwarded = cliRuntime === "claude"
+      // effort 只在真实下发的场景写 meta（能力表内的 CLI 且 low/high——网关
+      // 与本地直连都消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
+      const cliEffortForwarded = execControlFor(String(cliRuntime ?? "")).effort
         && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
@@ -11615,16 +11617,13 @@ async function _runCliAgentTurn(opts: {
     // Unified execution entry: per-task override wins over the agent's
     // saved runtime.model for THIS turn only.
     model: cliModelForTurn,
-    // Per-task reasoning effort — forwarded ONLY for CLIs with a verified
-    // switch. claude consumes MAX_THINKING_TOKENS on both execution paths
-    // (gateway envelope + this direct one). codex's backend has a
-    // model_reasoning_effort implementation ready, but its MAIN path is the
-    // P3394 gateway (ChatGPT app-server driven by gateway.cjs) which has no
-    // effort slot yet — filtering here keeps UI / envelope / direct / meta
-    // four layers consistent (claude-only) instead of honoring effort on a
-    // path the user cannot predict.
-    ...((runtime.cli === "claude"
-      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high"))
+    // Per-task reasoning effort — forwarded ONLY for CLIs with a real switch
+    // (execControlFor). claude consumes MAX_THINKING_TOKENS on both execution
+    // paths (gateway envelope + this direct one); codex maps low/high to its
+    // model_reasoning_effort on both paths too. Other CLIs keep their own
+    // reasoning configuration.
+    ...(execControlFor(String(runtime.cli)).effort
+      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high")
       ? { thinkingLevel: opts.item.execConfig.effort }
       : {}),
     customArgs: runtime.custom_args,
@@ -11753,6 +11752,9 @@ async function _runCliAgentTurn(opts: {
               output?: unknown;
               cacheRead?: unknown;
               cacheCreate?: unknown;
+              cost?: unknown;
+              costUsd?: unknown;
+              model?: unknown;
             };
           };
           if (
@@ -11773,6 +11775,15 @@ async function _runCliAgentTurn(opts: {
               usageOut.cacheReadTokens = usageIn.cacheRead;
             if (typeof usageIn?.cacheCreate === "number")
               usageOut.cacheWriteTokens = usageIn.cacheCreate;
+            // CLI 自报成本（claude 的 total_cost_usd，backend 归一为 cost 键）
+            // ——比单价表估算准，消息 meta 与会话统计优先消费。
+            const costUsdRaw =
+              typeof usageIn?.costUsd === "number" ? usageIn.costUsd
+              : typeof usageIn?.cost === "number" ? usageIn.cost
+              : undefined;
+            if (typeof costUsdRaw === "number" && Number.isFinite(costUsdRaw))
+              usageOut.costUsd = costUsdRaw;
+            const cliModel = typeof usageIn?.model === "string" && usageIn.model ? usageIn.model : undefined;
             cliDoneMetrics = {
               startedAt: doneEv.metrics.startedAt,
               firstTokenAt:
@@ -11784,6 +11795,7 @@ async function _runCliAgentTurn(opts: {
               ...(Object.keys(usageOut).length
                 ? { usage: usageOut }
                 : {}),
+              ...(cliModel ? { model: cliModel } : {}),
               ...(cliToolCalls > 0 ? { toolCalls: cliToolCalls } : {}),
             };
           }

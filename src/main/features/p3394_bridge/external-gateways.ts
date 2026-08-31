@@ -100,6 +100,8 @@ function watchGateway(cli: string, child: ChildProcess, input: { binPath?: strin
     if (watched.get(cli) !== child) return;
     watched.delete(cli);
     watchedStartInput.delete(cli);
+    // 网关进程没了，模型扫描缓存随之失效（新进程=新账号状态可能不同清单）。
+    gatewayModelsCache.delete(cli);
     scheduleRestart(cli, input);
   });
 }
@@ -388,6 +390,94 @@ export function prewarmExternalGateway(input: {
       });
     } catch { /* 预热失败不阻塞——发送时 recoverGateway 会兜底 */ }
   })();
+}
+
+// ── 模型发现（CodexHost 式"问 CLI 本身"）────────────────────────────────
+// 托管网关的 /p3394/models 端点按 runtime 枚举 CLI 真实可用模型（claude 的
+// /model 本地命令、opencode 的 models 子命令、codex 的 app-server RPC）。
+// 缓存策略照搬 CodexHost inspect：per-cli 缓存 + single-flight 并发去重 +
+// 失败不缓存（下次自动重试）+ refresh 强制重扫。
+export interface ExternalGatewayModels {
+  status: 'ready' | 'unavailable';
+  models: Array<{ id: string; label: string }>;
+  /** CLI 自己披露的当前默认模型（展示名或 full id）。 */
+  current?: string;
+  /** 网关侧 runtime 名（claude-persistent / codex / oneshot / …）。 */
+  runtime?: string;
+  /** unavailable 时的原因码（诊断用，不展示给用户）。 */
+  reason?: string;
+  error?: string;
+}
+
+const gatewayModelsCache = new Map<string, ExternalGatewayModels>();
+const gatewayModelsInFlight = new Map<string, Promise<ExternalGatewayModels>>();
+const GATEWAY_MODELS_FETCH_TIMEOUT_MS = Number(process.env.COGSEED_P3394_INSPECT_FETCH_MS || 40_000);
+
+async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GATEWAY_MODELS_FETCH_TIMEOUT_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/p3394/models`, { signal: controller.signal });
+    if (!res.ok) return { status: 'unavailable', models: [], reason: 'http_' + res.status };
+    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean };
+    const models = Array.isArray(body.models)
+      ? body.models
+          .filter((m): m is { id: string; label: string } =>
+            !!m && typeof m === 'object' && typeof m.id === 'string' && m.id.trim().length > 0)
+          .map((m) => ({ id: m.id.trim(), label: (m.label || m.id).trim() }))
+      : [];
+    if (body.status === 'ready' && models.length) {
+      return {
+        status: 'ready',
+        models,
+        ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
+        ...(typeof body.runtime === 'string' ? { runtime: body.runtime } : {}),
+      };
+    }
+    return {
+      status: 'unavailable',
+      models: [],
+      ...(typeof body.reason === 'string' ? { reason: body.reason } : { reason: 'gateway_unavailable' }),
+      ...(typeof body.error === 'string' ? { error: body.error } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      models: [],
+      reason: error instanceof Error && error.name === 'AbortError' ? 'fetch_timeout' : 'fetch_failed',
+      ...(error instanceof Error ? { error: error.message } : { error: String(error) }),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Enumerates the CLI's real model list through its managed gateway. Does NOT
+ *  auto-start a stopped gateway — scanning is best-effort; the static catalog
+ *  + manual entry remain the fallback on the renderer side. */
+export async function inspectExternalGatewayModels(
+  cli: string,
+  opts: { refresh?: boolean } = {},
+): Promise<ExternalGatewayModels> {
+  const key = String(cli || '').trim();
+  if (!key) return { status: 'unavailable', models: [], reason: 'cli_required' };
+  if (!opts.refresh) {
+    const cached = gatewayModelsCache.get(key);
+    if (cached) return cached;
+  }
+  const inflight = gatewayModelsInFlight.get(key);
+  if (inflight) return inflight;
+  const attempt = (async () => {
+    const gateway = listExternalGateways().find((g) => g.cli === key && g.running);
+    if (!gateway) return { status: 'unavailable' as const, models: [], reason: 'gateway_not_running' };
+    return fetchGatewayModels(gateway.port);
+  })().finally(() => { gatewayModelsInFlight.delete(key); });
+  gatewayModelsInFlight.set(key, attempt);
+  const result = await attempt;
+  // 只缓存 ready（失败不缓存——下次调用自动重试，CodexHost 同款语义）。
+  if (result.status === 'ready') gatewayModelsCache.set(key, result);
+  return result;
 }
 
 /** Stops a managed gateway (SIGTERM, graceful). Keeps the registry entry

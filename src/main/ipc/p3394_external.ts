@@ -16,8 +16,9 @@
 
 import { detectAll } from '../features/local_agents/registry.js';
 import {
-  listExternalGateways, startExternalGateway, stopExternalGateway,
+  listExternalGateways, startExternalGateway, stopExternalGateway, inspectExternalGatewayModels,
 } from '../features/p3394_bridge/external-gateways';
+import { listModels } from '../features/local_agents/models.js';
 import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
 import {
   listRemoteNodes, addRemoteNode, removeRemoteNode, updateRemoteNode, testRemoteNode, testRemoteNodeById,
@@ -66,6 +67,34 @@ export const p3394ExternalHandlers = {
     const result = await stopExternalGateway(cli);
     if (result.ok === false) return { ok: false, error: result.error };
     return { ok: true };
+  },
+  // ── 模型发现（统一执行入口 · 外接智能体执行控制）──────────────────────
+  // 扫描外接智能体 CLI 真实可用的模型（网关 /p3394/models，CodexHost 式
+  // "问 CLI 本身"）。渲染层传 agentId（对话 recipient），这里解析其
+  // runtime.cli。扫描结果与静态目录合并返回：扫描优先、静态兜底、手输永远
+  // 可用（渲染层负责）——三层数据源让"扫描失败"永远只是降级不是失败。
+  'p3394.external.listModels': async (args: { agentId?: unknown; refresh?: unknown }) => {
+    const agentId = typeof args?.agentId === 'string' ? args.agentId.trim() : '';
+    if (!agentId) return { ok: false, error: 'p3394_agent_id_required' };
+    let cli = '';
+    try {
+      const all = await listAgents();
+      const agent = all.find((a) => a && a.agent_id === agentId);
+      const rt = agent?.runtime as { kind?: string; cli?: string } | undefined;
+      if (rt && (rt.kind === 'p3394-gateway' || rt.kind === 'cli') && rt.cli) cli = rt.cli;
+    } catch { /* agent 解析失败按未接入处理 */ }
+    if (!cli) return { ok: false, error: 'p3394_agent_not_cli' };
+    const scanned = await inspectExternalGatewayModels(cli, { refresh: args?.refresh === true });
+    let staticModels: Array<{ id: string; label: string; default?: boolean }> = [];
+    try {
+      staticModels = listModels(cli as never) ?? [];
+    } catch { /* 静态目录缺失不阻塞 */ }
+    return {
+      ok: true,
+      cli,
+      scanned,
+      staticModels,
+    };
   },
   // ── 统一注册表管理（已注册节点）────────────────────────────────────
   // 注：不再提供独立的 p3394.peers.list —— 注册表快照已随

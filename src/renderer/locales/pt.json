@@ -4902,6 +4902,14 @@
   "settings.custom_providers.fetch_models_done": "{count} modelos importados",
   "settings.custom_providers.fetch_models_partial": "Importação parcial ({ok}); falha: {error}",
   "exec_config.cli_model_note": "O modelo é definido pela configuração do próprio \"{cli}\"; o CogSeed ainda não pode escolher um.",
+  "exec_config.cli_models_scanning": "A analisar os modelos disponíveis em \"{cli}\"…",
+  "exec_config.cli_models_scan_fallback": "Não foi possível obter uma lista de modelos em tempo real de \"{cli}\"; exibindo o catálogo interno. Você também pode digitar um ID de modelo.",
+  "exec_config.cli_models_current": "Modelo atual do CLI: {model}",
+  "exec_config.cli_follow_default": "Seguir o padrão do CLI",
+  "exec_config.cli_model_custom_ph": "Digite um ID de modelo (nomes completos aceitos)",
+  "exec_config.cli_model_custom_add": "Usar",
+  "exec_config.cli_models_rescan": "Analisar novamente",
+  "chat.stats.costReportedTitle": "{c} (custo reportado pelo CLI, não estimado)",
   "settings.custom_providers.cap_reasoning": "raciocínio",
   "settings.custom_providers.cap_vision": "visão"
 }
