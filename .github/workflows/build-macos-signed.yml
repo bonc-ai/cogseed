@@ -1,11 +1,11 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 发布流程: 在 main 分支上打 tag (如 v0.6.0) 触发本流程
-#           发布前先把 package.json 的 version 改成与 tag 一致 → 合并进 main → 打 v* tag → CD 打包发布
+# 发布流程: 在 cicd 分支上打 tag (如 v0.7.6) 触发本流程
+#           发布前先把 package.json 的 version 改成与 tag 一致 → 合并进 cicd → 打 v* tag → CD 打包发布
 # 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
 #
 # 注意: tag 不绑定分支,所以下面加了防呆检查:
-#       1) 只有指向 main 分支的 tag 才允许构建发布(见 "Verify tag comes from main branch" 步骤)
+#       1) 只有指向 cicd 分支的 tag 才允许构建发布(见 "Verify tag comes from cicd branch" 步骤)
 #       2) tag 版本必须与 package.json 的 version 一致(见 "Verify package.json version matches tag" 步骤)
 
 name: Build & Sign macOS
@@ -41,28 +41,28 @@ jobs:
 
       # 步骤 1.1b: 校验 tag 来源分支(防呆)
       # tag 本身不绑分支,任何人在任何分支打 v* tag 都会触发本流程。
-      # 这里强制要求:tag 指向的提交必须已经在 main 分支上,
-      # 否则直接失败,防止有人误在 dev/develop 等分支上打 tag 触发正式发布。
+      # 这里强制要求:tag 指向的提交必须已经在 cicd 分支上,
+      # 否则直接失败,防止有人误在 dev/develop/main 等分支上打 tag 触发正式发布。
       # 手动触发(workflow_dispatch)时跳过此检查,方便调试。
-      - name: Verify tag comes from main branch
+      - name: Verify tag comes from cicd branch
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 main
-          git fetch origin main:refs/remotes/origin/main
+          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 cicd
+          git fetch origin cicd:refs/remotes/origin/cicd
 
           # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
-          # 即:tag 指向的提交是否已经包含在 main 分支的历史里
-          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "✅ tag 指向的提交已包含在 main 分支,允许发布"
+          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
+            echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
           else
-            echo "❌ 这个 tag 不在 main 分支上,拒绝构建发布"
-            echo "   正确流程: 先把代码合并进 main 分支,再在 main 上打 tag"
+            echo "❌ 这个 tag 不在 cicd 分支上,拒绝构建发布"
+            echo "   正确流程: 先把代码合并进 cicd 分支,再在 cicd 上打 tag"
             exit 1
           fi
 
       # 步骤 1.1c: 校验 tag 版本与源码版本一致(防呆)
       # 版本号的唯一来源是源码里的 package.json:打 tag 前必须先把 version 改成
-      # 与 tag 相同并合入 main。不一致直接失败,避免出现"源码还是旧版本、
+      # 与 tag 相同并合入 cicd。不一致直接失败,避免出现"源码还是旧版本、
       # 靠流水线构建时改写"的版本追溯断档(如 v0.6.0 标签里的 package.json 仍是 0.0.5)。
       # 这里用 sed 提取版本号,不依赖 Node,放在 setup-node 之前也能跑。
       - name: Verify package.json version matches tag
@@ -73,7 +73,7 @@ jobs:
           echo "tag 版本: $TAG_VERSION / package.json 版本: $SRC_VERSION"
           if [ "$TAG_VERSION" != "$SRC_VERSION" ]; then
             echo "❌ package.json 的 version ($SRC_VERSION) 与 tag ($GITHUB_REF_NAME) 不一致,拒绝发布"
-            echo "   正确流程: 把 package.json 的 version 改成 $TAG_VERSION 并合并进 main,"
+            echo "   正确流程: 把 package.json 的 version 改成 $TAG_VERSION 并合并进 cicd,"
             echo "   然后删掉旧 tag 重打: git push origin :refs/tags/$GITHUB_REF_NAME && git tag $GITHUB_REF_NAME && git push origin $GITHUB_REF_NAME"
             exit 1
           fi
