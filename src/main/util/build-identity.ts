@@ -1,4 +1,6 @@
 import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { app } from 'electron';
 
 export type BuildChannel = 'dev' | 'packaged-dev' | 'release' | 'unknown';
 export interface BuildIdentity {
@@ -55,10 +57,8 @@ export function resolveBuildIdentity(options: {
   // Hub API 默认地址与发布 Gate 判定正确。dev 源码模式由 run.sh 的环境变量
   // 分支先行命中，不走到这里。
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const { app } = require('electron') as { app?: { isPackaged: boolean; getAppPath: () => string } };
     if (app && app.isPackaged) {
-      const candidate = require('node:path').join(app.getAppPath(), '.build', 'build-info.json');
+      const candidate = path.join(app.getAppPath(), '.build', 'build-info.json');
       const fromApp = readBuildInfo(candidate);
       if (fromApp) return fromApp;
       // 兜底:包内 package.json 的 cogseedBuildChannel(由 build.extraMetadata
@@ -66,7 +66,7 @@ export function resolveBuildIdentity(options: {
       // 的产物会落回 unknown → 客户端把更新/市场等请求打到 localhost:3000。
       try {
         const pkgRaw = (options.readFile || ((p) => fs.readFileSync(p, 'utf8')))(
-          require('node:path').join(app.getAppPath(), 'package.json'),
+          path.join(app.getAppPath(), 'package.json'),
         );
         const pkg = JSON.parse(pkgRaw) as { cogseedBuildChannel?: unknown };
         const fallbackChannel = channelOf(pkg?.cogseedBuildChannel);
@@ -75,7 +75,7 @@ export function resolveBuildIdentity(options: {
         }
       } catch { /* not found / malformed → unknown below */ }
     }
-  } catch { /* not running under electron */ }
+  } catch { /* not running under electron / app api missing */ }
   return { channel: 'unknown', commit: '', dirty: null, builtAt: '' };
 }
 
