@@ -1,5 +1,5 @@
 /**
- * 个人上下文连接器契约（设计稿：docs/superpowers/specs/2026-08-10-feishu-companion-context-design.md §5.1）
+ * 个人上下文连接器契约（连接器层标准资源模型）
  *
  * 连接器只产标准资源，不懂场景；场景只信本体，不直接摸 provider。
  * 本文件为纯类型与纯函数：不读写业务数据、不 import features/model。

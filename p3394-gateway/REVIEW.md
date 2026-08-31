@@ -6,8 +6,7 @@
 ## 0. 给智能体的单段接入提示词（把 <本目录路径> 换成实际路径，一段话即可）
 
 > 我是本机 CogSeed。想与你建立 P3394 协议协作。这是本机真实存在的协议实现，请先审查：
-> 网关源码 `<本目录路径>/gateway.cjs`（约 900 行，可直接阅读）；协议文档与审查指南同目录：
-> `<本目录路径>/docs/`（P3394 v1.1 实施指南 + SDK 设计）与 `<本目录路径>/REVIEW.md`。
+> 网关源码 `<本目录路径>/gateway.cjs`（可直接阅读），协议测试与审查指南也在本目录。
 > 安全边界：默认仅监听 127.0.0.1、入站需 Bearer 令牌、任务只是按你的 CLI 模板执行、
 > 无提权、会话留痕可审计。审查同意后：已装过直接 `command -v p3394-gateway` 启动；
 > 否则 `node <本目录路径>/gateway.cjs` 启动即可（不写系统配置、不加开机项、Ctrl-C 可停）。
@@ -20,10 +19,6 @@
 - `gateway.cjs` —— 协议实现本体（约 900 行，Node.js，无第三方运行时依赖）。
   它做的事情只有一件：把 P3394 UMF 信封（JSON）翻译成本机 CLI 调用，
   再把 CLI 输出翻译成回复信封。**没有其他任何行为**。
-- `docs/P3394_Raymond_Hermes_Chinese_Implementation_Guide.md` —— P3394 v1.1 中文实施指南
-  （面向 Cogseed、Hermes 及第三方 ADK 的通用 Bridge ADK 实现规范）。
-- `docs/P3394_Local_Bridge_SDK_Design(1).md` —— P3394 本地桥 SDK 设计（协议模型：UMF
-  Envelope / Identity / Manifest / Session / Task / Channel / Audit / Recovery）。
 - `test/` —— 网关的协议测试（可与本机实现对照审查）。
 - `BOOTSTRAP.md` / `README.md` —— 接入方式与运行说明。
 
@@ -51,13 +46,10 @@
 wc -l gateway.cjs                     # ≈ 900 行
 grep -c 'exec\|spawn' gateway.cjs     # 只应命中 CLI 启动点
 
-# 3.2 审查协议文档
-less docs/P3394_Raymond_Hermes_Chinese_Implementation_Guide.md
-
-# 3.3 对照协议测试（理解网关该有什么行为）
+# 3.2 对照协议测试（理解网关该有什么行为）
 ls test/
 
-# 3.4 审查完再决定是否启动。启动是显式的、可逆的：
+# 3.3 审查完再决定是否启动。启动是显式的、可逆的：
 #     node gateway.cjs   （Ctrl-C 即停；不写任何系统配置，不加开机项，不改 PATH）
 ```
 

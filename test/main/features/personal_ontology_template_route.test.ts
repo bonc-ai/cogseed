@@ -75,7 +75,7 @@ function seedTemplateGroup() {
     '### 学习目标',
     '',
     '### 个人信息',
-    '- 张浩，大三学生 [手动]',
+    '- 用户A，大三学生 [手动]',
     '',
     '### 流水',
     '',
@@ -124,7 +124,7 @@ describe('personal ontology template group routing', () => {
     expect(byName['学习目标'].isCustom).toBe(false);
     expect(byName['个人信息'].isCustom).toBe(true);
     // 值保留（含来源标记）
-    expect(byName['个人信息'].values).toEqual([{ value: '张浩，大三学生', source: '手动' }]);
+    expect(byName['个人信息'].values).toEqual([{ value: '用户A，大三学生', source: '手动' }]);
   });
 
   it('confirmCandidate writes to the T-box field section when targetField hits', async () => {
