@@ -1,3 +1,8 @@
+---
+name: kb-mindmap
+description: Generate a local multi-level mind map from knowledge-base documents (NotebookLM-style hierarchical JSON for tree visualization), powered by the configured local model with no cloud upload. Use for 生成脑图/思维导图, 梳理文档结构/要点, or when the user opens the mind-map action in the knowledge-base Q&A panel. Do not use when the request targets a single conversation message instead of KB materials, or when no KB documents are selected.
+---
+
 # kb-mindmap — 知识库多级脑图（本地化 notebooklm mind-map）
 
 > 改造自 `NotebookLM相关skill/notebooklm`：**保留其 mind-map 产物协议**（层级 JSON，

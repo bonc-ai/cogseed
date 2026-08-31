@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "a4483ab06b68dd864abe8a048b4285fcfdd6e6d330a98d29bff47c59dc56b80f",
+  "content_tree_sha256": "3f12dbf2eb30976ce4f618516e8afd5eb437a01d7f400bd277359e1e0f0cef83",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -6214,8 +6214,8 @@
     },
     {
       "path": "system/skills/_system.json",
-      "bytes": 585,
-      "sha256": "fd65eb0570c88ca5388362a19239e41a39e136fa8477291b1da71df52b57c017"
+      "bytes": 660,
+      "sha256": "c6612957fc37bd6a44089944b6e7a565c2e766a344a569f24e4b3766e5dbaff3"
     },
     {
       "path": "system/skills/agent-creator/_meta.json",
@@ -6301,6 +6301,21 @@
       "path": "system/skills/grounded-material-qa/SKILL.md",
       "bytes": 3289,
       "sha256": "9e6d39c1777881fc713f1b0a15cd02d30efb1ba9710d42b9d87da85fe0ba78c0"
+    },
+    {
+      "path": "system/skills/kb-mindmap/_meta.json",
+      "bytes": 64,
+      "sha256": "ec333024e3c8a96afd1d74a8efddca678fff61d51f0fb1cab9532ae57113d743"
+    },
+    {
+      "path": "system/skills/kb-mindmap/references/skill-spec.md",
+      "bytes": 1945,
+      "sha256": "d40d2d1fe0a36687178f44a60389335ac6d3fcc1b89a625a7544e2358f95a478"
+    },
+    {
+      "path": "system/skills/kb-mindmap/SKILL.md",
+      "bytes": 2440,
+      "sha256": "fe8abe20efb80a240474eb55a02875604dee7db91f84f55b96f794016ea1aedd"
     },
     {
       "path": "system/skills/package-installer/_meta.json",
@@ -6445,6 +6460,10 @@
       {
         "id": "grounded-material-qa",
         "update_at": 1787831433158
+      },
+      {
+        "id": "kb-mindmap",
+        "update_at": 1787900000000
       },
       {
         "id": "package-installer",
