@@ -83,6 +83,8 @@
       handle.classList.remove('is-active');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+      document.documentElement.removeEventListener('mouseleave', onUp);
       // Read back from the CSS var so we persist exactly the clamped value
       // we just rendered (covers the case where the pointer moved past the
       // limits during the drag).
@@ -100,6 +102,8 @@
       handle.classList.add('is-active');
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
+      document.documentElement.addEventListener('mouseleave', onUp);
     });
 
     handle.addEventListener('dblclick', () => {

@@ -1307,6 +1307,176 @@ describe('chats › deleteConversation', () => {
     expect(idx[0].deleted_at).toBeTruthy();
   });
 
+  it('blocks automatic explicit-id recreation but allows an intentional re-import', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, {
+      conversationId: 'deletedimport1',
+      title: 'original',
+    });
+    await chats.deleteConversation(TEST_UID, conv.conversation_id);
+
+    vi.resetModules();
+    const restartedChats = await loadChats();
+    await expect(restartedChats.createConversation(TEST_UID, {
+      conversationId: conv.conversation_id,
+      title: 'automatic recreation',
+    })).rejects.toThrow(/unavailable/i);
+    await expect(restartedChats.createConversation(TEST_UID, {
+      conversationId: conv.conversation_id,
+      title: 'intentional import',
+      reviveDeleted: true,
+    })).resolves.toMatchObject({
+      conversation_id: conv.conversation_id,
+      title: 'intentional import',
+    });
+  });
+
+  it('quarantines a pending terminal result when its Conversation is deleted', async () => {
+    const chats = await loadChats();
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const conv = await chats.createConversation(TEST_UID, { title: 'pending result destination' });
+    const executionId = 'cogseed-exec-delete-retained-result';
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: 'cogseed-task-delete-retained-result',
+      executionId,
+      conversationId: conv.conversation_id,
+      agentId: 'agent-delete-retained-result',
+      sessionId: 'cogseed-session-delete-retained-result',
+      destinationGeneration: conv._cogseed_result_generation!,
+      event: {
+        eventId: 'cogseed-event-delete-retained-result',
+        type: 'task.completed',
+        payload: { text: 'the only durable result copy' },
+      },
+    });
+
+    await expect(chats.deleteConversation(TEST_UID, conv.conversation_id)).resolves.toBe(true);
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, executionId)).resolves.toBeNull();
+    const deliveryPaths = await import('../../../src/main/features/cogseed_backend/paths');
+    const archive = JSON.parse(fs.readFileSync(
+      deliveryPaths.cogseedUndeliverableResultFile(TEST_UID, executionId), 'utf8'));
+    expect(archive).toMatchObject({
+      reason: 'task-missing',
+      payload: {
+        conversationId: conv.conversation_id,
+        event: { payload: { text: 'the only durable result copy' } },
+      },
+    });
+  });
+
+  it('does not recreate a tombstoned Conversation and closes its retained result as not applicable', async () => {
+    const chats = await loadChats();
+    const tasks = await import('../../../src/main/features/cogseed_backend/task-store');
+    const lifecycle = await import('../../../src/main/features/cogseed_backend/lifecycle');
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const runtimeController = await import('../../../src/main/features/cogseed_backend/runtime-controller');
+    const conv = await chats.createConversation(TEST_UID, { title: 'deleted recovery destination' });
+    const task = (await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-delete-explicit-recovery',
+      task: 'Retain this result after its destination is deleted.',
+      conversationId: conv.conversation_id,
+      agentId: 'agent-delete-explicit-recovery',
+      executionKind: 'local-cli',
+      localCli: { cli: 'codex' },
+    })).task;
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'completed');
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: task.taskId,
+      executionId: task.executionId!,
+      conversationId: conv.conversation_id,
+      agentId: task.agentId!,
+      sessionId: task.sessionId,
+      destinationGeneration: conv._cogseed_result_generation!,
+      event: {
+        eventId: `cogseed-event-terminal-${task.taskId}`,
+        type: 'task.completed',
+        payload: { text: 'the retained result must survive recovery' },
+      },
+    });
+    await expect(chats.deleteConversation(TEST_UID, conv.conversation_id)).resolves.toBe(true);
+    const indexFile = path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json');
+    const tombstonedBeforeRecovery = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+      .find((row: any) => row.conversation_id === conv.conversation_id);
+    const controller = runtimeController.createCogSeedRuntimeController({
+      runtime: {
+        async *run() {},
+        async shutdown() {},
+      } as any,
+    });
+
+    await expect(controller.retryCogSeedResultDelivery(TEST_UID, task.taskId))
+      .resolves.toMatchObject({ resultDeliveryState: 'not-applicable' });
+
+    expect(await chats.getConversation(TEST_UID, conv.conversation_id)).toBeNull();
+    expect(await chats.listActiveConversationIds(TEST_UID)).not.toContain(conv.conversation_id);
+    const tombstonedAfterRecovery = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+      .find((row: any) => row.conversation_id === conv.conversation_id);
+    expect(tombstonedAfterRecovery).toEqual(tombstonedBeforeRecovery);
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, task.executionId!)).resolves.toBeNull();
+    const deliveryPaths = await import('../../../src/main/features/cogseed_backend/paths');
+    expect(JSON.parse(fs.readFileSync(
+      deliveryPaths.cogseedUndeliverableResultFile(TEST_UID, task.executionId!), 'utf8'))).toMatchObject({
+      reason: 'conversation-deleted',
+      payload: { event: { payload: { text: 'the retained result must survive recovery' } } },
+    });
+    await expect(tasks.readCogSeedTask(TEST_UID, task.taskId)).resolves.toMatchObject({
+      status: 'completed',
+      resultDeliveryState: 'not-applicable',
+    });
+  });
+
+  it('never delivers an old result to a revived Conversation with the same id', async () => {
+    const chats = await loadChats();
+    const tasks = await import('../../../src/main/features/cogseed_backend/task-store');
+    const lifecycle = await import('../../../src/main/features/cogseed_backend/lifecycle');
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const runtimeController = await import('../../../src/main/features/cogseed_backend/runtime-controller');
+    const original = await chats.createConversation(TEST_UID, {
+      conversationId: 'revived-result-generation',
+      title: 'original generation',
+    });
+    const task = (await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-revived-result-generation',
+      task: 'Do not cross the generation fence.',
+      conversationId: original.conversation_id,
+      agentId: 'agent-revived-result-generation',
+    })).task;
+    await lifecycle.finalizeCogSeedTaskFromRetainedResult(TEST_UID, task.taskId, 'completed', { outputChars: 10 });
+    await chats.deleteConversation(TEST_UID, original.conversation_id);
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: task.taskId,
+      executionId: task.executionId!,
+      conversationId: original.conversation_id,
+      agentId: task.agentId!,
+      sessionId: task.sessionId,
+      destinationGeneration: original._cogseed_result_generation!,
+      event: {
+        eventId: `cogseed-event-terminal-${task.taskId}`,
+        type: 'task.completed',
+        payload: { text: 'belongs only to the deleted generation' },
+      },
+    });
+    const revived = await chats.createConversation(TEST_UID, {
+      conversationId: original.conversation_id,
+      title: 'new generation',
+      reviveDeleted: true,
+    });
+    expect(revived._cogseed_result_generation).not.toBe(original._cogseed_result_generation);
+    const projectTaskEvent = vi.fn(async () => 'projected');
+    const controller = runtimeController.createCogSeedRuntimeController({
+      runtime: { async *run() {}, async shutdown() {} } as any,
+      projectTaskEvent,
+    });
+
+    await expect(controller.retryCogSeedResultDelivery(TEST_UID, task.taskId)).resolves.toMatchObject({
+      resultDeliveryState: 'not-applicable',
+    });
+    expect(projectTaskEvent).not.toHaveBeenCalled();
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, task.executionId!)).resolves.toBeNull();
+  });
+
   it('keeps tombstoned rows when later writes update the active index', async () => {
     const chats = await loadChats();
     const deleted = await chats.createConversation(TEST_UID, { title: 'deleted' });

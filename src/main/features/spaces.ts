@@ -74,6 +74,18 @@ export interface Space {
   main_skill_ref?: SpaceAssetRef;
   /** 置顶时间（侧栏/空间中心置顶排序用；缺失 = 未置顶）。 */
   pinned_at?: string;
+  /** 是否为共享知识库（共享库 = 对外可加入，对标 ima 共享知识库）。 */
+  shared?: boolean;
+  /** 加入方式：direct=直接加入 / apply=申请加入（管理员批准）/ invite=仅邀请加入。 */
+  join_mode?: 'direct' | 'apply' | 'invite';
+  /** 成员权限：view_export=内容可查看和导出 / view_only=内容可查看但不可导出 / hidden=内容不可查看。 */
+  member_permission?: 'view_export' | 'view_only' | 'hidden';
+  /** 知识库描述/简介。 */
+  description?: string;
+  /** 封面（base64 data URL 或空字符串 = 默认封面）。 */
+  cover?: string;
+  /** 预设推荐问题（对外快捷提问）。 */
+  recommended_questions?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -311,6 +323,14 @@ function _normaliseSpace(raw: any): Space | null {
     })(),
     main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
     pinned_at: typeof raw.pinned_at === 'string' && raw.pinned_at ? raw.pinned_at : undefined,
+    shared: raw.shared === true,
+    join_mode: raw.join_mode === 'direct' || raw.join_mode === 'apply' || raw.join_mode === 'invite' ? raw.join_mode : undefined,
+    member_permission: raw.member_permission === 'view_export' || raw.member_permission === 'view_only' || raw.member_permission === 'hidden' ? raw.member_permission : undefined,
+    description: typeof raw.description === 'string' && raw.description ? raw.description : undefined,
+    cover: typeof raw.cover === 'string' && raw.cover ? raw.cover : undefined,
+    recommended_questions: Array.isArray(raw.recommended_questions)
+      ? raw.recommended_questions.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 10)
+      : undefined,
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : '',
   };
@@ -614,6 +634,12 @@ export async function createSpace(
     base_agent?: string;
     base_agents?: string[];
     main_skill_ref?: SpaceAssetRef;
+    shared?: boolean;
+    join_mode?: 'direct' | 'apply' | 'invite';
+    member_permission?: 'view_export' | 'view_only' | 'hidden';
+    description?: string;
+    cover?: string;
+    recommended_questions?: string[];
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
@@ -650,6 +676,14 @@ export async function createSpace(
     base_agents: baseAgents,
     gate_status: 'not_checked',
     main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
+    shared: opts.shared === true,
+    join_mode: opts.join_mode,
+    member_permission: opts.member_permission,
+    description: typeof opts.description === 'string' && opts.description.trim() ? opts.description.trim() : undefined,
+    cover: typeof opts.cover === 'string' && opts.cover ? opts.cover : undefined,
+    recommended_questions: Array.isArray(opts.recommended_questions)
+      ? opts.recommended_questions.map((q) => String(q).trim()).filter(Boolean).slice(0, 10)
+      : undefined,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
