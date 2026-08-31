@@ -81,10 +81,22 @@ function makeEl(tag: string): StubEl {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     addEventListener(_type: string, _fn: () => void) { /* stub */ },
     setAttribute() { /* stub */ },
-    appendChild(child) { el.children.push(child); child.parentNode = el; return child; },
+    appendChild(child) {
+      // DOM 语义：已在树中的节点先摘除再插入（防重复）。
+      if (child.parentNode && Array.isArray(child.parentNode.children)) {
+        const oi = child.parentNode.children.indexOf(child);
+        if (oi >= 0) child.parentNode.children.splice(oi, 1);
+      }
+      el.children.push(child); child.parentNode = el; return child;
+    },
     insertBefore(node, before) {
       // 经 bind(target) 转发时必须落在 target 上（闭包 el 只作默认宿主）。
       const host: StubEl = this && Array.isArray((this as StubEl).children) ? this as StubEl : el;
+      // DOM 语义：已在树中的节点先摘除再插入（移动，不重复）。
+      if (node.parentNode && Array.isArray(node.parentNode.children)) {
+        const oi = node.parentNode.children.indexOf(node);
+        if (oi >= 0) node.parentNode.children.splice(oi, 1);
+      }
       const idx = host.children.indexOf(before);
       host.children.splice(idx < 0 ? host.children.length : idx, 0, node);
       node.parentNode = host;
@@ -216,6 +228,9 @@ describe('chat-stream module', () => {
     // 完成 → 自动收缩：body 隐藏、cs-collapsed、header 摘要含步骤与 token。
     expect(body.style.display).toBe('none');
     expect(panel.className).toContain('cs-collapsed');
+    // 完成态定位：面板移到正文（占位元素）之后。
+    const order = Array.from(root.children);
+    expect(order.indexOf(anchor)).toBeLessThan(order.indexOf(panel));
     const summary = panel.querySelector('.cs-panel-summary')!;
     expect(summary.textContent).toContain('1 步');
     expect(summary.textContent).toContain('bash');
@@ -258,7 +273,10 @@ describe('chat-stream module', () => {
 
     handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.turn.completed', turnId: 'T2', status: 'failed', error: 'boom', endedAt: '' });
-    const failed = inserts[1].node;
+    // 完成态面板会移动到正文后（同样走 root.insertBefore，被 inserts 监听
+    // 记到），这里只取创建记录（before===anchor）。
+    const created = inserts.filter((i) => i.before === anchor);
+    const failed = created[1].node;
     expect(failed.className).toContain('failed');
     expect(failed.querySelector('[data-cs-state]')!.textContent).toContain('boom');
   });
