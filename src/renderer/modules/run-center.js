@@ -342,6 +342,10 @@
       }))
       .filter((agent) => agent.agentId);
   }
+  function taskDispatchableAgentCandidates() {
+    return createAgentCandidates().filter((agent) => agent.dispatchable
+      && (!Array.isArray(state.agentRegistry?.agents) || !!String(agent.definitionSource || '').trim()));
+  }
   function agentOptionsReady() {
     return Array.isArray(state.agentRegistry?.agents) || state.agentsLoaded;
   }
@@ -713,8 +717,8 @@
     if (!state.createMode) return '';
     const selected = selectedTask() || state.detail?.collaboration?.task;
     const agentDataReady = agentOptionsReady();
-    const agents = createAgentCandidates().filter((agent) => agent.dispatchable
-      && (state.createMode !== 'reassign' || agent.agentId !== selected?.agentId));
+    const agents = taskDispatchableAgentCandidates()
+      .filter((agent) => state.createMode !== 'reassign' || agent.agentId !== selected?.agentId);
     const options = agents.map((agent) => `<option value="${esc(agent.agentId)}"${agent.agentId === state.createAgentId ? ' selected' : ''}>${esc(agent.displayName || text('run_center.assigned_agent'))}</option>`).join('');
     const isReassign = state.createMode === 'reassign';
     const managedWorktrees = (Array.isArray(state.worktrees?.worktrees) ? state.worktrees.worktrees : [])
@@ -1062,6 +1066,17 @@
   function focusCreateControl() {
     focusLater('[data-run-center-create-task], [data-run-center-create-agent]');
   }
+  function createFailureMessage(error) {
+    const message = error?.message || String(error);
+    if (message.includes('CogSeed Agent is unavailable')) return text('run_center.selected_agent_unavailable');
+    if (message.includes('CogSeed Agent runtime is not executable')) return text('run_center.selected_agent_runtime_unavailable');
+    return message;
+  }
+  function clearCreateErrorAfterEdit(focusSelector) {
+    if (!state.createError) return;
+    state.createError = '';
+    renderPreservingFocus(focusSelector);
+  }
   function toggleCreateAdvanced() {
     if (state.createMode !== 'create' || state.createBusy) return;
     state.createAdvancedOpen = !state.createAdvancedOpen;
@@ -1129,6 +1144,12 @@
     const source = state.detail?.collaboration?.task || selectedTask();
     if (!isReassign && !state.createTask.trim()) { state.createError = text('run_center.create_task_required'); render(); focusCreateControl(); return; }
     if (isReassign && !state.createAgentId) { state.createError = text('run_center.choose_agent_required'); render(); focusCreateControl(); return; }
+    if (state.createAgentId && !taskDispatchableAgentCandidates().some((agent) => agent.agentId === state.createAgentId)) {
+      state.createError = text('run_center.selected_agent_unavailable');
+      render();
+      focusLater('[data-run-center-create-agent]');
+      return;
+    }
     if (isReassign && !source) return;
     state.createBusy = true;
     state.createError = '';
@@ -1150,7 +1171,7 @@
       await refresh({ background: true });
       if (created?.sessionId && created?.taskId) await select(created.sessionId, created.taskId, { focusDetail: true });
     } catch (error) {
-      state.createError = error?.message || String(error);
+      state.createError = createFailureMessage(error);
     } finally {
       state.createBusy = false;
       render();
@@ -1861,7 +1882,10 @@
         nextSearch?.focus();
         if (Number.isInteger(selectionStart)) nextSearch?.setSelectionRange(selectionStart, selectionStart);
       }
-      if (event.target.matches('[data-run-center-create-task]')) state.createTask = event.target.value || '';
+      if (event.target.matches('[data-run-center-create-task]')) {
+        state.createTask = event.target.value || '';
+        clearCreateErrorAfterEdit('[data-run-center-create-task]');
+      }
       if (event.target.matches('[data-run-center-worktree-branch]')) state.worktreeBranch = event.target.value || '';
       if (event.target.matches('[data-run-center-worktree-base]')) state.worktreeBaseRef = event.target.value || '';
     });
@@ -1870,8 +1894,14 @@
         toggleAgentGateway(event.target.dataset.runCenterAgentGateway, event.target.checked === true);
         return;
       }
-      if (event.target.matches('[data-run-center-create-agent]')) state.createAgentId = event.target.value || '';
-      if (event.target.matches('[data-run-center-create-worktree]')) state.createWorktreeName = event.target.value || '';
+      if (event.target.matches('[data-run-center-create-agent]')) {
+        state.createAgentId = event.target.value || '';
+        clearCreateErrorAfterEdit('[data-run-center-create-agent]');
+      }
+      if (event.target.matches('[data-run-center-create-worktree]')) {
+        state.createWorktreeName = event.target.value || '';
+        clearCreateErrorAfterEdit('[data-run-center-create-worktree]');
+      }
       if (event.target.matches('[data-run-center-source-filter]')) { state.sourceFilter = event.target.value || 'all'; renderAfterFilterChange(true); }
       if (event.target.matches('[data-run-center-run-agent-filter]')) { state.runAgentFilter = event.target.value || 'all'; renderAfterFilterChange(true); }
       if (event.target.matches('[data-run-center-time-filter]')) { state.runTimeFilter = event.target.value || 'all'; renderAfterFilterChange(true); }

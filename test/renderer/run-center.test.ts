@@ -855,8 +855,8 @@ describe('Run Center renderer contract', () => {
       if (channel === 'cogseed.agent.list') return {
         schemaVersion: 1, updatedAt: task.updatedAt,
         agents: [
-          { agentId: 'review-agent', displayName: 'Reviewer', sourceKind: 'cogseed', runtimeKind: 'in_process', dispatchable: true, health: 'ready', stats: { active: 0, completed: 0, failed: 0 } },
-          { agentId: 'codex-agent', displayName: 'Codex', sourceKind: 'p3394', runtimeKind: 'p3394-gateway:codex', installed: true, dispatchable: true, health: 'ready', stats: { active: 0, completed: 0, failed: 0 } },
+          { agentId: 'review-agent', displayName: 'Reviewer', sourceKind: 'cogseed', definitionSource: 'custom', runtimeKind: 'in_process', dispatchable: true, health: 'ready', stats: { active: 0, completed: 0, failed: 0 } },
+          { agentId: 'codex-agent', displayName: 'Codex', sourceKind: 'p3394', definitionSource: 'custom', runtimeKind: 'p3394-gateway:codex', installed: true, dispatchable: true, health: 'ready', stats: { active: 0, completed: 0, failed: 0 } },
         ],
         runtimes: [{ runtimeId: 'local-cli:codex', displayName: 'codex', sourceKind: 'local-cli', runtimeKind: 'codex', installed: true, dispatchable: true, health: 'ready', gatewayRunning: true, gatewayControllable: true }],
         channels: [],

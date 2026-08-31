@@ -5987,6 +5987,8 @@
   "run_center.create_worktree_empty": "No clean, verifiable managed worktrees. Create one from More tools.",
   "run_center.create_worktree_unavailable": "Worktrees are temporarily unavailable. The task can still start in the current workspace.",
   "run_center.create_agent_unavailable": "Agents are temporarily unavailable. The task can still start with CogSeed.",
+  "run_center.selected_agent_unavailable": "The selected Agent is unavailable. Choose another Agent or use CogSeed.",
+  "run_center.selected_agent_runtime_unavailable": "The selected Agent cannot run tasks. Choose another Agent or use CogSeed.",
   "run_center.create_isolation_label": "Execution isolation",
   "run_center.advanced_options": "Advanced options",
   "run_center.advanced_defaults": "Defaults to CogSeed and the current workspace",

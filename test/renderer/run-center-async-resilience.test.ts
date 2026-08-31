@@ -56,7 +56,11 @@ function diagnostics(taskCount: number) {
   };
 }
 
-function createHarness(options: { registryFailure?: boolean } = {}) {
+function createHarness(options: {
+  registryFailure?: boolean;
+  includeRuntimePeer?: boolean;
+  startFailure?: Error;
+} = {}) {
   const panelListeners = new Map<string, (event: any) => void>();
   const documentListeners = new Map<string, (event: any) => void>();
   const diagnosticsRequests: Deferred<any>[] = [];
@@ -67,6 +71,7 @@ function createHarness(options: { registryFailure?: boolean } = {}) {
   let html = '';
   let controls: any[] = [];
   let renderCount = 0;
+  let startFailure = options.startFailure;
 
   const rebuildControls = (markup: string) => {
     const nextControls: any[] = [];
@@ -154,14 +159,27 @@ function createHarness(options: { registryFailure?: boolean } = {}) {
     if (channel === 'cogseed.session.list') return Promise.resolve({ sessions: [] });
     if (channel === 'cogseed.agent.list' && options.registryFailure) return Promise.reject(new Error('registry unavailable'));
     if (channel === 'cogseed.agent.list') return Promise.resolve({
-      agents: [{ agentId: 'review-agent', displayName: 'Reviewer', dispatchable: true }], runtimes: [], channels: [],
+      agents: [
+        { agentId: 'review-agent', displayName: 'Reviewer', definitionSource: 'custom', dispatchable: true },
+        ...(options.includeRuntimePeer
+          ? [{ agentId: 'codex-peer', displayName: 'Codex', sourceKind: 'p3394', dispatchable: true }]
+          : []),
+      ],
+      runtimes: [], channels: [],
     });
     if (channel === 'agents.list') {
       const request = deferred<any>();
       agentRequests.push(request);
       return request.promise;
     }
-    if (channel === 'cogseed.task.start') return Promise.resolve({});
+    if (channel === 'cogseed.task.start') {
+      if (startFailure) {
+        const error = startFailure;
+        startFailure = undefined;
+        return Promise.reject(error);
+      }
+      return Promise.resolve({});
+    }
     return Promise.reject(new Error(`unexpected channel: ${channel}`));
   });
   const context: any = {
@@ -517,5 +535,45 @@ describe('Run Center asynchronous tool resilience', () => {
     await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
     expect(harness.calls.find((call) => call.channel === 'cogseed.task.start')?.payload)
       .toMatchObject({ task: 'Use the fallback Agent listing', agentId: 'review-agent' });
+  });
+
+  it('excludes bare runtime peers and clears localized Agent failures before a valid retry', async () => {
+    const harness = createHarness({
+      includeRuntimePeer: true,
+      startFailure: new Error('CogSeed Agent is unavailable'),
+    });
+    await harness.flush();
+
+    harness.click({ runCenterCreateOpen: '' });
+    harness.input('[data-run-center-create-task]', 'Create a daily report');
+    harness.click({ runCenterCreateAdvanced: '' });
+    await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
+
+    expect(harness.html()).toContain('value="review-agent"');
+    expect(harness.html()).not.toContain('value="codex-peer"');
+    harness.agentRequests[0].resolve(agentListing());
+    harness.worktreeRequests[0].resolve(projection('agent-retry'));
+    await harness.flush();
+
+    harness.change('[data-run-center-create-agent]', 'review-agent');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.html().includes('run_center.selected_agent_unavailable'));
+    expect(harness.html()).not.toContain('CogSeed Agent is unavailable');
+
+    harness.change('[data-run-center-create-agent]', '');
+    expect(harness.html()).not.toContain('run_center.selected_agent_unavailable');
+
+    harness.change('[data-run-center-create-agent]', 'codex-peer');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.flush();
+    expect(harness.calls.filter((call) => call.channel === 'cogseed.task.start')).toHaveLength(1);
+    expect(harness.html()).toContain('run_center.selected_agent_unavailable');
+
+    harness.change('[data-run-center-create-agent]', 'review-agent');
+    expect(harness.html()).not.toContain('run_center.selected_agent_unavailable');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.calls.filter((call) => call.channel === 'cogseed.task.start').length === 2);
+    expect(harness.calls.filter((call) => call.channel === 'cogseed.task.start').at(-1)?.payload)
+      .toMatchObject({ task: 'Create a daily report', agentId: 'review-agent' });
   });
 });

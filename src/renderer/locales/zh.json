@@ -5987,6 +5987,8 @@
   "run_center.create_worktree_empty": "暂无干净且可验证的受管工作树，可在“更多工具”中创建。",
   "run_center.create_worktree_unavailable": "暂时无法读取工作树，任务仍可在当前工作区启动。",
   "run_center.create_agent_unavailable": "暂时无法读取智能体，仍会默认使用 CogSeed 启动。",
+  "run_center.selected_agent_unavailable": "所选智能体当前不可用，请选择其他智能体或改用 CogSeed。",
+  "run_center.selected_agent_runtime_unavailable": "所选智能体暂时无法执行任务，请选择其他智能体或改用 CogSeed。",
   "run_center.create_isolation_label": "执行隔离",
   "run_center.advanced_options": "高级选项",
   "run_center.advanced_defaults": "默认使用 CogSeed 与当前工作区",
