@@ -20,6 +20,7 @@
   --color-surface-2: #EDF3EF;
   --color-surface-3: #DCE5DF;
   --color-bg: #FBFDFC;
+  --color-black: #000000;
   --color-white: #FFFFFF;
   --color-success: #16A34A;
   --color-success-soft: #DCFCE7;
@@ -37,6 +38,14 @@
   --color-command-scrim: rgba(20, 71, 55, 0.40);
   --color-focus-halo: rgba(14, 159, 110, 0.12);
   --color-grid-line: rgba(14, 159, 110, 0.035);
+  --color-info: #2563EB;
+  --color-info-soft: #EAF2F8;
+  --color-violet: #8B5CF6;
+  --color-violet-soft: #C084FC;
+  --color-teal: #0D706C;
+  --color-overlay-ink: #0F172A;
+  --color-shadow-ink: #144737;
+  --color-shadow-run: #1C3026;
 
   /* Typography: local system fonts only. */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;

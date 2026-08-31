@@ -402,6 +402,7 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
   const openLegacyAgentDashboard = view === 'dashboard';
   // Keep deep links and persisted callers using the pre-unification routes

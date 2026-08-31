@@ -8103,9 +8103,6 @@ async function loadConversationHistory(cid, opts = {}) {
     // 会话统计行（Task 8）。
     _refreshSessionStats();
     _mountCollaborationStatusCard(container, convMeta.collaboration || null);
-    if (window.CompanionRepro && typeof window.CompanionRepro.mount === 'function') {
-      void window.CompanionRepro.mount(cid);
-    }
     _setLoadEarlierHistory(container, cid, data.next_cursor);
     const searchTargetRevealed = opts.searchTarget
       ? _revealConversationHistorySearchTarget(cid, opts.searchTarget)
@@ -12786,17 +12783,6 @@ async function sendInConversation(cid, content, extra, options = {}) {
     // so it must not be merged into the active task-turn sample.
     enqueueMessage(cid, content, '', { direct: true, extra });
     return { started: false, queued: true, aborted: false, errored: false };
-  }
-
-  if (window.CompanionRepro && typeof window.CompanionRepro.handleChatMessage === 'function') {
-    try {
-      const handled = await window.CompanionRepro.handleChatMessage(cid, content, {
-        append(role, text) {
-          appendChatMessage({ role, content: text, time: nowIsoLocal() }, true, { cid, archive: true });
-        },
-      });
-      if (handled) return { started: true, aborted: false, errored: false, result: 'success' };
-    } catch (_) { /* fall through to normal commander send */ }
   }
 
   // Scroll-pin spacer is owned by the controller (features.scrollPin) —
