@@ -13,7 +13,7 @@ import type { RecallJsonRecord } from './types';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import { readReceipt, type ContextReuseReceipt } from '../p3394/context-reuse-receipt';
 import { abilityAssetReferenceMatches } from './asset-reference';
-import { recordRecallCandidateValidation } from './candidate-service';
+import { recordValidation } from './validation-service';
 
 const log = createLogger('recall.proofs');
 
@@ -273,7 +273,13 @@ export async function evaluateEffectivenessProof(userId: string, input: { transf
     for (const item of transfer.assetVersions) {
       try {
         const asset = await readAbilityAsset(userId, item.assetId);
-        await recordRecallCandidateValidation(userId, asset.candidateId, validationOutcome);
+        await recordValidation(userId, {
+          assetId: asset.id,
+          candidateId: asset.candidateId,
+          taskRunId: transfer.executionId,
+          outcome: validationOutcome,
+          evidenceRefs: refs,
+        });
       } catch {
         // Legacy assets may not have a readable candidate; the proof remains authoritative.
       }
