@@ -188,20 +188,6 @@
         <div><strong>${esc(text(attentionState[1]))}</strong><p>${esc(text(attentionState[2], { active: model.counts.active, attention: model.counts.attention }))}</p></div>
         ${model.updatedAt ? `<time>${esc(text('run_center.overview_updated', { time: formatDate(model.updatedAt) }))}</time>` : ''}
       </section>
-      <div class="run-center-overview-now">
-        <section class="run-center-overview-section is-priority run-center-overview-attention-queue">
-          <header><div><h2>${esc(text('run_center.overview_attention'))}</h2><p>${esc(text('run_center.overview_attention_detail'))}</p></div>${model.counts.attention ? `<button type="button" class="run-center-overview-link" data-run-center-overview-filter="attention">${esc(text('run_center.overview_view_attention'))}<b>${esc(model.counts.attention)}</b></button>` : ''}</header>
-          ${model.attentionRuns.length ? `<div class="run-center-overview-task-list">${model.attentionRuns.map((run) => taskButton(run, 'attention')).join('')}</div>` : `<p class="run-center-overview-good">${icon('check-circle')}${esc(text('run_center.overview_no_attention'))}</p>`}
-        </section>
-        <section class="run-center-overview-section is-active">
-          <header><div><h2>${esc(text('run_center.overview_running'))}</h2><p>${esc(text('run_center.overview_running_detail'))}</p></div><span>${esc(model.counts.active)}</span></header>
-          ${model.activeRuns.length ? `<div class="run-center-overview-task-list">${model.activeRuns.map((run) => taskButton(run, 'active')).join('')}</div>` : `<p class="run-center-overview-muted">${esc(text('run_center.overview_no_running'))}</p>`}
-        </section>
-        <section class="run-center-overview-section is-completed">
-          <header><div><h2>${esc(text('run_center.overview_completed'))}</h2><p>${esc(text('run_center.overview_completed_detail'))}</p></div></header>
-          ${model.completedRuns.length ? `<div class="run-center-overview-task-list">${model.completedRuns.map((run) => taskButton(run, 'completed')).join('')}</div>` : `<p class="run-center-overview-muted">${esc(text('run_center.overview_no_completed'))}</p>`}
-        </section>
-      </div>
       <details class="run-center-overview-analysis"${options.analysisOpen ? ' open' : ''}>
         <summary><span>${icon('activity')}<b>${esc(text('run_center.overview_analysis'))}</b><small>${esc(text('run_center.overview_analysis_detail'))}</small></span>${icon('chevron-down')}</summary>
         <div class="run-center-overview-analysis-body">
@@ -233,6 +219,20 @@
         </div>
         </div>
       </details>
+      <div class="run-center-overview-now">
+        <section class="run-center-overview-section is-priority run-center-overview-attention-queue">
+          <header><div><h2>${esc(text('run_center.overview_attention'))}</h2><p>${esc(text('run_center.overview_attention_detail'))}</p></div>${model.counts.attention ? `<button type="button" class="run-center-overview-link" data-run-center-overview-filter="attention">${esc(text('run_center.overview_view_attention'))}<b>${esc(model.counts.attention)}</b></button>` : ''}</header>
+          ${model.attentionRuns.length ? `<div class="run-center-overview-task-list">${model.attentionRuns.map((run) => taskButton(run, 'attention')).join('')}</div>` : `<p class="run-center-overview-good">${icon('check-circle')}${esc(text('run_center.overview_no_attention'))}</p>`}
+        </section>
+        <section class="run-center-overview-section is-active">
+          <header><div><h2>${esc(text('run_center.overview_running'))}</h2><p>${esc(text('run_center.overview_running_detail'))}</p></div><span>${esc(model.counts.active)}</span></header>
+          ${model.activeRuns.length ? `<div class="run-center-overview-task-list">${model.activeRuns.map((run) => taskButton(run, 'active')).join('')}</div>` : `<p class="run-center-overview-muted">${esc(text('run_center.overview_no_running'))}</p>`}
+        </section>
+        <section class="run-center-overview-section is-completed">
+          <header><div><h2>${esc(text('run_center.overview_completed'))}</h2><p>${esc(text('run_center.overview_completed_detail'))}</p></div></header>
+          ${model.completedRuns.length ? `<div class="run-center-overview-task-list">${model.completedRuns.map((run) => taskButton(run, 'completed')).join('')}</div>` : `<p class="run-center-overview-muted">${esc(text('run_center.overview_no_completed'))}</p>`}
+        </section>
+      </div>
     </div>`;
   }
 

@@ -92,11 +92,11 @@ describe('renderDashboard — component coverage (set A)', () => {
   it('Table: emits columns + rows with numeric alignment', () => {
     const html = renderDashboard({ root: { type: 'Table', props: {
       columns: [{ key: 'host', label: 'Host' }, { key: 'rtt', label: 'RTT', numeric: true }],
-      rows: [{ host: '10.0.0.1', rtt: 12 }, { host: '10.0.0.2', rtt: 84 }],
+      rows: [{ host: '192.0.2.1', rtt: 12 }, { host: '192.0.2.2', rtt: 84 }],
     } } });
     expect(html).toContain('<th>Host</th>');
     expect(html).toContain('<th data-numeric="1">RTT</th>');
-    expect(html).toContain('10.0.0.1');
+    expect(html).toContain('192.0.2.1');
     expect(html).toMatch(/<td data-numeric="1">12<\/td>/);
   });
 

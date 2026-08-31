@@ -243,6 +243,9 @@ async function defaultConversationExists(input: { userId: string; conversationId
 const defaultDeps: CogSeedGroupChatProjectionDeps = {
   conversationExists: defaultConversationExists,
   async appendProcessEvent(input) {
+    // Archiving is dashboard-only metadata and must not become a Group Chat
+    // process event or alter the already-terminal conversation turn.
+    if (input.kind === 'task.archived') return;
     await appendProjectedProcessEvent({
       uid: input.userId,
       cid: input.conversationId,

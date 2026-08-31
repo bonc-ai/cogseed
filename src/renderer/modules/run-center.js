@@ -99,7 +99,7 @@
     detailReturnFocus: '',
     actionNotice: '',
     actionError: '',
-    overviewAnalysisOpen: false,
+    overviewAnalysisOpen: true,
     selectionRevision: 0,
   };
 
@@ -173,7 +173,7 @@
     const scrollSnapshot = captureScroll();
     render();
     restoreScroll(scrollSnapshot);
-    if (focusSnapshot) restoreFocus(focusSnapshot);
+    if (focusSnapshot) restoreFocus(focusSnapshot, fallbackSelector);
     else focusLater(fallbackSelector);
   }
   function focusableElements(container) {
@@ -345,6 +345,13 @@
   function taskDispatchableAgentCandidates() {
     return createAgentCandidates().filter((agent) => agent.dispatchable
       && (!Array.isArray(state.agentRegistry?.agents) || !!String(agent.definitionSource || '').trim()));
+  }
+  function taskAgentOptionLabel(agent) {
+    const name = String(agent?.displayName || '').trim() || text('run_center.assigned_agent');
+    const runtimeKind = String(agent?.runtimeKind || '').trim();
+    if (runtimeKind.startsWith('p3394-gateway:')) return `${name} · ${text('run_center.agent_option_local_external')}`;
+    if (agent?.sourceKind === 'local-cli' || runtimeKind.startsWith('cli:')) return `${name} · ${text('run_center.agent_option_local_cli')}`;
+    return name;
   }
   function agentOptionsReady() {
     return Array.isArray(state.agentRegistry?.agents) || state.agentsLoaded;
@@ -614,6 +621,9 @@
     const { task, actions } = model;
     const busy = state.busyAction;
     const action = userState.action;
+    if (action === 'configure-model') {
+      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-configure-model>${icon('settings')}<span>${esc(text(userState.actionKey))}</span></button>`;
+    }
     if (action === 'open-task' && task?.conversationId) {
       return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
     }
@@ -651,6 +661,7 @@
     const completion = progress?.total ? Math.round((Number(progress.completed || 0) / Number(progress.total)) * 100) : 0;
     const secondary = [
       actions.abort ? `<button type="button" class="btn btn-sm btn-danger" data-run-center-action="abort" ${state.busyAction ? 'disabled' : ''}>${icon('stop')}<span>${esc(text('run_center.abort'))}</span></button>` : '',
+      actions.archive ? `<button type="button" class="btn btn-sm" data-run-center-action="archive" ${state.busyAction ? 'disabled' : ''}>${state.busyAction === 'archive' ? icon('loader', 'ui-icon is-spinning') : icon('archive')}<span>${esc(text(state.busyAction === 'archive' ? 'run_center.action_working' : 'run_center.remove_from_list'))}</span></button>` : '',
       `<button type="button" class="btn btn-sm" data-run-center-reassign>${icon('refresh')}<span>${esc(text('run_center.run_with_agent'))}</span></button>`,
       task.conversationId && userState.action !== 'open-task' ? `<button type="button" class="btn btn-sm" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button>` : '',
     ].filter(Boolean).join('');
@@ -708,7 +719,7 @@
         : activeTab === 'collaboration' ? collaborationHtml()
           : summaryTabHtml(model);
     return `<div class="run-center-run-detail" aria-live="polite" aria-busy="${String(!state.detail && !!state.selectedSessionId)}">
-      <header class="run-center-run-detail-header"><button type="button" class="run-center-detail-back" data-run-center-detail-back aria-label="${esc(text('run_center.back_to_runs'))}">${icon('chevron-left')}</button><div><span class="${statusClass(aggregateTask.status)}">${esc(text(statusKey(aggregateTask.status)))}</span><h2>${esc(displayRunTitle(run, aggregateTask))}</h2><p>${esc(sequenceLabel)} · ${esc(agentDisplayName(task?.agentId) || text('run_center.commander'))} · ${esc(formatDate(aggregateTask.updatedAt))}</p></div>${task?.conversationId ? `<button type="button" class="run-center-icon-btn" data-run-center-open="${esc(task.conversationId)}" title="${esc(text('run_center.open_task'))}" aria-label="${esc(text('run_center.open_task'))}">${icon('message-square')}</button>` : ''}</header>
+      <header class="run-center-run-detail-header"><button type="button" class="run-center-detail-back" data-run-center-detail-back aria-label="${esc(text('run_center.back_to_runs'))}">${icon('chevron-left')}</button><div><span class="${statusClass(aggregateTask.status)}">${esc(text(statusKey(aggregateTask.status)))}</span><h2>${esc(displayRunTitle(run, aggregateTask))}</h2><p>${esc(sequenceLabel)} · ${esc(agentDisplayName(task?.agentId) || text('run_center.commander'))} · ${esc(formatDate(aggregateTask.updatedAt))}</p></div><span class="run-center-detail-actions">${task?.conversationId ? `<button type="button" class="run-center-icon-btn" data-run-center-open="${esc(task.conversationId)}" title="${esc(text('run_center.open_task'))}" aria-label="${esc(text('run_center.open_task'))}">${icon('message-square')}</button>` : ''}${state.runMode === 'board' ? `<button type="button" class="run-center-icon-btn run-center-detail-close" data-run-center-detail-close title="${esc(text('common.close'))}" aria-label="${esc(text('common.close'))}">${icon('x')}</button>` : ''}</span></header>
       <div class="run-center-detail-tabs" role="tablist" aria-label="${esc(text('run_center.run_detail'))}">${tabs.map(([tab, key]) => `<button type="button" role="tab" aria-selected="${String(activeTab === tab)}" class="${activeTab === tab ? 'is-active' : ''}" data-run-center-detail-tab="${tab}">${esc(text(key))}</button>`).join('')}</div>
       <div class="run-center-detail-content" role="tabpanel">${content}</div>
     </div>`;
@@ -719,7 +730,7 @@
     const agentDataReady = agentOptionsReady();
     const agents = taskDispatchableAgentCandidates()
       .filter((agent) => state.createMode !== 'reassign' || agent.agentId !== selected?.agentId);
-    const options = agents.map((agent) => `<option value="${esc(agent.agentId)}"${agent.agentId === state.createAgentId ? ' selected' : ''}>${esc(agent.displayName || text('run_center.assigned_agent'))}</option>`).join('');
+    const options = agents.map((agent) => `<option value="${esc(agent.agentId)}"${agent.agentId === state.createAgentId ? ' selected' : ''}>${esc(taskAgentOptionLabel(agent))}</option>`).join('');
     const isReassign = state.createMode === 'reassign';
     const managedWorktrees = (Array.isArray(state.worktrees?.worktrees) ? state.worktrees.worktrees : [])
       .filter((item) => item.verifiable && !item.dirty);
@@ -1057,6 +1068,15 @@
       const result = await invoke('agents.list', { summary: true });
       state.agents = Array.isArray(result?.agents) ? result.agents : [];
       state.agentsLoaded = true;
+      try {
+        const registry = await invoke('cogseed.agent.list');
+        if (Array.isArray(registry?.agents)) {
+          state.agentRegistry = registry;
+          state.agentRegistryError = '';
+        }
+      } catch (error) {
+        state.agentRegistryError = error?.message || String(error);
+      }
     } catch (error) {
       state.agentsLoaded = true;
       state.createAdvancedError = error?.message || String(error);
@@ -1473,6 +1493,13 @@
     const task = state.detail?.collaboration?.task || selectedTask();
     if (!task) return;
     if (action === 'abort' && !rootWindow.confirm(text('run_center.abort_confirm'))) return;
+    if (action === 'archive' && !rootWindow.confirm(text('run_center.archive_confirm'))) return;
+    const visibleBefore = action === 'archive' ? orderedVisibleRuns() : [];
+    const archivedIndex = visibleBefore.findIndex((run) => run.members?.some((member) => member.taskId === task.taskId));
+    const adjacentRunKey = archivedIndex >= 0
+      ? visibleBefore[archivedIndex + 1]?.key || visibleBefore[archivedIndex - 1]?.key || ''
+      : '';
+    const archiveScrollSnapshot = action === 'archive' ? captureScroll() : null;
     const previousRunKeys = new Set(allRunModels().map((run) => run.key));
     const sourceConversationId = task.conversationId;
     const sourceSessionId = task.sessionId;
@@ -1484,7 +1511,26 @@
       const payload = { taskId: task.taskId, action };
       if (action === 'retry' || action === 'resume') payload.requestId = `req-run-center-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       await invoke('cogseed.task.action', payload);
+      if (action === 'archive') {
+        state.detailOpen = false;
+        state.detailReturnFocus = '';
+      }
       await refresh({ background: true });
+      if (action === 'archive') {
+        const visibleRuns = orderedVisibleRuns();
+        const targetRun = visibleRuns.find((run) => run.key === adjacentRunKey) || visibleRuns[0] || null;
+        const targetTask = runTask(targetRun);
+        state.actionNotice = '';
+        if (targetRun && targetTask) await select(targetTask.sessionId, targetTask.taskId, { runKey: targetRun.key });
+        else {
+          setSelectedTask('', '');
+          state.detail = null;
+        }
+        if (typeof rootWindow.uiToast === 'function') {
+          rootWindow.uiToast(text('run_center.action_success_archive'), { variant: 'success' });
+        }
+        return;
+      }
       const candidates = allRunModels().filter((run) => !previousRunKeys.has(run.key)).filter((run) => {
         const candidate = runTask(run);
         return candidate?.sessionId === sourceSessionId
@@ -1503,7 +1549,13 @@
       state.actionError = error?.message || String(error);
     } finally {
       state.busyAction = '';
-      renderPreservingFocus('[data-run-center-detail-tab="summary"]');
+      const fallbackSelector = action === 'archive' && state.selectedRunKey
+        ? state.runMode === 'board'
+          ? `[data-dashboard-board-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+          : `[data-run-center-queue-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+        : '[data-run-center-detail-tab="summary"]';
+      renderPreservingFocus(fallbackSelector);
+      if (archiveScrollSnapshot) restoreScroll(archiveScrollSnapshot);
     }
   }
   async function toggleAgentGateway(cli, nextEnabled) {
@@ -1714,6 +1766,11 @@
       }
       if (button.dataset.runCenterRefresh !== undefined) { refresh(); return; }
       if (button.dataset.runCenterCreateOpen !== undefined) { openCreate('create'); return; }
+      if (button.dataset.runCenterConfigureModel !== undefined) {
+        rootWindow.setView?.('settings');
+        rootWindow.activateSettingsTab?.('credentials');
+        return;
+      }
       if (button.dataset.runCenterCreateAdvanced !== undefined) { toggleCreateAdvanced(); return; }
       if (button.dataset.runCenterReassign !== undefined) { openCreate('reassign'); return; }
       if (button.dataset.runCenterCreateClose !== undefined) { closeCreate(); return; }
@@ -1849,12 +1906,20 @@
       const sessionId = button.dataset.runCenterSession || button.dataset.dashboardBoardSessionId;
       if (sessionId) {
         if (button.dataset.dashboardBoardSessionId) {
+          const runKey = button.dataset.dashboardBoardRunKey || '';
+          const selected = runKey
+            ? runKey === state.selectedRunKey
+            : taskId === state.selectedTaskId && sessionId === state.selectedSessionId;
+          if (state.detailOpen && selected) {
+            closeDetails();
+            return;
+          }
           state.detailOpen = true;
           state.detailTab = 'summary';
           state.detailReturnFocus = '.dashboard-board-card.is-selected';
           select(sessionId, taskId, {
             focusDetail: true,
-            runKey: button.dataset.dashboardBoardRunKey || '',
+            runKey,
           });
         } else select(sessionId, taskId);
         return;

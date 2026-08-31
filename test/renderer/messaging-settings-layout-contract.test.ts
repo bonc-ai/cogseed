@@ -97,7 +97,7 @@ describe('messaging connection-management layout contract', () => {
     expect(header).not.toContain('data-ui-icon="arrow-left"');
   });
 
-  it('edits the channel-bridge sender allowlist per instance (G-14)', () => {
+  it('edits the channel-bridge sender allowlist per instance', () => {
     // 每个渠道实例的设置面板有白名单卡：开关（关闭=显式清除 null）+ 名单编辑
     expect(rendererSource).toContain('function channelBridgeAllowlistCard');
     expect(rendererSource).toContain("settingsSection('messaging.section.bridge_allowlist'");
