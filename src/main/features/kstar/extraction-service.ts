@@ -119,6 +119,7 @@ export function proposeKstarCandidates(
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
 ): KstarCandidateProposal[] {
+  if (episode.r.status === 'timed_out') return [];
   const sourceRefs = normalizeCognitionSourceRefs([
     { kind: 'execution', id: episode.id, title: 'KSTAR episode' },
     ...episode.evidenceRefs.filter((ref) => ref.kind !== 'execution'),

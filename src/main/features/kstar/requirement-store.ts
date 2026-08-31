@@ -189,7 +189,7 @@ function validCompletionEvidence(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (
-    (record.finalStatus !== undefined && !['completed', 'failed', 'cancelled'].includes(String(record.finalStatus)))
+    (record.finalStatus !== undefined && !['completed', 'failed', 'cancelled', 'timed_out'].includes(String(record.finalStatus)))
     || (record.finalText !== undefined && (typeof record.finalText !== 'string' || record.finalText.length > MAX_GOAL))
     || (record.closeReason !== undefined && (typeof record.closeReason !== 'string' || record.closeReason.length > 1_000))
   ) return false;
