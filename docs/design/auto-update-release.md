@@ -19,8 +19,9 @@ GitHub main 打 tag vX.Y.Z（发布节奏由团队决定，防呆只允许 main 
 
 ## 发布步骤
 
-1. **GitHub**：把代码合并进 `main` → Releases → Draft a new release → tag 填 `vX.Y.Z`
-   （"Create new tag on publish"，target=main）→ Publish。
+1. **GitHub**：把 `package.json` 的 `version` 改成 `X.Y.Z`（必须与即将打的 tag 一致，
+   发布流水线最前面会硬校验，不一致直接拒绝构建）随代码合并进 `main` → Releases →
+   Draft a new release → tag 填 `vX.Y.Z`（"Create new tag on publish"，target=main）→ Publish。
 2. 等 Actions 跑完（约 10 分钟），Release 页应有两个资产：`CogSeed-X.Y.Z-mac-arm64.dmg` 与
    `CogSeed-X.Y.Z-mac-arm64.zip`。复制两者的下载直链（右键 → 复制链接地址）。
 3. **内网 GitLab**（hub 项目）：CI/CD → Run pipeline（main 分支）：
@@ -53,3 +54,7 @@ GitHub main 打 tag vX.Y.Z（发布节奏由团队决定，防呆只允许 main 
 - 首次把用户从 DMG 版本切到自动更新版本需要一次手动安装；之后的升级才全自动。
 - 自动更新包的签名必须与安装包同一开发者证书；换证书会触发"更新失败"。
 - feed 的 `pub_date` 取发布时刻；同版本重复发布（补 zip）不会重复提醒。
+- tag 必须与 `package.json` 的 `version` 完全一致（含预发布后缀，如 `v0.7.0-rc.1` 对应
+  `"version": "0.7.0-rc.1"`）；流水线在构建最前面校验，不一致直接失败。
+  历史版本（≤ v0.6.0）的源码版本号停留在 0.0.5、靠构建时改写，该做法已废弃，
+  历史标签不做回改；后续补 Release Manifest 固化映射（US-GO-17A）。
