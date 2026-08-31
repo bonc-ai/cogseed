@@ -17,6 +17,7 @@ import {
   compareExpected,
   inspectCliConfig,
   expandSearchDirs,
+  runVersionProbe,
   BIN_NAMES,
   ENV_KEYS,
 } from '../../scripts/diagnose-local-agents.mjs';
@@ -125,6 +126,18 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     fs.chmodSync(abs, 0o755);
     expect(await whichBin(abs, { env: { PATH: '' } })).toBe(abs);
     expect(await whichBin(path.join(tmp, 'missing'), { env: { PATH: '' } })).toBeNull();
+  });
+
+  it('probes an extensionless Windows shim through its .cmd sibling', async () => {
+    if (process.platform !== 'win32') return;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-win-shim-'));
+    const script = path.join(tmp, 'version-agent.cjs');
+    const shim = path.join(tmp, 'version-agent');
+    fs.writeFileSync(script, "process.stdout.write('version-agent 9.8.7\n');\n");
+    fs.writeFileSync(shim, '#!/bin/sh\n');
+    fs.writeFileSync(`${shim}.cmd`, '@echo off\r\necho version-agent 9.8.7\r\n');
+    await expect(runVersionProbe(shim, ['--version'], { platform: 'win32', env: process.env })).resolves.toBe('9.8.7');
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
 
@@ -236,10 +249,12 @@ describe('diagnose-local-agents: expected-config snapshot comparison', () => {
 
 describe('diagnose-local-agents: constant registry stays in sync with the app', () => {
   it('knows every CLI, its binary name, and its env override key', () => {
-    expect(Object.keys(BIN_NAMES)).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+    expect(Object.keys(BIN_NAMES)).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider']);
     expect(BIN_NAMES.claude).toBe('claude');
     expect(BIN_NAMES.workbuddy).toBe('codebuddy');
     expect(ENV_KEYS.claude).toBe('COGSEED_CLAUDE_PATH');
     expect(ENV_KEYS.workbuddy).toBe('COGSEED_WORKBUDDY_PATH');
+    expect(ENV_KEYS.gemini).toBe('COGSEED_GEMINI_PATH');
+    expect(ENV_KEYS.aider).toBe('COGSEED_AIDER_PATH');
   });
 });

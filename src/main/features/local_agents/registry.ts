@@ -17,7 +17,7 @@
  */
 
 import { createLogger } from '../../logger.js';
-import { findBinRecursively, whichBin } from './which.js';
+import { findBinRecursively, invalidateRecursiveCache, whichBin } from './which.js';
 import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver, MIN_VERSIONS } from './version.js';
 import * as fs from 'node:fs/promises';
@@ -405,7 +405,7 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   });
   const isBareName = !path.isAbsolute(candidate) && !candidate.includes('/') && !candidate.includes('\\');
   const resolved = resolvedByPath ?? (isBareName
-    ? await findBinRecursively(candidate, { env: process.env, home: os.homedir() })
+    ? await findBinRecursively(candidate, { env: process.env, home: os.homedir(), timeoutMs: 2_500 })
     : null);
   if (!resolved) {
     return {
@@ -464,4 +464,5 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
 export function invalidateCache(): void {
   cache = null;
   expandCache = null;
+  invalidateRecursiveCache();
 }
