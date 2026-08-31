@@ -11,10 +11,12 @@ const titleA = oldA[0].toUpperCase() + oldA.slice(1);
 const upperB = oldB.toUpperCase();
 const titleB = oldB[0].toUpperCase() + oldB.slice(1);
 const esc = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const patterns = [
+const oldProductPatterns = [
   new RegExp(`\\b${esc(upperA)}_[A-Z0-9_]+\\b`, 'g'),
   new RegExp(`\\b${esc(titleA)}\\b`, 'g'),
   new RegExp(`\\b${esc(oldA)}(?:[.:_/-]|\\b)`, 'g'),
+];
+const oldRuntimePatterns = [
   new RegExp(`\\b${esc(upperB)}_AGENT[A-Z0-9_]*\\b`, 'g'),
   new RegExp(`${esc(titleB)}Agent[A-Za-z0-9_]*`, 'g'),
   new RegExp(`${esc(oldB)}Agent[A-Za-z0-9_]*`, 'g'),
@@ -26,6 +28,20 @@ const patterns = [
   new RegExp(`${esc(oldB)}Runtime[A-Za-z0-9_]*`, 'g'),
   new RegExp(`\\b${esc(oldB)}-runtime(?:[.:_/-]|\\b)`, 'g'),
 ];
+const patterns = [...oldProductPatterns, ...oldRuntimePatterns];
+
+// These public files must retain upstream provenance to satisfy copyright and
+// license obligations. The exception applies only to the original product
+// family, never to old runtime identifiers or executable source.
+const provenanceFiles = new Set([
+  'NOTICE',
+  'README.md',
+  'README.zh-CN.md',
+  'THIRD_PARTY_NOTICES.md',
+  'p3394-gateway/NOTICE',
+  'publiccode.yml',
+]);
+const negativeAssertionFiles = new Set(['test/main/cogseed-residual-identifiers.test.ts']);
 
 const files = execFileSync('git', ['ls-files', '-z'], { cwd: root }).toString().split('\0').filter(Boolean);
 const findings = [];
@@ -40,7 +56,11 @@ for (const rel of files) {
   for (const [index, line] of bytes.toString('utf8').split(/\r?\n/).entries()) {
     for (const pattern of patterns) {
       pattern.lastIndex = 0;
-      if (pattern.test(line)) { findings.push(`${rel}:${index + 1}: ${line.trim().slice(0, 240)}`); break; }
+      if (!pattern.test(line)) continue;
+      if (provenanceFiles.has(rel) && oldProductPatterns.includes(pattern)) continue;
+      if (negativeAssertionFiles.has(rel) && /\.not\.toContain\s*\(/.test(line)) continue;
+      findings.push(`${rel}:${index + 1}: ${line.trim().slice(0, 240)}`);
+      break;
     }
   }
 }

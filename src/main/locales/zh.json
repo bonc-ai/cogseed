@@ -257,5 +257,6 @@
   "touchpoints.card.button.retry": "重试",
   "touchpoints.card.button.forget_source": "遗忘来源",
   "touchpoints.card.button.revoke_grant": "撤销授权",
-  "touchpoints.card.resolved": "已处理"
+  "touchpoints.card.resolved": "已处理",
+  "dashboard.retry_user_message": "（重试）"
 }

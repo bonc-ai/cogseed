@@ -50,7 +50,7 @@ jobs:
           git fetch origin cicd:refs/remotes/origin/cicd
 
           # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
-          # 即:tag 指向的提交是否已经包含在 main 分支的历史里
+          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
           if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
             echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
           else
@@ -138,6 +138,14 @@ jobs:
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           echo "将 package.json 的 version 设置为: $TAG_VERSION"
           npx json -I -f package.json -e "this.version = \"$TAG_VERSION\""
+
+      # 步骤 3.1: 写入发布渠道标记(关键!)
+      # 客户端用包内渠道决定 API 基址:release/packaged-dev → 生产官网,
+      # 其余 → http://localhost:3000(开发默认)。缺这步时,正式包会把
+      # 更新检查/市场等请求打到本机 3000 端口,自动更新与 v1 提醒全部失效。
+      # build.files 已包含 .build/build-info.json,写一次即可进包。
+      - name: Stamp release channel
+        run: node scripts/write-build-info.cjs --channel=release
 
       # ========================================
       # 阶段 4: 构建 + 签名

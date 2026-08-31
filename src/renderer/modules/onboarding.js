@@ -1521,9 +1521,6 @@ async function _csLoadClaudeSessions(agentType) {
     const res = await window.cogseed.invoke('localAgents.listClaudeSessions');
     const recentSessions = (res && res.sessions) || [];
 
-    console.log('[ONBOARDING] Claude sessions - total count:', recentSessions.length);
-    console.log('[ONBOARDING] Claude sessions - first 3:', recentSessions.slice(0, 3));
-
     if (!recentSessions.length) {
       container.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.import.no_history_path', '未找到 {label} 历史会话。如果你使用过 {label}，会话文件可能在 {path} 目录下。', { label: 'Claude Code', path: '~/.claude/projects/' }))}</div>`;
       _csUpdateAssetCount(agentType, 'sessions', 0);
@@ -1587,9 +1584,6 @@ async function _csLoadCodexSessions(agentType) {
   try {
     const res = await window.cogseed.invoke('sessionImport.listCodexSessions');
     const recentSessions = (res && res.sessions) || [];
-
-    console.log('[ONBOARDING] Codex sessions - total count:', recentSessions.length);
-    console.log('[ONBOARDING] Codex sessions - first 3:', recentSessions.slice(0, 3));
 
     if (!recentSessions.length) {
       container.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.import.no_history_path', '未找到 {label} 历史会话。如果你使用过 {label}，会话文件应在 {path} 目录下。', { label: 'Codex', path: '~/.codex/sessions/' }))}</div>`;
@@ -1668,8 +1662,6 @@ async function _csLoadOpencodeSessions(agentType) {
     }
 
     const sessions = res.sessions || [];
-    console.log('[ONBOARDING] OpenCode sessions - total count:', sessions.length);
-
     if (!sessions.length) {
       container.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.import.no_history', '未找到 {label} 历史会话。', { label: 'OpenCode' }))}</div>`;
       _csUpdateAssetCount(agentType, 'sessions', 0);
@@ -2072,27 +2064,19 @@ async function _csImportCodexSessions(agentType) {
 
 // ── Skills: scan ~/.claude/skills and import selected into the skill library ──
 async function _csLoadClaudeSkills(agentType) {
-  console.log('[CLAUDE SKILLS] _csLoadClaudeSkills called for agentType:', agentType);
   const container = _csFillAssetSection(agentType, 'skills', `<div class="cs-state loading">${_csEsc(_csT('onboarding.asset.scanning_skills', '正在扫描 {label} 技能…', { label: 'Claude Code' }))}</div>`);
   if (!container) {
-    console.log('[CLAUDE SKILLS] No container found, aborting');
     return;
   }
 
   try {
-    console.log('[CLAUDE SKILLS] Invoking sessionImport.listClaudeSkills...');
     const res = await window.cogseed.invoke('sessionImport.listClaudeSkills');
-    console.log('[CLAUDE SKILLS] IPC result:', res);
     const skills = (res && res.skills) || [];
-    console.log('[CLAUDE SKILLS] Parsed skills array:', skills.length, 'items');
 
     if (!skills.length) {
-      console.log('[CLAUDE SKILLS] No skills found, showing empty state');
       container.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.asset.no_skills_path', '未在本机找到 {label} 技能（{path} 为空或不存在）。', { label: 'Claude Code', path: '~/.claude/skills' }))}</div>`;
       return;
     }
-    console.log('[CLAUDE SKILLS] Rendering', skills.length, 'skills');
-
     const rows = skills.map((s, idx) => {
       const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
       const hidden = idx >= 3 ? ' style="display:none"' : '';
@@ -2150,12 +2134,10 @@ async function _csLoadClaudeSkills(agentType) {
     const badge = document.getElementById(`cs-count-${agentType}-skills`);
     if (badge) badge.textContent = `(${skills.length})`;
 
-    console.log('[CLAUDE SKILLS] Successfully rendered all skills');
     _obLog.info('loaded Claude skills', { count: skills.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    console.error('[CLAUDE SKILLS] Error loading skills:', err);
-    _obLog.warn('failed to load Claude skills', { error: msg });
+    _obLog.warn('failed to load Claude skills', { agent_type: agentType, error_name: err?.name || 'Error' });
     container.innerHTML = `<div class="cs-state err">${_csEsc(_csT('onboarding.common.scan_failed', '扫描失败：{reason}', { reason: msg }))}</div>`;
   }
 }
@@ -2211,27 +2193,19 @@ async function _csImportSelectedSkills(container) {
 
 // ── Codex Skills ────────────────────────────────────────────────────────────
 async function _csLoadCodexSkills(agentType) {
-  console.log('[CODEX SKILLS] _csLoadCodexSkills called for agentType:', agentType);
   const container = _csFillAssetSection(agentType, 'skills', `<div class="cs-state loading">${_csEsc(_csT('onboarding.asset.scanning_skills', '正在扫描 {label} 技能…', { label: 'Codex' }))}</div>`);
   if (!container) {
-    console.log('[CODEX SKILLS] No container found, aborting');
     return;
   }
 
   try {
-    console.log('[CODEX SKILLS] Invoking sessionImport.listCodexSkills...');
     const res = await window.cogseed.invoke('sessionImport.listCodexSkills');
-    console.log('[CODEX SKILLS] IPC result:', res);
     const skills = (res && res.skills) || [];
-    console.log('[CODEX SKILLS] Parsed skills array:', skills.length, 'items');
 
     if (!skills.length) {
-      console.log('[CODEX SKILLS] No skills found, showing empty state');
       container.innerHTML = `<div class="cs-state">${_csEsc(_csT('onboarding.asset.no_skills_path', '未在本机找到 {label} 技能（{path} 为空或不存在）。', { label: 'Codex', path: '~/.codex/skills/.system' }))}</div>`;
       return;
     }
-    console.log('[CODEX SKILLS] Rendering', skills.length, 'skills');
-
     const rows = skills.map((s, idx) => {
       const desc = s.description ? `<small>${_csEsc(s.description)}</small>` : '';
       const hidden = idx >= 3 ? ' style="display:none"' : '';
@@ -2289,12 +2263,10 @@ async function _csLoadCodexSkills(agentType) {
     const badge = document.getElementById(`cs-count-${agentType}-skills`);
     if (badge) badge.textContent = `(${skills.length})`;
 
-    console.log('[CODEX SKILLS] Successfully rendered all skills');
     _obLog.info('loaded Codex skills', { count: skills.length });
   } catch (err) {
     const msg = (err && err.message) || String(err);
-    console.error('[CODEX SKILLS] Error loading skills:', err);
-    _obLog.warn('failed to load Codex skills', { error: msg });
+    _obLog.warn('failed to load Codex skills', { agent_type: agentType, error_name: err?.name || 'Error' });
     container.innerHTML = `<div class="cs-state err">${_csEsc(_csT('onboarding.common.scan_failed', '扫描失败：{reason}', { reason: msg }))}</div>`;
   }
 }
