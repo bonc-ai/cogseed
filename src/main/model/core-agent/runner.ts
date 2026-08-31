@@ -194,6 +194,9 @@ export interface BuildRunnerParams {
    *  / process_file_full calls whose path targets the attachment dir of the
    *  current conv. */
   cid?: string;
+  /** 每会话访问权限模式（full / auto_approve / ask），由 group_chat 从会话
+   *  元数据解析后传入，透传给 local-tools / file-tools 的敏感操作门。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
   /** Stable id for the current visible actor/model turn. Used by delete_file
    *  confirmation UI so batching never crosses prior conversation turns. */
   turnId?: string;
@@ -683,6 +686,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
   const localTools = params.disableTools ? [] : createLocalTools({
     ...(uid ? { userId: uid } : {}),
     ...(params.cid ? { cid: params.cid } : {}),
+    ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
     ...(params.turnId ? { turnId: params.turnId } : {}),
     ...(agentId ? { agentId } : {}),
     ...(agentName ? { agentName } : {}),
@@ -709,6 +713,7 @@ export async function buildRunner(params: BuildRunnerParams): Promise<{
     ? createFileTools({
         userId: uid,
         ...(params.cid ? { cid: params.cid } : {}),
+        ...(params.permissionMode ? { permissionMode: params.permissionMode } : {}),
         ...(agentId ? { agentId } : {}),
         ...(agentName ? { agentName } : {}),
         ...(params.projectId ? { projectId: params.projectId } : {}),

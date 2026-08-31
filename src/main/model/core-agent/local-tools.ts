@@ -129,6 +129,9 @@ export interface LocalToolsOpts {
    *  (artifacts live under `chat_artifacts/<cid>/`); the tool errors out
    *  when it's missing. */
   cid?: string;
+  /** 每会话访问权限模式（full / auto_approve / ask）。`full` / `auto_approve`
+   *  直接放行敏感操作，`ask` / 未设置走弹窗。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
   /** Stable id for the current actor/model turn. Renderer uses this to group
    *  only delete confirmations produced by that same turn. */
   turnId?: string;
@@ -1244,6 +1247,7 @@ async function gateSensitiveLocalPathDetailed(
     operation,
     subject: abs,
     reasons,
+    ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     onWaiting: permissionWaitProgress(ctx, operation),
   });
   if (decision !== 'deny') return { error: null, approvedReasons: reasons };
@@ -2410,6 +2414,7 @@ function createBashTool(opts: LocalToolsOpts): AgentTool {
             agentName: opts.agentName ?? opts.agentId ?? '',
             command,
             reasons,
+            ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
             onWaiting: permissionWaitProgress(ctx, 'bash'),
           });
           if (decision === 'deny') {
@@ -2542,6 +2547,7 @@ async function gateInteractiveCliStart(
             agentName: opts.agentName ?? opts.agentId ?? '',
             command,
             reasons,
+            ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
             onWaiting: permissionWaitProgress(ctx, 'interactive_cli_start'),
           });
       if (decision === 'deny') {
