@@ -97,21 +97,37 @@ export async function autoForecastForRequirement(
   requirementId: string,
   options: AutoForecastOptions = {},
 ): Promise<{ ok: boolean; forecastId?: string; reason?: string }> {
+  const setStatus = async (status: import('./requirement-types').KstarForecastStatus, error?: string): Promise<void> => {
+    try {
+      const { readKstarRequirement, replaceKstarRequirement } = await import('./requirement-store');
+      const current = await readKstarRequirement(userId, requirementId);
+      if (!current) return;
+      await replaceKstarRequirement(userId, {
+        ...current,
+        forecastStatus: status,
+        ...(error ? { forecastError: String(error).replace(/\s+/g, ' ').slice(0, 2_000) } : { forecastError: undefined }),
+        updatedAt: new Date().toISOString(),
+      });
+    } catch { /* observability must not block execution */ }
+  };
   try {
     const { readKstarRequirement } = await import('./requirement-store');
     const requirement = await readKstarRequirement(userId, requirementId);
     if (!requirement || requirement.status !== 'open') {
       return { ok: false, reason: 'no open requirement' };
     }
-    if (requirement.forecastId) return { ok: true, forecastId: requirement.forecastId };
+    if (requirement.forecastId) { await setStatus('committed'); return { ok: true, forecastId: requirement.forecastId }; }
     if (!requirement.projectionId) {
+      await setStatus('skipped', 'projection not confirmed yet');
       return { ok: false, reason: 'projection not confirmed yet' };
     }
+    await setStatus('pending');
 
     let knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>;
     try {
       knowledge = await loadCommittedProjectionKnowledge(userId, requirement.projectionId);
     } catch {
+      await setStatus('failed', 'projection knowledge unavailable');
       return { ok: false, reason: 'projection knowledge unavailable' };
     }
 
@@ -165,6 +181,7 @@ export async function autoForecastForRequirement(
         requirementId,
         raw: String(generated || '').slice(0, 200),
       });
+      await setStatus('failed', 'no candidates generated');
       return { ok: false, reason: 'no candidates generated' };
     }
     // Bounded: keep at most 4 candidates (world-model contract).
@@ -174,6 +191,7 @@ export async function autoForecastForRequirement(
         userId,
         requirementId,
       });
+      await setStatus('failed', 'fewer than 2 candidates');
       return { ok: false, reason: 'fewer than 2 candidates' };
     }
 
@@ -192,6 +210,7 @@ export async function autoForecastForRequirement(
       forecastId: record.id,
       candidateCount: bounded.length,
     });
+    await setStatus('committed');
     return { ok: true, forecastId: record.id };
   } catch (error) {
     log.warn('kstar auto-forecast degraded', {
@@ -199,6 +218,7 @@ export async function autoForecastForRequirement(
       requirementId,
       error: (error as Error).message,
     });
+    await setStatus('failed', (error as Error).message);
     return { ok: false, reason: (error as Error).message };
   }
 }

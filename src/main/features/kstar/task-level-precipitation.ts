@@ -3,7 +3,7 @@ import { safeId } from '../../storage';
 import { lessonLanguageMismatches } from '../../util/language';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
-import { readKstarEpisode } from './episode-store';
+import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
 import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
@@ -78,6 +78,33 @@ export interface RequirementLevelPrecipitationResult {
   candidateIds: string[];
   mergedIntoIds: string[];
   updateCandidateIds: string[];
+  failureIds: string[];
+}
+
+async function updateExtractionRuns(
+  userId: string,
+  requirement: KstarRequirementRecord,
+  episodes: KstarEpisodeRecord[],
+  result: Pick<RequirementLevelPrecipitationResult, 'candidateIds' | 'createdAssetIds' | 'mergedIntoIds' | 'updateCandidateIds' | 'failureIds'>,
+): Promise<void> {
+  const completedAt = new Date().toISOString();
+  await Promise.all(episodes.map(async (episode) => {
+    const review = await readKstarReview(userId, episode.id);
+    const id = `ksx-${episode.id}`;
+    const existing = await readKstarJsonRecord(userId, 'extraction-runs', id);
+    const record = {
+      schemaVersion: 1 as const, ownerId: userId, id, episodeId: episode.id,
+      reviewId: review?.id || `ksr-${episode.id}`, candidateIds: result.candidateIds,
+      createdAssetIds: result.createdAssetIds, mergedIntoIds: result.mergedIntoIds,
+      updateCandidateIds: result.updateCandidateIds, failureIds: result.failureIds,
+      status: result.failureIds.length && !result.candidateIds.length ? 'failed' as const : result.candidateIds.length ? 'partial' as const : 'created' as const,
+      ...(result.failureIds.length ? { error: 'One or more precipitation operations failed.' } : {}),
+      createdAt: existing && typeof existing.createdAt === 'string' ? existing.createdAt : episode.createdAt,
+      updatedAt: completedAt, completedAt,
+    };
+    await replaceKstarJsonRecord(userId, 'extraction-runs', record);
+  }));
+  void requirement;
 }
 
 export function aggregateRequirementProposals(input: AggregateRequirementProposalsInput): KstarCandidateProposal[] {
@@ -231,7 +258,9 @@ export async function precipitateRequirementLevel(
     });
   }
   if (allProposals.length === 0) {
-    return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
+    const empty = { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
+    await updateExtractionRuns(userId, requirement, episodes, empty);
+    return empty;
   }
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
@@ -240,15 +269,19 @@ export async function precipitateRequirementLevel(
   let candidateIds: string[] = [];
   let mergedIntoIds: string[] = [];
   let updateCandidateIds: string[] = [];
+  let failureIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
+      conversationId: requirement.conversationId,
+      requirementId: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
     }, allProposals);
     createdAssetIds = direct.createdAssetIds;
     candidateIds = direct.candidateIds;
     mergedIntoIds = direct.mergedIntoIds;
     updateCandidateIds = direct.updateCandidateIds;
+    failureIds = direct.failureIds;
   } catch (error) {
     // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
@@ -257,7 +290,9 @@ export async function precipitateRequirementLevel(
       error: (error as Error).message,
     });
   }
-  return { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+  const result = { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds, failureIds };
+  await updateExtractionRuns(userId, requirement, episodes, result);
+  return result;
 }
 
 /** 读会话用户消息 → 确定性检测长期偏好 → 产 personal 候选。失败静默降级

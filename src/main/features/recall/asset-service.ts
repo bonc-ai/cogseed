@@ -154,6 +154,13 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const relationContract = readAbilityAssetRelationContract(value, value.id);
   const scopePolicy = normalizeAbilityAssetScopePolicy(value.scopePolicy);
   const causalRule = value.causalRule === undefined ? undefined : normalizeCausalRule(value.causalRule);
+  const validationCount = value.validationCount === undefined ? undefined : Number(value.validationCount);
+  const consecutiveFailures = value.consecutiveFailures === undefined ? undefined : Number(value.consecutiveFailures);
+  if ((validationCount !== undefined && (!Number.isInteger(validationCount) || validationCount < 0))
+    || (consecutiveFailures !== undefined && (!Number.isInteger(consecutiveFailures) || consecutiveFailures < 0))
+    || (value.lastValidatedAt !== undefined && (typeof value.lastValidatedAt !== 'string' || Number.isNaN(Date.parse(value.lastValidatedAt))))) {
+    throw new Error('malformed recall ability asset validation evidence');
+  }
   const recommendedAction = value.recommendedAction;
   if (recommendedAction !== undefined && recommendedAction !== 'pause' && recommendedAction !== 'rework') throw new Error('malformed recall ability asset recommendation');
   if (recommendedAction !== undefined && (typeof value.recommendationReason !== 'string' || !value.recommendationReason.trim() || typeof value.recommendationAt !== 'string')) throw new Error('malformed recall ability asset recommendation');
@@ -184,6 +191,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     ...relationContract,
     ...(scopePolicy ? { scopePolicy } : {}),
     ...(causalRule ? { causalRule } : {}),
+    ...(value.validationCount !== undefined ? { validationCount: value.validationCount } : {}),
+    ...(value.lastValidatedAt !== undefined ? { lastValidatedAt: value.lastValidatedAt } : {}),
+    ...(value.consecutiveFailures !== undefined ? { consecutiveFailures: value.consecutiveFailures } : {}),
   } as RecallAbilityAssetRecord;
 }
 
@@ -946,6 +956,56 @@ export async function setAbilityAssetMaturity(userId: string, assetId: string, m
   if (previous) {
     await appendAudit(userId, asset.id, 'maturity_advanced', {
       note: `${previous}->${asset.maturity}`,
+      actor: 'system',
+    });
+  }
+  return asset;
+}
+
+/** Record independent cross-task evidence for an asset. Loading an asset
+ * proves transfer; this record proves whether the transfer helped or hurt. */
+export async function recordAbilityAssetValidation(
+  userId: string,
+  assetId: string,
+  outcome: 'success' | 'failure',
+): Promise<RecallAbilityAssetRecord> {
+  if (!safeId(assetId)) throw new Error('invalid ability asset id');
+  let maturityAdvanced: { from: RecallAbilityAssetRecord['maturity']; to: RecallAbilityAssetRecord['maturity'] } | undefined;
+  let paused = false;
+  const updated = await updateRecallJsonRecord(userId, 'ability-assets', assetId, (raw) => {
+    if (!raw) throw new Error('recall ability asset not found');
+    const current = asAsset(raw);
+    if (current.status === 'purged' || current.status === 'deleted') return current;
+    const validationCount = (current.validationCount || 0) + (outcome === 'success' ? 1 : 0);
+    const consecutiveFailures = outcome === 'success' ? 0 : (current.consecutiveFailures || 0) + 1;
+    // Two independent positive outcomes establish repeatability for a seed.
+    // Transfer validation remains receipt-backed and cannot be fabricated by
+    // an outcome record alone.
+    const nextMaturity = outcome === 'success' && current.maturity === 'seed' && validationCount >= 2
+      ? 'bud'
+      : current.maturity;
+    if (nextMaturity !== current.maturity) maturityAdvanced = { from: current.maturity, to: nextMaturity };
+    if (consecutiveFailures >= 3 && current.status === 'active') paused = true;
+    return {
+      ...current,
+      validationCount,
+      ...(outcome === 'success' ? { lastValidatedAt: new Date().toISOString() } : {}),
+      consecutiveFailures,
+      ...(nextMaturity !== current.maturity ? { maturity: nextMaturity } : {}),
+      ...(paused ? { status: 'paused' as const } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  const asset = asAsset(updated);
+  if (maturityAdvanced) {
+    await appendAudit(userId, asset.id, 'maturity_advanced', {
+      note: `${maturityAdvanced.from}->${maturityAdvanced.to}:validation_count=${asset.validationCount}`,
+      actor: 'system',
+    });
+  }
+  if (paused) {
+    await appendAudit(userId, asset.id, 'paused', {
+      note: `three_consecutive_validation_failures:${asset.consecutiveFailures}`,
       actor: 'system',
     });
   }

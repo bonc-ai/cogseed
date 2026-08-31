@@ -51,6 +51,8 @@ import * as kstarProjectionDecision from '../features/kstar/projection-decision-
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
+import * as kstarTrace from '../features/kstar/trace';
+import * as kstarFailures from '../features/kstar/failure-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -2707,6 +2709,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
+  },
+  'kstar.trace.read': async ({ conversationId, taskId } = {}, ctx) => {
+    if (!safeId(conversationId) || (taskId !== undefined && !safeId(taskId))) throw new Error('invalid kstar trace input');
+    return { ok: true, trace: await kstarTrace.readKstarTrace(ctx.userId, { conversationId, ...(taskId ? { taskId } : {}) }) };
+  },
+  'kstar.failures.list': async ({ conversationId } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid kstar failure conversation id');
+    return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId ? { conversationId } : {}) };
   },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
   'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },

@@ -37,6 +37,7 @@ import type {
   KstarResultProposal,
   KstarTaskMutation,
 } from './control-types';
+import { recordKstarFailure } from './failure-service';
 
 const log = createLogger('kstar.control');
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,160}$/;
@@ -711,7 +712,7 @@ async function persistReceipt(
   state: KstarConversationTaskStateRecord,
   input: KstarControlInput,
   hash: string,
-  result: Exclude<KstarControlResult, { ok: false }>,
+  result: KstarControlResult,
 ): Promise<void> {
   const latest = await readConversationTaskState(context.userId, context.conversationId) || state;
   const receipt: KstarControlReceipt = {
@@ -720,11 +721,11 @@ async function persistReceipt(
     operation: input.operation,
     actor: 'commander',
     conversationId: context.conversationId,
-    ...(result.taskId ? { taskId: result.taskId } : {}),
-    ...(result.requirementId ? { requirementId: result.requirementId } : {}),
+    ...(result.ok && result.taskId ? { taskId: result.taskId } : {}),
+    ...(result.ok && result.requirementId ? { requirementId: result.requirementId } : {}),
     ...('projectionId' in result && result.projectionId ? { projectionId: result.projectionId } : {}),
     ...('forecastId' in result && result.forecastId ? { forecastId: result.forecastId } : {}),
-    status: 'ok',
+    status: result.ok ? 'ok' : 'failed',
     result,
     createdAt: nowIso(),
   };
@@ -762,11 +763,15 @@ export async function executeKstarControl(
   rawInput: unknown,
 ): Promise<KstarControlResult> {
   let operation: KstarControlOperation | 'invalid' = 'invalid';
+  let parsedInput: KstarControlInput | undefined;
+  let parsedHash = '';
   try {
     assertContext(context);
     const input = normalizeInput(rawInput);
     operation = input.operation;
     const hash = inputHash(input);
+    parsedInput = input;
+    parsedHash = hash;
     let state = await readConversationTaskState(context.userId, context.conversationId);
     if (!state) state = createInitialConversationTaskState(context.userId, context.conversationId);
     const existing = state.controlReceipts?.find((receipt) => receipt.idempotencyKey === input.idempotencyKey);
@@ -808,6 +813,13 @@ export async function executeKstarControl(
     return committed.result;
   } catch (error) {
     const result = mapError(error);
+    if (parsedInput && parsedHash && safeId(context?.userId) && safeId(context?.conversationId)) {
+      await persistReceipt(context, await readConversationTaskState(context.userId, context.conversationId) || createInitialConversationTaskState(context.userId, context.conversationId), parsedInput, parsedHash, result).catch(() => undefined);
+      await recordKstarFailure(context.userId, {
+        stage: 'control_receipt', errorCode: result.code,
+        errorMessage: result.message, operationKey: parsedInput.idempotencyKey, conversationId: context.conversationId,
+      }).catch(() => undefined);
+    }
     log.info('kstar.control', {
       operation,
       result: result.code === 'kstar_persistence_failed' ? 'failed' : 'rejected',
