@@ -191,6 +191,10 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
     && row.resultDeliveryState !== 'pending-recovery') {
     throw new Error('malformed CogSeed task');
   }
+  if (row.archivedAt !== undefined
+    && (typeof row.archivedAt !== 'string' || !Number.isFinite(Date.parse(row.archivedAt)))) {
+    throw new Error('malformed CogSeed task');
+  }
   for (const key of ['groupChatRunId', 'groupChatTurnId', 'groupChatSourceMessageId', 'groupChatMessageId', 'groupChatWorkflowRunId', 'groupChatWorkflowStepId'] as const) {
     if (row[key] !== undefined && (typeof row[key] !== 'string' || !safeId(row[key]))) {
       throw new Error('malformed CogSeed task');

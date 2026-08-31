@@ -179,6 +179,17 @@ function localEntry(entries: CogSeedHostCliEntry[], runtime: AgentRuntime | unde
     : undefined;
 }
 
+function runtimePeer(
+  peers: CogSeedHostPeer[],
+  agentId: string,
+  runtime: AgentRuntime | undefined,
+): CogSeedHostPeer | undefined {
+  return peers.find((item) => item.agent_id === agentId)
+    ?? (runtime?.kind === 'p3394-gateway'
+      ? peers.find((item) => item.agent_id === runtime.cli)
+      : undefined);
+}
+
 export async function buildCogSeedAgentRegistryProjection(
   userId: string,
   deps: CogSeedAgentRegistryProjectionDeps = {},
@@ -210,6 +221,7 @@ export async function buildCogSeedAgentRegistryProjection(
   }
 
   const projectedAgentIds = new Set<string>();
+  const boundPeerIds = new Set<string>();
   const agents: CogSeedRendererAgentSummary[] = definitions.map((definition) => {
     const agentId = safeIdentifier(definition.agent_id, 'unknown-agent');
     projectedAgentIds.add(agentId);
@@ -218,7 +230,8 @@ export async function buildCogSeedAgentRegistryProjection(
     const active = latestTask(relatedTasks.filter((task) => ACTIVE_STATUSES.has(task.status)));
     const last = latestTask(relatedTasks);
     const cli = localEntry(cliEntries, runtime);
-    const peer = peers.find((item) => item.agent_id === agentId);
+    const peer = runtimePeer(peers, agentId, runtime);
+    if (peer) boundPeerIds.add(peer.agent_id);
     const sourceKind: CogSeedRendererAgentSourceKind = runtime?.kind === 'p3394-gateway'
       ? 'p3394'
       : runtime?.kind === 'cli'
@@ -267,7 +280,8 @@ export async function buildCogSeedAgentRegistryProjection(
   for (const peer of peers) {
     // The local bridge registers CogSeed itself as a peer. It is infrastructure,
     // not an external executor that users can configure from the Run Center.
-    if (peer.node_kind === 'channel_bridge' || peer.agent_id === 'cogseed' || projectedAgentIds.has(peer.agent_id)) continue;
+    if (peer.node_kind === 'channel_bridge' || peer.agent_id === 'cogseed'
+      || projectedAgentIds.has(peer.agent_id) || boundPeerIds.has(peer.agent_id)) continue;
     const agentId = safeIdentifier(peer.agent_id, 'unknown-peer');
     const relatedTasks = tasksByAgent.get(agentId) ?? [];
     const active = latestTask(relatedTasks.filter((task) => ACTIVE_STATUSES.has(task.status)));
