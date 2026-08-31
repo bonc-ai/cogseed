@@ -656,6 +656,7 @@ export interface PackageUiRow {
   repo_url?: string;
   commit?: string;
   skill_count: number;
+  skills?: string[];
   bin_names: string[];
   updated_at?: string;
   manifest?: PackageManifestUi;
@@ -674,6 +675,7 @@ export function listPackagesForUi(uid: string): PackageUiRow[] {
       ...(p.repo_url ? { repo_url: p.repo_url } : {}),
       ...(p.commit ? { commit: p.commit.slice(0, 12) } : {}),
       skill_count: countPackageSkills(uid, p),
+      skills: listPackageSkills(uid, p),
       bin_names: p.bin_entries.map((b) => b.name),
       ...(p.updated_at ? { updated_at: p.updated_at } : {}),
       ...(manifest ? { manifest } : {}),

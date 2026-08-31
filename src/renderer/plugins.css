@@ -287,3 +287,16 @@
   color: var(--text-primary, #1f2937);
   font-weight: 600;
 }
+
+/* 新版本红点 */
+.plugins-version-dot {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-danger, #dc2626);
+  border-radius: 999px;
+  padding: 1px 7px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: default;
+}

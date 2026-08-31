@@ -110,6 +110,17 @@
     } catch (_) { return ''; }
   }
 
+  // 简单语义化版本比较：a > b → 1；相等 → 0；a < b → -1。
+  function _cmpVersion(a, b) {
+    const pa = String(a || '').replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+    const pb = String(b || '').replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0);
+      if (d !== 0) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+
   // ── 授权状态（license-check，经 packages.ui.invoke） ──────────────────────
   // 按角色从插件自带技能里挑（不硬编码具体技能名，通用插件也能用）：
   // 优先选名字含 student/teacher 的技能，否则退化为第一个技能。
@@ -142,8 +153,11 @@
       .then((res) => {
         if (!(res && res.ok && res.info)) throw new Error((res && res.error) || 'no info');
         const info = res.info;
+        const newer = info.latest_version && info.version && _cmpVersion(info.latest_version, info.version) > 0
+          ? info.latest_version
+          : null;
         if (!(info.config && info.config.configured)) {
-          _licenseCache.set(pkg.name, { state: 'unconfigured' });
+          _licenseCache.set(pkg.name, { state: 'unconfigured', latest: newer });
           _renderIfList();
           return;
         }
@@ -154,9 +168,9 @@
         }).then((r) => {
           if (r && r.ok) {
             const licensed = !!(r.result && r.result.licensed);
-            _licenseCache.set(pkg.name, { state: licensed ? 'licensed' : 'unlicensed' });
+            _licenseCache.set(pkg.name, { state: licensed ? 'licensed' : 'unlicensed', latest: newer });
           } else {
-            _licenseCache.set(pkg.name, { state: 'error', error: (r && r.error) || 'check failed' });
+            _licenseCache.set(pkg.name, { state: 'error', error: (r && r.error) || 'check failed', latest: newer });
           }
           _renderIfList();
         });
@@ -165,6 +179,13 @@
         _licenseCache.set(pkg.name, { state: 'error', error: (err && err.message) || String(err) });
         _renderIfList();
       });
+  }
+
+  function _versionChip(name, currentVersion) {
+    const entry = _licenseCache.get(name);
+    const latest = entry && entry.latest;
+    if (!latest || !currentVersion || _cmpVersion(latest, currentVersion) <= 0) return '';
+    return `<span class="plugins-version-dot" title="${_esc(_t('plugins.new_version', '新版本 v{ver}', { ver: latest }))}">${_esc(_t('plugins.new_version_short', 'v{ver}', { ver: latest }))}</span>`;
   }
 
   function _renderIfList() {
@@ -262,6 +283,7 @@
             <span class="plugins-card-name">${_esc(name)}</span>
             ${enabledBadge}
             ${pkg.has_ui ? _licenseChip(pkg.name) : ''}
+            ${_versionChip(pkg.name, pkg.manifest && pkg.manifest.version)}
           </div>
           ${desc ? `<p class="plugins-card-desc">${_esc(desc)}</p>` : ''}
           <div class="plugins-card-meta">
@@ -372,13 +394,27 @@
     _detailInfo = null;
     _view = 'detail';
     _render();
-    _invoke('packages.ui.info', { name })
-      .then((res) => {
-        if (_view !== 'detail' || _detailName !== name) return;
-        _detailInfo = (res && res.ok && res.info) ? res.info : null;
-        _render();
-      })
-      .catch(() => { if (_view === 'detail' && _detailName === name) _render(); });
+    const fetchInfo = (attempt) => {
+      _invoke('packages.ui.info', { name })
+        .then((res) => {
+          if (_view !== 'detail' || _detailName !== name) return;
+          _detailInfo = (res && res.ok && res.info) ? res.info : null;
+          // 主进程偶发抽风（如插件刚更新完）→ 800ms 后重试一次，界面自愈
+          if (!_detailInfo && attempt === 0) {
+            setTimeout(() => { if (_view === 'detail' && _detailName === name) fetchInfo(1); }, 800);
+            return;
+          }
+          _render();
+        })
+        .catch(() => {
+          if (attempt === 0) {
+            setTimeout(() => { if (_view === 'detail' && _detailName === name) fetchInfo(1); }, 800);
+            return;
+          }
+          if (_view === 'detail' && _detailName === name) _render();
+        });
+    };
+    fetchInfo(0);
   }
 
   function _renderDetail(root) {
@@ -398,11 +434,16 @@
     addRow(_t('plugins.detail_repo', '来源'), pkg.repo_url);
     addRow(_t('plugins.detail_commit', '提交'), pkg.commit);
     addRow(_t('plugins.detail_updated', '更新时间'), _fmtDate(pkg.updated_at));
+    if (info && info.latest_version && pkg.manifest && pkg.manifest.version && _cmpVersion(info.latest_version, pkg.manifest.version) > 0) {
+      addRow(_t('plugins.detail_new_version', '新版本'), info.latest_version + '（当前 v' + pkg.manifest.version + '）');
+    }
     const roles = info && Array.isArray(info.roles) ? info.roles.join(' / ') : '';
     addRow(_t('plugins.detail_roles', '面向角色'), roles);
     const license = info && info.license ? [info.license.model, info.license.unit].filter(Boolean).join(' · ') : '';
     addRow(_t('plugins.detail_license', '授权'), license);
-    const skills = (info && Array.isArray(info.skills) && info.skills.length) ? info.skills : [];
+    // 技能列表双保险：info 优先，失败/为空回退列表行携带的技能名。
+    const infoSkills = (info && Array.isArray(info.skills)) ? info.skills : [];
+    const skills = infoSkills.length ? infoSkills : ((pkg && Array.isArray(pkg.skills)) ? pkg.skills : []);
     const commands = (info && info.ui && Array.isArray(info.ui.commands) && info.ui.commands.length) ? info.ui.commands : [];
 
     const configSection = info ? _configSectionHtml(info) : '';
@@ -489,7 +530,7 @@
         </div>`
       : '';
     const fields = [
-      serverField,
+      serverLine,
       uiField({
         id: 'plugins-config-key',
         label: _t('plugins.config_key', 'API Key'),

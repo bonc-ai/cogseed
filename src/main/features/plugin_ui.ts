@@ -469,6 +469,8 @@ export interface PluginUiInfoResult {
   kind: string;
   enabled: boolean;
   version?: string;
+  latest_version?: string;
+  min_version?: string;
   roles?: string[];
   license?: { model?: string; unit?: string };
   skill_count: number;
@@ -485,20 +487,56 @@ export interface PluginUiInfoResult {
   };
 }
 
-/** get-info: package facts + manifest summary + masked config status. */
-export function pluginUiInfo(uid: string, name: string): { ok: boolean; info?: PluginUiInfoResult; error?: string } {
+/** get-info: package facts + manifest summary + masked config status.
+ *  附带平台版本公告的最新版本（凭已存 key 查询，5 分钟缓存；失败静默省略）。 */
+const _versionAnnounceCache = new Map<string, { ts: number; latest?: string; min?: string }>();
+const VERSION_ANNOUNCE_TTL_MS = 5 * 60 * 1000;
+
+async function fetchVersionAnnouncement(serverUrl: string, apiKey: string): Promise<{ latest?: string; min?: string }> {
+  const base = validatePlatformServerUrl(serverUrl);
+  if (!base) return {};
+  const cacheKey = `${base}`;
+  const cached = _versionAnnounceCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < VERSION_ANNOUNCE_TTL_MS) return cached;
+  const out: { latest?: string; min?: string } = {};
+  try {
+    const res = await fetch(`${base}/api/plugin/version`, {
+      headers: { 'x-api-key': apiKey, accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as {
+        latest_version?: unknown; min_version?: unknown;
+      } | null;
+      const norm = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().replace(/^v/, '') : '');
+      out.latest = norm(data?.latest_version) || undefined;
+      out.min = norm(data?.min_version) || undefined;
+      if (out.latest) _versionAnnounceCache.set(cacheKey, { ts: Date.now(), ...out });
+    }
+  } catch {
+    /* 离线/平台不可达：静默省略版本信息，不打断界面 */
+  }
+  return out;
+}
+
+export async function pluginUiInfo(uid: string, name: string): Promise<{ ok: boolean; info?: PluginUiInfoResult; error?: string }> {
   if (!isSafePackageName(name)) return { ok: false, error: 'invalid package name' };
   const pkg = readPackagesRegistry(uid).packages.find((p) => p.name === name);
   if (!pkg) return { ok: false, error: 'package not installed' };
   const manifest = readPackageManifest(uid, name);
   const config = readPluginRuntimeConfig(uid, name);
   const uiInfo = resolvePluginUiInfo(uid, name);
+  const announce = (config.api_key && config.server_url)
+    ? await fetchVersionAnnouncement(config.server_url, config.api_key)
+    : {};
   const info: PluginUiInfoResult = {
     name: pkg.name,
     ...(manifest?.name?.zh || manifest?.name?.en ? { display_name: manifest.name.zh || manifest.name.en } : {}),
     kind: pkg.kind,
     enabled: pkg.enabled !== false,
     ...(manifest?.version ? { version: manifest.version } : {}),
+    ...(announce.latest ? { latest_version: announce.latest } : {}),
+    ...(announce.min ? { min_version: announce.min } : {}),
     ...(manifest?.audience_roles?.length ? { roles: manifest.audience_roles } : {}),
     ...(manifest?.license ? { license: manifest.license } : {}),
     skill_count: listPackageSkills(uid, pkg).length,
@@ -641,7 +679,7 @@ export async function dispatchPluginUiInvoke(
 ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
   switch (method) {
     case 'get-info': {
-      const info = pluginUiInfo(uid, name);
+      const info = await pluginUiInfo(uid, name);
       return info.ok ? { ok: true, result: info.info } : info;
     }
     case 'runtime':

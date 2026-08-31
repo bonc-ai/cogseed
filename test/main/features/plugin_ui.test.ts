@@ -143,13 +143,20 @@ describe('plugin_ui › runtime config store', () => {
     expect(stored.api_key).toBe('secret-key');
     expect(stored.role).toBe('teacher');
 
-    const info = pluginUiInfo(TEST_UID, 'withui');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(
+      JSON.stringify({ ok: true, latest_version: 'v0.9.0', min_version: '0.8.0' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    let info;
+    try { info = await pluginUiInfo(TEST_UID, 'withui'); } finally { vi.unstubAllGlobals(); }
     expect(info.ok).toBe(true);
     expect(info.info!.config.configured).toBe(true);
     expect(info.info!.config.role).toBe('teacher');
     expect(JSON.stringify(info.info)).not.toContain('secret-key');
     expect(info.info!.ui!.commands).toEqual(['health', 'list-challenges']);
     expect(info.info!.skills).toEqual([]);
+    expect(info.info!.latest_version).toBe('0.9.0');
+    expect(info.info!.min_version).toBe('0.8.0');
   });
 
   it('keeps the api key on save when the input omits it', async () => {

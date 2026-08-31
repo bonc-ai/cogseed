@@ -4899,7 +4899,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'packages.ui.info': async (payload: { name?: unknown }, ctx: { userId: string }) => {
     if (typeof payload?.name !== 'string') throw new Error('invalid name');
     const ui = await import('../features/plugin_ui');
-    const info = ui.pluginUiInfo(ctx.userId, payload.name);
+    const info = await ui.pluginUiInfo(ctx.userId, payload.name);
+    const { createLogger } = await import('../logger');
+    createLogger('plugin-ui-info').info('packages.ui.info served', {
+      package_name: payload.name,
+      ok: info.ok,
+      skill_count: info.info?.skills?.length ?? -1,
+      error: (info as { error?: string }).error ?? undefined,
+    });
     return info.ok ? { ok: true as const, info: info.info } : info;
   },
   'packages.ui.invoke': async (payload: { name?: unknown; method?: unknown; params?: unknown }, ctx: { userId: string }) => {
