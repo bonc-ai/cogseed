@@ -140,7 +140,7 @@ function _csFmtDur(ms) {
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
 
-// ── 活动流骨架（每回合一个，无外框；运行态首行为「工作中 计时」） ──────────
+// ── 活动流骨架（每回合一个，无外框；计时/收起徽章挂消息头） ────────────────
 
 function _csStopTicker(flow) {
   if (flow && flow._csTicker) {
@@ -150,15 +150,70 @@ function _csStopTicker(flow) {
 }
 
 function _csStartTicker(flow, startedAtMs) {
-  const label = flow.querySelector('.cs-status-elapsed');
+  // 徽章挂在消息头（flow 子树之外），必须从引用里找，不能 querySelector。
+  const badge = flow._csBadge;
+  const label = badge && badge.querySelector('.cs-badge-elapsed');
   if (!label) return;
   const t0 = Number(startedAtMs) || Date.now();
-  // 立即先画一次（此刻 flow 尚未插入 DOM，isConnected 检查只放在轮询里）。
+  flow.dataset.csT0 = String(t0);
+  // 立即先画一次（此刻 badge 尚未插入 DOM，isConnected 检查只放在轮询里）。
   label.textContent = _csFmtDur(Date.now() - t0);
   flow._csTicker = setInterval(() => {
     if (!flow.isConnected) { _csStopTicker(flow); return; }
     label.textContent = _csFmtDur(Date.now() - t0);
   }, 1000);
+}
+
+/** 收起/展开时间线正文（徽章点击唯一入口；aria 同步）。 */
+function _csSetCollapsed(flow, collapsed) {
+  const body = flow.querySelector('.cs-flow-body');
+  if (!body) return;
+  body.style.display = collapsed ? 'none' : '';
+  flow.dataset.csCollapsed = collapsed ? '1' : '0';
+  const badge = flow._csBadge;
+  if (badge) {
+    badge.dataset.csCollapsed = collapsed ? '1' : '0';
+    badge.setAttribute('aria-expanded', String(!collapsed));
+    badge.setAttribute('aria-label', collapsed ? '展开过程' : '收起过程');
+  }
+}
+
+/** 计时/收起徽章：消息头里 cogseed 名字右侧，点击收起下方工具调用区。
+ *  运行中 label=工作中（实时计时），终态定格 label=已工作；历史无计时
+ *  数据只显示「已工作」（不编造时长）。 */
+function _csCreateBadge(flow, opts) {
+  const badge = document.createElement('button');
+  badge.type = 'button';
+  badge.className = 'cs-badge';
+  badge.dataset.csCollapsed = '0';
+  badge.setAttribute('aria-expanded', 'true');
+  const label = document.createElement('span');
+  label.className = 'cs-badge-label';
+  label.textContent = (opts && opts.terminalLabel) ? '已工作' : '工作中';
+  badge.appendChild(label);
+  if (!(opts && opts.noElapsed)) {
+    const elapsed = document.createElement('span');
+    elapsed.className = 'cs-badge-elapsed';
+    badge.appendChild(elapsed);
+  }
+  badge.addEventListener('click', () => {
+    _csSetCollapsed(flow, flow.dataset.csCollapsed !== '1');
+  });
+  flow._csBadge = badge;
+  return badge;
+}
+
+/** 徽章+停止的宿主：优先消息头（cogseed 名字右侧），找不到退回流内首行。 */
+function _csBadgeHost(flow, anchor) {
+  const header = anchor && anchor.querySelector ? anchor.querySelector('.chat-msg-header') : null;
+  if (header) return header;
+  let row = flow.querySelector('.cs-badge-row');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'cs-badge-row';
+    flow.insertBefore(row, flow.firstChild);
+  }
+  return row;
 }
 
 function _csCreateFlow(cid, turnId, opts) {
@@ -167,19 +222,19 @@ function _csCreateFlow(cid, turnId, opts) {
   flow.dataset.csTurn = turnId;
   if (cid) flow.dataset.csCid = cid;
 
-  // 运行态首行：「工作中 N 分 N 秒」+ 就近停止。完成后整行移除（视觉对齐
-  // CLI：结束后时间线自己说明一切）。历史重建不建这行。
+  const body = document.createElement('div');
+  body.className = 'cs-flow-body';
+  flow.appendChild(body);
+
+  const host = _csBadgeHost(flow, opts && opts.anchor);
   if (!(opts && opts.noStatus)) {
-    const status = document.createElement('div');
-    status.className = 'cs-status';
-    const label = document.createElement('span');
-    label.className = 'cs-status-label';
-    label.textContent = '工作中';
-    const elapsed = document.createElement('span');
-    elapsed.className = 'cs-status-elapsed';
+    host.appendChild(_csCreateBadge(flow, opts));
+    // 就近停止（矩阵 #6）：仅运行中显示，复用主输入区停止按钮的完整
+    // abort 链；主按钮不在 streaming 态（派单后台轮次）时由流自身标记，
+    // 由 conversation 的 cancel 管线收尾。
     const stop = document.createElement('button');
     stop.type = 'button';
-    stop.className = 'cs-status-stop';
+    stop.className = 'cs-badge-stop';
     stop.textContent = '停止';
     stop.title = '中止本轮执行';
     stop.addEventListener('click', () => {
@@ -188,21 +243,25 @@ function _csCreateFlow(cid, turnId, opts) {
         mainStop.click();
         return;
       }
-      // 主按钮不在 streaming 态（如派单后台轮次）——流自身标记，由
-      // conversation 的 cancel 管线收尾。
       _csSetFlowState(flow, 'cancelled');
     });
-    status.appendChild(label);
-    status.appendChild(elapsed);
-    status.appendChild(stop);
-    flow.appendChild(status);
+    host.appendChild(stop);
+    flow._csStopBtn = stop;
     _csStartTicker(flow, opts && opts.startedAtMs);
+  } else {
+    // 历史/完成态：徽章只做收起开关（无计时数据不编造时长）。
+    host.appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
   }
-
-  const body = document.createElement('div');
-  body.className = 'cs-flow-body';
-  flow.appendChild(body);
   return flow;
+}
+
+/** 流移除唯一入口：连同挂在消息头上的徽章/停止一起清掉。 */
+function _csRemoveFlow(flow) {
+  if (!flow) return;
+  if (flow._csBadge) flow._csBadge.remove();
+  if (flow._csStopBtn) flow._csStopBtn.remove();
+  _csStopTicker(flow);
+  flow.remove();
 }
 
 function _csBubbleLooksEmpty(bubble) {
@@ -216,7 +275,7 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
   const key = _csPanelKey(cid, turnId);
   let flow = _csPanels.get(key);
   if (flow && flow.isConnected) return { flow, body: flow.querySelector('.cs-flow-body') };
-  flow = _csCreateFlow(cid, turnId, opts);
+  flow = _csCreateFlow(cid, turnId, { ...opts, anchor });
   // 活动流挂在消息元素内部：消息头（cogseed 图标/名字）之后、正文容器
   // 之前——过程是消息的组成部分（图标下、正文上），执行中与完成态
   // 同位，收尾无需再移动。流式占位与历史渲染的消息结构都取
@@ -237,40 +296,45 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
     const firstKey = _csPanels.keys().next().value;
     const oldest = _csPanels.get(firstKey);
     if (oldest && !oldest.classList.contains('running')) {
-      _csStopTicker(oldest);
-      oldest.remove();
+      _csRemoveFlow(oldest);
       _csPanels.delete(firstKey);
     }
   }
   return { flow, body: flow.querySelector('.cs-flow-body') };
 }
 
-/** 回合终态：运行行退场（失败/取消转为结论行），计时器停止。 */
-function _csSetFlowState(flow, status, error) {
+/** 回合终态：徽章定格为「已工作 总时长」（历史无数据只显示已工作），
+ *  停止按钮撤除，计时器停止；收起开关保留（点击可开合时间线）。 */
+function _csSetFlowState(flow, status, error, endedAtMs) {
   flow.classList.remove('running', 'done', 'failed', 'cancelled');
   flow.classList.add(status === 'completed' ? 'done' : status);
   _csStopTicker(flow);
-  const statusRow = flow.querySelector('.cs-status');
-  if (status === 'completed') {
-    // 完成即撤运行行；纯文字回合（无任何动作行）连流壳一起撤，不留空壳。
-    if (statusRow) statusRow.remove();
-    const body = flow.querySelector('.cs-flow-body');
-    if (!body || !body.children.length) {
-      flow.remove();
-      for (const [key, mapped] of Array.from(_csPanels.entries())) {
-        if (mapped === flow) _csPanels.delete(key);
-      }
-    }
-    return;
+  if (flow._csStopBtn) {
+    flow._csStopBtn.remove();
+    flow._csStopBtn = null;
   }
-  if (statusRow) {
-    const stop = statusRow.querySelector('.cs-status-stop');
-    if (stop) stop.remove();
-    const label = statusRow.querySelector('.cs-status-label');
+  const badge = flow._csBadge;
+  if (badge) {
+    const label = badge.querySelector('.cs-badge-label');
     if (label) {
       label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
-        : status === 'cancelled' ? '已取消' : '工作中';
+        : status === 'cancelled' ? '已取消' : '已工作';
     }
+    const elapsed = badge.querySelector('.cs-badge-elapsed');
+    if (elapsed) {
+      const t0 = Number(flow.dataset.csT0);
+      const end = Number(endedAtMs) || Date.now();
+      elapsed.textContent = t0 ? _csFmtDur(Math.max(0, end - t0)) : '';
+    }
+  }
+  if (status !== 'completed') return;
+  // 完成即收尾；纯文字回合（无任何动作行）连流壳+徽章一起撤，不留空壳。
+  const body = flow.querySelector('.cs-flow-body');
+  if (!body || !body.children.length) {
+    for (const [key, mapped] of Array.from(_csPanels.entries())) {
+      if (mapped === flow) _csPanels.delete(key);
+    }
+    _csRemoveFlow(flow);
   }
 }
 
@@ -648,7 +712,8 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       if (flow) {
         _csCloseThinkRow(flow.querySelector('.cs-flow-body') || flow);
         _csFinalizePanelText(flow);
-        _csSetFlowState(flow, chatEvent.status, chatEvent.error);
+        _csSetFlowState(flow, chatEvent.status, chatEvent.error,
+          chatEvent.endedAt ? Date.parse(chatEvent.endedAt) : undefined);
       }
       return;
     }
@@ -810,12 +875,9 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
     const turnKey = _csPanelKey(cid, (opts && opts.turnId) || (msgDiv.dataset && msgDiv.dataset.msgId) || `hist-${Date.now()}`);
     // 同一消息重复重建（刷新/回滚重放）幂等：先移除旧流。
     const existing = _csPanels.get(turnKey);
-    if (existing) {
-      _csStopTicker(existing);
-      existing.remove();
-    }
+    if (existing) _csRemoveFlow(existing);
 
-    const flow = _csCreateFlow(cid, turnKey, { noStatus: true });
+    const flow = _csCreateFlow(cid, turnKey, { noStatus: true, anchor: msgDiv });
     const body = flow.querySelector('.cs-flow-body');
     for (const item of items) {
       const evt = item && (item.event || null);
@@ -849,7 +911,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       if (!text) continue;
       _csAppendReasoning(body, text);
     }
-    if (!body.children.length) { flow.remove(); return false; }
+    if (!body.children.length) { _csRemoveFlow(flow); return false; }
     // 历史无计时数据：思考行只定稿，不显示时长（不编造）。
     _csCloseThinkRow(body, true);
     _csSetFlowState(flow, 'completed');
@@ -868,10 +930,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
 
 /** 视图切换/历史重建时丢弃全部流（conversation.js 重建消息列表后调用）。 */
 window.chatStreamReset = function chatStreamReset() {
-  for (const flow of _csPanels.values()) {
-    _csStopTicker(flow);
-    flow.remove();
-  }
+  for (const flow of _csPanels.values()) _csRemoveFlow(flow);
   _csPanels.clear();
 };
 
