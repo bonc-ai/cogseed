@@ -109,7 +109,7 @@ describe('review-decision › 抑制语义（FR-EXT-07）', () => {
 });
 
 /**
- * G-4 「已处理历史」读口。
+ * 「已处理历史」读口。
  *
  * 存储是一个 targetRef 一个 jsonl，既有的 `listReviewDecisions` 只能按 targetRef
  * 单读，回答不了"我一共处理过什么"。这组用例钉的是**跨候选合并**这件事本身，

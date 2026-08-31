@@ -121,7 +121,7 @@ describe('P3394 node -> AI team projection', () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(testUid);
     const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
-    const lan = await mod.projectP3394NodeToTeam({ nodeId: 'lan-agent', endpoints: ['http://192.168.1.5:9000'] });
+    const lan = await mod.projectP3394NodeToTeam({ nodeId: 'lan-agent', endpoints: ['http://192.0.2.5:9000'] });
     expect(lan.projected).toBe(false);
     expect(lan.reason).toBe('skip_non_local');
 
