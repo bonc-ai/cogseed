@@ -86,7 +86,7 @@ export const p3394ExternalHandlers = {
   'p3394.remote.list': async () => listRemoteNodes(),
   'p3394.remote.add': async (args: { label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     addRemoteNode(args ?? {}),
-  // G-15 编辑：label/身份/endpoint/token 任意子集；未传 token 保留原值；
+  // 编辑远端节点：label/身份/endpoint/token 任意子集；未传 token 保留原值；
   // endpoint 变更做去重校验。
   'p3394.remote.update': async (args: { id?: unknown; label?: unknown; endpoint?: unknown; token?: unknown; expected_identity?: unknown }) =>
     updateRemoteNode(args?.id, args ?? {}),

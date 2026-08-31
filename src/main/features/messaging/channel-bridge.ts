@@ -131,7 +131,7 @@ export async function deliverToChannelBridge(
   return { ok: true, receipt };
 }
 
-// ── 系统触达统一信封入口（G-13：触达与对话同路）───────────────────────
+// ── 系统触达统一信封入口（触达与对话同路）───────────────────────
 // touchpoints / 个人简报 / sendToSelf 等系统侧主动通知，不再直调
 // sendProactive，而是构造 P3394 信封经 deliverToChannelBridge 投递——
 // 与智能体触达同一条路（护栏 + 回执 + 台账运单号）。sendProactive 退为

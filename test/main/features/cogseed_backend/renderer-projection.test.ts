@@ -9,7 +9,7 @@ const session = {
   ownerId: 'renderer-user',
   createdAt: '2026-08-05T00:00:00.000Z',
   updatedAt: '2026-08-05T00:01:00.000Z',
-  displayName: 'Private session alice@example.internal 10.1.12.6',
+  displayName: 'Private session alice@example.internal 192.0.2.6',
 };
 
 const parentTask = {

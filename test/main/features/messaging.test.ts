@@ -142,7 +142,7 @@ describe('messaging registry and ledgers', () => {
     });
   });
 
-  it('channel-bridge allowlist: array kept, null clears, invalid rejected (G-14)', async () => {
+  it('channel-bridge allowlist: array kept, null clears, invalid rejected', async () => {
     const { _registryTestHooks } = await import('../../../src/main/features/messaging/registry');
     const np = _registryTestHooks.normalizePolicy;
     // 数组：去空白去重后保留

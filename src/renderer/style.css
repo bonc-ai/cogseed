@@ -15983,7 +15983,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .messaging-link-button:hover:not(:disabled) { filter: brightness(1.04); }
 .messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
 
-/* 渠道即节点（G-14）：智能体触达白名单卡片 */
+/* 渠道即节点：智能体触达白名单卡片 */
 .messaging-allowlist-toggle.is-on { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--primary-text); }
 .messaging-allowlist-input {
   width: 100%;

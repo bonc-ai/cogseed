@@ -56,7 +56,7 @@ export type ProactiveSendResult =
       instance_id: string;
       owner_label?: string;
       text_length: number;
-      /** G-13 后经 channel-bridge 透传，链路异常时可能缺失（可选）。 */
+      /** 经 channel-bridge 透传，链路异常时可能缺失（可选）。 */
       attempts?: number;
       delivery_id?: string;
     }
