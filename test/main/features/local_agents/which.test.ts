@@ -97,6 +97,17 @@ describe('local_agents/which › whichBin', () => {
       expect((await whichBin('tool'))?.toLowerCase()).toBe(bare.toLowerCase());
     });
 
+    it('skips a bare npm bash shim and falls through to the .cmd shim', async () => {
+      const bare = path.join(tmpDir, 'claude');
+      const cmd = path.join(tmpDir, 'claude.CMD');
+      fs.writeFileSync(bare, '#!/bin/sh\necho hi\n');
+      fs.writeFileSync(cmd, '@echo off\r\n');
+      process.env.PATH = tmpDir;
+      process.env.PATHEXT = '.CMD';
+
+      expect((await whichBin('claude'))?.toLowerCase()).toBe(cmd.toLowerCase());
+    });
+
     it('accepts forward-slash explicit paths on Windows', async () => {
       const binPath = path.join(tmpDir, 'forward.cmd');
       fs.writeFileSync(binPath, '@echo hi\r\n');
