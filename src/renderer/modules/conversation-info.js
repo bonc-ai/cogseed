@@ -377,8 +377,8 @@ const ConversationInfo = (() => {
   function _renderCogSeedActions(task, actions) {
     if (!task) return '';
     const buttons = [];
-    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="retry" data-cogseed-task-id="${escapeHtml(task.taskId)}" data-cogseed-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
-    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="resume" data-cogseed-task-id="${escapeHtml(task.taskId)}" data-cogseed-request-id="${escapeHtml(task.requestId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
+    if (actions && actions.retry) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="retry" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.retry', 'Retry'))}</button>`);
+    if (actions && actions.resume) buttons.push(`<button type="button" class="conversation-info-cogseed-action" data-cogseed-action="resume" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.resume', 'Resume'))}</button>`);
     if (actions && actions.abort) buttons.push(`<button type="button" class="conversation-info-cogseed-action is-danger" data-cogseed-action="abort" data-cogseed-task-id="${escapeHtml(task.taskId)}">${escapeHtml(_label('common.abort', 'Abort'))}</button>`);
     return buttons.length ? `<div class="conversation-info-cogseed-actions">${buttons.join('')}</div>` : '';
   }
@@ -397,14 +397,20 @@ const ConversationInfo = (() => {
     const timeline = collaboration && Array.isArray(collaboration.timeline) ? collaboration.timeline : [];
     const workflow = collaboration && collaboration.workflow ? collaboration.workflow : { childTaskIds: [], steps: [] };
     const actionSummary = task && task.actions ? _renderCogSeedActions(task, task.actions) : '';
+    const projectionTitle = (item, fallback) => item && item.titleKey
+      ? _label(item.titleKey, item.title || fallback)
+      : (item && item.title) || fallback;
+    const projectionEventSummary = (event) => event && event.summaryKey
+      ? _label(event.summaryKey, event.summary || '')
+      : (event && event.summary) || '';
     const stepRows = Array.isArray(workflow.steps) && workflow.steps.length
-      ? `<div class="conversation-info-cogseed-steps">${workflow.steps.map((step) => `<div class="conversation-info-cogseed-step"><div class="conversation-info-cogseed-step-title">${escapeHtml(step.title || step.stepId || '')}</div><div class="conversation-info-cogseed-step-meta">${escapeHtml(step.status || '')}${step.actorId ? ` · ${escapeHtml(step.actorId)}` : ''}${Array.isArray(step.dependsOn) && step.dependsOn.length ? ` · ${escapeHtml(step.dependsOn.join(', '))}` : ''}</div>${step.resultSummary ? `<div class="conversation-info-cogseed-step-summary">${escapeHtml(step.resultSummary)}</div>` : ''}</div>`).join('')}</div>`
+      ? `<div class="conversation-info-cogseed-steps">${workflow.steps.map((step) => `<div class="conversation-info-cogseed-step"><div class="conversation-info-cogseed-step-title">${escapeHtml(projectionTitle(step, step.stepId || ''))}</div><div class="conversation-info-cogseed-step-meta">${escapeHtml(step.status || '')}${step.actorId ? ` · ${escapeHtml(step.actorId)}` : ''}${Array.isArray(step.dependsOn) && step.dependsOn.length ? ` · ${escapeHtml(step.dependsOn.join(', '))}` : ''}</div></div>`).join('')}</div>`
       : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_steps', 'No workflow steps yet.'))}</div>`;
     const actorRows = actors.length
       ? `<div class="conversation-info-cogseed-actors">${actors.map((actor) => `<div class="conversation-info-cogseed-actor"><div class="conversation-info-cogseed-actor-role">${escapeHtml(actor.role || '')}</div><div class="conversation-info-cogseed-actor-meta">${escapeHtml(actor.actorId || '')}${actor.taskId ? ` · ${escapeHtml(actor.taskId)}` : ''}${actor.status ? ` · ${escapeHtml(actor.status)}` : ''}</div></div>`).join('')}</div>`
       : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_actors', 'No actors yet.'))}</div>`;
     const timelineRows = timeline.length
-      ? `<div class="conversation-info-cogseed-timeline">${timeline.slice(-8).map((event) => `<div class="conversation-info-cogseed-timeline-item"><div class="conversation-info-cogseed-timeline-head">${escapeHtml(event.type || '')} · ${escapeHtml(event.createdAt || '')}</div><div class="conversation-info-cogseed-timeline-body">${escapeHtml(event.summary || '')}</div></div>`).join('')}</div>`
+      ? `<div class="conversation-info-cogseed-timeline">${timeline.slice(-8).map((event) => `<div class="conversation-info-cogseed-timeline-item"><div class="conversation-info-cogseed-timeline-head">${escapeHtml(projectionEventSummary(event))} · ${escapeHtml(event.createdAt || '')}</div></div>`).join('')}</div>`
       : `<div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.cogseed.no_timeline', 'No recovery timeline yet.'))}</div>`;
     const childIds = Array.isArray(workflow.childTaskIds) && workflow.childTaskIds.length
       ? `<div class="conversation-info-cogseed-child-tree">${workflow.childTaskIds.map((id) => `<span class="conversation-info-cogseed-child-chip">${escapeHtml(id)}</span>`).join('')}</div>`
@@ -416,7 +422,7 @@ const ConversationInfo = (() => {
     return `<section class="conversation-info-collaboration-section conversation-info-cogseed-overview">
       <div class="conversation-info-collaboration-section-title">${escapeHtml(_label('conversation_info.cogseed.section_title', 'Mate Collaboration Overview'))}</div>
       <div class="conversation-info-cogseed-meta">${escapeHtml(session.sessionId)} · ${escapeHtml(session.latestStatus || 'idle')} · ${escapeHtml(_label('conversation_info.cogseed.task_count', '{count} tasks', { count: session.taskCount || 0 }))}</div>
-      <div class="conversation-info-cogseed-task-title">${escapeHtml(task && task.title ? task.title : _label('conversation_info.cogseed.no_task', 'No active task.'))}</div>
+      <div class="conversation-info-cogseed-task-title">${escapeHtml(task ? projectionTitle(task, task.taskId || '') : _label('conversation_info.cogseed.no_task', 'No active task.'))}</div>
       ${actionSummary}
       ${childIds}
       <div class="conversation-info-cogseed-grid">
@@ -2411,13 +2417,10 @@ const ConversationInfo = (() => {
           ev.stopPropagation();
           const action = cogseedAction.dataset.cogseedAction;
           const taskId = cogseedAction.dataset.cogseedTaskId || '';
-          const requestId = cogseedAction.dataset.cogseedRequestId || '';
-          if (action === 'abort' && taskId) {
-            void window.cogseed.invoke('cogseed_agent.task.abort', { taskId }).then(() => refresh(_cid));
-          } else if (action === 'retry' && taskId && requestId) {
-            void window.cogseed.invoke('cogseed_agent.task.retry', { taskId, requestId }).then(() => refresh(_cid));
-          } else if (action === 'resume' && taskId && requestId) {
-            void window.cogseed.invoke('cogseed_agent.task.resume', { taskId, requestId, continuation: (_snapshot.cogseed.session && _snapshot.cogseed.session.collaboration && _snapshot.cogseed.session.collaboration.task && _snapshot.cogseed.session.collaboration.task.title) || 'Resume task.' }).then(() => refresh(_cid));
+          if (taskId && (action === 'abort' || action === 'retry' || action === 'resume')) {
+            const payload = { taskId, action };
+            if (action !== 'abort') payload.requestId = `req-conversation-info-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            void window.cogseed.invoke('cogseed.task.action', payload).then(() => refresh(_cid));
           }
           return;
         }

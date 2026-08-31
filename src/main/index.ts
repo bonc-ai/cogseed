@@ -563,7 +563,27 @@ async function runBootSelfCheck(): Promise<void> {
     log.info('language preferences resolved', { lang, uiLang });
   } catch (err) { log.warn('i18n init failed', { error: (err as Error).message }); }
 
-  // Stage 2: clear stale processing=true conversations from a previous crash.
+  // Stage 2: this is a pre-window correctness barrier, not background boot
+  // maintenance. A fresh main process owns no live CogSeed executors, so
+  // reconcile persisted work before the first window can present it as live.
+  try {
+    const { recoverCogSeedTasksAtBoot } = await import('./features/cogseed_backend/boot-recovery');
+    const recovered = await recoverCogSeedTasksAtBoot(users.getActiveUserId());
+    if (recovered.recoveredCount || recovered.workflowStepsReconciled
+      || recovered.retainedResultsRecovered || recovered.retainedResultsPending) {
+      log.info('CogSeed cold-start recovery complete', {
+        recovered_tasks: recovered.recoveredCount,
+        reconciled_workflows: recovered.workflowStepsReconciled || 0,
+        retained_results_recovered: recovered.retainedResultsRecovered,
+        retained_results_pending: recovered.retainedResultsPending,
+      });
+    }
+  } catch (err) {
+    log.error('CogSeed cold-start recovery failed', { error: (err as Error).message });
+    throw err;
+  }
+
+  // Stage 3: clear stale processing=true conversations from a previous crash.
   try { await chatsFeature.sweepStaleProcessing(users.getActiveUserId()); }
   catch (err) { log.warn('chats sweep failed', { error: (err as Error).message }); }
 
@@ -1096,7 +1116,7 @@ if (!gotLock) {
   // Account login is stripped, but connector OAuth still returns through the OS protocol. Keep
   // this connector-only receiver outside the removed account protocol module.
   registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     await runBootSelfCheck();
 
     // 版本迁移：检测版本变化，自动清理旧数据
@@ -1364,6 +1384,9 @@ if (!gotLock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  }).catch((err) => {
+    log.error('application startup failed', { error: (err as Error).message });
+    app.quit();
   });
 
   app.on('window-all-closed', () => {

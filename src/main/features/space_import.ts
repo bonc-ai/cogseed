@@ -9,10 +9,13 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import { spaceContentDir } from '../paths';
+import * as crypto from 'node:crypto';
+import { spaceContentDir, spaceLibraryVectorDbPath, userContextsDir } from '../paths';
 import { safeId } from '../storage';
 import { createLogger } from '../logger';
-
+import * as contexts from './contexts';
+import { importSpaceFileFromPath } from './project_files';
+import * as vs from './vec_store';
 const log = createLogger('space_import');
 
 export const IMPORT_LIMITS = {
@@ -37,6 +40,101 @@ export interface ImportSkippedEntry {
 export type ImportFolderResult =
   | { ok: true; total: number; copied: number; skipped: ImportSkippedEntry[]; targetDir: string }
   | { ok: false; error: string };
+
+export type ImportLibResult =
+  | { ok: true; scanned: number; imported: number; files: Array<{ name: string; ok: boolean; error?: string }> }
+  | { ok: false; error: string };
+
+/**
+ * 把个人知识库（contexts/ 下的一个库目录）的内容镜像导入到共享知识库（空间）。
+ * 对齐 ima「从个人知识库导入」：源目录结构保留，文件走空间索引队列（upsert），
+ * 导入后可直接在共享库内做 AI 问答。单个文件失败不阻断整体。
+ */
+export async function importLibIntoSpace(
+  userId: string,
+  spaceId: string,
+  libName: string,
+): Promise<ImportLibResult> {
+  if (!safeId(spaceId)) return { ok: false, error: 'invalid_space' };
+  const name = String(libName || '').trim();
+  if (!name) return { ok: false, error: 'missing_lib_name' };
+  const srcDir = path.join(userContextsDir(userId), name);
+  let st: fs.Stats;
+  try {
+    st = await fsp.stat(srcDir);
+  } catch {
+    return { ok: false, error: 'source_lib_not_found' };
+  }
+  if (!st.isDirectory()) return { ok: false, error: 'source_lib_not_directory' };
+
+  const files = await contexts.collectImportableFilesFromDir(srcDir);
+  const absByRel = new Map(files.map((f) => [f.rel, f.abs]));
+  return importFilesIntoSpace(userId, spaceId, absByRel);
+}
+
+/**
+ * 把一组个人库文件（relPath → 绝对路径）导入共享库（空间）。
+ * 供「整库导入」与「弹窗勾选文件导入」复用：并发复制 + pending 占位，
+ * 返回逐文件结果，单个失败不阻断。
+ */
+export async function importFilesIntoSpace(
+  userId: string,
+  spaceId: string,
+  absByRel: Map<string, string>,
+): Promise<ImportLibResult> {
+  const entries = Array.from(absByRel.entries());
+  const out: Array<{ name: string; ok: boolean; error?: string }> = [];
+  let imported = 0;
+
+  // 有限并发导入（默认 6 路），避免逐文件串行拖慢大批量导入。
+  const CONCURRENCY = 6;
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < entries.length) {
+      const [rel, abs] = entries[cursor++];
+      try {
+        const r = await importSpaceFileFromPath(userId, spaceId, rel, abs, { skipHash: true });
+        if (r.ok) imported += 1;
+        out.push({ name: rel, ok: r.ok, error: r.ok ? undefined : String((r as { error?: string }).error || 'import_failed') });
+      } catch (err) {
+        out.push({ name: rel, ok: false, error: (err as Error)?.message || String(err) });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, entries.length || 1) }, worker));
+
+  // 导入的文件已落盘并 enqueue 进索引队列，但向量化（提取/嵌入）是异步的，
+  // 直接读向量库快照会看不到新文件（"已导入 N 个但列表空"）。
+  // 这里为每个成功导入的文件写一条 pending 占位行（索引完成后会更新为 ready），
+  // 让列表立即可见、状态自然过渡。
+  if (imported > 0) {
+    try {
+      const store = vs.openVecStore(path.dirname(spaceLibraryVectorDbPath(userId, spaceId)));
+      for (const o of out) {
+        if (!o.ok) continue;
+        try {
+          const abs = absByRel.get(o.name);
+          if (!abs) continue;
+          const st = await fsp.stat(abs).catch(() => null);
+          if (!st) continue;
+          const existing = store.getFile(o.name);
+          if (existing && (existing.status === 'ready' || existing.status === 'processing' || existing.status === 'pending')) continue;
+          await store.setFileStatus(o.name, 'pending', {
+            kind: kindForName(o.name),
+            bytes: st.size,
+            mtime: st.mtimeMs / 1000,
+            sha1: await sha1Of(abs),
+          });
+        } catch { /* 占位失败不阻断（索引队列仍会兜底） */ }
+      }
+    } catch { /* store 打开失败不阻断 */ }
+  }
+
+  log.info('space import files done', {
+    userId, spaceId, scanned: entries.length, imported,
+  });
+  return { ok: true, scanned: entries.length, imported, files: out };
+}
 
 function reasonForError(err: unknown): string {
   if (!err) return 'copy_failed';
@@ -160,4 +258,23 @@ export async function importFolderIntoSpace(
 
 function logSafePath(p: string): string {
   return p.replace(/[A-Za-z]:\\/g, '').split(/[\\/]/).slice(-3).join('/');
+}
+
+/** 文件扩展名 → 向量库 kind（与 project_library_indexer.kindFor 一致）。 */
+function kindForName(name: string): vs.VecKind {
+  const ext = path.extname(name).toLowerCase();
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.docx' || ext === '.docm') return 'docx';
+  if (ext === '.xlsx' || ext === '.xlsm') return 'spreadsheet';
+  if (ext === '.pptx' || ext === '.pptm') return 'presentation';
+  if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'].includes(ext)) return 'image';
+  return 'text';
+}
+
+/** 轻量 SHA-1（占位行需要；大文件也只需读一次）。 */
+async function sha1Of(absPath: string): Promise<string> {
+  const hash = crypto.createHash('sha1');
+  const stream = fs.createReadStream(absPath);
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }

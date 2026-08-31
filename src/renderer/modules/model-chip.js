@@ -162,12 +162,18 @@ async function _setModelChipEffort(level) {
   }
 }
 
+function _clampMenuLeft(preferredLeft, menuWidth) {
+  const edge = 8;
+  const maxLeft = Math.max(edge, window.innerWidth - menuWidth - edge);
+  return Math.min(Math.max(edge, preferredLeft), maxLeft);
+}
+
 function _positionModelMenu(menu, anchor) {
   const rect = anchor.getBoundingClientRect();
   menu.style.position = 'fixed';
-  menu.style.left = rect.left + 'px';
-  menu.style.zIndex = '12000';
   document.body.appendChild(menu);
+  const menuWidth = menu.offsetWidth || 150;
+  menu.style.left = _clampMenuLeft(rect.left, menuWidth) + 'px';
   // Flip above the anchor when there isn't enough room below; clamp to
   // the viewport either way.
   const menuHeight = menu.offsetHeight || 280;
@@ -189,10 +195,14 @@ function _bindModelMenuDismiss(menu, anchor) {
   const onKey = (e) => {
     if (e.key === 'Escape') { _closeModelMenu(); e.preventDefault(); }
   };
+  const onViewportChange = () => _closeModelMenu();
   menu._onDocDown = onDocDown;
   menu._onKey = onKey;
+  menu._onViewportChange = onViewportChange;
   setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', onViewportChange);
+  document.addEventListener('scroll', onViewportChange, true);
 }
 
 function _makeMenuTrigger(label, chevronIcon, onClick) {
@@ -258,16 +268,17 @@ function _closeSubmenu() {
 function _positionSubmenu(sub, menu) {
   const rect = menu.getBoundingClientRect();
   sub.style.position = 'fixed';
-  sub.style.zIndex = '12001';
   const subWidth = sub.offsetWidth || 240;
   const spaceRight = window.innerWidth - rect.right - 6;
+  let preferredLeft;
   if (spaceRight >= subWidth) {
-    sub.style.left = (rect.right + 6) + 'px';
+    preferredLeft = rect.right + 6;
   } else {
-    sub.style.left = Math.max(8, rect.left - subWidth - 6) + 'px';
+    preferredLeft = rect.left - subWidth - 6;
   }
+  sub.style.left = _clampMenuLeft(preferredLeft, subWidth) + 'px';
   const subHeight = sub.offsetHeight || 200;
-  sub.style.top = Math.min(rect.top, window.innerHeight - subHeight - 8) + 'px';
+  sub.style.top = Math.max(8, Math.min(rect.top, window.innerHeight - subHeight - 8)) + 'px';
 }
 
 function _openSubmenu(menu, kind) {
@@ -305,10 +316,13 @@ function _toggleModelMenu(anchor) {
 function _closeModelMenu() {
   _closeSubmenu();
   const menu = document.getElementById('model-chip-menu');
-  if (!menu) return;
-  document.removeEventListener('mousedown', menu._onDocDown, true);
-  document.removeEventListener('keydown', menu._onKey, true);
-  menu.remove();
+  if (menu) {
+    document.removeEventListener('mousedown', menu._onDocDown, true);
+    document.removeEventListener('keydown', menu._onKey, true);
+    window.removeEventListener('resize', menu._onViewportChange);
+    document.removeEventListener('scroll', menu._onViewportChange, true);
+    menu.remove();
+  }
   document.querySelectorAll('.model-chip--open').forEach((el) => el.classList.remove('model-chip--open'));
 }
 
@@ -352,3 +366,4 @@ function initModelChip() {
 }
 
 window.initModelChip = initModelChip;
+window.closeModelChipMenu = _closeModelMenu;
