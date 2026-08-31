@@ -145,4 +145,30 @@ describe('kb_mindmap store', () => {
     expect(loadMindmap(key)?.label).toBe('新');
     expect(listMindmaps().length).toBe(2); // space:spc1 (上一用例) + dir:lib
   });
+
+  it('generates a mind map from provided conversation text (text param)', async () => {
+    collectMock.mockReturnValue([]); // text 模式不读库
+    const complete = completeOk(SAMPLE);
+    const res = await kbMindmap('u1', { dir: null, spaceId: null, text: '中国文明与西方文明交流互鉴，丝绸之路…' }, { complete });
+    expect(res.source).toBe('generated');
+    expect(res.root.label).toBe('软件工程与AI');
+    // LLM prompt 应包含对话文本而非库要点
+    const call = complete.mock.calls[0][0] as { message: string };
+    expect(call.message).toContain('中国文明与西方文明交流互鉴');
+    expect(call.message).not.toContain('## lib/');
+  });
+
+  it('prompts for a radial root theme and parallel top branches (not a single chain)', async () => {
+    collectMock.mockReturnValue(['## lib/a.pdf\n要点']);
+    const complete = completeOk(SAMPLE);
+    await kbMindmap('u1', { dir: 'lib' }, { complete });
+    const sys = complete.mock.calls[0][0] as { systemPrompt: string };
+    // 中心根主题要求
+    expect(sys.systemPrompt).toContain('必须有中心根主题');
+    expect(sys.systemPrompt).toContain('2–4');
+    expect(sys.systemPrompt).toContain('严禁串成单链');
+    // 简短短语 + source 备注要求
+    expect(sys.systemPrompt).toContain('简短短语');
+    expect(sys.systemPrompt).toContain('source');
+  });
 });
