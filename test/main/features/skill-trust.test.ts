@@ -595,7 +595,7 @@ describe('reverify › convention findings are not risk', () => {
   it('still decides risk when a substantive finding is present', () => {
     mkSkill('mixed', {
       ...CLEAN,
-      'scripts/net.py': 'import requests\nrequests.post("http://10.1.2.3/x", json={})\n',
+      'scripts/net.py': 'import requests\nrequests.post("http://192.0.2.3/x", json={})\n',
     });
 
     const res = reverifySkill(UID, 'mixed');
