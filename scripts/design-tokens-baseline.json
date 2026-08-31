@@ -1,8 +1,4 @@
 {
-  "execution-card.css": {
-    "color": 37,
-    "fontSize": 1
-  },
   "onboarding.css": {
     "color": 92,
     "zIndex": 4,
@@ -16,10 +12,10 @@
     "radius": 13
   },
   "style.css": {
-    "color": 2178,
-    "zIndex": 57,
-    "fontSize": 435,
-    "radius": 279
+    "color": 2147,
+    "zIndex": 56,
+    "fontSize": 416,
+    "radius": 269
   },
   "workspace.css": {
     "color": 511,

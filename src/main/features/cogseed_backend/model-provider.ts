@@ -1,7 +1,6 @@
 import type {
   RuntimeModelProvider,
   RuntimeModelProviderChunk,
-  RuntimeModelRequest,
   RuntimeModelToolCall,
 } from '../cogseed_runtime/kernel/model-adapter';
 import { resolveCogSeedApiKeyProfile, type CogSeedProviderProfile } from './provider-profiles';

@@ -424,6 +424,7 @@ afterEach(async () => {
   // ENOENT log noise.
   try {
     const bus = await import("../../../../src/main/features/group_chat/bus");
+    bus._setGroupChatTaskBridgeForTest(null);
     (bus as any)._setCoordinatorLeaseFactoryForTest?.();
     (bus as any)._setNestedDispatchOutcomeObserverForTest?.(null);
     (bus as any)._setNestedDispatchAttemptHooksForTest?.(null);
@@ -1157,18 +1158,45 @@ describe("group_chat bus integration › CJK + space-stripped name resolution", 
 });
 
 describe("group_chat bus integration › conversation delete cascade", () => {
-  it("chats.deleteConversation removes ALL per-conv on-disk artifacts", async () => {
+  it("chats.deleteConversation removes conversation artifacts but archives execution-owned pending results", async () => {
     const cid = newCid();
     const state =
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const chats = await import("../../../../src/main/features/chats");
     const paths = await import("../../../../src/main/paths");
+    const cliSessions = await import("../../../../src/main/features/local_agents/sessions");
+    const deliveries = await import("../../../../src/main/features/cogseed_backend/result-delivery-store");
+    const deliveryPaths = await import("../../../../src/main/features/cogseed_backend/paths");
+    const taskStore = await import("../../../../src/main/features/cogseed_backend/task-store");
+    const lifecycle = await import("../../../../src/main/features/cogseed_backend/lifecycle");
 
     // Create the conv via the chats facade so the index gets a row.
     const conv = await chats.createConversation(TEST_UID, { title: "测试" });
     // Hijack the cid since chats.createConversation generates its own.
     const realCid = conv.conversation_id;
+    await cliSessions.setSessionId(TEST_UID, realCid, AGENT_ID, 'codex', 'private-codex-session-id');
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: 'cogseed-task-delete-cascade',
+      executionId: 'cogseed-exec-delete-cascade',
+      conversationId: realCid,
+      agentId: AGENT_ID,
+      sessionId: 'cogseed-session-delete-cascade',
+      destinationGeneration: conv._cogseed_result_generation!,
+      event: {
+        eventId: 'cogseed-event-delete-cascade',
+        type: 'task.completed',
+        payload: { text: 'private pending result' },
+      },
+    });
+    const activeTask = (await taskStore.createCogSeedTask(TEST_UID, {
+      requestId: 'req-delete-active-task',
+      task: 'Must stop before the conversation disappears.',
+      conversationId: realCid,
+      agentId: AGENT_ID,
+    })).task;
+    await lifecycle.transitionCogSeedTask(TEST_UID, activeTask.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(TEST_UID, activeTask.taskId, 'running');
 
     _setScript(state.buildGconvSessionId(TEST_UID, realCid), [
       { type: "final", text: `@${AGENT_NAME} 干活` },
@@ -1205,6 +1233,8 @@ describe("group_chat bus integration › conversation delete cascade", () => {
     );
     expect(fs.existsSync(mainJsonl)).toBe(true);
     expect(fs.existsSync(groupDir)).toBe(true);
+    expect(await cliSessions.getSessionId(TEST_UID, realCid, AGENT_ID, 'codex')).toBe('private-codex-session-id');
+    expect(await deliveries.cogseedResultDeliveryStore.read(TEST_UID, 'cogseed-exec-delete-cascade')).not.toBeNull();
     // Note: session jsonls are created lazily by core-agent's PersistentSession;
     // they may or may not exist depending on whether the session got opened.
     // That's covered by the eviction behaviour rather than by file existence
@@ -1216,6 +1246,19 @@ describe("group_chat bus integration › conversation delete cascade", () => {
 
     expect(fs.existsSync(mainJsonl)).toBe(false);
     expect(fs.existsSync(groupDir)).toBe(false);
+    expect(await cliSessions.getSessionId(TEST_UID, realCid, AGENT_ID, 'codex')).toBeNull();
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, 'cogseed-exec-delete-cascade')).resolves.toBeNull();
+    expect(JSON.parse(fs.readFileSync(
+      deliveryPaths.cogseedUndeliverableResultFile(TEST_UID, 'cogseed-exec-delete-cascade'),
+      'utf8',
+    ))).toMatchObject({
+      reason: 'task-missing',
+      payload: {
+        conversationId: realCid,
+        event: { payload: { text: 'private pending result' } },
+      },
+    });
+    await expect(taskStore.readCogSeedTask(TEST_UID, activeTask.taskId)).resolves.toMatchObject({ status: 'cancelled' });
     if (cmdSessionExisted) expect(fs.existsSync(cmdSession)).toBe(false);
     if (agentSessionExisted) expect(fs.existsSync(agentSession)).toBe(false);
     // Bus state for this cid must also be gone.
@@ -1404,6 +1447,14 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const paths = await import("../../../../src/main/paths");
+    let observedTaskSequence = 0;
+    const observedParent = { taskId: 'cogseed-task-worker-parent', status: 'running' } as any;
+    const taskBridge = {
+      startRun: vi.fn(async () => observedParent),
+      startTurn: vi.fn(async () => ({ taskId: `cogseed-task-worker-turn-${++observedTaskSequence}`, status: 'running' } as any)),
+      finishTask: vi.fn(async (input: any) => ({ taskId: input.taskId, status: input.status } as any)),
+    };
+    bus._setGroupChatTaskBridgeForTest(taskBridge);
     (bus as any)._setNestedDispatchOutcomeObserverForTest((outcome: any) => {
       _recordedNestedOutcomes.push(outcome);
     });
@@ -1441,6 +1492,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       workerCall,
       "an in-process worker sub-run should have streamed",
     ).toBeTruthy();
+    expect(taskBridge.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      parentTaskId: observedParent.taskId,
+      actorKind: 'worker',
+      workflowStepId: expect.stringMatching(/^wstep-/),
+    }));
 
     // 2) Its FULL result came back SYNCHRONOUSLY as the run_worker tool result,
     //    wrapped as <worker-result> — the handback IS the tool result.
@@ -8393,4 +8449,3 @@ describe("group_chat bus › desktop message broadcaster", () => {
     // is the pre-fix steady state for external inbound paths.
   });
 });
-

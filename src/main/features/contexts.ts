@@ -222,6 +222,43 @@ export function isSupportedContextFileName(name: string): boolean {
   return isAllowedName(name);
 }
 
+/** 文件夹导入时单次扫描的文件上限（防超大目录拖垮主进程）。 */
+const MAX_FOLDER_IMPORT_FILES = 500;
+
+export interface ImportableFile {
+  /** 磁盘绝对路径（导入源）。 */
+  abs: string;
+  /** 相对所选文件夹的路径（不含文件夹名本身，用于镜像目录结构）。 */
+  rel: string;
+}
+
+/**
+ * 递归扫描一个本地目录，收集知识库白名单内的可导入文件（跳过隐藏项与
+ * 忽略目录），按名称排序，单次最多 MAX_FOLDER_IMPORT_FILES 个。
+ */
+export async function collectImportableFilesFromDir(absDir: string): Promise<ImportableFile[]> {
+  const out: ImportableFile[] = [];
+  async function walk(d: string, rel: string) {
+    if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+    let entries;
+    try { entries = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+      if (e.name.startsWith('.') || CONTEXTS_IGNORE.has(e.name)) continue;
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) {
+        await walk(full, relPath);
+      } else if (e.isFile() && isSupportedContextFileName(e.name)) {
+        out.push({ abs: full, rel: relPath });
+      }
+    }
+  }
+  await walk(absDir, '');
+  return out;
+}
+
 // ── Listing / Reading ────────────────────────────────────────────────────
 
 /** 并发相同 uid 的树遍历 in-flight 去重（导入/树接口叠加时共享一次遍历）。
@@ -792,7 +829,17 @@ export function renameContextEntry(srcRel: string, dstRel: string): Result<{ src
   let src: string; let dst: string;
   try { src = resolvePath(srcRel, { mustExist: true }); dst = resolvePath(dstRel); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  if (fs.existsSync(dst)) return { ok: false, error: 'destination already exists' };
+  // 大小写不敏感文件系统（macOS 默认）上 fs.existsSync(dst) 会命中 src 自身：
+  // 仅大小写变体（test → Test）是同一条目（同 inode），应放行；真正的同名（不同 inode）才报已存在。
+  if (fs.existsSync(dst)) {
+    let sameEntry = false;
+    try {
+      const s = fs.statSync(src);
+      const d = fs.statSync(dst);
+      sameEntry = typeof s.ino === 'number' && s.ino !== 0 && s.ino === d.ino;
+    } catch { /* stat 失败视为不同条目 */ }
+    if (!sameEntry) return { ok: false, error: 'destination already exists' };
+  }
   const srcIsFile = fs.statSync(src).isFile();
   if (srcIsFile && !isAllowedName(path.basename(dst))) {
     return { ok: false, error: 'destination has unsupported extension' };

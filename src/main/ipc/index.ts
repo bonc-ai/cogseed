@@ -19,9 +19,13 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
+import * as kbQa from '../features/kb_qa';
+import * as kbSummary from '../features/kb_summary';
+import * as kbMindmap from '../features/kb_mindmap';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as anchorFeature from '../features/anchor';
 import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
@@ -128,7 +132,7 @@ import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { invokeHandlers as updatesHandlers } from './updates';
-import { readJsonl, safeId } from '../storage';
+import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -137,7 +141,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userContextsDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -949,17 +953,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
   'cogseed.task.abort': async (payload, ctx) => cogseedBackend.cogseedIpcService.abort(ctx.userId, payload),
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
+  'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
+  'cogseed.agent.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.agents(ctx.userId),
+  'cogseed.dashboard.diagnostics': async (_payload, ctx) => cogseedBackend.cogseedIpcService.diagnostics(ctx.userId),
+  'cogseed.worktree.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.worktrees(ctx.userId),
+  'cogseed.worktree.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.createWorktree(ctx.userId, payload),
+  'cogseed.worktree.remove': async (payload, ctx) => cogseedBackend.cogseedIpcService.removeWorktree(ctx.userId, payload),
   'cogseed.connector.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.connectors(ctx.userId),
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
   'cogseed.kb.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.anchor.resolve': async (payload, ctx) => anchorFeature.anchorResolveIpc(ctx.userId, payload),
   'cogseed.kb.sources': async (_payload, ctx) => cogseedBackend.cogseedIpcService.kbSources(ctx.userId),
   'cogseed.connector.tools': async (payload, ctx) => cogseedBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
   'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedBackend.cogseedIpcService.sessions(ctx.userId) }),
@@ -1399,8 +1412,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { skills: skillRows, agents: filteredAgents };
   },
 
-  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref });
+  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1673,8 +1686,69 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, files: results };
   },
 
-  'spaces.files.createText': async ({ spaceId, name }, ctx) => {
+  // 共享知识库（空间）文件夹导入：目录选择器 → 递归收集白名单文件 → 镜像目录结构导入。
+  'spaces.files.pickAndUploadDir': async ({ spaceId, targetDir } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const targetName = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      try {
+        const r = await spaceFiles.importSpaceFileFromPath(ctx.userId, spaceId, targetName, f.abs);
+        results.push({ name: f.rel, target: targetName, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target: targetName, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      ok: true,
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
+  },
+
+  // 共享知识库（空间）导入个人知识库：把个人库（contexts/）内容镜像导入到空间（spaces/），
+  // 对齐 ima「从个人知识库导入」：源目录结构保留，走空间索引队列（upsert）统一入库。
+  'spaces.files.importFromLib': async ({ spaceId, libName } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const r = await spaceImport.importLibIntoSpace(ctx.userId, spaceId, String(libName || ''));
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  // 共享知识库（空间）按选中的个人库文件导入：paths 为相对 contexts 根的文件路径数组
+  // （如 ["班级建设资料/a.pdf", "挑战资料/b.docx"]），供「导入内容」弹窗勾选后调用。
+  'spaces.files.importFromLibFiles': async ({ spaceId, paths } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const list = Array.isArray(paths) ? paths.map((p) => String(p || '')).filter(Boolean) : [];
+    if (!list.length) return { ok: false, error: 'no files selected' };
+    const contextsRoot = userContextsDir(ctx.userId);
+    const absByRel = new Map<string, string>();
+    for (const rel of list) {
+      const abs = path.join(contextsRoot, rel);
+      try {
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) absByRel.set(rel, abs);
+      } catch { /* 跳过不可读项 */ }
+    }
+    if (!absByRel.size) return { ok: false, error: 'selected files not found' };
+    const r = await spaceImport.importFilesIntoSpace(ctx.userId, spaceId, absByRel);
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  'spaces.files.createText': async ({ spaceId, name }, ctx) => {    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     return spaceFiles.createSpaceTextFile(ctx.userId, spaceId, name);
   },
@@ -3867,6 +3941,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { files: results };
   },
 
+  // 导入整个文件夹：目录选择器 → 递归收集白名单文件 → 按目录结构镜像导入到库。
+  'contexts.pickAndUploadDir': async ({ targetDir } = {}) => {
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const target = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      if (contexts.hasHiddenContextPathSegment(target)) {
+        results.push({ ok: false, name: f.rel, target, reason: 'hidden' });
+        continue;
+      }
+      try {
+        const r = await contexts.importContextFileFromPath(target, f.abs);
+        results.push({ name: f.rel, target, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
+  },
+
   'contexts.mkdir': async ({ path }) => {
     return contexts.createContextDir(path || '');
   },
@@ -3918,6 +4024,160 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'library.writeText': async (payload, ctx) => {
     return _writeTextToLibrary(payload, ctx);
+  },
+
+  // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。
+  // 懒生成 + 库指纹缓存（features/kb_summary）；失败降级为文件清单。
+  // dir=个人库；spaceId=空间库（共享知识库）。
+  'kb.summary': async ({ dir, spaceId }, ctx) => {
+    const res = await kbSummary.kbSummarize(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
+  'kb.mindmap': async ({ dir, spaceId, force }, ctx) => {
+    const res = await kbMindmap.kbMindmap(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
+  'kb.mindmap.save': async ({ key, root }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k || !root || typeof root.label !== 'string') return { ok: false };
+    kbMindmap.saveMindmap(k, root as never);
+    return { ok: true, savedAt: kbMindmap.listMindmaps().find((m) => m.key === k)?.savedAt ?? Date.now() };
+  },
+  'kb.mindmap.list': async () => {
+    return { ok: true, items: kbMindmap.listMindmaps() };
+  },
+  'kb.mindmap.load': async ({ key }, ctx) => {
+    const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
+    return { ok: root !== null, root };
+  },
+
+  // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
+  'kb.mindmap.exportPdf': async ({ html }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(source);
+      await win.loadURL(dataUrl);
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出脑图 PDF',
+        defaultPath: `mindmap-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      console.error('[kb.mindmap.exportPdf] failed:', err);
+      return { ok: false };
+    }
+  },
+
+  // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
+  'kb.importWebUrl': async ({ dir, spaceId, url } = {}, ctx) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: '请输入有效的 http/https 链接' };
+    let resp: Response;
+    try {
+      resp = await fetch(u, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+    } catch (err) {
+      return { ok: false, error: '抓取失败：' + ((err as Error)?.message || String(err)) };
+    }
+    if (!resp.ok) return { ok: false, error: '抓取失败：HTTP ' + resp.status };
+    const html = await resp.text();
+    const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1]
+      ?.replace(/<[^>]+>/g, '').trim() || new URL(u).hostname || u;
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ').trim().slice(0, 30000);
+    const safeTitle = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 50) || '网页';
+    const fileName = `网页-${safeTitle}-${Date.now()}.md`;
+    const content = `# ${title}\n\n> 来源：${u}\n\n${text || '（网页无正文内容）'}\n`;
+    try {
+      if (spaceId) {
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const created = await spaceFiles.createSpaceTextFile(ctx.userId, spaceId, fileName);
+        if (!created.ok) return { ok: false, error: (created as { error?: string }).error || 'create failed' };
+        const updated = await spaceFiles.updateSpaceTextFile(ctx.userId, spaceId, fileName, content);
+        if (!updated.ok) return { ok: false, error: (updated as { error?: string }).error || 'write failed' };
+      } else {
+        const base = typeof dir === 'string' && dir ? String(dir).replace(/^\/+|\/+$/g, '') : '';
+        const res = contexts.writeContextFileForUser(ctx.userId, base ? `${base}/${fileName}` : fileName, content);
+        if (!res.ok) return { ok: false, error: (res as { error?: string }).error };
+      }
+      return { ok: true, fileName };
+    } catch (err) {
+      return { ok: false, error: '写入失败：' + ((err as Error)?.message || String(err)) };
+    }
+  },
+
+  // 个人知识库迁移：把源库（from）的全部内容复制进目标库（to），随后由 kb.reconcile 重建索引。
+  'kb.migrateLib': async ({ from, to } = {}, ctx) => {
+    const f = String(from || '').trim();
+    const t = String(to || '').trim();
+    if (!f || !t || f === t) return { ok: false, error: '源库与目标库不能相同' };
+    const root = userContextsDir(ctx.userId);
+    const src = path.join(root, f);
+    const dst = path.join(root, t);
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return { ok: false, error: '源知识库不存在' };
+    if (!fs.existsSync(dst) || !fs.statSync(dst).isDirectory()) return { ok: false, error: '目标知识库不存在' };
+    try {
+      fs.cpSync(src, dst, { recursive: true, force: true });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: '迁移失败：' + ((err as Error)?.message || String(err)) };
+    }
   },
 
   // ── Knowledge base (vector store) ──
@@ -5171,11 +5431,49 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
   },
 
+  // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
+  // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
+  'kbqa.askStream': async function* ({ space_id, question, k }, ctx, signal) {
+    const q = String(question ?? '').trim();
+    if (!q) {
+      yield { type: 'error', text: 'empty question' };
+      return;
+    }
+    try {
+      const events = kbQa.kbAskStream(ctx.userId, {
+        spaceId: space_id ? String(space_id) : null,
+        question: q,
+        k: typeof k === 'number' ? k : undefined,
+      }, {
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
   'cogseed.task.events': async function* (payload, ctx, signal) {
     yield* cogseedBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
+  'cogseed.dashboard.watch': async function* (_payload, ctx, signal) {
+    yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
+  },
+
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -5250,6 +5548,9 @@ const streamHandlers: Record<string, StreamHandler> = {
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
+              requestId: typeof retry_request_id === 'string' && safeId(retry_request_id)
+                ? retry_request_id
+                : `req-chat-retry-${genId12()}`,
             })
             : await groupChat.send({
                 userId: ctx.userId, cid, text,

@@ -29,7 +29,21 @@ describe('group_chat message deletion', () => {
     const layout = layoutModule.conversationLayout(UID, CID);
     const rows = [
       { id: 'keep-msg', ts: '2026-07-10T10:00:00', from: 'user', to: ['commander'], text: 'keep' },
-      { id: 'delete-msg', ts: '2026-07-10T10:01:00', from: 'commander', to: ['user'], text: 'delete' },
+      {
+        id: 'delete-msg',
+        ts: '2026-07-10T10:01:00',
+        from: 'commander',
+        to: ['user'],
+        text: 'delete this private answer',
+        model_text: 'private model input',
+        attachments: ['private.txt'],
+        process: [{ type: 'progress', text: 'private progress' }],
+        failure_kind: 'runtime',
+        failure_code: 'private_failure',
+        action_request_id: 'req-delete-msg',
+        turn_id: 'turn-delete-msg',
+        turn_end: true,
+      },
     ];
     fs.mkdirSync(path.dirname(layout.messageFile), { recursive: true });
     fs.writeFileSync(layout.messageFile, rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
@@ -45,12 +59,21 @@ describe('group_chat message deletion', () => {
     expect(result).toMatchObject({ ok: true, deleted: ['delete-msg'] });
     const mainRows = fs.readFileSync(layout.messageFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     const sliceRows = fs.readFileSync(layout.visibilityFile('commander'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    expect(mainRows.find((row) => row.id === 'delete-msg')).toMatchObject({
-      text: '', deleted_by_user: true, _v: 1,
-    });
-    expect(sliceRows.find((row) => row.id === 'delete-msg')).toMatchObject({
-      text: '', deleted_by_user: true, _v: 1,
-    });
+    const expectedTombstone = {
+      id: 'delete-msg',
+      ts: '2026-07-10T10:01:00',
+      from: 'commander',
+      to: ['user'],
+      text: '',
+      action_request_id: 'req-delete-msg',
+      turn_id: 'turn-delete-msg',
+      turn_end: true,
+      deleted_at: expect.any(String),
+      deleted_by_user: true,
+      _v: 1,
+    };
+    expect(mainRows.find((row) => row.id === 'delete-msg')).toEqual(expectedTombstone);
+    expect(sliceRows.find((row) => row.id === 'delete-msg')).toEqual(expectedTombstone);
     expect((await groupChat.readMessages(UID, CID)).map((row) => row.id)).toEqual(['keep-msg']);
     expect(fs.existsSync(retainedAttachment)).toBe(true);
   });

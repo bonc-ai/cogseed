@@ -45,14 +45,31 @@ describe('CogSeed task lifecycle', () => {
     ]);
   });
 
+  it('rolls back the task record when its matching lifecycle event cannot be persisted', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const eventFile = paths.cogseedTaskEventsFile(USER, created.taskId);
+    fs.rmSync(eventFile, { force: true });
+    fs.mkdirSync(eventFile, { recursive: true });
+
+    await expect(lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued')).rejects.toThrow();
+
+    await expect(tasks.readCogSeedTask(USER, created.taskId)).resolves.toMatchObject({ status: 'created' });
+  });
+
   it('makes repeated start idempotent, supports cancellation, recoverability, and explicit retry', async () => {
     const created = (await createTask()).task;
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
 
     await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
     const firstStart = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
     const duplicateStart = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
     expect(duplicateStart).toEqual(firstStart);
+    expect((await events.readCogSeedTaskEvents(USER, created.taskId, 0, 10))
+      .filter((event) => event.type === 'task.started')).toHaveLength(1);
 
     const recoverable = await lifecycle.markCogSeedTaskRecoverable(USER, created.taskId, 'worker_exit');
     expect(recoverable.status).toBe('recoverable');
@@ -61,6 +78,84 @@ describe('CogSeed task lifecycle', () => {
 
     await lifecycle.transitionCogSeedTask(USER, retried.taskId, 'cancelled');
     await expect(lifecycle.transitionCogSeedTask(USER, retried.taskId, 'queued')).rejects.toThrow(/terminal|transition/i);
+  });
+
+  it('allows a recovered execution to be explicitly cancelled', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.markCogSeedTaskRecoverable(USER, created.taskId, 'worker_restart');
+
+    await expect(lifecycle.transitionCogSeedTask(USER, created.taskId, 'cancelled')).resolves.toMatchObject({
+      status: 'cancelled',
+    });
+    expect((await events.readCogSeedTaskEvents(USER, created.taskId, 0, 20)).map((event) => event.type)).toEqual([
+      'task.created',
+      'task.queued',
+      'task.started',
+      'task.recoverable',
+      'task.cancelled',
+    ]);
+  });
+
+  it('allows only one competing outcome when completion, cancellation, and recovery race', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+
+    const outcomes = await Promise.allSettled([
+      lifecycle.transitionCogSeedTask(USER, created.taskId, 'completed', { outputChars: 4 }),
+      lifecycle.transitionCogSeedTask(USER, created.taskId, 'cancelled'),
+      lifecycle.markCogSeedTaskRecoverable(USER, created.taskId, 'worker_restart'),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(2);
+
+    const stored = await tasks.readCogSeedTask(USER, created.taskId);
+    expect(stored?.status).toMatch(/^(completed|cancelled|recoverable)$/);
+    const terminalEvents = (await events.readCogSeedTaskEvents(USER, created.taskId, 0, 20))
+      .filter((event) => ['task.completed', 'task.cancelled', 'task.recoverable'].includes(event.type));
+    expect(terminalEvents).toHaveLength(1);
+    expect(terminalEvents[0]?.type).toBe({
+      completed: 'task.completed',
+      cancelled: 'task.cancelled',
+      recoverable: 'task.recoverable',
+    }[stored!.status]);
+  });
+
+  it('atomically finalizes a retained result without fabricating a second execution lifecycle', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.markCogSeedTaskRecoverable(USER, created.taskId, 'worker_restart');
+
+    const [first, duplicate] = await Promise.all([
+      lifecycle.finalizeCogSeedTaskFromRetainedResult(USER, created.taskId, 'completed', { outputChars: 12 }),
+      lifecycle.finalizeCogSeedTaskFromRetainedResult(USER, created.taskId, 'completed', { outputChars: 12 }),
+    ]);
+
+    expect(first).toMatchObject({ status: 'completed', resultDeliveryState: 'pending-recovery' });
+    expect(duplicate).toMatchObject({ status: 'completed', resultDeliveryState: 'pending-recovery' });
+    await expect(lifecycle.finalizeCogSeedTaskFromRetainedResult(USER, created.taskId, 'failed', {
+      errorCode: 'late_conflict',
+    })).rejects.toThrow(/conflicting/i);
+    const stored = await events.readCogSeedTaskEvents(USER, created.taskId, 0, 20);
+    expect(stored.map((event) => event.type)).toEqual([
+      'task.created',
+      'task.queued',
+      'task.started',
+      'task.recoverable',
+      'task.completed',
+    ]);
+    expect(stored.filter((event) => event.type === 'task.completed')).toHaveLength(1);
   });
 
   it('keeps the original Skill version pins when retrying a task', async () => {
