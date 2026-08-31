@@ -6488,6 +6488,7 @@
   "exec_config.cli_model_custom_ph": "输入模型 ID（支持完整名称）",
   "exec_config.cli_model_custom_add": "使用",
   "exec_config.cli_models_rescan": "重新扫描",
+  "exec_config.cli_current_model_title": "「{model}」是该 CLI 当前自用的模型（可在菜单里切换）",
   "chat.stats.costReportedTitle": "{c}（CLI 自报成本，非估算）",
   "settings.custom_providers.cap_reasoning": "推理",
   "settings.custom_providers.cap_vision": "视觉",

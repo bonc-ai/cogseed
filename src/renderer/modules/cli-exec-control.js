@@ -94,10 +94,11 @@ async function loadCliModels(agentId, cli, opts) {
         reason: models.length ? null : ((res.scanned && res.scanned.reason) || 'empty_scan'),
         at: Date.now(),
       };
-      // ready 长缓存；unavailable 短缓存（避免菜单每次打开都打重扫描，
-      // 但 60s 后允许自动重试）。
+      // ready 长缓存（5 分钟）；unavailable 只缓存 10 秒——主进程侧对失败
+      // 本就不缓存，渲染层这里短缓存只为防抖（典型场景：应用启动时网关
+      // 尚未 respawn 完成而扫了个空，几秒后应自动重试填上当前模型）。
       if (entry.state === 'ready') _scanCache.set(key, entry);
-      else _scanCache.set(key, { ...entry, at: Date.now() - (_SCAN_TTL_MS - 60_000) });
+      else _scanCache.set(key, { ...entry, at: Date.now() - (_SCAN_TTL_MS - 10_000) });
       return entry;
     } catch (err) {
       return { state: 'unavailable', models: [], staticModels: [], current: null, reason: 'ipc_error', error: (err && err.message) || String(err), at: Date.now() };

@@ -71,6 +71,12 @@ describe('unified execution entry — picker scope', () => {
     expect(chip).toContain('model-chip-menu-segmented');
     expect(chip).toContain("t('exec_config.effort_cli_forward_note'");
     expect(chip).toContain("t('exec_config.cli_models_scanning')");
+    // 切到外接智能体时 chip 直接亮出 CLI 当前实际模型（扫描披露的
+    // current），不是笼统的「CLI 默认」占位；recipient 变化触发后台扫描。
+    expect(chip).toContain('scanCurrent');
+    expect(chip).toContain('modelIsCliCurrent');
+    expect(chip).toContain('_scanCliCurrentForChips');
+    expect(chip).toContain("t('exec_config.cli_current_model_title'");
   });
 });
 
