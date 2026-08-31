@@ -3982,6 +3982,7 @@ async function runActorTurnBody(
   let turnProjectId: string | undefined;
   let turnSpaceId: string | undefined;
   let turnConversationKind: string | undefined;
+  let turnPermissionMode: 'full' | 'auto_approve' | 'ask' | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
@@ -3991,6 +3992,8 @@ async function runActorTurnBody(
     if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
     const _kind = (_conv as any)?.kind;
     if (typeof _kind === "string" && _kind) turnConversationKind = _kind;
+    const _mode = (_conv as any)?.permission_mode;
+    if (_mode === 'full' || _mode === 'auto_approve' || _mode === 'ask') turnPermissionMode = _mode;
   } catch {
     /* default scope */
   }
@@ -5323,6 +5326,7 @@ async function runActorTurnBody(
         ...(turnModelOverride ? { modelOverride: turnModelOverride } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
+        ...(turnPermissionMode ? { permissionMode: turnPermissionMode } : {}),
         turnId: item.turnId,
         sourceMessageId: item.msgId,
         sourceMessageFromUser: item.fromActorId === USER_ID,

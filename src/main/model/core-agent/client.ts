@@ -1321,6 +1321,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(ephemeralSession ? { ephemeralSession: true } : {}),
       providerFirstEventTimeoutMs: Math.max(1, streamIdleTimeout * 1000),
       ...(cid ? { cid } : {}),
+      ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(turnId ? { turnId } : {}),
       ...(sourceMessageId ? { sourceMessageId } : {}),
       ...(sourceMessageFromUser ? { sourceMessageFromUser: true } : {}),
