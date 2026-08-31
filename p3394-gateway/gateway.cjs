@@ -26,7 +26,8 @@
  *     回传（digest 校验）——Artifact 端到端传递。
  *
  * 安装/获取（对端机器上；本地优先，有就直接用、不要从 NPM 拉）：
- *   1) 已全局安装过：command -v p3394-gateway 有输出 → 直接用 p3394-gateway；
+ *   1) 已全局安装过（POSIX: command -v p3394-gateway；Windows: where
+ *      p3394-gateway）有输出 → 直接用 p3394-gateway；
  *   2) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
  *      开发仓库 <仓库根>/p3394-gateway/gateway.cjs；
  *      macOS 已安装应用
@@ -199,6 +200,93 @@ if (AGENT_MODE !== 'oneshot' && AGENT_MODE !== 'sscli') {
 }
 const CLI = (process.env.P3394_AGENT_CLI || (preset ? preset.cli : PRESET_NAME)).trim();
 const CLI_ARGS = (process.env.P3394_AGENT_CLI_ARGS || (preset ? preset.args : '{message}')).trim();
+
+// Windows 拉起规则：
+//   - 裸命令名（如 npm 全局的 `codex`）必须按 PATH + PATHEXT 查找，优先
+//     `.cmd/.bat`（npm 的 Windows shim），否则 CreateProcess 会报 ENOENT；
+//   - `.cmd/.bat` 必须经 cmd.exe /c 执行，参数要内嵌进同一命令行，避免
+//     npm shim 二次解析 `%*` 时丢掉调用方追加的参数；
+//   - 无扩展名 node-shebang 脚本（如 WorkBuddy 内置 `codebuddy`）改经本进程
+//     Node 运行时执行（网关自身以 ELECTRON_RUN_AS_NODE=1 启动时子进程继承）；
+//   - 原生 exe/com 原样直启。
+const WINDOWS_CMD_SCRIPT_RE = /\.(?:cmd|bat)$/i;
+const WINDOWS_NATIVE_EXT_RE = /\.(?:exe|com)$/i;
+const CMD_META_RE = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(value) {
+  return String(value).replace(CMD_META_RE, '^$1');
+}
+
+function escapeCmdArgument(value, doubleEscapeMetaChars) {
+  let escaped = String(value);
+  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
+  escaped = '"' + escaped + '"';
+  escaped = escaped.replace(CMD_META_RE, '^$1');
+  if (doubleEscapeMetaChars) escaped = escaped.replace(CMD_META_RE, '^$1');
+  return escaped;
+}
+
+/** PATH + PATHEXT 查找；绝对路径只做存在性检查。 */
+function windowsLookPath(cli) {
+  if (!cli) return null;
+  if (path.isAbsolute(cli) || cli.includes('\\') || cli.includes('/')) {
+    try { return fs.statSync(cli).isFile() ? cli : null; } catch { return null; }
+  }
+  const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+  const pathValue = process.env.PATH || process.env.Path || '';
+  const dirs = pathValue.split(';').map((s) => s.trim()).filter(Boolean);
+  const names = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+function buildWindowsCmdInvocation(cli, args) {
+  const normalized = path.win32.normalize(cli);
+  const doubleEscape = /(?:node_modules[\\/]\.bin|AppData[\\/]Roaming[\\/]npm)[\\/][^\\/]+\.cmd$/i
+    .test(normalized);
+  const shellCommand = [
+    escapeCmdCommand(normalized),
+    ...args.map((arg) => escapeCmdArgument(arg, doubleEscape)),
+  ].join(' ');
+  return {
+    command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', '"' + shellCommand + '"'],
+  };
+}
+
+function isNodeShebangScript(cli) {
+  try {
+    const fd = fs.openSync(cli, 'r');
+    const buf = Buffer.alloc(256);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, n));
+  } catch {
+    return false;
+  }
+}
+
+/** Windows 感知的 CLI spawn：解析 shim 并选择正确的执行方式。 */
+function spawnCli(cli, args, optsArg) {
+  const opts = optsArg || {};
+  if (process.platform !== 'win32') return spawn(cli, args, opts);
+  const resolved = windowsLookPath(cli) || cli;
+  if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const inv = buildWindowsCmdInvocation(resolved, args);
+    return spawn(inv.command, inv.args, Object.assign({}, opts, { windowsVerbatimArguments: true }));
+  }
+  if (!WINDOWS_NATIVE_EXT_RE.test(resolved) && isNodeShebangScript(resolved)) {
+    return spawn(process.execPath, [resolved, ...args], opts);
+  }
+  return spawn(resolved, args, opts);
+}
+
 const TIMEOUT_MS = Number(process.env.P3394_AGENT_TIMEOUT_MS || 10 * 60 * 1000);
 const NODE_KIND = (process.env.P3394_NODE_KIND || 'agent').trim();
 if (!['agent', 'sub_agent', 'task_agent', 'capability', 'model_runtime'].includes(NODE_KIND)) {
@@ -509,7 +597,7 @@ const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
 function runAgent(message, taskId, cwd, onStream, onProgress) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
-    const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     if (taskId) activeTasks.set(taskId, child);
     let out = '';
     let errOut = '';
@@ -653,7 +741,13 @@ function sscliArgs() {
 // ── sscli 模式：常驻 CLI，p3394-sscli/1.0 JSONL ──
 /** Codex Desktop app-server adapter. The ChatGPT app ships this runtime and
  * uses the same CODEX_HOME as the visible Desktop conversations. */
-const CODEX_APP_SERVER = process.env.P3394_CODEX_APP_SERVER || '/Applications/ChatGPT.app/Contents/Resources/codex';
+const CODEX_APP_SERVER =
+  process.env.P3394_CODEX_APP_SERVER ||
+  (process.platform === 'win32'
+    // Windows has no Codex Desktop bundle; fall back to the PATH-resolvable
+    // `codex` (npm global shim, resolved by PATHEXT at spawn time).
+    ? 'codex'
+    : '/Applications/ChatGPT.app/Contents/Resources/codex');
 class CodexAppServerRuntime {
   constructor() {
     this.child = null;
@@ -709,7 +803,7 @@ class CodexAppServerRuntime {
     // 会让 gateway 进程直接崩（uncaught 'error'），而且 initialize 会挂到
     // TIMEOUT_MS 才失败。这里快速失败并清空状态，deliver 侧拿到明确错误。
     let spawnError = null;
-    this.child = spawn(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawnCli(CODEX_APP_SERVER, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.on('error', (error) => {
       spawnError = error;
       this._failPending(new Error('p3394_codex_app_server_spawn_failed: ' + error.message));
@@ -866,7 +960,7 @@ class SscliRuntime {
   }
   async start() {
     if (this.child) return;
-    this.child = spawn(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
     this.lineBuf = '';
     let errLog = '';
     this.child.stdout.on('data', (chunk) => {
@@ -950,7 +1044,7 @@ class StreamJsonRuntime {
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
-      const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawnCli(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
       this.active.set(cancelKey, child);
       let lineBuf = '';
       let accumulated = '';
@@ -1069,7 +1163,7 @@ class ClaudePersistentRuntime {
 
   _spawn(sessionId, cwd) {
     const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null };
-    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, this._args(), { cwd: cwd || undefined, stdio: ['pipe', 'pipe', 'pipe'] });
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {

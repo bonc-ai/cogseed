@@ -133,7 +133,10 @@ describe('local_agents/backends/base › spawnCli', () => {
     const missingCwd = path.join(root, 'cloud', 'spaces', 'sp_abc123', 'workspace', '任务甲');
     expect(fs.existsSync(missingCwd)).toBe(false);
 
-    const child = spawnCli('/bin/echo', ['hi'], missingCwd);
+    const probe = process.platform === 'win32'
+      ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'echo hi'] }
+      : { command: '/bin/echo', args: ['hi'] };
+    const child = spawnCli(probe.command, probe.args, missingCwd);
     const [code] = await new Promise<[number | null, string]>((resolve) => {
       let out = '';
       child.stdout.setEncoding('utf8');
@@ -153,7 +156,10 @@ describe('local_agents/backends/base › spawnCli', () => {
     const marker = path.join(cwd, 'marker.txt');
     fs.writeFileSync(marker, 'x');
 
-    spawnCli('/bin/echo', ['hi'], cwd);
+    const probe = process.platform === 'win32'
+      ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'echo hi'] }
+      : { command: '/bin/echo', args: ['hi'] };
+    spawnCli(probe.command, probe.args, cwd);
 
     expect(fs.statSync(marker).isFile()).toBe(true);
   });

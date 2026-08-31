@@ -161,9 +161,14 @@ export function localCliSearchDirs(type, platform = process.platform, env = proc
     if (env.NVM_SYMLINK) dirs.push(env.NVM_SYMLINK);
     if (type === 'codex' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'));
+      // OpenAI Codex Windows App keeps the CLI under bin/<hash>/codex.exe,
+      // outside PATH and npm; the `*` segment expands over version dirs.
+      dirs.push(path.win32.join(localAppData, 'OpenAI', 'Codex', 'bin', '*'));
     }
     if (type === 'workbuddy' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Some installers use %LOCALAPPDATA%\WorkBuddy directly (no "Programs").
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
     }
     return dirs;
   }
