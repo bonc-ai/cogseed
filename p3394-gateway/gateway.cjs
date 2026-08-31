@@ -504,6 +504,23 @@ function sanitizeStreamText(raw) {
 }
 
 // ── oneshot 模式：每消息 spawn CLI（可取消） ──
+
+// ── CogSeed 扩展：extensions.execution_prefs（单轮执行偏好透传） ──
+// CogSeed 主机可按轮次携带 { reasoning_effort }（low|high）。旧版宿主不发
+// 该字段 → undefined，行为与既往完全一致；未知/白名单外的值一律视为"跟随
+// CLI 自身默认"。仅 claude 系 runtime 消费（MAX_THINKING_TOKENS env）；其他
+// CLI 无已知开关，prefs 被安全忽略。档位→token 预算为启发式映射，与 CogSeed
+// 本地直连 backend 保持同一份取值。
+const EXEC_EFFORT_TOKENS = { low: '8192', high: '32000' };
+function executionPrefsFor(envelope) {
+  const ext = (envelope && envelope.extensions) || {};
+  const prefs = ext.execution_prefs;
+  if (!prefs || typeof prefs !== 'object') return null;
+  const effort = typeof prefs.reasoning_effort === 'string' ? prefs.reasoning_effort.trim().toLowerCase() : '';
+  if (!Object.prototype.hasOwnProperty.call(EXEC_EFFORT_TOKENS, effort)) return null;
+  return { maxThinkingTokens: EXEC_EFFORT_TOKENS[effort] };
+}
+
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
 function runAgent(message, taskId, cwd, onStream, onProgress) {
@@ -682,18 +699,56 @@ class CodexAppServerRuntime {
       else entry.resolve(msg.result);
       return;
     }
+    if (msg.method === 'turn/completed' && msg.params) {
+      const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
+      if (entry) {
+        this.pending.delete(key);
+        clearTimeout(entry.timer);
+        const turn = msg.params.turn || {};
+        if (turn.status === 'failed' || turn.status === 'interrupted') {
+          entry.reject(new Error((turn.error && turn.error.message) || ('p3394_codex_turn_' + turn.status)));
+        } else {
+          const itemReply = Array.isArray(turn.items)
+            ? turn.items.filter((item) => item && item.type === 'agentMessage' && typeof item.text === 'string').map((item) => item.text).join('')
+            : '';
+          entry.resolve(entry.deltas.join('') || itemReply);
+        }
+      }
+      return;
+    }
+    const entry = msg.params && msg.params.threadId ? this._touchTurn(msg.params.threadId) : null;
     if (msg.method === 'item/agentMessage/delta' && msg.params) {
-      const entry = this.pending.get('turn:' + msg.params.threadId);
       if (entry) {
         const delta = msg.params.delta || '';
         entry.deltas.push(delta);
         entry.onDelta?.(delta);
       }
     }
-    if (msg.method === 'turn/completed' && msg.params) {
-      const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
-      if (entry) { this.pending.delete(key); clearTimeout(entry.timer); entry.resolve(entry.deltas.join('')); }
+    if (entry && (msg.method === 'item/started' || msg.method === 'item/completed')) {
+      const itemType = msg.params.item && msg.params.item.type ? String(msg.params.item.type) : 'work';
+      this._emitProgress(entry, '[Codex] ' + itemType + (msg.method === 'item/started' ? ' started' : ' completed'));
+    } else if (entry && (msg.method === 'item/commandExecution/outputDelta' || msg.method === 'item/mcpToolCall/progress')) {
+      this._emitProgress(entry, '[Codex] working');
     }
+  }
+  _touchTurn(threadId) {
+    const key = 'turn:' + threadId;
+    const entry = this.pending.get(key);
+    if (!entry) return null;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      if (this.pending.get(key) !== entry) return;
+      this.pending.delete(key);
+      this.activeTurns.delete(entry.cancelKey);
+      entry.reject(new Error('p3394_codex_turn_timeout'));
+    }, TIMEOUT_MS);
+    return entry;
+  }
+  _emitProgress(entry, text) {
+    const now = Date.now();
+    if (!entry.onProgress || (entry.lastProgressAt && now - entry.lastProgressAt < 15 * 1000)) return;
+    entry.lastProgressAt = now;
+    entry.onProgress(text);
   }
   async start() {
     if (this.child) return;
@@ -732,7 +787,7 @@ class CodexAppServerRuntime {
   }
   get name() { return 'codex'; }
   async openSession() { /* codex 的 thread 在 deliver 里惰性创建 */ }
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cwd = (opts && opts.cwd) || null;
@@ -744,27 +799,34 @@ class CodexAppServerRuntime {
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
       this.threads.set(sessionId, threadId);
     }
-    const id = ++this.seq;
     // 可取消键与其余 runtime 一致：task_id 优先（cancel 控制帧按 task_id
     // 匹配），无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     const promise = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete('turn:' + threadId);
-        this.activeTurns.delete(cancelKey);
-        reject(new Error('p3394_codex_turn_timeout'));
-      }, TIMEOUT_MS);
       // 包装 resolve/reject 以便 turn 结束时同步摘除 activeTurns 登记。
       this.pending.set('turn:' + threadId, {
         resolve: (value) => { this.activeTurns.delete(cancelKey); resolve(value); },
         reject: (error) => { this.activeTurns.delete(cancelKey); reject(error); },
-        timer,
+        timer: null,
         deltas: [],
         onDelta,
+        onProgress,
+        cancelKey,
+        lastProgressAt: 0,
       });
+      this._touchTurn(threadId);
     });
     this.activeTurns.set(cancelKey, { threadId });
-    this._send({ jsonrpc: '2.0', id, method: 'turn/start', params: { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] } });
+    try {
+      await this._request('turn/start', { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] });
+    } catch (error) {
+      const entry = this.pending.get('turn:' + threadId);
+      if (entry) {
+        this.pending.delete('turn:' + threadId);
+        clearTimeout(entry.timer);
+        entry.reject(error);
+      }
+    }
     return promise;
   }
   /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
@@ -947,10 +1009,13 @@ class StreamJsonRuntime {
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [])];
+    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS（无 prefs 时保持
+    // CLI 自身默认）。
+    const thinkingEnv = (opts && opts.execPrefs) ? { MAX_THINKING_TOKENS: opts.execPrefs.maxThinkingTokens } : null;
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
-      const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(CLI, args, { cwd: (opts && opts.cwd) || undefined, env: thinkingEnv ? Object.assign({}, process.env, thinkingEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
       this.active.set(cancelKey, child);
       let lineBuf = '';
       let accumulated = '';
@@ -1067,9 +1132,11 @@ class ClaudePersistentRuntime {
     return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra];
   }
 
-  _spawn(sessionId, cwd) {
-    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null };
-    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, stdio: ['pipe', 'pipe', 'pipe'] });
+  _spawn(sessionId, cwd, maxThinkingTokens) {
+    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, maxThinkingTokens: maxThinkingTokens || null };
+    // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env）。
+    const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
+    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {
@@ -1167,12 +1234,21 @@ class ClaudePersistentRuntime {
     const hint = (opts && opts.peerCallHint) || '';
     const cancelKey = (opts && opts.taskId) || messageId;
     const cwd = (opts && opts.cwd) || process.cwd();
+    // 本轮的推理强度预算：与常驻进程已固化值不同时必须重启进程（env 是
+    // spawn 时定死的，进程活着改不了）；重启后首轮由 transcript 恢复上下文。
+    // 在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
+    const wantThinking = (opts && opts.execPrefs) ? opts.execPrefs.maxThinkingTokens : null;
     let entry = this.sessions.get(sessionId);
+    if (entry && entry.maxThinkingTokens !== (wantThinking || null) && !entry.turn) {
+      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      this._dropSession(sessionId);
+      entry = null;
+    }
     const fresh = !entry || entry.child.exitCode !== null || !entry.child.stdin.writable;
     if (fresh) {
       // 新进程（首次/上次进程已退出/被取消）：首轮回放 transcript，保证
       // 跨 gateway 重启与进程重建后的上下文不丢（常驻进程内后续轮自动延续）。
-      entry = this._spawn(sessionId, cwd);
+      entry = this._spawn(sessionId, cwd, wantThinking);
     } else if (entry.cwd !== cwd) {
       throw new Error('p3394_session_cwd_conflict');
     }
@@ -1527,7 +1603,8 @@ async function handleEnvelope(envelope) {
     await runtime.openSession(sessionId, goal, runtimeDir);
     // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
     await stream.finish();
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
     // Agent 运行期间写入 workspace/out/ 的文件 → 随回复回传（Artifact 端到端）

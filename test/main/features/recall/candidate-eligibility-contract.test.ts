@@ -53,7 +53,7 @@ function inboxCandidate(id: string, content: typeof PROJECT_FACT, status = 'weak
   return { id, status, ...content, sourceRefs: REFS, evidenceRefs: REFS };
 }
 
-describe('TG-01 分类不合格的候选不得作为普通可确认待办', () => {
+describe('分类不合格的候选不得作为普通可确认待办', () => {
   it('能力判据关掉确认与晋升，并给出可翻译的阻断原因', () => {
     const caps = getRecallCandidateCapabilities({
       status: 'weak_observation', risk: 'low', sourceRefs: REFS, evidenceRefs: REFS, ...PROJECT_FACT,
@@ -98,7 +98,7 @@ describe('TG-01 分类不合格的候选不得作为普通可确认待办', () =
   });
 });
 
-describe('TG-03 Inbox 与 Tree 消费同一套 eligibility', () => {
+describe('Inbox 与 Tree 消费同一套 eligibility', () => {
   it('同一条候选在两边得到同一个 canPromote', () => {
     const input = {
       status: 'weak_observation' as const, risk: 'low' as const,
@@ -146,7 +146,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
 
   const service = () => import('../../../../src/main/features/recall/candidate-service');
 
-  it('TG-02 编辑不得把分类不合格的候选洗成 pending_review', async () => {
+  it('编辑不得把分类不合格的候选洗成 pending_review', async () => {
     const candidates = await service();
     const saved = await candidates.saveRecallCandidate('u1', {
       ...PROJECT_FACT, sourceRefs: REFS as never, forceWeakObservation: true,
@@ -160,7 +160,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
     expect(edited.status).toBe('weak_observation');
   });
 
-  it('TG-02 真正改成合格内容后允许迁回 pending_review', async () => {
+  it('真正改成合格内容后允许迁回 pending_review', async () => {
     const candidates = await service();
     const saved = await candidates.saveRecallCandidate('u1', {
       ...PROJECT_FACT, sourceRefs: REFS as never, forceWeakObservation: true,
@@ -172,7 +172,7 @@ describe('候选 eligibility 的落库与编辑行为', () => {
     expect(getRecallCandidateCapabilities(fixed).canPromote).toBe(true);
   });
 
-  it('TG-06 可确认候选真实走通 promote → 正式资产', async () => {
+  it('可确认候选真实走通 promote → 正式资产', async () => {
     const candidates = await service();
     const saved = await candidates.saveRecallCandidate('u1', {
       ...DURABLE_PREFERENCE, sourceRefs: REFS as never,

@@ -70,7 +70,10 @@ describe('CogSeed Agent Registry projection', () => {
 
   it('normalizes P3394 peers and remote nodes without exposing endpoint credentials or treating channels as Agents', async () => {
     const projection = await buildCogSeedAgentRegistryProjection('registry-user', {
-      listAgentSummaries: vi.fn(async () => []),
+      listAgentSummaries: vi.fn(async () => [{
+        agent_id: 'codex-agent', name: 'Codex', enabled: true, source: 'custom',
+        runtime: { kind: 'p3394-gateway', cli: 'codex' },
+      }] as any),
       detectAll: vi.fn(async () => []),
       listTasks: vi.fn(async () => []),
       listChannels: vi.fn(async () => [{
@@ -85,7 +88,12 @@ describe('CogSeed Agent Registry projection', () => {
         {
           agent_id: 'remote-reviewer', display_name: 'Remote reviewer', node_kind: 'agent',
           online: true, disabled: false, last_seen_at: '2026-08-27T01:01:00.000Z',
-          capabilities: ['review', 'token=must-not-cross'], endpoints: ['http://10.0.0.8:9000'],
+          capabilities: ['review', 'token=must-not-cross'], endpoints: ['http://192.0.2.8:9000'],
+        },
+        {
+          agent_id: 'codex', display_name: 'Codex runtime', node_kind: 'agent',
+          online: true, disabled: false, last_seen_at: '2026-08-27T01:01:30.000Z',
+          capabilities: ['task-execution'], endpoints: ['http://127.0.0.1:9001'],
         },
         {
           agent_id: 'bridge-peer', display_name: 'Bridge peer', node_kind: 'channel_bridge',
@@ -100,7 +108,7 @@ describe('CogSeed Agent Registry projection', () => {
       listRemoteNodes: vi.fn(() => ({
         ok: true as const,
         nodes: [{
-          id: 'remote-node-safe', label: 'Remote runtime', endpoint: 'http://10.0.0.8:9000',
+          id: 'remote-node-safe', label: 'Remote runtime', endpoint: 'http://192.0.2.8:9000',
           tokenPreview: 'abcd…ef', expected_identity: 'remote-reviewer', enabled: true,
           created_at: '2026-08-27T00:59:00.000Z',
         }],
@@ -111,6 +119,11 @@ describe('CogSeed Agent Registry projection', () => {
     expect(projection.agents).toContainEqual(expect.objectContaining({
       agentId: 'remote-reviewer', sourceKind: 'p3394', online: true, dispatchable: true,
     }));
+    expect(projection.agents).toContainEqual(expect.objectContaining({
+      agentId: 'codex-agent', displayName: 'Codex', sourceKind: 'p3394',
+      runtimeKind: 'p3394-gateway:codex', online: true, dispatchable: true,
+    }));
+    expect(projection.agents.some((agent) => agent.agentId === 'codex')).toBe(false);
     expect(projection.agents.some((agent) => agent.agentId === 'bridge-peer')).toBe(false);
     expect(projection.agents.some((agent) => agent.agentId === 'cogseed')).toBe(false);
     expect(projection.agents).toContainEqual(expect.objectContaining({
@@ -124,7 +137,7 @@ describe('CogSeed Agent Registry projection', () => {
       channelId: 'channel-bridge', platform: 'telegram', health: 'ready',
     }));
     const serialized = JSON.stringify(projection);
-    expect(serialized).not.toContain('10.0.0.8');
+    expect(serialized).not.toContain('192.0.2.8');
     expect(serialized).not.toContain('abcd…ef');
     expect(serialized).not.toContain('token=must-not-cross');
     expect(serialized).not.toContain('endpoint');

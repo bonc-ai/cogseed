@@ -115,6 +115,85 @@ function workspaceRoot() {
     || path.join(require('os').homedir(), '.cogseed', 'data');
 }
 
+// ── Plugin runtime secrets injection ─────────────────────────────────────
+// A package with a plugin-provided UI stores its runtime credentials at
+// `<uid>/local/packages/.secrets/<pkg>.json` (0600, machine-private; written
+// by the plugin config flow in features/plugin_ui.ts). When the invoked skill
+// lives inside such a package, its EDUSEED_* / NSEAP_* platform keys are
+// merged into the environment right before the skill script runs — so
+// conversation-driven plugin calls (the agent as "remote control") work
+// without the user exporting keys by hand.
+//
+// Guard rails:
+//   - Explicit caller env always wins (EDUSEED_MOCK smoke runs, operator
+//     overrides): injection only fills variables the caller did not set.
+//   - Keys are injected for THIS skill run only. They are never part of the
+//     shell environment a bash `env` dump would show, and never travel back
+//     into tool output.
+//   - Skill→package matching goes through the packages registry (same
+//     registry-driven rule as skill root discovery above), not path guessing.
+
+function injectPackageRuntimeSecrets(scriptPath) {
+  const uid = process.env.COGSEED_UID;
+  if (!uid || !/^[A-Za-z0-9_-]{1,64}$/.test(uid)) return;
+  const packagesRoot = path.join(workspaceRoot(), uid, 'local', 'packages');
+  let registry;
+  try {
+    registry = JSON.parse(fs.readFileSync(path.join(packagesRoot, '_registry.json'), 'utf8'));
+  } catch { return; }
+  if (!registry || !Array.isArray(registry.packages)) return;
+
+  const skillDir = path.resolve(path.dirname(path.dirname(scriptPath)));
+  for (const pkg of registry.packages) {
+    if (!pkg || typeof pkg.name !== 'string' || !PKG_NAME_RE.test(pkg.name)) continue;
+    const roots = Array.isArray(pkg.skill_roots) ? pkg.skill_roots : [];
+    for (const rel of roots) {
+      if (typeof rel !== 'string' || path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) continue;
+      const root = path.resolve(rel === '.' ? path.join(packagesRoot, pkg.name) : path.join(packagesRoot, pkg.name, rel));
+      if (skillDir !== root && !skillDir.startsWith(root + path.sep)) continue;
+      let secrets;
+      try {
+        secrets = JSON.parse(fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkg.name}.json`), 'utf8'));
+      } catch { return; }
+      if (!secrets || typeof secrets !== 'object') return;
+      applyPackageSecrets(secrets);
+      return;
+    }
+  }
+}
+
+function applyPackageSecrets(secrets) {
+  const serverUrl = typeof secrets.server_url === 'string' && secrets.server_url.trim()
+    ? secrets.server_url.trim() : '';
+  const apiKey = typeof secrets.api_key === 'string' && secrets.api_key.trim()
+    ? secrets.api_key.trim() : '';
+  if (apiKey && !process.env.EDUSEED_API_KEY && !process.env.NSEAP_API_KEY) {
+    process.env.EDUSEED_API_KEY = apiKey;
+    process.env.NSEAP_API_KEY = apiKey;
+  }
+  if (serverUrl) {
+    if (!process.env.EDUSEED_SERVER_URL) process.env.EDUSEED_SERVER_URL = serverUrl;
+    if (!process.env.NSEAP_SERVER_URL) process.env.NSEAP_SERVER_URL = serverUrl;
+  }
+  const studentId = typeof secrets.student_id === 'string' && secrets.student_id.trim()
+    ? secrets.student_id.trim() : '';
+  if (studentId) {
+    if (!process.env.EDUSEED_STUDENT_ID) process.env.EDUSEED_STUDENT_ID = studentId;
+    if (!process.env.NSEAP_STUDENT_ID) process.env.NSEAP_STUDENT_ID = studentId;
+  }
+  const role = secrets.role === 'teacher' ? 'teacher' : (secrets.role === 'student' ? 'student' : '');
+  if (role) {
+    if (!process.env.EDUSEED_ROLE) process.env.EDUSEED_ROLE = role;
+    if (!process.env.NSEAP_ROLE) process.env.NSEAP_ROLE = role;
+  }
+  if (typeof secrets.cohort === 'string' && secrets.cohort.trim() && !process.env.EDUSEED_COHORT) {
+    process.env.EDUSEED_COHORT = secrets.cohort.trim();
+  }
+  if (typeof secrets.course_id === 'string' && secrets.course_id.trim() && !process.env.EDUSEED_COURSE_ID) {
+    process.env.EDUSEED_COURSE_ID = secrets.course_id.trim();
+  }
+}
+
 function sharedVenvRoot() {
   return process.env.COGSEED_VENV_ROOT || path.join(workspaceRoot(), 'venv');
 }
@@ -653,6 +732,7 @@ async function runAsModule(scriptPath, scriptArgs, skillId) {
 async function main() {
   const { skillId, scriptBase, scriptArgs } = parseArgs(process.argv);
   const scriptPath = locateSkillScript(skillId, scriptBase);
+  injectPackageRuntimeSecrets(scriptPath);
 
   const ext = path.extname(scriptPath).slice(1).toLowerCase();
   if (ext === 'ts' || ext === 'mjs' || ext === 'js') {

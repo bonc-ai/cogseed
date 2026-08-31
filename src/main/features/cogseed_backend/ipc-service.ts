@@ -3,7 +3,7 @@ import {
   subscribeCogSeedDashboardChanges,
   type CogSeedDashboardChange,
 } from './event-store';
-import { markCogSeedTaskRecoverable, retryCogSeedTask } from './lifecycle';
+import { archiveCogSeedTask, markCogSeedTaskRecoverable, retryCogSeedTask } from './lifecycle';
 import type { CogSeedRuntimeController, ResumeCogSeedTaskInput, StartCogSeedTaskInput } from './runtime-controller';
 import { assertCogSeedAgentId, assertCogSeedConnectorId, assertCogSeedKbSourceId, assertCogSeedRequestId, assertCogSeedSessionId, assertCogSeedTaskId, assertCogSeedUserId } from './paths';
 import { listCogSeedConnectors } from './connector-store';
@@ -47,12 +47,18 @@ async function resolveCogSeedRuntimeController(deps: CogSeedIpcServiceDeps): Pro
   return deps.controller ?? (await import('./runtime-controller')).cogseedRuntimeController;
 }
 
+async function reconcileCogSeedHostAgentDirectory(): Promise<void> {
+  const host = await import('../cogseed-agent-registry-host');
+  await host.syncCogSeedHostAgentDirectory();
+}
+
 export interface CogSeedIpcServiceDeps {
   controller?: CogSeedIpcController;
   readTask?: typeof readCogSeedTask;
   readTaskByRequestId?: typeof readCogSeedTaskByRequestId;
   admitTask?: typeof createCogSeedTask;
   retryTask?: typeof retryCogSeedTask;
+  archiveTask?: typeof archiveCogSeedTask;
   readEvents?: typeof readCogSeedTaskEvents;
   subscribeDashboardChanges?: typeof subscribeCogSeedDashboardChanges;
   resolveAgentExecutionContext?: typeof resolveCogSeedAgentExecutionContext;
@@ -79,6 +85,7 @@ export interface CogSeedIpcServiceDeps {
   retryGroupChat?: (input: { userId: string; cid: string; failedMessageId: string; visibleText: string; requestId: string }) => Promise<{ ok: boolean; error?: string }>;
   worktreeManager?: Pick<typeof cogseedWorktreeManager, 'resolve' | 'list' | 'create' | 'remove'>;
   listAgentRegistry?: (userId: string) => Promise<CogSeedRendererAgentRegistryProjection>;
+  reconcileAgentDirectory?: () => Promise<void>;
 }
 
 export interface CogSeedTaskEventsInput {
@@ -93,7 +100,7 @@ export interface CogSeedTaskRetryInput {
 }
 
 
-export type CogSeedRendererTaskAction = 'retry' | 'skip' | 'resume' | 'recover-result' | 'abort';
+export type CogSeedRendererTaskAction = 'retry' | 'skip' | 'resume' | 'recover-result' | 'abort' | 'archive';
 export type CogSeedRendererCollaborationAction = 'retry-step' | 'skip-step' | 'approve-gate' | 'reject-gate' | 'dismiss-conflict';
 
 export type CogSeedRendererTitleKey =
@@ -112,6 +119,7 @@ export interface CogSeedRendererActionSet {
   resume: boolean;
   recoverResult: boolean;
   abort: boolean;
+  archive: boolean;
 }
 
 export interface CogSeedRendererSessionSummary {
@@ -518,8 +526,11 @@ function rendererSessionTitle(
   return rendererTaskTitle(groupChatRun ?? latest ?? {}, conversationAgentCounts);
 }
 
-function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 'conversationId' | 'groupChatMessageId' | 'resultDeliveryState'>, hasWorkflowStep = false): CogSeedRendererActionSet {
+function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 'conversationId' | 'groupChatMessageId' | 'resultDeliveryState' | 'archivedAt'>, hasWorkflowStep = false): CogSeedRendererActionSet {
   const { status } = task;
+  const archive = status === 'failed' && !task.archivedAt
+    && task.resultDeliveryState !== 'pending'
+    && task.resultDeliveryState !== 'pending-recovery';
   if (task.executionKind === 'group-chat') {
     return {
       retry: status === 'failed' && !!task.conversationId && !!task.groupChatMessageId,
@@ -527,6 +538,7 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
       resume: false,
       recoverResult: false,
       abort: status === 'created' || status === 'queued' || status === 'running',
+      archive,
     };
   }
   return {
@@ -536,10 +548,12 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
     recoverResult: (task.resultDeliveryState === 'pending-recovery' || task.resultDeliveryState === 'pending')
       && (status === 'completed' || status === 'failed'),
     abort: !TERMINAL_TASK_STATUSES.has(status),
+    archive,
   };
 }
 
-export function cogSeedRendererBoardColumn(status: CogSeedTaskStatus): CogSeedRendererBoardColumn {
+export function cogSeedRendererBoardColumn(status: CogSeedTaskStatus, archivedAt?: string): CogSeedRendererBoardColumn {
+  if (archivedAt) return 'archived';
   if (status === 'created' || status === 'queued') return 'pending';
   if (status === 'running') return 'running';
   if (status === 'waiting_user' || status === 'recoverable' || status === 'failed') return 'attention';
@@ -652,6 +666,7 @@ function rendererSafeEventSummary(event: CogSeedTaskEvent): string {
     case 'task.failed': return 'Task failed.';
     case 'task.cancelled': return 'Task cancelled.';
     case 'task.recoverable': return 'Task requires recovery.';
+    case 'task.archived': return 'Task archived.';
     case 'tool.started': return 'Tool started.';
     case 'tool.finished': return event.payload.isError === true ? 'Tool failed.' : 'Tool finished.';
     default: return 'CogSeed task event.';
@@ -692,7 +707,7 @@ function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskI
 function normalizeActionInput(payload: unknown): { action: CogSeedRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
   const raw = asObject(payload);
   const action = boundedString(raw.action, 'action', 20) as CogSeedRendererTaskAction;
-  if (!['retry', 'skip', 'resume', 'recover-result', 'abort'].includes(action)) throw new Error('invalid CogSeed task action');
+  if (!['retry', 'skip', 'resume', 'recover-result', 'abort', 'archive'].includes(action)) throw new Error('invalid CogSeed task action');
   const taskId = raw.taskId === undefined ? undefined : assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
   const requestId = raw.requestId === undefined ? undefined : assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const reason = boundedString(raw.reason, 'reason', 500, false);
@@ -704,6 +719,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
   const readTaskByRequestId = deps.readTaskByRequestId ?? readCogSeedTaskByRequestId;
   const admitTask = deps.admitTask ?? createCogSeedTask;
   const retryTask = deps.retryTask ?? retryCogSeedTask;
+  const archiveTask = deps.archiveTask ?? archiveCogSeedTask;
   const readEvents = deps.readEvents ?? readCogSeedTaskEvents;
   const listSessions = deps.listSessions ?? listCogSeedSessions;
   const readSession = deps.readSession ?? readCogSeedSession;
@@ -726,6 +742,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
   const retryGroupChat = deps.retryGroupChat ?? (async (input) => (await import('../group_chat')).retryFailedTurn(input));
   const worktreeManager = deps.worktreeManager ?? cogseedWorktreeManager;
   const listAgentRegistry = deps.listAgentRegistry ?? buildCogSeedAgentRegistryProjection;
+  const reconcileAgentDirectory = deps.reconcileAgentDirectory ?? reconcileCogSeedHostAgentDirectory;
   const requestOperations = new Map<string, { fingerprint: string; promise: Promise<CogSeedRendererTaskSummary> }>();
 
   const singleFlightRequest = (
@@ -1005,6 +1022,11 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
 
     async agents(userId: string): Promise<CogSeedRendererAgentRegistryProjection> {
       assertCogSeedUserId(userId);
+      // A P3394 peer first registers as a live runtime node. Reconcile it into
+      // the persisted Agent directory before taking the Run Center snapshot so
+      // local external Agents are selectable immediately, not only after the
+      // separate AI team screen has been opened.
+      await reconcileAgentDirectory().catch(() => undefined);
       return listAgentRegistry(userId);
     },
 
@@ -1041,7 +1063,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         const sessionTitle = rendererSessionTitle(tasksBySession.get(task.sessionId) ?? [task], groupChatModes);
         return {
           ...taskSummary(task, false, groupChatModes),
-          column: cogSeedRendererBoardColumn(task.status),
+          column: cogSeedRendererBoardColumn(task.status, task.archivedAt),
           sessionTitle: sessionTitle.title,
           sessionTitleKey: sessionTitle.titleKey,
           ...(groupId ? { groupId } : {}),
@@ -1415,6 +1437,10 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       if (input.action === 'skip') throw new Error('CogSeed workflow skip requires a workflow step scope');
       const task = await readTask(userId, input.taskId);
       if (!task) throw new Error('CogSeed task not found');
+      if (input.action === 'archive') {
+        await archiveTask(userId, input.taskId);
+        return this.collaborationSnapshot(userId, { taskId: input.taskId });
+      }
       if (task.executionKind === 'group-chat') {
         if (!task.conversationId) throw new Error('Group Chat task has no conversation');
         if (input.action === 'abort') {

@@ -34,6 +34,11 @@ __pycache__/
 /.inspect-jiaoyu/
 /builds/
 
+# Separate internal projects nested in this working tree (own git history,
+# internal CI/deploy config, and their own node_modules) — never commit to this repo
+/.hub-edu-plugin/
+/.hub-verify/
+
 # engine build artifacts
 packages/*/node_modules
 packages/*/dist

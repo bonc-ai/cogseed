@@ -422,7 +422,7 @@ describe('skills renderer frontmatter parsing', () => {
       getElementById: (id: string) => id === 'skills-cognition-assets-body' ? body : null,
     };
     vm.runInContext(`_skillsCognitionState.assetSubview = 'assets';
-      _skillsCognitionState.assets = [{"id": "CA-RULE-P3394-001", "type": "rule", "category": "rule", "title": "P3394产品决策治理规则", "source": "Codex S-P3394-0731", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "本机用户 ZL", "scope": "当前P3394项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-P3394-QODER-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:method-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前P3394项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["cand-method-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
+      _skillsCognitionState.assets = [{"id": "CA-RULE-001", "type": "rule", "category": "rule", "title": "产品决策治理规则", "source": "demo-session-001", "version": "v1.1", "status": "active", "maturity": "transfer_validated", "owner": "local_user", "scope": "当前演示项目", "workspaceRefs": ["产品工作 Workspace"], "receiptRefs": ["CRR-SAMPLE-001"], "candidateRefs": [], "relationRefs": [], "reuseCount": 1, "candidateCount": 0}, {"id": "candidate:method-a", "type": "skill_method", "category": "skill_method", "title": "优化PRD回写Skill的来源分层", "source": "recall_candidate", "status": "candidate", "maturity": "bud", "owner": "local_user", "scope": "当前演示项目", "workspaceRefs": [], "receiptRefs": [], "candidateRefs": ["cand-method-a"], "relationRefs": [], "reuseCount": 0, "candidateCount": 1}];`, context);
 
     context.renderSkillsCognitionAssets();
 
@@ -430,7 +430,7 @@ describe('skills renderer frontmatter parsing', () => {
     expect(body.innerHTML).not.toContain('证据摘要');
     expect(body.innerHTML).toContain('规则与偏好');
     expect(body.innerHTML).toContain('技能与方法');
-    expect(body.innerHTML).toContain('P3394产品决策治理规则');
+    expect(body.innerHTML).toContain('产品决策治理规则');
     // 成熟度按 PRD 3.6 的用户侧表达，不再露出内部枚举名或园艺隐喻。
     // 第一条 transfer_validated → 已成功带入；第二条 status=candidate 还没被
     // 用户确认，按 PRD 3.6 属于 Candidate 档 → 待确认（旧实现把它和 bud 混成
@@ -542,16 +542,16 @@ describe('skills renderer frontmatter parsing', () => {
     vm.runInContext(`
       _skillsCognitionState.assetSubview = 'assets';
       _skillsCognitionState.assets = [${JSON.stringify({
-        id: 'CA-RULE-P3394-001',
+        id: 'CA-RULE-001',
         type: 'rule',
         category: 'rule',
-        title: 'P3394产品决策治理规则',
-        source: 'Codex S-P3394-0731',
+        title: '产品决策治理规则',
+        source: 'demo-session-001',
         version: 'v1.1',
         status: 'active',
         maturity: 'transfer_validated',
-        owner: '本机用户 ZL',
-        scope: '当前P3394项目',
+        owner: 'local_user',
+        scope: '当前演示项目',
         workspaceRefs: [],
         receiptRefs: [],
         candidateRefs: [],

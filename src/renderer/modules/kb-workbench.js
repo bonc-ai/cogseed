@@ -18,6 +18,7 @@
     loading: false,
     summaryLib: '',
     summary: null,
+    summaryCache: {}, // key(库名或 space:xxx) → 已解析的 summary（切回已解析库时立即显示，不重新触发 LLM）
     lastMind: null, // 最近生成的脑图根节点（预览/编辑用）
     mmCollapsed: new Set(), // 已折叠的一级分支节点 idx
     mmMode: 'mind', // 布局模式 mind=双向放射 | org=组织结构图(单向)
@@ -36,6 +37,10 @@
     pendingDelete: new Set(), // 共享库文件删除待索引合并
     sideCollapsed: false, // 知识库列表面板收起
     treeFilter: '', // 库树搜索关键词（过滤个人库+共享库）
+    qaAttachments: [], // 本次提问挂载的附件 [{name, path, size}]（最多 5 个）
+    qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）
+    qaSessions: [], // 会话列表 [{id, title, msgs, ts}]（持久化 localStorage）
+    qaSessionId: null, // 当前会话 id
   };
 
   const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };
@@ -68,6 +73,12 @@
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
     'chevron-right': '<path d="m9 6 6 6-6 6"/>',
     'panel-collapse': '<rect x="4" y="5" width="6" height="14" rx="1.5"/><rect x="14" y="5" width="6" height="14" rx="1.5"/>',
+    'popout': '<path d="M15 3h6v6"/><path d="m10 14 11-11"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    'history': '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+    'close': '<path d="M18 6 6 18M6 6l12 12"/>',
+    'paperclip': '<path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/>',
+    'tools': '<path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14.5 12l-2.5-2.5z"/>',
+    'more-h': '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
   };
   function _svg(name) {
     return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
@@ -222,7 +233,17 @@
     _state.spaceName = (sp && sp.name) || spaceId;
     _state.spaceFiles = [];
     _state.dirStack = [];
-    _state.summaryLib = '';
+    _resetAnalysisCard();
+    // 若该库已解析过（缓存命中），立即恢复显示，不重新触发 LLM
+    const key = `space:${spaceId}`;
+    if (_state.summaryCache[key]) {
+      _state.summaryLib = key;
+      _state.summary = _state.summaryCache[key];
+      _renderAnalysis(_state.summaryCache[key]);
+    } else {
+      _state.summaryLib = '';
+      _state.summary = null;
+    }
     _renderTree();
     _renderFiles();
     _renderRight();
@@ -274,7 +295,16 @@
     _state.spaceId = null;
     _state.spaceFiles = [];
     _state.dirStack = [];
-    _state.summaryLib = '';
+    _resetAnalysisCard();
+    // 若该库已解析过（缓存命中），立即恢复显示，不重新触发 LLM
+    if (_state.summaryCache[name]) {
+      _state.summaryLib = name;
+      _state.summary = _state.summaryCache[name];
+      _renderAnalysis(_state.summaryCache[name]);
+    } else {
+      _state.summaryLib = '';
+      _state.summary = null;
+    }
     _renderTree();
     _renderFiles();
     _renderRight();
@@ -451,8 +481,23 @@
       _log.warn('create shared space failed', err);
       okBtn.disabled = false;
       okBtn.textContent = '确定';
-      if (typeof uiToast === 'function') uiToast('创建失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      const raw = String((err && err.message) || err || '');
+      if (typeof uiToast === 'function') uiToast(`创建失败：${_kbSpaceErrText(raw)}`, { variant: 'error', timeoutMs: 3000 });
     }
+  }
+
+  // 共享库创建/重命名错误码 → 友好中文（name_dup 等英文码对用户不可读）
+  function _kbSpaceErrText(raw) {
+    if (!raw) return '未知错误';
+    const m = String(raw);
+    if (m.includes('name_dup') || m.includes('duplicate')) return '名称已存在，请换一个名称';
+    if (m.includes('name_empty')) return '名称不能为空';
+    if (m.includes('too_long')) return '名称或描述过长';
+    if (m.includes('invalid_space_type')) return '空间类型无效';
+    if (m.includes('not_found')) return '目标不存在';
+    if (m.includes('invalid')) return '参数无效';
+    if (m.includes('network') || m.includes('timed out')) return '网络超时，请重试';
+    return m;
   }
 
   function _kbShareCloseDialog() {
@@ -1157,12 +1202,48 @@
     if (!hasMsg && !hint) {
       const h = document.createElement('div');
       h.className = 'kb-qa-hint';
-      const disp = _state.spaceId ? _state.spaceName : (_state.currentLib || '当前知识库');
-      h.textContent = `基于「${disp}」提问，回答只引用库内资料并标注锚点。`;
+      h.innerHTML = `<div class="kb-qa-hint-ico">${_svg('sparkles')}</div>
+        <div class="kb-qa-hint-title">基于知识库问答</div>
+        <div class="kb-qa-hint-sub">提问后回答只引用库内资料并标注锚点</div>`;
       box.appendChild(h);
     } else if (hasMsg && hint) {
       hint.remove();
     }
+  }
+
+  // 仅移除空状态占位（不创建）——发问后调用，避免测试/环境副作用
+  function _removeQaHint() {
+    const box = document.getElementById('kb-qa-messages');
+    if (!box) return;
+    const hint = box.querySelector('.kb-qa-hint');
+    if (hint) hint.remove();
+  }
+
+  // 渲染本次提问挂载的附件卡片（输入框上方，最多 5 个）
+  function _renderQaAttachments() {
+    const strip = document.getElementById('kb-qa-attach-strip');
+    if (!strip) return;
+    const atts = _state.qaAttachments || [];
+    if (!atts.length) { strip.hidden = true; strip.innerHTML = ''; return; }
+    strip.hidden = false;
+    strip.innerHTML = atts.map((a, i) => {
+      const ext = String(a.name || '').split('.').pop().toUpperCase();
+      const size = a.size >= 1024 ? `${(a.size / 1024).toFixed(1)}KB` : `${a.size || 0}B`;
+      return `<div class="kb-qa-attach-chip">
+        <span class="kb-qa-attach-ico is-${String(ext).toLowerCase()}">${_esc(ext)}</span>
+        <span class="kb-qa-attach-name" title="${_esc(a.name)}">${_esc(a.name)}</span>
+        <span class="kb-qa-attach-meta">${_esc(ext)} ${_esc(size)}</span>
+        <button type="button" class="kb-qa-attach-rm" data-attach-idx="${i}" title="移除附件">✕</button>
+      </div>`;
+    }).join('');
+    strip.querySelectorAll('[data-attach-idx]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.dataset.attachIdx);
+        _state.qaAttachments.splice(idx, 1);
+        _renderQaAttachments();
+      });
+    });
   }
 
   function _clearQa() {
@@ -1232,11 +1313,32 @@
   }
 
   // ── AI 解析（S3：kb.summary → 逐文档要点 + 一句话总结 + 脑图骨架）──
+  // 切换库/空间时把解析卡重置为「未解析」态：脑图/测验入口保持可见（禁用），
+  // 避免用户误以为功能消失；点击「✨ 生成 AI 解析」后启用。
+  function _resetAnalysisCard() {
+    const card = document.getElementById('kb-wb-analysis-card');
+    if (!card) return;
+    card.innerHTML = `
+      <div class="kb-wb-right-card-title">
+        <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
+        <span class="kb-wb-card-actions">
+          <button type="button" class="kb-wb-a-btn is-primary" id="kb-wb-gen-mm" disabled title="请先点击「✨ 生成 AI 解析」">🧠 生成脑图</button>
+          <button type="button" class="kb-wb-a-btn" id="kb-wb-gen-quiz" disabled title="请先点击「✨ 生成 AI 解析」">📝 生成测验</button>
+        </span>
+      </div>
+      <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
+      <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>`;
+    // 重新绑定手动解析按钮（原按钮随 innerHTML 替换销毁）
+    const analyzeBtn = card.querySelector('#kb-analyze-btn');
+    if (analyzeBtn) analyzeBtn.addEventListener('click', () => _loadSummary());
+  }
+
   function _loadSummary() {
     const card = document.getElementById('kb-wb-analysis-card');
     if (!card) return;
     const lib = _state.currentLib || '';
     const key = _state.spaceId ? `space:${_state.spaceId}` : lib;
+    const reqKey = key; // 捕获发起时的库，回调时校验是否仍处于该库
     // 手动触发：打开/切库不再自动跑 LLM（避免后台推理占满 CPU）
     const btn = document.getElementById('kb-analyze-btn');
     if (btn) btn.disabled = true; // 生成中禁用
@@ -1263,7 +1365,14 @@
       .then((res) => {
         const b2 = document.getElementById('kb-analyze-btn');
         if (b2) b2.disabled = false;
-        if (res) _renderAnalysis(res);
+        if (!res) return;
+        // 竞态校验：若解析期间用户切换了库，丢弃旧结果（缓存仍保留，切回时可恢复）
+        const curKey = _state.spaceId ? `space:${_state.spaceId}` : (_state.currentLib || '');
+        if (curKey !== reqKey) return;
+        _state.summaryCache[reqKey] = res;
+        _state.summaryLib = reqKey;
+        _state.summary = res;
+        _renderAnalysis(res);
       })
       .catch(() => {
         const b2 = document.getElementById('kb-analyze-btn');
@@ -1341,6 +1450,9 @@
       el.addEventListener('click', () => _openAnchor({ source: 'library', scope: 'global', path: el.dataset.kbAnchor, chunkIdx: 1 }));
     });
     _state.summary = summary;
+    // 同步写入按库缓存（切回时立即恢复，不重新触发 LLM）
+    const cacheKey = _state.spaceId ? `space:${_state.spaceId}` : (_state.currentLib || '');
+    if (cacheKey) _state.summaryCache[cacheKey] = summary;
     // 后台预热脑图缓存：解析成功且库有脑图结构时，预生成一次，用户点「生成脑图」秒开
     if (ok && hasMm) {
       const key = _state.spaceId ? `space:${_state.spaceId}` : (_state.currentLib || '');
@@ -1388,6 +1500,9 @@
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
         _state.lastMind = res.root;
+        _state.mmCollapsed.clear();
+        _state.mmFocus = null;
+        _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
         _bindMindCanvas(canvas);
       })
@@ -1396,6 +1511,43 @@
         canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
       });
     box.scrollTop = box.scrollHeight;
+  }
+
+  // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）
+  function _genMindmapFromText(text, btn) {
+    if (!text || !text.trim()) {
+      if (typeof uiToast === 'function') uiToast('回答内容为空，无法生成脑图', { variant: 'warning' });
+      return;
+    }
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const anchor = btn && btn.parentElement ? btn.parentElement : null;
+    // 防止重复生成：按钮下方已有预览则不再叠加
+    if (anchor && anchor.querySelector('.kb-wb-mm-canvas')) {
+      if (typeof uiToast === 'function') uiToast('已生成，点击脑图可打开预览', { variant: 'info' });
+      return;
+    }
+    btn.disabled = true;
+    const holder = document.createElement('div');
+    holder.className = 'kb-mm-msg';
+    holder.innerHTML = '<div class="kb-wb-mm-canvas">'
+      + '<div class="kb-mm-loading">正在生成脑图（本地模型推理中，约 10–30 秒）…</div></div>';
+    if (anchor) anchor.appendChild(holder);
+    const canvas = holder.querySelector('.kb-wb-mm-canvas');
+    window.cogseed.invoke('kb.mindmap', { dir: null, spaceId: null, text })
+      .then((res) => {
+        btn.disabled = false;
+        if (!res || !res.root) throw new Error('empty mindmap');
+        _state.lastMind = res.root;
+        _state.mmCollapsed.clear();
+        _state.mmFocus = null;
+        _state.mmSearchHits = new Set();
+        canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
+        _bindMindCanvas(canvas);
+      })
+      .catch(() => {
+        btn.disabled = false;
+        canvas.innerHTML = '<div class="kb-mm-fail">脑图生成失败，请稍后重试</div>';
+      });
   }
 
   // 对话区脑图 = 缩略预览：点击 → 唤起弹窗（完整阅读/折叠/编辑/导出都在弹窗内）
@@ -1472,10 +1624,18 @@
     const wrap = document.getElementById('kb-mm-overlay-wrap');
     if (!root || !overlay || !wrap) return;
     if (!overlay.hidden) return; // 已打开则不重置
+    // 打开弹窗时隐藏对话区缩略脑图卡，避免"两个悬浮窗"叠加（关闭时恢复）
+    document.querySelectorAll('.kb-qa-mm-action .kb-mm-msg').forEach((el) => { el.style.display = 'none'; });
+    // 应用用户记忆的窗口尺寸/位置，绑定拖拽调整/标题拖拽/保存状态
+    _mmApplyWindowRect();
+    _mmBindResize();
+    _mmBindTitleDrag();
+    _mmUpdateSaveState();
     _renderOverlay();
     overlay.hidden = false;
-    const titleEl = document.getElementById('kb-mm-overlay-title');
-    if (titleEl) titleEl.textContent = `🧠 脑图预览 - ${_state.spaceId ? _state.spaceName : (_state.currentLib || '知识库')}`;
+    const titleInput = document.getElementById('kb-mm-title-input');
+    if (titleInput) titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '知识库');
+    _mmUpdateSaveState();
     if (_state.mmViewMode === 'graph') {
       const svgEl = wrap.querySelector('svg');
       if (svgEl && svgEl.viewBox && svgEl.viewBox.baseVal) {
@@ -1485,6 +1645,190 @@
       _mmFitToStage();
     }
     _mmUpdateToolbarState();
+  }
+
+  // 打开弹窗时隐藏对话区缩略脑图卡，避免"两个悬浮窗"叠加（关闭时恢复）
+  function _mmRestoreThumbs() {
+    document.querySelectorAll('.kb-qa-mm-action .kb-mm-msg').forEach((el) => { el.style.display = ''; });
+  }
+
+  // 窗口尺寸记忆（localStorage，无环境静默降级）：默认 78vw×80vh，用户可拖右下角调整
+  const _MM_SIZE_KEY = 'cogseed.kb-mm.size';
+  function _mmApplyWindowSize() {
+    const dlg = document.getElementById('kb-mm-dlg');
+    if (!dlg) return;
+    let w = 0, h = 0;
+    try {
+      const saved = JSON.parse(localStorage.getItem(_MM_SIZE_KEY) || 'null');
+      if (saved && saved.w && saved.h) { w = Number(saved.w); h = Number(saved.h); }
+    } catch { /* 无 localStorage 或损坏 */ }
+    if (!w || !h) {
+      w = Math.round(window.innerWidth * 0.78);
+      h = Math.round(window.innerHeight * 0.8);
+    }
+    w = Math.max(560, Math.min(w, window.innerWidth - 40));
+    h = Math.max(400, Math.min(h, window.innerHeight - 40));
+    dlg.style.width = w + 'px';
+    dlg.style.height = h + 'px';
+  }
+  function _mmSaveWindowSize() {
+    try {
+      const dlg = document.getElementById('kb-mm-dlg');
+      if (!dlg) return;
+      const r = dlg.getBoundingClientRect();
+      localStorage.setItem(_MM_SIZE_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) }));
+    } catch { /* 无 localStorage */ }
+  }
+  function _mmBindResize() {
+    const dlg = document.getElementById('kb-mm-dlg');
+    const handle = document.getElementById('kb-mm-resize');
+    if (!dlg || !handle) return;
+    // 防重复绑定
+    if (handle.dataset.bound) return;
+    handle.dataset.bound = '1';
+    let startX = 0, startY = 0, startW = 0, startH = 0;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startX = e.clientX; startY = e.clientY;
+      startW = dlg.offsetWidth; startH = dlg.offsetHeight;
+      document.body.classList.add('kb-wb-resizing');
+      const onMove = (ev) => {
+        const w = Math.max(560, Math.min(startW + (ev.clientX - startX), window.innerWidth - 40));
+        const h = Math.max(400, Math.min(startH + (ev.clientY - startY), window.innerHeight - 40));
+        dlg.style.width = w + 'px';
+        dlg.style.height = h + 'px';
+        _mmFitToStage();
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('kb-wb-resizing');
+        _mmSaveWindowSize();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── 悬浮窗增强：标题/保存状态/预览编辑模式/点阵/更多/独立窗口/拖拽移动/ESC ──
+  let _mmDirty = false; // 是否有未保存修改
+  let _mmPreviewMode = false; // false=编辑模式（全工具栏），true=预览模式（精简）
+  function _mmUpdateSaveState() {
+    const el = document.getElementById('kb-mm-save-state');
+    if (!el) return;
+    if (_mmDirty) {
+      el.textContent = '● 未保存';
+      el.className = 'kb-mm-save-state is-dirty';
+    } else {
+      el.textContent = '✓ 已保存';
+      el.className = 'kb-mm-save-state is-saved';
+    }
+  }
+  function _mmMarkDirty() { _mmDirty = true; _mmUpdateSaveState(); }
+  function _mmMarkSaved() { _mmDirty = false; _mmUpdateSaveState(); }
+  function _mmToggleMode() {
+    _mmPreviewMode = !_mmPreviewMode;
+    const dlg = document.getElementById('kb-mm-dlg');
+    const btn = document.getElementById('kb-mm-mode-btn');
+    if (dlg) dlg.classList.toggle('is-preview', _mmPreviewMode);
+    if (btn) btn.textContent = _mmPreviewMode ? '✎ 编辑' : '👁 预览';
+    const undo = document.getElementById('kb-mm-undo');
+    const refresh = document.getElementById('kb-mm-refresh');
+    if (undo) undo.hidden = _mmPreviewMode;
+    if (refresh) refresh.hidden = _mmPreviewMode;
+    const hint = document.getElementById('kb-mm-overlay-stage-hint');
+    if (hint) hint.hidden = _mmPreviewMode;
+  }
+  function _mmToggleDots() {
+    _state.mmBg = _state.mmBg === 'dots' ? 'none' : 'dots';
+    _mmUpdateToolbarState();
+    _rerenderMindmaps();
+  }
+  function _buildMoreMenu() {
+    const menu = document.getElementById('kb-mm-more-menu');
+    if (!menu || menu.dataset.built) return;
+    menu.dataset.built = '1';
+    const items = [
+      { k: 'fit', label: '适应画布', fn: () => _mmFitToStage() },
+      { k: 'center', label: '居中根节点', fn: () => _mmCenterNode(0) },
+      { k: 'copy', label: '复制 SVG', fn: () => _mmCopySvg() },
+    ];
+    menu.innerHTML = items.map((it) => `<div class="kb-mm-more-item" data-more="${it.k}">${it.label}</div>`).join('');
+    menu.querySelectorAll('[data-more]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const it = items.find((x) => x.k === el.dataset.more);
+        if (it) it.fn();
+        menu.hidden = true;
+      });
+    });
+  }
+  async function _mmPopout() {
+    const root = _state.lastMind;
+    if (!root || typeof window.cogseed?.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('暂无可弹出的脑图', { variant: 'warning' });
+      return;
+    }
+    try {
+      const svg = _mmTreeSvg(root, new Set(), _mmRenderOpts());
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>脑图</title><style>body{margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh}</style></head><body>${svg}</body></html>`;
+      const res = await window.cogseed.invoke('kb.mindmap.popout', { html });
+      if (res && res.ok === false && typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
+    } catch (err) {
+      _log.warn('mindmap popout failed', err);
+      if (typeof uiToast === 'function') uiToast('独立窗口暂不可用', { variant: 'info' });
+    }
+  }
+  function _mmBindTitleDrag() {
+    const bar = document.getElementById('kb-mm-titlebar');
+    const dlg = document.getElementById('kb-mm-dlg');
+    if (!bar || !dlg || bar.dataset.dragBound) return;
+    bar.dataset.dragBound = '1';
+    let sx = 0, sy = 0, ox = 0, oy = 0;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('input,button')) return;
+      sx = e.clientX; sy = e.clientY;
+      const r = dlg.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      const onMove = (ev) => {
+        dlg.style.left = Math.max(0, Math.min(window.innerWidth - dlg.offsetWidth, ox + (ev.clientX - sx))) + 'px';
+        dlg.style.top = Math.max(0, Math.min(window.innerHeight - dlg.offsetHeight, oy + (ev.clientY - sy))) + 'px';
+        dlg.style.margin = '0';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        _mmSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+  const _MM_RECT_KEY = 'cogseed.kb-mm.rect';
+  function _mmApplyWindowRect() {
+    const dlg = document.getElementById('kb-mm-dlg');
+    if (!dlg) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(_MM_RECT_KEY) || 'null');
+      if (saved && saved.w && saved.h) {
+        dlg.style.width = Math.max(560, Math.min(saved.w, window.innerWidth - 40)) + 'px';
+        dlg.style.height = Math.max(400, Math.min(saved.h, window.innerHeight - 40)) + 'px';
+      }
+      if (saved && typeof saved.x === 'number' && typeof saved.y === 'number') {
+        dlg.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - 200)) + 'px';
+        dlg.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - 100)) + 'px';
+        dlg.style.margin = '0';
+      }
+    } catch { /* ignore */ }
+  }
+  function _mmSaveWindowRect() {
+    try {
+      const dlg = document.getElementById('kb-mm-dlg');
+      if (!dlg) return;
+      const r = dlg.getBoundingClientRect();
+      localStorage.setItem(_MM_RECT_KEY, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) }));
+    } catch { /* ignore */ }
   }
 
   // 当前库的存档 key（与主进程 mindKey 对齐）
@@ -1503,6 +1847,7 @@
     window.cogseed.invoke('kb.mindmap.save', { key, root })
       .then((r) => {
         if (r && r.ok) {
+          _mmMarkSaved();
           if (typeof uiToast === 'function') uiToast('脑图已保存到知识库（下次打开可直接读取）', { variant: 'success' });
         } else if (typeof uiToast === 'function') {
           uiToast('保存失败', { variant: 'warning' });
@@ -1527,6 +1872,9 @@
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
         _state.lastMind = res.root;
+        _state.mmCollapsed.clear();
+        _state.mmFocus = null;
+        _state.mmSearchHits = new Set();
         _rerenderMindmaps();
         _mmFitToStage();
         if (typeof uiToast === 'function') uiToast('脑图已重新生成', { variant: 'success' });
@@ -1578,7 +1926,7 @@
           return;
         }
         _state.lastMind = r.root;
-        const titleEl = document.getElementById('kb-mm-overlay-title');
+        const titleEl = document.getElementById('kb-mm-title-input');
         const overlay = document.getElementById('kb-mm-overlay');
         if (titleEl && overlay) {
           overlay.hidden = false;
@@ -1632,15 +1980,19 @@
         });
         el.style.cursor = 'pointer';
       }
-      el.addEventListener('dblclick', (e) => {
+      el.addEventListener('dblclick', async (e) => {
         e.stopPropagation();
         let next = null;
-        try { next = typeof uiPrompt === 'function' ? uiPrompt('重命名节点：', _mmLabelAt(root, idx)) : window.prompt('重命名节点：', _mmLabelAt(root, idx)); }
-        catch (_) { return; }
+        try {
+          next = typeof uiPrompt === 'function'
+            ? await uiPrompt('重命名节点：', _mmLabelAt(root, idx))
+            : window.prompt('重命名节点：', _mmLabelAt(root, idx));
+        } catch (_) { return; }
         if (!next || !next.trim()) return;
         _mmUndoStack.push({ idx, old: _mmLabelAt(root, idx) });
         if (_mmUndoStack.length > 20) _mmUndoStack.shift();
         _mmSetLabelAt(root, idx, next.trim());
+        _mmMarkDirty();
         _rerenderMindmaps();
         if (_state.mmViewMode === 'graph') _mmFitToStage();
       });
@@ -1732,7 +2084,7 @@
   function _mmPdfHtml() {
     const svg = _mmCurrentSvg();
     if (!svg) return '';
-    const titleEl = document.getElementById('kb-mm-overlay-title');
+    const titleEl = document.getElementById('kb-mm-title-input');
     const title = titleEl ? titleEl.textContent.replace(/^🧠\s*/, '') : '知识库脑图';
     const clone = svg.cloneNode(true);
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -1770,11 +2122,21 @@
     return idxs;
   }
   function _mmExpandAll() {
+    if (!_state.lastMind) {
+      if (typeof uiToast === 'function') uiToast('请先生成脑图', { variant: 'info' });
+      return;
+    }
     _state.mmCollapsed.clear();
     _rerenderMindmaps();
   }
   function _mmCollapseAll() {
     const idxs = _mmBranchIdxList();
+    if (!idxs.length) {
+      if (typeof uiToast === 'function') uiToast('当前脑图没有可折叠的分支', { variant: 'info' });
+      return;
+    }
+    // 若已全部折叠则先展开以便用户看到反馈（避免"点了没反应"）
+    if (_state.mmCollapsed.size >= idxs.length) _state.mmCollapsed.clear();
     for (const i of idxs) _state.mmCollapsed.add(i);
     _rerenderMindmaps();
   }
@@ -2002,14 +2364,23 @@
     return 11;
   }
 
-  // 长文本自动换行：控制节点最大宽度，多行时增高节点
+  // 长文本自动换行：控制节点最大宽度（避免超长横条），按语义断行优先
   function _mmDims(label, size) {
-    const maxW = 180;
+    const maxW = 150;
     const charW = size * 1.02;
     const perLine = Math.max(5, Math.floor((maxW - 22) / charW));
     const text = String(label || '');
+    // 优先按中英文标点断行，其次按字符数
     const lines = [];
-    for (let i = 0; i < text.length; i += perLine) lines.push(text.slice(i, i + perLine));
+    let rest = text;
+    while (rest.length > perLine) {
+      let cut = rest.slice(0, perLine);
+      const m = cut.match(/.*[，。；、,.!?；：\s]/);
+      if (m && m[0].length >= perLine * 0.5) cut = m[0];
+      lines.push(cut);
+      rest = rest.slice(cut.length);
+    }
+    if (rest) lines.push(rest);
     const w = Math.min(maxW, Math.max(66, lines[0].length * charW + 26));
     const h = 34 + (lines.length - 1) * 15;
     return { lines, w, h };
@@ -2033,8 +2404,9 @@
     const highlight = opts.highlight instanceof Set ? opts.highlight : new Set();
     const bg = opts.bg || 'dots';
     const ROOT_X = mode === 'org' ? 96 : 640;
-    const XGAP = 252;
-    const TOP = 52, BOT = 470;
+    // 间距：同级节点拉大留白，子分支与父节点留足间隔，避免视觉拥挤
+    const XGAP = mode === 'org' ? 320 : 300;
+    const TOP = 40, BOT = 500;
 
     const list = []; // {label, depth, x, y, kids:[], idx, branch, dir, childCount, w, h, lines}
     const weight = (n) => (n && n.children && n.children.length ? n.children.reduce((a, c) => a + weight(c), 0) : 1);
@@ -2094,10 +2466,11 @@
     }
 
     // 画布范围（双向时 viewBox 从最左边界起，四周留白）
-    const visible = list.filter((n) => !hidden.has(n.idx));
-    const minX = Math.min(...visible.map((n) => n.x - n.w / 2)) - 60;
-    const maxX = Math.max(...visible.map((n) => n.x + n.w / 2)) + 160;
-    const maxY = Math.max(BOT, ...visible.map((n) => n.y + n.h / 2)) + 30;
+    // 基于**完整树**的布局坐标计算，折叠只隐藏节点、不改变画布大小
+    // （避免收拢/展开时脑图尺寸跳动）
+    const minX = Math.min(...list.map((n) => n.x - n.w / 2)) - 60;
+    const maxX = Math.max(...list.map((n) => n.x + n.w / 2)) + 160;
+    const maxY = Math.max(BOT, ...list.map((n) => n.y + n.h / 2)) + 30;
     const svgW = Math.max(400, maxX - minX);
     const svgH = Math.max(480, maxY);
     const showFolded = hidden.size > 0;
@@ -2120,7 +2493,7 @@
     const nodeSvg = list.map((n) => {
       if (hidden.has(n.idx)) return '';
       const p = (() => {
-        if (n.depth === 0) return { fill: KB_MM_ROOT, stroke: '#065F46', text: '#fff', size: 15, sw: 2 };
+        if (n.depth === 0) return { fill: '#0B7A52', stroke: '#065F46', text: '#fff', size: 16, sw: 2.4 }; // 中心根节点高亮加深
         const pal = _mmPalette(n.branch);
         if (n.depth === 1) return { fill: pal.deep, stroke: pal.deep, text: '#fff', size: 13, sw: 1.6 };
         if (n.depth === 2) return { fill: pal.light, stroke: pal.deep, text: '#14281E', size: 12, sw: 1.3 };
@@ -2131,8 +2504,9 @@
       const y = n.y - h / 2;
       const folded = n.depth === 1 && collapsed.has(n.idx);
       const badgeX = n.x + n.dir * (w / 2 + 9);
+      // 徽章统一加 kb-mm-fold-badge class：折叠态是 +N（点击展开），展开态是 −（点击折叠）
       const foldBadge = folded
-        ? `<circle cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="${p.stroke}"/><text x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="${p.stroke}">+${n.childCount}</text>`
+        ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="${p.stroke}"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="${p.stroke}">+${n.childCount}</text>`
         : (n.childCount > 0 && n.depth >= 1 ? `<circle class="kb-mm-fold-badge" cx="${badgeX}" cy="${n.y}" r="8" fill="#fff" stroke="#B7D3C3"/><text class="kb-mm-fold-badge" x="${badgeX}" y="${n.y + 4}" text-anchor="middle" font-size="10" fill="#3E5A4C">−</text>` : '');
       const dim = focus !== null && n.depth >= 1 && n.branch !== focus;
       const hit = highlight.has(n.idx);
@@ -2165,17 +2539,160 @@
   }
 
   // ── 问答流 ──
+  // 会话持久化 key（localStorage，无环境静默降级）
+  const _QA_SESSIONS_KEY = 'cogseed.kb.qa-sessions';
+  function _qaLoadSessions() {
+    try { _state.qaSessions = JSON.parse(localStorage.getItem(_QA_SESSIONS_KEY) || '[]'); }
+    catch { _state.qaSessions = []; }
+    if (!Array.isArray(_state.qaSessions)) _state.qaSessions = [];
+  }
+  function _qaPersist() {
+    try { localStorage.setItem(_QA_SESSIONS_KEY, JSON.stringify(_state.qaSessions.slice(0, 30))); }
+    catch { /* 无 localStorage */ }
+  }
+  // 当前会话不存在则创建（首次提问时）；保存消息到会话
+  function _qaSaveCurrentSession(firstQuestion) {
+    const now = Date.now();
+    if (!_state.qaSessionId) {
+      _state.qaSessionId = 's' + now;
+      const msgs = _state.qaHistory.map((m) => ({ ...m }));
+      _state.qaSessions.unshift({ id: _state.qaSessionId, title: String(firstQuestion || '新对话').slice(0, 30), msgs, ts: now });
+      _qaPersist();
+      return;
+    }
+    const s = _state.qaSessions.find((x) => x.id === _state.qaSessionId);
+    if (s) {
+      s.msgs = _state.qaHistory.map((m) => ({ ...m }));
+      if (!s.title && firstQuestion) s.title = String(firstQuestion).slice(0, 30);
+      s.ts = now;
+      _qaPersist();
+    }
+  }
+  // 新建对话：清空当前消息与上下文，创建新会话
+  function _qaNewSession() {
+    _state.qaSessionId = null;
+    _state.qaHistory = [];
+    _clearQa();
+    if (typeof uiToast === 'function') uiToast('已新建对话', { variant: 'info' });
+  }
+  // 载入历史会话：恢复消息区 + 上下文
+  function _qaLoadSession(id) {
+    const s = _state.qaSessions.find((x) => x.id === id);
+    if (!s) return;
+    _state.qaSessionId = id;
+    _state.qaHistory = (s.msgs || []).map((m) => ({ role: m.role, content: m.content }));
+    _clearQa();
+    const box = document.getElementById('kb-qa-messages');
+    if (!box) return;
+    for (const m of _state.qaHistory) {
+      const el = document.createElement('div');
+      el.className = m.role === 'user' ? 'kb-qa-msg is-user' : 'kb-qa-msg is-ai';
+      el.innerHTML = `<div class="kb-qa-msg-body">${_esc(m.content)}</div>`;
+      box.appendChild(el);
+    }
+    _maybeShowQaHint();
+  }
+  // 历史面板：会话列表（新建/切换/删除）
+  function _qaOpenHistory() {
+    _qaLoadSessions();
+    let panel = document.getElementById('kb-qa-history-panel');
+    if (panel) { panel.remove(); panel = null; }
+    panel = document.createElement('div');
+    panel.className = 'kb-qa-history-panel';
+    panel.id = 'kb-qa-history-panel';
+    panel.innerHTML = `
+      <div class="kb-qa-history-head">
+        <span>会话历史</span>
+        <button type="button" class="kb-qa-history-close" title="关闭">✕</button>
+      </div>
+      <div class="kb-qa-history-new" id="kb-qa-history-new">＋ 新建对话</div>
+      <div class="kb-qa-history-list">${_state.qaSessions.length
+        ? _state.qaSessions.map((s) => `<div class="kb-qa-history-item${s.id === _state.qaSessionId ? ' is-active' : ''}" data-hist-id="${_esc(s.id)}">
+            <span class="kb-qa-history-title">${_esc(s.title || '新对话')}</span>
+            <span class="kb-qa-history-meta">${s.msgs ? s.msgs.length : 0} 条 · ${_qaFmtTime(s.ts)}</span>
+            <button type="button" class="kb-qa-history-del" data-hist-del="${_esc(s.id)}" title="删除会话">🗑</button>
+          </div>`).join('')
+        : '<div class="kb-qa-history-empty">暂无历史对话</div>'}
+      </div>`;
+    document.body.appendChild(panel);
+    panel.querySelector('.kb-qa-history-close').addEventListener('click', () => panel.remove());
+    panel.querySelector('#kb-qa-history-new').addEventListener('click', () => { panel.remove(); _qaNewSession(); });
+    panel.querySelectorAll('[data-hist-id]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('[data-hist-del]')) return;
+        _qaLoadSession(el.dataset.histId);
+        panel.remove();
+      });
+    });
+    panel.querySelectorAll('[data-hist-del]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.histDel;
+        _state.qaSessions = _state.qaSessions.filter((x) => x.id !== id);
+        if (_state.qaSessionId === id) { _state.qaSessionId = null; _state.qaHistory = []; _clearQa(); }
+        _qaPersist();
+        _qaOpenHistory(); // 刷新列表
+      });
+    });
+  }
+  function _qaFmtTime(ts) {
+    const d = new Date(Number(ts) || 0);
+    if (isNaN(d.getTime())) return '';
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
   function _ask(question) {
     const q = String(question || '').trim();
     if (!q) return;
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
     _maybeShowQaHint();
+    // 多轮上下文：用户问题入 history（供模型参考，回答入 history 在 final）
+    _state.qaHistory.push({ role: 'user', content: q });
+    if (_state.qaHistory.length > 20) _state.qaHistory.splice(0, _state.qaHistory.length - 20);
+    _qaSaveCurrentSession(q); // 提问即创建/保存会话骨架（final 时更新回答）
 
     const user = document.createElement('div');
     user.className = 'kb-qa-msg is-user';
-    user.innerHTML = `<div class="kb-qa-msg-body">${_esc(q)}</div>`;
+    user.innerHTML = `<div class="kb-qa-msg-body">${_esc(q)}</div>
+      <div class="kb-qa-msg-more">
+        <button type="button" class="kb-qa-more-btn" title="更多">${_svg('more-h')}</button>
+        <div class="kb-qa-msg-menu" hidden>
+          <div class="kb-qa-msg-menu-item" data-qa-act="rename">📝 重命名</div>
+          <div class="kb-qa-msg-menu-item is-danger" data-qa-act="delete">🗑 删除</div>
+        </div>
+      </div>`;
     box.appendChild(user);
+    // 用户气泡：⋯ 菜单（重命名/删除）
+    const moreBtn = user.querySelector('.kb-qa-more-btn');
+    const menu = user.querySelector('.kb-qa-msg-menu');
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.kb-qa-msg-menu').forEach((m) => { if (m !== menu) m.hidden = true; });
+      menu.hidden = !menu.hidden;
+    });
+    menu.querySelectorAll('[data-qa-act]').forEach((item) => {
+      item.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        menu.hidden = true;
+        const act = item.dataset.qaAct;
+        const body = user.querySelector('.kb-qa-msg-body');
+        if (act === 'delete') {
+          // 删除当前问答对：用户气泡 + 紧随的 AI 气泡
+          user.remove();
+          let nxt = user.nextElementSibling;
+          while (nxt && nxt.classList.contains('kb-qa-msg')) { const cur = nxt; nxt = nxt.nextElementSibling; cur.remove(); }
+          _maybeShowQaHint();
+        } else if (act === 'rename') {
+          let next = null;
+          try { next = typeof uiPrompt === 'function' ? await uiPrompt('重命名问题：', body.textContent) : window.prompt('重命名问题：', body.textContent); }
+          catch (_) { return; }
+          if (next && next.trim()) body.textContent = next.trim();
+        }
+      });
+    });
+    // 点击别处关闭菜单
+    user.querySelector('.kb-qa-msg-body').addEventListener('click', (e) => { e.stopPropagation(); menu.hidden = true; });
 
     const ai = document.createElement('div');
     ai.className = 'kb-qa-msg is-ai is-typing';
@@ -2183,6 +2700,7 @@
     box.appendChild(ai);
     const streamBody = ai.querySelector('.kb-qa-stream');
     box.scrollTop = box.scrollHeight;
+    _removeQaHint(); // 有消息后移除空状态占位（不创建）
 
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') {
       ai.classList.remove('is-typing');
@@ -2191,7 +2709,13 @@
     }
     let text = '';
     try {
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8 }, (ev) => {
+      // 先捕获附件路径，再清空（顺序关键：否则 attachPaths 恒为空）
+      const attachPaths = (_state.qaAttachments || []).map((a) => a.path);
+      if (_state.qaAttachments && _state.qaAttachments.length) {
+        _state.qaAttachments = [];
+        _renderQaAttachments();
+      }
+      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.slice(0, -1) }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
@@ -2201,6 +2725,9 @@
           ai.classList.remove('is-typing');
           text = ev.text || text;
           streamBody.textContent = text;
+          // 多轮上下文：回答入 history + 持久化当前会话
+          _state.qaHistory.push({ role: 'assistant', content: text });
+          _qaSaveCurrentSession(q);
           const evidence = Array.isArray(ev.evidence) ? ev.evidence : [];
           if (evidence.length) {
             // 引用折叠（方案1）：默认只显示「引用(N)」按钮，点击展开全部锚点
@@ -2232,6 +2759,18 @@
             refs.appendChild(list);
             streamBody.appendChild(refs);
           }
+          // 每条 AI 回答末尾附「生成脑图」按钮：基于本条回答文本生成（不是整库）
+          const mmRow = document.createElement('div');
+          mmRow.className = 'kb-qa-mm-action';
+          const mmBtn = document.createElement('button');
+          mmBtn.type = 'button';
+          mmBtn.className = 'kb-qa-mm-btn';
+          mmBtn.innerHTML = '🧠 生成脑图';
+          mmBtn.title = '基于本条回答内容生成脑图';
+          const answerText = text;
+          mmBtn.addEventListener('click', () => _genMindmapFromText(answerText, mmBtn));
+          mmRow.appendChild(mmBtn);
+          streamBody.appendChild(mmRow);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
@@ -2371,18 +2910,45 @@
           <div class="kb-wb-right-head"><span class="kb-wb-chip">📚 <span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span></div>
           <div class="kb-wb-right-body" id="kb-wb-right">
             <div class="kb-wb-right-card" id="kb-wb-analysis-card">
-              <div class="kb-wb-right-card-title"><span class="kb-wb-ai-chip"></span>AI 解析本知识库</div>
+              <div class="kb-wb-right-card-title">
+                <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库</span>
+                <span class="kb-wb-card-actions">
+                  <button type="button" class="kb-wb-a-btn is-primary" id="kb-wb-gen-mm" disabled title="请先点击「✨ 生成 AI 解析」">🧠 生成脑图</button>
+                  <button type="button" class="kb-wb-a-btn" id="kb-wb-gen-quiz" disabled title="请先点击「✨ 生成 AI 解析」">📝 生成测验</button>
+                </span>
+              </div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>
             </div>
-            <div class="kb-qa-messages" id="kb-qa-messages"></div>
+            <div class="kb-qa-session">
+              <div class="kb-qa-session-head">
+                <span class="kb-qa-session-date" id="kb-qa-session-date"></span>
+                <div class="kb-qa-session-actions">
+                  <button type="button" class="kb-qa-session-btn" id="kb-qa-popout" title="新建对话">${_svg('plus')}</button>
+                  <button type="button" class="kb-qa-session-btn" id="kb-qa-history" title="会话历史">${_svg('history')}</button>
+                  <button type="button" class="kb-qa-session-btn" id="kb-qa-clear" title="清空当前对话">${_svg('close')}</button>
+                </div>
+              </div>
+              <div class="kb-qa-messages" id="kb-qa-messages"></div>
+            </div>
           </div>
           <div class="kb-wb-right-input">
             <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" hidden>当前解析降级，问答能力受限</div>
+            <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
               <select class="kb-qa-model" id="kb-qa-model" title="问答模型（真实配置）"></select>
               <span class="kb-qa-divider"></span>
-              <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问…"></textarea>
+              <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
+              <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
+                <button type="button" class="kb-qa-icon-btn" id="kb-qa-attach" title="上传附件">${_svg('paperclip')}</button>
+                <div class="kb-qa-attach-tip" id="kb-qa-attach-tip" hidden>
+                  <div class="kb-qa-attach-tip-title">支持上传附件</div>
+                  <div class="kb-qa-attach-tip-item">• 文件数量：最多支持 5 个</div>
+                  <div class="kb-qa-attach-tip-item">• 文件类型：pdf、doc、docx、ppt、pptx、xls、xlsx、csv、jpg、jpeg、png、webp、md、txt、xmind、mp3、m4a、wav、aac、html、epub</div>
+                  <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
+                </div>
+              </div>
+              <button type="button" class="kb-qa-icon-btn" id="kb-qa-tools" title="更多工具">${_svg('tools')}</button>
               <button type="button" class="kb-qa-send" id="kb-qa-send" title="发送" disabled>${_svg('send')}</button>
             </div>
             <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
@@ -2390,51 +2956,73 @@
         </section>
       </div>
       <div class="kb-mm-overlay" id="kb-mm-overlay" hidden>
+        <div class="kb-mm-dlg" id="kb-mm-dlg">
+        <div class="kb-mm-titlebar" id="kb-mm-titlebar">
+          <span class="kb-mm-titlebar-ico">🧠</span>
+          <input class="kb-mm-title-input" id="kb-mm-title-input" value="脑图预览" title="双击修改标题" spellcheck="false" />
+          <span class="kb-mm-save-state" id="kb-mm-save-state"></span>
+          <div class="kb-mm-titlebar-actions">
+            <button type="button" id="kb-mm-mode-btn" title="切换预览/编辑模式">👁 预览</button>
+            <button type="button" id="kb-mm-popout-btn" title="弹出独立窗口">⧉ 独立窗口</button>
+            <button type="button" class="kb-mm-overlay-close" id="kb-mm-overlay-close" title="关闭（Esc）">✕</button>
+          </div>
+        </div>
         <div class="kb-mm-overlay-toolbar">
-          <span class="kb-mm-overlay-title" id="kb-mm-overlay-title">🧠 脑图预览</span>
-          <div class="kb-mm-overlay-actions">
-            <button type="button" id="kb-mm-undo" title="撤销重命名">↩ 撤销</button>
-            <button type="button" id="kb-mm-refresh" title="重新生成脑图（强制刷新）">⟳ 刷新</button>
+          <div class="kb-mm-tb-group">
+            <button type="button" id="kb-mm-undo" title="撤销">↩ 撤销</button>
+            <button type="button" id="kb-mm-refresh" title="重新生成脑图">⟳ 刷新</button>
+          </div>
+          <div class="kb-mm-tb-group">
             <button type="button" id="kb-mm-save" title="保存到知识库">💾 保存</button>
             <div class="kb-mm-open">
               <button type="button" id="kb-mm-open-btn" title="打开已保存的脑图">📂 存档 ▾</button>
               <div class="kb-mm-open-menu" id="kb-mm-open-menu" hidden></div>
             </div>
-          </div>
-          <div class="kb-mm-layout">
-            <button type="button" id="kb-mm-layout-btn" title="切换布局">📐 布局</button>
-            <div class="kb-mm-layout-menu" id="kb-mm-layout-menu" hidden>
-              <div class="kb-mm-layout-item" data-mode="mind">🧠 思维导图（双向放射）</div>
-              <div class="kb-mm-layout-item" data-mode="org">🏢 组织结构图（单向）</div>
+            <div class="kb-mm-export">
+              <button type="button" id="kb-mm-export-btn" title="导出">📥 导出 ▾</button>
+              <div class="kb-mm-export-menu" id="kb-mm-export-menu" hidden>
+                <div class="kb-mm-export-item" data-export="png">🖼 下载 PNG 图片</div>
+                <div class="kb-mm-export-item" data-export="svg">📐 下载 SVG 矢量图</div>
+                <div class="kb-mm-export-item" data-export="pdf">📄 下载 PDF 文档</div>
+                <div class="kb-mm-export-item" data-export="md">📝 导出 Markdown 大纲</div>
+                <div class="kb-mm-export-item" data-export="copy">📋 复制到剪贴板</div>
+              </div>
             </div>
           </div>
-          <button type="button" id="kb-mm-expand-all" title="全部展开">⤢ 展开</button>
-          <button type="button" id="kb-mm-collapse-all" title="全部收拢">⤡ 收拢</button>
-          <button type="button" id="kb-mm-focus-btn" title="聚焦分支：点击一级分支只看该分支">◎ 聚焦</button>
-          <button type="button" id="kb-mm-outline-btn" title="大纲视图切换">☰ 大纲</button>
-          <button type="button" id="kb-mm-bg-btn" title="背景切换（点阵/纯白/无）">▦ 背景</button>
-          <input type="search" class="kb-mm-search" id="kb-mm-search" placeholder="搜索节点…" />
-          <div class="kb-mm-overlay-zoom">
-            <button type="button" id="kb-mm-zoom-out" title="缩小">−</button>
-            <span id="kb-mm-zoom-label">100%</span>
-            <button type="button" id="kb-mm-zoom-in" title="放大">＋</button>
-            <button type="button" id="kb-mm-reset" title="适应画布">适应</button>
+          <div class="kb-mm-tb-group kb-mm-tb-view">
+            <div class="kb-mm-layout">
+              <button type="button" id="kb-mm-layout-btn" title="切换布局">📐 布局</button>
+              <div class="kb-mm-layout-menu" id="kb-mm-layout-menu" hidden>
+                <div class="kb-mm-layout-item" data-mode="mind">🧠 思维导图（双向放射）</div>
+                <div class="kb-mm-layout-item" data-mode="org">🏢 组织结构图（单向）</div>
+              </div>
+            </div>
+            <button type="button" id="kb-mm-expand-all" title="全部展开">⤢ 展开</button>
+            <button type="button" id="kb-mm-collapse-all" title="全部收拢">⤡ 收拢</button>
+            <button type="button" id="kb-mm-focus-btn" title="聚焦分支">◎ 聚焦</button>
+            <button type="button" id="kb-mm-outline-btn" title="大纲视图切换">☰ 大纲</button>
+            <button type="button" id="kb-mm-bg-btn" title="背景切换">▦ 背景</button>
+            <button type="button" id="kb-mm-dots-btn" title="点阵开关">▤ 点阵</button>
           </div>
-          <div class="kb-mm-export">
-            <button type="button" id="kb-mm-export-btn" title="导出">📥 导出 ▾</button>
-            <div class="kb-mm-export-menu" id="kb-mm-export-menu" hidden>
-              <div class="kb-mm-export-item" data-export="png">🖼 下载 PNG 图片</div>
-              <div class="kb-mm-export-item" data-export="svg">📐 下载 SVG 矢量图</div>
-              <div class="kb-mm-export-item" data-export="pdf">📄 下载 PDF 文档</div>
-              <div class="kb-mm-export-item" data-export="md">📝 导出 Markdown 大纲</div>
-              <div class="kb-mm-export-item" data-export="copy">📋 复制到剪贴板</div>
+          <div class="kb-mm-tb-group kb-mm-tb-more">
+            <input type="search" class="kb-mm-search" id="kb-mm-search" placeholder="搜索节点…" />
+            <div class="kb-mm-overlay-zoom">
+              <button type="button" id="kb-mm-zoom-out" title="缩小">−</button>
+              <span id="kb-mm-zoom-label">100%</span>
+              <button type="button" id="kb-mm-zoom-in" title="放大">＋</button>
+              <button type="button" id="kb-mm-reset" title="适应画布">适应</button>
+            </div>
+            <div class="kb-mm-more">
+              <button type="button" id="kb-mm-more-btn" title="更多">⋯</button>
+              <div class="kb-mm-more-menu" id="kb-mm-more-menu" hidden></div>
             </div>
           </div>
-          <button type="button" class="kb-mm-overlay-close" id="kb-mm-overlay-close" title="关闭">✕</button>
         </div>
         <div class="kb-mm-overlay-stage" id="kb-mm-overlay-stage">
           <div class="kb-mm-overlay-wrap" id="kb-mm-overlay-wrap"></div>
-          <div class="kb-mm-overlay-stage-hint">滚轮缩放 · 拖拽平移 · 一级分支点击折叠/展开 · 双击节点重命名</div>
+          <div class="kb-mm-overlay-stage-hint">滚轮缩放｜拖拽平移｜点击聚焦｜−/+折叠｜双击重命名</div>
+        </div>
+        <div class="kb-mm-resize" id="kb-mm-resize" title="拖动调整窗口大小"></div>
         </div>
       </div>`;
     // 右列强制 flex column（JS 兜底：个别环境下样式表规则未应用时保证输入栏贴底）
@@ -2659,6 +3247,55 @@
         _submitQa();
       }
     });
+    // 会话头：日期 / 新建对话 / 历史 / 关闭
+    const _qaDate = document.getElementById('kb-qa-session-date');
+    if (_qaDate) {
+      const d = new Date();
+      _qaDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+    }
+    document.getElementById('kb-qa-popout')?.addEventListener('click', () => {
+      _qaNewSession(); // 独立窗口按钮 = 新建会话（保留历史，开启新上下文）
+    });
+    document.getElementById('kb-qa-history')?.addEventListener('click', () => {
+      _qaOpenHistory();
+    });
+    // 关闭会话：清空当前对话内容（保留历史）
+    document.getElementById('kb-qa-clear')?.addEventListener('click', () => {
+      _clearQa();
+      if (typeof uiToast === 'function') uiToast('会话已清空', { variant: 'info' });
+    });
+    // 载入历史会话列表（初始化）
+    _qaLoadSessions();
+    // 附件：选择本地文件挂载到本次提问（最多 5 个，发送时作为补充上下文）
+    const attachWrap = document.getElementById('kb-qa-attach-wrap');
+    const attachTip = document.getElementById('kb-qa-attach-tip');
+    attachWrap?.addEventListener('mouseenter', () => { if (attachTip) attachTip.hidden = false; });
+    attachWrap?.addEventListener('mouseleave', () => { if (attachTip) attachTip.hidden = true; });
+    document.getElementById('kb-qa-attach')?.addEventListener('click', async () => {
+      if (_state.qaAttachments.length >= 5) {
+        if (typeof uiToast === 'function') uiToast('最多支持 5 个附件', { variant: 'warning' });
+        return;
+      }
+      if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+      try {
+        const res = await window.cogseed.invoke('kbqa.attachPick', {});
+        const files = (res && Array.isArray(res.files)) ? res.files : [];
+        for (const f of files) {
+          if (_state.qaAttachments.length >= 5) break;
+          if (!_state.qaAttachments.some((a) => a.path === f.path)) {
+            _state.qaAttachments.push({ name: f.name, path: f.path, size: Number(f.size) || 0 });
+          }
+        }
+        _renderQaAttachments();
+      } catch (err) {
+        _log.warn('attach pick failed', err);
+        if (typeof uiToast === 'function') uiToast('选择附件失败', { variant: 'error' });
+      }
+    });
+    // 更多工具：占位菜单
+    document.getElementById('kb-qa-tools')?.addEventListener('click', () => {
+      if (typeof uiToast === 'function') uiToast('更多工具：即将上线', { variant: 'info' });
+    });
     // 脑图预览层事件：缩放 / 平移 / 关闭
     document.getElementById('kb-mm-export-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2691,6 +3328,7 @@
     });
     document.getElementById('kb-mm-overlay-close')?.addEventListener('click', () => {
       document.getElementById('kb-mm-overlay').hidden = true;
+      _mmRestoreThumbs();
     });
     document.getElementById('kb-mm-zoom-in')?.addEventListener('click', () => { _mmZoom = Math.min(4, _mmZoom * 1.25); _applyMmTransform(); });
     document.getElementById('kb-mm-zoom-out')?.addEventListener('click', () => { _mmZoom = Math.max(0.2, _mmZoom / 1.25); _applyMmTransform(); });
@@ -2716,6 +3354,37 @@
     document.getElementById('kb-mm-focus-btn')?.addEventListener('click', _mmToggleFocus);
     document.getElementById('kb-mm-outline-btn')?.addEventListener('click', _mmToggleOutline);
     document.getElementById('kb-mm-bg-btn')?.addEventListener('click', _mmCycleBg);
+    // 悬浮窗增强绑定：模式切换 / 点阵开关 / 更多菜单 / 独立窗口 / 标题双击 / ESC 关闭
+    document.getElementById('kb-mm-mode-btn')?.addEventListener('click', _mmToggleMode);
+    document.getElementById('kb-mm-dots-btn')?.addEventListener('click', _mmToggleDots);
+    document.getElementById('kb-mm-more-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const m = document.getElementById('kb-mm-more-menu');
+      if (!m) return;
+      _buildMoreMenu();
+      m.hidden = !m.hidden;
+    });
+    document.getElementById('kb-mm-popout-btn')?.addEventListener('click', _mmPopout);
+    const titleInput = document.getElementById('kb-mm-title-input');
+    titleInput?.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      titleInput.focus();
+      titleInput.select();
+    });
+    titleInput?.addEventListener('change', () => {
+      const t = String(titleInput.value || '').trim();
+      if (t) titleInput.value = t;
+      else titleInput.value = _state.spaceId ? _state.spaceName : (_state.currentLib || '脑图');
+      _mmMarkDirty();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const ov = document.getElementById('kb-mm-overlay');
+        if (ov && !ov.hidden) ov.hidden = true;
+        const d = document.querySelector('.kb-import-dlg-overlay');
+        if (d) d.remove();
+      }
+    });
     const mmSearchInput = document.getElementById('kb-mm-search');
     let mmSearchTimer = null;
     mmSearchInput?.addEventListener('input', () => {
@@ -3164,7 +3833,7 @@
       _loadAll();
     } catch (err) {
       _log.warn('rename space failed', err);
-      if (typeof uiToast === 'function') uiToast('重命名失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      if (typeof uiToast === 'function') uiToast('重命名失败：' + _kbSpaceErrText((err && err.message) || String(err)), { variant: 'error' });
     }
   }
 

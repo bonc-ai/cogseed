@@ -131,7 +131,7 @@ describe('User teaching signals', () => {
 });
 
 /**
- * G-2 教学回执的真实总数。
+ * 教学回执的真实总数。
  *
  * `listUserTeachingSignals` 的 limit 默认 20、上限 100，「待我处理」的指标此前
  * 取 `list(...).length`——超过 20 条那个数字就是错的，而且错得不可见。

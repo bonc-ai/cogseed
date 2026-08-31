@@ -584,6 +584,11 @@ export interface RunCliAgentOpts {
   cli: LocalCliType;
   model?: string;
   customArgs?: string[];
+  /** Per-task reasoning effort from the unified execution entry. Only
+   *  forwarded by backends with a known switch (claude → MAX_THINKING_TOKENS
+   *  env, codex → model_reasoning_effort config override); other CLIs
+   *  ignore the field and keep their own configuration. */
+  thinkingLevel?: 'off' | 'low' | 'high';
   /** Optional synthetic custom-provider id bound to this CLI Agent. */
   cliProviderId?: string;
   /** If set, the dispatch resumes a CLI-side session (claude
@@ -896,6 +901,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       cwd: opts.cwd,
       model: opts.model,
       customArgs: opts.customArgs,
+      ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
       resumeSessionId: opts.resumeSessionId,
       signal: opts.signal,
       onEvent,

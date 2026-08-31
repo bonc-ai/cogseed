@@ -12,6 +12,8 @@
  * unit-testable without a live provider).
  */
 
+import * as fsp from 'node:fs/promises';
+import * as path from 'node:path';
 import { createLogger } from '../logger';
 import { maskId } from '../util/log-redact';
 import { askMaterials, formatEvidence } from '../model/core-agent/ask-materials';
@@ -24,6 +26,10 @@ export interface KbAskInput {
   spaceId?: string | null;
   question: string;
   k?: number;
+  /** 本次提问挂载的附件（本地文件绝对路径），内容作为补充上下文。 */
+  attachPaths?: string[];
+  /** 多轮对话历史（不含当前问），拼进 systemPrompt 供模型参考。 */
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
 export interface KbAskDeps {
@@ -106,7 +112,7 @@ export async function* kbAskStream(
     return;
   }
 
-  const systemPrompt = `${KB_SYSTEM_PROMPT}\n\n${formatEvidence(res)}`;
+  const systemPrompt = `${KB_SYSTEM_PROMPT}\n\n${formatEvidence(res)}${await formatAttachments(userId, input.attachPaths)}${formatHistory(input.history)}`;
   let answer = '';
   try {
     for await (const event of deps.stream({
@@ -138,3 +144,32 @@ export async function* kbAskStream(
 }
 
 export const _internals = { toEvidenceRefs };
+
+/** 多轮对话历史拼进 systemPrompt（只保留最近 6 轮，防上下文溢出）。 */
+function formatHistory(history?: Array<{ role: 'user' | 'assistant'; content: string }>): string {
+  const rows = Array.isArray(history) ? history.slice(-6) : [];
+  if (!rows.length) return '';
+  const lines = rows.map((h) => (h.role === 'user' ? `用户：${h.content}` : `助手：${h.content}`));
+  return `\n\n以下是本次会话的对话历史（供理解上下文，回答当前问题时也可参考）：\n${lines.join('\n')}`;
+}
+
+/** 读取本次提问挂载的文本类附件，作为补充上下文（非文本/过大跳过）。 */
+async function formatAttachments(userId: string, attachPaths?: string[]): Promise<string> {
+  const paths = Array.isArray(attachPaths) ? attachPaths.filter((p) => typeof p === 'string' && p) : [];
+  if (!paths.length) return '';
+  const textExts = new Set(['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.log', '.html', '.htm', '.xml']);
+  const parts: string[] = [];
+  for (const p of paths.slice(0, 5)) {
+    try {
+      const st = await fsp.stat(p);
+      if (!st.isFile() || st.size > 200 * 1024) continue; // 只读 ≤200KB 文本
+      const ext = path.extname(p).toLowerCase();
+      if (!textExts.has(ext)) continue;
+      const text = await fsp.readFile(p, 'utf8');
+      if (!text.trim()) continue;
+      parts.push(`## 附件：${path.basename(p)}\n${text.slice(0, 6000)}`);
+    } catch { /* 跳过不可读附件 */ }
+  }
+  if (!parts.length) return '';
+  return `\n\n以下为本次提问附带的上传文件内容（回答时可参考）：\n\n${parts.join('\n\n')}`;
+}

@@ -218,6 +218,24 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     expect(result.text).toBe('hello cogseed, reply here');
   });
 
+  it('treats stream activity as a reply-timeout heartbeat', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer], 150);
+    const sendPromise = hub.sendAndWait('hermes', envelope());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hub.tryResolveReply(streamEnvelope('still working', 1, 'progress'))).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hub.tryResolveReply(replyEnvelope())).toBe(true);
+    await expect(sendPromise).resolves.toMatchObject({ text: 'hello cogseed, reply here' });
+  });
+
   it('replays a submitted envelope after the peer becomes available', async () => {
     const pending = envelope({ message_id: 'msg-recover-1', session_id: 'ses-recover-1', task_id: 'tsk-recover-1', idempotency_key: 'idem-recover-1' });
     outboxRecordSubmitted(pending, 'hermes');

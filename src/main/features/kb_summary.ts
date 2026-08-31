@@ -52,11 +52,27 @@ const CHUNK_CHAR_CAP = 400;
 const DOC_CHAR_CAP = 1200;
 const FILES_CAP = 12;
 const CACHE_MAX = 50;
+/** LLM 单次解析超时（网络不可达/模型卡住时降级，避免 UI 无限等待） */
+const SUMMARY_LLM_TIMEOUT_MS = 45 * 1000;
+
+/** 给 Promise 加超时：超时 reject（调用方 catch 后降级）。 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`LLM timeout after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
 
 const SUMMARY_SYSTEM_PROMPT = `你是知识库整理助手。根据提供的各文档要点，只输出一个 JSON 对象（不要任何额外文字）：
 {"docs":[{"name":"文档名","file":"相对路径","text":"一句话要点"}],"oneLiner":"整个知识库的一句话总结","mindmap":{"root":"中心主题","kids":["分支1","分支2","分支3"]}}`;
 
 const cache = new Map<string, KbSummaryResult>();
+// 同 key（用户+库）的解析 in-flight 去重：并发调用共享同一 Promise，
+// 避免切换库来回触发重复的 LLM 推理。
+const inFlight = new Map<string, Promise<KbSummaryResult>>();
 
 function fingerprint(files: Array<{ path: string; mtime: number; chunks: number }>): string {
   const h = createHash('sha256');
@@ -127,6 +143,28 @@ export async function kbSummarize(
   const dir = opts?.dir || null;
   const spaceId = opts?.spaceId || null;
   const isSpace = !!spaceId;
+  const inFlightKey = `${userId}\u0000${spaceId || 'lib'}\u0000${dir || ''}`;
+  const existing = inFlight.get(inFlightKey);
+  if (existing) return existing; // 同一库已在解析中，复用结果
+
+  const run = kbSummarizeInner(userId, opts, deps, inFlightKey);
+  inFlight.set(inFlightKey, run);
+  try {
+    return await run;
+  } finally {
+    if (inFlight.get(inFlightKey) === run) inFlight.delete(inFlightKey);
+  }
+}
+
+async function kbSummarizeInner(
+  userId: string,
+  opts: { dir?: string | null; spaceId?: string | null },
+  deps: KbSummaryDeps,
+  inFlightKey: string,
+): Promise<KbSummaryResult> {
+  const dir = opts?.dir || null;
+  const spaceId = opts?.spaceId || null;
+  const isSpace = !!spaceId;
   let ready;
   if (isSpace) {
     ready = spaceLibrary
@@ -161,12 +199,16 @@ export async function kbSummarize(
   const docLines = collectReadyDocLines(userId, { dir, spaceId });
 
   try {
-    const res = await deps.complete({
-      userId,
-      message: `请整理以下知识库文档要点：\n\n${docLines.join('\n\n')}`,
-      systemPrompt: SUMMARY_SYSTEM_PROMPT,
-      sessionId: `aside-kbsummary-${userId}`,
-    });
+    // LLM 调用加超时兜底：网络不可达/模型卡住时 45s 后降级，避免 UI 无限"正在解析…"
+    const res = await withTimeout(
+      deps.complete({
+        userId,
+        message: `请整理以下知识库文档要点：\n\n${docLines.join('\n\n')}`,
+        systemPrompt: SUMMARY_SYSTEM_PROMPT,
+        sessionId: `aside-kbsummary-${userId}`,
+      }),
+      SUMMARY_LLM_TIMEOUT_MS,
+    );
     if (!res.ok) throw new Error(res.error || 'model failed');
     const parsed = parseSummaryJson(res.text);
     const result: KbSummaryResult = {

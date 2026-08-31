@@ -622,6 +622,10 @@ async function loadAgents(forceRefresh, opts = {}) {
         });
         _agentsCache = sortedAgents;
         _agentsCacheIsSummary = summary;
+        // Unified execution entry: agent defaults (default_model /
+        // default_thinking) feed the composer's exec-config chip — notify
+        // it whenever the cache is refreshed (includes agent-edit writes).
+        try { window.dispatchEvent(new CustomEvent('cogseed:agents-cache-refreshed')); } catch (_) {}
         // Sidebar conv-row badges read agent icon+color from `_agentsCache`
         // (via `_renderConvAgentStackHtml`). Boot order is loadConversations
         // → loadAgents, so the first sidebar render lands before the cache
@@ -1830,6 +1834,7 @@ function _renderAgentDetail(agent, editing) {
   // without entering edit mode. The header chip was removed because
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
+  _renderAgentDetailExecDefaults(agent);
   _renderAgentDetailProjectDir(agent);
   void _renderAgentDetailGateway(agent);
   const localizedDesc = _agentSummary(agent, lang);
@@ -2155,6 +2160,153 @@ async function _renderAgentDetailRuntime(agent) {
       }
     },
   });
+}
+
+/** Unified execution entry — per-agent default execution config (in-process
+ *  agents only): default model + default thinking strength. Persisted via
+ *  `agents.update({ default_model, default_thinking })`; the composer's
+ *  exec-config chip shows these as the baseline and layers task overrides
+ *  on top without ever writing back here. CLI-backed agents keep their
+ *  model binding on `runtime.model` (create modal / runtime section) and
+ *  manage their own reasoning — nothing to configure here. */
+async function _renderAgentDetailExecDefaults(agent) {
+  const section = document.getElementById('agents-detail-exec-defaults-section');
+  const slot = document.getElementById('agents-detail-exec-defaults');
+  if (!section || !slot) return;
+  slot.innerHTML = '';
+  // Only in-process custom agents are editable; builtin/marketplace/CLI stay hidden.
+  const isCli = agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway';
+  if (isCli || agent.source !== 'custom') {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const FOLLOW_GLOBAL = '__follow_global__';
+  const entries = (typeof window.getModelChipEntries === 'function')
+    ? window.getModelChipEntries()
+    : [];
+  // Unique providers from the configured priority entries.
+  const providers = [];
+  const seenProviders = new Set();
+  for (const e of entries) {
+    if (e && e.provider && !seenProviders.has(e.provider)) {
+      seenProviders.add(e.provider);
+      providers.push(e);
+    }
+  }
+
+  const current = agent.default_model || null;
+
+  slot.innerHTML = `
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_model'))}</span>
+      <span class="ai-select agents-detail-exec-provider"></span>
+      <span class="ai-select agents-detail-exec-model"></span>
+    </div>
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_thinking'))}</span>
+      <span class="ai-select agents-detail-exec-thinking"></span>
+    </div>
+    <div class="agents-detail-exec-hint">${escapeHtml(t('agents.exec_defaults_hint'))}</div>
+  `;
+
+  const providerMount = slot.querySelector('.agents-detail-exec-provider');
+  const modelMount = slot.querySelector('.agents-detail-exec-model');
+  const thinkingMount = slot.querySelector('.agents-detail-exec-thinking');
+
+  let modelSel = null;
+  const currentProvider = current ? current.provider : '';
+  const currentModel = current ? current.model : '';
+
+  const providerOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    ...providers.map((e) => ({ value: e.provider, label: e.providerLabel || e.provider })),
+  ];
+  const providerSel = _aiSelectMount(providerMount, {
+    options: providerOptions,
+    value: currentProvider || FOLLOW_GLOBAL,
+  });
+
+  const setModelSelect = async (providerId, selectedModel) => {
+    if (!modelSel) {
+      modelSel = _aiSelectMount(modelMount, { options: [], value: '' });
+    }
+    if (!providerId) {
+      modelSel.setOptions([
+        { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+      ]);
+      modelSel.setValue(FOLLOW_GLOBAL);
+      return;
+    }
+    modelSel.setOptions([{ value: '__loading__', label: t('common.loading') }]);
+    modelSel.setValue('__loading__');
+    let models = [];
+    try {
+      const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
+      if (res && res.ok && Array.isArray(res.models)) models = res.models;
+    } catch (_) { /* keep empty */ }
+    const options = models
+      .map((m) => (m && typeof m === 'object' ? { value: String(m.id || ''), label: String(m.name || m.id || '') } : null))
+      .filter((o) => o && o.value);
+    if (!options.length) {
+      modelSel.setOptions([{ value: '__none__', label: t('model_chip.no_models') }]);
+      modelSel.setValue('__none__');
+      return;
+    }
+    modelSel.setOptions(options);
+    modelSel.setValue(options.some((o) => o.value === selectedModel) ? selectedModel : options[0].value);
+  };
+
+  const persist = async (updates) => {
+    try {
+      const res = await window.cogseed.invoke('agents.update', { agent_id: agent.agent_id, updates });
+      if (!res || !res.agent) {
+        _agentsLog.warn('agents.update exec defaults failed', { error: res && res.error });
+        return;
+      }
+      if (typeof loadAgents === 'function') await loadAgents(true);
+    } catch (err) {
+      _agentsLog.warn('agents.update exec defaults failed', err);
+    }
+  };
+
+  providerSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) {
+      await persist({ default_model: null });
+      await setModelSelect('', '');
+      return;
+    }
+    await setModelSelect(next, '');
+  });
+
+  // Model select is lazily mounted by setModelSelect; wire its change handler
+  // once via a microtask so `modelSel` is bound.
+  setTimeout(() => {
+    if (!modelSel) return;
+    modelSel.onChange(async (next) => {
+      const providerId = providerSel.getValue ? providerSel.getValue() : currentProvider;
+      if (!providerId || providerId === FOLLOW_GLOBAL || !next || next === '__none__' || next === '__loading__') return;
+      await persist({ default_model: { provider: providerId, model: next } });
+    });
+  }, 0);
+
+  const thinkingOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    { value: 'off', label: t('model_effort.off') },
+    { value: 'low', label: t('model_effort.low') },
+    { value: 'high', label: t('model_effort.high') },
+  ];
+  const thinkingSel = _aiSelectMount(thinkingMount, {
+    options: thinkingOptions,
+    value: agent.default_thinking || FOLLOW_GLOBAL,
+  });
+  thinkingSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) await persist({ default_thinking: null });
+    else if (next === 'off' || next === 'low' || next === 'high') await persist({ default_thinking: next });
+  });
+
+  await setModelSelect(currentProvider, currentModel);
 }
 
 /** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
@@ -3393,7 +3545,7 @@ function _findInputAreaTop(anchorEl) {
   return null;
 }
 
-function _positionPopoverAboveOrBelow(popover, anchorEl) {
+function _positionPopoverAboveOrBelow(popover, anchorEl, opts = {}) {
   // Make invisible but laid out so we can measure it before positioning.
   popover.style.display = 'flex';
   popover.style.left = '-9999px';
@@ -3408,7 +3560,11 @@ function _positionPopoverAboveOrBelow(popover, anchorEl) {
   // own top. This keeps the popover from overlapping the textarea on
   // chat panels while still working for any other future anchor.
   const aboveRef = _findInputAreaTop(anchorEl);
-  const refTop = aboveRef !== null ? aboveRef : rect.top;
+  // Recipient chips want the popover ANCHORED TO THE BUTTON itself —
+  // aligning to the input area leaves it floating ~100px above the chip
+  // (验收反馈两轮「位置不对」的根因), because the input-area box extends
+  // far above the button row.
+  const refTop = (opts.anchorToButton ? null : aboveRef) ?? rect.top;
   const availAbove = refTop - margin - gap;
   const availBelow = window.innerHeight - rect.bottom - margin - gap;
   const preferAbove = popRect.height <= availAbove || availAbove >= availBelow;
@@ -3733,7 +3889,12 @@ async function _openAgentPicker(anchorBtn) {
   // Paint the cached Agent shell in the same interaction frame. Other tabs
   // own their script/data loads and cannot delay this first frame.
   _setAgentPickerTab('agents', { focusSearch: false });
-  _positionPopoverAboveOrBelow(picker, anchorBtn);
+  // Recipient pickers anchor to the @ button itself (紧贴按钮上方弹出)。
+  _positionPopoverAboveOrBelow(picker, anchorBtn, {
+    anchorToButton: anchorBtn.id === 'chat-recipient-chip'
+      || anchorBtn.id === 'new-chat-recipient-chip'
+      || anchorBtn.id === 'auto-recipient-chip',
+  });
   setTimeout(() => document.getElementById('agent-picker-search')?.focus(), 30);
   // Project bindings affect Agent visibility, so refresh them independently
   // and repaint only if this picker session is still current.
@@ -3859,6 +4020,9 @@ function _renderAgentPickerList(filterText) {
   const projectEmptyHint = (!q && _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0)
     ? `<div class="skill-picker-empty-hint">${escapeHtml(t('agents.no_project_agents'))}</div>`
     : '';
+  // 接收者选择器只管「谁执行」（Commander + Agent）；模型的选择与展示统一由
+  // composer 右下角的执行配置 chip 负责（选中 CLI 智能体时该 chip 即管理其
+  // runtime.model）。模型不进这个列表——验收反馈：左侧出现模型属于概念混淆。
   listEl.innerHTML = projectEmptyHint + commanderHtml
     + groupHtml(t('agents.source_custom'), groups.custom)
     + groupHtml(t('agents.source_marketplace'), groups.marketplace);

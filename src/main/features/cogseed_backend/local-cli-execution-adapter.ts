@@ -293,9 +293,16 @@ async function* runViaP3394Gateway(
   const prompt = promptFromInput(input);
   const { runP3394GatewayTurn } = await import('../p3394_bridge/p3394-gateway-turn');
   const runningEvents: Array<{ text: string }> = [];
-  let result;
-  try {
-    result = await runP3394GatewayTurn({
+  let wakeConsumer: (() => void) | undefined;
+  let settled = false;
+  let result: Awaited<ReturnType<typeof runP3394GatewayTurn>> | undefined;
+  let runError: unknown;
+  const notifyConsumer = (): void => {
+    const wake = wakeConsumer;
+    wakeConsumer = undefined;
+    wake?.();
+  };
+  const turn = runP3394GatewayTurn({
       uid: input.userId,
       cid: input.conversationId,
       agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
@@ -306,17 +313,40 @@ async function* runViaP3394Gateway(
       signal: opts.signal ?? undefined,
       onProcess: (data) => {
         const typed = data as { type?: string; text?: string };
-        if ((typed.type === 'delta' || typed.type === 'final') && typeof typed.text === 'string' && typed.text) {
+        if (typed.type === 'delta' && typeof typed.text === 'string' && typed.text) {
           runningEvents.push({ text: typed.text });
+          notifyConsumer();
         }
       },
+    })
+    .then((value) => { result = value; })
+    .catch((error: unknown) => { runError = error; })
+    .finally(() => {
+      settled = true;
+      notifyConsumer();
     });
-  } catch (error) {
-    yield { type: 'error', ...base, status: 'failed', error: error instanceof Error ? error.message : String(error) };
+
+  while (!settled || runningEvents.length > 0) {
+    const item = runningEvents.shift();
+    if (item) {
+      yield { type: 'event', ...base, status: 'running', text: item.text };
+      continue;
+    }
+    if (!settled) {
+      await new Promise<void>((resolve) => {
+        if (settled || runningEvents.length > 0) resolve();
+        else wakeConsumer = resolve;
+      });
+    }
+  }
+  await turn;
+  if (runError) {
+    yield { type: 'error', ...base, status: 'failed', error: runError instanceof Error ? runError.message : String(runError) };
     return;
   }
-  for (const item of runningEvents) {
-    yield { type: 'event', ...base, status: 'running', text: item.text };
+  if (!result) {
+    yield { type: 'error', ...base, status: 'failed', error: 'p3394 gateway execution ended without a result' };
+    return;
   }
   if (result.failureCode || result.error) {
     yield {
