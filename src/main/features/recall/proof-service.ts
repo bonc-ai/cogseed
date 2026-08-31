@@ -13,6 +13,7 @@ import type { RecallJsonRecord } from './types';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from './source-service';
 import { readReceipt, type ContextReuseReceipt } from '../p3394/context-reuse-receipt';
 import { abilityAssetReferenceMatches } from './asset-reference';
+import { recordRecallCandidateValidation } from './candidate-service';
 
 const log = createLogger('recall.proofs');
 
@@ -267,6 +268,17 @@ export async function evaluateEffectivenessProof(userId: string, input: { transf
   const record: EffectivenessProofRecord = { schemaVersion: 1, ownerId: userId, id: `ep-${genId12()}`, transferProofId: transfer.id, outcome, status: valid ? 'valid' : 'invalid', observedResult: text(input.observedResult, 'observed result', 4000), evidenceRefs: refs, ...(recommendedAction ? { recommendedAction } : {}), createdAt: new Date().toISOString() };
   await writeRecallJsonRecord(userId, 'effectiveness-proofs', record.id, record);
   const effectivenessMaturity = maturityForEffectivenessOutcome(record.outcome, record.status === 'valid');
+  const validationOutcome = record.outcome === 'better' ? 'success' : record.outcome === 'worse' || record.outcome === 'rework' ? 'failure' : undefined;
+  if (validationOutcome) {
+    for (const item of transfer.assetVersions) {
+      try {
+        const asset = await readAbilityAsset(userId, item.assetId);
+        await recordRecallCandidateValidation(userId, asset.candidateId, validationOutcome);
+      } catch {
+        // Legacy assets may not have a readable candidate; the proof remains authoritative.
+      }
+    }
+  }
   if (effectivenessMaturity) {
     for (const item of transfer.assetVersions) await setAbilityAssetMaturity(userId, item.assetId, effectivenessMaturity);
   }

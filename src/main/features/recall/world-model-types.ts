@@ -167,6 +167,10 @@ export interface WorldModelForecast {
   selectedCandidateId?: string;
   causalLinks?: WorldModelCausalLink[];
   assumptions?: string[];
+  forecastConfidence?: number;
+  riskLevel?: CausalRuleSeverity;
+  contextFreshness?: { projectionConfirmedAt: string; projectedAt: string; ageMs: number };
+  forecastCreatedAt?: string;
 }
 
 export interface WorldModelKnowledge {
@@ -299,7 +303,7 @@ export interface ResultDeltaDetail {
   acceptanceSignals: AcceptanceSignalResult[];
   missingPredictedFiles: string[];
   unexpectedProducedFiles: string[];
-  terminalStatus: 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+  terminalStatus: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input';
 }
 
 export interface WorldModelReconciliation {
