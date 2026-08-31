@@ -81,6 +81,7 @@ async function loadSettings() {
   if (typeof initSettingsTabs === 'function') initSettingsTabs();
   _settingsBindConfiguredToggle();
   _settingsBindLanguageOnce();
+  _settingsBindThinkingOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
   _settingsBindContextsEntryOnce();
@@ -472,6 +473,53 @@ function _settingsBindLanguageOnce() {
   });
 }
 
+// ── Global default thinking strength (unified execution entry) ──
+// The composer's exec-config chip is task-scoped only; the GLOBAL default
+// lives here. Options mirror prefs.getThinkingLevel/setThinkingLevel.
+let _settingsThinkingSel = null; // _aiSelectMount api
+
+const _SETTINGS_THINKING_OPTIONS = [
+  { value: 'auto', label: '' },
+  { value: 'off', label: '' },
+  { value: 'low', label: '' },
+  { value: 'high', label: '' },
+];
+
+function _settingsThinkingLabels() {
+  // Resolve through t() at render time so an in-flight language switch
+  // relabels the options without a page reload.
+  return _SETTINGS_THINKING_OPTIONS.map((o) => ({
+    value: o.value,
+    label: t('model_effort.' + o.value),
+  }));
+}
+
+function _settingsBindThinkingOnce() {
+  const el = document.getElementById('settings-thinking-select');
+  if (!el) return;
+  const apply = (level) => {
+    if (_settingsThinkingSel) _settingsThinkingSel.setValue(level);
+    return;
+  };
+  _settingsThinkingSel = _aiSelectMount(el, {
+    options: _settingsThinkingLabels(),
+    value: 'auto',
+  });
+  _settingsThinkingSel.onChange(async (next) => {
+    if (!['auto', 'off', 'low', 'high'].includes(next)) return;
+    try {
+      await window.cogseed.invoke('prefs.setThinkingLevel', { level: next });
+      _settingsLog.info('thinking level changed', { level: next });
+      if (typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+    } catch (err) {
+      _settingsLog.warn('setThinkingLevel failed', { error: (err && err.message) || String(err) });
+    }
+  });
+  window.cogseed.invoke('prefs.getThinkingLevel').then((res) => {
+    if (res && res.level) apply(res.level);
+  }).catch(() => {});
+}
+
 function _settingsSyncLanguageRadio() {
   // Function name kept for caller-side compatibility; semantics is now "sync dropdown value".
   const cur = (typeof getLang === 'function') ? getLang() : 'zh';
@@ -483,6 +531,11 @@ function _settingsSyncLanguageRadio() {
 // isn't refreshed by applyDomI18n's data-i18n sweep).
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
+  // Unified execution entry: thinking-strength option labels resolve
+  // through t(), so re-apply them on language switches.
+  if (_settingsThinkingSel && typeof _settingsThinkingSel.setOptions === 'function') {
+    _settingsThinkingSel.setOptions(_settingsThinkingLabels());
+  }
   _settingsRenderLocalExec();
   _settingsRenderPicker();
   _settingsRenderEntries();
@@ -1370,6 +1423,13 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   }
   const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
   addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
+  // 远端模型发现：调服务自己的 list-models 端点拉全量清单，勾选导入。
+  const fetchModelsButton = document.createElement('button');
+  fetchModelsButton.type = 'button';
+  fetchModelsButton.className = 'btn';
+  fetchModelsButton.innerHTML = `${_settingsIconHtml('refresh', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.fetch_models'))}</span>`;
+  fetchModelsButton.addEventListener('click', () => _settingsOpenCustomProviderFetchModels(provider));
+  addModelButton?.parentNode?.appendChild(fetchModelsButton);
 
   actions.innerHTML = '';
   const closeButton = document.createElement('button');
@@ -1381,8 +1441,116 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
 }
 
-async function _settingsSetCustomProviderEnabled(provider, enabled) {
-  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+/** 远端模型发现视图：打开即向服务发起 list-models 请求，结果按勾选导入。
+ *  已在本地的模型标记「已存在」不可重复勾选；导入走 customProviders.model.add
+ *  逐个落库（窗口/输出上限用默认值，可在导入后按需编辑）。 */
+async function _settingsOpenCustomProviderFetchModels(provider) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !provider?.id) return;
+  _settingsSetCustomProviderModalView('fetch-models', provider, null, false);
+  title.textContent = t('settings.custom_providers.fetch_models_title', { name: provider.name || provider.id });
+  body.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.fetch_models_loading'))}</div>`;
+  actions.innerHTML = '';
+
+  const existing = new Set(_settingsCustomProviderModels(provider).map((model) => model.id));
+  const res = await _settingsCallCustomProvider('customProviders.fetchModels', { providerId: provider.id });
+  // Modal may have been closed / navigated while the request was in flight.
+  const viewActive = _settingsState.customProviderModalView
+    && _settingsState.customProviderModalView.providerId === provider.id
+    && _settingsState.customProviderModalView.kind === 'fetch-models'
+    && overlay.classList.contains('open');
+  if (!viewActive) return;
+  if (!res || !res.ok) {
+    body.innerHTML = `
+      <div class="settings-custom-provider-fetch-error">
+        ${_settingsIconHtml('warning', 'ui-icon')}
+        <span>${escapeHtml(t('settings.custom_providers.fetch_models_failed', { error: (res && res.error) || '' }))}</span>
+      </div>`;
+    const closeButton = document.createElement('button');
+    closeButton.className = 'btn';
+    closeButton.textContent = t('common.close');
+    closeButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+    actions.appendChild(closeButton);
+    return;
+  }
+
+  const rows = (res.models || []).slice(0, 200);
+  const selectable = rows.filter((row) => !existing.has(row.id));
+  body.innerHTML = `
+    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(t('settings.custom_providers.fetch_models_hint'))}</p>
+    <div class="settings-custom-provider-fetch-list" id="settings-custom-provider-fetch-list"></div>
+  `;
+  const listEl = body.querySelector('#settings-custom-provider-fetch-list');
+  for (const row of rows) {
+    const isExisting = existing.has(row.id);
+    const rowEl = document.createElement('label');
+    rowEl.className = 'settings-custom-provider-fetch-row' + (isExisting ? ' is-existing' : '');
+    // 能力徽标（A/B 层补全的数据）：导入前即可见支持什么。
+    const badges = [
+      row.reasoning === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_reasoning'))}</span>` : '',
+      row.vision === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_vision'))}</span>` : '',
+      row.contextWindow ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(row.contextWindow) }))}</span>` : '',
+    ].filter(Boolean).join('');
+    rowEl.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
+      <span class="settings-custom-provider-fetch-name">${escapeHtml(row.name ? `${row.name} (${row.id})` : row.id)}</span>
+      ${badges}
+      ${isExisting ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.fetch_models_existing'))}</span>` : ''}
+    `;
+    listEl.appendChild(rowEl);
+  }
+
+  actions.innerHTML = '';
+  const cancelButton = document.createElement('button');
+  cancelButton.className = 'btn';
+  cancelButton.textContent = t('common.cancel');
+  cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+  actions.appendChild(cancelButton);
+  const importButton = document.createElement('button');
+  importButton.className = 'btn btn-primary';
+  importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: selectable.length });
+  importButton.disabled = selectable.length === 0;
+  importButton.addEventListener('click', async () => {
+    if (importButton.disabled) return;
+    const picked = [...listEl.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')]
+      .map((input) => input.value)
+      .filter((id) => !existing.has(id));
+    if (!picked.length) return;
+    importButton.disabled = true;
+    // 服务/目录给出的元数据（A/B 层）随导入落库；窗口值没给时保持默认，
+    // 用户可在导入后的编辑表单里改。reasoning/vision 不入库——运行时按
+    // 同一识别逻辑动态判定，与 UI 标注天然一致。
+    const metaById = new Map((res.models || []).map((row) => [row.id, row]));
+    let imported = 0;
+    let firstError = '';
+    for (const id of picked) {
+      const meta = metaById.get(id) || {};
+      // 归一化校验要求 maxTokens <= contextWindow：服务只给了窗口时把
+      // 默认输出上限钳到窗口内，避免导入失败。
+      const contextWindow = meta.contextWindow || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
+      const maxTokens = meta.maxTokens || Math.min(_CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS, contextWindow);
+      const normalized = _settingsNormalizeCustomProviderModel({ id, contextWindow, maxTokens });
+      if (!normalized.ok) { if (!firstError) firstError = `${id}: ${normalized.error}`; continue; }
+      const added = await _settingsCallCustomProvider('customProviders.model.add', {
+        providerId: provider.id,
+        model: normalized.model,
+      });
+      if (added && added.ok) imported += 1;
+      else if (!firstError) firstError = `${id}: ${(added && added.error) || 'failed'}`;
+    }
+    if (imported > 0) await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed) _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    if (firstError) _settingsCustomProviderModalStatus('error', t('settings.custom_providers.fetch_models_partial', { ok: imported, error: firstError }));
+    else if (imported > 0) _settingsCustomProviderModalStatus('', t('settings.custom_providers.fetch_models_done', { count: imported }));
+  });
+  actions.appendChild(importButton);
+}
+
+async function _settingsSetCustomProviderEnabled(provider, enabled) {  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
   return _settingsWithCustomProviderAction(`provider:enabled:${provider.id}`, async () => {
     if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
       _settingsCustomProviderModalStatus('', t(enabled ? 'settings.custom_providers.enabling' : 'settings.custom_providers.disabling'));

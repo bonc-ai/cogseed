@@ -4569,6 +4569,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.providerId, 'providerId', 120),
     boundedText(args?.modelId, 'modelId', 200),
   ),
+  // 远端模型发现（统一执行入口配套）：调服务自己的 list-models 端点，
+  // 只读不落库——渲染层展示列表，用户勾选后经 model.add 导入。
+  'customProviders.fetchModels': async (args, ctx) => customProviders.fetchCustomProviderModels(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };
@@ -5473,7 +5479,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -5491,6 +5497,19 @@ const streamHandlers: Record<string, StreamHandler> = {
         || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
       yield { type: 'error', text: 'invalid recipient route' };
       return;
+    }
+    // Per-task execution config (unified execution entry). Shape-check here;
+    // the group-chat facade re-validates and drops stale/unknown values.
+    if (execution_config !== undefined) {
+      const ec: any = execution_config;
+      const badShape = !ec || typeof ec !== 'object'
+        || (ec.provider !== undefined && typeof ec.provider !== 'string')
+        || (ec.model !== undefined && typeof ec.model !== 'string')
+        || (ec.effort !== undefined && ec.effort !== 'off' && ec.effort !== 'low' && ec.effort !== 'high');
+      if (badShape) {
+        yield { type: 'error', text: 'invalid execution config' };
+        return;
+      }
     }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
@@ -5558,6 +5577,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
                 ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
+                ...(execution_config ? { execution_config } : {}),
               });
       } catch (err) {
         sendErr = err;

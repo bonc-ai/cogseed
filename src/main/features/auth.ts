@@ -1174,44 +1174,70 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
-export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean }[] }> {
+export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
+    // 方案 C：reasoning 标注按识别结果（与 custom_provider_runtime 的
+    // 透传判定同一数据源）——识别为支持推理的模型，UI 解锁档位且请求
+    // 真的会带 reasoning_effort；识别不出的保持 undefined（UI 显示能力
+    // 未知并禁用低/高），不再写死 false。
     const custom = customProviderForId(loadProfiles(), id);
-    // contextWindow 透传：自定义 provider 模型本就存有窗口值（设置界面可
-    // 配），渲染层会话统计行的上下文占用分母靠它（2026-08-27 反馈补齐）。
-    // 存量兜底：导入早期落库的窗口恒为默认猜测值，与默认相等且目录确知
-    // 真实窗口时，读取侧以目录值为准（不重写存储；用户手改过的值必然
-    // ≠ 默认，不受影响）。vision 同理：库里未知而目录确知时读目录值。
-    return {
-      models: (custom?.models || []).map((model) => {
-        const abilities = publicModelAbilitiesFor(model.id);
-        const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
-          ? model.contextWindow : null;
-        const resolvedWindow = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
-          ? (abilities.contextWindow ?? stored)
-          : stored;
-        const resolvedVision = typeof model.vision === 'boolean'
-          ? model.vision : abilities.vision;
-        return {
-          id: model.id,
-          name: model.id,
-          ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
-          ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
-        };
-      }),
-    };
+    const models = custom?.models || [];
+    const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
+    // reasoning 标注按识别结果（识别器不可用时省略该字段，与运行时不透传
+    // 的行为一致）；contextWindow/vision 透传不依赖识别器（目录解析独立）。
+    let recognizer: typeof import('../model/model_id_recognition') | null = null;
+    try {
+      recognizer = await import('../model/model_id_recognition');
+    } catch { recognizer = null; }
+    for (const model of models) {
+      const abilities = publicModelAbilitiesFor(model.id);
+      const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
+        ? model.contextWindow : null;
+      const resolvedWindow = stored === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+        ? (abilities.contextWindow ?? stored)
+        : stored;
+      const resolvedVision = typeof model.vision === 'boolean'
+        ? model.vision : abilities.vision;
+      const recognized = recognizer ? await recognizer.recognizeModelByIdReady(model.id) : null;
+      out.push({
+        id: model.id,
+        name: model.id,
+        ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
+        ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
+        ...(recognized?.reasoning !== undefined ? { reasoning: recognized.reasoning } : {}),
+      });
+    }
+    return { models: out };
   }
   if (!isModelProviderAllowed(id)) return { models: [] };
   const allowed = (models: { id: string; name: string }[]) =>
     models.filter((m) => isModelProviderAllowed(id, m.id));
+  const annotate = async (models: { id: string; name: string }[]) => {
+    const out: { id: string; name: string; reasoning?: boolean }[] = [];
+    let mod: Awaited<ReturnType<typeof ca>> | null = null;
+    for (const m of models) {
+      let reasoning: boolean | undefined;
+      try {
+        mod = mod || await ca();
+        const resolved = resolveConfiguredPiModel(mod, id, m.id);
+        reasoning = resolved?.model && typeof (resolved.model as { reasoning?: unknown }).reasoning === 'boolean'
+          ? (resolved.model as { reasoning?: boolean }).reasoning
+          : undefined;
+      } catch {
+        reasoning = undefined;
+      }
+      out.push(reasoning === undefined ? m : { ...m, reasoning });
+    }
+    return out;
+  };
   const curated = curatedModelsFor(id);
-  if (curated.length) return { models: allowed(curated) };
+  if (curated.length) return { models: await annotate(allowed(curated)) };
   try {
     const mod = await ca();
     const raw = mod.listPiModels(id) || [];
-    return { models: allowed(pickLatestGenerations(raw as any[], 2)) };
+    return { models: await annotate(allowed(pickLatestGenerations(raw as any[], 2))) };
   } catch {
     return { models: [] };
   }
@@ -2549,6 +2575,31 @@ export async function pickChatEntryGroup(): Promise<ChatEntryChoice[]> {
     });
   }
   return choices;
+}
+
+/**
+ * Resolve the chat entry group for an explicit per-task model override
+ * (unified execution entry: user picked a specific provider+model for this
+ * conversation). Reuses `pickChatEntryGroup`'s candidate filtering
+ * (enabled providers, cooldown, resolvable keys), then narrows to the
+ * entries of the requested provider with `model` replaced by the requested
+ * id — the API key / base URL stay provider-level, only the model id is
+ * per-request.
+ *
+ * Returns null when the provider has no usable entry (unknown provider,
+ * no credentials, everything cooled down). Callers fall back to the
+ * default group in that case so a stale override never hard-fails a turn.
+ */
+export async function pickChatEntryGroupForModelOverride(
+  override: { provider: string; model: string },
+): Promise<ChatEntryChoice[] | null> {
+  const providerId = String(override?.provider || '').trim();
+  const modelId = String(override?.model || '').trim();
+  if (!providerId || !modelId) return null;
+  const group = await pickChatEntryGroup();
+  const matching = group.filter((c) => c.provider === providerId);
+  if (!matching.length) return null;
+  return matching.map((c) => ({ ...c, model: modelId }));
 }
 
 /**
