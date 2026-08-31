@@ -1,128 +1,176 @@
-/* ─── chat-stream 过程面板（conv-core M1） ─────────────────────────────────
-   与 execution-card.css 同级的独立样式块；色板跟随全局 tokens（浅色为主，
-   状态色用现有 --danger/--ok 系变量名兜底，缺省时落到固定值）。 */
+/* ─── chat-stream 过程活动流（conv-core M1） ─────────────────────────────
+   视觉对齐 CLI 活动时间线：没有外框卡片，每个动作一行轻量条目
+   （线稿图标 + 动词 + 目标 + 增删统计），与正文按真实顺序交错。
+   色板跟随全局浅色基调，暗色用 prefers-color-scheme 兜底。 */
 
-.cs-panel {
-  /* 面板位于消息气泡内部（消息头之后、正文之前）——边距按气泡内嵌留白 */
-  margin: 2px 0 8px;
-  border: 1px solid rgba(127, 127, 127, .25);
-  border-radius: 10px;
-  background: rgba(127, 127, 127, .06);
-  font-size: 12.5px;
-  overflow: hidden;
-  /* chat-history 是固定高度的滚动 column flex 容器：不设 no-shrink 时面板
-     会被 flex 压缩到几像素高（执行中内容撑不住、完成态只剩一条线）。 */
+.cs-flow {
+  margin: 2px 0 6px;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  min-width: 0;
+  /* chat-history 是固定高度的滚动 column flex 容器：不设 no-shrink 时流
+     会被 flex 压缩到几像素高（执行中内容撑不住）。 */
   flex-shrink: 0;
 }
-.cs-panel.running { border-color: rgba(59, 130, 246, .45); }
-.cs-panel.failed { border-color: rgba(220, 38, 38, .5); }
-.cs-panel.done { border-color: rgba(22, 163, 74, .4); }
 
-.cs-panel-header {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; user-select: none; cursor: pointer; min-width: 0;
-}
-.cs-panel-header:hover { background: rgba(127, 127, 127, .06); }
-.cs-panel.cs-collapsed { background: transparent; border-color: rgba(127, 127, 127, .18); }
-.cs-panel.cs-collapsed .cs-panel-header { padding: 3px 8px; }
-.cs-panel-title { font-weight: 600; flex: none; }
-.cs-panel-summary {
-  flex: 1; color: #8a8a8a; font-size: 12px; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-}
-.cs-panel-state { color: #888; flex: none; }
-.cs-panel-toggle {
-  flex: none; margin-left: 0; border: 0; background: transparent; cursor: pointer;
-  color: #999; font-size: 11px; padding: 2px 4px; border-radius: 6px; width: 16px;
-}
-.cs-panel-toggle:hover { background: rgba(127, 127, 127, .12); }
-.cs-panel-stop {
-  margin-left: auto; border: 1px solid rgba(220, 38, 38, .4); cursor: pointer;
-  background: transparent; color: rgb(185, 28, 28); font-size: 12px;
-  padding: 2px 10px; border-radius: 6px; flex: none;
-}
-.cs-panel-stop:hover { background: rgba(239, 68, 68, .1); }
-
-.cs-spinner {
-  width: 10px; height: 10px; border-radius: 50%;
-  border: 2px solid rgba(59, 130, 246, .25);
-  border-top-color: rgb(59, 130, 246);
-  animation: cs-spin .8s linear infinite; flex: none;
-}
-@keyframes cs-spin { to { transform: rotate(360deg); } }
-
-.cs-panel-body {
-  padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 2px;
+.cs-flow-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
-/* ── 时间线行（CLI 风格：一行一操作，无边框盒） ── */
-.cs-card {
-  border: 0; background: transparent; border-radius: 6px;
-  padding: 2px 4px; margin: 0;
+/* ── 运行态首行：工作中 计时 + 停止（完成后整行撤掉） ── */
+.cs-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  color: #9aa2ad;
+  user-select: none;
+  min-width: 0;
 }
-.cs-card:hover { background: rgba(127, 127, 127, .07); }
-.cs-card.cs-interaction { border: 1px solid rgba(127, 127, 127, .25); background: rgba(255, 255, 255, .55); padding: 5px 8px; }
-.cs-row-head {
-  display: flex; align-items: center; gap: 7px; min-width: 0;
+.cs-status-label { flex: none; }
+.cs-status-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+.cs-status-stop {
+  border: 0; background: transparent; cursor: pointer;
+  color: #b9c0ca; font-size: 12px; padding: 1px 8px; border-radius: 6px;
+}
+.cs-status-stop:hover { color: rgb(185, 28, 28); background: rgba(127, 127, 127, .1); }
+.cs-flow.failed .cs-status-label { color: rgb(214, 69, 69); }
+
+/* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
+.cs-row {
+  padding: 3px 6px;
+  border-radius: 7px;
   cursor: pointer;
+  min-width: 0;
 }
-.cs-card-ico { flex: none; font-size: 12px; width: 14px; text-align: center; }
-.cs-card-ico.inProgress { color: rgb(59, 130, 246); }
-.cs-card-ico.completed { color: rgb(22, 163, 74); }
-.cs-card-ico.failed { color: rgb(220, 38, 38); }
+.cs-row:hover { background: rgba(127, 127, 127, .07); }
+.cs-row-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
 
-.cs-tool-name { font-weight: 600; flex: none; font-family: ui-monospace, monospace; }
-.cs-tool-args {
-  color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: ui-monospace, monospace; font-size: 11.5px;
+.cs-ico { display: inline-flex; flex: none; color: #a6adb8; }
+.cs-ico .cs-ico-svg { width: 15px; height: 15px; }
+.cs-ico.failed { color: rgb(214, 69, 69); }
+
+.cs-verb { color: #7f8792; flex: none; }
+.cs-verb.failed { color: rgb(214, 69, 69); }
+.cs-verb.raw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+.cs-row-dim { color: #bcc2cc; flex: none; }
+
+/* 目标：文件名深一档、目录浅一档；都能截断（长路径不打爆行） */
+.cs-file-ico { display: inline-flex; flex: none; }
+.cs-file-ico .chat-file-kind-icon { width: 15px; height: 15px; }
+.cs-file-name {
+  flex: 0 1 auto; min-width: 0; max-width: 46%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #6f7883;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
 }
-.cs-row-dur { color: #aaa; flex: none; font-size: 11px; margin-left: auto; }
-.cs-card-error { color: rgb(220, 38, 38); padding: 1px 0 1px 21px; font-size: 12px; }
-.cs-card-out { margin-top: 2px; padding-left: 21px; }
-.cs-card-out pre {
-  margin: 0; padding: 5px 8px; border-radius: 6px;
+.cs-file-dir {
+  /* 不占满余量：+N/−N 统计紧跟目录（对齐 CLI）；路径过长时收缩省略 */
+  flex: 0 1 auto; min-width: 0; max-width: 44%;
+  margin-left: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #b9c0ca;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.cs-target {
+  flex: 1 1 80px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #99a1ac;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+/* 行内 diff 统计与展开的 diff 正文 */
+.cs-add { color: rgb(26, 127, 55); flex: none; font-family: ui-monospace, monospace; font-size: 12px; }
+.cs-del { color: rgb(207, 34, 46); flex: none; font-family: ui-monospace, monospace; font-size: 12px; }
+.cs-diff-body {
+  display: none;
+  margin: 4px 0 2px 22px;
+  max-height: 260px; overflow: auto;
+  font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;
+}
+.cs-row.cs-open .cs-diff-body { display: block; }
+.cs-diff-line { display: block; white-space: pre-wrap; word-break: break-all; }
+.cs-diff-line.add { color: rgb(22, 128, 61); background: rgba(34, 197, 94, .1); }
+.cs-diff-line.del { color: rgb(178, 34, 34); background: rgba(239, 68, 68, .08); }
+.cs-diff-line.ctx { color: #99a1ac; }
+
+/* 失败原因与工具输出（点击行展开） */
+.cs-row-error {
+  color: rgb(214, 69, 69);
+  padding-left: 22px;
+  font-size: 12px;
+}
+.cs-row-out {
+  display: none;
+  padding-left: 22px;
+}
+.cs-row.cs-open .cs-row-out { display: block; }
+.cs-row-out pre {
+  margin: 2px 0 3px; padding: 5px 8px; border-radius: 6px;
   background: rgba(0, 0, 0, .04); max-height: 200px; overflow: auto;
   font-size: 11.5px; white-space: pre-wrap; word-break: break-all;
 }
 
-/* 时间线正文段（边说边执行的文字，交回前的时间线内呈现） */
+/* ── 思考行： brain 图标 + 思考 + 时长；点开看原文 ── */
+.cs-row-think .cs-think-dur { color: #bcc2cc; }
+.cs-think-full {
+  display: none;
+  margin: 2px 0 2px 22px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid rgba(127, 127, 127, .18);
+  color: #9aa2ad;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.cs-row.cs-open .cs-think-full { display: block; }
+
+/* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
 .cs-text {
-  padding: 2px 4px 2px 21px; line-height: 1.55; white-space: pre-wrap;
-  word-break: break-word; font-size: 13px;
+  padding: 4px 6px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13.5px;
+  color: var(--text, #1f2937);
 }
 
-.cs-reason-head { color: #8a8a8a; }
-.cs-reason-label { flex: none; }
-.cs-reason-hint { color: #b5b5b5; font-size: 11px; }
-.cs-reason-full {
-  display: none; margin-top: 2px; padding: 4px 8px 4px 21px;
-  color: #8a8a8a; white-space: pre-wrap; word-break: break-word;
-  font-size: 11.5px; border-left: 2px solid rgba(127, 127, 127, .2);
-}
-.cs-card.cs-open .cs-reason-full { display: block; }
-
-.cs-diff-path { font-family: ui-monospace, monospace; font-size: 11.5px; }
-.cs-diff-summary { color: #777; flex: none; }
-.cs-diff-body {
-  margin-top: 4px; max-height: 260px; overflow: auto;
-  font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;
-  border-radius: 6px; background: rgba(0, 0, 0, .04); padding: 4px 8px;
-}
-.cs-diff-line { display: block; white-space: pre-wrap; word-break: break-all; }
-.cs-diff-line.add { color: rgb(22, 128, 61); background: rgba(34, 197, 94, .12); }
-.cs-diff-line.del { color: rgb(178, 34, 34); background: rgba(239, 68, 68, .1); }
-.cs-diff-line.ctx { color: #777; }
-
-.cs-usage { color: #777; }
+/* ── 用量行 ── */
+.cs-usage-row { padding: 2px 6px; color: #a6adb8; font-size: 12px; }
 .cs-ctx-warn { color: rgb(202, 138, 4); font-weight: 600; }
 
-/* 交互卡（M2 审批/提问） */
+/* ── 交互卡（审批/提问：有按钮和输入，保留轻边框卡以示可操作） ── */
+.cs-card.cs-interaction {
+  border: 1px solid rgba(127, 127, 127, .22);
+  background: rgba(255, 255, 255, .6);
+  border-radius: 10px;
+  padding: 7px 10px;
+  margin: 3px 0;
+}
+.cs-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.cs-card-ico { display: inline-flex; flex: none; color: rgb(202, 138, 4); }
+.cs-card-ico .cs-ico-svg { width: 15px; height: 15px; }
 .cs-interaction .cs-interaction-prompt { font-weight: 600; }
 .cs-interaction-detail {
-  margin: 4px 0; padding: 6px 8px; border-radius: 6px;
+  margin: 5px 0; padding: 6px 8px; border-radius: 6px;
   background: rgba(0, 0, 0, .05); font-size: 11.5px;
   white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto;
 }
+.cs-interaction-reasons { color: rgb(202, 138, 4); font-size: 12px; margin-top: 3px; }
 .cs-interaction-actions, .cs-interactions-input-row {
   display: flex; gap: 6px; margin-top: 6px; align-items: center;
 }
@@ -141,7 +189,20 @@
 .cs-interaction.closed .cs-interaction-prompt { font-weight: 400; }
 
 @media (prefers-color-scheme: dark) {
-  .cs-card { background: rgba(255, 255, 255, .04); }
-  .cs-card-out pre, .cs-diff-body { background: rgba(0, 0, 0, .28); }
-  .cs-panel { background: rgba(127, 127, 127, .1); }
+  .cs-flow { color: #c8cdd5; }
+  .cs-status { color: #8b93a0; }
+  .cs-status-stop { color: #79808c; }
+  .cs-row:hover { background: rgba(255, 255, 255, .06); }
+  .cs-ico { color: #8b93a0; }
+  .cs-verb { color: #a6adb8; }
+  .cs-row-dim, .cs-row-think .cs-think-dur { color: #6d7480; }
+  .cs-file-name { color: #a6adb8; }
+  .cs-file-dir { color: #6d7480; }
+  .cs-target { color: #8b93a0; }
+  .cs-text { color: var(--text, #e5e7eb); }
+  .cs-usage-row { color: #8b93a0; }
+  .cs-think-full { color: #8b93a0; border-left-color: rgba(255, 255, 255, .16); }
+  .cs-row-out pre, .cs-interaction-detail { background: rgba(0, 0, 0, .28); }
+  .cs-card.cs-interaction { background: rgba(255, 255, 255, .04); }
+  .cs-btn { background: rgba(255, 255, 255, .06); }
 }
