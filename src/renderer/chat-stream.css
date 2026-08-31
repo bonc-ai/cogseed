@@ -4,6 +4,10 @@
    色板跟随全局浅色基调，暗色用 prefers-color-scheme 兜底。 */
 
 .cs-flow {
+  /* 消息容器是 flex column + align-items:flex-start（收缩适应内容）：
+     不显式占满宽度的话，流宽会被超长的 nowrap 行撑到容器之外
+     （真机：命令横穿整个窗口）。width:100% 让行内省略在消息宽度内生效。 */
+  width: 100%;
   margin: 2px 0 6px;
   display: flex;
   flex-direction: column;
@@ -21,24 +25,35 @@
   min-width: 0;
 }
 
-/* ── 运行态首行：工作中 计时 + 停止（完成后整行撤掉） ── */
-.cs-status {
-  display: flex;
+/* ── 计时/收起徽章：挂在消息头 cogseed 名字右侧，点击开合下方时间线 ── */
+.cs-badge {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 6px;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   color: #9aa2ad;
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  flex: none;
   user-select: none;
-  min-width: 0;
 }
-.cs-status-label { flex: none; }
-.cs-status-elapsed { flex: none; font-variant-numeric: tabular-nums; }
-.cs-status-stop {
+.cs-badge:hover { background: rgba(127, 127, 127, .09); color: #6f7883; }
+.cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; }
+.cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
+.cs-badge-elapsed { font-variant-numeric: tabular-nums; }
+.cs-flow.failed .cs-badge { color: rgb(214, 69, 69); }
+.cs-flow.failed .cs-badge:hover { color: rgb(178, 34, 34); }
+.cs-badge-stop {
   border: 0; background: transparent; cursor: pointer;
-  color: #b9c0ca; font-size: 12px; padding: 1px 8px; border-radius: 6px;
+  color: #b9c0ca; font-size: 12px; padding: 2px 8px; border-radius: 8px;
+  flex: none;
 }
-.cs-status-stop:hover { color: rgb(185, 28, 28); background: rgba(127, 127, 127, .1); }
-.cs-flow.failed .cs-status-label { color: rgb(214, 69, 69); }
+.cs-badge-stop:hover { color: rgb(185, 28, 28); background: rgba(127, 127, 127, .1); }
+/* 兜底宿主（消息头不存在时，徽章落在流内首行） */
+.cs-badge-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; }
 
 /* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
 .cs-row {
@@ -86,6 +101,8 @@
 }
 .cs-target {
   flex: 1 1 80px; min-width: 0;
+  /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
+  max-width: 68%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   color: #99a1ac;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -190,8 +207,9 @@
 
 @media (prefers-color-scheme: dark) {
   .cs-flow { color: #c8cdd5; }
-  .cs-status { color: #8b93a0; }
-  .cs-status-stop { color: #79808c; }
+  .cs-badge { color: #8b93a0; }
+  .cs-badge:hover { background: rgba(255, 255, 255, .07); color: #a6adb8; }
+  .cs-badge-stop { color: #79808c; }
   .cs-row:hover { background: rgba(255, 255, 255, .06); }
   .cs-ico { color: #8b93a0; }
   .cs-verb { color: #a6adb8; }
