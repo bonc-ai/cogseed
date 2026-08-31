@@ -168,7 +168,7 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-tree'].innerHTML).toContain('挑战资料');
     expect(els['kb-wb-tree'].innerHTML).toContain('个人知识库');
     expect(els['kb-wb-tree'].innerHTML).toContain('共享知识库');
-    expect(els['kb-wb-tree'].innerHTML).toContain('订阅知识库');
+    expect(els['kb-wb-tree'].innerHTML).not.toContain('订阅知识库');
   });
 
   it('defaults to the first library and renders files with kb status chips', async () => {
@@ -270,5 +270,54 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-tree'].innerHTML).toContain('data-kb-space="sp1"');
     expect(els['kb-wb-tree'].innerHTML).toContain('共享');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('空间库 · S4 上线');
+  });
+
+  it('collapses the side panel and reveals the floating expand handle (round trip)', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    const collapse = els['kb-wb-side-collapse'];
+    const expand = els['kb-wb-side-expand'];
+    expect(collapse).toBeTruthy();
+    expect(expand).toBeTruthy();
+    // 初始：收起按钮可见，展开把手隐藏
+    expect(collapse.hidden).toBe(false);
+    expect(expand.hidden).toBe(true);
+    // 折叠 → 收起按钮隐藏、展开把手出现
+    collapse._listeners.click();
+    expect(collapse.hidden).toBe(true);
+    expect(expand.hidden).toBe(false);
+    // 点悬浮把手展开 → 恢复
+    expand._listeners.click();
+    expect(collapse.hidden).toBe(false);
+    expect(expand.hidden).toBe(true);
+    // 再折叠一次（往返稳定）
+    collapse._listeners.click();
+    expect(collapse.hidden).toBe(true);
+    expect(expand.hidden).toBe(false);
+  });
+
+  it('search finds files inside unexpanded folders (recursive)', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    // 等待初始渲染（默认库：班级建设资料，含子目录/子文件.txt 未展开）
+    await vi.waitFor(() => {
+      expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    });
+    // 搜索「子文件」：文件夹未展开，也应命中深层文件
+    const input = els['kb-wb-search-input'];
+    input.value = '子文件';
+    input._listeners.input({ target: input });
+    expect(els['kb-wb-files'].innerHTML).toContain('子文件.txt');
+    expect(els['kb-wb-files'].innerHTML).toContain('📁 子目录');
+    // 搜索根目录文件：meta 显示「库根」
+    input.value = 'a.pdf';
+    input._listeners.input({ target: input });
+    expect(els['kb-wb-files'].innerHTML).toContain('a.pdf');
+    expect(els['kb-wb-files'].innerHTML).toContain('库根');
+    // 无匹配时显示「无匹配文档」而非空库引导
+    input.value = '不存在的关键词xyz';
+    input._listeners.input({ target: input });
+    expect(els['kb-wb-files'].innerHTML).toContain('无匹配文档');
+    expect(els['kb-wb-files'].innerHTML).not.toContain('＋ 添加内容');
   });
 });

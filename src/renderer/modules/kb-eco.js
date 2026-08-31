@@ -5,9 +5,9 @@
 (function () {
   // 只保留已落地入口（知识库/笔记/发现）；浏览/Agent/菜单为预留项，不展示避免误导。
   const ECO_NAV = [
-    { key: 'kb', icon: 'book-open', label: '知识库', status: 'ok' },
+    { key: 'kb', icon: 'folder', label: '知识库', status: 'ok' },
     { key: 'notes', icon: 'file-text', label: '笔记', status: 'ok' },
-    { key: 'discover', icon: 'sparkles', label: '发现', status: 'ok' },
+    { key: 'discover', icon: 'globe', label: '发现', status: 'ok' },
   ];
   const COMPACT_KEY = 'cogseed.kb.eco.compact';
   let _compact = false;

@@ -1709,8 +1709,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'spaces.files.createText': async ({ spaceId, name }, ctx) => {
+  // 共享知识库（空间）导入个人知识库：把个人库（contexts/）内容镜像导入到空间（spaces/），
+  // 对齐 ima「从个人知识库导入」：源目录结构保留，走空间索引队列（upsert）统一入库。
+  'spaces.files.importFromLib': async ({ spaceId, libName } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const r = await spaceImport.importLibIntoSpace(ctx.userId, spaceId, String(libName || ''));
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  // 共享知识库（空间）按选中的个人库文件导入：paths 为相对 contexts 根的文件路径数组
+  // （如 ["班级建设资料/a.pdf", "挑战资料/b.docx"]），供「导入内容」弹窗勾选后调用。
+  'spaces.files.importFromLibFiles': async ({ spaceId, paths } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const list = Array.isArray(paths) ? paths.map((p) => String(p || '')).filter(Boolean) : [];
+    if (!list.length) return { ok: false, error: 'no files selected' };
+    const contextsRoot = userContextsDir(ctx.userId);
+    const absByRel = new Map<string, string>();
+    for (const rel of list) {
+      const abs = path.join(contextsRoot, rel);
+      try {
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) absByRel.set(rel, abs);
+      } catch { /* 跳过不可读项 */ }
+    }
+    if (!absByRel.size) return { ok: false, error: 'selected files not found' };
+    const r = await spaceImport.importFilesIntoSpace(ctx.userId, spaceId, absByRel);
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  'spaces.files.createText': async ({ spaceId, name }, ctx) => {    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     return spaceFiles.createSpaceTextFile(ctx.userId, spaceId, name);
   },

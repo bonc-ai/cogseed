@@ -88,6 +88,7 @@
             </div>
             <div class="kb-notes-items" id="kb-notes-items"></div>
           </aside>
+          <div class="kb-wb-divider" data-wb-divider="notes" title="拖动调整宽度"></div>
           <section class="kb-notes-editor">
             <div class="kb-notes-toolbar">
               <button type="button" class="ed-btn" data-cmd="undo" title="撤回">↩</button>
@@ -328,6 +329,48 @@
           const ed = document.getElementById('kb-notes-edit');
           if (ed && ed.dataset.note) { e.preventDefault(); _save(); }
         }
+      });
+      // 笔记列表 / 编辑器 分隔条拖拽（宽度持久化，无 localStorage 环境静默降级）
+      let notesDrag = null;
+      const _notesDividerLoad = () => {
+        try {
+          const w = Number(localStorage.getItem('kb-notes-c1'));
+          const box = document.querySelector('.kb-notes');
+          if (box && w >= 180 && w <= 480) box.style.setProperty('--kb-nc1', `${w}px`);
+        } catch { /* no-op */ }
+      };
+      const _notesDividerSave = () => {
+        try {
+          const box = document.querySelector('.kb-notes');
+          if (!box) return;
+          localStorage.setItem('kb-notes-c1', box.style.getPropertyValue('--kb-nc1') || '280');
+        } catch { /* no-op */ }
+      };
+      _notesDividerLoad();
+      host.querySelector('.kb-wb-divider[data-wb-divider="notes"]')?.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const box = document.querySelector('.kb-notes');
+        if (!box) return;
+        notesDrag = {
+          startX: e.clientX,
+          startW: parseFloat(box.style.getPropertyValue('--kb-nc1')) || 280,
+        };
+        document.body.classList.add('kb-wb-resizing');
+        e.currentTarget.classList.add('is-dragging');
+      });
+      document.addEventListener('mousemove', (e) => {
+        if (!notesDrag) return;
+        const box = document.querySelector('.kb-notes');
+        if (!box) return;
+        const w = Math.min(480, Math.max(180, notesDrag.startW + (e.clientX - notesDrag.startX)));
+        box.style.setProperty('--kb-nc1', `${w}px`);
+      });
+      document.addEventListener('mouseup', () => {
+        if (!notesDrag) return;
+        notesDrag = null;
+        document.body.classList.remove('kb-wb-resizing');
+        host.querySelectorAll('.kb-wb-divider').forEach((x) => x.classList.remove('is-dragging'));
+        _notesDividerSave();
       });
     }
     _loadNotes();
