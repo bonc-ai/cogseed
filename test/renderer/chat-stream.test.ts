@@ -152,6 +152,17 @@ describe('chat-stream module', () => {
       inserts.push({ node, before });
       return realInsert(node, before);
     };
+    // 面板现挂在消息（anchor）内部：监听 anchor 的 append/insert 供断言。
+    const realAppendA = anchor.appendChild.bind(anchor);
+    anchor.appendChild = (node) => {
+      inserts.push({ node, before: null });
+      return realAppendA(node);
+    };
+    const realInsertA = anchor.insertBefore.bind(anchor);
+    anchor.insertBefore = (node, before) => {
+      inserts.push({ node, before });
+      return realInsertA(node, before);
+    };
     g.window = g; // classic script 通过 window.* 挂载
     g.document = { createElement: (tag: string) => makeEl(tag) };
     g.CSS = { escape: (v: string) => v };
@@ -159,10 +170,11 @@ describe('chat-stream module', () => {
     await import('../../src/renderer/modules/chat-stream.js');
   });
 
-  it('turn.started 创建面板挂 anchor 之前，同 turn 幂等', () => {
+  it('turn.started 在消息内部建面板（正文区之前），同 turn 幂等', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'commander', startedAt: '' });
     expect(inserts).toHaveLength(1);
-    expect(inserts[0].before).toBe(anchor);
+    // 面板是消息（anchor）的子元素——cogseed 图标下、正文上。
+    expect(inserts[0].node.parentNode).toBe(anchor);
 
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } });
     expect(inserts).toHaveLength(1);
@@ -228,9 +240,8 @@ describe('chat-stream module', () => {
     // 完成 → 自动收缩：body 隐藏、cs-collapsed、header 摘要含步骤与 token。
     expect(body.style.display).toBe('none');
     expect(panel.className).toContain('cs-collapsed');
-    // 完成态定位：面板移到正文（占位元素）之后。
-    const order = Array.from(root.children);
-    expect(order.indexOf(anchor)).toBeLessThan(order.indexOf(panel));
+    // 完成态定位：面板内建于消息内部，收尾不移动。
+    expect(panel.parentNode).toBe(anchor);
     const summary = panel.querySelector('.cs-panel-summary')!;
     expect(summary.textContent).toContain('1 步');
     expect(summary.textContent).toContain('bash');
@@ -273,10 +284,7 @@ describe('chat-stream module', () => {
 
     handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.turn.completed', turnId: 'T2', status: 'failed', error: 'boom', endedAt: '' });
-    // 完成态面板会移动到正文后（同样走 root.insertBefore，被 inserts 监听
-    // 记到），这里只取创建记录（before===anchor）。
-    const created = inserts.filter((i) => i.before === anchor);
-    const failed = created[1].node;
+    const failed = inserts[1].node;
     expect(failed.className).toContain('failed');
     expect(failed.querySelector('[data-cs-state]')!.textContent).toContain('boom');
   });
@@ -401,8 +409,10 @@ describe('chat-stream module', () => {
     ];
     expect(render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' })).toBe(true);
 
-    const panel = root.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
+    const panel = msgDiv.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
     expect(panel).toBeTruthy();
+    // 面板在消息内部（msgDiv 的子元素）。
+    expect(panel.parentNode).toBe(msgDiv);
     const body = panel.querySelector('.cs-panel-body')!;
     const cards = body.children.filter((c) => c.className.includes('cs-toolExecution'));
     expect(cards).toHaveLength(1);
@@ -412,12 +422,12 @@ describe('chat-stream module', () => {
     expect(body.style.display).toBe('none');
     expect(panel.className).toContain('cs-collapsed');
     render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1', expanded: true });
-    const collapsed = root.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
+    const collapsed = msgDiv.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1')!;
     expect(collapsed.querySelector('.cs-panel-body')!.style.display).not.toBe('none');
 
     // 同 turnId 重建幂等：旧面板移除、只留一个。
     render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' });
-    const panels = root.children.filter((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1');
+    const panels = msgDiv.children.filter((c) => (c.dataset as Record<string, string>).csTurn === 'c-1::hist-1');
     expect(panels).toHaveLength(1);
 
     // 空数组/缺父节点返回 false。
