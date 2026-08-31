@@ -72,6 +72,7 @@ function createHarness(options: {
   let controls: any[] = [];
   let renderCount = 0;
   let startFailure = options.startFailure;
+  let agentRegistryCalls = 0;
 
   const rebuildControls = (markup: string) => {
     const nextControls: any[] = [];
@@ -158,15 +159,23 @@ function createHarness(options: {
     if (channel === 'cogseed.task.list') return Promise.resolve({ tasks: [], groups: [], counts: {} });
     if (channel === 'cogseed.session.list') return Promise.resolve({ sessions: [] });
     if (channel === 'cogseed.agent.list' && options.registryFailure) return Promise.reject(new Error('registry unavailable'));
-    if (channel === 'cogseed.agent.list') return Promise.resolve({
-      agents: [
-        { agentId: 'review-agent', displayName: 'Reviewer', definitionSource: 'custom', dispatchable: true },
-        ...(options.includeRuntimePeer
-          ? [{ agentId: 'codex-peer', displayName: 'Codex', sourceKind: 'p3394', dispatchable: true }]
-          : []),
-      ],
-      runtimes: [], channels: [],
-    });
+    if (channel === 'cogseed.agent.list') {
+      agentRegistryCalls += 1;
+      return Promise.resolve({
+        agents: [
+          { agentId: 'review-agent', displayName: 'Reviewer', definitionSource: 'custom', dispatchable: true },
+          ...(options.includeRuntimePeer
+            ? agentRegistryCalls > 1
+              ? [{
+                  agentId: 'codex-agent', displayName: 'Codex', sourceKind: 'p3394',
+                  definitionSource: 'custom', runtimeKind: 'p3394-gateway:codex', dispatchable: true,
+                }]
+              : [{ agentId: 'codex-peer', displayName: 'Codex', sourceKind: 'p3394', dispatchable: true }]
+            : []),
+        ],
+        runtimes: [], channels: [],
+      });
+    }
     if (channel === 'agents.list') {
       const request = deferred<any>();
       agentRequests.push(request);
@@ -553,7 +562,9 @@ describe('Run Center asynchronous tool resilience', () => {
     expect(harness.html()).not.toContain('value="codex-peer"');
     harness.agentRequests[0].resolve(agentListing());
     harness.worktreeRequests[0].resolve(projection('agent-retry'));
-    await harness.flush();
+    await harness.waitFor(() => harness.html().includes('value="codex-agent"'));
+    expect(harness.html()).toContain('Codex · run_center.agent_option_local_external');
+    expect(harness.html()).not.toContain('value="codex-peer"');
 
     harness.change('[data-run-center-create-agent]', 'review-agent');
     harness.click({ runCenterCreateSubmit: '' });

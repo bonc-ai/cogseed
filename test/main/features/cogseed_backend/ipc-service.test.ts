@@ -14,8 +14,33 @@ describe('CogSeed IPC service', () => {
       runtimes: [],
       channels: [],
     };
+    const calls: string[] = [];
+    const reconcileAgentDirectory = vi.fn(async () => { calls.push('reconcile'); });
+    const listAgentRegistry = vi.fn(async () => {
+      calls.push('list');
+      return registry;
+    });
+    const service = createCogSeedIpcService({ listAgentRegistry, reconcileAgentDirectory });
+
+    await expect(service.agents('ipc-user')).resolves.toBe(registry);
+    expect(calls).toEqual(['reconcile', 'list']);
+    expect(reconcileAgentDirectory).toHaveBeenCalledTimes(1);
+    expect(listAgentRegistry).toHaveBeenCalledWith('ipc-user');
+  });
+
+  it('keeps the Agent Registry available when external directory reconciliation fails', async () => {
+    const registry = {
+      schemaVersion: 1 as const,
+      updatedAt: '2026-08-27T00:00:00.000Z',
+      agents: [],
+      runtimes: [],
+      channels: [],
+    };
     const listAgentRegistry = vi.fn(async () => registry);
-    const service = createCogSeedIpcService({ listAgentRegistry });
+    const service = createCogSeedIpcService({
+      listAgentRegistry,
+      reconcileAgentDirectory: vi.fn(async () => { throw new Error('bridge unavailable'); }),
+    });
 
     await expect(service.agents('ipc-user')).resolves.toBe(registry);
     expect(listAgentRegistry).toHaveBeenCalledWith('ipc-user');
@@ -162,6 +187,73 @@ describe('CogSeed IPC service', () => {
     expect(controller.cancelCogSeedTask).not.toHaveBeenCalled();
     expect(controller.retryCogSeedTask).not.toHaveBeenCalled();
     expect(controller.resumeCogSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('archives failed runs through the existing task action and preserves their failed status', async () => {
+    let task = {
+      schemaVersion: 1,
+      taskId: 'cogseed-task-archive',
+      sessionId: 'cogseed-session-archive',
+      runtimeSessionId: 'mruntime-archive',
+      executionId: 'cogseed-exec-archive',
+      requestId: 'req-archive',
+      ownerId: 'ipc-user',
+      status: 'failed',
+      task: 'Private failed task body.',
+      errorCode: 'provider_error',
+      resultDeliveryState: 'delivered',
+      createdAt: '2026-08-27T00:00:00.000Z',
+      updatedAt: '2026-08-27T00:01:00.000Z',
+    } as any;
+    const session = {
+      schemaVersion: 1,
+      sessionId: task.sessionId,
+      runtimeSessionId: task.runtimeSessionId,
+      ownerId: task.ownerId,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      sessionKind: 'generic',
+      actorRole: 'commander',
+      lifecycleState: 'terminal',
+    } as any;
+    const archiveTask = vi.fn(async (_userId: string, _taskId: string) => {
+      task = { ...task, archivedAt: '2026-08-27T00:02:00.000Z', updatedAt: '2026-08-27T00:02:00.000Z' };
+      return task;
+    });
+    const service = createCogSeedIpcService({
+      archiveTask,
+      readTask: vi.fn(async () => task),
+      listTasks: vi.fn(async () => [task]),
+      readSession: vi.fn(async () => session),
+      listSessions: vi.fn(async () => [session]),
+      readEvents: vi.fn(async () => []),
+      readCoordination: vi.fn(async () => null),
+    });
+
+    await expect(service.board('ipc-user')).resolves.toMatchObject({
+      tasks: [expect.objectContaining({
+        taskId: task.taskId,
+        status: 'failed',
+        column: 'attention',
+        actions: expect.objectContaining({ archive: true }),
+      })],
+    });
+    await expect(service.action('ipc-user', {
+      action: 'archive',
+      taskId: task.taskId,
+    })).resolves.toMatchObject({
+      task: expect.objectContaining({ taskId: task.taskId, status: 'failed' }),
+    });
+    await expect(service.board('ipc-user')).resolves.toMatchObject({
+      tasks: [expect.objectContaining({
+        taskId: task.taskId,
+        status: 'failed',
+        column: 'archived',
+        actions: expect.objectContaining({ archive: false }),
+      })],
+      counts: expect.objectContaining({ attention: 0, archived: 1 }),
+    });
+    expect(archiveTask).toHaveBeenCalledWith('ipc-user', task.taskId);
   });
 
   it('resolves Agent execution on the main side and creates linked reassignment tasks', async () => {

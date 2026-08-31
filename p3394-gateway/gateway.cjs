@@ -699,18 +699,56 @@ class CodexAppServerRuntime {
       else entry.resolve(msg.result);
       return;
     }
+    if (msg.method === 'turn/completed' && msg.params) {
+      const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
+      if (entry) {
+        this.pending.delete(key);
+        clearTimeout(entry.timer);
+        const turn = msg.params.turn || {};
+        if (turn.status === 'failed' || turn.status === 'interrupted') {
+          entry.reject(new Error((turn.error && turn.error.message) || ('p3394_codex_turn_' + turn.status)));
+        } else {
+          const itemReply = Array.isArray(turn.items)
+            ? turn.items.filter((item) => item && item.type === 'agentMessage' && typeof item.text === 'string').map((item) => item.text).join('')
+            : '';
+          entry.resolve(entry.deltas.join('') || itemReply);
+        }
+      }
+      return;
+    }
+    const entry = msg.params && msg.params.threadId ? this._touchTurn(msg.params.threadId) : null;
     if (msg.method === 'item/agentMessage/delta' && msg.params) {
-      const entry = this.pending.get('turn:' + msg.params.threadId);
       if (entry) {
         const delta = msg.params.delta || '';
         entry.deltas.push(delta);
         entry.onDelta?.(delta);
       }
     }
-    if (msg.method === 'turn/completed' && msg.params) {
-      const key = 'turn:' + msg.params.threadId; const entry = this.pending.get(key);
-      if (entry) { this.pending.delete(key); clearTimeout(entry.timer); entry.resolve(entry.deltas.join('')); }
+    if (entry && (msg.method === 'item/started' || msg.method === 'item/completed')) {
+      const itemType = msg.params.item && msg.params.item.type ? String(msg.params.item.type) : 'work';
+      this._emitProgress(entry, '[Codex] ' + itemType + (msg.method === 'item/started' ? ' started' : ' completed'));
+    } else if (entry && (msg.method === 'item/commandExecution/outputDelta' || msg.method === 'item/mcpToolCall/progress')) {
+      this._emitProgress(entry, '[Codex] working');
     }
+  }
+  _touchTurn(threadId) {
+    const key = 'turn:' + threadId;
+    const entry = this.pending.get(key);
+    if (!entry) return null;
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => {
+      if (this.pending.get(key) !== entry) return;
+      this.pending.delete(key);
+      this.activeTurns.delete(entry.cancelKey);
+      entry.reject(new Error('p3394_codex_turn_timeout'));
+    }, TIMEOUT_MS);
+    return entry;
+  }
+  _emitProgress(entry, text) {
+    const now = Date.now();
+    if (!entry.onProgress || (entry.lastProgressAt && now - entry.lastProgressAt < 15 * 1000)) return;
+    entry.lastProgressAt = now;
+    entry.onProgress(text);
   }
   async start() {
     if (this.child) return;
@@ -749,7 +787,7 @@ class CodexAppServerRuntime {
   }
   get name() { return 'codex'; }
   async openSession() { /* codex 的 thread 在 deliver 里惰性创建 */ }
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cwd = (opts && opts.cwd) || null;
@@ -761,27 +799,34 @@ class CodexAppServerRuntime {
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
       this.threads.set(sessionId, threadId);
     }
-    const id = ++this.seq;
     // 可取消键与其余 runtime 一致：task_id 优先（cancel 控制帧按 task_id
     // 匹配），无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     const promise = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete('turn:' + threadId);
-        this.activeTurns.delete(cancelKey);
-        reject(new Error('p3394_codex_turn_timeout'));
-      }, TIMEOUT_MS);
       // 包装 resolve/reject 以便 turn 结束时同步摘除 activeTurns 登记。
       this.pending.set('turn:' + threadId, {
         resolve: (value) => { this.activeTurns.delete(cancelKey); resolve(value); },
         reject: (error) => { this.activeTurns.delete(cancelKey); reject(error); },
-        timer,
+        timer: null,
         deltas: [],
         onDelta,
+        onProgress,
+        cancelKey,
+        lastProgressAt: 0,
       });
+      this._touchTurn(threadId);
     });
     this.activeTurns.set(cancelKey, { threadId });
-    this._send({ jsonrpc: '2.0', id, method: 'turn/start', params: { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] } });
+    try {
+      await this._request('turn/start', { threadId, input: [{ type: 'text', text: text + note + hint, text_elements: [] }] });
+    } catch (error) {
+      const entry = this.pending.get('turn:' + threadId);
+      if (entry) {
+        this.pending.delete('turn:' + threadId);
+        clearTimeout(entry.timer);
+        entry.reject(error);
+      }
+    }
     return promise;
   }
   /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的

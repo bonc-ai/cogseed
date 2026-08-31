@@ -80,6 +80,39 @@ describe('CogSeed task lifecycle', () => {
     await expect(lifecycle.transitionCogSeedTask(USER, retried.taskId, 'queued')).rejects.toThrow(/terminal|transition/i);
   });
 
+  it('archives only eligible failed tasks without rewriting their failure lifecycle', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+
+    await expect(lifecycle.archiveCogSeedTask(USER, created.taskId)).rejects.toThrow(/only failed/i);
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'failed', { errorCode: 'provider_error' });
+    await tasks.updateCogSeedTask(USER, created.taskId, (task) => ({
+      ...task,
+      resultDeliveryState: 'pending-recovery',
+    }));
+    await expect(lifecycle.archiveCogSeedTask(USER, created.taskId)).rejects.toThrow(/result.*recovered/i);
+    await tasks.updateCogSeedTask(USER, created.taskId, (task) => ({
+      ...task,
+      resultDeliveryState: 'delivered',
+    }));
+
+    const first = await lifecycle.archiveCogSeedTask(USER, created.taskId);
+    const duplicate = await lifecycle.archiveCogSeedTask(USER, created.taskId);
+    expect(first).toMatchObject({ status: 'failed', errorCode: 'provider_error', archivedAt: expect.any(String) });
+    expect(duplicate).toEqual(first);
+    expect((await events.readCogSeedTaskEvents(USER, created.taskId, 0, 20)).map((event) => event.type)).toEqual([
+      'task.created',
+      'task.queued',
+      'task.started',
+      'task.failed',
+      'task.archived',
+    ]);
+  });
+
   it('allows a recovered execution to be explicitly cancelled', async () => {
     const created = (await createTask()).task;
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');

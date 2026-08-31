@@ -5,7 +5,7 @@ export { readCogSeedTaskEvents } from './event-store';
 export * as cogseedExecutionRecords from './cogseed-execution-store';
 export { cogseedConnectorManager, createCogSeedConnectorManager } from './connector-manager';
 export { cogseedKbManager, createCogSeedKbManager } from './cogseed-kb-store';
-export { retryCogSeedTask, transitionCogSeedTask, markCogSeedTaskRecoverable } from './lifecycle';
+export { archiveCogSeedTask, retryCogSeedTask, transitionCogSeedTask, markCogSeedTaskRecoverable } from './lifecycle';
 export { recoverCogSeedTasks } from './recovery';
 export {
   classifyCogSeedRuntimeHealth,

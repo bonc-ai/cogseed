@@ -20,6 +20,7 @@ const COGSEED_TASK_EVENT_TYPES = new Set<string>([
   'task.failed',
   'task.cancelled',
   'task.recoverable',
+  'task.archived',
   'artifact',
 ]);
 const log = createLogger('cogseed-backend:event-store');

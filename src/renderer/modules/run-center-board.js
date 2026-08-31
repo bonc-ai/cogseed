@@ -109,6 +109,14 @@
   function userStateForTask(task, context = {}) {
     const status = String(task?.status || 'created');
     const resultDeliveryState = String(task?.resultDeliveryState || '');
+    if (task?.column === 'archived') {
+      return {
+        kind: 'archived', attention: false,
+        stateKey: status === 'failed' ? 'run_center.user_state_failed' : 'run_center.user_state_finished',
+        reasonKey: status === 'failed' ? 'run_center.user_reason_failed' : 'run_center.user_reason_finished',
+        action: '', actionKey: '', priority: 20,
+      };
+    }
     if (resultDeliveryState === 'pending-recovery') {
       return {
         kind: 'pending_recovery', attention: true,
@@ -142,11 +150,14 @@
       };
     }
     if (status === 'failed') {
+      const requiresModelConfiguration = ['model_preflight', 'provider_error'].includes(String(task?.errorCode || ''));
       return {
         kind: 'failed', attention: true,
         stateKey: 'run_center.user_state_failed',
         reasonKey: 'run_center.user_reason_failed',
-        action: 'retry', actionKey: 'run_center.retry', priority: ATTENTION_STATE_PRIORITY.failed,
+        action: requiresModelConfiguration ? 'configure-model' : 'retry',
+        actionKey: requiresModelConfiguration ? 'run_center.configure_model' : 'run_center.retry',
+        priority: ATTENTION_STATE_PRIORITY.failed,
       };
     }
     if (task?.column === 'running' || ['created', 'queued', 'pending', 'running'].includes(status)) {
