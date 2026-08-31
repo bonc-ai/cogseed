@@ -35,6 +35,28 @@ import {
 
 const log = createLogger('skill-reverify');
 
+/**
+ * Whether this build ships without the deep scanner (`SCANNER_ABSENT` marker).
+ *
+ * Cached per process: the packaging decision cannot change at runtime. In such
+ * a build a local receipt can never be upgraded to `scanner: 'deep'`, so the
+ * deep path must trust a hash-valid local receipt instead of rescanning the
+ * whole library on every call (each rescan re-runs the absent-scanner path and
+ * LLM instruction audits, then writes the same `scanner: 'local'` verdict —
+ * which the next call treats as stale again, forever).
+ */
+let _scannerAbsentByBuild: boolean | null = null;
+async function _isScannerAbsentByBuild(): Promise<boolean> {
+  if (_scannerAbsentByBuild !== null) return _scannerAbsentByBuild;
+  try {
+    const { scannerAvailability } = await import('./security/sentry-adapter');
+    _scannerAbsentByBuild = scannerAvailability() === 'absent_by_build';
+  } catch {
+    _scannerAbsentByBuild = false;
+  }
+  return _scannerAbsentByBuild;
+}
+
 export interface ReverifyResult {
   skillId: string;
   decision: ReceiptDecision | 'unknown';
@@ -279,7 +301,13 @@ async function _reverifyDeep(
   // in place; otherwise a `local` verdict — written by the sync path, or by a
   // build predating deep re-verification — would permanently short-circuit deep
   // scanning for that skill, reopening this very hole one layer down.
-  if (cached && cached.scanner === 'deep') {
+  //
+  // Exception: a build that ships without the deep scanner (`SCANNER_ABSENT`)
+  // can never upgrade a local receipt, so this condition would rescan the whole
+  // library on every call and never converge. For such builds a hash-valid
+  // local receipt is the best evidence available — trust it the same way the
+  // sync path (`reverifySkill`) already trusts any non-stale receipt.
+  if (cached && (cached.scanner === 'deep' || await _isScannerAbsentByBuild())) {
     return {
       skillId,
       decision: cached.decision ?? 'unknown',
