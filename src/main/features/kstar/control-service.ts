@@ -5,6 +5,7 @@ import { nowIso, safeId } from '../../storage';
 import { maskId } from '../../util/log-redact';
 import { previewContextProjection } from '../recall/context-projection';
 import { commitCommanderForecast } from './forecast-commit';
+import { assertKstarTransition, KstarInvalidTransitionError } from './state-machine';
 import {
   createInitialConversationTaskState,
   createKstarRequirementRecord,
@@ -200,7 +201,7 @@ function resultProposal(value: unknown): KstarResultProposal | undefined {
   if (value === undefined) return undefined;
   if (!plain(value)) throw new ControlInputError('result proposal is invalid');
   const finalStatus = value.finalStatus;
-  if (finalStatus !== undefined && !['completed', 'failed', 'cancelled'].includes(String(finalStatus))) {
+  if (finalStatus !== undefined && !['completed', 'failed', 'cancelled', 'timed_out'].includes(String(finalStatus))) {
     throw new ControlInputError('result.finalStatus is invalid');
   }
   return {
@@ -378,6 +379,7 @@ async function upsertState(
           error: (error as Error).message,
         });
       }
+      assertKstarTransition('requirement', requirement.status, 'waiting_review');
       await replaceKstarRequirement(context.userId, {
         ...requirement,
         status: 'waiting_review',
@@ -385,6 +387,7 @@ async function upsertState(
       });
     }
     if (task.status === 'open' || task.status === 'closing') {
+      assertKstarTransition('task', task.status, 'closing');
       await replaceKstarTask(context.userId, {
         ...task,
         status: 'closing',
@@ -465,6 +468,8 @@ async function upsertState(
   }
   const closing = taskMutation.operation === 'close' || requirementMutation.operation === 'close';
   if (closing) {
+    assertKstarTransition('task', task.status, 'closing');
+    assertKstarTransition('requirement', requirement.status, 'waiting_review');
     task = { ...task, status: 'closing', closeReason: 'user_complete', updatedAt: now };
     requirement = { ...requirement, status: 'waiting_review', updatedAt: now };
     state = {
@@ -518,6 +523,8 @@ async function requestProjection(
     authorization: 'workspace_policy',
     confirm: true,
   });
+  assertKstarTransition('requirement', requirement.status, 'waiting_review');
+  assertKstarTransition('task', task.status, 'closing');
   await replaceKstarRequirement(context.userId, {
     ...requirement,
     projectionId: projection.id,
@@ -648,6 +655,7 @@ async function abandon(
       acceptanceEvidence: [],
       ...(result?.closeReason ? { closeReason: result.closeReason } : { closeReason: 'aborted' }),
     };
+    assertKstarTransition('requirement', requirement.status, 'abandoned');
     await replaceKstarRequirement(context.userId, {
       ...requirement,
       status: 'abandoned',
@@ -655,6 +663,7 @@ async function abandon(
       updatedAt: now,
     });
   }
+  assertKstarTransition('task', task.status, 'abandoned');
   await replaceKstarTask(context.userId, {
     ...task,
     status: 'abandoned',
@@ -734,6 +743,7 @@ function replayResult(receipt: KstarControlReceipt, hash: string): KstarControlR
 
 function mapError(error: unknown): Extract<KstarControlResult, { ok: false }> {
   if (error instanceof ControlInputError) return invalid(error.message);
+  if (error instanceof KstarInvalidTransitionError) return invalid(error.message);
   const code = (error as { code?: unknown })?.code;
   if (
     code === 'kstar_projection_not_confirmed'

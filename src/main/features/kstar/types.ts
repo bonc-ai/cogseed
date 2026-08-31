@@ -4,7 +4,7 @@ import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model
 
 export const KSTAR_SCHEMA_VERSION = 1;
 
-export type KstarTaskStatus = 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+export type KstarTaskStatus = 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input';
 export type KstarOutcome = 'better_than_expected' | 'met_expected' | 'worse_than_expected' | 'unclear';
 export type KstarAttribution = 'knowledge_gap' | 'rule_gap' | 'template_gap' | 'skill_gap' | 'execution_gap' | 'unclear';
 
@@ -75,6 +75,10 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
     userFeedback?: unknown;
     failureKind?: string;
     failureCode?: string;
+    durationMs?: number;
+    toolCallCount?: number;
+    failedToolCount?: number;
+    networkAccess?: boolean;
   };
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
