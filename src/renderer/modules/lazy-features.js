@@ -62,6 +62,12 @@ const _rendererFeatureManifest = Object.freeze({
   dashboard: [
     { src: './modules/dashboard.js' },
   ],
+  // 首启引导（onboarding.js 168K + css 33K）：只在设备未完成引导时由
+  // boot.js 查完 prefs 标记后按需注入——已完成的老设备首屏少解析 200K。
+  onboarding: [
+    { src: './onboarding.css', type: 'style' },
+    { src: './modules/onboarding.js' },
+  ],
 });
 
 const _rendererFeatureLoads = new Map();
@@ -71,6 +77,17 @@ function _appendRendererFeatureScript(entry) {
   const existing = _rendererScriptLoads.get(entry.src);
   if (existing) return existing;
   const run = new Promise((resolve, reject) => {
+    // type:'style' 条目注入样式表（onboarding 等 UI 覆盖层的 css 懒加载）。
+    if (entry.type === 'style') {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = entry.src;
+      link.dataset.rendererFeature = entry.src;
+      link.onload = () => resolve();
+      link.onerror = () => reject(new Error(`renderer feature style failed: ${entry.src}`));
+      (document.head || document.documentElement).appendChild(link);
+      return;
+    }
     const script = document.createElement('script');
     script.src = entry.src;
     script.async = false;
