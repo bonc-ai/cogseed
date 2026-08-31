@@ -11517,6 +11517,10 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 /* 会话面板里合成 chip 后面还有语音输入按钮再是发送按钮，此时发送按钮也要
    收回自己的 margin-left:auto，让 chip/mic/send 一起贴在右侧。 */
 .chat-model-effort-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
+/* 统一执行入口的 exec-config chip 同样以 chip→mic→send 相邻收尾；
+   不收回 send 的 auto margin 时，两个 auto 平分剩余空间，chip+mic 会
+   悬在正中（chip 自身已带 margin-left:auto，见 .model-chip 主规则）。 */
+.exec-config-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
 /* Combined model+effort chip: "model · effort". The effort label is muted
    secondary text; the "·" separator is a lightweight visual divider. */
