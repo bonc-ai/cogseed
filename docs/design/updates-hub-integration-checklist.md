@@ -37,10 +37,10 @@
 ```
 ① 制品：CogSeed-X.Y.Z-darwin-arm64.dmg + .zip（正式走 GitHub Release 直链；
    验证阶段：本机 .hub-verify/artifacts/ 直接经 hub 后台表单上传，
-   不必经过内网 GitLab 管道）
+   不必经过 hub 项目 CI 管道）
 ②【验证阶段】hub 后台 admin/updates：新建版本 → 上传 dmg（主安装包）+
    zip（自动更新包）→ 核对 SHA-256 → 点「发布」
-  【正式流程】内网 GitLab：Run pipeline（main）：
+  【正式流程】hub 项目 CI：Run pipeline（main）：
    INSTALLER_URL=<dmg 直链>、AUTO_UPDATE_ZIP_URL=<zip 直链>
    → release:installer 登记草稿包（文件名须 CogSeed-<version>-darwin-arm64.<ext>）
 ③ hub 后台 admin/updates（发布员）：核对版本/文件名/SHA-256 → 点「发布」
@@ -50,7 +50,7 @@
 
 ## 5. hub 侧修复 MR
 
-- 内网 GitLab hub 项目 MR !45：
+- hub 项目 MR !45：
   `fix(updates): feed 按 User-Agent 版本门控，已是最新回 204`
   （feed 无更新回 204 而非 `200+{}`；从 CFNetwork UA 解析版本做门控；
   合并到 main 自动部署）。合并前请 hub 侧 review。
