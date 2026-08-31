@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   formatBuildIdentityLabel,
   resolveBuildIdentity,
 } from '../../../src/main/util/build-identity';
+
+const electronMock = vi.hoisted(() => ({
+  app: { isPackaged: true, getAppPath: () => '/app.asar' },
+}));
+
+vi.mock('electron', () => ({ app: electronMock.app }));
 
 describe('build identity', () => {
   it('prefers launch environment values over packaged metadata', () => {
@@ -37,5 +43,23 @@ describe('build identity', () => {
     expect(resolveBuildIdentity({ env: {}, packagedInfoPath: '/missing', readFile: () => { throw new Error('missing'); } })).toEqual({
       channel: 'unknown', commit: '', dirty: null, builtAt: '',
     });
+  });
+
+  it('falls back to the packaged package.json cogseedBuildChannel when build-info is absent (self-built bundles)', () => {
+    // 源码用户自行 electron-builder 打包时不会写 .build/build-info.json；
+    // 渠道应能从包内 package.json 的 extraMetadata 注入字段兜底解析，
+    // 否则更新/市场等请求会落回 localhost:3000。
+    const identity = resolveBuildIdentity({
+      env: {},
+      readFile: (filePath) => {
+        if (String(filePath).endsWith('build-info.json')) throw new Error('missing build-info');
+        if (String(filePath).endsWith('package.json')) {
+          return JSON.stringify({ name: 'cogseed', cogseedBuildChannel: 'release' });
+        }
+        throw new Error(`unexpected read: ${String(filePath)}`);
+      },
+    });
+    expect(identity.channel).toBe('release');
+    expect(formatBuildIdentityLabel('0.6.0', identity)).toBe('v0.6.0');
   });
 });
