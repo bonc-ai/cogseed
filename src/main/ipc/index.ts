@@ -4879,6 +4879,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
     return result;
   },
+  // UI-initiated install: the renderer already showed the exact command in a
+  // confirm modal (the UI's version of the CLI consent face). Deps consent
+  // stays off; the CLI path remains the only way to consent dependencies.
+  'packages.install': async (payload: { source?: unknown; name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.source !== 'string' || typeof payload?.name !== 'string') {
+      throw new Error('invalid source/name');
+    }
+    const pkgs = await import('../features/packages');
+    const result = await pkgs.runPackageInstall(ctx.userId, { source: payload.source, name: payload.name });
+    try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
+    return result;
+  },
+  // ── Plugin-provided UI (plan §B) ────────────────────────────────────────
+  // The iframe-hosted plugin page talks to the renderer via postMessage; the
+  // renderer forwards through these handlers. Only allowlisted methods exist
+  // (see features/plugin_ui.ts); api keys are injected main-side and never
+  // returned to the renderer.
+  'packages.ui.info': async (payload: { name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    const info = await ui.pluginUiInfo(ctx.userId, payload.name);
+    const { createLogger } = await import('../logger');
+    createLogger('plugin-ui-info').info('packages.ui.info served', {
+      package_name: payload.name,
+      ok: info.ok,
+      skill_count: info.info?.skills?.length ?? -1,
+      error: (info as { error?: string }).error ?? undefined,
+    });
+    return info.ok ? { ok: true as const, info: info.info } : info;
+  },
+  'packages.ui.invoke': async (payload: { name?: unknown; method?: unknown; params?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string' || typeof payload?.method !== 'string') {
+      throw new Error('invalid name/method');
+    }
+    const ui = await import('../features/plugin_ui');
+    return ui.dispatchPluginUiInvoke(ctx.userId, payload.name, payload.method, payload.params);
+  },
+  'packages.ui.save-config': async (payload: { name?: unknown; config?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    return ui.savePluginRuntimeConfig(ctx.userId, payload.name, payload.config);
+  },
   // Open-tier skills (external packages + global folders) for the read-only
   // "From packages & global folders" group in the skills panel. External and
   // global are listed independently (no cross-tier display-name dedupe) so a
