@@ -14758,6 +14758,11 @@ function createChatController(config) {
     } finally {
       const wasAborted = pending?.aborted;
       const wasErrored = pending?.errored;
+      // conv-core 兜底：断流/中止时时间线面板里未交回的正文也要落回
+      // 气泡（正常完成路径 turn.completed 已交回，此处幂等跳过）。
+      if (typeof window.chatStreamFinalize === 'function') {
+        try { window.chatStreamFinalize(id); } catch (_) { /* 面板兜底失败不阻塞收尾 */ }
+      }
       terminalResult = { started: true, aborted: !!wasAborted, errored: !!wasErrored };
       pending = null;
       _updateSendUI();
@@ -14887,7 +14892,10 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
     }
     _renderAgentEvent(msg, ev.event);
   } else if (ev.type === 'delta') {
-    _streamingAppendFinalDelta(msg, ev.text || '');
+    // conv-core：时间线接管时正文不重复写（同上 group 分支）。
+    const _csTL = typeof window.chatStreamHasPanel === 'function'
+      && window.chatStreamHasPanel(cid);
+    if (!_csTL) _streamingAppendFinalDelta(msg, ev.text || '');
   } else if (ev.type === 'final') {
     _streamingSetFinal(msg, ev.text, { archive });
     // Attach input-form widget if the final event carries one. Main
@@ -15601,9 +15609,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       if (data.type === 'delta' && typeof data.text === 'string') {
         // 首条输出已到达 → 取消该外接智能体的「慢响应」检测。
         _clearSlowSwitch(cid, actor);
-        // Token-by-token streaming → write into the placeholder's final
-        // body so the user sees the reply form character-by-character.
-        _streamingAppendFinalDelta(target, data.text);
+        // conv-core：chat-stream 时间线接管正文渲染（文字段与工具行真实
+        // 交错），回合收尾由面板把全文交回本管道（_streamingAppendFinalDelta）。
+        const _csTimelineOwns = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_csTimelineOwns) {
+          _streamingAppendFinalDelta(target, data.text);
+        }
         _streamingUpdateActivity(target, t('chat.activity_writing'));
       } else if (data.type === 'progress' && data.text) {
         // 外接智能体有 process 活动但尚无首条输出 → 开始慢检测（阈值见
