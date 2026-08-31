@@ -257,11 +257,15 @@ function _csRenderToolCard(card, payload, status) {
 
 function _csRenderReasoningCard(card, payload) {
   const text = (payload && payload.text) || '';
+  // 思考行不显示内容（对齐 CLI 呈现）：只留「💭 思考」占位行，
+  // 点击展开看原文——过程透明但思考文本不占视觉。
   card.innerHTML = `
     <div class="cs-row-head cs-reason-head">
       <span class="cs-card-ico completed">💭</span>
-      <span class="cs-reason-text">${_csEscapeHtml(text)}</span>
-    </div>`;
+      <span class="cs-reason-label">思考</span>
+      ${text ? '<span class="cs-reason-hint">点击查看</span>' : ''}
+    </div>
+    ${text ? `<div class="cs-reason-full">${_csEscapeHtml(text)}</div>` : ''}`;
   if (!card.dataset.csClickBound) {
     card.dataset.csClickBound = '1';
     card.addEventListener('click', () => {
@@ -425,6 +429,18 @@ function _csFinalizePanelText(panel) {
   delete panel.dataset.csText;
 }
 
+/** 完成态定位：过程面板移到正文气泡之后——正文是主体、过程摘要是附属，
+ *  阅读顺序「先答案，后过程」。执行中面板在正文上方（正文未出）。 */
+function _csMovePanelBelowBody(panel) {
+  if (!panel.parentNode) return;
+  const sibs = Array.from(panel.parentNode.children || []);
+  const idx = sibs.indexOf(panel);
+  const anchor = idx >= 0 ? sibs[idx + 1] : null;
+  if (anchor && anchor.parentNode === panel.parentNode) {
+    panel.parentNode.insertBefore(panel, anchor.nextSibling);
+  }
+}
+
 /** 流结束兜底（conversation 在 reader 循环收尾时调用）：中断/断流时
  *  running 面板的正文也要交回，防止文字困在面板里随收缩一起藏掉。 */
 window.chatStreamFinalize = function chatStreamFinalize(cid) {
@@ -433,6 +449,7 @@ window.chatStreamFinalize = function chatStreamFinalize(cid) {
     if (panel.classList.contains('running')) {
       _csFinalizePanelText(panel);
       _csSetPanelState(panel, 'cancelled');
+      _csMovePanelBelowBody(panel);
     }
   }
 };
@@ -484,6 +501,8 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       if (panel) {
         _csFinalizePanelText(panel);
         _csSetPanelState(panel, chatEvent.status, chatEvent.error);
+        // 完成态定位：面板移到正文气泡之后（正文主体、过程附属）。
+        if (chatEvent.status !== 'failed') _csMovePanelBelowBody(panel);
       }
       return;
     }
@@ -697,7 +716,8 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       ].filter(Boolean).join(' ');
       _csUpdatePanelSummary(panel);
     }
-    msgDiv.parentNode.insertBefore(panel, msgDiv);
+    // 历史重建面板挂在正文气泡之后（完成态定位：正文主体、过程附属）。
+    msgDiv.parentNode.insertBefore(panel, msgDiv.nextSibling);
     _csPanels.set(turnKey, panel);
     return true;
   } catch (err) {
