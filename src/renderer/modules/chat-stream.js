@@ -123,8 +123,14 @@ function _csEnsurePanel(cid, anchor, turnId, actorId) {
   let panel = _csPanels.get(key);
   if (panel && panel.isConnected) return { panel, body: panel.querySelector('.cs-panel-body') };
   panel = _csCreatePanel(cid, turnId, actorId);
-  // 面板挂在流式占位气泡之前：先见过程，后见正文，与阅读动线一致。
-  anchor.parentNode && anchor.parentNode.insertBefore(panel, anchor);
+  // 面板挂在消息元素内部：消息头（cogseed 图标/名字）之后、正文容器
+  // 之前——过程是消息的组成部分（图标下、正文上），执行中与完成态
+  // 同位，收尾无需再移动。流式占位与历史渲染的消息结构都取
+  // .chat-bubble（正文容器）为锚；查不到时退到消息末尾。
+  const bubble = anchor && anchor.querySelector
+    ? anchor.querySelector('.chat-bubble, [data-role="final"]') : null;
+  if (bubble) anchor.insertBefore(panel, bubble);
+  else if (anchor && anchor.appendChild) anchor.appendChild(panel);
   _csPanels.set(key, panel);
   // 惰性清理：超过 40 个面板时丢最老的已完成面板，防长会话 DOM 无界。
   if (_csPanels.size > 40) {
@@ -404,15 +410,10 @@ function _csRenderInteractionCard(body, ev) {
 }
 
 /** 回合收尾：时间线正文交回 conversation 原管道（markdown/结构块保留），
- *  面板内文字段移除，正文回到消息气泡位。anchor=面板后的流式占位消息。 */
+ *  面板内文字段移除，正文回到消息气泡位。面板宿主=消息元素。 */
 function _csFinalizePanelText(panel) {
   const txt = panel.dataset.csText || '';
-  let anchor = null;
-  if (panel.parentNode) {
-    const sibs = Array.from(panel.parentNode.children || []);
-    const idx = sibs.indexOf(panel);
-    if (idx >= 0 && idx + 1 < sibs.length) anchor = sibs[idx + 1];
-  }
+  const anchor = panel.parentNode;
   if (txt && anchor) {
     try {
       if (typeof _streamingAppendFinalDelta === 'function') {
@@ -429,17 +430,8 @@ function _csFinalizePanelText(panel) {
   delete panel.dataset.csText;
 }
 
-/** 完成态定位：过程面板移到正文气泡之后——正文是主体、过程摘要是附属，
- *  阅读顺序「先答案，后过程」。执行中面板在正文上方（正文未出）。 */
-function _csMovePanelBelowBody(panel) {
-  if (!panel.parentNode) return;
-  const sibs = Array.from(panel.parentNode.children || []);
-  const idx = sibs.indexOf(panel);
-  const anchor = idx >= 0 ? sibs[idx + 1] : null;
-  if (anchor && anchor.parentNode === panel.parentNode) {
-    panel.parentNode.insertBefore(panel, anchor.nextSibling);
-  }
-}
+/** 完成态定位已内建：面板创建时即在消息内部（消息头之后、正文之前），
+ *  无需收尾移动。见 _csEnsurePanel。 */
 
 /** 流结束兜底（conversation 在 reader 循环收尾时调用）：中断/断流时
  *  running 面板的正文也要交回，防止文字困在面板里随收缩一起藏掉。 */
@@ -449,7 +441,6 @@ window.chatStreamFinalize = function chatStreamFinalize(cid) {
     if (panel.classList.contains('running')) {
       _csFinalizePanelText(panel);
       _csSetPanelState(panel, 'cancelled');
-      _csMovePanelBelowBody(panel);
     }
   }
 };
@@ -501,8 +492,6 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       if (panel) {
         _csFinalizePanelText(panel);
         _csSetPanelState(panel, chatEvent.status, chatEvent.error);
-        // 完成态定位：面板移到正文气泡之后（正文主体、过程附属）。
-        if (chatEvent.status !== 'failed') _csMovePanelBelowBody(panel);
       }
       return;
     }
@@ -716,8 +705,11 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       ].filter(Boolean).join(' ');
       _csUpdatePanelSummary(panel);
     }
-    // 历史重建面板挂在正文气泡之后（完成态定位：正文主体、过程附属）。
-    msgDiv.parentNode.insertBefore(panel, msgDiv.nextSibling);
+    // 历史重建面板同样挂在消息内部（消息头之后、正文容器之前），与
+    // 实时路径同位。
+    const bubble = msgDiv.querySelector('.chat-bubble, [data-role="final"]');
+    if (bubble) msgDiv.insertBefore(panel, bubble);
+    else msgDiv.appendChild(panel);
     _csPanels.set(turnKey, panel);
     return true;
   } catch (err) {
