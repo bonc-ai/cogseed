@@ -1,10 +1,11 @@
-// ─── chat-stream: 结构化会话事件的过程面板（conv-core M1） ─────────────────
+// ─── chat-stream: 结构化会话事件的过程活动流（conv-core M1） ────────────────
 //
 // 消费主进程 conversations.sendStream 并行下发的 stream:'chat' 事件
 // （chat.turn.started/completed、chat.item 五种 kind），渲染为当前回合的
-// 「过程面板」：每个工具调用一张实时卡片（进行中/完成/失败三态、输出可
-// 折叠）、思考提示折叠条、用量条。正文文本仍走老 delta 通道渲染，本模块
-// 跳过 kind:text 不重复显示。
+// 「过程活动流」：没有外框卡片，每个动作就是一行轻量条目（图标 + 动词 +
+// 目标 + 增删统计），与正文文字段按真实发生顺序交错，视觉对齐 CLI 活动
+// 时间线。正文文本仍走老 delta 通道收尾渲染，本模块跳过 kind:text 的
+// 最终渲染、仅在流中承接。
 //
 // 契约见 design/conv-core/spec.md；事件形状的事实源在主进程
 // src/main/features/chat_events/schema.ts。
@@ -22,282 +23,311 @@ function _csEscapeHtml(text) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/** cid+turnId → 面板根元素。流式回合切换/视图切换时由 GC 惰性清理。 */
+/** cid+turnId → 活动流根元素。流式回合切换/视图切换时由 GC 惰性清理。 */
 const _csPanels = new Map();
 
 function _csPanelKey(cid, turnId) { return `${cid}::${turnId}`; }
 
-function _csStatusIcon(status) {
-  if (status === 'completed') return '✓';
-  if (status === 'failed') return '✗';
-  return '◌';
+// ── 工具名 → 图标/动词/目标样式映射（视觉对齐 CLI：读取/编辑/运行/MCP…） ──
+const _CS_TOOL_STYLES = [
+  [['read_file', 'stat_file', 'read_mate_kb', 'kb_read', 'chat_read', 'office_read'], 'search', '读取', 'path'],
+  [['search_files', 'grep_files', 'kb_search', 'chat_search', 'web_search'], 'search', '搜索', 'text'],
+  [['web_fetch'], 'globe', '抓取', 'text'],
+  [['write_file', 'office_create', 'create_artifact', 'create_docx', 'create_pptx', 'create_xlsx', 'markdown_to_pdf', 'html_to_pdf', 'generate_image'], 'edit-pencil', '写入', 'path'],
+  [['edit_file', 'office_edit', 'patch_apply'], 'edit-pencil', '编辑', 'path'],
+  [['delete_file'], 'trash-2', '删除', 'path'],
+  [['bash', 'exec_command', 'interactive_cli_start', 'interactive_cli_send', 'interactive_cli_read', 'interactive_cli_close'], 'terminal', '运行', 'text'],
+  [['browser_open', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_screenshot'], 'globe', '浏览', 'text'],
+  [['run_skill'], 'zap', '技能', 'text'],
+  [['call_connector_tool', 'list_connector_tools'], 'plug', 'MCP', 'mcp'],
+  [['messaging_send', 'p3394_send'], 'send', '发送', 'text'],
+  [['cogseed_delegate'], 'send', '派单', 'text'],
+  [['manage_execution_plan'], 'list-ordered', '计划', 'text'],
+  [['cross_session_memory'], 'book-open', '记忆', 'text'],
+];
+
+function _csStyleForTool(toolName) {
+  const name = String(toolName || '');
+  for (const [names, icon, verb, targetKind] of _CS_TOOL_STYLES) {
+    if (names.includes(name)) return { icon, verb, targetKind };
+  }
+  // 未收录的工具：诚实回退为原名（等宽字体），不硬造动词。
+  return { icon: 'box', verb: name || 'tool', targetKind: 'text', raw: true };
 }
 
-function _csPanelClass(status) {
-  if (status === 'completed') return 'cs-panel done';
-  if (status === 'failed') return 'cs-panel failed';
-  if (status === 'cancelled') return 'cs-panel cancelled';
-  return 'cs-panel running';
+/** 图标渲染委托共享 icons.js；模块单测环境缺依赖时回退为空（不阻塞渲染）。 */
+function _csIco(name) {
+  return typeof window !== 'undefined' && typeof window.uiIconHtml === 'function'
+    ? window.uiIconHtml(name, 'cs-ico-svg') : '';
 }
 
-function _csCreatePanel(cid, turnId, actorId) {
-  const panel = document.createElement('div');
-  panel.className = 'cs-panel running';
-  panel.dataset.csTurn = turnId;
-  panel.dataset.csActor = actorId || '';
+function _csFileIco(fileName) {
+  return typeof window !== 'undefined' && typeof window.fileKindIconHtml === 'function'
+    ? window.fileKindIconHtml(fileName) : '';
+}
 
-  const header = document.createElement('div');
-  header.className = 'cs-panel-header';
+/** argsSummary（JSON 摘要字符串，可能被截断）宽松还原为参数对象。 */
+function _csParseArgs(argsSummary) {
+  const raw = String(argsSummary || '').trim();
+  if (!raw.startsWith('{')) return null;
+  try { return JSON.parse(raw); } catch { /* 截断/非 JSON → 原文展示 */ }
+  try { return JSON.parse(`${raw}}`); } catch { return null; }
+}
 
-  const spinner = document.createElement('span');
-  spinner.className = 'cs-spinner';
-  spinner.setAttribute('aria-hidden', 'true');
+function _csFirstArg(args, keys) {
+  if (!args || typeof args !== 'object') return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
 
-  const title = document.createElement('span');
-  title.className = 'cs-panel-title';
-  title.textContent = actorId || turnId;
+function _csFmtDur(ms) {
+  const total = Math.max(1, Math.round((Number(ms) || 0) / 1000));
+  if (total < 60) return `${total} 秒`;
+  return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
+}
 
-  const state = document.createElement('span');
-  state.className = 'cs-panel-state';
-  state.dataset.csState = '';
-  state.textContent = '运行中';
+// ── 活动流骨架（每回合一个，无外框；运行态首行为「工作中 计时」） ──────────
 
-  // 收起行摘要（N 步 · 工具名 · ↑↓token）：完成后面板收缩成 header 一行，
-  // 摘要让这行本身携带"这轮干了什么"，不点开也能扫读。
-  const summary = document.createElement('span');
-  summary.className = 'cs-panel-summary';
+function _csStopTicker(flow) {
+  if (flow && flow._csTicker) {
+    clearInterval(flow._csTicker);
+    flow._csTicker = null;
+  }
+}
 
-  // 展开指示箭头：▾ 展开 / ▸ 收起。header 整行可点（CLI 习惯），
-  // 停止按钮自己 stopPropagation。
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'cs-panel-toggle';
-  toggle.textContent = '▾';
-  toggle.setAttribute('aria-expanded', 'true');
-  toggle.setAttribute('aria-label', '收起过程');
-  toggle.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const body = panel.querySelector('.cs-panel-body');
-    _csSetCollapsed(panel, body && body.style.display !== 'none');
-  });
-  header.addEventListener('click', () => {
-    const body = panel.querySelector('.cs-panel-body');
-    _csSetCollapsed(panel, body && body.style.display !== 'none');
-  });
+function _csStartTicker(flow, startedAtMs) {
+  const label = flow.querySelector('.cs-status-elapsed');
+  if (!label) return;
+  const t0 = Number(startedAtMs) || Date.now();
+  // 立即先画一次（此刻 flow 尚未插入 DOM，isConnected 检查只放在轮询里）。
+  label.textContent = _csFmtDur(Date.now() - t0);
+  flow._csTicker = setInterval(() => {
+    if (!flow.isConnected) { _csStopTicker(flow); return; }
+    label.textContent = _csFmtDur(Date.now() - t0);
+  }, 1000);
+}
 
-  // 就近取消（矩阵 #6）：面板运行中显示「停止」，复用主输入区停止按钮的
-  // 完整 abort 链（streaming 态下点击发送按钮即中止）——不另铺 IPC。
-  const stop = document.createElement('button');
-  stop.type = 'button';
-  stop.className = 'cs-panel-stop';
-  stop.textContent = '停止';
-  stop.title = '中止本轮执行';
-  stop.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const mainStop = document.querySelector('.chat-send-btn.streaming');
-    if (mainStop) {
-      mainStop.click();
-      return;
-    }
-    // 主按钮不在 streaming 态（如派单后台轮次）——面板自身标记，
-    // 由 conversation 的 cancel 管线收尾。
-    _csSetPanelState(panel, 'cancelled');
-  });
+function _csCreateFlow(cid, turnId, opts) {
+  const flow = document.createElement('div');
+  flow.className = 'cs-flow running';
+  flow.dataset.csTurn = turnId;
+  if (cid) flow.dataset.csCid = cid;
 
-  header.appendChild(spinner);
-  header.appendChild(toggle);
-  header.appendChild(title);
-  header.appendChild(summary);
-  header.appendChild(state);
-  header.appendChild(stop);
+  // 运行态首行：「工作中 N 分 N 秒」+ 就近停止。完成后整行移除（视觉对齐
+  // CLI：结束后时间线自己说明一切）。历史重建不建这行。
+  if (!(opts && opts.noStatus)) {
+    const status = document.createElement('div');
+    status.className = 'cs-status';
+    const label = document.createElement('span');
+    label.className = 'cs-status-label';
+    label.textContent = '工作中';
+    const elapsed = document.createElement('span');
+    elapsed.className = 'cs-status-elapsed';
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'cs-status-stop';
+    stop.textContent = '停止';
+    stop.title = '中止本轮执行';
+    stop.addEventListener('click', () => {
+      const mainStop = document.querySelector('.chat-send-btn.streaming');
+      if (mainStop) {
+        mainStop.click();
+        return;
+      }
+      // 主按钮不在 streaming 态（如派单后台轮次）——流自身标记，由
+      // conversation 的 cancel 管线收尾。
+      _csSetFlowState(flow, 'cancelled');
+    });
+    status.appendChild(label);
+    status.appendChild(elapsed);
+    status.appendChild(stop);
+    flow.appendChild(status);
+    _csStartTicker(flow, opts && opts.startedAtMs);
+  }
 
   const body = document.createElement('div');
-  body.className = 'cs-panel-body';
-  panel.appendChild(header);
-  panel.appendChild(body);
-  return panel;
+  body.className = 'cs-flow-body';
+  flow.appendChild(body);
+  return flow;
 }
 
-function _csEnsurePanel(cid, anchor, turnId, actorId) {
+function _csEnsureFlow(cid, anchor, turnId, opts) {
   const key = _csPanelKey(cid, turnId);
-  let panel = _csPanels.get(key);
-  if (panel && panel.isConnected) return { panel, body: panel.querySelector('.cs-panel-body') };
-  panel = _csCreatePanel(cid, turnId, actorId);
-  // 面板挂在消息元素内部：消息头（cogseed 图标/名字）之后、正文容器
+  let flow = _csPanels.get(key);
+  if (flow && flow.isConnected) return { flow, body: flow.querySelector('.cs-flow-body') };
+  flow = _csCreateFlow(cid, turnId, opts);
+  // 活动流挂在消息元素内部：消息头（cogseed 图标/名字）之后、正文容器
   // 之前——过程是消息的组成部分（图标下、正文上），执行中与完成态
   // 同位，收尾无需再移动。流式占位与历史渲染的消息结构都取
   // .chat-bubble（正文容器）为锚；查不到时退到消息末尾。
   const bubble = anchor && anchor.querySelector
     ? anchor.querySelector('.chat-bubble, [data-role="final"]') : null;
-  if (bubble) anchor.insertBefore(panel, bubble);
-  else if (anchor && anchor.appendChild) anchor.appendChild(panel);
-  _csPanels.set(key, panel);
-  // 惰性清理：超过 40 个面板时丢最老的已完成面板，防长会话 DOM 无界。
+  if (bubble) anchor.insertBefore(flow, bubble);
+  else if (anchor && anchor.appendChild) anchor.appendChild(flow);
+  // 运行中正文都在时间线里：气泡此时是空的，把空底条藏掉（视觉对齐 CLI：
+  // 运行中没有空泡壳），收尾交回正文时恢复。
+  if (bubble && !bubble.firstChild) {
+    bubble.style.display = 'none';
+    flow.dataset.csBubbleHidden = '1';
+  }
+  _csPanels.set(key, flow);
+  // 惰性清理：超过 40 个流时丢最老的已完成流，防长会话 DOM 无界。
   if (_csPanels.size > 40) {
     const firstKey = _csPanels.keys().next().value;
     const oldest = _csPanels.get(firstKey);
     if (oldest && !oldest.classList.contains('running')) {
+      _csStopTicker(oldest);
       oldest.remove();
       _csPanels.delete(firstKey);
     }
   }
-  return { panel, body: panel.querySelector('.cs-panel-body') };
+  return { flow, body: flow.querySelector('.cs-flow-body') };
 }
 
-/** 展开/收起唯一入口：body 显隐 + chevron 方向 + aria 同步。 */
-function _csSetCollapsed(panel, collapsed) {
-  const body = panel.querySelector('.cs-panel-body');
-  if (!body) return;
-  body.style.display = collapsed ? 'none' : '';
-  panel.classList.toggle('cs-collapsed', collapsed);
-  const chev = panel.querySelector('.cs-panel-toggle');
-  if (chev) {
-    chev.textContent = collapsed ? '▸' : '▾';
-    chev.setAttribute('aria-expanded', String(!collapsed));
-    chev.setAttribute('aria-label', collapsed ? '展开过程' : '收起过程');
-  }
-}
-
-function _csFmtTok(n) {
-  return typeof n === 'number' && n >= 10000
-    ? `${Math.round(n / 1000)}K` : String(n);
-}
-
-/** 收起行摘要：N 步 · 工具名（去重前 3）· ↑↓token。卡片增减/usage 到达/
- *  终态时刷新，让收缩成的一行自己能讲清楚这轮发生了什么。 */
-function _csUpdatePanelSummary(panel) {
-  const summary = panel.querySelector('.cs-panel-summary');
-  if (!summary) return;
-  const body = panel.querySelector('.cs-panel-body');
-  const toolNames = [];
-  let steps = 0;
-  for (const card of (body ? body.children : [])) {
-    if (!card.dataset || !card.dataset.csItem) continue;
-    if (card.classList.contains('cs-usage')) continue;
-    steps += 1;
-    // 工具名优先读渲染时落在 dataset 的副本（不依赖 innerHTML 子树查询，
-    // stub/真实 DOM 行为一致），缺省回退查 .cs-tool-name。
-    let n = card.dataset.csName || '';
-    if (!n) {
-      const nameEl = card.querySelector('.cs-tool-name');
-      n = nameEl ? nameEl.textContent.trim() : '';
+/** 回合终态：运行行退场（失败/取消转为结论行），计时器停止。 */
+function _csSetFlowState(flow, status, error) {
+  flow.classList.remove('running', 'done', 'failed', 'cancelled');
+  flow.classList.add(status === 'completed' ? 'done' : status);
+  _csStopTicker(flow);
+  const statusRow = flow.querySelector('.cs-status');
+  if (status === 'completed') {
+    // 完成即撤运行行；纯文字回合（无任何动作行）连流壳一起撤，不留空壳。
+    if (statusRow) statusRow.remove();
+    const body = flow.querySelector('.cs-flow-body');
+    if (!body || !body.children.length) {
+      flow.remove();
+      for (const [key, mapped] of Array.from(_csPanels.entries())) {
+        if (mapped === flow) _csPanels.delete(key);
+      }
     }
-    if (n && toolNames.indexOf(n) === -1) toolNames.push(n);
+    return;
   }
-  const bits = [];
-  if (steps) bits.push(`${steps} 步`);
-  if (toolNames.length) {
-    bits.push(toolNames.slice(0, 3).join(' · ') + (toolNames.length > 3 ? ' …' : ''));
-  }
-  const usage = panel.dataset.csUsage;
-  if (usage) bits.push(usage);
-  summary.textContent = bits.join('　');
-}
-
-function _csSetPanelState(panel, status, error) {
-  panel.className = _csPanelClass(status);
-  const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
-  const spinner = panel.querySelector('.cs-spinner');
-  if (spinner) spinner.style.display = terminal ? 'none' : '';
-  const stopBtn = panel.querySelector('.cs-panel-stop');
-  if (stopBtn) stopBtn.style.display = terminal ? 'none' : '';
-  const stateEl = panel.querySelector('[data-cs-state]');
-  if (stateEl) {
-    const label = status === 'completed' ? '已完成'
-      : status === 'failed' ? `失败${error ? `：${error}` : ''}`
-      : status === 'cancelled' ? '已取消' : '运行中';
-    stateEl.textContent = label;
-  }
-  // 完成即收缩（CLI 行为契约：执行过程实时可见，结束后过程收起，
-  // 摘要行 + 点开可看）。失败不收：过程就是排障信息。
-  if (terminal && status !== 'failed') {
-    _csUpdatePanelSummary(panel);
-    _csSetCollapsed(panel, true);
+  if (statusRow) {
+    const stop = statusRow.querySelector('.cs-status-stop');
+    if (stop) stop.remove();
+    const label = statusRow.querySelector('.cs-status-label');
+    if (label) {
+      label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
+        : status === 'cancelled' ? '已取消' : '工作中';
+    }
   }
 }
 
-// ── Item 卡片 ───────────────────────────────────────────────────────────────
+// ── 行渲染（无边框：一行一动作） ──────────────────────────────────────────
 
-function _csEnsureItemCard(body, itemId, kind) {
-  let card = body.querySelector(`[data-cs-item="${CSS.escape(itemId)}"]`);
-  if (card) return card;
-  card = document.createElement('div');
-  card.className = `cs-card cs-${kind}`;
-  card.dataset.csItem = itemId;
-  body.appendChild(card);
-  _csUpdatePanelSummary(body.closest('.cs-panel'));
-  return card;
+function _csEnsureItemRow(body, itemId, kind) {
+  let row = body.querySelector(`[data-cs-item="${CSS.escape(itemId)}"]`);
+  if (row) return row;
+  // cs-row 提供行布局基座（flex/间距/hover）；cs-{kind} 供测试与定制区分。
+  row = document.createElement('div');
+  row.className = `cs-row cs-item cs-${kind}`;
+  row.dataset.csItem = itemId;
+  body.appendChild(row);
+  return row;
 }
 
-function _csRenderToolCard(card, payload, status) {
+/** 彩色文件类型图标（icons.js 的文件族），外包一层定位 span；无依赖时省略。 */
+function _csFileIcoSpan(fileName) {
+  const svg = _csFileIco(fileName);
+  return svg ? `<span class="cs-file-ico">${svg}</span>` : '';
+}
+
+/** 目标片段：路径类 → 彩色文件图标 + 文件名 + 目录（均等宽、可截断）；
+ *  MCP → 服务名 · 工具名；其余 → 单行等宽摘要。 */
+function _csTargetHtml(targetKind, args, rawSummary) {
+  if (targetKind === 'mcp') {
+    const server = _csFirstArg(args, ['connector', 'server', 'server_name', 'name'])
+      || (rawSummary || '');
+    const tool = _csFirstArg(args, ['tool', 'tool_name', 'method']);
+    return `<span class="cs-file-name">${_csEscapeHtml(server)}</span>`
+      + (tool ? `<span class="cs-row-dim">· ${_csEscapeHtml(tool)}</span>` : '');
+  }
+  const path = _csFirstArg(args, ['path', 'file_path', 'filePath', 'file']);
+  if (path && (targetKind === 'path' || /[\\/]/.test(path))) {
+    const sep = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    const base = sep >= 0 ? path.slice(sep + 1) : path;
+    const dir = sep >= 0 ? path.slice(0, sep) : '';
+    return `${_csFileIcoSpan(base)}`
+      + `<span class="cs-file-name" title="${_csEscapeHtml(path)}">${_csEscapeHtml(base)}</span>`
+      + (dir ? `<span class="cs-file-dir">${_csEscapeHtml(dir)}</span>` : '');
+  }
+  const text = _csFirstArg(args, ['command', 'query', 'pattern', 'url', 'skill_id', 'subject']);
+  const shown = text || rawSummary || '';
+  return shown ? `<span class="cs-target" title="${_csEscapeHtml(shown)}">${_csEscapeHtml(shown)}</span>` : '';
+}
+
+/** fileChange diff → +N/−N 统计（与行内统计同源：行前缀计数）。 */
+function _csDiffStats(diff) {
+  let adds = 0;
+  let dels = 0;
+  for (const line of String(diff || '').split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) adds += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) dels += 1;
+  }
+  return { adds, dels };
+}
+
+function _csRenderToolRow(row, payload, status) {
   const p = payload || {};
-  // 摘要行读取的名称副本（见 _csUpdatePanelSummary）。
-  card.dataset.csName = String(p.toolName || 'tool');
-  if (status !== 'completed' && status !== 'failed') card.dataset.csT0 = String(Date.now());
-  else if (card.dataset.csDur === undefined && card.dataset.csT0) {
-    card.dataset.csDur = String(Math.max(0, Date.now() - Number(card.dataset.csT0)));
-  }
-  const dur = card.dataset.csDur
-    ? ` · ${(Number(card.dataset.csDur) / 1000).toFixed(1)}s` : '';
-  const parts = [
-    `<div class="cs-row-head">
-      <span class="cs-card-ico ${status}">${_csStatusIcon(status)}</span>
-      <span class="cs-tool-name">${_csEscapeHtml(p.toolName || 'tool')}</span>
-      ${p.argsSummary ? `<span class="cs-tool-args">${_csEscapeHtml(p.argsSummary)}</span>` : ''}
-      <span class="cs-row-dur">${dur}</span>
-    </div>`,
+  const args = _csParseArgs(p.argsSummary);
+  const style = _csStyleForTool(p.toolName);
+  const failed = status === 'failed';
+  const target = _csTargetHtml(style.targetKind, args, p.argsSummary || '');
+  const hover = [p.toolName, p.argsSummary].filter(Boolean).join(' ');
+  // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
+  const line = [
+    `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
+    `<span class="cs-verb${failed ? ' failed' : ''}${style.raw ? ' raw' : ''}">${_csEscapeHtml(style.verb)}</span>`,
+    target,
   ];
-  if (p.error) parts.push(`<div class="cs-card-error">${_csEscapeHtml(p.error)}</div>`);
-  if (p.output) {
-    parts.push(`<div class="cs-card-out"><pre>${_csEscapeHtml(p.output)}</pre></div>`);
-  }
-  card.innerHTML = parts.join('');
-  if (!card.dataset.csClickBound) {
-    card.dataset.csClickBound = '1';
-    card.addEventListener('click', () => {
-      const out = card.querySelector('.cs-card-out');
-      if (out) out.style.display = out.style.display === 'none' ? '' : 'none';
+  const blocks = [];
+  if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);
+  if (p.output) blocks.push(`<div class="cs-row-out"><pre>${_csEscapeHtml(p.output)}</pre></div>`);
+  row.innerHTML = `<div class="cs-row-line">${line.join('')}</div>${blocks.join('')}`;
+  if (hover) row.title = hover;
+  if (!row.dataset.csClickBound) {
+    row.dataset.csClickBound = '1';
+    row.addEventListener('click', () => {
+      row.classList.toggle('cs-open');
     });
   }
 }
 
-function _csRenderReasoningCard(card, payload) {
-  const text = (payload && payload.text) || '';
-  // 思考行不显示内容（对齐 CLI 呈现）：只留「💭 思考」占位行，
-  // 点击展开看原文——过程透明但思考文本不占视觉。
-  card.innerHTML = `
-    <div class="cs-row-head cs-reason-head">
-      <span class="cs-card-ico completed">💭</span>
-      <span class="cs-reason-label">思考</span>
-      ${text ? '<span class="cs-reason-hint">点击查看</span>' : ''}
-    </div>
-    ${text ? `<div class="cs-reason-full">${_csEscapeHtml(text)}</div>` : ''}`;
-  if (!card.dataset.csClickBound) {
-    card.dataset.csClickBound = '1';
-    card.addEventListener('click', () => {
-      card.classList.toggle('cs-open');
-    });
-  }
-}
-
-function _csRenderDiffCard(card, payload) {
+function _csRenderDiffRow(row, payload) {
   const p = payload || {};
   const diff = String(p.diff || '');
+  const { adds, dels } = _csDiffStats(diff);
+  const sep = Math.max(String(p.filePath || '').lastIndexOf('/'), String(p.filePath || '').lastIndexOf('\\'));
+  const base = sep >= 0 ? String(p.filePath).slice(sep + 1) : String(p.filePath || '');
+  const dir = sep >= 0 ? String(p.filePath).slice(0, sep) : '';
   const lines = diff.split('\n').slice(0, 400).map((line) => {
     const cls = line.startsWith('+') && !line.startsWith('+++') ? 'add'
       : line.startsWith('-') && !line.startsWith('---') ? 'del' : 'ctx';
     return `<span class="cs-diff-line ${cls}">${_csEscapeHtml(line)}</span>`;
   }).join('');
-  card.innerHTML = `
-    <div class="cs-row-head">
-      <span class="cs-card-ico completed">✎</span>
-      <span class="cs-diff-path">${_csEscapeHtml(p.filePath || '')}</span>
-      ${p.summary ? `<span class="cs-diff-summary">${_csEscapeHtml(p.summary)}</span>` : ''}
+  row.innerHTML = `
+    <div class="cs-row-line">
+      <span class="cs-ico">${_csIco('edit-pencil')}</span>
+      <span class="cs-verb">编辑</span>
+      ${_csFileIcoSpan(base)}
+      <span class="cs-file-name" title="${_csEscapeHtml(p.filePath || '')}">${_csEscapeHtml(base)}</span>
+      ${dir ? `<span class="cs-file-dir">${_csEscapeHtml(dir)}</span>` : ''}
+      ${adds ? `<span class="cs-add">+${adds}</span>` : ''}
+      ${dels ? `<span class="cs-del">−${dels}</span>` : ''}
     </div>
-    <div class="cs-diff-body">${lines}</div>`;
+    ${diff ? `<div class="cs-diff-body">${lines}</div>` : ''}`;
+  if (!row.dataset.csClickBound) {
+    row.dataset.csClickBound = '1';
+    row.addEventListener('click', () => {
+      row.classList.toggle('cs-open');
+    });
+  }
 }
 
-function _csRenderUsageCard(card, payload) {
+function _csRenderUsageRow(row, payload) {
   const p = payload || {};
   const bits = [];
   if (p.inputTokens != null) bits.push(`↑${p.inputTokens.toLocaleString()}`);
@@ -309,19 +339,62 @@ function _csRenderUsageCard(card, payload) {
     if (pct >= 85) bits.push('<span class="cs-ctx-warn">上下文接近上限</span>');
   }
   if (!bits.length) return;
-  card.innerHTML = `<div class="cs-usage">${bits.join(' · ')}</div>`;
-  // token 摘要挂到面板级：完成收缩后 header 一行仍能看到本轮用量。
-  const panel = card.closest('.cs-panel');
-  if (panel) {
-    panel.dataset.csUsage = [
-      typeof p.inputTokens === 'number' ? `↑${_csFmtTok(p.inputTokens)}` : '',
-      typeof p.outputTokens === 'number' ? `↓${_csFmtTok(p.outputTokens)}` : '',
-    ].filter(Boolean).join(' ');
-    _csUpdatePanelSummary(panel);
-  }
+  row.innerHTML = `<div class="cs-usage-row">${bits.join(' · ')}</div>`;
 }
 
-// ── 交互卡（M2：审批/提问） ────────────────────────────────────────────────
+// ── 思考行（合并连续片段为一行，收行时结算时长） ──────────────────────────
+
+function _csThinkDurText(row) {
+  if (row.dataset.csClosed !== '1') return '…';
+  const t0 = Number(row.dataset.csT0);
+  if (!t0 || !row.dataset.csDur) return '';
+  return `· 持续了 ${_csFmtDur(Number(row.dataset.csDur))}`;
+}
+
+function _csRenderThinkRow(row) {
+  const full = row.dataset.csFull
+    ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
+  row.innerHTML = `
+    <div class="cs-row-line">
+      <span class="cs-ico">${_csIco('brain-circuit')}</span>
+      <span class="cs-verb">思考</span>
+      <span class="cs-row-dim cs-think-dur">${_csThinkDurText(row)}</span>
+    </div>
+    ${full}`;
+}
+
+/** 追加思考片段：最近一行思考行仍开着就续写，否则新开一行。 */
+function _csAppendReasoning(body, text) {
+  let row = null;
+  const kids = body.children;
+  const last = kids[kids.length - 1];
+  if (last && String(last.className || '').includes('cs-row-think') && last.dataset.csClosed !== '1') {
+    row = last;
+  } else {
+    row = document.createElement('div');
+    row.className = 'cs-row cs-row-think';
+    row.dataset.csT0 = String(Date.now());
+    row.addEventListener('click', () => row.classList.toggle('cs-open'));
+    body.appendChild(row);
+  }
+  if (text) row.dataset.csFull = (row.dataset.csFull || '') + text;
+  _csRenderThinkRow(row);
+  return row;
+}
+
+/** 收思考行：结算时长（persisted 无计时数据时只定稿不留空时长）。 */
+function _csCloseThinkRow(body, silent) {
+  const kids = body.children;
+  const last = kids[kids.length - 1];
+  if (!last || !String(last.className || '').includes('cs-row-think') || last.dataset.csClosed === '1') return;
+  last.dataset.csClosed = '1';
+  if (!silent && last.dataset.csT0) {
+    last.dataset.csDur = String(Math.max(0, Date.now() - Number(last.dataset.csT0)));
+  }
+  _csRenderThinkRow(last);
+}
+
+// ── 交互卡（M2：审批/提问——需要按钮/输入，保留轻边框卡） ──────────────────
 
 function _csReplyInteraction(interactionId, payload) {
   const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
@@ -346,7 +419,7 @@ function _csRenderInteractionCard(body, ev) {
   head.className = 'cs-card-head';
   const ico = document.createElement('span');
   ico.className = 'cs-card-ico inProgress';
-  ico.textContent = ev.kind === 'approval' ? '⚠️' : '❓';
+  ico.innerHTML = _csIco('shield');
   const promptEl = document.createElement('span');
   promptEl.className = 'cs-interaction-prompt';
   promptEl.textContent = ev.prompt;
@@ -410,10 +483,10 @@ function _csRenderInteractionCard(body, ev) {
 }
 
 /** 回合收尾：时间线正文交回 conversation 原管道（markdown/结构块保留），
- *  面板内文字段移除，正文回到消息气泡位。面板宿主=消息元素。 */
-function _csFinalizePanelText(panel) {
-  const txt = panel.dataset.csText || '';
-  const anchor = panel.parentNode;
+ *  流内文字段移除，正文回到消息气泡位。流宿主=消息元素。 */
+function _csFinalizePanelText(flow) {
+  const txt = flow.dataset.csText || '';
+  const anchor = flow.parentNode;
   if (txt && anchor) {
     try {
       if (typeof _streamingAppendFinalDelta === 'function') {
@@ -426,21 +499,26 @@ function _csFinalizePanelText(panel) {
       _csLog.warn('timeline text hand-back failed', { error: String(err && err.message || err) });
     }
   }
-  for (const seg of Array.from(panel.querySelectorAll('.cs-text'))) seg.remove();
-  delete panel.dataset.csText;
+  for (const seg of Array.from(flow.querySelectorAll('.cs-text'))) seg.remove();
+  delete flow.dataset.csText;
+  // 恢复运行时隐藏的空气泡（正文已交回，气泡重新有内容）。
+  if (flow.dataset.csBubbleHidden === '1') {
+    const bubble = anchor && anchor.querySelector
+      ? anchor.querySelector('.chat-bubble, [data-role="final"]') : null;
+    if (bubble) bubble.style.display = '';
+    delete flow.dataset.csBubbleHidden;
+  }
 }
 
-/** 完成态定位已内建：面板创建时即在消息内部（消息头之后、正文之前），
- *  无需收尾移动。见 _csEnsurePanel。 */
-
 /** 流结束兜底（conversation 在 reader 循环收尾时调用）：中断/断流时
- *  running 面板的正文也要交回，防止文字困在面板里随收缩一起藏掉。 */
+ *  running 流的正文也要交回，防止文字困在流里。 */
 window.chatStreamFinalize = function chatStreamFinalize(cid) {
-  for (const [key, panel] of Array.from(_csPanels.entries())) {
+  for (const [key, flow] of Array.from(_csPanels.entries())) {
     if (cid && !key.startsWith(`${cid}::`)) continue;
-    if (panel.classList.contains('running')) {
-      _csFinalizePanelText(panel);
-      _csSetPanelState(panel, 'cancelled');
+    if (flow.classList.contains('running')) {
+      _csCloseThinkRow(flow.querySelector('.cs-flow-body') || flow);
+      _csFinalizePanelText(flow);
+      _csSetFlowState(flow, 'cancelled');
     }
   }
 };
@@ -451,18 +529,21 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
   if (!chatEvent || typeof chatEvent !== 'object') return;
   try {
     if (chatEvent.type === 'chat.turn.started') {
-      _csEnsurePanel(cid, anchor, chatEvent.turnId, chatEvent.actorId);
+      _csEnsureFlow(cid, anchor, chatEvent.turnId, {
+        startedAtMs: chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now(),
+      });
       return;
     }
     if (chatEvent.type === 'chat.item') {
       const { kind, status, itemId, payload, turnId } = chatEvent;
-      const { panel, body } = _csEnsurePanel(cid, anchor, turnId);
+      const { flow, body } = _csEnsureFlow(cid, anchor, turnId);
       if (kind === 'text') {
         // 时间线接管正文（边思考边说边执行的真实交错）：delta 追加到当前
-        // 文字段，遇其它 item 关段；全文聚合在 panel.dataset.csText，回合
+        // 文字段，遇其它 item 关段；全文聚合在 flow.dataset.csText，回合
         // 收尾交回 conversation 原管道渲染（markdown/结构块不损失）。
+        _csCloseThinkRow(body);
         const piece = String((payload && payload.delta) || '');
-        panel.dataset.csText = (panel.dataset.csText || '') + piece;
+        flow.dataset.csText = (flow.dataset.csText || '') + piece;
         const kids = body.children;
         const last = kids[kids.length - 1];
         let seg = (last && last.className && String(last.className).includes('cs-text')
@@ -471,38 +552,42 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
           seg = document.createElement('div');
           seg.className = 'cs-text';
           body.appendChild(seg);
-          _csUpdatePanelSummary(panel);
         }
         seg.textContent += piece;
         return;
       }
-      // 非 text item 到达 → 关闭当前文字段（下次正文新开段，保持交错）。
+      // 非文字 item：关闭当前文字段与思考行（下次各自新开段，保持交错）。
       const kids2 = body.children;
       const openSeg = kids2[kids2.length - 1];
       if (openSeg && String(openSeg.className || '').includes('cs-text')) openSeg.dataset.csClosed = '1';
-      const card = _csEnsureItemCard(body, itemId, kind);
-      if (kind === 'toolExecution') _csRenderToolCard(card, payload, status);
-      else if (kind === 'reasoning') _csRenderReasoningCard(card, payload);
-      else if (kind === 'fileChange') _csRenderDiffCard(card, payload);
-      else if (kind === 'usage') _csRenderUsageCard(card, payload);
+      if (kind === 'reasoning') {
+        _csAppendReasoning(body, String((payload && payload.text) || ''));
+        return;
+      }
+      _csCloseThinkRow(body);
+      const row = _csEnsureItemRow(body, itemId, kind);
+      if (kind === 'toolExecution') _csRenderToolRow(row, payload, status);
+      else if (kind === 'fileChange') _csRenderDiffRow(row, payload);
+      else if (kind === 'usage') _csRenderUsageRow(row, payload);
       return;
     }
     if (chatEvent.type === 'chat.turn.completed') {
-      const panel = _csPanels.get(_csPanelKey(cid, chatEvent.turnId));
-      if (panel) {
-        _csFinalizePanelText(panel);
-        _csSetPanelState(panel, chatEvent.status, chatEvent.error);
+      const flow = _csPanels.get(_csPanelKey(cid, chatEvent.turnId));
+      if (flow) {
+        _csCloseThinkRow(flow.querySelector('.cs-flow-body') || flow);
+        _csFinalizePanelText(flow);
+        _csSetFlowState(flow, chatEvent.status, chatEvent.error);
       }
       return;
     }
     if (chatEvent.type === 'chat.interaction.requested') {
-      const { body } = _csEnsurePanel(cid, anchor, chatEvent.turnId);
+      const { body } = _csEnsureFlow(cid, anchor, chatEvent.turnId);
       _csRenderInteractionCard(body, chatEvent);
       return;
     }
     if (chatEvent.type === 'chat.interaction.closed') {
-      for (const panel of _csPanels.values()) {
-        const card = panel.querySelector(`[data-cs-interaction="${CSS.escape(chatEvent.interactionId)}"]`);
+      for (const flow of _csPanels.values()) {
+        const card = flow.querySelector(`[data-cs-interaction="${CSS.escape(chatEvent.interactionId)}"]`);
         if (card) {
           card.classList.add('closed');
           card.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
@@ -519,9 +604,9 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
 // ── bash 审批桥接（M2.1：敏感操作审批进入消息流上下文） ────────────────────
 //
 // bash:permission 弹窗（bash_permission.js）照常工作；本桥接把同一请求
-// 镜像成当前会话过程面板里的审批卡——用户在消息流上下文里看到"哪一步
+// 镜像成当前会话活动流里的审批卡——用户在消息流上下文里看到"哪一步
 // 在等什么批准"，点卡上按钮与点弹窗等效（同走 bash.permission_response，
-// 主进程幂等：先到者生效）。无活跃面板（不在聊天视图）时静默跳过。
+// 主进程幂等：先到者生效）。无活跃流（不在聊天视图）时静默跳过。
 
 function _csReplyBashPermission(requestId, decision) {
   const invoke = window.cogseed && typeof window.cogseed.invoke === 'function'
@@ -555,15 +640,15 @@ window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(
   const source = opts && opts.source === 'bridge' ? 'bridge' : 'bash';
   if (!info || typeof info !== 'object' || !info.request_id) return;
   try {
-    // cid 匹配的最近面板（审批发生在该会话的执行中）；bridge 请求的 info
-    // 无 cid 时挂最近活跃面板。
+    // cid 匹配的最近流（审批发生在该会话的执行中）；bridge 请求的 info
+    // 无 cid 时挂最近活跃流。
     let target = null;
-    for (const [key, panel] of _csPanels.entries()) {
-      if (!panel.isConnected) continue;
-      if (info.cid ? key.startsWith(`${info.cid}::`) : true) target = panel;
+    for (const [key, flow] of _csPanels.entries()) {
+      if (!flow.isConnected) continue;
+      if (info.cid ? key.startsWith(`${info.cid}::`) : true) target = flow;
     }
     if (!target) return;
-    const body = target.querySelector('.cs-panel-body');
+    const body = target.querySelector('.cs-flow-body');
     if (!body) return;
 
     let card = body.querySelector(`[data-cs-interaction="${CSS.escape(info.request_id)}"]`);
@@ -576,7 +661,7 @@ window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(
     head.className = 'cs-card-head';
     const ico = document.createElement('span');
     ico.className = 'cs-card-ico inProgress';
-    ico.textContent = '⚠️';
+    ico.innerHTML = _csIco('shield');
     const promptEl = document.createElement('span');
     promptEl.className = 'cs-interaction-prompt';
     const what = info.command || info.operation || '敏感操作';
@@ -622,8 +707,8 @@ window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(
 };
 
 window.chatStreamDismissBashPermission = function chatStreamDismissBashPermission(requestId) {
-  for (const panel of _csPanels.values()) {
-    const card = panel.querySelector(`[data-cs-interaction="${CSS.escape(requestId)}"]`);
+  for (const flow of _csPanels.values()) {
+    const card = flow.querySelector(`[data-cs-interaction="${CSS.escape(requestId)}"]`);
     if (card) {
       card.classList.add('closed');
       card.querySelectorAll('button, input').forEach((el) => { el.disabled = true; });
@@ -632,32 +717,34 @@ window.chatStreamDismissBashPermission = function chatStreamDismissBashPermissio
   }
 };
 
-/** 该会话是否存在活跃面板——conversation.js 据此停画老过程 rail（去重）。 */
+/** 该会话是否存在活跃流——conversation.js 据此停画老过程 rail（去重）。 */
 window.chatStreamHasPanel = function chatStreamHasPanel(cid) {
-  for (const [key, panel] of _csPanels.entries()) {
-    if (panel.isConnected && key.startsWith(`${cid}::`)) return true;
+  for (const [key, flow] of _csPanels.entries()) {
+    if (flow.isConnected && key.startsWith(`${cid}::`)) return true;
   }
   return false;
 };
 
 /**
  * 完成/历史态重建：从消息持久化的 process items（老格式 progress/event）
- * 重建 Turn 过程面板，插在消息元素之前。conv-core 统一过程 UI——
- * _renderPersistedProcess 检测到本函数可用时全部委托过来，老 details
- * 折叠卡退役（chat-stream.js 加载失败的极端场景仍走老路径兜底）。
+ * 重建活动流，插在消息元素内部（消息头之后、正文之前）。conv-core 统一
+ * 过程 UI——_renderPersistedProcess 检测到本函数可用时全部委托过来，老
+ * details 折叠卡退役（chat-stream.js 加载失败的极端场景仍走老路径兜底）。
+ * 历史流没有运行行：动作行全部可见（与实时完成态一致）。
  */
 window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDiv, items, opts) {
   if (!Array.isArray(items) || !items.length || !msgDiv || !msgDiv.parentNode) return false;
   try {
-    const actorName = (opts && opts.actorName) || '';
     const turnKey = _csPanelKey(cid, (opts && opts.turnId) || (msgDiv.dataset && msgDiv.dataset.msgId) || `hist-${Date.now()}`);
-    // 同一消息重复重建（刷新/回滚重放）幂等：先移除旧面板。
+    // 同一消息重复重建（刷新/回滚重放）幂等：先移除旧流。
     const existing = _csPanels.get(turnKey);
-    if (existing) existing.remove();
+    if (existing) {
+      _csStopTicker(existing);
+      existing.remove();
+    }
 
-    const panel = _csCreatePanel(cid, turnKey, actorName || '过程');
-    const body = panel.querySelector('.cs-panel-body');
-    const toolCards = new Map();
+    const flow = _csCreateFlow(cid, turnKey, { noStatus: true });
+    const body = flow.querySelector('.cs-flow-body');
     for (const item of items) {
       const evt = item && (item.event || null);
       const data = evt && evt.stream === 'tool' ? (evt.data || {}) : null;
@@ -667,8 +754,8 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const payload = {
           toolName: String(data.name || 'tool'),
           ...(typeof data.arguments === 'object' && data.arguments
-            ? { argsSummary: JSON.stringify(data.arguments).slice(0, 120) }
-            : (typeof data.arguments === 'string' ? { argsSummary: data.arguments.slice(0, 120) } : {})),
+            ? { argsSummary: JSON.stringify(data.arguments).slice(0, 300) }
+            : (typeof data.arguments === 'string' ? { argsSummary: data.arguments.slice(0, 300) } : {})),
           ...(typeof data.output === 'string' ? { output: data.output.slice(0, 4000) } : {}),
           ...(typeof data.result_preview === 'string' && !data.output
             ? { output: data.result_preview.slice(0, 4000) } : {}),
@@ -678,39 +765,26 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const status = data.phase === 'end'
           ? (data.isError === true ? 'failed' : 'completed')
           : 'inProgress';
-        const card = _csEnsureItemCard(body, itemId, 'toolExecution');
-        _csRenderToolCard(card, payload, status);
-        toolCards.set(toolId, itemId);
+        const row = _csEnsureItemRow(body, itemId, 'toolExecution');
+        _csRenderToolRow(row, payload, status);
         continue;
       }
-      // progress 纯文本与其余事件流（context/compaction/runtime…）→ 思考条。
+      // progress 纯文本与其余事件流（context/compaction/runtime…）→ 思考行。
       const text = (item && typeof item.text === 'string' && item.text)
         || (evt && evt.stream ? `[${evt.stream}] ${String((evt.data && evt.data.phase) || '')}`.trim() : '');
       if (!text) continue;
-      const card = _csEnsureItemCard(body, `${turnKey}:r:${_csPanels.size}:${Math.random().toString(36).slice(2, 8)}`, 'reasoning');
-      _csRenderReasoningCard(card, { text });
+      _csAppendReasoning(body, text);
     }
-    if (!body.children.length) { panel.remove(); return false; }
-    _csSetPanelState(panel, 'completed');
-    // 历史回合默认收起（完成态=摘要行，点开看全程）；正文为空的异常
-    // 回合（中断占位/HTML 桩）过程即全部内容，调用方传 expanded:true 展开。
-    _csSetCollapsed(panel, !(opts && opts.expanded === true));
-    // 历史 items 不带 usage 事件：从卡片文本回填 token 摘要，让收起行有用量。
-    const usageCard = body.querySelector('.cs-usage');
-    if (usageCard && !panel.dataset.csUsage) {
-      const txt = usageCard.textContent;
-      panel.dataset.csUsage = [
-        (txt.match(/↑[\d,]+/) || [''])[0],
-        (txt.match(/↓[\d,]+/) || [''])[0],
-      ].filter(Boolean).join(' ');
-      _csUpdatePanelSummary(panel);
-    }
-    // 历史重建面板同样挂在消息内部（消息头之后、正文容器之前），与
+    if (!body.children.length) { flow.remove(); return false; }
+    // 历史无计时数据：思考行只定稿，不显示时长（不编造）。
+    _csCloseThinkRow(body, true);
+    _csSetFlowState(flow, 'completed');
+    // 历史重建流同样挂在消息内部（消息头之后、正文容器之前），与
     // 实时路径同位。
     const bubble = msgDiv.querySelector('.chat-bubble, [data-role="final"]');
-    if (bubble) msgDiv.insertBefore(panel, bubble);
-    else msgDiv.appendChild(panel);
-    _csPanels.set(turnKey, panel);
+    if (bubble) msgDiv.insertBefore(flow, bubble);
+    else msgDiv.appendChild(flow);
+    _csPanels.set(turnKey, flow);
     return true;
   } catch (err) {
     _csLog.warn('persisted process rebuild failed', { error: String(err && err.message || err) });
@@ -718,9 +792,12 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
   }
 };
 
-/** 视图切换/历史重建时丢弃全部面板（conversation.js 重建消息列表后调用）。 */
+/** 视图切换/历史重建时丢弃全部流（conversation.js 重建消息列表后调用）。 */
 window.chatStreamReset = function chatStreamReset() {
-  for (const panel of _csPanels.values()) panel.remove();
+  for (const flow of _csPanels.values()) {
+    _csStopTicker(flow);
+    flow.remove();
+  }
   _csPanels.clear();
 };
 
