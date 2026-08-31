@@ -1,0 +1,3857 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "defcd5f55aa7bd9fa2749fe80818eb9cf597a54b",
+  "totals": {
+    "calls": 427,
+    "staticCalls": 398,
+    "dynamicCalls": 29,
+    "uniqueStaticChannels": 273,
+    "invokeChannels": 269,
+    "streamChannels": 4
+  },
+  "callsites": [
+    {
+      "file": "src/renderer/modules/account-chip.js",
+      "line": 77,
+      "column": 21,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 112,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "customProviders.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 243,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "memory.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 244,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "prefs.getCommanderAvatar",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 245,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "commander.getProfile",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 246,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "commander.runtimeStats.get",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 396,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "skills.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 397,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "skills.listOpen",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 679,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 910,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "agents.setEnabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1198,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "marketplace.categories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1277,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1403,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1587,
+      "column": 12,
+      "kind": "invoke",
+      "channel": "memory.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1589,
+      "column": 10,
+      "kind": "invoke",
+      "channel": "agents.memory.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1594,
+      "column": 12,
+      "kind": "invoke",
+      "channel": "memory.replace",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1596,
+      "column": 10,
+      "kind": "invoke",
+      "channel": "agents.memory.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1601,
+      "column": 12,
+      "kind": "invoke",
+      "channel": "memory.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1603,
+      "column": 10,
+      "kind": "invoke",
+      "channel": "agents.memory.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 1761,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.assets.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2014,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2139,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2153,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2207,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "p3394.external.stop",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2213,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "p3394.external.start",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2277,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "common.pickDirectory",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2281,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "agents.cliProjectDir.set",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2299,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "agents.cliProjectDir.set",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2316,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "agents.cliProjectDir.get",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2367,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "prefs.setCommanderAvatar",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 2376,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 3069,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "p3394.external.start",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 3179,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "agents.builtin.delete",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 3761,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.scope.resolve",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4192,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "personalOntology.groups.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4193,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "personalOntology.templates.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4381,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "spaces.artifacts.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4382,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "spaces.conversations.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4397,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "recall.assets.listForSpace",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4540,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "conversations.taskRefs.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4561,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "conversations.taskRefs.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4588,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "conversations.taskRefs.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/agents.js",
+      "line": 4601,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "conversations.taskRefs.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto-events.js",
+      "line": 19,
+      "column": 25,
+      "kind": "stream",
+      "channel": "autoTasks.events",
+      "argumentCount": 3,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 107,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "autoTasks.currentDevice",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 466,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "conversations.autoTaskCounts",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 528,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "conversations.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 716,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "autoTasks.setEnabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 729,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "autoTasks.delete",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 847,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "autoTasks.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 903,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "autoTasks.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1237,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "autoTasks.allocateDraftId",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1358,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "autoTasks.attachments.upload",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1475,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "autoTasks.attachments.import",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1547,
+      "column": 24,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1581,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "autoTasks.attachments.pickAndUpload",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1664,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "autoTasks.attachments.delete",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1979,
+      "column": 19,
+      "kind": "invoke",
+      "channel": "autoTasks.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 1984,
+      "column": 19,
+      "kind": "invoke",
+      "channel": "autoTasks.create",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 2069,
+      "column": 25,
+      "kind": "stream",
+      "channel": "autoTasks.events",
+      "argumentCount": 3,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 2146,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "autoTasks.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/auto.js",
+      "line": 2234,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "autoTasks.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/avatar.js",
+      "line": 33,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "avatars.getCatalog",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/bash_permission.js",
+      "line": 70,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "permissions.getLocalExec",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/bash_permission.js",
+      "line": 82,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "permissions.setLocalExecMode",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/bash_permission.js",
+      "line": 299,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "bash.permission_response",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/bridge.js",
+      "line": 31,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "bridge.permission_response",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-artifact.js",
+      "line": 346,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "conversations.artifacts.inspect",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-aside.js",
+      "line": 94,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "aside.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-aside.js",
+      "line": 171,
+      "column": 16,
+      "kind": "stream",
+      "channel": "aside.askStream",
+      "argumentCount": 3,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-aside.js",
+      "line": 208,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "aside.clear",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 338,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 362,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "library.importProduced",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 580,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "produced.readText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 605,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "produced.officePreviewHtml",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 816,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "produced.readText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 884,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-file-viewer.js",
+      "line": 897,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "workspace.statPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-input-form.js",
+      "line": 226,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "common.pickDirectory",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-input-form.js",
+      "line": 429,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "common.pickFiles",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/chat-lightbox.js",
+      "line": 251,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-lightbox.js",
+      "line": 275,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "library.importProduced",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-md-drawer.js",
+      "line": 56,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-side-browser.js",
+      "line": 140,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/chat-use.js",
+      "line": 591,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "personalOntology.groups.read",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 153,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "companionRepro.getState",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 167,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "companionRepro.saveDraft",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 169,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "companionRepro.generateProjectContext",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 171,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "companionRepro.applyProjectContextRevision",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 178,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "companionRepro.generateTaskContract",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 180,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "companionRepro.confirmTaskContract",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 182,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "companionRepro.startExecution",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/companion-repro.js",
+      "line": 196,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "companionRepro.submitGuideMessage",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 153,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "connectors.catalog",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 154,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "connectors.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 191,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "connectors.verify",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 700,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "connectors.set_enabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 771,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "connectors.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 815,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "connectors.start_oauth",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 873,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "connectors.refresh",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 1037,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "connectors.add_custom",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/connectors.js",
+      "line": 1159,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "connectors.install_confirm_response",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/contexts.js",
+      "line": 1483,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "contexts.pickAndUpload",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 291,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 302,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "localAgents.listClaudeDesktopSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 390,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "localAgents.listClaudeDesktopSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 407,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "localAgents.listClaudeSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 419,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "sessionImport.listCodexSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 431,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "sessionImport.listWorkbuddySessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 443,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "sessionImport.listOpencodeSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 640,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 642,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeDesktopSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 646,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "sessionImport.importWorkbuddySession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 651,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "sessionImport.importOpencodeSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/continue-work.js",
+      "line": 656,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "sessionImport.importCodexSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2105,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "workspace.revealPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "CallExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2136,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "library.importProduced",
+      "argumentCount": 2,
+      "payloadNodeKind": "CallExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2164,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "workspace.deletePath",
+      "argumentCount": 2,
+      "payloadNodeKind": "CallExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2197,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "attachments.absPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2387,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "cogseed_agent.task.abort",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2389,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "cogseed_agent.task.retry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2391,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "cogseed_agent.task.resume",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation-info.js",
+      "line": 2524,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "p3394.execution.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 375,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "recall.assets.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 1139,
+      "column": 34,
+      "kind": "stream",
+      "channel": "sessionImport.events",
+      "argumentCount": 3,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 1916,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "spaces.templates.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 1917,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "skills.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 1918,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 1951,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.createFromDraft",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 2036,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "chats.markWelcomeSeen",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 2064,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "conversations.completeSpaceBuilder",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 3070,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getCommanderAvatar",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 3943,
+      "column": 18,
+      "kind": "invoke",
+      "channel": "conversations.attachments.pickAndUpload",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4132,
+      "column": 22,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4597,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.usage.feedback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4630,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.teaching.revoke",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4700,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "workspace.openFileExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4809,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "attachments.absPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4835,
+      "column": 33,
+      "kind": "invoke",
+      "channel": "attachments.absPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 4866,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "attachments.absPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6248,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6301,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "conversations.setSpace",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6434,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "spaces.openInFinder",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6480,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6513,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6532,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.delete",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6547,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "spaces.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 6770,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "spaces.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 7575,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "chats.beginWelcome",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 7584,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "chats.handoffWelcomeReply",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 7640,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "recall.teaching.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 9020,
+      "column": 23,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 9132,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "kstar.review.confirm",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 9149,
+      "column": 3,
+      "kind": "invoke",
+      "channel": "kstar.review.read",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 9770,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "conversations.taskRefs.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 9847,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "attachments.absPath",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 10813,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "library.writeText",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11104,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "chats.handoffWelcomeReply",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11840,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "model.hasConfigured",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11847,
+      "column": 22,
+      "kind": "invoke",
+      "channel": "prefs.getCliFallback",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11858,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "localAgents.cliEndpointInfo",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11877,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11909,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11938,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 11952,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "agents.create",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12045,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12084,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12090,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "prefs.getCliFallback",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12092,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "prefs.setCliFallback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12149,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/conversation.js",
+      "line": 12169,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.detectDesktopApps",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/delete-file-confirm.js",
+      "line": 222,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "delete_file.visible",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/delete-file-confirm.js",
+      "line": 338,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "delete_file.respond",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/expense-agent-cards.js",
+      "line": 74,
+      "column": 28,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/expense-workbench.js",
+      "line": 72,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "expenseAgent.status",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/hub-account.js",
+      "line": 51,
+      "column": 21,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/interactive-cli.js",
+      "line": 76,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "auth.openExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/interactive-cli.js",
+      "line": 261,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "interactiveCli.send",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/interactive-cli.js",
+      "line": 283,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "interactiveCli.close",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/interactive-tour.js",
+      "line": 145,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "prefs.getTourCompleted",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/interactive-tour.js",
+      "line": 460,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "prefs.setTourCompleted",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/ipc-shim.js",
+      "line": 220,
+      "column": 10,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/ipc-shim.js",
+      "line": 290,
+      "column": 22,
+      "kind": "stream",
+      "channel": null,
+      "argumentCount": 3,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/ipc-shim.js",
+      "line": 359,
+      "column": 26,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/ipc-shim.js",
+      "line": 436,
+      "column": 10,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "line": 120,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "line": 162,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "p3394.external.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "line": 187,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "p3394.external.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "line": 212,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "p3394.peers.revoke",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/local-agents.js",
+      "line": 219,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "p3394.peers.toggle",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 269,
+      "column": 41,
+      "kind": "invoke",
+      "channel": "marketplace.categories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 443,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "marketplace.getListingsCache",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 457,
+      "column": 3,
+      "kind": "invoke",
+      "channel": "marketplace.setListingsCache",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 549,
+      "column": 3,
+      "kind": "invoke",
+      "channel": "marketplace.sweepCache",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 661,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "marketplace.reconcileStatus",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 875,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 876,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "skills.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 916,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "marketplace.categories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1010,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "marketplace.categories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1190,
+      "column": 21,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1594,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "marketplace.detailAgent",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1603,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "marketplace.detailSkill",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1609,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "marketplace.cacheSkillFiles",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1616,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "marketplace.cacheSkillRead",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 1746,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "marketplace.cacheSkillRead",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 2054,
+      "column": 21,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 2169,
+      "column": 21,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/marketplace.js",
+      "line": 2272,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "marketplace.categories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/md-view-edit.js",
+      "line": 238,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "produced.readText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/md-view-edit.js",
+      "line": 269,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "produced.writeText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/memory.js",
+      "line": 57,
+      "column": 23,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/memory.js",
+      "line": 920,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "common.pickFiles",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/messaging-settings.js",
+      "line": 116,
+      "column": 12,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-authorization.js",
+      "line": 401,
+      "column": 12,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 25,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.listEntries",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 37,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getThinkingLevel",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 191,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "prefs.setThinkingLevel",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 308,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.listModels",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 352,
+      "column": 22,
+      "kind": "invoke",
+      "channel": "auth.updateEntryModel",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 365,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "auth.reorderEntries",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-chip.js",
+      "line": 404,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.reorderEntries",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/model-guard.js",
+      "line": 71,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "auth.hasConfiguredModel",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/model-guard.js",
+      "line": 72,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "chat.executionCapability",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/model-guard.js",
+      "line": 119,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.listEntries",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 446,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "spaces.scenarios.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 493,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "spaces.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 516,
+      "column": 33,
+      "kind": "invoke",
+      "channel": "spaces.create",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 545,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "conversations.setSpace",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 641,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.recommendStartingPoint",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 661,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "sessionImport.prefetchRecommended",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 761,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 763,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "sessionImport.importWorkbuddySession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 765,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "sessionImport.importCodexSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1150,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1151,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "localAgents.cliEndpointInfo",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1188,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "agents.create",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1335,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1348,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "prefs.getCliFallback",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1350,
+      "column": 31,
+      "kind": "invoke",
+      "channel": "prefs.setCliFallback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1363,
+      "column": 32,
+      "kind": "invoke",
+      "channel": "customProviders.storeActiveCliConfig",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1383,
+      "column": 31,
+      "kind": "invoke",
+      "channel": "agents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1388,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "agents.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1436,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1450,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.listClaudeSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1517,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listCodexSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1586,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listOpencodeSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1718,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1758,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.recommendStartingPoint",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1779,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listWorkbuddySessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1867,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.importWorkbuddySession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1953,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.importCodexSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 1988,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.recommendStartingPoint",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2011,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listClaudeSkills",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2112,
+      "column": 23,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2147,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listCodexSkills",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2240,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.readClaudeMemories",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2309,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeMemories",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2341,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.readCodexMemory",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2382,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.importCodexMemory",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2422,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.readOpencodeMemory",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2466,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listOpencodeTodos",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2553,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.importOpencodeTodos",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2606,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.listCodexTasks",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2703,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "sessionImport.importCodexTasks",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2767,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "sessionImport.importClaudeSession",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2820,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "localAgents.listAcpSessions",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 2915,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "prefs.setOnboarding",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 3002,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "auth.openExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/onboarding.js",
+      "line": 3084,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getOnboarding",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 93,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "marketplace.getListingsCache",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 108,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "marketplace.mergeListingsCache",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 159,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "marketplace.listProjects",
+      "argumentCount": 2,
+      "payloadNodeKind": "CallExpression"
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 176,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "marketplace.listProjects",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 304,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "packages.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/oss.js",
+      "line": 327,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "auth.openExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/personal-context-center.js",
+      "line": 52,
+      "column": 12,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/personal-ontology.js",
+      "line": 139,
+      "column": 25,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/personal-ontology.js",
+      "line": 397,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "projects.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "line": 106,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.projections.card",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "line": 113,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.projections.availableAssets",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "line": 150,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "recall.projections.confirm",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "line": 152,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "recall.projections.retryForecast",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/recall-projection-card.js",
+      "line": 153,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "recall.projections.revise",
+      "argumentCount": 2,
+      "payloadNodeKind": "ConditionalExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "line": 236,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.security.status",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "line": 240,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.trust.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "line": 244,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "line": 269,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "skills.trust.reverify",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings-security.js",
+      "line": 275,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.trust.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 138,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getTaskNotifications",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 201,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "prefs.openTaskNotificationSettings",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 223,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "prefs.setTaskNotifications",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 266,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "permissions.getLocalExec",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 284,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "permissions.setLocalExecMode",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 311,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getMetacognition",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 335,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "prefs.setMetacognition",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 368,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "app.dataRootPath",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 402,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "app.openDataRoot",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 520,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "prefs.getCliFallback",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 535,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "prefs.setCliFallback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 536,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "model.hasConfigured",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 553,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "model.hasConfigured",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 555,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "prefs.markCliFallbackNoticeShown",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 564,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.listProviders",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 572,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.listEntries",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 578,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.getProfilesStoreStatus",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 603,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.resetProfilesStoreAfterDecryptFailure",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 615,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "settings.getCommanderBackend",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 677,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "settings.setCommanderBackend",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 838,
+      "column": 18,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 960,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "customProviders.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 965,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "customProviders.ccswitch.probe",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1477,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "customProviders.ccswitch.preview",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1673,
+      "column": 29,
+      "kind": "invoke",
+      "channel": "customProviders.ccswitch.sync",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1702,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "auth.removeEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1707,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "auth.addEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1763,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.listModels",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1929,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "auth.addApiKey",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1939,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "auth.addEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 1974,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "auth.addEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2114,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "auth.addApiKey",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2127,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "auth.addEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2230,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "auth.cancelOAuthFlow",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2242,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "auth.startOAuth",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2253,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.pollOAuthFlow",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2299,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "auth.openExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2310,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "auth.submitOAuthInput",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2339,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "auth.submitOAuthInput",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2367,
+      "column": 35,
+      "kind": "invoke",
+      "channel": "auth.listModels",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2372,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "auth.addEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2455,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "auth.listModels",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2464,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "auth.updateEntryModel",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2520,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "auth.revealApiKey",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2543,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "auth.updateApiKey",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2675,
+      "column": 23,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2691,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "customProviders.model.test",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2695,
+      "column": 13,
+      "kind": "invoke",
+      "channel": "auth.testConnection",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2717,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "auth.removeEntry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2778,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "searchAuth.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2817,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "searchAuth.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2871,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "searchAuth.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2913,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "imageAuth.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 2950,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "imageAuth.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3004,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "imageAuth.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3055,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "videoAuth.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3103,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "videoAuth.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3157,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "videoAuth.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3184,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "ttsAuth.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3279,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "ttsAuth.add",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/settings.js",
+      "line": 3336,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "ttsAuth.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 285,
+      "column": 36,
+      "kind": "invoke",
+      "channel": "recall.sources.removeImpact",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 302,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.sources.remove",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 321,
+      "column": 30,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 354,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "recall.assets.versions",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 355,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "cognition.assets.diff",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 373,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "recall.cognitionChain.read",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 376,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "recall.usage.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 377,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "recall.proofs.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 412,
+      "column": 28,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 444,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "recall.assets.rollback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 507,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.proofs.effectiveness.feedback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 544,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.proofs.effectiveness.feedback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 704,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.assets.crossScope",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 846,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.captures.historicalAutoStart",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 922,
+      "column": 30,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 944,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.captures.retry",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 961,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.teaching.revoke",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1020,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.skills.decide",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1042,
+      "column": 37,
+      "kind": "invoke",
+      "channel": "cognition.skills.rollback.preview",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1068,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "cognition.skills.rollback",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1260,
+      "column": 30,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1290,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "recall.assets.read",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1291,
+      "column": 11,
+      "kind": "invoke",
+      "channel": "personalOntology.groups.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1342,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.assets.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1438,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "recall.candidates.promoteBatch",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1542,
+      "column": 30,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/skills-bindings.js",
+      "line": 1545,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.candidates.promote",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 700,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.skills.prepare",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 767,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "recall.skills.confirm",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1783,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.captures.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1803,
+      "column": 24,
+      "kind": "invoke",
+      "channel": "recall.captures.settings.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1824,
+      "column": 26,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1850,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.continuation.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1882,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "recall.continuation.read",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1907,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "cognition.skills.summary",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1912,
+      "column": 32,
+      "kind": "invoke",
+      "channel": "recall.skills.prepare",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 1921,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "recall.workspaceRefs.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 2231,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "cognition.reviewDecisions.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 2742,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "recall.timeline.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 2743,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "cognition.receipts.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4269,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "cognition.dashboard.read",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4270,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.candidates.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4271,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "cognition.assets.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4272,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.sources.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4273,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.captures.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4274,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.captures.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4275,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.teaching.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4276,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "recall.captures.settings.get",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4277,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "cognition.inbox.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4278,
+      "column": 34,
+      "kind": "invoke",
+      "channel": "personalOntology.templates.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4753,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "skills.listOpen",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4760,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "packages.list",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 4775,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.listPrivate",
+      "argumentCount": 1,
+      "payloadNodeKind": null
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5293,
+      "column": 17,
+      "kind": "invoke",
+      "channel": "skills.trust.reverify",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5394,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.setEnabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5415,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "skills.setEnabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5568,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "packages.action",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5634,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.setEnabled",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 5670,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "skills.discardImportDraft",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 6324,
+      "column": 27,
+      "kind": "invoke",
+      "channel": "skills.update",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 6604,
+      "column": 26,
+      "kind": "invoke",
+      "channel": "skills.updateForEdit",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 6752,
+      "column": 30,
+      "kind": "invoke",
+      "channel": "skills.checkDeclaration",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 7604,
+      "column": 28,
+      "kind": "invoke",
+      "channel": "skills.checkDeclaration",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 7621,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "skills.admit",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 7659,
+      "column": 21,
+      "kind": "invoke",
+      "channel": "skills.admit",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/skills.js",
+      "line": 7775,
+      "column": 15,
+      "kind": "invoke",
+      "channel": "skills.builtin.delete",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "line": 189,
+      "column": 5,
+      "kind": "invoke",
+      "channel": "terminal.close",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "line": 224,
+      "column": 9,
+      "kind": "invoke",
+      "channel": "terminal.resize",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "line": 340,
+      "column": 7,
+      "kind": "invoke",
+      "channel": "terminal.write",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "line": 352,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "terminal.create",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/terminal-panel.js",
+      "line": 367,
+      "column": 31,
+      "kind": "stream",
+      "channel": "terminal.stream",
+      "argumentCount": 3,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/text-view-edit.js",
+      "line": 115,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "produced.readText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/text-view-edit.js",
+      "line": 223,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "produced.writeText",
+      "argumentCount": 2,
+      "payloadNodeKind": "Identifier"
+    },
+    {
+      "file": "src/renderer/modules/touchpoint-settings.js",
+      "line": 153,
+      "column": 26,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    },
+    {
+      "file": "src/renderer/modules/user-workspace.js",
+      "line": 38,
+      "column": 25,
+      "kind": "invoke",
+      "channel": "spaces.list",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/user-workspace.js",
+      "line": 109,
+      "column": 23,
+      "kind": "invoke",
+      "channel": "conversations.setSpace",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/utils.js",
+      "line": 1540,
+      "column": 3,
+      "kind": "invoke",
+      "channel": "auth.openExternal",
+      "argumentCount": 2,
+      "payloadNodeKind": "ObjectLiteralExpression"
+    },
+    {
+      "file": "src/renderer/modules/workspace.js",
+      "line": 43,
+      "column": 25,
+      "kind": "invoke",
+      "channel": null,
+      "argumentCount": 2,
+      "payloadNodeKind": "BinaryExpression"
+    }
+  ]
+}
