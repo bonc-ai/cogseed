@@ -9,7 +9,7 @@
 
 本地闭环验证通过后，可再做一次「真实 hub」联动：hub 后台点发布 → 桌面端
 提醒。制品用 `scripts/build-hub-verify-artifacts.mjs` 构建（真实产品配置、
-无证书 ad-hoc 密封），走内网 GitLab Release 资产直链 + `release:installer`
+无证书 ad-hoc 密封），走 hub 项目 CI 的 Release 资产直链 + `release:installer`
 管道登记草稿包 → hub 后台发布 → 桌面测试客户端（release 渠道，默认指向
 生产 API）验证 → 立即「下线」。hub 后端契约对齐点见
 `updates-hub-integration-checklist.md`。

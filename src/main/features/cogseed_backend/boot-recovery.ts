@@ -41,6 +41,10 @@ export async function recoverCogSeedTasksAtBoot(userId: string): Promise<CogSeed
       const outcome = await reconcileCogSeedPendingResult(userId, pendingFile, {
         allowInactiveExecutionRecovery: true,
         isExecutionActive: () => false,
+        // Boot-time recovery has no interactive latency to protect: give the
+        // group-chat projection a generous budget (default is 1s, which CI and
+        // first-boot cold starts can exceed → false "pending" until next boot).
+        projectionTimeoutMs: 5_000,
       });
       if (outcome.status === 'delivered' || outcome.status === 'cleaned') retainedResultsRecovered += 1;
       else if (outcome.status === 'quarantined') retainedResultsQuarantined += 1;
