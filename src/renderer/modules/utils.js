@@ -898,7 +898,11 @@ function renderDashboard(spec) {
 
 function _renderDbNode(node) {
   if (!node || typeof node !== 'object') return '';
-  const props = (node.props && typeof node.props === 'object') ? node.props : {};
+  // props 双形态兼容：React 风格（{type, props:{...}}）与扁平风格
+  // （{type, label, value, ...}——不少模型把属性直接平铺在节点上）。
+  // children 已有同款双形态兜底（React 式 props.children），props 缺失时
+  // 节点自身就是属性袋——否则整卡渲染成空壳（真机：5 个 Metric 全空白）。
+  const props = (node.props && typeof node.props === 'object') ? node.props : node;
   // Children belong at the node level (sibling of `props`), but many models
   // nest them React-style under `props.children`. Without this fallback those
   // subtrees vanish and the container renders empty — accept either shape.
