@@ -10996,11 +10996,15 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.09);
 }
 
+/* assistant 正文平铺（ZCode 风活动流）：正文直接落在页面上，无气泡卡
+   感（conv-core 过程 UI 终态——过程行与正文同一块无框画布）。 */
 .chat-message.assistant .chat-bubble {
-  background: #fff;
+  background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
 }
 .chat-message.assistant[data-placeholder="1"] .chat-bubble {
   transition: none;
