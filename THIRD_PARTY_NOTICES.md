@@ -83,6 +83,13 @@ xterm.js (xterm.js, xterm.css, addon-fit.js)
     (c) the xterm.js authors and Source/contributors, https://xtermjs.org/
     License: MIT
 
+Chart.js 4.5.1 (chart.umd.min.js)
+    Copyright (c) 2014-2024 Chart.js Contributors
+    Source: https://www.npmjs.com/package/chart.js/v/4.5.1
+    License: MIT
+    License text: src/renderer/vendor/chartjs/LICENSE
+    CogSeed vendors the unmodified UMD distribution for offline Renderer use.
+
 --------------------------------------------------------------------
 4. Office document engine
 --------------------------------------------------------------------
@@ -244,7 +251,21 @@ Dual/multi-licensed production components used under a permissive option
       in section 1; CogSeed uses the MIT option.
 
 --------------------------------------------------------------------
-8. License text policy
+8. Adapted source code
+--------------------------------------------------------------------
+
+AI Agent Board
+    Copyright (c) 2025 AI Agent Board Contributors
+    Source: https://github.com/DanWahlin/ai-agent-board
+    Source commit: 4f2965e72ad99e32e0375af837247cafb382f17c
+    License: MIT
+    License text: third_party_licenses/ai-agent-board/LICENSE
+    CogSeed adapts the canonical JSON ordering used for orchestration request
+    snapshots and the task-group status counter to its local task model. The
+    adapted files retain the upstream copyright and SPDX license declaration.
+
+--------------------------------------------------------------------
+9. License text policy
 --------------------------------------------------------------------
 
 The license files above are copied verbatim from the exact package versions

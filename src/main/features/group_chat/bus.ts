@@ -25,7 +25,7 @@ import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
-import { dispatchSlots } from "../../util/locks";
+import { dispatchSlots, fileEditLock } from "../../util/locks";
 import {
   canonicalizePath,
   isFileSystemCaseSensitive,
@@ -139,6 +139,10 @@ import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import { getThinkingLevel } from "../config";
+import {
+  groupChatTaskBridge,
+  type GroupChatTaskBridge,
+} from "../cogseed_backend/group-chat-task-bridge";
 
 // Narrowed once so TS can see the excluded 'auto' branch.
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
@@ -1295,6 +1299,8 @@ interface CidState {
     projectionId?: string;
     forecastId?: string;
     wakeRequestId?: string;
+    /** Dashboard projection only; never controls Group Chat execution. */
+    cogseedTaskId?: string;
     /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
      *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
      *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
@@ -1386,6 +1392,8 @@ type InteractiveFollowupStarter = (input: {
 let _interactiveFollowupStarterForTest: InteractiveFollowupStarter | null = null;
 type BackendConversationCanceller = (userId: string, conversationId: string) => Promise<unknown>;
 let _backendConversationCancellerForTest: BackendConversationCanceller | null = null;
+let _groupChatTaskBridgeForTest: GroupChatTaskBridge | null = null;
+let _beforeQueueDispatchForTest: (() => void | Promise<void>) | null = null;
 
 export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
@@ -1422,6 +1430,20 @@ export function _setBackendConversationCancellerForTest(
   canceller: BackendConversationCanceller | null,
 ): void {
   _backendConversationCancellerForTest = canceller;
+}
+
+export function _setGroupChatTaskBridgeForTest(bridge: GroupChatTaskBridge | null): void {
+  _groupChatTaskBridgeForTest = bridge;
+}
+
+export function _setBeforeQueueDispatchForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeQueueDispatchForTest = hook;
+}
+
+function observedTaskBridge(): GroupChatTaskBridge {
+  return _groupChatTaskBridgeForTest || groupChatTaskBridge;
 }
 
 function getOrInitCid(uid: string, cid: string): CidState {
@@ -1521,7 +1543,7 @@ function _emitTaskRunTerminalIfQuiescent(
         ? "waiting_input"
         : run.status || "failed";
   const listeners = [..._taskTerminalListeners];
-  void (async () => {
+  trackBackgroundWrite(state, (async () => {
     // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
     // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
     // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
@@ -1572,6 +1594,15 @@ function _emitTaskRunTerminalIfQuiescent(
     }
     if (!event.logical_run_id) event.logical_run_id = run.runId;
     if (!event.execution_id) event.execution_id = run.runId;
+    if (run.cogseedTaskId) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: run.cogseedTaskId,
+        status,
+        ...(event.finished_message_id ? { messageId: event.finished_message_id } : {}),
+        ...(status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
+      });
+    }
     for (const listener of listeners) {
       try {
         listener(event);
@@ -1579,7 +1610,7 @@ function _emitTaskRunTerminalIfQuiescent(
         log.warn(`task terminal listener threw: ${(err as Error).message}`);
       }
     }
-  })();
+  })(), "task terminal projection");
 }
 
 function emit(state: CidState, ev: GroupEvent): void {
@@ -1782,7 +1813,7 @@ export interface ProjectedGroupProcessInput {
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
   data: Record<string, unknown>;
 }
 
@@ -1830,6 +1861,93 @@ export interface ProjectedAgentMessageInput {
   terminalStatus?: 'completed' | 'failed';
 }
 
+export interface ProjectedUserTaskMessageInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  requestId: string;
+  text: string;
+}
+
+/** Persist a Run Center task as the user side of a normal CogSeed
+ * conversation without enqueueing a second executor. The request id makes the
+ * projection idempotent when the task-start IPC call is replayed. */
+export async function appendProjectedUserTaskMessage(
+  input: ProjectedUserTaskMessageInput,
+): Promise<GroupMessage | null> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.requestId)) {
+    throw new Error('invalid CogSeed Run Center message projection');
+  }
+  const text = String(input.text || '').trim();
+  if (!text) throw new Error('CogSeed Run Center task text is required');
+  const chats = await import('../chats');
+  const conversation = await chats.getConversation(input.uid, input.cid);
+  if (!conversation) return null;
+  const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
+  const projected = await fileEditLock(messageFile).runExclusive(async () => {
+    const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
+    const existing = existingRows.find((row) => (
+      !row.deleted_at
+      && row.from === USER_ID
+      && row.action_request_id === input.requestId
+    ));
+    if (existing) {
+      if (existing.text !== text || existing.to.length !== 1 || existing.to[0] !== input.agentId) {
+        throw new Error('CogSeed request ID payload conflict');
+      }
+      return { msg: existing, created: false };
+    }
+    await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+    await ensureAgentMember(input.uid, input.cid, input.agentId);
+    const msg: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: USER_ID,
+      to: [input.agentId],
+      text,
+      action_request_id: input.requestId,
+    };
+    await appendMain(input.uid, input.cid, msg, {
+      senderKind: 'user',
+      senderId: USER_ID,
+      agentIds: [input.agentId],
+    });
+    return { msg, created: true };
+  });
+  const { msg, created } = projected;
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
+  const actorIds = Array.from(new Set([USER_ID, COMMANDER_ID, input.agentId, ...members.actors.map((actor) => actor.id)]));
+  await fileEditLock(messageFile).runExclusive(async () => {
+    for (const actorId of actorIds) {
+      if (actorId === USER_ID) continue;
+      const slice = await readSlice(input.uid, input.cid, actorId, 10_000, conversation.project_id || null);
+      if (slice.some((row) => row.id === msg.id)) continue;
+      await appendVisibleStrict(
+        input.uid,
+        input.cid,
+        msg,
+        [actorId],
+        conversation.project_id || null,
+      );
+    }
+  });
+  if (created && messageBroadcaster) {
+    try {
+      messageBroadcaster({
+        uid: input.uid,
+        cid: input.cid,
+        msgId: msg.id,
+        from: USER_ID,
+        turnEnd: false,
+      });
+    } catch {
+      // A broken desktop refresh hook must not block task execution.
+    }
+  }
+  if (created) emit(getOrInitCid(input.uid, input.cid), { type: 'message', cid: input.cid, msg });
+  return msg;
+}
+
 /** Persist and publish one Backend-produced Agent reply without routing it
  * back through the Group Chat executor. */
 export async function appendProjectedAgentMessage(input: ProjectedAgentMessageInput): Promise<GroupMessage | null> {
@@ -1850,19 +1968,28 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     await _syncStateStatus(state);
     return null;
   }
-  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
-  await ensureAgentMember(input.uid, input.cid, input.agentId);
-  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
   const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
   const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
   let existing: GroupMessage | undefined;
   for (let index = existingRows.length - 1; index >= 0; index -= 1) {
     const row = existingRows[index];
-    if (!row.deleted_at && row.from === input.agentId && row.turn_id === input.turnId) {
+    if (row.from === input.agentId && row.turn_id === input.turnId) {
       existing = row;
       break;
     }
   }
+  if (existing?.deleted_at) {
+    // A user-deleted terminal reply remains durable idempotency evidence. A
+    // projection retry may finish its bookkeeping, but must not resurrect the
+    // bubble, repopulate visibility slices, or emit it again.
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+    await _syncStateStatus(state);
+    return existing;
+  }
+  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+  await ensureAgentMember(input.uid, input.cid, input.agentId);
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
   const msg: GroupMessage = existing ?? {
     id: genId12(),
     ts: nowIso(),
@@ -1932,6 +2059,12 @@ export interface EnqueueParams {
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
   failure_code?: string;
+  /** Durable host action id used to make retry/continuation enqueue idempotent. */
+  actionRequestId?: string;
+  /** Stable QueueItem identity for a host-owned recoverable dispatch. This is
+   * internal to the main process and is never persisted on the source user
+   * message or exposed through IPC. */
+  dispatchTurnId?: string;
   model_text?: string;
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
@@ -2059,6 +2192,9 @@ export interface EnqueueParams {
  */
 export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
   const { uid, cid, fromActorId, text } = params;
+  if (params.dispatchTurnId && !safeId(params.dispatchTurnId)) {
+    throw new Error('invalid dispatch turn id');
+  }
   const state = getOrInitCid(uid, cid);
   if (state.terminating) {
     throw Object.assign(new Error("conversation runtime is terminating"), {
@@ -2385,6 +2521,9 @@ async function _enqueueBody(
     if (fromKind === "user") to = [COMMANDER_ID];
     else to = [USER_ID];
   }
+  if (params.dispatchTurnId && to.filter((recipientId) => recipientId !== USER_ID).length !== 1) {
+    throw new Error('stable dispatch turn id requires exactly one executable recipient');
+  }
 
   // Floor update: a user-visible recipient choice is the conversation floor.
   // Manual @ / chip selection should stick until the user switches again, the
@@ -2553,6 +2692,7 @@ async function _enqueueBody(
       : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
+    ...(params.actionRequestId ? { action_request_id: params.actionRequestId } : {}),
     ...(params.model_text && params.model_text.trim()
       ? { model_text: params.model_text }
       : {}),
@@ -2601,6 +2741,7 @@ async function _enqueueBody(
       : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
     ...(params.metrics ? { metrics: params.metrics } : {}),
+    ...(params.turn_end ? { turn_end: true as const } : {}),
   };
 
   if (state.taskRun && params.kstarTerminalProvenance) {
@@ -2628,6 +2769,19 @@ async function _enqueueBody(
       state.taskRun.anchorMessageId = msg.id;
     }
     state.taskRun.lastMessageId = msg.id;
+    const opensObservedRun = !params.internalControl
+      && !backendFollowupAgentId
+      && !state.taskRun.cogseedTaskId
+      && (fromActorId === USER_ID || params.externalInbound === true);
+    if (opensObservedRun) {
+      const observed = await observedTaskBridge().startRun({
+        userId: uid,
+        conversationId: cid,
+        runId: state.taskRun.runId,
+        sourceMessageId: msg.id,
+      });
+      if (observed) state.taskRun.cogseedTaskId = observed.taskId;
+    }
   }
   // Strip the process trail before writing visibility slices: only the user-
   // facing main jsonl needs it for history reload. Agent workers replay
@@ -2739,6 +2893,9 @@ async function _enqueueBody(
   }
 
   // Dispatch to non-user recipients.
+  if (_beforeQueueDispatchForTest && to.some((recipientId) => recipientId !== USER_ID)) {
+    await _beforeQueueDispatchForTest();
+  }
   const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
@@ -2755,7 +2912,7 @@ async function _enqueueBody(
     const w = ensureRuntime(state);
     w.queue.push({
       actor,
-      turnId: genId12(),
+      turnId: params.dispatchTurnId || genId12(),
       msgId,
       fromActorId,
       ...(params.internalControl ? { internalControl: true } : {}),
@@ -2829,6 +2986,155 @@ async function _enqueueBody(
   }
 
   return msg;
+}
+
+export interface RecoverPersistedUserDispatchInput {
+  uid: string;
+  cid: string;
+  messageId: string;
+  actionRequestId: string;
+  recipientId: string;
+  turnId: string;
+  resumeActiveTurn?: boolean;
+}
+
+export type PersistedUserDispatchRecoveryDisposition =
+  | 'redispatched'
+  | 'already-active'
+  | 'already-completed';
+
+export interface RecoverPersistedUserDispatchResult {
+  msg: GroupMessage;
+  disposition: PersistedUserDispatchRecoveryDisposition;
+}
+
+/** Repair the narrow crash window where a host-owned user message reached the
+ * main JSONL but its QueueItem did not reach the in-memory runtime. The caller
+ * supplies identities derived from a durable retry claim; this function never
+ * creates or rewrites the source message. */
+export async function recoverPersistedUserDispatch(
+  input: RecoverPersistedUserDispatchInput,
+): Promise<RecoverPersistedUserDispatchResult> {
+  for (const id of [input.cid, input.messageId, input.actionRequestId, input.recipientId, input.turnId]) {
+    if (!safeId(id)) throw new Error('invalid persisted dispatch identity');
+  }
+  const state = getOrInitCid(input.uid, input.cid);
+  if (state.terminating) {
+    throw Object.assign(new Error('conversation runtime is terminating'), {
+      code: 'E_CONVERSATION_TERMINATING',
+    });
+  }
+
+  state.pendingEnqueues += 1;
+  try {
+    const messageFile = conversationLayout(input.uid, input.cid).messageFile;
+    const rows = await readJsonl<GroupMessage>(messageFile, 100_000);
+    const msg = rows.find((row) => row.id === input.messageId && !row.deleted_at);
+    if (!msg
+      || msg.from !== USER_ID
+      || msg.action_request_id !== input.actionRequestId
+      || msg.to.length !== 1
+      || msg.to[0] !== input.recipientId) {
+      throw new Error('persisted retry message does not match its dispatch claim');
+    }
+
+    const existingRuntime = state.workers.get(RUNTIME_KEY);
+    if (existingRuntime?.currentTurnId === input.turnId
+      || existingRuntime?.queue.some((item) => item.turnId === input.turnId)) {
+      return { msg, disposition: 'already-active' };
+    }
+
+    // Re-read after checking the runtime. A worker may have completed while
+    // the first JSONL read was in flight; runWorkerLoop clears currentTurnId
+    // only after the terminal message has finished persisting.
+    const latestRows = await readJsonl<GroupMessage>(messageFile, 100_000);
+    if (latestRows.some((row) => (
+      row.from === input.recipientId
+      && row.turn_id === input.turnId
+      && row.turn_end === true
+    ))) {
+      return { msg, disposition: 'already-completed' };
+    }
+
+    await seedReservedActors(input.uid, input.cid);
+    if (!RESERVED_IDS.has(input.recipientId)) {
+      await ensureAgentMember(input.uid, input.cid, input.recipientId);
+    }
+    const members = await readMembers(input.uid, input.cid);
+    const actor = members.actors.find((candidate) => candidate.id === input.recipientId);
+    if (!actor || actor.kind === 'user' || actor.kind === 'worker') {
+      throw new Error('persisted retry actor is unavailable');
+    }
+    if (actor.kind === 'agent') {
+      const available = isAgentEnabled(input.uid, actor.id)
+        && !!await agentsFeat.getAgentForChatDispatch(input.uid, actor.id);
+      if (!available) throw new Error('persisted retry actor is unavailable');
+    }
+
+    const sliceMsg: GroupMessage = msg.process
+      ? (() => {
+          const { process: _drop, ...rest } = msg;
+          return rest as GroupMessage;
+        })()
+      : msg;
+    const actorIds = Array.from(new Set([
+      USER_ID,
+      COMMANDER_ID,
+      input.recipientId,
+      ...members.actors.map((member) => member.id),
+    ]));
+    for (const actorId of actorIds) {
+      if (actorId === USER_ID) continue;
+      const slice = await readSlice(input.uid, input.cid, actorId, 10_000);
+      if (slice.some((row) => row.id === msg.id)) continue;
+      await appendVisibleStrict(input.uid, input.cid, sliceMsg, [actorId]);
+    }
+
+    if (!state.taskRun) {
+      state.taskRun = {
+        runId: genId12(),
+        startedAtMs: Date.now(),
+        status: null,
+        anchorMessageId: msg.id,
+        lastMessageId: msg.id,
+      };
+    }
+    const runtime = ensureRuntime(state);
+    let disposition: PersistedUserDispatchRecoveryDisposition = 'already-active';
+    if (runtime.currentTurnId !== input.turnId
+      && !runtime.queue.some((item) => item.turnId === input.turnId)) {
+      runtime.queue.push({
+        actor,
+        turnId: input.turnId,
+        msgId: msg.id,
+        fromActorId: USER_ID,
+        sourceMessageText: msg.text,
+        llmPayload: composeLlmTurnPayload(input.uid, USER_ID, msg),
+        ...(msg.p3394?.recipient_epochs[input.recipientId] !== undefined
+          ? { incomingEpoch: msg.p3394.recipient_epochs[input.recipientId] }
+          : {}),
+        ...(msg.attachments?.length ? { attachments: msg.attachments.slice() } : {}),
+        ...(msg.references?.length ? { references: msg.references.slice() } : {}),
+        ...(msg.use_selections?.length ? { useSelections: msg.use_selections.slice() } : {}),
+        ...(input.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
+      });
+      const wake = runtime.wake;
+      runtime.wake = null;
+      wake?.();
+      disposition = 'redispatched';
+    }
+    return { msg, disposition };
+  } finally {
+    state.pendingEnqueues -= 1;
+    if (state.pendingEnqueues === 0 && state.pendingEnqueueWaiters.size > 0) {
+      const waiters = [...state.pendingEnqueueWaiters];
+      state.pendingEnqueueWaiters.clear();
+      for (const resolve of waiters) resolve();
+    }
+    if (state.taskRun) {
+      trackBackgroundWrite(state, _syncStateStatus(state), 'post-recovery syncStateStatus');
+    }
+  }
 }
 
 function _resolvedReferenceAttachments(
@@ -3428,6 +3734,24 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  const observedTurn = state.taskRun?.cogseedTaskId
+    ? await observedTaskBridge().startTurn({
+        userId: state.uid,
+        conversationId: state.cid,
+        runId: state.taskRun.runId,
+        turnId: item.turnId,
+        sourceMessageId: item.msgId,
+        parentTaskId: state.taskRun.cogseedTaskId,
+        actorId: w.actor.id,
+        ...(w.actor.name ? { actorName: w.actor.name } : {}),
+        actorKind: w.actor.kind === 'worker'
+          ? 'worker'
+          : w.actor.kind === 'agent'
+            ? 'agent'
+            : 'commander',
+        ...(stepId ? { workflowStepId: stepId } : {}),
+      })
+    : null;
   let cliProcessPid: number | undefined;
   let inProcessSessionIsActive = () => false;
   const appendCoordinatorEvent = (event: ProcessEvent): void => {
@@ -3528,6 +3852,20 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: result.kind === 'completed' ? result.terminalStatus : 'failed',
+        ...(result.kind === 'completed' && result.persistedMsg?.id ? { messageId: result.persistedMsg.id } : {}),
+        ...(result.kind === 'completed' && result.outcome.kind === 'persist' && result.outcome.failureCode
+          ? { errorCode: result.outcome.failureCode }
+          : result.kind === 'early' && result.failureCode
+            ? { errorCode: result.failureCode }
+            : {}),
+        process: processItems,
+      });
+    }
     return result;
   } catch (err) {
     const coordinatorAbort =
@@ -3546,6 +3884,15 @@ async function runActorTurn(
         error: logErrorRef(
           new Error("Nested workflow step settlement failed."),
         ),
+      });
+    }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: aborted ? 'cancelled' : 'failed',
+        errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
+        process: processItems,
       });
     }
     if (stepId && !settled) {
@@ -4803,7 +5150,7 @@ async function runActorTurnBody(
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
       const { getLocalExecMode } = await import("../permissions");
-      // Vision fallback seam (2026-08-27, 子安口径): if this turn carries
+      // Vision fallback seam (2026-08-27, product call): if this turn carries
       // images and the receiving model is KNOWN vision-incapable, the
       // registered pluggable handler returns MODEL-FACING instructions
       // (image facts + on-disk paths + which vision tools to call — vision
@@ -10770,6 +11117,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   let cleared = 0;
   let aborted = 0;
   let abortedModelSessions = 0;
+  let backendCancelError: unknown;
   if (state) {
     _recordTaskRunOutcome(state, "cancelled");
     state.backendTurns.clear();
@@ -10792,7 +11140,8 @@ export async function abort(uid: string, cid: string): Promise<void> {
     });
     await cancelBackend(uid, cid);
   } catch (err) {
-    log.warn(`abort CogSeed Backend tasks failed cid=${cid}: ${(err as Error).message}`);
+    backendCancelError = err;
+    log.warn('abort CogSeed Backend tasks failed', { error: logErrorRef(err) });
   }
   // Belt-and-suspenders abort for model turns. In production traces we saw
   // user stop requests reach this function while the bus worker map no longer
@@ -10863,6 +11212,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   log.info(
     `abort user=${uid} cid=${cid} clearedQueue=${cleared} abortedWorkers=${aborted} abortedModelSessions=${abortedModelSessions}`,
   );
+  if (backendCancelError) throw new Error('CogSeed Backend task cancellation failed');
 }
 
 // ── Cleanup ──────────────────────────────────────────────────────────────

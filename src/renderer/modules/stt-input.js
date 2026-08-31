@@ -247,4 +247,10 @@
     const cancel = _el(panel.cancel);
     if (cancel) cancel.addEventListener('click', _cancel);
   });
+
+  // 供 boot.js::setView 在视图切换（离开会话/新建会话面板）时调用：切走即停，
+  // 避免麦克风在别的模块里继续收音。只停当前这路，不影响其它状态。
+  window.__stopSttInputRecording = () => {
+    if (_recording) void _stop();
+  };
 })();

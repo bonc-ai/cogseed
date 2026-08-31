@@ -403,7 +403,10 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
     if (version) break;
     // Short per-probe timeout: a healthy CLI answers --version in <100ms;
     // 2s covers slow cold starts without letting a hung binary (hermes
-    // without TTY, GUI-launched codex) stall the workspace view for 5s.
+    // without TTY, GUI-launched codex) stall the workspace view. Zero-output
+    // timeouts are retried once inside detectVersion (spawn starvation under
+    // load), keeping the worst case at ~4s per probe — still under the 5s
+    // budget that motivated this limit.
     version = await detectVersion(resolved, 2_000, versionArgs);
   }
   if (!version && type === 'hermes') {

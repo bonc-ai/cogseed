@@ -10,6 +10,7 @@ import { getAgentCliProjectDirInfo } from '../agents';
 import { getWorkspacePath } from '../user_workspace';
 import type { RuntimeEventEnvelope } from '../cogseed_runtime/protocol';
 import type { CogSeedLocalCliConfig } from './types';
+import type { CogSeedExecutionProcessHealth } from './runtime-health-watchdog';
 
 const RESUME_REJECTED_PATTERNS = [
   /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
@@ -25,6 +26,7 @@ export interface CogSeedLocalCliExecutionInput {
   agentName?: string;
   requestId: string;
   taskId: string;
+  executionId?: string;
   sessionId: string;
   runtimeSessionId: string;
   task: string;
@@ -37,6 +39,7 @@ export interface CogSeedLocalCliExecutionInput {
 
 export interface CogSeedLocalCliExecutionAdapter {
   run(input: CogSeedLocalCliExecutionInput, opts?: { signal?: AbortSignal | null }): AsyncIterable<RuntimeEventEnvelope>;
+  probeProcess?(input: Pick<CogSeedLocalCliExecutionInput, 'taskId' | 'executionId'>): Promise<CogSeedExecutionProcessHealth>;
 }
 
 export interface CogSeedLocalCliExecutionAdapterDeps {
@@ -45,6 +48,26 @@ export interface CogSeedLocalCliExecutionAdapterDeps {
   setSessionId?: typeof cliSessions.setSessionId;
   clearSession?: typeof cliSessions.clearForAgent;
   resolveWorkingDir?: (input: CogSeedLocalCliExecutionInput) => Promise<string>;
+  probePid?: (pid: number) => CogSeedExecutionProcessHealth | Promise<CogSeedExecutionProcessHealth>;
+}
+
+interface LocalCliProcessRecord {
+  executionId?: string;
+  pid?: number;
+  settled: boolean;
+}
+
+function defaultProbePid(pid: number): CogSeedExecutionProcessHealth {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return 'invalid';
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'ESRCH') return 'missing';
+    if (code === 'EPERM') return 'alive';
+    return 'unknown';
+  }
 }
 
 function promptFromInput(input: CogSeedLocalCliExecutionInput): string {
@@ -168,8 +191,17 @@ export function createCogSeedLocalCliExecutionAdapter(
   const setSessionId = deps.setSessionId ?? cliSessions.setSessionId;
   const clearSession = deps.clearSession ?? cliSessions.clearForAgent;
   const resolveWorkingDir = deps.resolveWorkingDir ?? defaultWorkingDir;
+  const probePid = deps.probePid ?? defaultProbePid;
+  const processes = new Map<string, LocalCliProcessRecord>();
 
   return {
+    async probeProcess(input) {
+      const record = processes.get(input.taskId);
+      if (!record || record.executionId !== input.executionId) return 'unknown';
+      if (record.settled) return 'missing';
+      if (record.pid === undefined) return 'unknown';
+      return probePid(record.pid);
+    },
     async *run(input, opts = {}) {
       // 统一执行路径：P3394 外接智能体（viaP3394Gateway）走托管 gateway
       // （UMF 信封），与对话分派共用同一条协议轨，事件语义映射到 Runtime
@@ -194,6 +226,7 @@ export function createCogSeedLocalCliExecutionAdapter(
           uid: input.userId,
           cid: input.conversationId,
           agentId: input.agentId,
+          ...(input.executionId ? { executionId: input.executionId } : {}),
           agentName: input.agentName || input.localCli.agentName,
           cli: input.localCli.cli as RunCliAgentOpts['cli'],
           ...(input.localCli.model ? { model: input.localCli.model } : {}),
@@ -203,7 +236,17 @@ export function createCogSeedLocalCliExecutionAdapter(
           prompt,
           cwd,
           signal,
-          onEvent: (event) => { events.push(event); },
+          onEvent: (event) => {
+            if (event.type === 'process-info') {
+              const pid = typeof event.pid === 'number' ? event.pid : undefined;
+              processes.set(input.taskId, {
+                ...(input.executionId ? { executionId: input.executionId } : {}),
+                ...(pid !== undefined ? { pid } : {}),
+                settled: false,
+              });
+            }
+            events.push(event);
+          },
         });
         return { events, result };
       };
@@ -213,6 +256,8 @@ export function createCogSeedLocalCliExecutionAdapter(
         await clearSession(input.userId, input.conversationId, input.agentId);
         attempt = await runAttempt(null);
       }
+      const processRecord = processes.get(input.taskId);
+      if (processRecord && processRecord.executionId === input.executionId) processRecord.settled = true;
       for (const event of attempt.events) {
         if (event.type === 'done' || event.type === 'stderr-line' || event.type === 'raw-line' || event.type === 'log') continue;
         const mapped = mapNonTerminalEvent(input, event);
@@ -254,6 +299,7 @@ async function* runViaP3394Gateway(
       uid: input.userId,
       cid: input.conversationId,
       agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
+      ...(input.executionId ? { executionId: input.executionId } : {}),
       cli: input.localCli.cli,
       prompt,
       ...(input.workingDir ? { workingDir: input.workingDir } : {}),

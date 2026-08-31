@@ -31,7 +31,8 @@ export type CogSeedTaskStatus =
   | 'cancelled'
   | 'recoverable';
 
-export type CogSeedTaskExecutionKind = 'cogseed-native' | 'local-cli';
+export type CogSeedTaskExecutionKind = 'cogseed-native' | 'local-cli' | 'group-chat';
+export type CogSeedResultDeliveryState = 'not-applicable' | 'pending' | 'delivered' | 'pending-recovery';
 
 export interface CogSeedLocalCliConfig {
   cli: string;
@@ -60,12 +61,30 @@ export interface CogSeedTaskRecord {
   runtimeRunId?: string;
   runtimeWorkerId?: string;
   requestId: string;
+  /** Internal SHA-256 of the canonical create request. It allows a request
+   * claim interrupted after the task write to be repaired without storing a
+   * second copy of the request payload. */
+  requestFingerprint?: string;
   ownerId: string;
   status: CogSeedTaskStatus;
   task: string;
   conversationId?: string;
   agentId?: string;
   executionKind?: CogSeedTaskExecutionKind;
+  /** Delivery of the terminal result into the bound CogSeed conversation.
+   * Raw output remains in the execution path and is never copied into dashboard DTOs. */
+  resultDeliveryState?: CogSeedResultDeliveryState;
+  /** Privacy-safe Group Chat correlation ids. Message bodies are never copied here. */
+  groupChatRunId?: string;
+  groupChatTurnId?: string;
+  groupChatSourceMessageId?: string;
+  groupChatMessageId?: string;
+  groupChatActorKind?: 'commander' | 'agent' | 'worker';
+  /** Group Chat's authoritative collaboration identifiers. The Workflow data
+   * remains in the conversation collaboration store; CogSeed only keeps the
+   * safe correlation needed by renderer projections. */
+  groupChatWorkflowRunId?: string;
+  groupChatWorkflowStepId?: string;
   allowedSkillIds?: string[];
   skillVersionPins?: CogSeedTaskSkillVersionPin[];
   skillVersionPinStatus?: 'pinned' | 'unpinned';
@@ -77,6 +96,8 @@ export interface CogSeedTaskRecord {
   workingDir?: string;
   retryOfTaskId?: string;
   lastResumeRequestId?: string;
+  /** SHA-256 of the last resume payload; raw continuation data is not stored here. */
+  lastResumeRequestFingerprint?: string;
   coordinationId?: string;
   parentTaskId?: string;
   coordinationDepth?: number;
@@ -135,12 +156,15 @@ export interface CogSeedRequestClaim {
   taskId: string;
   ownerId: string;
   createdAt: string;
+  /** SHA-256 of canonical material request fields for replay conflict detection. */
+  requestFingerprint?: string;
 }
 
 export type CogSeedTaskEventType =
   | 'task.created'
   | 'task.queued'
   | 'task.started'
+  | 'task.waiting_user'
   | 'model.delta'
   | 'tool.started'
   | 'tool.finished'

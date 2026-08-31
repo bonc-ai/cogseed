@@ -30,6 +30,7 @@ const REQUIRED_BUILTIN_INVENTORY = Object.freeze({
     'personal-ontology-candidate-builder',
     'skill-creator',
     'grounded-material-qa',
+    'kb-mindmap',
   ]),
   marketplace_agents: Object.freeze([
     '0fdb4da8a080',
