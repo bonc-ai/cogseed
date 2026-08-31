@@ -25,13 +25,17 @@
     mmBg: 'dots', // 背景 dots=点阵 | plain=纯白 | none=无
     mmSearchHits: new Set(), // 脑内搜索命中节点 idx
     mmViewMode: 'graph', // graph=图形 | outline=大纲
-    treeGroups: new Set(), // 已折叠的库树组名（个人知识库/共享知识库/订阅知识库）
+    treeGroups: new Set(), // 已折叠的库树组名（个人知识库/共享知识库）
     expanded: new Set(), // 已展开的文件夹相对路径（内联展开/折叠）
     spaces: [],
     spaceId: null,
     spaceName: '',
     spaceFiles: [],
     filePerms: {}, // 共享库文件成员权限（会话内：path → view_export|view_only|hidden）
+    pendingRename: {}, // 共享库文件重命名待索引合并：oldPath → newPath（防刷新快照"消失"）
+    pendingDelete: new Set(), // 共享库文件删除待索引合并
+    sideCollapsed: false, // 知识库列表面板收起
+    treeFilter: '', // 库树搜索关键词（过滤个人库+共享库）
   };
 
   const _TYPE_LABEL = { pdf: 'PDF', excel: 'EXCEL', ppt: 'PPT', img: '图片', word: 'WORD', txt: 'TXT' };
@@ -54,15 +58,19 @@
     sort: '<path d="M8 6h13M8 12h9M8 18h5M3 6h.01M3 12h.01M3 18h.01"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>',
-    search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
-    send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+    send: '<path d="M3.6 4.4 20.6 12 3.6 19.6l2.4-7.6z"/><path d="M6 12h14.6"/>',
+    plus: '<rect x="4" y="4" width="16" height="16" rx="4.5"/><path d="M12 8v8M8 12h8"/>',
     trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>',
-    more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
-    share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4M12 2v13"/>',
+    more: '<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>',
+    share: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    chip: '<rect x="5" y="7" width="14" height="10" rx="2.5"/><path d="M9 7V4.5M15 7V4.5M9 19.5V17M15 19.5V17M10.5 12h3"/>',
+    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    'chevron-right': '<path d="m9 6 6 6-6 6"/>',
+    'panel-collapse': '<rect x="4" y="5" width="6" height="14" rx="1.5"/><rect x="14" y="5" width="6" height="14" rx="1.5"/>',
   };
   function _svg(name) {
-    return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
+    return `<svg class="kb-ico-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_SVGS[name] || ''}</svg>`;
   }
 
   function _extClass(name) {
@@ -157,15 +165,14 @@
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
     const groups = [
-      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.map((l) =>
+      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
-          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
+          ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
       ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
-      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.map((sp) =>
+      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder-open', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share">共享</span></div>`
-      ).join('') || '<div class="kb-tree-placeholder">暂无共享空间</div>' },
-      { key: '订阅知识库', label: '订阅知识库', plus: false, html: '<div class="kb-tree-placeholder">订阅 · S4 上线</div>' },
+          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="共享知识库">${_icon('users', 'kb-share-ico')}</span></div>`
+      ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
     ];
     const groupHtml = groups.map((g) => {
       const open = !_state.treeGroups.has(g.key);
@@ -228,7 +235,32 @@
     try {
       const res = await window.cogseed.invoke('spaces.files.status', { spaceId });
       if (_state.spaceId !== spaceId) return; // 已切换
-      _state.spaceFiles = (res && Array.isArray(res.files)) ? res.files : [];
+      let files = (res && Array.isArray(res.files)) ? res.files : [];
+      // 合并 pending 乐观操作（索引队列 delete/upsert 异步，快照可能短暂缺失）：
+      // 1) 重命名：快照中的旧名映射到新名；upsert 未完成（快照缺新名）用本地乐观项兜底，文件不消失
+      const pr = _state.pendingRename || {};
+      if (Object.keys(pr).length) {
+        files = files.map((f) => {
+          const key = f.path || f.name;
+          return pr[key] ? { ...f, name: pr[key], path: pr[key] } : f;
+        });
+        for (const newP of Object.values(pr)) {
+          if (!files.some((f) => (f.path || f.name) === newP)) {
+            const local = _state.spaceFiles.find((f) => (f.path || f.name) === newP);
+            if (local) files.push(local);
+          }
+        }
+        const done = Object.entries(pr).every(([oldP, newP]) =>
+          files.some((f) => (f.path || f.name) === newP) && !files.some((f) => (f.path || f.name) === oldP));
+        if (done) _state.pendingRename = {};
+      }
+      // 2) 删除：快照残留的待删项移除
+      if (_state.pendingDelete && _state.pendingDelete.size) {
+        const before = files.length;
+        files = files.filter((f) => !_state.pendingDelete.has(f.path || f.name));
+        if (files.length < before) _state.pendingDelete.clear();
+      }
+      _state.spaceFiles = files;
       _renderFiles();
       _renderRight();
     } catch (err) {
@@ -431,11 +463,11 @@
   }
 
   // 空态：居中插图 + 大号主按钮（保留库头部骨架，不一片白板）
-  // 空库（左侧无库）→ 创建知识库；库内无内容 → 「去这里添加」引导打开导入菜单
+  // 空库（左侧无库）→ 创建知识库；库内无内容 → 「添加内容」打开与工具栏一致的导入菜单
   function _emptyStateHtml(kind) {
     const createBtn = kind === 'lib'
       ? '<button type="button" class="kb-empty-btn" id="kb-empty-create">＋ 创建知识库</button>'
-      : '<button type="button" class="kb-empty-btn" id="kb-empty-add">＋ 添加内容</button><button type="button" class="kb-empty-btn kb-empty-btn-ghost" id="kb-empty-import-dir">＋ 上传文件夹</button>';
+      : '<button type="button" class="kb-empty-btn" id="kb-empty-add">＋ 添加内容</button>';
     return `<div class="kb-empty">
       <div class="kb-empty-illus">${_icon('book-open', 'kb-empty-ico')}</div>
       <div class="kb-empty-title">${kind === 'lib' ? '还没有知识库' : '知识库什么也没有，去这里添加'}</div>
@@ -444,19 +476,16 @@
     </div>`;
   }
 
-  // 空态按钮绑定：空库 → 创建；库内空 → 「添加内容」打开导入菜单 + 上传文件夹
-  function _bindEmptyActions(isSpace) {
+  // 空态按钮绑定：空库 → 创建；库内空 → 「添加内容」打开导入菜单（与工具栏同一入口）
+  function _bindEmptyActions() {
     const create = document.getElementById('kb-empty-create');
     if (create) create.addEventListener('click', _createLib);
     const add = document.getElementById('kb-empty-add');
-    if (add) add.addEventListener('click', () => {
+    if (add) add.addEventListener('click', (e) => {
+      e.stopPropagation(); // 阻止冒泡到 document 的全局菜单关闭，否则菜单刚打开就被关闭
       const b = document.getElementById('kb-wb-import');
       if (b) b.click();
     });
-    const imp = document.getElementById('kb-empty-import');
-    if (imp) imp.addEventListener('click', isSpace ? _importSpaceFiles : _importFiles);
-    const impDir = document.getElementById('kb-empty-import-dir');
-    if (impDir) impDir.addEventListener('click', isSpace ? _importSpaceDir : _importDir);
   }
 
   // 共享库（空间）上传文件：spaces.files.pickAndUpload
@@ -497,6 +526,254 @@
       _log.warn('space import dir failed', err);
       if (typeof uiToast === 'function') uiToast('导入文件夹失败', { variant: 'error' });
     }
+  }
+
+  // ── 导入内容弹窗（共享库 ← 个人知识库文件多选，对标 ima 导入对话框）──
+  let _dlgLib = '';          // 当前个人库名
+  let _dlgDir = '';          // 当前目录（相对库根的路径段，'' = 库根）
+  let _dlgHistory = []; // 目录历史（进入的子目录路径）
+  let _dlgHistIdx = -1;      // 历史游标
+  let _dlgSelected = new Set(); // 选中的文件 relPath（含库前缀，如 班级建设资料/a.pdf）
+  let _dlgFilter = '';
+
+  function _importDlgNode(libName, dirSegs) {
+    const lib = _state.tree.find((n) => n.type === 'dir' && n.name === libName);
+    if (!lib) return null;
+    let node = lib;
+    for (const seg of dirSegs) {
+      const next = (node.children || []).find((n) => n.type === 'dir' && n.name === seg);
+      if (!next) return null;
+      node = next;
+    }
+    return node;
+  }
+
+  function _importDlgRelPath(libName, dirSegs, name) {
+    return [libName, ...dirSegs, name].filter(Boolean).join('/');
+  }
+
+  function _renderImportDlgList() {
+    const overlay = document.querySelector('.kb-import-dlg-overlay');
+    if (!overlay) return;
+    const node = _importDlgNode(_dlgLib, _dlgDir.split('/').filter(Boolean));
+    const q = _dlgFilter.trim().toLowerCase();
+    // 子目录 + 文件（文件多选）
+    const dirs = (node && node.children ? node.children : [])
+      .filter((n) => n.type === 'dir')
+      .filter((n) => !q || n.name.toLowerCase().includes(q));
+    const files = (node && node.children ? node.children : [])
+      .filter((n) => n.type === 'file')
+      .filter((n) => !q || n.name.toLowerCase().includes(q));
+    let html = '';
+    for (const d of dirs) {
+      html += `<div class="kb-import-dlg-row is-dir" data-import-dir="${_esc(d.name)}">
+        ${_icon('folder', 'kb-import-dlg-ico')}
+        <span class="kb-import-dlg-name">${_esc(d.name)}</span>
+        <span class="kb-import-dlg-meta">文件夹</span>
+      </div>`;
+    }
+    for (const f of files) {
+      const rel = _importDlgRelPath(_dlgLib, _dlgDir.split('/').filter(Boolean), f.name);
+      const checked = _dlgSelected.has(rel) ? ' checked' : '';
+      html += `<div class="kb-import-dlg-row${checked}" data-import-file="${_esc(rel)}">
+        <input type="checkbox" class="kb-import-dlg-check" data-import-check="${_esc(rel)}" ${checked ? 'checked' : ''} />
+        <span class="kb-import-dlg-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
+        <span class="kb-import-dlg-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
+        <span class="kb-import-dlg-meta">${_esc(_extLabel(f.name))}</span>
+      </div>`;
+    }
+    if (!dirs.length && !files.length) {
+      html = '<div class="kb-import-dlg-empty">' + (q ? '无匹配文件' : '此目录为空') + '</div>';
+    }
+    overlay.querySelector('.kb-import-dlg-files').innerHTML = html;
+    // 路径栏
+    const pathEl = overlay.querySelector('.kb-import-dlg-path');
+    const segs = _dlgDir.split('/').filter(Boolean);
+    pathEl.textContent = [_dlgLib, ...segs].join(' / ');
+    _syncImportDlgFooter(overlay);
+  }
+
+  function _syncImportDlgFooter(overlay) {
+    const countEl = overlay.querySelector('.kb-import-dlg-count');
+    const okBtn = overlay.querySelector('.kb-import-dlg-ok');
+    if (countEl) countEl.textContent = `已选中 ${_dlgSelected.size} 个文件`;
+    if (okBtn) okBtn.disabled = _dlgSelected.size === 0;
+  }
+
+  function _bindImportDlgEvents(overlay) {
+    overlay.querySelector('.kb-import-dlg-close')?.addEventListener('click', () => overlay.remove());
+    overlay.querySelector('.kb-import-dlg-cancel')?.addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    // 返回 / 前进
+    overlay.querySelector('.kb-import-dlg-back')?.addEventListener('click', () => {
+      if (_dlgHistIdx <= 0) return;
+      _dlgHistIdx -= 1;
+      const cur = _dlgHistory[_dlgHistIdx];
+      const parts = String(cur || '').split('/');
+      _dlgLib = parts[0] || '';
+      _dlgDir = parts.slice(1).join('/');
+      _renderImportDlgList();
+      _syncImportDlgNav(overlay);
+    });
+    overlay.querySelector('.kb-import-dlg-forward')?.addEventListener('click', () => {
+      if (_dlgHistIdx >= _dlgHistory.length - 1) return;
+      _dlgHistIdx += 1;
+      const cur = _dlgHistory[_dlgHistIdx];
+      const parts = String(cur || '').split('/');
+      _dlgLib = parts[0] || '';
+      _dlgDir = parts.slice(1).join('/');
+      _renderImportDlgList();
+      _syncImportDlgNav(overlay);
+    });
+    // 搜索
+    const searchInput = overlay.querySelector('.kb-import-dlg-search input');
+    searchInput?.addEventListener('input', (e) => {
+      _dlgFilter = String(e.target.value || '').trim();
+      _renderImportDlgList();
+    });
+    // 左侧树：切换知识库
+    overlay.querySelectorAll('[data-import-lib]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const name = el.dataset.importLib;
+        _pushImportDlgHistory(`${name}`);
+        _renderImportDlgList();
+        overlay.querySelectorAll('[data-import-lib]').forEach((x) => x.classList.remove('active'));
+        el.classList.add('active');
+        _syncImportDlgNav(overlay);
+      });
+    });
+    // 右侧：子目录进入 / 文件勾选
+    overlay.querySelector('.kb-import-dlg-files')?.addEventListener('click', (e) => {
+      const dirEl = e.target.closest('[data-import-dir]');
+      if (dirEl) {
+        const segs = _dlgDir.split('/').filter(Boolean);
+        segs.push(dirEl.dataset.importDir);
+        _pushImportDlgHistory(`${_dlgLib}/${segs.join('/')}`);
+        _dlgDir = segs.join('/');
+        _renderImportDlgList();
+        _syncImportDlgNav(overlay);
+        return;
+      }
+      const checkEl = e.target.closest('[data-import-check]');
+      if (checkEl) {
+        const rel = checkEl.dataset.importCheck;
+        if (_dlgSelected.has(rel)) _dlgSelected.delete(rel);
+        else _dlgSelected.add(rel);
+        // 只更新当前行选中态与底部统计，不重渲染整个列表（避免连续勾选时 DOM 重建丢事件）
+        const row = checkEl.closest('.kb-import-dlg-row');
+        if (row) row.classList.toggle('checked', _dlgSelected.has(rel));
+        _syncImportDlgFooter(overlay);
+        return;
+      }
+      const rowEl = e.target.closest('[data-import-file]');
+      if (rowEl) {
+        const rel = rowEl.dataset.importFile;
+        if (_dlgSelected.has(rel)) _dlgSelected.delete(rel);
+        else _dlgSelected.add(rel);
+        rowEl.classList.toggle('checked', _dlgSelected.has(rel));
+        const cb = rowEl.querySelector('[data-import-check]');
+        if (cb) cb.checked = _dlgSelected.has(rel);
+        _syncImportDlgFooter(overlay);
+      }
+    });
+    // 导入
+    overlay.querySelector('.kb-import-dlg-ok')?.addEventListener('click', async () => {
+      if (!_dlgSelected.size) return;
+      const files = Array.from(_dlgSelected);
+      const okBtn = overlay.querySelector('.kb-import-dlg-ok');
+      okBtn.disabled = true;
+      okBtn.textContent = '导入中…';
+      try {
+        const res = await window.cogseed.invoke('spaces.files.importFromLibFiles', { spaceId: _state.spaceId, paths: files });
+        if (!res || res.ok === false) {
+          if (typeof uiToast === 'function') uiToast('导入失败：' + ((res && res.error) || 'unknown'), { variant: 'error' });
+          return;
+        }
+        if (typeof uiToast === 'function') {
+          uiToast(`已导入 ${Number(res.imported) || 0} 个文件`, { variant: 'success', timeoutMs: 2500 });
+        }
+        overlay.remove();
+        _loadSpaceFiles(_state.spaceId);
+      } catch (err) {
+        _log.warn('import dlg files failed', err);
+        if (typeof uiToast === 'function') uiToast('导入失败', { variant: 'error' });
+        okBtn.disabled = false;
+        okBtn.textContent = '导入';
+      }
+    });
+  }
+
+  function _pushImportDlgHistory(loc) {
+    // 剪掉游标之后的旧前进记录
+    _dlgHistory = _dlgHistory.slice(0, _dlgHistIdx + 1);
+    _dlgHistory.push(loc);
+    _dlgHistIdx = _dlgHistory.length - 1;
+    _syncImportDlgNav(document.querySelector('.kb-import-dlg-overlay'));
+  }
+
+  function _syncImportDlgNav(overlay) {
+    if (!overlay) return;
+    const back = overlay.querySelector('.kb-import-dlg-back');
+    const fwd = overlay.querySelector('.kb-import-dlg-forward');
+    if (back) back.disabled = _dlgHistIdx <= 0;
+    if (fwd) fwd.disabled = _dlgHistIdx >= _dlgHistory.length - 1;
+  }
+
+  // 共享库（空间）导入个人知识库：打开「导入内容」多选弹窗（对标 ima）
+  async function _importSpaceFromLib() {
+    if (!_state.spaceId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    // 确保个人库树已加载
+    if (!_state.libs.length) {
+      if (typeof uiToast === 'function') uiToast('没有可导入的个人知识库', { variant: 'warning' });
+      return;
+    }
+    _dlgLib = _state.libs[0].name;
+    _dlgDir = '';
+    _dlgHistory = [_dlgLib];
+    _dlgHistIdx = 0;
+    _dlgSelected = new Set();
+    _dlgFilter = '';
+    const libItems = _state.libs.map((l, i) =>
+      `<div class="kb-import-dlg-lib${i === 0 ? ' active' : ''}" data-import-lib="${_esc(l.name)}">
+        ${_icon('folder', 'kb-import-dlg-ico')}<span class="kb-import-dlg-name">${_esc(l.name)}</span>
+      </div>`).join('') || '<div class="kb-import-dlg-empty">暂无个人知识库</div>';
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-import-dlg-overlay';
+    overlay.innerHTML = `
+      <div class="kb-import-dlg">
+        <div class="kb-import-dlg-head">
+          <div class="kb-import-dlg-title"><span class="kb-import-dlg-title-ico">${_svg('upload')}</span>导入内容</div>
+          <div class="kb-import-dlg-search">
+            <span class="kb-import-dlg-search-ico">${_svg('search')}</span>
+            <input type="text" placeholder="搜索" autocomplete="off" spellcheck="false" />
+          </div>
+          <button type="button" class="kb-import-dlg-close" title="关闭">✕</button>
+        </div>
+        <div class="kb-import-dlg-nav">
+          <button type="button" class="kb-import-dlg-back" title="返回">←</button>
+          <button type="button" class="kb-import-dlg-forward" title="前进">→</button>
+          <span class="kb-import-dlg-path"></span>
+        </div>
+        <div class="kb-import-dlg-body">
+          <div class="kb-import-dlg-tree">
+            <div class="kb-import-dlg-group">个人知识库</div>
+            <div class="kb-import-dlg-libs">${libItems}</div>
+          </div>
+          <div class="kb-import-dlg-files"></div>
+        </div>
+        <div class="kb-import-dlg-foot">
+          <span class="kb-import-dlg-count">已选中 0 个文件</span>
+          <div class="kb-import-dlg-actions">
+            <button type="button" class="kb-import-dlg-cancel">取消</button>
+            <button type="button" class="kb-import-dlg-ok" disabled>导入</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    _bindImportDlgEvents(overlay);
+    _renderImportDlgList();
+    _syncImportDlgNav(overlay);
   }
 
   // 导入菜单「新建文件夹」：个人库 contexts.mkdir / 空间 spaces.files.mkdir
@@ -619,8 +896,13 @@
     if (lib) _renderNodeRows(parts, lib.children || [], 0, lib.path || _state.currentLib, q);
     // 底部：没有更多内容了（对齐 ima 列表结束提示）
     const endTip = parts.length ? '<div class="kb-files-end">没有更多内容了</div>' : '';
-    list.innerHTML = (parts.join('') + endTip) || _emptyStateHtml('file');
-    if (!parts.length) _bindEmptyActions(false);
+    if (!parts.length && q) {
+      // 搜索无结果：显示"无匹配"占位，不显示空库引导（避免误导为新库）
+      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+    } else {
+      list.innerHTML = (parts.join('') + endTip) || _emptyStateHtml('file');
+      if (!parts.length) _bindEmptyActions();
+    }
 
     list.querySelectorAll('[data-kb-dir]').forEach((el) => {
       el.addEventListener('click', () => _toggleDir(el.dataset.kbDir));
@@ -664,15 +946,58 @@
     return `${d.getMonth() + 1}/${d.getDate()}`;
   }
 
+  // 搜索模式下文件行显示所在目录（相对当前库，根目录显示「库根」）
+  function _relDirLabel(parentPath) {
+    const cur = String(_state.currentLib || '');
+    const base = cur ? new RegExp('^' + _escReg(cur) + '(?:/|$)') : null;
+    const rel = base ? String(parentPath || '').replace(base, '').replace(/\/+$/, '') : String(parentPath || '');
+    return rel ? `📁 ${rel}` : '库根';
+  }
+
+  function _escReg(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   function _renderNodeRows(parts, children, level, parentPath, q) {
     const pad = 16 + level * 20;
+    // 搜索模式：无视展开状态递归全树，匹配的目录/文件都展示（文件标注所在目录）
+    if (q) {
+      const dirs = (children || [])
+        .filter((n) => n.type === 'dir' && n.name.toLowerCase().includes(q))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const files = _sortFiles((children || [])
+        .filter((n) => n.type === 'file' && n.name.toLowerCase().includes(q)));
+      for (const d of dirs) {
+        const path = `${parentPath}/${d.name}`;
+        parts.push(`<div class="kb-file-row is-dir" data-kb-dir="${_esc(path)}" style="padding-left:${pad}px">
+          ${_icon('chevron-right', 'kb-mini-ico kb-dir-caret')}
+          ${_icon('folder-open', 'kb-file-icon-svg is-dir')}
+          <span class="kb-file-name">${_esc(d.name)}</span>
+          <span class="kb-file-meta">${_countFiles(d)} 项</span>
+          <span class="kb-file-actions"><button type="button" class="kb-mini-btn" data-kb-dir-toggle="${_esc(path)}" title="展开">${_icon('chevron-right', 'kb-mini-ico')}</button></span>
+        </div>`);
+      }
+      for (const f of files) {
+        const rel = `${parentPath}/${f.name}`;
+        parts.push(`<div class="kb-file-row" data-kb-file="${_esc(rel)}" style="padding-left:${pad}px">
+          <span class="kb-file-icon is-${_extClass(f.name)}">${_extLabel(f.name)}</span>
+          <span class="kb-file-name">${_esc(f.name)}</span>
+          <span class="kb-file-meta">${_esc(_relDirLabel(parentPath))}</span>
+          <span class="kb-file-date">${_fmtDate(f.mtime)}</span>
+          ${_statusChip(rel)}
+          <span class="kb-file-actions"><button type="button" class="kb-mini-btn" title="生成思维导图（S3）">${_icon('sparkles', 'kb-mini-ico')}</button><button type="button" class="kb-mini-btn" title="更多">${_icon('more-horizontal', 'kb-mini-ico')}</button></span>
+        </div>`);
+      }
+      for (const d of (children || []).filter((n) => n.type === 'dir')) {
+        _renderNodeRows(parts, d.children || [], level + 1, `${parentPath}/${d.name}`, q);
+      }
+      return;
+    }
     const dirs = (children || [])
       .filter((n) => n.type === 'dir')
-      .filter((n) => !q || n.name.toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name));
     const files = _sortFiles((children || [])
-      .filter((n) => n.type === 'file')
-      .filter((n) => !q || n.name.toLowerCase().includes(q)));
+      .filter((n) => n.type === 'file'));
     for (const d of dirs) {
       const path = `${parentPath}/${d.name}`;
       const open = _state.expanded.has(path);
@@ -730,9 +1055,16 @@
     }
     // 底部：没有更多内容了（对齐 ima 列表结束提示）
     if (files.length) html += '<div class="kb-files-end">没有更多内容了</div>';
+    if (!html && q) {
+      // 搜索无结果：不显示空库引导
+      list.innerHTML = '<div class="kb-empty"><div class="kb-empty-title">无匹配文档</div><div class="kb-empty-sub">换个关键词试试，支持按文件名搜索库内所有文件（含文件夹中的文件）</div></div>';
+      _renderCount(0);
+      _renderRight();
+      return;
+    }
     if (!html) html = _emptyStateHtml('file');
     list.innerHTML = html;
-    _bindEmptyActions(true);
+    _bindEmptyActions();
     list.querySelectorAll('[data-kb-space-file]').forEach((el) => {
       el.addEventListener('click', () => {
         if (typeof uiToast === 'function') uiToast('空间库原文查看：后续版本支持', { variant: 'info' });
@@ -742,6 +1074,15 @@
         e.preventDefault(); e.stopPropagation();
         _kbSpaceFileMenu(el.dataset.kbSpaceFile, e.clientX, e.clientY);
       });
+      // 「…」按钮 = 与右键同一菜单（保持入口一致）
+      const moreBtn = el.querySelector('.kb-mini-btn[title="更多"]');
+      if (moreBtn) {
+        moreBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const b = el.getBoundingClientRect();
+          _kbSpaceFileMenu(el.dataset.kbSpaceFile, b.x + b.width - 40, b.y + 20);
+        });
+      }
     });
     const crumb = document.getElementById('kb-wb-crumb');
     if (crumb) crumb.hidden = true;
@@ -905,7 +1246,7 @@
     }
     _state.summaryLib = key;
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      card.innerHTML = '<div class="kb-wb-right-card-title">✨ AI 解析本知识库</div><div class="kb-wb-right-placeholder">解析服务不可用</div>';
+      card.innerHTML = '<div class="kb-wb-right-card-title"><span class="kb-wb-ai-chip"></span>AI 解析本知识库</div><div class="kb-wb-right-placeholder">解析服务不可用</div>';
       return;
     }
     const holder = card.querySelector('.kb-wb-right-placeholder');
@@ -952,7 +1293,7 @@
     </span>`;
 
     let html = `<div class="kb-wb-right-card-title">
-      <span>✨ AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
+      <span><span class="kb-wb-ai-chip"></span>AI 解析本知识库${srcTag}<span class="kb-wb-card-src">（${docs.length} 个文档）</span></span>
       ${actions}
     </div>`;
 
@@ -1946,14 +2287,26 @@
     _state.rendered = true;
     host.innerHTML = `
       <div class="kb-wb">
+        <button type="button" class="kb-wb-side-expand" id="kb-wb-side-expand" title="展开知识库列表" hidden>${_svg('chevron-right')}</button>
         <aside class="kb-wb-side">
-          <div class="kb-wb-side-head"><h2>知识库列表</h2><button type="button" class="kb-wb-icon-btn" id="kb-wb-global-search" title="全局搜索（搜-读-写入口）">${_svg('search')}</button></div>
+          <div class="kb-wb-side-head">
+            <h2>知识库列表</h2>
+            <div class="kb-wb-side-actions">
+              <button type="button" class="kb-wb-icon-btn" id="kb-wb-side-collapse" title="收起 / 展开知识库面板">${_svg('panel-collapse')}</button>
+              <button type="button" class="kb-wb-icon-btn" id="kb-wb-side-search-btn" title="搜索知识库">${_svg('search')}</button>
+            </div>
+          </div>
+          <div class="kb-wb-side-search" id="kb-wb-side-search" hidden>
+            <span class="kb-wb-side-search-ico">${_svg('search')}</span>
+            <input type="text" id="kb-wb-side-search-input" placeholder="搜索知识库…" autocomplete="off" spellcheck="false" />
+          </div>
           <div class="kb-wb-tree" id="kb-wb-tree"></div>
         </aside>
+        <div class="kb-wb-divider" data-wb-divider="1" title="拖动调整宽度"></div>
         <section class="kb-wb-mid">
           <div class="kb-wb-mid-head">
             <div class="kb-wb-lib-head">
-              <div class="kb-wb-lib-cover" id="kb-wb-lib-cover"><span class="kb-wb-cover-icon">📁</span></div>
+              <div class="kb-wb-lib-cover" id="kb-wb-lib-cover"><svg class="kb-wb-cover-svg" viewBox="0 0 24 24" fill="rgba(255,255,255,.96)" stroke="rgba(255,255,255,.96)" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4.2l1.8 2.2h7a2 2 0 0 1 2 2v7.3a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg></div>
               <div class="kb-wb-lib-meta">
                 <div class="kb-wb-lib-name" id="kb-wb-lib-name">知识库</div>
                 <div class="kb-wb-lib-owner" id="kb-wb-lib-owner"><span class="kb-wb-owner-avatar" id="kb-wb-owner-avatar">我</span><span class="kb-wb-owner-name" id="kb-wb-owner-name">我</span></div>
@@ -1988,7 +2341,7 @@
                     <div class="kb-wb-sort-item" data-sort="name">名称</div>
                   </div>
                 </div>
-                <button type="button" class="kb-wb-icon-btn" id="kb-wb-refresh" title="刷新（重新索引）">${_svg('refresh')}</button>
+                <button type="button" class="kb-wb-icon-btn" id="kb-wb-refresh" title="重置排序并刷新">${_svg('refresh')}</button>
                 <div class="kb-wb-import-wrap">
                   <button type="button" class="kb-wb-icon-btn" id="kb-wb-import" title="导入内容">${_svg('upload')}</button>
                   <div class="kb-wb-import-menu" id="kb-wb-import-menu" hidden>
@@ -2013,11 +2366,12 @@
           </div>
           <div class="kb-wb-files" id="kb-wb-files"></div>
         </section>
+        <div class="kb-wb-divider" data-wb-divider="2" title="拖动调整宽度"></div>
         <section class="kb-wb-right">
           <div class="kb-wb-right-head"><span class="kb-wb-chip">📚 <span id="kb-wb-right-lib">—</span></span><span class="kb-wb-local"><span class="kb-wb-dot"></span>本地推理 · 资料不上云</span></div>
           <div class="kb-wb-right-body" id="kb-wb-right">
             <div class="kb-wb-right-card" id="kb-wb-analysis-card">
-              <div class="kb-wb-right-card-title">✨ AI 解析本知识库</div>
+              <div class="kb-wb-right-card-title"><span class="kb-wb-ai-chip"></span>AI 解析本知识库</div>
               <div class="kb-wb-right-card-sub" id="kb-wb-analysis-sub">当前库：—</div>
               <div class="kb-wb-right-placeholder"><button type="button" class="kb-wb-a-btn" id="kb-analyze-btn">✨ 生成 AI 解析</button></div>
             </div>
@@ -2091,8 +2445,109 @@
     }
     document.getElementById('kb-wb-lib-name').textContent = _state.currentLib || '知识库';
     document.getElementById('kb-wb-right-lib').textContent = _state.currentLib || '—';
-    document.getElementById('kb-wb-global-search')?.addEventListener('click', () => {
-      if (typeof uiToast === 'function') uiToast('全局搜索（Cmd/Ctrl+K）', { variant: 'info' });
+    // 知识库列表搜索：点击放大镜展开输入框，实时过滤全部库（个人+共享）
+    const sideSearch = document.getElementById('kb-wb-side-search');
+    const sideSearchInput = document.getElementById('kb-wb-side-search-input');
+    document.getElementById('kb-wb-side-search-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!sideSearch) return;
+      sideSearch.hidden = !sideSearch.hidden;
+      if (!sideSearch.hidden) {
+        sideSearchInput?.focus();
+      } else {
+        _state.treeFilter = '';
+        if (sideSearchInput) sideSearchInput.value = '';
+        _renderTree();
+      }
+    });
+    sideSearchInput?.addEventListener('input', (e) => {
+      _state.treeFilter = String(e.target.value || '').trim().toLowerCase();
+      _renderTree();
+    });
+    sideSearchInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        _state.treeFilter = '';
+        sideSearchInput.value = '';
+        _renderTree();
+        if (sideSearch) sideSearch.hidden = true;
+      }
+    });
+    // 侧边栏折叠：收起整个知识库列表面板，给内容区更多空间
+    const collapseBtn = document.getElementById('kb-wb-side-collapse');
+    const expandBtn = document.getElementById('kb-wb-side-expand');
+    const applySideCollapsed = () => {
+      const wb = document.querySelector('.kb-wb');
+      if (wb) wb.classList.toggle('side-collapsed', _state.sideCollapsed);
+      if (collapseBtn) collapseBtn.hidden = _state.sideCollapsed;
+      if (expandBtn) expandBtn.hidden = !_state.sideCollapsed;
+    };
+    collapseBtn?.addEventListener('click', () => {
+      _state.sideCollapsed = true;
+      applySideCollapsed();
+    });
+    expandBtn?.addEventListener('click', () => {
+      _state.sideCollapsed = false;
+      applySideCollapsed();
+    });
+    applySideCollapsed();
+    // 分隔条拖拽：aside/mid、mid/right 之间左右调整列宽（对标 ima）
+    // 宽度持久化到 localStorage（环境无 localStorage 时静默降级）
+    let dividerDrag = null;
+    const _dividerLoad = () => {
+      try {
+        const c1 = Number(localStorage.getItem('kb-wb-c1'));
+        const c2 = Number(localStorage.getItem('kb-wb-c2'));
+        const wb = document.querySelector('.kb-wb');
+        if (!wb) return;
+        if (c1 >= 140 && c1 <= 420) wb.style.setProperty('--kb-c1', `${c1}px`);
+        if (c2 >= 240 && c2 <= 620) wb.style.setProperty('--kb-c2', `${c2}px`);
+      } catch { /* no-op */ }
+    };
+    const _dividerClamp = (idx, w) => (idx === 1 ? Math.min(420, Math.max(140, w)) : Math.min(620, Math.max(240, w)));
+    const _dividerSave = () => {
+      try {
+        const wb = document.querySelector('.kb-wb');
+        if (!wb) return;
+        localStorage.setItem('kb-wb-c1', wb.style.getPropertyValue('--kb-c1') || '236');
+        localStorage.setItem('kb-wb-c2', wb.style.getPropertyValue('--kb-c2') || '372');
+      } catch { /* no-op */ }
+    };
+    _dividerLoad();
+    document.querySelectorAll('.kb-wb-divider').forEach((div) => {
+      div.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const idx = Number(div.dataset.wbDivider) || 1;
+        const wb = document.querySelector('.kb-wb');
+        if (!wb) return;
+        if (_state.sideCollapsed && idx === 1) return; // 折叠态第 1 条不可拖
+        const startX = e.clientX;
+        const startC1 = parseFloat(wb.style.getPropertyValue('--kb-c1')) || 236;
+        const startC2 = parseFloat(wb.style.getPropertyValue('--kb-c2')) || 372;
+        const dividerIndex = idx; // 1=aside/mid，2=mid/right
+        dividerDrag = { dividerIndex, startX, startC1, startC2 };
+        document.body.classList.add('kb-wb-resizing');
+        div.classList.add('is-dragging');
+      });
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dividerDrag) return;
+      const wb = document.querySelector('.kb-wb');
+      if (!wb) return;
+      const dx = e.clientX - dividerDrag.startX;
+      if (dividerDrag.dividerIndex === 1) {
+        const w = _dividerClamp(1, dividerDrag.startC1 + dx);
+        wb.style.setProperty('--kb-c1', `${w}px`);
+      } else {
+        const w = _dividerClamp(2, dividerDrag.startC2 + dx);
+        wb.style.setProperty('--kb-c2', `${w}px`);
+      }
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dividerDrag) return;
+      dividerDrag = null;
+      document.body.classList.remove('kb-wb-resizing');
+      document.querySelectorAll('.kb-wb-divider').forEach((x) => x.classList.remove('is-dragging'));
+      _dividerSave();
     });
     document.getElementById('kb-wb-search-input')?.addEventListener('input', (e) => {
       _state.filter = e.target.value;
@@ -2142,7 +2597,15 @@
         else if (typeof uiToast === 'function') uiToast('该操作暂不可用', { variant: 'info' });
       });
     });
-    document.getElementById('kb-wb-refresh')?.addEventListener('click', () => _loadAll());
+    // 重置按钮：恢复默认排序（更新时间）+ 刷新数据 + 提示（对齐 ima 重置语义）
+    document.getElementById('kb-wb-refresh')?.addEventListener('click', () => {
+      _state.sort = 'updated';
+      document.querySelectorAll('.kb-wb-sort-item').forEach((x) => x.classList.remove('is-selected'));
+      const def = document.querySelector('.kb-wb-sort-item[data-sort="updated"]');
+      if (def) def.classList.add('is-selected');
+      _loadAll();
+      if (typeof uiToast === 'function') uiToast('已重置排序（更新时间）并刷新', { variant: 'info', timeoutMs: 2000 });
+    });
     // 导入按钮 → 多级导入菜单（对齐 ima：本地文件/文件夹/网页/笔记/新建文件夹等）
     const importMenu = document.getElementById('kb-wb-import-menu');
     const importNoteSub = document.getElementById('kb-wb-import-note-sub');
@@ -2160,7 +2623,7 @@
         if (act === 'file') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'dir') { if (isSpace) _importSpaceDir(); else _importDir(); }
         else if (act === 'url') _kbImportWebUrl();
-        else if (act === 'kblib') _kbMigrateLib();
+        else if (act === 'kblib') { if (isSpace) _importSpaceFromLib(); else _kbMigrateLib(); }
         else if (act === 'note-new') _kbNewNote();
         else if (act === 'note-import') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'folder') _kbNewFolder();
@@ -2606,8 +3069,9 @@
       hasSub.addEventListener('mouseenter', () => { sub.classList.add('show'); });
       hasSub.addEventListener('mouseleave', () => { sub.classList.remove('show'); });
     }
-    setTimeout(() => document.addEventListener('click', function once(e) {
-      if (!el.contains(e.target)) { close(); document.removeEventListener('click', once); }
+    // 外部关闭用 mousedown（click 时序在菜单 append 之后，会把刚弹出的菜单误关）
+    setTimeout(() => document.addEventListener('mousedown', function once(e) {
+      if (!el.contains(e.target)) { close(); document.removeEventListener('mousedown', once); }
     }), 0);
   }
 
@@ -2618,8 +3082,17 @@
     try {
       const res = await window.cogseed.invoke('spaces.files.rename', { spaceId: _state.spaceId, oldName: path, name: String(next).trim() });
       if (res && res.ok === false) throw new Error(res.error || 'rename failed');
+      // 乐观更新 + 记录 pending（刷新快照合并，索引 upsert 完成前文件不消失）
+      const parent = String(path).includes('/') ? String(path).slice(0, String(path).lastIndexOf('/') + 1) : '';
+      const newRel = parent + String(next).trim();
+      _state.pendingRename[path] = newRel;
+      _state.spaceFiles = _state.spaceFiles.map((f) => {
+        if ((f.path || f.name) === path) return { ...f, name: newRel, path: newRel };
+        return f;
+      });
+      _renderFiles();
       if (typeof uiToast === 'function') uiToast('已重命名', { variant: 'success', timeoutMs: 1500 });
-      _loadSpaceFiles(_state.spaceId);
+      _loadSpaceFiles(_state.spaceId); // 后台校正（合并逻辑保证不消失）
     } catch (err) {
       if (typeof uiToast === 'function') uiToast('重命名失败：' + ((err && err.message) || String(err)), { variant: 'error' });
     }
@@ -2637,6 +3110,10 @@
     try {
       const res = await window.cogseed.invoke('spaces.files.delete', { spaceId: _state.spaceId, name: path });
       if (res && res.ok === false) throw new Error(res.error || 'delete failed');
+      // 乐观移除 + 记录 pending（刷新快照合并，索引删除完成前不残留）
+      _state.pendingDelete.add(path);
+      _state.spaceFiles = _state.spaceFiles.filter((f) => (f.path || f.name) !== path);
+      _renderFiles();
       if (typeof uiToast === 'function') uiToast('已删除', { variant: 'success', timeoutMs: 1500 });
       _loadSpaceFiles(_state.spaceId);
     } catch (err) {

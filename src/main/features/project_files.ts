@@ -473,6 +473,7 @@ export async function importSpaceFileFromPath(
   spaceId: string,
   name: string,
   sourceAbs: string,
+  opts?: { skipHash?: boolean },
 ): Promise<Result<{ info: SpaceFileInfo }>> {
   const startedAt = Date.now();
   let safeName: string;
@@ -485,7 +486,7 @@ export async function importSpaceFileFromPath(
   } catch (err) { return { ok: false, error: (err as Error).message }; }
 
   try {
-    const source = await inspectLocalImportSource(sourceAbs, maxBytesFor(safeName));
+    const source = await inspectLocalImportSource(sourceAbs, maxBytesFor(safeName), { skipHash: opts?.skipHash });
     if (TEXT_EXTS.has(path.extname(safeName).toLowerCase())) {
       // Text caps are small; validate UTF-8 without bringing large Office/PDF
       // payloads back into the main-process heap.
