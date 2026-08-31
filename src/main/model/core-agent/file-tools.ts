@@ -90,6 +90,9 @@ export interface FileToolsOpts {
    *  dir (in addition to the user's active workspace). Omitted = no
    *  attachment scope (workspace-only). */
   cid?: string;
+  /** 每会话访问权限模式（full / auto_approve / ask）。`full` / `auto_approve`
+   *  直接放行敏感操作，`ask` / 未设置走弹窗。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
   /** Acting agent identity — used to label sensitive-path approval prompts.
    *  Display falls back to agentId, then a generic label. Omitted for the
    *  commander / ad-hoc runs. */
@@ -214,6 +217,7 @@ async function gateSensitivePathAccess(
     operation,
     subject: abs,
     reasons,
+    ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
     onWaiting: permissionWaitProgress(ctx, operation),
   });
   if (decision !== 'deny') return null;
