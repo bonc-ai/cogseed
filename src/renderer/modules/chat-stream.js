@@ -62,18 +62,27 @@ function _csCreatePanel(cid, turnId, actorId) {
   state.dataset.csState = '';
   state.textContent = '运行中';
 
+  // 收起行摘要（N 步 · 工具名 · ↑↓token）：完成后面板收缩成 header 一行，
+  // 摘要让这行本身携带"这轮干了什么"，不点开也能扫读。
+  const summary = document.createElement('span');
+  summary.className = 'cs-panel-summary';
+
+  // 展开指示箭头：▾ 展开 / ▸ 收起。header 整行可点（CLI 习惯），
+  // 停止按钮自己 stopPropagation。
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'cs-panel-toggle';
-  toggle.textContent = '收起';
+  toggle.textContent = '▾';
   toggle.setAttribute('aria-expanded', 'true');
-  toggle.addEventListener('click', () => {
+  toggle.setAttribute('aria-label', '收起过程');
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
     const body = panel.querySelector('.cs-panel-body');
-    if (!body) return;
-    const open = body.style.display !== 'none';
-    body.style.display = open ? 'none' : '';
-    toggle.textContent = open ? '展开' : '收起';
-    toggle.setAttribute('aria-expanded', String(!open));
+    _csSetCollapsed(panel, body && body.style.display !== 'none');
+  });
+  header.addEventListener('click', () => {
+    const body = panel.querySelector('.cs-panel-body');
+    _csSetCollapsed(panel, body && body.style.display !== 'none');
   });
 
   // 就近取消（矩阵 #6）：面板运行中显示「停止」，复用主输入区停止按钮的
@@ -83,7 +92,8 @@ function _csCreatePanel(cid, turnId, actorId) {
   stop.className = 'cs-panel-stop';
   stop.textContent = '停止';
   stop.title = '中止本轮执行';
-  stop.addEventListener('click', () => {
+  stop.addEventListener('click', (e) => {
+    e.stopPropagation();
     const mainStop = document.querySelector('.chat-send-btn.streaming');
     if (mainStop) {
       mainStop.click();
@@ -95,10 +105,11 @@ function _csCreatePanel(cid, turnId, actorId) {
   });
 
   header.appendChild(spinner);
+  header.appendChild(toggle);
   header.appendChild(title);
+  header.appendChild(summary);
   header.appendChild(state);
   header.appendChild(stop);
-  header.appendChild(toggle);
 
   const body = document.createElement('div');
   body.className = 'cs-panel-body';
@@ -127,18 +138,75 @@ function _csEnsurePanel(cid, anchor, turnId, actorId) {
   return { panel, body: panel.querySelector('.cs-panel-body') };
 }
 
+/** 展开/收起唯一入口：body 显隐 + chevron 方向 + aria 同步。 */
+function _csSetCollapsed(panel, collapsed) {
+  const body = panel.querySelector('.cs-panel-body');
+  if (!body) return;
+  body.style.display = collapsed ? 'none' : '';
+  panel.classList.toggle('cs-collapsed', collapsed);
+  const chev = panel.querySelector('.cs-panel-toggle');
+  if (chev) {
+    chev.textContent = collapsed ? '▸' : '▾';
+    chev.setAttribute('aria-expanded', String(!collapsed));
+    chev.setAttribute('aria-label', collapsed ? '展开过程' : '收起过程');
+  }
+}
+
+function _csFmtTok(n) {
+  return typeof n === 'number' && n >= 10000
+    ? `${Math.round(n / 1000)}K` : String(n);
+}
+
+/** 收起行摘要：N 步 · 工具名（去重前 3）· ↑↓token。卡片增减/usage 到达/
+ *  终态时刷新，让收缩成的一行自己能讲清楚这轮发生了什么。 */
+function _csUpdatePanelSummary(panel) {
+  const summary = panel.querySelector('.cs-panel-summary');
+  if (!summary) return;
+  const body = panel.querySelector('.cs-panel-body');
+  const toolNames = [];
+  let steps = 0;
+  for (const card of (body ? body.children : [])) {
+    if (!card.dataset || !card.dataset.csItem) continue;
+    if (card.classList.contains('cs-usage')) continue;
+    steps += 1;
+    // 工具名优先读渲染时落在 dataset 的副本（不依赖 innerHTML 子树查询，
+    // stub/真实 DOM 行为一致），缺省回退查 .cs-tool-name。
+    let n = card.dataset.csName || '';
+    if (!n) {
+      const nameEl = card.querySelector('.cs-tool-name');
+      n = nameEl ? nameEl.textContent.trim() : '';
+    }
+    if (n && toolNames.indexOf(n) === -1) toolNames.push(n);
+  }
+  const bits = [];
+  if (steps) bits.push(`${steps} 步`);
+  if (toolNames.length) {
+    bits.push(toolNames.slice(0, 3).join(' · ') + (toolNames.length > 3 ? ' …' : ''));
+  }
+  const usage = panel.dataset.csUsage;
+  if (usage) bits.push(usage);
+  summary.textContent = bits.join('　');
+}
+
 function _csSetPanelState(panel, status, error) {
   panel.className = _csPanelClass(status);
+  const terminal = status === 'completed' || status === 'failed' || status === 'cancelled';
   const spinner = panel.querySelector('.cs-spinner');
-  if (spinner) spinner.style.display = status === 'completed' || status === 'failed' || status === 'cancelled' ? 'none' : '';
+  if (spinner) spinner.style.display = terminal ? 'none' : '';
   const stopBtn = panel.querySelector('.cs-panel-stop');
-  if (stopBtn) stopBtn.style.display = status === 'completed' || status === 'failed' || status === 'cancelled' ? 'none' : '';
+  if (stopBtn) stopBtn.style.display = terminal ? 'none' : '';
   const stateEl = panel.querySelector('[data-cs-state]');
   if (stateEl) {
     const label = status === 'completed' ? '已完成'
       : status === 'failed' ? `失败${error ? `：${error}` : ''}`
       : status === 'cancelled' ? '已取消' : '运行中';
     stateEl.textContent = label;
+  }
+  // 完成即收缩（CLI 行为契约：执行过程实时可见，结束后过程收起，
+  // 摘要行 + 点开可看）。失败不收：过程就是排障信息。
+  if (terminal && status !== 'failed') {
+    _csUpdatePanelSummary(panel);
+    _csSetCollapsed(panel, true);
   }
 }
 
@@ -151,11 +219,14 @@ function _csEnsureItemCard(body, itemId, kind) {
   card.className = `cs-card cs-${kind}`;
   card.dataset.csItem = itemId;
   body.appendChild(card);
+  _csUpdatePanelSummary(body.closest('.cs-panel'));
   return card;
 }
 
 function _csRenderToolCard(card, payload, status) {
   const p = payload || {};
+  // 摘要行读取的名称副本（见 _csUpdatePanelSummary）。
+  card.dataset.csName = String(p.toolName || 'tool');
   const parts = [
     `<div class="cs-card-head">
       <span class="cs-card-ico ${status}">${_csStatusIcon(status)}</span>
@@ -209,6 +280,15 @@ function _csRenderUsageCard(card, payload) {
   }
   if (!bits.length) return;
   card.innerHTML = `<div class="cs-usage">${bits.join(' · ')}</div>`;
+  // token 摘要挂到面板级：完成收缩后 header 一行仍能看到本轮用量。
+  const panel = card.closest('.cs-panel');
+  if (panel) {
+    panel.dataset.csUsage = [
+      typeof p.inputTokens === 'number' ? `↑${_csFmtTok(p.inputTokens)}` : '',
+      typeof p.outputTokens === 'number' ? `↓${_csFmtTok(p.outputTokens)}` : '',
+    ].filter(Boolean).join(' ');
+    _csUpdatePanelSummary(panel);
+  }
 }
 
 // ── 交互卡（M2：审批/提问） ────────────────────────────────────────────────
@@ -484,7 +564,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
     const existing = _csPanels.get(turnKey);
     if (existing) existing.remove();
 
-    const panel = _csCreatePanel(cid, turnKey, actorName);
+    const panel = _csCreatePanel(cid, turnKey, actorName || '过程');
     const body = panel.querySelector('.cs-panel-body');
     const toolCards = new Map();
     for (const item of items) {
@@ -521,16 +601,18 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
     }
     if (!body.children.length) { panel.remove(); return false; }
     _csSetPanelState(panel, 'completed');
-    // 完成态默认展开（过程可见是 conv-core 的核心诉求）；用户可一键收起。
-    // 老线程回放不想全展开时，调用方传 expanded:false 显式收起。
-    if (opts && opts.expanded === false) {
-      const bodyEl = panel.querySelector('.cs-panel-body');
-      const toggle = panel.querySelector('.cs-panel-toggle');
-      if (bodyEl && toggle) {
-        bodyEl.style.display = 'none';
-        toggle.textContent = '展开';
-        toggle.setAttribute('aria-expanded', 'false');
-      }
+    // 历史回合默认收起（完成态=摘要行，点开看全程）；正文为空的异常
+    // 回合（中断占位/HTML 桩）过程即全部内容，调用方传 expanded:true 展开。
+    _csSetCollapsed(panel, !(opts && opts.expanded === true));
+    // 历史 items 不带 usage 事件：从卡片文本回填 token 摘要，让收起行有用量。
+    const usageCard = body.querySelector('.cs-usage');
+    if (usageCard && !panel.dataset.csUsage) {
+      const txt = usageCard.textContent;
+      panel.dataset.csUsage = [
+        (txt.match(/↑[\d,]+/) || [''])[0],
+        (txt.match(/↓[\d,]+/) || [''])[0],
+      ].filter(Boolean).join(' ');
+      _csUpdatePanelSummary(panel);
     }
     msgDiv.parentNode.insertBefore(panel, msgDiv);
     _csPanels.set(turnKey, panel);
