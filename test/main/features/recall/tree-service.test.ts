@@ -195,7 +195,7 @@ describe('cognition tree asset relation contract', () => {
 });
 
 /**
- * G-8「芽」。
+ * 「芽」。
  *
  * 芽的判据在 tree-service 一处：`getRecallCandidateCapabilities().canPromote`
  * 且过 `validatePromotionByAssetType` 晋升闸门。这一组测试盯的是产品承诺的
@@ -204,7 +204,7 @@ describe('cognition tree asset relation contract', () => {
  * 这条推理是不够的：晋升路径不止一条，任何一条忘了落状态，用户看到的就是
  * 同一条认知在树上出现两次。
  */
-describe('cognition tree candidate buds (G-8)', () => {
+describe('cognition tree candidate buds', () => {
   async function seedCandidate(
     userId: string,
     input: {
@@ -305,7 +305,7 @@ describe('cognition tree candidate buds (G-8)', () => {
     expect(graph.nodes.map((node) => node.id)).not.toContain(`candidate:${belowBar.id}`);
   });
 
-  /** G-8 的核心不变量。这条不接受"推理上应该成立"。 */
+  /** 核心不变量。这条不接受"推理上应该成立"。 */
   it('replaces the bud with an asset leaf on promotion, never both in one rebuild', async () => {
     const { candidates, tree } = await modules();
     const candidate = await seedCandidate('u-promote', {

@@ -110,7 +110,7 @@ const viewMock = vi.hoisted(() => ({
 }));
 const teachingMock = vi.hoisted(() => ({
   listUserTeachingSignals: vi.fn(async () => []),
-  // G-2：读口改走分页出口（items + total）。total 必须是截断前的真实条数，
+  // 读口改走分页出口（items + total）。total 必须是截断前的真实条数，
   // 所以这里刻意让 total 与 items.length 不相等——否则用例分不出实现是真的
   // 读了 total，还是又拿 items.length 顶替。
   listUserTeachingSignalPage: vi.fn(async () => ({ items: [], total: 42 })),
