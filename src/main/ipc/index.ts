@@ -3914,6 +3914,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return contexts.uploadContextFile(target, buf);
   },
 
+  // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
+  'kbqa.attachPick': async ({ extensions } = {}) => {
+    const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
+    const picked = await _pickLocalFiles('选择附件', rawExts, true);
+    const files = picked.map((filePath) => {
+      let bytes = 0;
+      try { bytes = fs.statSync(filePath).size; } catch { bytes = 0; }
+      return { name: path.basename(filePath), path: filePath, size: bytes };
+    });
+    return { files };
+  },
+
   'contexts.pickAndUpload': async ({ targetDir } = {}) => {
     const picked = await _pickLocalFiles('Choose files', CONTEXT_PICK_EXTENSIONS, true, /* seedWorkspaceOnFirstOpen */ true);
     const results = [];
@@ -4050,11 +4062,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
-  'kb.mindmap': async ({ dir, spaceId, force }, ctx) => {
+  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
+  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
     const res = await kbMindmap.kbMindmap(ctx.userId, {
       dir: typeof dir === 'string' && dir ? dir : null,
       spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
       force: force === true,
+      text: typeof text === 'string' && text ? text : null,
     }, {
       complete: async (opts) => {
         const r = await modelClient.chatWithModel({
@@ -4084,6 +4098,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'kb.mindmap.load': async ({ key }, ctx) => {
     const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
     return { ok: root !== null, root };
+  },
+
+  // 脑图弹出独立窗口：新开一个无边框 BrowserWindow 展示 SVG，适合大屏深度查看
+  'kb.mindmap.popout': async ({ html }) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false, error: 'no html' };
+    try {
+      const win = new BrowserWindow({
+        width: 900, height: 640, minWidth: 480, minHeight: 320,
+        title: '脑图',
+        backgroundColor: '#ffffff',
+        webPreferences: { sandbox: true },
+      });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      win.on('closed', () => { /* no-op */ });
+      return { ok: true };
+    } catch (err) {
+      log.warn('mindmap popout failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false, error: 'popout failed' };
+    }
   },
 
   // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
@@ -5481,7 +5515,7 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
@@ -5492,6 +5526,8 @@ const streamHandlers: Record<string, StreamHandler> = {
         spaceId: space_id ? String(space_id) : null,
         question: q,
         k: typeof k === 'number' ? k : undefined,
+        attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
+        history: Array.isArray(history) ? history.filter((h: any) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : undefined,
       }, {
         stream: (opts) => modelClient.streamChatWithModel({
           userId: opts.userId,
