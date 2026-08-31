@@ -2,6 +2,7 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { autoApplyRecallCandidate, saveRecallCandidate } from '../recall/candidate-service';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import { recordKstarFailure } from './failure-service';
 import type { KstarCandidateProposal, KstarEpisodeRecord } from './types';
 
 /**
@@ -28,11 +29,15 @@ export interface PrecipitateDirectExperienceResult {
   mergedIntoIds: string[];
   /** Candidates that became update proposals (quality-fusion, need user). */
   updateCandidateIds: string[];
+  /** Persistent failure ids for proposals that could not be written. */
+  failureIds: string[];
 }
 
 /** Lightweight source reference for requirement-level precipitation. */
 export interface DirectExperienceSource {
   id: string;
+  conversationId?: string;
+  requirementId?: string;
   workspaceId?: string;
 }
 
@@ -92,6 +97,7 @@ export async function precipitateDirectExperienceFromSource(
     candidateIds: [],
     mergedIntoIds: [],
     updateCandidateIds: [],
+    failureIds: [],
   };
   for (const [index, proposal] of proposals.slice(0, 3).entries()) {
     try {
@@ -138,6 +144,14 @@ export async function precipitateDirectExperienceFromSource(
         sourceId: source.id,
         error: (error as Error).message,
       });
+      const failure = await recordKstarFailure(userId, {
+        stage: 'precipitation', errorCode: 'asset_write_failed',
+        errorMessage: (error as Error).message, operationKey: `precipitation-${source.id}-${index}`,
+        ...(source.conversationId ? { conversationId: source.conversationId } : {}),
+        ...(source.requirementId ? { requirementId: source.requirementId } : {}),
+        episodeId: source.id.startsWith('kse-') ? source.id : undefined,
+      }).catch(() => null);
+      if (failure) result.failureIds.push(failure.id);
     }
   }
   return result;

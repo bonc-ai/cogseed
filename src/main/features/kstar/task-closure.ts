@@ -19,6 +19,7 @@ import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
 import type { WorldModelForecast } from '../recall/world-model-types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
+import { recordKstarFailure } from './failure-service';
 
 const log = createLogger('kstar.task-closure');
 const closureLocks = new Map<string, Promise<KstarClosureResult>>();
@@ -57,6 +58,11 @@ function validExtractionRun(userId: string, episodeId: string, reviewId: string,
     raw.ownerId !== userId || raw.id !== runId || raw.episodeId !== episodeId || raw.reviewId !== reviewId ||
     !Array.isArray(raw.candidateIds) || raw.candidateIds.some((id) => typeof id !== 'string') ||
     !['created', 'partial', 'failed'].includes(String(raw.status)) ||
+    (raw.createdAssetIds !== undefined && (!Array.isArray(raw.createdAssetIds) || raw.createdAssetIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.mergedIntoIds !== undefined && (!Array.isArray(raw.mergedIntoIds) || raw.mergedIntoIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.updateCandidateIds !== undefined && (!Array.isArray(raw.updateCandidateIds) || raw.updateCandidateIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.failureIds !== undefined && (!Array.isArray(raw.failureIds) || raw.failureIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.completedAt !== undefined && typeof raw.completedAt !== 'string') ||
     typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string' ||
     (raw.error !== undefined && typeof raw.error !== 'string')
   ) throw new Error('malformed kstar extraction run');
@@ -146,6 +152,11 @@ async function finishClosure(
         needsConfirmation: inferred.needsConfirmation,
       });
     } catch {
+      await recordKstarFailure(userId, {
+        stage: 'review_inference', errorCode: 'review_inference_failed',
+        errorMessage: 'KSTAR review inference failed; a conservative review was stored.',
+        operationKey: `review-${episode.id}`, episodeId: episode.id,
+      }).catch(() => undefined);
       review = await saveKstarReviewRecord(userId, createInitialKstarReview(episode));
     }
   }
@@ -488,6 +499,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           conversationId: event.conversation_id,
           errorCode: 'group_capture_failed',
         });
+        void recordKstarFailure(event.user_id, {
+          stage: 'capture', errorCode: 'group_capture_failed',
+          errorMessage: 'KSTAR group terminal capture failed after retry.', conversationId: event.conversation_id,
+          operationKey: `capture-${event.run_id}`, episodeId: `kse-${event.run_id}`,
+        }).catch(() => undefined);
       }
     };
     void runCapture(0);

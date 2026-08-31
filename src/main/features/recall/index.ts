@@ -10,11 +10,10 @@ export type { CognitionCatalogKind, CognitionCatalogSource, CognitionSourceActio
 export { cognitionSourceControlId, isCognitionSourceEnabled, listCognitionSourceControls, readCognitionSourceControl } from './source-control';
 export type { CognitionSourceAvailability, CognitionSourceControlRecord, CognitionSourceRemovalImpact, RemoveCognitionSourceResult } from './source-control';
 
-<<<<<<< HEAD
 export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, recallCandidateConflictingTypes, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate, recordRecallCandidateValidation } from './candidate-service';
-=======
-export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate, recordRecallCandidateValidation } from './candidate-service';
->>>>>>> 2b88b728 (feat(kstar): add lifecycle and execution optimizations)
+export { recordInjectionReceipt, listInjectionReceipts } from './injection-receipt';
+export { recordValidation, listValidationRecords } from './validation-service';
+export { evaluatePromotionPolicy } from './promotion-policy';
 export type { AbilityAssetType, RecallAbilityAssetRecord, RecallAssetHandoffReceipt, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
 export { normalizeAbilityAssetOntologyRefs } from './ontology-refs';
 export type { AbilityAssetOntologyRef } from './ontology-refs';
@@ -27,7 +26,7 @@ export type { CapturePromptMessage, ListRecallCapturesQuery, RecallCaptureCandid
 export { isWithinNightlyWindow, nextNightlyRunAt, readRecallCaptureSettings, updateRecallCaptureSettings } from './capture-settings';
 export type { RecallCaptureExecutionPolicy, RecallCaptureSettingsRecord, UpdateRecallCaptureSettingsInput } from './capture-settings';
 
-export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetCrossScopeConfirmation, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
+export { archiveAbilityAsset, deleteAbilityAsset, downgradeAbilityAssetMaturityForRevokedEvidence, initializeAbilityAsset, listAbilityAssetAudit, listAbilityAssetVersions, listAbilityAssets, pauseAbilityAsset, purgeAbilityAsset, readAbilityAsset, recordAbilityAssetValidation, recommendAbilityAssetAction, restoreAbilityAsset, resumeAbilityAsset, revokeAbilityAsset, rollbackAbilityAsset, setAbilityAssetCrossScopeConfirmation, setAbilityAssetMaturity, updateAbilityAsset } from './asset-service';
 export type { AbilityAssetActor, AbilityAssetAuditRecord, AbilityAssetRecommendedAction, AbilityAssetUserActionInput, AbilityAssetVersionRecord, RecommendAbilityAssetActionInput, UpdateAbilityAssetInput } from './asset-service';
 
 export { confirmRecallSkillDraft, decideRecallSkillDraft, prepareRecallSkillDraft, readInstalledSkillForAsset, readRecallSkillDraft } from './skill-draft-service';
