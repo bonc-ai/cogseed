@@ -15,7 +15,10 @@
  * drop bare names (PowerShell shims, MinGW, etc.).
  */
 
-import * as fs from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 const isWindows = process.platform === 'win32';
@@ -47,6 +50,137 @@ export async function whichBin(name: string, opts: { extraDirs?: string[] } = {}
     }
   }
   return null;
+}
+
+export function recursiveSearchRoots(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home = os.homedir(),
+): string[] {
+  const roots: string[] = [];
+  const localAppData = env.LOCALAPPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Local') : '');
+  const appData = env.APPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Roaming') : '');
+  if (isWindows) {
+    if (localAppData) {
+      roots.push(localAppData);
+      roots.push(path.win32.join(localAppData, 'Programs'));
+      if (name === 'codex') {
+        roots.push(path.win32.join(localAppData, 'OpenAI'));
+        roots.push(path.win32.join(localAppData, 'Programs', 'OpenAI'));
+      }
+      if (name === 'codebuddy') {
+        roots.push(path.win32.join(localAppData, 'WorkBuddy'));
+        roots.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy'));
+      }
+    }
+    if (appData) {
+      roots.push(appData);
+      roots.push(path.win32.join(appData, 'npm'));
+    }
+    return [...new Set(roots.map(r => r.toLowerCase()))].filter(Boolean);
+  }
+  if (home) {
+    roots.push(path.posix.join(home, '.codex'));
+    roots.push(path.posix.join(home, '.local'));
+    roots.push(path.posix.join(home, '.hermes'));
+    roots.push(path.posix.join(home, '.npm-global'));
+    roots.push(path.posix.join(home, '.cargo'));
+  }
+  roots.push('/opt/homebrew', '/usr/local');
+  return [...new Set(roots)].filter(Boolean);
+}
+
+let recursiveCache: { at: number; key: string; value: string | null } | null = null;
+
+/**
+ * Installer-layout fallback: when PATH and the standard candidate dirs miss,
+ * recursively search per-agent install roots. Replaces hard-coded dir
+ * whack-a-mole (Windows-app hash dirs, WorkBuddy variants, …).
+ *
+ * Windows uses `where.exe /R`; POSIX uses a bounded recursive walk.
+ * Results are cached 5 minutes, matching registry's detect cache.
+ */
+export async function findBinRecursively(
+  name: string,
+  opts: { env?: NodeJS.ProcessEnv; home?: string } = {},
+): Promise<string | null> {
+  if (!name) return null;
+  const env = opts.env ?? process.env;
+  const home = opts.home ?? os.homedir();
+  const roots = recursiveSearchRoots(name, env, home);
+  const key = `${process.platform}|${name}|${roots.join(';')}`;
+  if (recursiveCache && recursiveCache.key === key && Date.now() - recursiveCache.at < 5 * 60_000) {
+    return recursiveCache.value;
+  }
+
+  const resolved = isWindows
+    ? findBinWindowsRecursive(name, roots)
+    : await findBinPosixRecursive(name, roots);
+  recursiveCache = { at: Date.now(), key, value: resolved };
+  return resolved;
+}
+
+function findBinWindowsRecursive(name: string, roots: string[]): string | null {
+  const candidates = winExtCandidates().map(ext => name + ext);
+  for (const root of roots) {
+    try {
+      if (!fs.statSync(root).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    for (const candidate of candidates) {
+      let result;
+      try {
+        result = spawnSync('where.exe', ['/R', root, candidate], {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 10_000,
+        });
+      } catch {
+        continue;
+      }
+      if (result.status !== 0) continue;
+      const line = String(result.stdout || '').split(/\r?\n/).map(s => s.trim()).find(Boolean);
+      if (line && fs.existsSync(line) && fs.statSync(line).isFile()) return line;
+    }
+  }
+  return null;
+}
+
+async function findBinPosixRecursive(name: string, roots: string[]): Promise<string | null> {
+  const seen = new Set<string>();
+  const walk = async (dir: string, depth: number): Promise<string | null> => {
+    if (depth > 4 || seen.has(dir)) return null;
+    seen.add(dir);
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
+    catch { return null; }
+    for (const entry of entries) {
+      const full = path.posix.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        const hit = await walk(full, depth + 1);
+        if (hit) return hit;
+      } else if (entry.isFile() && entry.name === name && (await isExecutableFilePosix(full))) {
+        return full;
+      }
+    }
+    return null;
+  };
+  for (const root of roots) {
+    const hit = await walk(root, 0);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function isExecutableFilePosix(p: string): Promise<boolean> {
+  try {
+    const st = await fsp.stat(p);
+    return st.isFile() && (st.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 function uniqueDirs(dirs: string[]): string[] {
@@ -88,7 +222,7 @@ function winExtCandidates(): string[] {
  */
 async function isExecutableFile(p: string): Promise<boolean> {
   try {
-    const st = await fs.stat(p);
+    const st = await fsp.stat(p);
     if (!st.isFile()) return false;
     if (isWindows) return true;
     // 0o111 = any of user/group/other execute.

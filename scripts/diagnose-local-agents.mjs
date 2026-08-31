@@ -40,7 +40,7 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,6 +270,87 @@ export async function whichBin(name, opts = {}) {
         return candidate;
       }
     }
+  }
+  return null;
+}
+
+/** 安装目录递归兜底（镜像 which.ts::findBinRecursively）。 */
+function recursiveSearchRoots(name, platform, env, home) {
+  const isWindows = platform === 'win32';
+  const roots = [];
+  const localAppData = env.LOCALAPPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Local') : '');
+  const appData = env.APPDATA || (isWindows ? path.win32.join(home, 'AppData', 'Roaming') : '');
+  if (isWindows) {
+    if (localAppData) {
+      roots.push(localAppData);
+      roots.push(path.win32.join(localAppData, 'Programs'));
+      if (name === 'codex') {
+        roots.push(path.win32.join(localAppData, 'OpenAI'));
+        roots.push(path.win32.join(localAppData, 'Programs', 'OpenAI'));
+      }
+      if (name === 'codebuddy') {
+        roots.push(path.win32.join(localAppData, 'WorkBuddy'));
+        roots.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy'));
+      }
+    }
+    if (appData) {
+      roots.push(appData);
+      roots.push(path.win32.join(appData, 'npm'));
+    }
+    return [...new Set(roots.map((r) => r.toLowerCase()))].filter(Boolean);
+  }
+  if (home) {
+    roots.push(path.posix.join(home, '.codex'));
+    roots.push(path.posix.join(home, '.local'));
+    roots.push(path.posix.join(home, '.hermes'));
+    roots.push(path.posix.join(home, '.npm-global'));
+    roots.push(path.posix.join(home, '.cargo'));
+  }
+  roots.push('/opt/homebrew', '/usr/local');
+  return [...new Set(roots)].filter(Boolean);
+}
+
+export async function findBinRecursively(name, opts = {}) {
+  const { platform = process.platform, env = process.env, home = os.homedir() } = opts;
+  if (!name) return null;
+  const roots = recursiveSearchRoots(name, platform, env, home);
+  if (platform === 'win32') {
+    const candidates = winExtCandidates(env).map((ext) => name + ext);
+    for (const root of roots) {
+      try { if (!fs.statSync(root).isDirectory()) continue; } catch { continue; }
+      for (const candidate of candidates) {
+        let result;
+        try {
+          result = spawnSync('where.exe', ['/R', root, candidate], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+        } catch { continue; }
+        if (result.status !== 0) continue;
+        const line = String(result.stdout || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+        if (line && fs.existsSync(line) && fs.statSync(line).isFile()) return line;
+      }
+    }
+    return null;
+  }
+  const seen = new Set();
+  const walk = async (dir, depth) => {
+    if (depth > 4 || seen.has(dir)) return null;
+    seen.add(dir);
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      const full = path.posix.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        const hit = await walk(full, depth + 1);
+        if (hit) return hit;
+      } else if (entry.isFile() && entry.name === name && (await isExecutableFile(full, platform))) {
+        return full;
+      }
+    }
+    return null;
+  };
+  for (const root of roots) {
+    const hit = await walk(root, 0);
+    if (hit) return hit;
   }
   return null;
 }
@@ -939,19 +1020,24 @@ export async function diagnoseCli(type, opts = {}) {
   const envPath = (env[ENV_KEYS[type]] || '').trim();
   const candidate = envPath && envPath.length > 0 ? envPath : BIN_NAMES[type];
   const extraDirs = envPath && envPath.length > 0 ? [] : await expandSearchDirs(localCliSearchDirs(type, platform, env, home), platform, home);
-  const resolved = await whichBin(candidate, { extraDirs, platform, env });
+  let resolved = await whichBin(candidate, { extraDirs, platform, env });
+  let usedRecursive = false;
+  if (!resolved && !envPath && !candidate.includes('/') && !candidate.includes('\\')) {
+    resolved = await findBinRecursively(candidate, { platform, env, home });
+    usedRecursive = resolved !== null;
+  }
   if (!resolved) {
     result.binary.source = envPath ? 'env' : 'path+search-dirs';
     result.error = 'not_found';
     result.errorDetail = envPath
       ? `${ENV_KEYS[type]}=${envPath} 不存在或不可执行`
-      : `${BIN_NAMES[type]} 在 PATH 和常见安装位置都找不到`;
+      : `${BIN_NAMES[type]} 在 PATH、常见安装位置和递归安装根都找不到`;
     result.verdict = 'missing_binary';
     return result;
   }
   result.binary.found = true;
   result.binary.path = resolved;
-  result.binary.source = envPath ? 'env' : 'path+search-dirs';
+  result.binary.source = envPath ? 'env' : (usedRecursive ? 'recursive-search' : 'path+search-dirs');
   try { result.binary.realPath = fs.realpathSync(resolved); } catch { result.binary.realPath = null; }
 
   // 2. 版本探测
