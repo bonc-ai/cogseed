@@ -287,6 +287,7 @@ async function doStartExternalGateway(input: {
   }
   const alias = String(input.alias || '').trim().slice(0, 60) || mapping.id;
   const gatewayHome = path.join(variantRoot(), 'external-gateways', cli);
+  const gatewayLogPath = path.join(variantRoot(), 'external-gateways', cli + '.log');
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     ELECTRON_RUN_AS_NODE: '1',
@@ -315,12 +316,17 @@ async function doStartExternalGateway(input: {
     child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let errLog = '';
     let outLog = '';
+    fs.mkdirSync(path.dirname(gatewayLogPath), { recursive: true });
+    const logStream = fs.createWriteStream(gatewayLogPath, { flags: 'a' });
     child.stdout?.on('data', (chunk: Buffer) => {
       if (outLog.length < 2000) outLog += chunk.toString('utf8');
+      logStream.write(chunk);
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       if (errLog.length < 2000) errLog += chunk.toString('utf8');
+      logStream.write(chunk);
     });
+    child.once('close', () => logStream.end());
     // 等待 hello 注册：节点在注册表里出现 endpoint 即接入成功。注册表
     // 可能由本进程的常驻实例或桥的入站 listener 写入，因此每轮都从磁盘
     // 重建快照（持久化文件是唯一事实来源）。
@@ -350,6 +356,7 @@ async function doStartExternalGateway(input: {
       agent_id: mapping.id,
       alias,
       bin: String(input.binPath || '').trim() || mapping.id,
+      log: gatewayLogPath,
       port,
       pid: child.pid ?? 0,
       started_at: new Date().toISOString(),

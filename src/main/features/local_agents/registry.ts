@@ -17,7 +17,7 @@
  */
 
 import { createLogger } from '../../logger.js';
-import { whichBin } from './which.js';
+import { findBinRecursively, whichBin } from './which.js';
 import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver, MIN_VERSIONS } from './version.js';
 import * as fs from 'node:fs/promises';
@@ -400,9 +400,13 @@ export async function detectAll(opts: { force?: boolean } = {}): Promise<LocalCl
 export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   const envPath = process.env[ENV_KEYS[type]]?.trim();
   const candidate = envPath && envPath.length > 0 ? envPath : BIN_NAMES[type];
-  const resolved = await whichBin(candidate, {
+  const resolvedByPath = await whichBin(candidate, {
     extraDirs: envPath ? [] : await expandSearchDirs(localCliSearchDirs(type)),
   });
+  const isBareName = !path.isAbsolute(candidate) && !candidate.includes('/') && !candidate.includes('\\');
+  const resolved = resolvedByPath ?? (isBareName
+    ? await findBinRecursively(candidate, { env: process.env, home: os.homedir() })
+    : null);
   if (!resolved) {
     return {
       type, path: null, version: null, available: false,
