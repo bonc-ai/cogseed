@@ -70,8 +70,59 @@ function _csFileIco(fileName) {
 function _csParseArgs(argsSummary) {
   const raw = String(argsSummary || '').trim();
   if (!raw.startsWith('{')) return null;
-  try { return JSON.parse(raw); } catch { /* 截断/非 JSON → 原文展示 */ }
-  try { return JSON.parse(`${raw}}`); } catch { return null; }
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' ? value : null;
+  } catch { /* 截断/非完整 JSON → 字段扫描 */ }
+  // 截断的 JSON 解不动：按字段名直接抠字符串值（截断的命令也能显示前段）。
+  const extracted = {};
+  for (const field of ['command', 'query', 'pattern', 'path', 'file_path', 'url', 'connector', 'server', 'tool', 'skill_id']) {
+    const value = _csPartialJsonField(raw, field);
+    if (value) extracted[field] = value;
+  }
+  return Object.keys(extracted).length ? extracted : null;
+}
+
+/** 从可能被截断的 JSON 文本里抠出某个字符串字段的值。
+ *  手写字符扫描 + 固定转义表（不动态拼正则/执行串）。field 调用方传白名单。 */
+function _csPartialJsonField(source, field) {
+  const text = String(source || '');
+  const key = `"${field}"`;
+  let at = text.indexOf(key);
+  while (at !== -1) {
+    let i = at + key.length;
+    while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i += 1;
+    if (text[i] === ':') {
+      i += 1;
+      while (i < text.length && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i += 1;
+      if (text[i] === '"') {
+        i += 1;
+        let raw = '';
+        while (i < text.length && text[i] !== '"') {
+          if (text[i] === '\\' && i + 1 < text.length) {
+            raw += text[i] + text[i + 1];
+            i += 2;
+          } else {
+            raw += text[i];
+            i += 1;
+          }
+        }
+        return _csUnescapeJson(raw);
+      }
+    }
+    at = text.indexOf(key, at + key.length);
+  }
+  return '';
+}
+
+const _CS_ESCAPES = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+
+function _csUnescapeJson(raw) {
+  if (raw.indexOf('\\') === -1) return raw;
+  return raw.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})/g, (m, g) => {
+    if (g[0] === 'u') return String.fromCharCode(parseInt(g.slice(1), 16));
+    return _CS_ESCAPES[g] || g;
+  });
 }
 
 function _csFirstArg(args, keys) {
@@ -154,6 +205,13 @@ function _csCreateFlow(cid, turnId, opts) {
   return flow;
 }
 
+function _csBubbleLooksEmpty(bubble) {
+  if (!bubble) return false;
+  if (String(bubble.textContent || '').trim()) return false;
+  // 有可见媒体/结构块不算空（避免误伤带隐藏骨架的消息）。
+  return !bubble.querySelector('img, video, audio, iframe, canvas, svg, pre, code, blockquote, table, ul, ol, hr, .chat-attachments, .chat-artifacts, .chat-plan-announce, .chat-reference-bundle, .recall-citations');
+}
+
 function _csEnsureFlow(cid, anchor, turnId, opts) {
   const key = _csPanelKey(cid, turnId);
   let flow = _csPanels.get(key);
@@ -169,7 +227,7 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
   else if (anchor && anchor.appendChild) anchor.appendChild(flow);
   // 运行中正文都在时间线里：气泡此时是空的，把空底条藏掉（视觉对齐 CLI：
   // 运行中没有空泡壳），收尾交回正文时恢复。
-  if (bubble && !bubble.firstChild) {
+  if (bubble && _csBubbleLooksEmpty(bubble)) {
     bubble.style.display = 'none';
     flow.dataset.csBubbleHidden = '1';
   }
@@ -272,11 +330,18 @@ function _csDiffStats(diff) {
 
 function _csRenderToolRow(row, payload, status) {
   const p = payload || {};
-  const args = _csParseArgs(p.argsSummary);
+  // 事件按相位增量到达：start 带参数、progress 带 message、end 带输出/错误
+  // （end 不带 arguments！）。dataset 累积已见字段——后到相位重绘时不得把
+  // start 的目标抹掉，否则行会退化成光秃秃的动词（真机踩过的坑）。
+  if (p.argsSummary) row.dataset.csArgs = String(p.argsSummary);
+  if (p.output) row.dataset.csOut = String(p.output);
+  const argsSummary = p.argsSummary || row.dataset.csArgs || '';
+  const output = p.output || row.dataset.csOut || '';
+  const args = _csParseArgs(argsSummary);
   const style = _csStyleForTool(p.toolName);
   const failed = status === 'failed';
-  const target = _csTargetHtml(style.targetKind, args, p.argsSummary || '');
-  const hover = [p.toolName, p.argsSummary].filter(Boolean).join(' ');
+  const target = _csTargetHtml(style.targetKind, args, argsSummary);
+  const hover = [p.toolName, argsSummary].filter(Boolean).join(' ');
   // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
   const line = [
     `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
@@ -285,7 +350,7 @@ function _csRenderToolRow(row, payload, status) {
   ];
   const blocks = [];
   if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);
-  if (p.output) blocks.push(`<div class="cs-row-out"><pre>${_csEscapeHtml(p.output)}</pre></div>`);
+  if (output) blocks.push(`<div class="cs-row-out"><pre>${_csEscapeHtml(output)}</pre></div>`);
   row.innerHTML = `<div class="cs-row-line">${line.join('')}</div>${blocks.join('')}`;
   if (hover) row.title = hover;
   if (!row.dataset.csClickBound) {
@@ -549,9 +614,16 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         let seg = (last && last.className && String(last.className).includes('cs-text')
           && last.dataset.csClosed !== '1') ? last : null;
         if (!seg) {
+          // 投影器在工具行后会补发 '\n\n' 分隔 delta（供 markdown 段落分隔）；
+          // 时间线段剥掉段首空白（行间距已分隔），否则渲染出一块空行。聚合
+          // 文本（flow.dataset.csText）不受影响，交回后 markdown 仍需要它。
+          const lead = piece.replace(/^[ \t\r\n]+/, '');
+          if (!lead && !piece.trim()) return;
           seg = document.createElement('div');
           seg.className = 'cs-text';
           body.appendChild(seg);
+          seg.textContent += lead;
+          return;
         }
         seg.textContent += piece;
         return;
@@ -749,6 +821,8 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       const evt = item && (item.event || null);
       const data = evt && evt.stream === 'tool' ? (evt.data || {}) : null;
       if (data && typeof data === 'object') {
+        // 工具到达 = 当前思考行结束（历史无计时数据，silent 只定稿不留空时长）。
+        _csCloseThinkRow(body, true);
         const toolId = String(data.id || '');
         const itemId = `${turnKey}:tool:${toolId || Math.random().toString(36).slice(2, 8)}`;
         const payload = {
