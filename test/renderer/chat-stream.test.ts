@@ -298,6 +298,81 @@ describe('chat-stream module', () => {
     expect(rows[0].innerHTML).toContain('done');
   });
 
+  it('end/progress 相位不丢 start 的参数（dataset 累积）；progress 的 message 保留为输出', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: '{"command":"npm run typecheck"}' } });
+    // progress：无 argsSummary、带 message。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', output: 'running…' } });
+    // end：真机 tool_end 不带 arguments——参数必须还在。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', output: 'ok' } });
+    const row = bodyOf(flow).children.find((c) => c.dataset.csItem === 't1')!;
+    expect(row.innerHTML).toContain('npm run typecheck');
+    expect(row.innerHTML).toContain('ok');
+  });
+
+  it('截断 JSON 的 argsSummary 按字段扫描提取命令，不显示原始 JSON', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    const truncated = '{"command":"cd /tmp && echo \\"hello world\\" && ls -la","timeoutMs":5000';
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: truncated } });
+    const row = bodyOf(flow).children.find((c) => c.dataset.csItem === 't1')!;
+    expect(row.innerHTML).toContain('cd /tmp &amp;&amp; echo &quot;hello world&quot; &amp;&amp; ls -la');
+    expect(row.innerHTML).not.toContain('&quot;command&quot;');
+  });
+
+  it('时间线接管正文：text 段交错、完成交回清空、思考行随之收行', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '我先查一下：' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', output: 'ok' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '查完了。' } });
+
+    const flow = inserts[0].node;
+    const body = bodyOf(flow);
+    const segs = body.children.filter((c) => String(c.className).includes('cs-text'));
+    // 文字与工具行交错：两段文字夹一个工具行。
+    expect(segs).toHaveLength(2);
+    expect(segs[0].textContent).toBe('我先查一下：');
+    expect(segs[1].textContent).toBe('查完了。');
+    expect(flow.dataset.csText).toBe('我先查一下：查完了。');
+
+    // turn.completed：交回（_streamingAppendFinalDelta 不在测试环境，走
+    // finalEl fallback 亦无），段移除、聚合清空；有动作行 → 流保留为 done。
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    expect(flow.querySelectorAll('.cs-text')).toHaveLength(0);
+    expect(flow.dataset.csText).toBeUndefined();
+    expect(flow.className).toContain('done');
+    expect(flow.className).not.toContain('running');
+    expect(flow.isConnected).toBe(true);
+    // 完成后运行行整体撤除。
+    expect(flow.querySelector('.cs-status')).toBeNull();
+
+    // finalize 兜底：running 流（断流场景）被收尾为 cancelled。
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'i2', kind: 'text', status: 'inProgress', payload: { delta: '做到一半' } });
+    const fin = g.window.chatStreamFinalize as (c: string) => void;
+    fin('c-1');
+    const p2 = inserts[inserts.length - 1].node;
+    expect(p2.className).toContain('cs-flow');
+    expect(p2.className).toContain('cancelled');
+    expect(p2.querySelectorAll('.cs-text')).toHaveLength(0);
+  });
+
+  it('投影器的工具后 \\n\\n 分隔 delta 不在时间线里产生空行段，聚合文本保留', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '\n\n' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '正文第一段。' } });
+    const flow = inserts[0].node;
+    const body = bodyOf(flow);
+    const segs = body.children.filter((c) => String(c.className).includes('cs-text'));
+    expect(segs).toHaveLength(1);
+    // 段首空白被剥掉（时间线显示），聚合文本保留（markdown 分段需要）。
+    expect(segs[0].textContent).toBe('正文第一段。');
+    expect(flow.dataset.csText).toBe('\n\n正文第一段。');
+  });
+
   it('usage 行渲染并含上下文告警，diff 行渲染增删统计与着色行', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { inputTokens: 100, contextWindowRatio: 0.92 } });
@@ -416,9 +491,10 @@ describe('chat-stream module', () => {
     const msgDiv = makeEl('div');
     root.appendChild(msgDiv);
     const items = [
+      { type: 'progress', text: '先想一下' },
       { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 't1', name: 'bash', arguments: { command: 'ls' } } } },
       { type: 'event', event: { stream: 'tool', data: { phase: 'end', id: 't1', name: 'bash', output: 'ok' } } },
-      { type: 'progress', text: '思考中' },
+      { type: 'progress', text: '再想想' },
     ];
     expect(render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' })).toBe(true);
 
@@ -435,10 +511,13 @@ describe('chat-stream module', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].innerHTML).toContain('ok');
     expect(rows[0].innerHTML).toContain('运行');
-    // progress 文本 → 思考行。
+    expect(rows[0].innerHTML).toContain('ls');
+    // progress 文本 → 思考行；中间的思考行（后面跟了工具）必须已收行——
+    // 不再挂着 "…" 占位。
     const thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
-    expect(thinks).toHaveLength(1);
-    expect(thinks[0].innerHTML).toContain('思考');
+    expect(thinks).toHaveLength(2);
+    expect(thinks[0].dataset.csClosed).toBe('1');
+    expect(flow.innerHTML).not.toContain('…');
 
     // 同 turnId 重建幂等：旧流移除、只留一个。
     render('c-1', msgDiv, items, { actorName: 'agent', turnId: 'hist-1' });
