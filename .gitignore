@@ -49,8 +49,8 @@ package.json.new
 # deliberately; this file is local state and would churn per developer.
 /.claude/settings.local.json
 
-# Written by scripts/strip-closed-source-scanner.mjs when building an
-# open-source distribution. Not source: its presence in a normal checkout would
+# Written by the open-source build process. Not source: its presence in a
+# normal checkout would
 # tell the app the bundled scanner is intentionally absent.
 /resources/guardrail/SCANNER_ABSENT
 # Hermes desktop attachments (PRD/转写等敏感文件，勿入库)
