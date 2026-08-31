@@ -12,7 +12,9 @@
  * Windows: scan PATH (split by ';'), multiply each candidate by
  * `process.env.PATHEXT` (e.g. `.COM;.EXE;.BAT;.CMD`); first stat hit
  * wins. The empty extension is also tried first because some installs
- * drop bare names (PowerShell shims, MinGW, etc.).
+ * drop bare names (MinGW, etc.). A bare name that is a Unix shebang
+ * script (npm's `#!/bin/sh` shim) is NOT spawnable on Windows and is
+ * skipped so the `.cmd` shim npm generates alongside it wins instead.
  */
 
 import * as fs from 'node:fs/promises';
@@ -90,10 +92,33 @@ async function isExecutableFile(p: string): Promise<boolean> {
   try {
     const st = await fs.stat(p);
     if (!st.isFile()) return false;
-    if (isWindows) return true;
+    if (isWindows) {
+      // npm generates a `<name>` bash shim (`#!/bin/sh`) alongside every
+      // `<name>.cmd`/`<name>.ps1`. The bare shim is a Unix script Windows
+      // cannot spawn; skip it so whichBin falls through to the real `.cmd`.
+      if (path.extname(p) === '' && await isShebangScript(p)) return false;
+      return true;
+    }
     // 0o111 = any of user/group/other execute.
     return (st.mode & 0o111) !== 0;
   } catch {
     return false;
+  }
+}
+
+/** True when the file starts with `#!` (a Unix shebang). Windows spawn
+ *  cannot execute these directly. Reads at most two bytes; returns false
+ *  on any read error rather than throwing. */
+async function isShebangScript(p: string): Promise<boolean> {
+  let handle: fs.FileHandle | null = null;
+  try {
+    handle = await fs.open(p, 'r');
+    const buf = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(buf, 0, 2, 0);
+    return bytesRead >= 2 && buf[0] === 0x23 /* # */ && buf[1] === 0x21 /* ! */;
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => { /* ignore */ });
   }
 }
