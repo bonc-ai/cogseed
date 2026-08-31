@@ -5567,6 +5567,16 @@ async function runActorTurnBody(
       if (failedUsageWrites.length) {
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(persistedRecallCitations.map((citation) => recordInjectionReceipt(uid, {
+        assetId: citation.asset_id,
+        assetVersion: citation.version,
+        taskRunId: item.turnId,
+        projectionId: citation.projection_id,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'injected',
+      })));
     }
     if (dispatchedUsage.length) {
       // Commander-dispatched grants ride the same usage ledger so the asset
@@ -5584,6 +5594,15 @@ async function runActorTurnBody(
       if (failedDispatchedWrites.length) {
         log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(dispatchedUsage.map((grant) => recordInjectionReceipt(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'dispatched',
+      })));
     }
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
@@ -6636,6 +6655,26 @@ async function guardKstarPrivilegedDispatch(
     if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
     state.taskRun.projectionId = provenance.projectionId;
     state.taskRun.forecastId = provenance.forecastId;
+    // Keep the durable CogSeed task aligned with the in-memory run provenance
+    // so either side can be used as the audit entry point after a restart.
+    if (lifecycle.task?.cogseedTaskId) {
+      try {
+        const { updateCogSeedTask } = await import('../cogseed_backend/task-store');
+        await updateCogSeedTask(state.uid, lifecycle.task.cogseedTaskId, (task) => ({
+          ...task,
+          kstarTaskId: lifecycle.task!.id,
+          ...(lifecycle.requirement?.id ? { kstarRequirementId: lifecycle.requirement.id } : {}),
+          kstarProjectionId: provenance.projectionId,
+          kstarForecastId: provenance.forecastId,
+          updatedAt: new Date().toISOString(),
+        }));
+      } catch (error) {
+        log.warn('kstar provenance bridge degraded', {
+          cid: maskId(state.cid),
+          error: logErrorRef(error),
+        });
+      }
+    }
   }
   return { provenance };
 }
@@ -8497,7 +8536,11 @@ async function hostRouteTaskTurn(
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
   const { isObviouslyTrivial, isClosingIntent } = await import('../kstar/task-intent');
+  const recordRouting = async (decision: import('../kstar/requirement-types').KstarRoutingDecision): Promise<void> => {
+    await import('../kstar/requirement-store').then((store) => store.recordKstarRoutingDecision(uid, cid, decision)).catch(() => undefined);
+  };
   if (isClosingIntent(messageText)) {
+    await recordRouting({ at: nowIso(), kind: 'closing_intent', isTask: true, continuation: true, reason: 'closing intent', ...(sourceMessageId ? { sourceMessageId } : {}) });
     // Deterministic closing intent ("完成/搞定/结束"): close the open task
     // via the finish path (requirement precipitation runs) and NEVER open a
     // new task from it. Checked before the trivial filter so it cannot be
@@ -8541,7 +8584,9 @@ async function hostRouteTaskTurn(
     }
     return { openedTask: false };
   }
-  if (isObviouslyTrivial(messageText)) return { openedTask: false };
+  if (isObviouslyTrivial(messageText)) {
+    return { openedTask: false };
+  }
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
@@ -8551,6 +8596,7 @@ async function hostRouteTaskTurn(
     const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
     if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
     if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
+    await recordRouting({ at: nowIso(), kind: 'model_judged', isTask: true, continuation: verdict.continuation, reason: 'model routing verdict', ...(sourceMessageId ? { sourceMessageId } : {}) });
 
     if (openRequirement && verdict.continuation === false) {
       // Model judged: user moved to a NEW task while one was open. Close the

@@ -120,6 +120,29 @@ async function resolveConversationIdForTask(
   }
 }
 
+async function linkKstarTask(userId: string, conversationId: string | undefined, cogseedTaskId: string): Promise<void> {
+  if (!conversationId) return;
+  try {
+    const lifecycle = await (await import('../kstar/lifecycle-adapter')).readKstarTaskLifecycle(userId, conversationId);
+    const task = lifecycle.task;
+    if (!task || task.conversationId !== conversationId) return;
+    const kstar = await import('../kstar/requirement-store');
+    if (task.cogseedTaskId !== cogseedTaskId) {
+      await kstar.replaceKstarTask(userId, { ...task, cogseedTaskId, updatedAt: new Date().toISOString() });
+    }
+    await updateCogSeedTask(userId, cogseedTaskId, (current) => ({
+      ...current,
+      kstarTaskId: task.id,
+      ...(lifecycle.requirement?.id ? { kstarRequirementId: lifecycle.requirement.id } : {}),
+      ...(lifecycle.projection?.id ? { kstarProjectionId: lifecycle.projection.id } : {}),
+      ...(lifecycle.requirement?.forecastId ? { kstarForecastId: lifecycle.requirement.forecastId } : {}),
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    log.warn('KSTAR/CogSeed task bridge degraded', { taskId: cogseedTaskId, error: logErrorRef(error) });
+  }
+}
+
 async function projectTaskEventBestEffort(
   userId: string,
   task: CogSeedTaskRecord,
@@ -306,9 +329,10 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
     async startCogSeedTask(userId, input) {
       const created = await createCogSeedTask(userId, input);
       if (!created.created) return created.task;
+      const conversationId = await resolveConversationIdForTask(userId, created.task, input);
+      await linkKstarTask(userId, conversationId, created.task.taskId);
       const capabilities = await resolveRuntimeCapabilities(userId, created.task.requestId, created.task.runtimeSessionId);
       const launchInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = { ...input, capabilities };
-      const conversationId = await resolveConversationIdForTask(userId, created.task, input);
       if (conversationId) {
         const assetContext = await buildRuntimeAssetContext(userId, conversationId);
         if (assetContext.length) {

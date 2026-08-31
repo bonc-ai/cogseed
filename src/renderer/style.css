@@ -6140,6 +6140,91 @@ body.model-not-configured .main-content { flex-direction: column; }
   font-weight: 600;
   cursor: pointer;
 }
+
+.conversation-info-kstar-trace {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.conversation-info-kstar-trace-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.conversation-info-kstar-trace-heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.conversation-info-kstar-trace-subtitle,
+.conversation-info-kstar-trace-meta,
+.conversation-info-kstar-trace-reason {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.conversation-info-kstar-trace-subtitle { margin-top: 2px; }
+.conversation-info-kstar-trace-count {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-align: center;
+}
+.conversation-info-kstar-trace-list {
+  display: grid;
+  gap: 5px;
+}
+.conversation-info-kstar-trace-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
+  border-left: 3px solid var(--border-strong, var(--border));
+  background: var(--surface-2);
+}
+.conversation-info-kstar-trace-row.is-ok { border-left-color: var(--success, #16a34a); }
+.conversation-info-kstar-trace-row.is-pending { border-left-color: var(--primary); }
+.conversation-info-kstar-trace-row.is-failed { border-left-color: var(--danger, #dc2626); }
+.conversation-info-kstar-trace-row.is-skipped,
+.conversation-info-kstar-trace-row.is-not_started,
+.conversation-info-kstar-trace-row.is-degraded { border-left-color: var(--text-muted); }
+.conversation-info-kstar-trace-stage {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-info-kstar-trace-main { min-width: 0; }
+.conversation-info-kstar-trace-status {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+.conversation-info-kstar-trace-summary,
+.conversation-info-kstar-trace-reason {
+  overflow-wrap: anywhere;
+}
+.conversation-info-kstar-trace-summary {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.conversation-info-kstar-trace-meta { margin-top: 3px; }
+.conversation-info-kstar-trace-reason { margin-top: 2px; color: var(--danger, #dc2626); }
+
 /* KSTAR migration/history section */
 .conversation-info-kstar-migration-status {
   display: flex;

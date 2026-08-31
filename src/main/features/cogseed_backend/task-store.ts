@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 
-import { genId12, nowIso, writeJson } from '../../storage';
+import { genId12, nowIso, safeId, writeJson } from '../../storage';
 import { appendCogSeedTaskEvent } from './event-store';
 import { fileEditLock } from '../../util/locks';
 import {
@@ -60,6 +60,10 @@ export interface CreateCogSeedTaskInput {
   coordinationId?: string;
   parentTaskId?: string;
   coordinationDepth?: number;
+  kstarTaskId?: string;
+  kstarRequirementId?: string;
+  kstarProjectionId?: string;
+  kstarForecastId?: string;
 }
 
 export interface CreateCogSeedTaskResult {
@@ -129,6 +133,10 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   if (row.coordinationId !== undefined && (typeof row.coordinationId !== 'string' || !row.coordinationId.startsWith('cogseed-coord-'))) throw new Error('malformed CogSeed task');
   if (row.parentTaskId !== undefined && (typeof row.parentTaskId !== 'string' || !row.parentTaskId.startsWith('cogseed-task-'))) throw new Error('malformed CogSeed task');
   if (row.coordinationDepth !== undefined && (!Number.isInteger(row.coordinationDepth) || Number(row.coordinationDepth) < 1)) throw new Error('malformed CogSeed task');
+  if (row.kstarTaskId !== undefined && (typeof row.kstarTaskId !== 'string' || !safeId(row.kstarTaskId))) throw new Error('malformed CogSeed task');
+  if (row.kstarRequirementId !== undefined && (typeof row.kstarRequirementId !== 'string' || !safeId(row.kstarRequirementId))) throw new Error('malformed CogSeed task');
+  if (row.kstarProjectionId !== undefined && (typeof row.kstarProjectionId !== 'string' || !safeId(row.kstarProjectionId))) throw new Error('malformed CogSeed task');
+  if (row.kstarForecastId !== undefined && (typeof row.kstarForecastId !== 'string' || !safeId(row.kstarForecastId))) throw new Error('malformed CogSeed task');
   if (row.conversationId !== undefined) assertCogSeedConversationId(String(row.conversationId));
   if (row.agentId !== undefined) assertCogSeedAgentId(String(row.agentId));
   if (row.executionKind !== undefined && row.executionKind !== 'cogseed-native' && row.executionKind !== 'local-cli') {
@@ -349,6 +357,10 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       ...(input.coordinationId ? { coordinationId: assertCogSeedCoordinationId(String(input.coordinationId)) } : {}),
       ...(input.parentTaskId ? { parentTaskId: assertCogSeedTaskId(String(input.parentTaskId)) } : {}),
       ...(input.coordinationDepth !== undefined ? { coordinationDepth: (() => { const depth = Number(input.coordinationDepth); if (!Number.isInteger(depth) || depth < 1) throw new Error('invalid CogSeed coordination depth'); return depth; })() } : {}),
+      ...(input.kstarTaskId ? { kstarTaskId: safeId(String(input.kstarTaskId)) ? String(input.kstarTaskId) : (() => { throw new Error('invalid KSTAR task id'); })() } : {}),
+      ...(input.kstarRequirementId ? { kstarRequirementId: safeId(String(input.kstarRequirementId)) ? String(input.kstarRequirementId) : (() => { throw new Error('invalid KSTAR requirement id'); })() } : {}),
+      ...(input.kstarProjectionId ? { kstarProjectionId: safeId(String(input.kstarProjectionId)) ? String(input.kstarProjectionId) : (() => { throw new Error('invalid KSTAR projection id'); })() } : {}),
+      ...(input.kstarForecastId ? { kstarForecastId: safeId(String(input.kstarForecastId)) ? String(input.kstarForecastId) : (() => { throw new Error('invalid KSTAR forecast id'); })() } : {}),
       createdAt,
       updatedAt: createdAt,
     };

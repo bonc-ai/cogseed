@@ -113,6 +113,22 @@ export async function saveWorldModelForecast(
   return record;
 }
 
+export async function saveWorldModelSnapshot(
+  userId: string,
+  snapshot: WorldModelSnapshot,
+): Promise<WorldModelSnapshot> {
+  await writeRecallJsonRecord(userId, 'world-model-snapshots', snapshot.id, snapshot as unknown as import('./types').RecallJsonRecord);
+  return snapshot;
+}
+
+export async function readWorldModelSnapshot(
+  userId: string,
+  snapshotId: string,
+): Promise<WorldModelSnapshot | null> {
+  const raw = await readRecallJsonRecord(userId, 'world-model-snapshots', snapshotId);
+  return raw ? raw as unknown as WorldModelSnapshot : null;
+}
+
 /** Read a world-model forecast record by id. */
 export async function readWorldModelForecast(
   userId: string,
