@@ -178,6 +178,12 @@ function _csSetCollapsed(flow, collapsed) {
   }
 }
 
+/** 交互卡（审批/提问）到达时若时间线被收起，自动展开一次——审批/提问
+ *  只有时间线这一个入口，不能困在收起的区域里等到超时。 */
+function _csExpandIfCollapsed(flow) {
+  if (flow && flow.dataset.csCollapsed === '1') _csSetCollapsed(flow, false);
+}
+
 /** 计时/收起徽章：消息头里 cogseed 名字右侧，点击收起下方工具调用区。
  *  运行中 label=工作中（实时计时），终态定格 label=已工作；历史无计时
  *  数据只显示「已工作」（不编造时长）。 */
@@ -187,6 +193,8 @@ function _csCreateBadge(flow, opts) {
   badge.className = 'cs-badge';
   badge.dataset.csCollapsed = '0';
   badge.setAttribute('aria-expanded', 'true');
+  badge.setAttribute('aria-label', '收起过程');
+  badge.setAttribute('title', '收起/展开过程');
   const label = document.createElement('span');
   label.className = 'cs-badge-label';
   label.textContent = (opts && opts.terminalLabel) ? '已工作' : '工作中';
@@ -320,6 +328,8 @@ function _csSetFlowState(flow, status, error, endedAtMs) {
       label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
         : status === 'cancelled' ? '已取消' : '已工作';
     }
+    // 失败详情被徽章省略号截断时，悬停 title 兜底看全文。
+    if (status === 'failed' && error && label) badge.setAttribute('title', label.textContent);
     const elapsed = badge.querySelector('.cs-badge-elapsed');
     if (elapsed) {
       const t0 = Number(flow.dataset.csT0);
@@ -718,8 +728,10 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       return;
     }
     if (chatEvent.type === 'chat.interaction.requested') {
-      const { body } = _csEnsureFlow(cid, anchor, chatEvent.turnId);
+      const { flow, body } = _csEnsureFlow(cid, anchor, chatEvent.turnId);
       _csRenderInteractionCard(body, chatEvent);
+      // 收起状态下到达的审批/提问卡自动展开（唯一入口，不能藏在折叠区）。
+      _csExpandIfCollapsed(flow);
       return;
     }
     if (chatEvent.type === 'chat.interaction.closed') {
@@ -838,6 +850,8 @@ window.chatStreamBridgeBashPermission = function chatStreamBridgeBashPermission(
     }
     card.appendChild(actions);
     body.appendChild(card);
+    // 镜像审批同样不能困在收起的时间线里（弹窗兜底只在 bash 侧存在）。
+    _csExpandIfCollapsed(target);
   } catch (err) {
     _csLog.warn('bash permission bridge failed', { error: String(err && err.message || err) });
   }

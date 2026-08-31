@@ -226,6 +226,68 @@ describe('chat-stream module', () => {
     expect(flow.dataset.csCollapsed).toBe('0');
   });
 
+  it('消息带 chat-msg-header 时徽章挂头部主路径（不在流内）', () => {
+    // 真机流式占位消息结构：msg > .chat-msg-header + .chat-bubble。
+    const headerMsg = makeEl('div');
+    const header = makeEl('div');
+    header.className = 'chat-msg-header';
+    const bubble = makeEl('div');
+    bubble.className = 'chat-bubble';
+    headerMsg.appendChild(header);
+    headerMsg.appendChild(bubble);
+    root.appendChild(headerMsg);
+
+    g.window.chatStreamHandleEvent('c-1', headerMsg, { type: 'chat.turn.started', turnId: 'H1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = headerMsg.children.find((c) => String(c.className).includes('cs-flow'))!;
+    expect(flow).toBeTruthy();
+    // 徽章+停止在头部（不在流子树里），且不再走流内兜底行。
+    const badge = header.querySelector('.cs-badge')!;
+    expect(badge).toBeTruthy();
+    expect(header.querySelector('.cs-badge-stop')).toBeTruthy();
+    expect(flow.querySelector('.cs-badge')).toBeNull();
+    expect(flow.querySelector('.cs-badge-row')).toBeNull();
+    // 头部徽章点击同样能收起/展开流的正文。
+    (badge.handlers.click!)();
+    expect(flow.querySelector('.cs-flow-body')!.style.display).toBe('none');
+    (badge.handlers.click!)();
+    expect(flow.querySelector('.cs-flow-body')!.style.display).not.toBe('none');
+    // 流移除时头部徽章一并清理。
+    g.window.chatStreamReset();
+    expect(badge.connected).toBe(false);
+    expect(header.querySelector('.cs-badge')).toBeNull();
+  });
+
+  it('收起状态下审批/提问卡到达时自动展开（含 bash 审批镜像）', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    const badge = flow.querySelector('.cs-badge')!;
+    (badge.handlers.click!)();
+    expect(flow.querySelector('.cs-flow-body')!.style.display).toBe('none');
+
+    // chat.interaction 到达 → 自动展开。
+    handle({ type: 'chat.interaction.requested', turnId: 'T1', interactionId: 'ix-9', kind: 'question', prompt: '用哪个？', timeoutMs: 30000 });
+    expect(flow.querySelector('.cs-flow-body')!.style.display).not.toBe('none');
+    expect(flow.dataset.csCollapsed).toBe('0');
+
+    // 再次收起后 bash 审批镜像到达 → 同样自动展开。
+    (badge.handlers.click!)();
+    const bridge = g.window.chatStreamBridgeBashPermission as (i: unknown) => void;
+    bridge({ request_id: 'bp-9', cid: 'c-1', command: 'rm -rf x' });
+    expect(flow.querySelector('.cs-flow-body')!.style.display).not.toBe('none');
+  });
+
+  it('失败徽章 title 携带完整错误（悬停兜底），初始 aria/title 齐全', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    const badge = flow.querySelector('.cs-badge')!;
+    expect(badge.getAttribute('aria-label')).toBe('收起过程');
+    expect(badge.getAttribute('title')).toBe('收起/展开过程');
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'f1', kind: 'toolExecution', status: 'failed', payload: { toolName: 'bash', argsSummary: 'ls', error: 'boom' } });
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'failed', error: 'fetch failed: timeout after 75001ms', endedAt: '' });
+    expect(badge.getAttribute('title')).toContain('fetch failed: timeout after 75001ms');
+  });
+
   it('toolExecution 动词映射：bash→运行+命令、read_file→读取+文件名/目录、未知工具显原名', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = inserts[0].node;
