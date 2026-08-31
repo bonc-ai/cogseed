@@ -9411,12 +9411,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     const isAbortStub = bodyText === '（已中断）' || bodyText === '(stopped)' || bodyText === '';
     const expanded = isAbortStub || isHtmlSnippet;
     // conv-core：chat-stream 面板接管完成态过程显示（统一过程 UI，老
-    // details 折叠卡退役）；面板函数不可用时走老路径兜底。面板默认展开
-    // （过程可见），不传 expanded。
+    // details 折叠卡退役）；面板函数不可用时走老路径兜底。面板默认收起
+    // （摘要行，点开看全程），仅空正文异常回合 expanded:true 展开。
     if (typeof window.chatStreamRenderPersisted === 'function'
         && window.chatStreamRenderPersisted(currentCid, msgDiv, message.process, {
-          actorName: String(message.from || message.actor || ''),
+          actorName: String(message.from || message._from || message.actor || ''),
           turnId: message.turn_id || (message._msg_id ? `m:${message._msg_id}` : undefined),
+          expanded,
         })) {
       // 面板已重建，跳过老 details 渲染。
     } else {
