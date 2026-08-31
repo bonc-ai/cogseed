@@ -7147,6 +7147,54 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
   return url;
 }
 
+// ── 每会话访问权限模式（Claude Code 风格三档）──────────────────────────
+// full = 完全访问（bypass）；auto_approve = 帮我批准（敏感操作自动放行）；
+// ask = 请求批准（敏感操作弹窗确认）。三档都在执行层（bash-permissions）生效。
+const _PERMISSION_MODES = [
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
+  { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+];
+
+let _permissionModeSelectBound = false;
+
+function _permissionModeEl() {
+  return document.getElementById('chat-permission-mode-select');
+}
+
+function _renderPermissionModeSelect(convMeta) {
+  const select = _permissionModeEl();
+  if (!select) return;
+  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+    ? convMeta.permission_mode
+    : 'ask';
+  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
+  // 默认「请求批准」填 select（与执行层未设置时的弹窗行为一致），此时
+  // escapeHtml 还没就绪，需要安全兜底。
+  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
+  select.innerHTML = _PERMISSION_MODES.map((m) => {
+    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
+    return `<option value="${m.id}"${current === m.id ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  select.value = current;
+}
+
+function _bindPermissionModeSelect() {
+  if (_permissionModeSelectBound) return;
+  _permissionModeSelectBound = true;
+  const select = _permissionModeEl();
+  if (!select) return;
+  select.addEventListener('change', async () => {
+    const mode = select.value;
+    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    try {
+      await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
+    }
+  });
+}
+
 function _membersRequestUrl(cid) {
   return `/api/conversations/${encodeURIComponent(cid)}/members?project_id=${encodeURIComponent(_projectIdForConversation(cid))}`;
 }

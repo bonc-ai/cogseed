@@ -182,6 +182,9 @@ export interface ChatOptions {
    *  read_file / search_files / grep_files scope to this conv's attachment
    *  dir in addition to the user's active workspace. */
   cid?: string;
+  /** 每会话访问权限模式（full / auto_approve / ask），由调用方从会话元数据
+   *  解析后传入，透传给 local-tools / file-tools 的敏感操作门。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
   /** Stable id for the visible actor turn. Group chat passes this through as
    *  part of its turn-scoped execution contract; file output now stays in the
    *  conversation workspace rather than a turn-specific subdirectory. */
