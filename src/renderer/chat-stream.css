@@ -3,7 +3,8 @@
    状态色用现有 --danger/--ok 系变量名兜底，缺省时落到固定值）。 */
 
 .cs-panel {
-  margin: 6px 0;
+  /* 面板位于消息气泡内部（消息头之后、正文之前）——边距按气泡内嵌留白 */
+  margin: 2px 0 8px;
   border: 1px solid rgba(127, 127, 127, .25);
   border-radius: 10px;
   background: rgba(127, 127, 127, .06);
