@@ -857,9 +857,13 @@ describe('auth › custom providers', () => {
       supportsOAuth: false,
       manualModel: false,
     }));
+    // Unified execution entry (方案 C)：custom 模型的 reasoning 标注按识别
+    // 结果——识别不出的模型不再硬标 false，而是省略字段（UI 显示能力未知
+    // 并禁用档位，与运行时不透传的行为一致）。relay-model 不在任何家族。
     expect(await auth.listModels(providerId)).toEqual({
       // contextWindow 透传（normalizeModels 的默认窗口）——渲染层会话统计行
-      // 的上下文占用分母依赖它。
+      // 的上下文占用分母依赖它；reasoning 按识别结果，relay-model 不在任何
+      // 家族→省略字段（与运行时不透传的行为一致）。
       models: [{ id: 'relay-model', name: 'relay-model', contextWindow: 131_072 }],
     });
 

@@ -88,7 +88,7 @@ describe('CogSeed Agent Registry projection', () => {
         {
           agent_id: 'remote-reviewer', display_name: 'Remote reviewer', node_kind: 'agent',
           online: true, disabled: false, last_seen_at: '2026-08-27T01:01:00.000Z',
-          capabilities: ['review', 'token=must-not-cross'], endpoints: ['http://10.0.0.8:9000'],
+          capabilities: ['review', 'token=must-not-cross'], endpoints: ['http://192.0.2.8:9000'],
         },
         {
           agent_id: 'codex', display_name: 'Codex runtime', node_kind: 'agent',
@@ -108,7 +108,7 @@ describe('CogSeed Agent Registry projection', () => {
       listRemoteNodes: vi.fn(() => ({
         ok: true as const,
         nodes: [{
-          id: 'remote-node-safe', label: 'Remote runtime', endpoint: 'http://10.0.0.8:9000',
+          id: 'remote-node-safe', label: 'Remote runtime', endpoint: 'http://192.0.2.8:9000',
           tokenPreview: 'abcd…ef', expected_identity: 'remote-reviewer', enabled: true,
           created_at: '2026-08-27T00:59:00.000Z',
         }],
@@ -137,7 +137,7 @@ describe('CogSeed Agent Registry projection', () => {
       channelId: 'channel-bridge', platform: 'telegram', health: 'ready',
     }));
     const serialized = JSON.stringify(projection);
-    expect(serialized).not.toContain('10.0.0.8');
+    expect(serialized).not.toContain('192.0.2.8');
     expect(serialized).not.toContain('abcd…ef');
     expect(serialized).not.toContain('token=must-not-cross');
     expect(serialized).not.toContain('endpoint');

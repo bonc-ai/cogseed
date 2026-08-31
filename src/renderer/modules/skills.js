@@ -93,7 +93,7 @@ const _skillsCognitionState = {
   skillUpdate: null,
   /** 三个读口返回的**真实**总数（items + total 契约）。与 `assets.length` /
    *  `teachingSignals.length` 分开存：后者是本次取回了几条，前者是一共有几条，
-   *  把截断后的长度当总数正是 G-2/G-3 的病根。 */
+   *  把截断后的长度当总数正是病根。 */
   totals: { assets: null, teachingSignals: null, inboxItems: null },
   /** 「已处理历史」（cognition.reviewDecisions.list）。按需加载。 */
   reviewHistory: null,
@@ -3374,7 +3374,7 @@ function _cognitionTreeStats() {
     (budsByType[type] = budsByType[type] || []).push(candidate);
   }
   const tree = _skillsCognitionState.tree;
-  // 树契约 v2（G-8）起，后端也把候选投影成 `candidate:` 节点，且它们同样带
+  // 树契约 v2 起，后端也把候选投影成 `candidate:` 节点，且它们同样带
   // `assetType`（用来挂枝）。**正式资产的每一条统计与渲染都必须先把它们摘掉**：
   // 候选没有 maturity/status/version，混进来会让叶片数虚高、已验证占比被稀释，
   // 而且同一条候选会既画成叶又画成芽。芽自有通道（recallCandidates → budsByType），
@@ -3524,7 +3524,7 @@ function _cognitionIsFirstRun() {
 /**
  * 「空种子」首启引导（原型 02）。
  *
- * **不是独立页**：G-9 定下"默认永远停在待我处理、不自动跳页"之后，它作为
+ * **不是独立页**：产品定下"默认永远停在待我处理、不自动跳页"之后，它作为
  * 「待我处理」空态的首启变体渲染（一件东西都没有时）。曾短暂存在过一个独立的
  * `seed` 页，落地不再跳转后它就没有入口了——留着就是死路由，已删除。
  *

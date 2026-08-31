@@ -85,6 +85,8 @@ function writeCustomAgent(agentId: string, fields: Partial<Record<string, any>> 
   if ('runtime' in fields) data.runtime = fields.runtime;
   if ('interface_contract' in fields) data.interface_contract = fields.interface_contract;
   if ('interaction_mode' in fields) data.interaction_mode = fields.interaction_mode;
+  if ('default_model' in fields) data.default_model = fields.default_model;
+  if ('default_thinking' in fields) data.default_thinking = fields.default_thinking;
   fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify(data));
 }
 
@@ -2382,3 +2384,80 @@ describe('agents › list cache invalidation', () => {
 // (The legacy marketplace-sentinel sync tests are gone. Marketplace installs now live at
 // `<uid>/local/marketplace/agents/<id>/` and are reconciled from
 // the cloud-synced `installs.json` manifest — see features/marketplace_*.ts.)
+
+// ─── Unified execution entry: per-agent default execution config ─────────
+
+describe('agents › default execution config (default_model / default_thinking)', () => {
+  it('sets default_model and default_thinking on update and reads them back', async () => {
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      default_thinking: 'low',
+    });
+    expect(updated?.default_model).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
+    expect(updated?.default_thinking).toBe('low');
+    // Persisted shape round-trips through normalizeAgent.
+    const again = await a.getAgent('abc');
+    expect(again?.default_model).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
+    expect(again?.default_thinking).toBe('low');
+  });
+
+  it('null drops both fields (revert to following the global defaults)', async () => {
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      default_thinking: 'high',
+    });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: null,
+      default_thinking: null,
+    });
+    expect(updated?.default_model).toBeUndefined();
+    expect(updated?.default_thinking).toBeUndefined();
+  });
+
+  it('omitted fields stay untouched while the other one updates', async () => {
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: 'zai', model: 'glm-5' },
+    });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', { default_thinking: 'off' });
+    expect(updated?.default_model).toEqual({ provider: 'zai', model: 'glm-5' });
+    expect(updated?.default_thinking).toBe('off');
+  });
+
+  it('drops unusable default_model shapes instead of persisting them', async () => {
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    // provider without model / model without provider / non-object → dropped
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: { provider: 'anthropic' } as any,
+    });
+    expect(updated?.default_model).toBeUndefined();
+    // invalid thinking enum → dropped
+    const updated2 = await a.updateCustomAgent('abc', {
+      default_thinking: 'ultra' as any,
+    });
+    expect(updated2?.default_thinking).toBeUndefined();
+  });
+
+  it('normalizeAgent drops partial raw shapes from disk (blank parts collapse)', async () => {
+    // A hand-edited agent.json with a half-empty default_model must read back
+    // as "no field set" so turn resolution never sees a broken pair.
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: '  ', model: 'claude-opus-4-8' },
+      default_thinking: 'sometimes',
+    });
+    const a = await loadAgents();
+    const agent = await a.getAgent('abc');
+    expect(agent?.default_model).toBeUndefined();
+    expect(agent?.default_thinking).toBeUndefined();
+  });
+});

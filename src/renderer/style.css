@@ -11517,6 +11517,10 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 /* 会话面板里合成 chip 后面还有语音输入按钮再是发送按钮，此时发送按钮也要
    收回自己的 margin-left:auto，让 chip/mic/send 一起贴在右侧。 */
 .chat-model-effort-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
+/* 统一执行入口的 exec-config chip 同样以 chip→mic→send 相邻收尾；
+   不收回 send 的 auto margin 时，两个 auto 平分剩余空间，chip+mic 会
+   悬在正中（chip 自身已带 margin-left:auto，见 .model-chip 主规则）。 */
+.exec-config-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
 /* Combined model+effort chip: "model · effort". The effort label is muted
    secondary text; the "·" separator is a lightweight visual divider. */
@@ -11642,6 +11646,159 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ─── Unified execution entry ────────────────────────────────────────── */
+
+/* Bubble header meta: the actual execution config (model · effort / CLI)
+   shown on streaming placeholders and persisted replies alike. */
+.chat-msg-exec-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  background: var(--surface-2, #f4f5f7);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 6px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Composer exec-config chip: model label + effort badge in one chip. */
+.exec-config-effort {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.exec-config-effort.is-cli {
+  background: transparent;
+  border-style: dashed;
+}
+.exec-config-effort.is-override,
+.model-chip.is-override .exec-config-effort.is-override {
+  color: var(--primary-text, #5b57d6);
+  border-color: rgba(91, 87, 214, 0.35);
+}
+.model-chip.is-override {
+  border-color: rgba(91, 87, 214, 0.35);
+}
+
+/* Section-grouped picker (本地 Agent / API 连接模型). Section headers are
+   the PRIMARY navigation (10px source labels like 自定义/平台 are secondary
+   noise inside a section), so they get real weight and stick to the top of
+   the scrolling list while that section is in view. */
+.skill-picker-group-label--section {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+  margin-top: 6px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--text-2, #374151);
+}
+.skill-picker-item--model { position: relative; }
+.picker-model-expand {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.picker-model-expand:hover { background: #eceef2; color: var(--text); }
+.picker-model-expand-icon { width: 13px; height: 13px; }
+.skill-picker-item--back .skill-picker-item-name { color: var(--muted); font-size: 12px; }
+
+/* Exec-config menu: compact — the composer menu should read as a light
+   utility popover, not a panel. Narrower than the generic menu, tighter
+   rows, effort as one segmented pill row. */
+.model-chip-menu--exec { min-width: 240px; max-width: 300px; }
+.model-chip-menu--exec .model-chip-menu-header {
+  padding: 6px 8px 4px;
+}
+.model-chip-menu--exec .model-chip-menu-section {
+  padding: 5px 8px 2px;
+  font-size: 9.5px;
+}
+.model-chip-menu--exec .model-chip-menu-item {
+  padding: 5px 9px;
+  gap: 1px;
+}
+.model-chip-menu-subheader {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 8px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.model-chip-menu-section {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #9ca3af;
+}
+.model-chip-menu-section-extra { font-weight: 500; text-transform: none; letter-spacing: 0; }
+.model-chip-menu-note {
+  padding: 3px 10px 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.model-chip-menu-item--action .model-chip-menu-name { color: var(--primary-text, #5b57d6); }
+
+/* One-row effort picker (自动 / 关闭 / 低 / 高). */
+.model-chip-menu-segmented {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+.model-chip-seg-btn {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
+}
+.model-chip-seg-btn:hover { background: var(--primary-soft); border-color: rgba(91, 87, 214, 0.25); }
+.model-chip-seg-btn.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.model-chip-seg-btn.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: line-through;
 }
 
 .workspace-menu {
@@ -15826,7 +15983,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .messaging-link-button:hover:not(:disabled) { filter: brightness(1.04); }
 .messaging-secondary-button { border-color: var(--border); background: var(--surface); color: var(--text-2); }
 
-/* 渠道即节点（G-14）：智能体触达白名单卡片 */
+/* 渠道即节点：智能体触达白名单卡片 */
 .messaging-allowlist-toggle.is-on { border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); color: var(--primary-text); }
 .messaging-allowlist-input {
   width: 100%;
@@ -16447,6 +16604,59 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+/* 远端模型发现（fetch from service）：结果勾选列表。 */
+.settings-custom-provider-fetch-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.settings-custom-provider-fetch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.settings-custom-provider-fetch-row:last-child { border-bottom: 0; }
+.settings-custom-provider-fetch-row.is-existing {
+  cursor: default;
+  background: var(--surface-2);
+}
+.settings-custom-provider-fetch-row.is-existing .settings-custom-provider-fetch-name {
+  color: var(--muted);
+}
+.settings-custom-provider-fetch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+.settings-custom-provider-fetch-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.settings-custom-provider-fetch-badge.is-cap {
+  color: var(--primary-text, #5b57d6);
+  border-color: rgba(91, 87, 214, 0.35);
+}
+.settings-custom-provider-fetch-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  color: var(--danger);
+  font-size: 13px;
 }
 .settings-custom-provider-detail-model-row {
   display: flex;
