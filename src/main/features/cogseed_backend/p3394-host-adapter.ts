@@ -41,7 +41,7 @@ export function buildP3394OutboundEnvelope(
   peer: string,
   message: string,
   sourceKey: string,
-  opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string; executionPrefs?: { reasoningEffort?: 'off' | 'low' | 'high' } } = {},): P3394Envelope {
+  opts: { scopeKey?: string; parts?: P3394PayloadPart[]; goal?: string; workingDir?: string; executionPrefs?: { reasoningEffort?: 'off' | 'low' | 'high'; model?: string } } = {},): P3394Envelope {
   // Goal 自动隔离（指南 §5.3）：同 (scope, peer) 同 Goal 复用会话，不同 Goal 开新会话。
   const sessionId = sessionForGoal(opts.scopeKey ?? peer, peer, opts.goal);
   // 约定（S-04 关联 id 脱敏前提）：P3394 的 message/session/task id 一律由
@@ -77,9 +77,14 @@ export function buildP3394OutboundEnvelope(
         ? { working_dir: opts.workingDir.trim() }
         : {}),
       // CogSeed 私有扩展（对端旧版忽略未知 extension 字段，向后兼容）：
-      // 单轮执行偏好。仅 claude 网关 runtime 消费 reasoning_effort。
-      ...(opts.executionPrefs?.reasoningEffort
-        ? { execution_prefs: { reasoning_effort: opts.executionPrefs.reasoningEffort } }
+      // 单轮执行偏好。claude 网关 runtime 消费 reasoning_effort 与 model
+      // （MAX_THINKING_TOKENS / --model），codex 网关 runtime 消费 model
+      // （thread/start）与 reasoning_effort（config.model_reasoning_effort）。
+      ...(opts.executionPrefs?.reasoningEffort || opts.executionPrefs?.model
+        ? { execution_prefs: {
+            ...(opts.executionPrefs?.reasoningEffort ? { reasoning_effort: opts.executionPrefs.reasoningEffort } : {}),
+            ...(opts.executionPrefs?.model ? { model: opts.executionPrefs.model } : {}),
+          } }
         : {}),
     },
   };

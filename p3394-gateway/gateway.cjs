@@ -505,28 +505,42 @@ function sanitizeStreamText(raw) {
 
 // ── oneshot 模式：每消息 spawn CLI（可取消） ──
 
-// ── CogSeed 扩展：extensions.execution_prefs（单轮执行偏好透传） ──
-// CogSeed 主机可按轮次携带 { reasoning_effort }（low|high）。旧版宿主不发
-// 该字段 → undefined，行为与既往完全一致；未知/白名单外的值一律视为"跟随
-// CLI 自身默认"。仅 claude 系 runtime 消费（MAX_THINKING_TOKENS env）；其他
-// CLI 无已知开关，prefs 被安全忽略。档位→token 预算为启发式映射，与 CogSeed
-// 本地直连 backend 保持同一份取值。
-const EXEC_EFFORT_TOKENS = { low: '8192', high: '32000' };
-function executionPrefsFor(envelope) {
-  const ext = (envelope && envelope.extensions) || {};
-  const prefs = ext.execution_prefs;
-  if (!prefs || typeof prefs !== 'object') return null;
-  const effort = typeof prefs.reasoning_effort === 'string' ? prefs.reasoning_effort.trim().toLowerCase() : '';
-  if (!Object.prototype.hasOwnProperty.call(EXEC_EFFORT_TOKENS, effort)) return null;
-  return { maxThinkingTokens: EXEC_EFFORT_TOKENS[effort] };
+// ── 外接智能体执行控制：模型发现 + 单轮偏好 + 用量提取 ──────────────────
+// 实现抽在同目录 models-probe.cjs（纯函数 + 依赖注入，可直接单测；本文件
+// 顶层即起 HTTP 服务无法被 require）。/p3394/models 端点按 runtime 枚举
+// CLI 真实可用的模型：claude 用 /model 本地命令（零模型调用）、codex 探测
+// app-server 枚举方法、opencode 跑自家 models 子命令；其余 runtime 明确
+// unavailable，宿主回落静态目录+手输（能力协商降级，不硬失败）。
+const {
+  executionPrefsFor,
+  extractClaudeResultUsage,
+  normalizeClaudeInit,
+  claudeModelsCache,
+  probeClaudeModels: probeClaudeModelsImpl,
+  probeSubcommandModels: probeSubcommandModelsImpl,
+} = require('./models-probe.cjs');
+
+// 薄包装：把网关进程级常量（CLI 命令、preset 名、spawn）注入探测实现。
+function probeClaudeModels() {
+  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawn });
+}
+function probeSubcommandModels() {
+  return probeSubcommandModelsImpl({ cli: CLI, presetName: PRESET_NAME, spawnFn: spawn });
 }
 
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
-function runAgent(message, taskId, cwd, onStream, onProgress) {
+function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
-    const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    // CogSeed 扩展：单轮偏好（claude 落 oneshot 时的模型/强度——每轮独立
+    // spawn，天然 per-turn）。其余 CLI 的 prefs 无已知开关，安全忽略。
+    const prefs = execPrefs || {};
+    if (PRESET_NAME === 'claude' && prefs.model) args.push('--model', prefs.model);
+    const claudeEnv = (PRESET_NAME === 'claude' && prefs.maxThinkingTokens)
+      ? { MAX_THINKING_TOKENS: prefs.maxThinkingTokens }
+      : null;
+    const child = spawn(CLI, args, { cwd: cwd || undefined, env: claudeEnv ? Object.assign({}, process.env, claudeEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     if (taskId) activeTasks.set(taskId, child);
     let out = '';
     let errOut = '';
@@ -635,13 +649,21 @@ const oneshotRuntime = {
     // 注册可取消键用 task_id（cancel 控制帧按 task_id 匹配）；无 task_id 时
     // 回退到 message_id，保证单消息用例仍可取消。
     const cancelKey = (opts && opts.taskId) || messageId;
-    const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress);
+    const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress, opts && opts.execPrefs);
     const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
     appendTranscript(sessionId, 'in', text);
     appendTranscript(sessionId, 'out', reply);
     return reply;
   },
   cancel(taskId) { return cancelTask(taskId); },
+  /** 模型发现：有登记枚举子命令的 CLI（opencode）走子命令探测；claude 落到
+   *  oneshot 时（P3394_AGENT_MODE 未声明 sscli）用 init 帧探测；其余明确
+   *  unavailable，宿主回落静态目录+手输。 */
+  async inspectModels() {
+    if (INSPECT_SUBCOMMANDS[PRESET_NAME]) return probeSubcommandModels();
+    if (PRESET_NAME === 'claude') return probeClaudeModels();
+    return { status: 'unavailable', reason: 'oneshot_no_inspect' };
+  },
   close() {
     for (const child of activeTasks.values()) { try { child.kill('SIGTERM'); } catch { /* already gone */ } }
     activeTasks.clear();
@@ -780,6 +802,41 @@ class CodexAppServerRuntime {
     if (spawnError) throw spawnError;
     this._send({ jsonrpc: '2.0', method: 'initialized', params: {} });
   }
+  /** 模型发现：探测 app-server 的枚举 RPC（协议演进中，方法名不保证稳定，
+   *  候选依次试、短超时、解析容错）。全部失败 → unavailable，宿主回落静态
+   *  目录（能力协商降级，不硬失败）。 */
+  async inspectModels() {
+    try { await this.start(); } catch (error) {
+      return { status: 'unavailable', reason: 'app_server_start_failed', error: error && error.message ? error.message : String(error) };
+    }
+    const candidates = ['model/providers', 'models/list'];
+    for (const method of candidates) {
+      let result;
+      try {
+        result = await this._request(method, {}, 8_000);
+      } catch { continue; } // 未知方法/超时 → 试下一个
+      const models = [];
+      const seen = new Set();
+      const visit = (node, depth) => {
+        if (!node || depth > 4 || models.length > 200) return;
+        if (Array.isArray(node)) { for (const item of node) visit(item, depth + 1); return; }
+        if (typeof node !== 'object') return;
+        // 带 models 数组的节点是 provider（其自身 id 不是模型名）——只下钻。
+        if (Array.isArray(node.models)) { visit(node.models, depth + 1); return; }
+        const id = typeof node.id === 'string' && node.id.trim()
+          ? node.id.trim()
+          : (typeof node.model === 'string' && node.model.trim() ? node.model.trim() : '');
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          models.push({ id, label: (typeof node.displayName === 'string' && node.displayName.trim()) || (typeof node.name === 'string' && node.name.trim()) || id });
+        }
+        for (const value of Object.values(node)) visit(value, depth + 1);
+      };
+      visit(result, 0);
+      if (models.length) return { status: 'ready', models };
+    }
+    return { status: 'unavailable', reason: 'no_model_rpc' };
+  }
   _failPending(error) {
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     this.pending.clear();
@@ -794,7 +851,35 @@ class CodexAppServerRuntime {
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
-      const result = await this._request('thread/start', { cwd, approvalPolicy: 'never', sandbox: 'workspace-write', ephemeral: false });
+      // CogSeed 扩展（统一执行入口）：单轮模型 → thread/start 的 model 参数
+      // （与 CogSeed 直连 backend 同一传法）；单轮强度 → config 的
+      // model_reasoning_effort（CogSeed 统一档位 low/high 与 codex 值集 1:1）。
+      // config 是 app-server 的 per-thread 覆盖——若当前版本不认该字段导致
+      // thread/start 被拒，去掉 config 重试一次（强度静默降级、模型保留，
+      // 不让整轮失败）。
+      const prefs = (opts && opts.execPrefs) || {};
+      const startParams = {
+        cwd,
+        approvalPolicy: 'never',
+        sandbox: 'workspace-write',
+        ephemeral: false,
+        model: prefs.model || null,
+        modelProvider: null,
+      };
+      const effortLevel = (prefs.reasoningEffort === 'low' || prefs.reasoningEffort === 'high')
+        ? prefs.reasoningEffort
+        : null;
+      let result;
+      try {
+        result = await this._request('thread/start', effortLevel
+          ? { ...startParams, config: { model_reasoning_effort: effortLevel } }
+          : startParams);
+      } catch (configError) {
+        if (!effortLevel) throw configError;
+        console.warn('[p3394-gateway] codex thread/start rejected effort config; retrying without it: '
+          + (configError && configError.message ? configError.message : String(configError)));
+        result = await this._request('thread/start', startParams);
+      }
       threadId = result && result.thread && result.thread.id;
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
       this.threads.set(sessionId, threadId);
@@ -979,6 +1064,11 @@ class SscliRuntime {
     if (!this.child) return;
     this._send({ op: 'cancel', task_id: taskId });
   }
+  /** 模型发现：p3394-sscli/1.0 协议尚无模型枚举操作（hermes 侧 ACP 广播是
+   *  后续增强）——明确 unavailable，宿主回落静态目录+手输。 */
+  async inspectModels() {
+    return { status: 'unavailable', reason: 'sscli_no_inspect_op' };
+  }
   close() {
     this.closing = true;
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
@@ -1008,10 +1098,12 @@ class StreamJsonRuntime {
     // 不带 [会话历史] 会让 claude 每轮失忆）。
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
-    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [])];
-    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS（无 prefs 时保持
-    // CLI 自身默认）。
-    const thinkingEnv = (opts && opts.execPrefs) ? { MAX_THINKING_TOKENS: opts.execPrefs.maxThinkingTokens } : null;
+    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env；单轮模型 →
+    // --model 参数（每轮独立 spawn，天然 per-turn）。
+    const execPrefs = (opts && opts.execPrefs) || null;
+    const thinkingEnv = execPrefs && execPrefs.maxThinkingTokens ? { MAX_THINKING_TOKENS: execPrefs.maxThinkingTokens } : null;
+    const modelArgs = execPrefs && execPrefs.model ? ['--model', execPrefs.model] : [];
+    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []), ...modelArgs];
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
@@ -1068,10 +1160,15 @@ class StreamJsonRuntime {
   }
   /** 解析一行 stream-json 事件：text_delta → 逐 token 增量；assistant 完整帧
    *  作为终态（仅在无 delta 累积时以其全文本收尾，避免与已累积的 delta 重复）。
-   *  返回 'delta' | 'done' | null。 */
+   *  返回 'delta' | 'done' | null。init 帧顺带缓存模型清单（inspect 数据源）。 */
   _parseLine(line, onDelta, append, getAccumulated) {
     let ev;
     try { ev = JSON.parse(line); } catch { return null; }
+    if (ev && ev.type === 'system' && ev.subtype === 'init') {
+      const normalized = normalizeClaudeInit(ev);
+      if (normalized) claudeModelsCache.set(normalized);
+      return null;
+    }
     if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
       && ev.event.delta && typeof ev.event.delta.text === 'string') {
       const t = ev.event.delta.text;
@@ -1087,6 +1184,14 @@ class StreamJsonRuntime {
       return 'done'; // 终态帧（claude stream-json：assistant 后仅余 result）
     }
     return null;
+  }
+  /** 模型发现：缓存优先（每轮 spawn 的 init 帧都会刷新），冷启动最小探测。 */
+  async inspectModels() {
+    const cached = claudeModelsCache.get();
+    if (cached && cached.models.length) {
+      return { status: 'ready', models: cached.models, current: cached.current };
+    }
+    return probeClaudeModels();
   }
   cancel(taskId) {
     const child = this.active.get(taskId);
@@ -1122,21 +1227,23 @@ class ClaudePersistentRuntime {
   get name() { return 'claude-persistent'; }
   async openSession() { /* 常驻进程在 deliver 时惰性 spawn */ }
 
-  _args() {
+  _args(model) {
     // CLI_ARGS（'-p {message}'）去掉 {message} 占位，追加双工流式参数。
     // streamJsonArgs 已含 --output-format stream-json（claude preset），
-    // 缺失时才补，避免重复参数。
+    // 缺失时才补，避免重复参数。model 是进程级参数：任务级模型选择随
+    // spawn 固化（变更走 deliver 的 drop/respawn）。
     const base = CLI_ARGS.split(' ').map((part) => part.trim()).filter((part) => part && part !== '{message}');
     const extra = (preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : [];
     const hasOutputFormat = extra.some((part) => part === '--output-format');
-    return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra];
+    return [...base, '--input-format', 'stream-json', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...extra, ...(model ? ['--model', model] : [])];
   }
 
-  _spawn(sessionId, cwd, maxThinkingTokens) {
-    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, maxThinkingTokens: maxThinkingTokens || null };
-    // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env）。
+  _spawn(sessionId, cwd, maxThinkingTokens, model) {
+    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, maxThinkingTokens: maxThinkingTokens || null, model: model || null };
+    // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env；
+    // --model 是进程级参数——两者的变更由 deliver 的 drop/respawn 对齐）。
     const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
-    const child = spawn(CLI, this._args(), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(CLI, this._args(model), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {
@@ -1176,6 +1283,14 @@ class ClaudePersistentRuntime {
   _onLine(entry, line) {
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
+    // init 帧（type:system/subtype:init）在 spawn 后、首轮消息前到达——此刻
+    // entry.turn 必为空，必须先于下面的在途守卫接住：models 清单与当前默认
+    // 模型都来自这里（/p3394/models 的最新鲜数据源）。
+    if (ev && ev.type === 'system' && ev.subtype === 'init') {
+      const normalized = normalizeClaudeInit(ev);
+      if (normalized) claudeModelsCache.set(normalized);
+      return;
+    }
     if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
     const turn = entry.turn;
     if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
@@ -1202,7 +1317,7 @@ class ClaudePersistentRuntime {
       entry.turn = null;
       this._armIdleReclaim(entry.sessionId, entry);
       if (ev.is_error) turn.reject(new Error(ev.error || 'p3394_claude_turn_failed'));
-      else turn.resolve((turn.accumulated || turn.lastAssistantText || '').trim());
+      else turn.resolve({ text: (turn.accumulated || turn.lastAssistantText || '').trim(), usage: extractClaudeResultUsage(ev) });
     }
   }
 
@@ -1234,12 +1349,13 @@ class ClaudePersistentRuntime {
     const hint = (opts && opts.peerCallHint) || '';
     const cancelKey = (opts && opts.taskId) || messageId;
     const cwd = (opts && opts.cwd) || process.cwd();
-    // 本轮的推理强度预算：与常驻进程已固化值不同时必须重启进程（env 是
-    // spawn 时定死的，进程活着改不了）；重启后首轮由 transcript 恢复上下文。
-    // 在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
+    // 本轮的推理强度预算/模型：与常驻进程已固化值不同时必须重启进程（env 与
+    // --model 都是 spawn 时定死的，进程活着改不了）；重启后首轮由 transcript
+    // 恢复上下文。在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
     const wantThinking = (opts && opts.execPrefs) ? opts.execPrefs.maxThinkingTokens : null;
+    const wantModel = (opts && opts.execPrefs) ? opts.execPrefs.model : null;
     let entry = this.sessions.get(sessionId);
-    if (entry && entry.maxThinkingTokens !== (wantThinking || null) && !entry.turn) {
+    if (entry && (entry.maxThinkingTokens !== (wantThinking || null) || entry.model !== (wantModel || null)) && !entry.turn) {
       try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
       this._dropSession(sessionId);
       entry = null;
@@ -1248,7 +1364,7 @@ class ClaudePersistentRuntime {
     if (fresh) {
       // 新进程（首次/上次进程已退出/被取消）：首轮回放 transcript，保证
       // 跨 gateway 重启与进程重建后的上下文不丢（常驻进程内后续轮自动延续）。
-      entry = this._spawn(sessionId, cwd, wantThinking);
+      entry = this._spawn(sessionId, cwd, wantThinking, wantModel);
     } else if (entry.cwd !== cwd) {
       throw new Error('p3394_session_cwd_conflict');
     }
@@ -1306,6 +1422,15 @@ class ClaudePersistentRuntime {
     this._dropSession(sessionId);
     return true;
   }
+  /** 模型发现：常驻会话的 init 帧缓存优先（正在运行的进程自己披露的最新
+   *  清单），冷启动回落最小探测（起进程只等 init、零模型调用）。 */
+  async inspectModels() {
+    const cached = claudeModelsCache.get();
+    if (cached && cached.models.length) {
+      return { status: 'ready', models: cached.models, current: cached.current };
+    }
+    return probeClaudeModels();
+  }
   close() {
     for (const entry of this.sessions.values()) {
       if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
@@ -1339,7 +1464,7 @@ function runtimeFor() {
 }
 
 // ── 回复回发（可携带 resource parts） ──
-function postReply(envelope, replyText, resourceParts) {
+function postReply(envelope, replyText, resourceParts, turnUsage) {
   const ext = (envelope && envelope.extensions) || {};
   // H-01：回发端点只信任回环/受信配置（COGSEED_ENDPOINT），防止诱导本网关
   // 把任务结果 POST 到任意第三方地址（数据外泄）。token 与端点成对回退。
@@ -1358,7 +1483,12 @@ function postReply(envelope, replyText, resourceParts) {
       sender: { agent_id: AGENT_ID, ...(AGENT_ALIAS ? { alias: AGENT_ALIAS } : {}) },
       recipients: [{ agent_id: (envelope.sender && envelope.sender.agent_id) || 'cogseed' }],
       reply_to: envelope.message_id,
-      payload: { parts },
+      // CogSeed 私有扩展：本轮 CLI 自报用量（数字字段，非文本非凭据），宿主
+      // 折进消息 metrics。旧宿主不认识 metadata 字段——安全忽略。
+      payload: {
+        parts,
+        ...(turnUsage ? { metadata: { usage: turnUsage } } : {}),
+      },
       idempotency_key: 'idem-reply-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
     },
   });
@@ -1606,13 +1736,19 @@ async function handleEnvelope(envelope) {
     // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
     const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
     await stream.finish();
-    const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
+    // deliver 契约：string（无用量）或 { text, usage? }（带本轮 CLI 自报
+    // 用量——claude persistent 的 result 帧；其余 runtime 一期不带）。
+    const replyBody = typeof rawReply === 'string' ? rawReply : String((rawReply && rawReply.text) || '');
+    const turnUsage = (rawReply && typeof rawReply === 'object' && rawReply.usage && typeof rawReply.usage === 'object')
+      ? rawReply.usage
+      : undefined;
+    const reply = replyBody.length > MAX_REPLY_BYTES ? replyBody.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : replyBody;
     // Agent 运行期间写入 workspace/out/ 的文件 → 随回复回传（Artifact 端到端）
     const outParts = collectOutParts(outDir, runStartedAt);
     if (outParts.length) console.log('[p3394-gateway] attaching ' + outParts.length + ' artifact(s) to reply');
     if (idem) remember(idem, reply);
     console.log('[p3394-gateway] agent replied ' + reply.slice(0, 120));
-    postReply(envelope, reply, outParts);
+    postReply(envelope, reply, outParts, turnUsage);
   } catch (error) {
     // 已被 cancel 控制帧终止的任务：取消回执已发，不再补发错误回信。
     if (envelope.task_id && cancelledTasks.has(envelope.task_id)) {
@@ -1630,6 +1766,41 @@ const server = http.createServer((req, res) => {
   }
   if (req.url && req.url.startsWith('/p3394/health')) {
     json(res, 200, { ok: true, agent_id: AGENT_ID });
+    return;
+  }
+  // 模型发现（CodexHost 式"问 CLI 本身"）：按当前 runtime 枚举 CLI 真实可用
+  // 的模型。同步请求-响应（探测可能起子进程，上限 ~25s，宿主侧 fetch 需带
+  // 足够超时）。鉴权与 /p3394/envelope 同规则（回环 + 可选 Bearer）。
+  if (req.url && req.url.startsWith('/p3394/models') && req.method === 'GET') {
+    if (AUTH_TOKEN) {
+      const auth = req.headers.authorization || '';
+      if (auth !== 'Bearer ' + AUTH_TOKEN) {
+        json(res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+    }
+    void (async () => {
+      try {
+        const runtime = runtimeFor();
+        const inspected = runtime.inspectModels
+          ? await runtime.inspectModels()
+          : { status: 'unavailable', reason: 'runtime_no_inspect' };
+        json(res, 200, {
+          ok: true,
+          runtime: runtime.name,
+          cli: CLI,
+          inspected_at: new Date().toISOString(),
+          ...(inspected || {}),
+        });
+      } catch (error) {
+        json(res, 200, {
+          ok: true,
+          status: 'unavailable',
+          reason: 'inspect_failed',
+          error: error && error.message ? error.message : String(error),
+        });
+      }
+    })();
     return;
   }
   // Peer call 本地路由：运行中的 CLI 智能体（oneshot 子进程 / sscli 常驻）

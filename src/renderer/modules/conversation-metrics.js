@@ -53,12 +53,21 @@ function messageMetricsLine(metrics) {
     if (num(usage.cacheReadTokens) > 0) titleLines.push(`缓存读 ${formatTokens(usage.cacheReadTokens)} tok`);
     if (num(usage.cacheWriteTokens) > 0) titleLines.push(`缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`);
   }
+  // CLI 自报成本（claude 的 total_cost_usd 等，美元）——比价格表估算准。
+  const costUsd = (usage && typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) && usage.costUsd >= 0)
+    ? usage.costUsd
+    : null;
+  if (costUsd !== null) titleLines.push(`CLI 自报成本 $${costUsd.toFixed(4)}`);
   return {
     durationMs,
     latencyText: ttft === null ? null : formatLatency(ttft),
     rateText,
     inText: hasUsage ? formatTokens(num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) : null,
     outText: hasUsage ? formatTokens(num(usage.outputTokens)) : null,
+    costText: costUsd !== null
+      ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : null,
+    model: (typeof metrics.model === 'string' && metrics.model) || null,
     titleLines,
   };
 }
@@ -76,7 +85,10 @@ function foldSessionMetrics(metricsList, opts = {}) {
   let output = 0;
   let cacheRead = 0;
   let cacheWrite = 0;
+  let reportedCostUsd = 0;   // CLI/网关自报成本合计（美元）
+  let reportedCostTurns = 0;
   let lastUsage = null;
+  let lastUsageModel = null; // 自报模型 id——ctx 分母按它解析（CLI 回合不再错用全局模型窗口）
   for (const m of list) {
     if (num(m.toolCalls) > 0) steps += num(m.toolCalls);
     if (typeof m.startedAt === 'number' && typeof m.completedAt === 'number') {
@@ -94,7 +106,14 @@ function foldSessionMetrics(metricsList, opts = {}) {
     output += num(u.outputTokens);
     cacheRead += num(u.cacheReadTokens);
     cacheWrite += num(u.cacheWriteTokens);
-    if (num(u.inputTokens) + num(u.outputTokens) > 0) lastUsage = u;
+    if (typeof u.costUsd === 'number' && Number.isFinite(u.costUsd) && u.costUsd >= 0) {
+      reportedCostUsd += u.costUsd;
+      reportedCostTurns += 1;
+    }
+    if (num(u.inputTokens) + num(u.outputTokens) > 0) {
+      lastUsage = u;
+      lastUsageModel = typeof m.model === 'string' && m.model ? m.model : null;
+    }
   }
   // 命中率分母 = input+cacheRead（与 usage_ledger dashboard 口径一致，§101，不含 cacheWrite）
   const cacheDenom = input + cacheRead;
@@ -102,9 +121,16 @@ function foldSessionMetrics(metricsList, opts = {}) {
   const cacheHitText = cacheDenom > 0
     ? `${Math.min(100, Math.round((cacheRead / cacheDenom) * 100))}%`
     : null;
-  // 上下文占用 = 最近一次 usage 的 input+output（设计 §94）
-  const ctx = lastUsage && num(opts.contextWindow) > 0
-    ? { used: num(lastUsage.inputTokens) + num(lastUsage.outputTokens), window: num(opts.contextWindow) }
+  // 上下文占用 = 最近一次 usage 的 input+output（设计 §94）。分母解析：
+  // 该回合自报模型 → 调用方给的 resolveWindowForModel（CLI 回合按实际模型
+  // 查窗口）→ 全局 contextWindow 兜底 → 无分母只显示已用量。
+  const resolveWindow = typeof opts.resolveWindowForModel === 'function' ? opts.resolveWindowForModel : null;
+  const windowFromModel = (resolveWindow && lastUsageModel) ? resolveWindow(lastUsageModel) : null;
+  const ctxWindow = (typeof windowFromModel === 'number' && windowFromModel > 0)
+    ? windowFromModel
+    : num(opts.contextWindow);
+  const ctx = lastUsage && ctxWindow > 0
+    ? { used: num(lastUsage.inputTokens) + num(lastUsage.outputTokens), window: ctxWindow }
     : (lastUsage ? { used: num(lastUsage.inputTokens) + num(lastUsage.outputTokens), window: 0 } : null);
   const ctxText = ctx
     ? (ctx.window > 0
@@ -114,8 +140,14 @@ function foldSessionMetrics(metricsList, opts = {}) {
   const ctxHot = !!(ctx && ctx.window > 0 && ctx.used / ctx.window >= 0.8);
   const rateText = decodeMs > 0 ? formatRate(decodeTok / (decodeMs / 1_000)) : null;
   const ttftAvgText = ttftN > 0 ? formatDuration(ttftMs / ttftN) : null;
+  // 成本：任一回合有 CLI 自报成本（美元）→ 显示自报合计（准确，CLI 侧计价）；
+  // 否则用价格表估算（¥，下界估算）。两种币种不混算——混算需要汇率，编数字。
   let costText = null;
-  if (opts.price && (totalIn > 0 || output > 0)) {
+  let costReported = false;
+  if (reportedCostTurns > 0) {
+    costText = `$${reportedCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    costReported = true;
+  } else if (opts.price && (totalIn > 0 || output > 0)) {
     // 单价为 ¥/百万 token，费用需除以 1_000_000
     const cost = (input * num(opts.price.in) + output * num(opts.price.out)
       + cacheRead * num(opts.price.cacheRead) + cacheWrite * num(opts.price.cacheWrite)) / 1_000_000;
@@ -124,7 +156,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
   return {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
-    inText: formatTokens(totalIn), outText: formatTokens(output), costText,
+    inText: formatTokens(totalIn), outText: formatTokens(output), costText, costReported,
   };
 }
 

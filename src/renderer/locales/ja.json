@@ -4902,6 +4902,14 @@
   "settings.custom_providers.fetch_models_done": "{count} 個のモデルをインポートしました",
   "settings.custom_providers.fetch_models_partial": "一部のみインポート（{ok} 個）、失敗：{error}",
   "exec_config.cli_model_note": "モデルは「{cli}」自身の構成で決まり、CogSeed からは指定できません。",
+  "exec_config.cli_models_scanning": "「{cli}」の利用可能なモデルをスキャン中…",
+  "exec_config.cli_models_scan_fallback": "「{cli}」からライブのモデル一覧を取得できませんでした。内蔵カタログを表示します。モデル ID を直接入力することもできます。",
+  "exec_config.cli_models_current": "CLI の現在のモデル：{model}",
+  "exec_config.cli_follow_default": "CLI のデフォルトに従う",
+  "exec_config.cli_model_custom_ph": "モデル ID を入力（正式名称対応）",
+  "exec_config.cli_model_custom_add": "使用",
+  "exec_config.cli_models_rescan": "再スキャン",
+  "chat.stats.costReportedTitle": "{c}（CLI 自己申告のコスト、推定ではありません）",
   "settings.custom_providers.cap_reasoning": "推論",
   "settings.custom_providers.cap_vision": "ビジョン"
 }

@@ -1326,20 +1326,27 @@ function _executionConfigForSend(target, snapshot) {
     };
   }
   const cfg = {};
-  // 方案 B：外接 CLI 智能体的模型由 CLI 自身配置决定（网关信封无 model
-  // 栏位），model 覆盖对其是假开关——历史残留的 override.model 不下发，
-  // 只有 effort（claude 真实消费）继续旅行。
-  const isCliAgentRecipient = snap && snap.kind === 'agent' && snap.id
-    && (() => {
+  // 外接智能体执行控制：能力表内（claude/codex，见 cli-exec-control.js）的
+  // CLI 模型真实随信封下发（execution_prefs.model → --model / thread config），
+  // 任务级 model 覆盖放行；表外 CLI 的模型由 CLI 自身配置决定，历史残留的
+  // override.model 不下发（假开关）。effort 同理由能力表把关。
+  const recipientAgent = snap && snap.kind === 'agent' && snap.id
+    ? (() => {
       const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
-      const a = list.find((x) => x && x.agent_id === snap.id);
-      return !!(a && a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'));
-    })();
-  if (!isCliAgentRecipient) {
+      return list.find((x) => x && x.agent_id === snap.id) || null;
+    })()
+    : null;
+  const isCliAgentRecipient = !!(recipientAgent && recipientAgent.runtime
+    && (recipientAgent.runtime.kind === 'cli' || recipientAgent.runtime.kind === 'p3394-gateway'));
+  const cliExec = (typeof window !== 'undefined' && window.cliExecControl && isCliAgentRecipient && recipientAgent.runtime)
+    ? window.cliExecControl.execControlFor(recipientAgent.runtime.cli) : null;
+  if (!isCliAgentRecipient || (cliExec && cliExec.model)) {
     if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
     else if (ov.model) { cfg.model = ov.model; }
   }
-  if (ov.effort) cfg.effort = ov.effort;
+  // effort：CLI 智能体只在能力表声明 effort 开关时下发（与 bus 侧同一过滤，
+  // 双保险防历史残留 override 泄漏成假开关）。
+  if (ov.effort && (!isCliAgentRecipient || (cliExec && cliExec.effort))) cfg.effort = ov.effort;
   return Object.keys(cfg).length ? cfg : undefined;
 }
 // The conversation "floor": server-authoritative `StateFile.active_recipient`,
@@ -9126,6 +9133,17 @@ async function _fetchCurrentModelContextWindow() {
 }
 window.getCurrentModelContextWindow = getCurrentModelContextWindow;
 
+// 会话统计的 CLI 类型推断：取最近一条带 exec_meta.cli 的 assistant 消息
+// （外接智能体回合的模型窗口解析需要知道 CLI 类型；混合会话按最近的算）。
+function _dominantCliTypeForStats() {
+  let cli = null;
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    const meta = el._msgExecMeta;
+    if (meta && typeof meta.cli === 'string' && meta.cli) cli = meta.cli;
+  });
+  return cli;
+}
+
 // 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
 // ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
 // 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
@@ -9140,7 +9158,14 @@ function _refreshSessionStats() {
   const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
     ? window.getCurrentModelContextWindow() : null;
   const price = _userPriceForStats();
-  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // CLI 回合的 ctx 分母：按该回合自报模型解析窗口（cli-exec-control 的
+  // 映射 + 已缓存的扫描条目），解析不到回退全局模型窗口。
+  const resolveWindowForModel = (modelId) => {
+    if (!modelId || !window.cliExecControl) return null;
+    const cli = _dominantCliTypeForStats();
+    return window.cliExecControl.contextWindowForCliModel(cli, modelId, window.cliExecControl.cachedCliModels(cli));
+  };
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price, resolveWindowForModel });
   // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
   // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
   const segs = [];
@@ -9177,11 +9202,15 @@ function _refreshSessionStats() {
     seg.appendChild(v);
     box.appendChild(seg);
   });
-  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
-  // 单价、无模型名，title 不带模型字段。
+  // 费用段标注依据：CLI 自报（准确，CLI 侧计价）vs 价格表估算（下界、非
+  // 账单）。价格表只有 '*' 默认单价、无模型名，title 不带模型字段。
   if (f.costText) {
     const costSpan = box.lastElementChild;
-    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+    if (costSpan) {
+      costSpan.title = f.costReported
+        ? t('chat.stats.costReportedTitle', { c: f.costText })
+        : t('chat.stats.costTitle', { c: f.costText });
+    }
   }
   _syncStatsWidthToComposer();
 }
@@ -9232,6 +9261,7 @@ function _mountMsgMeta(ph, metrics) {
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
   if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
   if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {
     const seg = document.createElement('span');
@@ -9493,6 +9523,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
   // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
   msgDiv._msgMetrics = message.metrics || null;
+  msgDiv._msgExecMeta = message.exec_meta || null;
   _mountMsgMeta(msgDiv, message.metrics);
   // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
   // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
@@ -15468,6 +15499,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
   // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
   ph._msgMetrics = gm.metrics || null;
+  ph._msgExecMeta = gm.exec_meta || null;
   _mountMsgMeta(ph, gm.metrics);
 
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.
