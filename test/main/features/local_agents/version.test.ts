@@ -153,6 +153,25 @@ describe('local_agents/version › detectVersion', () => {
     expect(performance.now() - startedAt).toBeLessThan(5_000);
   });
 
+  it('retries once when a probe times out silently (zero output)', async () => {
+    const script = path.join(tmpDir, 'silent-hang.js');
+    fs.writeFileSync(script, "setInterval(() => {}, 1000);");
+    const launcher = path.join(tmpDir, isWindows ? 'silent-hang.cmd' : 'silent-hang');
+    if (isWindows) {
+      fs.writeFileSync(launcher, `@echo off\r\n"${TEST_NODE}" "${script}"\r\n`);
+    } else {
+      fs.writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(TEST_NODE)} ${JSON.stringify(script)}\n`);
+      fs.chmodSync(launcher, 0o755);
+    }
+    const startedAt = performance.now();
+    expect(await detectVersion(launcher, 200)).toBeNull();
+    const elapsed = performance.now() - startedAt;
+    // 零输出超时 → 重试一次：总耗时至少 2×timeout，证明重试路径发生；
+    // 不重试时约为单次 timeout（≈200ms），此处下界远高于它。
+    expect(elapsed).toBeGreaterThanOrEqual(390);
+    expect(elapsed).toBeLessThan(5_000);
+  });
+
   it.runIf(isWindows)('times out a Windows command shim and terminates its descendant process tree', async () => {
     const script = path.join(tmpDir, 'hanging-version.js');
     const pidFile = path.join(tmpDir, 'descendant.pid');
