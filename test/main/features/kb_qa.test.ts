@@ -109,4 +109,45 @@ describe('kb_qa kbAskStream', () => {
       source: 'library', scope: 'global', path: 'notes/a.md', chunkIdx: 2, snippet: HIT.snippet, score: HIT.score,
     });
   });
+
+  it('appends text attachments into the system prompt as supplementary context', async () => {
+    askMaterialsMock.mockResolvedValue({
+      hasEvidence: true, hits: [HIT], query: 'q', summary: ['evidence ready'],
+    } as any);
+    const fsMod = await import('node:fs');
+    const osMod = await import('node:os');
+    const pathMod = await import('node:path');
+    const tmp = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'kbqa-att-'));
+    const attPath = pathMod.join(tmp, '说明.md');
+    fsMod.writeFileSync(attPath, '# 附件要点\n\n本附件描述私有化部署的步骤。');
+    try {
+      const stream = fakeStream('基于附件回答。');
+      const events = await collect(kbAskStream('u1', { question: '如何部署', attachPaths: [attPath] }, { stream } as any));
+      const streamOpts = stream.mock.calls[0][0];
+      expect(streamOpts.systemPrompt).toContain('附件：说明.md');
+      expect(streamOpts.systemPrompt).toContain('私有化部署的步骤');
+      expect(events.some((e) => e.type === 'final')).toBe(true);
+    } finally {
+      fsMod.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('kb_qa multi-turn history', () => {
+  it('appends history into system prompt for context', async () => {
+    const { askMaterials } = await import('../../../src/main/model/core-agent/ask-materials');
+    vi.mocked(askMaterials).mockResolvedValue({
+      hasEvidence: true, hits: [{ source: 'library', scope: 'global', path: 'notes/a.md', chunkIdx: 2, snippet: 's', score: 0.02 }], query: 'q', summary: [],
+    } as any);
+    const { kbAskStream } = await import('../../../src/main/features/kb_qa');
+    const stream = vi.fn(async function* () { yield { type: 'delta', text: 'ok' }; });
+    const events: any[] = [];
+    for await (const e of kbAskStream('u1', {
+      question: '第二问',
+      history: [{ role: 'user', content: '第一问' }, { role: 'assistant', content: '第一答' }],
+    }, { stream } as any)) events.push(e);
+    const opts = stream.mock.calls[0][0] as { systemPrompt: string };
+    expect(opts.systemPrompt).toContain('用户：第一问');
+    expect(opts.systemPrompt).toContain('助手：第一答');
+  });
 });
