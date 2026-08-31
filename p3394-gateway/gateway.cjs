@@ -742,6 +742,9 @@ function sscliArgs() {
 /** Codex Desktop app-server adapter. The ChatGPT app ships this runtime and
  * uses the same CODEX_HOME as the visible Desktop conversations. */
 const CODEX_APP_SERVER =
+  // Detected CLI path wins: CogSeed may find the Windows-app hash install or
+  // an explicit COGSEED_CODEX_PATH even when `codex` is not on PATH/PATHEXT.
+  process.env.P3394_AGENT_CLI ||
   process.env.P3394_CODEX_APP_SERVER ||
   (process.platform === 'win32'
     // Windows has no Codex Desktop bundle; fall back to the PATH-resolvable
