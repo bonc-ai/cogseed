@@ -4909,6 +4909,7 @@
   "exec_config.cli_model_custom_ph": "モデル ID を入力（正式名称対応）",
   "exec_config.cli_model_custom_add": "使用",
   "exec_config.cli_models_rescan": "再スキャン",
+  "exec_config.cli_current_model_title": "「{model}」はこの CLI が現在使用中のモデルです（メニューで切替可）",
   "chat.stats.costReportedTitle": "{c}（CLI 自己申告のコスト、推定ではありません）",
   "settings.custom_providers.cap_reasoning": "推論",
   "settings.custom_providers.cap_vision": "ビジョン"

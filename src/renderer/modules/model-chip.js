@@ -117,31 +117,37 @@ function _effectiveExecConfig(target) {
   const defaultEntry = _modelChipEntries[0] || null;
 
   // CLI-backed local agent：能力表内的 CLI（claude/codex）模型真实可控——
-  // 显示「任务级覆盖 > agent 默认 runtime.model > 跟随 CLI」，选择写任务级
-  // 覆盖（bare model id，随信封下发）。表外 CLI 维持只读（模型由 CLI 自身
-  // 配置决定，不显示误导值）。推理强度按能力表决定可否调整。
+  // 显示「任务级覆盖 > agent 默认 runtime.model > 扫描到的 CLI 当前模型 >
+  // 『CLI 默认』占位」，选择写任务级覆盖（bare model id，随信封下发）。
+  // 表外 CLI 只读展示当前模型（显示 ≠ 可改，控件仍由能力表把关）。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
     const ctl = (typeof window !== 'undefined' && window.cliExecControl)
-      ? window.cliExecControl.execControlFor(cliType)
-      : { model: false, effort: false };
+      ? window.cliExecControl
+      : null;
+    const cap = ctl ? ctl.execControlFor(cliType) : { model: false, effort: false };
     const runtimeModel = (agent.runtime && agent.runtime.model) || '';
-    const modelChoice = (ctl.model && override.model) ? String(override.model)
-      : (ctl.model && runtimeModel) ? String(runtimeModel)
+    const scanCurrent = (ctl && ctl.cachedCliModels(cliType) && ctl.cachedCliModels(cliType).current) || '';
+    const modelChoice = (cap.model && override.model) ? String(override.model)
+      : (cap.model && runtimeModel) ? String(runtimeModel)
       : '';
+    // 无覆盖/无默认时，chip 直接亮出 CLI 当前实际模型（扫描披露，如
+    // "Sonnet 5"）——切换外接智能体即见其真实模型，不再显示笼统的占位。
+    const currentLabel = modelChoice || scanCurrent || t('exec_config.cli_default_model');
     return {
       mode: 'cli',
       cliType,
-      modelSupported: !!ctl.model,
+      modelSupported: !!cap.model,
       model: modelChoice,
-      modelLabel: modelChoice || t('exec_config.cli_default_model'),
+      modelLabel: currentLabel,
+      modelIsCliCurrent: !modelChoice && !!scanCurrent,
       provider: '',
       providerLabel: cliType,
       effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
       effortOverridden: override.effort === 'low' || override.effort === 'high',
-      effortSupported: !!ctl.effort,
-      modelOverridden: !!(ctl.model && override.model),
+      effortSupported: !!cap.effort,
+      modelOverridden: !!(cap.model && override.model),
       agent,
     };
   }
@@ -244,6 +250,25 @@ function _modelChipRenderAll() {
   document.querySelectorAll('.model-chip[data-model-target]').forEach((chip) => _modelChipRenderChip(chip));
 }
 
+/** 切到外接智能体时后台拉一次模型扫描（有缓存直接命中）——chip 的
+ *  「CLI 当前模型」标签来自扫描结果的 current 字段，异步回来重渲染。 */
+async function _scanCliCurrentForChips() {
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  if (!ctl) return;
+  const seen = new Set();
+  for (const target of ['conversation', 'new-chat', 'project']) {
+    try {
+      const agent = _recipientAgent(target);
+      if (!_isCliAgent(agent) || !agent.runtime || !agent.runtime.cli) continue;
+      const cli = agent.runtime.cli;
+      if (seen.has(cli)) continue;
+      seen.add(cli);
+      await ctl.loadCliModels(agent.agent_id, cli);
+    } catch { /* 扫描失败保持现状（占位标签）*/ }
+  }
+  _modelChipRenderAll();
+}
+
 function _modelChipRenderChip(chip) {
   const target = _chipTargetForElement(chip);
   const cfg = _effectiveExecConfig(target);
@@ -282,7 +307,9 @@ function _modelChipRenderChip(chip) {
   const overrideMarker = cfg.modelOverridden || cfg.effortOverridden;
   chip.classList.toggle('is-override', !!overrideMarker);
   chip.title = cliMode
-    ? t('exec_config.effort_cli_note')
+    ? (cfg.modelIsCliCurrent
+      ? t('exec_config.cli_current_model_title', { model: cfg.modelLabel })
+      : t('exec_config.effort_cli_note'))
     : t('exec_config.title');
 }
 
@@ -698,14 +725,16 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
     menu.appendChild(cur);
   }
 
-  // 「跟随 CLI」行：清除任务级模型覆盖，回到 CLI 自身默认。
+  // 「跟随 CLI」行：清除任务级模型覆盖，回到 CLI 自身默认——副标签亮出
+  // 该默认具体是什么（扫描披露的当前模型）。
   const followRow = document.createElement('div');
   followRow.className = 'model-chip-menu-item' + (!cfg.model ? ' is-default' : '');
   followRow.innerHTML =
     '<span class="model-chip-menu-main">' +
     `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.cli_follow_default'))}</span>` +
     (!cfg.model ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
-    '</span>';
+    '</span>' +
+    `<span class="model-chip-menu-sub">${escapeHtml(scan.current || cliType)}</span>`;
   followRow.addEventListener('click', () => applyPick(''));
   menu.appendChild(followRow);
 
@@ -834,14 +863,22 @@ function initModelChip() {
     });
     window.addEventListener('i18n-change', () => _modelChipRenderAll());
     // Recipient changes re-resolve the effective config (agent defaults /
-    // API model pick) — the chip must follow the target.
-    window.addEventListener('cogseed:recipient-changed', () => _modelChipRenderAll());
+    // API model pick) — the chip must follow the target. CLI agents also
+    // kick a background model scan so the chip can surface the CLI's REAL
+    // current model (e.g. "Sonnet 5") instead of a generic placeholder.
+    window.addEventListener('cogseed:recipient-changed', () => {
+      _modelChipRenderAll();
+      void _scanCliCurrentForChips();
+    });
     // Agent defaults (default_model / default_thinking) can change from the
     // agent settings page while a chat is open.
     window.addEventListener('cogseed:agents-cache-refreshed', () => _modelChipRenderAll());
   }
   refreshModelChipEntries();
   refreshModelChipEffort();
+  // 恢复会话场景：打开应用就可能停在外接智能体的会话里——预扫一次让
+  // chip 直接显示 CLI 当前模型（有缓存时无感命中）。
+  void _scanCliCurrentForChips();
 }
 
 window.initModelChip = initModelChip;
