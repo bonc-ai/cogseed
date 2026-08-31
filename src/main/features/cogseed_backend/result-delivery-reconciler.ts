@@ -35,6 +35,12 @@ export interface CogSeedResultDeliveryReconcilerOptions {
   allowInactiveExecutionRecovery?: boolean;
   isExecutionActive?: (taskId: string) => boolean;
   leaseWaitMs?: number;
+  /** Wall-clock budget for the group-chat projection step (default 1000ms).
+   * Live delivery keeps it tight (interactive latency); boot-time recovery
+   * passes a larger budget — the projection can exceed 1s under first-boot
+   * and CI-suite load, and a false "pending" there stalls retained results
+   * until the next boot. */
+  projectionTimeoutMs?: number;
 }
 
 function terminalStatus(retained: CogSeedReadablePendingResultDelivery): 'completed' | 'failed' {
@@ -75,13 +81,14 @@ async function defaultProjectTaskEvent(input: CogSeedGroupChatProjectionInput): 
 async function projectBounded(
   input: CogSeedGroupChatProjectionInput,
   projectTaskEvent: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>,
+  timeoutMs: number,
 ): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const outcome = await Promise.race([
       projectTaskEvent(input).then((value) => value === 'dropped' ? false : true, () => false),
       new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), 1_000);
+        timer = setTimeout(() => resolve(false), timeoutMs);
         timer.unref?.();
       }),
     ]);
@@ -241,7 +248,7 @@ export async function reconcileCogSeedPendingResult(
       executionId: retained.executionId,
       sessionId: retained.sessionId,
       event: retained.event,
-    }, options.projectTaskEvent ?? defaultProjectTaskEvent);
+    }, options.projectTaskEvent ?? defaultProjectTaskEvent, options.projectionTimeoutMs ?? 1_000);
     if (!projected) return { status: 'pending', task: awaitingDelivery, reason: 'projection-failed' };
 
     await lease.assertOwned();

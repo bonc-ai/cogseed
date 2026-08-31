@@ -71,25 +71,34 @@ export function checkMinVersion(cli: string, detected: string | null): string | 
  * Run the configured version probe, return the parsed version string (the
  * raw line we matched, not just the semver), or null on any failure.
  *
- * Timeout is 5s — a version probe should be sub-100ms; anything longer is
- * a hung/wrong binary.
+ * Timeout is 5s by default (callers pass 2s) — a version probe should be
+ * sub-100ms; anything longer is a hung/wrong binary. A probe that times out
+ * with ZERO output is retried once: under heavy machine load (CI suites,
+ * first-launch cold starts) the spawn can be starved past the timeout even
+ * for a healthy binary, so one retry recovers the common transient case
+ * while keeping the worst case for a genuinely hung binary at 2×timeoutMs.
  */
-export async function detectVersion(
+type ProbeOutcome =
+  | { kind: 'version'; version: string }
+  | { kind: 'silent-timeout' }
+  | { kind: 'unavailable' };
+
+function probeVersionOnce(
   binPath: string,
-  timeoutMs = 5000,
-  versionArgs: readonly string[] = ['--version'],
-): Promise<string | null> {
+  timeoutMs: number,
+  versionArgs: readonly string[],
+): Promise<ProbeOutcome> {
   return new Promise(resolve => {
     let settled = false;
     let outputBytes = 0;
     let timer: NodeJS.Timeout | null = null;
     const maxOutputBytes = 64 * 1024;
-    const finish = (v: string | null) => {
+    const finish = (outcome: ProbeOutcome) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       timer = null;
-      resolve(v);
+      resolve(outcome);
     };
 
     let stdout = '';
@@ -109,7 +118,7 @@ export async function detectVersion(
         detached: process.platform !== 'win32',
       });
     } catch {
-      finish(null);
+      finish({ kind: 'unavailable' });
       return;
     }
 
@@ -119,7 +128,7 @@ export async function detectVersion(
       outputBytes += data.length;
       if (outputBytes > maxOutputBytes) {
         killProcessTree(child, 'SIGKILL');
-        finish(null);
+        finish({ kind: 'unavailable' });
         return;
       }
       if (target === 'stdout') stdout += data.toString('utf8');
@@ -133,23 +142,36 @@ export async function detectVersion(
       // command-shell parent leaves the real CLI (and any probe descendants)
       // running after discovery has already returned.
       killProcessTree(child, 'SIGTERM');
-      finish(null);
+      finish(outputBytes === 0 ? { kind: 'silent-timeout' } : { kind: 'unavailable' });
     }, timeoutMs);
     timer.unref?.();
 
-    child.on('error', () => finish(null));
+    child.on('error', () => finish({ kind: 'unavailable' }));
     child.on('close', (code) => {
-      if (code !== 0) return finish(null);
+      if (code !== 0) return finish({ kind: 'unavailable' });
       // Some wrappers print a banner to stdout and the actual version to
       // stderr. Inspect both streams instead of letting non-empty stdout
       // hide a valid stderr version.
       const text = `${stdout}\n${stderr}`.trim();
-      if (!text) return finish(null);
+      if (!text) return finish({ kind: 'unavailable' });
       const sv = parseSemver(text);
-      if (!sv) return finish(null);
+      if (!sv) return finish({ kind: 'unavailable' });
       // Return the matched semver string so callers store a clean value
       // (the raw line may carry product names / notes we don't want).
-      finish(`${sv.major}.${sv.minor}.${sv.patch}`);
+      finish({ kind: 'version', version: `${sv.major}.${sv.minor}.${sv.patch}` });
     });
   });
+}
+
+export async function detectVersion(
+  binPath: string,
+  timeoutMs = 5000,
+  versionArgs: readonly string[] = ['--version'],
+): Promise<string | null> {
+  const first = await probeVersionOnce(binPath, timeoutMs, versionArgs);
+  if (first.kind !== 'silent-timeout') {
+    return first.kind === 'version' ? first.version : null;
+  }
+  const retry = await probeVersionOnce(binPath, timeoutMs, versionArgs);
+  return retry.kind === 'version' ? retry.version : null;
 }

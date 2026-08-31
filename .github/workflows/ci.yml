@@ -31,7 +31,11 @@ jobs:
       - run: npm run test:resources:setup
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      # 全量套件默认 maxWorkers=4，在 macos-latest（3 vCPU）上会过度抢占，
+      # 负载型时序用例（CLI 版本探测、boot 恢复投影等）因此偶发超时红单。
+      # 发布门禁优先稳定性：限制 2 个 worker，多花几分钟换可重复的绿。
+      - run: node scripts/run-tests.mjs run --maxWorkers=2
+      - run: npm run test:resources
       - run: npm run readme:check
       - run: npm run tokens:check
       - run: npm run builtin:manifest:check
