@@ -182,7 +182,7 @@
   padding: 3px 6px;
   color: #a6adb8;
 }
-.cs-loading-spinner { display: inline-flex; animation: cs-spin 1s steps(8) infinite; }
+.cs-loading-spinner { display: inline-flex; animation: cs-spin 1s linear infinite; }
 .cs-loading-spinner svg { width: 14px; height: 14px; }
 @keyframes cs-spin { to { transform: rotate(360deg); } }
 
