@@ -101,16 +101,11 @@ async function bootApp() {
   // First-run walkthrough FIRST: check the machine-local onboarding marker
   // right after i18n, BEFORE Stage A/B. The walkthrough is a full-screen
   // overlay — the user should land on it immediately, never on a half-loaded
-  // main UI that swaps to the walkthrough seconds later. It is fire-and-
-  // forget so it never blocks first paint; Stage A/B keep warming the main
-  // UI underneath the overlay. `maybeStart` is idempotent (skips when the
-  // marker says completed), so the original post-Stage-B call below stays
-  // as a safety net for edge cases where the early check raced boot.
-  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
-    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
-      _bootLog.warn('onboarding maybeStart (early) failed', { error: (err && err.message) || String(err) });
-    });
-  }
+  // main UI that swaps to the walkthrough seconds later. Fire-and-forget so
+  // it never blocks first paint; the script itself is lazy-loaded only when
+  // the marker says this device hasn't completed it. The post-restore call
+  // below stays as a safety net (loader + maybeStart are both idempotent).
+  _maybeStartOnboardingFeature();
 
   // ── Stage A (parallel, no inter-dependencies) ──────────────────────
   // All four are independent IPC calls. Three downstream constraints,
@@ -178,15 +173,11 @@ async function bootApp() {
       setTimeout(_warmWorkspaceFeature, 500);
     }
   }
-  // First-run walkthrough: fire-and-forget so it never blocks first paint.
-  // It reads the machine-local onboarding marker and only lifts the overlay
-  // on a device that hasn't completed it yet. Runs after the last view is
-  // restored so the app is fully painted underneath the overlay.
-  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
-    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
-      _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
-    });
-  }
+  // First-run walkthrough safety net: fire-and-forget so it never blocks
+  // first paint. Same lazy path as the early call — the marker gates both,
+  // and the loader/maybeStart are idempotent so the second call is a no-op
+  // when the early one already started the walkthrough.
+  _maybeStartOnboardingFeature();
 
   // Interactive tour is started by onboarding.js after completion
   // (removed duplicate auto-start to avoid "tour already running" conflict)
@@ -288,6 +279,31 @@ function _saveLastView(view, cid) {
   try {
     localStorage.setItem(_LAST_VIEW_KEY, JSON.stringify({ view, cid: cid || null }));
   } catch (_) {}
+}
+
+// ── 首启引导（onboarding）按需加载 ─────────────────────────────────────────
+// onboarding.js(168K)+css(33K) 只在设备未完成引导时才需要：先查机器本地
+// 标记（prefs IPC，无需脚本本体），未完成才经 lazy-features 注入并启动；
+// 已完成的老设备首屏少解析约 200K。幂等：loader 与 maybeStart 各自去重。
+function _maybeStartOnboardingFeature() {
+  Promise.resolve()
+    .then(() => window.cogseed.invoke('prefs.getOnboarding'))
+    .then((res) => {
+      if (res && res.completed === true) return; // 已完成：不加载不启动
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      return Promise.resolve(loader('onboarding'))
+        .then(() => {
+          if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+            return window.csOnboarding.maybeStart();
+          }
+        });
+    })
+    .catch((err) => {
+      _bootLog.warn('onboarding lazy load failed', { error: (err && err.message) || String(err) });
+    });
 }
 
 function _loadViewFeature(feature, view, run) {
