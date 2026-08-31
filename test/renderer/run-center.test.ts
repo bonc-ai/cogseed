@@ -34,6 +34,7 @@ describe('Run Center renderer contract', () => {
     expect(boot).toContain("if (openLegacyAgentDashboard) view = 'run-center'");
     expect(boot).toContain("openLegacyAgentDashboard ? 'agents' : opts.runCenterView");
     expect(html).not.toContain('<script src="./modules/run-center.js"></script>');
+    expect(read('src/renderer/modules/run-center.js')).toContain('overviewAnalysisOpen: true');
   });
 
   it('keeps the macOS window top draggable without swallowing Run Center actions', () => {
@@ -48,6 +49,9 @@ describe('Run Center renderer contract', () => {
 
     expect(css).toMatch(/#run-center-root\s*{[\s\S]*?container:\s*run-center \/ inline-size;/);
     expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\s*\{[\s\S]*?grid-template-columns:\s*minmax\(300px, 350px\) minmax\(0, 1fr\);/);
+    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode:not\(\.is-detail-open\)\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode\.is-detail-open\s*\{[^}]*clamp\(340px, 30%, 440px\);/);
+    expect(css).toMatch(/#panel-run-center \.dashboard-board-column\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*100%;/);
     expect(css).toMatch(/#panel-run-center \.run-center-queue-scroll\s*\{[\s\S]*?overflow:\s*auto;/);
     expect(css).toMatch(/#panel-run-center \.run-center-queue-item\.is-selected\s*\{[\s\S]*?background:\s*var\(--rc-surface-muted\);/);
     expect(css).toMatch(/#panel-run-center \.dashboard-board-card\.is-selected\s*\{[\s\S]*?background:\s*var\(--rc-surface-muted\);/);
@@ -70,6 +74,8 @@ describe('Run Center renderer contract', () => {
     expect(source).toContain("invoke('cogseed.agent.list')");
     expect(source).toContain("invoke('cogseed.task.action'");
     expect(source).toContain("action === 'recover-result' ? actions.recoverResult : false");
+    expect(source).toContain('data-run-center-action="archive"');
+    expect(source).toContain("text('run_center.archive_confirm')");
     expect(source).toContain("invoke(isReassign ? 'cogseed.task.reassign' : 'cogseed.task.start'");
     expect(source).toContain("rootWindow.cogseed.stream('cogseed.dashboard.watch'");
     expect(source).toContain("invoke('agents.list', { summary: true })");
@@ -109,13 +115,15 @@ describe('Run Center renderer contract', () => {
       tasks: [
         { taskId: 'pending', executionId: 'execution-pending', sessionId: 'session-a', conversationId: 'conversation-a', column: 'pending', sourceKind: 'cogseed', title: 'Pending', updatedAt: '2026-08-26T10:00:00.000Z' },
         { taskId: 'running', executionId: 'execution-running', sessionId: 'session-a', conversationId: 'conversation-a', sessionTitle: 'Agent conversation', column: 'running', sourceKind: 'agent', agentId: 'agent-1', worktreeName: 'cogseed-worktree-dev-review', title: 'Running', updatedAt: '2026-08-26T11:00:00.000Z' },
-        { taskId: 'archived', sessionId: 'session-b', column: 'archived', sourceKind: 'agent', title: 'Archived', updatedAt: '2026-08-26T09:00:00.000Z' },
+        { taskId: 'archived', executionId: 'execution-archived', sessionId: 'session-b', status: 'failed', errorCode: 'provider_error', column: 'archived', sourceKind: 'agent', title: 'Archived', updatedAt: '2026-08-26T09:00:00.000Z' },
       ],
     };
     expect(board.filteredTasks(projection, '', 'all').map((task: any) => task.taskId)).toEqual(['pending', 'running']);
     expect(board.filteredTasks(projection, '', 'pending').map((task: any) => task.taskId)).toEqual(['pending']);
     expect(board.filteredTasks(projection, '', 'running').map((task: any) => task.taskId)).toEqual(['running']);
     expect(board.filteredTasks(projection, 'archived', 'all', true).map((task: any) => task.taskId)).toEqual(['archived']);
+    expect(board.filterRuns(board.buildRunModels(projection), { search: '', filter: 'all' }).map((run: any) => run.aggregateTask.taskId)).toEqual(['pending', 'running']);
+    expect(board.userStateForTask(projection.tasks[2]).action).toBe('');
     expect(board.filteredTasks(projection, '', 'all', false, 'agent').map((task: any) => task.taskId)).toEqual(['running']);
     expect(board.filteredTasks(projection, 'Researcher', 'all', false, 'all', (agentId: string) => agentId ? 'Researcher' : '').map((task: any) => task.taskId)).toEqual(['running']);
     expect(board.filteredTasks(projection, 'dev-review', 'all').map((task: any) => task.taskId)).toEqual(['running']);
@@ -304,6 +312,9 @@ describe('Run Center renderer contract', () => {
     expect(fallback.title).not.toContain(tasks[0].worktreeName);
 
     expect(board.userStateForTask({ status: 'needs_review' }).action).toBe('open-handling');
+    expect(board.userStateForTask({ status: 'failed', errorCode: 'provider_error' }).action).toBe('configure-model');
+    expect(board.userStateForTask({ status: 'failed', errorCode: 'model_preflight' }).action).toBe('configure-model');
+    expect(board.userStateForTask({ status: 'failed', errorCode: 'task_failed' }).action).toBe('retry');
     expect(board.userStateForTask({ status: 'running', column: 'running' }).attention).toBe(false);
   });
 
@@ -380,7 +391,8 @@ describe('Run Center renderer contract', () => {
       statusKey: (status: string) => `run_center.status_${status}`, statusClass: () => 'run-center-status',
       formatDate: (value: string) => value, formatDay: (value: Date) => String(value.getDate()),
       stateView: (key: string) => key, localizedTitle: (task: any) => task.taskId,
-      agentName: (agentId: string) => agentId, loading: false, error: '', now: new Date(2026, 7, 27, 12),
+      agentName: (agentId: string) => agentId, loading: false, error: '', analysisOpen: true,
+      now: new Date(2026, 7, 27, 12),
     });
     expect(html).toContain('run_center.overview_health_attention');
     expect(html).toContain('data-run-center-overview-filter="attention"');
@@ -390,6 +402,10 @@ describe('Run Center renderer contract', () => {
     expect(html).toContain('data-run-center-overview-task="failed"');
     expect(html).toContain('data-run-center-overview-agent="agent-a"');
     expect(html).toContain('data-run-center-overview-source="local-cli"');
+    expect(html.indexOf('class="run-center-overview-analysis"')).toBeLessThan(
+      html.indexOf('class="run-center-overview-now"'),
+    );
+    expect(html).toContain('class="run-center-overview-analysis" open');
   });
 
   it('derives every overview statistic from logical Runs without double-counting attempts', () => {
@@ -572,7 +588,7 @@ describe('Run Center renderer contract', () => {
       executionId: 'sensitive-execution-id', executionKind: 'sensitive-execution-kind',
       runtimeKind: 'sensitive-runtime-kind', errorCode: 'provider_error',
       conversationMode: 'agent', resultDeliveryState: 'delivered', participantCount: 1, resumable: false,
-      actions: { retry: false, skip: false, resume: false, recoverResult: false, abort: true },
+      actions: { retry: false, skip: false, resume: false, recoverResult: false, abort: true, archive: false },
     };
     const session = {
       sessionId: task.sessionId, title: 'CogSeed task', titleKey: 'run_center.task_kind_cogseed',
@@ -942,6 +958,13 @@ describe('Run Center renderer contract', () => {
         collaborationActionsCompleted += 1;
         return { ok: true };
       }
+      if (channel === 'cogseed.task.action') {
+        if (payload?.action === 'archive') {
+          task.column = 'archived';
+          task.actions.archive = false;
+        }
+        return { ok: true };
+      }
       if (channel === 'cogseed.task.start') { created = true; return task; }
       if (channel === 'p3394.external.stop') return { ok: true };
       throw new Error(`unexpected channel: ${channel}`);
@@ -962,7 +985,7 @@ describe('Run Center renderer contract', () => {
           },
         },
         addEventListener: vi.fn(), setTimeout, clearTimeout, confirm: vi.fn(() => true),
-        setView: vi.fn(),
+        setView: vi.fn(), activateSettingsTab: vi.fn(),
         uiIconHtml: (name: string) => `<i>${name}</i>`,
       },
       document: Object.assign(documentState, { getElementById: () => panel, addEventListener: (type: string, listener: (event: any) => void) => documentListeners.set(type, listener) }),
@@ -1263,7 +1286,8 @@ describe('Run Center renderer contract', () => {
     expect(html).toContain('class="run-center-run-detail" aria-live="polite"');
     expect(html).toContain('data-run-center-detail-tab="summary"');
     expect(html).toContain('data-run-center-detail-tab="history"');
-    click({ runCenterDetailBack: '' });
+    expect(read('src/renderer/modules/run-center.js')).toContain("state.runMode === 'board'");
+    click({ runCenterDetailClose: '' });
     await waitFor(() => focusedControls.at(-1) === 'board-selected');
     expect(html).not.toContain('is-queue-mode is-detail-open');
 
@@ -1347,6 +1371,44 @@ describe('Run Center renderer contract', () => {
       expect(detailPanel).not.toContain(rawValue);
     }
     expect(detailPanel).not.toContain('run_center.detail_collaboration');
+
+    task.status = 'failed';
+    task.column = 'attention';
+    task.actions.abort = false;
+    task.actions.archive = true;
+    click({ runCenterRefresh: '' });
+    await waitFor(() => html.includes('data-run-center-configure-model'));
+    let failedSummary = html.match(/<div class="run-center-summary-flow">([\s\S]*?)<\/div>\s*<\/div><\/main>/)?.[1] || '';
+    expect(failedSummary).toContain('data-run-center-configure-model');
+    expect(failedSummary).not.toContain('data-run-center-action="retry"');
+    click({ runCenterConfigureModel: '' });
+    expect(context.window.setView).toHaveBeenLastCalledWith('settings');
+    expect(context.window.activateSettingsTab).toHaveBeenLastCalledWith('credentials');
+
+    task.errorCode = 'model_preflight';
+    click({ runCenterRefresh: '' });
+    await waitFor(() => html.includes('data-run-center-configure-model'));
+    failedSummary = html.match(/<div class="run-center-summary-flow">([\s\S]*?)<\/div>\s*<\/div><\/main>/)?.[1] || '';
+    expect(failedSummary).toContain('data-run-center-configure-model');
+    expect(failedSummary).not.toContain('data-run-center-action="retry"');
+    expect(failedSummary).toContain('data-run-center-action="archive"');
+    click({ runCenterAction: 'archive' });
+    await waitFor(() => calls.some((call) => call.channel === 'cogseed.task.action' && call.payload?.action === 'archive'));
+    await waitFor(() => !html.includes('data-run-center-queue-task="cogseed-task-renderer"'));
+    expect(context.window.confirm).toHaveBeenLastCalledWith('run_center.archive_confirm');
+    expect(html).not.toContain('is-queue-mode is-detail-open');
+    task.status = 'running';
+    task.column = 'running';
+    task.actions.abort = true;
+    task.errorCode = 'provider_error';
+    click({ runCenterRefresh: '' });
+    await waitFor(() => html.includes('data-run-center-queue-task="cogseed-task-renderer"'));
+    click({ dashboardBoardTaskId: task.taskId, dashboardBoardSessionId: task.sessionId });
+    await waitFor(() => html.includes('run_center.user_state_running'));
+    click({ dashboardBoardTaskId: task.taskId, dashboardBoardSessionId: task.sessionId });
+    expect(html).not.toContain('is-queue-mode is-detail-open');
+    click({ dashboardBoardTaskId: task.taskId, dashboardBoardSessionId: task.sessionId });
+    await waitFor(() => html.includes('is-queue-mode is-detail-open'));
 
     documentListeners.get('keydown')?.({ key: 'Escape', target: {} });
     expect(html).not.toContain('is-queue-mode is-detail-open');
@@ -1483,6 +1545,7 @@ describe('Run Center renderer contract', () => {
       'run_center.task_kind_worker_turn',
       'run_center.workflow_step',
       'run_center.event_task_waiting_user',
+      'run_center.event_task_archived',
       'run_center.event_model_delta',
       'run_center.event_artifact',
       'run_center.source_agent-conversation',

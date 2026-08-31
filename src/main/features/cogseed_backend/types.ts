@@ -104,6 +104,9 @@ export interface CogSeedTaskRecord {
   createdAt: string;
   updatedAt: string;
   terminalAt?: string;
+  /** User-hidden timestamp. Archiving removes a terminal run from default
+   * dashboard lists without rewriting its lifecycle status or history. */
+  archivedAt?: string;
   errorCode?: string;
 }
 
@@ -172,6 +175,7 @@ export type CogSeedTaskEventType =
   | 'task.failed'
   | 'task.cancelled'
   | 'task.recoverable'
+  | 'task.archived'
   | 'artifact';
 
 export interface CogSeedTaskEvent {

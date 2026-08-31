@@ -118,11 +118,23 @@ describe('unified Agent Operations Center layout contract', () => {
     expect(agents).not.toContain('.endpoint');
     expect(agents).not.toContain('.token');
     expect(agents).not.toContain('.path');
+    expect(css).toMatch(/\.run-center-executor-row\s*\{[^}]*grid-template-columns:[^}]*150px[^}]*minmax\(145px, auto\)/);
+    expect(css).toMatch(/\.run-center-executor-row > \.run-center-agent-health\s*\{[^}]*grid-column:\s*3;/);
+    expect(css).toMatch(/\.run-center-executor-row > \.run-center-registry-stats\s*\{[^}]*grid-column:\s*4;/);
+    expect(css).toMatch(/\.run-center-executor-row > \.run-center-registry-actions\s*\{[^}]*grid-column:\s*5;/);
+    expect(css).toMatch(/\.run-center-executor-row > \.run-center-executor-toggle\s*\{[^}]*grid-column:\s*6;/);
   });
 
   it('keeps the queue/board split usable on desktop and narrow surfaces', () => {
     expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\s*{[\s\S]*?grid-template-columns:\s*minmax\(300px, 350px\) minmax\(0, 1fr\);/);
-    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode\s*{[\s\S]*?grid-template-columns:\s*minmax\(0, 1\.5fr\) minmax\(340px, \.66fr\);/);
+    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode:not\(\.is-detail-open\)\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode\.is-detail-open\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) clamp\(340px, 30%, 440px\);/);
+    expect(css).toMatch(/#panel-run-center \.run-center-layout\.is-runs\.is-board-mode:not\(\.is-detail-open\) \.run-center-run-detail-pane\s*{[^}]*display:\s*none;/);
+    expect(css).toMatch(/#panel-run-center \.run-center-run-list-pane\.is-board \.dashboard-board-scroll\s*{[^}]*height:\s*100%;[^}]*box-sizing:\s*border-box;/);
+    expect(css).toMatch(/#panel-run-center \.run-center-run-list-pane\.is-board \.dashboard-board-columns\s*{[^}]*height:\s*100%;[^}]*min-height:\s*0;/);
+    expect(css).toMatch(/#panel-run-center \.dashboard-board-columns\s*{[^}]*width:\s*100%;[^}]*align-items:\s*stretch;/);
+    expect(css).toMatch(/#panel-run-center \.dashboard-board-column\s*{[^}]*height:\s*100%;[^}]*min-height:\s*100%;[^}]*flex-direction:\s*column;/);
+    expect(css).toMatch(/#panel-run-center \.dashboard-board-column-list\s*{[^}]*flex:\s*1 1 auto;[^}]*overflow-y:\s*auto;/);
     expect(css).toMatch(/#panel-run-center \.run-center-run-detail-pane\s*{[\s\S]*?min-height:\s*0;/);
     expect(css).toMatch(/#panel-run-center \.run-center-mode-switch\s*{[\s\S]*?display:\s*inline-flex;/);
     expect(css).toMatch(/#panel-run-center \.run-center-queue-item\s*{[\s\S]*?min-height:\s*84px;/);

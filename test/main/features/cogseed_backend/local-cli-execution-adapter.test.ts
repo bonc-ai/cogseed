@@ -300,6 +300,46 @@ describe('CogSeed Backend local CLI execution adapter', () => {
     expect(events.at(-1)).toMatchObject({ type: 'result', status: 'completed', text: 'gateway reply text' });
   });
 
+  it('yields gateway deltas before the turn completes without duplicating the final body', async () => {
+    let emitProcess: ((data: Record<string, unknown>) => void) | undefined;
+    let finishTurn: ((value: { text: string }) => void) | undefined;
+    gatewayTurnMock.runP3394GatewayTurn.mockImplementationOnce((input: any) => new Promise((resolve) => {
+      emitProcess = input.onProcess;
+      finishTurn = resolve;
+    }));
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+    const iterator = adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-cli-adapter',
+      agentId: 'agent-cli-adapter',
+      agentName: 'Codex',
+      requestId: 'req-cli-gateway-stream',
+      taskId: 'cogseed-task-cli-gateway-stream',
+      sessionId: 'cogseed-session-cli-gateway-stream',
+      runtimeSessionId: 'mruntime-cli-gateway-stream',
+      task: 'Stream this via gateway.',
+      context: [],
+      localCli: { cli: 'codex', viaP3394Gateway: true },
+    })[Symbol.asyncIterator]();
+
+    const firstEvent = iterator.next();
+    await vi.waitFor(() => expect(emitProcess).toBeTypeOf('function'));
+    emitProcess?.({ type: 'delta', text: 'live chunk' });
+    await expect(firstEvent).resolves.toMatchObject({
+      done: false,
+      value: { type: 'event', status: 'running', text: 'live chunk' },
+    });
+
+    emitProcess?.({ type: 'final', text: 'live chunk plus final' });
+    finishTurn?.({ text: 'live chunk plus final' });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: 'result', status: 'completed', text: 'live chunk plus final' },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   it('maps a gateway failure to a failed runtime envelope with the failure code', async () => {
     gatewayTurnMock.runP3394GatewayTurn.mockResolvedValueOnce({
       text: '', failureCode: 'p3394_reply_timeout', error: 'timed out waiting for reply',
