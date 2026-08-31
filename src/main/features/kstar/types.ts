@@ -87,6 +87,8 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
 
 export type KstarReviewState = 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
 export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'commander' | 'user' | 'unknown';
+export type KstarEvidenceLayer = 'fact' | 'inference' | 'experience';
+export type KstarReviewStatus = 'pending' | 'confirmed' | 'rejected' | 'skipped';
 
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;
@@ -104,6 +106,8 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   reviewState?: KstarReviewState;
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;
+  evidenceLayer?: KstarEvidenceLayer;
+  reviewStatus?: KstarReviewStatus;
   confirmedAt?: string;
   /** Model-reasoned reusable lesson ("why the gap happened + what is worth
    *  reusing"). When present it becomes the precipitation judgment instead
@@ -157,7 +161,28 @@ export interface KstarExtractionRunRecord extends KstarJsonRecord {
   reviewId: string;
   candidateIds: string[];
   status: 'created' | 'partial' | 'failed';
+  /** Result ids are populated when the requirement-level extraction pass runs. */
+  createdAssetIds?: string[];
+  mergedIntoIds?: string[];
+  updateCandidateIds?: string[];
+  failureIds?: string[];
+  completedAt?: string;
   createdAt: string;
   updatedAt: string;
   error?: string;
+}
+
+export type KstarFailureStage = 'capture' | 'review_inference' | 'precipitation' | 'control_receipt';
+
+export interface KstarFailureRecord extends KstarJsonRecord {
+  schemaVersion: 1;
+  stage: KstarFailureStage;
+  errorCode: string;
+  errorMessage: string;
+  at: string;
+  operationKey: string;
+  conversationId?: string;
+  episodeId?: string;
+  requirementId?: string;
+  taskId?: string;
 }

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { createLogger } from '../../logger';
+import { evaluatePromotionPolicy } from './promotion-policy';
 import { resolveAssetLifecycle } from './formal-assets/policy';
 import { describePromotionBlock, validatePromotionByAssetType, type PromotionBlockReason } from './formal-assets/promotion';
 import { genId12, safeId } from '../../storage';
@@ -181,6 +182,10 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   spaceId?: string;
   /** Provenance for assets learned from conversation sources. */
   sourceSessionIds?: string[];
+  /** Independent cross-task effectiveness evidence. Legacy assets may omit these. */
+  validationCount?: number;
+  lastValidatedAt?: string;
+  consecutiveFailures?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -319,6 +324,14 @@ export class SemanticDedupUnavailableError extends Error {
   constructor(readonly reason: string) {
     super(`semantic duplicate check unavailable: ${reason}`);
     this.name = 'SemanticDedupUnavailableError';
+  }
+}
+
+export class PromotionPausedError extends Error {
+  readonly code = 'promotion_paused';
+  constructor(readonly reason: string) {
+    super(`automatic promotion paused: ${reason}`);
+    this.name = 'PromotionPausedError';
   }
 }
 
@@ -1168,6 +1181,8 @@ export async function autoApplyRecallCandidate(
   // 自进化沉淀会被记成会话自动抽取。缺省按 capture 线处理。
   const provenance: RecallPromotionProvenance = opts.provenance || 'capture';
   const candidate = await readRecallCandidate(userId, candidateId);
+  const policy = evaluatePromotionPolicy(candidate);
+  if (policy.action === 'pause') throw new PromotionPausedError(policy.reason);
   if (candidate.status === 'confirmed') {
     try {
       const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system', provenance });

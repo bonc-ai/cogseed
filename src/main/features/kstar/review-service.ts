@@ -23,6 +23,8 @@ export interface SaveKstarReviewInput {
   reviewState?: KstarReviewRecord['reviewState'];
   inferenceMethod?: KstarReviewRecord['inferenceMethod'];
   needsConfirmation?: boolean;
+  evidenceLayer?: KstarReviewRecord['evidenceLayer'];
+  reviewStatus?: KstarReviewRecord['reviewStatus'];
   confirmedAt?: string;
   /** Model-reasoned reusable lesson; persisted and used as the precipitation
    *  judgment instead of a fixed template sentence. */
@@ -115,6 +117,8 @@ export async function saveKstarReview(
     ...(input.reviewState ? { reviewState: input.reviewState } : {}),
     ...(input.inferenceMethod ? { inferenceMethod: input.inferenceMethod } : {}),
     ...(input.needsConfirmation !== undefined ? { needsConfirmation: input.needsConfirmation } : {}),
+    evidenceLayer: input.evidenceLayer || (input.inferenceMethod === 'user' ? 'experience' : 'inference'),
+    reviewStatus: input.reviewStatus || (input.reviewState === 'confirmed' ? 'confirmed' : input.reviewState === 'unknown' ? 'skipped' : 'pending'),
     ...(input.confirmedAt ? { confirmedAt: input.confirmedAt } : {}),
     ...(input.lesson?.trim() ? { lesson: boundedReason(input.lesson) } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(input.evidenceRefs),
@@ -140,6 +144,8 @@ function validateStoredReview(userId: string, episodeId: string, raw: Record<str
     (raw.reviewState !== undefined && !['inferred', 'needs_confirmation', 'confirmed', 'unknown'].includes(String(raw.reviewState))) ||
     (raw.inferenceMethod !== undefined && !['deterministic', 'model', 'commander', 'user', 'unknown'].includes(String(raw.inferenceMethod))) ||
     (raw.needsConfirmation !== undefined && typeof raw.needsConfirmation !== 'boolean') ||
+    (raw.evidenceLayer !== undefined && !['fact', 'inference', 'experience'].includes(String(raw.evidenceLayer))) ||
+    (raw.reviewStatus !== undefined && !['pending', 'confirmed', 'rejected', 'skipped'].includes(String(raw.reviewStatus))) ||
     (raw.confirmedAt !== undefined && typeof raw.confirmedAt !== 'string') ||
     (raw.lesson !== undefined && typeof raw.lesson !== 'string') ||
     !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 ||

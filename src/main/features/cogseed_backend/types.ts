@@ -108,6 +108,11 @@ export interface CogSeedTaskRecord {
    * dashboard lists without rewriting its lifecycle status or history. */
   archivedAt?: string;
   errorCode?: string;
+  /** Optional durable bridge to the governed KSTAR records. */
+  kstarTaskId?: string;
+  kstarRequirementId?: string;
+  kstarProjectionId?: string;
+  kstarForecastId?: string;
 }
 
 export interface CogSeedSessionRecord {
