@@ -8,7 +8,7 @@
 GitHub main 打 tag vX.Y.Z（发布节奏由团队决定，防呆只允许 main 上的 tag）
   → Build & Sign macOS：签名+公证产出 dmg（手动安装）+ zip（自动更新）
   → GitHub Release 挂两个文件
-  → 内网 GitLab release:installer（INSTALLER_URL=dmg 直链，AUTO_UPDATE_ZIP_URL=zip 直链）
+  → hub 项目 CI release:installer（INSTALLER_URL=dmg 直链，AUTO_UPDATE_ZIP_URL=zip 直链）
   → 服务器登记为运营平台「草稿包」（系统计算 SHA-256，不直写 catalog）
   → 发布员在运营平台核对后点「发布」
   → releases.json（老版本客户端提醒通道，dmg）+ /updates/feed/mac-arm64（新客户端自动更新）
@@ -24,7 +24,7 @@ GitHub main 打 tag vX.Y.Z（发布节奏由团队决定，防呆只允许 main 
    Draft a new release → tag 填 `vX.Y.Z`（"Create new tag on publish"，target=main）→ Publish。
 2. 等 Actions 跑完（约 10 分钟），Release 页应有两个资产：`CogSeed-X.Y.Z-mac-arm64.dmg` 与
    `CogSeed-X.Y.Z-mac-arm64.zip`。复制两者的下载直链（右键 → 复制链接地址）。
-3. **内网 GitLab**（hub 项目）：CI/CD → Run pipeline（main 分支）：
+3. **hub 项目**（CI/CD）：Run pipeline（main 分支）：
    - `INSTALLER_URL` = dmg 直链
    - `AUTO_UPDATE_ZIP_URL` = zip 直链
    - （无 AUTO_UPDATE_ZIP_URL 也能登记，但用户将收不到自动更新）
