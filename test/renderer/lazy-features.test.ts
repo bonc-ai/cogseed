@@ -178,7 +178,9 @@ describe('renderer lazy feature loader', () => {
     const tabLoader = source.slice(tabLoaderStart, tabLoaderEnd);
 
     expect(openBody).toContain("_setAgentPickerTab('agents'");
-    expect(openBody).toContain('_positionPopoverAboveOrBelow(picker, anchorBtn)');
+    // Positioning fires in the same frame (anchor opts vary by picker type —
+    // recipient chips pass { anchorToButton: true }, others call bare).
+    expect(openBody).toMatch(/_positionPopoverAboveOrBelow\(picker, anchorBtn(,|\))/);
     expect(openBody.indexOf('_refreshAgentPickerProjectContext(anchorBtn.id)')).toBeLessThan(
       openBody.indexOf("_setAgentPickerTab('agents'"),
     );

@@ -69,6 +69,10 @@ export interface BackendRunOptions {
   cwd: string;
   model?: string;
   customArgs?: string[];
+  /** Per-task reasoning effort from the unified execution entry. Only
+   *  backends with a concrete switch consume it (claude → MAX_THINKING_TOKENS
+   *  env; codex → `model_reasoning_effort` config override). Others ignore. */
+  thinkingLevel?: 'off' | 'low' | 'high';
   /** When set, ask the CLI to resume a prior session by id (claude:
    *  `--resume <id>`). Backends that don't support resume ignore the
    *  field; the runner's session-bookkeeping treats that as "no
@@ -177,6 +181,10 @@ export function spawnCli(
   cwd: string,
   env?: NodeJS.ProcessEnv,
   providerEnv?: Record<string, string>,
+  /** Extra env the backend derives from per-task options (e.g. claude's
+   *  MAX_THINKING_TOKENS from thinkingLevel). Applied last, after
+   *  providerEnv, and never allowed to touch PATH. */
+  effortEnv?: Record<string, string>,
 ): ChildProcessWithoutNullStreams {
   // The CLI needs a real cwd to start in — child_process.spawn does NOT
   // create it, and a missing cwd surfaces as `spawn <bin> ENOENT` (same
@@ -194,6 +202,10 @@ export function spawnCli(
   }
   const childEnv = buildCliSpawnEnv(binPath, env ?? process.env);
   for (const [key, value] of Object.entries(providerEnv || {})) {
+    if (key === 'PATH' || key === 'Path') continue;
+    childEnv[key] = value;
+  }
+  for (const [key, value] of Object.entries(effortEnv || {})) {
     if (key === 'PATH' || key === 'Path') continue;
     childEnv[key] = value;
   }

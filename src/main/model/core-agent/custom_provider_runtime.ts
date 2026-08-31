@@ -94,7 +94,11 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
  * directly. Cost is left at 0 (local stat display only — the real bill
  * comes from the third-party endpoint).
  */
-export function buildCustomProviderModel(cp: CustomProvider, modelId: string): Model<Api> {
+export function buildCustomProviderModel(
+  cp: CustomProvider,
+  modelId: string,
+  recognition?: { reasoning?: boolean; vision?: boolean },
+): Model<Api> {
   const api = apiForProtocol(cp.protocol);
   const metadata = buildCustomProviderModelMeta(cp, modelId);
   const model: Model<Api> = {
@@ -105,8 +109,12 @@ export function buildCustomProviderModel(cp: CustomProvider, modelId: string): M
     // us clear of catalog collisions.
     provider: customProviderId(cp.id) as any,
     baseUrl: cp.baseUrl,
-    reasoning: false,
-    input: ['text'],
+    // 方案 C（参数真透传）：reasoning 按识别结果开启——pi-ai 对 openai
+    // 兼容端点在 model.reasoning=true 且用户选了档位时会自动带上
+    // reasoning_effort；anthropic 端点同理带 thinking。识别不出（未知
+    // 模型）保持关闭，不给不认识的服务盲发参数。
+    reasoning: recognition?.reasoning === true,
+    input: recognition?.vision === true ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: metadata.contextWindow,
     maxTokens: metadata.maxTokens,
@@ -142,7 +150,13 @@ export async function createCustomProvider(
   if (!apiKey) throw new Error(`custom provider ${providerId}: apiKey required`);
   if (!modelId) throw new Error(`custom provider ${providerId}: modelId required`);
   const mod = await ca();
-  const model = buildCustomProviderModel(cp, modelId);
+  // 识别（方案 C）：知名模型家族按目录能力决定是否透传推理参数。
+  let recognition: { reasoning?: boolean; vision?: boolean } | undefined;
+  try {
+    const { recognizeModelByIdReady } = await import('../model_id_recognition');
+    recognition = (await recognizeModelByIdReady(modelId)) || undefined;
+  } catch { /* unrecognized → no reasoning forwarding */ }
+  const model = buildCustomProviderModel(cp, modelId, recognition);
   return mod.createPiProvider({
     provider: customProviderId(cp.id),
     apiKey,

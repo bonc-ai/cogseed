@@ -282,6 +282,15 @@ export interface Agent {
    *  Missing field = auto. Authored by the agent edit UI dropdown, NOT the
    *  agent-edit LLM. See `bus.ts::buildOutputFormatHint`. */
   output_format?: OutputFormat;
+  /** Per-agent default model for in-process turns. Absent = follow the
+   *  global default entry (auth priority rank 1). CLI / p3394-gateway
+   *  agents ignore this — their model binding lives on `runtime.model`.
+   *  Authored by the agent edit UI, NOT the agent-edit LLM. */
+  default_model?: { provider: string; model: string };
+  /** Per-agent default thinking strength for in-process turns. Absent =
+   *  follow the global `thinking_level` preference. Only meaningful for
+   *  in-process agents. Authored by the agent edit UI. */
+  default_thinking?: 'off' | 'low' | 'high';
   source: AgentSource;
   created_at: string;
   updated_at: string;
@@ -338,6 +347,8 @@ export interface AgentRaw {
   state?: unknown;
   enabled_connectors?: unknown;
   output_format?: unknown;
+  default_model?: unknown;
+  default_thinking?: unknown;
   profile?: unknown;
   role?: unknown;
   dispatch?: unknown;
@@ -1001,6 +1012,14 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
   if (outputFormat && outputFormat !== 'auto') {
     agent.output_format = outputFormat;
   }
+  // Per-agent execution defaults: loose raw shapes collapse to "no field".
+  // A default_model whose provider/model strings are empty would silently
+  // break turn resolution, so blank parts drop the whole field.
+  const defModel = _normalizeAgentDefaultModel(raw.default_model);
+  if (defModel) agent.default_model = defModel;
+  if (raw.default_thinking === 'off' || raw.default_thinking === 'low' || raw.default_thinking === 'high') {
+    agent.default_thinking = raw.default_thinking;
+  }
   agent.interface_contract = normalizeAgentInterfaceContract(raw.interface_contract, rt, outputFormat);
   if (typeof raw.management_surface === 'string' && AGENT_MANAGEMENT_SURFACES.has(raw.management_surface)) {
     agent.management_surface = raw.management_surface as AgentManagementSurface;
@@ -1016,6 +1035,17 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
   const interactionMode = normalizeAgentInteractionMode(raw.interaction_mode, raw.agent_id);
   if (interactionMode) agent.interaction_mode = interactionMode;
   return agent;
+}
+
+/** Coerce a raw `default_model` field. Unknown / partial shapes return null
+ *  (= drop the field; the agent follows the global default entry). */
+function _normalizeAgentDefaultModel(raw: unknown): { provider: string; model: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const provider = typeof r.provider === 'string' ? r.provider.trim() : '';
+  const model = typeof r.model === 'string' ? r.model.trim() : '';
+  if (!provider || !model) return null;
+  return { provider, model };
 }
 
 /** Validate / coerce a raw `runtime` field. Unknown shapes return null
@@ -1949,6 +1979,19 @@ export interface UpdateAgentFields {
    *   omitted              → untouched
    *  Authored by the agent edit UI dropdown. */
   output_format?: OutputFormat | null;
+  /** Three-way update for the per-agent default execution model (in-process
+   *  agents only):
+   *   object → set (validated; blank parts reject the whole update)
+   *   null   → drop (revert to following the global default entry)
+   *   omitted → untouched
+   *  Authored by the agent edit UI. */
+  default_model?: { provider: string; model: string } | null;
+  /** Three-way update for the per-agent default thinking strength:
+   *   level → set ('off' | 'low' | 'high')
+   *   null  → drop (revert to following the global preference)
+   *   omitted → untouched
+   *  Authored by the agent edit UI. */
+  default_thinking?: 'off' | 'low' | 'high' | null;
 }
 
 /**
@@ -2166,6 +2209,26 @@ async function _applyAgentUpdates(
       delete (data as { output_format?: unknown }).output_format;
     } else if (clean) {
       (data as { output_format?: OutputFormat }).output_format = clean;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(updates || {}, 'default_model')) {
+    const v = updates.default_model;
+    const clean = _normalizeAgentDefaultModel(v);
+    if (v === null || clean === null) {
+      // null (or an unusable shape) drops the field → follow the global
+      // default entry. Blank/partial payloads must not poison turn
+      // resolution, so they collapse the same way.
+      delete (data as { default_model?: unknown }).default_model;
+    } else {
+      (data as { default_model?: { provider: string; model: string } }).default_model = clean;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(updates || {}, 'default_thinking')) {
+    const v = updates.default_thinking;
+    if (v === 'off' || v === 'low' || v === 'high') {
+      (data as { default_thinking?: 'off' | 'low' | 'high' }).default_thinking = v;
+    } else {
+      delete (data as { default_thinking?: unknown }).default_thinking;
     }
   }
   if (Object.prototype.hasOwnProperty.call(updates || {}, 'icon')) {

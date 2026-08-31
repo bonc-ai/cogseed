@@ -456,6 +456,10 @@ export interface SendInput {
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   recipient_agent_id?: string;
   recipient_origin?: 'user_selection' | 'cli_fallback';
+  /** Per-task execution config from the unified execution entry (composer
+   *  recipient/model pick). Validated here; empty objects are dropped so
+   *  downstream sees a clean undefined. */
+  execution_config?: import('./bus').TurnExecutionConfig;
   /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随消息贯穿派发；
    * 不传时行为与既往完全一致。 */
   p3394_envelope?: P3394Envelope;
@@ -497,6 +501,28 @@ async function _validateUserRoute(
     if (!entry?.available) throw new Error('selected local Agent is unavailable');
   }
   return { agentId, origin };
+}
+
+/** Validate the per-task execution config (unified execution entry) at the
+ *  business boundary. Renderer state is advisory: ids are shape-checked and
+ *  unknown values are dropped (not fatal — a stale override must never block
+ *  sending; the turn falls back to the default group). An all-empty object
+ *  collapses to null so downstream sees a clean undefined.
+ *  `model` may travel without `provider` — that's the CLI-agent override
+ *  shape (the model id is passed to the external CLI directly); in-process
+ *  turns require the full pair and ignore model-only values.
+ *  Exported for the unified-execution-entry tests. */
+export function _validatedExecutionConfig(raw: unknown): import('./bus').TurnExecutionConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const provider = typeof r.provider === 'string' ? r.provider.trim() : '';
+  const model = typeof r.model === 'string' ? r.model.trim() : '';
+  const effort = r.effort === 'off' || r.effort === 'low' || r.effort === 'high' ? r.effort : undefined;
+  if (!model && !effort) return null;
+  return {
+    ...(provider && model ? { provider, model } : (model ? { model } : {})),
+    ...(effort ? { effort } : {}),
+  };
 }
 
 /** 任务引用（@ 产物）源消息定位：在源会话消息里找持有该文件（附件或 produced）的最新一条。 */
@@ -748,6 +774,10 @@ export async function send(
   } catch (err) {
     return { ok: false, error: (err as Error).message || 'invalid recipient route' };
   }
+  // Per-task execution config (unified execution entry). Validate shape at
+  // the business boundary — the renderer state is advisory, same as the
+  // recipient route above.
+  const executionConfig = _validatedExecutionConfig(input.execution_config);
   await seedReservedActors(userId, cid);
   // Auto-title: the first real user message in a fresh / unnamed
   // conversation overwrites the placeholder title so the sidebar item
@@ -783,6 +813,7 @@ export async function send(
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
       ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
+      ...(executionConfig ? { executionConfig } : {}),
       ...(p3394_envelope ? { p3394_envelope } : {}),
     });
     // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
