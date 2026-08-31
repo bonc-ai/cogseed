@@ -179,5 +179,21 @@ describe('CogSeed task and session store', () => {
     expect(plain.task.localCli?.viaP3394Gateway).not.toBe(true);
   });
 
+  it('round-trips all durable KSTAR bridge identifiers', async () => {
+    const store = await backend();
+    const created = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-kstar-bridge-ids', task: 'Run a governed task.',
+      kstarTaskId: 'kst-bridge-task', kstarRequirementId: 'ksr-bridge-requirement',
+      kstarProjectionId: 'proj-bridge-projection', kstarForecastId: 'wf-bridge-forecast',
+    });
+    await expect(store.readCogSeedTask(USER_A, created.task.taskId)).resolves.toMatchObject({
+      kstarTaskId: 'kst-bridge-task', kstarRequirementId: 'ksr-bridge-requirement',
+      kstarProjectionId: 'proj-bridge-projection', kstarForecastId: 'wf-bridge-forecast',
+    });
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-kstar-bridge-invalid', task: 'Reject unsafe bridge id.', kstarForecastId: '../escape',
+    })).rejects.toThrow(/forecast/i);
+  });
+
 
 });

@@ -14,7 +14,7 @@ import type {
   KstarTaskRecord,
 } from './requirement-types';
 import type { KstarControlErrorCode, KstarControlOperation, KstarControlReceipt, KstarControlResult } from './control-types';
-import type { KstarProjectionDecisionMarker } from './requirement-types';
+import type { KstarProjectionDecisionMarker, KstarRoutingDecision } from './requirement-types';
 
 const MAX_TITLE = 200;
 const MAX_GOAL = 4_000;
@@ -29,6 +29,7 @@ const CONTROL_OPERATIONS = new Set<KstarControlOperation>([
 const CONTROL_IDEMPOTENCY_KEY = /^[A-Za-z0-9_.:-]{1,160}$/;
 const CONTROL_INPUT_HASH = /^[a-f0-9]{64}$/;
 const MAX_PROJECTION_DECISIONS = 100;
+const MAX_ROUTING_DECISIONS = 100;
 const CONTROL_ERROR_CODES = new Set<KstarControlErrorCode>([
   'kstar_control_invalid_input',
   'kstar_projection_not_confirmed',
@@ -116,6 +117,17 @@ function normalizeProjectionDecisions(value: unknown, conversationId: string): K
   return out.slice(-MAX_PROJECTION_DECISIONS);
 }
 
+function normalizeRoutingDecisions(value: unknown): KstarRoutingDecision[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((raw): raw is KstarRoutingDecision => {
+    if (!isPlainRecord(raw) || typeof raw.at !== 'string' || typeof raw.kind !== 'string' || typeof raw.isTask !== 'boolean') return false;
+    return ['closing_intent', 'trivial', 'model_judged', 'dispatch_auto'].includes(raw.kind)
+      && (raw.continuation === undefined || typeof raw.continuation === 'boolean')
+      && (raw.reason === undefined || typeof raw.reason === 'string')
+      && (raw.sourceMessageId === undefined || (typeof raw.sourceMessageId === 'string' && safeId(raw.sourceMessageId)));
+  }).slice(-MAX_ROUTING_DECISIONS);
+}
+
 function normalizeControlReceipts(value: unknown, conversationId: string): KstarControlReceipt[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -163,6 +175,7 @@ function validateTask(userId: string, raw: Record<string, unknown>): KstarTaskRe
     (raw.closeReason !== undefined && !['user_complete', 'topic_switch', 'aborted'].includes(String(raw.closeReason))) ||
     (raw.aggregateReviewId !== undefined && typeof raw.aggregateReviewId !== 'string') ||
     (raw.candidateRunId !== undefined && typeof raw.candidateRunId !== 'string') ||
+    (raw.cogseedTaskId !== undefined && (typeof raw.cogseedTaskId !== 'string' || !safeId(raw.cogseedTaskId))) ||
     typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar task');
   return raw as KstarTaskRecord;
@@ -214,6 +227,8 @@ function validateRequirement(userId: string, raw: Record<string, unknown>): Ksta
     (raw.rHat !== undefined && (() => { validateExpectedResult(raw.rHat); return false; })()) ||
     (raw.projectionId !== undefined && (typeof raw.projectionId !== 'string' || !safeId(raw.projectionId))) ||
     (raw.forecastId !== undefined && (typeof raw.forecastId !== 'string' || !safeId(raw.forecastId))) ||
+    (raw.forecastStatus !== undefined && !['pending', 'committed', 'failed', 'skipped'].includes(String(raw.forecastStatus))) ||
+    (raw.forecastError !== undefined && (typeof raw.forecastError !== 'string' || raw.forecastError.length > 2_000)) ||
     !Array.isArray(raw.projectionIds) || raw.projectionIds.some((item: unknown) => typeof item !== 'string' || !safeId(item)) ||
     (raw.wakeRequestId !== undefined && (typeof raw.wakeRequestId !== 'string' || !safeId(raw.wakeRequestId))) ||
     (raw.completionEvidence !== undefined && !validCompletionEvidence(raw.completionEvidence)) ||
@@ -250,13 +265,15 @@ function validateState(userId: string, raw: Record<string, unknown>, conversatio
   const projectionDecisions = raw.projectionDecisions === undefined
     ? undefined
     : normalizeProjectionDecisions(raw.projectionDecisions, conversationId);
-  if (raw.controlReceipts === undefined && projectionDecisions === undefined) {
+  const routingDecisions = raw.routingDecisions === undefined ? undefined : normalizeRoutingDecisions(raw.routingDecisions);
+  if (raw.controlReceipts === undefined && projectionDecisions === undefined && routingDecisions === undefined) {
     return raw as KstarConversationTaskStateRecord;
   }
   return {
     ...raw,
     ...(raw.controlReceipts === undefined ? {} : { controlReceipts: normalizeControlReceipts(raw.controlReceipts, conversationId) }),
     ...(projectionDecisions === undefined ? {} : { projectionDecisions }),
+    ...(routingDecisions === undefined ? {} : { routingDecisions }),
   } as KstarConversationTaskStateRecord;
 }
 
@@ -332,9 +349,28 @@ export async function replaceConversationTaskState(userId: string, record: Kstar
   return replaceKstarJsonRecord(userId, 'task-states', validateState(userId, record as unknown as Record<string, unknown>, record.conversationId));
 }
 
+export async function recordKstarRoutingDecision(
+  userId: string,
+  conversationId: string,
+  decision: KstarRoutingDecision,
+): Promise<KstarConversationTaskStateRecord> {
+  if (!safeId(userId) || !safeId(conversationId)) throw new Error('invalid kstar routing reference');
+  const state = await readConversationTaskState(userId, conversationId) || createInitialConversationTaskState(userId, conversationId);
+  const routingDecisions = [...(state.routingDecisions || []), decision].slice(-MAX_ROUTING_DECISIONS);
+  return replaceConversationTaskState(userId, { ...state, routingDecisions, updatedAt: nowIso() });
+}
+
 export async function readKstarTask(userId: string, taskId: string): Promise<KstarTaskRecord | null> {
   const raw = await readKstarJsonRecord(userId, 'tasks', taskId);
   return raw ? validateTask(userId, raw as Record<string, unknown>) : null;
+}
+
+export async function listKstarTasksForConversation(userId: string, conversationId: string): Promise<KstarTaskRecord[]> {
+  if (!safeId(conversationId)) throw new Error('invalid kstar conversation id');
+  return (await listKstarJsonRecords(userId, 'tasks'))
+    .map((record) => validateTask(userId, record as Record<string, unknown>))
+    .filter((record) => record.conversationId === conversationId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 export async function replaceKstarTask(userId: string, record: KstarTaskRecord): Promise<KstarTaskRecord> {

@@ -19,6 +19,7 @@ export const KSTAR_PRM_WEIGHTS = Object.freeze({
 export type KstarRequirementIntent = 'new' | 'continue' | 'complete' | 'topic_switch';
 export type KstarTaskPhase = 'open' | 'closing' | 'closed' | 'abandoned';
 export type KstarRequirementStatus = 'open' | 'waiting_review' | 'closed' | 'abandoned';
+export type KstarForecastStatus = 'pending' | 'committed' | 'failed' | 'skipped';
 
 export interface KstarPrmScores {
   accuracy: number;
@@ -76,6 +77,8 @@ export interface KstarTaskRecord extends KstarJsonRecord {
   closeReason?: 'user_complete' | 'topic_switch' | 'aborted';
   aggregateReviewId?: string;
   candidateRunId?: string;
+  /** Durable bridge to the CogSeed backend task, when this requirement uses it. */
+  cogseedTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -100,6 +103,8 @@ export interface KstarRequirementRecord extends KstarJsonRecord {
   projectionIds: string[];
   /** World-model forecast record produced at task boundary ((A_hat, R_hat)). */
   forecastId?: string;
+  forecastStatus?: KstarForecastStatus;
+  forecastError?: string;
   /** Wake request bound when the preloaded asset list is confirmed and the Agent is woken. */
   wakeRequestId?: string;
   /** Commander-submitted terminal evidence via kstar_control.finish/abandon. */
@@ -128,6 +133,15 @@ export interface KstarProjectionDecisionMarker {
   createdAt: string;
 }
 
+export interface KstarRoutingDecision {
+  at: string;
+  kind: 'closing_intent' | 'trivial' | 'model_judged' | 'dispatch_auto';
+  isTask: boolean;
+  continuation?: boolean;
+  reason?: string;
+  sourceMessageId?: string;
+}
+
 export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   schemaVersion: 1;
   conversationId: string;
@@ -142,6 +156,7 @@ export interface KstarConversationTaskStateRecord extends KstarJsonRecord {
   lastRoutedUserMessageId?: string;
   controlReceipts?: KstarControlReceipt[];
   projectionDecisions?: KstarProjectionDecisionMarker[];
+  routingDecisions?: KstarRoutingDecision[];
   createdAt: string;
   updatedAt: string;
 }

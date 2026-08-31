@@ -52,6 +52,7 @@ const ConversationInfo = (() => {
     wakeRequests: [],
     protocolEvents: [],
     protocolError: '',
+    kstarTrace: null,
     // 四类能力资产（关于我 / 规则与偏好 / 模板与范例 / 技能与方法）。
     assets: [],
     // 本会话相关的认知候选（recall.candidates.list 按 sourceRefs 过滤）：
@@ -273,7 +274,7 @@ const ConversationInfo = (() => {
 
   async function _load(cid) {
     const enc = encodeURIComponent(cid);
-    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData, assetsData, extractionData, candidatesData] = await Promise.all([
+    const [historyData, filesData, attachmentData, syncEnabled, activity, wakeData, protocolData, executionsData, assetsData, extractionData, candidatesData, kstarTraceData] = await Promise.all([
       _fetchJson(typeof _historyRequestUrl === 'function'
         ? _historyRequestUrl(cid)
         : `/api/conversations/${enc}/history?limit=10`),
@@ -313,6 +314,9 @@ const ConversationInfo = (() => {
               && c.sourceRefs.some((ref) => ref && ref.kind === 'conversation' && ref.id === cid))
           : []
       )).catch(() => []),
+      _invokeOrDefault('kstar.trace.read', { conversationId: cid }, { ok: false }).then((data) => (
+        data && data.ok && data.trace && Array.isArray(data.trace.nodes) ? data.trace : null
+      )).catch(() => null),
     ]);
     return {
       conversation: historyData.conversation || null,
@@ -335,6 +339,7 @@ const ConversationInfo = (() => {
       assets: Array.isArray(assetsData) ? assetsData : [],
       extraction: extractionData || null,
       candidates: Array.isArray(candidatesData) ? candidatesData : [],
+      kstarTrace: kstarTraceData || null,
     };
   }
 
@@ -1196,6 +1201,40 @@ const ConversationInfo = (() => {
     return `<div class="conversation-info-protocol">${header}${_renderProtocolSummary(events)}${_renderProtocolFilters(events)}${list}</div>`;
   }
 
+  function _kstarTraceStatusLabel(value) {
+    const status = String(value || 'degraded');
+    const labels = {
+      ok: _label('conversation_info.kstar_trace.status.ok', '正常'),
+      pending: _label('conversation_info.kstar_trace.status.pending', '进行中'),
+      failed: _label('conversation_info.kstar_trace.status.failed', '失败'),
+      degraded: _label('conversation_info.kstar_trace.status.degraded', '降级'),
+      skipped: _label('conversation_info.kstar_trace.status.skipped', '跳过'),
+      not_started: _label('conversation_info.kstar_trace.status.not_started', '未开始'),
+    };
+    return labels[status] || status;
+  }
+
+  function _renderKstarTrace() {
+    const trace = _snapshot.kstarTrace;
+    const nodes = trace && Array.isArray(trace.nodes) ? trace.nodes : [];
+    const title = _label('conversation_info.kstar_trace.title', 'KSTAR 执行轨迹');
+    const subtitle = _label('conversation_info.kstar_trace.subtitle', '按阶段查看任务是否真实落盘、执行和沉淀');
+    if (!trace) {
+      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.unavailable', '当前会话暂无 KSTAR 轨迹。'))}</div></section>`;
+    }
+    if (!nodes.length) {
+      return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div></div><div class="conversation-info-empty is-small">${escapeHtml(_label('conversation_info.kstar_trace.empty', 'KSTAR 尚未产生可展示的阶段记录。'))}</div></section>`;
+    }
+    const rows = nodes.slice(-100).map((entry) => {
+      const stage = String(entry && entry.stage || 'unknown');
+      const status = String(entry && entry.status || 'degraded');
+      const meta = [entry && entry.primaryId, entry && entry.at].filter(Boolean).join(' · ');
+      const reason = entry && (entry.degradedReason || entry.errorCode) ? String(entry.degradedReason || entry.errorCode) : '';
+      return `<div class="conversation-info-kstar-trace-row is-${escapeHtml(status)}"><div class="conversation-info-kstar-trace-stage">${escapeHtml(stage)}</div><div class="conversation-info-kstar-trace-main"><div class="conversation-info-kstar-trace-status">${escapeHtml(_kstarTraceStatusLabel(status))}</div>${entry && entry.summary ? `<div class="conversation-info-kstar-trace-summary">${escapeHtml(String(entry.summary))}</div>` : ''}${meta ? `<div class="conversation-info-kstar-trace-meta">${escapeHtml(meta)}</div>` : ''}${reason ? `<div class="conversation-info-kstar-trace-reason">${escapeHtml(reason)}</div>` : ''}</div></div>`;
+    }).join('');
+    return `<section class="conversation-info-kstar-trace"><div class="conversation-info-kstar-trace-header"><div><div class="conversation-info-kstar-trace-heading">${escapeHtml(title)}</div><div class="conversation-info-kstar-trace-subtitle">${escapeHtml(subtitle)}</div></div><span class="conversation-info-kstar-trace-count">${escapeHtml(String(nodes.length))}</span></div><div class="conversation-info-kstar-trace-list">${rows}</div></section>`;
+  }
+
   // 9.1 会话区域统一框架 · 右侧「本次携带」：
   // 本次运行（真实执行记录）、运行证明（ContextReuseReceipt）、
   // 本次 Context 引用、来源与边界。数据全部来自既有 IPC
@@ -1567,6 +1606,7 @@ const ConversationInfo = (() => {
       paneOpen('proof') +
         '<div class="run-context-subsection">' +
           '<div class="run-context-subsection-title">' + escapeHtml(_label('conversation_info.run_context.subsection_proof', '运行证明')) + '</div>' +
+          _renderKstarTrace() +
           _renderProtocolInspector() +
         '</div>' +
         '<div class="run-context-subsection">' +
@@ -1890,7 +1930,7 @@ const ConversationInfo = (() => {
     _open = false;
     _resumeEvidenceCid = '';
     _carriedRunsExpanded = false;
-    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '' };
+    _snapshot = { conversation: null, history: [], files: [], fileRoot: '', fileRootExists: false, filesTruncated: false, filesCount: 0, filesScanSkipped: false, syncEnabled: false, attachments: [], runtime: null, actors: [], collaboration: null, cogseed: { session: null, collaboration: null, sessions: [], loading: false, error: '' }, wakeRequests: [], protocolEvents: [], protocolError: '', kstarTrace: null };
     _protocolFilters.agent = '';
     _protocolFilters.role = '';
     _protocolFilters.result = '';

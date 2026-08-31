@@ -80,6 +80,11 @@ export interface CogSeedTaskRecord {
   updatedAt: string;
   terminalAt?: string;
   errorCode?: string;
+  /** Optional durable bridge to the governed KSTAR records. */
+  kstarTaskId?: string;
+  kstarRequirementId?: string;
+  kstarProjectionId?: string;
+  kstarForecastId?: string;
 }
 
 export interface CogSeedSessionRecord {

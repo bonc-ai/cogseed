@@ -8,6 +8,7 @@ import {
   applyCausalRules,
   buildWorldModelForecastRecord,
   collectWorldSnapshot,
+  saveWorldModelSnapshot,
   saveWorldModelForecast,
 } from '../recall/world-model';
 import {
@@ -326,10 +327,13 @@ export async function commitCommanderForecast(
   });
 
   try {
+    await saveWorldModelSnapshot(userId, snapshot);
     await saveWorldModelForecast(userId, record);
     await replaceKstarRequirement(userId, {
       ...requirement,
       forecastId: record.id,
+      forecastStatus: 'committed',
+      forecastError: undefined,
       updatedAt: nowIso(),
     });
   } catch (error) {
