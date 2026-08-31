@@ -126,7 +126,13 @@ export async function requestBashDecision(opts: {
   subject?: string;
   reasons: RiskCategory[];
   onWaiting?: (elapsedMs: number) => void;
+  /** 每会话访问权限模式（由工具装配层从会话元数据传入）。`full` / `auto_approve`
+   *  直接放行不弹窗；`ask` 或未传走既有弹窗。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
 }): Promise<BashDecision> {
+  // 每会话访问权限：full（完全访问）/ auto_approve（帮我批准）直接放行，不弹窗。
+  if (opts.permissionMode === 'full' || opts.permissionMode === 'auto_approve') return 'allow_run';
+
   const reasons = opts.reasons.slice();
   if (isCoveredByRun(opts.cid, opts.agentId, reasons)) return 'allow_run';
 
