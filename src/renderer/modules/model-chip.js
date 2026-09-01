@@ -31,6 +31,29 @@ let _modelChipBound = false;
 // reasoning capability). Unknown ids fall back to the name heuristic.
 const _modelReasoningByProvider = new Map();
 
+// auth.listEntries 不带 reasoning 标注，能力表过去只在下钻二级列表时填充
+// ——顶层菜单冷开会对自定义 provider 误显示「该模型不支持」。启动加载
+// 条目时按 provider 预取标注，与下钻共用同一张表（同一数据源）。
+async function _prefetchReasoningForEntries() {
+  const providers = new Set(_modelChipEntries.map((e) => e && e.provider).filter(Boolean));
+  let changed = false;
+  for (const provider of providers) {
+    // 已有表（含标注为空的空表）不再重复拉；IPC 失败不入表，下次打开重试。
+    if (_modelReasoningByProvider.has(provider)) continue;
+    try {
+      const res = await window.cogseed.invoke('auth.listModels', { provider });
+      if (!(res && res.ok && Array.isArray(res.models))) continue;
+      const table = {};
+      for (const m of res.models) {
+        if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
+      }
+      _modelReasoningByProvider.set(String(provider), table);
+      changed = true;
+    } catch { /* 下次打开菜单重试 */ }
+  }
+  return changed;
+}
+
 const _EFFORT_OPTIONS = ['auto', 'off', 'low', 'high'];
 
 function _modelSupportsThinking(modelId) {
@@ -61,6 +84,7 @@ async function refreshModelChipEntries() {
     if (res && res.ok && Array.isArray(res.entries)) {
       _modelChipEntries = res.entries;
       _modelChipRenderAll();
+      void _prefetchReasoningForEntries();
     }
   } catch (err) {
     _modelChipLog.warn('model entries refresh failed', { error: (err && err.message) || String(err) });
@@ -443,6 +467,17 @@ function _renderExecConfigMenu(menu, anchor) {
     _renderApiProviderRows(menu, anchor, target, cfg);
   }
 
+  // 推理能力标注补拉（冷开兜底）：预取通常在条目加载时已完成，这里只处理
+  // 「菜单先开、标注后到」的窗口——取回新标注且菜单仍停在顶层时原位重画。
+  // changed 才重画（否则「重画→再预取→再重画」死循环），下钻视图不拽回。
+  menu.dataset.view = 'exec';
+  void _prefetchReasoningForEntries().then((changed) => {
+    if (changed && menu.isConnected && menu.dataset.view === 'exec') {
+      _renderExecConfigMenu(menu, anchor);
+      _positionModelMenu(menu, anchor);
+    }
+  });
+
   // ── Effort section ──
   _menuSectionLabel(menu, 'exec_config.section_effort');
   {
@@ -599,6 +634,7 @@ function _applyModelPick(target, cfg, provider, model, modelLabel, providerLabel
  *  capability, cached for the effort gating). */
 async function _openProviderModels(menu, anchor, target, entry, cfg) {
   menu.innerHTML = '';
+  menu.dataset.view = 'providers';
 
   const back = document.createElement('button');
   back.type = 'button';
@@ -909,6 +945,7 @@ function initModelChip() {
       if (e && e.detail && Array.isArray(e.detail.entries)) {
         _modelChipEntries = e.detail.entries;
         _modelChipRenderAll();
+        void _prefetchReasoningForEntries();
       } else {
         refreshModelChipEntries();
       }
@@ -936,3 +973,6 @@ function initModelChip() {
 window.initModelChip = initModelChip;
 window.refreshExecConfigChip = _modelChipRenderAll;
 window.getModelChipEntries = getModelChipEntries;
+// 顶层拖拽区等外部表面需要在视口/视图变化时收起悬浮菜单（boot.js 防御性
+// 调用；top-drag-regions 契约测试钉住此导出）。
+window.closeModelChipMenu = _closeModelMenu;
