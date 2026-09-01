@@ -193,7 +193,12 @@ const PRESETS = {
               // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
               modelControllable: true },
   opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode',
-              modelArgs: '--model {model}', inspect: { args: ['models'], parser: 'lines' } },
+              modelArgs: '--model {model}', inspect: { args: ['models'], parser: 'lines' },
+              // --variant 即推理强度（run --help 实测："model variant
+              // (provider-specific reasoning effort, e.g., high, max, minimal)"）。
+              // 无真"关"档（minimal 是最低不是关闭）→ off 映射 minimal，
+              // 能力表 effortOff=false（UI 置灰 off，防语义欺骗）。
+              effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' } },
   gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini',
               modelArgs: '-m {model}' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
@@ -209,7 +214,10 @@ const PRESETS = {
               modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
               // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
               // 实测 init.model="auto"）——清单与当前值双通道。
-              initProbeArgs: ['-p'] },
+              initProbeArgs: ['-p'],
+              // --effort 单次覆盖（--help 实测：minimal, low, medium, high,
+              // xhigh, max）。无真"关"档 → off 映射 minimal，effortOff=false。
+              effortArgs: '--effort {effort}', effortLevels: { off: 'minimal' } },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
 // 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
@@ -541,6 +549,7 @@ const {
   executionPrefsFor,
   extractClaudeResultUsage,
   normalizeClaudeInit,
+  createClaudeStreamEventClassifier,
   claudeModelsCache,
   probeClaudeModels: probeClaudeModelsImpl,
   probeInspectCommand,
@@ -1170,7 +1179,20 @@ class StreamJsonRuntime {
   constructor() { this.active = new Map(); } // task_id → child（无 task_id 回退 message_id）
   get name() { return 'stream-json'; }
   async openSession() { /* 每次 deliver 独立 spawn 该回调 CLI，无需握手 */ }
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    // 结构化过程帧分类器（工具调用/思考起止）——每轮一个实例（块索引状态
+    // 随进程生命周期，天然 per-turn）。
+    const classifyStreamEvent = createClaudeStreamEventClassifier();
+    const emitStructured = (event) => {
+      if (onProgress && event) {
+        const name = (event.data && event.data.name) || '';
+        const phase = (event.data && event.data.phase) || '';
+        const fallback = event.stream === 'tool'
+          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          : (phase === 'end' ? '思考完成' : '思考中');
+        onProgress(fallback, event);
+      }
+    };
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     // 与 oneshot 一致：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
@@ -1221,6 +1243,8 @@ class StreamJsonRuntime {
         lineBuf = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
+          const structured = classifyStreamEvent(line);
+          if (structured) emitStructured(structured);
           const result = this._parseLine(line, onDelta, (t) => { accumulated += t; }, () => accumulated);
           if (result === 'done') {
             clearTimeout(timer);
@@ -1379,6 +1403,8 @@ class ClaudePersistentRuntime {
     }
     if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
     const turn = entry.turn;
+    const structured = turn.classifyStreamEvent ? turn.classifyStreamEvent(ev) : null;
+    if (structured) turn.emitStructured(structured);
     if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
       && ev.event.delta && typeof ev.event.delta.text === 'string') {
       const t = ev.event.delta.text;
@@ -1430,11 +1456,23 @@ class ClaudePersistentRuntime {
     }
   }
 
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cancelKey = (opts && opts.taskId) || messageId;
     const cwd = (opts && opts.cwd) || process.cwd();
+    // 结构化过程帧分类器（与 StreamJsonRuntime 同构，状态随常驻进程的当轮）。
+    const classifyStreamEvent = createClaudeStreamEventClassifier();
+    const emitStructured = (event) => {
+      if (onProgress && event) {
+        const name = (event.data && event.data.name) || '';
+        const phase = (event.data && event.data.phase) || '';
+        const fallback = event.stream === 'tool'
+          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          : (phase === 'end' ? '思考完成' : '思考中');
+        onProgress(fallback, event);
+      }
+    };
     // 本轮的推理强度预算/模型：与常驻进程已固化值不同时必须重启进程（env 与
     // --model 都是 spawn 时定死的，进程活着改不了）；重启后首轮由 transcript
     // 恢复上下文。在途轮次不可杀——旧配置跑完当轮，下一轮 deliver 再对齐。
@@ -1476,6 +1514,9 @@ class ClaudePersistentRuntime {
         accumulated: '',
         lastAssistantText: '',
         onDelta,
+        onProgress,
+        classifyStreamEvent,
+        emitStructured,
       };
       try {
         entry.child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');
@@ -1606,7 +1647,7 @@ function postReply(envelope, replyText, resourceParts, turnUsage) {
 /** Sends a best-effort incremental reply. Stream frames are deliberately
  * separate event envelopes so the terminal reply remains the only frame that
  * resolves the outbound request. */
-function postStreamEvent(envelope, text, sequence, kind) {
+function postStreamEvent(envelope, text, sequence, kind, structuredEvent) {
   const ext = (envelope && envelope.extensions) || {};
   // H-01：流式帧回发与终态回发（postReply）同规则——只信任回环/受信配置
   // （COGSEED_ENDPOINT）。对端可控的 reply_endpoint 若不校验，攻击者发一条
@@ -1629,7 +1670,14 @@ function postStreamEvent(envelope, text, sequence, kind) {
       reply_to: envelope.message_id,
       payload: {
         parts: [{ type: 'text', text }],
-        metadata: { stream_event: kind || 'delta', stream_seq: sequence, stream_source_message_id: envelope.message_id },
+        metadata: {
+          stream_event: kind || 'delta',
+          stream_seq: sequence,
+          stream_source_message_id: envelope.message_id,
+          // 结构化过程事件（stream:'tool' / item reasoning…）——宿主过程栏
+          // 按 event 词表渲染（参数/时长/i18n），text 仅作旧宿主的降级行。
+          ...(structuredEvent ? { stream_data: structuredEvent } : {}),
+        },
       },
       idempotency_key: 'idem-stream-' + nonce,
     },
@@ -1710,6 +1758,16 @@ function createStreamEmitter(envelope) {
       streamedChars += text.length;
       progressBuffer += (progressBuffer && !/\n$/.test(progressBuffer) ? '\n' : '') + text;
       armFlush('progress');
+    },
+    // 结构化过程事件（工具调用/思考起止）：低频，立即独立成帧（不经文本
+    // 合并器），text 只作旧宿主的降级行。事件与文本帧共用 sequence 序列，
+    // chain 串行保证有序。
+    pushEvent(event, fallbackText) {
+      if (!event || typeof event !== 'object') return;
+      if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      sequence += 1;
+      const seq = sequence;
+      chain = chain.then(() => postStreamEvent(envelope, fallbackText || '.', seq, 'progress', event));
     },
     async finish() {
       if (timer) { clearTimeout(timer); timer = null; }

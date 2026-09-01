@@ -21,10 +21,12 @@ const CLI_EXEC_CONTROL = {
   codex: { model: true, effort: true, effortOff: false },
   hermes: { model: true, effort: true, effortOff: true },
   openclaw: { model: true, effort: true, effortOff: true },
-  opencode: { model: true, effort: false, effortOff: false },
+  // opencode --variant / workbuddy --effort（--help 实测有通道）；
+  // off 映射 minimal（最低档非真关闭）→ off 置灰。
+  opencode: { model: true, effort: true, effortOff: false },
   gemini: { model: true, effort: false, effortOff: false },
   aider: { model: true, effort: false, effortOff: false },
-  workbuddy: { model: true, effort: false, effortOff: false },
+  workbuddy: { model: true, effort: true, effortOff: false },
 };
 
 function execControlFor(cli) {

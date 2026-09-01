@@ -12,6 +12,7 @@ import {
   probeStreamJsonInitModel,
   probeCodexConfigModel,
   probeConfigModels,
+  createClaudeStreamEventClassifier,
   effortArgsFor,
   effortLevelFor,
   INSPECT_SUBCOMMANDS,
@@ -102,6 +103,22 @@ describe('gateway effort channel — effortArgsFor / effortLevelFor', () => {
     // 未知档位不映射（null = 不下发，跟随 CLI 默认）。
     expect(effortLevelFor(hermesPreset, 'medium')).toBeNull();
     expect(effortLevelFor(hermesPreset, '')).toBeNull();
+  });
+
+  it('opencode --variant / workbuddy --effort channels (flag-verified)', () => {
+    // opencode run --help: "--variant model variant (provider-specific
+    // reasoning effort, e.g., high, max, minimal)"；off 无真关档 → minimal。
+    const opencodePreset = { effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' } };
+    expect(effortArgsFor(opencodePreset, {})).toBe('--variant {effort}');
+    expect(effortLevelFor(opencodePreset, 'off')).toBe('minimal');
+    expect(effortLevelFor(opencodePreset, 'low')).toBe('low');
+    expect(effortLevelFor(opencodePreset, 'high')).toBe('high');
+    // workbuddy（codebuddy）--help: "--effort <level> (minimal, low, medium,
+    // high, xhigh, max)"；同样 off→minimal。
+    const workbuddyPreset = { effortArgs: '--effort {effort}', effortLevels: { off: 'minimal' } };
+    expect(effortArgsFor(workbuddyPreset, {})).toBe('--effort {effort}');
+    expect(effortLevelFor(workbuddyPreset, 'high')).toBe('high');
+    expect(effortLevelFor(workbuddyPreset, 'off')).toBe('minimal');
   });
 });
 
@@ -420,6 +437,11 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     expect(result.current).toBe('agnes-2.5-flash');
   });
 
+  it('returns no_config_probe for unknown config keys', () => {
+    const unknown = probeConfigModels({ configModels: 'nope', env: {}, readFileSync: () => '' }) as { status: string; reason: string };
+    expect(unknown.status).toBe('unavailable');
+    expect(unknown.reason).toBe('no_config_probe');
+  });
   it('degrades honestly when config files are missing or carry no models', () => {
     const missing = probeConfigModels({
       configModels: 'hermes', env: { HOME: '/fake-home' },
@@ -438,5 +460,47 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     const unknown = probeConfigModels({ configModels: 'nope', env: {}, readFileSync: () => '' }) as { status: string; reason: string };
     expect(unknown.status).toBe('unavailable');
     expect(unknown.reason).toBe('no_config_probe');
+  });
+});
+
+describe('gateway createClaudeStreamEventClassifier — 过程帧结构化', () => {
+  const se = (event: unknown) => ({ type: 'stream_event', event });
+  const classifyAll = (lines: unknown[]) => {
+    const classify = createClaudeStreamEventClassifier();
+    return lines.map((l) => classify(l)).filter(Boolean);
+  };
+
+  it('emits structured tool start/end from content_block frames', () => {
+    const events = classifyAll([
+      se({ type: 'content_block_start', index: 0, content_block: { type: 'text' } }),
+      se({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls ~/.pi' } } }),
+      se({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{}' } }),
+      se({ type: 'content_block_stop', index: 1 }),
+      se({ type: 'content_block_stop', index: 0 }),
+    ]) as Array<{ stream: string; data: Record<string, unknown> }>;
+    expect(events).toHaveLength(2);
+    expect(events[0]).toEqual({ stream: 'tool', data: { name: 'Bash', phase: 'start', arguments: { command: 'ls ~/.pi' } } });
+    expect(events[1]).toEqual({ stream: 'tool', data: { name: 'Bash', phase: 'end' } });
+  });
+
+  it('emits reasoning start/end around thinking blocks', () => {
+    const events = classifyAll([
+      se({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }),
+      se({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'let me check' } }),
+      se({ type: 'content_block_stop', index: 0 }),
+      se({ type: 'content_block_start', index: 1, content_block: { type: 'thinking' } }),
+      se({ type: 'content_block_stop', index: 1 }),
+    ]) as Array<{ stream: string; data: Record<string, unknown> }>;
+    expect(events.map((e) => `${e.stream}:${e.data.phase}`)).toEqual([
+      'item:start', 'item:end', 'item:start', 'item:end',
+    ]);
+  });
+
+  it('ignores plain deltas, non-stream lines and malformed json', () => {
+    const classify = createClaudeStreamEventClassifier();
+    expect(classify(se({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } }))).toBeNull();
+    expect(classify({ type: 'assistant', message: {} })).toBeNull();
+    expect(classify('not-json{')).toBeNull();
+    expect(classify(null)).toBeNull();
   });
 });
