@@ -248,6 +248,69 @@ function probeSubcommandModels(deps = {}) {
   return probeInspectCommand({ cli, args: [sub], parser: 'lines', spawnFn, env: deps.env });
 }
 
+/** claude 兼容 CLI（codebuddy 等）的当前模型探测：双工 stream-json 起进程、
+ *  写一条 user 消息触发 init 帧、抓 model 字段即杀（模型调用不会发生）。
+ *  deps: { cli, args, spawnFn, env }。CodexHost 对标：effectiveModel 的
+ *  本地事实源之一。 */
+function probeStreamJsonInitModel(deps = {}) {
+  const cli = deps.cli || '';
+  const baseArgs = Array.isArray(deps.args) ? deps.args : [];
+  const spawnFn = deps.spawnFn || defaultSpawn;
+  if (!cli) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const args = [...baseArgs, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
+    let lineBuf = '';
+    let settled = false;
+    const child = spawnFn(cli, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), inspectTimeoutMs(deps.env));
+    child.stdout.on('data', (chunk) => {
+      lineBuf += chunk.toString('utf8');
+      const lines = lineBuf.split('\n');
+      lineBuf = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          if (ev && ev.type === 'system' && ev.subtype === 'init') {
+            // models 数组（若 CLI 披露）一并带回；current 即 model 字段。
+            finish({
+              current: (typeof ev.model === 'string' && ev.model) ? ev.model.trim() : null,
+              models: normalizeClaudeInit(ev) ? normalizeClaudeInit(ev).models : null,
+            });
+            return;
+          }
+        } catch { /* non-JSON line */ }
+      }
+    });
+    child.on('error', () => finish(null));
+    child.on('close', () => finish(null));
+    try {
+      child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } }) + '\n');
+    } catch { finish(null); }
+  });
+}
+
+/** codex 当前默认模型：读本机 CODEX_HOME 的 config.toml `model = "..."`
+ *  行（网关与 codex 同机，配置文件即事实源；无文件/无字段返回 null）。 */
+function probeCodexConfigModel(fsLike, env = process.env) {
+  try {
+    const fsMod = fsLike || require('node:fs');
+    const osMod = require('node:os');
+    const pathMod = require('node:path');
+    const home = (env && env.CODEX_HOME) || pathMod.join(osMod.homedir(), '.codex');
+    const text = fsMod.readFileSync(pathMod.join(home, 'config.toml'), 'utf8');
+    const m = /^\s*model\s*=\s*"([^"]+)"/m.exec(text);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
 module.exports = {
   EXEC_EFFORT_TOKENS,
   executionPrefsFor,
@@ -257,6 +320,8 @@ module.exports = {
   probeClaudeModels,
   probeSubcommandModels,
   probeInspectCommand,
+  probeStreamJsonInitModel,
+  probeCodexConfigModel,
   INSPECT_SUBCOMMANDS,
   INSPECT_PARSERS,
   modelArgsFor,

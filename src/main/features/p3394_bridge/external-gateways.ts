@@ -447,6 +447,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
       status: 'unavailable',
       models: [],
       ...(modelControllable ? { modelControllable: true } : {}),
+      ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
       ...(typeof body.reason === 'string' ? { reason: body.reason } : { reason: 'gateway_unavailable' }),
       ...(typeof body.error === 'string' ? { error: body.error } : {}),
     };

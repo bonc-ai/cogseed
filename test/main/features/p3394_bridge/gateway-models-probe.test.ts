@@ -9,6 +9,8 @@ import {
   probeClaudeModels,
   probeSubcommandModels,
   probeInspectCommand,
+  probeStreamJsonInitModel,
+  probeCodexConfigModel,
   INSPECT_SUBCOMMANDS,
   modelArgsFor,
   modelControllableFor,
@@ -241,6 +243,61 @@ describe('gateway probeInspectCommand — declared parsers (universal enumeratio
     }) as { status: string; reason: string };
     expect(result.status).toBe('unavailable');
     expect(result.reason).toBe('no_inspect_declared');
+  });
+});
+
+describe('gateway probeStreamJsonInitModel — claude-compatible init-frame current model', () => {
+  it('captures init.model and kills the child before any model call', async () => {
+    const child = {
+      stdinWrites: [] as string[],
+      killed: false,
+      on() { return this; },
+      kill() { this.killed = true; return true; },
+      stdout: { on(event: string, cb: (v: unknown) => void) { (this as unknown as { cbs: Array<(v: unknown) => void> }).cbs = ((this as unknown as { cbs?: Array<(v: unknown) => void> }).cbs || []); (this as unknown as { cbs: Array<(v: unknown) => void> }).cbs.push(cb); return this; } },
+      stderr: { on() { return this; } },
+    } as unknown as { stdout: { cbs: Array<(v: Buffer) => void> }; stdinWrites: string[]; killed: boolean };
+    const spawnFn = () => {
+      const c = child as unknown as { stdout: { cbs: Array<(v: Buffer) => void> }; stdin: { write: (s: string) => void } };
+      c.stdin = { write: (s: string) => { child.stdinWrites.push(s); } };
+      // spawn 后异步推 init 帧（模拟 codebuddy：model 有值、models 数组无）。
+      queueMicrotask(() => {
+        for (const cb of c.stdout.cbs || []) {
+          cb(Buffer.from(JSON.stringify({ type: 'system', subtype: 'init', model: 'auto' }) + '\n'));
+        }
+      });
+      return child;
+    };
+    const result = await probeStreamJsonInitModel({
+      cli: 'codebuddy', args: ['-p'], spawnFn, env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
+    }) as { current: string | null; models: Array<unknown> | null };
+    expect(result?.current).toBe('auto');
+    expect(result?.models).toBeNull(); // codebuddy init 不披露清单（实测）
+    expect(child.killed).toBe(true);   // init 一到即杀（零模型调用）
+    expect(child.stdinWrites).toHaveLength(1); // 触发 init 的 user 消息
+  });
+
+  it('returns null on timeout / child exit without init', async () => {
+    const r = await probeStreamJsonInitModel({
+      cli: 'x', args: [], spawnFn: SPAWN_FN({ closeWith: 1 }), env: { P3394_INSPECT_TIMEOUT_MS: '500' },
+    });
+    expect(r).toBeNull();
+  });
+});
+
+describe('gateway probeCodexConfigModel — config.toml current model', () => {
+  it('reads the model= line from CODEX_HOME config.toml', async () => {
+    const fsLike = {
+      readFileSync: () => 'model_provider = "custom"\nmodel = "gpt-5.6-luna"\nnotify = []\n',
+    };
+    const byEnv = probeCodexConfigModel(fsLike, { CODEX_HOME: '/tmp/any' });
+    expect(byEnv).toBe('gpt-5.6-luna');
+  });
+
+  it('returns null when the file or the field is missing', () => {
+    const fsLike = { readFileSync: () => 'model_provider = "custom"\n' };
+    expect(probeCodexConfigModel(fsLike, { CODEX_HOME: '/tmp/any' })).toBeNull();
+    const fsMissing = { readFileSync: () => { throw new Error('ENOENT'); } };
+    expect(probeCodexConfigModel(fsMissing, {})).toBeNull();
   });
 });
 
