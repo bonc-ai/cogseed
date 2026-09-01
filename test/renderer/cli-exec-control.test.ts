@@ -55,18 +55,36 @@ describe('cli-exec-control context window resolution', () => {
 });
 
 describe('cli-exec-control merged model view', () => {
-  it('unions scan ∪ static ∪ custom, first source wins on duplicate ids', () => {
+  it('unions static ∪ scan ∪ custom with default-first ordering', () => {
     const entry = {
       models: [{ id: 'sonnet', label: 'Sonnet (扫描)' }],
       staticModels: [
-        { id: 'sonnet', label: 'Sonnet (内置)' },
-        { id: 'opus', label: 'Opus', contextWindow: 200_000 },
+        { id: 'sonnet', label: 'Sonnet (内置)', contextWindow: 200_000 },
+        { id: 'default', label: '默认（跟随 CLI）', default: true },
+        { id: 'opus', label: 'Opus' },
       ],
     };
     const merged = cliExecControl.mergedCliModels('claude', entry);
-    expect(merged.find((m) => m.id === 'sonnet')?.source).toBe('scan');
-    expect(merged.find((m) => m.id === 'opus')?.contextWindow).toBe(200_000);
+    // 重复 id：static 先入（携带 default 标记与窗口），scan 同 id 不覆盖。
+    expect(merged.find((m) => m.id === 'sonnet')?.source).toBe('static');
+    expect(merged.find((m) => m.id === 'sonnet')?.contextWindow).toBe(200_000);
+    // default 条目永远排第一（CodexHost 排序规则）。
+    expect(merged[0]).toMatchObject({ id: 'default', isDefault: true });
     expect(merged.filter((m) => m.id === 'sonnet')).toHaveLength(1);
+  });
+
+  it('effectiveModelLabel: current > default entry > first item (never a placeholder)', () => {
+    const withCurrent = { current: 'Sonnet 5', models: [{ id: 'sonnet', label: 'sonnet' }] };
+    expect(cliExecControl.effectiveModelLabel('claude', withCurrent)).toEqual({ label: 'Sonnet 5', source: 'current' });
+    const noCurrent = {
+      current: null,
+      staticModels: [{ id: 'default', label: '默认（跟随 CLI）', default: true }],
+      models: [{ id: 'sonnet', label: 'sonnet' }],
+    };
+    expect(cliExecControl.effectiveModelLabel('claude', noCurrent)?.source).toBe('default');
+    const bareList = { current: null, models: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] };
+    expect(cliExecControl.effectiveModelLabel('opencode', bareList)).toEqual({ label: 'A', source: 'first' });
+    expect(cliExecControl.effectiveModelLabel('hermes', null)).toBeNull();
   });
 
   it('keeps manual entries (localStorage bridge is a no-op outside browsers)', () => {

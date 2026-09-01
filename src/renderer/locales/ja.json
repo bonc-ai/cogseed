@@ -4910,6 +4910,9 @@
   "exec_config.cli_model_custom_add": "使用",
   "exec_config.cli_models_rescan": "再スキャン",
   "exec_config.cli_current_model_title": "「{model}」はこの CLI が現在使用中のモデルです（メニューで切替可）",
+  "exec_config.cli_models_loading": "モデルを読み込み中…",
+  "exec_config.cli_models_search_ph": "モデルを検索…",
+  "exec_config.cli_models_no_match": "一致するモデルがありません",
   "chat.stats.costReportedTitle": "{c}（CLI 自己申告のコスト、推定ではありません）",
   "settings.custom_providers.cap_reasoning": "推論",
   "settings.custom_providers.cap_vision": "ビジョン"
