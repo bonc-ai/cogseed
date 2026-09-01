@@ -402,6 +402,9 @@ export interface ExternalGatewayModels {
   models: Array<{ id: string; label: string }>;
   /** CLI 自己披露的当前默认模型（展示名或 full id）。 */
   current?: string;
+  /** CLI 自己披露的当前思考强度（claude /model 输出的 effort 档，如
+   *  "xhigh"）——菜单展示用，与模型选择正交。 */
+  currentEffort?: string;
   /** 网关侧 runtime 名（claude-persistent / codex / oneshot / …）。 */
   runtime?: string;
   /** 能力协商（CodexHost 式）：网关是否有模型参数通道（预设模板或
@@ -424,7 +427,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/p3394/models`, { signal: controller.signal });
     if (!res.ok) return { status: 'unavailable', models: [], reason: 'http_' + res.status };
-    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean };
+    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean; current_effort?: string };
     const models = Array.isArray(body.models)
       ? body.models
           .filter((m): m is { id: string; label: string } =>
@@ -434,12 +437,16 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
     // 能力协商独立于扫描结果：即使清单枚举失败（unavailable），网关仍能
     // 告知模型是否可控（有参数通道但无枚举接口的 CLI 很常见）。
     const modelControllable = body.model_controllable === true || body.modelControllable === true;
+    const currentEffort = typeof body.current_effort === 'string' && body.current_effort.trim()
+      ? body.current_effort.trim()
+      : undefined;
     if (body.status === 'ready' && models.length) {
       return {
         status: 'ready',
         models,
         ...(modelControllable ? { modelControllable: true } : {}),
         ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
+        ...(currentEffort ? { currentEffort } : {}),
         ...(typeof body.runtime === 'string' ? { runtime: body.runtime } : {}),
       };
     }

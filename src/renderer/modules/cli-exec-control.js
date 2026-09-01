@@ -104,6 +104,7 @@ async function loadCliModels(agentId, cli, opts) {
         state: models.length ? 'ready' : 'unavailable',
         models,
         current: (res.scanned && typeof res.scanned.current === 'string' && res.scanned.current) || null,
+        currentEffort: (res.scanned && typeof res.scanned.currentEffort === 'string' && res.scanned.currentEffort) || null,
         // 能力协商独立于清单：unavailable 也可能可控（无枚举接口但有参数通道）。
         modelControllable: !!(res.scanned && res.scanned.modelControllable),
         staticModels: Array.isArray(res.staticModels) ? res.staticModels : [],

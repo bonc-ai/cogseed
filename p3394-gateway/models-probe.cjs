@@ -164,13 +164,16 @@ const INSPECT_PARSERS = {
     }
     return models.length ? { models } : null;
   },
-  /** claude `claude -p /model --output-format json`：Current model +
-   *  Available 别名清单（零模型调用的纯本地命令）。 */
+  /** claude `claude -p /model --output-format json`：Current model（含
+   *  effort 档位副信息）+ Available 别名清单（零模型调用的纯本地命令）。 */
   'claude-model-list'(out) {
     let parsed;
     try { parsed = JSON.parse(String(out || '').trim()); } catch { return null; }
     const resultText = typeof parsed.result === 'string' ? parsed.result : '';
-    const currentDisplay = /Current model:\s*(.+?)(?:\s*\(effort:[^)]*\))?\s*$/.exec(resultText.split('\n')[0] || '');
+    const head = resultText.split('\n')[0] || '';
+    const currentDisplay = /Current model:\s*(.+?)(?:\s*\(effort:([^)]*)\))?\s*$/.exec(head);
+    // effort 副信息（如 "xhigh"）——CLI 自报的当前思考强度，菜单展示用。
+    const currentEffort = (currentDisplay && typeof currentDisplay[2] === 'string' && currentDisplay[2].trim()) || null;
     const avail = /Available:\s*([^.]+)/.exec(resultText);
     const ids = (avail && avail[1] ? avail[1] : '')
       .split(',')
@@ -178,7 +181,11 @@ const INSPECT_PARSERS = {
       // 别名不含空格；", or a full model ID" 尾注与杂项一并滤掉。
       .filter((id) => id && !id.includes(' '));
     if (!ids.length) return null;
-    return { models: ids.map((id) => ({ id, label: id })), currentDisplay: currentDisplay ? currentDisplay[1].trim() : null };
+    return {
+      models: ids.map((id) => ({ id, label: id })),
+      currentDisplay: currentDisplay ? currentDisplay[1].trim() : null,
+      ...(currentEffort ? { currentEffort } : {}),
+    };
   },
   /** workbuddy `--help`：`--model <model>` 行内 "Currently supported:
    *  (a, b, c)" 括号清单（CLI 自家披露的完整可选集）。 */
@@ -229,7 +236,12 @@ function probeInspectCommand(deps = {}) {
       let parsed = null;
       try { parsed = parser(out); } catch { parsed = null; }
       if (parsed && parsed.models && parsed.models.length) {
-        finish({ status: 'ready', models: parsed.models, ...(parsed.currentDisplay ? { current: parsed.currentDisplay } : {}) });
+        finish({
+          status: 'ready',
+          models: parsed.models,
+          ...(parsed.currentDisplay ? { current: parsed.currentDisplay } : {}),
+          ...(parsed.currentEffort ? { current_effort: parsed.currentEffort } : {}),
+        });
       } else {
         finish({ status: 'unavailable', reason: code === 0 ? 'no_model_list' : 'exit_' + code, stderrTail: stderrTail.slice(-300) || undefined });
       }
