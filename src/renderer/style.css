@@ -6396,9 +6396,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   border-left: 3px solid var(--border-strong, var(--border));
   background: var(--surface-2);
 }
-.conversation-info-kstar-trace-row.is-ok { border-left-color: var(--success, #16a34a); }
+.conversation-info-kstar-trace-row.is-ok { border-left-color: var(--success); }
 .conversation-info-kstar-trace-row.is-pending { border-left-color: var(--primary); }
-.conversation-info-kstar-trace-row.is-failed { border-left-color: var(--danger, #dc2626); }
+.conversation-info-kstar-trace-row.is-failed { border-left-color: var(--danger); }
 .conversation-info-kstar-trace-row.is-skipped,
 .conversation-info-kstar-trace-row.is-not_started,
 .conversation-info-kstar-trace-row.is-degraded { border-left-color: var(--text-muted); }
@@ -6406,7 +6406,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6427,7 +6427,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   line-height: 1.4;
 }
 .conversation-info-kstar-trace-meta { margin-top: 3px; }
-.conversation-info-kstar-trace-reason { margin-top: 2px; color: var(--danger, #dc2626); }
+.conversation-info-kstar-trace-reason { margin-top: 2px; color: var(--danger); }
 
 /* KSTAR migration/history section */
 .conversation-info-kstar-migration-status {
