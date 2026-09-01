@@ -6518,6 +6518,7 @@
   "plugins.detail_commit": "Commit",
   "plugins.detail_kind": "Kind",
   "plugins.detail_license": "License",
+   "plugins.detail_license_status": "License status",
   "plugins.detail_repo": "Source",
   "plugins.detail_roles": "Audience",
   "plugins.detail_section_commands": "Commands available in conversations",

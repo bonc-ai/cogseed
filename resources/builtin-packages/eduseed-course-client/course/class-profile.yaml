@@ -1,0 +1,33 @@
+# Class Profile —— 飞书组件化配置（换一份 = 换一个班，代码零改动）
+# 凭证一律 env: 引用，本文件不存明文密钥。
+class_profile: v1
+class_id: cohort-A
+platform_url: "http://localhost:3000"      # 或线上 http://49.233.169.16
+
+feishu:
+  app_id_ref: "env:FEISHU_APP_ID"
+  app_secret_ref: "env:FEISHU_APP_SECRET"
+  app_token: "<REPLACE: 飞书 Base URL /base/ 后那段>"
+  # SEC-AUDIT MCP-11：表 ID 随插件包分发，不落真实值（运行时经平台 API 访问，不直连飞书）
+  tables:
+    students: "<REPLACE>"
+    challenges: "<REPLACE>"
+    submissions: "<REPLACE>"
+    evaluations: "<REPLACE>"
+    portfolio: "<REPLACE>"
+    audit: "<REPLACE>"
+    inbox: "<REPLACE>"
+    teachers: "<REPLACE>"
+    admins: "<REPLACE>"
+
+auth:
+  role: "student"                        # student | teacher
+  student_id: ""                         # SEC-AUDIT MCP-02：不落真实学号；
+                                         # 学号由安装者经 env:EDUSEED_STUDENT_ID 注入（env 优先）
+  api_key_ref: "env:EDUSEED_API_KEY"
+  cohort_ref: "env:EDUSEED_COHORT"         # 可选
+
+# 规则：
+# 1. 换班 = 复制本文件为新 class-profile，改 app_token / tables / class_id；
+# 2. 飞书表字段名必须与平台约定一致（见 eduseed-platform 建表指南 9.2）；
+# 3. platform_url 指向的平台上，.env.local 的表映射必须与本文件一致。

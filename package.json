@@ -205,6 +205,16 @@
         ]
       },
       {
+        "from": "resources/builtin-packages",
+        "to": "builtin-packages",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
         "from": "resources/officecli",
         "to": "officecli",
         "filter": [

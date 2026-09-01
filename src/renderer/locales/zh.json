@@ -6518,6 +6518,7 @@
   "plugins.detail_commit": "提交",
   "plugins.detail_kind": "类型",
   "plugins.detail_license": "授权",
+   "plugins.detail_license_status": "授权状态",
   "plugins.detail_repo": "来源",
   "plugins.detail_roles": "面向角色",
   "plugins.detail_section_commands": "对话可用命令",
