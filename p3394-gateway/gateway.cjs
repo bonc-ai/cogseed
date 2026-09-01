@@ -194,7 +194,10 @@ const PRESETS = {
               modelArgs: '--model {model}' },
   openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw' },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
-              modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' } },
+              modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
+              // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
+              // 实测 init.model="auto"）——清单与当前值双通道。
+              initProbeArgs: ['-p'] },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
 // 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
@@ -529,6 +532,8 @@ const {
   claudeModelsCache,
   probeClaudeModels: probeClaudeModelsImpl,
   probeInspectCommand,
+  probeStreamJsonInitModel,
+  probeCodexConfigModel,
   modelArgsFor,
   modelControllableFor,
   splitModelArgs,
@@ -681,13 +686,31 @@ const oneshotRuntime = {
     return reply;
   },
   cancel(taskId) { return cancelTask(taskId); },
-  /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；claude 落
-   *  oneshot 时保留专用探测（init 缓存交互）；其余明确 unavailable，宿主
-   *  回落静态目录+手输。 */
+  /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；声明了
+   *  initProbeArgs（claude 兼容 CLI）再并行抓 init 帧的当前模型；claude
+   *  落 oneshot 时保留专用探测；其余明确 unavailable。 */
   async inspectModels() {
     if (PRESET_NAME === 'claude') return probeClaudeModels();
     const viaPreset = probePresetInspect();
-    if (viaPreset) return viaPreset;
+    const viaInit = (preset && preset.initProbeArgs)
+      ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawn })
+      : null;
+    const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
+    if (listResult && listResult.status === 'ready') {
+      return {
+        ...listResult,
+        ...(initResult && initResult.current ? { current: initResult.current } : {}),
+      };
+    }
+    // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
+    if (initResult && initResult.models && initResult.models.length) {
+      return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
+    }
+    if (initResult && initResult.current) {
+      // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
+      return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
+    }
+    if (listResult) return listResult;
     return { status: 'unavailable', reason: 'oneshot_no_inspect' };
   },
   close() {
@@ -832,8 +855,11 @@ class CodexAppServerRuntime {
    *  候选依次试、短超时、解析容错）。全部失败 → unavailable，宿主回落静态
    *  目录（能力协商降级，不硬失败）。 */
   async inspectModels() {
+    // codex 当前默认模型：本机 CODEX_HOME 的 config.toml `model = "..."` 行
+    // （网关与 codex 同机，配置文件即事实源）。无论 RPC 枚举成败都带上。
+    const configModel = probeCodexConfigModel();
     try { await this.start(); } catch (error) {
-      return { status: 'unavailable', reason: 'app_server_start_failed', error: error && error.message ? error.message : String(error) };
+      return { status: 'unavailable', reason: 'app_server_start_failed', ...(configModel ? { current: configModel } : {}), error: error && error.message ? error.message : String(error) };
     }
     const candidates = ['model/providers', 'models/list'];
     for (const method of candidates) {
@@ -859,9 +885,9 @@ class CodexAppServerRuntime {
         for (const value of Object.values(node)) visit(value, depth + 1);
       };
       visit(result, 0);
-      if (models.length) return { status: 'ready', models };
+      if (models.length) return { status: 'ready', models, ...(configModel ? { current: configModel } : {}) };
     }
-    return { status: 'unavailable', reason: 'no_model_rpc' };
+    return { status: 'unavailable', reason: 'no_model_rpc', ...(configModel ? { current: configModel } : {}) };
   }
   _failPending(error) {
     for (const entry of this.pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
