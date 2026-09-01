@@ -379,7 +379,15 @@ function _bindModelMenuDismiss(menu, anchor) {
   };
   menu._onDocDown = onDocDown;
   menu._onKey = onKey;
-  const onViewportChange = () => _closeModelMenu();
+  // 页面滚动/窗口变化会让 fixed 定位的菜单脱离锚点，照旧收起；但菜单
+  // 自己的滚动（模型列表翻页、搜索框横滚——capture 监听对不冒泡的
+  // scroll 事件同样可见）必须忽略，否则用户一滚菜单就秒关，长清单
+  // 根本翻不动。
+  const onViewportChange = (e) => {
+    const t = e && e.target;
+    if (t && t.nodeType && (t === menu || menu.contains(t))) return;
+    _closeModelMenu();
+  };
   menu._onViewportChange = onViewportChange;
   setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
   document.addEventListener('keydown', onKey, true);
