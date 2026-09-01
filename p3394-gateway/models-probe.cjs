@@ -57,6 +57,52 @@ function extractClaudeResultUsage(ev) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// ── claude stream-json 过程帧分类（CodexHost 式工具调用/思考可见性）────
+// 每轮一个分类器实例（有状态：content_block index → 块类型）。输入原始
+// stream-json 行对象，输出宿主过程栏已支持的结构化事件（stream:'tool'/
+// 'item'reasoning），文本 delta/终态帧不归它管（返回 null 走原路径）。
+function createClaudeStreamEventClassifier() {
+  const blockTypes = new Map(); // index → { type, name }
+  let thinkingOpen = false;
+  return function classify(line) {
+    let ev;
+    try { ev = typeof line === 'string' ? JSON.parse(line) : line; } catch { return null; }
+    if (!ev || ev.type !== 'stream_event' || !ev.event || typeof ev.event !== 'object') return null;
+    const inner = ev.event;
+    const idx = typeof inner.index === 'number' ? inner.index : -1;
+    if (inner.type === 'content_block_start') {
+      const block = (inner.content_block && typeof inner.content_block === 'object') ? inner.content_block : {};
+      const type = String(block.type || '');
+      const name = typeof block.name === 'string' ? block.name : '';
+      blockTypes.set(idx, { type, name });
+      if (type === 'tool_use') {
+        const input = (block.input && typeof block.input === 'object' && Object.keys(block.input).length)
+          ? block.input : null;
+        return { stream: 'tool', data: { name: name || 'tool', phase: 'start', ...(input ? { arguments: input } : {}) } };
+      }
+      if (type === 'thinking' && !thinkingOpen) {
+        thinkingOpen = true;
+        return { stream: 'item', data: { itemType: 'reasoning', phase: 'start' } };
+      }
+      return null;
+    }
+    if (inner.type === 'content_block_stop') {
+      const block = blockTypes.get(idx);
+      blockTypes.delete(idx);
+      if (!block) return null;
+      if (block.type === 'tool_use') {
+        return { stream: 'tool', data: { name: block.name || 'tool', phase: 'end' } };
+      }
+      if (block.type === 'thinking' && thinkingOpen) {
+        thinkingOpen = false;
+        return { stream: 'item', data: { itemType: 'reasoning', phase: 'end' } };
+      }
+      return null;
+    }
+    return null;
+  };
+}
+
 /** claude init 帧 models 数组（[{value,displayName,resolvedModel?}]）→ 统一
  *  {id,label}。init.model 是 CLI 当前解析到的默认模型，一并带回。 */
 function normalizeClaudeInit(ev) {
@@ -452,6 +498,7 @@ module.exports = {
   executionPrefsFor,
   extractClaudeResultUsage,
   normalizeClaudeInit,
+  createClaudeStreamEventClassifier,
   claudeModelsCache,
   probeClaudeModels,
   probeSubcommandModels,

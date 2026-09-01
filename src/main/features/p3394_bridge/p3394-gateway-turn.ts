@@ -200,10 +200,17 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       try {
         const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
           if (input.signal?.aborted) return;
-          // progress 帧（openclaw 的 [skills]/[tools] 过程日志等）→ process
-          // rail；不置 streamed，正文仍由终态回复一次性落地。
+          // progress 帧（openclaw 的 [skills]/[tools] 过程日志、claude 的
+          // 工具调用/思考结构化事件等）→ process rail；不置 streamed，正文
+          // 仍由终态回复一次性落地。
           if (event.kind === 'progress') {
-            input.onProcess?.({ type: 'progress', text: event.text });
+            input.onProcess?.({
+              type: 'progress',
+              text: event.text,
+              ...((event as { event?: unknown }).event
+                ? { event: (event as { event: unknown }).event }
+                : {}),
+            });
             return;
           }
           if (firstTokenAt === null) firstTokenAt = Date.now();

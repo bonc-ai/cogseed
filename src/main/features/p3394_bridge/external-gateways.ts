@@ -281,6 +281,27 @@ async function doStartExternalGateway(input: {
   const existing = listExternalGateways().find((g) => g.cli === cli && g.running);
   if (existing) return { ok: true, value: existing };
 
+  // 自定义参数模板声明（agent 记录的 runtime.model_args / effort_args）——
+  // 「任意外接智能体接入即可控」的声明通道：spawn 时注入网关 env（覆盖
+  // 进程级同名值）。动态 import 避免 agents ↔ bridge 循环依赖；读取失败
+  // 不阻塞起动（预设模板仍然生效）。
+  const declaredTemplates = await (async () => {
+    try {
+      const { listAgents } = await import('../agents');
+      const agents = await listAgents();
+      const withTemplates = agents.find((a) => {
+        const rt = a?.runtime as { kind?: string; cli?: string; model_args?: unknown; effort_args?: unknown } | undefined;
+        return rt && rt.kind === 'p3394-gateway' && rt.cli === cli
+          && (typeof rt.model_args === 'string' || typeof rt.effort_args === 'string');
+      });
+      const rt = withTemplates?.runtime as { model_args?: string; effort_args?: string } | undefined;
+      return {
+        ...(typeof rt?.model_args === 'string' && rt.model_args.includes('{model}') ? { modelArgs: rt.model_args } : {}),
+        ...(typeof rt?.effort_args === 'string' && rt.effort_args.includes('{effort}') ? { effortArgs: rt.effort_args } : {}),
+      };
+    } catch { return {}; }
+  })();
+
   const scriptPath = gatewayScriptPath();
   if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
   let port: number;
@@ -306,6 +327,10 @@ async function doStartExternalGateway(input: {
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
     ...(CLI_TO_RUNTIME_MODE[cli] ? { P3394_AGENT_MODE: CLI_TO_RUNTIME_MODE[cli] } : {}),
+    // per-agent 参数模板声明（「声明即生效」）：注入后网关即可控模型/强度
+    // （预设之外的 CLI 尤其依赖此通道），能力协商随之披露。
+    ...(declaredTemplates.modelArgs ? { P3394_AGENT_MODEL_ARGS: declaredTemplates.modelArgs } : {}),
+    ...(declaredTemplates.effortArgs ? { P3394_AGENT_EFFORT_ARGS: declaredTemplates.effortArgs } : {}),
   };
 
   let child: ChildProcess | null = null;
@@ -411,6 +436,8 @@ export interface ExternalGatewayModels {
    *  P3394_AGENT_MODEL_ARGS 自定义声明）。UI 控件显隐的权威依据——取代
    *  任何硬编码白名单。 */
   modelControllable?: boolean;
+  /** 同上，强度通道（预设 effortArgs 或 P3394_AGENT_EFFORT_ARGS 声明）。 */
+  effortControllable?: boolean;
   /** unavailable 时的原因码（诊断用，不展示给用户）。 */
   reason?: string;
   error?: string;
@@ -427,7 +454,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/p3394/models`, { signal: controller.signal });
     if (!res.ok) return { status: 'unavailable', models: [], reason: 'http_' + res.status };
-    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean; current_effort?: string };
+    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean; effort_controllable?: boolean; current_effort?: string };
     const models = Array.isArray(body.models)
       ? body.models
           .filter((m): m is { id: string; label: string } =>
@@ -437,6 +464,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
     // 能力协商独立于扫描结果：即使清单枚举失败（unavailable），网关仍能
     // 告知模型是否可控（有参数通道但无枚举接口的 CLI 很常见）。
     const modelControllable = body.model_controllable === true || body.modelControllable === true;
+    const effortControllable = body.effort_controllable === true || body.effortControllable === true;
     const currentEffort = typeof body.current_effort === 'string' && body.current_effort.trim()
       ? body.current_effort.trim()
       : undefined;
@@ -445,6 +473,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
         status: 'ready',
         models,
         ...(modelControllable ? { modelControllable: true } : {}),
+        ...(effortControllable ? { effortControllable: true } : {}),
         ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
         ...(currentEffort ? { currentEffort } : {}),
         ...(typeof body.runtime === 'string' ? { runtime: body.runtime } : {}),
@@ -454,6 +483,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
       status: 'unavailable',
       models: [],
       ...(modelControllable ? { modelControllable: true } : {}),
+      ...(effortControllable ? { effortControllable: true } : {}),
       ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
       ...(typeof body.reason === 'string' ? { reason: body.reason } : { reason: 'gateway_unavailable' }),
       ...(typeof body.error === 'string' ? { error: body.error } : {}),

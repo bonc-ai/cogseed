@@ -1328,8 +1328,8 @@ function _executionConfigForSend(target, snapshot) {
   const cfg = {};
   // 外接智能体执行控制：模型随 execution_config 通用下发——网关按「模型
   // 参数模板」（预设或 P3394_AGENT_MODEL_ARGS 自定义声明）消费，无通道的
-  // CLI 安全忽略（跟随自身默认），所以这里不设白名单。effort 仍按能力表
-  // （各家强度语义差异大，乱发参数有风险）。
+  // CLI 安全忽略（跟随自身默认），所以这里不设白名单。effort 同理
+  // （P3394_AGENT_EFFORT_ARGS 自定义声明；网关无模板即忽略信封字段）。
   const recipientAgent = snap && snap.kind === 'agent' && snap.id
     ? (() => {
       const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
@@ -1339,12 +1339,13 @@ function _executionConfigForSend(target, snapshot) {
   const isCliAgentRecipient = !!(recipientAgent && recipientAgent.runtime
     && (recipientAgent.runtime.kind === 'cli' || recipientAgent.runtime.kind === 'p3394-gateway'));
   const cliExec = (typeof window !== 'undefined' && window.cliExecControl && isCliAgentRecipient && recipientAgent.runtime)
-    ? window.cliExecControl.execControlFor(recipientAgent.runtime.cli) : null;
+    ? window.cliExecControl.effortControllableFor(recipientAgent.runtime.cli) : null;
   if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
   else if (ov.model) { cfg.model = ov.model; }
-  // effort：CLI 智能体只在能力表声明 effort 开关时下发（与 bus 侧同一过滤，
-  // 双保险防历史残留 override 泄漏成假开关）。
-  if (ov.effort && (!isCliAgentRecipient || (cliExec && cliExec.effort))) cfg.effort = ov.effort;
+  // effort：CLI 智能体按网关协商（effort_controllable，自建智能体经
+  // P3394_AGENT_EFFORT_ARGS 声明即 true）下发；未协商走兜底表（未知 CLI
+  // 乐观放开）。网关无模板时信封字段安全忽略——与 model 同一模式。
+  if (ov.effort && (!isCliAgentRecipient || cliExec)) cfg.effort = ov.effort;
   return Object.keys(cfg).length ? cfg : undefined;
 }
 // The conversation "floor": server-authoritative `StateFile.active_recipient`,

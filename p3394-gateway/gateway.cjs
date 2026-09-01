@@ -1933,9 +1933,11 @@ const server = http.createServer((req, res) => {
           ok: true,
           runtime: runtime.name,
           cli: CLI,
-          // 能力协商（CodexHost 式）：模型可控 = 有参数模板或专有通道。宿主
-          // 据此决定 UI 控件显隐——不再依赖任何硬编码白名单。
+          // 能力协商（CodexHost 式）：模型可控 = 有参数模板或专有通道；强度
+          // 可控 = 有 effortArgs 模板（预设声明或 P3394_AGENT_EFFORT_ARGS）。
+          // 宿主据此决定 UI 控件显隐——不再依赖任何硬编码白名单。
           model_controllable: modelControllable(),
+          effort_controllable: !!effortArgsFor(PRESETS[PRESET_NAME] || {}, process.env),
           inspected_at: new Date().toISOString(),
           ...(inspected || {}),
         });

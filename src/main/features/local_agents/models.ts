@@ -175,11 +175,13 @@ const CLI_EXEC_CONTROL: Record<string, CliExecControl> = {
   workbuddy: { model: true, effort: true, effortOff: false },
 };
 export function execControlFor(cli: string): CliExecControl {
-  // model 兜底全开（任意外接智能体都可尝试控制，网关无通道即安全忽略）；
-  // effort 仅表内 CLI。
+  // 未知 CLI 的 model/effort 兜底全开（与渲染层同源）：自定义智能体可用
+  // P3394_AGENT_MODEL_ARGS / P3394_AGENT_EFFORT_ARGS 声明通道，网关无模板
+  // 时信封字段安全忽略——「声明即生效」。已知无通道的（gemini/aider）
+  // 表内显式 false；运行时协商（effort_controllable）是 UI 显隐权威。
   const type = String(cli || '').trim();
   const known = CLI_EXEC_CONTROL[type];
-  return known ?? { model: true, effort: false, effortOff: false };
+  return known ?? { model: true, effort: true, effortOff: false };
 }
 
 /** 别名/模型 id → 上下文窗口（会话统计的 ctx 分母）。优先级：claude 别名

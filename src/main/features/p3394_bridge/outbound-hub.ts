@@ -28,6 +28,9 @@ export interface P3394OutboundStreamEvent {
   text: string;
   /** 'delta' → 正文增量（可见气泡）；'progress' → process rail 过程日志（工具调用等）。 */
   kind: 'delta' | 'progress';
+  /** 结构化过程事件（stream:'tool' / item reasoning 等，网关 claude 流解析
+   *  产出）——宿主过程栏按 event 词表渲染；旧网关只有 text。 */
+  event?: Record<string, unknown>;
   envelope: P3394Envelope;
   sequence?: number;
   sourceMessageId?: string;
@@ -347,9 +350,14 @@ function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamE
   const sourceMessageId = typeof metadata.stream_source_message_id === 'string'
     ? metadata.stream_source_message_id
     : undefined;
+  // 网关 claude 流解析产出的结构化过程事件（工具调用/思考起止）。
+  const structuredEvent = (metadata.stream_data && typeof metadata.stream_data === 'object')
+    ? (metadata.stream_data as Record<string, unknown>)
+    : undefined;
   return {
     text,
     kind: streamEvent,
+    ...(structuredEvent ? { event: structuredEvent } : {}),
     envelope,
     ...(sequence !== undefined ? { sequence } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
