@@ -60,6 +60,31 @@ describe('Run Center run and attempt identity', () => {
     expect(attemptsApi.failureCategory('private-unmapped-code')).toBe('other');
   });
 
+  it('maps every failure code to its category and treats near-miss codes as unmapped', () => {
+    const attemptsApi = loadAttemptsApi();
+
+    expect(attemptsApi.failureCategory('model_preflight')).toBe('model');
+    expect(attemptsApi.failureCategory('provider_error')).toBe('provider');
+    expect(attemptsApi.failureCategory('group_chat_run_failed')).toBe('collaboration');
+    expect(attemptsApi.failureCategory('unknown_code')).toBe('other');
+
+    // An absent code is "no failure", not an unmapped one: the detail pane keys
+    // its error banner off 'none', so a succeeded run must never reach 'other'.
+    for (const empty of [undefined, null, '', 0, false, NaN]) {
+      expect(attemptsApi.failureCategory(empty)).toBe('none');
+    }
+
+    // Matching is exact: a code that differs only by case or padding falls to
+    // 'other' and loses its category, so producers must emit the literal code.
+    for (const nearMiss of ['Provider_Error', 'PROVIDER_ERROR', ' provider_error', 'provider_error ']) {
+      expect(attemptsApi.failureCategory(nearMiss)).toBe('other');
+    }
+
+    // A truthy non-string is unmapped rather than throwing.
+    expect(attemptsApi.failureCategory(42)).toBe('other');
+    expect(attemptsApi.failureCategory({})).toBe('other');
+  });
+
   it('uses queue and board modes, embeds summary/history, reveals collaboration on demand, and retains stable selection', async () => {
     const panelListeners = new Map<string, (event: any) => void>();
     const documentListeners = new Map<string, (event: any) => void>();
