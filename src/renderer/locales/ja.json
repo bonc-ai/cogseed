@@ -4881,7 +4881,7 @@
   "exec_config.no_model": "モデル未設定",
   "exec_config.cli_default_model": "CLIデフォルト",
   "exec_config.cli_badge": "CLI",
-  "exec_config.effort_cli_note": "モデルと推論強度はいずれも外部CLI自身の構成で決まり、CogSeed はここでは上書きしません。",
+  "exec_config.effort_cli_note": "推論強度は外部CLI自身の構成で決まり、CogSeed はここでは上書きしません（モデルは上で調整できます）。",
   "exec_config.no_reasoning_note": "推論強度非対応",
   "settings.thinking.title": "既定の推論強度",
   "settings.thinking.sub": "チャット実行の既定の思考強度（グローバル既定）。会話内では入力欄右側の実行構成チップで一時的に調整でき、現在のタスクにのみ影響します。",

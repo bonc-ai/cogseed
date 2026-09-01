@@ -176,7 +176,10 @@ const replyWaiters = new Map(); // message_id → 处理回信的函数
 //   同样的模板即可获得模型控制。
 // inspect：模型枚举通道声明（args+parser；无声明=unavailable 回落静态/手输）。
 const PRESETS = {
-  hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes' },
+  hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
+              // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
+              // 配置（configModels 声明式枚举，见 models-probe.cjs）。
+              modelArgs: '-m {model}', configModels: 'hermes' },
   // claude 声明 stream-json 输出（sscli 主导下的流式包装器）：-p 配合
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
@@ -192,7 +195,10 @@ const PRESETS = {
               modelArgs: '-m {model}' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
               modelArgs: '--model {model}' },
-  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw' },
+  openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
+              // --model 单次覆盖（agent --help 实测）；模型绑定在配置的
+              // agents/models 段——configModels 声明式枚举读取。
+              modelArgs: '--model {model}', configModels: 'openclaw' },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
               modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
               // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
@@ -534,6 +540,7 @@ const {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  probeConfigModels,
   modelArgsFor,
   modelControllableFor,
   splitModelArgs,
@@ -688,10 +695,14 @@ const oneshotRuntime = {
   cancel(taskId) { return cancelTask(taskId); },
   /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；声明了
    *  initProbeArgs（claude 兼容 CLI）再并行抓 init 帧的当前模型；claude
-   *  落 oneshot 时保留专用探测；其余明确 unavailable。 */
+   *  落 oneshot 时保留专用探测；声明 configModels（hermes/openclaw）读
+   *  CLI 自身配置文件枚举；其余明确 unavailable。 */
   async inspectModels() {
     if (PRESET_NAME === 'claude') return probeClaudeModels();
     const viaPreset = probePresetInspect();
+    const viaConfig = (preset && preset.configModels)
+      ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
+      : null;
     const viaInit = (preset && preset.initProbeArgs)
       ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawn })
       : null;
@@ -710,6 +721,9 @@ const oneshotRuntime = {
       // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
       return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
     }
+    // 配置声明式枚举（hermes/openclaw）：子命令探测缺失/失败时接管——
+    // 读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
+    if (viaConfig && viaConfig.status === 'ready') return viaConfig;
     if (listResult) return listResult;
     return { status: 'unavailable', reason: 'oneshot_no_inspect' };
   },

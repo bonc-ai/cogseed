@@ -11,6 +11,7 @@ import {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  probeConfigModels,
   INSPECT_SUBCOMMANDS,
   modelArgsFor,
   modelControllableFor,
@@ -326,5 +327,87 @@ describe('gateway probeSubcommandModels — per-line enumeration (opencode style
     expect(result.status).toBe('unavailable');
     expect(result.reason).toBe('no_inspect_command');
     expect(INSPECT_SUBCOMMANDS).toEqual({ opencode: 'models' });
+  });
+});
+
+describe('gateway probeConfigModels — declared-config enumeration (hermes/openclaw)', () => {
+  const HERMES_YAML = [
+    'model:',
+    '  default: deepseek-v4-flash',
+    '  provider: opencode-go',
+    '  base_url: \'\'',
+    'providers:',
+    '  agnes:',
+    '    base_url: https://apihub.agnes-ai.com/v1',
+    '    default_model: agnes-2.0-flash',
+    '    models:',
+    '      - agnes-2.0-flash',
+  ].join('\n');
+  const HERMES_CACHE = JSON.stringify({
+    agnes: { fp: 'x', at: 1, models: ['agnes-2.0-flash'] },
+    'opencode-go': { fp: 'y', at: 2, models: ['minimax-m3', 'kimi-k3', 'deepseek-v4-flash'] },
+  });
+
+  it('enumerates the ACTIVE provider models + current default from hermes config', () => {
+    const result = probeConfigModels({
+      configModels: 'hermes',
+      env: { HOME: '/fake-home' },
+      readFileSync: (p: string) => {
+        if (p === '/fake-home/.hermes/config.yaml') return HERMES_YAML;
+        if (p === '/fake-home/.hermes/provider_models_cache.json') return HERMES_CACHE;
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    expect(result.current).toBe('deepseek-v4-flash');
+    // 只取当前 provider（opencode-go）的清单——那是 CLI 实际会用的模型集。
+    expect(result.models.map((m) => m.id)).toEqual(['minimax-m3', 'kimi-k3', 'deepseek-v4-flash']);
+  });
+
+  it('enumerates provider models with metadata + the default primary from openclaw config', () => {
+    const OPENCLAW_JSON = JSON.stringify({
+      models: { mode: 'merge', providers: {
+        minimax: { baseUrl: 'x', api: 'anthropic-messages', models: [
+          { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', reasoning: true, contextWindow: 204800 },
+        ] },
+        agnes: { api: 'openai-completions', models: [{ id: 'agnes-2.5-flash' }] },
+      } },
+      agents: { defaults: { model: { primary: 'agnes/agnes-2.5-flash' } }, list: [] },
+    });
+    const result = probeConfigModels({
+      configModels: 'openclaw',
+      env: { HOME: '/fake-home' },
+      readFileSync: (p: string) => {
+        if (p === '/fake-home/.openclaw/openclaw.json') return OPENCLAW_JSON;
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string; label: string; contextWindow?: number }> };
+    expect(result.status).toBe('ready');
+    expect(result.models).toEqual([
+      { id: 'MiniMax-M2.7', label: 'MiniMax M2.7', contextWindow: 204800 },
+      { id: 'agnes-2.5-flash', label: 'agnes-2.5-flash' },
+    ]);
+    // primary 的 provider/ 前缀剥掉，与清单 id 同口径（isCurrent 命中）。
+    expect(result.current).toBe('agnes-2.5-flash');
+  });
+
+  it('degrades honestly when config files are missing or carry no models', () => {
+    const missing = probeConfigModels({
+      configModels: 'hermes', env: { HOME: '/fake-home' },
+      readFileSync: () => { throw new Error('ENOENT'); },
+    }) as { status: string; reason: string };
+    expect(missing.status).toBe('unavailable');
+    expect(missing.reason).toBe('config_read_failed');
+
+    const empty = probeConfigModels({
+      configModels: 'openclaw', env: { HOME: '/fake-home' },
+      readFileSync: () => JSON.stringify({ models: { providers: {} }, agents: {} }),
+    }) as { status: string; reason: string };
+    expect(empty.status).toBe('unavailable');
+    expect(empty.reason).toBe('config_no_models');
+
+    const unknown = probeConfigModels({ configModels: 'nope', env: {}, readFileSync: () => '' }) as { status: string; reason: string };
+    expect(unknown.status).toBe('unavailable');
+    expect(unknown.reason).toBe('no_config_probe');
   });
 });

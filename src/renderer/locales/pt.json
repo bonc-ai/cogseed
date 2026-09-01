@@ -4881,7 +4881,7 @@
   "exec_config.no_model": "Nenhum modelo configurado",
   "exec_config.cli_default_model": "Padrão da CLI",
   "exec_config.cli_badge": "CLI",
-  "exec_config.effort_cli_note": "Tanto o modelo quanto o esforço de raciocínio são definidos pela configuração da própria CLI externa; o CogSeed não os substitui aqui.",
+  "exec_config.effort_cli_note": "O esforço de raciocínio é definido pela configuração da própria CLI externa; o CogSeed não o substitui aqui (o modelo pode ser ajustado acima).",
   "exec_config.no_reasoning_note": "Sem suporte a esforço de raciocínio",
   "settings.thinking.title": "Esforço de raciocínio padrão",
   "settings.thinking.sub": "A intensidade de pensamento padrão das execuções de chat (padrão global). Dentro de uma conversa você pode ajustá-la temporariamente pelo chip de configuração de execução ao lado da caixa de entrada — afeta apenas a tarefa atual.",

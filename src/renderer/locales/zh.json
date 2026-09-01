@@ -6460,7 +6460,7 @@
   "exec_config.no_model": "未配置模型",
   "exec_config.cli_default_model": "CLI 默认",
   "exec_config.cli_badge": "CLI",
-  "exec_config.effort_cli_note": "模型与推理强度均由该外部 CLI 自身的配置决定，CogSeed 不在此覆盖。",
+  "exec_config.effort_cli_note": "推理强度由该外部 CLI 自身的配置决定，CogSeed 不在此覆盖（模型可在上方调整）。",
   "exec_config.no_reasoning_note": "不支持推理强度配置",
   "settings.thinking.title": "默认推理强度",
   "settings.thinking.sub": "对话执行的默认思考强度（全局默认）。会话内可通过输入框右侧的执行配置临时调整，仅影响当前任务。",
