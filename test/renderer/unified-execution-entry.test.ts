@@ -72,7 +72,10 @@ describe('unified execution entry — picker scope', () => {
     expect(chip).toContain("t('exec_config.cli_models_scanning')");
     // 切到外接智能体时 chip 直接亮出 CLI 当前实际模型（扫描披露的
     // current），不是笼统的「CLI 默认」占位；recipient 变化触发后台扫描。
-    expect(chip).toContain('scanCurrent');
+    // CodexHost 显示规则：chip 永远显示具体模型名（current > default 条目 >
+    // 清单第一项），扫描在途显示加载文案——不显示「默认」占位。
+    expect(chip).toContain('effectiveModelLabel');
+    expect(chip).toContain("t('exec_config.cli_models_loading')");
     expect(chip).toContain('modelIsCliCurrent');
     expect(chip).toContain('_scanCliCurrentForChips');
     expect(chip).toContain("t('exec_config.cli_current_model_title'");

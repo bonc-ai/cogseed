@@ -132,6 +132,11 @@ function cachedCliModels(cli) {
   return _scanCache.get(String(cli || '').trim()) || null;
 }
 
+/** 扫描是否在途（chip 的 loading 态：显示「正在加载」而非占位符）。 */
+function scanInFlight(cli) {
+  return _scanInFlight.has(String(cli || '').trim());
+}
+
 // ── 手输记忆：清单外的自定义模型 id（per-cli，localStorage） ─────────────
 const _CUSTOM_KEY = 'cli-custom-models';
 function customModelsFor(cli) {
@@ -163,16 +168,30 @@ function rememberCustomModel(cli, modelId) {
 function mergedCliModels(cli, scanEntry) {
   const seen = new Set();
   const out = [];
-  const push = (id, label, source, contextWindow) => {
+  const push = (id, label, source, contextWindow, isDefault) => {
     const key = String(id || '').trim();
     if (!key || seen.has(key)) return;
     seen.add(key);
-    out.push({ id: key, label: (label || key), source, ...(typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {}) });
+    out.push({ id: key, label: (label || key), source, isDefault: !!isDefault, ...(typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {}) });
   };
-  for (const m of (scanEntry && scanEntry.models) || []) push(m.id, m.label, 'scan');
-  for (const m of (scanEntry && scanEntry.staticModels) || []) push(m.id, m.label, 'static', m.contextWindow);
+  for (const m of (scanEntry && scanEntry.staticModels) || []) push(m.id, m.label, 'static', m.contextWindow, m.default);
+  for (const m of (scanEntry && scanEntry.models) || []) push(m.id, m.label, 'scan', undefined, m.id === 'default' || m.id === 'auto');
   for (const id of customModelsFor(cli)) push(id, id, 'custom');
+  // CodexHost 对标排序：default 条目永远第一（claude 的 'default'、
+  // workbuddy 的 'auto'），其余保持原序——chip 的默认显示取清单头。
+  out.sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0));
   return out;
+}
+
+/** 无任务级覆盖时 chip 显示的模型（CodexHost 显示规则：永远显示具体模型
+ *  名，不显示「默认」占位）。优先级：扫描 current（CLI 自报当前）> 清单
+ *  default 条目 > 清单第一项 > null（完全无数据才允许占位）。 */
+function effectiveModelLabel(cli, scanEntry) {
+  const entry = scanEntry || cachedCliModels(cli);
+  if (entry && entry.current) return { label: entry.current, source: 'current' };
+  const merged = mergedCliModels(cli, entry);
+  const hit = merged.find((m) => m.isDefault) || merged[0] || null;
+  return hit ? { label: hit.label, source: hit.isDefault ? 'default' : 'first' } : null;
 }
 
 if (typeof window !== 'undefined') {
@@ -182,6 +201,8 @@ if (typeof window !== 'undefined') {
     contextWindowForCliModel,
     loadCliModels,
     cachedCliModels,
+    scanInFlight,
+    effectiveModelLabel,
     customModelsFor,
     rememberCustomModel,
     mergedCliModels,
@@ -196,6 +217,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     modelControllableFor,
     contextWindowForCliModel,
     mergedCliModels,
+    effectiveModelLabel,
     customModelsFor,
     rememberCustomModel,
   };

@@ -4910,6 +4910,9 @@
   "exec_config.cli_model_custom_add": "Usar",
   "exec_config.cli_models_rescan": "Analisar novamente",
   "exec_config.cli_current_model_title": "\"{model}\" é o modelo atual do próprio CLI (trocável no menu)",
+  "exec_config.cli_models_loading": "Carregando modelos…",
+  "exec_config.cli_models_search_ph": "Pesquisar modelos…",
+  "exec_config.cli_models_no_match": "Nenhum modelo correspondente",
   "chat.stats.costReportedTitle": "{c} (custo reportado pelo CLI, não estimado)",
   "settings.custom_providers.cap_reasoning": "raciocínio",
   "settings.custom_providers.cap_vision": "visão"

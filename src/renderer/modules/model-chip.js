@@ -116,10 +116,11 @@ function _effectiveExecConfig(target) {
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
-  // CLI-backed local agent：模型可控性由网关运行时协商（modelControllable，
-  // 任意声明了参数模板的外接智能体都可控——含自定义 P3394_AGENT_MODEL_ARGS）。
-  // 显示「任务级覆盖 > agent 默认 runtime.model > 扫描到的 CLI 当前模型 >
-  // 『CLI 默认』占位」。effort 仍按兜底能力表（各家强度语义差异大）。
+  // CLI-backed local agent（CodexHost 显示规则照抄）：chip 永远显示具体模型名，
+  // 不显示「默认」占位——优先级：任务级覆盖 > agent 默认 runtime.model > 扫描
+  // current（CLI 自报当前）> 清单 default 条目（claude 'default'/workbuddy
+  // 'auto'）> 清单第一项；扫描在途显示「正在加载」；仅完全无数据才占位。
+  // 模型可控性由网关运行时协商（modelControllable）。effort 按兜底能力表。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
@@ -129,20 +130,23 @@ function _effectiveExecConfig(target) {
     const modelSupported = ctl ? ctl.modelControllableFor(cliType) : true;
     const effortSupported = ctl ? ctl.execControlFor(cliType).effort : false;
     const runtimeModel = (agent.runtime && agent.runtime.model) || '';
-    const scanCurrent = (ctl && ctl.cachedCliModels(cliType) && ctl.cachedCliModels(cliType).current) || '';
+    const scanEntry = ctl ? ctl.cachedCliModels(cliType) : null;
+    const effective = ctl ? ctl.effectiveModelLabel(cliType, scanEntry) : null;
     const modelChoice = (modelSupported && override.model) ? String(override.model)
       : (modelSupported && runtimeModel) ? String(runtimeModel)
       : '';
-    // 无覆盖/无默认时，chip 直接亮出 CLI 当前实际模型（扫描披露，如
-    // "Sonnet 5"）——切换外接智能体即见其真实模型，不再显示笼统的占位。
-    const currentLabel = modelChoice || scanCurrent || t('exec_config.cli_default_model');
+    const scanning = ctl && ctl.scanInFlight(cliType) && !scanEntry;
+    const modelLabel = modelChoice
+      || (scanEntry && scanEntry.current)
+      || (effective ? effective.label : '')
+      || (scanning ? t('exec_config.cli_models_loading') : t('exec_config.cli_default_model'));
     return {
       mode: 'cli',
       cliType,
       modelSupported,
       model: modelChoice,
-      modelLabel: currentLabel,
-      modelIsCliCurrent: !modelChoice && !!scanCurrent,
+      modelLabel,
+      modelIsCliCurrent: !modelChoice && !!(scanEntry && scanEntry.current),
       provider: '',
       providerLabel: cliType,
       effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
@@ -694,6 +698,35 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   loading.remove();
 
   const merged = ctl.mergedCliModels(cliType, scan);
+
+  // 搜索框（CodexHost 对标：长清单客户端过滤；输入事件 stopPropagation
+  // 防冒泡到宿主键盘处理，搜索框永不 disabled——禁用聚焦元素会丢焦点）。
+  let visibleMerged = merged;
+  const needsSearch = merged.length > 8;
+  if (needsSearch) {
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'model-chip-menu-search';
+    const search = document.createElement('input');
+    search.type = 'text';
+    search.className = 'model-chip-menu-input';
+    search.placeholder = t('exec_config.cli_models_search_ph');
+    search.maxLength = 100;
+    search.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const q = String(search.value || '').trim().toLowerCase();
+      visibleMerged = !q
+        ? merged
+        : merged.filter((m) => m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+      renderModelRows();
+    });
+    for (const type of ['keydown', 'keyup', 'keypress']) {
+      search.addEventListener(type, (e) => e.stopPropagation());
+    }
+    searchWrap.appendChild(search);
+    menu.appendChild(searchWrap);
+    setTimeout(() => { try { search.focus(); } catch (_) { /* menu closed */ } }, 0);
+  }
+
   const applyPick = (modelId, isCustom) => {
     try {
       if (typeof setExecOverride !== 'function') return;
@@ -739,7 +772,19 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   followRow.addEventListener('click', () => applyPick(''));
   menu.appendChild(followRow);
 
-  merged.forEach((m) => {
+  // 模型行渲染（搜索过滤后增量重画；无匹配显示提示行）。
+  const rowsHost = document.createElement('div');
+  menu.appendChild(rowsHost);
+  const renderModelRows = () => {
+    rowsHost.textContent = '';
+    if (!visibleMerged.length) {
+      const none = document.createElement('div');
+      none.className = 'model-chip-menu-loading';
+      none.textContent = t('exec_config.cli_models_no_match');
+      rowsHost.appendChild(none);
+      return;
+    }
+    visibleMerged.forEach((m) => {
     const isCurrent = cfg.model === m.id;
     const item = document.createElement('div');
     item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
@@ -752,8 +797,10 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
       '</span>' +
       `<span class="model-chip-menu-sub">${escapeHtml(m.id)}</span>`;
     item.addEventListener('click', () => applyPick(m.id, m.source === 'custom'));
-    menu.appendChild(item);
-  });
+    rowsHost.appendChild(item);
+    });
+  };
+  renderModelRows();
 
   // 手输行：任意模型 id（claude 明确接受 "a full model ID"；codex 同理）。
   const customRow = document.createElement('div');

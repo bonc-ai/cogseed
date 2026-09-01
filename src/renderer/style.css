@@ -11580,6 +11580,54 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--muted);
   padding: 4px 8px 6px;
 }
+/* 外接智能体模型菜单：搜索框（长清单客户端过滤，CodexHost 对标）。 */
+.model-chip-menu-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding: 2px 4px 6px;
+}
+.model-chip-menu-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  outline: none;
+}
+.model-chip-menu-input:focus { border-color: var(--primary, var(--border)); }
+/* 手输自定义模型 id 行 + 重扫按钮。 */
+.model-chip-menu-custom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 4px 2px;
+}
+.model-chip-menu-custom .model-chip-menu-input { flex: 1; }
+.model-chip-menu-custom-btn,
+.model-chip-menu-rescan {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  cursor: pointer;
+}
+.model-chip-menu-custom-btn:hover,
+.model-chip-menu-rescan:hover { background: var(--surface-3, var(--surface-2, var(--surface))); }
+.model-chip-menu-rescan {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  text-align: center;
+  color: var(--muted);
+}
 .model-chip-menu-item {
   display: flex;
   flex-direction: column;
