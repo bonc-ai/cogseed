@@ -5177,6 +5177,21 @@ async function runActorTurnBody(
       // P3394 gateway turns currently report no metrics (no runner.ts done
       // event on that path) — the read degrades to undefined there.
       cliTurnMetrics = (cliOut as { metrics?: GroupMessageMetrics }).metrics;
+      // 回读确认（CodexHost 对标的 CogSeed 适配）：CLI 自报的实际模型
+      // （usage.model）与下发值不一致时以实际值落 exec_meta——杜绝
+      // "展示 ≠ 实际"的假成功，并在日志留痕（CLI 静默换模型可观测）。
+      if (
+        cliTurnMetrics?.model && turnExecMeta?.model &&
+        cliTurnMetrics.model !== turnExecMeta.model
+      ) {
+        log.warn("external agent model mismatch: CLI used a different model than requested", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          requested: turnExecMeta.model,
+          actual: cliTurnMetrics.model,
+        });
+        turnExecMeta = { ...turnExecMeta, model: cliTurnMetrics.model };
+      }
       if (cliOut.error) {
         // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
         // 原始后端错误只进日志，不透给渲染层。

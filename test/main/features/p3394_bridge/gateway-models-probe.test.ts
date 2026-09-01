@@ -154,6 +154,8 @@ describe('gateway probeClaudeModels — /model local-command probe (injected spa
       'sonnet[1m]', 'opus[1m]', 'fable[1m]', 'opusplan', 'default',
     ]);
     expect(result.current).toBe('Sonnet 5');
+    // /model 输出的 effort 副信息一并解析（菜单显示「CLI 当前强度」）。
+    expect((result as { current_effort?: string }).current_effort).toBe('xhigh');
     // 成功探测会填充 init 缓存（current 用 full id 补全的源头）。
     expect(claudeModelsCache.get()?.models.length).toBe(10);
   });

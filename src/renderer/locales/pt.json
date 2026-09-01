@@ -4913,6 +4913,7 @@
   "exec_config.cli_models_loading": "Carregando modelos…",
   "exec_config.cli_models_search_ph": "Pesquisar modelos…",
   "exec_config.cli_models_no_match": "Nenhum modelo correspondente",
+  "exec_config.cli_models_current_with_effort": "Atual do CLI: {model} · esforço {effort}",
   "chat.stats.costReportedTitle": "{c} (custo reportado pelo CLI, não estimado)",
   "settings.custom_providers.cap_reasoning": "raciocínio",
   "settings.custom_providers.cap_vision": "visão"

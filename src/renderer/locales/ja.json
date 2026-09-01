@@ -4913,6 +4913,7 @@
   "exec_config.cli_models_loading": "モデルを読み込み中…",
   "exec_config.cli_models_search_ph": "モデルを検索…",
   "exec_config.cli_models_no_match": "一致するモデルがありません",
+  "exec_config.cli_models_current_with_effort": "CLI 現在のモデル：{model} · 強度 {effort}",
   "chat.stats.costReportedTitle": "{c}（CLI 自己申告のコスト、推定ではありません）",
   "settings.custom_providers.cap_reasoning": "推論",
   "settings.custom_providers.cap_vision": "ビジョン"

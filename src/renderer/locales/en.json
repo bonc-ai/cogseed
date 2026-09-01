@@ -6492,6 +6492,7 @@
   "exec_config.cli_models_loading": "Loading models…",
   "exec_config.cli_models_search_ph": "Search models…",
   "exec_config.cli_models_no_match": "No matching models",
+  "exec_config.cli_models_current_with_effort": "CLI current: {model} · effort {effort}",
   "chat.stats.costReportedTitle": "{c} (CLI-reported cost, not an estimate)",
   "settings.custom_providers.cap_reasoning": "reasoning",
   "settings.custom_providers.cap_vision": "vision",

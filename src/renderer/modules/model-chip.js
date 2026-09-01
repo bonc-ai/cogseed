@@ -746,7 +746,9 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
     _closeModelMenu();
   };
 
-  // 扫描状态说明：失败时一行短注（静态/手输仍可用），不阻塞选择。
+  // 扫描状态说明：失败时一行短注（静态/手输仍可用），不阻塞选择。ready 时
+  // 显示 CLI 自报的当前模型（含思考强度副信息，CodexHost resolvedModelLabel
+  // 式的"CLI 现在真实状态"展示）。
   if (scan.state !== 'ready') {
     const note = document.createElement('div');
     note.className = 'model-chip-menu-note';
@@ -755,7 +757,9 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   } else if (scan.current) {
     const cur = document.createElement('div');
     cur.className = 'model-chip-menu-note';
-    cur.textContent = t('exec_config.cli_models_current', { model: scan.current });
+    cur.textContent = scan.currentEffort
+      ? t('exec_config.cli_models_current_with_effort', { model: scan.current, effort: scan.currentEffort })
+      : t('exec_config.cli_models_current', { model: scan.current });
     menu.appendChild(cur);
   }
 
