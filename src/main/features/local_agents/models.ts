@@ -167,10 +167,12 @@ const CLI_EXEC_CONTROL: Record<string, CliExecControl> = {
   codex: { model: true, effort: true, effortOff: false },
   hermes: { model: true, effort: true, effortOff: true },
   openclaw: { model: true, effort: true, effortOff: true },
-  opencode: { model: true, effort: false, effortOff: false },
+  // opencode --variant / workbuddy --effort（均 --help 实测）：low/high 恒等、
+  // off 映射 minimal（最低档，非真关闭）→ effortOff=false 置灰 off。
+  opencode: { model: true, effort: true, effortOff: false },
   gemini: { model: true, effort: false, effortOff: false },
   aider: { model: true, effort: false, effortOff: false },
-  workbuddy: { model: true, effort: false, effortOff: false },
+  workbuddy: { model: true, effort: true, effortOff: false },
 };
 export function execControlFor(cli: string): CliExecControl {
   // model 兜底全开（任意外接智能体都可尝试控制，网关无通道即安全忽略）；

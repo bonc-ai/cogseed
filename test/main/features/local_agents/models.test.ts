@@ -101,8 +101,12 @@ describe('local_agents/models', () => {
     it('keeps model control open for every CLI (runtime negotiation decides), effort stays gated', () => {
       // 新语义：模型控制权威在网关运行时协商（/p3394/models 的
       // model_controllable），本表只是冷启动兜底——model 对未知 CLI 也放开
-      // （无参数通道的网关会安全忽略信封里的 model）；effort 仅表内 CLI。
-      for (const cli of ['opencode', 'gemini', 'aider', 'workbuddy', '', 'unknown-cli']) {
+      // （无参数通道的网关会安全忽略信封里的 model）；effort 仅表内 CLI
+      // （opencode --variant / workbuddy --effort 已实测加入；gemini 无
+      // 强度 flag、aider 未安装无通道，保持关闭）。
+      expect(execControlFor('opencode')).toEqual({ model: true, effort: true, effortOff: false });
+      expect(execControlFor('workbuddy')).toEqual({ model: true, effort: true, effortOff: false });
+      for (const cli of ['gemini', 'aider', '', 'unknown-cli']) {
         expect(execControlFor(cli), `effort capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: false, effortOff: false });
       }
     });
