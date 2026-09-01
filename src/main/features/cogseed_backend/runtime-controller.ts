@@ -935,6 +935,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       capabilities,
     };
     const conversationId = await resolveConversationIdForTask(userId, created.task, input);
+    await linkKstarTask(userId, conversationId, created.task.taskId);
     launchInput.context = await buildTaskExecutionContext(userId, created.task, launchInput, conversationId);
     return launchTask(userId, created.task, launchInput);
   }
