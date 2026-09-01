@@ -20,12 +20,14 @@ describe('cli-exec-control capability table parity (renderer vs main)', () => {
     }
   });
 
-  it('unknown CLIs keep model control open (runtime negotiation decides), effort stays gated', () => {
-    // 新语义：模型控制的权威是网关运行时协商（modelControllable），兜底表
-    // 对未知 CLI 也放开 model（信封下发无通道即被网关安全忽略）；effort
-    // 仍只对有真实链路的 CLI 开放。
-    expect(cliExecControl.execControlFor('')).toEqual({ model: true, effort: false, effortOff: false });
-    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: true, effort: false, effortOff: false });
+  it('unknown CLIs keep model AND effort control open (runtime negotiation decides)', () => {
+    // 新语义：模型与强度控制的权威都是网关运行时协商（modelControllable /
+    // effortControllable），兜底表对未知 CLI 也放开（信封下发无模板即被
+    // 网关安全忽略——自定义智能体经 P3394_AGENT_MODEL_ARGS /
+    // P3394_AGENT_EFFORT_ARGS 声明即生效）。已知无通道的（gemini/aider）
+    // 表内显式 false，运行时协商同样返回 false。
+    expect(cliExecControl.execControlFor('')).toEqual({ model: true, effort: true, effortOff: false });
+    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: true, effort: true, effortOff: false });
   });
 
   it('hermes/openclaw expose real effort channels incl. an explicit off level', () => {

@@ -99,15 +99,18 @@ describe('local_agents/models', () => {
     });
 
     it('keeps model control open for every CLI (runtime negotiation decides), effort stays gated', () => {
-      // 新语义：模型控制权威在网关运行时协商（/p3394/models 的
-      // model_controllable），本表只是冷启动兜底——model 对未知 CLI 也放开
-      // （无参数通道的网关会安全忽略信封里的 model）；effort 仅表内 CLI
-      // （opencode --variant / workbuddy --effort 已实测加入；gemini 无
-      // 强度 flag、aider 未安装无通道，保持关闭）。
+      // 新语义：模型与强度控制权威都在网关运行时协商（/p3394/models 的
+      // model_controllable / effort_controllable），本表只是冷启动兜底——
+      // 未知 CLI 的 model/effort 兜底全开（自定义智能体经
+      // P3394_AGENT_MODEL_ARGS / P3394_AGENT_EFFORT_ARGS 声明即生效，网关
+      // 无模板时信封字段安全忽略）。已知无通道的（gemini/aider）显式 false。
       expect(execControlFor('opencode')).toEqual({ model: true, effort: true, effortOff: false });
       expect(execControlFor('workbuddy')).toEqual({ model: true, effort: true, effortOff: false });
-      for (const cli of ['gemini', 'aider', '', 'unknown-cli']) {
-        expect(execControlFor(cli), `effort capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: false, effortOff: false });
+      for (const cli of ['gemini', 'aider']) {
+        expect(execControlFor(cli), `known-no-channel capability for ${cli}`).toEqual({ model: true, effort: false, effortOff: false });
+      }
+      for (const cli of ['', 'unknown-cli', 'my-custom-agent']) {
+        expect(execControlFor(cli), `fallback capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: true, effortOff: false });
       }
     });
   });

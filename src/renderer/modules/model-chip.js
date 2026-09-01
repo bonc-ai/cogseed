@@ -160,7 +160,9 @@ function _effectiveExecConfig(target) {
       ? window.cliExecControl
       : null;
     const modelSupported = ctl ? ctl.modelControllableFor(cliType) : true;
-    const effortSupported = ctl ? ctl.execControlFor(cliType).effort : false;
+    // 强度可控性同模型：网关协商（effort_controllable，自建智能体经
+    // P3394_AGENT_EFFORT_ARGS 声明也协商为 true）优先，未协商走兜底表。
+    const effortSupported = ctl ? ctl.effortControllableFor(cliType) : false;
     const runtimeModel = (agent.runtime && agent.runtime.model) || '';
     const scanEntry = ctl ? ctl.cachedCliModels(cliType) : null;
     const effective = ctl ? ctl.effectiveModelLabel(cliType, scanEntry) : null;

@@ -30,7 +30,21 @@ const CLI_EXEC_CONTROL = {
 };
 
 function execControlFor(cli) {
-  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: true, effort: false, effortOff: false };
+  // 未知 CLI 的 effort 兜底放开（true）：自定义智能体可用
+  // P3394_AGENT_EFFORT_ARGS 声明通道，网关无模板时信封字段安全忽略——
+  // 与 model 同一「声明即生效」模式。已知无通道的（gemini/aider）表内
+  // 显式 false，且运行时协商（effortControllableFor）会覆盖兜底。
+  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: true, effort: true, effortOff: false };
+}
+
+/** 强度是否可控：网关运行时协商（/p3394/models 的 effort_controllable，
+ *  由 effortArgs 预设或 P3394_AGENT_EFFORT_ARGS 声明决定）优先；未协商
+ *  时兜底表。网关无模板=协商 false（诚实置灰），未扫描=表兜底（乐观，
+ *  自建智能体可能配了 env 声明）。 */
+function effortControllableFor(cli) {
+  const entry = cachedCliModels(cli);
+  if (entry && typeof entry.effortControllable === 'boolean') return entry.effortControllable;
+  return execControlFor(cli).effort;
 }
 
 /** 模型是否可控：网关运行时协商（扫描响应的 modelControllable）优先，
@@ -113,6 +127,7 @@ async function loadCliModels(agentId, cli, opts) {
         currentEffort: (res.scanned && typeof res.scanned.currentEffort === 'string' && res.scanned.currentEffort) || null,
         // 能力协商独立于清单：unavailable 也可能可控（无枚举接口但有参数通道）。
         modelControllable: !!(res.scanned && res.scanned.modelControllable),
+        effortControllable: !!(res.scanned && res.scanned.effortControllable),
         staticModels: Array.isArray(res.staticModels) ? res.staticModels : [],
         reason: models.length ? null : ((res.scanned && res.scanned.reason) || 'empty_scan'),
         at: Date.now(),
@@ -213,6 +228,7 @@ if (typeof window !== 'undefined') {
   window.cliExecControl = {
     execControlFor,
     modelControllableFor,
+    effortControllableFor,
     contextWindowForCliModel,
     loadCliModels,
     cachedCliModels,
@@ -230,6 +246,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     CLI_EXEC_CONTROL,
     execControlFor,
     modelControllableFor,
+    effortControllableFor,
     contextWindowForCliModel,
     mergedCliModels,
     effectiveModelLabel,

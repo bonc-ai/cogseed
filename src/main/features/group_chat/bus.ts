@@ -68,7 +68,6 @@ import type {
   StateFile,
 } from "./state";
 import { maxToolLoopsForActorKind } from "./actor-budgets";
-import { execControlFor } from "../local_agents/models";
 import {
   GroupMessage,
   appendVisible,
@@ -5105,16 +5104,15 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
-            // Unified execution entry · 外接智能体执行控制：单轮模型随信封
-            // execution_prefs.model 下发——**不设硬编码白名单**：网关按
-            // 「模型参数模板」（预设声明或 P3394_AGENT_MODEL_ARGS 自定义声明）
-            // 决定消费与否，无通道的 CLI 安全忽略（跟随自身默认）。能力
-            // 协商（model_controllable）由 /p3394/models 披露、渲染层消费。
-            // effort 按能力表把关（各家强度语义差异大，乱发参数有风险）；
-            // off 仅参数模板通道可表达（hermes --reasoning none / openclaw
-            // --thinking off），claude/codex 的 UI 已置灰不会出现。
-            ...(execControlFor(String(cliRuntime ?? "")).effort
-              && (item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
+            // Unified execution entry · 外接智能体执行控制：单轮模型与强度都随
+            // 信封 execution_prefs 下发——**不设静态白名单**：网关按「参数模板」
+            // 决定消费与否（模型：预设声明或 P3394_AGENT_MODEL_ARGS；强度：预设
+            // effortArgs 或 P3394_AGENT_EFFORT_ARGS），无模板的 CLI 安全忽略信封
+            // 字段（跟随自身默认），永远不会拼出它不认识的参数。能力协商
+            // （model_controllable / effort_controllable）由 /p3394/models 披露、
+            // 渲染层消费决定 UI 显隐。off 仅参数模板通道可表达（映射声明见
+            // PRESETS.effortLevels），claude/codex 的 UI 已置灰不会出现。
+            ...((item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
@@ -5169,11 +5167,12 @@ async function runActorTurnBody(
           ? cliAgent.runtime.model
           : undefined;
       const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
-      // effort 只在真实下发的场景写 meta（能力表内的 CLI 且 off/low/high——
-      // 网关与本地直连都消费；off 仅参数模板通道可表达，claude/codex 的 UI
-      // 已置灰不会出现）；其他 CLI 不标注，避免展示一个没生效的配置。
-      const cliEffortForwarded = execControlFor(String(cliRuntime ?? "")).effort
-        && (item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
+      // effort 只在真实下发的场景写 meta（off/low/high——网关与本地直连
+      // 都按模板消费，无模板安全忽略；off 仅参数模板通道可表达，
+      // claude/codex 的 UI 已置灰不会出现）；其他场景不标注，避免展示一个
+      // 没生效的配置。
+      const cliEffortForwarded
+        = item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high";
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),
@@ -11632,13 +11631,11 @@ async function _runCliAgentTurn(opts: {
     // Unified execution entry: per-task override wins over the agent's
     // saved runtime.model for THIS turn only.
     model: cliModelForTurn,
-    // Per-task reasoning effort — forwarded ONLY for CLIs with a real switch
-    // (execControlFor). claude consumes MAX_THINKING_TOKENS on both execution
-    // paths (gateway envelope + this direct one); codex maps low/high to its
-    // model_reasoning_effort on both paths too. Other CLIs keep their own
-    // reasoning configuration.
-    ...(execControlFor(String(runtime.cli)).effort
-      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high")
+    // Per-task reasoning effort — backends consume the field only when they
+    // have a real channel (claude: MAX_THINKING_TOKENS; codex: maps low/high
+    // to model_reasoning_effort) and safely ignore it otherwise, so no static
+    // gate is needed here. Other CLIs keep their own reasoning configuration.
+    ...((opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high")
       ? { thinkingLevel: opts.item.execConfig.effort }
       : {}),
     customArgs: runtime.custom_args,

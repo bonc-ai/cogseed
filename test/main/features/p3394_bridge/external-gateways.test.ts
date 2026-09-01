@@ -1,12 +1,21 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/registry';
 import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import * as fs from 'node:fs';
+
+// 「声明即生效」端到端（见文末用例）：mock agents 模块让 listAgents 返回
+// 带参数模板声明的 agent。aider 预设有 modelArgs 无 effortArgs——声明的
+// effort_args 注入后 /models 应披露 effort_controllable: true（三跳全证：
+// agent 声明 → spawn env → 网关协商披露）。
+const listAgentsMock = vi.fn(async () => [
+  { agent_id: 'decl-test', name: '声明通道测试', runtime: { kind: 'p3394-gateway', cli: 'aider', effort_args: '--thinking {effort}' } },
+]);
+vi.mock('../../../../src/main/features/agents', () => ({ listAgents: (...args: unknown[]) => listAgentsMock(...args) }));
 
 let previousVariant: string | undefined;
 let variantName: string;
@@ -350,6 +359,66 @@ describe('P3394 external-agent gateway host', () => {
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
       try { fs.rmSync(gatewayStateFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
+  it('injects per-agent template declarations into the gateway env (declare-then-controllable)', async () => {
+    // 三跳全证：agent 声明（listAgentsMock）→ spawn env（P3394_AGENT_EFFORT_ARGS）
+    // → 网关协商披露（/models effort_controllable）。aider 预设有 modelArgs、
+    // 无 effortArgs——无声明时 effort_controllable 应为 false，有声明为 true。
+    const token = 'decl-test-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('decl-test-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    // 与其他用例同构：收 hello → 写注册表（startExternalGateway 等 stateFile
+    // 出现该节点才算起动完成）。
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      // 每轮从磁盘重建：同 variant 内 bare→declared 重启会重置注册表文件，
+      // 内存实例的旧记录会挡住新 endpoint 的注册。
+      const diskRegistry = new P3394PeerRegistry({ filePath: registryFile });
+      if (diskRegistry.resolve(senderId).ok === false) {
+        diskRegistry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    const fetchModels = async (port2: number) => {
+      const res = await fetch(`http://127.0.0.1:${port2}/p3394/models`);
+      return res.json() as Promise<{ model_controllable?: boolean; effort_controllable?: boolean }>;
+    };
+    try {
+      // 对照组：无声明（mock 返回空）→ effort 不可控。
+      listAgentsMock.mockResolvedValueOnce([]);
+      const bare = await startExternalGateway({ cli: 'aider', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(bare.ok, 'bare start failed: ' + (bare.ok === false ? bare.error : '')).toBe(true);
+      if (!bare.ok) throw new Error(bare.error);
+      const bareCaps = await fetchModels(bare.value.port);
+      expect(bareCaps.model_controllable).toBe(true);   // aider 预设自带 --model
+      expect(bareCaps.effort_controllable).toBe(false); // 预设无 effort 通道
+      await stopExternalGateway('aider');
+      // 重置注册表：bare 组的旧 aider 记录（旧 endpoint）会让 subscribe
+      // 回调跳过新注册 → declared 的新 endpoint 永远等不到。同 variant
+      // 内重启必须先清（生产路径 stopExternalGateway 不动 peers 注册表）。
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+
+      // 实验组：带声明（文件顶部默认 mock）→ 强度可控。
+      const declared = await startExternalGateway({ cli: 'aider', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(declared.ok, 'declared start failed: ' + (declared.ok === false ? declared.error : '')).toBe(true);
+      if (!declared.ok) throw new Error(declared.error);
+      const declaredCaps = await fetchModels(declared.value.port);
+      expect(declaredCaps.effort_controllable).toBe(true);
+    } finally {
+      await stopExternalGateway('aider');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 });
