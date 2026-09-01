@@ -10452,7 +10452,9 @@ function _renderPersistedProcess(msgDiv, items, { expanded = false } = {}) {
       window.planRail.restorePlanEvent(itemEvent);
     }
     if (item && item.type === 'progress') {
-      const preferEventText = itemEvent && ['context', 'compaction', 'runtime'].includes(itemEvent.stream);
+      // 工具调用/思考等结构化事件优先走事件词表（带参数预览/时长/i18n），
+      // 网关的降级纯文本仅在无事件时兜底。
+      const preferEventText = itemEvent && ['context', 'compaction', 'runtime', 'tool', 'item'].includes(itemEvent.stream);
       text = (preferEventText ? _formatEventLine(itemEvent) : '')
         || item.text
         || (itemEvent ? _formatEventLine(itemEvent) : '')
@@ -15299,8 +15301,20 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   // 按 dataset.fromActor 判定占位归属。
   for (const [liveK, live] of Array.from(_groupPlaceholders.entries())) {
     if (!liveK.startsWith(`${cid}:`)) continue;
-    if (!live || !live.parentElement || live.dataset.finalized === '1') continue;
+    if (!live || live.dataset.finalized === '1') continue;
     if (live.dataset.fromActor !== actorId) continue;
+    if (!live.parentElement) {
+      // 视图切走时脱独的占位（map 里还在、DOM 里没了）：复活并挂回容器，
+      // 而不是跳过它去新建——sendStream/observer 的事件 closure 仍指向
+      // 该节点，复活它才能保住「一个 actor 一条气泡」。否则切回后
+      // runtime 恢复与历史加载赛跑：先到者新建第二条、后到者把旧节点
+      // 挂回来，同屏出现两条（旧的带过程信息、新的纯三点）。
+      const container = document.getElementById('chat-history');
+      if (!container) continue;
+      const emptyEl = container.querySelector('.empty');
+      if (emptyEl) emptyEl.remove();
+      _appendBeforeSpacer(container, live);
+    }
     _groupPlaceholders.delete(liveK);
     if (tid) live.dataset.turnId = tid;
     _stampPlaceholderTriggerMsg(live, sourceMsgId);
