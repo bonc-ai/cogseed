@@ -5101,18 +5101,17 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
-            // Unified execution entry · 外接智能体执行控制：按能力表
-            // （execControlFor）转发单轮模型与推理强度——claude/codex 网关
-            // runtime 均有真实消费链路（--model/MAX_THINKING_TOKENS 与
-            // thread/start model + config.model_reasoning_effort）。能力表外
-            // 的 CLI 不下发对应字段（不放假开关）。
+            // Unified execution entry · 外接智能体执行控制：单轮模型随信封
+            // execution_prefs.model 下发——**不设硬编码白名单**：网关按
+            // 「模型参数模板」（预设声明或 P3394_AGENT_MODEL_ARGS 自定义声明）
+            // 决定消费与否，无通道的 CLI 安全忽略（跟随自身默认）。能力
+            // 协商（model_controllable）由 /p3394/models 披露、渲染层消费。
+            // effort 仍按能力表把关（各家强度语义差异大，乱发参数有风险）。
             ...(execControlFor(String(cliRuntime ?? "")).effort
               && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
-            ...(execControlFor(String(cliRuntime ?? "")).model && item.execConfig?.model
-              ? { model: item.execConfig.model }
-              : {}),
+            ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
@@ -5156,20 +5155,14 @@ async function runActorTurnBody(
             onProcess: forwardProcess,
           });
       for (const p of cliOut.produced || []) await onFileWritten(p);
-      // 方案 B 解除（外接智能体执行控制）：能力表内的 CLI（claude/codex）模型
-      // 真实随信封下发，网关 turn 的 exec_meta 记录实际生效值（任务级覆盖 >
-      // agent 默认 runtime.model）。能力表外的 CLI 维持不写 model（CLI 自决，
-      // 写了就是"展示 ≠ 实际"）。
+      // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
+      // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认
+      // runtime.model）。
       const cliRuntimeModel =
         cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
           ? cliAgent.runtime.model
           : undefined;
-      const cliIsGateway = cliAgent.runtime?.kind === "p3394-gateway";
-      const cliTurnModel = cliIsGateway
-        ? (execControlFor(String(cliRuntime ?? "")).model
-          ? (item.execConfig?.model || cliRuntimeModel)
-          : undefined)
-        : (item.execConfig?.model || cliRuntimeModel);
+      const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
       // effort 只在真实下发的场景写 meta（能力表内的 CLI 且 low/high——网关
       // 与本地直连都消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
       const cliEffortForwarded = execControlFor(String(cliRuntime ?? "")).effort

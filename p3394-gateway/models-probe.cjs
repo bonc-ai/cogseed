@@ -90,74 +90,125 @@ function inspectTimeoutMs(env) {
  *  变化），比任何预置表都可信；完整模型 ID 也被接受（"or a full model
  *  ID"）——宿主侧手输兜底因此天然成立。
  *  deps: { cli, spawnFn, env }——spawnFn 注入以便测试 fake 子进程。 */
+/** claude 模型探测：走通用枚举探测（claude-model-list parser），结果写入
+ *  init 缓存；current 优先用缓存里的 full id（常驻会话 init 帧披露），
+ *  探测只得展示名。deps: { cli, spawnFn, env }。 */
 function probeClaudeModels(deps = {}) {
-  const cli = deps.cli || 'claude';
+  return probeInspectCommand({
+    cli: deps.cli || 'claude',
+    args: ['-p', '/model', '--output-format', 'json'],
+    parser: 'claude-model-list',
+    spawnFn: deps.spawnFn,
+    env: deps.env,
+  }).then((result) => {
+    if (result.status === 'ready') {
+      const cachedCurrent = (claudeModelsCache.get() || {}).current;
+      const current = cachedCurrent || result.current || null;
+      claudeModelsCache.set({ models: result.models, current });
+      return { ...result, current };
+    }
+    return result;
+  });
+}
+
+/** 子命令枚举表：新 CLI 在 gateway PRESETS 的 inspect 声明里登记，不再
+ *  维护独立映射（INSPECT_SUBCOMMANDS 保留兼容导出）。 */
+const INSPECT_SUBCOMMANDS = Object.freeze({ opencode: 'models' });
+
+// ── 模型参数通道（通用）：任意外接智能体的模型控制声明 ───────────────────
+// 模板形如 '--model {model}' / '-m {model}'；'{model}' 替换为所选模型 id。
+// 预设表（gateway PRESETS.modelArgs）之外，自定义智能体用
+// P3394_AGENT_MODEL_ARGS 声明同一模板即可接入模型控制——无需改代码。
+
+/** 生效的模型参数模板：env 覆盖（自定义声明）优先，其次预设声明。返回
+ *  null = 该 CLI 无模型参数通道（信封里的 model 会被网关安全忽略）。 */
+function modelArgsFor(preset, env = process.env) {
+  const fromEnv = String((env && env.P3394_AGENT_MODEL_ARGS) || '').trim();
+  if (fromEnv) return fromEnv;
+  const fromPreset = preset && typeof preset.modelArgs === 'string' ? preset.modelArgs.trim() : '';
+  return fromPreset || null;
+}
+
+/** 该 CLI 的模型是否可控：有参数模板，或走专有通道（codex 的
+ *  app-server thread 参数，预设里以 modelControllable 声明）。 */
+function modelControllableFor(preset, env = process.env) {
+  if (modelArgsFor(preset, env)) return true;
+  return !!(preset && preset.modelControllable);
+}
+
+/** 引号感知的 argv 切分（模板可含带空格的参数；{model} 先替换再切分，
+ *  模型 id 含空格时按引号包裹语义处理）。 */
+function splitModelArgs(template, modelId) {
+  const raw = String(template || '').replace(/\{model\}/g, String(modelId || ''));
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) out.push(m[1] !== undefined ? m[1] : (m[2] !== undefined ? m[2] : m[3]));
+  return out.filter((part) => part !== '');
+}
+
+// ── 枚举输出解析器（按 gateway PRESETS.inspect.parser 声明选用） ─────────
+const INSPECT_PARSERS = {
+  /** opencode models：每行一个 `provider/model` 或裸 id。 */
+  lines(out) {
+    const models = [];
+    const seen = new Set();
+    for (const line of String(out || '').split(/\r?\n/)) {
+      const id = line.trim();
+      if (!id || id.includes(' ')) continue; // 帮助文本/杂项行
+      if (!seen.has(id)) {
+        seen.add(id);
+        const slash = id.indexOf('/');
+        models.push({ id, label: slash > 0 ? id.slice(slash + 1) : id });
+      }
+    }
+    return models.length ? { models } : null;
+  },
+  /** claude `claude -p /model --output-format json`：Current model +
+   *  Available 别名清单（零模型调用的纯本地命令）。 */
+  'claude-model-list'(out) {
+    let parsed;
+    try { parsed = JSON.parse(String(out || '').trim()); } catch { return null; }
+    const resultText = typeof parsed.result === 'string' ? parsed.result : '';
+    const currentDisplay = /Current model:\s*(.+?)(?:\s*\(effort:[^)]*\))?\s*$/.exec(resultText.split('\n')[0] || '');
+    const avail = /Available:\s*([^.]+)/.exec(resultText);
+    const ids = (avail && avail[1] ? avail[1] : '')
+      .split(',')
+      .map((s) => s.trim())
+      // 别名不含空格；", or a full model ID" 尾注与杂项一并滤掉。
+      .filter((id) => id && !id.includes(' '));
+    if (!ids.length) return null;
+    return { models: ids.map((id) => ({ id, label: id })), currentDisplay: currentDisplay ? currentDisplay[1].trim() : null };
+  },
+  /** workbuddy `--help`：`--model <model>` 行内 "Currently supported:
+   *  (a, b, c)" 括号清单（CLI 自家披露的完整可选集）。 */
+  'help-model-list'(out) {
+    const text = String(out || '');
+    const line = text.split(/\r?\n/).find((l) => /--model/.test(l) && /currently supported/i.test(l));
+    if (!line) return null;
+    const paren = /\(([^()]*)\)\s*(?:$|\n)/.exec(line);
+    const ids = (paren && paren[1] ? paren[1] : '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((id) => id && !id.includes(' '));
+    if (!ids.length) return null;
+    return { models: ids.map((id) => ({ id, label: id })) };
+  },
+};
+
+/** 通用枚举探测：spawn cli + 声明的 args，按声明的 parser 解析 stdout。
+ *  deps: { cli, args, parser, spawnFn, env, keepCurrentFrom }。 */
+function probeInspectCommand(deps = {}) {
+  const cli = deps.cli || '';
+  const args = Array.isArray(deps.args) ? deps.args : [];
+  const parser = INSPECT_PARSERS[deps.parser];
   const spawnFn = deps.spawnFn || defaultSpawn;
+  if (!cli || !parser) return Promise.resolve({ status: 'unavailable', reason: 'no_inspect_declared' });
   return new Promise((resolve) => {
-    const args = ['-p', '/model', '--output-format', 'json'];
     let out = '';
     let stderrTail = '';
     let settled = false;
     const child = spawnFn(cli, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { child.kill('SIGTERM'); } catch { /* already gone */ }
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      finish({ status: 'unavailable', reason: 'timeout', stderrTail: stderrTail.slice(-300) });
-    }, inspectTimeoutMs(deps.env));
-    child.stdout.on('data', (chunk) => { if (out.length < 64 * 1024) out += chunk; });
-    child.stderr.on('data', (chunk) => { if (stderrTail.length < 2048) stderrTail += chunk; });
-    child.on('error', (error) => {
-      finish({ status: 'unavailable', reason: 'spawn_failed', error: error.message });
-    });
-    child.on('close', () => {
-      if (settled) return;
-      try {
-        const parsed = JSON.parse(out.trim());
-        const resultText = typeof parsed.result === 'string' ? parsed.result : '';
-        const currentDisplay = /Current model:\s*(.+?)(?:\s*\(effort:[^)]*\))?\s*$/.exec(resultText.split('\n')[0] || '');
-        const avail = /Available:\s*([^.]+)/.exec(resultText);
-        const ids = (avail && avail[1] ? avail[1] : '')
-          .split(',')
-          .map((s) => s.trim())
-          // 别名不含空格；", or a full model ID" 尾注与杂项一并滤掉。
-          .filter((id) => id && !id.includes(' '));
-        if (ids.length) {
-          const models = ids.map((id) => ({ id, label: id }));
-          const current = (claudeModelsCache.get() || {}).current
-            || (currentDisplay ? currentDisplay[1].trim() : null);
-          claudeModelsCache.set({ models, current });
-          finish({ status: 'ready', models, current });
-        } else {
-          finish({ status: 'unavailable', reason: 'no_model_list', stderrTail: stderrTail.slice(-300) || undefined });
-        }
-      } catch (error) {
-        finish({ status: 'unavailable', reason: 'parse_failed', error: error && error.message ? error.message : String(error), stderrTail: stderrTail.slice(-300) || undefined });
-      }
-    });
-  });
-}
-
-/** 子命令枚举表（opencode models 等）：新 CLI 在此登记一条即接入扫描。 */
-const INSPECT_SUBCOMMANDS = Object.freeze({ opencode: 'models' });
-
-/** 子命令枚举探测：每行一个模型 id（`provider/model` 或裸 id）。
- *  deps: { cli, presetName, subcommands, spawnFn, env }。 */
-function probeSubcommandModels(deps = {}) {
-  const cli = deps.cli || '';
-  const presetName = deps.presetName || '';
-  const spawnFn = deps.spawnFn || defaultSpawn;
-  const sub = (deps.subcommands || INSPECT_SUBCOMMANDS)[presetName];
-  if (!sub) return Promise.resolve({ status: 'unavailable', reason: 'no_inspect_command' });
-  return new Promise((resolve) => {
-    let out = '';
-    let stderrTail = '';
-    let settled = false;
-    const child = spawnFn(cli, [sub], { stdio: ['ignore', 'pipe', 'pipe'] });
     const finish = (value) => {
       if (settled) return;
       settled = true;
@@ -175,21 +226,26 @@ function probeSubcommandModels(deps = {}) {
     });
     child.on('close', (code) => {
       if (settled) return;
-      const models = [];
-      const seen = new Set();
-      for (const line of out.split(/\r?\n/)) {
-        const id = line.trim();
-        if (!id || id.includes(' ')) continue; // 帮助文本/杂项行
-        if (!seen.has(id)) {
-          seen.add(id);
-          const slash = id.indexOf('/');
-          models.push({ id, label: slash > 0 ? id.slice(slash + 1) : id });
-        }
+      let parsed = null;
+      try { parsed = parser(out); } catch { parsed = null; }
+      if (parsed && parsed.models && parsed.models.length) {
+        finish({ status: 'ready', models: parsed.models, ...(parsed.currentDisplay ? { current: parsed.currentDisplay } : {}) });
+      } else {
+        finish({ status: 'unavailable', reason: code === 0 ? 'no_model_list' : 'exit_' + code, stderrTail: stderrTail.slice(-300) || undefined });
       }
-      if (models.length) finish({ status: 'ready', models });
-      else finish({ status: 'unavailable', reason: code === 0 ? 'empty_output' : 'exit_' + code, stderrTail: stderrTail.slice(-300) || undefined });
     });
   });
+}
+
+/** 子命令枚举探测（兼容旧签名：cli/presetName/subcommands 注入）。
+ *  deps: { cli, presetName, subcommands, spawnFn, env }。 */
+function probeSubcommandModels(deps = {}) {
+  const cli = deps.cli || '';
+  const presetName = deps.presetName || '';
+  const spawnFn = deps.spawnFn || defaultSpawn;
+  const sub = (deps.subcommands || INSPECT_SUBCOMMANDS)[presetName];
+  if (!sub) return Promise.resolve({ status: 'unavailable', reason: 'no_inspect_command' });
+  return probeInspectCommand({ cli, args: [sub], parser: 'lines', spawnFn, env: deps.env });
 }
 
 module.exports = {
@@ -200,5 +256,10 @@ module.exports = {
   claudeModelsCache,
   probeClaudeModels,
   probeSubcommandModels,
+  probeInspectCommand,
   INSPECT_SUBCOMMANDS,
+  INSPECT_PARSERS,
+  modelArgsFor,
+  modelControllableFor,
+  splitModelArgs,
 };

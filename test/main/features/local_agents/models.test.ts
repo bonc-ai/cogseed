@@ -42,9 +42,12 @@ describe('local_agents/models', () => {
       expect(execControlFor('codex')).toEqual({ model: true, effort: true });
     });
 
-    it('degrades every other CLI to read-only (no fake switches)', () => {
+    it('keeps model control open for every CLI (runtime negotiation decides), effort stays gated', () => {
+      // 新语义：模型控制权威在网关运行时协商（/p3394/models 的
+      // model_controllable），本表只是冷启动兜底——model 对未知 CLI 也放开
+      // （无参数通道的网关会安全忽略信封里的 model）；effort 仅表内 CLI。
       for (const cli of ['openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider', '', 'unknown-cli']) {
-        expect(execControlFor(cli), `capability for ${cli || '(empty)'}`).toEqual({ model: false, effort: false });
+        expect(execControlFor(cli), `effort capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: false });
       }
     });
   });

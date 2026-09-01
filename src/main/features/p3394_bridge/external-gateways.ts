@@ -404,6 +404,10 @@ export interface ExternalGatewayModels {
   current?: string;
   /** 网关侧 runtime 名（claude-persistent / codex / oneshot / …）。 */
   runtime?: string;
+  /** 能力协商（CodexHost 式）：网关是否有模型参数通道（预设模板或
+   *  P3394_AGENT_MODEL_ARGS 自定义声明）。UI 控件显隐的权威依据——取代
+   *  任何硬编码白名单。 */
+  modelControllable?: boolean;
   /** unavailable 时的原因码（诊断用，不展示给用户）。 */
   reason?: string;
   error?: string;
@@ -420,17 +424,21 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/p3394/models`, { signal: controller.signal });
     if (!res.ok) return { status: 'unavailable', models: [], reason: 'http_' + res.status };
-    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean };
+    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean };
     const models = Array.isArray(body.models)
       ? body.models
           .filter((m): m is { id: string; label: string } =>
             !!m && typeof m === 'object' && typeof m.id === 'string' && m.id.trim().length > 0)
           .map((m) => ({ id: m.id.trim(), label: (m.label || m.id).trim() }))
       : [];
+    // 能力协商独立于扫描结果：即使清单枚举失败（unavailable），网关仍能
+    // 告知模型是否可控（有参数通道但无枚举接口的 CLI 很常见）。
+    const modelControllable = body.model_controllable === true || body.modelControllable === true;
     if (body.status === 'ready' && models.length) {
       return {
         status: 'ready',
         models,
+        ...(modelControllable ? { modelControllable: true } : {}),
         ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
         ...(typeof body.runtime === 'string' ? { runtime: body.runtime } : {}),
       };
@@ -438,6 +446,7 @@ async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> 
     return {
       status: 'unavailable',
       models: [],
+      ...(modelControllable ? { modelControllable: true } : {}),
       ...(typeof body.reason === 'string' ? { reason: body.reason } : { reason: 'gateway_unavailable' }),
       ...(typeof body.error === 'string' ? { error: body.error } : {}),
     };
