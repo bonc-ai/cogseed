@@ -15270,6 +15270,46 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
     return ph;
   }
 
+  // Wake→task→exec 两级系统的 turn_id 会中途更换（cogseed-task-* →
+  // cogseed-exec-*）。同一 actor 的连续事件必须落在同一条气泡上
+  // Hand-off flicker guard: once the commander has handed the floor to an agent
+  // (server `active_recipient` is an agent), it ends its turn with no more
+  // output — so an in_flight/active_turns sweep must NOT mint a fresh empty
+  // commander placeholder that would flash during the agent's reply and vanish
+  // at turn end. dispatch_to does NOT set the floor, so its post-dispatch
+  // synthesis still creates a placeholder normally (and arrives via a real delta
+  // event, which adopts the bubble it streams into). The commander's pre-hand-off
+  // seg bubble was already created + finalized before the floor was set.
+  // Checked BEFORE adoption/annex so no path can resurrect a commander bubble
+  // while the floor points elsewhere.
+  if (actorId === 'commander') {
+    const floor = _serverFloorByCid.get(cid) || '';
+    if (floor && floor !== 'commander' && floor !== 'user') return null;
+  }
+
+  // Wake→task→exec 两级系统的 turn_id 会中途更换（cogseed-task-* →
+  // cogseed-exec-*）。同一 actor 的连续事件必须落在同一条气泡上
+  // （「一个回合一条消息」纪律）：任何未 finalized 的该 actor 活占位
+  // 直接收编——迁移 map key、改写 dataset.turnId，绝不新建第二条。
+  // 不收编的话，占位会按 turn_id 拆成两条并存（旧的带过程信息、新的
+  // 纯三点），即外接智能体回复时的「多余图标」。tid 为空的调用
+  // （state_changed in_flight 旧格式）同样先收编，否则会去领养
+  // controller 的初始隐藏占位、造成同 actor 双气泡闪现。
+  // 注意 key 归属：带 tid 的 key 是 `cid:turn:tid`（不含 actor），只能
+  // 按 dataset.fromActor 判定占位归属。
+  for (const [liveK, live] of Array.from(_groupPlaceholders.entries())) {
+    if (!liveK.startsWith(`${cid}:`)) continue;
+    if (!live || !live.parentElement || live.dataset.finalized === '1') continue;
+    if (live.dataset.fromActor !== actorId) continue;
+    _groupPlaceholders.delete(liveK);
+    if (tid) live.dataset.turnId = tid;
+    _stampPlaceholderTriggerMsg(live, sourceMsgId);
+    _seedPlaceholderActivityStart(live, startedAtMs);
+    _setPlaceholderActor(live, actorId, { cid, allowFallback });
+    _groupPlaceholders.set(k, live);
+    return live;
+  }
+
   if (tid) {
     const legacyK = _phKey(cid, actorId);
     const legacyPh = _groupPlaceholders.get(legacyK);
@@ -15306,18 +15346,6 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   }
   const container = document.getElementById('chat-history');
   if (!container) return null;
-  // Hand-off flicker guard: once the commander has handed the floor to an agent
-  // (server `active_recipient` is an agent), it ends its turn with no more
-  // output — so an in_flight/active_turns sweep must NOT mint a fresh empty
-  // commander placeholder that would flash during the agent's reply and vanish
-  // at turn end. dispatch_to does NOT set the floor, so its post-dispatch
-  // synthesis still creates a placeholder normally (and arrives via a real delta
-  // event, which adopts the bubble it streams into). The commander's pre-hand-off
-  // seg bubble was already created + finalized before the floor was set.
-  if (actorId === 'commander') {
-    const floor = _serverFloorByCid.get(cid) || '';
-    if (floor && floor !== 'commander' && floor !== 'user') return null;
-  }
   ph = _createStreamingAssistantMessage(container, { hiddenUntilActor: true, triggerMsgId: sourceMsgId });
   if (tid) ph.dataset.turnId = tid;
   _seedPlaceholderActivityStart(ph, startedAtMs);
