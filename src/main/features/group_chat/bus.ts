@@ -2002,6 +2002,10 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     to: [USER_ID],
     text,
     turn_id: input.turnId,
+    // 终态投影本身就是该回合的结束消息：落库也带 turn_end，让重放路径
+    // （history reload / 轮询 reconcile）与实时 emit 语义一致，渲染层据此
+    // 消费 actor 占位而不是留下悬空的三点气泡。
+    turn_end: true,
     ...(input.process?.length ? { process: input.process } : {}),
     ...(input.failureKind ? { failure_kind: input.failureKind } : {}),
     ...(input.failureCode ? { failure_code: input.failureCode } : {}),
