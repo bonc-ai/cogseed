@@ -2434,6 +2434,20 @@ async function _purgeDeletedConversationFiles(userId: string, cid: string, remov
     await cliSessions.clearForConversation(userId, cid);
   } catch (err) { log.warn(`purge cli sessions user=${userId} cid=${cid}: ${(err as Error).message}`); }
 
+  // Purge the Group Chat shadow tasks this conversation projected into the
+  // CogSeed backend (task JSON + events JSONL + projection cache + request
+  // claim). The Run Center already hides them once the conversation is gone,
+  // but hidden is not deleted: they stayed on disk forever, kept being read by
+  // every dashboard scan, and left request claims that still resolved. Tasks
+  // holding an undelivered terminal result are retained by the primitive.
+  try {
+    const cogseedTasks = await import('./cogseed_backend/task-store');
+    const purge = await cogseedTasks.purgeCogSeedGroupChatTasksByConversation(userId, cid);
+    if (purge.failedTaskIds.length) {
+      log.warn(`purge cogseed tasks user=${userId} cid=${cid}: unreadable ${purge.failedTaskIds.join(',')}`);
+    }
+  } catch (err) { log.warn(`purge cogseed tasks user=${userId} cid=${cid}: ${(err as Error).message}`); }
+
   // Pending terminal results remain execution-owned after the destination is
   // deleted. Recovery may report the missing destination, but must not destroy
   // the only durable copy or recreate the conversation implicitly.
