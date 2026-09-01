@@ -18,7 +18,7 @@ import { detectAll } from '../features/local_agents/registry.js';
 import {
   listExternalGateways, startExternalGateway, stopExternalGateway, inspectExternalGatewayModels,
 } from '../features/p3394_bridge/external-gateways';
-import { listModels } from '../features/local_agents/models.js';
+import { canonicalClaudeCurrentModel, canonicalClaudeModelId, listModels } from '../features/local_agents/models.js';
 import { listP3394Peers, revokeP3394Peer, setP3394PeerEnabled } from '../features/p3394_bridge/app-wiring';
 import {
   listRemoteNodes, addRemoteNode, removeRemoteNode, updateRemoteNode, testRemoteNode, testRemoteNodeById,
@@ -85,14 +85,32 @@ export const p3394ExternalHandlers = {
     } catch { /* agent 解析失败按未接入处理 */ }
     if (!cli) return { ok: false, error: 'p3394_agent_not_cli' };
     const scanned = await inspectExternalGatewayModels(cli, { refresh: args?.refresh === true });
-    let staticModels: Array<{ id: string; label: string; default?: boolean }> = [];
+    let staticModels: Array<{ id: string; label: string; description?: string; default?: boolean }> = [];
     try {
       staticModels = listModels(cli as never) ?? [];
     } catch { /* 静态目录缺失不阻塞 */ }
+    // claude 别名规范化：CLI `/model` 披露的是别名（sonnet/opus[1m]…），
+    // 客户端模型选择器按公开 id 展示（claude-sonnet-5…）——用户要求清单
+    // 与外接智能体（客户端）实际看到的完全一致。已知别名映射到公开 id
+    // （与静态目录去重合并）；客户端目录没有的路由别名（default/best/
+    // opusplan）剔除——跟随默认由「跟随 CLI」行承担，其余手输仍可用。
+    // CLI 自报当前模型（如 "Sonnet 5"）同样规范化，无法唯一映射保持原值。
+    let normalized = scanned;
+    if (cli === 'claude' && scanned && Array.isArray(scanned.models)) {
+      normalized = {
+        ...scanned,
+        models: scanned.models
+          .map((m) => ({ ...m, id: canonicalClaudeModelId(String(m?.id ?? '')) ?? '' }))
+          .filter((m) => m.id),
+        ...(scanned.current != null
+          ? { current: canonicalClaudeCurrentModel(scanned.current) ?? scanned.current }
+          : {}),
+      };
+    }
     return {
       ok: true,
       cli,
-      scanned,
+      scanned: normalized,
       staticModels,
     };
   },

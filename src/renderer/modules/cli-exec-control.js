@@ -169,13 +169,21 @@ function rememberCustomModel(cli, modelId) {
 function mergedCliModels(cli, scanEntry) {
   const seen = new Set();
   const out = [];
-  const push = (id, label, source, contextWindow, isDefault) => {
+  const push = (id, label, source, contextWindow, isDefault, description) => {
     const key = String(id || '').trim();
     if (!key || seen.has(key)) return;
     seen.add(key);
-    out.push({ id: key, label: (label || key), source, isDefault: !!isDefault, ...(typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {}) });
+    out.push({
+      id: key,
+      label: (label || key),
+      source,
+      isDefault: !!isDefault,
+      ...(typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {}),
+      // 客户端同款副标题（静态目录条目携带；扫描/手输条目回落显示 id）。
+      ...(description ? { description } : {}),
+    });
   };
-  for (const m of (scanEntry && scanEntry.staticModels) || []) push(m.id, m.label, 'static', m.contextWindow, m.default);
+  for (const m of (scanEntry && scanEntry.staticModels) || []) push(m.id, m.label, 'static', m.contextWindow, m.default, m.description);
   for (const m of (scanEntry && scanEntry.models) || []) push(m.id, m.label, 'scan', undefined, m.id === 'default' || m.id === 'auto');
   for (const id of customModelsFor(cli)) push(id, id, 'custom');
   // CodexHost 对标排序：default 条目永远第一（claude 的 'default'、

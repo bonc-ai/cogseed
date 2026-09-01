@@ -856,7 +856,8 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
         ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
         : '') +
       '</span>' +
-      `<span class="model-chip-menu-sub">${escapeHtml(m.id)}</span>`;
+      // 副标题优先显示客户端同款描述文案（静态目录条目），无描述回落 id。
+      `<span class="model-chip-menu-sub">${escapeHtml(m.description || m.id)}</span>`;
     item.addEventListener('click', () => applyPick(m.id, m.source === 'custom'));
     rowsHost.appendChild(item);
     });

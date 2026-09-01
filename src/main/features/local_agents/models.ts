@@ -26,22 +26,28 @@ export type LocalModel = {
   label: string;
   /** Optional display hint; UI badges this entry as the recommended pick. */
   default?: boolean;
+  /** Client-style subtitle shown under the id (menu row secondary line). */
+  description?: string;
   /** Context window in tokens (alias resolution + session-stats denominator). */
   contextWindow?: number;
 };
 
 const CATALOG: Record<LocalCliType, LocalModel[]> = {
-  // claude：别名清单与 CLI `/model` 本地命令披露的可用集对齐（2026-08 实测），
-  // 作为运行时扫描的静态镜像/兜底。窗口为公开规格：sonnet/opus/haiku 系
-  // 200K，[1m] 长上下文变体 1M；best/default/opusplan/fable 跟随 CLI 自身
-  // 解析，不标窗口（诚实省略，不编数字）。
+  // claude：与 Claude Code 客户端模型选择器同款公开 id 目录（用户 2026-09
+  // 以客户端截图为准对齐）——CLI `/model` 披露的别名（sonnet/opus[1m]…）
+  // 经 canonicalClaudeModelId 规范化到这些 id，不再直接进清单。条目顺序即
+  // 客户端顺序（能力降序：fable → haiku → opus → sonnet，1M 变体随后），
+  // 因此不标 default（跟随 CLI 默认由菜单「跟随 CLI」行承担）。窗口为公开
+  // 规格：基础款 200K，[1m] 长上下文变体 1M。
   claude: [
-    { id: 'default', label: '默认（跟随 CLI）', default: true },
-    { id: 'sonnet', label: 'Sonnet', contextWindow: 200_000 },
-    { id: 'opus', label: 'Opus', contextWindow: 200_000 },
-    { id: 'haiku', label: 'Haiku', contextWindow: 200_000 },
-    { id: 'sonnet[1m]', label: 'Sonnet 1M', contextWindow: 1_048_576 },
-    { id: 'opus[1m]', label: 'Opus 1M', contextWindow: 1_048_576 },
+    { id: 'claude-fable-5', label: 'claude-fable-5', description: 'For your toughest challenges', contextWindow: 200_000 },
+    { id: 'claude-fable-5[1m]', label: 'claude-fable-5[1m]', description: '1M context window', contextWindow: 1_048_576 },
+    { id: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5-20251001', description: 'Fastest for quick answers', contextWindow: 200_000 },
+    { id: 'claude-haiku-4-5-20251001[1m]', label: 'claude-haiku-4-5-20251001[1m]', description: '1M context window', contextWindow: 1_048_576 },
+    { id: 'claude-opus-4-8', label: 'claude-opus-4-8', description: 'Most capable for ambitious work', contextWindow: 200_000 },
+    { id: 'claude-opus-4-8[1m]', label: 'claude-opus-4-8[1m]', description: '1M context window', contextWindow: 1_048_576 },
+    { id: 'claude-sonnet-5', label: 'claude-sonnet-5', description: 'Most efficient for everyday tasks', contextWindow: 200_000 },
+    { id: 'claude-sonnet-5[1m]', label: 'claude-sonnet-5[1m]', description: '1M context window', contextWindow: 1_048_576 },
   ],
   // codex：窗口未在静态目录标注的条目走 public_model_catalog（gpt-5.6 系
   // 已有 272K/372K 数据）。
@@ -83,6 +89,50 @@ const CATALOG: Record<LocalCliType, LocalModel[]> = {
 /** Return the static model list for a CLI type. Empty = free-text entry. */
 export function listModels(cli: LocalCliType): LocalModel[] {
   return CATALOG[cli] ?? [];
+}
+
+// ── claude 扫描别名规范化（客户端公开 id 对齐）──────────────────────────
+// CLI `/model` 披露的是别名（sonnet/opus[1m]/default/best/opusplan…），
+// 而 Claude Code 客户端按公开模型 id 展示。用户要求 CogSeed 的模型映射
+// 与外接智能体（客户端）实际看到的完全一致——扫描结果在 IPC 组装处经
+// 本表规范化后再进合并清单。
+
+const CLAUDE_ALIAS_TO_MODEL: Record<string, string> = {
+  sonnet: 'claude-sonnet-5',
+  opus: 'claude-opus-4-8',
+  haiku: 'claude-haiku-4-5-20251001',
+  fable: 'claude-fable-5',
+  'sonnet[1m]': 'claude-sonnet-5[1m]',
+  'opus[1m]': 'claude-opus-4-8[1m]',
+  'fable[1m]': 'claude-fable-5[1m]',
+};
+
+/** CLI 别名 → 客户端公开 id。已是公开 id 的原样通过；客户端目录没有的
+ *  CLI 路由别名（default/best/opusplan）返回 null = 从合并清单剔除
+ *  （跟随默认由「跟随 CLI」行承担，其余手输仍可用）——不猜映射。 */
+export function canonicalClaudeModelId(id: string): string | null {
+  const key = String(id || '').trim();
+  if (!key) return null;
+  const mapped = CLAUDE_ALIAS_TO_MODEL[key] ?? CLAUDE_ALIAS_TO_MODEL[key.toLowerCase()];
+  if (mapped) return mapped;
+  return CATALOG.claude.some((m) => m.id === key) ? key : null;
+}
+
+/** CLI 自报当前模型（/model 输出的显示名，如 "Sonnet 5"）→ 公开 id。
+ *  无法唯一映射（路由别名/未来新模型）返回 null = 保持 CLI 自报原值展示。 */
+export function canonicalClaudeCurrentModel(display: string): string | null {
+  const raw = String(display || '').trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  const exact = CATALOG.claude.find((m) => m.id.toLowerCase() === lower);
+  if (exact) return exact.id;
+  if (/opusplan/i.test(raw)) return null;
+  const suffix = /\[1m\]/i.test(raw) ? '[1m]' : '';
+  if (/fable/i.test(raw)) return 'claude-fable-5' + suffix;
+  if (/haiku/i.test(raw)) return 'claude-haiku-4-5-20251001' + suffix;
+  if (/opus/i.test(raw)) return 'claude-opus-4-8' + suffix;
+  if (/sonnet/i.test(raw)) return 'claude-sonnet-5' + suffix;
+  return null;
 }
 
 /**
