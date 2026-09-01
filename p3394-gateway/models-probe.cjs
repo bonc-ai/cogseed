@@ -323,6 +323,100 @@ function probeCodexConfigModel(fsLike, env = process.env) {
   } catch { return null; }
 }
 
+// ── 声明式配置枚举（hermes / openclaw）──────────────────────────────────
+// 这两家 CLI 的「已配置模型」躺在各自磁盘配置里（无通用枚举子命令）：
+//   hermes   ~/.hermes/config.yaml（model.default/provider）
+//            + ~/.hermes/provider_models_cache.json（CLI 自己维护的各
+//              provider /v1/models 缓存——hermes model --refresh 会重建）
+//   openclaw ~/.openclaw/openclaw.json（models.providers[].models 元数据
+//            + agents.defaults.model.primary 当前绑定）
+// 网关与 CLI 同机 → 读文件即事实源，比 spawn 探测快且零副作用。
+// readFileSync 注入（测试 fake）；解析失败/无模型 → unavailable 降级，
+// 宿主回落静态目录+手输（与 inspect 探测同一降级语义）。
+
+/** hermes config.yaml 顶层 model: 段的 default/provider（两层小状态机：
+ *  只认零缩进 `model:` 进入、下一个顶层 key 退出——providers: 段里的
+ *  default_model 不属于本段，不误读）。 */
+function hermesModelSection(yamlText) {
+  let inSection = false;
+  const out = { default: '', provider: '' };
+  for (const line of String(yamlText || '').split('\n')) {
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const isTop = /^[^\s#]/.test(line);
+    if (isTop) {
+      inSection = /^model:\s*$/.test(line);
+      continue;
+    }
+    if (!inSection) continue;
+    let m = /^\s+default:\s*(\S+)\s*$/.exec(line);
+    if (m) { out.default = m[1].replace(/^['"]|['"]$/g, ''); continue; }
+    m = /^\s+provider:\s*(\S+)\s*$/.exec(line);
+    if (m) { out.provider = m[1].replace(/^['"]|['"]$/g, ''); }
+  }
+  return out;
+}
+
+function hermesConfigModels(fsMod, pathMod, env, readFileSync) {
+  const home = (env && env.HOME) || require('node:os').homedir();
+  const section = hermesModelSection(readFileSync(pathMod.join(home, '.hermes', 'config.yaml'), 'utf8'));
+  let cache = null;
+  try {
+    cache = JSON.parse(readFileSync(pathMod.join(home, '.hermes', 'provider_models_cache.json'), 'utf8'));
+  } catch { /* 无缓存：只报 current，清单交给宿主静态/手输 */ }
+  const ids = (cache && section.provider
+    && cache[section.provider] && Array.isArray(cache[section.provider].models)
+    ? cache[section.provider].models : []
+  ).filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim());
+  // 无 provider 清单也可用配置声明的默认模型（至少让 chip 显示 current）。
+  if (!ids.length && !section.default) return { status: 'unavailable', reason: 'config_no_models' };
+  return {
+    status: 'ready',
+    models: ids.map((id) => ({ id, label: id })),
+    ...(section.default ? { current: section.default } : {}),
+  };
+}
+
+function openclawConfigModels(fsMod, pathMod, env, readFileSync) {
+  const home = (env && env.HOME) || require('node:os').homedir();
+  const cfg = JSON.parse(readFileSync(pathMod.join(home, '.openclaw', 'openclaw.json'), 'utf8'));
+  const providers = (cfg && cfg.models && typeof cfg.models.providers === 'object' && cfg.models.providers) || {};
+  const models = [];
+  for (const list of Object.values(providers)) {
+    for (const m of ((list && Array.isArray(list.models)) ? list.models : [])) {
+      if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !m.id.trim()) continue;
+      models.push({
+        id: m.id.trim(),
+        label: (typeof m.name === 'string' && m.name.trim()) || m.id.trim(),
+        ...(Number.isFinite(m.contextWindow) && m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
+      });
+    }
+  }
+  if (!models.length) return { status: 'unavailable', reason: 'config_no_models' };
+  const primary = String(((cfg.agents && cfg.agents.defaults && cfg.agents.defaults.model) || {}).primary || '').trim();
+  // primary 形如 "agnes/agnes-2.5-flash"（provider 前缀）——剥前缀与清单
+  // id 同口径，UI 的 isCurrent 才能命中；裸 id 原样。
+  const current = primary ? (primary.includes('/') ? primary.split('/').slice(1).join('/') : primary) : '';
+  return { status: 'ready', models, ...(current ? { current } : {}) };
+}
+
+const CONFIG_MODEL_PARSERS = {
+  hermes: hermesConfigModels,
+  openclaw: openclawConfigModels,
+};
+
+/** 声明式配置枚举入口。deps: { configModels（解析器键）, env, readFileSync }。
+ *  返回与 probeInspectCommand 同形状（ready/unavailable + models/current）。 */
+function probeConfigModels(deps = {}) {
+  const parser = CONFIG_MODEL_PARSERS[String(deps.configModels || '')];
+  const readFileSync = typeof deps.readFileSync === 'function' ? deps.readFileSync : null;
+  if (!parser || !readFileSync) return { status: 'unavailable', reason: 'no_config_probe' };
+  try {
+    return parser(null, require('node:path'), deps.env || {}, readFileSync);
+  } catch {
+    return { status: 'unavailable', reason: 'config_read_failed' };
+  }
+}
+
 module.exports = {
   EXEC_EFFORT_TOKENS,
   executionPrefsFor,
@@ -334,6 +428,8 @@ module.exports = {
   probeInspectCommand,
   probeStreamJsonInitModel,
   probeCodexConfigModel,
+  probeConfigModels,
+  CONFIG_MODEL_PARSERS,
   INSPECT_SUBCOMMANDS,
   INSPECT_PARSERS,
   modelArgsFor,

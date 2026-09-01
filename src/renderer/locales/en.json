@@ -6460,7 +6460,7 @@
   "exec_config.no_model": "No model configured",
   "exec_config.cli_default_model": "CLI default",
   "exec_config.cli_badge": "CLI",
-  "exec_config.effort_cli_note": "Both the model and the reasoning effort are decided by the external CLI's own configuration; CogSeed does not override them here.",
+  "exec_config.effort_cli_note": "The reasoning effort is decided by the external CLI's own configuration; CogSeed does not override it here (the model can be adjusted above).",
   "exec_config.no_reasoning_note": "No reasoning-effort support",
   "settings.thinking.title": "Default reasoning effort",
   "settings.thinking.sub": "The default thinking strength for chat runs (global default). Inside a conversation you can adjust it temporarily via the execution-config chip next to the input box — that only affects the current task.",
