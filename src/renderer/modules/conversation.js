@@ -1326,10 +1326,10 @@ function _executionConfigForSend(target, snapshot) {
     };
   }
   const cfg = {};
-  // 外接智能体执行控制：能力表内（claude/codex，见 cli-exec-control.js）的
-  // CLI 模型真实随信封下发（execution_prefs.model → --model / thread config），
-  // 任务级 model 覆盖放行；表外 CLI 的模型由 CLI 自身配置决定，历史残留的
-  // override.model 不下发（假开关）。effort 同理由能力表把关。
+  // 外接智能体执行控制：模型随 execution_config 通用下发——网关按「模型
+  // 参数模板」（预设或 P3394_AGENT_MODEL_ARGS 自定义声明）消费，无通道的
+  // CLI 安全忽略（跟随自身默认），所以这里不设白名单。effort 仍按能力表
+  // （各家强度语义差异大，乱发参数有风险）。
   const recipientAgent = snap && snap.kind === 'agent' && snap.id
     ? (() => {
       const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
@@ -1340,10 +1340,8 @@ function _executionConfigForSend(target, snapshot) {
     && (recipientAgent.runtime.kind === 'cli' || recipientAgent.runtime.kind === 'p3394-gateway'));
   const cliExec = (typeof window !== 'undefined' && window.cliExecControl && isCliAgentRecipient && recipientAgent.runtime)
     ? window.cliExecControl.execControlFor(recipientAgent.runtime.cli) : null;
-  if (!isCliAgentRecipient || (cliExec && cliExec.model)) {
-    if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
-    else if (ov.model) { cfg.model = ov.model; }
-  }
+  if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
+  else if (ov.model) { cfg.model = ov.model; }
   // effort：CLI 智能体只在能力表声明 effort 开关时下发（与 bus 侧同一过滤，
   // 双保险防历史残留 override 泄漏成假开关）。
   if (ov.effort && (!isCliAgentRecipient || (cliExec && cliExec.effort))) cfg.effort = ov.effort;

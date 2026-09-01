@@ -20,9 +20,13 @@ describe('cli-exec-control capability table parity (renderer vs main)', () => {
     }
   });
 
-  it('unknown CLIs degrade to read-only (no fake switches)', () => {
-    expect(cliExecControl.execControlFor('')).toEqual({ model: false, effort: false });
-    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: false, effort: false });
+  it('unknown CLIs keep model control open (runtime negotiation decides), effort stays gated', () => {
+    // 新语义：模型控制的权威是网关运行时协商（modelControllable），兜底表
+    // 对未知 CLI 也放开 model（信封下发无通道即被网关安全忽略）；effort
+    // 仍只对有真实链路的 CLI 开放。
+    expect(cliExecControl.execControlFor('')).toEqual({ model: true, effort: false });
+    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: true, effort: false });
+    expect(cliExecControl.execControlFor('hermes')).toEqual({ model: true, effort: false });
   });
 });
 

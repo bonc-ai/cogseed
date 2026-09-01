@@ -58,15 +58,25 @@ const CATALOG: Record<LocalCliType, LocalModel[]> = {
   gemini: [],
   aider: [],
   // WorkBuddy (Tencent) routes models by account; `auto` lets the CLI pick
-  // (verified: init reports model:"auto", resolving to glm-5.2 /
-  // deepseek-v4-flash per turn). We expose `auto` as the default plus the
-  // ids observed from the CLI's own --model help so users can pin one; an
-  // empty runtime.model still means "let the CLI decide".
+  // (verified: init reports model:"auto"). The list below mirrors the CLI's
+  // own --help disclosure (2026-08 实测 "Currently supported" 括号清单)——
+  // 运行时扫描同源；an empty runtime.model still means "let the CLI decide".
   workbuddy: [
     { id: 'auto', label: '自动（由 WorkBuddy 选择）', default: true },
+    { id: 'hy4-preview', label: 'hy4-preview' },
+    { id: 'hy3', label: 'Hunyuan 3' },
+    { id: 'hy3-x', label: 'hy3-x' },
+    { id: 'glm-5.3', label: 'GLM-5.3' },
+    { id: 'glm-5.3-flash', label: 'GLM-5.3 Flash' },
     { id: 'glm-5.2', label: 'GLM-5.2' },
     { id: 'glm-5.1', label: 'GLM-5.1' },
-    { id: 'hy3', label: 'Hunyuan 3' },
+    { id: 'glm-5v-turbo', label: 'GLM-5v Turbo' },
+    { id: 'minimax-m3', label: 'MiniMax M3' },
+    { id: 'kimi-k3-1', label: 'Kimi K3.1' },
+    { id: 'kimi-k2.7', label: 'Kimi K2.7' },
+    { id: 'kimi-k2.6', label: 'Kimi K2.6' },
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
   ],
 };
 
@@ -87,11 +97,14 @@ export function defaultModel(cli: LocalCliType): string | null {
 }
 
 // ── 外接智能体执行控制（统一执行入口）──────────────────────────────────
-// 能力表：哪些 CLI 的模型/思考强度控制有真实下发链路（P3394 网关 runtime
-// 消费：claude --model + MAX_THINKING_TOKENS；codex thread/start model +
-// config.model_reasoning_effort）。不在表内的 CLI 不放假开关——渲染层隐藏
-// 对应控件，发送侧剔除对应字段。扫出的模型清单与本表无关：任何 CLI 都能
-// 扫描展示，但只有能力表内的 CLI 可以真正更改。
+// 能力权威来源是网关运行时协商（/p3394/models 的 model_controllable：
+// 预设 modelArgs 模板或 P3394_AGENT_MODEL_ARGS 自定义声明）。本表只是
+// 渲染层冷启动兜底（扫描未返回时的初始显隐）：
+// - model：预设 8 个 CLI 中 6 个有参数通道（claude/opencode/gemini/aider/
+//   workbuddy 模板 + codex 专有通道），自定义智能体经 env 声明——兜底全开，
+//   协商回 false（如 hermes/openclaw 无通道）时渲染层收起控件。
+// - effort：各家强度参数语义差异大（claude 思考预算/codex effort/其余无），
+//   只对有真实链路的 CLI 开放，不通用化。
 export interface CliExecControl {
   model: boolean;
   effort: boolean;
@@ -99,9 +112,17 @@ export interface CliExecControl {
 const CLI_EXEC_CONTROL: Record<string, CliExecControl> = {
   claude: { model: true, effort: true },
   codex: { model: true, effort: true },
+  opencode: { model: true, effort: false },
+  gemini: { model: true, effort: false },
+  aider: { model: true, effort: false },
+  workbuddy: { model: true, effort: false },
 };
 export function execControlFor(cli: string): CliExecControl {
-  return CLI_EXEC_CONTROL[String(cli || '').trim()] ?? { model: false, effort: false };
+  // model 兜底全开（任意外接智能体都可尝试控制，网关无通道即安全忽略）；
+  // effort 仅表内 CLI。
+  const type = String(cli || '').trim();
+  const known = CLI_EXEC_CONTROL[type];
+  return known ?? { model: true, effort: false };
 }
 
 /** 别名/模型 id → 上下文窗口（会话统计的 ctx 分母）。优先级：claude 别名

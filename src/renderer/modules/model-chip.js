@@ -116,21 +116,22 @@ function _effectiveExecConfig(target) {
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
-  // CLI-backed local agent：能力表内的 CLI（claude/codex）模型真实可控——
+  // CLI-backed local agent：模型可控性由网关运行时协商（modelControllable，
+  // 任意声明了参数模板的外接智能体都可控——含自定义 P3394_AGENT_MODEL_ARGS）。
   // 显示「任务级覆盖 > agent 默认 runtime.model > 扫描到的 CLI 当前模型 >
-  // 『CLI 默认』占位」，选择写任务级覆盖（bare model id，随信封下发）。
-  // 表外 CLI 只读展示当前模型（显示 ≠ 可改，控件仍由能力表把关）。
+  // 『CLI 默认』占位」。effort 仍按兜底能力表（各家强度语义差异大）。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
     const ctl = (typeof window !== 'undefined' && window.cliExecControl)
       ? window.cliExecControl
       : null;
-    const cap = ctl ? ctl.execControlFor(cliType) : { model: false, effort: false };
+    const modelSupported = ctl ? ctl.modelControllableFor(cliType) : true;
+    const effortSupported = ctl ? ctl.execControlFor(cliType).effort : false;
     const runtimeModel = (agent.runtime && agent.runtime.model) || '';
     const scanCurrent = (ctl && ctl.cachedCliModels(cliType) && ctl.cachedCliModels(cliType).current) || '';
-    const modelChoice = (cap.model && override.model) ? String(override.model)
-      : (cap.model && runtimeModel) ? String(runtimeModel)
+    const modelChoice = (modelSupported && override.model) ? String(override.model)
+      : (modelSupported && runtimeModel) ? String(runtimeModel)
       : '';
     // 无覆盖/无默认时，chip 直接亮出 CLI 当前实际模型（扫描披露，如
     // "Sonnet 5"）——切换外接智能体即见其真实模型，不再显示笼统的占位。
@@ -138,7 +139,7 @@ function _effectiveExecConfig(target) {
     return {
       mode: 'cli',
       cliType,
-      modelSupported: !!cap.model,
+      modelSupported,
       model: modelChoice,
       modelLabel: currentLabel,
       modelIsCliCurrent: !modelChoice && !!scanCurrent,
@@ -146,8 +147,8 @@ function _effectiveExecConfig(target) {
       providerLabel: cliType,
       effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
       effortOverridden: override.effort === 'low' || override.effort === 'high',
-      effortSupported: !!cap.effort,
-      modelOverridden: !!(cap.model && override.model),
+      effortSupported,
+      modelOverridden: !!(modelSupported && override.model),
       agent,
     };
   }

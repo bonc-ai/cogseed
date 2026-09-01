@@ -12,14 +12,28 @@
 
 const _cliExecLog = (typeof createLogger === 'function') ? createLogger('cli-exec-control') : null;
 
-// 与主进程 CLI_EXEC_CONTROL 同源（测试钉一致性）。
+// 与主进程 CLI_EXEC_CONTROL 同源（测试钉一致性）。模型兜底全开：能力权威
+// 是网关运行时协商（modelControllable），本表只在扫描未返回时给初始显隐。
 const CLI_EXEC_CONTROL = {
   claude: { model: true, effort: true },
   codex: { model: true, effort: true },
+  opencode: { model: true, effort: false },
+  gemini: { model: true, effort: false },
+  aider: { model: true, effort: false },
+  workbuddy: { model: true, effort: false },
 };
 
 function execControlFor(cli) {
-  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: false, effort: false };
+  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: true, effort: false };
+}
+
+/** 模型是否可控：网关运行时协商（扫描响应的 modelControllable）优先，
+ *  未协商时兜底表（model 全开——任意外接智能体都可控制，网关无通道即
+ *  安全忽略跟随自身默认）。 */
+function modelControllableFor(cli) {
+  const entry = cachedCliModels(cli);
+  if (entry && typeof entry.modelControllable === 'boolean') return entry.modelControllable;
+  return execControlFor(cli).model;
 }
 
 // claude 别名 → 上下文窗口（公开规格；[1m] 变体 1M）。与主进程
@@ -90,6 +104,8 @@ async function loadCliModels(agentId, cli, opts) {
         state: models.length ? 'ready' : 'unavailable',
         models,
         current: (res.scanned && typeof res.scanned.current === 'string' && res.scanned.current) || null,
+        // 能力协商独立于清单：unavailable 也可能可控（无枚举接口但有参数通道）。
+        modelControllable: !!(res.scanned && res.scanned.modelControllable),
         staticModels: Array.isArray(res.staticModels) ? res.staticModels : [],
         reason: models.length ? null : ((res.scanned && res.scanned.reason) || 'empty_scan'),
         at: Date.now(),
@@ -162,6 +178,7 @@ function mergedCliModels(cli, scanEntry) {
 if (typeof window !== 'undefined') {
   window.cliExecControl = {
     execControlFor,
+    modelControllableFor,
     contextWindowForCliModel,
     loadCliModels,
     cachedCliModels,
@@ -176,6 +193,7 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
   module.exports = {
     CLI_EXEC_CONTROL,
     execControlFor,
+    modelControllableFor,
     contextWindowForCliModel,
     mergedCliModels,
     customModelsFor,

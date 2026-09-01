@@ -62,11 +62,10 @@ describe('unified execution entry — picker scope', () => {
     expect(ctl).toContain('rememberCustomModel');
     // 能力表防假开关：模型可控性查表而非硬编码，表外 CLI 不渲染模型区。
     expect(chip).not.toContain('CLI_EFFORT_SUPPORTED');
-    // 发送侧：能力表内 CLI 的 override.model 随 execution_config 下发
-    // （`cliExec.model` 放行），表外剔除。
-    expect(conv).toContain('cliExec && cliExec.model');
-    // effort 同理由能力表把关（渲染层 + bus 双保险）。
+    // 发送侧：模型通用下发（execution_config.model 不设白名单——网关按
+    // 参数模板消费，无通道即安全忽略）；effort 仍按能力表把关。
     expect(conv).toContain('cliExec && cliExec.effort');
+    expect(conv).not.toContain('cliExec && cliExec.model');
     // 真开关保留：effort 分段仍在。
     expect(chip).toContain('model-chip-menu-segmented');
     expect(chip).toContain("t('exec_config.effort_cli_forward_note'");

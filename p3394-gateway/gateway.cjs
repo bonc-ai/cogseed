@@ -171,19 +171,30 @@ const replyWaiters = new Map(); // message_id → 处理回信的函数
 // 预设：市面上常见智能体的 CLI 模板（oneshot 非交互模式，stdout 输出最终回复）。
 // 预设只是便捷模板，不是接入白名单——任何 P3394_AGENT 名字都可启动，
 // 未知名默认：身份=名字、CLI=同名命令、参数={message}（见下方解析逻辑）。
+// modelArgs：模型参数模板（'{model}' 占位，注入任务级模型选择；无声明=该
+//   CLI 无已知模型参数通道）。自定义智能体用 P3394_AGENT_MODEL_ARGS 声明
+//   同样的模板即可获得模型控制。
+// inspect：模型枚举通道声明（args+parser；无声明=unavailable 回落静态/手输）。
 const PRESETS = {
   hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes' },
   // claude 声明 stream-json 输出（sscli 主导下的流式包装器）：-p 配合
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
-  claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages' },
-  codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex' },
-  opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode' },
-  gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini' },
-  aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider' },
+  claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
+              modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' } },
+  codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex',
+              // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
+              modelControllable: true },
+  opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode',
+              modelArgs: '--model {model}', inspect: { args: ['models'], parser: 'lines' } },
+  gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini',
+              modelArgs: '-m {model}' },
+  aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
+              modelArgs: '--model {model}' },
   openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw' },
-  workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy' },
+  workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
+              modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' } },
 };
 const PRESET_NAME = (process.env.P3394_AGENT || 'hermes').trim().toLowerCase();
 // 预设只是便捷模板，不是白名单：P3394 面向任意智能体/任意程序，任何名字
@@ -517,15 +528,27 @@ const {
   normalizeClaudeInit,
   claudeModelsCache,
   probeClaudeModels: probeClaudeModelsImpl,
-  probeSubcommandModels: probeSubcommandModelsImpl,
+  probeInspectCommand,
+  modelArgsFor,
+  modelControllableFor,
+  splitModelArgs,
 } = require('./models-probe.cjs');
 
-// 薄包装：把网关进程级常量（CLI 命令、preset 名、spawn）注入探测实现。
+// 薄包装：把网关进程级常量（CLI 命令、spawn）注入探测实现。
 function probeClaudeModels() {
   return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawn });
 }
-function probeSubcommandModels() {
-  return probeSubcommandModelsImpl({ cli: CLI, presetName: PRESET_NAME, spawnFn: spawn });
+// 通用枚举探测：按预设表的 inspect 声明（args+parser）spawn 解析。
+function probePresetInspect() {
+  if (!preset || !preset.inspect) return null;
+  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawn });
+}
+// 本网关的模型参数模板（env 覆盖 > 预设声明；null=无通道，信封 model 被忽略）。
+function modelArgTemplate() {
+  return modelArgsFor(preset, process.env);
+}
+function modelControllable() {
+  return modelControllableFor(preset, process.env);
 }
 
 const activeTasks = new Map(); // task_id → child
@@ -533,10 +556,12 @@ const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
 function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
-    // CogSeed 扩展：单轮偏好（claude 落 oneshot 时的模型/强度——每轮独立
-    // spawn，天然 per-turn）。其余 CLI 的 prefs 无已知开关，安全忽略。
+    // CogSeed 扩展（通用）：单轮模型选择按「模型参数模板」注入（预设声明
+    // 或 P3394_AGENT_MODEL_ARGS 自定义声明；模板形如 '--model {model}'）。
+    // 无模板的 CLI 忽略（跟随自身默认）；claude 强度仍走 MAX_THINKING_TOKENS。
     const prefs = execPrefs || {};
-    if (PRESET_NAME === 'claude' && prefs.model) args.push('--model', prefs.model);
+    const template = modelArgTemplate();
+    if (prefs.model && template) args.push(...splitModelArgs(template, prefs.model));
     const claudeEnv = (PRESET_NAME === 'claude' && prefs.maxThinkingTokens)
       ? { MAX_THINKING_TOKENS: prefs.maxThinkingTokens }
       : null;
@@ -656,12 +681,13 @@ const oneshotRuntime = {
     return reply;
   },
   cancel(taskId) { return cancelTask(taskId); },
-  /** 模型发现：有登记枚举子命令的 CLI（opencode）走子命令探测；claude 落到
-   *  oneshot 时（P3394_AGENT_MODE 未声明 sscli）用 init 帧探测；其余明确
-   *  unavailable，宿主回落静态目录+手输。 */
+  /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；claude 落
+   *  oneshot 时保留专用探测（init 缓存交互）；其余明确 unavailable，宿主
+   *  回落静态目录+手输。 */
   async inspectModels() {
-    if (INSPECT_SUBCOMMANDS[PRESET_NAME]) return probeSubcommandModels();
     if (PRESET_NAME === 'claude') return probeClaudeModels();
+    const viaPreset = probePresetInspect();
+    if (viaPreset) return viaPreset;
     return { status: 'unavailable', reason: 'oneshot_no_inspect' };
   },
   close() {
@@ -1098,12 +1124,15 @@ class StreamJsonRuntime {
     // 不带 [会话历史] 会让 claude 每轮失忆）。
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
-    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env；单轮模型 →
-    // --model 参数（每轮独立 spawn，天然 per-turn）。
+    // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env（claude）；单轮
+    // 模型 → 通用「模型参数模板」注入（每轮独立 spawn，天然 per-turn）。
     const execPrefs = (opts && opts.execPrefs) || null;
-    const thinkingEnv = execPrefs && execPrefs.maxThinkingTokens ? { MAX_THINKING_TOKENS: execPrefs.maxThinkingTokens } : null;
-    const modelArgs = execPrefs && execPrefs.model ? ['--model', execPrefs.model] : [];
-    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []), ...modelArgs];
+    const thinkingEnv = (PRESET_NAME === 'claude' && execPrefs && execPrefs.maxThinkingTokens)
+      ? { MAX_THINKING_TOKENS: execPrefs.maxThinkingTokens }
+      : null;
+    const template = modelArgTemplate();
+    const modelArgv = (execPrefs && execPrefs.model && template) ? splitModelArgs(template, execPrefs.model) : [];
+    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []), ...modelArgv];
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
@@ -1789,6 +1818,9 @@ const server = http.createServer((req, res) => {
           ok: true,
           runtime: runtime.name,
           cli: CLI,
+          // 能力协商（CodexHost 式）：模型可控 = 有参数模板或专有通道。宿主
+          // 据此决定 UI 控件显隐——不再依赖任何硬编码白名单。
+          model_controllable: modelControllable(),
           inspected_at: new Date().toISOString(),
           ...(inspected || {}),
         });

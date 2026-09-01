@@ -8,7 +8,11 @@ import {
   claudeModelsCache,
   probeClaudeModels,
   probeSubcommandModels,
+  probeInspectCommand,
   INSPECT_SUBCOMMANDS,
+  modelArgsFor,
+  modelControllableFor,
+  splitModelArgs,
 } from '../../../../p3394-gateway/models-probe.cjs';
 
 /** fake 子进程：脚本化 stdout/stderr 推送 + close 触发，不需要真 CLI。 */
@@ -163,14 +167,14 @@ describe('gateway probeClaudeModels — /model local-command probe (injected spa
     claudeModelsCache.clear();
   });
 
-  it('reports unavailable with a reason when the CLI errors out', async () => {
+  it('reports unavailable with a reason when the CLI output is unparseable', async () => {
     const result = await probeClaudeModels({
       cli: 'claude',
       spawnFn: SPAWN_FN({ emit: [['stdout', 'not json at all']] }),
       env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
     }) as { status: string; reason: string };
     expect(result.status).toBe('unavailable');
-    expect(result.reason).toBe('parse_failed');
+    expect(result.reason).toBe('no_model_list');
   });
 
   it('surfaces spawn failures (CLI missing) as unavailable, not a crash', async () => {
@@ -181,6 +185,62 @@ describe('gateway probeClaudeModels — /model local-command probe (injected spa
     }) as { status: string; reason: string };
     expect(result.status).toBe('unavailable');
     expect(result.reason).toBe('spawn_failed');
+  });
+});
+
+describe('gateway model-args channel — universal model control declaration', () => {
+  it('resolves the template from env override first, then the preset declaration', () => {
+    expect(modelArgsFor({ modelArgs: '--model {model}' })).toBe('--model {model}');
+    expect(modelArgsFor({ modelArgs: '--model {model}' }, { P3394_AGENT_MODEL_ARGS: '-m {model}' })).toBe('-m {model}');
+    // 自定义智能体（无预设）经 env 声明即可控。
+    expect(modelArgsFor(null, { P3394_AGENT_MODEL_ARGS: '--model {model}' })).toBe('--model {model}');
+    expect(modelArgsFor(null)).toBeNull();
+    expect(modelArgsFor({})).toBeNull();
+  });
+
+  it('marks controllable when a template or a dedicated channel exists (codex)', () => {
+    expect(modelControllableFor({ modelArgs: '-m {model}' })).toBe(true);
+    expect(modelControllableFor({ modelControllable: true })).toBe(true); // codex thread 参数通道
+    expect(modelControllableFor(null, { P3394_AGENT_MODEL_ARGS: '--model {model}' })).toBe(true);
+    expect(modelControllableFor({})).toBe(false);
+    expect(modelControllableFor(null)).toBe(false);
+  });
+
+  it('expands the {model} placeholder with quote-aware splitting', () => {
+    expect(splitModelArgs('--model {model}', 'gpt-5.6-sol')).toEqual(['--model', 'gpt-5.6-sol']);
+    expect(splitModelArgs('-m {model}', 'sonnet[1m]')).toEqual(['-m', 'sonnet[1m]']);
+    expect(splitModelArgs('--model "{model}" --strict', 'my model')).toEqual(['--model', 'my model', '--strict']);
+    expect(splitModelArgs('', 'x')).toEqual([]);
+  });
+});
+
+describe('gateway probeInspectCommand — declared parsers (universal enumeration)', () => {
+  it('parses the workbuddy --help disclosure (help-model-list)', async () => {
+    const helpText = [
+      '  --include-partial-messages  Output raw SSE',
+      '  --model <model>  Model for the current session. Currently supported: (auto, hy4-preview, hy3, glm-5.3, deepseek-v4-pro, custom-local:deepseek-v4-flash)',
+      '  --text-to-image-model <model>  for images',
+    ].join('\n');
+    const result = await probeInspectCommand({
+      cli: 'codebuddy',
+      args: ['--help'],
+      parser: 'help-model-list',
+      spawnFn: SPAWN_FN({ emit: [['stdout', helpText]] }),
+      env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
+    }) as { status: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    expect(result.models.map((m) => m.id)).toEqual([
+      'auto', 'hy4-preview', 'hy3', 'glm-5.3', 'deepseek-v4-pro', 'custom-local:deepseek-v4-flash',
+    ]);
+  });
+
+  it('reports unavailable when no parser is declared for the CLI', async () => {
+    const result = await probeInspectCommand({
+      cli: 'custom-agent', args: ['--models'], parser: 'nope',
+      spawnFn: SPAWN_FN({}), env: {},
+    }) as { status: string; reason: string };
+    expect(result.status).toBe('unavailable');
+    expect(result.reason).toBe('no_inspect_declared');
   });
 });
 
