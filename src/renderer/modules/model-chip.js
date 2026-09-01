@@ -181,8 +181,8 @@ function _effectiveExecConfig(target) {
       modelIsCliCurrent: !modelChoice && !!(scanEntry && scanEntry.current),
       provider: '',
       providerLabel: cliType,
-      effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
-      effortOverridden: override.effort === 'low' || override.effort === 'high',
+      effort: (override.effort === 'off' || override.effort === 'low' || override.effort === 'high') ? override.effort : null,
+      effortOverridden: override.effort === 'off' || override.effort === 'low' || override.effort === 'high',
       effortSupported,
       modelOverridden: !!(modelSupported && override.model),
       agent,
@@ -906,17 +906,21 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   _positionModelMenu(menu, anchor);
 }
 
-/** claude 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
- *  把档位写进信封 execution_prefs，网关 claude runtime 转换为
- *  MAX_THINKING_TOKENS 环境变量注入。「关闭」对 CLI 档位不可表达（claude
- *  无禁用入口；codex 的 minimal 对应"极简"而非关闭），置灰防语义欺骗。 */
+/** CLI 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
+ *  把档位写进信封 execution_prefs：claude 走 MAX_THINKING_TOKENS 环境变
+ *  量；hermes/openclaw 等有单次强度参数的走参数模板（网关 effortArgs）。
+ *  「关闭」档仅对能表达禁用的 CLI 开放（hermes --reasoning none /
+ *  openclaw --thinking off）；claude 无禁用入口、codex 的 minimal 对应
+ *  "极简"而非关闭——置灰防语义欺骗。 */
 function _renderCliEffortSegmented(menu, anchor, cfg, cliType) {
   const target = _chipTargetForElement(anchor);
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  const offSupported = ctl ? ctl.execControlFor(cliType).effortOff : false;
   const seg = document.createElement('div');
   seg.className = 'model-chip-menu-segmented';
   _EFFORT_OPTIONS.forEach((level) => {
     const isActive = (cfg.effort || 'auto') === level;
-    const unavailable = level === 'off';
+    const unavailable = level === 'off' && !offSupported;
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'model-chip-seg-btn'

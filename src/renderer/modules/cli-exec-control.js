@@ -14,17 +14,21 @@ const _cliExecLog = (typeof createLogger === 'function') ? createLogger('cli-exe
 
 // 与主进程 CLI_EXEC_CONTROL 同源（测试钉一致性）。模型兜底全开：能力权威
 // 是网关运行时协商（modelControllable），本表只在扫描未返回时给初始显隐。
+// effortOff：「关闭」档可表达（hermes --reasoning none / openclaw
+// --thinking off）；claude/codex 无禁用入口，UI 置灰防语义欺骗。
 const CLI_EXEC_CONTROL = {
-  claude: { model: true, effort: true },
-  codex: { model: true, effort: true },
-  opencode: { model: true, effort: false },
-  gemini: { model: true, effort: false },
-  aider: { model: true, effort: false },
-  workbuddy: { model: true, effort: false },
+  claude: { model: true, effort: true, effortOff: false },
+  codex: { model: true, effort: true, effortOff: false },
+  hermes: { model: true, effort: true, effortOff: true },
+  openclaw: { model: true, effort: true, effortOff: true },
+  opencode: { model: true, effort: false, effortOff: false },
+  gemini: { model: true, effort: false, effortOff: false },
+  aider: { model: true, effort: false, effortOff: false },
+  workbuddy: { model: true, effort: false, effortOff: false },
 };
 
 function execControlFor(cli) {
-  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: true, effort: false };
+  return CLI_EXEC_CONTROL[String(cli || '').trim()] || { model: true, effort: false, effortOff: false };
 }
 
 /** 模型是否可控：网关运行时协商（扫描响应的 modelControllable）优先，

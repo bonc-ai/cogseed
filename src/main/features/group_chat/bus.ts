@@ -5110,9 +5110,11 @@ async function runActorTurnBody(
             // 「模型参数模板」（预设声明或 P3394_AGENT_MODEL_ARGS 自定义声明）
             // 决定消费与否，无通道的 CLI 安全忽略（跟随自身默认）。能力
             // 协商（model_controllable）由 /p3394/models 披露、渲染层消费。
-            // effort 仍按能力表把关（各家强度语义差异大，乱发参数有风险）。
+            // effort 按能力表把关（各家强度语义差异大，乱发参数有风险）；
+            // off 仅参数模板通道可表达（hermes --reasoning none / openclaw
+            // --thinking off），claude/codex 的 UI 已置灰不会出现。
             ...(execControlFor(String(cliRuntime ?? "")).effort
-              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
+              && (item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
@@ -5167,10 +5169,11 @@ async function runActorTurnBody(
           ? cliAgent.runtime.model
           : undefined;
       const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
-      // effort 只在真实下发的场景写 meta（能力表内的 CLI 且 low/high——网关
-      // 与本地直连都消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
+      // effort 只在真实下发的场景写 meta（能力表内的 CLI 且 off/low/high——
+      // 网关与本地直连都消费；off 仅参数模板通道可表达，claude/codex 的 UI
+      // 已置灰不会出现）；其他 CLI 不标注，避免展示一个没生效的配置。
       const cliEffortForwarded = execControlFor(String(cliRuntime ?? "")).effort
-        && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
+        && (item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),

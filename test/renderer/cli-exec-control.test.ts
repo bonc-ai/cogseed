@@ -24,9 +24,18 @@ describe('cli-exec-control capability table parity (renderer vs main)', () => {
     // 新语义：模型控制的权威是网关运行时协商（modelControllable），兜底表
     // 对未知 CLI 也放开 model（信封下发无通道即被网关安全忽略）；effort
     // 仍只对有真实链路的 CLI 开放。
-    expect(cliExecControl.execControlFor('')).toEqual({ model: true, effort: false });
-    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: true, effort: false });
-    expect(cliExecControl.execControlFor('hermes')).toEqual({ model: true, effort: false });
+    expect(cliExecControl.execControlFor('')).toEqual({ model: true, effort: false, effortOff: false });
+    expect(cliExecControl.execControlFor('something-new')).toEqual({ model: true, effort: false, effortOff: false });
+  });
+
+  it('hermes/openclaw expose real effort channels incl. an explicit off level', () => {
+    // hermes --reasoning（none|low|high…）与 openclaw --thinking
+    // （off|minimal|low|medium|high）都是单次覆盖参数（--help 实测）——
+    // effort 通道开放，且「关闭」档真实可表达（claude/codex 无 off 入口，
+    // 置灰防语义欺骗；这两家不置灰）。
+    expect(cliExecControl.execControlFor('hermes')).toEqual({ model: true, effort: true, effortOff: true });
+    expect(cliExecControl.execControlFor('openclaw')).toEqual({ model: true, effort: true, effortOff: true });
+    expect(cliExecControl.execControlFor('claude')).toEqual({ model: true, effort: true, effortOff: false });
   });
 });
 

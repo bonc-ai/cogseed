@@ -158,21 +158,26 @@ export function defaultModel(cli: LocalCliType): string | null {
 export interface CliExecControl {
   model: boolean;
   effort: boolean;
+  /** 「关闭」档可表达（hermes --reasoning none / openclaw --thinking off）。
+   *  claude/codex 无禁用入口，UI 置灰防语义欺骗。 */
+  effortOff: boolean;
 }
 const CLI_EXEC_CONTROL: Record<string, CliExecControl> = {
-  claude: { model: true, effort: true },
-  codex: { model: true, effort: true },
-  opencode: { model: true, effort: false },
-  gemini: { model: true, effort: false },
-  aider: { model: true, effort: false },
-  workbuddy: { model: true, effort: false },
+  claude: { model: true, effort: true, effortOff: false },
+  codex: { model: true, effort: true, effortOff: false },
+  hermes: { model: true, effort: true, effortOff: true },
+  openclaw: { model: true, effort: true, effortOff: true },
+  opencode: { model: true, effort: false, effortOff: false },
+  gemini: { model: true, effort: false, effortOff: false },
+  aider: { model: true, effort: false, effortOff: false },
+  workbuddy: { model: true, effort: false, effortOff: false },
 };
 export function execControlFor(cli: string): CliExecControl {
   // model 兜底全开（任意外接智能体都可尝试控制，网关无通道即安全忽略）；
   // effort 仅表内 CLI。
   const type = String(cli || '').trim();
   const known = CLI_EXEC_CONTROL[type];
-  return known ?? { model: true, effort: false };
+  return known ?? { model: true, effort: false, effortOff: false };
 }
 
 /** 别名/模型 id → 上下文窗口（会话统计的 ctx 分母）。优先级：claude 别名
