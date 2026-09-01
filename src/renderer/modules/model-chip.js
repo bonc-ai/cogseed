@@ -336,6 +336,9 @@ function _closeModelMenu() {
   document.querySelectorAll('.model-chip--open').forEach((el) => el.classList.remove('model-chip--open'));
 }
 
+// Kept as a small public bridge for boot/navigation teardown callers.
+window.closeModelChipMenu = _closeModelMenu;
+
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {
   const old = document.getElementById('model-chip-menu');
