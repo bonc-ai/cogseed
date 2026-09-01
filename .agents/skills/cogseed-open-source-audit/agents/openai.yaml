@@ -1,7 +1,0 @@
-interface:
-  display_name: "CogSeed Open-Source Audit"
-  short_description: "Scan repo privacy and release risks"
-  default_prompt: "Use $cogseed-open-source-audit to scan this repository before pushing; only print findings and never write files."
-
-policy:
-  allow_implicit_invocation: true
