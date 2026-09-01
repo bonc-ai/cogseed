@@ -105,6 +105,23 @@ describe('unified execution entry — task-scoped exec-config chip', () => {
     // Unsupported models disable the effort options with the reason shown.
     expect(chip).toMatch(/model_effort\.unsupported_hint/);
   });
+
+  it('re-renders the anchor chip at menu-open so chip and menu can never disagree', () => {
+    const chip = read('src/renderer/modules/model-chip.js');
+    // chip 平时靠事件重渲染；事件丢失/时序错位会停在旧态（真机事故：
+    // 接收者已是指挥官，chip 仍显示上一轮 CLI 智能体的「Sonnet 5 · CLI」，
+    // 菜单却列 API 条目）。开菜单瞬间必须用当前状态同步重画锚点 chip——
+    // 菜单与 chip 消费同一个 _effectiveExecConfig，同步重画后必然一致。
+    expect(chip).toMatch(/_toggleExecConfigMenu\(anchor\) {[\s\S]*?_modelChipRenderChip\(anchor\);[\s\S]*?_renderExecConfigMenu\(menu, anchor\)/);
+  });
+
+  it('self-heals a null agents cache instead of silently degrading an agent recipient', () => {
+    const chip = read('src/renderer/modules/model-chip.js');
+    // 接收者是 agent 但缓存为 null（编辑流程置空后回填失败）时，
+    // _recipientAgent 后台补拉 loadAgents——否则 chip/菜单静默滑到
+    // 指挥官的 API 语义，用户对着 ClaudeCode 会话看到 deepseek 条目。
+    expect(chip).toContain('void loadAgents(true)');
+  });
 });
 
 describe('unified execution entry — send path and bubble meta', () => {

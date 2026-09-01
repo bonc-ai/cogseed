@@ -118,7 +118,15 @@ function _recipientAgent(target) {
     const r = (typeof getChatRecipient === 'function') ? getChatRecipient(target) : null;
     if (!r || r.kind !== 'agent' || !r.id) return null;
     const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
-    return list.find((a) => a && a.agent_id === r.id) || null;
+    const hit = list.find((a) => a && a.agent_id === r.id) || null;
+    if (!hit && typeof loadAgents === 'function' && !Array.isArray(_agentsCache)) {
+      // 缓存为 null（agent 编辑等流程会先置空再回填，回填失败则一直空）：
+      // 接收者明明是 agent 却解析不出 spec，chip/菜单会静默滑到指挥官的
+      // API 语义。后台补拉一次，拉回后 agents-cache-refreshed 事件会触发
+      // chip 重渲染自愈；本次渲染先按现状走。
+      try { void loadAgents(true); } catch (_) { /* already running */ }
+    }
+    return hit;
   } catch (_) { return null; }
 }
 
@@ -411,6 +419,11 @@ function _toggleExecConfigMenu(anchor) {
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
 
+  // 开菜单瞬间用当前状态同步重画锚点 chip：chip 平时靠事件重渲染
+  // （recipient/agents-cache 变化），任何一次事件丢失或时序错位都会让它
+  // 停在旧态——用户会看到 chip 写着 A、菜单列着 B。菜单与 chip 读同一个
+  // _effectiveExecConfig，这里同步重画后两者必然一致。
+  _modelChipRenderChip(anchor);
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
   menu.className = 'model-chip-menu model-chip-menu--exec';
