@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>操作确认</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="ed-confirm-body">
+  <div class="ed-confirm-card">
+    <div class="ed-confirm-head">
+      <span class="ed-logo">🎓</span>
+      <div class="ed-brand-text">
+        <h1 id="c-title">操作确认</h1>
+        <p id="c-sub">EduSeed 智教助手 · 你确认后才会写入平台</p>
+      </div>
+    </div>
+    <div id="c-body" class="ed-confirm-body-main">
+      <div class="ed-loading">正在读取待确认内容…</div>
+    </div>
+    <div class="ed-confirm-actions">
+      <button class="ed-btn" id="c-cancel" type="button">取消</button>
+      <button class="ed-btn ed-btn-primary" id="c-confirm" type="button">确认（写入平台）</button>
+    </div>
+  </div>
+  <script src="/__cogseed/plugin-bridge.js"></script>
+  <script src="./confirm.js"></script>
+</body>
+</html>

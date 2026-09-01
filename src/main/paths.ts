@@ -510,6 +510,15 @@ export const packagedBuiltinMarketplaceDir = () => path.join(packagedBuiltinDir(
 export const packagedBuiltinMarketplaceAgentsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'agents');
 export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'skills');
 
+/**
+ * Product-bundled external packages (`resources/builtin-packages/`).
+ * Startup seeds them into the per-user packages tree (see
+ * `features/builtin_packages.ts`); the installer CLI stays the single
+ * writer of the packages registry. Kept outside `builtin/` so the
+ * marketplace content-tree manifest/hash never covers these trees.
+ */
+export const packagedBuiltinPackagesDir = () => packagedResourceDir('builtin-packages');
+
 // Hidden system skills (product protocols, not user skills). Source files ship
 // with the app under `resources/builtin/system/skills/`; startup mirrors them
 // here so model file tools can read a stable per-user data-root path.
