@@ -13,19 +13,25 @@ const { spawn: defaultSpawn } = require('node:child_process');
 // CLI 自身默认"。档位→token 预算为启发式映射，与 CogSeed 本地直连
 // backend 保持同一份取值。
 const EXEC_EFFORT_TOKENS = Object.freeze({ low: '8192', high: '32000' });
+// 档位全集：off 只对参数模板通道（effortArgs）有意义——hermes
+// --reasoning none / openclaw --thinking off 有真实禁用语义；claude 的
+// maxThinkingTokens 无 off 入口，off 不产出 token 预算。
+const EXEC_EFFORT_LEVELS = Object.freeze(['off', 'low', 'high']);
 
 function executionPrefsFor(envelope) {
   const ext = (envelope && envelope.extensions) || {};
   const prefs = ext.execution_prefs;
   if (!prefs || typeof prefs !== 'object') return null;
   const effort = typeof prefs.reasoning_effort === 'string' ? prefs.reasoning_effort.trim().toLowerCase() : '';
-  const hasEffort = Object.prototype.hasOwnProperty.call(EXEC_EFFORT_TOKENS, effort);
+  const hasEffort = EXEC_EFFORT_LEVELS.includes(effort);
   const model = typeof prefs.model === 'string' ? prefs.model.trim().slice(0, 200) : '';
   if (!hasEffort && !model) return null;
   return {
-    // maxThinkingTokens：claude 系 runtime 的档位→预算映射；reasoningEffort：
-    // 原始档位（codex 的 config.model_reasoning_effort 直接消费）。
-    ...(hasEffort ? { maxThinkingTokens: EXEC_EFFORT_TOKENS[effort], reasoningEffort: effort } : {}),
+    // maxThinkingTokens：claude 系 runtime 的档位→预算映射（off 无此语义，
+    // 不产出）；reasoningEffort：原始档位（codex 的 config 与参数模板通道
+    // effortArgs 都消费它）。
+    ...(hasEffort && effort !== 'off' ? { maxThinkingTokens: EXEC_EFFORT_TOKENS[effort] } : {}),
+    ...(hasEffort ? { reasoningEffort: effort } : {}),
     ...(model ? { model } : {}),
   };
 }
@@ -134,6 +140,30 @@ function modelArgsFor(preset, env = process.env) {
 function modelControllableFor(preset, env = process.env) {
   if (modelArgsFor(preset, env)) return true;
   return !!(preset && preset.modelControllable);
+}
+
+/** 单轮强度参数模板（与 modelArgsFor 同模式）：预设 effortArgs 声明
+ *  （'{effort}' 占位）或 P3394_AGENT_EFFORT_ARGS 自定义声明；null = 该
+ *  CLI 无强度参数通道（信封 reasoning_effort 被网关安全忽略）。 */
+function effortArgsFor(preset, env = process.env) {
+  const fromEnv = String((env && env.P3394_AGENT_EFFORT_ARGS) || '').trim();
+  if (fromEnv) return fromEnv;
+  const fromPreset = preset && typeof preset.effortArgs === 'string' ? preset.effortArgs.trim() : '';
+  return fromPreset || null;
+}
+
+/** CogSeed 档位（off/low/high）→ CLI 取值。预设 effortLevels 声明映射
+ *  （如 hermes off→none）；未声明的档位恒等（openclaw 的 off|low|high
+ *  与 CogSeed 同名零配置）；不在档位全集内返回 null（不下发，跟随 CLI
+ *  自身默认）。 */
+function effortLevelFor(preset, level) {
+  const key = String(level || '').trim().toLowerCase();
+  if (!EXEC_EFFORT_LEVELS.includes(key)) return null;
+  const map = (preset && preset.effortLevels && typeof preset.effortLevels === 'object')
+    ? preset.effortLevels
+    : null;
+  const mapped = map && Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : key;
+  return mapped.trim() || null;
 }
 
 /** 引号感知的 argv 切分（模板可含带空格的参数；{model} 先替换再切分，
@@ -434,5 +464,7 @@ module.exports = {
   INSPECT_PARSERS,
   modelArgsFor,
   modelControllableFor,
+  effortArgsFor,
+  effortLevelFor,
   splitModelArgs,
 };

@@ -12,6 +12,8 @@ import {
   probeStreamJsonInitModel,
   probeCodexConfigModel,
   probeConfigModels,
+  effortArgsFor,
+  effortLevelFor,
   INSPECT_SUBCOMMANDS,
   modelArgsFor,
   modelControllableFor,
@@ -51,8 +53,7 @@ const CLI_MODEL_REPLY = JSON.stringify({
     + 'Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.',
 });
 
-describe('gateway executionPrefsFor — model + effort passthrough', () => {
-  const run = (ext: unknown) => executionPrefsFor({ extensions: ext });
+describe('gateway executionPrefsFor — model + effort passthrough', () => {  const run = (ext: unknown) => executionPrefsFor({ extensions: ext });
 
   it('parses model + effort together', () => {
     expect(run({ execution_prefs: { reasoning_effort: 'low', model: 'sonnet' } }))
@@ -73,6 +74,34 @@ describe('gateway executionPrefsFor — model + effort passthrough', () => {
   it('caps oversized model ids instead of dropping them', () => {
     const prefs = run({ execution_prefs: { model: 'a'.repeat(500) } }) as { model: string };
     expect(prefs.model.length).toBe(200);
+  });
+
+  it('forwards an explicit off effort (hermes/openclaw channels) without claude tokens', () => {
+    // off 档只透传 reasoningEffort——claude 的 maxThinkingTokens 无 off
+    // 语义（CLI 无禁用入口），不产出；参数模板通道（--reasoning none /
+    // --thinking off）由 effortArgsFor 消费。
+    expect(run({ execution_prefs: { reasoning_effort: 'off' } })).toEqual({ reasoningEffort: 'off' });
+  });
+});
+
+describe('gateway effort channel — effortArgsFor / effortLevelFor', () => {
+  it('resolves the template from the preset, overridable via env', () => {
+    const hermesPreset = { effortArgs: '--reasoning {effort}' };
+    expect(effortArgsFor(hermesPreset, {})).toBe('--reasoning {effort}');
+    expect(effortArgsFor(hermesPreset, { P3394_AGENT_EFFORT_ARGS: '--level {effort}' })).toBe('--level {effort}');
+    expect(effortArgsFor({}, {})).toBeNull();
+  });
+
+  it('maps CogSeed levels onto CLI vocabularies (identity unless declared)', () => {
+    const hermesPreset = { effortLevels: { off: 'none' } };
+    expect(effortLevelFor(hermesPreset, 'off')).toBe('none');
+    expect(effortLevelFor(hermesPreset, 'low')).toBe('low');
+    expect(effortLevelFor(hermesPreset, 'high')).toBe('high');
+    // openclaw 的 off|low|high 与 CogSeed 档位同名——无需声明映射。
+    expect(effortLevelFor({}, 'off')).toBe('off');
+    // 未知档位不映射（null = 不下发，跟随 CLI 默认）。
+    expect(effortLevelFor(hermesPreset, 'medium')).toBeNull();
+    expect(effortLevelFor(hermesPreset, '')).toBeNull();
   });
 });
 

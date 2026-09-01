@@ -90,16 +90,20 @@ describe('local_agents/models', () => {
 
   describe('execControlFor — 外接智能体执行控制能力表', () => {
     it('enables model + effort control only for CLIs with a real gateway path', () => {
-      expect(execControlFor('claude')).toEqual({ model: true, effort: true });
-      expect(execControlFor('codex')).toEqual({ model: true, effort: true });
+      expect(execControlFor('claude')).toEqual({ model: true, effort: true, effortOff: false });
+      expect(execControlFor('codex')).toEqual({ model: true, effort: true, effortOff: false });
+      // hermes --reasoning（none|…）/ openclaw --thinking（off|…）有单次
+      // 覆盖参数（--help 实测）——effort 开放且「关闭」档真实可表达。
+      expect(execControlFor('hermes')).toEqual({ model: true, effort: true, effortOff: true });
+      expect(execControlFor('openclaw')).toEqual({ model: true, effort: true, effortOff: true });
     });
 
     it('keeps model control open for every CLI (runtime negotiation decides), effort stays gated', () => {
       // 新语义：模型控制权威在网关运行时协商（/p3394/models 的
       // model_controllable），本表只是冷启动兜底——model 对未知 CLI 也放开
       // （无参数通道的网关会安全忽略信封里的 model）；effort 仅表内 CLI。
-      for (const cli of ['openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider', '', 'unknown-cli']) {
-        expect(execControlFor(cli), `effort capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: false });
+      for (const cli of ['opencode', 'gemini', 'aider', 'workbuddy', '', 'unknown-cli']) {
+        expect(execControlFor(cli), `effort capability for ${cli || '(empty)'}`).toEqual({ model: true, effort: false, effortOff: false });
       }
     });
   });

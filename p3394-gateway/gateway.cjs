@@ -179,7 +179,10 @@ const PRESETS = {
   hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
               // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
               // 配置（configModels 声明式枚举，见 models-probe.cjs）。
-              modelArgs: '-m {model}', configModels: 'hermes' },
+              // --reasoning 单次覆盖（none|minimal|low|medium|high|xhigh|
+              // max|ultra）——off 映射 none（CLI 无 "off" 词）。
+              modelArgs: '-m {model}', configModels: 'hermes',
+              effortArgs: '--reasoning {effort}', effortLevels: { off: 'none' } },
   // claude 声明 stream-json 输出（sscli 主导下的流式包装器）：-p 配合
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
@@ -198,7 +201,10 @@ const PRESETS = {
   openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
               // --model 单次覆盖（agent --help 实测）；模型绑定在配置的
               // agents/models 段——configModels 声明式枚举读取。
-              modelArgs: '--model {model}', configModels: 'openclaw' },
+              // --thinking off|minimal|low|medium|high——off/low/high 与
+              // CogSeed 档位同名，零映射声明。
+              modelArgs: '--model {model}', configModels: 'openclaw',
+              effortArgs: '--thinking {effort}' },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
               modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
               // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
@@ -541,6 +547,8 @@ const {
   probeStreamJsonInitModel,
   probeCodexConfigModel,
   probeConfigModels,
+  effortArgsFor,
+  effortLevelFor,
   modelArgsFor,
   modelControllableFor,
   splitModelArgs,
@@ -570,10 +578,15 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs) {
     const args = CLI_ARGS.split(' ').map((part) => part.replace('{message}', message));
     // CogSeed 扩展（通用）：单轮模型选择按「模型参数模板」注入（预设声明
     // 或 P3394_AGENT_MODEL_ARGS 自定义声明；模板形如 '--model {model}'）。
-    // 无模板的 CLI 忽略（跟随自身默认）；claude 强度仍走 MAX_THINKING_TOKENS。
+    // 单轮强度同理走「强度参数模板」（effortArgs + 档位映射，hermes
+    // --reasoning / openclaw --thinking）。无模板的 CLI 忽略（跟随自身
+    // 默认）；claude 强度仍走 MAX_THINKING_TOKENS。
     const prefs = execPrefs || {};
     const template = modelArgTemplate();
     if (prefs.model && template) args.push(...splitModelArgs(template, prefs.model));
+    const effortTemplate = effortArgsFor(preset, process.env);
+    const effortLevel = prefs.reasoningEffort ? effortLevelFor(preset, prefs.reasoningEffort) : null;
+    if (effortLevel && effortTemplate) args.push(...splitModelArgs(effortTemplate, effortLevel));
     const claudeEnv = (PRESET_NAME === 'claude' && prefs.maxThinkingTokens)
       ? { MAX_THINKING_TOKENS: prefs.maxThinkingTokens }
       : null;
@@ -1165,14 +1178,18 @@ class StreamJsonRuntime {
     const transcript = readTranscriptTail(sessionId);
     const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env（claude）；单轮
-    // 模型 → 通用「模型参数模板」注入（每轮独立 spawn，天然 per-turn）。
+    // 模型 → 通用「模型参数模板」注入（每轮独立 spawn，天然 per-turn）；
+    // 强度参数模板通道（hermes/openclaw）与模型同构注入。
     const execPrefs = (opts && opts.execPrefs) || null;
     const thinkingEnv = (PRESET_NAME === 'claude' && execPrefs && execPrefs.maxThinkingTokens)
       ? { MAX_THINKING_TOKENS: execPrefs.maxThinkingTokens }
       : null;
     const template = modelArgTemplate();
     const modelArgv = (execPrefs && execPrefs.model && template) ? splitModelArgs(template, execPrefs.model) : [];
-    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []), ...modelArgv];
+    const effortTemplate = effortArgsFor(preset, process.env);
+    const effortLevel = (execPrefs && execPrefs.reasoningEffort) ? effortLevelFor(preset, execPrefs.reasoningEffort) : null;
+    const effortArgv = (effortLevel && effortTemplate) ? splitModelArgs(effortTemplate, effortLevel) : [];
+    const args = [...CLI_ARGS.split(' ').map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? preset.streamJsonArgs.split(' ').filter(Boolean) : []), ...modelArgv, ...effortArgv];
     // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
     const cancelKey = (opts && opts.taskId) || messageId;
     return new Promise((resolve, reject) => {
