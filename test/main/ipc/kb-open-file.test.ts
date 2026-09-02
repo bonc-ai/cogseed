@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
 import { makeMinimalDocx } from '../../fixtures/make-minimal-docx';
 import { makeMinimalPdf } from '../../fixtures/make-minimal-pdf';
+import { makeMinimalXlsx } from '../../fixtures/make-minimal-office';
 
 vi.mock('electron', () => ({
   app: { isPackaged: false },
@@ -99,22 +100,46 @@ describe('kb.openFile › 个人库文本/文档预览', () => {
     expect(res.content).toBe('纯文本');
   });
 
-  it('docx 转 markdown', async () => {
+  it('docx 转排版化 HTML 预览', async () => {
     const docx = makeMinimalDocx({ heading: 'Doc 标题', paragraphs: ['段落一。'] });
     writeLibFile(`${LIB}/c.docx`, docx);
     const res = await invoke('kb.openFile', { path: `${LIB}/c.docx` });
     expect(res.ok).toBe(true);
-    expect(res.kind).toBe('markdown');
-    expect(res.content).toMatch(/Doc 标题/);
+    expect(res.kind).toBe('office');
+    expect(res.officeKind).toBe('word');
+    // 返回完整 HTML 文档（含 office 排版包裹样式 + mammoth 转换正文）
+    expect(res.html).toContain('office-word');
+    expect(res.html).toContain('Doc 标题');
+    expect(res.html).toContain('段落一');
   });
 
-  it('pdf 提取分页文本', async () => {
+  it('xlsx 转表格化 HTML 预览', async () => {
+    const xlsx = makeMinimalXlsx({
+      sheetName: '成绩表',
+      rows: [
+        ['姓名', '分数'],
+        ['张伟', '99'],
+      ],
+    });
+    writeLibFile(`${LIB}/e.xlsx`, xlsx);
+    const res = await invoke('kb.openFile', { path: `${LIB}/e.xlsx` });
+    expect(res.ok).toBe(true);
+    expect(res.kind).toBe('office');
+    expect(res.officeKind).toBe('spreadsheet');
+    expect(res.html).toContain('office-sheet');
+    expect(res.html).toContain('成绩表');
+    expect(res.html).toContain('张伟');
+  });
+
+  it('pdf 走原生 PDFium（返回路径，不跨 IPC 传输文本）', async () => {
     const pdf = makeMinimalPdf(['第 1 页内容']);
     writeLibFile(`${LIB}/d.pdf`, pdf);
     const res = await invoke('kb.openFile', { path: `${LIB}/d.pdf` });
     expect(res.ok).toBe(true);
-    expect(res.kind).toBe('text');
-    expect(typeof res.content).toBe('string');
+    expect(res.kind).toBe('pdf');
+    expect(res.name).toBe('d.pdf');
+    expect(res.path).toBe(`${LIB}/d.pdf`);
+    expect(res.content).toBeUndefined();
   });
 });
 
@@ -131,6 +156,21 @@ describe('kb.openFile › 空间库文件预览', () => {
     expect(res.ok).toBe(true);
     expect(res.kind).toBe('markdown');
     expect(res.content).toContain('# 空间文档');
+  });
+
+  it('spaceId + path 的 pdf 返回原生 PDFium 标记', async () => {
+    const sid = await makeSpace('共享库2');
+    const paths = await import('../../../src/main/paths');
+    const root = paths.spaceContextsDir(TEST_UID, sid);
+    const abs = path.join(root, 'slide.pdf');
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, makeMinimalPdf(['空间 pdf']), 'utf8');
+
+    const res = await invoke('kb.openFile', { spaceId: sid, path: 'slide.pdf' });
+    expect(res.ok).toBe(true);
+    expect(res.kind).toBe('pdf');
+    expect(res.spaceId).toBe(sid);
+    expect(res.content).toBeUndefined();
   });
 
   it('拒绝越界路径（../ 逃逸）', async () => {

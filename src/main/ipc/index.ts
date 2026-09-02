@@ -4278,18 +4278,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
-  // 文本直读；docx 转 Markdown；pdf 提取文本（分页）；其余返回不支持。
+  // 文本直读（md 渲染为 Markdown）；docx/xlsx/pptx 转排版化 HTML 预览；
+  // pdf 走 kb-file:// 原生 PDFium iframe（排版不失真），此处只校验返回路径。
   'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
     const p = typeof relPath === 'string' ? relPath.trim() : '';
     if (!p) return { ok: false, error: 'missing path' };
     try {
       let abs: string;
       let display = p;
+      let spaceRoot: string | null = null;
       if (typeof spaceId === 'string' && spaceId) {
         // 空间库：路径在空间 contexts 目录下（防穿越）
         if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
         const { spaceContextsDir } = await import('../paths');
         const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
+        spaceRoot = root;
         abs = path.resolve(root, p);
         if (abs !== root && !abs.startsWith(root + path.sep)) {
           return { ok: false, error: 'invalid path' };
@@ -4303,7 +4306,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       }
       const ext = path.extname(abs).toLowerCase();
       const name = path.basename(abs);
-      if (['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'].includes(ext)) {
+      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      if (TEXT_EXTS.includes(ext)) {
         const MAX = 2 * 1024 * 1024;
         const st = fs.statSync(abs);
         if (st.size > MAX) return { ok: false, error: 'too_large', size: st.size };
@@ -4313,16 +4317,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
         return { ok: true, kind, name, path: display, content: text };
       }
-      if (ext === '.docx') {
-        const { docxBufferToMarkdown } = await import('../util/extract-docx');
-        const md = await docxBufferToMarkdown(fs.readFileSync(abs));
-        return { ok: true, kind: 'markdown', name, path: display, content: md };
+      const officeKind = _officePreviewKindForExt(ext);
+      if (officeKind) {
+        // docx / xlsx / pptx → 排版化 HTML 预览（与 produced.officePreviewHtml 同链）
+        const st = fs.statSync(abs);
+        const MAX_OFFICE = 50 * 1024 * 1024;
+        if (st.size > MAX_OFFICE) return { ok: false, error: 'too_large', size: st.size };
+        const cacheKey = `${abs}:${st.size}:${st.mtimeMs}:kb`;
+        const cached = _officePreviewCacheGet(cacheKey);
+        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html };
+        try {
+          const buf = fs.readFileSync(abs);
+          let fragment = '';
+          if (officeKind === 'word') {
+            const { docxBufferToHtml } = await import('../util/extract-docx');
+            fragment = await docxBufferToHtml(buf);
+          } else if (officeKind === 'spreadsheet') {
+            const { xlsxBufferToHtml } = await import('../util/extract-office');
+            fragment = xlsxBufferToHtml(buf);
+          } else {
+            const { pptxBufferToHtml } = await import('../util/extract-office');
+            fragment = pptxBufferToHtml(buf);
+          }
+          const html = _wrapOfficePreviewHtml(officeKind, name, fragment || '<p class="office-muted">（暂无可见内容）</p>');
+          _officePreviewCachePut(cacheKey, html, officeKind);
+          return { ok: true, kind: 'office', officeKind, name, path: display, html };
+        } catch (err) {
+          return { ok: false, error: String((err as Error).message || 'preview failed'), name };
+        }
       }
       if (ext === '.pdf') {
-        const { pdfBufferToPages } = await import('../util/extract-pdf');
-        const pages = await pdfBufferToPages(fs.readFileSync(abs));
-        const text = pages.map((pg, i) => `--- 第 ${i + 1} 页 ---\n${pg}`).join('\n\n');
-        return { ok: true, kind: 'text', name, path: display, content: text || '（PDF 未提取到文本，可能为扫描件）' };
+        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src
+        return { ok: true, kind: 'pdf', name, path: display, spaceId: spaceRoot ? (typeof spaceId === 'string' ? spaceId : undefined) : undefined };
       }
       return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
     } catch (err) {

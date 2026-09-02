@@ -62,11 +62,12 @@ if (IS_PACKAGED_LAUNCH_SMOKE) {
 }
 
 // Register the KB file protocol BEFORE `app.whenReady()` — privileged
-// schemes can't be added after. `kb-file:///<relpath>` serves a single
-// file out of the current active user's `<uid>/cloud/contexts/`. Used by
-// the renderer's PDF iframe (Chromium's built-in PDFium handles `.pdf`
-// directly when served via a standard scheme). Other bytes types fall
-// back to `shell.openPath`.
+// schemes can't be added after. `kb-file://kb/<relpath>` serves a single
+// file out of the current active user's `<uid>/cloud/contexts/`;
+// `kb-file://space/<spaceId>/<relpath>` serves a space-library file from
+// that space's contexts dir. Used by the renderer's PDF iframe (Chromium's
+// built-in PDFium handles `.pdf` directly when served via a standard
+// scheme). Other bytes types fall back to `shell.openPath`.
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'kb-file',
@@ -186,6 +187,7 @@ import * as builtinMarketplaceStartup from './features/builtin_marketplace_start
 import * as builtinPackagesStartup from './features/builtin_packages_startup';
 import type { BuiltinMarketplaceSeedResult } from './features/builtin_marketplace';
 import * as chatAttachments from './features/chat_attachments';
+import * as spacesFeature from './features/spaces';
 import * as chatArtifacts from './features/chat_artifacts';
 import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
@@ -918,14 +920,45 @@ function registerKbFileProtocol(): void {
   protocol.handle('kb-file', async (request) => {
     const reqUrl = request.url;
     try {
-      // URL shape on the wire: `kb-file://kb/<relpath>` — `kb` is a fixed
-      // fake host (see renderer `_encodeKbFileUrl`). Tolerate older /
-      // unusual normalisations (`kb-file://<seg>/...`, `kb-file:///…`) by
-      // extracting the pathname via `new URL`; standard-scheme URLs parse
-      // cleanly once a host is present.
+      // Two route shapes, dispatched by URL host:
+      //   kb-file://kb/<relpath>              — personal contexts file
+      //   kb-file://space/<spaceId>/<relpath> — space-library file
+      // The `kb` / `space` hosts are fixed fake hosts (see renderer
+      // `_encodeKbFileUrl`). Tolerate older / unusual normalisations
+      // (`kb-file://<seg>/...`, `kb-file:///…`) by extracting the pathname
+      // via `new URL`; standard-scheme URLs parse cleanly once a host is
+      // present.
       const uid = users.getActiveUserId();
-      const root = path.resolve(paths.userContextsDir(uid));
-      const resolved = resolveContainedProtocolFile(reqUrl, 'kb-file', root);
+      let root: string;
+      let resolveUrl = reqUrl;
+      let u: URL;
+      try { u = new URL(reqUrl); }
+      catch { return new Response('bad request', { status: 400 }); }
+      if (u.host.toLowerCase() === 'space') {
+        // spaceId is the first pathname segment; the remaining segments are
+        // the file's relative path inside the space contexts dir.
+        const segs = decodeURIComponent(u.pathname || '').replace(/^\/+/, '').split('/');
+        const spaceId = segs.shift() || '';
+        if (!spaceId || !storage.safeId(spaceId)) {
+          log.warn('kb-file/space: bad spaceId', { reqUrl });
+          return new Response('bad request', { status: 400 });
+        }
+        if (!segs.length) {
+          log.warn('kb-file/space: missing relpath', { reqUrl });
+          return new Response('bad request', { status: 400 });
+        }
+        if (!(await spacesFeature.spaceExists(uid, spaceId))) {
+          log.warn('kb-file/space: no such space', { reqUrl, spaceId });
+          return new Response('not found', { status: 404 });
+        }
+        root = path.resolve(paths.spaceContextsDir(uid, spaceId));
+        // Rebuild a clean `kb-file://kb/<rel>` so resolveContainedProtocolFile
+        // only sees the file-relative path (spaceId is consumed above).
+        resolveUrl = 'kb-file://kb/' + segs.map(encodeURIComponent).join('/');
+      } else {
+        root = path.resolve(paths.userContextsDir(uid));
+      }
+      const resolved = resolveContainedProtocolFile(resolveUrl, 'kb-file', root);
       if (resolved.ok === false) {
         log.warn('kb-file: rejected', { reqUrl, code: resolved.error });
         return new Response(resolved.error.replace('_', ' '), { status: resolved.status });

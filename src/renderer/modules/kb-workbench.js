@@ -1231,6 +1231,7 @@
   // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
   // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
   let _fileViewerOverlay = null;
+  let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
   function _ensureFileViewerOverlay() {
     if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
     const el = (tag, cls, text) => {
@@ -1302,6 +1303,14 @@
     const errorEl = overlay.querySelector('#kb-fv-error');
     const textEl = overlay.querySelector('#kb-fv-text');
     const mdEl = overlay.querySelector('#kb-fv-md');
+    const body = overlay.querySelector('.kb-fv-body');
+    // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
+    body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
+    body.classList.remove('kb-fv-body--frame');
+    if (_fvOfficeBlobUrl) {
+      try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
+      _fvOfficeBlobUrl = null;
+    }
     loading.hidden = !st.loading;
     errorEl.hidden = true; errorEl.textContent = '';
     textEl.hidden = true; textEl.textContent = '';
@@ -1318,17 +1327,48 @@
       return;
     }
     const c = st.content;
-    if (!c || !c.content) {
+    if (!c || !c.kind) {
       errorEl.hidden = false;
       errorEl.textContent = '文件内容为空';
       return;
     }
-    if (c.kind === 'markdown' && typeof renderMarkdown === 'function') {
+    if (c.kind === 'markdown') {
       mdEl.hidden = false;
-      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${renderMarkdown(String(c.content))}</div>`;
-    } else {
+      const bodyMd = String(c.content || '');
+      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
+    } else if (c.kind === 'text') {
       textEl.hidden = false;
-      textEl.textContent = String(c.content);
+      textEl.textContent = String(c.content || '');
+    } else if (c.kind === 'pdf') {
+      // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
+      // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
+      const rel = String(c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (s) => String(s).split('/').map(encodeURIComponent).join('/');
+      const src = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--pdf';
+      frame.src = `${src}#toolbar=1&navpanes=0`;
+      frame.title = String(c.name || rel);
+      body.appendChild(frame);
+      body.classList.add('kb-fv-body--frame');
+    } else if (c.kind === 'office') {
+      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式），沙箱 iframe
+      const officeHtml = String(c.html || '');
+      _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--office';
+      frame.setAttribute('sandbox', '');
+      frame.src = _fvOfficeBlobUrl;
+      frame.title = String(c.name || c.path || '');
+      body.appendChild(frame);
+      body.classList.add('kb-fv-body--frame');
+    } else {
+      errorEl.hidden = false;
+      errorEl.textContent = '暂不支持预览该文件';
+      return;
     }
     overlay.focus();
   }
@@ -1380,6 +1420,14 @@
       .kb-fv-dialog--reader .kb-fv-body { padding: 32px 56px; }
       .kb-fv-dialog--reader .kb-fv-markdown { font-size: 16px; }
       .kb-fv-dialog--reader .kb-fv-text { font-size: 15px; font-family: inherit; }
+      /* pdf / office 嵌入 iframe：占满正文区，独立滚动，正文区本身不滚 */
+      .kb-fv-body--frame { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .kb-fv-body--frame .kb-fv-frame {
+        flex: 1; width: 100%; border: 0; min-height: 0;
+        background: #fff; border-radius: 0 0 12px 12px;
+      }
+      .kb-fv-dialog--reader .kb-fv-body--frame { padding: 0; }
+      .kb-fv-frame--office { background: #eef2f7; }
     `;
     document.head.appendChild(style);
   }
