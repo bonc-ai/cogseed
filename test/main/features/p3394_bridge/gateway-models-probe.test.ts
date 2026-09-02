@@ -182,6 +182,24 @@ describe('gateway extractClaudeResultUsage — reply-envelope usage payload', ()
     expect(legacyFirst.model).toBe('claude-opus-5');
   });
 
+  it('sums modelUsage into billed input/output (CodexHost calibrated parity)', () => {
+    // CodexHost 把 result 帧 modelUsage 求和作权威（calibrated）值——计费
+    // 口径输出含思考与内部处理，是真实速率的分子的真值来源。
+    const out = extractClaudeResultUsage({
+      usage: { input_tokens: 100, output_tokens: 9_930 },
+      total_cost_usd: 0.18,
+      modelUsage: {
+        'claude-sonnet-5[1M]': { canonicalModel: 'claude-sonnet-5', inputTokens: 2_790, outputTokens: 9_453 },
+        'claude-haiku-5[1M]': { canonicalModel: 'claude-haiku-5', inputTokens: 500, outputTokens: 200 },
+      },
+    }) as { billedInput?: number; billedOutput?: number; model?: string };
+    expect(out.billedOutput).toBe(9_653);
+    expect(out.billedInput).toBe(3_290);
+    // 无 modelUsage → 不产出计费字段。
+    const bare = extractClaudeResultUsage({ usage: { input_tokens: 1 } }) as Record<string, unknown>;
+    expect('billedOutput' in bare).toBe(false);
+  });
+
   it('extracts thinking tokens as reasoning (DSH 口径：思考单列)', () => {
     // claude 把思考量放在 usage.output_tokens_details.thinking_tokens——
     // 真实计费量，独立保留；速度与 ↓ 展示按「思考+输出」合计。

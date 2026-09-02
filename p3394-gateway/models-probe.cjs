@@ -75,13 +75,26 @@ function extractClaudeResultUsage(ev) {
   if (details && typeof details === 'object' && typeof details.thinking_tokens === 'number') {
     out.reasoning = details.thinking_tokens;
   }
-  // 注：result 帧的 duration_ms/ttft_ms 计时同样是聚合口径（实测
-  // ttft_ms≈duration_ms、"数到 20"自报 output 8955）——不可用作速度分母，
-  // 生成窗口用宿主本地打点（首个生成活动→终态，见 gateway-turn）。
+  // 计费口径的输入/输出总量（modelUsage——CLI 转发的模型侧反馈，
+  // CodexHost 同款权威值：它把 result 帧的 modelUsage 求和作 calibrated
+  // 值覆盖估算）。billedOutput 含思考与内部处理的完整生成——真实速率
+  // （billedOutput ÷ 生成窗口）与账单都基于它；「可见回复」仍按文本
+  // 实测（out.output，measured 口径）。
+  const modelUsage = (ev && ev.modelUsage && typeof ev.modelUsage === 'object') ? ev.modelUsage : null;
+  if (modelUsage) {
+    let billedIn = 0;
+    let billedOut = 0;
+    for (const value of Object.values(modelUsage)) {
+      if (!value || typeof value !== 'object') continue;
+      if (typeof value.inputTokens === 'number') billedIn += value.inputTokens;
+      if (typeof value.outputTokens === 'number') billedOut += value.outputTokens;
+    }
+    if (billedOut > 0) out.billedOutput = billedOut;
+    if (billedIn > 0) out.billedInput = billedIn;
+  }
   // 实际模型名三路径（新版 claude 把 per-model 用量挪进 result 帧的
   // modelUsage——canonicalModel 是规范名；旧版走 message.model / 根级
   // model）——metrics.model 是会话统计 ctx 分母的解析键。
-  const modelUsage = (ev && ev.modelUsage && typeof ev.modelUsage === 'object') ? ev.modelUsage : null;
   let canonical = '';
   if (modelUsage) {
     for (const value of Object.values(modelUsage)) {

@@ -11777,6 +11777,8 @@ async function _runCliAgentTurn(opts: {
               input?: unknown;
               output?: unknown;
               reasoning?: unknown;
+              billedOutput?: unknown;
+              billedInput?: unknown;
               measured?: unknown;
               cacheRead?: unknown;
               cacheCreate?: unknown;
@@ -11801,6 +11803,10 @@ async function _runCliAgentTurn(opts: {
               usageOut.outputTokens = usageIn.output;
             if (typeof usageIn?.reasoning === "number")
               usageOut.reasoningTokens = usageIn.reasoning;
+            if (typeof usageIn?.billedOutput === "number" && usageIn.billedOutput > 0)
+              usageOut.billedOutputTokens = usageIn.billedOutput;
+            if (typeof usageIn?.billedInput === "number" && usageIn.billedInput > 0)
+              usageOut.billedInputTokens = usageIn.billedInput;
             if (usageIn?.measured === true)
               usageOut.measured = true;
             if (typeof usageIn?.cacheRead === "number")

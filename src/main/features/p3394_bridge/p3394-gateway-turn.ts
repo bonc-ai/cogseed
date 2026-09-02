@@ -37,6 +37,11 @@ export interface P3394GatewayTurnResult {
       outputTokens?: number;
       /** 思考 token（DSH 口径单列；claude 的 thinking_tokens）。 */
       reasoningTokens?: number;
+      /** 计费口径输出总量（modelUsage 求和，含思考与内部处理）——真实
+       *  生成量的权威值；速度分子优先用它（不带 ≈）。 */
+      billedOutputTokens?: number;
+      /** 计费口径输入总量（modelUsage 求和）。 */
+      billedInputTokens?: number;
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       costUsd?: number;
@@ -182,6 +187,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     if (typeof usageIn?.input === 'number') usage.inputTokens = usageIn.input;
     if (typeof usageIn?.output === 'number') usage.outputTokens = usageIn.output;
     if (typeof usageIn?.reasoning === 'number') usage.reasoningTokens = usageIn.reasoning;
+    // 计费口径总量（CLI 转发的模型侧反馈，CodexHost calibrated 同源）：
+    // billedOutput 含思考与内部处理的完整生成——真实速率的分子的权威值。
+    if (typeof usageIn?.billedOutput === 'number' && usageIn.billedOutput > 0) usage.billedOutputTokens = usageIn.billedOutput;
+    if (typeof usageIn?.billedInput === 'number' && usageIn.billedInput > 0) usage.billedInputTokens = usageIn.billedInput;
     if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
     if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
     if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;
