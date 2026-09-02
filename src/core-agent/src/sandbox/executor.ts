@@ -73,6 +73,10 @@ type KillableChild = Pick<ChildProcess, "kill" | "pid">;
 type ProcessKiller = typeof process.kill;
 type SpawnFn = typeof spawn;
 
+const WINDOWS_POWERSHELL_UTF8_PREFIX =
+  "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
+  "$OutputEncoding = [Console]::OutputEncoding; ";
+
 export const DEFAULT_SANDBOX_TIMEOUT_MS = 60 * 60_000;
 const KILL_GRACE_MS = 5_000;
 const KILL_SETTLE_GRACE_MS = KILL_GRACE_MS + 1_000;
@@ -198,7 +202,15 @@ export function buildShellInvocation(
   if (platform === "win32" && kind === "powershell") {
     return {
       command: shell,
-      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `${WINDOWS_POWERSHELL_UTF8_PREFIX}${command}`,
+      ],
       kind,
     };
   }

@@ -459,19 +459,21 @@ describe("augmentPath", () => {
       expect(inv.args).toEqual(["/d", "/s", "/c", command]);
     });
 
-    it("passes PowerShell commands through without bash-syntax rewriting", () => {
+    it("passes PowerShell commands through with UTF-8 output and without bash-syntax rewriting", () => {
       const command = '$COGSEED_NODE "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval';
       const inv = buildShellInvocation("powershell.exe", command, "win32");
       expect(inv.kind).toBe("powershell");
-      expect(inv.args).toEqual([
+      expect(inv.args.slice(0, -1)).toEqual([
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        command,
       ]);
+      expect(inv.args.at(-1)).toContain("[Console]::OutputEncoding");
+      expect(inv.args.at(-1)).toContain("$OutputEncoding = [Console]::OutputEncoding");
+      expect(inv.args.at(-1)?.endsWith(command)).toBe(true);
     });
 
     it("keeps explicit Git Bash-style shells POSIX-shaped on Windows", () => {
