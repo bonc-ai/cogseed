@@ -182,6 +182,9 @@ export interface ChatOptions {
    *  read_file / search_files / grep_files scope to this conv's attachment
    *  dir in addition to the user's active workspace. */
   cid?: string;
+  /** 每会话访问权限模式（full / auto_approve / ask），由调用方从会话元数据
+   *  解析后传入，透传给 local-tools / file-tools 的敏感操作门。 */
+  permissionMode?: 'full' | 'auto_approve' | 'ask';
   /** Stable id for the visible actor turn. Group chat passes this through as
    *  part of its turn-scoped execution contract; file output now stays in the
    *  conversation workspace rather than a turn-specific subdirectory. */
@@ -282,6 +285,13 @@ export interface ChatOptions {
    *  preserving). Set `'off'` to suppress thinking even on a reasoner;
    *  set `'low'` / `'high'` to override. */
   thinkingLevel?: 'off' | 'low' | 'high';
+  /** Per-task model override from the unified execution entry (user picked a
+   *  specific provider+model for this conversation, or temporarily switched
+   *  an in-process agent's model). Resolved against the user's configured
+   *  entries at runner build time; when the provider has no usable entry the
+   *  run falls back to the default priority group — the resolved-runtime
+   *  callback then reports what actually ran. */
+  modelOverride?: { provider: string; model: string };
   /** G8d in-process nested sub-run (a dispatch tool running a worker/agent turn
    *  inside its caller's turn). When true, the run does NOT acquire a global
    *  concurrency slot — the parent turn already holds one, and a nested

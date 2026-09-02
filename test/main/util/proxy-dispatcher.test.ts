@@ -88,9 +88,9 @@ describe('util/proxy-dispatcher buildNoProxy', () => {
   });
 
   it('merges caller NO_PROXY and dedupes', () => {
-    const out = buildNoProxy({ NO_PROXY: 'example.com, localhost , 10.0.0.1' }).split(',');
+    const out = buildNoProxy({ NO_PROXY: 'example.com, localhost , 192.0.2.1' }).split(',');
     expect(out).toContain('example.com');
-    expect(out).toContain('10.0.0.1');
+    expect(out).toContain('192.0.2.1');
     expect(out.filter((host) => host === 'localhost')).toHaveLength(1);
   });
 });

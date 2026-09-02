@@ -25,7 +25,7 @@ import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
-import { dispatchSlots } from "../../util/locks";
+import { dispatchSlots, fileEditLock } from "../../util/locks";
 import {
   canonicalizePath,
   isFileSystemCaseSensitive,
@@ -77,6 +77,7 @@ import {
   type ChatUseSelection,
   type ChatMessageReference,
   type GroupMessageFailureKind,
+  type GroupMessageMetrics,
   type MarketplaceInstallRequest,
   type RecallMessageCitation,
   type WakeRequestSummary,
@@ -138,6 +139,10 @@ import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import { getThinkingLevel } from "../config";
+import {
+  groupChatTaskBridge,
+  type GroupChatTaskBridge,
+} from "../cogseed_backend/group-chat-task-bridge";
 
 // Narrowed once so TS can see the excluded 'auto' branch.
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
@@ -235,6 +240,27 @@ export function _setP3394ControllerForTest(
   controller: Pick<P3394Controller, "admitMessage"> | null,
 ): void {
   _p3394ControllerForTest = controller;
+}
+
+/** Notification a persisted group-chat message sends to the app shell
+ *  (renderer push, tests). Fired after `appendVisible`, so receivers can
+ *  re-read conversation state from disk. */
+export interface GroupChatMessageBroadcast {
+  uid: string;
+  cid: string;
+  msgId: string;
+  from: string;
+  turnEnd: boolean;
+}
+
+type GroupChatMessageBroadcaster = (info: GroupChatMessageBroadcast) => void;
+
+let messageBroadcaster: GroupChatMessageBroadcaster | null = null;
+
+/** Register the desktop push hook (IPC layer calls this at boot). Passing
+ *  null detaches (used by tests to isolate). */
+export function setGroupChatMessageBroadcaster(fn: GroupChatMessageBroadcaster | null): void {
+  messageBroadcaster = fn;
 }
 
 /** Minimal HTML escape for embedding raw error strings inside the
@@ -1120,6 +1146,8 @@ interface QueueItem {
   /** Exact visible user text, kept separate from the LLM payload so teaching
    * intent cannot be inferred from injected references or attachment metadata. */
   sourceMessageText?: string;
+  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随派发 item
+   * 运行时携带，不持久化到 GroupMessage。 */
   /** Composed runtime payload — what the worker actually feeds the LLM,
    * including the `<msg from=X>...</msg>` wrapper. Built at enqueue time
    * so the queue is a real FIFO of LLM-ready turns, no last-minute
@@ -1165,6 +1193,10 @@ interface QueueItem {
   workflow_step_id?: string;
   /** Sender-assigned epoch persisted on the source GroupMessage. */
   incomingEpoch?: number;
+  /** Per-task execution config (unified execution entry) captured on the
+   *  triggering user message. Consumed by runActorTurnBody to override the
+   *  model / thinking strength for THIS turn only. */
+  execConfig?: TurnExecutionConfig;
 }
 
 type TurnAbortSource =
@@ -1271,6 +1303,8 @@ interface CidState {
     projectionId?: string;
     forecastId?: string;
     wakeRequestId?: string;
+    /** Dashboard projection only; never controls Group Chat execution. */
+    cogseedTaskId?: string;
     /** 本次运行里真正落过 ContextReuseReceipt 的轮次 id。
      *  回执按 `turn-<turnId>` 存（与 execution-records 同名），终态事件带上这份
      *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
@@ -1362,6 +1396,8 @@ type InteractiveFollowupStarter = (input: {
 let _interactiveFollowupStarterForTest: InteractiveFollowupStarter | null = null;
 type BackendConversationCanceller = (userId: string, conversationId: string) => Promise<unknown>;
 let _backendConversationCancellerForTest: BackendConversationCanceller | null = null;
+let _groupChatTaskBridgeForTest: GroupChatTaskBridge | null = null;
+let _beforeQueueDispatchForTest: (() => void | Promise<void>) | null = null;
 
 export function _setEnqueueAdmissionGateForTest(
   gate: (() => Promise<void>) | null,
@@ -1398,6 +1434,20 @@ export function _setBackendConversationCancellerForTest(
   canceller: BackendConversationCanceller | null,
 ): void {
   _backendConversationCancellerForTest = canceller;
+}
+
+export function _setGroupChatTaskBridgeForTest(bridge: GroupChatTaskBridge | null): void {
+  _groupChatTaskBridgeForTest = bridge;
+}
+
+export function _setBeforeQueueDispatchForTest(
+  hook: (() => void | Promise<void>) | null,
+): void {
+  _beforeQueueDispatchForTest = hook;
+}
+
+function observedTaskBridge(): GroupChatTaskBridge {
+  return _groupChatTaskBridgeForTest || groupChatTaskBridge;
 }
 
 function getOrInitCid(uid: string, cid: string): CidState {
@@ -1497,7 +1547,7 @@ function _emitTaskRunTerminalIfQuiescent(
         ? "waiting_input"
         : run.status || "failed";
   const listeners = [..._taskTerminalListeners];
-  void (async () => {
+  trackBackgroundWrite(state, (async () => {
     // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
     // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
     // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
@@ -1548,6 +1598,15 @@ function _emitTaskRunTerminalIfQuiescent(
     }
     if (!event.logical_run_id) event.logical_run_id = run.runId;
     if (!event.execution_id) event.execution_id = run.runId;
+    if (run.cogseedTaskId) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: run.cogseedTaskId,
+        status,
+        ...(event.finished_message_id ? { messageId: event.finished_message_id } : {}),
+        ...(status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
+      });
+    }
     for (const listener of listeners) {
       try {
         listener(event);
@@ -1555,7 +1614,7 @@ function _emitTaskRunTerminalIfQuiescent(
         log.warn(`task terminal listener threw: ${(err as Error).message}`);
       }
     }
-  })();
+  })(), "task terminal projection");
 }
 
 function emit(state: CidState, ev: GroupEvent): void {
@@ -1714,6 +1773,21 @@ async function appendMain(
   const file = layout.messageFile;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   await appendJsonlAtomic<GroupMessage>(file, msg);
+  // 指挥官发言在落盘时顺手标记到 members.json（commander_spoken）。
+  // 展示路径（工作空间任务列表等）据此跳过整份 jsonl 的正则扫描；
+  // 老数据由读取侧懒补记。失败不阻断消息落盘流程。
+  if (msg.from === 'commander') {
+    try {
+      const { markCommanderSpoken } = await import('./state');
+      await markCommanderSpoken(uid, cid, layout.projectId);
+    } catch (err) {
+      log.warn('markCommanderSpoken failed', {
+        uid,
+        cid,
+        error: (err as Error)?.message,
+      });
+    }
+  }
   // Stamp `updated_at` on this cid's _index.json row so the sidebar can sort
   // by real last-activity time rather than file mtime (which sync clobbers
   // when pulling from another device — see chats.ts::listConversations).
@@ -1743,7 +1817,7 @@ export interface ProjectedGroupProcessInput {
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
   data: Record<string, unknown>;
 }
 
@@ -1791,6 +1865,93 @@ export interface ProjectedAgentMessageInput {
   terminalStatus?: 'completed' | 'failed';
 }
 
+export interface ProjectedUserTaskMessageInput {
+  uid: string;
+  cid: string;
+  agentId: string;
+  requestId: string;
+  text: string;
+}
+
+/** Persist a Run Center task as the user side of a normal CogSeed
+ * conversation without enqueueing a second executor. The request id makes the
+ * projection idempotent when the task-start IPC call is replayed. */
+export async function appendProjectedUserTaskMessage(
+  input: ProjectedUserTaskMessageInput,
+): Promise<GroupMessage | null> {
+  if (!safeId(input.cid) || !safeId(input.agentId) || !safeId(input.requestId)) {
+    throw new Error('invalid CogSeed Run Center message projection');
+  }
+  const text = String(input.text || '').trim();
+  if (!text) throw new Error('CogSeed Run Center task text is required');
+  const chats = await import('../chats');
+  const conversation = await chats.getConversation(input.uid, input.cid);
+  if (!conversation) return null;
+  const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
+  const projected = await fileEditLock(messageFile).runExclusive(async () => {
+    const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
+    const existing = existingRows.find((row) => (
+      !row.deleted_at
+      && row.from === USER_ID
+      && row.action_request_id === input.requestId
+    ));
+    if (existing) {
+      if (existing.text !== text || existing.to.length !== 1 || existing.to[0] !== input.agentId) {
+        throw new Error('CogSeed request ID payload conflict');
+      }
+      return { msg: existing, created: false };
+    }
+    await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+    await ensureAgentMember(input.uid, input.cid, input.agentId);
+    const msg: GroupMessage = {
+      id: genId12(),
+      ts: nowIso(),
+      from: USER_ID,
+      to: [input.agentId],
+      text,
+      action_request_id: input.requestId,
+    };
+    await appendMain(input.uid, input.cid, msg, {
+      senderKind: 'user',
+      senderId: USER_ID,
+      agentIds: [input.agentId],
+    });
+    return { msg, created: true };
+  });
+  const { msg, created } = projected;
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
+  const actorIds = Array.from(new Set([USER_ID, COMMANDER_ID, input.agentId, ...members.actors.map((actor) => actor.id)]));
+  await fileEditLock(messageFile).runExclusive(async () => {
+    for (const actorId of actorIds) {
+      if (actorId === USER_ID) continue;
+      const slice = await readSlice(input.uid, input.cid, actorId, 10_000, conversation.project_id || null);
+      if (slice.some((row) => row.id === msg.id)) continue;
+      await appendVisibleStrict(
+        input.uid,
+        input.cid,
+        msg,
+        [actorId],
+        conversation.project_id || null,
+      );
+    }
+  });
+  if (created && messageBroadcaster) {
+    try {
+      messageBroadcaster({
+        uid: input.uid,
+        cid: input.cid,
+        msgId: msg.id,
+        from: USER_ID,
+        turnEnd: false,
+      });
+    } catch {
+      // A broken desktop refresh hook must not block task execution.
+    }
+  }
+  if (created) emit(getOrInitCid(input.uid, input.cid), { type: 'message', cid: input.cid, msg });
+  return msg;
+}
+
 /** Persist and publish one Backend-produced Agent reply without routing it
  * back through the Group Chat executor. */
 export async function appendProjectedAgentMessage(input: ProjectedAgentMessageInput): Promise<GroupMessage | null> {
@@ -1811,19 +1972,28 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     await _syncStateStatus(state);
     return null;
   }
-  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
-  await ensureAgentMember(input.uid, input.cid, input.agentId);
-  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
   const messageFile = conversationLayout(input.uid, input.cid, conversation.project_id || null).messageFile;
   const existingRows = await readJsonl<GroupMessage>(messageFile, 10_000);
   let existing: GroupMessage | undefined;
   for (let index = existingRows.length - 1; index >= 0; index -= 1) {
     const row = existingRows[index];
-    if (!row.deleted_at && row.from === input.agentId && row.turn_id === input.turnId) {
+    if (row.from === input.agentId && row.turn_id === input.turnId) {
       existing = row;
       break;
     }
   }
+  if (existing?.deleted_at) {
+    // A user-deleted terminal reply remains durable idempotency evidence. A
+    // projection retry may finish its bookkeeping, but must not resurrect the
+    // bubble, repopulate visibility slices, or emit it again.
+    state.backendTurns.delete(input.turnId);
+    _recordTaskRunOutcome(state, input.terminalStatus ?? (input.failureKind ? 'failed' : 'completed'));
+    await _syncStateStatus(state);
+    return existing;
+  }
+  await seedReservedActors(input.uid, input.cid, conversation.project_id || null);
+  await ensureAgentMember(input.uid, input.cid, input.agentId);
+  const members = await readMembers(input.uid, input.cid, conversation.project_id || null);
   const msg: GroupMessage = existing ?? {
     id: genId12(),
     ts: nowIso(),
@@ -1879,6 +2049,20 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
 
 // ── enqueue ──────────────────────────────────────────────────────────────
 
+/** Per-task execution configuration chosen in the unified execution entry
+ *  (composer). Every field is optional; absent fields fall through to the
+ *  agent's own defaults, then to the global defaults. Originates from the
+ *  renderer send stream, validated at the IPC boundary. */
+export interface TurnExecutionConfig {
+  /** Explicit provider id (built-in or `cp:<id>` custom). */
+  provider?: string;
+  /** Explicit model id under that provider. */
+  model?: string;
+  /** Explicit thinking strength. 'auto' never travels down this path —
+   *  the renderer omits the field when the user wants provider default. */
+  effort?: 'off' | 'low' | 'high';
+}
+
 export interface EnqueueParams {
   uid: string;
   cid: string;
@@ -1893,6 +2077,12 @@ export interface EnqueueParams {
    * taxonomy only; the rendered text still controls failure actions/UI. */
   failure_kind?: GroupMessageFailureKind;
   failure_code?: string;
+  /** Durable host action id used to make retry/continuation enqueue idempotent. */
+  actionRequestId?: string;
+  /** Stable QueueItem identity for a host-owned recoverable dispatch. This is
+   * internal to the main process and is never persisted on the source user
+   * message or exposed through IPC. */
+  dispatchTurnId?: string;
   model_text?: string;
   /** Host-verified failed-turn continuation. Kept off the persisted message
    * schema; it only controls how the recipient worker opens its session. */
@@ -1935,12 +2125,21 @@ export interface EnqueueParams {
    *  uses this to force `to=[user]`). Otherwise router decides. */
   forceTo?: string[];
   /** Trusted user route. The IPC/group facade validates composer selections;
-   * retry and edit flows derive their target from persisted history. It stays
-   * off the persisted message schema and bypasses raw-mention Wake approval. */
+   *  retry and edit flows derive their target from persisted history. It stays
+   *  off the persisted message schema and bypasses raw-mention Wake approval. */
   userRoute?: {
     agentId: string;
     origin: 'user_selection' | 'cli_fallback' | 'failed_turn_retry' | 'message_edit';
   };
+  /** Per-task execution config from the unified execution entry (renderer
+   *  composer). Validated at the IPC boundary; applied on top of agent /
+   *  global defaults at turn time. Only rides live queue items — the visible
+   *  outcome lands on the end-of-turn message as `exec_meta`. */
+  executionConfig?: TurnExecutionConfig;
+  /** Actual execution config to persist on this message (unified execution
+   *  entry). Set by runTurn on the actor's end-of-turn message so a history
+   *  reload can rerender the same meta on the bubble. */
+  exec_meta?: GroupMessage["exec_meta"];
   /** Trusted external-channel inbound (P3394 bridge): keeps the
    * user-message abort-reset and task-run lifecycle semantics for a message
    * that persists under the peer agent's own actor identity. Only the
@@ -1961,6 +2160,10 @@ export interface EnqueueParams {
    * end-of-turn message. Renderer uses it to finalize the exact placeholder
    * that collected this turn's process / delta events. */
   turn_id?: string;
+  /** Usage/timing metrics for the settled assistant reply this enqueue
+   *  persists. Passed through to the persisted GroupMessage; absent on
+   *  user messages and host status rows. */
+  metrics?: GroupMessageMetrics;
   /** QueueItem.msgId for the actor execution that produced this message —
    * the id of the (user/commander) message that triggered the turn. Carried
    * on live bus events only (never persisted) so consumers such as the
@@ -2016,6 +2219,9 @@ export interface EnqueueParams {
  */
 export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
   const { uid, cid, fromActorId, text } = params;
+  if (params.dispatchTurnId && !safeId(params.dispatchTurnId)) {
+    throw new Error('invalid dispatch turn id');
+  }
   const state = getOrInitCid(uid, cid);
   if (state.terminating) {
     throw Object.assign(new Error("conversation runtime is terminating"), {
@@ -2342,6 +2548,9 @@ async function _enqueueBody(
     if (fromKind === "user") to = [COMMANDER_ID];
     else to = [USER_ID];
   }
+  if (params.dispatchTurnId && to.filter((recipientId) => recipientId !== USER_ID).length !== 1) {
+    throw new Error('stable dispatch turn id requires exactly one executable recipient');
+  }
 
   // Floor update: a user-visible recipient choice is the conversation floor.
   // Manual @ / chip selection should stick until the user switches again, the
@@ -2510,6 +2719,7 @@ async function _enqueueBody(
       : {}),
     ...(params.failure_kind ? { failure_kind: params.failure_kind } : {}),
     ...(params.failure_code ? { failure_code: params.failure_code } : {}),
+    ...(params.actionRequestId ? { action_request_id: params.actionRequestId } : {}),
     ...(params.model_text && params.model_text.trim()
       ? { model_text: params.model_text }
       : {}),
@@ -2556,7 +2766,10 @@ async function _enqueueBody(
     ...(params.process && params.process.length
       ? { process: params.process }
       : {}),
+    ...(params.exec_meta ? { exec_meta: params.exec_meta } : {}),
     ...(params.turn_id ? { turn_id: params.turn_id } : {}),
+    ...(params.metrics ? { metrics: params.metrics } : {}),
+    ...(params.turn_end ? { turn_end: true as const } : {}),
   };
 
   if (state.taskRun && params.kstarTerminalProvenance) {
@@ -2584,6 +2797,19 @@ async function _enqueueBody(
       state.taskRun.anchorMessageId = msg.id;
     }
     state.taskRun.lastMessageId = msg.id;
+    const opensObservedRun = !params.internalControl
+      && !backendFollowupAgentId
+      && !state.taskRun.cogseedTaskId
+      && (fromActorId === USER_ID || params.externalInbound === true);
+    if (opensObservedRun) {
+      const observed = await observedTaskBridge().startRun({
+        userId: uid,
+        conversationId: cid,
+        runId: state.taskRun.runId,
+        sourceMessageId: msg.id,
+      });
+      if (observed) state.taskRun.cogseedTaskId = observed.taskId;
+    }
   }
   // Strip the process trail before writing visibility slices: only the user-
   // facing main jsonl needs it for history reload. Agent workers replay
@@ -2601,6 +2827,28 @@ async function _enqueueBody(
     ...members.actors.map((a) => a.id),
   ]);
   await appendVisible(uid, cid, sliceMsg, Array.from(allActorIds));
+
+  // Desktop refresh rail: every persisted group-chat message (in-app sends,
+  // external-channel inbound like Feishu, agent replies) notifies the
+  // registered broadcaster. The IPC layer wires this to a
+  // `conversations:updated` push so the renderer's sidebar and open
+  // conversation stay live even when no per-request stream is attached
+  // (which is exactly the external-inbound case: nothing in the renderer
+  // subscribed to this conversation's bus events).
+  if (messageBroadcaster) {
+    try {
+      messageBroadcaster({
+        uid,
+        cid,
+        msgId,
+        from: fromActorId,
+        turnEnd: params.turn_end === true,
+      });
+      log.info(`desktop message broadcast uid=${uid} cid=${cid} msg=${msgId} from=${fromActorId}`);
+    } catch {
+      // A broken broadcast listener must never take the bus down.
+    }
+  }
 
   emit(state, {
     type: "message",
@@ -2673,6 +2921,9 @@ async function _enqueueBody(
   }
 
   // Dispatch to non-user recipients.
+  if (_beforeQueueDispatchForTest && to.some((recipientId) => recipientId !== USER_ID)) {
+    await _beforeQueueDispatchForTest();
+  }
   const refreshed = dispatchMembers;
   for (const recipientId of to) {
     if (recipientId === USER_ID) continue;
@@ -2689,7 +2940,7 @@ async function _enqueueBody(
     const w = ensureRuntime(state);
     w.queue.push({
       actor,
-      turnId: genId12(),
+      turnId: params.dispatchTurnId || genId12(),
       msgId,
       fromActorId,
       ...(params.internalControl ? { internalControl: true } : {}),
@@ -2710,6 +2961,7 @@ async function _enqueueBody(
       ...(params.committedProjectionId ? { committedProjectionId: params.committedProjectionId } : {}),
       ...(params.forecastId ? { forecastId: params.forecastId } : {}),
       ...(params.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
+      ...(params.executionConfig ? { execConfig: params.executionConfig } : {}),
       ...(params.workflow_step_id
         ? { workflow_step_id: params.workflow_step_id }
         : {}),
@@ -2763,6 +3015,155 @@ async function _enqueueBody(
   }
 
   return msg;
+}
+
+export interface RecoverPersistedUserDispatchInput {
+  uid: string;
+  cid: string;
+  messageId: string;
+  actionRequestId: string;
+  recipientId: string;
+  turnId: string;
+  resumeActiveTurn?: boolean;
+}
+
+export type PersistedUserDispatchRecoveryDisposition =
+  | 'redispatched'
+  | 'already-active'
+  | 'already-completed';
+
+export interface RecoverPersistedUserDispatchResult {
+  msg: GroupMessage;
+  disposition: PersistedUserDispatchRecoveryDisposition;
+}
+
+/** Repair the narrow crash window where a host-owned user message reached the
+ * main JSONL but its QueueItem did not reach the in-memory runtime. The caller
+ * supplies identities derived from a durable retry claim; this function never
+ * creates or rewrites the source message. */
+export async function recoverPersistedUserDispatch(
+  input: RecoverPersistedUserDispatchInput,
+): Promise<RecoverPersistedUserDispatchResult> {
+  for (const id of [input.cid, input.messageId, input.actionRequestId, input.recipientId, input.turnId]) {
+    if (!safeId(id)) throw new Error('invalid persisted dispatch identity');
+  }
+  const state = getOrInitCid(input.uid, input.cid);
+  if (state.terminating) {
+    throw Object.assign(new Error('conversation runtime is terminating'), {
+      code: 'E_CONVERSATION_TERMINATING',
+    });
+  }
+
+  state.pendingEnqueues += 1;
+  try {
+    const messageFile = conversationLayout(input.uid, input.cid).messageFile;
+    const rows = await readJsonl<GroupMessage>(messageFile, 100_000);
+    const msg = rows.find((row) => row.id === input.messageId && !row.deleted_at);
+    if (!msg
+      || msg.from !== USER_ID
+      || msg.action_request_id !== input.actionRequestId
+      || msg.to.length !== 1
+      || msg.to[0] !== input.recipientId) {
+      throw new Error('persisted retry message does not match its dispatch claim');
+    }
+
+    const existingRuntime = state.workers.get(RUNTIME_KEY);
+    if (existingRuntime?.currentTurnId === input.turnId
+      || existingRuntime?.queue.some((item) => item.turnId === input.turnId)) {
+      return { msg, disposition: 'already-active' };
+    }
+
+    // Re-read after checking the runtime. A worker may have completed while
+    // the first JSONL read was in flight; runWorkerLoop clears currentTurnId
+    // only after the terminal message has finished persisting.
+    const latestRows = await readJsonl<GroupMessage>(messageFile, 100_000);
+    if (latestRows.some((row) => (
+      row.from === input.recipientId
+      && row.turn_id === input.turnId
+      && row.turn_end === true
+    ))) {
+      return { msg, disposition: 'already-completed' };
+    }
+
+    await seedReservedActors(input.uid, input.cid);
+    if (!RESERVED_IDS.has(input.recipientId)) {
+      await ensureAgentMember(input.uid, input.cid, input.recipientId);
+    }
+    const members = await readMembers(input.uid, input.cid);
+    const actor = members.actors.find((candidate) => candidate.id === input.recipientId);
+    if (!actor || actor.kind === 'user' || actor.kind === 'worker') {
+      throw new Error('persisted retry actor is unavailable');
+    }
+    if (actor.kind === 'agent') {
+      const available = isAgentEnabled(input.uid, actor.id)
+        && !!await agentsFeat.getAgentForChatDispatch(input.uid, actor.id);
+      if (!available) throw new Error('persisted retry actor is unavailable');
+    }
+
+    const sliceMsg: GroupMessage = msg.process
+      ? (() => {
+          const { process: _drop, ...rest } = msg;
+          return rest as GroupMessage;
+        })()
+      : msg;
+    const actorIds = Array.from(new Set([
+      USER_ID,
+      COMMANDER_ID,
+      input.recipientId,
+      ...members.actors.map((member) => member.id),
+    ]));
+    for (const actorId of actorIds) {
+      if (actorId === USER_ID) continue;
+      const slice = await readSlice(input.uid, input.cid, actorId, 10_000);
+      if (slice.some((row) => row.id === msg.id)) continue;
+      await appendVisibleStrict(input.uid, input.cid, sliceMsg, [actorId]);
+    }
+
+    if (!state.taskRun) {
+      state.taskRun = {
+        runId: genId12(),
+        startedAtMs: Date.now(),
+        status: null,
+        anchorMessageId: msg.id,
+        lastMessageId: msg.id,
+      };
+    }
+    const runtime = ensureRuntime(state);
+    let disposition: PersistedUserDispatchRecoveryDisposition = 'already-active';
+    if (runtime.currentTurnId !== input.turnId
+      && !runtime.queue.some((item) => item.turnId === input.turnId)) {
+      runtime.queue.push({
+        actor,
+        turnId: input.turnId,
+        msgId: msg.id,
+        fromActorId: USER_ID,
+        sourceMessageText: msg.text,
+        llmPayload: composeLlmTurnPayload(input.uid, USER_ID, msg),
+        ...(msg.p3394?.recipient_epochs[input.recipientId] !== undefined
+          ? { incomingEpoch: msg.p3394.recipient_epochs[input.recipientId] }
+          : {}),
+        ...(msg.attachments?.length ? { attachments: msg.attachments.slice() } : {}),
+        ...(msg.references?.length ? { references: msg.references.slice() } : {}),
+        ...(msg.use_selections?.length ? { useSelections: msg.use_selections.slice() } : {}),
+        ...(input.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
+      });
+      const wake = runtime.wake;
+      runtime.wake = null;
+      wake?.();
+      disposition = 'redispatched';
+    }
+    return { msg, disposition };
+  } finally {
+    state.pendingEnqueues -= 1;
+    if (state.pendingEnqueues === 0 && state.pendingEnqueueWaiters.size > 0) {
+      const waiters = [...state.pendingEnqueueWaiters];
+      state.pendingEnqueueWaiters.clear();
+      for (const resolve of waiters) resolve();
+    }
+    if (state.taskRun) {
+      trackBackgroundWrite(state, _syncStateStatus(state), 'post-recovery syncStateStatus');
+    }
+  }
 }
 
 function _resolvedReferenceAttachments(
@@ -3362,6 +3763,24 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  const observedTurn = state.taskRun?.cogseedTaskId
+    ? await observedTaskBridge().startTurn({
+        userId: state.uid,
+        conversationId: state.cid,
+        runId: state.taskRun.runId,
+        turnId: item.turnId,
+        sourceMessageId: item.msgId,
+        parentTaskId: state.taskRun.cogseedTaskId,
+        actorId: w.actor.id,
+        ...(w.actor.name ? { actorName: w.actor.name } : {}),
+        actorKind: w.actor.kind === 'worker'
+          ? 'worker'
+          : w.actor.kind === 'agent'
+            ? 'agent'
+            : 'commander',
+        ...(stepId ? { workflowStepId: stepId } : {}),
+      })
+    : null;
   let cliProcessPid: number | undefined;
   let inProcessSessionIsActive = () => false;
   const appendCoordinatorEvent = (event: ProcessEvent): void => {
@@ -3462,6 +3881,20 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: result.kind === 'completed' ? result.terminalStatus : 'failed',
+        ...(result.kind === 'completed' && result.persistedMsg?.id ? { messageId: result.persistedMsg.id } : {}),
+        ...(result.kind === 'completed' && result.outcome.kind === 'persist' && result.outcome.failureCode
+          ? { errorCode: result.outcome.failureCode }
+          : result.kind === 'early' && result.failureCode
+            ? { errorCode: result.failureCode }
+            : {}),
+        process: processItems,
+      });
+    }
     return result;
   } catch (err) {
     const coordinatorAbort =
@@ -3480,6 +3913,15 @@ async function runActorTurn(
         error: logErrorRef(
           new Error("Nested workflow step settlement failed."),
         ),
+      });
+    }
+    if (observedTurn) {
+      await observedTaskBridge().finishTask({
+        userId: state.uid,
+        taskId: observedTurn.taskId,
+        status: aborted ? 'cancelled' : 'failed',
+        errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
+        process: processItems,
       });
     }
     if (stepId && !settled) {
@@ -3540,6 +3982,7 @@ async function runActorTurnBody(
   let turnProjectId: string | undefined;
   let turnSpaceId: string | undefined;
   let turnConversationKind: string | undefined;
+  let turnPermissionMode: 'full' | 'auto_approve' | 'ask' | undefined;
   try {
     const { getConversation } = await import("../chats");
     const _conv = await getConversation(uid, cid);
@@ -3549,6 +3992,8 @@ async function runActorTurnBody(
     if (typeof _sid === "string" && _sid) turnSpaceId = _sid;
     const _kind = (_conv as any)?.kind;
     if (typeof _kind === "string" && _kind) turnConversationKind = _kind;
+    const _mode = (_conv as any)?.permission_mode;
+    if (_mode === 'full' || _mode === 'auto_approve' || _mode === 'ask') turnPermissionMode = _mode;
   } catch {
     /* default scope */
   }
@@ -3796,6 +4241,15 @@ async function runActorTurnBody(
   // extraTools — the LLM stream is replaced below by `runCliAgentTurn`.
   // Hoisted here so the branch below can read it without re-fetching.
   let cliAgent: import("../agents").Agent | null = null;
+  // The full agent spec for the acting agent (null for commander / worker).
+  // Hoisted like `cliAgent` so the turn executor can read per-agent default
+  // model / thinking strength (unified execution entry) without re-fetching.
+  let turnAgentSpec: import("../agents").Agent | null = null;
+  // Actual execution config for this turn (unified execution entry). Filled
+  // by the resolved-runtime callback (in-process) or at CLI launch, emitted
+  // as a live `execution` process event, and persisted on the end-of-turn
+  // message as `exec_meta`.
+  let turnExecMeta: GroupMessage["exec_meta"] | null = null;
   let actorInteractive = false;
   // Commander loop bubbles: split a commander turn into reasoning segments at
   // each VISIBLE dispatch boundary. `flush` is wired up after `streamingText`
@@ -3970,8 +4424,10 @@ async function runActorTurnBody(
     }
     if (agentsFeat.isCliAgent(agent) || agentsFeat.isP3394GatewayAgent(agent)) {
       cliAgent = agent;
+      turnAgentSpec = agent;
       systemPrompt = ""; // unused on CLI / P3394-gateway path
     } else {
+      turnAgentSpec = agent;
       systemPrompt = await buildAgentInGroupSystemPrompt(
         uid,
         cid,
@@ -4325,6 +4781,14 @@ async function runActorTurnBody(
     turnFailureCode = code;
   };
   let agentRunTimingData: Record<string, unknown> | undefined;
+  // Wall-clock moment the terminal agent_run_result event arrived — the
+  // internal-link anchor for rebuilding startedAt (completedAt - duration_ms)
+  // and firstTokenAt (startedAt + first_token_ms) on the persisted reply.
+  let agentRunResultAt: number | undefined;
+  // Settled-reply metrics for the CLI-backed turn (assembled inside
+  // _runCliAgentTurn off the runner's done event). Undefined on internal
+  // model turns — those derive metrics from agentRunTimingData instead.
+  let cliTurnMetrics: GroupMessageMetrics | undefined;
   // Wire the commander segment flush now that `streamingText` exists. Called
   // from a visible-dispatch tool BEFORE the dispatched agent runs, so the
   // commander's reasoning since the last flush is persisted as its own `seg`
@@ -4547,9 +5011,15 @@ async function runActorTurnBody(
               ...(event ? { event } : {}),
             });
           } else if (data.type === "event") {
-            const event = processEventForPersistence(data.event);
-            if (event)
-              appendProcessItem(processItems, { type: "event", event });
+            // Execution-config events (unified execution entry) are live-only:
+            // they ride the bus for the streaming bubble's meta row and are
+            // persisted as `exec_meta` on the end-of-turn message instead.
+            const stream = (data as { event?: { stream?: string } }).event?.stream;
+            if (stream !== "execution") {
+              const persisted = processEventForPersistence(data.event);
+              if (persisted)
+                appendProcessItem(processItems, { type: "event", event: persisted });
+            }
           }
           // For the live wire: `delta` streams into the placeholder
           // bubble (token-by-token); other shapes feed the process
@@ -4610,7 +5080,13 @@ async function runActorTurnBody(
       // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
       // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
       const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
-      const cliOut = isP3394Gateway
+      // Required-input gate（第二期收口：直连与网关两通道共用）：必填输入
+      // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
+      // <agent-input-form> 询问用户。
+      const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      const cliOut = sharedFormBlock
+        ? { text: sharedFormBlock, produced: [] as string[] }
+        : isP3394Gateway
         ? await (
             await import("../p3394_bridge/p3394-gateway-turn")
           ).runP3394GatewayTurn({
@@ -4624,6 +5100,16 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
+            // Unified execution entry: forward the per-task reasoning effort
+            // in the envelope's CogSeed-private execution_prefs. Only claude
+            // gateway runtime consumes it today (MAX_THINKING_TOKENS), and
+            // only low/high are expressible there ('off' has no reliable
+            // claude switch — the UI disables it; guard here so a stale
+            // override can never leak a value the gateway would drop).
+            ...((cliRuntime === "claude"
+              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high"))
+              ? { reasoningEffort: item.execConfig.effort }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
@@ -4641,6 +5127,13 @@ async function runActorTurnBody(
             signal: w.abortController.signal,
             onCoordinatorActivity: (event) => {
               coordinatorLease?.observe(event as never);
+            },
+            // 第二期收口：网关路径同样打通 PID 通道（正整数才进内存协调器，
+            // 与直连路径同一校验）；真实网关子进程 pid 数据源后续增强。
+            onProcessInfo: (pid) => {
+              if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+                coordinator.setCliProcessPid(pid);
+              }
             },
             onProcess: forwardProcess,
           })
@@ -4660,10 +5153,51 @@ async function runActorTurnBody(
             onProcess: forwardProcess,
           });
       for (const p of cliOut.produced || []) await onFileWritten(p);
+      // Unified execution entry: record what this CLI turn actually ran with
+      // (persisted as exec_meta on the end-of-turn message). Mirrors the
+      // per-turn model choice inside _runCliAgentTurn (override > runtime.model).
+      const cliRuntimeModel =
+        cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          ? cliAgent.runtime.model
+          : undefined;
+      // 方案 B（模型不可控不展示）：网关是外接智能体的实际执行路径，信封
+      // 没有 model 栏位——CLI 实际用哪个模型由它自身配置决定。网关 turn 的
+      // exec_meta 因此不写 model（写了就是"展示 ≠ 实际"）；仅近乎废弃的本地
+      // 直连路径真实消费 runtime.model，那里保留真实值。
+      const cliIsGateway = cliAgent.runtime?.kind === "p3394-gateway";
+      const cliTurnModel = cliIsGateway
+        ? undefined
+        : (item.execConfig?.model || cliRuntimeModel);
+      // effort 只在真实下发的场景写 meta（claude 且 low/high——网关与本地
+      // 直连都会消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
+      const cliEffortForwarded = cliRuntime === "claude"
+        && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
+      turnExecMeta = {
+        ...(cliTurnModel ? { model: cliTurnModel } : {}),
+        ...(cliRuntime ? { cli: cliRuntime } : {}),
+        ...(cliEffortForwarded ? { effort: item.execConfig.effort } : {}),
+      };
       finalText = cliOut.text;
       streamingText = cliOut.text;
+      // P3394 gateway turns currently report no metrics (no runner.ts done
+      // event on that path) — the read degrades to undefined there.
+      cliTurnMetrics = (cliOut as { metrics?: GroupMessageMetrics }).metrics;
       if (cliOut.error) {
-        errText = cliOut.error;
+        // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
+        // 原始后端错误只进日志，不透给渲染层。
+        const failedCli = cliAgent.runtime &&
+          (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+          ? cliAgent.runtime.cli
+          : "";
+        errText = t("cli_agent.run_failed_detail", {
+          name: cliAgent.name || failedCli,
+          cli: failedCli,
+        });
+        log.warn("external agent turn failed", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          error: cliOut.error,
+        });
         turnInfrastructureFailure ||= !!cliOut.infrastructureFailure;
         markTurnFailure(
           (cliOut.failureKind || "runtime") as import("./visibility").GroupMessageFailureKind,
@@ -4699,6 +5233,59 @@ async function runActorTurnBody(
       const actorMaxToolLoops = maxToolLoopsForActorKind(actor.kind);
       const { createLifecycleSink } = await import("../execution-records");
       const { getLocalExecMode } = await import("../permissions");
+      // Vision fallback seam (2026-08-27, product call): if this turn carries
+      // images and the receiving model is KNOWN vision-incapable, the
+      // registered pluggable handler returns MODEL-FACING instructions
+      // (image facts + on-disk paths + which vision tools to call — vision
+      // model reroute / vision MCP, shape deliberately open). The model then
+      // acts on its own agency. No handler or unknown capability keeps
+      // today's pass-through behavior.
+      if (turnImages.length) {
+        const { applyVisionFallbackIfBlind } = await import("../vision_fallback");
+        const chatAttachments = await import("../chat_attachments");
+        // Enrich inline images with name + on-disk path (processors read the
+        // original bytes from disk, not the compressed inline payload).
+        // buildAttachmentManifest packs images in attachment order, so pair
+        // them positionally; unmatched entries stay anonymous.
+        const imageNames: string[] = [];
+        for (const rawName of item.attachments || []) {
+          const resolved = chatAttachments.resolveAttachmentAbsPath(uid, cid, String(rawName));
+          if (resolved.ok && resolved.kind === "image") imageNames.push(String(rawName));
+        }
+        const enrichedImages = turnImages.map((img, i) => {
+          const name = imageNames[i];
+          if (!name) return { ...img };
+          const r = chatAttachments.resolveAttachmentAbsPath(uid, cid, name);
+          return r.ok ? { ...img, name, absPath: r.absPath } : { ...img };
+        });
+        const fallback = await applyVisionFallbackIfBlind({
+          userId: uid,
+          conversationId: cid,
+          messageText,
+          images: enrichedImages,
+          resolveAbilities: async () => {
+            const auth = await import("../auth");
+            const { entries } = await auth.listEntries();
+            const current = entries && entries[0];
+            if (!current || !current.provider || !current.model) return null;
+            const res = await auth.listModels(current.provider);
+            const hit = (res.models || []).find((m) => m && m.id === current.model);
+            return hit
+              ? { providerId: current.provider, modelId: current.model, ...(hit.vision !== undefined ? { vision: hit.vision } : {}) }
+              : null;
+          },
+        });
+        if (fallback) {
+          messageText = fallback.messageText;
+          turnImages = fallback.images as typeof turnImages;
+          if (fallback.note) {
+            appendProcessItem(processItems, {
+              type: "event",
+              event: { stream: "attachment", data: { phase: "vision-fallback", note: fallback.note } },
+            });
+          }
+        }
+      }
       const executionLifecycle = createLifecycleSink(uid, {
         executionId: `turn-${item.turnId}`,
         kind: "core-agent",
@@ -4710,9 +5297,22 @@ async function runActorTurnBody(
         boundary: "real",
         permissionMode: getLocalExecMode(),
       });
-      // User-selected thinking strength ('auto' = no override; let the
-      // provider default / model decide).
-      const turnThinkingLevel = thinkingLevelForRun();
+      // Unified execution entry — effective thinking strength priority:
+      // per-task override (renderer composer) > agent default (agent.json
+      // `default_thinking`) > global preference. 'auto' = no override; let
+      // the provider default / model decide.
+      const turnThinkingLevel: "auto" | "off" | "low" | "high"
+        = item.execConfig?.effort
+          ?? turnAgentSpec?.default_thinking
+          ?? thinkingLevelForRun();
+      // Effective model override priority: per-task override > agent
+      // default (`default_model`). Commander / in-process agents only —
+      // CLI turns apply their own model below (runtime.model + override).
+      const turnModelOverride = item.execConfig?.provider && item.execConfig?.model
+        ? { provider: item.execConfig.provider, model: item.execConfig.model }
+        : turnAgentSpec?.default_model
+          ? { ...turnAgentSpec.default_model }
+          : undefined;
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
@@ -4723,8 +5323,10 @@ async function runActorTurnBody(
         // User-selected thinking strength ('auto' = no override; let the
         // provider default / model decide).
         ...(turnThinkingLevel !== "auto" ? { thinkingLevel: turnThinkingLevel } : {}),
+        ...(turnModelOverride ? { modelOverride: turnModelOverride } : {}),
         ...(actor.kind === "agent" ? { agentId: actor.id } : {}),
         cid,
+        ...(turnPermissionMode ? { permissionMode: turnPermissionMode } : {}),
         turnId: item.turnId,
         sourceMessageId: item.msgId,
         sourceMessageFromUser: item.fromActorId === USER_ID,
@@ -4739,11 +5341,40 @@ async function runActorTurnBody(
             candidate_ids: receipt.candidateIds,
           });
         },
-        ...(isCommander ? {
-          onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
-            commanderResolvedRuntime = runtime;
-          },
-        } : {}),
+        // Every in-process turn reports its resolved runtime (actual
+        // provider/model after override / fallback). Commander keeps its
+        // existing collector; all actors also emit the live execution-config
+        // process event so the renderer can show "actually running with X ·
+        // effort Y" on the streaming bubble (unified execution entry).
+        onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
+          if (isCommander) commanderResolvedRuntime = runtime;
+          turnExecMeta = {
+            provider: runtime.providerId,
+            model: runtime.modelId,
+            effort: turnThinkingLevel,
+          };
+          emit(state, {
+            type: "process",
+            cid,
+            actor: actor.id,
+            turn_id: item.turnId,
+            data: {
+              type: "event",
+              event: {
+                stream: "execution",
+                data: {
+                  phase: "config",
+                  actor: actor.id,
+                  agent_id: actor.id,
+                  provider: runtime.providerId,
+                  model: runtime.modelId,
+                  effort: turnThinkingLevel,
+                  runtime: "model",
+                },
+              },
+            },
+          });
+        },
         ...(item.resumeActiveTurn ? { resumeActiveTurn: true } : {}),
         ...(turnProjectId ? { projectId: turnProjectId } : {}),
         ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
@@ -4861,6 +5492,7 @@ async function runActorTurnBody(
             inner && typeof inner === "object"
               ? (inner as Record<string, unknown>)
               : undefined;
+          agentRunResultAt = agentRunTimingData ? Date.now() : undefined;
           if (actor.kind !== "worker") {
             emit(state, {
               type: "agent_run_result",
@@ -5580,6 +6212,51 @@ async function runActorTurnBody(
 
   let persistedMsg: GroupMessage | null = null;
   if (outcome.kind === "persist") {
+    // Task 5: usage/timing metrics for this settled reply. CLI turns arrive
+    // fully assembled from _runCliAgentTurn (runner attaches startedAt /
+    // firstTokenAt to the terminal done event); internal model turns rebuild
+    // them from the agent_run_result payload — duration_ms anchors startedAt,
+    // first_token_ms anchors firstTokenAt relative to it. Fields the source
+    // didn't report are omitted, never fabricated.
+    let replyMetrics: GroupMessageMetrics | undefined;
+    if (cliTurnMetrics) {
+      replyMetrics = cliTurnMetrics;
+    } else if (agentRunTimingData) {
+      const durationMs = Number(agentRunTimingData.duration_ms);
+      const completedAt = agentRunResultAt ?? Date.now();
+      const startedAt =
+        Number.isFinite(durationMs) && durationMs >= 0
+          ? completedAt - durationMs
+          : turnStartedAt;
+      const firstTokenMs = Number(agentRunTimingData.first_token_ms);
+      const usageIn =
+        agentRunTimingData.usage &&
+        typeof agentRunTimingData.usage === "object"
+          ? (agentRunTimingData.usage as Record<string, unknown>)
+          : undefined;
+      const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
+      if (typeof usageIn?.inputTokens === "number")
+        usageOut.inputTokens = usageIn.inputTokens;
+      if (typeof usageIn?.outputTokens === "number")
+        usageOut.outputTokens = usageIn.outputTokens;
+      if (typeof usageIn?.cacheReadTokens === "number")
+        usageOut.cacheReadTokens = usageIn.cacheReadTokens;
+      if (typeof usageIn?.cacheWriteTokens === "number")
+        usageOut.cacheWriteTokens = usageIn.cacheWriteTokens;
+      const toolCalls = Number(agentRunTimingData.tool_calls);
+      replyMetrics = {
+        startedAt,
+        firstTokenAt:
+          Number.isFinite(firstTokenMs) && firstTokenMs >= 0
+            ? startedAt + firstTokenMs
+            : null,
+        completedAt,
+        ...(Object.keys(usageOut).length ? { usage: usageOut } : {}),
+        ...(Number.isFinite(toolCalls) && toolCalls > 0
+          ? { toolCalls }
+          : {}),
+      };
+    }
     const tailProcessItems = processItems.slice(segState.processStart);
     const persistedRecallCitations: RecallMessageCitation[] = (
       !outcome.failureKind && !errText && !aborted
@@ -5637,6 +6314,8 @@ async function runActorTurnBody(
         ? { recall_citations: persistedRecallCitations }
         : {}),
       ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
+      // Unified execution entry: persist what actually ran on this turn.
+      ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
       // Final segment index when this turn was split at visible-dispatch
       // boundaries; lets the renderer finalize the last per-segment placeholder.
       ...(segState.flushedAny ? { seg: segState.seg } : {}),
@@ -5646,6 +6325,7 @@ async function runActorTurnBody(
       // dispatch) would also wrongly consume the placeholder.
       turn_end: true,
       turn_id: item.turnId,
+      ...(replyMetrics ? { metrics: replyMetrics } : {}),
       ...(item.kstarDecision?.required
         ? { kstarDecision: item.kstarDecision }
         : {}),
@@ -6021,13 +6701,13 @@ async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
   const [skillsFeat, agentsFeat, templatesFeat] = await Promise.all([
     import("../skills"),
     import("../agents"),
-    import("../role_templates"),
+    import("../personal_ontology_contract"),
   ]);
   const [skills, agents, templates, scenarios] = await Promise.all([
     skillsFeat.listSkills(),
     agentsFeat.listAgents().catch(() => []),
-    templatesFeat.listRoleTemplates(),
-    templatesFeat.listScenarios(),
+    templatesFeat.listRoleTemplateCatalog(),
+    templatesFeat.listRoleScenarios(),
   ]);
   const clip = (s: string, n = 90) => {
     const t = String(s || "").replace(/\s+/g, " ").trim();
@@ -6052,14 +6732,14 @@ async function buildSpaceBuilderSystemPrompt(uid: string): Promise<string> {
       }).join("\n")
     : "（暂无可用智能体）";
   const templatesBlock = templates.length
-    ? templates.map((t) => `- ${t.name}（id: ${t.template_id}）— ${clip(t.description)}`).join("\n")
+    ? templates.map((t) => `- ${t.name}（id: ${t.templateId}）— ${clip(t.description || "")}`).join("\n")
     : "（暂无角色模板）";
   const scenariosBlock = scenarios.length
     ? scenarios.map((s) => {
-        const extra = (s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids?.length
-          ? `，可配模板: ${(s as { suggested_secondary_template_ids?: string[] }).suggested_secondary_template_ids!.join("/")}`
+        const extra = s.suggestedSecondaryTemplateIds?.length
+          ? `，可配模板: ${s.suggestedSecondaryTemplateIds.join("/")}`
           : "";
-        return `- ${s.name}（id: ${s.scenario_id}）— ${clip(s.description || "")}${extra}`;
+        return `- ${s.name}（id: ${s.scenarioId}）— ${clip(s.description || "")}${extra}`;
       }).join("\n")
     : "（暂无场景）";
   const main = renderPromptWithSharedRules(
@@ -10566,6 +11246,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   let cleared = 0;
   let aborted = 0;
   let abortedModelSessions = 0;
+  let backendCancelError: unknown;
   if (state) {
     _recordTaskRunOutcome(state, "cancelled");
     state.backendTurns.clear();
@@ -10588,7 +11269,8 @@ export async function abort(uid: string, cid: string): Promise<void> {
     });
     await cancelBackend(uid, cid);
   } catch (err) {
-    log.warn(`abort CogSeed Backend tasks failed cid=${cid}: ${(err as Error).message}`);
+    backendCancelError = err;
+    log.warn('abort CogSeed Backend tasks failed', { error: logErrorRef(err) });
   }
   // Belt-and-suspenders abort for model turns. In production traces we saw
   // user stop requests reach this function while the bus worker map no longer
@@ -10659,6 +11341,7 @@ export async function abort(uid: string, cid: string): Promise<void> {
   log.info(
     `abort user=${uid} cid=${cid} clearedQueue=${cleared} abortedWorkers=${aborted} abortedModelSessions=${abortedModelSessions}`,
   );
+  if (backendCancelError) throw new Error('CogSeed Backend task cancellation failed');
 }
 
 // ── Cleanup ──────────────────────────────────────────────────────────────
@@ -10813,11 +11496,39 @@ async function _runCliAgentTurn(opts: {
   failureKind?: GroupMessageFailureKind;
   failureCode?: string;
   infrastructureFailure?: boolean;
+  /** Settled-reply metrics assembled from the runner's terminal done event
+   *  (startedAt/firstTokenAt + backend usage) plus the local tool-call count.
+   *  Absent when no backend done event carried metrics (missing CLI,
+   *  pre-dispatch rejection — nothing real ran). */
+  metrics?: GroupMessageMetrics;
 }> {
   const runtime = opts.agent.runtime as Extract<
     NonNullable<import("../agents").AgentRuntime>,
     { kind: "cli" }
   >;
+
+  // Unified execution entry: a per-task model override replaces the CLI's
+  // bound model for THIS turn only (runtime.model is the agent's saved
+  // default). CLI overrides carry a bare model id (no provider — the model
+  // is passed to the external CLI directly). Reasoning effort is forwarded
+  // per task too, but ONLY for CLIs with a real switch (see the runner.run
+  // thinkingLevel filter below — claude today); other CLIs keep their own
+  // reasoning configuration.
+  const cliModelForTurn = opts.item.execConfig?.model || runtime.model;
+  opts.onProcess({
+    type: "event",
+    event: {
+      stream: "execution",
+      data: {
+        phase: "config",
+        actor: opts.actor.id,
+        agent_id: opts.agent.agent_id,
+        ...(cliModelForTurn ? { model: cliModelForTurn } : {}),
+        cli: runtime.cli,
+        runtime: "cli",
+      },
+    },
+  });
 
   // Required-input gate: a CLI agent never runs an LLM, so the form-emit
   // logic in `chat_agent_in_group.md` (where in-process agents check their
@@ -10875,6 +11586,10 @@ async function _runCliAgentTurn(opts: {
   let resultText = "";
   let aborted = false;
   let backendSessionId: string | undefined;
+  // Task 5 metrics inputs: tool-call count (tool-event phase="use") and the
+  // terminal done event's timing/usage payload.
+  let cliToolCalls = 0;
+  let cliDoneMetrics: GroupMessageMetrics | undefined;
   const produced = new Set<string>();
   const pendingToolPaths = new Map<string, string[]>();
   // Set when the CLI rejects our `--resume <id>` (e.g. claude code's
@@ -10897,7 +11612,21 @@ async function _runCliAgentTurn(opts: {
     agentName: opts.agent.name || opts.agent.agent_id,
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     cli: runtime.cli as import("../local_agents/registry").LocalCliType,
-    model: runtime.model,
+    // Unified execution entry: per-task override wins over the agent's
+    // saved runtime.model for THIS turn only.
+    model: cliModelForTurn,
+    // Per-task reasoning effort — forwarded ONLY for CLIs with a verified
+    // switch. claude consumes MAX_THINKING_TOKENS on both execution paths
+    // (gateway envelope + this direct one). codex's backend has a
+    // model_reasoning_effort implementation ready, but its MAIN path is the
+    // P3394 gateway (ChatGPT app-server driven by gateway.cjs) which has no
+    // effort slot yet — filtering here keeps UI / envelope / direct / meta
+    // four layers consistent (claude-only) instead of honoring effort on a
+    // path the user cannot predict.
+    ...((runtime.cli === "claude"
+      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high"))
+      ? { thinkingLevel: opts.item.execConfig.effort }
+      : {}),
     customArgs: runtime.custom_args,
     ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
     resumeSessionId: resumeSessionId || undefined,
@@ -10935,6 +11664,7 @@ async function _runCliAgentTurn(opts: {
           break;
         case "tool-event":
           if ((e as any).phase === "use") {
+            cliToolCalls += 1;
             const paths = extractWritablePathsFromCliTool(
               e as any,
               opts.workingDir,
@@ -11007,13 +11737,58 @@ async function _runCliAgentTurn(opts: {
             },
           });
           break;
-        case "done":
+        case "done": {
           if (typeof (e as any).output === "string")
             resultText = (e as any).output as string;
           if ((e as any).status === "cancelled") aborted = true;
           if (typeof (e as any).sessionId === "string")
             backendSessionId = (e as any).sessionId as string;
+          // Task 5: settle reply metrics off the runner-attached
+          // startedAt/firstTokenAt plus the backend's usage totals (input /
+          // output / cacheRead / cacheCreate → GroupMessageMetrics.usage).
+          const doneEv = e as {
+            metrics?: { startedAt?: unknown; firstTokenAt?: unknown };
+            usage?: {
+              input?: unknown;
+              output?: unknown;
+              cacheRead?: unknown;
+              cacheCreate?: unknown;
+            };
+          };
+          if (
+            doneEv.metrics &&
+            typeof doneEv.metrics.startedAt === "number" &&
+            Number.isFinite(doneEv.metrics.startedAt)
+          ) {
+            const usageIn =
+              doneEv.usage && typeof doneEv.usage === "object"
+                ? doneEv.usage
+                : undefined;
+            const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
+            if (typeof usageIn?.input === "number")
+              usageOut.inputTokens = usageIn.input;
+            if (typeof usageIn?.output === "number")
+              usageOut.outputTokens = usageIn.output;
+            if (typeof usageIn?.cacheRead === "number")
+              usageOut.cacheReadTokens = usageIn.cacheRead;
+            if (typeof usageIn?.cacheCreate === "number")
+              usageOut.cacheWriteTokens = usageIn.cacheCreate;
+            cliDoneMetrics = {
+              startedAt: doneEv.metrics.startedAt,
+              firstTokenAt:
+                typeof doneEv.metrics.firstTokenAt === "number" &&
+                Number.isFinite(doneEv.metrics.firstTokenAt)
+                  ? doneEv.metrics.firstTokenAt
+                  : null,
+              completedAt: Date.now(),
+              ...(Object.keys(usageOut).length
+                ? { usage: usageOut }
+                : {}),
+              ...(cliToolCalls > 0 ? { toolCalls: cliToolCalls } : {}),
+            };
+          }
           break;
+        }
         default:
           opts.onProcess({
             type: "event",
@@ -11074,6 +11849,7 @@ async function _runCliAgentTurn(opts: {
       failureKind: "runtime",
       failureCode: "cli_session_persistence_failed",
       infrastructureFailure: true,
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "missing_cli") {
@@ -11096,6 +11872,7 @@ async function _runCliAgentTurn(opts: {
       produced: Array.from(produced),
       failureKind: "dependency",
       failureCode: result.cliError || "missing_cli",
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "cancelled") {
@@ -11103,6 +11880,7 @@ async function _runCliAgentTurn(opts: {
       text: resultText || accText,
       aborted: true,
       produced: Array.from(produced),
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   if (result.status === "failed" || result.status === "timeout") {
@@ -11139,6 +11917,7 @@ async function _runCliAgentTurn(opts: {
       produced: Array.from(produced),
       failureKind: "runtime",
       failureCode: result.status === "timeout" ? "cli_timeout" : "cli_failed",
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
   const finalText = resultText || accText;
@@ -11146,9 +11925,14 @@ async function _runCliAgentTurn(opts: {
     return {
       text: t("cli_agent.slash_no_output", { cmd: slashCommandName }),
       produced: Array.from(produced),
+      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
     };
   }
-  return { text: finalText, produced: Array.from(produced) };
+  return {
+    text: finalText,
+    produced: Array.from(produced),
+    ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
+  };
 }
 
 function normalizeCliProducedPaths(

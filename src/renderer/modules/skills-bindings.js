@@ -1649,17 +1649,11 @@ function _initSkillsCognitionBindings() {
           ? ((card && typeof card.querySelector === 'function'
             ? card.querySelector('[data-recall-edit-type]')?.value : '') || candidate?.suggestedType)
           : candidate?.suggestedType;
+        // 落点是 PO contract 给的 opaque fieldRef：原样回传，不解析、不重组。
         const readProfileTarget = () => {
           if (submittedType !== 'personal' || !card) return undefined;
-          const encoded = card.querySelector('[data-recall-profile-target]')?.value || '';
-          if (!encoded) return undefined;
-          try {
-            const target = JSON.parse(decodeURIComponent(encoded));
-            if (!target || !target.groupId || !target.section || !target.fieldName) return undefined;
-            return target;
-          } catch (_) {
-            return undefined;
-          }
+          const fieldRef = card.querySelector('[data-recall-profile-target]')?.value || '';
+          return fieldRef ? { fieldRef } : undefined;
         };
         const profileTarget = readProfileTarget();
         let riskAcknowledged = false;

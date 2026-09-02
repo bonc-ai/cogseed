@@ -2831,12 +2831,9 @@ describe('Recall cognition renderer flow', () => {
   it('passes the selected personal-template field through candidate confirmation', async () => {
     let clickHandler: ((event: any) => Promise<void>) | undefined;
     const calls: Array<[string, unknown]> = [];
-    const target = {
-      groupId: 'group-student',
-      templateId: 'student',
-      section: '学习背景',
-      fieldName: '专业与学习方向',
-    };
+    // 落点只是一个 opaque fieldRef：渲染层原样读、原样回传，不解析
+    const fieldRef = 'po1eyJrIjoidGYifQ';
+    const target = { fieldRef };
     const panel: any = {
       dataset: {},
       addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
@@ -2845,7 +2842,7 @@ describe('Recall cognition renderer flow', () => {
     };
     const card: any = {
       querySelector: (selector: string) => selector === '[data-recall-profile-target]'
-        ? { value: encodeURIComponent(JSON.stringify(target)) }
+        ? { value: fieldRef }
         : null,
     };
     const button: any = {
@@ -3253,7 +3250,8 @@ describe('Recall cognition renderer flow', () => {
 
     context.renderSkillsCognitionTree();
 
-    expect(host.innerHTML).toContain('树上还没有叶片');
+    // 空态已升级为「认知种子」首播引导，不再显示旧文案。
+    expect(host.innerHTML).toContain('你的认知种子已经准备好');
     expect(host.innerHTML).not.toContain('cognition-tree-leaf');
   });
 
@@ -3515,7 +3513,7 @@ describe('Recall cognition renderer flow', () => {
 });
 
 /**
- * G-1：加载中必须与"真的没有"分开。
+ * 加载中必须与"真的没有"分开。
  *
  * `initSkillsCognitionConsole` 先让面板可见、再异步取数。此前这中间没有任何
  * 加载态：body 先是空白，用户在取数完成前切 tab 会看到空态（「还没有资产」）。
@@ -3573,7 +3571,7 @@ describe('认知资产页首屏加载态', () => {
 });
 
 /**
- * G-5：成功要有回执。
+ * 成功要有回执。
  *
  * 失败一直有 uiAlert，成功却只靠"列表变了"暗示。六种候选决定在列表上的表现
  * 几乎一样（都是这一条消失），没有回执用户分不清自己刚点的是"拒绝"还是"稍后"。
@@ -3657,7 +3655,7 @@ describe('认知资产动作的成功回执', () => {
 });
 
 /**
- * G-6 空种子首启页。
+ * 空种子首启页。
  *
  * 它不是第五个任务视图，而是一种状态：整个认知资产一件东西都没有时，四个页
  * 各自的空态回答的是"这一类现在是空的"，回答不了新用户真正的问题——"我该从
@@ -3670,7 +3668,7 @@ describe('空种子首启页', () => {
     teachingSignals: [], inboxItems: [],
   };
 
-  // G-9 之后首启引导不再是独立页，而是「待我处理」空态的首启变体，
+  // 信息架构收敛后首启引导不再是独立页，而是「待我处理」空态的首启变体，
   // 所以这里改从 inbox 渲染断言——引导内容与入口没变，只是长在了它该在的地方。
   function seedContext(state: Record<string, unknown>) {
     const context = loadSkillsRenderer();
@@ -3749,7 +3747,7 @@ describe('空种子首启页', () => {
 });
 
 /**
- * G-7 认知树有机可视化。
+ * 认知树有机可视化。
  *
  * 这组用例的重点不是"画得像不像原型"，而是**没有画出后端不认的东西**。
  * 一张图最容易悄悄多出一个状态：树上多一个芽、树干多一个版本号，看上去更完整，
@@ -3828,7 +3826,7 @@ describe('认知树 SVG 可视化', () => {
   });
 
   /**
-   * 树契约 v2（G-8）起，后端也把候选投影成 `candidate:` 节点，且它们**同样带
+   * 树契约 v2 起，后端也把候选投影成 `candidate:` 节点，且它们**同样带
    * `assetType`**（用来挂枝）。渲染层的正式资产统计按 `assetType` 分枝，若不先
    * 摘掉候选，一条候选就会被当成已确认资产：叶片数虚高、成熟度分档被稀释。
    * 芽自有通道（recallCandidates → budsByType），不从树节点走。
@@ -3957,7 +3955,7 @@ describe('认知树 SVG 可视化', () => {
 });
 
 /**
- * G-2 / G-3 / G-4：前端展示的数量与历史必须来自后端真值。
+ * 前端展示的数量与历史必须来自后端真值。
  *
  * 这组用例的判据不是"能不能点"，而是**显示出来的数字是不是真的**——
  * 截断后的 `items.length` 和真实 `total` 在界面上长得一模一样，错了看不出来。
@@ -3980,7 +3978,7 @@ describe('认知资产的真实计数与已处理历史', () => {
     return { context, host };
   }
 
-  /** G-2 semantic：教学回执被截断时，显示的必须是后端 total，不是取回条数。 */
+  /** 语义：教学回执被截断时，显示的必须是后端 total，不是取回条数。 */
   it('教学回执计数用后端 total，不用截断后的长度', () => {
     const signals = Array.from({ length: 20 }, (_, i) => ({ id: `t-${i}`, status: 'active' }));
     const { context, host } = inboxContext({
@@ -4013,7 +4011,7 @@ describe('认知资产的真实计数与已处理历史', () => {
     expect(host.innerHTML).not.toContain('教学回执（全部）');
   });
 
-  /** G-3 semantic：资产总数用后端 total。 */
+  /** 语义：资产总数用后端 total。 */
   it('版本与治理的「全部资产」用后端 total', () => {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
@@ -4056,7 +4054,7 @@ describe('认知资产的真实计数与已处理历史', () => {
     expect(host.innerHTML).toContain('需要关注');
   });
 
-  /** G-4：历史只渲染账本里真有的字段，缺的不补。 */
+  /** 历史只渲染账本里真有的字段，缺的不补。 */
   it('已处理历史只显示真实落账字段', () => {
     const { context, host } = inboxContext({
       reviewHistory: {
@@ -4143,7 +4141,7 @@ describe('认知资产的真实计数与已处理历史', () => {
 });
 
 /**
- * G-4 E2E：处理一条候选后，它必须**同时**从待办消失并出现在已处理历史里。
+ * E2E：处理一条候选后，它必须**同时**从待办消失并出现在已处理历史里。
  *
  * 这两件事是一次动作的两面。此前决定落账后历史带不会重取，用户要等下次进页
  * 才看得到——界面上就成了"处理完就没了"。
@@ -4251,13 +4249,13 @@ describe('候选决定的端到端回流', () => {
 });
 
 /**
- * G-9 一级信息架构收敛。
+ * 一级信息架构收敛。
  *
  * 决定：一级只有四个**任务视图**（我的认知树 / 待我处理 / 复用与证明 / 版本与治理），
  * 默认停在第一个任务视图「我的认知树」，**不自动跳页**。管理来源与沉淀活动降级
  * 为页头辅助入口，功能不能消失。
  */
-describe('G-9 认知资产一级信息架构', () => {
+describe('认知资产一级信息架构', () => {
   function inbox(state: Record<string, unknown>) {
     const context = loadSkillsRenderer();
     const host = { innerHTML: '' };
@@ -4366,7 +4364,7 @@ describe('G-9 认知资产一级信息架构', () => {
 /**
  * 回归：首屏不得卡在「加载中」。
  *
- * G-1 曾在 initSkillsCognitionConsole 里先把 `_skillsCognitionState.loading`
+ * 早期版本曾在 initSkillsCognitionConsole 里先把 `_skillsCognitionState.loading`
  * 置真、再调 loadSkillsCognitionSnapshot()，好让预渲染显示加载态。但 `loading`
  * 是那个函数**自己的重入锁**——它一进门就 `if (loading) return`，于是快照永远
  * 不加载、loadedAt 永远是 0、_cognitionSnapshotPending() 永远为真，认知资产页

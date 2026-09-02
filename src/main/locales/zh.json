@@ -218,6 +218,9 @@
   "expense_agent.submit.unavailable": "无法显示提交确认，本次未提交。",
   "expense_agent.submit.cancelled": "已取消提交，未向飞书发送数据。",
   "cogseed.runtime_failed": "智能体未能完成本次回复。请重试。",
+  "messaging.wake_card.noop_title": "操作未生效",
+  "messaging.wake_card.noop_detail": "该唤醒请求已不在待审批状态（可能已获批准并开始执行），本次点击没有改变任何状态。",
+  "messaging.direct_chat": "私聊",
   "messaging.new_session_confirmation": "已开始新的对话。请告诉我接下来要处理什么。",
   "messaging.approval.approve": "已允许",
   "messaging.approval.approve_once": "已允许一次",
@@ -254,5 +257,6 @@
   "touchpoints.card.button.retry": "重试",
   "touchpoints.card.button.forget_source": "遗忘来源",
   "touchpoints.card.button.revoke_grant": "撤销授权",
-  "touchpoints.card.resolved": "已处理"
+  "touchpoints.card.resolved": "已处理",
+  "dashboard.retry_user_message": "（重试）"
 }

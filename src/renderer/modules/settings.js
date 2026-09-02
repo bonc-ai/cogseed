@@ -15,6 +15,7 @@ let _settingsState = {
   providers: [],      // from auth.listProviders  [{id, label, supportsApiKey, supportsOAuth, profiles, ...}]
   entries: [],        // from auth.listEntries
   modelsCache: {},    // provider → [{id, name}]
+  recycleBatches: [], // from recycle.list [{id, kind, label, created_at_ms, items, paths_preview, ...}]
   pickerProviderSel: null,
   pickerModelSel: null,
   pickerProviderEl: null,
@@ -80,6 +81,7 @@ async function loadSettings() {
   if (typeof initSettingsTabs === 'function') initSettingsTabs();
   _settingsBindConfiguredToggle();
   _settingsBindLanguageOnce();
+  _settingsBindThinkingOnce();
   _settingsBindTaskNotificationsOnce();
   _settingsBindClientConfigOnce();
   _settingsBindContextsEntryOnce();
@@ -99,6 +101,7 @@ async function loadSettings() {
     _settingsSafeCall('settings auth profiles status refresh', _settingsRefreshAuthProfilesStatus),
     _settingsSafeCall('settings custom providers refresh', _settingsRefreshCustomProviders),
     _settingsSafeCall('settings ccswitch status refresh', _settingsRefreshCcswitchStatus),
+    _settingsSafeCall('settings recycle refresh', _settingsRefreshRecycle),
     _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
     _settingsSafeCall('settings hub account refresh', () => window.initHubAccountSettings && window.initHubAccountSettings()),
   ]);
@@ -115,6 +118,7 @@ async function loadSettings() {
   await _settingsSafeCall('settings auth profiles recovery render', _settingsRenderAuthProfilesRecovery);
   await _settingsSafeCall('settings custom providers render', _settingsRenderCustomProviders);
   await _settingsSafeCall('settings ccswitch render', _settingsRenderCcswitchStatus);
+  await _settingsSafeCall('settings recycle render', _settingsRenderRecycle);
   // Account card + subscription card (views/login/account_settings.js — absent in
   // the open-source build, so these are no-ops there). renderSubscriptionSettings rebinds the
   // action button's click handler with the current subscription state on every
@@ -469,6 +473,53 @@ function _settingsBindLanguageOnce() {
   });
 }
 
+// ── Global default thinking strength (unified execution entry) ──
+// The composer's exec-config chip is task-scoped only; the GLOBAL default
+// lives here. Options mirror prefs.getThinkingLevel/setThinkingLevel.
+let _settingsThinkingSel = null; // _aiSelectMount api
+
+const _SETTINGS_THINKING_OPTIONS = [
+  { value: 'auto', label: '' },
+  { value: 'off', label: '' },
+  { value: 'low', label: '' },
+  { value: 'high', label: '' },
+];
+
+function _settingsThinkingLabels() {
+  // Resolve through t() at render time so an in-flight language switch
+  // relabels the options without a page reload.
+  return _SETTINGS_THINKING_OPTIONS.map((o) => ({
+    value: o.value,
+    label: t('model_effort.' + o.value),
+  }));
+}
+
+function _settingsBindThinkingOnce() {
+  const el = document.getElementById('settings-thinking-select');
+  if (!el) return;
+  const apply = (level) => {
+    if (_settingsThinkingSel) _settingsThinkingSel.setValue(level);
+    return;
+  };
+  _settingsThinkingSel = _aiSelectMount(el, {
+    options: _settingsThinkingLabels(),
+    value: 'auto',
+  });
+  _settingsThinkingSel.onChange(async (next) => {
+    if (!['auto', 'off', 'low', 'high'].includes(next)) return;
+    try {
+      await window.cogseed.invoke('prefs.setThinkingLevel', { level: next });
+      _settingsLog.info('thinking level changed', { level: next });
+      if (typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+    } catch (err) {
+      _settingsLog.warn('setThinkingLevel failed', { error: (err && err.message) || String(err) });
+    }
+  });
+  window.cogseed.invoke('prefs.getThinkingLevel').then((res) => {
+    if (res && res.level) apply(res.level);
+  }).catch(() => {});
+}
+
 function _settingsSyncLanguageRadio() {
   // Function name kept for caller-side compatibility; semantics is now "sync dropdown value".
   const cur = (typeof getLang === 'function') ? getLang() : 'zh';
@@ -480,6 +531,11 @@ function _settingsSyncLanguageRadio() {
 // isn't refreshed by applyDomI18n's data-i18n sweep).
 window.addEventListener('i18n-change', () => {
   _settingsSyncLanguageRadio();
+  // Unified execution entry: thinking-strength option labels resolve
+  // through t(), so re-apply them on language switches.
+  if (_settingsThinkingSel && typeof _settingsThinkingSel.setOptions === 'function') {
+    _settingsThinkingSel.setOptions(_settingsThinkingLabels());
+  }
   _settingsRenderLocalExec();
   _settingsRenderPicker();
   _settingsRenderEntries();
@@ -990,6 +1046,99 @@ function _settingsRenderCcswitchStatus() {
   }
 }
 
+// ── 回收站（本机删除快照，可恢复 / 彻底删除）──
+const _RECYCLE_KIND_LABEL = {
+  conversation: '会话', conversations: '会话', project: '项目', auto_task: '自动化任务',
+  attachment: '附件', context: '资料库/知识库', space_file: '空间文件', saved_app: '已保存应用',
+  agent: '智能体', skill: '技能', workspace: '工作区', other: '其他',
+};
+
+async function _settingsRefreshRecycle() {
+  try {
+    const res = await window.cogseed.invoke('recycle.list');
+    _settingsState.recycleBatches = (res && Array.isArray(res.batches)) ? res.batches : [];
+  } catch (_) {
+    _settingsState.recycleBatches = [];
+  }
+}
+
+function _settingsRecycleTitle(batch) {
+  const name = batch && (batch.label || batch.display_title);
+  if (name) return String(name);
+  const label = _RECYCLE_KIND_LABEL[String(batch && batch.kind || 'other')] || '其他';
+  const paths = Array.isArray(batch && batch.paths_preview) ? batch.paths_preview : [];
+  const first = paths[0] ? String(paths[0]).split('/').pop() : '';
+  return first ? `${label} · ${first}` : label;
+}
+
+function _settingsRecycleMeta(batch) {
+  const label = _RECYCLE_KIND_LABEL[String(batch && batch.kind || 'other')] || '其他';
+  const n = Array.isArray(batch && batch.items) ? batch.items.length
+    : (Array.isArray(batch && batch.paths_preview) ? batch.paths_preview.length : 0);
+  const d = new Date(Number(batch && batch.created_at_ms) || Date.now());
+  const pad = (x) => String(x).padStart(2, '0');
+  const time = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${label} · ${n} 项 · 删除于 ${time}`;
+}
+
+function _settingsRenderRecycle() {
+  const body = document.getElementById('settings-recycle-body');
+  if (!body) return;
+  const batches = _settingsState.recycleBatches || [];
+  if (!batches.length) {
+    body.innerHTML = '<div class="settings-empty">暂无可恢复数据</div>';
+    return;
+  }
+  body.innerHTML = `<div class="settings-recycle-scroll">${batches.map((b) => {
+    const id = String(b && b.id || '');
+    return `<div class="settings-recycle-row">
+      <div class="settings-recycle-row-head">
+        <div class="settings-recycle-main">
+          <div class="settings-recycle-name">${escapeHtml(_settingsRecycleTitle(b))}</div>
+          <div class="settings-recycle-meta">${escapeHtml(_settingsRecycleMeta(b))}</div>
+        </div>
+        <div class="settings-recycle-actions">
+          <button type="button" class="btn btn-sm" data-recycle-action="restore" data-recycle-id="${escapeHtml(id)}">恢复</button>
+          <button type="button" class="btn btn-sm" data-recycle-action="delete" data-recycle-id="${escapeHtml(id)}">彻底删除</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+  body.querySelectorAll('[data-recycle-action]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.recycleId;
+      if (!id) return;
+      if (btn.dataset.recycleAction === 'restore') {
+        try {
+          const res = await window.cogseed.invoke('recycle.restore', { id });
+          if (res && res.ok) {
+            if (typeof uiToast === 'function') uiToast(`已恢复 ${Number(res.restored) || 0} 项`, { variant: 'success', timeoutMs: 2500 });
+          } else if (typeof uiToast === 'function') uiToast('恢复失败', { variant: 'warning' });
+        } catch (e) {
+          if (typeof uiToast === 'function') uiToast('恢复失败：' + String((e && e.message) || e), { variant: 'error' });
+        }
+      } else {
+        let ok = false;
+        try {
+          ok = typeof uiConfirmDanger === 'function'
+            ? await uiConfirmDanger({ title: '彻底删除', message: '彻底删除后不可恢复，确认删除该回收站条目？', dangerLabel: '彻底删除', cancelLabel: '取消' })
+            : window.confirm('彻底删除后不可恢复，确认删除？');
+        } catch (_) { return; }
+        if (!ok) return;
+        try {
+          const res = await window.cogseed.invoke('recycle.delete', { id });
+          if (res && res.deleted) { if (typeof uiToast === 'function') uiToast('已彻底删除', { variant: 'success' }); }
+          else if (typeof uiToast === 'function') uiToast('删除失败', { variant: 'warning' });
+        } catch (e) {
+          if (typeof uiToast === 'function') uiToast('删除失败：' + String((e && e.message) || e), { variant: 'error' });
+        }
+      }
+      await _settingsRefreshRecycle();
+      _settingsRenderRecycle();
+    });
+  });
+}
+
 function _settingsRenderCustomProviders() {
   const container = document.getElementById('settings-custom-provider-list');
   if (!container) return;
@@ -1274,6 +1423,13 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   }
   const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
   addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
+  // 远端模型发现：调服务自己的 list-models 端点拉全量清单，勾选导入。
+  const fetchModelsButton = document.createElement('button');
+  fetchModelsButton.type = 'button';
+  fetchModelsButton.className = 'btn';
+  fetchModelsButton.innerHTML = `${_settingsIconHtml('refresh', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.fetch_models'))}</span>`;
+  fetchModelsButton.addEventListener('click', () => _settingsOpenCustomProviderFetchModels(provider));
+  addModelButton?.parentNode?.appendChild(fetchModelsButton);
 
   actions.innerHTML = '';
   const closeButton = document.createElement('button');
@@ -1285,8 +1441,116 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   if (!overlay.classList.contains('open')) _settingsOpenModal(overlay);
 }
 
-async function _settingsSetCustomProviderEnabled(provider, enabled) {
-  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
+/** 远端模型发现视图：打开即向服务发起 list-models 请求，结果按勾选导入。
+ *  已在本地的模型标记「已存在」不可重复勾选；导入走 customProviders.model.add
+ *  逐个落库（窗口/输出上限用默认值，可在导入后按需编辑）。 */
+async function _settingsOpenCustomProviderFetchModels(provider) {
+  const overlay = document.getElementById('settings-custom-provider-modal');
+  const title = document.getElementById('settings-custom-provider-modal-title');
+  const body = document.getElementById('settings-custom-provider-modal-body');
+  const actions = document.getElementById('settings-custom-provider-modal-actions');
+  if (!overlay || !title || !body || !actions || !provider?.id) return;
+  _settingsSetCustomProviderModalView('fetch-models', provider, null, false);
+  title.textContent = t('settings.custom_providers.fetch_models_title', { name: provider.name || provider.id });
+  body.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.fetch_models_loading'))}</div>`;
+  actions.innerHTML = '';
+
+  const existing = new Set(_settingsCustomProviderModels(provider).map((model) => model.id));
+  const res = await _settingsCallCustomProvider('customProviders.fetchModels', { providerId: provider.id });
+  // Modal may have been closed / navigated while the request was in flight.
+  const viewActive = _settingsState.customProviderModalView
+    && _settingsState.customProviderModalView.providerId === provider.id
+    && _settingsState.customProviderModalView.kind === 'fetch-models'
+    && overlay.classList.contains('open');
+  if (!viewActive) return;
+  if (!res || !res.ok) {
+    body.innerHTML = `
+      <div class="settings-custom-provider-fetch-error">
+        ${_settingsIconHtml('warning', 'ui-icon')}
+        <span>${escapeHtml(t('settings.custom_providers.fetch_models_failed', { error: (res && res.error) || '' }))}</span>
+      </div>`;
+    const closeButton = document.createElement('button');
+    closeButton.className = 'btn';
+    closeButton.textContent = t('common.close');
+    closeButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+    actions.appendChild(closeButton);
+    return;
+  }
+
+  const rows = (res.models || []).slice(0, 200);
+  const selectable = rows.filter((row) => !existing.has(row.id));
+  body.innerHTML = `
+    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(t('settings.custom_providers.fetch_models_hint'))}</p>
+    <div class="settings-custom-provider-fetch-list" id="settings-custom-provider-fetch-list"></div>
+  `;
+  const listEl = body.querySelector('#settings-custom-provider-fetch-list');
+  for (const row of rows) {
+    const isExisting = existing.has(row.id);
+    const rowEl = document.createElement('label');
+    rowEl.className = 'settings-custom-provider-fetch-row' + (isExisting ? ' is-existing' : '');
+    // 能力徽标（A/B 层补全的数据）：导入前即可见支持什么。
+    const badges = [
+      row.reasoning === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_reasoning'))}</span>` : '',
+      row.vision === true ? `<span class="settings-custom-provider-fetch-badge is-cap">${escapeHtml(t('settings.custom_providers.cap_vision'))}</span>` : '',
+      row.contextWindow ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(row.contextWindow) }))}</span>` : '',
+    ].filter(Boolean).join('');
+    rowEl.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(row.id)}" ${isExisting ? 'disabled' : 'checked'} />
+      <span class="settings-custom-provider-fetch-name">${escapeHtml(row.name ? `${row.name} (${row.id})` : row.id)}</span>
+      ${badges}
+      ${isExisting ? `<span class="settings-custom-provider-fetch-badge">${escapeHtml(t('settings.custom_providers.fetch_models_existing'))}</span>` : ''}
+    `;
+    listEl.appendChild(rowEl);
+  }
+
+  actions.innerHTML = '';
+  const cancelButton = document.createElement('button');
+  cancelButton.className = 'btn';
+  cancelButton.textContent = t('common.cancel');
+  cancelButton.addEventListener('click', () => _settingsOpenCustomProviderDetails(provider));
+  actions.appendChild(cancelButton);
+  const importButton = document.createElement('button');
+  importButton.className = 'btn btn-primary';
+  importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: selectable.length });
+  importButton.disabled = selectable.length === 0;
+  importButton.addEventListener('click', async () => {
+    if (importButton.disabled) return;
+    const picked = [...listEl.querySelectorAll('input[type=checkbox]:checked:not(:disabled)')]
+      .map((input) => input.value)
+      .filter((id) => !existing.has(id));
+    if (!picked.length) return;
+    importButton.disabled = true;
+    // 服务/目录给出的元数据（A/B 层）随导入落库；窗口值没给时保持默认，
+    // 用户可在导入后的编辑表单里改。reasoning/vision 不入库——运行时按
+    // 同一识别逻辑动态判定，与 UI 标注天然一致。
+    const metaById = new Map((res.models || []).map((row) => [row.id, row]));
+    let imported = 0;
+    let firstError = '';
+    for (const id of picked) {
+      const meta = metaById.get(id) || {};
+      // 归一化校验要求 maxTokens <= contextWindow：服务只给了窗口时把
+      // 默认输出上限钳到窗口内，避免导入失败。
+      const contextWindow = meta.contextWindow || _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
+      const maxTokens = meta.maxTokens || Math.min(_CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS, contextWindow);
+      const normalized = _settingsNormalizeCustomProviderModel({ id, contextWindow, maxTokens });
+      if (!normalized.ok) { if (!firstError) firstError = `${id}: ${normalized.error}`; continue; }
+      const added = await _settingsCallCustomProvider('customProviders.model.add', {
+        providerId: provider.id,
+        model: normalized.model,
+      });
+      if (added && added.ok) imported += 1;
+      else if (!firstError) firstError = `${id}: ${(added && added.error) || 'failed'}`;
+    }
+    if (imported > 0) await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
+    if (refreshed) _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    if (firstError) _settingsCustomProviderModalStatus('error', t('settings.custom_providers.fetch_models_partial', { ok: imported, error: firstError }));
+    else if (imported > 0) _settingsCustomProviderModalStatus('', t('settings.custom_providers.fetch_models_done', { count: imported }));
+  });
+  actions.appendChild(importButton);
+}
+
+async function _settingsSetCustomProviderEnabled(provider, enabled) {  const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
   return _settingsWithCustomProviderAction(`provider:enabled:${provider.id}`, async () => {
     if (_settingsIsCustomProviderModalViewActive(viewGeneration, provider.id)) {
       _settingsCustomProviderModalStatus('', t(enabled ? 'settings.custom_providers.enabling' : 'settings.custom_providers.disabling'));
@@ -1679,6 +1943,10 @@ function _settingsCcswitchRenderProviderDetail(provider) {
         modelsByExternalId: { [provider.externalId]: modelIds },
         // The probe pins the real API base (CC Switch bare-host URLs lack /v1).
         baseUrlsByExternalId: { [provider.externalId]: provider.baseUrl },
+        // Probed model abilities (context window, vision) ride along —
+        // aggregator endpoints volunteer them; plain OpenAI-compatible ones
+        // have none and this stays empty.
+        abilitiesByExternalId: { [provider.externalId]: provider.modelAbilities || {} },
       });
       if (!syncRes || !syncRes.ok) {
         addBtn.classList.remove('is-loading');

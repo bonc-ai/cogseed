@@ -10,6 +10,7 @@ import { getAgentCliProjectDirInfo } from '../agents';
 import { getWorkspacePath } from '../user_workspace';
 import type { RuntimeEventEnvelope } from '../cogseed_runtime/protocol';
 import type { CogSeedLocalCliConfig } from './types';
+import type { CogSeedExecutionProcessHealth } from './runtime-health-watchdog';
 
 const RESUME_REJECTED_PATTERNS = [
   /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
@@ -25,6 +26,7 @@ export interface CogSeedLocalCliExecutionInput {
   agentName?: string;
   requestId: string;
   taskId: string;
+  executionId?: string;
   sessionId: string;
   runtimeSessionId: string;
   task: string;
@@ -37,6 +39,7 @@ export interface CogSeedLocalCliExecutionInput {
 
 export interface CogSeedLocalCliExecutionAdapter {
   run(input: CogSeedLocalCliExecutionInput, opts?: { signal?: AbortSignal | null }): AsyncIterable<RuntimeEventEnvelope>;
+  probeProcess?(input: Pick<CogSeedLocalCliExecutionInput, 'taskId' | 'executionId'>): Promise<CogSeedExecutionProcessHealth>;
 }
 
 export interface CogSeedLocalCliExecutionAdapterDeps {
@@ -45,6 +48,26 @@ export interface CogSeedLocalCliExecutionAdapterDeps {
   setSessionId?: typeof cliSessions.setSessionId;
   clearSession?: typeof cliSessions.clearForAgent;
   resolveWorkingDir?: (input: CogSeedLocalCliExecutionInput) => Promise<string>;
+  probePid?: (pid: number) => CogSeedExecutionProcessHealth | Promise<CogSeedExecutionProcessHealth>;
+}
+
+interface LocalCliProcessRecord {
+  executionId?: string;
+  pid?: number;
+  settled: boolean;
+}
+
+function defaultProbePid(pid: number): CogSeedExecutionProcessHealth {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return 'invalid';
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'ESRCH') return 'missing';
+    if (code === 'EPERM') return 'alive';
+    return 'unknown';
+  }
 }
 
 function promptFromInput(input: CogSeedLocalCliExecutionInput): string {
@@ -116,6 +139,9 @@ function mapNonTerminalEvent(
   }
   if (event.type === 'tool-event') {
     const phase = event.phase === 'result' ? 'tool_result' : 'tool_call';
+    const toolErrorText = event.isError === true && typeof event.output === 'string'
+      ? event.output.trim()
+      : '';
     return {
       type: 'event',
       ...base,
@@ -123,7 +149,9 @@ function mapNonTerminalEvent(
       metadata: {
         kernel_event: phase,
         ...(typeof event.tool === 'string' ? { name: event.tool } : {}),
+        ...(typeof event.callId === 'string' && event.callId ? { call_id: event.callId } : {}),
         ...(phase === 'tool_result' ? { isError: event.isError === true } : {}),
+        ...(phase === 'tool_result' && toolErrorText ? { error: toolErrorText.slice(0, 2000) } : {}),
       },
     };
   }
@@ -163,8 +191,17 @@ export function createCogSeedLocalCliExecutionAdapter(
   const setSessionId = deps.setSessionId ?? cliSessions.setSessionId;
   const clearSession = deps.clearSession ?? cliSessions.clearForAgent;
   const resolveWorkingDir = deps.resolveWorkingDir ?? defaultWorkingDir;
+  const probePid = deps.probePid ?? defaultProbePid;
+  const processes = new Map<string, LocalCliProcessRecord>();
 
   return {
+    async probeProcess(input) {
+      const record = processes.get(input.taskId);
+      if (!record || record.executionId !== input.executionId) return 'unknown';
+      if (record.settled) return 'missing';
+      if (record.pid === undefined) return 'unknown';
+      return probePid(record.pid);
+    },
     async *run(input, opts = {}) {
       // 统一执行路径：P3394 外接智能体（viaP3394Gateway）走托管 gateway
       // （UMF 信封），与对话分派共用同一条协议轨，事件语义映射到 Runtime
@@ -189,6 +226,7 @@ export function createCogSeedLocalCliExecutionAdapter(
           uid: input.userId,
           cid: input.conversationId,
           agentId: input.agentId,
+          ...(input.executionId ? { executionId: input.executionId } : {}),
           agentName: input.agentName || input.localCli.agentName,
           cli: input.localCli.cli as RunCliAgentOpts['cli'],
           ...(input.localCli.model ? { model: input.localCli.model } : {}),
@@ -198,7 +236,17 @@ export function createCogSeedLocalCliExecutionAdapter(
           prompt,
           cwd,
           signal,
-          onEvent: (event) => { events.push(event); },
+          onEvent: (event) => {
+            if (event.type === 'process-info') {
+              const pid = typeof event.pid === 'number' ? event.pid : undefined;
+              processes.set(input.taskId, {
+                ...(input.executionId ? { executionId: input.executionId } : {}),
+                ...(pid !== undefined ? { pid } : {}),
+                settled: false,
+              });
+            }
+            events.push(event);
+          },
         });
         return { events, result };
       };
@@ -208,6 +256,8 @@ export function createCogSeedLocalCliExecutionAdapter(
         await clearSession(input.userId, input.conversationId, input.agentId);
         attempt = await runAttempt(null);
       }
+      const processRecord = processes.get(input.taskId);
+      if (processRecord && processRecord.executionId === input.executionId) processRecord.settled = true;
       for (const event of attempt.events) {
         if (event.type === 'done' || event.type === 'stderr-line' || event.type === 'raw-line' || event.type === 'log') continue;
         const mapped = mapNonTerminalEvent(input, event);
@@ -243,29 +293,60 @@ async function* runViaP3394Gateway(
   const prompt = promptFromInput(input);
   const { runP3394GatewayTurn } = await import('../p3394_bridge/p3394-gateway-turn');
   const runningEvents: Array<{ text: string }> = [];
-  let result;
-  try {
-    result = await runP3394GatewayTurn({
+  let wakeConsumer: (() => void) | undefined;
+  let settled = false;
+  let result: Awaited<ReturnType<typeof runP3394GatewayTurn>> | undefined;
+  let runError: unknown;
+  const notifyConsumer = (): void => {
+    const wake = wakeConsumer;
+    wakeConsumer = undefined;
+    wake?.();
+  };
+  const turn = runP3394GatewayTurn({
       uid: input.userId,
       cid: input.conversationId,
       agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
+      ...(input.executionId ? { executionId: input.executionId } : {}),
       cli: input.localCli.cli,
       prompt,
       ...(input.workingDir ? { workingDir: input.workingDir } : {}),
       signal: opts.signal ?? undefined,
       onProcess: (data) => {
         const typed = data as { type?: string; text?: string };
-        if ((typed.type === 'delta' || typed.type === 'final') && typeof typed.text === 'string' && typed.text) {
+        if (typed.type === 'delta' && typeof typed.text === 'string' && typed.text) {
           runningEvents.push({ text: typed.text });
+          notifyConsumer();
         }
       },
+    })
+    .then((value) => { result = value; })
+    .catch((error: unknown) => { runError = error; })
+    .finally(() => {
+      settled = true;
+      notifyConsumer();
     });
-  } catch (error) {
-    yield { type: 'error', ...base, status: 'failed', error: error instanceof Error ? error.message : String(error) };
+
+  while (!settled || runningEvents.length > 0) {
+    const item = runningEvents.shift();
+    if (item) {
+      yield { type: 'event', ...base, status: 'running', text: item.text };
+      continue;
+    }
+    if (!settled) {
+      await new Promise<void>((resolve) => {
+        if (settled || runningEvents.length > 0) resolve();
+        else wakeConsumer = resolve;
+      });
+    }
+  }
+  await turn;
+  if (runError) {
+    yield { type: 'error', ...base, status: 'failed', error: runError instanceof Error ? runError.message : String(runError) };
     return;
   }
-  for (const item of runningEvents) {
-    yield { type: 'event', ...base, status: 'running', text: item.text };
+  if (!result) {
+    yield { type: 'error', ...base, status: 'failed', error: 'p3394 gateway execution ended without a result' };
+    return;
   }
   if (result.failureCode || result.error) {
     yield {

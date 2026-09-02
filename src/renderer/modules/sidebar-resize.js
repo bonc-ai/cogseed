@@ -52,21 +52,39 @@
     let dragging = false;
     let startX = 0;
     let startWidth = 0;
+    // rAF 节流：每次 mousemove 写 --sidebar-width 会触发 sidebar 的
+    // container-query 同步重算布局，拖拽期间每帧写一次即可。
+    let pendingWidth = null;
+    let rafId = 0;
+
+    function flushWidth() {
+      rafId = 0;
+      if (pendingWidth == null) return;
+      applyWidth(pendingWidth);
+      pendingWidth = null;
+    }
 
     function onMove(e) {
       if (!dragging) return;
       const dx = e.clientX - startX;
       const next = clamp(startWidth + dx);
-      applyWidth(next);
+      pendingWidth = next;
+      if (!rafId) rafId = requestAnimationFrame(flushWidth);
     }
 
     function onUp() {
       if (!dragging) return;
       dragging = false;
+      if (pendingWidth != null) applyWidth(pendingWidth);
+      pendingWidth = null;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
       document.body.classList.remove('is-sidebar-resizing');
       handle.classList.remove('is-active');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+      document.documentElement.removeEventListener('mouseleave', onUp);
       // Read back from the CSS var so we persist exactly the clamped value
       // we just rendered (covers the case where the pointer moved past the
       // limits during the drag).
@@ -84,6 +102,8 @@
       handle.classList.add('is-active');
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
+      window.addEventListener('blur', onUp);
+      document.documentElement.addEventListener('mouseleave', onUp);
     });
 
     handle.addEventListener('dblclick', () => {

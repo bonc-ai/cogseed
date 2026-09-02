@@ -3,6 +3,8 @@
 /node_modules
 /resources/embedding-model
 /resources/officecli
+/resources/sherpa-onnx
+/.npm-cache
 /resources/runtime/.python-*
 /resources/runtime/.uv-*
 /resources/runtime/.node-*
@@ -27,6 +29,10 @@ plan.md
 /.zcode/
 __pycache__/
 *.py[cod]
+
+# Unrelated project snapshots and inspection material (never commit)
+/.inspect-jiaoyu/
+/builds/
 
 # engine build artifacts
 packages/*/node_modules

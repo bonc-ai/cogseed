@@ -35,6 +35,15 @@ const groupChatMocks = vi.hoisted(() => ({
 const busMocks = vi.hoisted(() => ({
   subscribe: undefined as undefined | ReturnType<typeof vi.fn>,
 }));
+// Per-test override for createAdapter. Static `vi.mock` (registered at
+// transform time) replaces the racy `vi.doMock` + `vi.resetModules` +
+// dynamic `import` sequence for messaging/adapters: under parallel load the
+// doMock registration could be missed and the REAL adapter answered instead
+// (see the group_chat comment above). Delegates to the real implementation
+// unless a wechat test installs its own adapter.
+const adapterMocks = vi.hoisted(() => ({
+  createAdapter: undefined as undefined | ((...args: unknown[]) => unknown),
+}));
 
 vi.mock('../../../src/main/features/group_chat', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/main/features/group_chat')>();
@@ -48,6 +57,16 @@ vi.mock('../../../src/main/features/group_chat/bus', async (importOriginal) => {
   const subscribe = vi.fn((...args: Parameters<typeof actual.subscribe>) => actual.subscribe(...args));
   busMocks.subscribe = subscribe;
   return { ...actual, subscribe };
+});
+
+vi.mock('../../../src/main/features/messaging/adapters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/messaging/adapters')>();
+  const createAdapter = vi.fn((...args: Parameters<typeof actual.createAdapter>) => {
+    return adapterMocks.createAdapter
+      ? (adapterMocks.createAdapter(...args) as ReturnType<typeof actual.createAdapter>)
+      : actual.createAdapter(...args);
+  });
+  return { ...actual, createAdapter };
 });
 
 /**
@@ -215,9 +234,7 @@ describe('wechat_personal end-to-end', () => {
       busListener = listener;
       return () => { busListener = undefined; };
     });
-    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
-      createAdapter: vi.fn(() => adapter),
-    }));
+    adapterMocks.createAdapter = () => adapter;
     vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
     vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe }));
     // The suite also imports messaging from tests that use the real Group
@@ -295,7 +312,7 @@ describe('wechat_personal end-to-end', () => {
 
       await manager.stopForUser('uid-1');
     } finally {
-      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      adapterMocks.createAdapter = undefined;
       vi.doUnmock('../../../src/main/features/group_chat');
       vi.doUnmock('../../../src/main/features/group_chat/bus');
       vi.resetModules();
@@ -323,9 +340,7 @@ describe('wechat_personal end-to-end', () => {
       },
       sendMessage,
     };
-    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
-      createAdapter: vi.fn(() => adapter),
-    }));
+    adapterMocks.createAdapter = () => adapter;
     vi.resetModules();
 
     try {
@@ -399,7 +414,7 @@ describe('wechat_personal end-to-end', () => {
 
       await manager.stopForUser('uid-1');
     } finally {
-      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      adapterMocks.createAdapter = undefined;
       vi.resetModules();
     }
   });
@@ -425,9 +440,7 @@ describe('wechat_personal end-to-end', () => {
       },
       sendMessage,
     };
-    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
-      createAdapter: vi.fn(() => adapter),
-    }));
+    adapterMocks.createAdapter = () => adapter;
     vi.resetModules();
 
     try {
@@ -524,7 +537,7 @@ describe('wechat_personal end-to-end', () => {
 
       await manager.stopForUser('uid-1');
     } finally {
-      vi.doUnmock('../../../src/main/features/messaging/adapters');
+      adapterMocks.createAdapter = undefined;
       vi.resetModules();
     }
   });

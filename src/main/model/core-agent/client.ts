@@ -901,6 +901,16 @@ function agentRunResultEventForTelemetry(input: {
   timings?: AgentRunTimings;
   failureCode?: string;
   failurePhase?: StreamEvent['failurePhase'];
+  /** Terminal usage totals for this run (SafeUsage — provider-reported
+   *  numbers only). Consumed by the group-chat bus to attach metrics to the
+   *  settled assistant reply. */
+  usage?: SafeUsage;
+  /** Wall-clock delay from run start to the first text delta, when one
+   *  arrived. Lets the bus derive firstTokenAt for reply metrics. */
+  firstTokenMs?: number;
+  /** Actual tool invocations this run (tool_start count, NOT the available
+   *  tool definition count used by has_tools/tool_count_bucket). */
+  toolCalls?: number;
 }): StreamEvent {
   const result = input.status === 'completed'
     ? 'success'
@@ -928,6 +938,9 @@ function agentRunResultEventForTelemetry(input: {
     data.retry_wait_ms = Math.max(0, Math.round(input.timings.retryWaitMs));
     data.other_ms = Math.max(0, Math.round(input.timings.otherMs));
   }
+  if (input.usage) data.usage = input.usage;
+  if (Number.isFinite(input.firstTokenMs)) data.first_token_ms = Math.max(0, Math.round(input.firstTokenMs || 0));
+  if (Number.isFinite(input.toolCalls) && (input.toolCalls || 0) > 0) data.tool_calls = input.toolCalls;
   if (errorCode) data.error_code = errorCode;
   return { type: 'event', event: { stream: 'agent_run_result', data } };
 }
@@ -958,6 +971,7 @@ export function modelTurnContextForLog(input: {
   fileReadOnlyExtraRoots?: readonly string[];
   cacheRetention?: string;
   thinkingLevel?: string;
+  modelOverride?: { provider: string; model: string };
   nested?: boolean;
   hasAbortSignal?: boolean;
   drainSteer?: unknown;
@@ -1010,6 +1024,9 @@ export function modelTurnContextForLog(input: {
     file_read_only_extra_root_count: input.fileReadOnlyExtraRoots?.length || 0,
     cache_retention: input.cacheRetention || undefined,
     thinking_level: input.thinkingLevel || undefined,
+    model_override: input.modelOverride
+      ? `${input.modelOverride.provider}/${input.modelOverride.model}`
+      : undefined,
     nested: !!input.nested,
     has_abort_signal: !!input.hasAbortSignal,
     has_drain_steer: typeof input.drainSteer === 'function',
@@ -1069,6 +1086,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     onSkillInvoked,
     cacheRetention,
     thinkingLevel,
+    modelOverride,
     nested = false,
     drainSteer,
     toolAccess,
@@ -1102,6 +1120,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
     fileReadOnlyExtraRoots,
     cacheRetention,
     thinkingLevel,
+    modelOverride,
     nested,
     hasAbortSignal: !!abortSignal,
     drainSteer,
@@ -1291,6 +1310,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       sessionId,
       systemPrompt,
       userId,
+      ...(modelOverride ? { modelOverride } : {}),
       ...(disableTools ? { disableTools: true } : {}),
       ...(toolAccess === 'read-only' ? { toolAccess: 'read-only' } : {}),
       agentId,
@@ -1301,6 +1321,7 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       ...(ephemeralSession ? { ephemeralSession: true } : {}),
       providerFirstEventTimeoutMs: Math.max(1, streamIdleTimeout * 1000),
       ...(cid ? { cid } : {}),
+      ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
       ...(turnId ? { turnId } : {}),
       ...(sourceMessageId ? { sourceMessageId } : {}),
       ...(sourceMessageFromUser ? { sourceMessageFromUser: true } : {}),
@@ -1742,6 +1763,9 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       failureCode: terminalFailureCode || undefined,
       failurePhase: terminalFailurePhase
         || (terminalStatus === 'aborted' ? liveRunFailurePhase(liveRunTimings.phase) : undefined),
+      usage: diagnostics.usage,
+      firstTokenMs: diagnostics.firstTextDeltaMs,
+      toolCalls: diagnostics.toolStarts > 0 ? diagnostics.toolStarts : undefined,
     });
     log.info('model turn finish', {
       ...turnLogContext,

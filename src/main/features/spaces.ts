@@ -20,12 +20,17 @@ import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName } from '../paths';
+import { userSpacesDir, spaceMetaFile, spaceContentDir, SPACE_DIR_MARKER, invalidateSpaceDirCache, sanitizeSpaceDirName, userAgentsDir, userSkillsDir } from '../paths';
 import { nowIso, readJson, writeJson } from '../storage';
 import { createLogger } from '../logger';
 import { getRendererTable } from '../i18n';
 import { limitNameDisplayText } from '../util/name-limit';
-import { getRoleTemplate, getScenario, type RoleTemplate, type RoleTemplateBundle } from './role_templates';
+import {
+  getRoleTemplateCatalogEntry,
+  getRoleScenario,
+  resolveRoleTemplateId,
+  type RoleTemplateCatalogEntry,
+} from './personal_ontology_contract';
 import type { RecallAbilityAssetRecord } from './recall/candidate-service';
 
 const log = createLogger('spaces');
@@ -69,6 +74,18 @@ export interface Space {
   main_skill_ref?: SpaceAssetRef;
   /** 置顶时间（侧栏/空间中心置顶排序用；缺失 = 未置顶）。 */
   pinned_at?: string;
+  /** 是否为共享知识库（共享库 = 对外可加入，对标 ima 共享知识库）。 */
+  shared?: boolean;
+  /** 加入方式：direct=直接加入 / apply=申请加入（管理员批准）/ invite=仅邀请加入。 */
+  join_mode?: 'direct' | 'apply' | 'invite';
+  /** 成员权限：view_export=内容可查看和导出 / view_only=内容可查看但不可导出 / hidden=内容不可查看。 */
+  member_permission?: 'view_export' | 'view_only' | 'hidden';
+  /** 知识库描述/简介。 */
+  description?: string;
+  /** 封面（base64 data URL 或空字符串 = 默认封面）。 */
+  cover?: string;
+  /** 预设推荐问题（对外快捷提问）。 */
+  recommended_questions?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +98,12 @@ export interface SpaceWithMeta extends Space {
   skill_count: number;
   agent_count: number;
   invalid_count: number;
+  /** COGSEED-15：空间可用智能体清单（与会话是否对话过无关）。
+   *  = ['commander'（CogSeed 主智能体，恒可用）] ∪ 外接智能体（base_agents 映射成功的
+   *    本机可协作工具，runtime.kind=cli/p3394-gateway，如 Claude Code / Codex）。
+   *  模板/市场引用的内置 Agent（专家类）不属于此清单——它们是另一类能力。
+   *  会话头部/空间任务行/空间 meta 的统一计数来源。 */
+  usable_agents: string[];
   /** 最近一次活跃会话标题（列表「最近」展示用；无会话则不填）。 */
   last_conversation_title?: string;
   /** 最近一次活跃会话时间（最近使用排序用；无会话则不填）。 */
@@ -90,9 +113,9 @@ export interface SpaceWithMeta extends Space {
 /** 派生结果（纯函数输出）。 */
 export interface SpaceResources {
   /** 解析到的主模板；无模板/模板不存在 = null。 */
-  template: RoleTemplate | null;
+  template: RoleTemplateCatalogEntry | null;
   /** 解析到的副模板列表（最多 2 个）。 */
-  secondary_templates: RoleTemplate[];
+  secondary_templates: RoleTemplateCatalogEntry[];
   /** 模板 bundle ∪ extra，过滤失效、去重保序。 */
   effective_skills: string[];
   effective_agents: string[];
@@ -141,7 +164,7 @@ function systemSpaceNameVariants(key: string): string[] {
     const match = /^ws\.(scenario|role_template)\.([a-z0-9_]+)\.name$/.exec(key);
     if (!match) return [];
     const [, kind, id] = match;
-    const source = kind === 'scenario' ? getScenario(id) : getRoleTemplate(id);
+    const source = kind === 'scenario' ? getRoleScenario(id) : getRoleTemplateCatalogEntry(id);
     if (!source) return [];
     add(source.name);
   }
@@ -177,28 +200,6 @@ function normaliseAssetRef(raw: unknown): SpaceAssetRef | undefined {
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
 
-/** 从模板文件文本解析捆绑声明行（自定义模板，一期"复制改"产物）。
- *  声明格式（模板文件元信息区，置于 `> 模板: <id>@<ver>` 之后）：
- *    `> 捆绑技能: sk-a, sk-b`
- *    `> 捆绑智能体: ag-1`
- *  无声明行 → 空捆绑。纯函数，不 import template_files（避免循环依赖）。 */
-export function parseTemplateFileBundle(text: string): RoleTemplateBundle {
-  const bundle: RoleTemplateBundle = { skill_ids: [], agent_ids: [] };
-  if (!text) return bundle;
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^>\s*捆绑技能\s*:\s*(.*)$/.exec(line);
-    if (m) {
-      bundle.skill_ids = m[1].split(',').map((s) => s.trim()).filter(Boolean);
-      continue;
-    }
-    const ma = /^>\s*捆绑智能体\s*:\s*(.*)$/.exec(line);
-    if (ma) {
-      bundle.agent_ids = ma[1].split(',').map((s) => s.trim()).filter(Boolean);
-    }
-  }
-  return bundle;
-}
-
 /** 空间 → 资源派生（纯函数，同步）。
  *  @param space  空间（可部分：primary_template_id/extra_skills/extra_agents）
  *  @param valid  当前用户可见资源的 id 集合（调用方从 listSkills/listAgents 构造）
@@ -219,29 +220,27 @@ export function resolveSpaceResources(
   const primary = space.primary_template_id || space.template_id;
   const secondary = space.secondary_template_ids ?? [];
 
-  let template: RoleTemplate | null = null;
-  const secondaryTemplates: RoleTemplate[] = [];
+  let template: RoleTemplateCatalogEntry | null = null;
+  const secondaryTemplates: RoleTemplateCatalogEntry[] = [];
   const bundleSkills: string[] = [];
   const bundleAgents: string[] = [];
+  const collectBundle = (entry: RoleTemplateCatalogEntry) => {
+    bundleSkills.push(...(entry.bundle?.skillIds ?? []));
+    bundleAgents.push(...(entry.bundle?.agentIds ?? []));
+  };
 
   // 主模板
   if (primary) {
-    template = getRoleTemplate(primary) ?? null;
-    if (template?.bundle) {
-      bundleSkills.push(...template.bundle.skill_ids);
-      bundleAgents.push(...template.bundle.agent_ids);
-    }
+    template = getRoleTemplateCatalogEntry(primary) ?? null;
+    if (template) collectBundle(template);
   }
   // 副模板（去重：排除与主模板相同的 id）
   for (const sid of secondary) {
     if (sid === primary) continue;
-    const st = getRoleTemplate(sid);
+    const st = getRoleTemplateCatalogEntry(sid);
     if (st) {
       secondaryTemplates.push(st);
-      if (st.bundle) {
-        bundleSkills.push(...st.bundle.skill_ids);
-        bundleAgents.push(...st.bundle.agent_ids);
-      }
+      collectBundle(st);
     }
   }
 
@@ -324,6 +323,14 @@ function _normaliseSpace(raw: any): Space | null {
     })(),
     main_skill_ref: normaliseAssetRef(raw.main_skill_ref),
     pinned_at: typeof raw.pinned_at === 'string' && raw.pinned_at ? raw.pinned_at : undefined,
+    shared: raw.shared === true,
+    join_mode: raw.join_mode === 'direct' || raw.join_mode === 'apply' || raw.join_mode === 'invite' ? raw.join_mode : undefined,
+    member_permission: raw.member_permission === 'view_export' || raw.member_permission === 'view_only' || raw.member_permission === 'hidden' ? raw.member_permission : undefined,
+    description: typeof raw.description === 'string' && raw.description ? raw.description : undefined,
+    cover: typeof raw.cover === 'string' && raw.cover ? raw.cover : undefined,
+    recommended_questions: Array.isArray(raw.recommended_questions)
+      ? raw.recommended_questions.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, 10)
+      : undefined,
     created_at: typeof raw.created_at === 'string' ? raw.created_at : '',
     updated_at: typeof raw.updated_at === 'string' ? raw.updated_at : '',
   };
@@ -511,6 +518,17 @@ function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?:
  *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
+  const startedAt = Date.now();
+  // 持久化元数据表路径：指纹命中 → 直接返回（重启后冷启动同样命中，
+  // 不再逐空间读 space.json + 最近会话）。
+  const meta = await import('./workspace_meta');
+  const tableEntry = await meta.getEntry<SpaceWithMeta[]>(uid, 'spaces', 'all');
+  if (tableEntry && Array.isArray(tableEntry.data)) {
+    if ((await _spacesStamp(uid)) === tableEntry.stamp) {
+      log.info('listSpaces table hit', { spaces: tableEntry.data.length, ms: Date.now() - startedAt });
+      return tableEntry.data.map((s) => ({ ...s }));
+    }
+  }
   const ids = await _listSpaceIds(uid);
   const [agents, skills] = await Promise.all([
     import('./agents').then((m) => m.listAgents()).catch(() => []),
@@ -525,13 +543,23 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const metas = await Promise.all(ids.map(async (sid) => {
     const s = await _readSpace(uid, sid);
     if (!s) return null;
-    const res = resolveSpaceResources(s, valid, {
-      baseAgentAgentIds: (s.base_agents ?? []).map((t) => baseAgentToAgentId(agents, t)).filter((x): x is string => !!x),
-    });
-    // 最近活跃会话（列表「最近」展示 + 最近使用排序；chats 动态引入避免模块加载链）
+    const baseAgentIds = (s.base_agents ?? [])
+      .map((t) => baseAgentToAgentId(agents, t))
+      .filter((x): x is string => !!x);
+    const res = resolveSpaceResources(s, valid, { baseAgentAgentIds: baseAgentIds });
+    // COGSEED-15：空间可用智能体清单 = CogSeed 主智能体 + 外接智能体（base_agents 映射
+    // 成功、去重保序）。模板/市场引用的内置 Agent（effective_agents）不计入——
+    // 它们与外接协作工具是两类不同的东西。与会话是否对话过无关。
+    const usableAgents = ['commander'];
+    for (const id of baseAgentIds) {
+      if (id && !usableAgents.includes(id)) usableAgents.push(id);
+    }
+    // 最近活跃会话（列表「最近」展示 + 最近使用排序）。走轻量版：只合并
+    // 空间/全局索引取最新一行，跳过 members.json 读取与整份 jsonl 的
+    // commander 扫描 —— 否则 N 个空间会把全部消息字节读一遍再丢掉。
     let lastConv: { title?: string; updated_at?: string; created_at?: string } | undefined;
     try {
-      const convs = await import('./chats').then((m) => m.listSpaceConversations(uid, sid));
+      const convs = await import('./chats').then((m) => m.listSpaceConversationsLight(uid, sid));
       lastConv = convs[0];
     } catch (_) { /* 会话索引异常不阻断列表 */ }
     return {
@@ -540,7 +568,8 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
       template_names: [res.template?.name, ...res.secondary_templates.map((t) => t.name)]
         .filter(Boolean).join(' ') || undefined,
       skill_count: res.effective_skills.length + res.invalid_refs.skills.length,
-      agent_count: res.effective_agents.length + res.invalid_refs.agents.length,
+      agent_count: usableAgents.length,
+      usable_agents: usableAgents,
       invalid_count: res.invalid_refs.skills.length + res.invalid_refs.agents.length,
       last_conversation_title: lastConv?.title || undefined,
       last_conversation_at: lastConv?.updated_at || lastConv?.created_at || undefined,
@@ -549,7 +578,36 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const out: SpaceWithMeta[] = metas.filter((m): m is NonNullable<typeof m> => Boolean(m));
   const collator = new Intl.Collator('zh', { sensitivity: 'base', numeric: true });
   out.sort((a, b) => collator.compare(a.name, b.name) || a.space_id.localeCompare(b.space_id));
+  try {
+    await meta.putEntry(uid, 'spaces', 'all', await _spacesStamp(uid), out);
+  } catch { /* 表写入失败不阻断 */ }
+  // 性能埋点：工作空间首屏核心路径耗时（诊断用，仅计数/时长）。
+  log.info('listSpaces done', { spaces: out.length, ms: Date.now() - startedAt });
   return out;
+}
+
+async function _entryStamp(dir: string): Promise<string> {
+  try {
+    const st = await fsp.stat(dir);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** 工作空间摘要的验证指纹：spaces 目录 + 会话索引全部根 + skills/agents
+ *  目录。任一变化（新建空间/会话、技能或智能体增删）即失配 → 实时重算。 */
+async function _spacesStamp(uid: string): Promise<string> {
+  const parts: string[] = [
+    `sd:${await _entryStamp(ensureSpacesDir(uid))}`,
+    `sk:${await _entryStamp(userSkillsDir(uid))}`,
+    `ag:${await _entryStamp(userAgentsDir(uid))}`,
+  ];
+  try {
+    const chats = await import('./chats');
+    parts.push(await chats.conversationIndexStamp(uid));
+  } catch { /* 索引不可用 → 失配兜底由 live 路径覆盖 */ }
+  return parts.join('|');
 }
 
 export async function getSpace(uid: string, spaceId: string): Promise<Space | null> {
@@ -576,6 +634,12 @@ export async function createSpace(
     base_agent?: string;
     base_agents?: string[];
     main_skill_ref?: SpaceAssetRef;
+    shared?: boolean;
+    join_mode?: 'direct' | 'apply' | 'invite';
+    member_permission?: 'view_export' | 'view_only' | 'hidden';
+    description?: string;
+    cover?: string;
+    recommended_questions?: string[];
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const name = normName(opts.name);
@@ -612,6 +676,14 @@ export async function createSpace(
     base_agents: baseAgents,
     gate_status: 'not_checked',
     main_skill_ref: normaliseAssetRef(opts.main_skill_ref),
+    shared: opts.shared === true,
+    join_mode: opts.join_mode,
+    member_permission: opts.member_permission,
+    description: typeof opts.description === 'string' && opts.description.trim() ? opts.description.trim() : undefined,
+    cover: typeof opts.cover === 'string' && opts.cover ? opts.cover : undefined,
+    recommended_questions: Array.isArray(opts.recommended_questions)
+      ? opts.recommended_questions.map((q) => String(q).trim()).filter(Boolean).slice(0, 10)
+      : undefined,
     created_at: nowIso(),
     updated_at: nowIso(),
   };
@@ -683,16 +755,18 @@ export async function createSpaceFromDraft(
   const secondaryTemplateIds: string[] = [];
   let bundleSkillIds = new Set<string>();
   let bundleAgentIds = new Set<string>();
-  const tpls = await import('./role_templates').then((m) => m.listRoleTemplates());
-  const resolveTpl = (raw: string): string | undefined =>
-    resolveDraftResourceId(tpls.map((t) => ({ id: t.template_id, name: t.name })), raw);
+  // 模板引用解析（id 精确 → 显示名模糊）由 PO contract 负责，Workspace 不再
+  // 自建一份目录匹配；bundle 也从 contract 的目录条目读，不碰 T-box 结构。
+  const collectDraftBundle = (entry: RoleTemplateCatalogEntry) => {
+    (entry.bundle?.skillIds || []).forEach((id) => bundleSkillIds.add(id));
+    (entry.bundle?.agentIds || []).forEach((id) => bundleAgentIds.add(id));
+  };
   if (draft.primary_template_id) {
-    const resolved = resolveTpl(draft.primary_template_id);
-    if (resolved) {
+    const resolved = resolveRoleTemplateId(draft.primary_template_id);
+    const tpl = resolved ? getRoleTemplateCatalogEntry(resolved) : undefined;
+    if (resolved && tpl) {
       templateId = resolved;
-      const tpl = tpls.find((t) => t.template_id === resolved)!;
-      (tpl.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
-      (tpl.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      collectDraftBundle(tpl);
       if (resolved !== draft.primary_template_id) corrections.push(`角色模板「${draft.primary_template_id}」已按名称解析为「${tpl.name}」`);
     } else {
       corrections.push(`角色模板「${draft.primary_template_id}」不存在，已忽略（空间将不套模板，可在空间设置里改）`);
@@ -701,12 +775,11 @@ export async function createSpaceFromDraft(
   for (const sid of draft.secondary_template_ids || []) {
     if (!sid || sid === templateId || secondaryTemplateIds.includes(sid)) continue;
     if (secondaryTemplateIds.length >= 2) { corrections.push('副模板超过 2 个，仅保留前 2 个'); break; }
-    const resolved = resolveTpl(sid);
-    if (resolved) {
+    const resolved = resolveRoleTemplateId(sid);
+    const st = resolved ? getRoleTemplateCatalogEntry(resolved) : undefined;
+    if (resolved && st) {
       secondaryTemplateIds.push(resolved);
-      const st = tpls.find((t) => t.template_id === resolved)!;
-      (st.bundle?.skill_ids || []).forEach((id) => bundleSkillIds.add(id));
-      (st.bundle?.agent_ids || []).forEach((id) => bundleAgentIds.add(id));
+      collectDraftBundle(st);
       if (resolved !== sid) corrections.push(`副模板「${sid}」已按名称解析为「${st.name}」`);
     } else {
       corrections.push(`副模板「${sid}」不存在，已忽略`);
@@ -1084,56 +1157,26 @@ export async function resolveSpaceScope(
 }
 
 /**
- * 情境空间「角色画像」注入：会话挂空间 + 空间有主模板 → 读主+副角色模板文件
- * （个人本体唯一事实来源）的有值字段，格式化为「当前角色画像」块，由 runner 注入
- * system prompt。主角色优先，副角色字段排后；空坑不注入；任何失败 → ''（静默降级）。
+ * 情境空间「角色画像」注入：会话挂空间 + 空间有主模板 → 由 Personal Ontology
+ * 按 template id 返回已格式化的「当前角色画像」块，交给 runner 注入 system prompt。
+ *
+ * Workspace 这一侧只负责「这个空间绑了哪些角色模板」和调用时机；画像怎么存、
+ * 分节字段怎么组织、空坑与来源标记怎么处理，全部在 PO contract 内部完成
+ * （见 personal_ontology_contract.ts::getRoleProfileForRuntime）。任何失败在
+ * contract 内部已降级为空串，这里不再重复兜底。
  */
 export async function formatRoleProfileForSystemPrompt(
   uid: string,
   spaceId: string | null | undefined,
 ): Promise<string> {
-  try {
-    if (!spaceId) return '';
-    const space = await _readSpace(uid, spaceId);
-    const primary = space?.primary_template_id || space?.template_id;
-    if (!primary) return '';
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-    const tmpl = await import('./personal_ontology_template_files');
-
-    // 收集所有需要读的模板 id（主+副，去重）
-    const allTemplateIds = [primary];
-    if (space?.secondary_template_ids?.length) {
-      for (const sid of space.secondary_template_ids) {
-        if (sid && sid !== primary) allTemplateIds.push(sid);
-      }
-    }
-
-    const allLines: string[] = [];
-    for (const tid of allTemplateIds) {
-      const text = tmpl.readTemplateFileText(uid, tid);
-      if (!text) continue;
-      const content = tmpl.parseTemplateContent(text);
-      const tpl = getRoleTemplate(tid);
-      const tplName = (tpl && tpl.name) || tid;
-      const lines: string[] = [];
-      for (const sec of content.sections) {
-        for (const [fieldName, values] of Object.entries(sec.fields)) {
-          if (!values.length) continue; // 空坑不注入
-          lines.push(`- ${sec.title} · ${fieldName}: ${values.map((v) => v.value).join('、')}`);
-        }
-      }
-      if (lines.length) {
-        allLines.push(`### 角色「${tplName}」`, ...lines);
-      }
-    }
-    if (!allLines.length) return ''; // 全空坑 → 不注入空画像
-
-    return [
-      `## 当前角色画像`,
-      `本空间绑定了以下角色模板；以下为已记录的个人画像（来源：个人本体角色模板文件，随候选确认更新）：`,
-      ...allLines,
-    ].join('\n');
-  } catch {
-    return ''; // 静默降级
+  if (!spaceId) return '';
+  const space = await _readSpace(uid, spaceId).catch(() => null);
+  const primary = space?.primary_template_id || space?.template_id;
+  if (!primary) return '';
+  const templateIds = [primary];
+  for (const sid of space?.secondary_template_ids ?? []) {
+    if (sid && sid !== primary) templateIds.push(sid);
   }
+  const { getRoleProfileForRuntime } = await import('./personal_ontology_contract');
+  return getRoleProfileForRuntime(uid, templateIds);
 }

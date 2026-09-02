@@ -17,10 +17,13 @@ import {
   conversationMessageFile,
   conversationMessageReadFile,
 } from '../../util/project-layout';
-import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, nowIso, safeId } from '../../storage';
+import { readJsonl, rewriteJsonlLine, rewriteJsonlRecords, genId12, nowIso, safeId, writeJson } from '../../storage';
 import { createLogger } from '../../logger';
+import type { P3394Envelope } from '../p3394_bridge/envelope';
 import { t } from '../../i18n';
 import { logErrorRef } from '../../util/log-redact';
+import { fileEditLock } from '../../util/locks';
+import { cogSeedRequestFingerprint } from '../cogseed_backend/request-fingerprint';
 
 import {
   COMMANDER_ID, USER_ID, RESERVED_IDS, readMembers, readState, seedReservedActors, purgeGroupDir,
@@ -29,6 +32,7 @@ import {
 import { isPlaceholderTitle } from './conv_title';
 import {
   abort as busAbort, dropConv as busDropConv, enqueue, subscribe, isQuiescent, runtimeSnapshot,
+  recoverPersistedUserDispatch,
   type GroupEvent,
 } from './bus';
 import {
@@ -269,6 +273,9 @@ function _deletedMessageRevision(message: GroupMessage, deletedAt: string): Grou
     from: message.from,
     to: Array.isArray(message.to) ? message.to : [],
     text: '',
+    ...(safeId(message.action_request_id) ? { action_request_id: message.action_request_id } : {}),
+    ...(safeId(message.turn_id) ? { turn_id: message.turn_id } : {}),
+    ...(message.turn_end === true ? { turn_end: true as const } : {}),
     deleted_at: deletedAt,
     deleted_by_user: true,
     _v: Math.max(0, Number(message._v) || 0) + 1,
@@ -449,6 +456,13 @@ export interface SendInput {
   kstar_review_card?: { kind: 'kstar_review_card'; episodeId: string; reviewId: string; expectedResult?: string; actualResult?: string };
   recipient_agent_id?: string;
   recipient_origin?: 'user_selection' | 'cli_fallback';
+  /** Per-task execution config from the unified execution entry (composer
+   *  recipient/model pick). Validated here; empty objects are dropped so
+   *  downstream sees a clean undefined. */
+  execution_config?: import('./bus').TurnExecutionConfig;
+  /** P3394 信封（翻译官模式）：渠道入站消息投影出的统一信封，随消息贯穿派发；
+   * 不传时行为与既往完全一致。 */
+  p3394_envelope?: P3394Envelope;
 }
 
 type ValidatedUserRoute = NonNullable<Parameters<typeof enqueue>[0]['userRoute']>;
@@ -487,6 +501,28 @@ async function _validateUserRoute(
     if (!entry?.available) throw new Error('selected local Agent is unavailable');
   }
   return { agentId, origin };
+}
+
+/** Validate the per-task execution config (unified execution entry) at the
+ *  business boundary. Renderer state is advisory: ids are shape-checked and
+ *  unknown values are dropped (not fatal — a stale override must never block
+ *  sending; the turn falls back to the default group). An all-empty object
+ *  collapses to null so downstream sees a clean undefined.
+ *  `model` may travel without `provider` — that's the CLI-agent override
+ *  shape (the model id is passed to the external CLI directly); in-process
+ *  turns require the full pair and ignore model-only values.
+ *  Exported for the unified-execution-entry tests. */
+export function _validatedExecutionConfig(raw: unknown): import('./bus').TurnExecutionConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const provider = typeof r.provider === 'string' ? r.provider.trim() : '';
+  const model = typeof r.model === 'string' ? r.model.trim() : '';
+  const effort = r.effort === 'off' || r.effort === 'low' || r.effort === 'high' ? r.effort : undefined;
+  if (!model && !effort) return null;
+  return {
+    ...(provider && model ? { provider, model } : (model ? { model } : {})),
+    ...(effort ? { effort } : {}),
+  };
 }
 
 /** 任务引用（@ 产物）源消息定位：在源会话消息里找持有该文件（附件或 produced）的最新一条。 */
@@ -729,7 +765,7 @@ async function _resolveMessageReferences(
 export async function send(
   input: SendInput,
 ): Promise<{ ok: boolean; msg?: GroupMessage; error?: string }> {
-  const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card } = input;
+  const { userId, cid, text, model_text, attachments, use_selections, references, recall_projection_card, kstar_review_card, p3394_envelope } = input;
   if (!safeId(cid)) return { ok: false, error: 'invalid cid' };
   if (!text || !text.trim()) return { ok: false, error: 'empty message' };
   let userRoute: ValidatedUserRoute | null = null;
@@ -738,6 +774,10 @@ export async function send(
   } catch (err) {
     return { ok: false, error: (err as Error).message || 'invalid recipient route' };
   }
+  // Per-task execution config (unified execution entry). Validate shape at
+  // the business boundary — the renderer state is advisory, same as the
+  // recipient route above.
+  const executionConfig = _validatedExecutionConfig(input.execution_config);
   await seedReservedActors(userId, cid);
   // Auto-title: the first real user message in a fresh / unnamed
   // conversation overwrites the placeholder title so the sidebar item
@@ -773,6 +813,8 @@ export async function send(
       ...(recall_projection_card ? { recall_projection_card } : {}),
       ...(kstar_review_card ? { kstar_review_card } : {}),
       ...(userRoute ? { userRoute, forceTo: [userRoute.agentId] } : {}),
+      ...(executionConfig ? { executionConfig } : {}),
+      ...(p3394_envelope ? { p3394_envelope } : {}),
     });
     // 一次性引用语义：持久化 task_references 随本条消息消费后即从会话移除，
     // 下一条消息不再自动携带（本消息的引用已在 enqueue 时快照，不受影响）。
@@ -916,7 +958,7 @@ export async function replaceUserMessage(
 
 export type FailedTurnRetryMode = 'resume' | 'restart';
 
-export interface RetryFailedTurnInput {
+export interface ResolveFailedTurnRetryInput {
   userId: string;
   cid: string;
   failedMessageId: string;
@@ -925,9 +967,102 @@ export interface RetryFailedTurnInput {
   visibleText: string;
 }
 
+export interface RetryFailedTurnInput extends ResolveFailedTurnRetryInput {
+  requestId: string;
+}
+
 export interface ResolvedFailedTurnRetry {
   mode: FailedTurnRetryMode;
   enqueue: Parameters<typeof enqueue>[0];
+}
+
+interface FailedTurnRetryClaim {
+  schemaVersion: 1;
+  requestId: string;
+  fingerprint: string;
+  failedMessageId: string;
+  status: 'pending' | 'completed';
+  mode?: FailedTurnRetryMode;
+  messageId?: string;
+  dispatchTurnId?: string;
+  /** Request ID persisted on the canonical user message. It differs from
+   * requestId only when a fresh Dashboard request repairs a crash-before-
+   * dispatch attempt without creating a second message. */
+  canonicalRequestId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface FailedTurnRetryTargetClaim {
+  schemaVersion: 1;
+  requestId: string;
+  fingerprint: string;
+  failedMessageId: string;
+  mode?: FailedTurnRetryMode;
+  dispatchTurnId?: string;
+  canonicalRequestId?: string;
+  messageId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function failedTurnRetryClaimFile(userId: string, cid: string, requestId: string): string {
+  return path.join(conversationLayout(userId, cid).groupDir, 'dashboard-retry-claims', `${requestId}.json`);
+}
+
+function failedTurnRetryTargetClaimFile(userId: string, cid: string, failedMessageId: string): string {
+  return path.join(
+    conversationLayout(userId, cid).groupDir,
+    'dashboard-retry-target-claims',
+    `${failedMessageId}.json`,
+  );
+}
+
+function retryDispatchTurnId(fingerprint: string): string {
+  return `turn-retry-${fingerprint.slice(0, 24)}`;
+}
+
+async function readFailedTurnRetryClaim(file: string): Promise<FailedTurnRetryClaim | null> {
+  try {
+    const value = JSON.parse(await fsp.readFile(file, 'utf8')) as Partial<FailedTurnRetryClaim>;
+    if (value.schemaVersion !== 1
+      || !safeId(value.requestId || '')
+      || !/^[a-f0-9]{64}$/.test(value.fingerprint || '')
+      || !safeId(value.failedMessageId || '')
+      || (value.status !== 'pending' && value.status !== 'completed')
+      || (value.mode !== undefined && value.mode !== 'resume' && value.mode !== 'restart')
+      || (value.messageId !== undefined && !safeId(value.messageId))
+      || (value.dispatchTurnId !== undefined && !safeId(value.dispatchTurnId))
+      || (value.canonicalRequestId !== undefined && !safeId(value.canonicalRequestId))) {
+      throw new Error('malformed Group Chat retry claim');
+    }
+    return value as FailedTurnRetryClaim;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function readFailedTurnRetryTargetClaim(
+  file: string,
+): Promise<FailedTurnRetryTargetClaim | null> {
+  try {
+    const value = JSON.parse(await fsp.readFile(file, 'utf8')) as Partial<FailedTurnRetryTargetClaim>;
+    if (value.schemaVersion !== 1
+      || !safeId(value.requestId || '')
+      || !/^[a-f0-9]{64}$/.test(value.fingerprint || '')
+      || !safeId(value.failedMessageId || '')
+      || (value.mode !== undefined && value.mode !== 'resume' && value.mode !== 'restart')
+      || (value.dispatchTurnId !== undefined && !safeId(value.dispatchTurnId))
+      || (value.canonicalRequestId !== undefined && !safeId(value.canonicalRequestId))
+      || (value.messageId !== undefined && !safeId(value.messageId))) {
+      throw new Error('malformed Group Chat retry target claim');
+    }
+    return value as FailedTurnRetryTargetClaim;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 function _processHasCompletedOrStartedTool(msg: GroupMessage): boolean {
@@ -945,7 +1080,7 @@ function _processHasCompletedOrStartedTool(msg: GroupMessage): boolean {
  * main process owns this decision so the renderer cannot guess from localized
  * text or stale DOM. */
 export async function resolveFailedTurnRetry(
-  input: RetryFailedTurnInput,
+  input: ResolveFailedTurnRetryInput,
 ): Promise<{ ok: true; value: ResolvedFailedTurnRetry } | { ok: false; error: string }> {
   const { userId, cid, failedMessageId } = input;
   const visibleText = String(input.visibleText || '').trim();
@@ -1080,11 +1215,278 @@ export async function resolveFailedTurnRetry(
 export async function retryFailedTurn(
   input: RetryFailedTurnInput,
 ): Promise<{ ok: boolean; mode?: FailedTurnRetryMode; msg?: GroupMessage; error?: string }> {
+  const requestId = String(input.requestId || '').trim();
+  if (!safeId(requestId)) return { ok: false, error: 'invalid retry request id' };
+  if (!safeId(input.cid) || !safeId(input.failedMessageId)) {
+    return { ok: false, error: 'invalid retry target' };
+  }
+  const fingerprint = cogSeedRequestFingerprint('retry', {
+    cid: input.cid,
+    failedMessageId: input.failedMessageId,
+    visibleText: String(input.visibleText || '').trim(),
+  });
+  const claimFile = failedTurnRetryClaimFile(input.userId, input.cid, requestId);
+  const targetClaimFile = failedTurnRetryTargetClaimFile(
+    input.userId,
+    input.cid,
+    input.failedMessageId,
+  );
   try {
-    const resolved = await resolveFailedTurnRetry(input);
-    if (!resolved.ok) return resolved;
-    const msg = await enqueue(resolved.value.enqueue);
-    return { ok: true, mode: resolved.value.mode, msg };
+    return await fileEditLock(claimFile).runExclusive(async () => {
+      const existing = await readFailedTurnRetryClaim(claimFile);
+      if (existing
+        && (existing.requestId !== requestId || existing.failedMessageId !== input.failedMessageId)) {
+        throw new Error('retry request claim does not match its storage key');
+      }
+      if (existing && existing.fingerprint !== fingerprint) {
+        return { ok: false, error: 'retry request ID payload conflict' };
+      }
+      return fileEditLock(targetClaimFile).runExclusive(async () => {
+        let targetClaim = await readFailedTurnRetryTargetClaim(targetClaimFile);
+        if (targetClaim && targetClaim.failedMessageId !== input.failedMessageId) {
+          throw new Error('retry target claim does not match its storage key');
+        }
+        const rows = await readJsonl<GroupMessage>(mainJsonlFile(input.userId, input.cid), 100_000);
+        if (targetClaim && targetClaim.fingerprint !== fingerprint) {
+          return { ok: false, error: 'retry target already claimed' };
+        }
+
+        const existingCanonicalRequestId = existing?.canonicalRequestId || requestId;
+        const targetCanonicalRequestId = targetClaim?.canonicalRequestId
+          || targetClaim?.requestId;
+        const ownMessageId = existing?.messageId
+          || (targetClaim?.requestId === requestId ? targetClaim.messageId : undefined);
+        const ownCanonicalRequestId = existing
+          ? existingCanonicalRequestId
+          : targetClaim?.requestId === requestId
+            ? targetCanonicalRequestId
+            : requestId;
+        const msg = ownMessageId
+          ? rows.find((row) => (
+              row.id === ownMessageId
+              && row.action_request_id === ownCanonicalRequestId
+            ))
+          : rows.find((row) => row.action_request_id === ownCanonicalRequestId);
+        if (msg) {
+          const mode = existing?.mode || targetClaim?.mode;
+          const dispatchTurnId = existing?.dispatchTurnId || targetClaim?.dispatchTurnId;
+          const canonicalRequestId = msg.action_request_id;
+          if (!canonicalRequestId || !safeId(canonicalRequestId)) {
+            throw new Error('persisted retry message has invalid request identity');
+          }
+          const timestamp = nowIso();
+          if (!targetClaim) {
+            targetClaim = {
+              schemaVersion: 1,
+              requestId,
+              fingerprint,
+              failedMessageId: input.failedMessageId,
+              ...(mode ? { mode } : {}),
+              ...(dispatchTurnId ? { dispatchTurnId } : {}),
+              canonicalRequestId,
+              messageId: msg.id,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            };
+            await writeJson(targetClaimFile, targetClaim);
+          } else if (targetClaim.requestId === requestId
+            && (targetClaim.canonicalRequestId !== canonicalRequestId
+              || targetClaim.messageId !== msg.id)) {
+            targetClaim = {
+              ...targetClaim,
+              canonicalRequestId,
+              messageId: msg.id,
+              updatedAt: timestamp,
+            };
+            await writeJson(targetClaimFile, targetClaim);
+          }
+          if (dispatchTurnId) {
+            if (msg.to.length !== 1 || msg.to[0] === USER_ID) {
+              throw new Error('persisted retry message has no executable recipient');
+            }
+            await recoverPersistedUserDispatch({
+              uid: input.userId,
+              cid: input.cid,
+              messageId: msg.id,
+              actionRequestId: canonicalRequestId,
+              recipientId: msg.to[0],
+              turnId: dispatchTurnId,
+              ...(mode === 'resume' ? { resumeActiveTurn: true } : {}),
+            });
+          }
+          const completed: FailedTurnRetryClaim = {
+            schemaVersion: 1,
+            requestId,
+            fingerprint,
+            failedMessageId: input.failedMessageId,
+            status: 'completed',
+            ...(mode ? { mode } : {}),
+            messageId: msg.id,
+            ...(dispatchTurnId ? { dispatchTurnId } : {}),
+            ...(canonicalRequestId !== requestId ? { canonicalRequestId } : {}),
+            createdAt: existing?.createdAt || timestamp,
+            updatedAt: timestamp,
+          };
+          await writeJson(claimFile, completed);
+          return { ok: true, mode, msg };
+        }
+        if (existing?.status === 'completed') {
+          throw new Error('completed retry message is missing');
+        }
+
+        if (targetClaim && targetClaim.requestId !== requestId) {
+          const canonicalRequestId = targetCanonicalRequestId;
+          const dispatchTurnId = targetClaim.dispatchTurnId;
+          const mode = targetClaim.mode;
+          if (!canonicalRequestId || !dispatchTurnId || !mode) {
+            return { ok: false, error: 'retry target already claimed' };
+          }
+          const canonicalMsg = targetClaim.messageId
+            ? rows.find((row) => (
+                row.id === targetClaim.messageId
+                && row.action_request_id === canonicalRequestId
+              ))
+            : rows.find((row) => row.action_request_id === canonicalRequestId);
+          if (!canonicalMsg) {
+            // No canonical message means the previous owner stopped before
+            // enqueue persisted anything. Since this target lock is now ours,
+            // that owner cannot still cross the persistence boundary. Transfer
+            // the claim and let this request perform the one canonical enqueue.
+            // A recorded messageId without a matching row is data loss, not a
+            // safe pre-message crash, and must fail closed.
+            if (targetClaim.messageId) throw new Error('completed retry message is missing');
+            const priorClaim = await readFailedTurnRetryClaim(
+              failedTurnRetryClaimFile(input.userId, input.cid, targetClaim.requestId),
+            );
+            if (priorClaim && (
+              priorClaim.requestId !== targetClaim.requestId
+              || priorClaim.failedMessageId !== input.failedMessageId
+              || priorClaim.fingerprint !== fingerprint
+              || priorClaim.status === 'completed'
+              || (priorClaim.mode && priorClaim.mode !== mode)
+              || (priorClaim.dispatchTurnId && priorClaim.dispatchTurnId !== dispatchTurnId)
+            )) {
+              throw new Error('retry target claim conflicts with its request claim');
+            }
+            targetClaim = {
+              ...targetClaim,
+              requestId,
+              canonicalRequestId: requestId,
+              messageId: undefined,
+              updatedAt: nowIso(),
+            };
+            await writeJson(targetClaimFile, targetClaim);
+          } else {
+            if (canonicalMsg.to.length !== 1 || canonicalMsg.to[0] === USER_ID) {
+              throw new Error('persisted retry message has no executable recipient');
+            }
+            const recovery = await recoverPersistedUserDispatch({
+              uid: input.userId,
+              cid: input.cid,
+              messageId: canonicalMsg.id,
+              actionRequestId: canonicalRequestId,
+              recipientId: canonicalMsg.to[0],
+              turnId: dispatchTurnId,
+              ...(mode === 'resume' ? { resumeActiveTurn: true } : {}),
+            });
+            if (recovery.disposition !== 'redispatched') {
+              return { ok: false, error: 'retry target already claimed' };
+            }
+            const timestamp = nowIso();
+            const completed: FailedTurnRetryClaim = {
+              schemaVersion: 1,
+              requestId,
+              fingerprint,
+              failedMessageId: input.failedMessageId,
+              status: 'completed',
+              mode,
+              messageId: canonicalMsg.id,
+              dispatchTurnId,
+              canonicalRequestId,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            };
+            await writeJson(claimFile, completed);
+            targetClaim = {
+              ...targetClaim,
+              requestId,
+              canonicalRequestId,
+              messageId: canonicalMsg.id,
+              updatedAt: timestamp,
+            };
+            await writeJson(targetClaimFile, targetClaim);
+            return { ok: true, mode, msg: canonicalMsg };
+          }
+        }
+
+        const resolved = await resolveFailedTurnRetry(input);
+        if (!resolved.ok) return resolved;
+        const claimedMode = existing?.mode || targetClaim?.mode;
+        if (claimedMode && claimedMode !== resolved.value.mode) {
+          return { ok: false, error: 'retry target state changed before dispatch' };
+        }
+        const timestamp = nowIso();
+        const dispatchTurnId = existing?.dispatchTurnId
+          || targetClaim?.dispatchTurnId
+          || retryDispatchTurnId(fingerprint);
+        if (!targetClaim) {
+          targetClaim = {
+            schemaVersion: 1,
+            requestId,
+            fingerprint,
+            failedMessageId: input.failedMessageId,
+            mode: resolved.value.mode,
+            dispatchTurnId,
+            canonicalRequestId: requestId,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          await writeJson(targetClaimFile, targetClaim);
+        } else if (!targetClaim.dispatchTurnId) {
+          targetClaim = {
+            ...targetClaim,
+            mode: targetClaim.mode || resolved.value.mode,
+            dispatchTurnId,
+            canonicalRequestId: targetClaim.canonicalRequestId || requestId,
+            updatedAt: timestamp,
+          };
+          await writeJson(targetClaimFile, targetClaim);
+        }
+        const pending: FailedTurnRetryClaim = {
+          schemaVersion: 1,
+          requestId,
+          fingerprint,
+          failedMessageId: input.failedMessageId,
+          status: 'pending',
+          mode: resolved.value.mode,
+          dispatchTurnId,
+          canonicalRequestId: requestId,
+          createdAt: existing?.createdAt || timestamp,
+          updatedAt: timestamp,
+        };
+        await writeJson(claimFile, pending);
+        const enqueued = await enqueue({
+          ...resolved.value.enqueue,
+          actionRequestId: requestId,
+          dispatchTurnId,
+        });
+        if (!targetClaim) throw new Error('retry target claim disappeared before completion');
+        targetClaim = {
+          ...targetClaim,
+          canonicalRequestId: requestId,
+          messageId: enqueued.id,
+          updatedAt: nowIso(),
+        };
+        await writeJson(targetClaimFile, targetClaim);
+        await writeJson(claimFile, {
+          ...pending,
+          status: 'completed',
+          messageId: enqueued.id,
+          updatedAt: nowIso(),
+        } satisfies FailedTurnRetryClaim);
+        return { ok: true, mode: resolved.value.mode, msg: enqueued };
+      });
+    });
   } catch (err) {
     log.error('failed-turn retry failed', { error: logErrorRef(err) });
     return { ok: false, error: (err as Error).message || String(err) };

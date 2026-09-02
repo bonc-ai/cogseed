@@ -59,7 +59,7 @@ describe('connectors/custom-transport › streamable-http', () => {
     // Look-alikes that must NOT pass the loopback exception:
     expect(codeOf(() => validateCustomTransport({ kind: 'streamable-http', url: 'http://localhost.evil.com/mcp' })))
       .toBe('E_URL_INSECURE');
-    expect(codeOf(() => validateCustomTransport({ kind: 'streamable-http', url: 'http://192.168.1.5/mcp' })))
+    expect(codeOf(() => validateCustomTransport({ kind: 'streamable-http', url: 'http://192.0.2.5/mcp' })))
       .toBe('E_URL_INSECURE');
   });
 

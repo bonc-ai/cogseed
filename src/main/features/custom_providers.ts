@@ -31,6 +31,7 @@ import {
   type CustomProvider,
   type CustomProviderModel,
 } from './auth';
+import { publicContextWindowFor, publicModelAbilitiesFor } from '../model/public_model_catalog';
 import { createLogger } from '../logger';
 
 const log = createLogger('custom-providers');
@@ -110,19 +111,31 @@ function normalizeModel(
 ): CustomProviderModel {
   const value = typeof raw === 'string' ? { id: raw } : raw;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model must be an object or string id');
-  const candidate = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const candidate = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown };
   if (typeof candidate.id !== 'string') throw new Error('model id required');
   const id = candidate.id.trim();
   if (!id) throw new Error('model id required');
   if (id.length > MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH) {
     throw new Error(`model id must be at most ${MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH} characters`);
   }
+  // Window fallback chain: explicit value → catalog (known model) → default
+  // guess. The catalog beat-out prevents importer rows (CC Switch hints carry
+  // only ids) from silently carrying a wrong 128K default for models whose
+  // real window is public knowledge.
   const contextWindow = normalizePositiveSafeInteger(
     candidate.contextWindow,
     'contextWindow',
-    fallback?.contextWindow ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
+    fallback?.contextWindow
+      ?? publicContextWindowFor(id)
+      ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
     MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   );
+  // Vision has NO guessed default: explicit > fallback > catalog, else
+  // undefined (= unknown; consumers treat unknown as pass-through).
+  const rawVision = candidate.vision;
+  const vision = typeof rawVision === 'boolean'
+    ? rawVision
+    : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision);
   const maxTokens = normalizePositiveSafeInteger(
     candidate.maxTokens,
     'maxTokens',
@@ -130,7 +143,7 @@ function normalizeModel(
     MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   );
   if (maxTokens > contextWindow) throw new Error('maxTokens must not exceed contextWindow');
-  return { id, contextWindow, maxTokens };
+  return { id, contextWindow, maxTokens, ...(vision !== undefined ? { vision } : {}) };
 }
 
 function normalizeModels(models: unknown): CustomProviderModel[] {
@@ -476,9 +489,153 @@ export async function testCustomProviderModel(
   });
 }
 
+/** First positive safe integer among the candidate metadata fields. */
+function pickPositive(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isSafeInteger(n) && n > 0) return n;
+  }
+  return undefined;
+}
+
+/**
+ * List the models a custom provider's service exposes, by calling the
+ * service's own "list models" endpoint with the stored credentials.
+ * OpenAI-compatible: `GET {baseUrl}/models` (baseUrl convention already
+ * carries the version segment, same as the chat endpoint). Anthropic:
+ * `GET {baseUrl}/v1/models`. Gemini: `GET {baseUrl}/v1beta/models`.
+ *
+ * Read-only: nothing is imported — the renderer shows the list and the
+ * user picks what to add. The API key comes from the provider's stored
+ * config (never a literal) and is excluded from every error message.
+ */
+export async function fetchCustomProviderModels(
+  userId: string,
+  id: string,
+): Promise<{ ok: true; models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> } | { ok: false; error: string }> {
+  let providerId: string;
+  try {
+    providerId = normalizeProviderId(id);
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+
+  // Same trust level as the provider's chat traffic: the user configured
+  // this exact URL; we only additionally pin the scheme to http(s) so a
+  // hand-edited store entry can't turn the fetch into a file:// read.
+  let base: URL;
+  try {
+    base = new URL(provider.baseUrl);
+    if (base.protocol !== 'http:' && base.protocol !== 'https:') {
+      return { ok: false, error: 'base URL must be http(s)' };
+    }
+  } catch {
+    return { ok: false, error: 'invalid base URL' };
+  }
+
+  const trimmed = provider.baseUrl.replace(/\/+$/, '');
+  let url: string;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (provider.protocol === 'openai' || provider.protocol === 'openai-responses') {
+    url = `${trimmed}/models`;
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  } else if (provider.protocol === 'anthropic') {
+    url = `${trimmed}/v1/models`;
+    headers['x-api-key'] = provider.apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    url = `${trimmed}/v1beta/models`;
+    headers['x-goog-api-key'] = provider.apiKey;
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      return { ok: false, error: `service responded ${response.status}` };
+    }
+    const text = await response.text();
+    if (text.length > 2_000_000) return { ok: false, error: 'response too large' };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { ok: false, error: 'service did not return JSON (is the URL/protocol correct?)' };
+    }
+    const rows = parsed && typeof parsed === 'object'
+      ? ((parsed as { data?: unknown; models?: unknown }).data
+        ?? (parsed as { models?: unknown }).models)
+      : null;
+    if (!Array.isArray(rows)) return { ok: false, error: 'unexpected response shape' };
+
+    const out: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number; reasoning?: boolean; vision?: boolean }> = [];
+    for (const row of rows.slice(0, 500)) {
+      if (!row || typeof row !== 'object') continue;
+      const record = row as Record<string, unknown>;
+      // gemini reports `name: "models/<id>"`; openai/anthropic use `id`.
+      let rawId = typeof record.id === 'string' ? record.id
+        : typeof record.name === 'string' ? record.name : '';
+      rawId = rawId.replace(/^models\//, '').trim().slice(0, 120);
+      if (!rawId) continue;
+      const rawName = typeof record.display_name === 'string' ? record.display_name
+        : typeof record.displayName === 'string' ? record.displayName : '';
+      const name = rawName.trim().slice(0, 120);
+      if (out.some((existing) => existing.id === rawId)) continue;
+      // 非标准扩展字段（A 层——能拿尽拿）：vLLM 的 max_model_len、
+      // OpenRouter 的 context_length / top_provider.max_completion_tokens /
+      // supported_parameters / architecture.input_modalities。没有标准的
+      // 保证，字段存在才取，否则留给识别模块（B 层）补。
+      const contextWindow = pickPositive(record.max_model_len, record.context_length, record.max_context_tokens, record.context_window);
+      const rawTop = record.top_provider as Record<string, unknown> | undefined;
+      const maxTokens = pickPositive(record.max_completion_tokens, record.max_output_tokens, rawTop?.max_completion_tokens);
+      const params = Array.isArray(record.supported_parameters)
+        ? record.supported_parameters.filter((x): x is string => typeof x === 'string')
+        : [];
+      const reasoning = params.length
+        ? params.some((p) => p === 'reasoning' || p === 'reasoning_effort')
+        : undefined;
+      const arch = record.architecture as Record<string, unknown> | undefined;
+      const modalities = (Array.isArray(arch?.input_modalities) ? arch?.input_modalities
+        : Array.isArray(record.input_modalities) ? record.input_modalities : []) as unknown[];
+      const vision = modalities.length
+        ? modalities.some((m) => typeof m === 'string' && m.toLowerCase().includes('image'))
+        : undefined;
+      out.push({
+        id: rawId,
+        ...(name && name !== rawId ? { name } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxTokens !== undefined ? { maxTokens } : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(vision !== undefined ? { vision } : {}),
+      });
+      if (out.length >= 200) break;
+    }
+    if (!out.length) return { ok: false, error: 'service listed no models' };
+    // B 层：服务没给的元数据，用内置目录/家族规则识别补全（不改服务给的值）。
+    try {
+      const { recognizeModelByIdReady } = await import('../model/model_id_recognition');
+      for (const item of out) {
+        const recognized = await recognizeModelByIdReady(item.id);
+        if (!recognized) continue;
+        if (item.contextWindow === undefined && recognized.contextWindow !== undefined) item.contextWindow = recognized.contextWindow;
+        if (item.maxTokens === undefined && recognized.maxTokens !== undefined) item.maxTokens = recognized.maxTokens;
+        if (item.reasoning === undefined && recognized.reasoning !== undefined) item.reasoning = recognized.reasoning;
+        if (item.vision === undefined && recognized.vision !== undefined) item.vision = recognized.vision;
+      }
+    } catch { /* recognition is best-effort enrichment */ }
+    return { ok: true, models: out };
+  } catch (error) {
+    const message = (error as Error).message || String(error);
+    return { ok: false, error: message.includes(provider.apiKey) ? 'request failed' : `request failed: ${message}` };
+  }
+}
+
 /** Preset protocol choices for the add form's dialect selector. */
-export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {
-  return [
+export function listCustomProviderProtocols(): Array<{ id: CustomProviderProtocol; label: string }> {  return [
     { id: 'anthropic', label: 'Anthropic (Claude)' },
     { id: 'openai', label: 'OpenAI' },
     { id: 'gemini', label: 'Gemini' },
@@ -512,6 +669,8 @@ export async function syncFromCcSwitch(
   home?: string,
   modelsByExternalId?: Record<string, string[]>,
   baseUrlsByExternalId?: Record<string, string>,
+  windowsByExternalId?: Record<string, Record<string, number>>,
+  abilitiesByExternalId?: Record<string, Record<string, { contextWindow?: number; vision?: boolean }>>,
 ): Promise<CcSwitchSyncResult> {
   // Lazy require to keep better-sqlite3 out of the module load path for
   // callers that never import from CC Switch.
@@ -535,13 +694,48 @@ export async function syncFromCcSwitch(
         const needsKey = !apiKey || !!it.needsKey;
         // Prefer the live-probed model list (passed from the preview step);
         // fall back to the config hints when probing wasn't possible.
-        const importedModels = normalizeModels(modelsByExternalId?.[it.externalId] || it.models || []);
+        // Probed abilities (aggregator endpoints volunteer them) ride along
+        // as the highest-priority source — normalizeModel then applies
+        // explicit > probe > catalog > default per field.
+        const rawModels: unknown[] = modelsByExternalId?.[it.externalId] || it.models || [];
+        const probeAbilities = abilitiesByExternalId?.[it.externalId] || it.modelAbilities || {};
+        const importedModels = normalizeModels(rawModels.map((m) => {
+          if (typeof m !== 'string') return m;
+          const a = probeAbilities[m];
+          if (!a) return m;
+          const out: { id: string; contextWindow?: number; vision?: boolean } = { id: m };
+          const w = a.contextWindow;
+          if (Number.isSafeInteger(w) && (w as number) > 0 && (w as number) <= MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW) {
+            out.contextWindow = w;
+          }
+          if (typeof a.vision === 'boolean') out.vision = a.vision;
+          return out.contextWindow !== undefined || out.vision !== undefined ? out : m;
+        }));
         const existing = customProviders.find((provider) => provider.source === 'ccswitch' && provider.externalId === it.externalId);
         let provider: CustomProvider;
         if (existing) {
           const existingMetadata = new Map(existing.models.map((model) => [model.id, model]));
           const mergedModels = importedModels.length
-            ? importedModels.map((model) => existingMetadata.get(model.id) || model)
+            ? importedModels.map((model) => {
+              const prev = existingMetadata.get(model.id);
+              if (!prev) return model;
+              // A stored window equal to the default is an unconfirmed guess
+              // (importers historically had no window source) — replace it
+              // when this import resolved a better value (probe field or
+              // catalog match inside normalizeModel). User-entered values
+              // that differ from the default are deliberate: never touch.
+              // Vision has no guessed default (undefined = unknown), so an
+              // absent value is simply filled in when this import knows it.
+              let next = prev;
+              if (prev.contextWindow === DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW
+                && model.contextWindow !== DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW) {
+                next = { ...next, contextWindow: model.contextWindow };
+              }
+              if (prev.vision === undefined && typeof model.vision === 'boolean') {
+                next = { ...next, vision: model.vision };
+              }
+              return next;
+            })
             : existing.models;
           Object.assign(existing, {
             name: it.name || existing.name,
@@ -657,6 +851,10 @@ export async function previewCcSwitchImport(userId: string): Promise<
       if (probe.ok) {
         item.models = probe.models;
         item.modelsProbe = true;
+        // Abilities volunteered by the endpoint (aggregators only; sparse).
+        if (probe.abilities && Object.keys(probe.abilities).length) {
+          item.modelAbilities = probe.abilities;
+        }
         // Pin the real API base discovered by the probe (CC Switch configs
         // often store a bare host without the /v1 segment).
         if (probe.baseUrl) item.baseUrl = probe.baseUrl;

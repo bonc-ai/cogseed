@@ -56,7 +56,8 @@ export type ProactiveSendResult =
       instance_id: string;
       owner_label?: string;
       text_length: number;
-      attempts: number;
+      /** 经 channel-bridge 透传，链路异常时可能缺失（可选）。 */
+      attempts?: number;
       delivery_id?: string;
     }
   | { status: 'not_sent'; reason: 'denied' | 'timed_out' | 'aborted' | 'no_renderer' }
@@ -224,6 +225,9 @@ export async function sendToSelf(
   }
 
   try {
+    // 渠道原生投递：触达是 CogSeed 自身功能，直连 messaging 层的幂等投递
+    // 台账（含重试/中止/回执 externalDeliveryId）。（2026-08-26 理清：
+    // 此前经 P3394 信封绕路投递，属叙事耦合，渠道功能与协议解耦。）
     const { entry } = await manager.sendProactive(uid, {
       instanceId: chosen.instance_id,
       recipientId: ownerExternalUserId,
@@ -236,7 +240,7 @@ export async function sendToSelf(
       instance_id: chosen.instance_id,
       ...(chosen.owner_label ? { owner_label: chosen.owner_label } : {}),
       text_length: text.length,
-      attempts: entry.attempts,
+      ...(typeof entry.attempts === 'number' ? { attempts: entry.attempts } : {}),
       ...(entry.externalDeliveryId ? { delivery_id: entry.externalDeliveryId } : {}),
     };
   } catch (err) {

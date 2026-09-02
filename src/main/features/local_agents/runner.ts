@@ -575,6 +575,8 @@ export interface RunCliAgentOpts {
   uid: string;
   cid: string;
   agentId: string;
+  /** CogSeed attempt correlation. Never forwarded as a CLI argument. */
+  executionId?: string;
   /** Display name for permission dialogs; falls back to agentId. */
   agentName?: string;
   /** Conversation project scope, when the CLI turn belongs to a project. */
@@ -582,6 +584,11 @@ export interface RunCliAgentOpts {
   cli: LocalCliType;
   model?: string;
   customArgs?: string[];
+  /** Per-task reasoning effort from the unified execution entry. Only
+   *  forwarded by backends with a known switch (claude → MAX_THINKING_TOKENS
+   *  env, codex → model_reasoning_effort config override); other CLIs
+   *  ignore the field and keep their own configuration. */
+  thinkingLevel?: 'off' | 'low' | 'high';
   /** Optional synthetic custom-provider id bound to this CLI Agent. */
   cliProviderId?: string;
   /** If set, the dispatch resumes a CLI-side session (claude
@@ -743,6 +750,12 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
   const cliSessionId = `cli-${opts.cli}-${handle.runId}`;
   const spillDir = sessionToolResultsDir(opts.uid, cliSessionId);
   let lastEventAt = Date.now();
+  // 外接 run 计时打点（2026-08-27）：startedAt=run 创建时刻；首个 text-delta
+  // 记 firstTokenAt。两者随 done 事件挂到 done.metrics 供群聊落盘消费。
+  // 注意：这里不做台账入账（emitModelUsage 属于 usage-ledger 线，未进主线；
+  // 待该线合入后在 done 分支补转发）。
+  const cliRunStartedAt = Date.now();
+  let cliFirstTokenAt: number | null = null;
   const onEvent = (e: LocalEvent) => {
     // Self-emitted idle pulses don't count as "the CLI did something"
     // — without this carve-out we'd reset our own deadline and stop
@@ -771,10 +784,15 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
     recordLocalAgentEventForLog(runDiagnostics, e);
     persist.append(handle, e);
     if (e.type === 'text-delta' && typeof e.text === 'string') {
+      if (cliFirstTokenAt === null) cliFirstTokenAt = Date.now();
       streamedOutput += e.text;
       persist.appendOutput(handle, e.text);
     }
     if (e.type === 'done') {
+      (e as { metrics?: { startedAt: number; firstTokenAt: number | null } }).metrics = {
+        startedAt: cliRunStartedAt,
+        firstTokenAt: cliFirstTokenAt,
+      };
       terminal = {
         status: (e.status as RunCliAgentResult['status']) || 'failed',
         output: typeof e.output === 'string' ? e.output : undefined,
@@ -883,6 +901,7 @@ export async function run(opts: RunCliAgentOpts): Promise<RunCliAgentResult> {
       cwd: opts.cwd,
       model: opts.model,
       customArgs: opts.customArgs,
+      ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
       resumeSessionId: opts.resumeSessionId,
       signal: opts.signal,
       onEvent,

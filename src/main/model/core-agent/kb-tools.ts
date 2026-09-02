@@ -24,12 +24,18 @@ import * as kb from '../../features/kb_vector';
 import * as kbEmbed from '../../features/kb_embed';
 import * as spaceLibrary from '../../features/project_library_indexer';
 import { logErrorRef, maskId } from '../../util/log-redact';
+import { searchMaterials, type MaterialSearchOptions } from './material-search';
+import { resolveMaterialSet } from './material-boundary';
+import { askMaterials, formatEvidence } from './ask-materials';
+import * as chatAttachments from '../../features/chat_attachments';
+import * as fileIndexer from '../../features/file_indexer';
 
 const log = createLogger('kb-tools');
 
 export interface KbToolsOpts {
   userId: string;
   spaceId?: string;
+  cid?: string;
 }
 
 const PREVIEW_CHARS = 400;
@@ -376,6 +382,15 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Library-relative path (as returned by kb_search hits).' },
+        source: {
+          type: 'string',
+          enum: ['library', 'attachment'],
+          description: 'Source to read from. Default library. Use "attachment" with `name` to read a conversation attachment.',
+        },
+        name: {
+          type: 'string',
+          description: 'Attachment filename (only when source="attachment"). Use names from `material_list`.',
+        },
         scope: {
           type: 'string',
           enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
@@ -392,6 +407,30 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
       required: ['path'],
     },
     async execute(input) {
+      const src = input.source === 'attachment' ? 'attachment' : 'library';
+      if (src === 'attachment') {
+        const name = String(input.name ?? '').trim();
+        if (!name) return { content: 'kb_read: `name` is required when source="attachment"', isError: true };
+        if (!opts.cid) return { content: 'kb_read: no conversation context (cid) to read attachments from', isError: true };
+        const resolved = chatAttachments.resolveAttachmentAbsPath(opts.userId, opts.cid, name);
+        if (!resolved.ok) {
+          const why = 'error' in resolved ? resolved.error : 'unknown';
+          return { content: `kb_read: attachment not accessible — ${why}`, isError: true };
+        }
+        const { absPath, kind } = resolved;
+        let text: string;
+        try {
+          ({ text } = await fileIndexer.getExtractedText(opts.userId, absPath));
+        } catch (err) {
+          return {
+            content: `kb_read: attachment extraction failed — ${(err as Error).message}`,
+            isError: true,
+          };
+        }
+        const meta = await fileIndexer.statFile(opts.userId, absPath);
+        const header = `<attachment name="${name}" kind="${kind}" bytes="${meta.bytes}">`;
+        return { content: `${header}\n${text}\n</attachment>` };
+      }
       const relPath = String(input.path ?? '').trim();
       if (!relPath) return { content: 'kb_read: `path` is required', isError: true };
       const scope = parseReadScope(input.scope, hasSpace);
@@ -463,5 +502,245 @@ function createKbReadTool(opts: KbToolsOpts): AgentTool {
 
 /** Build the KB tools for one runner. */
 export function createKbTools(opts: KbToolsOpts): AgentTool[] {
-  return [createKbListTool(opts), createKbSearchTool(opts), createKbReadTool(opts)];
+  return [
+    createKbListTool(opts),
+    createKbSearchTool(opts),
+    createKbReadTool(opts),
+    createMaterialSearchTool(opts),
+    createMaterialListTool(opts),
+    createAskMaterialsTool(opts),
+  ];
+}
+
+/**
+ * `ask_materials` — grounded Q&A evidence service (COGSEED-39 ① Phase 4a).
+ * Runs the material-set hybrid search (Library + attachments), applies a
+ * fused-score threshold, and returns an evidence package with a citation
+ * contract — or an explicit no-material / low-confidence marker. The model
+ * answers ONLY from the evidence and cites `path#chunk N`.
+ */
+function createAskMaterialsTool(opts: KbToolsOpts): AgentTool {
+  const hasSpace = !!opts.spaceId;
+  return {
+    name: 'ask_materials',
+    description:
+      'Grounded Q&A over the material set: hybrid search (Library + this conversation\'s\n'
+      + 'attachments) with a relevance threshold. Returns either an evidence package\n'
+      + 'to answer from — cite every claim as `path#chunk N` — or an explicit\n'
+      + '"no material" / "low confidence" marker. Use for questions about imported\n'
+      + 'materials; do NOT answer material questions from memory or web search\n'
+      + 'without consulting this (or material_search) first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The user\'s question about the materials.',
+        },
+        k: {
+          type: 'number',
+          description: 'Max evidence hits. Default 8, max 30.',
+        },
+        scope: {
+          type: 'string',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Search scope. Default all = current space Library plus global Library.'
+            : 'Search scope. Only global is available outside a space.',
+        },
+        min_score: {
+          type: 'number',
+          description: 'Optional fused-score floor for evidence (default 0.0015). Raise it to demand stronger matches.',
+        },
+      },
+      required: ['question'],
+    },
+    async execute(input) {
+      const question = String(input.question ?? '').trim();
+      if (!question) return { content: 'ask_materials: `question` is required', isError: true };
+      const res = await askMaterials({
+        userId: opts.userId,
+        ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
+        query: question,
+        ...(input.k !== undefined ? { k: Number(input.k) } : {}),
+        ...(hasSpace && input.scope !== undefined ? { scope: input.scope as MaterialSearchOptions['scope'] } : {}),
+        ...(input.min_score !== undefined ? { minScore: Number(input.min_score) } : {}),
+      });
+      return { content: formatEvidence(res) };
+    },
+  };
+}
+
+/**
+ * `material_list` — inventory the full material boundary for the current
+ * conversation: Library files (global + space) plus conversation
+ * attachments and space artifacts, each marked in-scope or not
+ * (COGSEED-39 ① Phase 3). Read-only.
+ */
+function createMaterialListTool(opts: KbToolsOpts): AgentTool {
+  const hasSpace = !!opts.spaceId;
+  return {
+    name: 'material_list',
+    executionMode: 'parallel',
+    description:
+      'List everything in the current material boundary for grounded Q&A: Library files'
+      + (hasSpace ? ' (global + current space)' : '')
+      + ', this conversation\'s attachments'
+      + (hasSpace ? ', and space artifacts' : '')
+      + '. Each entry is marked in-scope or out-of-scope. Use before asking '
+      + '"what materials can you answer from?" or when a question\'s scope is unclear.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Maximum entries per section. Default 50, max 200.',
+        },
+      },
+    },
+    async execute(input) {
+      const limit = Math.min(200, Math.max(1, Math.floor(Number(input.limit ?? 50))));
+      const boundary = await resolveMaterialSet({
+        userId: opts.userId,
+        ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid } : {}),
+      });
+
+      const lines: string[] = [];
+      lines.push(`Material boundary (history=${boundary.history}, library global=${boundary.library.global} space=${boundary.library.space}):`);
+
+      const library: Array<{ scope: string; path: string; status: string; chunks: number }> = [];
+      if (boundary.library.global) {
+        for (const row of kb.listFiles(opts.userId)) {
+          library.push({ scope: 'global', path: row.rel_path, status: row.status, chunks: row.chunks });
+        }
+      }
+      if (boundary.library.space && opts.spaceId) {
+        for (const row of spaceLibrary.listFiles(opts.userId, opts.spaceId)) {
+          library.push({ scope: 'space', path: row.rel_path, status: row.status, chunks: row.chunks });
+        }
+      }
+      if (library.length) {
+        lines.push('Library:');
+        for (const f of library.slice(0, limit)) {
+          lines.push(`- [library/${f.scope}] ${f.path} (status=${f.status}, chunks=${f.chunks})`);
+        }
+        if (library.length > limit) lines.push(`... ${library.length - limit} more library file(s)`);
+      } else {
+        lines.push('Library: (empty)');
+      }
+
+      if (boundary.attachments.length) {
+        lines.push('Attachments:');
+        for (const a of boundary.attachments.slice(0, limit)) {
+          lines.push(`- [attachment] ${a.name} (${a.kind}, ${formatBytes(a.bytes)}, ${a.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+        }
+        if (boundary.attachments.length > limit) lines.push(`... ${boundary.attachments.length - limit} more attachment(s)`);
+      } else {
+        lines.push('Attachments: (none)');
+      }
+
+      if (boundary.artifacts.length) {
+        lines.push('Space artifacts:');
+        for (const ar of boundary.artifacts.slice(0, limit)) {
+          lines.push(`- [artifact] ${ar.name} (${ar.type}${ar.ext}, ${ar.inScope ? 'in-scope' : 'OUT-OF-SCOPE'})`);
+        }
+        if (boundary.artifacts.length > limit) lines.push(`... ${boundary.artifacts.length - limit} more artifact(s)`);
+      } else {
+        lines.push('Space artifacts: (none)');
+      }
+
+      return { content: lines.join('\n') };
+    },
+  };
+}
+
+/**
+ * `material_search` — hybrid (vector + BM25 keyword) retrieval over the
+ * Library, fusing both signals with RRF. Same read-only posture as
+ * kb_search, but returns a unified hit shape (scope/path/chunkIdx + snippet)
+ * that doubles as the citation anchor for grounded answering
+ * (COGSEED-39 ① Phase 2).
+ */
+function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
+  const hasSpace = !!opts.spaceId;
+  return {
+    name: 'material_search',
+    executionMode: 'parallel',
+    description:
+      'Hybrid search over the user Library (semantic vector + BM25 keyword, fused)'
+      + (hasSpace ? ' (current space + global by default)' : '')
+      + ', plus this conversation\'s attachments when present.'
+      + ' Use for grounded Q&A about imported materials: returns the top-k most\n'
+      + 'relevant chunks with a citation anchor (scope + path + chunk index) and a\n'
+      + 'short snippet. Preferred over `kb_search` when the question mixes exact\n'
+      + 'terms/ids (which keyword matching catches) with meaning (which vectors\n'
+      + 'catch). After picking hits, read full chunks with `kb_read` using the\n'
+      + 'returned scope + path.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Free-text query. Natural language works; exact terms/ids help the keyword side.',
+        },
+        k: {
+          type: 'number',
+          description: 'Top-k result count. Default 8, max 30.',
+        },
+        dir: {
+          type: 'string',
+          description: 'Optional: limit search to files under this relative subdirectory.',
+        },
+        path: {
+          type: 'string',
+          description: 'Optional: limit search to one exact Library-relative file path.',
+        },
+        kind: {
+          type: 'string',
+          enum: [...KB_KIND_VALUES],
+          description: 'Optional: restrict to one file kind.',
+        },
+        scope: {
+          type: 'string',
+          enum: hasSpace ? ['all', 'space', 'global'] : ['global'],
+          description: hasSpace
+            ? 'Search scope. Default all = current space Library plus global Library.'
+            : 'Search scope. Only global is available outside a space.',
+        },
+      },
+      required: ['query'],
+    },
+    async execute(input) {
+      const query = String(input.query ?? '').trim();
+      if (!query) return { content: 'material_search: `query` is required', isError: true };
+      const searchOpts: MaterialSearchOptions = {
+        userId: opts.userId,
+        ...(opts.spaceId ? { spaceId: opts.spaceId } : {}),
+        ...(opts.cid ? { cid: opts.cid, attachments: true } : {}),
+        query,
+        ...(input.k !== undefined ? { k: Number(input.k) } : {}),
+        ...(typeof input.dir === 'string' && input.dir.trim() ? { dir: input.dir.trim() } : {}),
+        ...(typeof input.path === 'string' && input.path.trim() ? { path: input.path.trim() } : {}),
+        ...(parseKbKind(input.kind) ? { kind: parseKbKind(input.kind)! } : {}),
+        ...(hasSpace && input.scope !== undefined ? { scope: input.scope as MaterialSearchOptions['scope'] } : {}),
+      };
+
+      const res = await searchMaterials(searchOpts);
+      const lines = [`Material search hits (${res.summary.join('; ')}):`];
+      if (!res.hits.length) {
+        lines.push('No relevant material found for this query.');
+        return { content: lines.join('\n') };
+      }
+      for (const h of res.hits) {
+        const anchor = `[${h.scope}] ${h.path}#chunk ${h.chunkIdx}`;
+        const scores = `score=${h.score.toFixed(3)}`
+          + (h.vectorScore !== undefined ? ` vec=${h.vectorScore.toFixed(3)}` : '')
+          + (h.keywordScore !== undefined ? ` kw=${h.keywordScore.toFixed(3)}` : '');
+        lines.push(`- ${anchor} ${scores}${h.title ? ` · ${h.title}` : ''}\n  ${h.snippet}`);
+      }
+      return { content: lines.join('\n') };
+    },
+  };
 }

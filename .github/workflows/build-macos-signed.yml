@@ -1,7 +1,12 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 触发条件: 推送到 main 分支或手动触发
-# 产物: 签名+公证后的 .dmg 文件
+# 发布流程: 在 cicd 分支上打 tag (如 v0.7.6) 触发本流程
+#           发布前先把 package.json 的 version 改成与 tag 一致 → 合并进 cicd → 打 v* tag → CD 打包发布
+# 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
+#
+# 注意: tag 不绑定分支,所以下面加了防呆检查:
+#       1) 只有指向 cicd 分支的 tag 才允许构建发布(见 "Verify tag comes from cicd branch" 步骤)
+#       2) tag 版本必须与 package.json 的 version 一致(见 "Verify package.json version matches tag" 步骤)
 
 name: Build & Sign macOS
 
@@ -9,8 +14,8 @@ name: Build & Sign macOS
 on:
   push:
     tags:
-      - 'v*'  # 只在推送 v1.0.0、v2.1.3 这样的 tag 时触发构建
-  workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮)
+      - 'v*'  # 只在推送 v0.1.3 这样的 tag 时触发构建
+  workflow_dispatch:    # 允许手动触发(GitHub 网页上点 "Run workflow" 按钮,用于调试)
 
 # 给 workflow 用的默认 GITHUB_TOKEN 加上"可以创建 Release"的权限
 # 不需要额外申请 Secret,GitHub 每次运行自动生成这个 token
@@ -27,8 +32,52 @@ jobs:
       # ========================================
 
       # 步骤 1.1: 下载你的代码
+      # fetch-depth: 0 = 拉取完整 git 历史,
+      # 否则下一步无法判断 tag 到底属于哪个分支
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 步骤 1.1b: 校验 tag 来源分支(防呆)
+      # tag 本身不绑分支,任何人在任何分支打 v* tag 都会触发本流程。
+      # 这里强制要求:tag 指向的提交必须已经在 cicd 分支上,
+      # 否则直接失败,防止有人误在 dev/develop/main 等分支上打 tag 触发正式发布。
+      # 手动触发(workflow_dispatch)时跳过此检查,方便调试。
+      - name: Verify tag comes from cicd branch
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # checkout tag 时默认不会拉取其他分支引用,这里显式拉一下 cicd
+          git fetch origin cicd:refs/remotes/origin/cicd
+
+          # merge-base --is-ancestor A B: 判断 A 是否是 B 的祖先(含 A==B)
+          # 即:tag 指向的提交是否已经包含在 cicd 分支的历史里
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/cicd; then
+            echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
+          else
+            echo "❌ 这个 tag 不在 cicd 分支上,拒绝构建发布"
+            echo "   正确流程: 先把代码合并进 cicd 分支,再在 cicd 上打 tag"
+            exit 1
+          fi
+
+      # 步骤 1.1c: 校验 tag 版本与源码版本一致(防呆)
+      # 版本号的唯一来源是源码里的 package.json:打 tag 前必须先把 version 改成
+      # 与 tag 相同并合入 cicd。不一致直接失败,避免出现"源码还是旧版本、
+      # 靠流水线构建时改写"的版本追溯断档(如 v0.6.0 标签里的 package.json 仍是 0.0.5)。
+      # 这里用 sed 提取版本号,不依赖 Node,放在 setup-node 之前也能跑。
+      - name: Verify package.json version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          SRC_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)"
+          echo "tag 版本: $TAG_VERSION / package.json 版本: $SRC_VERSION"
+          if [ "$TAG_VERSION" != "$SRC_VERSION" ]; then
+            echo "❌ package.json 的 version ($SRC_VERSION) 与 tag ($GITHUB_REF_NAME) 不一致,拒绝发布"
+            echo "   正确流程: 把 package.json 的 version 改成 $TAG_VERSION 并合并进 cicd,"
+            echo "   然后删掉旧 tag 重打: git push origin :refs/tags/$GITHUB_REF_NAME && git tag $GITHUB_REF_NAME && git push origin $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "✅ 源码版本与 tag 版本一致,继续构建"
 
       # 步骤 1.2: 安装 Node.js
       - name: Setup Node.js
@@ -95,20 +144,19 @@ jobs:
           rm certificate.p12
 
       # ========================================
-      # 阶段 3: 版本号对齐
+      # 阶段 3: 写入构建元信息
       # ========================================
+      # (原步骤 3.0 "构建时把 package.json 的 version 改成 tag 版本"已移除:
+      #  版本号以源码为唯一来源,发布前改好,流水线只在步骤 1.1c 校验一致性,
+      #  保证 "源代码版本—标签—构建产物" 三者可直接对上)
 
-      # 步骤 3.0: 把 package.json 的 version 改成和 tag 一致
-      # 比如推的 tag 是 v0.0.7,就把 package.json 的 version 改成 0.0.7
-      # 这样打包出来的文件名 (CogSeed-0.0.7-mac-*.dmg) 才会和 tag 对上
-      # 只在推 tag 触发时才改;手动触发 (workflow_dispatch) 时不改,保持原样
-      - name: Sync package.json version with tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          # github.ref_name 例如 "v0.0.7",去掉开头的 "v" 得到 "0.0.7"
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          echo "将 package.json 的 version 设置为: $TAG_VERSION"
-          npx json -I -f package.json -e "this.version = \"$TAG_VERSION\""
+      # 步骤 3.1: 写入发布渠道标记(关键!)
+      # 客户端用包内渠道决定 API 基址:release/packaged-dev → 生产官网,
+      # 其余 → http://localhost:3000(开发默认)。缺这步时,正式包会把
+      # 更新检查/市场等请求打到本机 3000 端口,自动更新与 v1 提醒全部失效。
+      # build.files 已包含 .build/build-info.json,写一次即可进包。
+      - name: Stamp release channel
+        run: node scripts/write-build-info.cjs --channel=release
 
       # ========================================
       # 阶段 4: 构建 + 签名
@@ -152,11 +200,14 @@ jobs:
 
       # 步骤 6.1: 上传 .dmg 到 GitHub
       # 构建完成后,你可以在 GitHub Actions 页面下载
-      - name: Upload DMG artifact
+      - name: Upload DMG & zip artifact
         uses: actions/upload-artifact@v4
         with:
           name: CogSeed-macOS
-          path: dist/*.dmg
+          # dmg = 手动安装（官网/首次安装）；zip = 自动更新（Squirrel.Mac feed）
+          path: |
+            dist/*.dmg
+            dist/*.zip
           retention-days: 30  # 保留 30 天
 
       # ========================================
@@ -171,9 +222,23 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.dmg
+          # dmg + zip 都挂到 Release：zip 供 hub 自动更新 feed 使用
+          files: |
+            dist/*.dmg
+            dist/*.zip
           # tag 名字就用推送的那个 tag (比如 v0.0.6)
           tag_name: ${{ github.ref_name }}
+          # 显式关闭自动生成的更新日志。
+          # 若不设置 body,action 会让 GitHub 自动汇总本次 tag 涵盖的
+          # 所有 commit message(含提交者邮箱、co-author、内部实现细节),
+          # 这些会公开在 Release 页面。这里用固定的干净说明覆盖,避免泄露。
+          generate_release_notes: false
+          body: |
+            CogSeed ${{ github.ref_name }} macOS 安装包(已签名并公证)。
+
+            下载对应芯片的版本:
+            - arm64.dmg — Apple 芯片(M 系列)
+            - x64.dmg — Intel 芯片
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

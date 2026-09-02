@@ -100,6 +100,7 @@ export async function importClaudeSession(
       kind: 'normal',
       title,
       conversationId: session.sessionId,
+      reviveDeleted: true,
     });
     const cid = conv.conversation_id;
 

@@ -54,10 +54,11 @@ function _loadSidebarCollapse() {
         spaces: raw.spaces === true,
         recent: raw.recent === true,
         spaceGroups: (raw.spaceGroups && typeof raw.spaceGroups === 'object') ? raw.spaceGroups : {},
+        channelGroups: (raw.channelGroups && typeof raw.channelGroups === 'object') ? raw.channelGroups : {},
       };
     }
   } catch (_) {}
-  return { pinned: false, spaces: false, recent: false, spaceGroups: {} };
+  return { pinned: false, spaces: false, recent: false, spaceGroups: {}, channelGroups: {} };
 }
 function _saveSidebarCollapse() {
   try { localStorage.setItem(_SIDEBAR_COLLAPSE_KEY, JSON.stringify(_sidebarCollapse)); } catch (_) {}
@@ -1024,12 +1025,15 @@ function _initMentionMirror(textarea) {
   editor.setAttribute('aria-multiline', 'true');
   editor.dataset.richInputId = textarea.id || '';
   editor.dataset.placeholder = textarea.getAttribute('placeholder') || '';
+  editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || editor.dataset.placeholder);
 
   // Insert wrap in place of textarea, move textarea inside.
   textarea.parentNode.insertBefore(wrap, textarea);
   wrap.appendChild(editor);
   wrap.appendChild(textarea);
   textarea.classList.add('chat-rich-source');
+  textarea.setAttribute('aria-hidden', 'true');
+  textarea.tabIndex = -1;
 
   let lastPlaceholder = '';
   const api = _chatRichCreateApi(textarea, editor);
@@ -1039,6 +1043,7 @@ function _initMentionMirror(textarea) {
     if (placeholder !== lastPlaceholder) {
       lastPlaceholder = placeholder;
       editor.dataset.placeholder = placeholder;
+      editor.setAttribute('aria-label', textarea.getAttribute('aria-label') || placeholder);
     }
     api.renderFromTextarea();
   };
@@ -1221,6 +1226,122 @@ let _newChatRecipient = { ..._COMMANDER }; // ephemeral, reset on view-enter
 let _pendingNewChatRecipient = null;        // captured at send time, transferred to new cid
 let _projectChatRecipient = { ..._COMMANDER }; // ephemeral recipient for project detail composer
 const _autoRecipientByCid = new Map(); // cid → transient agent recipient while plan waits on user input
+
+// ─── Unified execution entry: per-task execution overrides ───
+// A task-level override captures what the user picked for THIS conversation
+// in the execution-config chip (model / reasoning effort). It layers on top
+// of the recipient's own defaults (agent.json default_model/default_thinking
+// for agents, global entry rank-1 + global thinking preference otherwise)
+// and never writes back to those defaults — switching conversations or
+// agents leaves them untouched. Persisted per-cid like the recipient map.
+const _EXEC_OVERRIDE_LS_KEY = 'chat.execOverrideByCid';
+let _execOverrideByCid = {};     // { [cid]: {provider?, model?, modelLabel?, effort?} }
+let _newChatExecOverride = null; // ephemeral, transferred to the new cid at send
+let _projectExecOverride = null;
+
+function _loadExecOverrideMap() {
+  try {
+    const raw = localStorage.getItem(_EXEC_OVERRIDE_LS_KEY);
+    if (!raw) return;
+    const v = JSON.parse(raw);
+    if (v && typeof v === 'object') _execOverrideByCid = v;
+  } catch (_) { /* corrupt entry — start fresh */ }
+}
+_loadExecOverrideMap();
+
+function _saveExecOverrideMap() {
+  try { localStorage.setItem(_EXEC_OVERRIDE_LS_KEY, JSON.stringify(_execOverrideByCid)); } catch (_) {}
+}
+
+/** Normalise an override patch: keep only usable fields, drop empties. */
+function _normExecOverride(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  if (raw.provider && typeof raw.provider === 'string' && raw.model && typeof raw.model === 'string') {
+    out.provider = raw.provider;
+    out.model = raw.model;
+    if (typeof raw.modelLabel === 'string' && raw.modelLabel) out.modelLabel = raw.modelLabel;
+  } else if (raw.model && typeof raw.model === 'string') {
+    // CLI-agent override shape: bare model id handed to the external CLI.
+    out.model = raw.model;
+    if (typeof raw.modelLabel === 'string' && raw.modelLabel) out.modelLabel = raw.modelLabel;
+  }
+  if (raw.effort === 'off' || raw.effort === 'low' || raw.effort === 'high') {
+    out.effort = raw.effort;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function _activeExecOverride(target) {
+  if (target === 'new-chat') return _newChatExecOverride;
+  if (target === 'project') return _projectExecOverride;
+  if (currentCid) return _execOverrideByCid[currentCid] || null;
+  return null;
+}
+
+/** Read the CURRENT override (no snapshot variant) — for the config chip UI. */
+function getExecOverride(target) {
+  const ov = _activeExecOverride(target || 'conversation');
+  return ov ? { ...ov } : null;
+}
+
+/** Write / merge the task-level override. `patch === null` clears it. */
+function setExecOverride(target, patch) {
+  const tg = target || 'conversation';
+  if (patch === null || patch === undefined) {
+    if (tg === 'new-chat') _newChatExecOverride = null;
+    else if (tg === 'project') _projectExecOverride = null;
+    else if (currentCid) {
+      delete _execOverrideByCid[currentCid];
+      _saveExecOverrideMap();
+    }
+    if (typeof window !== 'undefined' && typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+    return;
+  }
+  const base = _activeExecOverride(tg) || {};
+  const next = _normExecOverride({ ...base, ...patch });
+  if (tg === 'new-chat') _newChatExecOverride = next;
+  else if (tg === 'project') _projectExecOverride = next;
+  else if (currentCid) {
+    if (next) _execOverrideByCid[currentCid] = next;
+    else delete _execOverrideByCid[currentCid];
+    _saveExecOverrideMap();
+  }
+  if (typeof window !== 'undefined' && typeof window.refreshExecConfigChip === 'function') window.refreshExecConfigChip();
+}
+
+/** Build the `execution_config` send payload for a target. Returns undefined
+ *  when nothing is overridden (turn falls back to agent/global defaults).
+ *  - recipient kind 'model' (API-connection pick): always sends the chosen
+ *    provider+model — that IS the execution target.
+ *  - otherwise: only fields present in the task-level override travel. */
+function _executionConfigForSend(target, snapshot) {
+  const snap = snapshot || _activeRecipient(target);
+  const ov = _activeExecOverride(target) || {};
+  if (snap && snap.kind === 'model' && snap.provider && snap.model) {
+    return {
+      provider: snap.provider,
+      model: snap.model,
+      ...(ov.effort ? { effort: ov.effort } : {}),
+    };
+  }
+  const cfg = {};
+  // 方案 B：外接 CLI 智能体的模型由 CLI 自身配置决定（网关信封无 model
+  // 栏位），model 覆盖对其是假开关——历史残留的 override.model 不下发，
+  // 只有 effort（claude 真实消费）继续旅行。
+  const isCliAgentRecipient = snap && snap.kind === 'agent' && snap.id
+    && (() => {
+      const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
+      const a = list.find((x) => x && x.agent_id === snap.id);
+      return !!(a && a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'));
+    })();
+  if (!isCliAgentRecipient) {
+    if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
+    else if (ov.model) { cfg.model = ov.model; }
+  }
+  if (ov.effort) cfg.effort = ov.effort;
+  return Object.keys(cfg).length ? cfg : undefined;
+}
 // The conversation "floor": server-authoritative `StateFile.active_recipient`,
 // mirrored here from every `state_changed` event. The commander sets it via
 // `hand_off_to` (model-decided); the agent's `<handback />`, the user's
@@ -1255,8 +1376,25 @@ function _saveRecipientMap() {
 const _quotesByCid = new Map();   // cid → Array<{ fromActor, fromName, msgId, text, produced[] }>
 
 function _normRecipient(next) {
-  if (!next || (next.kind !== 'commander' && next.kind !== 'agent')) return null;
+  if (!next) return null;
   if (next.kind === 'commander') return { ..._COMMANDER };
+  if (next.kind === 'model') {
+    // Unified execution entry: an API-connection model picked as the
+    // execution target. provider+model identify it; name is the display
+    // label (model name); providerLabel powers tooltips.
+    const provider = String(next.provider || '').trim();
+    const model = String(next.model || '').trim();
+    if (!provider || !model) return null;
+    return {
+      kind: 'model',
+      id: `${provider}/${model}`,
+      provider,
+      model,
+      name: String(next.name || model),
+      ...(next.providerLabel ? { providerLabel: String(next.providerLabel) } : {}),
+    };
+  }
+  if (next.kind !== 'agent') return null;
   const origin = next.origin === 'cli_fallback' || next.origin === 'active_floor'
     ? next.origin
     : undefined;
@@ -1284,7 +1422,14 @@ function _projectIdForConversation(cid) {
   return (conv && conv.project_id) || '';
 }
 
-function _onRecipientChanged(_target) { /* reserved for future hooks */ }
+function _onRecipientChanged(_target) {
+  // Unified execution entry: the exec-config chip resolves its display from
+  // the active recipient (agent defaults / API model pick), so it must
+  // re-render on every recipient change.
+  try {
+    window.dispatchEvent(new CustomEvent('cogseed:recipient-changed', { detail: { target: _target } }));
+  } catch (_) { /* non-DOM context */ }
+}
 
 /** When the active project's bindings change (commander chip → switch
  *  project, or project rename/binding edit while a chat is open), the
@@ -1294,6 +1439,17 @@ function _onRecipientChanged(_target) { /* reserved for future hooks */ }
 function setChatRecipient(target, next, _opts = {}) {
   const r = _normRecipient(next);
   if (!r) return;
+  // 任务级执行配置跟随「当前选中的接收者」：换执行者（含切回指挥官）即清空
+  // 旧的临时覆盖，否则「给上一个目标调的模型/强度」会被新目标继承——验收中
+  // 「选中 ClaudeCode 却显示 deepseek」就是这条泄漏。三个 target 统一处理，
+  // auto（楼层驱动）切换不动用户的手动配置。
+  if (_opts.auto !== true) {
+    const prev = _activeRecipient(target);
+    const targetChanged = !prev
+      || prev.kind !== r.kind
+      || (r.kind === 'agent' ? prev.id !== r.id : true);
+    if (targetChanged) setExecOverride(target, null);
+  }
   if (target === 'new-chat') {
     _newChatRecipient = r;
   } else if (target === 'project') {
@@ -1309,6 +1465,13 @@ function setChatRecipient(target, next, _opts = {}) {
         // Returning to the commander while an agent holds the floor: arm a
         // one-shot `@commander` on the next send so the server resets the floor
         // (the model-owned floor can only be moved by a routed message).
+        if (_serverFloorByCid.get(currentCid)) _pendingFloorResetByCid.add(currentCid);
+      } else if (r.kind === 'model') {
+        // Unified execution entry: an API-connection model executes on the
+        // commander path (no agent actor). Like an explicit return-to-
+        // commander, arm the one-shot floor reset so the message isn't
+        // hijacked by whichever agent currently holds the floor.
+        _recipientByCid[currentCid] = r;
         if (_serverFloorByCid.get(currentCid)) _pendingFloorResetByCid.add(currentCid);
       } else {
         _recipientByCid[currentCid] = r;
@@ -1340,9 +1503,16 @@ function _transferNewChatRecipientTo(cid) {
   if (!_pendingNewChatRecipient) { _pendingNewChatRecipient = null; return; }
   const r = _pendingNewChatRecipient;
   _pendingNewChatRecipient = null;
-  if (r.kind === 'agent') {
+  if (r.kind === 'agent' || r.kind === 'model') {
     _recipientByCid[cid] = r;
     _saveRecipientMap();
+  }
+  // The task-level execution override picked on the landing page follows the
+  // message into the new conversation (unified execution entry).
+  if (_newChatExecOverride) {
+    _execOverrideByCid[cid] = _newChatExecOverride;
+    _saveExecOverrideMap();
+    _newChatExecOverride = null;
   }
 }
 
@@ -1352,6 +1522,9 @@ function _renderRecipientChip(target) {
     const id = tg === 'new-chat' ? 'new-chat-recipient-name' : 'chat-recipient-name';
     const nameEl = document.getElementById(id);
     if (!nameEl) continue;
+    // Stale tooltips from a previous model-recipient render must not linger
+    // on agent/commander renders — reset first, model branch re-sets it.
+    nameEl.closest('.chat-recipient-chip')?.removeAttribute('title');
     const r = _activeRecipient(tg);
     if (r.kind === 'agent' && r.id) {
       // Resolve name from the live registry first — the `r.name` field is
@@ -1365,6 +1538,15 @@ function _renderRecipientChip(target) {
       }
       if (!display) display = r.name || r.id;
       nameEl.textContent = display;
+      nameEl.removeAttribute('data-i18n');
+    } else if (r.kind === 'model' && r.model) {
+      // Unified execution entry: an API-connection model is the execution
+      // target — show the model name; the provider rides the tooltip.
+      nameEl.textContent = r.name || r.model;
+      const chipHost = nameEl.closest('.chat-recipient-chip');
+      if (chipHost) chipHost.title = r.providerLabel
+        ? `${r.providerLabel} · ${r.model}`
+        : `${r.provider} · ${r.model}`;
       nameEl.removeAttribute('data-i18n');
     } else if (typeof currentCid === 'string' && currentCid
       && typeof conversations !== 'undefined' && Array.isArray(conversations)
@@ -1406,7 +1588,12 @@ function onEnterNewChatView() {
   // already chose, and leave the chip alone.
   const input = document.getElementById('new-chat-input');
   const hasDraft = !!(input && input.value);
-  if (!hasDraft) _newChatRecipient = { ..._COMMANDER };
+  if (!hasDraft) {
+    _newChatRecipient = { ..._COMMANDER };
+    // The landing execution override is as ephemeral as the recipient —
+    // a fresh visit starts from defaults (unified execution entry).
+    _newChatExecOverride = null;
+  }
   _renderRecipientChip('new-chat');
   // Empty-state greeting / clock / ready-count — refresh on each view enter
   // so the time-of-day greeting is correct after a long idle session.
@@ -1520,7 +1707,61 @@ window.addEventListener('i18n-change', _refreshEmptyStateGreeting);
 // already consumes (conversations[] cache, _groupMembersCache, pendingConvs)
 // so the header stays consistent across refreshes without new IPC.
 
+/** 会话顶部的返回面包屑：工作空间 / 我的空间 / <空间名>（会话名由标题行承担）。 */
+function _refreshChatBreadcrumb() {
+  const crumbEl = document.getElementById('chat-header-breadcrumb');
+  if (!crumbEl) return;
+  const cid = currentCid;
+  const conv = Array.isArray(conversations)
+    ? conversations.find((c) => c && c.conversation_id === cid)
+    : null;
+  const spaceId = (conv && conv.space_id) || '';
+  if (!cid || !spaceId) {
+    crumbEl.hidden = true;
+    crumbEl.innerHTML = '';
+    return;
+  }
+  let spaceName = (conv && conv.space_name) || '';
+  if (!spaceName) {
+    const sp = Array.isArray(_sidebarSpaces)
+      ? _sidebarSpaces.find((s) => s && s.space_id === spaceId)
+      : null;
+    if (sp) spaceName = _conversationSpaceDisplayName(sp);
+  }
+  if (!spaceName) spaceName = spaceId;
+  const rootLabel = t('ws.center_title', '工作空间');
+  const spacesLabel = t('ws.my_spaces', '我的空间');
+  crumbEl.innerHTML =
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(rootLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="workspace">${escapeHtml(spacesLabel)}</button>` +
+    `<span class="chat-header-breadcrumb-sep">/</span>` +
+    `<button type="button" class="chat-header-breadcrumb-link" data-breadcrumb-nav="space" data-space-id="${escapeHtml(spaceId)}">${escapeHtml(spaceName)}</button>`;
+  crumbEl.hidden = false;
+  crumbEl.querySelectorAll('[data-breadcrumb-nav]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const nav = btn.getAttribute('data-breadcrumb-nav');
+      if (nav === 'workspace') {
+        window.setView('workspace');
+      } else if (nav === 'space') {
+        const sid = btn.getAttribute('data-space-id');
+        if (typeof window.openWorkspaceSpace === 'function') {
+          window.openWorkspaceSpace(sid);
+        } else {
+          // workspace.js 是懒加载的：首次点击时可能还没注册 openWorkspaceSpace。
+          // 先暂存目标空间 id，等 renderWorkspace 加载完成后消费它打开指定空间。
+          window.__cogseedPendingOpenSpace = sid;
+          window.setView('workspace');
+        }
+      }
+    });
+  });
+}
+
 function _refreshChatHeader() {
+  _refreshChatBreadcrumb();
   const cid = currentCid;
   const conv = Array.isArray(conversations)
     ? conversations.find((c) => c && c.conversation_id === cid)
@@ -1566,14 +1807,29 @@ function _refreshChatHeader() {
     // path as the sidebar conv row + chat-msg avatar — uniform icon
     // style across surfaces. The trailing "N agents" count only counts
     // real agents.
-    const members = _groupMembersCache.get(cid) || [];
-    const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+    // COGSEED-15：空间会话按「空间可用智能体清单」渲染头像与数量（与是否对话过无关，
+    // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+    const spaceMeta = conv && conv.space_id ? _spaceById(conv.space_id) : null;
+    const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+      ? spaceMeta.usable_agents
+      : null;
     const slots = [];
-    // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
-    if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-    for (const a of agents) slots.push({ kind: 'agent', id: a.id });
-    // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
-    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+    let agentCount = 0;
+    if (usableAgents) {
+      agentCount = usableAgents.length;
+      for (const id of usableAgents) {
+        slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
+      }
+    } else {
+      const members = _groupMembersCache.get(cid) || [];
+      const agents = members.filter((a) => a && a.id && a.kind === 'agent');
+      // 与左侧会话列表对齐：commander（参与时）+ 真实 Agent 头像，多 Agent 各显示一个。
+      if (conv && conv.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+      for (const a of agents) slots.push({ kind: 'agent', id: a.id });
+      // 无任何参与头像时回退显示 CogSeed 图标（与左侧列表一致）。
+      if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
+      agentCount = agents.length;
+    }
     const visibleSlots = slots.slice(0, 4);
     if (visibleSlots.length) {
       if (parts.length) parts.push('<span class="chat-header-meta-sep">·</span>');
@@ -1598,11 +1854,11 @@ function _refreshChatHeader() {
         });
       }).join('');
       parts.push(`<span class="chat-header-meta-members">${memberHtml}</span>`);
-      if (agents.length) {
-        const countTxt = t('chat.header.agent_count', { n: agents.length });
+      if (agentCount) {
+        const countTxt = t('chat.header.agent_count', { n: agentCount });
         const countLabel = (countTxt && countTxt !== 'chat.header.agent_count')
           ? countTxt
-          : `${agents.length} agents`;
+          : `${agentCount} agents`;
         parts.push(`<span class="chat-header-meta-text">${escapeHtml(countLabel)}</span>`);
       }
     }
@@ -1924,11 +2180,11 @@ let _spaceAssetNames = { templates: {}, skills: {}, agents: {} };
 async function _ensureSpaceAssetNames() {
   try {
     const [tplRes, skillRes, agentRes] = await Promise.all([
-      window.cogseed.invoke('spaces.templates.list'),
+      window.cogseed.invoke('personalOntology.templates.catalog'),
       window.cogseed.invoke('skills.list'),
       window.cogseed.invoke('agents.list'),
     ]);
-    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.template_id, t.name || t.template_id]));
+    _spaceAssetNames.templates = Object.fromEntries((tplRes.templates || []).map((t) => [t.templateId, t.name || t.templateId]));
     _spaceAssetNames.skills = Object.fromEntries((skillRes.skills || []).map((s) => [s.id, s.name || s.id]));
     _spaceAssetNames.agents = Object.fromEntries((agentRes.agents || []).map((a) => [a.agent_id, a.name || a.agent_id]));
   } catch (_) { return; }
@@ -2223,6 +2479,10 @@ function _forgetCidRecipient(cid) {
   if (_recipientByCid[cid]) {
     delete _recipientByCid[cid];
     _saveRecipientMap();
+  }
+  if (_execOverrideByCid[cid]) {
+    delete _execOverrideByCid[cid];
+    _saveExecOverrideMap();
   }
   _autoRecipientByCid.delete(cid);
   _serverFloorByCid.delete(cid);
@@ -3488,6 +3748,8 @@ function _groupMsgToLegacy(gm) {
     ...(gm.imported_seed === true ? { imported_seed: true } : {}),
     ...(gm.plan_announcement ? { _plan_announcement: true } : {}),
     ...(Array.isArray(gm.process) && gm.process.length ? { process: gm.process } : {}),
+    ...(gm.metrics ? { metrics: gm.metrics } : {}),
+    ...(gm.exec_meta ? { exec_meta: gm.exec_meta } : {}),
     ...(gm.turn_id ? { _turn_id: gm.turn_id } : {}),
     ...(gm.failure_kind ? { failure_kind: gm.failure_kind } : {}),
     ...(gm.failure_code ? { failure_code: gm.failure_code } : {}),
@@ -5255,18 +5517,35 @@ function startRelayActivitySubscription() {
 // Called whenever a non-internal message lands on a cid so the list stays
 // ordered by pin state first, then last activity (matches backend
 // listConversations sort on the next full reload).
+// rAF 合并（仅热路径）：多 agent turn 会在同一帧内连发多个 message 事件，
+// 每个事件都全量排序 + innerHTML 重建侧栏是流式期间卡顿主因。行已在
+// 列表中时数据（last_active_at）即时更新、排序与渲染每帧至多一次——
+// 视觉更新延迟 ≤16ms，不可感知。冷启动水合（缓存外新任务行）保持
+// 同步渲染：新任务需要立即可见。
+let _bumpScheduled = false;
 async function _bumpConvToTop(cid) {
   if (!cid) return;
   if (!Array.isArray(conversations)) conversations = [];
   let c = conversations.find((row) => row && row.conversation_id === cid);
+  const hydrated = !c;
   if (!c) {
     c = await _hydrateConversationRow(cid);
     if (!c) return;
   }
   _markConversationListLocallyChanged();
   c.last_active_at = new Date().toISOString();
-  _sortConversationCacheForSidebar();
-  renderConversationList();
+  if (hydrated) {
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+    return;
+  }
+  if (_bumpScheduled) return;
+  _bumpScheduled = true;
+  requestAnimationFrame(() => {
+    _bumpScheduled = false;
+    _sortConversationCacheForSidebar();
+    renderConversationList();
+  });
 }
 
 function _compareConversationsForSidebar(a, b) {
@@ -5385,28 +5664,43 @@ function _renderConvAgentStackHtml(c) {
   //   the list fresh, so a freshly @-mentioned agent shows up before the
   //   next `listConversations` lands.
   // Cap at 4 slots total.
+  // COGSEED-15：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
+  // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
+  const spaceMeta = c.space_id ? _spaceById(c.space_id) : null;
+  const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
+    ? spaceMeta.usable_agents
+    : null;
   const slots = [];
-  if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-  const seen = new Set();
-  if (Array.isArray(c.agent_ids)) {
-    for (const id of c.agent_ids) {
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      slots.push({ kind: 'agent', id });
+  if (usableAgents) {
+    const seenU = new Set();
+    for (const id of usableAgents) {
+      if (!id || seenU.has(id)) continue;
+      seenU.add(id);
+      slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
     }
-  }
-  const cached = _groupMembersCache.get(c.conversation_id);
-  if (Array.isArray(cached)) {
-    for (const a of cached) {
-      if (!a || !a.id || a.kind !== 'agent') continue;
-      if (seen.has(a.id)) continue;
-      seen.add(a.id);
-      slots.push({ kind: 'agent', id: a.id });
+  } else {
+    if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
+    const seen = new Set();
+    if (Array.isArray(c.agent_ids)) {
+      for (const id of c.agent_ids) {
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        slots.push({ kind: 'agent', id });
+      }
     }
+    const cached = _groupMembersCache.get(c.conversation_id);
+    if (Array.isArray(cached)) {
+      for (const a of cached) {
+        if (!a || !a.id || a.kind !== 'agent') continue;
+        if (seen.has(a.id)) continue;
+        seen.add(a.id);
+        slots.push({ kind: 'agent', id: a.id });
+      }
+    }
+    // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
+    // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
+    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   }
-  // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
-  // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
-  if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
   const parts = slots.slice(0, 4).map((s) => {
     if (s.kind === 'commander') {
       const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
@@ -5443,8 +5737,10 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const menuTitle = escapeHtml(t('project.menu.more_actions'));
   // ZCode 式行内相对时间（58分 / 3小时 / 6小时）：最近任务平铺列表没有时间桶标题，
   // 行尾的相对时间承担「新近度」信号。置顶区/空间组同样受益（一眼看出哪些最近动过）。
-  const timeHtml = _renderConversationRelativeTime(c)
-    ? `<span class="conv-item-time" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(_renderConversationRelativeTime(c))}</span>`
+  // data-time-iso 是 ticker 定点刷新的时间源（见 _refreshConversationRelativeTimes）。
+  const timeText = _renderConversationRelativeTime(c);
+  const timeHtml = timeText
+    ? `<span class="conv-item-time" data-time-iso="${escapeHtml(_conversationActivityIso(c) || '')}" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(timeText)}</span>`
     : '';
   // Auto-fired conversations get the same clock icon as the sidebar
   // "Automation" tab, rendered to the LEFT of the title text. Visible in
@@ -5542,9 +5838,8 @@ function _refreshConvTaskLine(cid) {
   else item.insertAdjacentHTML('beforeend', line);
 }
 
-/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
-function _renderConversationRelativeTime(c) {
-  const iso = _conversationActivityIso(c);
+/** 相对时间纯计算（iso → 「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _relativeTimeFromIso(iso) {
   if (!iso) return '';
   const dt = new Date(iso);
   if (isNaN(dt.getTime())) return '';
@@ -5557,6 +5852,37 @@ function _renderConversationRelativeTime(c) {
   const d = Math.floor(h / 24);
   if (d < 30) return t('sidebar.time_days', { n: d });
   return t('sidebar.time_old');
+}
+
+/** ZCode 式相对时间（「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
+function _renderConversationRelativeTime(c) {
+  return _relativeTimeFromIso(_conversationActivityIso(c));
+}
+
+// 相对时间不会自己走：整列表只在数据事件（新消息 / 置顶 / 重命名…）时重渲染，
+// 时间文本会一直冻结到重启或手动刷新。ticker 定点刷新 .conv-item-time 的文本
+// （时间源挂在 data-time-iso 上，不回查会话缓存），避免周期性全量重渲染打断
+// 行内重命名、合并勾选和滚动位置。
+let _convTimeTickerStarted = false;
+function _refreshConversationRelativeTimes() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
+  document.querySelectorAll('.conv-item-time[data-time-iso]').forEach((el) => {
+    const next = _relativeTimeFromIso(el.getAttribute('data-time-iso'));
+    if (next && el.textContent !== next) el.textContent = next;
+  });
+}
+function _ensureConversationTimeTicker() {
+  if (_convTimeTickerStarted || typeof setInterval !== 'function') return;
+  _convTimeTickerStarted = true;
+  setInterval(() => {
+    if (typeof document === 'undefined' || document.hidden) return;
+    _refreshConversationRelativeTimes();
+  }, 30000);
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) _refreshConversationRelativeTimes();
+    });
+  }
 }
 
 /** 绝对时间（悬停 title 用）。 */
@@ -6416,6 +6742,30 @@ function _spaceById(sid) {
   return _sidebarSpaces.find((s) => s && s.space_id === sid) || null;
 }
 
+/** COGSEED-19：空间组头「+」——在该空间下直接创建任务，立即进入会话页。
+ *  无二次弹窗；创建失败 toast 提示，不打断侧栏。 */
+async function _quickNewTaskInSpace(sid) {
+  if (!sid) return;
+  try {
+    const res = await apiFetch('/api/conversations/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spaceId: sid }),
+    });
+    const data = await res.json();
+    if (!data.ok || !data.conversation) throw new Error(data.error || 'create failed');
+    const conv = data.conversation;
+    conv.last_active_at = new Date().toISOString();
+    conversations.unshift(conv);
+    renderConversationList();
+    setView('conversation', conv.conversation_id, { skipLoad: true });
+  } catch (e) {
+    if (typeof uiToast === 'function') {
+      uiToast(t('sidebar.space_new_task_failed', '新建任务失败：{reason}', { reason: (e && e.message) || '' }), { variant: 'error', timeoutMs: 5000 });
+    }
+  }
+}
+
 async function _openSpaceActionMenu(anchorBtn, sid) {
   if (!anchorBtn || !sid) return;
   let menu = document.getElementById('conversation-action-menu');
@@ -6620,6 +6970,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       renderConversationList();
     });
   });
+  // 侧栏「消息渠道」折叠组切换（飞书/微信等；状态持久化 localStorage）
+  container.querySelectorAll('[data-conv-channel-toggle="1"]').forEach((btn) => {
+    if (btn.dataset.channelBound === '1') return;
+    btn.dataset.channelBound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const platform = btn.dataset.convChannel || '';
+      if (!platform) return;
+      _sidebarCollapse.channelGroups[platform] = !_sidebarCollapse.channelGroups[platform];
+      _saveSidebarCollapse();
+      renderConversationList();
+    });
+  });
   // 侧栏空间行 ⋯ 菜单（置顶/重命名/在访达中显示/删除）
   container.querySelectorAll('[data-conv-space-more]').forEach((el) => {
     if (el.dataset.moreBound === '1') return;
@@ -6628,6 +6992,20 @@ function _bindConversationSidebarItems(container, opts = {}) {
       e.preventDefault();
       e.stopPropagation();
       _openSpaceActionMenu(el, el.dataset.convSpaceMore || '');
+    });
+  });
+  // COGSEED-19：空间组头「+」→ 直接在该空间下新建任务并进入会话页（无二次弹窗）
+  container.querySelectorAll('[data-conv-space-quick-task]').forEach((el) => {
+    if (el.dataset.quickTaskBound === '1') return;
+    el.dataset.quickTaskBound = '1';
+    const fire = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _quickNewTaskInSpace(el.dataset.convSpaceQuickTask || '');
+    };
+    el.addEventListener('click', fire);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') fire(e);
     });
   });
   // 空间行内联重命名：回车保存、Esc 取消、失焦保存
@@ -6832,6 +7210,9 @@ function _renderSpaceSidebarGroup(sp, convs) {
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
       ${labelHtml}
       <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-space-quick-task" role="button" tabindex="0" data-conv-space-quick-task="${escapeHtml(sp.space_id)}"
+        title="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}" aria-label="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}">
+        ${_uiIconHtml('plus', 'conv-space-quick-task-icon')}</span>
       <span class="conv-space-more-btn" role="button" tabindex="0" data-conv-space-more="${escapeHtml(sp.space_id)}"
         title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</span>
     </button>
@@ -6839,6 +7220,72 @@ function _renderSpaceSidebarGroup(sp, convs) {
       bucketScope: `space:${sp.space_id}`,
       nested: true,
     })).join('')}`;
+}
+
+// ── 消息渠道分组（飞书/微信等渠道会话在「最近任务」tab 的聚合展示）──
+// 渠道会话 = conversations 列表里带 channel_platform 的行（主进程列表响应
+// 标注：新会话创建时落盘 + 存量经 binding join 兜底）。分组只收非置顶的
+// 渠道会话（用户置顶 = 想常驻顶部，不进组）。折叠状态持久化
+// _sidebarCollapse.channelGroups[platform]，默认展开。
+const CHANNEL_SIDEBAR_ICONS = {
+  feishu_lark: 'feishu',
+  wechat_personal: 'wechat',
+  wecom: 'wecom',
+  telegram: 'telegram',
+};
+const CHANNEL_SIDEBAR_NAMES = {
+  feishu_lark: '飞书',
+  wechat_personal: '微信',
+  wecom: '企业微信',
+  telegram: 'Telegram',
+};
+function _channelGroupLabel(platform, convs) {
+  const first = (convs || []).find(Boolean);
+  const live = first && typeof first.channel_name === 'string' && first.channel_name.trim();
+  return live || CHANNEL_SIDEBAR_NAMES[platform] || platform;
+}
+function _channelGroupIcon(platform) {
+  return CHANNEL_SIDEBAR_ICONS[platform] || 'message-square';
+}
+/** 渠道分组区：每组一个可折叠组头（图标+渠道名+会话数）+ 组内会话行。
+ *  组间按组内最新活跃倒序；组内排序复用置顶/最近的比较器。 */
+function _renderChannelSidebarGroups(channelConvs) {
+  if (!channelConvs.length) return '';
+  const byPlatform = new Map();
+  for (const conv of channelConvs) {
+    const platform = conv.channel_platform;
+    if (!platform) continue;
+    if (!byPlatform.has(platform)) byPlatform.set(platform, []);
+    byPlatform.get(platform).push(conv);
+  }
+  const groups = Array.from(byPlatform.entries())
+    .map(([platform, convs]) => ({ platform, convs }))
+    .sort((a, b) => {
+      const latest = (list) => list.reduce((acc, c) => {
+        const at = (c && (c.last_active_at || c.updated_at)) || '';
+        return at > acc ? at : acc;
+      }, '');
+      return latest(b.convs).localeCompare(latest(a.convs));
+    });
+  return groups.map(({ platform, convs }) => {
+    const collapsed = !!_sidebarCollapse.channelGroups[platform];
+    const label = _channelGroupLabel(platform, convs);
+    // 与「最近任务」等分区头同构（conv-list-space-title + fold 按钮 +
+    // 渐变线 + 计数徽章），保证侧栏所有标题行视觉一致；渠道差异只保留
+    // 标签前的渠道图标与组内会话数徽章。
+    return `
+    <div class="conv-list-section-header conv-list-space-title${collapsed ? ' is-collapsed' : ''}">
+      <button type="button" class="conv-list-section-fold" data-conv-channel-toggle="1" data-conv-channel="${escapeHtml(platform)}"
+        aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+        <span class="conv-channel-group-icon" aria-hidden="true">${_uiIconHtml(_channelGroupIcon(platform), 'conv-channel-group-icon-svg')}</span>
+        <span class="conv-list-section-label">${escapeHtml(label)}</span>
+      </button>
+      <span class="conv-list-section-count">${convs.length}</span>
+      <span class="conv-list-section-rule" aria-hidden="true"></span>
+    </div>
+    ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
+  }).join('');
 }
 
 /** 分区标题行：可折叠（data-sidebar-fold）+ 可选右侧操作按钮（data-sidebar-action）。 */
@@ -6940,6 +7387,7 @@ function _sidebarHasMoreOld() {
 function renderConversationList() {
   _conversationBucketDateKey = _conversationLocalDateKey();
   const container = document.getElementById('conversation-list');
+  _ensureConversationTimeTicker();
   _sortConversationCacheForSidebar();
   // 三段结构：置顶（pinned）→ 空间（space_id）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）。
   // pin 的会话只在置顶区出现（不重复进空间/最近区）。
@@ -6992,8 +7440,16 @@ function renderConversationList() {
         parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
       }
     }
+    // ② 渠道分组区（飞书/微信等渠道会话；置顶的渠道会话留在置顶区不进组）
+    const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
+    const plainRecent = channelConvs.length
+      ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
+      : recent;
+    if (channelConvs.length) {
+      parts.push(_renderChannelSidebarGroups(channelConvs));
+    }
     // ③ 最近任务区（平铺，无时间桶标题）
-    if (recent.length || hasDeferredRecent) {
+    if (plainRecent.length || hasDeferredRecent) {
       parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
         action: 'new-task',
         actionTitle: t('sidebar.new_task', '新建任务'),
@@ -7001,7 +7457,7 @@ function renderConversationList() {
       }));
       if (!_sidebarCollapse.recent) {
         if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-        parts.push(_renderConversationFlatList(recent, {
+        parts.push(_renderConversationFlatList(plainRecent, {
           bucketScope: 'sidebar',
           loadMore: _sidebarHasMoreOld(),
           loadMoreBucket: 'last30',
@@ -7162,6 +7618,54 @@ function _historyRequestUrl(cid, before = null, limit = HISTORY_PAGE_SIZE, aroun
   return url;
 }
 
+// ── 每会话访问权限模式（Claude Code 风格三档）──────────────────────────
+// full = 完全访问（bypass）；auto_approve = 帮我批准（敏感操作自动放行）；
+// ask = 请求批准（敏感操作弹窗确认）。三档都在执行层（bash-permissions）生效。
+const _PERMISSION_MODES = [
+  { id: 'full', labelKey: 'chat.permission.full', label: '完全访问' },
+  { id: 'auto_approve', labelKey: 'chat.permission.auto_approve', label: '帮我批准' },
+  { id: 'ask', labelKey: 'chat.permission.ask', label: '请求批准' },
+];
+
+let _permissionModeSelectBound = false;
+
+function _permissionModeEl() {
+  return document.getElementById('chat-permission-mode-select');
+}
+
+function _renderPermissionModeSelect(convMeta) {
+  const select = _permissionModeEl();
+  if (!select) return;
+  const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
+    ? convMeta.permission_mode
+    : 'ask';
+  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
+  // 默认「请求批准」填 select（与执行层未设置时的弹窗行为一致），此时
+  // escapeHtml 还没就绪，需要安全兜底。
+  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
+  select.innerHTML = _PERMISSION_MODES.map((m) => {
+    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
+    return `<option value="${m.id}"${current === m.id ? ' selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+  select.value = current;
+}
+
+function _bindPermissionModeSelect() {
+  if (_permissionModeSelectBound) return;
+  _permissionModeSelectBound = true;
+  const select = _permissionModeEl();
+  if (!select) return;
+  select.addEventListener('change', async () => {
+    const mode = select.value;
+    if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
+    try {
+      await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
+    } catch (err) {
+      if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
+    }
+  });
+}
+
 function _membersRequestUrl(cid) {
   return `/api/conversations/${encodeURIComponent(cid)}/members?project_id=${encodeURIComponent(_projectIdForConversation(cid))}`;
 }
@@ -7303,6 +7807,8 @@ async function _loadOlderConversationHistory(cid, before) {
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
       container.insertBefore(fragment, row.nextSibling);
+      // 更早历史也是离屏 fragment 装载，插入后补刷会话统计行（Task 8）。
+      _refreshSessionStats();
       _removeSupersededInterruptionBubbles(container);
       _setLoadEarlierHistory(container, cid, nextCursor);
       _restoreOlderHistoryPrependScroll(container, previousScrollHeight, previousScrollTop);
@@ -7775,10 +8281,11 @@ async function loadConversationHistory(cid, opts = {}) {
       }));
       container.appendChild(historyFragment);
     }
+    // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
+    // appendChatMessage 里的刷新查不到已挂载消息，插入完成后统一刷一次
+    // 会话统计行（Task 8）。
+    _refreshSessionStats();
     _mountCollaborationStatusCard(container, convMeta.collaboration || null);
-    if (window.CompanionRepro && typeof window.CompanionRepro.mount === 'function') {
-      void window.CompanionRepro.mount(cid);
-    }
     _setLoadEarlierHistory(container, cid, data.next_cursor);
     const searchTargetRevealed = opts.searchTarget
       ? _revealConversationHistorySearchTarget(cid, opts.searchTarget)
@@ -7806,6 +8313,7 @@ async function loadConversationHistory(cid, opts = {}) {
     // `agent_enabled` on the conversation payload (true when no agent_id).
     convAgentEnabledByCid.set(cid, convMeta.agent_enabled !== false);
     _renderConvDisabledBanner(cid);
+    _renderPermissionModeSelect(convMeta);
     const processingFresh = convMeta.processing === true
       && convMeta.processing_since
       && (Date.now() - new Date(convMeta.processing_since).getTime()) < 15 * 60 * 1000;
@@ -7920,6 +8428,9 @@ async function loadConversationHistory(cid, opts = {}) {
     if (!preserveScroll) {
       container.innerHTML = `<div class="empty">${escapeHtml(t('chat.load_failed', { msg: e.message || '' }))}</div>`;
     }
+    // 加载失败时消息区只剩占位——统计行随之隐藏，避免残留上个会话的数据
+    // （Task 8）。preserveScroll 的部分重载保留现有消息，刷新结果不变。
+    _refreshSessionStats();
     if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
   }
 }
@@ -8550,6 +9061,199 @@ if (typeof document !== 'undefined') {
   });
 }
 
+// ─── 会话统计行（输入框下方，Task 8）────────────────────────────────────
+// 折叠当前会话所有带 metrics 的 assistant 消息：轮数/步数、LLM 总耗时、
+// 首 token 平均与速率、缓存命中、上下文占用、token 合计与费用。常驻显示
+// （不受消息级 .chat-msg-meta 的 hover 显隐影响）；无带 metrics 的消息整行
+// hidden；窗口/单价未知就省略对应段——诚实省略，不编数字。
+
+// 单价复用 dashboard 成本页同一 localStorage key（'dashboard-price-table'，
+// 实测结构 { [modelId]: { in: ¥/1M, out: ¥/1M } }，成本页保存时只写 '*'
+// 默认条目、无模型名，也无 cacheRead/cacheWrite 单价），不另立存储。
+// 结构对不上或没有可用的 '*'/'default' 条目 → 返回 null（不显示费用段）。
+function _userPriceForStats() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dashboard-price-table') || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const def = raw['*'] || raw.default;
+    if (!def || typeof def !== 'object') return null;
+    const pin = Number(def.in);
+    const pout = Number(def.out);
+    const hasIn = Number.isFinite(pin) && pin > 0;
+    const hasOut = Number.isFinite(pout) && pout > 0;
+    if (!hasIn && !hasOut) return null;
+    // 现场价格表没有缓存单价（成本页同样只按 in/out 折算）→ 按 0 计，
+    // 费用是下界估算，费用段的 title 已注明非账单金额。
+    return { in: hasIn ? pin : 0, out: hasOut ? pout : 0, cacheRead: 0, cacheWrite: 0 };
+  } catch (_) {
+    return null;
+  }
+}
+
+// 当前模型 contextWindow：渲染层没有现成全局，走已有 auth.* IPC（不新造）
+// ——auth.listEntries[0] 是默认模型（与 model-chip 同源），auth.listModels
+// 的 curated 分支透传 contextWindow；未策展/custom provider 的 fallback
+// 分支没有该字段 → null，统计行只显示已用量。结果缓存 60s（负结果也在
+// 内，避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
+let _statsModelWindowCache = null; // { value: number|null, at: ms }
+function getCurrentModelContextWindow() {
+  const now = Date.now();
+  if (!_statsModelWindowCache || now - _statsModelWindowCache.at > 60_000) {
+    _statsModelWindowCache = {
+      value: _statsModelWindowCache ? _statsModelWindowCache.value : null,
+      at: now,
+    };
+    _fetchCurrentModelContextWindow();
+  }
+  return _statsModelWindowCache.value;
+}
+async function _fetchCurrentModelContextWindow() {
+  try {
+    const entries = await window.cogseed.invoke('auth.listEntries');
+    const current = entries && entries.ok && Array.isArray(entries.entries)
+      ? entries.entries[0] : null;
+    if (!current || !current.provider || !current.model) return;
+    const res = await window.cogseed.invoke('auth.listModels', { provider: current.provider });
+    const models = res && res.ok && Array.isArray(res.models) ? res.models : [];
+    const hit = models.find((m) => m && typeof m === 'object' && m.id === current.model);
+    const cw = hit && Number.isSafeInteger(hit.contextWindow) && hit.contextWindow > 0
+      ? hit.contextWindow : null;
+    _statsModelWindowCache = { value: cw, at: Date.now() };
+    if (cw) _refreshSessionStats();
+  } catch (_) {
+    // 取不到保持现状（null 或旧值）——只显示已用量。
+  }
+}
+window.getCurrentModelContextWindow = getCurrentModelContextWindow;
+
+// 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
+// ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
+// 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
+function _refreshSessionStats() {
+  const box = document.getElementById('chat-session-stats');
+  if (!box || !window.conversationMetrics) return;
+  const list = [];
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    if (el._msgMetrics) list.push(el._msgMetrics);
+  });
+  if (!list.length) { box.hidden = true; return; }
+  const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
+    ? window.getCurrentModelContextWindow() : null;
+  const price = _userPriceForStats();
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
+  // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
+  const segs = [];
+  segs.push({ v: t('chat.stats.counts', { turns: f.turns, steps: f.steps }) });
+  if (f.llmMs > 0) {
+    segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
+  }
+  if (f.ttftAvgText) {
+    segs.push({
+      k: t('chat.stats.speedK'),
+      v: f.rateText
+        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
+        : f.ttftAvgText,
+    });
+  }
+  if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
+  box.innerHTML = '';
+  box.hidden = false;
+  segs.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    box.appendChild(seg);
+  });
+  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
+  // 单价、无模型名，title 不带模型字段。
+  if (f.costText) {
+    const costSpan = box.lastElementChild;
+    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+  }
+  _syncStatsWidthToComposer();
+}
+
+// 统计行与输入卡左右边缘实时对齐（2026-08-27 反馈）。卡宽随内容收缩
+// （chip 增删、附件条出现都会变），CSS 定宽追不上；此处每次刷新直读卡宽
+// 同步一次，并挂 ResizeObserver 让后续卡片尺寸变化即时跟随（首次 observe
+// 也会回调一次）。vm 测试环境无 ResizeObserver，守卫跳过。
+let _statsComposerObserver = null;
+function _syncStatsWidthToComposer() {
+  const box = document.getElementById('chat-session-stats');
+  const card = document.querySelector('.chat-input-area');
+  if (!box || !card) return;
+  if (!_statsComposerObserver && typeof ResizeObserver !== 'undefined') {
+    _statsComposerObserver = new ResizeObserver(() => _syncStatsWidthToComposer());
+    _statsComposerObserver.observe(card);
+  }
+  const cw = card.getBoundingClientRect().width;
+  if (cw > 0) box.style.width = `${Math.round(cw)}px`;
+}
+
+// 消息级用量信息条：悬停显示（与 chat-msg-actions 同节奏）。数据来自
+// gm.metrics（可选字段），无数据不渲染。数字与时间戳，无正文无凭证。
+// 挂在操作行（[data-role=msg-actions]）内右对齐——与复制/引用图标同一行
+// （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
+// _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
+function _mountMsgMeta(ph, metrics) {
+  const line = window.conversationMetrics
+    ? window.conversationMetrics.messageMetricsLine(metrics) : null;
+  if (!line) return;
+  let row = ph.querySelector('[data-role="msg-actions"]');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'chat-msg-actions';
+    row.dataset.role = 'msg-actions';
+    ph.appendChild(row);
+  }
+  let meta = row.querySelector('[data-role="msg-meta"]');
+  if (!meta) {
+    meta = document.createElement('div');
+    meta.className = 'chat-msg-meta';
+    meta.dataset.role = 'msg-meta';
+    row.appendChild(meta);
+  }
+  // 分段结构与会话统计行同一视觉语言：.mseg > (.k 浅色标签 + .v mono 数值)。
+  const parts = [];
+  parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
+  if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
+  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
+  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  meta.textContent = '';
+  parts.forEach((s) => {
+    const seg = document.createElement('span');
+    seg.className = 'mseg';
+    if (s.k) {
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = s.k;
+      seg.appendChild(k);
+    }
+    const v = document.createElement('span');
+    v.className = 'v';
+    v.textContent = s.v;
+    seg.appendChild(v);
+    meta.appendChild(seg);
+  });
+  if (line.titleLines.length) meta.title = line.titleLines.join('\n');
+  // 消息级 meta 更新后同步刷会话统计行（覆盖流式 finalize 路径——它不走
+  // appendChatMessage 尾部；Task 8）。
+  _refreshSessionStats();
+}
+
 function appendChatMessage(message, autoScroll = true, opts = {}) {
   const container = opts.container
     ? (typeof opts.container === 'string' ? document.getElementById(opts.container) : opts.container)
@@ -8727,9 +9431,15 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
       ? t('chat.recipient_space_builder')
       : resolvedActorLabel || fromLabel || p3394Fallback || t('chat.from_agent_unknown');
   const avatarHtml = role === 'user' ? '' : _renderActorAvatarHtml(headerActorId);
+  // Unified execution entry: the actual execution config persisted with the
+  // message rides the header as a subtle meta chip — 发送前（composer 配置
+  // chip）、执行中（流式占位 meta）、结果（这里）三处展示保持一致。
+  const execMetaHtml = role !== 'user' && message.exec_meta && _formatExecMetaText(message.exec_meta)
+    ? `<span class="chat-msg-exec-meta">${escapeHtml(_formatExecMetaText(message.exec_meta))}</span>`
+    : '';
   const headerHtml = role === 'user'
     ? `<div class="chat-msg-header chat-msg-header-user"><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`
-    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span><span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
+    : `<div class="chat-msg-header">${avatarHtml}<span class="chat-msg-from${_isActorDetailTarget(headerActorId) ? ' is-agent-link' : ''}"${_actorLinkAttrs(headerActorId)}>${escapeHtml(headerName)}</span>${execMetaHtml}<span class="chat-msg-time">${formatTime(message.time || new Date().toISOString())}</span></div>`;
   const planAnnHtml = message._plan_announcement
     ? `<div class="chat-plan-announce">${_uiIconHtml('clipboard-list', 'ui-icon chat-plan-announce-icon')}<span>${escapeHtml(t('chat.plan_announce'))}</span></div>` : '';
   // Deliverables mount last inside the bubble as a footer strip. The separate
@@ -8780,6 +9490,13 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   if (historyHydration) container.appendChild(msgDiv);
   else _insertByTimestamp(container, msgDiv);
   if (role === 'user') _moveUserBeforeOrphanLivePlaceholder(container, msgDiv);
+  // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
+  // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
+  msgDiv._msgMetrics = message.metrics || null;
+  _mountMsgMeta(msgDiv, message.metrics);
+  // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
+  // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
+  _refreshSessionStats();
   if (!isHtmlSnippet && typeof typesetMath === 'function') {
     const md = msgDiv.querySelector('.markdown-body');
     if (md) typesetMath(md);
@@ -10905,7 +11622,10 @@ async function _retryFailedAssistantMessage(msgDiv, btn) {
     if (failedMessageId) {
       payload = {
         content: t('chat.retry_user_message'),
-        extra: { retry_message_id: failedMessageId },
+        extra: {
+          retry_message_id: failedMessageId,
+          retry_request_id: `req-chat-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
       };
     } else {
       // Compatibility for an unpersisted/legacy live failure with no stable
@@ -11098,11 +11818,16 @@ async function handleNewChatSubmit() {
   if (typeof window !== 'undefined' && typeof window.commitNewChatTaskRefs === 'function') {
     await window.commitNewChatTaskRefs(convId);
   }
+  // Unified execution entry: the landing pick (API model recipient and/or
+  // execution-config override) follows the message. Recipient + override were
+  // already transferred to convId above, so resolve against the new cid.
+  const newChatExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
     ..._recipientRoutingFields(recipientSnapshot),
+    ...(newChatExecConfig ? { execution_config: newChatExecConfig } : {}),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -11204,11 +11929,13 @@ async function handleChatSubmit() {
       await uiAlert(t('chat.attach_queue_blocked'));
       return;
     }
+    const queuedExecConfig = _executionConfigForSend('conversation', recipientSnapshot);
     enqueueMessage(cid, requestText, null, {
       recipient: recipientSnapshot,
       extra: {
         ...(useSelections.length ? { use_selections: useSelections } : {}),
         ...(references.length ? { references } : {}),
+        ...(queuedExecConfig ? { execution_config: queuedExecConfig } : {}),
       },
     });
     _clearQuotes(cid);
@@ -11240,11 +11967,19 @@ async function handleChatSubmit() {
   // 结构化字段路由而覆盖显式提及 → 仍路由回旧智能体。仅当正文没有前导 @提及
   // 时才附加快照路由字段（普通 chip 选中 / CLI fallback 场景）。
   const hasExplicitMention = _LEADING_MENTION_RE.test(content);
+  // Unified execution entry: per-task model / effort picks (API-connection
+  // model recipient or execution-config chip override). Like the structured
+  // route above, an explicit @mention overrides the chip target — the task
+  // config must not leak onto a differently-routed turn.
+  const executionConfig = hasExplicitMention
+    ? undefined
+    : _executionConfigForSend('conversation', recipientSnapshot);
   const extra = {
     ...(attachments.length ? { attachments } : {}),
     ...(useSelections.length ? { use_selections: useSelections } : {}),
     ...(references.length ? { references } : {}),
     ...(hasExplicitMention ? {} : _recipientRoutingFields(recipientSnapshot)),
+    ...(executionConfig ? { execution_config: executionConfig } : {}),
   };
   // 发送即清 composer 引用条（视觉反馈：引用已随消息发出）
   if (typeof window !== 'undefined' && typeof window.clearChatTaskRefChips === 'function') window.clearChatTaskRefChips();
@@ -12137,6 +12872,11 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
 async function _ensureModelOrCliFallback(cid, target = 'conversation', rawContent = '') {
   const selected = _activeRecipient(target);
   if (selected && selected.kind === 'agent' && selected.id) return true;
+  // Unified execution entry: an API-connection model pick implies the user
+  // came from the configured-providers list — route like a configured model
+  // (a stale entry that lost its key falls back to the default group at
+  // turn time, surfaced by the resolved-runtime event).
+  if (selected && selected.kind === 'model' && selected.provider) return true;
   // A raw mention is an explicit dispatch request of its own. Let main parse
   // and Wake-gate it; automatic CLI fallback must not replace its target.
   if (_LEADING_MENTION_RE.test(String(rawContent || '').trim())) return true;
@@ -12252,17 +12992,6 @@ async function sendInConversation(cid, content, extra, options = {}) {
     // so it must not be merged into the active task-turn sample.
     enqueueMessage(cid, content, '', { direct: true, extra });
     return { started: false, queued: true, aborted: false, errored: false };
-  }
-
-  if (window.CompanionRepro && typeof window.CompanionRepro.handleChatMessage === 'function') {
-    try {
-      const handled = await window.CompanionRepro.handleChatMessage(cid, content, {
-        append(role, text) {
-          appendChatMessage({ role, content: text, time: nowIsoLocal() }, true, { cid, archive: true });
-        },
-      });
-      if (handled) return { started: true, aborted: false, errored: false, result: 'success' };
-    } catch (_) { /* fall through to normal commander send */ }
   }
 
   // Scroll-pin spacer is owned by the controller (features.scrollPin) —
@@ -12965,6 +13694,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
     <div class="chat-msg-header">
       <span class="chat-msg-avatar-slot" data-role="from-avatar"></span>
       <span class="chat-msg-from" data-role="from-chip"></span>
+      <span class="chat-msg-exec-meta" data-role="exec-meta" hidden></span>
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
     </div>
     <div class="chat-bubble">
@@ -13007,6 +13737,41 @@ function _createStreamingAssistantMessage(container, opts = {}) {
 function _hideThinking(msg) {
   const thinking = msg.querySelector('[data-role="thinking"]');
   if (thinking) thinking.style.display = 'none';
+}
+
+/** Unified execution entry: format the actual execution config shown on a
+ *  bubble's header meta — "模型 · 强度" for model turns, "CLI · 模型" for
+ *  external CLI turns. Returns '' when there is nothing meaningful. */
+function _formatExecMetaText(meta) {
+  if (!meta || typeof meta !== 'object') return '';
+  const parts = [];
+  const model = String(meta.model || '').trim();
+  const effort = meta.effort === 'off' || meta.effort === 'low' || meta.effort === 'high'
+    ? meta.effort
+    : (meta.effort === 'auto' ? 'auto' : '');
+  const cli = String(meta.cli || '').trim();
+  if (cli) {
+    if (model) parts.push(model);
+    parts.push(cli.toUpperCase());
+    return parts.join(' · ');
+  }
+  if (model) parts.push(model);
+  if (effort) parts.push(t('model_effort.' + effort));
+  return parts.join(' · ');
+}
+
+function _setExecMetaOnHeader(host, meta) {
+  const el = host && host.querySelector ? host.querySelector('[data-role="exec-meta"]') : null;
+  if (!el) return;
+  const text = _formatExecMetaText(meta);
+  if (!text) { el.hidden = true; el.textContent = ''; return; }
+  el.textContent = text;
+  el.hidden = false;
+}
+
+function _setPlaceholderExecMeta(placeholder, data) {
+  if (!placeholder || !data || typeof data !== 'object') return;
+  _setExecMetaOnHeader(placeholder, data);
 }
 
 const _PROCESS_GLYPH_KIND = {
@@ -14700,6 +15465,11 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
     ph.appendChild(actionsRow);
   }
 
+  // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
+  // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
+  ph._msgMetrics = gm.metrics || null;
+  _mountMsgMeta(ph, gm.metrics);
+
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.
   const gmCreated = _normalizeCreatedAgents(gm);
   if (gmCreated) {
@@ -14790,6 +15560,19 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   _scheduleConversationInfoFileRefresh(cid);
 }
 
+// Msg ids recently rendered through a live bus stream (in-app send / open
+// conversation observer). The `conversations:updated` desktop push consults
+// this to avoid double-rendering messages the renderer already appended.
+const _recentLiveBusMsgIds = new Set();
+const _recentLiveBusMsgOrder = [];
+function _rememberLiveBusMsgId(id) {
+  if (!id || _recentLiveBusMsgIds.has(id)) return;
+  _recentLiveBusMsgIds.add(id);
+  _recentLiveBusMsgOrder.push(id);
+  while (_recentLiveBusMsgOrder.length > 200) _recentLiveBusMsgIds.delete(_recentLiveBusMsgOrder.shift());
+}
+window.__cogseedLiveBusTracker = { has: (id) => _recentLiveBusMsgIds.has(id) };
+
 // Group-chat bus event router. Each event is one of:
 //   { type: 'message', cid, msg: GroupMessage, turn_id? }
 //   { type: 'process', cid, actor, turn_id?, data: { type, text?, event? } }
@@ -14800,6 +15583,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
 //   { type: 'aborted', cid }
 function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {}) {
   if (!evData || typeof evData !== 'object') return;
+  if (evData.type === 'message' && evData.msg) _rememberLiveBusMsgId(evData.msg.id);
   if (evData.type === 'agent_run_result') {
     if (window.ConversationInfo && typeof window.ConversationInfo.refreshAgentActivity === 'function') {
       void window.ConversationInfo.refreshAgentActivity(cid);
@@ -14825,7 +15609,11 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
   // user's view; visible end-of-turn replies will bump shortly after).
   if (evData.type === 'message' && evData.msg && !evData.msg.dispatch) {
     _bumpConvToTop(cid);
-    if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid);
+    // 文件快照刷新统一走防抖（_scheduleConversationInfoFileRefresh）：
+    // 流式期间每个 message 事件都即时触发 conversations.files.list 会在
+    // 主进程叠加整树遍历（每次消息 → 一次全量快照），还会反复闪加载态。
+    // 180ms 合并一次 + silent 刷新，数据到达延迟不可感知，行为不变。
+    _scheduleConversationInfoFileRefresh(cid);
     // Mark commander as "in chat" the moment it speaks here, so the
     // sidebar/header badges add the commander avatar without waiting for
     // the next `listConversations` to re-derive it from <cid>.jsonl.
@@ -14839,7 +15627,6 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
         }
       }
     }
-    if (evData.msg.from !== 'user') _scheduleConversationInfoFileRefresh(cid);
     // Global cache refresh — must happen BEFORE the cross-cid early-return
     // below, since the agents/skills tabs are global UI surfaces. Without
     // this hop, creating a skill / agent from a background conv leaves
@@ -15043,6 +15830,13 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       } else if (data.type === 'event') {
         // 事件型 process（工具调用、状态等）同样证明活动但未输出文本。
         _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
+        // Unified execution entry: the turn's actual execution config (model
+        // / effort / CLI) rides a dedicated live-only event — show it on the
+        // placeholder's header meta instead of the process rail.
+        if (data.event && data.event.stream === 'execution') {
+          _setPlaceholderExecMeta(target, data.event.data);
+          return;
+        }
         const before = _processLineCount(target);
         _renderAgentEvent(target, data.event);
         const evt = data.event || {};
@@ -16117,12 +16911,14 @@ function _updateConvSidebarBadge(cid, _unused) {
 
 // Repaint badges on every visible conversation item. Called after re-render
 // of the sidebar list so previously-known pending/queued state is reapplied.
+// 每行徽标已空化：_updateConvSidebarBadge 对每行做的是同一个全局 chip 刷新 +
+// 当前会话头刷新（最多一行命中）。改成 O(1) 单次刷新，消除侧栏重建后
+// O(N×P) 的重复 pendingConvs 遍历。
 function _refreshAllConvBadges() {
-  document.querySelectorAll('.conv-item').forEach(el => {
-    const cid = el.dataset.cid;
-    if (cid) _updateConvSidebarBadge(cid);
-  });
   _refreshCommanderRunningChip();
+  if (currentCid) {
+    try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
+  }
 }
 
 // Right-aligned chip on the Commander sidebar button that surfaces "N in
@@ -16199,4 +16995,8 @@ if (typeof window !== 'undefined') {
   } else {
     _initChatSelectionMenu();
   }
+  _bindPermissionModeSelect();
+  // 权限 select 现在常驻底部栏（工作空间旁），先按默认「完全访问」填好，
+  // 等历史加载后再由 _renderPermissionModeSelect(convMeta) 精确回填。
+  _renderPermissionModeSelect(null);
 }

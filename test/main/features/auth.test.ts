@@ -776,6 +776,62 @@ describe('auth › listModels', () => {
       'gpt-5.5',
     ]);
   });
+
+  it('passes custom-provider contextWindow through (renderer ctx denominator)', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(TEST_UID, {
+      name: 'Window Relay',
+      protocol: 'openai',
+      baseUrl: 'https://window-relay.example/v1',
+      // 合成测试值，运行时构造（非真实凭据）。
+      apiKey: ['window', 'relay', TEST_UID].join('-'),
+      models: [
+        'plain-model',
+        { id: 'sized-model', contextWindow: 262_144, maxTokens: 8_192 },
+      ],
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const a = await import('../../../src/main/features/auth');
+    const { models } = await a.listModels(`cp:${created.id}`);
+    const plain = models.find((m) => m.id === 'plain-model');
+    const sized = models.find((m) => m.id === 'sized-model');
+    // Unspecified models carry the normalized default window; explicit values
+    // pass through untouched — the renderer stats line divides by these.
+    expect(plain?.contextWindow).toBe(131_072);
+    expect(sized?.contextWindow).toBe(262_144);
+  });
+
+  it('surfaces the catalog window over a stored default (legacy-row fallback)', async () => {
+    // Rows imported before catalog resolution carry the 128K guess; listModels
+    // must answer with the catalog value for known models without rewriting
+    // the store. Explicit non-default values are the user's and stay as-is.
+    const providers = await import('../../../src/main/features/custom_providers');
+    const created = providers.addCustomProvider(TEST_UID, {
+      name: 'Legacy Window Relay',
+      protocol: 'openai',
+      baseUrl: 'https://legacy-window.example/v1',
+      // Runtime-built synthetic value, not a credential.
+      apiKey: ['legacy-window', TEST_UID].join('-'),
+      models: [
+        { id: 'deepseek/deepseek-v4-flash-vision-exp', contextWindow: 131_072, maxTokens: 8_192 },
+        { id: 'hand-tuned-model', contextWindow: 262_144, maxTokens: 8_192 },
+        { id: 'blind-model', contextWindow: 131_072, maxTokens: 8_192, vision: false },
+      ],
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const a = await import('../../../src/main/features/auth');
+    const { models } = await a.listModels(`cp:${created.id}`);
+    // Stored default + catalog hit → catalog's 1M answers; unknown vision
+    // (undefined in store) resolves from the catalog too.
+    expect(models.find((m) => m.id === 'deepseek/deepseek-v4-flash-vision-exp')?.contextWindow).toBe(1_048_576);
+    expect(models.find((m) => m.id === 'deepseek/deepseek-v4-flash-vision-exp')?.vision).toBe(true);
+    // User-typed non-default value is respected verbatim.
+    expect(models.find((m) => m.id === 'hand-tuned-model')?.contextWindow).toBe(262_144);
+    // Stored vision === false is explicit (probe/user) — never overridden.
+    expect(models.find((m) => m.id === 'blind-model')?.vision).toBe(false);
+  });
 });
 
 describe('auth › custom providers', () => {
@@ -801,8 +857,14 @@ describe('auth › custom providers', () => {
       supportsOAuth: false,
       manualModel: false,
     }));
+    // Unified execution entry (方案 C)：custom 模型的 reasoning 标注按识别
+    // 结果——识别不出的模型不再硬标 false，而是省略字段（UI 显示能力未知
+    // 并禁用档位，与运行时不透传的行为一致）。relay-model 不在任何家族。
     expect(await auth.listModels(providerId)).toEqual({
-      models: [{ id: 'relay-model', name: 'relay-model' }],
+      // contextWindow 透传（normalizeModels 的默认窗口）——渲染层会话统计行
+      // 的上下文占用分母依赖它；reasoning 按识别结果，relay-model 不在任何
+      // 家族→省略字段（与运行时不透传的行为一致）。
+      models: [{ id: 'relay-model', name: 'relay-model', contextWindow: 131_072 }],
     });
 
     await auth.addEntry({ provider: providerId, model: 'relay-model', profileId: providerId });

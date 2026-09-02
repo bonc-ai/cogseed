@@ -291,9 +291,9 @@ describe("augmentPath", () => {
   });
 
   it("preserves user-supplied entries verbatim", () => {
-    const input = "/Users/me/bin:/usr/bin";
+    const input = "/Users/tester/bin:/usr/bin";
     const out = augmentPath(input, "darwin", {});
-    expect(out.split(":")).toContain("/Users/me/bin");
+    expect(out.split(":")).toContain("/Users/tester/bin");
     expect(out.split(":")).toContain("/usr/bin");
   });
 
@@ -305,19 +305,19 @@ describe("augmentPath", () => {
   });
 
   it("adds common Google Cloud SDK install locations on POSIX", () => {
-    const out = augmentPath("/usr/bin:/bin", "darwin", { HOME: "/Users/me" });
+    const out = augmentPath("/usr/bin:/bin", "darwin", { HOME: "/Users/tester" });
     const parts = out.split(":");
     expect(parts).toContain("/opt/homebrew/share/google-cloud-sdk/bin");
     expect(parts).toContain("/usr/local/share/google-cloud-sdk/bin");
-    expect(parts).toContain("/Users/me/google-cloud-sdk/bin");
+    expect(parts).toContain("/Users/tester/google-cloud-sdk/bin");
   });
 
   it("keeps user-supplied entries BEFORE canonical ones when the user put them first", () => {
-    // /Users/me/tools/bin is user-custom; it must remain ahead of the
+    // /Users/tester/tools/bin is user-custom; it must remain ahead of the
     // canonical /usr/bin entry that already existed in the input.
-    const input = "/Users/me/tools/bin:/usr/bin";
+    const input = "/Users/tester/tools/bin:/usr/bin";
     const out = augmentPath(input).split(":");
-    expect(out.indexOf("/Users/me/tools/bin")).toBeLessThan(out.indexOf("/usr/bin"));
+    expect(out.indexOf("/Users/tester/tools/bin")).toBeLessThan(out.indexOf("/usr/bin"));
   });
 
   it("uses Windows PATH delimiters without splitting drive letters", () => {

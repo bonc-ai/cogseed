@@ -282,6 +282,15 @@ export interface Agent {
    *  Missing field = auto. Authored by the agent edit UI dropdown, NOT the
    *  agent-edit LLM. See `bus.ts::buildOutputFormatHint`. */
   output_format?: OutputFormat;
+  /** Per-agent default model for in-process turns. Absent = follow the
+   *  global default entry (auth priority rank 1). CLI / p3394-gateway
+   *  agents ignore this — their model binding lives on `runtime.model`.
+   *  Authored by the agent edit UI, NOT the agent-edit LLM. */
+  default_model?: { provider: string; model: string };
+  /** Per-agent default thinking strength for in-process turns. Absent =
+   *  follow the global `thinking_level` preference. Only meaningful for
+   *  in-process agents. Authored by the agent edit UI. */
+  default_thinking?: 'off' | 'low' | 'high';
   source: AgentSource;
   created_at: string;
   updated_at: string;
@@ -338,6 +347,8 @@ export interface AgentRaw {
   state?: unknown;
   enabled_connectors?: unknown;
   output_format?: unknown;
+  default_model?: unknown;
+  default_thinking?: unknown;
   profile?: unknown;
   role?: unknown;
   dispatch?: unknown;
@@ -1001,6 +1012,14 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
   if (outputFormat && outputFormat !== 'auto') {
     agent.output_format = outputFormat;
   }
+  // Per-agent execution defaults: loose raw shapes collapse to "no field".
+  // A default_model whose provider/model strings are empty would silently
+  // break turn resolution, so blank parts drop the whole field.
+  const defModel = _normalizeAgentDefaultModel(raw.default_model);
+  if (defModel) agent.default_model = defModel;
+  if (raw.default_thinking === 'off' || raw.default_thinking === 'low' || raw.default_thinking === 'high') {
+    agent.default_thinking = raw.default_thinking;
+  }
   agent.interface_contract = normalizeAgentInterfaceContract(raw.interface_contract, rt, outputFormat);
   if (typeof raw.management_surface === 'string' && AGENT_MANAGEMENT_SURFACES.has(raw.management_surface)) {
     agent.management_surface = raw.management_surface as AgentManagementSurface;
@@ -1018,6 +1037,17 @@ export function normalizeAgent(raw: AgentRaw | null | undefined, source: AgentSo
   return agent;
 }
 
+/** Coerce a raw `default_model` field. Unknown / partial shapes return null
+ *  (= drop the field; the agent follows the global default entry). */
+function _normalizeAgentDefaultModel(raw: unknown): { provider: string; model: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const provider = typeof r.provider === 'string' ? r.provider.trim() : '';
+  const model = typeof r.model === 'string' ? r.model.trim() : '';
+  if (!provider || !model) return null;
+  return { provider, model };
+}
+
 /** Validate / coerce a raw `runtime` field. Unknown shapes return null
  *  (= drop the field; the agent falls back to the in-process default).
  *  Kept loose on purpose: front-end and edit-prompt may both write here
@@ -1030,9 +1060,9 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   if (kind !== 'cli' && kind !== 'p3394-gateway') return null;
   const cli = typeof r.cli === 'string' ? r.cli.trim() : '';
   if (!cli) return null;
-  const out: AgentRuntime = kind === 'p3394-gateway'
-    ? { kind: 'p3394-gateway', cli }
-    : { kind: 'cli', cli };
+  // 第二期通道收口：legacy 直连 `cli` runtime 一律读回为网关型——外接只有
+  // 一条执行路径（P3394 网关）。磁盘迁移见 _migrateLegacyCliRuntime。
+  const out: AgentRuntime = { kind: 'p3394-gateway', cli };
   if (typeof r.model === 'string' && r.model.trim()) out.model = r.model.trim();
   if (Array.isArray(r.custom_args)) {
     const args = r.custom_args.filter((s): s is string => typeof s === 'string');
@@ -1056,9 +1086,10 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
 
 /** True when this agent runs via a local CLI rather than in-process
  *  core-agent. Single source of truth — group_chat / chats / renderer
- *  all import this rather than re-checking `runtime?.kind` directly. */
+ *  all import this rather than re-checking `runtime?.kind` directly.
+ *  第二期收口：直连 `cli` 已升级为网关型，两者都算"本机 CLI 智能体"。 */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
-  return !!agent && agent.runtime?.kind === 'cli';
+  return !!agent && (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
 }
 
 /** True when this agent is a P3394-managed external agent (dispatch goes
@@ -1399,8 +1430,35 @@ function _enrichAgentSpecs(uid: string, specs: Agent[]): Promise<Agent[]> {
 
 /** Read the normalized catalog specs once. Full listings add mutable display
  * overlays below; chat-startup summaries deliberately do not. */
-async function _listAgentSpecs(): Promise<Agent[]> {
-  const stamp = _agentDirStamp();
+/**
+ * 第二期通道收口：把磁盘上 legacy `runtime.kind === 'cli'` 的 agent.json
+ * 一次性迁移为 p3394-gateway。原始内容备份为 `agent.json.pre-gateway.bak`
+ * （不覆盖已有备份，可手工回滚）；迁移失败时仅内存升级，不阻塞列表。
+ */
+async function _migrateLegacyCliRuntime(file: string, raw: AgentRaw): Promise<AgentRaw> {
+  const rt = raw.runtime as { kind?: string } | null | undefined;
+  if (!rt || typeof rt !== 'object' || rt.kind !== 'cli') return raw;
+  const backup = `${file}.pre-gateway.bak`;
+  const upgraded: AgentRaw = {
+    ...raw,
+    runtime: { ...rt, kind: 'p3394-gateway' },
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    if (!fs.existsSync(backup)) await fsp.copyFile(file, backup);
+    await fsp.writeFile(file, JSON.stringify(upgraded, null, 2) + '\n', 'utf8');
+    log.info('migrated legacy cli runtime to p3394-gateway', { file });
+    return upgraded;
+  } catch (err) {
+    log.warn('legacy cli runtime migration failed; in-memory upgrade only', {
+      file,
+      error: (err as Error).message,
+    });
+    return upgraded;
+  }
+}
+
+async function _listAgentSpecs(): Promise<Agent[]> {  const stamp = _agentDirStamp();
   let specs: Agent[];
   if (_agentListCache && _agentListCache.stamp === stamp) {
     specs = _agentListCache.data;
@@ -1422,6 +1480,7 @@ async function _listAgentSpecs(): Promise<Agent[]> {
           if (!fs.existsSync(full)) continue;
           let data: AgentRaw;
           try { data = await readJson<AgentRaw>(full); } catch { continue; }
+          data = await _migrateLegacyCliRuntime(full, data);
           const norm = normalizeAgent(data, source);
           if (!norm) continue;
           if (isMarketplaceSource(source)) {
@@ -1920,6 +1979,19 @@ export interface UpdateAgentFields {
    *   omitted              → untouched
    *  Authored by the agent edit UI dropdown. */
   output_format?: OutputFormat | null;
+  /** Three-way update for the per-agent default execution model (in-process
+   *  agents only):
+   *   object → set (validated; blank parts reject the whole update)
+   *   null   → drop (revert to following the global default entry)
+   *   omitted → untouched
+   *  Authored by the agent edit UI. */
+  default_model?: { provider: string; model: string } | null;
+  /** Three-way update for the per-agent default thinking strength:
+   *   level → set ('off' | 'low' | 'high')
+   *   null  → drop (revert to following the global preference)
+   *   omitted → untouched
+   *  Authored by the agent edit UI. */
+  default_thinking?: 'off' | 'low' | 'high' | null;
 }
 
 /**
@@ -2031,8 +2103,8 @@ async function _applyAgentUpdates(
     ? _normalizeRuntime((updates as any).runtime)
     : null;
   const effectiveCli = incomingRuntime
-    ? incomingRuntime.kind === 'cli'
-    : (_normalizeRuntime((data as any).runtime)?.kind === 'cli');
+    ? incomingRuntime.kind === 'p3394-gateway'
+    : (_normalizeRuntime((data as any).runtime)?.kind === 'p3394-gateway');
   if (effectiveCli) {
     if ('workflow' in (updates || {})) delete (updates as any).workflow;
     if ('skill_list' in (updates || {})) delete (updates as any).skill_list;
@@ -2139,6 +2211,26 @@ async function _applyAgentUpdates(
       (data as { output_format?: OutputFormat }).output_format = clean;
     }
   }
+  if (Object.prototype.hasOwnProperty.call(updates || {}, 'default_model')) {
+    const v = updates.default_model;
+    const clean = _normalizeAgentDefaultModel(v);
+    if (v === null || clean === null) {
+      // null (or an unusable shape) drops the field → follow the global
+      // default entry. Blank/partial payloads must not poison turn
+      // resolution, so they collapse the same way.
+      delete (data as { default_model?: unknown }).default_model;
+    } else {
+      (data as { default_model?: { provider: string; model: string } }).default_model = clean;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(updates || {}, 'default_thinking')) {
+    const v = updates.default_thinking;
+    if (v === 'off' || v === 'low' || v === 'high') {
+      (data as { default_thinking?: 'off' | 'low' | 'high' }).default_thinking = v;
+    } else {
+      delete (data as { default_thinking?: unknown }).default_thinking;
+    }
+  }
   if (Object.prototype.hasOwnProperty.call(updates || {}, 'icon')) {
     const v = (updates as any).icon;
     if (avatars.isKnownIcon(v)) data.icon = v;
@@ -2182,10 +2274,10 @@ async function _applyAgentUpdates(
     // detail-page selector; we mirror it here so the rule survives
     // any other update path (tests, future scripts, IPC misuse).
     const existingKind: 'cli' | 'in_process' = data.runtime &&
-      _normalizeRuntime(data.runtime)?.kind === 'cli' ? 'cli' : 'in_process';
+      _normalizeRuntime(data.runtime)?.kind === 'p3394-gateway' ? 'cli' : 'in_process';
     const incomingKind: 'cli' | 'in_process' | null = v === null
       ? 'in_process'
-      : (_normalizeRuntime(v)?.kind === 'cli' ? 'cli' : 'in_process');
+      : (_normalizeRuntime(v)?.kind === 'p3394-gateway' ? 'cli' : 'in_process');
     if (incomingKind !== null && incomingKind !== existingKind) {
       log.warn(`agent ${agentId}: ignored runtime kind switch ${existingKind} → ${incomingKind}`);
     } else if (v === null) {
@@ -2282,7 +2374,7 @@ export async function addCustomAgentMemory(agentId: string, content: string) {
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
   const res = addAgentEntry(getActiveUserId(), agentId, content);
   if (res.ok) _invalidateAgentListCache();
   return res;
@@ -2292,7 +2384,7 @@ export async function removeCustomAgentMemory(agentId: string, oldText: string) 
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
 
   const fileRes = removeAgentEntry(getActiveUserId(), agentId, oldText);
   if (fileRes.ok) {
@@ -2330,7 +2422,7 @@ export async function updateCustomAgentMemory(agentId: string, oldText: string, 
   if (!agentId || !safeId(agentId)) return { ok: false, error: 'invalid agent_id', entries: [], usage: { current: 0, limit: 0 } };
   const target = await _resolveAgentMemoryTarget(agentId);
   if (!target) return { ok: false, error: 'agent not found or read-only', entries: [], usage: { current: 0, limit: 0 } };
-  if (_normalizeRuntime(target.data.runtime)?.kind === 'cli') return _agentMemoryNotSupportedForExternalResult();
+  if (_normalizeRuntime(target.data.runtime)?.kind === 'p3394-gateway') return _agentMemoryNotSupportedForExternalResult();
   const res = replaceAgentEntry(getActiveUserId(), agentId, oldText, content);
   if (res.ok) _invalidateAgentListCache();
   return res;

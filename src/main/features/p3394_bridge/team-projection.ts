@@ -220,6 +220,16 @@ export async function projectP3394NodeToTeam(input: {
   const nodeId = String(input.nodeId || '').trim();
   if (!nodeId || nodeId === 'cogseed') return { projected: false, reason: 'skip_local' };
 
+  // 引导未完成时，阻止自动创建 CLI Agent（用户必须在引导中主动"连接"）
+  try {
+    const onboardingState = await import('../onboarding_state');
+    if (!onboardingState.getOnboardingCompleted()) {
+      return { projected: false, reason: 'onboarding_not_completed' };
+    }
+  } catch (err) {
+    log.warn('onboarding check failed in team projection', { error: err instanceof Error ? err.message : String(err) });
+  }
+
   // 聚焦本地：只有同机节点（回环端点）自动投影；无端点的纯客户端不投影。
   const endpoints = (input.endpoints ?? []).filter((v) => typeof v === 'string' && v.startsWith('http'));
   const allLoopback = endpoints.length > 0 && endpoints.every((endpoint) => {

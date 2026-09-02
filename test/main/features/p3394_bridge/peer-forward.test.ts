@@ -49,7 +49,7 @@ function makeDeps(overrides: Partial<P3394PeerForwardDeps> = {}): {
     ['node-a', { identity: { agent_id: 'node-a' }, endpoints: ['http://127.0.0.1:9100'] }],
     ['node-b', { identity: { agent_id: 'node-b' }, endpoints: ['http://127.0.0.1:9200'] }],
     // 远程/非回环 target（H-03：默认不可转发，需显式授权）。
-    ['node-remote', { identity: { agent_id: 'node-remote' }, endpoints: ['http://192.168.1.50:9000'] }],
+    ['node-remote', { identity: { agent_id: 'node-remote' }, endpoints: ['http://192.0.2.50:9000'] }],
   ]);
   const deps: P3394PeerForwardDeps = {
     resolveAgent: (id) => {

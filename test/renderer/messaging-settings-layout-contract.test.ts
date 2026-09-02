@@ -97,6 +97,21 @@ describe('messaging connection-management layout contract', () => {
     expect(header).not.toContain('data-ui-icon="arrow-left"');
   });
 
+  it('edits the channel-bridge sender allowlist per instance', () => {
+    // 每个渠道实例的设置面板有白名单卡：开关（关闭=显式清除 null）+ 名单编辑
+    expect(rendererSource).toContain('function channelBridgeAllowlistCard');
+    expect(rendererSource).toContain("settingsSection('messaging.section.bridge_allowlist'");
+    expect(rendererSource).toContain('channelBridgeSenderAllowlist');
+    // 四个渠道面板都插入白名单卡
+    for (const panel of ['renderFeishuPanel', 'renderTelegramPanel', 'renderWecomPanel', 'renderWechatPanel']) {
+      const body = rendererSource.slice(
+        rendererSource.indexOf(`function ${panel}`),
+        rendererSource.indexOf('function ', rendererSource.indexOf(`function ${panel}`) + 10),
+      );
+      expect(body).toContain('channelBridgeAllowlistCard(instance)');
+    }
+  });
+
   it('uses restrained neutral surfaces for navigation, the current account, and removal', () => {
     expect(rendererStyle).toMatch(/\.messaging-menu\s*\{[^{}]*background:\s*color-mix\(in srgb, var\(--surface\) 97%, var\(--text\) 3%\);/);
     expect(rendererStyle).toMatch(/\.messaging-menu-item\.is-active\s*\{[^{}]*background:\s*color-mix\(in srgb, var\(--primary\) 6%, var\(--surface\)\);/);

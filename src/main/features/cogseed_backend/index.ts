@@ -5,9 +5,24 @@ export { readCogSeedTaskEvents } from './event-store';
 export * as cogseedExecutionRecords from './cogseed-execution-store';
 export { cogseedConnectorManager, createCogSeedConnectorManager } from './connector-manager';
 export { cogseedKbManager, createCogSeedKbManager } from './cogseed-kb-store';
-export { retryCogSeedTask, transitionCogSeedTask, markCogSeedTaskRecoverable } from './lifecycle';
+export { archiveCogSeedTask, retryCogSeedTask, transitionCogSeedTask, markCogSeedTaskRecoverable } from './lifecycle';
 export { recoverCogSeedTasks } from './recovery';
-export { createCogSeedTask, readCogSeedTask, updateCogSeedTask, listCogSeedTasks, getOrCreateCogSeedSession, readCogSeedSession, listCogSeedSessions } from './task-store';
+export {
+  classifyCogSeedRuntimeHealth,
+  createCogSeedRuntimeHealthWatchdog,
+  DEFAULT_COGSEED_RUNTIME_ORPHAN_GRACE_MS,
+  DEFAULT_COGSEED_RUNTIME_SLOW_THRESHOLD_MS,
+  DEFAULT_COGSEED_RUNTIME_WATCHDOG_INTERVAL_MS,
+} from './runtime-health-watchdog';
+export type {
+  CogSeedExecutionProcessHealth,
+  CogSeedRuntimeHealthDecision,
+  CogSeedRuntimeHealthScanReport,
+  CogSeedRuntimeHealthState,
+  CogSeedRuntimeHealthWatchdog,
+} from './runtime-health-watchdog';
+export { cogseedWorktreeManager, createCogSeedWorktreeManager } from './worktree-manager';
+export { createCogSeedTask, readCogSeedTask, updateCogSeedTask, listCogSeedTasks, getOrCreateCogSeedSession, readCogSeedSession, listCogSeedSessions, setCogSeedSessionDisplayName } from './task-store';
 export type { CogSeedActorRecord, CogSeedActorRole, CogSeedCommanderSession, CogSeedMemberSession, CogSeedSessionKind, CogSeedSessionLifecycleState, CogSeedSessionLineage, CogSeedTaskEvent, CogSeedTaskRecord, CogSeedTaskStatus, CogSeedSessionRecord } from './types';
 
 export { cogseedOfficeAdapter, createCogSeedOfficeAdapter } from './office-adapter';
