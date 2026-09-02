@@ -67,6 +67,13 @@ function extractClaudeResultUsage(ev) {
   if (typeof u.cache_read_input_tokens === 'number') out.cacheRead = u.cache_read_input_tokens;
   if (typeof u.cache_creation_input_tokens === 'number') out.cacheCreate = u.cache_creation_input_tokens;
   if (typeof ev.total_cost_usd === 'number' && Number.isFinite(ev.total_cost_usd)) out.costUsd = ev.total_cost_usd;
+  // 思考 token 单列（DSH 口径：reasoning 与最终输出分开统计；速度与 ↓
+  // 展示都按「思考+输出」合计）。claude 把它放在 usage.output_tokens_details
+  // .thinking_tokens——真实计费量，与被虚报的 output_tokens 无关。
+  const details = u.output_tokens_details;
+  if (details && typeof details === 'object' && typeof details.thinking_tokens === 'number') {
+    out.reasoning = details.thinking_tokens;
+  }
   // 实际模型名三路径（新版 claude 把 per-model 用量挪进 result 帧的
   // modelUsage——canonicalModel 是规范名；旧版走 message.model / 根级
   // model）——metrics.model 是会话统计 ctx 分母的解析键。

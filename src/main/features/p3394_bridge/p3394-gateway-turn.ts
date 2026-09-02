@@ -35,6 +35,8 @@ export interface P3394GatewayTurnResult {
     usage?: {
       inputTokens?: number;
       outputTokens?: number;
+      /** 思考 token（DSH 口径单列；claude 的 thinking_tokens）。 */
+      reasoningTokens?: number;
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       costUsd?: number;
@@ -176,6 +178,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     const usage: NonNullable<NonNullable<P3394GatewayTurnResult['metrics']>>['usage'] = {};
     if (typeof usageIn?.input === 'number') usage.inputTokens = usageIn.input;
     if (typeof usageIn?.output === 'number') usage.outputTokens = usageIn.output;
+    if (typeof usageIn?.reasoning === 'number') usage.reasoningTokens = usageIn.reasoning;
     if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
     if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
     if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;

@@ -37,19 +37,24 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 
 function messageMetricsLine(metrics) {
   if (!metrics || typeof metrics !== 'object') return null;
   const { startedAt, firstTokenAt, completedAt, usage, toolCalls } = metrics;
-  const hasUsage = usage && (num(usage.inputTokens) + num(usage.outputTokens)
+  const hasUsage = usage && (num(usage.inputTokens) + num(usage.outputTokens) + num(usage.reasoningTokens)
     + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) > 0;
   if (typeof startedAt !== 'number' || typeof completedAt !== 'number') return null;
   const durationMs = Math.max(0, completedAt - startedAt);
   const ttft = typeof firstTokenAt === 'number' ? Math.max(0, firstTokenAt - startedAt) : null;
   const decodeMs = typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null;
   const hasTools = num(toolCalls) > 0;
-  const rateText = !hasTools && decodeMs > 0 && hasUsage && num(usage.outputTokens) > 0
-    ? formatRate(num(usage.outputTokens) / (decodeMs / 1_000))
+  // DSH 口径：速度 = 生成阶段（decode）吞吐，分子是「思考 + 输出」合计
+  // （reasoning 与最终文本都是逐 token 生成的）。
+  const genTokens = num(usage && usage.reasoningTokens) + num(usage && usage.outputTokens);
+  const rateText = !hasTools && decodeMs > 0 && hasUsage && genTokens > 0
+    ? formatRate(genTokens / (decodeMs / 1_000))
     : null;
   if (!hasUsage && ttft === null) return null;
   const titleLines = [];
   if (hasUsage) {
+    if (num(usage.reasoningTokens) > 0) titleLines.push(`思考 ${formatTokens(usage.reasoningTokens)} tok`);
+    if (num(usage.outputTokens) > 0) titleLines.push(`输出 ${formatTokens(usage.outputTokens)} tok`);
     if (num(usage.cacheReadTokens) > 0) titleLines.push(`缓存读 ${formatTokens(usage.cacheReadTokens)} tok`);
     if (num(usage.cacheWriteTokens) > 0) titleLines.push(`缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`);
   }
@@ -63,7 +68,8 @@ function messageMetricsLine(metrics) {
     latencyText: ttft === null ? null : formatLatency(ttft),
     rateText,
     inText: hasUsage ? formatTokens(num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) : null,
-    outText: hasUsage ? formatTokens(num(usage.outputTokens)) : null,
+    // ↓ = 思考 + 输出合计（DSH 口径；拆分悬停可见）。
+    outText: hasUsage ? formatTokens(genTokens) : null,
     costText: costUsd !== null
       ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : null,
@@ -83,6 +89,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
   let decodeTok = 0;
   let input = 0;
   let output = 0;
+  let reasoning = 0;
   let cacheRead = 0;
   let cacheWrite = 0;
   let reportedCostUsd = 0;   // CLI/网关自报成本合计（美元）
@@ -98,19 +105,22 @@ function foldSessionMetrics(metricsList, opts = {}) {
       ttftMs += Math.max(0, m.firstTokenAt - m.startedAt);
       ttftN += 1;
       const d = Math.max(0, m.completedAt - m.firstTokenAt);
-      const u = m.usage || {};
-      if (num(u.outputTokens) > 0) { decodeMs += d; decodeTok += num(u.outputTokens); }
+      const u0 = m.usage || {};
+      // DSH 口径：decode 吞吐分子 = 思考 + 输出。
+      const gen = num(u0.reasoningTokens) + num(u0.outputTokens);
+      if (gen > 0) { decodeMs += d; decodeTok += gen; }
     }
     const u = m.usage || {};
     input += num(u.inputTokens);
     output += num(u.outputTokens);
+    reasoning += num(u.reasoningTokens);
     cacheRead += num(u.cacheReadTokens);
     cacheWrite += num(u.cacheWriteTokens);
     if (typeof u.costUsd === 'number' && Number.isFinite(u.costUsd) && u.costUsd >= 0) {
       reportedCostUsd += u.costUsd;
       reportedCostTurns += 1;
     }
-    if (num(u.inputTokens) + num(u.outputTokens) > 0) {
+    if (num(u.inputTokens) + num(u.outputTokens) + num(u.reasoningTokens) > 0) {
       lastUsage = u;
       lastUsageModel = typeof m.model === 'string' && m.model ? m.model : null;
     }
@@ -147,16 +157,16 @@ function foldSessionMetrics(metricsList, opts = {}) {
   if (reportedCostTurns > 0) {
     costText = `$${reportedCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     costReported = true;
-  } else if (opts.price && (totalIn > 0 || output > 0)) {
-    // 单价为 ¥/百万 token，费用需除以 1_000_000
-    const cost = (input * num(opts.price.in) + output * num(opts.price.out)
+  } else if (opts.price && (totalIn > 0 || output + reasoning > 0)) {
+    // 单价为 ¥/百万 token，费用需除以 1_000_000（思考与输出同价计）
+    const cost = (input * num(opts.price.in) + (output + reasoning) * num(opts.price.out)
       + cacheRead * num(opts.price.cacheRead) + cacheWrite * num(opts.price.cacheWrite)) / 1_000_000;
     costText = `¥${cost.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   return {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
-    inText: formatTokens(totalIn), outText: formatTokens(output), costText, costReported,
+    inText: formatTokens(totalIn), outText: formatTokens(output + reasoning), costText, costReported,
   };
 }
 
