@@ -30,6 +30,11 @@ function errResult(code: string, msg: string): ToolResult {
   return { content: `${code}: ${msg}`, isError: true };
 }
 
+/** Lookup command for a globally installed P3394 gateway on this platform. */
+function gatewayLookupCommand(): string {
+  return process.platform === 'win32' ? 'where p3394-gateway' : 'command -v p3394-gateway';
+}
+
 /** P3394 接入提示词（单段，可直接复制发给对方智能体——用户视角一个提示词完成）。
  *  动态注入本机真实路径、安全证据与认证令牌；详细接入文档（云端/自研方式、
  *  预设参数、sscli 协议等）在 gateway 同目录 BOOTSTRAP.md / REVIEW.md。 */
@@ -47,7 +52,7 @@ function p3394BootstrapGuide(): string {
     '网关源码 ' + gatewayPath + '（约 900 行，可直接阅读）；接入文档与审查指南同目录：',
     gatewayDir + 'README.md 与 ' + gatewayDir + 'REVIEW.md。',
     '安全边界：默认仅监听 127.0.0.1、入站需 Bearer 令牌、任务只是按你的 CLI 模板执行、',
-    '无提权、会话留痕可审计。审查同意后：已装过直接 command -v p3394-gateway 启动；',
+    '无提权、会话留痕可审计。审查同意后：已装过直接 ' + gatewayLookupCommand() + ' 启动；',
     '否则 ' + authLine + ' 启动即可（不写系统配置、不加开机项、Ctrl-C 可停）。',
     '启动后你会自动向 Cogseed 注册（hello），注册完成我就能主动调用你；',
     '随后我会发协作任务，任务消息会写明协作对象与内容。不同意请说明理由。」',
@@ -93,7 +98,7 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
       "The reply is the peer's answer text; report it back to the user verbatim. " +
       'If the call fails (peer not registered or unreachable), do NOT retry blindly — tell the ' +
       'user in plain language that the other Agent needs the P3394 gateway, which is BUNDLED ' +
-      'with CogSeed (no NPM needed): run `command -v p3394-gateway` on that machine, or use the ' +
+      'with CogSeed (no NPM needed): run `' + gatewayLookupCommand() + '` on that machine, or use the ' +
       'CogSeed bundled copy under …/app.asar.unpacked/p3394-gateway/gateway.cjs (dev repo: ' +
       'p3394-gateway/gateway.cjs) and start it with node; only fall back to ' +
       '"npm install -g @cogseed/p3394-gateway" when neither exists (see the error message for details).',

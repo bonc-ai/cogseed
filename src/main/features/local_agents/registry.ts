@@ -17,7 +17,7 @@
  */
 
 import { createLogger } from '../../logger.js';
-import { whichBin } from './which.js';
+import { findBinRecursively, invalidateRecursiveCache, whichBin } from './which.js';
 import { detectCliAuth } from './auth-state.js';
 import { checkMinVersion, detectVersion, parseSemver, MIN_VERSIONS } from './version.js';
 import * as fs from 'node:fs/promises';
@@ -98,11 +98,21 @@ export function localCliSearchDirs(
     if (env.NVM_SYMLINK) dirs.push(env.NVM_SYMLINK);
     if (type === 'codex' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'));
+      // OpenAI Codex Windows App keeps the CLI under bin/<hash>/codex.exe,
+      // outside PATH and npm; the `*` segment expands over version dirs.
+      dirs.push(path.win32.join(localAppData, 'OpenAI', 'Codex', 'bin', '*'));
     }
     if (type === 'workbuddy' && localAppData) {
       // WorkBuddy (Tencent) desktop is an Electron app; the bundled `codebuddy`
       // CLI lives under its unpacked asar (same layout as the macOS bundle).
       dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Some installers use %LOCALAPPDATA%\WorkBuddy directly (no "Programs").
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Layout variants (resources\<layer>\cli\bin and direct cli\bin).
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'cli', 'bin'));
     }
     return dirs;
   }
@@ -219,15 +229,23 @@ async function detectCodexPackageVersion(binPath: string): Promise<string | null
   catch { dir = path.dirname(binPath); }
 
   for (let i = 0; i < 6; i += 1) {
-    const pkgPath = path.join(dir, 'package.json');
-    try {
-      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-      if (pkg?.name === '@openai/codex' && typeof pkg.version === 'string') {
-        const sv = parseSemver(pkg.version);
-        if (sv) return `${sv.major}.${sv.minor}.${sv.patch}`;
+    // npm/pnpm/yarn global layout: <prefix>/node_modules/@openai/codex/package.json.
+    // The bare shim sits in <prefix>, so walking UP from it never reaches the
+    // package root — it lives one level DOWN under node_modules.
+    const pkgPaths = [
+      path.join(dir, 'package.json'),
+      path.join(dir, 'node_modules', '@openai', 'codex', 'package.json'),
+    ];
+    for (const pkgPath of pkgPaths) {
+      try {
+        const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+        if (pkg?.name === '@openai/codex' && typeof pkg.version === 'string') {
+          const sv = parseSemver(pkg.version);
+          if (sv) return `${sv.major}.${sv.minor}.${sv.patch}`;
+        }
+      } catch {
+        // Keep walking toward the npm package root.
       }
-    } catch {
-      // Keep walking toward the npm package root.
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -250,15 +268,21 @@ async function detectClaudePackageVersion(binPath: string): Promise<string | nul
   catch { dir = path.dirname(binPath); }
 
   for (let i = 0; i < 8; i += 1) {
-    const pkgPath = path.join(dir, 'package.json');
-    try {
-      const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-      if (pkg?.name === '@anthropic-ai/claude-code' && typeof pkg.version === 'string') {
-        const sv = parseSemver(pkg.version);
-        if (sv) return `${sv.major}.${sv.minor}.${sv.patch}`;
+    // npm/pnpm/yarn global layout: <prefix>/node_modules/@anthropic-ai/claude-code/package.json.
+    const pkgPaths = [
+      path.join(dir, 'package.json'),
+      path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'package.json'),
+    ];
+    for (const pkgPath of pkgPaths) {
+      try {
+        const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
+        if (pkg?.name === '@anthropic-ai/claude-code' && typeof pkg.version === 'string') {
+          const sv = parseSemver(pkg.version);
+          if (sv) return `${sv.major}.${sv.minor}.${sv.patch}`;
+        }
+      } catch {
+        // Keep walking toward the npm package root.
       }
-    } catch {
-      // Keep walking toward the npm package root.
     }
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -376,9 +400,13 @@ export async function detectAll(opts: { force?: boolean } = {}): Promise<LocalCl
 export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
   const envPath = process.env[ENV_KEYS[type]]?.trim();
   const candidate = envPath && envPath.length > 0 ? envPath : BIN_NAMES[type];
-  const resolved = await whichBin(candidate, {
+  const resolvedByPath = await whichBin(candidate, {
     extraDirs: envPath ? [] : await expandSearchDirs(localCliSearchDirs(type)),
   });
+  const isBareName = !path.isAbsolute(candidate) && !candidate.includes('/') && !candidate.includes('\\');
+  const resolved = resolvedByPath ?? (isBareName
+    ? await findBinRecursively(candidate, { env: process.env, home: os.homedir(), timeoutMs: 2_500 })
+    : null);
   if (!resolved) {
     return {
       type, path: null, version: null, available: false,
@@ -439,4 +467,5 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
 export function invalidateCache(): void {
   cache = null;
   expandCache = null;
+  invalidateRecursiveCache();
 }

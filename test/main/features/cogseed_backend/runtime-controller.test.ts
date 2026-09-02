@@ -244,8 +244,13 @@ describe('CogSeed Runtime controller', () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const deliveries = await import('../../../../src/main/features/cogseed_backend/result-delivery-store');
     let writebackAvailable = false;
+    let rejectInitialWriteback!: () => void;
+    const initialWritebackRejected = new Promise<void>((resolve) => { rejectInitialWriteback = resolve; });
     const projectTaskEvent = vi.fn(async (input: any) => {
-      if (input.event.type === 'task.completed' && !writebackAvailable) throw new Error('writeback unavailable');
+      if (input.event.type === 'task.completed' && !writebackAvailable) {
+        rejectInitialWriteback();
+        throw new Error('writeback unavailable');
+      }
       return 'projected';
     });
     const controller = createCogSeedRuntimeController({
@@ -260,6 +265,7 @@ describe('CogSeed Runtime controller', () => {
       agentId: 'agent-projection-recovery',
     });
 
+    await initialWritebackRejected;
     await eventually(async () => {
       await expect(tasks.readCogSeedTask(USER, task.taskId)).resolves.toMatchObject({
         status: 'completed',

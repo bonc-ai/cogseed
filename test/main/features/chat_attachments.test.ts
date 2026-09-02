@@ -230,9 +230,11 @@ describe('chat_attachments › uploadAttachment', () => {
 
     expect(results.every((r) => r.ok)).toBe(true);
     if (!results.every((r) => r.ok)) return;
+    const stored = results[0];
+    if (!stored.ok) return;
     expect(new Set(results.map((r) => r.info.name)).size).toBe(1);
     expect(results.filter((r) => r.reused).length).toBe(2);
-    expect(fs.readdirSync(attDir()).filter((n) => !n.startsWith('.'))).toEqual(['parallel-a.txt']);
+    expect(fs.readdirSync(attDir()).filter((n) => !n.startsWith('.'))).toEqual([stored.info.name]);
   });
 
   it('imports a workspace file by path into the attachment pool', async () => {

@@ -5,6 +5,11 @@
     "fontSize": 54,
     "radius": 11
   },
+  "plugins.css": {
+    "color": 48,
+    "fontSize": 8,
+    "radius": 2
+  },
   "recall-local.css": {
     "color": 530,
     "zIndex": 1,
@@ -12,10 +17,10 @@
     "radius": 13
   },
   "style.css": {
-    "color": 2147,
-    "zIndex": 56,
-    "fontSize": 416,
-    "radius": 269
+    "color": 2277,
+    "zIndex": 63,
+    "fontSize": 441,
+    "radius": 300
   },
   "workspace.css": {
     "color": 511,

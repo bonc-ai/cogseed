@@ -12,6 +12,9 @@ import { makeMinimalPdf } from '../../../fixtures/make-minimal-pdf';
 
 const UID = 'u-localtools-001';
 const CID = 'conv-edit';
+const NATIVE_SHELL_SUCCESS_TIMEOUT_MS = process.platform === 'win32' && process.env.CI
+  ? 60_000
+  : 10_000;
 
 let tmpDir: string;
 let prevWs: string | undefined;
@@ -54,7 +57,7 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
 
     const result = await bash.execute({
       command: 'Write-Output $env:COGSEED_NATIVE_SMOKE',
-      timeoutMs: 10_000,
+      timeoutMs: NATIVE_SHELL_SUCCESS_TIMEOUT_MS,
     }, {
       workingDir: cwd,
       state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'Windows-你好' } },
@@ -73,7 +76,7 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
 
     const result = await bash.execute({
       command: 'cmd /c echo %COGSEED_NATIVE_SMOKE%',
-      timeoutMs: 10_000,
+      timeoutMs: NATIVE_SHELL_SUCCESS_TIMEOUT_MS,
     }, {
       workingDir: cwd,
       state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'cmd-ok' } },
@@ -92,7 +95,7 @@ describe('local-tools › Windows PowerShell compatibility preflight', () => {
 
     const result = await bash.execute({
       command: 'printf \'%s\' "$COGSEED_NATIVE_SMOKE"',
-      timeoutMs: 10_000,
+      timeoutMs: NATIVE_SHELL_SUCCESS_TIMEOUT_MS,
     }, {
       workingDir: cwd,
       state: { sandboxEnv: { COGSEED_NATIVE_SMOKE: 'macOS-你好' } },

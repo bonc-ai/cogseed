@@ -312,6 +312,18 @@ describe('local_agents/registry › Windows GUI search paths', () => {
       'D:\\pnpm',
       'C:\\Program Files\\nodejs',
       'C:\\Users\\alice\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\OpenAI\\Codex\\bin\\*',
+    ]));
+
+    const wbDirs = localCliSearchDirs('workbuddy', 'win32', {
+      APPDATA: 'C:\\Users\\alice\\AppData\\Roaming',
+      LOCALAPPDATA: 'C:\\Users\\alice\\AppData\\Local',
+    }, 'C:\\Users\\alice');
+    expect(wbDirs).toEqual(expect.arrayContaining([
+      'C:\\Users\\alice\\AppData\\Local\\Programs\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\resources\\*\\cli\\bin',
+      'C:\\Users\\alice\\AppData\\Local\\WorkBuddy\\cli\\bin',
     ]));
   });
 });

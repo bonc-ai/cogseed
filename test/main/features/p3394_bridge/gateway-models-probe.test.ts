@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import * as os from 'node:os';
+import * as path from 'node:path';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -415,12 +417,13 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
   });
 
   it('enumerates the ACTIVE provider models + current default from hermes config', () => {
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-home');
     const result = probeConfigModels({
       configModels: 'hermes',
-      env: { HOME: '/fake-home' },
+      env: { HOME: fakeHome },
       readFileSync: (p: string) => {
-        if (p === '/fake-home/.hermes/config.yaml') return HERMES_YAML;
-        if (p === '/fake-home/.hermes/provider_models_cache.json') return HERMES_CACHE;
+        if (p === path.join(fakeHome, '.hermes', 'config.yaml')) return HERMES_YAML;
+        if (p === path.join(fakeHome, '.hermes', 'provider_models_cache.json')) return HERMES_CACHE;
         throw new Error('ENOENT: ' + p);
       },
     }) as { status: string; current: string; models: Array<{ id: string }> };
@@ -431,6 +434,7 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
   });
 
   it('enumerates provider models with metadata + the default primary from openclaw config', () => {
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-home');
     const OPENCLAW_JSON = JSON.stringify({
       models: { mode: 'merge', providers: {
         minimax: { baseUrl: 'x', api: 'anthropic-messages', models: [
@@ -442,9 +446,9 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     });
     const result = probeConfigModels({
       configModels: 'openclaw',
-      env: { HOME: '/fake-home' },
+      env: { HOME: fakeHome },
       readFileSync: (p: string) => {
-        if (p === '/fake-home/.openclaw/openclaw.json') return OPENCLAW_JSON;
+        if (p === path.join(fakeHome, '.openclaw', 'openclaw.json')) return OPENCLAW_JSON;
         throw new Error('ENOENT: ' + p);
       },
     }) as { status: string; current: string; models: Array<{ id: string; label: string; contextWindow?: number }> };

@@ -34,6 +34,12 @@ afterEach(() => {
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
+function writeNodeCli(name: string, body: string): string {
+  const file = path.join(os.tmpdir(), `${name}-${process.pid}-${Date.now()}.cjs`);
+  fs.writeFileSync(file, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+  return file;
+}
+
 describe('P3394 external-agent gateway host', () => {
   it('maps every supported CLI to a gateway preset node id', () => {
     expect(p3394ExternalGatewayIdFor('claude')).toBe('claude');
@@ -72,9 +78,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const echoCli = writeNodeCli('p3394-echo-cli', "process.stdout.write(process.argv.slice(2).join(' '));");
     try {
       await stopExternalGateway('hermes');
-      const started = await startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      const started = await startExternalGateway({ cli: 'hermes', binPath: echoCli, alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok, 'start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
       if (!started.ok) throw new Error(started.error);
       const dialer = new P3394HttpChannel('ext-task-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
@@ -89,11 +96,13 @@ describe('P3394 external-agent gateway host', () => {
       expect(response.task_id).toBe('tsk-ext-task-1');
       expect(response.payload.parts[0].type).toBe('text');
       expect(response.payload.parts[0].text).toContain('hello external gateway');
+      expect(fs.existsSync(path.join(path.dirname(registryFile), 'external-gateways', 'hermes.log'))).toBe(false);
       await dialer.close();
     } finally {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(echoCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
@@ -161,6 +170,66 @@ describe('P3394 external-agent gateway host', () => {
     }
   }, 60_000);
 
+  it('runs an absolute extensionless Windows shim through its .cmd sibling', async () => {
+    if (process.platform !== 'win32') return;
+    const token = 'ext-windows-shim-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-windows-shim-'));
+    const shim = path.join(shimDir, 'agent shim');
+    const cliScript = path.join(shimDir, 'fake-agent.cjs');
+    const previousArgs = process.env.P3394_AGENT_CLI_ARGS;
+    fs.writeFileSync(cliScript, "process.stdout.write(process.argv.slice(2).join(' '));\n");
+    // npm on Windows leaves a POSIX shim beside the executable .cmd entry.
+    fs.writeFileSync(shim, '#!/bin/sh\n');
+    fs.writeFileSync(`${shim}.cmd`, '@echo off\r\nnode "%~dp0fake-agent.cjs" %*\r\n');
+    process.env.P3394_AGENT_CLI_ARGS = '-p {message}';
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* isolate */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('ext-windows-shim-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    let replyResolve: ((value: unknown) => void) | null = null;
+    const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
+    channel.subscribe((envelope) => {
+      if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        replyResolve?.(envelope);
+        return;
+      }
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      if (registry.resolve(senderId).ok === false) {
+        registry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const port = ((channel as unknown as { server: import('node:http').Server }).server.address() as { port: number }).port;
+    try {
+      await stopExternalGateway('hermes');
+      const started = await startExternalGateway({ cli: 'hermes', binPath: shim, bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(started.ok).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const dialer = new P3394HttpChannel('ext-windows-shim-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
+      await dialer.dial('hermes');
+      await dialer.send({
+        spec_version: 'p3394/1.0', message_id: 'msg-windows-shim', session_id: 'ses-windows-shim', task_id: 'tsk-windows-shim', kind: 'task', performative: 'request',
+        sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'windows shim works' }] },
+        extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token }, idempotency_key: 'idem-windows-shim',
+      } as never);
+      const response = await Promise.race([reply, new Promise((_, reject) => setTimeout(() => reject(new Error('windows shim reply timeout')), 10_000))]) as { payload: { parts: Array<{ text?: string }> } };
+      expect(response.payload.parts[0].text).toContain('windows shim works');
+      await dialer.close();
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(shimDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      if (previousArgs === undefined) delete process.env.P3394_AGENT_CLI_ARGS;
+      else process.env.P3394_AGENT_CLI_ARGS = previousArgs;
+    }
+  }, 60_000);
+
   it('V-03：真实 CLI 执行失败 → gateway 显式错误回信 → CogSeed 感知失败（不静默）', async () => {    const token = 'ext-fail-token';
     const registryFile = p3394StateFile('p3394-peers.json');
     try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
@@ -189,11 +258,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const failingCli = writeNodeCli('p3394-fail-cli', 'process.exit(3);');
     try {
       await stopExternalGateway('hermes');
-      // 可执行脚本以非零码（3）退出——真实 CLI 执行失败路径（macOS 无 /bin/false）。
-      const failingCli = path.join(os.tmpdir(), 'p3394-fail-cli-' + Date.now() + '.sh');
-      fs.writeFileSync(failingCli, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+      // 跨平台 Node CLI 以非零码（3）退出，验证真实执行失败回信路径。
       const started = await startExternalGateway({ cli: 'hermes', binPath: failingCli, alias: '失败 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok).toBe(true);
       if (!started.ok) throw new Error(started.error);
@@ -212,11 +280,11 @@ describe('P3394 external-agent gateway host', () => {
       expect(text).toContain('p3394_gateway_error');
       expect(text).toMatch(/agent exited 3/);
       await dialer.close();
-      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     } finally {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
