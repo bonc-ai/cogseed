@@ -9098,9 +9098,10 @@ function _userPriceForStats() {
 
 // 当前模型 contextWindow：渲染层没有现成全局，走已有 auth.* IPC（不新造）
 // ——auth.listEntries[0] 是默认模型（与 model-chip 同源），auth.listModels
-// 的 curated 分支透传 contextWindow；未策展/custom provider 的 fallback
-// 分支没有该字段 → null，统计行只显示已用量。结果缓存 60s（负结果也在
-// 内，避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
+// 透传 contextWindow（curated 走目录；custom provider 走存储值+公共模型
+// 目录解析——实测 deepseek 自定义项可解析 1M）。解析不到的模型该字段为
+// null → 统计行只显示已用量（诚实省略）。结果缓存 60s（负结果也在内，
+// 避免每条消息挂载都打 IPC）；取到非空窗口后异步重刷统计行补分母。
 let _statsModelWindowCache = null; // { value: number|null, at: ms }
 function getCurrentModelContextWindow() {
   const now = Date.now();
