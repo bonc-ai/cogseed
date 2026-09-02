@@ -9173,12 +9173,9 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
   }
   if (f.ttftAvgText) {
-    segs.push({
-      k: t('chat.stats.speedK'),
-      v: f.rateText
-        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
-        : f.ttftAvgText,
-    });
+    // 速率段 2026-09-03 下线（口径反复修正未达标，见 foldSessionMetrics
+    // 的 rateText——计算与数据采集保留，显示待重做后恢复）。
+    segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
   if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
@@ -9258,7 +9255,6 @@ function _mountMsgMeta(ph, metrics) {
   const parts = [];
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
-  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
   if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
   if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
