@@ -2,7 +2,7 @@
 # 凭证一律 env: 引用，本文件不存明文密钥。
 class_profile: v1
 class_id: cohort-A
-platform_url: "http://localhost:3000"      # 或线上 http://49.233.169.16
+platform_url: "http://localhost:3000"
 
 feishu:
   app_id_ref: "env:FEISHU_APP_ID"
