@@ -638,4 +638,46 @@ describe('spaces › listSpaces 最近活跃会话（last_conversation_*）', ()
     expect(meBusy?.last_conversation_title).toBe('最近任务');
     expect(meBusy?.last_conversation_at).toBeTruthy();
   });
+  it('updates share permission fields (shared/join_mode/member_permission)', async () => {
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '权限测试空间' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const sid = created.space.space_id;
+
+    const upd = await spaces.updateSpace(TEST_UID, sid, {
+      shared: false,
+      join_mode: 'apply',
+      member_permission: 'view_only',
+    });
+    expect(upd.ok).toBe(true);
+    if (!upd.ok) return;
+    expect(upd.space.shared).toBe(false);
+    expect(upd.space.join_mode).toBe('apply');
+    expect(upd.space.member_permission).toBe('view_only');
+
+    // 再切回公开+直接加入
+    const upd2 = await spaces.updateSpace(TEST_UID, sid, {
+      shared: true,
+      join_mode: 'direct',
+      member_permission: 'view_export',
+    });
+    expect(upd2.ok).toBe(true);
+    if (!upd2.ok) return;
+    expect(upd2.space.shared).toBe(true);
+    expect(upd2.space.join_mode).toBe('direct');
+    expect(upd2.space.member_permission).toBe('view_export');
+  });
+
+  it('rejects invalid join_mode / member_permission', async () => {
+    const spaces = await loadSpaces();
+    const created = await spaces.createSpace(TEST_UID, { name: '权限测试空间2' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const badJoin = await spaces.updateSpace(TEST_UID, created.space.space_id, { join_mode: 'weird' as never });
+    expect(badJoin.ok).toBe(false);
+    const badPerm = await spaces.updateSpace(TEST_UID, created.space.space_id, { member_permission: 'weird' as never });
+    expect(badPerm.ok).toBe(false);
+  });
 });
+;

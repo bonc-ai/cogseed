@@ -22,6 +22,8 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as shareFeishu from '../features/share/feishu-share';
+import * as personalContextManager from '../features/personal_context/manager';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
@@ -1445,7 +1447,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const {
       spaceId, name, icon, template_id, primary_template_id, secondary_template_ids,
       space_type, sustained_outcome, instructions, base_agent, base_agents,
-      main_skill_ref, gate_status,
+      main_skill_ref, gate_status, shared, join_mode, member_permission,
     } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.updateSpace(ctx.userId, spaceId, {
@@ -1460,6 +1462,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'gate_status') ? { gate_status } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'pinned_at') ? { pinned_at: args.pinned_at } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'shared') ? { shared: args.shared } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'join_mode') ? { join_mode: args.join_mode } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'member_permission') ? { member_permission: args.member_permission } : {}),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
@@ -4142,6 +4147,60 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     } catch (err) {
       console.error('[kb.mindmap.exportPdf] failed:', err);
       return { ok: false };
+    }
+  },
+
+  // KB 分享到飞书（方案 A/B：空间 → 飞书 wiki 公网链接）。
+  // 复制链接/管理面板共用；need_reauthorize → 渲染层引导用 FEISHU_SHARE_SCOPES 重新授权。
+  'kb.share.toFeishu': async ({ spaceId, access, force } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    }
+    const mode = access === 'tenant' || access === 'private' || access === 'anyone' ? access : 'anyone';
+    return shareFeishu.pushSpaceToFeishu(ctx.userId, spaceId, { access: mode, force: force === true });
+  },
+  'kb.share.update': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    return shareFeishu.pushSpaceToFeishu(ctx.userId, spaceId, { force: true });
+  },
+  'kb.share.revoke': async ({ spaceId, mode } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    const revokeMode = mode === 'delete_space' ? 'delete_space' : 'close_link';
+    return shareFeishu.revokeFeishuShare(ctx.userId, spaceId, revokeMode);
+  },
+  'kb.share.list': async (_payload, ctx) => ({ items: await shareFeishu.listFeishuShares(ctx.userId) }),
+  'kb.share.get': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
+    return { state: await shareFeishu.getFeishuShare(ctx.userId, spaceId) };
+  },
+  'kb.share.needsUpdate': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { needed: false };
+    return shareFeishu.shareNeedsUpdate(ctx.userId, spaceId);
+  },
+  // 分享应用配置（独立于消息机器人）：appId/appSecret 存本机，供分享 OAuth 使用。
+  'kb.share.appConfig.get': async (_payload, ctx) => {
+    const cfg = await personalContextManager.getFeishuShareAppConfig(ctx.userId);
+    return { configured: cfg !== null, ...(cfg ? { appId: cfg.appId } : {}) }; // 不回传 appSecret
+  },
+  'kb.share.appConfig.set': async ({ appId, appSecret } = {}, ctx) => {
+    const aid = typeof appId === 'string' ? appId.trim() : '';
+    const secret = typeof appSecret === 'string' ? appSecret.trim() : '';
+    if (!aid || !secret) return { ok: false, error: '请填写 App ID 与 App Secret' };
+    await personalContextManager.setFeishuShareAppConfig(ctx.userId, { appId: aid, appSecret: secret });
+    return { ok: true };
+  },
+  'kb.share.appConfig.clear': async (_payload, ctx) => {
+    await personalContextManager.setFeishuShareAppConfig(ctx.userId, null);
+    return { ok: true };
+  },
+  // 分享授权：用分享专用应用凭据（或回退机器人凭据）发起写权限 OAuth
+  'kb.share.authorize': async (_payload, ctx) => {
+    try {
+      const result = await personalContextManager.beginShareAuthorize(ctx.userId);
+      return { ok: true, ...result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
     }
   },
 
