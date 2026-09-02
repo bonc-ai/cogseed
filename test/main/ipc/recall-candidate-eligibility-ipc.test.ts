@@ -2,7 +2,7 @@
  * 候选「可确认」契约在**真实 IPC 读口**上的回归护栏。
  *
  * `test/main/features/recall/candidate-eligibility-contract.test.ts` 已经在
- * service 层守住了同一批不变量（TG-01 / TG-02 / TG-06），但那一层看不到
+ * service 层守住了同一批不变量，但那一层看不到
  * 渲染层真正拿到的东西：能力判据是 `recall.candidates.list` 的 handler 现算
  * 现拼的 DTO 投影，「待我处理」是 `cognition.inbox.list` 的服务端读模型。
  * 两个 handler body 此前没有任何 IPC 级用例穿过——`test/main/ipc/recall.test.ts`
@@ -142,7 +142,7 @@ const findById = (candidates: CandidateDto[], id: string): CandidateDto => {
   return found;
 };
 
-describe('TG-06 候选可确认性在真实 IPC 读口上闭环', () => {
+describe('候选可确认性在真实 IPC 读口上闭环', () => {
   it('Case A 合格候选：list 说能确认 → inbox 出普通待办 → promote 真的落出正式资产', async () => {
     const candidates = await candidateService();
     const saved = await candidates.saveRecallCandidate(UID, {

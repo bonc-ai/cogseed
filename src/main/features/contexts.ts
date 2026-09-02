@@ -23,6 +23,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { shell } from 'electron';
@@ -221,16 +222,74 @@ export function isSupportedContextFileName(name: string): boolean {
   return isAllowedName(name);
 }
 
+/** 文件夹导入时单次扫描的文件上限（防超大目录拖垮主进程）。 */
+const MAX_FOLDER_IMPORT_FILES = 500;
+
+export interface ImportableFile {
+  /** 磁盘绝对路径（导入源）。 */
+  abs: string;
+  /** 相对所选文件夹的路径（不含文件夹名本身，用于镜像目录结构）。 */
+  rel: string;
+}
+
+/**
+ * 递归扫描一个本地目录，收集知识库白名单内的可导入文件（跳过隐藏项与
+ * 忽略目录），按名称排序，单次最多 MAX_FOLDER_IMPORT_FILES 个。
+ */
+export async function collectImportableFilesFromDir(absDir: string): Promise<ImportableFile[]> {
+  const out: ImportableFile[] = [];
+  async function walk(d: string, rel: string) {
+    if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+    let entries;
+    try { entries = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
+      if (e.name.startsWith('.') || CONTEXTS_IGNORE.has(e.name)) continue;
+      const relPath = rel ? `${rel}/${e.name}` : e.name;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) {
+        await walk(full, relPath);
+      } else if (e.isFile() && isSupportedContextFileName(e.name)) {
+        out.push({ abs: full, rel: relPath });
+      }
+    }
+  }
+  await walk(absDir, '');
+  return out;
+}
+
 // ── Listing / Reading ────────────────────────────────────────────────────
 
-export function listContextsTreeForUser(uid: string): ContextNode[] {
+/** 并发相同 uid 的树遍历 in-flight 去重（导入/树接口叠加时共享一次遍历）。
+ *  结果每次都是新鲜数据，不引入陈旧窗口。 */
+const _treeInFlight = new Map<string, Promise<ContextNode[]>>();
+
+export function listContextsTreeForUser(uid: string): Promise<ContextNode[]> {
+  const existing = _treeInFlight.get(uid);
+  if (existing) return existing;
+  const run = walkContextsTree(uid).then(
+    (tree) => {
+      if (_treeInFlight.get(uid) === run) _treeInFlight.delete(uid);
+      return tree;
+    },
+    (err) => {
+      if (_treeInFlight.get(uid) === run) _treeInFlight.delete(uid);
+      throw err;
+    },
+  );
+  _treeInFlight.set(uid, run);
+  return run;
+}
+
+async function walkContextsTree(uid: string): Promise<ContextNode[]> {
   const root = contextsRootForUser(uid);
   fs.mkdirSync(root, { recursive: true });
 
-  function walk(d: string, rel = ''): ContextNode[] {
+  async function walk(d: string, rel = ''): Promise<ContextNode[]> {
     let items;
     try {
-      items = fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => {
+      items = (await fsp.readdir(d, { withFileTypes: true })).sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
         return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
       });
@@ -242,13 +301,13 @@ export function listContextsTreeForUser(uid: string): ContextNode[] {
       const relPath = rel ? `${rel}/${e.name}` : e.name;
       const full = path.join(d, e.name);
       if (e.isDirectory()) {
-        out.push({ name: e.name, path: relPath, type: 'dir', children: walk(full, relPath) });
+        out.push({ name: e.name, path: relPath, type: 'dir', children: await walk(full, relPath) });
       } else if (e.isFile()) {
         // Show every supported KB file kind in the tree — text + binary both
         // get vectorized, both deserve to be visible.
         if (!isAllowedName(e.name)) continue;
         let size = 0; let mtime = 0;
-        try { const st = fs.statSync(full); size = st.size; mtime = st.mtimeMs / 1000; }
+        try { const st = await fsp.stat(full); size = st.size; mtime = st.mtimeMs / 1000; }
         catch { /* ignore */ }
         out.push({ name: e.name, path: relPath, type: 'file', bytes: size, mtime });
       }
@@ -258,7 +317,7 @@ export function listContextsTreeForUser(uid: string): ContextNode[] {
   return walk(root);
 }
 
-export function listContextsTree(): ContextNode[] {
+export function listContextsTree(): Promise<ContextNode[]> {
   return listContextsTreeForUser(getActiveUserId());
 }
 
@@ -770,7 +829,17 @@ export function renameContextEntry(srcRel: string, dstRel: string): Result<{ src
   let src: string; let dst: string;
   try { src = resolvePath(srcRel, { mustExist: true }); dst = resolvePath(dstRel); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  if (fs.existsSync(dst)) return { ok: false, error: 'destination already exists' };
+  // 大小写不敏感文件系统（macOS 默认）上 fs.existsSync(dst) 会命中 src 自身：
+  // 仅大小写变体（test → Test）是同一条目（同 inode），应放行；真正的同名（不同 inode）才报已存在。
+  if (fs.existsSync(dst)) {
+    let sameEntry = false;
+    try {
+      const s = fs.statSync(src);
+      const d = fs.statSync(dst);
+      sameEntry = typeof s.ino === 'number' && s.ino !== 0 && s.ino === d.ino;
+    } catch { /* stat 失败视为不同条目 */ }
+    if (!sameEntry) return { ok: false, error: 'destination already exists' };
+  }
   const srcIsFile = fs.statSync(src).isFile();
   if (srcIsFile && !isAllowedName(path.basename(dst))) {
     return { ok: false, error: 'destination has unsupported extension' };

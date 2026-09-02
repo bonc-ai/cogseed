@@ -144,6 +144,40 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
+  // ── 工作空间 tab 冷启动预热 ─────────────────────────────────────────────
+  // workspace.js 原本是点击 tab 时才注入的懒加载脚本（3000 行/172KB），
+  // 每次打开软件后第一次点「工作空间」都要现场取代码 + 解析，产生可感知
+  // 延迟。这里改成打开软件时就把脚本注入好（只加载、不渲染），首次点击
+  // 只剩数据 IPC，跟同会话第二次点击一样快。
+  // requestIdleCallback 等主线程空闲再装，不挤占首帧；4s 兜底保证必装。
+  {
+    const _warmWorkspaceFeature = () => {
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      Promise.resolve(loader('workspace'))
+        .then(() => {
+          // 数据同样预热：在隐藏面板里先渲染一遍（不可见），首次点击只剩
+          // 极短刷新；本机 CLI 探测也提前完成，新建空间弹窗的基础 Agent
+          // 不再后补。用户已手动进入工作空间/面包屑已请求打开指定空间时跳过，
+          // 避免与点击路径的 renderWorkspace 并发互相覆盖。
+          if (currentView !== 'workspace' && currentView !== 'spaces'
+            && !window.__cogseedPendingOpenSpace
+            && typeof window.renderWorkspace === 'function') {
+            Promise.resolve(window.renderWorkspace()).catch(() => {});
+          }
+        })
+        .catch((err) => {
+          _bootLog.warn('workspace warmup load failed', { error: (err && err.message) || String(err) });
+        });
+    };
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(_warmWorkspaceFeature, { timeout: 4000 });
+    } else {
+      setTimeout(_warmWorkspaceFeature, 500);
+    }
+  }
   // First-run walkthrough: fire-and-forget so it never blocks first paint.
   // It reads the machine-local onboarding marker and only lifts the overlay
   // on a device that hasn't completed it yet. Runs after the last view is
@@ -284,9 +318,11 @@ function _lazyFeaturePanel(view) {
     : view === 'skills' ? 'panel-connections'
     : view === 'recall' ? 'panel-recall'
     : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+    : view === 'kb' ? 'panel-kb'
     : view === 'contexts' ? 'panel-contexts'
     : view === 'settings' ? 'panel-settings'
     : view === 'auto' ? 'panel-auto'
+    : view === 'run-center' ? 'panel-run-center'
     : view === 'marketplace' ? 'panel-marketplace'
     : view === 'devtools' ? 'panel-devtools'
     : null;
@@ -366,9 +402,37 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
+  const openLegacyAgentDashboard = view === 'dashboard';
+  // Keep deep links and persisted callers using the pre-unification routes
+  // inside Run Center. The Run Center controller owns the secondary mode/tab
+  // mapping, while boot only needs to select the shared panel.
+  const legacyRunCenterView = view === 'board' || view === 'runs' || view === 'collaboration'
+    ? view : null;
+  // The restored five-tab vocabulary can also arrive as a direct deep link.
+  // Keep `agents` out of this list because that route still owns the global
+  // Connections/Agents surface outside Run Center.
+  const directRunCenterView = ['overview', 'tasks', 'sessions', 'history', 'execution'].includes(view)
+    ? view : null;
+  const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
+  // Keep the legacy expression explicit: callers that pass a secondary
+  // Run Center route still take precedence over the requested panel view.
+  const effectiveRunCenterView = legacyRunCenterView || requestedRunCenterView;
+  const normalizedRunCenterView = directRunCenterView || effectiveRunCenterView;
+  // The pre-unification `runs` route opened the execution-history surface.
+  // Keep that deep link stable while the visible Run Center `runs` tab opens
+  // the actionable queue through its own in-panel activation.
+  const runCenterInitialView = legacyRunCenterView === 'runs'
+    ? 'history' : normalizedRunCenterView;
   if (openPersonalOntology) view = 'recall';
+  if (openLegacyAgentDashboard) view = 'run-center';
+  if (legacyRunCenterView) view = 'run-center';
+  if (directRunCenterView) view = 'run-center';
   if (view === 'evolution') view = 'skills';
+  if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
+    window.stopRunCenterWatch();
+  }
   if (currentView !== view || (view === 'conversation' && currentCid !== cid)) {
     _bootLog.info('view change', { view, cid: cid || undefined });
   }
@@ -376,16 +440,22 @@ function setView(view, cid, opts = {}) {
   if (view !== 'agents' && typeof closeExpenseWorkbench === 'function') {
     closeExpenseWorkbench();
   }
+  // 切离会话 / 新建会话面板时停止正在进行的语音输入，避免麦克风在别的模块继续收音。
+  if (view !== 'conversation' && view !== 'new-chat' && typeof window.__stopSttInputRecording === 'function') {
+    window.__stopSttInputRecording();
+  }
   _saveLastView(view, cid);
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
+                : view === 'run-center' ? 'panel-run-center'
                 : view === 'agents' || view === 'contexts' ? 'panel-connections'
                 : view === 'skills' ? 'panel-connections'
                 : view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
+                : view === 'kb' ? 'panel-kb'
                 : view === 'settings' ? 'panel-settings'
                 : view === 'memory' ? 'panel-memory'
                 : view === 'devtools' ? 'panel-devtools'
@@ -395,6 +465,8 @@ function setView(view, cid, opts = {}) {
 
   document.getElementById('new-chat-btn').classList.toggle('active', view === 'new-chat');
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
+  document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
+  document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
   document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
@@ -412,6 +484,11 @@ function setView(view, cid, opts = {}) {
   if (view === 'memory') {
     _loadViewFeature('settings', 'memory', () => {
       if (typeof renderMemoryPage === 'function') renderMemoryPage();
+    });
+  }
+  if (view === 'run-center') {
+    _loadViewFeature('run-center', 'run-center', () => {
+      if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView);
     });
   }
   if (view === 'conversation' && cid) {
@@ -581,6 +658,14 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('workspace-tab-load', () => {
       _loadViewFeature('workspace', 'workspace', () => {
         if (typeof renderWorkspace === 'function') renderWorkspace();
+      });
+    });
+  } else if (view === 'kb') {
+    currentCid = null;
+    _deferSidebarNavWork('kb-tab-load', () => {
+      _loadViewFeature('kb', 'kb', () => {
+        if (typeof renderKbEco === 'function') renderKbEco();
+        if (typeof renderKbWorkbench === 'function') renderKbWorkbench();
       });
     });
   } else if (view === 'settings') {

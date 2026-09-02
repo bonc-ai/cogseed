@@ -42,6 +42,53 @@ vi.mock('../../../../src/main/features/user_workspace', async (importOriginal) =
 }));
 
 describe('CogSeed Backend local CLI execution adapter', () => {
+  it('tracks only the correlated CLI pid and reports settled processes as missing', async () => {
+    let release!: () => void;
+    let spawned!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const processObserved = new Promise<void>((resolve) => { spawned = resolve; });
+    let processHealth: 'alive' | 'missing' = 'alive';
+    const runCli = vi.fn(async (input: any) => {
+      input.onEvent({ type: 'process-info', pid: 4321, cwd: '/private/ignored', cmd: 'ignored' });
+      spawned();
+      await gate;
+      input.onEvent({ type: 'done', status: 'completed', output: 'done' });
+      return { runId: 'run-process-probe', status: 'completed', output: 'done' };
+    });
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({
+      runCli,
+      getSessionId: vi.fn(async () => null),
+      setSessionId: vi.fn(async () => {}),
+      clearSession: vi.fn(async () => {}),
+      resolveWorkingDir: vi.fn(async () => '/tmp/project'),
+      probePid: vi.fn(async (pid: number) => pid === 4321 ? processHealth : 'invalid'),
+    });
+    const input = {
+      userId: 'cli-process-user',
+      conversationId: 'cid-cli-process',
+      agentId: 'agent-cli-process',
+      requestId: 'req-cli-process',
+      taskId: 'cogseed-task-cli-process',
+      executionId: 'cogseed-exec-cli-process',
+      sessionId: 'cogseed-session-cli-process',
+      runtimeSessionId: 'mruntime-cli-process',
+      task: 'Observe the child process.',
+      localCli: { cli: 'claude' },
+    };
+
+    const collecting = collect(adapter.run(input, { signal: new AbortController().signal }));
+    await processObserved;
+    await expect(adapter.probeProcess?.(input)).resolves.toBe('alive');
+    processHealth = 'missing';
+    await expect(adapter.probeProcess?.(input)).resolves.toBe('missing');
+    await expect(adapter.probeProcess?.({ ...input, executionId: 'cogseed-exec-other' })).resolves.toBe('unknown');
+
+    release();
+    await collecting;
+    await expect(adapter.probeProcess?.(input)).resolves.toBe('missing');
+  });
+
   it('maps runner events into Runtime envelopes and persists the external CLI session', async () => {
     const setSessionId = vi.fn(async () => {});
     const runCli = vi.fn(async (input: any) => {
@@ -67,6 +114,7 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       agentName: 'CLI Agent',
       requestId: 'req-cli-adapter',
       taskId: 'cogseed-task-cli-adapter',
+      executionId: 'cogseed-exec-cli-adapter',
       sessionId: 'cogseed-session-cli-adapter',
       runtimeSessionId: 'mruntime-cli-adapter',
       task: 'Implement the change.',
@@ -78,6 +126,7 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       uid: 'cli-adapter-user',
       cid: 'cid-cli-adapter',
       agentId: 'agent-cli-adapter',
+      executionId: 'cogseed-exec-cli-adapter',
       cli: 'claude',
       model: 'sonnet',
       customArgs: ['--verbose'],
@@ -249,6 +298,46 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       workingDir: '/tmp/cli-gateway-workspace',
     }));
     expect(events.at(-1)).toMatchObject({ type: 'result', status: 'completed', text: 'gateway reply text' });
+  });
+
+  it('yields gateway deltas before the turn completes without duplicating the final body', async () => {
+    let emitProcess: ((data: Record<string, unknown>) => void) | undefined;
+    let finishTurn: ((value: { text: string }) => void) | undefined;
+    gatewayTurnMock.runP3394GatewayTurn.mockImplementationOnce((input: any) => new Promise((resolve) => {
+      emitProcess = input.onProcess;
+      finishTurn = resolve;
+    }));
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+    const iterator = adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-cli-adapter',
+      agentId: 'agent-cli-adapter',
+      agentName: 'Codex',
+      requestId: 'req-cli-gateway-stream',
+      taskId: 'cogseed-task-cli-gateway-stream',
+      sessionId: 'cogseed-session-cli-gateway-stream',
+      runtimeSessionId: 'mruntime-cli-gateway-stream',
+      task: 'Stream this via gateway.',
+      context: [],
+      localCli: { cli: 'codex', viaP3394Gateway: true },
+    })[Symbol.asyncIterator]();
+
+    const firstEvent = iterator.next();
+    await vi.waitFor(() => expect(emitProcess).toBeTypeOf('function'));
+    emitProcess?.({ type: 'delta', text: 'live chunk' });
+    await expect(firstEvent).resolves.toMatchObject({
+      done: false,
+      value: { type: 'event', status: 'running', text: 'live chunk' },
+    });
+
+    emitProcess?.({ type: 'final', text: 'live chunk plus final' });
+    finishTurn?.({ text: 'live chunk plus final' });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: 'result', status: 'completed', text: 'live chunk plus final' },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
   it('maps a gateway failure to a failed runtime envelope with the failure code', async () => {

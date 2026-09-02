@@ -53,7 +53,7 @@ const _skillsCognitionState = {
   captureSettings: null,
   captureModel: null,
   /** 已安装个人角色模板的字段清单，供 Personal 候选确认时选择直接落点。 */
-  personalTemplates: [],
+  personalFieldTargets: [],
   /** 个人本体分组，供资产编辑时选择本体绑定（ontologyRefs）。
    *  **按需加载**：只在打开资产编辑器时随权威记录一起取，不进四页快照
    *  （`skills-cognition-layout` 有不变量钉住：快照不得加载本体数据）。
@@ -93,7 +93,7 @@ const _skillsCognitionState = {
   skillUpdate: null,
   /** 三个读口返回的**真实**总数（items + total 契约）。与 `assets.length` /
    *  `teachingSignals.length` 分开存：后者是本次取回了几条，前者是一共有几条，
-   *  把截断后的长度当总数正是 G-2/G-3 的病根。 */
+   *  把截断后的长度当总数正是病根。 */
   totals: { assets: null, teachingSignals: null, inboxItems: null },
   /** 「已处理历史」（cognition.reviewDecisions.list）。按需加载。 */
   reviewHistory: null,
@@ -312,26 +312,17 @@ function _captureLinkedAssetIds(capture) {
   return [...new Set(ids)];
 }
 
+// 落点下拉：option 的 value 就是 PO contract 给的 opaque fieldRef，渲染层
+// 不再序列化 { groupId, templateId, section, fieldName } 四元组往返一趟。
+// label 也由 contract 拼好（模板名 · 分节 · 字段），这里不重组显示名。
 function _renderPersonalProfileTarget(candidate) {
   if (candidate?.suggestedType !== 'personal') return '';
-  const templates = (Array.isArray(_skillsCognitionState.personalTemplates)
-    ? _skillsCognitionState.personalTemplates : [])
-    .filter((template) => template && template.installed && template.group_id && Array.isArray(template.sections));
+  const targets = Array.isArray(_skillsCognitionState.personalFieldTargets)
+    ? _skillsCognitionState.personalFieldTargets : [];
   const options = [`<option value="">${escapeHtml(_cognitionText('cognition.personal_profile_target_auto', '自动匹配模板字段'))}</option>`];
-  for (const template of templates) {
-    for (const section of template.sections) {
-      for (const field of (Array.isArray(section.fields) ? section.fields : [])) {
-        const name = typeof field === 'string' ? field : field?.name;
-        if (!name) continue;
-        const value = encodeURIComponent(JSON.stringify({
-          groupId: template.group_id,
-          templateId: template.template_id,
-          section: section.title,
-          fieldName: name,
-        }));
-        options.push(`<option value="${escapeHtml(value)}">${escapeHtml(`${template.name} · ${section.title} · ${name}`)}</option>`);
-      }
-    }
+  for (const target of targets) {
+    if (!target || !target.fieldRef) continue;
+    options.push(`<option value="${escapeHtml(target.fieldRef)}">${escapeHtml(target.label || target.fieldRef)}</option>`);
   }
   return `<label class="cognition-candidate-field cognition-candidate-profile-target"><span>${escapeHtml(_cognitionText('cognition.personal_profile_target', '个人模板落点'))}</span><select data-recall-profile-target>${options.join('')}</select><small class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.personal_profile_target_hint', '不选择时由系统自动匹配；只写入已安装模板字段。'))}</small></label>`;
 }
@@ -3383,7 +3374,7 @@ function _cognitionTreeStats() {
     (budsByType[type] = budsByType[type] || []).push(candidate);
   }
   const tree = _skillsCognitionState.tree;
-  // 树契约 v2（G-8）起，后端也把候选投影成 `candidate:` 节点，且它们同样带
+  // 树契约 v2 起，后端也把候选投影成 `candidate:` 节点，且它们同样带
   // `assetType`（用来挂枝）。**正式资产的每一条统计与渲染都必须先把它们摘掉**：
   // 候选没有 maturity/status/version，混进来会让叶片数虚高、已验证占比被稀释，
   // 而且同一条候选会既画成叶又画成芽。芽自有通道（recallCandidates → budsByType），
@@ -3491,17 +3482,12 @@ function renderSkillsCognitionTree() {
     ],
   });
   if (!nodes.length) {
+    // 没有已确认的正式资产 → 始终显示「种子」。种子→树只由"是否沉淀出正式资产"
+    // 决定，与是否存在待确认候选无关；若有候选，种子上附带「去处理 N 个候选芽」入口。
     const budEntry = budCount
       ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
       : '';
-    // 空树分两种，给的话也不同：
-    //   一件东西都没有 → 首启种子引导（该从哪儿开始），与「待我处理」的
-    //     首启变体同源——从认知树进来的人先看到的是起点，不是一张空画布；
-    //   有资产但被清空/从未确认 → 「树上还没有叶片」，树的空态如实表达。
-    const emptyBody = _cognitionIsFirstRun()
-      ? _cognitionSeedMarkup()
-      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
-    host.innerHTML = `${hero}${emptyBody}`;
+    host.innerHTML = `${hero}${_cognitionSeedMarkup()}${budEntry}`;
     return;
   }
   host.innerHTML = `${hero}${_renderCognitionTreeContent(stats)}`;
@@ -3538,7 +3524,7 @@ function _cognitionIsFirstRun() {
 /**
  * 「空种子」首启引导（原型 02）。
  *
- * **不是独立页**：G-9 定下"默认永远停在待我处理、不自动跳页"之后，它作为
+ * **不是独立页**：产品定下"默认永远停在待我处理、不自动跳页"之后，它作为
  * 「待我处理」空态的首启变体渲染（一件东西都没有时）。曾短暂存在过一个独立的
  * `seed` 页，落地不再跳转后它就没有入口了——留着就是死路由，已删除。
  *
@@ -4096,24 +4082,22 @@ function _renderCognitionTreeFirstPage(items) {
     titleKey: 'cognition.tree_title', title: '这棵树，就是你积累下来的能力',
     hintKey: 'cognition.tree_page_hint', hint: '树只展示正式认知资产。待确认候选是芽，确认后成为浅叶，经过真实复用与证据验证后成为深叶。',
   };
-  if (_cognitionIsFirstRun()) return _cognitionSeedMarkup();
   const stats = _cognitionTreeStats();
   const { tree, nodes, budCount, deepCount } = stats;
   if (tree?.error) {
     return `<div class="skills-cognition-warning"><span>${escapeHtml(tree.error)}</span><button class="btn btn-sm" data-cognition-tree-reload>${escapeHtml(_cognitionText('common.retry', '重试'))}</button></div>`;
   }
+  const budEntry = budCount
+    ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
+    : '';
   if (!tree || tree.loading) {
-    // 树数据按需加载。无资产时不需要树——空树就是"还没有叶片"，直接给空态，
-    // 不显示一个会永远转下去的加载中（只有有资产才触发拉树）。
+    // 树数据未就绪：有确认资产才显示加载中；无确认资产直接给种子，避免闪加载。
     return items.length
       ? `<div class="skills-cognition-loading">${escapeHtml(_cognitionText('cognition.loading', '加载中…'))}</div>`
-      : `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span></div>`;
+      : `${_cognitionSeedMarkup()}${budEntry}`;
   }
   if (!nodes.length) {
-    const budEntry = budCount
-      ? `<div class="skills-cognition-actions"><button type="button" class="btn btn-sm btn-primary" data-cognition-page-link="inbox">${escapeHtml(_cognitionText('cognition.tree_empty_handle_buds', '去处理 {n} 个候选芽').replace('{n}', String(budCount)))}</button></div>`
-      : '';
-    return `<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.tree_empty', '树上还没有叶片'))}</strong><span>${escapeHtml(_cognitionText('cognition.tree_empty_hint', '候选被确认为正式资产后才会长出叶片；当前还没有已确认的资产。'))}</span>${budEntry}</div>`;
+    return `${_cognitionSeedMarkup()}${budEntry}`;
   }
   const hero = _renderCognitionTaskHero({
     ...treeHeroBase,
@@ -4448,7 +4432,7 @@ async function loadSkillsCognitionSnapshot() {
   const capturePayload = { limit: 25 };
   const captureStatuses = _captureStatusesForFilter(snapshotCaptureFilter);
   if (captureStatuses.length) capturePayload.statuses = captureStatuses;
-  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalTemplates] = await Promise.allSettled([
+  const [dashboard, recallCandidates, assets, sources, captures, recentCaptures, teachingSignals, captureSettings, inbox, personalFieldTargets] = await Promise.allSettled([
     Promise.resolve().then(() => window.cogseed.invoke('cognition.dashboard.read')),
     Promise.resolve().then(() => window.cogseed.invoke('recall.candidates.list')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.assets.list', { limit: 500 })),
@@ -4458,7 +4442,7 @@ async function loadSkillsCognitionSnapshot() {
     Promise.resolve().then(() => window.cogseed.invoke('recall.teaching.list', { limit: 20 })),
     Promise.resolve().then(() => window.cogseed.invoke('recall.captures.settings.get')),
     Promise.resolve().then(() => window.cogseed.invoke('cognition.inbox.list')),
-    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.list')),
+    Promise.resolve().then(() => window.cogseed.invoke('personalOntology.templates.fieldTargets')),
   ]);
   const captureResultIsCurrent = !captureRequestWasInFlight
     && snapshotCaptureRequestId === _skillsCognitionCaptureRequestId
@@ -4495,9 +4479,9 @@ async function loadSkillsCognitionSnapshot() {
   if (recentCaptures.status === 'fulfilled' && recentCaptures.value?.ok) _skillsCognitionState.recentCaptures = recentCaptures.value.captures || [];
   if (teachingSignals.status === 'fulfilled' && teachingSignals.value?.ok) _skillsCognitionState.teachingSignals = teachingSignals.value.signals || [];
   if (inbox.status === 'fulfilled' && inbox.value?.ok) _skillsCognitionState.inboxItems = inbox.value.items || [];
-  if (personalTemplates.status === 'fulfilled' && personalTemplates.value && personalTemplates.value.ok !== false) {
-    _skillsCognitionState.personalTemplates = Array.isArray(personalTemplates.value.templates)
-      ? personalTemplates.value.templates : [];
+  if (personalFieldTargets.status === 'fulfilled' && personalFieldTargets.value && personalFieldTargets.value.ok !== false) {
+    _skillsCognitionState.personalFieldTargets = Array.isArray(personalFieldTargets.value.targets)
+      ? personalFieldTargets.value.targets : [];
   }
   _skillsCognitionState.captureSettings = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.settings : _skillsCognitionState.captureSettings;
   _skillsCognitionState.captureModel = captureSettings.status === 'fulfilled' && captureSettings.value?.ok ? captureSettings.value.model : _skillsCognitionState.captureModel;

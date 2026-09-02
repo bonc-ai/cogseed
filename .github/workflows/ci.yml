@@ -1,10 +1,16 @@
 name: CI
 
+# CI (verify) runs only on the cicd branch — the release gate.
+# Day-to-day development merges into develop via review only (no CI);
+# the full verify suite runs once when a PR targets cicd, and again on
+# push to cicd, right before tagging a release.
 on:
   pull_request:
+    branches:
+      - cicd
   push:
     branches:
-      - main
+      - cicd
   workflow_dispatch:
 
 permissions:
@@ -15,6 +21,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -23,6 +31,23 @@ jobs:
       - run: npm run test:resources:setup
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      # 全量套件默认 maxWorkers=4，在 macos-latest（3 vCPU）上会过度抢占，
+      # 负载型时序用例（CLI 版本探测、boot 恢复投影等）因此偶发超时红单。
+      # 发布门禁优先稳定性：限制 2 个 worker，多花几分钟换可重复的绿。
+      - run: node scripts/run-tests.mjs run --maxWorkers=2
+      - run: npm run test:resources
       - run: npm run readme:check
+      - run: npm run tokens:check
       - run: npm run builtin:manifest:check
+      - name: Email hygiene gate (release gate)
+        run: |
+          set -euo pipefail
+          bad=$(git log --format='%h|%an|%ae' "origin/cicd..HEAD" 2>/dev/null \
+            | grep -vE '\|([0-9]+\+[^@]+@users\.noreply\.github\.com|business@bonc\.com\.cn)$' \
+            || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits to cicd contain non-noreply author emails:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ All commit author emails are noreply."

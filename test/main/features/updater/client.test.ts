@@ -83,6 +83,24 @@ describe('checkForUpdates', () => {
     expect(state.reminded?.['0.0.6']).toBe(1_000);
   });
 
+  it('sends the updates-contract platform token (darwin/win32/linux), not the app taxonomy', async () => {
+    const fetchMock = stubFetch(async () => latestResponse(null));
+    await updater.checkForUpdates(UID, { manual: true, now: 1_000 });
+    const call = fetchMock.mock.calls[0] as [RequestInfo, RequestInit];
+    const headers = (call[1].headers || {}) as Record<string, string>;
+    const contractToken = { darwin: 'darwin', win32: 'win32', linux: 'linux' }[process.platform];
+    if (contractToken) {
+      // The shared client header maps darwin→'mac' for other APIs; the
+      // update channel must send the contract token or /updates/latest
+      // matches no catalog entry and silently reports "up to date".
+      expect(headers['CogSeed-Platform']).toBe(contractToken);
+      expect(headers['CogSeed-Platform']).not.toBe('mac');
+    }
+    // Other metadata rides along unchanged.
+    expect(headers['CogSeed-App-Version']).toBe('0.0.5');
+    expect(headers['CogSeed-Arch']).toBe(process.arch);
+  });
+
   it('throttles automatic reminders to once per day, same version', async () => {
     stubFetch(async () => latestResponse(infoFixture()));
     await updater.checkForUpdates(UID, { now: 1_000 });

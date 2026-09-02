@@ -19,9 +19,14 @@ import { app, ipcMain, dialog, BrowserWindow, type WebContents } from 'electron'
 import * as users from '../features/users';
 import * as chats from '../features/chats';
 import * as conversationAside from '../features/conversation_aside';
+import * as kbQa from '../features/kb_qa';
+import * as kbSummary from '../features/kb_summary';
+import * as kbMindmap from '../features/kb_mindmap';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
+import * as anchorFeature from '../features/anchor';
+import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
@@ -59,8 +64,8 @@ import * as recallViews from '../features/recall/recall-view-service';
 import * as recallTeaching from '../features/recall/teaching-service';
 import * as personalOntologyGroups from '../features/personal_ontology_groups';
 import * as personalOntologyTemplateFiles from '../features/personal_ontology_template_files';
-import { getRoleTemplate } from '../features/role_templates';
 import type { GroupEvent } from '../features/group_chat/bus';
+import { setGroupChatMessageBroadcaster } from '../features/group_chat/bus';
 import * as agents from '../features/agents';
 import * as autoTasks from '../features/auto_tasks';
 import { isAgentEnabled } from '../features/component_enabled';
@@ -104,6 +109,7 @@ import * as commanderRuntimeStats from '../features/commander_runtime_stats';
 import * as commanderBackend from '../features/commander_backend';
 import * as chatExecutionCapability from '../features/chat_execution_capability';
 import * as cogseedBackend from '../features/cogseed_backend';
+import * as stt from '../features/stt/stt-service';
 import { getRendererTables, isLang, isUiLang, t } from '../i18n';
 import { isPathAllowed } from '../util/path-sandbox';
 import * as userWorkspace from '../features/user_workspace';
@@ -116,6 +122,9 @@ import {
 import { invokeHandlers as qualityHandlers } from './quality';
 import { invokeHandlers as connectorsHandlers } from './connectors';
 import { invokeHandlers as messagingHandlers } from './messaging';
+import * as messagingBindings from '../features/messaging/bindings';
+import * as messagingRegistry from '../features/messaging/registry';
+import { annotateChannelConversations } from '../features/messaging/channel-annotation';
 import { invokeHandlers as personalContextHandlers } from './personal-context';
 import { invokeHandlers as touchpointHandlers } from './touchpoints';
 import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench';
@@ -123,7 +132,7 @@ import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { invokeHandlers as updatesHandlers } from './updates';
-import { readJsonl, safeId } from '../storage';
+import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
   markConfirmationVisible as markDeleteConfirmationVisible,
@@ -132,7 +141,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { shell } from 'electron';
-import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
+import { DEFAULT_USER_WORKSPACE, WS_ROOT, projectFilesDir, userContextsDir, userMarketplaceSkillDir, userSkillsDir } from '../paths';
 import {
   chatAttachmentDirForConversation,
   chatAttachmentRelPath,
@@ -417,8 +426,54 @@ function _officePreviewKindForExt(ext: string): OfficePreviewKind | null {
   return null;
 }
 
-function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string): string {
+// 卡片视图会为可视卡片批量请求 Office 预览：按 path+size+mtime 做进程内
+// LRU 缓存（上限 24 条），同一文件重复预览/卡片来回滚动不重复解析。
+const _officePreviewCache = new Map<string, { at: number; html: string; kind: string }>();
+const OFFICE_PREVIEW_CACHE_MAX = 24;
+
+function _officePreviewCacheGet(key: string): { html: string; kind: string } | null {
+  const hit = _officePreviewCache.get(key);
+  if (!hit) return null;
+  hit.at = Date.now();
+  return { html: hit.html, kind: hit.kind };
+}
+
+function _officePreviewCachePut(key: string, html: string, kind: string): void {
+  _officePreviewCache.set(key, { at: Date.now(), html, kind });
+  if (_officePreviewCache.size <= OFFICE_PREVIEW_CACHE_MAX) return;
+  let oldestKey = '';
+  let oldestAt = Infinity;
+  for (const [k, v] of _officePreviewCache) {
+    if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+  }
+  if (oldestKey) _officePreviewCache.delete(oldestKey);
+}
+
+function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: string, opts?: { compact?: boolean }): string {
   const safeTitle = _escapePreviewHtml(title || 'Office preview');
+  // 卡片缩略模式：整页紧贴顶部、小字号、去留白——小卡里「全而不大」。
+  const compactCss = opts?.compact ? `
+  <style>
+    body { background: #fff; font-size: 11px; }
+    .office-preview { padding: 0; min-height: 0; }
+    .office-word { max-width: none; min-height: 0; margin: 0; padding: 12px 14px; border: 0; box-shadow: none; }
+    .office-word h1 { margin: 0 0 8px; font-size: 16px; }
+    .office-word h2 { margin: 12px 0 6px; font-size: 13px; }
+    .office-word h3 { margin: 10px 0 5px; font-size: 12px; }
+    .office-word p, .office-word li { margin: 0 0 6px; font-size: 11px; line-height: 1.5; }
+    .office-word ul, .office-word ol { margin: 0 0 8px 18px; }
+    .office-word table, .office-table-wrap table { margin: 8px 0; font-size: 10px; }
+    .office-word th, .office-word td, .office-table-wrap th, .office-table-wrap td { padding: 3px 5px; }
+    .office-spreadsheet { padding: 6px; }
+    .office-sheet { margin: 0 0 10px; padding: 8px; }
+    .office-sheet h2 { margin: 0 0 8px; font-size: 12px; }
+    .office-table-wrap { max-height: none; }
+    .office-table-wrap td { min-width: 60px; }
+    .office-presentation { padding: 6px; gap: 8px; }
+    .office-slide { width: 100%; padding: 12px 14px; border-radius: 4px; }
+    .office-slide-body p { margin: 0 0 6px; font-size: 12px; }
+    .office-slide-body p:first-child { font-size: 14px; }
+  </style>` : '';
   return `<!doctype html>
 <html>
 <head>
@@ -572,6 +627,7 @@ function _wrapOfficePreviewHtml(kind: OfficePreviewKind, title: string, body: st
       .office-slide-body p:first-child { font-size: 22px; }
     }
   </style>
+  ${compactCss}
 </head>
 <body>
   <main class="office-preview office-${kind}">
@@ -628,6 +684,17 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
+  // COGSEED-18：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
+  // 条目无 cid）。仅当调用方显式声明 spaceId 且该空间属于当前用户——防越权。
+  const spaceId = payload?.spaceId;
+  if (typeof spaceId === 'string' && safeId(spaceId) && await spaces.spaceExists(userId, spaceId)) {
+    try {
+      const { spaceContentDir } = await import('../paths');
+      const contentDir = path.resolve(spaceContentDir(userId, spaceId));
+      const target = path.resolve(absPath);
+      if (target === contentDir || target.startsWith(contentDir + path.sep)) return true;
+    } catch { /* fall through */ }
+  }
   const cid = payload?.cid;
   if (typeof cid !== 'string' || !cid) return false;
   // 1) 会话记录过的产物文件（消息 produced[]）
@@ -654,11 +721,11 @@ function _contextTreeHasPath(nodes: contexts.ContextNode[], relPath: string): bo
   return false;
 }
 
-function _uniqueContextImportPath(rawName: string): string {
+async function _uniqueContextImportPath(rawName: string): Promise<string> {
   const name = path.basename(String(rawName || '').trim() || 'artifact');
   const ext = path.extname(name);
   const stem = ext ? name.slice(0, -ext.length) : name;
-  const tree = contexts.listContextsTree();
+  const tree = await contexts.listContextsTree();
   if (!_contextTreeHasPath(tree, name)) return name;
   for (let i = 2; i < 1000; i += 1) {
     const candidate = `${stem}-${i}${ext}`;
@@ -724,7 +791,7 @@ async function _importProducedToLibrary(payload: any, ctx: IpcContext): Promise<
 
   const relPath = typeof payload?.targetPath === 'string' && payload.targetPath.trim()
     ? payload.targetPath.trim()
-    : _uniqueContextImportPath(targetName);
+    : await _uniqueContextImportPath(targetName);
   const result = contexts.uploadContextFile(relPath, buf);
   if (!result.ok) return result;
   return { ok: true, scope: 'global', path: result.path, bytes: result.bytes };
@@ -868,18 +935,44 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
+  'stt.pushAudio': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    if (typeof raw.chunk !== 'string') throw new Error('invalid audio chunk');
+    const bytes = Buffer.from(raw.chunk, 'base64');
+    if (bytes.length % 2 !== 0) throw new Error('invalid pcm length');
+    const samples = new Float32Array(bytes.length / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+    stt.pushAudio(ctx.userId, raw.sessionId, samples);
+    return { ok: true };
+  },
+  'stt.stop': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    return stt.stopSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
   'cogseed.task.abort': async (payload, ctx) => cogseedBackend.cogseedIpcService.abort(ctx.userId, payload),
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
+  'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
+  'cogseed.agent.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.agents(ctx.userId),
+  'cogseed.dashboard.diagnostics': async (_payload, ctx) => cogseedBackend.cogseedIpcService.diagnostics(ctx.userId),
+  'cogseed.worktree.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.worktrees(ctx.userId),
+  'cogseed.worktree.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.createWorktree(ctx.userId, payload),
+  'cogseed.worktree.remove': async (payload, ctx) => cogseedBackend.cogseedIpcService.removeWorktree(ctx.userId, payload),
   'cogseed.connector.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.connectors(ctx.userId),
   'cogseed.kb.index': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbIndex(ctx.userId, payload),
   'cogseed.kb.search': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbSearch(ctx.userId, payload),
   'cogseed.kb.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.kbRead(ctx.userId, payload),
+  'cogseed.anchor.resolve': async (payload, ctx) => anchorFeature.anchorResolveIpc(ctx.userId, payload),
   'cogseed.kb.sources': async (_payload, ctx) => cogseedBackend.cogseedIpcService.kbSources(ctx.userId),
   'cogseed.connector.tools': async (payload, ctx) => cogseedBackend.cogseedIpcService.connectorTools(ctx.userId, payload),
   'cogseed.session.list': async (_payload, ctx) => ({ sessions: await cogseedBackend.cogseedIpcService.sessions(ctx.userId) }),
@@ -907,6 +1000,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'conversations.list': async ({ mode, active_cid, expanded_projects, project_id, task_id, bucket, offset }, ctx) => {
+    // Channel conversations get their sidebar grouping fields (platform
+    // back-fill via bindings + live display name) on every list response;
+    // persisted fields stay authoritative, the join is display-only.
+    const annotate = async <T extends { conversation_id: string; channel_platform?: string }>(rows: readonly T[]): Promise<T[]> => {
+      if (!rows.length) return [...rows];
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      return annotateChannelConversations(rows, bindings, instances);
+    };
     if (mode === 'startup') {
       const expandedProjectIds = String(expanded_projects || '')
         .split(',')
@@ -915,21 +1019,40 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         activeConversationId: safeId(active_cid) ? active_cid : undefined,
         expandedProjectIds,
       });
+      if (Array.isArray((result as { conversations?: unknown }).conversations)) {
+        (result as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((result as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
       return result;
     }
     if (mode === 'project') {
       if (!safeId(project_id)) throw new Error('invalid project id');
-      return chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      const page = await chats.listProjectConversationPage(ctx.userId, project_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'auto_task') {
       if (!safeId(task_id)) throw new Error('invalid auto task id');
-      return chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      const page = await chats.listAutoTaskConversationPage(ctx.userId, task_id, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
     if (mode === 'old_unprojected') {
       if (bucket !== 'last30' && bucket !== 'older') throw new Error('invalid conversation bucket');
-      return chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      const page = await chats.listOldUnprojectedConversationPage(ctx.userId, bucket, offset);
+      if (Array.isArray((page as { conversations?: unknown }).conversations)) {
+        (page as { conversations: Awaited<ReturnType<typeof annotate>> }).conversations =
+          await annotate((page as { conversations: Array<{ conversation_id: string; channel_platform?: string }> }).conversations);
+      }
+      return page;
     }
-    return { conversations: await chats.listConversations(ctx.userId) };
+    return { conversations: await annotate(await chats.listConversations(ctx.userId)) };
   },
 
   'conversations.autoTaskCounts': async ({ task_ids } = {}, ctx) => {
@@ -941,6 +1064,32 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const { cid } = args;
     if (!safeId(cid)) throw new Error('invalid cid');
     const conv = await chats.getConversation(ctx.userId, cid, conversationProjectHint(args));
+    if (!conv) throw new Error('conversation not found');
+    // Same channel annotation as the list endpoints — a freshly hydrated
+    // sidebar row (e.g. external inbound to a brand-new conversation) must
+    // land in its channel group immediately.
+    if (!conv.channel_platform) {
+      const [bindings, instances] = await Promise.all([
+        messagingBindings.listBindings(ctx.userId).catch(() => []),
+        messagingRegistry.listInstances(ctx.userId).catch(() => []),
+      ]);
+      const [annotated] = annotateChannelConversations([conv], bindings, instances);
+      return { conversation: annotated || conv };
+    }
+    const [instances] = await Promise.all([
+      messagingRegistry.listInstances(ctx.userId).catch(() => []),
+    ]);
+    const [annotated] = annotateChannelConversations([conv], [], instances);
+    return { conversation: annotated || conv };
+  },
+
+  'conversations.setPermissionMode': async (args, ctx) => {
+    const { cid, permission_mode } = args;
+    if (!safeId(cid)) throw new Error('invalid cid');
+    if (permission_mode !== 'full' && permission_mode !== 'auto_approve' && permission_mode !== 'ask') {
+      throw new Error('invalid permission mode');
+    }
+    const conv = await chats.updateConversation(ctx.userId, cid, { permission_mode }, conversationProjectHint(args));
     if (!conv) throw new Error('conversation not found');
     return { conversation: conv };
   },
@@ -1023,7 +1172,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         ? path.join(workspaceRoot, state.workspace_dir)
         : workspaceRoot;
     }
-    return conversationFiles.listWorkspaceFiles(root);
+    return await conversationFiles.listWorkspaceFiles(root);
   },
 
   // 引导「工作区目录已被移动或删除」→ 用户重新选择目录后固化到本会话。
@@ -1247,11 +1396,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       skills.listSkillCatalog(),
       agents.listAgents(),
     ]);
-    return { skills: skillRows, agents: agentRows };
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = agentRows;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = agentRows.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { skills: skillRows, agents: filteredAgents };
   },
 
-  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref } = {}, ctx) => {
-    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref });
+  'spaces.create': async ({ name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions } = {}, ctx) => {
+    const result = await spaces.createSpace(ctx.userId, { name, system_name_key, template_id, primary_template_id, secondary_template_ids, icon, space_type, sustained_outcome, instructions, base_agent, base_agents, main_skill_ref, shared, join_mode, member_permission, description, cover, recommended_questions });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
   },
@@ -1355,24 +1517,39 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agents.listAgents().catch(() => []),
       skills.listSkillCatalog().catch(() => []),
     ]);
+
+    // 引导未完成时，过滤掉所有 CLI Agent
+    let filteredAgents = sAgents;
+    if (!onboardingState.getOnboardingCompleted()) {
+      filteredAgents = sAgents.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
     const result = await spaces.pruneInvalidSpaceResources(ctx.userId, spaceId, {
       skills: new Set(sSkills.map((s) => s.id)),
-      agents: new Set(sAgents.map((a) => a.agent_id)),
+      agents: new Set(filteredAgents.map((a) => a.agent_id)),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { removed: result.removed };
   },
 
-  // 模板选择器数据源（含 bundle 静态预览；内置模板 v1.1.0）
-  'spaces.templates.list': async (_payload, _ctx) => {
-    const templates = await import('../features/role_templates').then((m) => m.listRoleTemplates());
-    return { templates };
+  // 模板目录：唯一正式出口在 Personal Ontology。返回 RoleTemplateSummary
+  // （templateId/name/description/version/installed/bundle），**不含**
+  // preset_groups / sections / 字段值 / group_id —— 见 personal_ontology_contract.ts。
+  'personalOntology.templates.catalog': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { templates: await contract.listRoleTemplateSummaries(ctx.userId) };
   },
 
-  // 情境入口场景列表（教育/写作/职场+自定义，M2）
-  'spaces.scenarios.list': async (_payload, _ctx) => {
-    const scenarios = await import('../features/role_templates').then((m) => m.listScenarios());
-    return { scenarios };
+  // 情境入口场景列表（教育/写作/职场+自定义）。场景归属未裁决，先统一从 contract 出。
+  'personalOntology.scenarios.list': async (_payload, _ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { scenarios: contract.listRoleScenarios() };
   },
 
   // ── 空间三 tab 数据源（空间化重构阶段 1）──────────────────────────────
@@ -1386,20 +1563,56 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { artifacts: await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId) };
   },
 
-  'spaces.artifacts.confirm': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.confirmSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { confirmed: result.confirmed };
+  // 删除空间产物（产物页「更多」→ 删除产物）。破坏性操作由渲染层二次确认；
+  // 这里以空间产物列表为准重新解析目标（path 或 artifactId 精确命中），拒绝
+  // 任意外部路径。web artifact 删除整个产物目录，文件产物删除文件本身
+  // （macOS 走废纸篓，其余平台回退 rm）。删除后失效产物缓存与文件索引。
+  'spaces.artifacts.delete': async ({ spaceId, path: targetPath, artifactId, cid } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof targetPath !== 'string' || !targetPath) throw new Error('missing path');
+    const wanted = path.resolve(targetPath);
+    const entries = await spacesArtifacts.listSpaceArtifacts(ctx.userId, spaceId);
+    const target = entries.find((e) => (
+      (e.path && path.resolve(e.path) === wanted)
+      || (typeof artifactId === 'string' && artifactId && e.artifactId === artifactId)
+    ));
+    if (!target || !target.path) throw new Error('artifact not found in space');
+    // web artifact → 删除整个产物目录；文件 → 删除文件本身
+    let victim = path.resolve(target.path);
+    if (target.type === 'artifact') victim = path.dirname(victim);
+    let st: fs.Stats;
+    try { st = fs.statSync(victim); }
+    catch { return { ok: false, error: 'not_found' }; }
+    try {
+      if (typeof shell.trashItem === 'function') await shell.trashItem(victim);
+      else if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+      else fs.unlinkSync(victim);
+    } catch (err) {
+      try {
+        if (st.isDirectory()) fs.rmSync(victim, { recursive: true, force: true });
+        else fs.unlinkSync(victim);
+      }
+      catch {
+        return { ok: false, error: String((err as Error).message || 'delete failed') };
+      }
+    }
+    spacesArtifacts.invalidateSpaceArtifacts(spaceId);
+    try {
+      const fileIndexer = require('../features/file_indexer') as { invalidateFileCache?: (userId: string, absPath: string) => void };
+      fileIndexer.invalidateFileCache?.(ctx.userId, victim);
+    } catch { /* cache invalidation is best-effort */ }
+    void cid;
+    return { ok: true, path: victim };
   },
 
-  'spaces.artifacts.reject': async ({ spaceId, cid, name } = {}, ctx) => {
-    if (!safeId(spaceId) || !safeId(cid)) throw new Error('invalid args');
-    if (typeof name !== 'string' || !name) throw new Error('invalid name');
-    const result = await spacesArtifacts.rejectSpaceArtifact(ctx.userId, spaceId, cid, name);
-    if (!result.ok) throw new Error((result as { error: string }).error);
-    return { rejected: result.rejected };
+  // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
+  // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
+  'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (typeof sourceDir !== 'string' || !path.isAbsolute(sourceDir)) throw new Error('invalid sourceDir');
+    return spaceImport.importFolderIntoSpace(ctx.userId, spaceId, sourceDir, (p) => {
+      broadcastToRenderer('workspace-import:progress', p);
+    });
   },
 
   // ── 空间作用域（@ 选择器按空间能力过滤：agents ∪ skills = 模板 bundle ∪ extra）──
@@ -1473,8 +1686,69 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, files: results };
   },
 
-  'spaces.files.createText': async ({ spaceId, name }, ctx) => {
+  // 共享知识库（空间）文件夹导入：目录选择器 → 递归收集白名单文件 → 镜像目录结构导入。
+  'spaces.files.pickAndUploadDir': async ({ spaceId, targetDir } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const targetName = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      try {
+        const r = await spaceFiles.importSpaceFileFromPath(ctx.userId, spaceId, targetName, f.abs);
+        results.push({ name: f.rel, target: targetName, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target: targetName, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      ok: true,
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
+  },
+
+  // 共享知识库（空间）导入个人知识库：把个人库（contexts/）内容镜像导入到空间（spaces/），
+  // 对齐 ima「从个人知识库导入」：源目录结构保留，走空间索引队列（upsert）统一入库。
+  'spaces.files.importFromLib': async ({ spaceId, libName } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const r = await spaceImport.importLibIntoSpace(ctx.userId, spaceId, String(libName || ''));
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  // 共享知识库（空间）按选中的个人库文件导入：paths 为相对 contexts 根的文件路径数组
+  // （如 ["班级建设资料/a.pdf", "挑战资料/b.docx"]），供「导入内容」弹窗勾选后调用。
+  'spaces.files.importFromLibFiles': async ({ spaceId, paths } = {}, ctx) => {
+    if (!safeId(spaceId)) throw new Error('invalid spaceId');
+    if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
+    const list = Array.isArray(paths) ? paths.map((p) => String(p || '')).filter(Boolean) : [];
+    if (!list.length) return { ok: false, error: 'no files selected' };
+    const contextsRoot = userContextsDir(ctx.userId);
+    const absByRel = new Map<string, string>();
+    for (const rel of list) {
+      const abs = path.join(contextsRoot, rel);
+      try {
+        if (fs.existsSync(abs) && fs.statSync(abs).isFile()) absByRel.set(rel, abs);
+      } catch { /* 跳过不可读项 */ }
+    }
+    if (!absByRel.size) return { ok: false, error: 'selected files not found' };
+    const r = await spaceImport.importFilesIntoSpace(ctx.userId, spaceId, absByRel);
+    if (r.ok === false) return { ok: false, error: r.error };
+    return { ok: true, scanned: r.scanned, imported: r.imported, files: r.files };
+  },
+
+  'spaces.files.createText': async ({ spaceId, name }, ctx) => {    if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (typeof name !== 'string' || !name) throw new Error('invalid name');
     return spaceFiles.createSpaceTextFile(ctx.userId, spaceId, name);
   },
@@ -1537,7 +1811,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.files.status': async ({ spaceId, skipReconcile }, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     if (!await spaces.spaceExists(ctx.userId, spaceId)) throw new Error('not_found');
-    const reconcile = skipReconcile ? null : await spaceLibraryIndexer.reconcile(ctx.userId, spaceId);
+    // 快照先行：状态/文件列表直接读向量库（毫秒级），全量磁盘 reconcile
+    // 放后台补跑（in-flight 合并），不阻塞页签打开。状态变化经
+    // space.kb.events 实时推送，reconcile 结果并非首屏依赖。
+    if (!skipReconcile) {
+      void spaceLibraryIndexer.reconcile(ctx.userId, spaceId).catch((err) => {
+        log.warn('background space library reconcile failed', {
+          space_id: spaceId,
+          error: (err as Error)?.message || String(err),
+        });
+      });
+    }
     const summary = spaceLibraryIndexer.statusSummary(ctx.userId, spaceId);
     const files = spaceLibraryIndexer.listFiles(ctx.userId, spaceId).map((r) => ({
       name: r.rel_path,
@@ -1549,7 +1833,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       mtime: r.mtime,
       error: r.error || undefined,
     }));
-    return { summary, files, reconcile };
+    return { summary, files, reconcile: null };
   },
 
   'spaces.files.reconcile': async ({ spaceId }, ctx) => {
@@ -2280,25 +2564,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.candidates.promote': async ({ candidateId, riskAcknowledged, profileTarget } = {}, ctx) => {
     if (!safeId(candidateId)) throw new Error('invalid recall candidate id');
     if (riskAcknowledged !== undefined && typeof riskAcknowledged !== 'boolean') throw new Error('invalid risk acknowledgment');
+    // 落点只有一个 opaque fieldRef（PO contract 生成）。IPC 层只做形状与长度
+    // 校验，语义判定（模板存在/已安装/分节/字段/T-box）留给 PO 写入口——
+    // 收归前这里逐字段校验 groupId+section+fieldName，等于在 IPC 层复述一遍
+    // PO 的内部结构。
     if (profileTarget !== undefined) {
       if (!profileTarget || typeof profileTarget !== 'object' || Array.isArray(profileTarget)
-        || !safeId(profileTarget.groupId)
-        || typeof profileTarget.section !== 'string' || !profileTarget.section.trim() || profileTarget.section.length > 200
-        || typeof profileTarget.fieldName !== 'string' || !profileTarget.fieldName.trim() || profileTarget.fieldName.length > 200
-        || (profileTarget.templateId !== undefined && !safeId(profileTarget.templateId))) {
+        || typeof profileTarget.fieldRef !== 'string'
+        || !safeId(profileTarget.fieldRef)
+        || profileTarget.fieldRef.length > 512) {
         throw new Error('invalid personal profile target');
       }
     }
     const promoted = await recallCaptures.promoteRecallCaptureCandidate(ctx.userId, candidateId, {
       riskAcknowledged: riskAcknowledged === true,
-      ...(profileTarget ? {
-        profileTarget: {
-          groupId: profileTarget.groupId,
-          section: profileTarget.section.trim(),
-          fieldName: profileTarget.fieldName.trim(),
-          ...(profileTarget.templateId ? { templateId: profileTarget.templateId } : {}),
-        },
-      } : {}),
+      ...(profileTarget ? { profileTarget: { fieldRef: profileTarget.fieldRef } } : {}),
     });
     return {
       ok: true,
@@ -2927,11 +3207,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // catalog and reopen every agent.json. Actual definition mutations,
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
-    return {
-      agents: summary === true || summary === '1'
-        ? await agents.listAgentSummaries()
-        : await agents.listAgents(),
-    };
+    let agentList = summary === true || summary === '1'
+      ? await agents.listAgentSummaries()
+      : await agents.listAgents();
+
+    // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
+    // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
+    if (!onboardingState.getOnboardingCompleted()) {
+      agentList = agentList.filter((agent) => {
+        const runtime = agent && agent.runtime;
+        // 过滤掉所有 CLI 类型的 Agent
+        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+          return false;
+        }
+        return true;
+      });
+    }
+
+    return { agents: agentList };
   },
 
   'agents.get': async ({ agent_id }) => {
@@ -3068,12 +3361,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // ── Personal Ontology Groups ("记忆分组") ──
   'personalOntology.groups.list': async (_payload, ctx) => {
     const groups = await personalOntologyGroups.listGroups(ctx.userId);
-    // 运行时附加模板显示名（渲染层层级展示用，不落盘）
+    // 运行时附加模板显示名（渲染层层级展示用，不落盘）。显示名的唯一来源是
+    // contract 的目录条目——不再让调用方各自查 T-box 常量。
+    const contract = await import('../features/personal_ontology_contract');
     for (const g of groups) {
-      if (g.template_id) {
-        const template = getRoleTemplate(g.template_id);
-        if (template) g.template_name = template.name;
-      }
+      if (!g.template_id) continue;
+      const entry = contract.getRoleTemplateCatalogEntry(g.template_id);
+      if (entry) g.template_name = entry.name;
     }
     return { groups };
   },
@@ -3092,12 +3386,29 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
   'personalOntology.groups.read': async ({ groupId }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
-    // 复合 id（groupId::分节）→ 返回分节内容；普通 id → 整文件（chat-use 兼容）
-    return personalOntologyTemplateFiles.readContentById(ctx.userId, groupId);
+    // 三种入参都要读得出来：contract opaque ref（@ Picker 新路径）、复合 id
+    // （groupId::分节，历史草稿里的存量 token）、普通 group id。readOntologyEntry
+    // 内部按 ref 前缀分流后统一走 readContentById，chat-use 侧零改动。
+    const contract = await import('../features/personal_ontology_contract');
+    return contract.readOntologyEntry(ctx.userId, groupId);
   },
   'personalOntology.groups.write': async ({ groupId, content }, ctx) => {
     if (!groupId || typeof groupId !== 'string') throw new Error('missing groupId');
     return personalOntologyGroups.writeGroupContent(ctx.userId, groupId, String(content ?? ''));
+  },
+
+  // 可 @ 引用的本体条目（普通分组 + 已安装模板的分节）。返回的 ref 是
+  // PO contract 生成的 opaque 句柄：渲染层原样存、原样回传，不解析、不拼接。
+  'personalOntology.entries.list': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { entries: await contract.listOntologyEntries(ctx.userId) };
+  },
+
+  // 可写入的角色模板字段落点（已安装 ∩ T-box）。targets[].fieldRef 是 opaque
+  // 写入句柄，调用方只回传它；label 已拼好，渲染层不重组显示名。
+  'personalOntology.templates.fieldTargets': async (_payload, ctx) => {
+    const contract = await import('../features/personal_ontology_contract');
+    return { targets: await contract.listRoleTemplateFieldTargets(ctx.userId) };
   },
 
   // ── Personal Ontology Role Templates (角色模板) ──
@@ -3567,7 +3878,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cache.clearAll': async () => ({ bytes_freed: await cacheClearable.clearAllClearable() }),
 
   // ── Contexts (user-owned directory tree; vectorized via kb_indexer) ──
-  'contexts.tree': async () => ({ tree: contexts.listContextsTree() }),
+  'contexts.tree': async () => ({ tree: await contexts.listContextsTree() }),
 
   'contexts.read': async ({ path }) => {
     return contexts.readContextFile(path || '');
@@ -3603,6 +3914,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return contexts.uploadContextFile(target, buf);
   },
 
+  // KB 问答附件选择：返回本地文件路径元数据（挂载卡片 + askStream 读内容）。
+  'kbqa.attachPick': async ({ extensions } = {}) => {
+    const rawExts = Array.isArray(extensions) ? extensions : CHAT_PICK_EXTENSIONS;
+    const picked = await _pickLocalFiles('选择附件', rawExts, true);
+    const files = picked.map((filePath) => {
+      let bytes = 0;
+      try { bytes = fs.statSync(filePath).size; } catch { bytes = 0; }
+      return { name: path.basename(filePath), path: filePath, size: bytes };
+    });
+    return { files };
+  },
+
   'contexts.pickAndUpload': async ({ targetDir } = {}) => {
     const picked = await _pickLocalFiles('Choose files', CONTEXT_PICK_EXTENSIONS, true, /* seedWorkspaceOnFirstOpen */ true);
     const results = [];
@@ -3628,6 +3951,38 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       }
     }
     return { files: results };
+  },
+
+  // 导入整个文件夹：目录选择器 → 递归收集白名单文件 → 按目录结构镜像导入到库。
+  'contexts.pickAndUploadDir': async ({ targetDir } = {}) => {
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const res = parent
+      ? await dialog.showOpenDialog(parent, { title: '导入文件夹', properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ title: '导入文件夹', properties: ['openDirectory'] });
+    if (res.canceled || !res.filePaths?.length) return { canceled: true };
+    const dirAbs = res.filePaths[0];
+    const folderName = path.basename(dirAbs);
+    const files = await contexts.collectImportableFilesFromDir(dirAbs);
+    const results: Array<Record<string, unknown>> = [];
+    for (const f of files) {
+      const target = _targetInDir(targetDir, `${folderName}/${f.rel}`);
+      if (contexts.hasHiddenContextPathSegment(target)) {
+        results.push({ ok: false, name: f.rel, target, reason: 'hidden' });
+        continue;
+      }
+      try {
+        const r = await contexts.importContextFileFromPath(target, f.abs);
+        results.push({ name: f.rel, target, ...r });
+      } catch (err) {
+        results.push({ ok: false, name: f.rel, target, error: (err as Error)?.message || String(err) });
+      }
+    }
+    return {
+      folder: folderName,
+      scanned: files.length,
+      imported: results.filter((r) => r.ok).length,
+      files: results,
+    };
   },
 
   'contexts.mkdir': async ({ path }) => {
@@ -3681,6 +4036,182 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'library.writeText': async (payload, ctx) => {
     return _writeTextToLibrary(payload, ctx);
+  },
+
+  // KB library summary (知识库模块 S3)：逐文档要点 + 一句话总结 + 脑图骨架。
+  // 懒生成 + 库指纹缓存（features/kb_summary）；失败降级为文件清单。
+  // dir=个人库；spaceId=空间库（共享知识库）。
+  'kb.summary': async ({ dir, spaceId }, ctx) => {
+    const res = await kbSummary.kbSummarize(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB multi-level mind map (本地化 notebooklm mind-map 协议)：层级 JSON 供可视化。
+  // 支持 text 参数：基于对话回答文本生成；缺省基于知识库文档要点。
+  'kb.mindmap': async ({ dir, spaceId, force, text }, ctx) => {
+    const res = await kbMindmap.kbMindmap(ctx.userId, {
+      dir: typeof dir === 'string' && dir ? dir : null,
+      spaceId: typeof spaceId === 'string' && spaceId ? spaceId : null,
+      force: force === true,
+      text: typeof text === 'string' && text ? text : null,
+    }, {
+      complete: async (opts) => {
+        const r = await modelClient.chatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          skillList: [],
+          disableTools: true,
+        });
+        return { ok: r.ok, text: r.text, error: r.error };
+      },
+    });
+    return res;
+  },
+
+  // KB mind map 保存 / 列表 / 读取（用户数据目录 kb-mindmaps.json）。
+  'kb.mindmap.save': async ({ key, root }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k || !root || typeof root.label !== 'string') return { ok: false };
+    kbMindmap.saveMindmap(k, root as never);
+    return { ok: true, savedAt: kbMindmap.listMindmaps().find((m) => m.key === k)?.savedAt ?? Date.now() };
+  },
+  'kb.mindmap.list': async () => {
+    return { ok: true, items: kbMindmap.listMindmaps() };
+  },
+  'kb.mindmap.load': async ({ key }, ctx) => {
+    const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
+    return { ok: root !== null, root };
+  },
+
+  // 脑图弹出独立窗口：新开一个无边框 BrowserWindow 展示 SVG，适合大屏深度查看
+  'kb.mindmap.popout': async ({ html }) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false, error: 'no html' };
+    try {
+      const win = new BrowserWindow({
+        width: 900, height: 640, minWidth: 480, minHeight: 320,
+        title: '脑图',
+        backgroundColor: '#ffffff',
+        webPreferences: { sandbox: true },
+      });
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(source));
+      win.on('closed', () => { /* no-op */ });
+      return { ok: true };
+    } catch (err) {
+      log.warn('mindmap popout failed', { error: (err as Error)?.message || String(err) });
+      return { ok: false, error: 'popout failed' };
+    }
+  },
+
+  // 脑图 PDF 导出：隐藏窗口渲染 HTML → printToPDF → 保存
+  'kb.mindmap.exportPdf': async ({ html }, ctx) => {
+    const source = typeof html === 'string' && html ? html : '';
+    if (!source) return { ok: false };
+    try {
+      const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+      const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(source);
+      await win.loadURL(dataUrl);
+      const data = await win.webContents.printToPDF({ pageSize: 'A4', printBackground: true, margins: { marginType: 'default' } });
+      win.destroy();
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: '导出脑图 PDF',
+        defaultPath: `mindmap-${Date.now()}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, canceled: true };
+      const fs = await import('node:fs');
+      fs.writeFileSync(filePath, data);
+      return { ok: true, filePath };
+    } catch (err) {
+      console.error('[kb.mindmap.exportPdf] failed:', err);
+      return { ok: false };
+    }
+  },
+
+  // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
+  'kb.importWebUrl': async ({ dir, spaceId, url } = {}, ctx) => {
+    const u = String(url || '').trim();
+    if (!/^https?:\/\//i.test(u)) return { ok: false, error: '请输入有效的 http/https 链接' };
+    let resp: Response;
+    try {
+      resp = await fetch(u, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+    } catch (err) {
+      return { ok: false, error: '抓取失败：' + ((err as Error)?.message || String(err)) };
+    }
+    if (!resp.ok) return { ok: false, error: '抓取失败：HTTP ' + resp.status };
+    const html = await resp.text();
+    const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1]
+      ?.replace(/<[^>]+>/g, '').trim() || new URL(u).hostname || u;
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ').trim().slice(0, 30000);
+    const safeTitle = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 50) || '网页';
+    const fileName = `网页-${safeTitle}-${Date.now()}.md`;
+    const content = `# ${title}\n\n> 来源：${u}\n\n${text || '（网页无正文内容）'}\n`;
+    try {
+      if (spaceId) {
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const created = await spaceFiles.createSpaceTextFile(ctx.userId, spaceId, fileName);
+        if (!created.ok) return { ok: false, error: (created as { error?: string }).error || 'create failed' };
+        const updated = await spaceFiles.updateSpaceTextFile(ctx.userId, spaceId, fileName, content);
+        if (!updated.ok) return { ok: false, error: (updated as { error?: string }).error || 'write failed' };
+      } else {
+        const base = typeof dir === 'string' && dir ? String(dir).replace(/^\/+|\/+$/g, '') : '';
+        const res = contexts.writeContextFileForUser(ctx.userId, base ? `${base}/${fileName}` : fileName, content);
+        if (!res.ok) return { ok: false, error: (res as { error?: string }).error };
+      }
+      return { ok: true, fileName };
+    } catch (err) {
+      return { ok: false, error: '写入失败：' + ((err as Error)?.message || String(err)) };
+    }
+  },
+
+  // 个人知识库迁移：把源库（from）的全部内容复制进目标库（to），随后由 kb.reconcile 重建索引。
+  'kb.migrateLib': async ({ from, to } = {}, ctx) => {
+    const f = String(from || '').trim();
+    const t = String(to || '').trim();
+    if (!f || !t || f === t) return { ok: false, error: '源库与目标库不能相同' };
+    const root = userContextsDir(ctx.userId);
+    const src = path.join(root, f);
+    const dst = path.join(root, t);
+    if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) return { ok: false, error: '源知识库不存在' };
+    if (!fs.existsSync(dst) || !fs.statSync(dst).isDirectory()) return { ok: false, error: '目标知识库不存在' };
+    try {
+      fs.cpSync(src, dst, { recursive: true, force: true });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: '迁移失败：' + ((err as Error)?.message || String(err)) };
+    }
   },
 
   // ── Knowledge base (vector store) ──
@@ -4072,6 +4603,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.providerId, 'providerId', 120),
     boundedText(args?.modelId, 'modelId', 200),
   ),
+  // 远端模型发现（统一执行入口配套）：调服务自己的 list-models 端点，
+  // 只读不落库——渲染层展示列表，用户勾选后经 model.add 导入。
+  'customProviders.fetchModels': async (args, ctx) => customProviders.fetchCustomProviderModels(
+    ctx.userId,
+    boundedText(args?.providerId, 'providerId', 120),
+  ),
   'customProviders.ccswitch.probe': async () => {
     const probe = probeCcSwitch();
     return { available: probe.available, reason: probe.reason };
@@ -4105,7 +4642,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       })),
     };
   },
-  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId } = {}, ctx) => {
+  'customProviders.ccswitch.sync': async ({ externalIds, modelsByExternalId, baseUrlsByExternalId, abilitiesByExternalId } = {}, ctx) => {
     const selected = Array.isArray(externalIds)
       ? externalIds.filter((id): id is string => typeof id === 'string' && !!id)
       : undefined;
@@ -4115,7 +4652,26 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const bases = baseUrlsByExternalId && typeof baseUrlsByExternalId === 'object' && !Array.isArray(baseUrlsByExternalId)
       ? baseUrlsByExternalId
       : undefined;
-    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases);
+    // Probed per-model abilities (sparse; aggregator endpoints only).
+    // Validate one level deep: { [externalId]: { [modelId]: { contextWindow?, vision? } } }.
+    let abilities: Record<string, Record<string, { contextWindow?: number; vision?: boolean }>> | undefined;
+    if (abilitiesByExternalId && typeof abilitiesByExternalId === 'object' && !Array.isArray(abilitiesByExternalId)) {
+      for (const [extId, map] of Object.entries(abilitiesByExternalId)) {
+        if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+        const clean: Record<string, { contextWindow?: number; vision?: boolean }> = {};
+        for (const [modelId, raw] of Object.entries(map)) {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+          const a: { contextWindow?: number; vision?: boolean } = {};
+          const w = (raw as Record<string, unknown>).contextWindow;
+          if (typeof w === 'number' && Number.isSafeInteger(w) && w > 0) a.contextWindow = w;
+          const v = (raw as Record<string, unknown>).vision;
+          if (typeof v === 'boolean') a.vision = v;
+          if (a.contextWindow !== undefined || a.vision !== undefined) clean[modelId] = a;
+        }
+        if (Object.keys(clean).length) (abilities || (abilities = {}))[extId] = clean;
+      }
+    }
+    return customProviders.syncFromCcSwitch(ctx.userId, selected, undefined, models, bases, undefined, abilities);
   },
   'customProviders.storeActiveCliConfig': async ({ cli } = {}, ctx) => {
     if (typeof cli !== 'string' || !cli) {
@@ -4356,6 +4912,48 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // Skill listing reflects enable/disable + remove immediately.
     try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
     return result;
+  },
+  // UI-initiated install: the renderer already showed the exact command in a
+  // confirm modal (the UI's version of the CLI consent face). Deps consent
+  // stays off; the CLI path remains the only way to consent dependencies.
+  'packages.install': async (payload: { source?: unknown; name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.source !== 'string' || typeof payload?.name !== 'string') {
+      throw new Error('invalid source/name');
+    }
+    const pkgs = await import('../features/packages');
+    const result = await pkgs.runPackageInstall(ctx.userId, { source: payload.source, name: payload.name });
+    try { (await import('../model/core-agent/skill-registry')).invalidateSkills(); } catch { /* runner not loaded */ }
+    return result;
+  },
+  // ── Plugin-provided UI (plan §B) ────────────────────────────────────────
+  // The iframe-hosted plugin page talks to the renderer via postMessage; the
+  // renderer forwards through these handlers. Only allowlisted methods exist
+  // (see features/plugin_ui.ts); api keys are injected main-side and never
+  // returned to the renderer.
+  'packages.ui.info': async (payload: { name?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    const info = await ui.pluginUiInfo(ctx.userId, payload.name);
+    const { createLogger } = await import('../logger');
+    createLogger('plugin-ui-info').info('packages.ui.info served', {
+      package_name: payload.name,
+      ok: info.ok,
+      skill_count: info.info?.skills?.length ?? -1,
+      error: (info as { error?: string }).error ?? undefined,
+    });
+    return info.ok ? { ok: true as const, info: info.info } : info;
+  },
+  'packages.ui.invoke': async (payload: { name?: unknown; method?: unknown; params?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string' || typeof payload?.method !== 'string') {
+      throw new Error('invalid name/method');
+    }
+    const ui = await import('../features/plugin_ui');
+    return ui.dispatchPluginUiInvoke(ctx.userId, payload.name, payload.method, payload.params);
+  },
+  'packages.ui.save-config': async (payload: { name?: unknown; config?: unknown }, ctx: { userId: string }) => {
+    if (typeof payload?.name !== 'string') throw new Error('invalid name');
+    const ui = await import('../features/plugin_ui');
+    return ui.savePluginRuntimeConfig(ctx.userId, payload.name, payload.config);
   },
   // Open-tier skills (external packages + global folders) for the read-only
   // "From packages & global folders" group in the skills panel. External and
@@ -4696,6 +5294,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (st.size > MAX_OFFICE_PREVIEW_BYTES) {
       return { ok: false, error: 'too_large', size: st.size, cap: MAX_OFFICE_PREVIEW_BYTES };
     }
+    const cacheKey = `${norm}:${st.size}:${st.mtimeMs}:${payload?.mode === 'card' ? 'card' : 'full'}`;
+    const cached = _officePreviewCacheGet(cacheKey);
+    if (cached) return { ok: true, html: cached.html, kind: cached.kind, size: st.size, cached: true };
+    const compact = payload?.mode === 'card';
 
     try {
       const buf = fs.readFileSync(norm);
@@ -4710,7 +5312,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         const { pptxBufferToHtml } = await import('../util/extract-office');
         fragment = pptxBufferToHtml(buf);
       }
-      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>');
+      const html = _wrapOfficePreviewHtml(kind, path.basename(norm), fragment || '<p class="office-muted">(no previewable content)</p>', { compact });
+      _officePreviewCachePut(cacheKey, html, kind);
       return { ok: true, html, kind, size: st.size };
     } catch (err) {
       return { ok: false, error: String((err as Error).message || 'preview failed') };
@@ -4840,6 +5443,25 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // unexpected throws.
 
 const streamHandlers: Record<string, StreamHandler> = {
+  'stt.results': async function* ({ sessionId }, ctx, signal) {
+    if (typeof sessionId !== 'string' || !safeId(sessionId)) {
+      yield { type: 'error', text: 'invalid session id' };
+      return;
+    }
+    let lastPartial = '';
+    while (!signal.aborted) {
+      const partial = stt.currentPartial(ctx.userId, sessionId);
+      if (partial && partial !== lastPartial) {
+        lastPartial = partial;
+        yield { type: 'event', event: { partial } };
+      }
+      if (stt.isSessionDone(ctx.userId, sessionId)) {
+        yield { type: 'event', event: { final: stt.currentFinal(ctx.userId, sessionId) } };
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+  },
   /**
    * Read-only aside answer. Deliberately NOT routed through groupChat.send /
    * bus.enqueue: doing so would append to the main transcript and add a second
@@ -4891,11 +5513,51 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
   },
 
+  // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
+  // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
+  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
+    const q = String(question ?? '').trim();
+    if (!q) {
+      yield { type: 'error', text: 'empty question' };
+      return;
+    }
+    try {
+      const events = kbQa.kbAskStream(ctx.userId, {
+        spaceId: space_id ? String(space_id) : null,
+        question: q,
+        k: typeof k === 'number' ? k : undefined,
+        attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
+        history: Array.isArray(history) ? history.filter((h: any) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string') : undefined,
+      }, {
+        stream: (opts) => modelClient.streamChatWithModel({
+          userId: opts.userId,
+          message: opts.message,
+          systemPrompt: opts.systemPrompt,
+          sessionId: opts.sessionId,
+          // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
+          skillList: [],
+          disableTools: true,
+          abortSignal: signal,
+        }) as AsyncIterable<{ type: string; text?: string }>,
+      });
+      for await (const event of events) {
+        if (signal.aborted) return;
+        yield event as { type: string; text?: string };
+      }
+    } catch (err) {
+      yield { type: 'error', text: (err as Error).message };
+    }
+  },
+
   'cogseed.task.events': async function* (payload, ctx, signal) {
     yield* cogseedBackend.cogseedIpcService.streamEvents(ctx.userId, payload, signal);
   },
 
-  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, retry_message_id, edit_message_id }, ctx, signal) {
+  'cogseed.dashboard.watch': async function* (_payload, ctx, signal) {
+    yield* cogseedBackend.cogseedIpcService.streamDashboardChanges(ctx.userId, signal);
+  },
+
+  'conversations.sendStream': async function* ({ cid, content, attachments, use_selections, references, recipient_agent_id, recipient_origin, execution_config, retry_message_id, retry_request_id, edit_message_id }, ctx, signal) {
     if (!safeId(cid)) {
       yield { type: 'error', text: 'invalid cid' };
       return;
@@ -4913,6 +5575,19 @@ const streamHandlers: Record<string, StreamHandler> = {
         || (recipient_origin !== 'user_selection' && recipient_origin !== 'cli_fallback'))) {
       yield { type: 'error', text: 'invalid recipient route' };
       return;
+    }
+    // Per-task execution config (unified execution entry). Shape-check here;
+    // the group-chat facade re-validates and drops stale/unknown values.
+    if (execution_config !== undefined) {
+      const ec: any = execution_config;
+      const badShape = !ec || typeof ec !== 'object'
+        || (ec.provider !== undefined && typeof ec.provider !== 'string')
+        || (ec.model !== undefined && typeof ec.model !== 'string')
+        || (ec.effort !== undefined && ec.effort !== 'off' && ec.effort !== 'low' && ec.effort !== 'high');
+      if (badShape) {
+        yield { type: 'error', text: 'invalid execution config' };
+        return;
+      }
     }
     // Legacy `conversations.stream` is now a thin wrapper around the
     // group_chat bus. Subscribe to the bus directly BEFORE calling
@@ -4970,6 +5645,9 @@ const streamHandlers: Record<string, StreamHandler> = {
               cid,
               failedMessageId: retryMessageId,
               visibleText: text,
+              requestId: typeof retry_request_id === 'string' && safeId(retry_request_id)
+                ? retry_request_id
+                : `req-chat-retry-${genId12()}`,
             })
             : await groupChat.send({
                 userId: ctx.userId, cid, text,
@@ -4977,6 +5655,7 @@ const streamHandlers: Record<string, StreamHandler> = {
                 ...(useSelections.length ? { use_selections: useSelections } : {}),
                 ...(refs.length ? { references: refs } : {}),
                 ...(recipient_agent_id ? { recipient_agent_id, recipient_origin } : {}),
+                ...(execution_config ? { execution_config } : {}),
               });
       } catch (err) {
         sendErr = err;
@@ -5303,6 +5982,10 @@ const streamHandlers: Record<string, StreamHandler> = {
 
 interface StreamState { cancelled: boolean; controller: AbortController; sender: WebContents }
 const activeStreams = new Map<string, StreamState>();
+/** process 事件批量窗口：16ms 内相邻 delta 打包成一条 IPC 消息。 */
+const STREAM_BATCH_WINDOW_MS = 16;
+/** 单条批量消息最多携带的 process 事件数（防止长时间突发时包过大）。 */
+const STREAM_BATCH_MAX = 64;
 
 /**
  * Resolve the current user context for an IPC request. `user.init` must be
@@ -5331,6 +6014,14 @@ export const p3394BridgeIpcPort = new P3394IpcChannel('ipc', {
 });
 
 export function register(): void {
+  // Desktop live-refresh rail: every persisted group-chat message (external
+  // channel inbound included — nothing in the renderer holds a stream for
+  // those conversations) is pushed to all windows so the sidebar and the
+  // open conversation can refresh without a manual reload.
+  setGroupChatMessageBroadcaster((info) => {
+    broadcastToRenderer('conversations:updated', info);
+  });
+
   const handleInvoke = async (event, request: unknown) => {
     if (!isTrustedIpcSender(event.sender)) {
       log.warn('rejected invoke from untrusted renderer');
@@ -5443,8 +6134,36 @@ export function register(): void {
     const envelope = parseStreamEnvelope(request);
     if (!envelope) return;
     const { requestId, channel, payload } = envelope;
+    // 逐 token 的 process 事件每发一条都是一次 IPC 序列化 + 渲染层一次
+    // SSE 解析，流式高峰期（~50 事件/秒 × 若干并发流）会淹没主→渲染
+    // 通道。把相邻的 process 事件打包成数组一次发送，preload 拆包后
+    // 逐个回调 —— 渲染层事件语义与顺序完全不变，只减少消息数。
+    // 非 process 事件（message / turn_end / done / error 等结构事件）
+    // 立即发送，不引入可感知延迟。
+    const pending: unknown[] = [];
+    let flushTimer: NodeJS.Timeout | null = null;
+    const flushBatch = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (!pending.length) return;
+      if (event.sender.isDestroyed()) return;
+      const batch = pending.splice(0, pending.length);
+      event.sender.send(`stream:${requestId}`, batch);
+    };
     const out = (ev: unknown) => {
       if (event.sender.isDestroyed()) return;
+      if (ev && typeof ev === 'object' && (ev as { type?: string }).type === 'process') {
+        pending.push(ev);
+        if (pending.length >= STREAM_BATCH_MAX) {
+          flushBatch();
+        } else if (!flushTimer) {
+          flushTimer = setTimeout(flushBatch, STREAM_BATCH_WINDOW_MS);
+        }
+        return;
+      }
+      flushBatch();
       event.sender.send(`stream:${requestId}`, ev);
     };
 

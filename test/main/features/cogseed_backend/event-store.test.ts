@@ -53,4 +53,125 @@ describe('CogSeed task event store', () => {
 
     await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).rejects.toThrow(/malformed CogSeed event/i);
   });
+
+  it('rejects a persisted event type outside the protocol schema', async () => {
+    const task = (await setupTask()).task;
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const file = paths.cogseedTaskEventsFile(USER, task.taskId);
+    const [created] = fs.readFileSync(file, 'utf8').trimEnd().split('\n').map((line) => JSON.parse(line));
+    created.type = 'task.paused';
+    fs.writeFileSync(file, `${JSON.stringify(created)}\n`, 'utf8');
+
+    await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).rejects.toThrow(/malformed CogSeed event/i);
+  });
+
+  it('truncates only an unterminated crash tail and continues the event sequence', async () => {
+    const task = (await setupTask()).task;
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const file = paths.cogseedTaskEventsFile(USER, task.taskId);
+    fs.appendFileSync(file, '{"schemaVersion":1,"eventId":"cogseed-event-interrupted"', 'utf8');
+
+    await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.created', sequence: 1 }),
+    ]);
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('cogseed-event-interrupted');
+
+    await expect(events.appendCogSeedTaskEvent(
+      USER,
+      task.taskId,
+      task.sessionId,
+      'task.queued',
+      {},
+    )).resolves.toMatchObject({ sequence: 2 });
+  });
+
+  it('preserves a complete final event whose trailing newline was interrupted', async () => {
+    const task = (await setupTask()).task;
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const file = paths.cogseedTaskEventsFile(USER, task.taskId);
+    await events.appendCogSeedTaskEvent(USER, task.taskId, task.sessionId, 'task.queued', {});
+    const stored = fs.readFileSync(file);
+    fs.writeFileSync(file, stored.subarray(0, stored.length - 1));
+
+    await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.created', sequence: 1 }),
+      expect.objectContaining({ type: 'task.queued', sequence: 2 }),
+    ]);
+    expect(fs.readFileSync(file, 'utf8').endsWith('\n')).toBe(true);
+    await expect(events.appendCogSeedTaskEvent(
+      USER,
+      task.taskId,
+      task.sessionId,
+      'task.started',
+      {},
+    )).resolves.toMatchObject({ sequence: 3 });
+  });
+
+  it('does not discard malformed rows in the middle of an event stream', async () => {
+    const task = (await setupTask()).task;
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const file = paths.cogseedTaskEventsFile(USER, task.taskId);
+    await events.appendCogSeedTaskEvent(USER, task.taskId, task.sessionId, 'task.queued', {});
+    const [created, queued] = fs.readFileSync(file, 'utf8').trimEnd().split('\n');
+    fs.writeFileSync(file, `${created}\n{not-json}\n${queued}\n`, 'utf8');
+
+    await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).rejects.toThrow(/line 2/i);
+    expect(fs.readFileSync(file, 'utf8')).toContain('{not-json}\n');
+  });
+
+  it('publishes user-isolated Dashboard invalidations without event payload data', async () => {
+    const task = (await setupTask()).task;
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const received: unknown[] = [];
+    const otherUserReceived: unknown[] = [];
+    const unsubscribe = events.subscribeCogSeedDashboardChanges(USER, (change) => received.push(change));
+    const unsubscribeOther = events.subscribeCogSeedDashboardChanges('cogseed-event-other', (change) => otherUserReceived.push(change));
+
+    await events.appendCogSeedTaskEvent(USER, task.taskId, task.sessionId, 'tool.started', {
+      toolName: 'read_file',
+      secret: 'must-not-cross-dashboard-stream',
+    });
+
+    expect(received).toEqual([{
+      schemaVersion: 1,
+      revision: expect.any(Number),
+      changeKind: 'task',
+      taskId: task.taskId,
+      sessionId: task.sessionId,
+      occurredAt: expect.any(String),
+      domains: ['tasks', 'sessions', 'agents', 'collaboration'],
+    }]);
+    expect(JSON.stringify(received)).not.toContain('secret');
+    expect(JSON.stringify(received)).not.toContain('read_file');
+    expect(otherUserReceived).toEqual([]);
+
+    unsubscribe();
+    unsubscribeOther();
+    await events.appendCogSeedTaskEvent(USER, task.taskId, task.sessionId, 'task.completed', {});
+    expect(received).toHaveLength(1);
+  });
+
+  it('isolates a failing Dashboard subscriber from durable event persistence', async () => {
+    const task = (await setupTask()).task;
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const healthyListener = vi.fn();
+    const unsubscribeBroken = events.subscribeCogSeedDashboardChanges(USER, () => { throw new Error('renderer listener failed'); });
+    const unsubscribeHealthy = events.subscribeCogSeedDashboardChanges(USER, healthyListener);
+
+    await expect(events.appendCogSeedTaskEvent(USER, task.taskId, task.sessionId, 'task.queued', {})).resolves.toMatchObject({
+      type: 'task.queued',
+    });
+
+    await expect(events.readCogSeedTaskEvents(USER, task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.created' }),
+      expect.objectContaining({ type: 'task.queued' }),
+    ]);
+    expect(healthyListener).toHaveBeenCalledTimes(1);
+    unsubscribeBroken();
+    unsubscribeHealthy();
+  });
 });

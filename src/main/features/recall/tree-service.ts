@@ -13,7 +13,7 @@ import { RECALL_SCHEMA_VERSION, type RecallJsonRecord } from './types';
 
 export const COGNITION_TREE_CONTRACT = 'ability_asset_relations';
 /**
- * v2（G-8）：树上除正式资产外还长「芽」——尚未晋升、但用户现在就能确认成
+ * v2：树上除正式资产外还长「芽」——尚未晋升、但用户现在就能确认成
  * 正式资产的候选。v1 记录只有 asset 节点，读到时按下面的 `readCognitionTree`
  * 原样重投一次即可，不需要迁移器：树本来就是投影，唯一事实源仍是资产与候选
  * 记录本身，重建不会丢用户数据。
@@ -277,7 +277,7 @@ export async function readCognitionTree(userId: string): Promise<CognitionTreeRe
   const raw = await readRecallJsonRecord(userId, 'tree', 'graph');
   if (!raw) return undefined;
   // Records written before C7 contain source/candidate/usage lifecycle nodes;
-  // records written before G-8 (contractVersion 1) carry no candidate buds.
+  // records written before v2 (contractVersion 1) carry no candidate buds.
   // Both are re-projected once from the assets/candidates that own the facts.
   if (!isCurrentContract(raw)) return rebuildCognitionTree(userId);
   assertCurrentTree(raw);

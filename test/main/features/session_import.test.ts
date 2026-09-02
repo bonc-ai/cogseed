@@ -29,6 +29,27 @@ vi.mock('../../../src/main/model/client', () => ({
   },
   async chatWithModel() { return { ok: true, text: '', error: '', aborted: false }; },
 }));
+// The resume welcome's action plan picks its model path via
+// `auth.hasConfiguredModel()`: configured → core-agent/runner, unconfigured →
+// a real local CLI spawn. Neither may run for real in tests — the CLI path
+// blocks for its full action-plan timeout on dev machines that have CLIs
+// installed, leaving the extraction stuck in 'pending'. Force the configured
+// branch and stub the runner so the pipeline settles deterministically.
+vi.mock('../../../src/main/features/auth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/features/auth')>();
+  return { ...actual, hasConfiguredModel: () => ({ configured: true }) };
+});
+vi.mock('../../../src/main/model/core-agent/runner', () => ({
+  async buildRunner() {
+    return { runner: { runReflection: async () => '' } };
+  },
+}));
+
+// Welcome generation may fall back to an installed local CLI when no API
+// model is configured. This pipeline test must not launch a real user tool.
+vi.mock('../../../src/main/features/local_agents/fallback-picker', () => ({
+  pickBestCliForFallback: vi.fn(async () => null),
+}));
 
 let tmpDir: string;
 let homeDir: string;
@@ -335,7 +356,7 @@ describe('session_import › skill-import (Claude skills → skill library)', ()
 describe('session_import › full pipeline (importClaudeSession)', () => {
   /** B+ fast import: import returns before extraction; poll the persisted
    *  extraction state until it settles (done/failed). */
-  async function waitForExtraction(userId: string, cid: string, timeoutMs = 4000) {
+  async function waitForExtraction(userId: string, cid: string, timeoutMs = 15000) {
     const { getExtractionState } = await import(
       '../../../src/main/features/session_import/extraction-background'
     );

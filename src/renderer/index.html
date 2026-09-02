@@ -9,10 +9,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CogSeed</title>
   <link rel="stylesheet" href="./vendor/xterm/xterm.css" />
+  <link rel="stylesheet" href="./tokens.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./onboarding.css" />
+  <link rel="stylesheet" href="./ui-components.css" />
+  <link rel="stylesheet" href="./plugins.css" />
   <script>
     // macOS 无边框窗口（main/index.ts: titleBarStyle hiddenInset）：红绿灯
     // 悬浮在内容上，CSS 据此声明红绿灯让位与各视图顶部条的窗口拖拽区。
@@ -42,6 +45,8 @@
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
+        <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span><span class="sidebar-btn-chip kb-new-chip" data-i18n="sidebar.kb_new">新</span></button>
+        <button class="sidebar-btn" id="run-center-btn"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行中心</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
       </div>
@@ -68,7 +73,6 @@
            data-i18n-title="sidebar.resize_title"
            title="Drag to resize · double-click to reset"></div>
     </aside>
-
     <main class="main-content">
       <div class="main-top-actions">
         <div class="model-guard-slot" id="model-guard-slot"></div>
@@ -107,10 +111,17 @@
               </div>
               <div class="chat-quote-preview" id="new-chat-quote-preview" style="display:none"></div>
               <textarea id="new-chat-input" data-i18n-placeholder="new_chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors, Library files." rows="2"></textarea>
+              <!-- 语音输入波形面板（新建会话）：录音时显示，波形随真实音量起伏。 -->
+              <div class="chat-stt-panel" id="new-chat-stt-panel" hidden>
+                <div class="chat-stt-wave" id="new-chat-stt-wave" aria-hidden="true"></div>
+                <div class="chat-stt-meta">
+                  <span class="chat-stt-hint" data-i18n="chat.stt.listening">正在聆听…</span>
+                  <button type="button" class="chat-stt-cancel" id="new-chat-stt-cancel" data-i18n="chat.stt.cancel">取消</button>
+                </div>
+              </div>
               <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
                    P11: [+] | divider | [@agent] | [workspace - JS-injected] |
-                   [skill] | spacer | [send]. The open-source build strips
-                   voice input, so send owns the right spacer. -->
+                   [skill] | spacer | [model+effort] [mic] [send]. -->
               <div class="chat-bottom-bar">
                 <button type="button" class="chat-attach-btn" id="new-chat-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
                 <span class="chat-composer-divider" aria-hidden="true"></span>
@@ -128,6 +139,11 @@
                     <span data-ui-icon="x" data-ui-icon-class="chip-close-icon"></span>
                   </button>
                 </div>
+                <button type="button" class="chat-stt-btn" id="new-chat-stt-btn"
+                        data-i18n-title="chat.stt.title" title="语音输入" aria-label="语音输入" aria-pressed="false">
+                  <span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon chat-stt-icon-mic"></span>
+                  <span data-ui-icon="square" data-ui-icon-class="chat-stt-icon chat-stt-icon-stop"></span>
+                </button>
                 <button id="new-chat-send-btn" class="chat-send-btn" data-i18n-title="new_chat.send_title" title="Send">
                   <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                 </button>
@@ -184,12 +200,15 @@
                  `_refreshChatHeader()` in conversation.js. -->
             <div class="chat-header" id="chat-header">
               <div class="chat-header-main">
+                <nav class="chat-header-breadcrumb" id="chat-header-breadcrumb" aria-label="面包屑导航" hidden></nav>
+                <div class="chat-header-main-inline">
                 <div class="chat-header-title-row">
                   <h1 class="chat-header-title" id="chat-header-title"></h1>
                   <input type="text" class="chat-header-title-input" id="chat-header-title-input"
                          autocomplete="off" spellcheck="false" hidden />
                 </div>
                 <div class="chat-header-meta" id="chat-header-meta"></div>
+                </div>
               </div>
               <div class="chat-header-actions">
                 <button type="button" class="chat-header-details-btn" id="chat-terminal-toggle"
@@ -268,6 +287,14 @@
                 </div>
                 <div class="chat-quote-preview" id="chat-quote-preview" style="display:none"></div>
                 <textarea id="chat-input" data-i18n-placeholder="chat.input_placeholder" placeholder="Type @ to choose agents, skills, connectors." rows="2"></textarea>
+                <!-- 语音输入波形面板：录音时显示，波形随真实音量起伏。 -->
+                <div class="chat-stt-panel" id="chat-stt-panel" hidden>
+                  <div class="chat-stt-wave" id="chat-stt-wave" aria-hidden="true"></div>
+                  <div class="chat-stt-meta">
+                    <span class="chat-stt-hint" data-i18n="chat.stt.listening">正在聆听…</span>
+                    <button type="button" class="chat-stt-cancel" id="chat-stt-cancel" data-i18n="chat.stt.cancel">取消</button>
+                  </div>
+                </div>
                 <!-- Composer bottom bar order matches PC/docs/design/PATTERNS.md
                      P11: [+] | divider | [@agent] | [workspace - JS-injected] |
                      [skill] | spacer | [send].                      by `chat-send-btn { margin-left: auto }`. -->
@@ -278,18 +305,35 @@
                     <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
                     <span class="chat-recipient-name" id="chat-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
                   </button>
+                  <!-- 每会话访问权限：紧跟工作空间 chip（JS 注入在 recipient 之后）。 -->
+                  <span class="chat-permission-chip" id="chat-permission-chip" data-i18n-title="chat.permission.title" title="访问权限">
+                    <span data-ui-icon="lock" data-ui-icon-class="chat-permission-chip-icon"></span>
+                    <select class="chat-permission-select" id="chat-permission-mode-select" aria-label="访问权限"></select>
+                  </span>
                   <!-- Workspace chip is injected by user-workspace.js right after
                        the recipient chip — see initUserWorkspace(). -->
                   <div class="chat-skill-chip" id="chat-skill-chip" data-target="conversation" style="display:none">
                     <span class="chip-label"></span>
-                    <span class="chip-close" data-i18n-title="chat.chip_remove_title" title="Remove">×</span>
+                    <button type="button" class="chip-close" data-i18n-title="chat.chip_remove_title" data-i18n-aria-label="chat.chip_remove_title" title="Remove" aria-label="Remove">
+                      <span data-ui-icon="x" data-ui-icon-class="chip-close-icon"></span>
+                    </button>
                   </div>
+                  <button type="button" class="chat-stt-btn" id="chat-stt-btn"
+                          data-i18n-title="chat.stt.title" title="语音输入" aria-label="语音输入" aria-pressed="false">
+                    <span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon chat-stt-icon-mic"></span>
+                    <span data-ui-icon="square" data-ui-icon-class="chat-stt-icon chat-stt-icon-stop"></span>
+                  </button>
                   <button id="chat-send-btn" class="chat-send-btn" data-i18n-title="chat.send_title" title="Send">
                     <span data-ui-icon="send" data-ui-icon-class="send-icon"></span>
                     <span data-ui-icon="stop" data-ui-icon-class="stop-icon"></span>
                   </button>
+                  <!-- 模型 + 思考强度：由 model-chip.js 注入合成 chip，紧跟发送按钮。 -->
                 </div>
               </div>
+              <!-- 会话统计行（Task 8）：输入区下方常驻显示当前会话的 token
+                   用量折叠结果（轮数/耗时/速率/缓存/上下文占用/费用）。
+                   无带 metrics 的消息时整行 hidden（conversation.js 控制）。 -->
+              <div id="chat-session-stats" class="chat-session-stats" hidden></div>
             </div>
             <!-- Bottom-docked integrated terminal (front-end mock; populated by
                  modules/terminal-panel.js). Toggle via #chat-terminal-toggle. -->
@@ -628,10 +672,12 @@
            MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
       <section class="panel" id="panel-connections">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="connections-container">
           <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="连接">
             <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
             <button type="button" class="connections-tab" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab" data-connections-tab="plugins" data-i18n="connections.tab.plugins">插件</button>
             <button type="button" class="connections-tab" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
             <button type="button" class="connections-tab" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
             <button type="button" class="connections-tab" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">触点</button>
@@ -692,6 +738,10 @@
                   <div class="agents-detail-section" id="agents-detail-runtime-section" style="display:none">
                     <div class="agents-detail-label" data-i18n="agents.label_runtime">External agent</div>
                     <div class="agents-detail-runtime" id="agents-detail-runtime"></div>
+                  </div>
+                  <div class="agents-detail-section" id="agents-detail-exec-defaults-section" style="display:none">
+                    <div class="agents-detail-label" data-i18n="agents.label_exec_defaults">Default execution config</div>
+                    <div class="agents-detail-exec-defaults" id="agents-detail-exec-defaults"></div>
                   </div>
                   <div class="agents-detail-section" id="agents-detail-gateway-section" style="display:none">
                     <div class="agents-detail-label" data-i18n="agents.label_gateway_status">P3394 gateway</div>
@@ -807,6 +857,12 @@
                   <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
                 </div>
               </div>
+            </div>
+
+            <!-- 插件 → 插件中心（安装/启停/更新/移除 + 插件自带工作台 iframe）。
+                 壳在此，列表与工作台由 plugins.js 懒加载渲染到 #plugins-root。 -->
+            <div class="connections-tab-pane" id="connections-pane-plugins" data-connections-pane="plugins" hidden>
+              <div class="plugins-root" id="plugins-root"></div>
             </div>
 
             <!-- 数据源 → 入口卡跳转到资料库面板 -->
@@ -1021,25 +1077,33 @@
            opened from the project-detail page's Automation tab). -->
       <section class="panel" id="panel-auto">
         <div class="auto-view">
-          <div class="auto-header">
-            <span class="auto-title-text" data-i18n="auto.title">Auto</span>
-            <span class="auto-header-count" id="auto-header-count"></span>
-            <button type="button" class="btn btn-sm auto-header-add" id="auto-add-btn" data-i18n="auto.add_btn">+ Create</button>
-          </div>
+          <div id="auto-page-header"></div>
           <div class="auto-scroll">
             <div class="auto-intro" data-i18n="auto.subtitle">Run tasks on a schedule and let AI handle the repetitive work</div>
             <div class="auto-sync-note" id="auto-sync-note" hidden></div>
+            <div class="auto-page-state" id="auto-page-state" aria-live="polite"></div>
             <div class="auto-list" id="auto-list"></div>
             <!-- Starter-template grid, painted by auto.js when the list is empty. -->
             <div class="auto-templates" id="auto-templates" hidden></div>
-            <div class="auto-empty empty" id="auto-empty" data-i18n="auto.empty">No auto tasks yet</div>
           </div>
         </div>
       </section>
 
+      <!-- Run Center: private Task/Event projections only, loaded on demand. -->
+      <section class="panel" id="panel-run-center">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <div id="run-center-root"></div>
+      </section>
+
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
       <section class="panel" id="panel-workspace">
+        <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="ws-view" id="ws-view"></div>
+      </section>
+
+      <!-- Knowledge Base (知识库工作台：生态 rail + 三栏，由 kb-eco.js / kb-workbench.js 渲染) -->
+      <section class="panel" id="panel-kb">
+        <div class="kb-view" id="kb-view"></div>
       </section>
 
       <!-- Settings -->
@@ -1052,6 +1116,7 @@
             <button class="settings-tab" data-settings-tab="usage" data-i18n="settings.tab.usage">账号与用量</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
             <button class="settings-tab" data-settings-tab="security" data-i18n="settings.tab.security">安全与信任</button>
+            <button class="settings-tab" data-settings-tab="about" data-i18n="settings.tab.about">关于我们</button>
           </div>
 
           <div class="settings-body">
@@ -1127,6 +1192,16 @@
 
               <div class="settings-group">
                 <div class="settings-group-head">
+                  <div class="settings-group-title" data-i18n="settings.thinking.title">默认推理强度</div>
+                  <div class="settings-group-sub" data-i18n="settings.thinking.sub">对话执行的默认思考强度（全局默认）。会话内可通过输入框右侧的执行配置临时调整，仅影响当前任务。</div>
+                </div>
+                <div class="settings-row" id="settings-thinking-row">
+                  <div class="ai-select" id="settings-thinking-select"></div>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.task_notifications.title">任务通知</div>
                   <div class="settings-group-sub" data-i18n="settings.task_notifications.sub">当 CogSeed 不在前台时，在任务完成、失败或需要输入时发送系统通知。</div>
                 </div>
@@ -1183,29 +1258,6 @@
                     <span data-i18n="settings.metacognition.toggle">Enable</span>
                   </label>
                   <span class="settings-status muted" id="settings-metacognition-status"></span>
-                </div>
-              </div>
-
-              <div class="settings-group">
-                <div class="settings-group-head">
-                  <div class="settings-group-title" data-i18n="settings.updates.title">更新</div>
-                  <div class="settings-group-sub" data-i18n="settings.updates.sub">检查新版本，下载并安装更新包。更新状态仅保存在本机。</div>
-                </div>
-                <div class="settings-row settings-updater-row">
-                  <span class="muted" id="updater-current-version"></span>
-                  <button class="btn btn-sm" id="updater-check-btn" type="button" data-i18n="settings.updates.check">检查更新</button>
-                </div>
-                <div class="settings-row settings-updater-row" id="updater-status-row" hidden>
-                  <span id="updater-status-text" class="settings-updater-status"></span>
-                </div>
-                <div class="settings-row settings-updater-row" id="updater-actions-row" hidden>
-                  <button class="btn btn-sm" id="updater-download-btn" type="button" data-i18n="settings.updates.download">下载更新</button>
-                  <button class="btn btn-sm btn-plain" id="updater-open-btn" type="button" data-i18n="settings.updates.open_installer">打开安装包</button>
-                  <button class="btn btn-sm btn-plain" id="updater-skip-btn" type="button" data-i18n="settings.updates.skip">跳过此版本</button>
-                </div>
-                <div class="settings-row settings-updater-row" id="updater-progress-row" hidden>
-                  <div class="updater-progress-track"><div class="updater-progress-bar" id="updater-progress-bar"></div></div>
-                  <span class="muted" id="updater-progress-text"></span>
                 </div>
               </div>
             </div>
@@ -1413,6 +1465,41 @@
                 </div>
                 <div class="settings-row">
                   <button class="btn btn-sm" type="button" id="settings-usage-open-connections" data-i18n="settings.usage.open_connections">前往连接</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ───────────────────────── 关于我们 ───────────────────────── -->
+            <div class="settings-tab-pane" data-settings-pane="about" hidden>
+              <div class="settings-about-card">
+                <div class="settings-about-main">
+                  <img class="settings-about-icon" src="../resources/icons/icon.png" alt="" draggable="false" />
+                  <div class="settings-about-copy">
+                    <span class="settings-about-name">CogSeed</span>
+                    <span class="muted" id="updater-current-version"></span>
+                  </div>
+                  <div class="settings-about-actions">
+                    <button class="btn btn-sm" id="updater-check-btn" type="button" data-i18n="settings.updates.check">检查更新</button>
+                    <a class="btn btn-sm btn-plain" href="https://cogseed-open.bonc.com.cn/#view=changelog" target="_blank" rel="noopener noreferrer" data-i18n="settings.updates.view_intro">版本介绍</a>
+                  </div>
+                </div>
+                <div class="settings-about-rows">
+                  <div class="settings-row settings-updater-row" id="updater-status-row" hidden>
+                    <span id="updater-status-text" class="settings-updater-status"></span>
+                  </div>
+                  <div class="settings-row settings-updater-row" id="updater-actions-row" hidden>
+                    <button class="btn btn-sm" id="updater-download-btn" type="button" data-i18n="settings.updates.download">下载更新</button>
+                    <button class="btn btn-sm btn-plain" id="updater-open-btn" type="button" data-i18n="settings.updates.open_installer">打开安装包</button>
+                    <button class="btn btn-sm btn-plain" id="updater-skip-btn" type="button" data-i18n="settings.updates.skip">跳过此版本</button>
+                  </div>
+                  <div class="settings-row settings-updater-row" id="updater-auto-row" hidden>
+                    <span id="updater-auto-text" class="settings-updater-status"></span>
+                    <button class="btn btn-sm" id="updater-auto-install-btn" type="button" hidden data-i18n="settings.updates.auto.install">重启并安装</button>
+                  </div>
+                  <div class="settings-row settings-updater-row" id="updater-progress-row" hidden>
+                    <div class="updater-progress-track"><div class="updater-progress-bar" id="updater-progress-bar"></div></div>
+                    <span class="muted" id="updater-progress-text"></span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1632,53 +1719,66 @@
   <!-- Auto-task create / edit modal (see modules/auto.js). Reused by the
        Automation tab AND the project-detail page's "自动化" tab. Opens via
        `window.openAutoTaskDialog({ task?, projectId?, onSaved? })`. -->
-  <div class="modal-overlay ui-dialog-overlay" id="auto-task-dialog-overlay" style="display:none">
-    <div class="modal ui-dialog auto-task-dialog modal-standard" role="dialog" aria-modal="true" aria-labelledby="auto-task-dialog-title">
-      <div class="modal-title ui-dialog-title auto-task-dialog-title" id="auto-task-dialog-title" data-i18n="auto.create_section_title">New auto task</div>
-      <div class="modal-body auto-task-dialog-body">
+  <div class="modal-overlay ui-dialog-overlay ui-modal-overlay" id="auto-task-dialog-overlay" data-ui-modal-root="true" style="display:none">
+    <section class="modal ui-dialog ui-modal ui-modal--lg auto-task-dialog modal-standard" role="dialog" aria-modal="true" aria-labelledby="auto-task-dialog-title">
+      <header class="ui-modal__header">
+        <div class="ui-modal__heading">
+          <h2 class="modal-title ui-dialog-title ui-modal__title auto-task-dialog-title" id="auto-task-dialog-title" data-i18n="auto.create_section_title">New auto task</h2>
+        </div>
+        <div id="auto-dialog-close-slot"></div>
+      </header>
+      <div class="modal-body ui-modal__body auto-task-dialog-body">
         <!-- Composer chrome cloned 1:1 from #new-chat-input-area. -->
-        <div class="new-chat-input-wrapper auto-composer-wrapper">
-          <div class="new-chat-input-area">
-            <div class="chat-input-overlay">
-              <div class="chat-attachments" id="auto-task-attachments" style="display:none"></div>
-            </div>
-            <textarea id="auto-task-input" rows="2" maxlength="8000"
-                      data-i18n-placeholder="auto.content_placeholder"
-                      placeholder="Type @ to choose agents, skills, connectors, Library files."></textarea>
-            <div class="chat-bottom-bar">
-              <button type="button" class="chat-attach-btn" id="auto-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
-              <span class="chat-composer-divider" aria-hidden="true"></span>
-              <button type="button" class="chat-recipient-chip" id="auto-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
-                <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
-                <span class="chat-recipient-name" id="auto-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
-              </button>
+        <div class="ui-field ui-form__item ui-form__item--wide auto-content-field">
+          <div class="ui-field__label-row">
+            <label for="auto-task-input" data-i18n="auto.content_label">Task content</label>
+            <span class="ui-field__requirement" data-i18n="common.required">Required</span>
+          </div>
+          <div class="new-chat-input-wrapper auto-composer-wrapper">
+            <div class="new-chat-input-area">
+              <div class="chat-input-overlay">
+                <div class="chat-attachments" id="auto-task-attachments" style="display:none"></div>
+              </div>
+              <textarea id="auto-task-input" rows="2" maxlength="8000"
+                        data-i18n-placeholder="auto.content_placeholder"
+                        placeholder="Type @ to choose agents, skills, connectors, Library files."></textarea>
+              <div class="chat-bottom-bar">
+                <button type="button" class="chat-attach-btn" id="auto-attach-btn" data-i18n-title="new_chat.attach_title" title="Upload attachment (text / PDF / Word / image / video)">+</button>
+                <span class="chat-composer-divider" aria-hidden="true"></span>
+                <button type="button" class="chat-recipient-chip" id="auto-recipient-chip" data-i18n-title="chat.recipient_picker_title_with_library" title="Choose agent, skill, connector, or Library file">
+                  <span class="chat-recipient-prefix" data-i18n="chat.recipient_label">@</span>
+                  <span class="chat-recipient-name" id="auto-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         <div class="auto-schedule-row">
-          <div class="form-row auto-schedule-cell">
-            <label data-i18n="auto.freq_label">Frequency</label>
-            <div id="auto-freq-select"></div>
+          <div class="form-row ui-field auto-schedule-cell">
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-freq-label" data-i18n="auto.freq_label">Frequency</span></div>
+            <div class="ui-select-host" id="auto-freq-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-date" hidden>
-            <label data-i18n="auto.date_label">Date</label>
-            <input type="date" id="auto-date-input" />
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-date" hidden>
+            <div class="ui-field__label-row"><label for="auto-date-input" data-i18n="auto.date_label">Date</label></div>
+            <input class="form-input ui-control" type="date" id="auto-date-input" />
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-weekday" hidden>
-            <label data-i18n="auto.weekday_label">Weekday</label>
-            <div id="auto-weekday-select"></div>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-weekday" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-weekday-label" data-i18n="auto.weekday_label">Weekday</span></div>
+            <div class="ui-select-host" id="auto-weekday-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-monthly-day" hidden>
-            <label data-i18n="auto.day_label">Day</label>
-            <div id="auto-monthly-day-select"></div>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-monthly-day" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-monthly-day-label" data-i18n="auto.day_label">Day</span></div>
+            <div class="ui-select-host" id="auto-monthly-day-select"></div>
           </div>
-          <div class="form-row auto-schedule-cell" id="auto-row-time" hidden>
-            <label data-i18n="auto.time_label">Time</label>
+          <div class="form-row ui-field auto-schedule-cell" id="auto-row-time" hidden>
+            <div class="ui-field__label-row"><span class="ui-field__label" id="auto-time-label" data-i18n="auto.time_label">Time</span></div>
             <div class="auto-time-row">
-              <div id="auto-hour-select"></div>
+              <span class="ui-visually-hidden" id="auto-hour-label" data-i18n="auto.hour_label">Hour</span>
+              <div class="ui-select-host" id="auto-hour-select"></div>
               <span class="auto-time-sep">:</span>
-              <div id="auto-minute-select"></div>
+              <span class="ui-visually-hidden" id="auto-minute-label" data-i18n="auto.minute_label">Minute</span>
+              <div class="ui-select-host" id="auto-minute-select"></div>
             </div>
           </div>
         </div>
@@ -1689,36 +1789,37 @@
              - hidden when the user has no projects at all (no options to
                pick from — the "default = none" outcome is automatic)
              - otherwise visible, defaulting to "no project" (`value=''`). -->
-        <div class="form-row" id="auto-row-project" hidden>
-          <label data-i18n="auto.project_label">Project</label>
-          <div id="auto-project-select"></div>
+        <div class="form-row ui-field" id="auto-row-project" hidden>
+          <div class="ui-field__label-row"><span class="ui-field__label" id="auto-project-label" data-i18n="auto.project_label">Project</span></div>
+          <div class="ui-select-host" id="auto-project-select"></div>
         </div>
 
-        <div class="form-row" id="auto-row-run-device" hidden>
-          <label data-i18n="auto.run_label">Run</label>
-          <div id="auto-run-device-select"></div>
+        <div class="form-row ui-field" id="auto-row-run-device" hidden>
+          <div class="ui-field__label-row"><span class="ui-field__label" id="auto-run-device-label" data-i18n="auto.run_label">Run</span></div>
+          <div class="ui-select-host" id="auto-run-device-select"></div>
         </div>
 
-        <div class="form-row">
-          <label data-i18n="auto.title_label">Title (optional)</label>
-          <input type="text" id="auto-title-input"
+        <div class="form-row ui-field">
+          <div class="ui-field__label-row">
+            <label for="auto-title-input" data-i18n="auto.title_label">Title (optional)</label>
+            <span class="ui-field__requirement" data-i18n="common.optional">Optional</span>
+          </div>
+          <input class="form-input ui-control ui-input" type="text" id="auto-title-input"
                  data-i18n-placeholder="auto.title_placeholder" />
         </div>
 
-        <div class="form-row">
+        <div class="form-row ui-field">
           <label class="auto-enabled-label">
             <input type="checkbox" id="auto-enabled-input" checked />
             <span data-i18n="auto.enabled_label">Enabled</span>
           </label>
         </div>
 
+        <div class="auto-dialog-error" id="auto-dialog-error" role="alert" hidden></div>
       </div>
 
-      <div class="modal-actions">
-        <button type="button" class="btn" id="auto-dialog-cancel-btn" data-i18n="auto.cancel_btn">Cancel</button>
-        <button type="button" class="btn btn-primary" id="auto-submit-btn" data-i18n="auto.create_btn">Create</button>
-      </div>
-    </div>
+      <footer class="modal-actions ui-modal__footer" id="auto-dialog-actions"></footer>
+    </section>
   </div>
 
   <!-- Library "new directory" modal. Text-file creation no longer
@@ -1830,6 +1931,11 @@
   <script src="./modules/chat-input-form.js"></script>
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
+  <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-form.js"></script>
+  <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/ui-page-header.js"></script>
+  <script src="./modules/ui-modal.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
   <script src="./modules/chat-file-viewer.js"></script>
   <script src="./modules/md-view-edit.js"></script>
@@ -1843,7 +1949,12 @@
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/conv-bucket.js"></script>
   <script src="./modules/recall-projection-card.js"></script>
+  <!-- 纯函数模块：window.conversationMetrics（消息/会话 token 用量格式化）。
+       必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
+  <script src="./modules/conversation-metrics.js"></script>
   <script src="./modules/conversation.js"></script>
+  <script src="./modules/anchored-source-view.js"></script>
+  <script src="./modules/chat-citation.js"></script>
   <script src="./modules/artifact-security.js"></script>
   <script src="./modules/chat-artifact.js"></script>
   <script src="./modules/plan-rail.js"></script>
@@ -1862,6 +1973,7 @@
   <script src="./modules/search.js"></script>
   <script src="./modules/user-workspace.js"></script>
   <script src="./modules/model-chip.js"></script>
+  <script src="./modules/stt-input.js"></script>
   <script src="./modules/local-agents.js"></script>
   <!-- DOMPurify must load before utils.js so inline connector SVGs are sanitized, not disabled. -->
   <script src="./vendor/dompurify/purify.min.js"></script>

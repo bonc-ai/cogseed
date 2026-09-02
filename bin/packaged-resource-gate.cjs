@@ -14,6 +14,7 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   builtin: 'builtin-resource-contract',
   officecli: 'officecli-release-gate',
   guardrail: 'guardrail-scanner-contract',
+  'sherpa-onnx': 'pinned-offline-resource',
   '.': 'mac-localized-metadata',
 });
 
@@ -33,6 +34,18 @@ const EMBEDDING_MODEL_CONTRACT = Object.freeze({
     Object.freeze({ name: 'tokenizer.json', bytes: 439_125, sha256: '48cea5d44424912a6fd1ea647bf4fe50b55ab8b1e5879c3275f80e339e8fae26' }),
     Object.freeze({ name: 'tokenizer_config.json', bytes: 367, sha256: 'e6f3b96db926a37d4039995fbf5ad17de158dfb8f6343d607e4dbaad18d75f5a' }),
     Object.freeze({ name: 'vocab.txt', bytes: 109_540, sha256: '45bbac6b341c319adc98a532532882e91a9cefc0329aa57bac9ae761c27b291c' }),
+  ]),
+});
+
+const SHERPA_ONNX_CONTRACT = Object.freeze({
+  kind: 'sherpa-onnx',
+  id: 'sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23',
+  source: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2',
+  files: Object.freeze([
+    Object.freeze({ name: 'encoder-epoch-99-avg-1.onnx', bytes: 40_948_171, sha256: '84c6a8f372686faa5b8f45f2d79f0816f76dcd9f547acb9a90eba2772d7eda8b' }),
+    Object.freeze({ name: 'decoder-epoch-99-avg-1.onnx', bytes: 7_509_745, sha256: '5ee0f03a2768ff1d5c83ef3a493243c7935d316cd41280037b14783a3467cc78' }),
+    Object.freeze({ name: 'joiner-epoch-99-avg-1.onnx', bytes: 7_109_975, sha256: '030212efaea9a8b6a4fa98faf6ac6055529c4408cf4865e898220ddd02780f34' }),
+    Object.freeze({ name: 'tokens.txt', bytes: 48_697, sha256: '8b294db9045d6e5f94647f4c1eec1af4da143a75053c399611444b378ff966ac' }),
   ]),
 });
 
@@ -195,6 +208,10 @@ function verifyEmbeddingModelRoot(resourceRoot) {
   return verifyResourceContract(resourceRoot, EMBEDDING_MODEL_CONTRACT);
 }
 
+function verifySherpaOnnxRoot(resourceRoot) {
+  return verifyResourceContract(resourceRoot, SHERPA_ONNX_CONTRACT);
+}
+
 function verifyEmbeddingModelArchive(file) {
   requirePinnedFile('embedding-model archive', file, EMBEDDING_MODEL_CONTRACT.archive);
 }
@@ -240,7 +257,10 @@ function requiredMacLocalizedMetadataVerificationEntries() {
 }
 
 function requiredPackagedResourceVerificationEntries() {
-  return [`resource:embedding-model:${EMBEDDING_MODEL_CONTRACT.id}`];
+  return [
+    `resource:embedding-model:${EMBEDDING_MODEL_CONTRACT.id}`,
+    `resource:sherpa-onnx:${SHERPA_ONNX_CONTRACT.id}`,
+  ];
 }
 
 function verifyExtraResourcesConfig(extraResources) {
@@ -286,6 +306,7 @@ module.exports = {
   EXTRA_RESOURCES_CONTRACT,
   MAC_LOCALIZED_METADATA_CONTRACT,
   MAC_LOCALIZED_METADATA_FILTERS,
+  SHERPA_ONNX_CONTRACT,
   parseAppleStrings,
   requiredMacLocalizedMetadataVerificationEntries,
   requiredPackagedResourceVerificationEntries,
@@ -294,4 +315,5 @@ module.exports = {
   verifyEmbeddingModelRoot,
   verifyMacLocalizedMetadataRoot,
   verifyResourceContract,
+  verifySherpaOnnxRoot,
 };

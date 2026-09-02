@@ -203,6 +203,7 @@ describe('messaging proactive target service', () => {
       ownerLabel: '本人',
       text: 'hello',
     }));
+    // 渠道原生投递（2026-08-26 理清）：sourceKey 原样直传，不再包信封前缀
     expect(manager.sendProactive).toHaveBeenCalledWith('user-1', {
       instanceId: 'bot-1',
       recipientId: 'ou_self_1',

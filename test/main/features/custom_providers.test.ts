@@ -338,4 +338,127 @@ describe('custom providers', () => {
     const anthropic = (await auth.listProviders()).providers.find((provider) => provider.id === 'anthropic');
     expect(anthropic?.profiles).toHaveLength(1);
   });
+
+  it('inherits catalog windows for known models instead of the 128K default', async () => {
+    // Importer rows carry bare model ids with no window data; for models the
+    // public catalog knows (deepseek-v4-flash-vision-exp = 1M, confirmed
+    // 2026-08-27), normalization must resolve the real window. Unknown ids
+    // keep the conservative default — never guessed.
+    const providers = await import('../../../src/main/features/custom_providers');
+    const result = providers.addCustomProvider(UID, {
+      name: 'Aggregator Relay',
+      protocol: 'openai',
+      baseUrl: 'https://aggr.example/v1',
+      apiKey: ['aggr', UID].join('-'),
+      models: [
+        'deepseek/deepseek-v4-flash-vision-exp',
+        'totally-unknown-model',
+      ],
+    });
+    if (!result.ok) throw new Error(result.error);
+    const listed = providers.listCustomProviders(UID);
+    const byId = Object.fromEntries(listed[0].models.map((m) => [m.id, m]));
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1_048_576);
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].vision).toBe(true);
+    expect(byId['totally-unknown-model'].contextWindow).toBe(131_072);
+    expect(byId['totally-unknown-model'].vision).toBeUndefined();
+  });
+});
+
+// ─── 远端模型发现：fetchCustomProviderModels ─────────────────────────────
+
+describe('custom providers › fetchCustomProviderModels', () => {
+  const jsonBody = (data: unknown, status = 200) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(data),
+  }) as unknown as Response;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('calls the OpenAI-compatible /models endpoint with the stored bearer key', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1', apiKey: 'sk-live', models: ['model-a'],
+    });
+    if (!added.ok) throw new Error(added.error);
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), headers: init.headers as Record<string, string> });
+      return jsonBody({ data: [{ id: 'model-a' }, { id: ' gpt-relay ' }, { id: 'model-a' }, { not: 'a model' }, null] });
+    }));
+
+    const res = await providers.fetchCustomProviderModels(UID, added.id);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // dedupe + trim + drop non-rows
+    expect(res.models).toEqual([{ id: 'model-a' }, { id: 'gpt-relay' }]);
+    expect(calls[0].url).toBe('https://relay.example/v1/models');
+    expect(calls[0].headers.Authorization).toBe('Bearer sk-live');
+  });
+
+  it('uses the anthropic /v1/models endpoint with x-api-key and maps display_name', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Anth Relay', protocol: 'anthropic', baseUrl: 'https://anth.example', apiKey: 'ak-live',
+    });
+    if (!added.ok) throw new Error(added.error);
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), headers: init.headers as Record<string, string> });
+      return jsonBody({ data: [{ id: 'claude-relay', display_name: 'Claude Relay' }] });
+    }));
+
+    const res = await providers.fetchCustomProviderModels(UID, added.id);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.models).toEqual([{ id: 'claude-relay', name: 'Claude Relay' }]);
+    expect(calls[0].url).toBe('https://anth.example/v1/models');
+    expect(calls[0].headers['x-api-key']).toBe('ak-live');
+    expect(calls[0].headers['anthropic-version']).toBe('2023-06-01');
+  });
+
+  it('strips the gemini models/ prefix and reports failures without leaking the key', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Gem Relay', protocol: 'gemini', baseUrl: 'https://gem.example', apiKey: 'gk-live',
+    });
+    if (!added.ok) throw new Error(added.error);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonBody({ models: [{ name: 'models/gemini-relay', displayName: 'Gemini Relay' }] })));
+
+    const gemini = await providers.fetchCustomProviderModels(UID, added.id);
+    expect(gemini.ok).toBe(true);
+    // 家族规则识别（B 层）：gemini-* 视觉默认开、推理需 pro/thinking 变体。
+    if (gemini.ok) expect(gemini.models).toEqual([
+      { id: 'gemini-relay', name: 'Gemini Relay', reasoning: false, vision: true },
+    ]);
+
+    // Failure path: network error message that embeds the key must be redacted.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('connect ECONNREFUSED with key gk-live inside'); }));
+    const failed = await providers.fetchCustomProviderModels(UID, added.id);
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.error).not.toContain('gk-live');
+  });
+
+  it('fails fast for unknown providers without issuing any request', async () => {
+    const providers = await import('../../../src/main/features/custom_providers');
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const res = await providers.fetchCustomProviderModels(UID, 'cp-nonexistent');
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBe('not found');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // NOTE: the http(s)-only scheme pin in fetchCustomProviderModels is
+    // defense-in-depth — the add/update entry points already reject
+    // non-http(s) base URLs, and the encrypted store cannot be hand-edited
+    // from a test, so that branch is covered by review rather than a case.
+  });
 });

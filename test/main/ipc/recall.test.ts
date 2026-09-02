@@ -110,7 +110,7 @@ const viewMock = vi.hoisted(() => ({
 }));
 const teachingMock = vi.hoisted(() => ({
   listUserTeachingSignals: vi.fn(async () => []),
-  // G-2：读口改走分页出口（items + total）。total 必须是截断前的真实条数，
+  // 读口改走分页出口（items + total）。total 必须是截断前的真实条数，
   // 所以这里刻意让 total 与 items.length 不相等——否则用例分不出实现是真的
   // 读了 total，还是又拿 items.length 顶替。
   listUserTeachingSignalPage: vi.fn(async () => ({ items: [], total: 42 })),
@@ -252,24 +252,21 @@ describe('ipc › recall candidate governance', () => {
       },
     });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenCalledWith(UID, 'cand-a', { riskAcknowledged: false });
+    // 落点只透传一个 opaque fieldRef；IPC 层不再逐字段复述 PO 内部结构
+    const fieldRef = 'po1eyJrIjoidGYiLCJ0Ijoic3R1ZGVudCJ9';
     await expect(call('recall.candidates.promote', {
       candidateId: 'cand-personal',
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef },
     })).resolves.toMatchObject({ ok: true });
     expect(captureMock.promoteRecallCaptureCandidate).toHaveBeenLastCalledWith(UID, 'cand-personal', {
       riskAcknowledged: false,
-      profileTarget: {
-        groupId: 'group-student',
-        templateId: 'student',
-        section: '学习背景',
-        fieldName: '专业与学习方向',
-      },
+      profileTarget: { fieldRef },
     });
+    // 形状不对的落点在 IPC 层就被拒（语义判定仍留给 PO 写入口）
+    await expect(call('recall.candidates.promote', {
+      candidateId: 'cand-personal',
+      profileTarget: { groupId: 'group-student', section: '学习背景', fieldName: '专业与学习方向' },
+    })).resolves.toMatchObject({ ok: false, error: 'invalid personal profile target' });
     await expect(call('recall.candidates.ignore', { candidateId: 'cand-a', note: 'not reusable' })).resolves.toMatchObject({ ok: true, candidate: { status: 'ignored' } });
     expect(recallMock.ignoreRecallCandidate).toHaveBeenCalledWith(UID, 'cand-a', 'not reusable');
     await expect(call('recall.candidates.promoteBatch', { candidateIds: ['cand-a', 'cand-b'] })).resolves.toMatchObject({ ok: true, failed: [] });

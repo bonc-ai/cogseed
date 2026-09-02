@@ -386,6 +386,52 @@ describe('chats › setConversationSpace (把已有会话绑定到空间)', () =
   });
 });
 
+describe('chats › listSpaceConversations commander_in_chat（懒补记）', () => {
+  const convJsonl = (cid: string) => path.join(tmpDir, TEST_UID, 'cloud', 'chats', `${cid}.jsonl`);
+  const membersJson = (cid: string) => path.join(tmpDir, TEST_UID, 'cloud', 'chats', cid, 'members.json');
+
+  it('老数据无标志：第一次扫描 jsonl 命中并回写 commander_spoken，之后 jsonl 删除仍为 true', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '补记', spaceId: 'sp_abc123' });
+    const cid = conv.conversation_id;
+    fs.mkdirSync(path.dirname(convJsonl(cid)), { recursive: true });
+    fs.writeFileSync(convJsonl(cid), [
+      JSON.stringify({ from: 'user', to: 'commander', text: 'hello', ts: '2026-01-01T00:00:00.000Z' }),
+      JSON.stringify({ from: 'commander', to: 'user', text: 'hi', ts: '2026-01-01T00:00:01.000Z' }),
+    ].join('\n') + '\n', 'utf-8');
+
+    const rows = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    const row = rows.find((c) => c.conversation_id === cid);
+    expect(row?.commander_in_chat).toBe(true);
+    // 懒补记：标志已落盘
+    const members = JSON.parse(fs.readFileSync(membersJson(cid), 'utf-8'));
+    expect(members.commander_spoken).toBe(true);
+
+    // 之后不再依赖 jsonl：删掉聊天记录，判断仍成立（标志命中）
+    fs.rmSync(convJsonl(cid));
+    const again = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(again.find((c) => c.conversation_id === cid)?.commander_in_chat).toBe(true);
+  });
+
+  it('指挥官从未发言：保持 false，不写入任何假标志', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, { title: '无指挥官', spaceId: 'sp_abc123' });
+    const cid = conv.conversation_id;
+    fs.mkdirSync(path.dirname(convJsonl(cid)), { recursive: true });
+    fs.writeFileSync(convJsonl(cid), [
+      JSON.stringify({ from: 'user', to: 'agent-a', text: 'hi', ts: '2026-01-01T00:00:00.000Z' }),
+    ].join('\n') + '\n', 'utf-8');
+
+    const rows = await chats.listSpaceConversations(TEST_UID, 'sp_abc123');
+    expect(rows.find((c) => c.conversation_id === cid)?.commander_in_chat).toBe(false);
+    // 没有命中就不该写 members.json（或写出的文件不带假标志）
+    if (fs.existsSync(membersJson(cid))) {
+      const members = JSON.parse(fs.readFileSync(membersJson(cid), 'utf-8'));
+      expect(members.commander_spoken).toBeUndefined();
+    }
+  });
+});
+
 describe('chats › targeted conversation lookup', () => {
   it('uses a validated project/global hint without opening unrelated indexes', async () => {
     const chats = await loadChats();
@@ -875,6 +921,35 @@ describe('chats › index repair', () => {
     expect(index[0].participant_summary_updated_at).toBe(index[0].updated_at);
   });
 
+  it('COGSEED-15：空间任务行与会话运行协作区域共用同一份参与智能体名单', async () => {
+    const chats = await loadChats();
+    const spaces = await import('../../../src/main/features/spaces');
+    const created = await spaces.createSpace(TEST_UID, { name: '一致空间' });
+    if (!created.ok) throw new Error('create space failed');
+    const sid = created.space.space_id;
+    const conv = await chats.createConversation(TEST_UID, { title: '一致', spaceId: sid });
+
+    // 运行协作区域的数据源：members.json（同一 Agent 多次加入只计 1 个；commander 不计入）
+    const membersDir = path.join(tmpDir, TEST_UID, 'cloud', 'chats', conv.conversation_id);
+    fs.mkdirSync(membersDir, { recursive: true });
+    fs.writeFileSync(path.join(membersDir, 'members.json'), JSON.stringify({
+      version: 1,
+      actors: [
+        { kind: 'commander', id: 'commander', joined_at: '2026-06-01T00:00:00Z' },
+        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:01Z' },
+        { kind: 'agent', id: 'agent-b', joined_at: '2026-06-01T00:00:02Z' },
+        { kind: 'agent', id: 'agent-a', joined_at: '2026-06-01T00:00:03Z' },
+      ],
+    }));
+
+    const spaceConvs = await chats.listSpaceConversations(TEST_UID, sid);
+    const row = spaceConvs.find((c) => c.conversation_id === conv.conversation_id);
+    expect(row).toBeTruthy();
+    // 与运行协作区域一致：独立 Agent 去重计数（agent-a 只计 1），commander 不占名额
+    expect(row!.agent_ids).toEqual(['agent-a', 'agent-b']);
+    expect(row!.commander_in_chat).toBe(false);
+  });
+
   it('updates a fresh participant summary incrementally with message activity', async () => {
     const chats = await loadChats();
     const conv = await chats.createConversation(TEST_UID, { agentId: 'agent-start' });
@@ -1230,6 +1305,176 @@ describe('chats › deleteConversation', () => {
     expect(idx).toHaveLength(1);
     expect(idx[0].conversation_id).toBe(conv.conversation_id);
     expect(idx[0].deleted_at).toBeTruthy();
+  });
+
+  it('blocks automatic explicit-id recreation but allows an intentional re-import', async () => {
+    const chats = await loadChats();
+    const conv = await chats.createConversation(TEST_UID, {
+      conversationId: 'deletedimport1',
+      title: 'original',
+    });
+    await chats.deleteConversation(TEST_UID, conv.conversation_id);
+
+    vi.resetModules();
+    const restartedChats = await loadChats();
+    await expect(restartedChats.createConversation(TEST_UID, {
+      conversationId: conv.conversation_id,
+      title: 'automatic recreation',
+    })).rejects.toThrow(/unavailable/i);
+    await expect(restartedChats.createConversation(TEST_UID, {
+      conversationId: conv.conversation_id,
+      title: 'intentional import',
+      reviveDeleted: true,
+    })).resolves.toMatchObject({
+      conversation_id: conv.conversation_id,
+      title: 'intentional import',
+    });
+  });
+
+  it('quarantines a pending terminal result when its Conversation is deleted', async () => {
+    const chats = await loadChats();
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const conv = await chats.createConversation(TEST_UID, { title: 'pending result destination' });
+    const executionId = 'cogseed-exec-delete-retained-result';
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: 'cogseed-task-delete-retained-result',
+      executionId,
+      conversationId: conv.conversation_id,
+      agentId: 'agent-delete-retained-result',
+      sessionId: 'cogseed-session-delete-retained-result',
+      destinationGeneration: conv._cogseed_result_generation!,
+      event: {
+        eventId: 'cogseed-event-delete-retained-result',
+        type: 'task.completed',
+        payload: { text: 'the only durable result copy' },
+      },
+    });
+
+    await expect(chats.deleteConversation(TEST_UID, conv.conversation_id)).resolves.toBe(true);
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, executionId)).resolves.toBeNull();
+    const deliveryPaths = await import('../../../src/main/features/cogseed_backend/paths');
+    const archive = JSON.parse(fs.readFileSync(
+      deliveryPaths.cogseedUndeliverableResultFile(TEST_UID, executionId), 'utf8'));
+    expect(archive).toMatchObject({
+      reason: 'task-missing',
+      payload: {
+        conversationId: conv.conversation_id,
+        event: { payload: { text: 'the only durable result copy' } },
+      },
+    });
+  });
+
+  it('does not recreate a tombstoned Conversation and closes its retained result as not applicable', async () => {
+    const chats = await loadChats();
+    const tasks = await import('../../../src/main/features/cogseed_backend/task-store');
+    const lifecycle = await import('../../../src/main/features/cogseed_backend/lifecycle');
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const runtimeController = await import('../../../src/main/features/cogseed_backend/runtime-controller');
+    const conv = await chats.createConversation(TEST_UID, { title: 'deleted recovery destination' });
+    const task = (await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-delete-explicit-recovery',
+      task: 'Retain this result after its destination is deleted.',
+      conversationId: conv.conversation_id,
+      agentId: 'agent-delete-explicit-recovery',
+      executionKind: 'local-cli',
+      localCli: { cli: 'codex' },
+    })).task;
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(TEST_UID, task.taskId, 'completed');
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: task.taskId,
+      executionId: task.executionId!,
+      conversationId: conv.conversation_id,
+      agentId: task.agentId!,
+      sessionId: task.sessionId,
+      destinationGeneration: conv._cogseed_result_generation!,
+      event: {
+        eventId: `cogseed-event-terminal-${task.taskId}`,
+        type: 'task.completed',
+        payload: { text: 'the retained result must survive recovery' },
+      },
+    });
+    await expect(chats.deleteConversation(TEST_UID, conv.conversation_id)).resolves.toBe(true);
+    const indexFile = path.join(tmpDir, TEST_UID, 'cloud', 'chats', '_index.json');
+    const tombstonedBeforeRecovery = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+      .find((row: any) => row.conversation_id === conv.conversation_id);
+    const controller = runtimeController.createCogSeedRuntimeController({
+      runtime: {
+        async *run() {},
+        async shutdown() {},
+      } as any,
+    });
+
+    await expect(controller.retryCogSeedResultDelivery(TEST_UID, task.taskId))
+      .resolves.toMatchObject({ resultDeliveryState: 'not-applicable' });
+
+    expect(await chats.getConversation(TEST_UID, conv.conversation_id)).toBeNull();
+    expect(await chats.listActiveConversationIds(TEST_UID)).not.toContain(conv.conversation_id);
+    const tombstonedAfterRecovery = JSON.parse(fs.readFileSync(indexFile, 'utf8'))
+      .find((row: any) => row.conversation_id === conv.conversation_id);
+    expect(tombstonedAfterRecovery).toEqual(tombstonedBeforeRecovery);
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, task.executionId!)).resolves.toBeNull();
+    const deliveryPaths = await import('../../../src/main/features/cogseed_backend/paths');
+    expect(JSON.parse(fs.readFileSync(
+      deliveryPaths.cogseedUndeliverableResultFile(TEST_UID, task.executionId!), 'utf8'))).toMatchObject({
+      reason: 'conversation-deleted',
+      payload: { event: { payload: { text: 'the retained result must survive recovery' } } },
+    });
+    await expect(tasks.readCogSeedTask(TEST_UID, task.taskId)).resolves.toMatchObject({
+      status: 'completed',
+      resultDeliveryState: 'not-applicable',
+    });
+  });
+
+  it('never delivers an old result to a revived Conversation with the same id', async () => {
+    const chats = await loadChats();
+    const tasks = await import('../../../src/main/features/cogseed_backend/task-store');
+    const lifecycle = await import('../../../src/main/features/cogseed_backend/lifecycle');
+    const deliveries = await import('../../../src/main/features/cogseed_backend/result-delivery-store');
+    const runtimeController = await import('../../../src/main/features/cogseed_backend/runtime-controller');
+    const original = await chats.createConversation(TEST_UID, {
+      conversationId: 'revived-result-generation',
+      title: 'original generation',
+    });
+    const task = (await tasks.createCogSeedTask(TEST_UID, {
+      requestId: 'req-revived-result-generation',
+      task: 'Do not cross the generation fence.',
+      conversationId: original.conversation_id,
+      agentId: 'agent-revived-result-generation',
+    })).task;
+    await lifecycle.finalizeCogSeedTaskFromRetainedResult(TEST_UID, task.taskId, 'completed', { outputChars: 10 });
+    await chats.deleteConversation(TEST_UID, original.conversation_id);
+    await deliveries.cogseedResultDeliveryStore.save(TEST_UID, {
+      taskId: task.taskId,
+      executionId: task.executionId!,
+      conversationId: original.conversation_id,
+      agentId: task.agentId!,
+      sessionId: task.sessionId,
+      destinationGeneration: original._cogseed_result_generation!,
+      event: {
+        eventId: `cogseed-event-terminal-${task.taskId}`,
+        type: 'task.completed',
+        payload: { text: 'belongs only to the deleted generation' },
+      },
+    });
+    const revived = await chats.createConversation(TEST_UID, {
+      conversationId: original.conversation_id,
+      title: 'new generation',
+      reviveDeleted: true,
+    });
+    expect(revived._cogseed_result_generation).not.toBe(original._cogseed_result_generation);
+    const projectTaskEvent = vi.fn(async () => 'projected');
+    const controller = runtimeController.createCogSeedRuntimeController({
+      runtime: { async *run() {}, async shutdown() {} } as any,
+      projectTaskEvent,
+    });
+
+    await expect(controller.retryCogSeedResultDelivery(TEST_UID, task.taskId)).resolves.toMatchObject({
+      resultDeliveryState: 'not-applicable',
+    });
+    expect(projectTaskEvent).not.toHaveBeenCalled();
+    await expect(deliveries.cogseedResultDeliveryStore.read(TEST_UID, task.executionId!)).resolves.toBeNull();
   });
 
   it('keeps tombstoned rows when later writes update the active index', async () => {

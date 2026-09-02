@@ -558,6 +558,10 @@ export const userConnectorsConfigFile = (uid: string) => path.join(userCloudConf
 // activateUser(); both core-agent's auth store and the web-search provider
 // cache land in this same directory.
 export const userLocalConfigDir   = (uid: string) => path.join(userLocalRoot(uid), 'config');
+/** 工作空间持久化元数据表目录（列表查询的本地缓存；纯派生数据，可整表丢弃）。 */
+export const workspaceMetaDir     = (uid: string) => path.join(userLocalRoot(uid), 'workspace');
+/** 元数据表分区文件（spaces/conversations/artifacts/fileTrees 各一个，互不拖累）。 */
+export const workspaceMetaSectionFile = (uid: string, section: string) => path.join(workspaceMetaDir(uid), `meta-${section}.json`);
 export const userAuthProfilesFile = (uid: string) => path.join(userLocalConfigDir(uid), 'auth-profiles.json');
 export const userWebSearchCache   = (uid: string) => path.join(userLocalConfigDir(uid), 'web-search-cache.json');
 export const userReflectionStateFile = (uid: string) => path.join(userLocalConfigDir(uid), 'reflection-state.json');
@@ -760,6 +764,14 @@ export const userPackagesBinDir       = (uid: string) => path.join(userPackagesD
 export const userPackageSkillsDir = (uid: string) => path.join(userLocalRoot(uid), 'package_skills');
 export const userPackageSkillDir  = (uid: string, name: string) => path.join(userPackageSkillsDir(uid), name);
 
+// ── Plugin UI runtime config (machine-private, main+UI-owned) ───────────
+// `<uid>/local/packages/.secrets/<pkg>.json` holds a plugin-provided-UI
+// runtime's credentials (e.g. EDUSEED_* platform keys). Kept OUTSIDE the
+// verbatim package tree (cogseed-pkg.cjs must never read/write it) and
+// OUTSIDE cloud/ (keys are machine-private). Written only by
+// `features/plugin_ui.ts`; the renderer may only see a masked flag.
+export const userPackageSecretsDir = (uid: string) => path.join(userPackagesDir(uid), '.secrets');
+
 // ── Global skill roots (machine-global, read-only, outside WS_ROOT) ─────
 // Skills the user already keeps for OTHER agent hosts on this machine, read
 // purely for interop: `~/.claude/skills` (claude-code) and `~/.codex/skills`
@@ -874,6 +886,20 @@ export function embeddingModelDir(): string {
   // itself — filtered out by the line above; in other tsx / node scripts
   // resourcesPath simply does not exist).
   return path.join(PC_ROOT, 'resources', 'embedding-model');
+}
+
+/** Speech-to-text (sherpa-onnx) model directory, shipped via `extraResources`.
+ *
+ *   dev:    PC/resources/sherpa-onnx/
+ *   packed: <app>/Contents/Resources/sherpa-onnx/   (darwin)
+ *           <app>/resources/sherpa-onnx/            (win/linux)
+ */
+export function sttModelDir(): string {
+  const rp = (process as unknown as { resourcesPath?: string }).resourcesPath;
+  if (rp && !rp.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
+    return path.join(rp, 'sherpa-onnx');
+  }
+  return path.join(PC_ROOT, 'resources', 'sherpa-onnx');
 }
 
 /** Runtime binaries shipped via electron-builder `extraResources`.

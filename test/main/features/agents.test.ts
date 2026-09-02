@@ -85,6 +85,8 @@ function writeCustomAgent(agentId: string, fields: Partial<Record<string, any>> 
   if ('runtime' in fields) data.runtime = fields.runtime;
   if ('interface_contract' in fields) data.interface_contract = fields.interface_contract;
   if ('interaction_mode' in fields) data.interaction_mode = fields.interaction_mode;
+  if ('default_model' in fields) data.default_model = fields.default_model;
+  if ('default_thinking' in fields) data.default_thinking = fields.default_thinking;
   fs.writeFileSync(path.join(dir, 'agent.json'), JSON.stringify(data));
 }
 
@@ -477,7 +479,7 @@ describe('agents › normalizeAgent', () => {
       runtime: { kind: 'cli', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'] },
     } as any, 'custom');
     expect(norm?.runtime).toEqual({
-      kind: 'cli', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'],
+      kind: 'p3394-gateway', cli: 'claude', model: 'claude-opus-4-7', custom_args: ['--debug'],
     });
     expect(a.isCliAgent(norm)).toBe(true);
   });
@@ -521,7 +523,8 @@ describe('agents › normalizeAgent', () => {
       cli_provider_id: 'cp:hermes-local',
     });
     expect(a.isP3394GatewayAgent(norm)).toBe(true);
-    expect(a.isCliAgent(norm)).toBe(false);
+    // 收口后网关型也是"本机 CLI 智能体"（UI/项目目录判断共用 isCliAgent）
+    expect(a.isCliAgent(norm)).toBe(true);
   });
 
   it('normalizes in_process runtime but does not flag as CLI', async () => {
@@ -541,7 +544,7 @@ describe('agents › normalizeAgent', () => {
       runtime: { kind: 'cli', cli: 'claude', custom_args: ['--ok', 42, null, '--other'] as any },
     } as any, 'custom');
     expect(norm?.runtime).toEqual({
-      kind: 'cli', cli: 'claude', custom_args: ['--ok', '--other'],
+      kind: 'p3394-gateway', cli: 'claude', custom_args: ['--ok', '--other'],
     });
   });
 
@@ -573,7 +576,7 @@ describe('agents › normalizeAgent', () => {
     expect(norm?.interface_contract).toEqual({
       version: 1,
       role: 'external_expert',
-      runtime: { kind: 'cli', cli: 'hermes' },
+      runtime: { kind: 'p3394-gateway', cli: 'hermes' },
       io: { input: 'task_message', output: 'final_message_with_artifacts' },
       governance: {
         session_role: 'participant_only',
@@ -598,7 +601,7 @@ describe('agents › normalizeAgent', () => {
       },
     } as any, 'custom');
     expect(norm?.interface_contract.role).toBe('external_expert');
-    expect(norm?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'codex' });
+    expect(norm?.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
     expect(norm?.interface_contract.governance.session_role).toBe('participant_only');
     expect(norm?.interface_contract.governance.uses_mate_skills).toBe(false);
   });
@@ -1233,7 +1236,7 @@ describe('agents › createCustomAgent', () => {
     expect(raw.interface_contract).toEqual({
       version: 1,
       role: 'external_expert',
-      runtime: { kind: 'cli', cli: 'codex' },
+      runtime: { kind: 'p3394-gateway', cli: 'codex' },
       io: { input: 'task_message', output: 'final_message_with_artifacts' },
       governance: {
         session_role: 'participant_only',
@@ -1299,10 +1302,11 @@ describe('agents › countP3394GatewayAgentsByCli (shared-gateway refcount)', ()
     const a = await loadAgents();
 
     await a.createCustomAgent({ name: 'N', description: 'desc', category: 'general' });
-    // in_process runtime is the default and not persisted as runtime.kind
+    // in_process runtime is the default and not persisted as runtime.kind.
+    // 收口后创建的 `cli` 型读回即网关型，计入 gateway 绑定统计。
     await a.createCustomAgent({ name: 'CliLike', description: 'desc', category: 'general', runtime: { kind: 'cli', cli: 'codex' } });
 
-    expect(await a.countP3394GatewayAgentsByCli('codex')).toBe(0);
+    expect(await a.countP3394GatewayAgentsByCli('codex')).toBe(1);
     expect(await a.countP3394GatewayAgentsByCli('hermes')).toBe(0);
     expect(await a.countP3394GatewayAgentsByCli('')).toBe(0);
     expect(await a.countP3394GatewayAgentsByCli(null)).toBe(0);
@@ -1425,7 +1429,7 @@ describe('agents › listAgents', () => {
       name: 'Brief Agent',
       source: 'custom',
       category: 'data',
-      runtime: { kind: 'cli', cli: 'codex' },
+      runtime: { kind: 'p3394-gateway', cli: 'codex' },
       enabled: false,
     });
     expect(summary).not.toHaveProperty('workflow');
@@ -1471,6 +1475,27 @@ describe('agents › listAgents', () => {
     expect(match).toHaveLength(1);
     expect(match[0].source).toBe('marketplace');
     expect(match[0].name).toBe('BuiltDup');
+  });
+
+  it('第二期收口：legacy cli runtime 读回为 p3394-gateway，磁盘迁移并留备份', async () => {
+    writeCustomAgent('legacy-cli-agent', {
+      name: 'Legacy CLI',
+      runtime: { kind: 'cli', cli: 'claude', model: 'sonnet' },
+    });
+    const agentFile = path.join(customAgentsDir(), 'legacy-cli-agent', 'agent.json');
+    const backupFile = `${agentFile}.pre-gateway.bak`;
+    const a = await loadAgents();
+    const list = await a.listAgents();
+    const migrated = list.find((x) => x.agent_id === 'legacy-cli-agent');
+    // 读路径升级：无论磁盘新旧，读出的执行后端只有网关一种
+    expect(migrated?.runtime).toMatchObject({ kind: 'p3394-gateway', cli: 'claude', model: 'sonnet' });
+    // 磁盘迁移：agent.json 回写为网关型
+    const onDisk = JSON.parse(fs.readFileSync(agentFile, 'utf8'));
+    expect(onDisk.runtime).toMatchObject({ kind: 'p3394-gateway', cli: 'claude' });
+    // 原始内容备份，可回滚
+    expect(fs.existsSync(backupFile)).toBe(true);
+    const backup = JSON.parse(fs.readFileSync(backupFile, 'utf8'));
+    expect(backup.runtime).toMatchObject({ kind: 'cli', cli: 'claude' });
   });
 });
 
@@ -1575,7 +1600,7 @@ describe('agents › updateCustomAgent', () => {
     const updated = await a.updateCustomAgent('abc', {
       runtime: { kind: 'cli', cli: 'codex' },
     } as any);
-    expect(updated?.runtime).toEqual({ kind: 'cli', cli: 'codex' });
+    expect(updated?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex' });
   });
 
   it('reconciles interface contract when updating a CLI backend', async () => {
@@ -1593,9 +1618,9 @@ describe('agents › updateCustomAgent', () => {
       runtime: { kind: 'cli', cli: 'hermes' },
     } as any);
     expect(updated?.interface_contract.role).toBe('external_expert');
-    expect(updated?.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
+    expect(updated?.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
     const raw = JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8'));
-    expect(raw.interface_contract.runtime).toEqual({ kind: 'cli', cli: 'hermes' });
+    expect(raw.interface_contract.runtime).toEqual({ kind: 'p3394-gateway', cli: 'hermes' });
     expect(raw.interface_contract.governance.uses_mate_skills).toBe(false);
   });
 
@@ -1607,12 +1632,12 @@ describe('agents › updateCustomAgent', () => {
     const a = await loadAgents();
     // Attempt with explicit null (drop) — should be ignored.
     const r1 = await a.updateCustomAgent('abc', { runtime: null } as any);
-    expect(r1?.runtime).toEqual({ kind: 'cli', cli: 'claude' });
+    expect(r1?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'claude' });
     // Attempt with kind:'in_process' — also ignored.
     const r2 = await a.updateCustomAgent('abc', {
       runtime: { kind: 'in_process' },
     } as any);
-    expect(r2?.runtime).toEqual({ kind: 'cli', cli: 'claude' });
+    expect(r2?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'claude' });
   });
 
   it('locks runtime kind: in_process agent cannot become cli post-create', async () => {
@@ -2359,3 +2384,80 @@ describe('agents › list cache invalidation', () => {
 // (The legacy marketplace-sentinel sync tests are gone. Marketplace installs now live at
 // `<uid>/local/marketplace/agents/<id>/` and are reconciled from
 // the cloud-synced `installs.json` manifest — see features/marketplace_*.ts.)
+
+// ─── Unified execution entry: per-agent default execution config ─────────
+
+describe('agents › default execution config (default_model / default_thinking)', () => {
+  it('sets default_model and default_thinking on update and reads them back', async () => {
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      default_thinking: 'low',
+    });
+    expect(updated?.default_model).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
+    expect(updated?.default_thinking).toBe('low');
+    // Persisted shape round-trips through normalizeAgent.
+    const again = await a.getAgent('abc');
+    expect(again?.default_model).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' });
+    expect(again?.default_thinking).toBe('low');
+  });
+
+  it('null drops both fields (revert to following the global defaults)', async () => {
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: 'anthropic', model: 'claude-opus-4-8' },
+      default_thinking: 'high',
+    });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: null,
+      default_thinking: null,
+    });
+    expect(updated?.default_model).toBeUndefined();
+    expect(updated?.default_thinking).toBeUndefined();
+  });
+
+  it('omitted fields stay untouched while the other one updates', async () => {
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: 'zai', model: 'glm-5' },
+    });
+    const a = await loadAgents();
+    const updated = await a.updateCustomAgent('abc', { default_thinking: 'off' });
+    expect(updated?.default_model).toEqual({ provider: 'zai', model: 'glm-5' });
+    expect(updated?.default_thinking).toBe('off');
+  });
+
+  it('drops unusable default_model shapes instead of persisting them', async () => {
+    writeCustomAgent('abc', { name: 'Old', workflow: 'wf' });
+    const a = await loadAgents();
+    // provider without model / model without provider / non-object → dropped
+    const updated = await a.updateCustomAgent('abc', {
+      default_model: { provider: 'anthropic' } as any,
+    });
+    expect(updated?.default_model).toBeUndefined();
+    // invalid thinking enum → dropped
+    const updated2 = await a.updateCustomAgent('abc', {
+      default_thinking: 'ultra' as any,
+    });
+    expect(updated2?.default_thinking).toBeUndefined();
+  });
+
+  it('normalizeAgent drops partial raw shapes from disk (blank parts collapse)', async () => {
+    // A hand-edited agent.json with a half-empty default_model must read back
+    // as "no field set" so turn resolution never sees a broken pair.
+    writeCustomAgent('abc', {
+      name: 'Old',
+      workflow: 'wf',
+      default_model: { provider: '  ', model: 'claude-opus-4-8' },
+      default_thinking: 'sometimes',
+    });
+    const a = await loadAgents();
+    const agent = await a.getAgent('abc');
+    expect(agent?.default_model).toBeUndefined();
+    expect(agent?.default_thinking).toBeUndefined();
+  });
+});

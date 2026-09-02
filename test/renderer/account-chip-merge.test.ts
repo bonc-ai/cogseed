@@ -192,6 +192,12 @@ describe('account-chip merged footer entry (click toggle)', () => {
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.settings');
     expect(rootEl.menu!.innerHTML).toContain('hub.account.sign_out');
     expect(rootEl.menu!.innerHTML).toContain('hub.chip.menu.collapse');
+    // P3394 ACCOUNT-01/03：已登录菜单不再有「账号概览」「登录设备」入口，
+    // 也不展示 LocalIdentity 绑定状态（已绑定/未绑定本机身份）。
+    expect(rootEl.menu!.querySelector('[data-chip-action="overview"]')).toBeNull();
+    expect(rootEl.menu!.querySelector('[data-chip-action="devices"]')).toBeNull();
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.account.bound_local');
+    expect(rootEl.menu!.innerHTML).not.toContain('hub.account.not_bound');
 
     rootEl.chip!.click();
     expect(rootEl.menu!.hidden).toBe(true);

@@ -965,6 +965,7 @@
         void updateInstance({ workspace: { type: 'all' } }, workspaceSelect);
       });
       wrapper.appendChild(preferencesCard(responseSelect, workspaceSelect));
+      wrapper.appendChild(channelBridgeAllowlistCard(instance));
       const deletion = settingsSection('messaging.section.danger', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
@@ -1135,6 +1136,7 @@
     config.appendChild(rows);
     wrapper.appendChild(config);
     if (instance) {
+      wrapper.appendChild(channelBridgeAllowlistCard(instance));
       const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
@@ -1553,8 +1555,9 @@
     wrapper.appendChild(wechatAssociationCard());
     const instances = instancesForChannel(channel);
     if (instances.length) {
-      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
       const instance = primaryInstance(channel);
+      wrapper.appendChild(channelBridgeAllowlistCard(instance));
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1587,8 +1590,9 @@
       wrapper.appendChild(config);
     }
     if (instances.length) {
-      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
       const instance = primaryInstance(channel);
+      wrapper.appendChild(channelBridgeAllowlistCard(instance));
+      const deletion = card('messaging.delete_title', 'messaging.delete_subtitle', 'messaging-delete-card');
       const deleteButton = el('button', 'btn btn-danger messaging-delete-button', labelFor('messaging.delete', ''));
       deleteButton.type = 'button';
       deleteButton.disabled = state.updating;
@@ -1716,6 +1720,57 @@
     section.append(
       rows,
     );
+    return section;
+  }
+
+  // 渠道即节点的发送白名单：允许哪些智能体（sender agent_id）经
+  // p3394_send 主动发到本渠道实例。关闭开关 = 显式清除（传 null），
+  // 全放行；开启后名单外发送被拒。速率护栏（10/分·sender、30/分·实例）
+  // 不在此配置、始终生效。
+  function channelBridgeAllowlistCard(instance) {
+    const section = settingsSection('messaging.section.bridge_allowlist', 'messaging.section.bridge_allowlist_subtitle', 'messaging-bridge-allowlist-card');
+    const current = Array.isArray(instance.policy?.channelBridgeSenderAllowlist)
+      ? instance.policy.channelBridgeSenderAllowlist
+      : null;
+    const enabled = current !== null;
+    const toggleLabel = el('div', 'messaging-config-card-heading');
+    toggleLabel.appendChild(el('h3', '', labelFor('messaging.bridge_allowlist.toggle', '')));
+    const toggle = el('button', `btn messaging-secondary-button messaging-allowlist-toggle${enabled ? ' is-on' : ''}`);
+    toggle.type = 'button';
+    toggle.textContent = labelFor(enabled ? 'messaging.bridge_allowlist.on' : 'messaging.bridge_allowlist.off', '');
+    toggle.addEventListener('click', () => {
+      if (state.updating) return;
+      // 开启即"名单外全拒"，空名单=全部拒绝：确认防误触。
+      void (async () => {
+        const ok = typeof uiConfirm === 'function'
+          ? await uiConfirm({ message: labelFor('messaging.bridge_allowlist.enable_confirm', '') })
+          : true;
+        if (ok) void updateInstance({ policy: { channelBridgeSenderAllowlist: enabled ? null : [] } }, toggle);
+      })();
+    });
+    toggleLabel.appendChild(toggle);
+    section.appendChild(toggleLabel);
+
+    if (!enabled) return section;
+    const textarea = el('textarea', 'messaging-allowlist-input');
+    textarea.value = (current || []).join('\n');
+    textarea.rows = 3;
+    textarea.spellcheck = false;
+    textarea.setAttribute('aria-label', labelFor('messaging.section.bridge_allowlist', ''));
+    section.appendChild(textarea);
+    const hint = el('p', 'messaging-allowlist-hint', labelFor('messaging.bridge_allowlist.hint', ''));
+    section.appendChild(hint);
+    const save = el('button', 'btn messaging-secondary-button messaging-allowlist-save', labelFor('messaging.bridge_allowlist.save', ''));
+    save.type = 'button';
+    save.disabled = state.updating;
+    save.addEventListener('click', () => {
+      if (state.updating) return;
+      const ids = textarea.value.split(/[\n,，]+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      void updateInstance({ policy: { channelBridgeSenderAllowlist: ids } }, textarea);
+    });
+    section.appendChild(save);
     return section;
   }
 

@@ -54,6 +54,40 @@ test('selectLatest picks the highest version for the caller platform/arch', () =
   assert.equal(any.version, '0.0.6');
 });
 
+test('selectLatest filters by ext and excludeExt (feed vs reminder channels)', () => {
+  const pair = [
+    { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.6-mac-arm64.dmg' },
+    { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.6-mac-arm64.zip' },
+    { version: '0.0.7', platform: 'darwin', arch: 'arm64', file: 'CogSeed-0.0.7-mac-arm64.zip' },
+  ];
+
+  // ext: only the newest zip (auto-update feed).
+  const zip = selectLatest({ releases: pair, platform: 'darwin', arch: 'arm64', ext: '.zip' });
+  assert.equal(zip.version, '0.0.7');
+  assert.equal(zip.file, 'CogSeed-0.0.7-mac-arm64.zip');
+
+  // excludeExt: zip never leaks into the v1 reminder channel, even when a
+  // newer zip exists — the newest installer dmg wins.
+  const dmg = selectLatest({ releases: pair, platform: 'darwin', arch: 'arm64', currentVersion: '0.0.5', excludeExt: '.zip' });
+  assert.equal(dmg.version, '0.0.6');
+  assert.equal(dmg.file, 'CogSeed-0.0.6-mac-arm64.dmg');
+
+  // No zip for the platform → null.
+  assert.equal(selectLatest({ releases: pair, platform: 'linux', arch: 'x64', ext: '.zip' }), null);
+});
+
+test('upsertRelease keeps dmg and zip of the same release as separate entries', () => {
+  let catalog = upsertRelease(emptyCatalog(), { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'a.dmg', sha256: 'dmg-sha' });
+  catalog = upsertRelease(catalog, { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'a.zip', sha256: 'zip-sha' });
+  assert.equal(catalog.releases.length, 2);
+
+  // Re-publishing the same extension still replaces in place.
+  catalog = upsertRelease(catalog, { version: '0.0.6', platform: 'darwin', arch: 'arm64', file: 'b.zip', sha256: 'zip-sha-v2' });
+  assert.equal(catalog.releases.length, 2);
+  const files = catalog.releases.map((r) => r.file).sort();
+  assert.deepEqual(files, ['a.dmg', 'b.zip']);
+});
+
 test('releaseToData builds the client payload with https download url', () => {
   const data = releaseToData({
     version: '0.0.6',

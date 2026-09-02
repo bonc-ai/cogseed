@@ -87,6 +87,19 @@ export interface WakeRequestSummary {
   workflow_resume_token?: string;
 }
 
+export interface GroupMessageMetrics {
+  startedAt: number;
+  firstTokenAt: number | null;
+  completedAt: number;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
+  toolCalls?: number;
+}
+
 export interface GroupMessage {
   /** Stable per-message id (not jsonl line index). Used by visibility +
    * dedupe. */
@@ -113,13 +126,35 @@ export interface GroupMessage {
    * message and recipient so a replay/re-dispatch reuses the original value. */
   p3394?: { recipient_epochs: Record<string, number> };
   /** Stable actor-execution id that produced this record. Live process,
-   * terminal bus events, persisted history and renderer placeholders all use
-   * this value to refer to the same reply. Older records may omit it. */
+   *  terminal bus events, persisted history and renderer placeholders all use
+   *  this value to refer to the same reply. Older records may omit it. */
   turn_id?: string;
+  /** Durable terminal marker for one actor execution. Live events already
+   * carry `turn_end`; persisting the bit lets crash recovery distinguish a
+   * completed turn from an intermediate segment with the same `turn_id`. */
+  turn_end?: true;
+  /** Actual execution configuration for this actor reply (unified execution
+   *  entry): the model / thinking strength that ran this turn. Emitted as a
+   *  process event at turn start AND persisted here so a history reload can
+   *  rerender the same meta on the bubble. Older records omit it. */
+  exec_meta?: {
+    provider?: string;
+    model?: string;
+    /** 'auto' = provider default (no explicit thinking override). */
+    effort?: "off" | "low" | "high" | "auto";
+    /** CLI runtime id when this turn ran on an external CLI agent. */
+    cli?: string;
+    /** Human-facing label of the provider at execution time. */
+    provider_label?: string;
+  };
   /** Host-generated status records are not model replies. Kept explicit so
    * recovery/reconciliation never claims a live actor placeholder merely
    * because the status row has the same sender. */
   system_kind?: "reply_interrupted" | "kstar_review";
+  /** Usage/timing facts for one settled assistant reply. Absent on legacy
+   *  rows, user messages, and host status rows. Numbers only — never
+   *  credentials or free text. */
+  metrics?: GroupMessageMetrics;
   /** Markdown text body. */
   text: string;
   /** Structured failure origin. Older records omit this field and must not be
@@ -127,6 +162,8 @@ export interface GroupMessage {
   failure_kind?: GroupMessageFailureKind;
   /** Stable low-cardinality reason paired with `failure_kind`. */
   failure_code?: string;
+  /** Host action idempotency key. This is a safe correlation id, never user text. */
+  action_request_id?: string;
   /** Internal model-facing text. UI renders `text`; workers use this when
    * present so system-created messages can stay terse for humans while
    * preserving full instructions for the model. */

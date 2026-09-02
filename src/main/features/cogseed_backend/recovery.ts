@@ -1,8 +1,9 @@
 import { nowIso, writeJson } from '../../storage';
-import { markCogSeedTaskRecoverable } from './lifecycle';
+import { isCogSeedTaskActiveStatus, markCogSeedTaskRecoverable } from './lifecycle';
 import { assertCogSeedUserId, cogseedRecoveryStateFile } from './paths';
-import { listCogSeedTasks } from './task-store';
+import { listCogSeedTasks, readCogSeedTask } from './task-store';
 import type { CogSeedGroupChatProjectionInput } from './group-chat-projection';
+import type { CogSeedTaskRecord } from './types';
 
 export interface CogSeedRecoveryReport {
   recoveredCount: number;
@@ -11,42 +12,107 @@ export interface CogSeedRecoveryReport {
   taskIds: string[];
 }
 
-export async function recoverCogSeedTasks(
+export interface CogSeedRecoveryOptions {
+  projectTaskEvent?: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>;
+  /** Tasks known to still have a live executor in this main-process instance. */
+  activeTaskIds?: Iterable<string>;
+  /** Optional ownership/liveness probe for callers with a richer runtime view. */
+  isTaskActive?: (task: CogSeedTaskRecord) => boolean | Promise<boolean>;
+}
+
+const inFlightRecoveries = new Map<string, Promise<CogSeedRecoveryReport>>();
+
+function isRecoveryCandidate(task: CogSeedTaskRecord): boolean {
+  return isCogSeedTaskActiveStatus(task.status);
+}
+
+export interface RecoverCogSeedTaskOptions {
+  errorCode: string;
+  projectTaskEvent?: (input: CogSeedGroupChatProjectionInput) => Promise<unknown>;
+  canRecover?: (task: CogSeedTaskRecord) => boolean | Promise<boolean>;
+}
+
+/** Re-read and transition one candidate through the canonical lifecycle path.
+ * A concurrent completion, cancellation, retry, or prior recovery wins
+ * benignly and returns null. */
+export async function recoverCogSeedTask(
   userId: string,
-  options: { projectTaskEvent?: (input: CogSeedGroupChatProjectionInput) => Promise<unknown> } = {},
+  taskId: string,
+  options: RecoverCogSeedTaskOptions,
+): Promise<CogSeedTaskRecord | null> {
+  const current = await readCogSeedTask(userId, taskId);
+  if (!current || !isRecoveryCandidate(current)) return null;
+  if (options.canRecover && !await options.canRecover(current)) return null;
+  let updated: CogSeedTaskRecord;
+  try {
+    updated = await markCogSeedTaskRecoverable(userId, taskId, options.errorCode);
+  } catch (error) {
+    const latest = await readCogSeedTask(userId, taskId);
+    if (!latest || !isRecoveryCandidate(latest)) return null;
+    throw error;
+  }
+  if (updated.status !== 'recoverable') return null;
+  if (updated.conversationId && updated.agentId && options.projectTaskEvent) {
+    try {
+      await options.projectTaskEvent({
+        userId,
+        conversationId: updated.conversationId,
+        agentId: updated.agentId,
+        taskId: updated.taskId,
+        sessionId: updated.sessionId,
+        event: {
+          eventId: `cogseed-event-recovery-${updated.taskId}`,
+          type: 'task.recoverable',
+          payload: { errorCode: options.errorCode },
+        },
+      });
+    } catch {
+      // Recovery state is authoritative; display projection remains best-effort.
+    }
+  }
+  return updated;
+}
+
+async function runCogSeedTaskRecovery(
+  userId: string,
+  options: CogSeedRecoveryOptions,
 ): Promise<CogSeedRecoveryReport> {
-  assertCogSeedUserId(userId);
   const tasks = await listCogSeedTasks(userId);
-  const recoverable = tasks.filter((task) => task.status === 'created' || task.status === 'queued' || task.status === 'running');
+  const candidates = tasks.filter(isRecoveryCandidate);
+  const activeTaskIds = new Set(options.activeTaskIds ?? []);
   const projectTaskEvent = options.projectTaskEvent ?? (async (input: CogSeedGroupChatProjectionInput) => {
     const { cogseedGroupChatProjection } = await import('./group-chat-projection');
     return cogseedGroupChatProjection.project(input);
   });
-  for (const task of recoverable) {
-    const updated = await markCogSeedTaskRecoverable(userId, task.taskId, 'worker_restart');
-    if (updated.conversationId && updated.agentId) {
-      try {
-        await projectTaskEvent({
-          userId,
-          conversationId: updated.conversationId,
-          agentId: updated.agentId,
-          taskId: updated.taskId,
-          sessionId: updated.sessionId,
-          event: {
-            eventId: `cogseed-event-recovery-${updated.taskId}`,
-            type: 'task.recoverable',
-            payload: { errorCode: 'worker_restart' },
-          },
-        });
-      } catch {
-        // Recovery state is authoritative; display projection remains best-effort.
-      }
-    }
+  const taskIds: string[] = [];
+  for (const task of candidates) {
+    if (activeTaskIds.has(task.taskId) || await options.isTaskActive?.(task)) continue;
+    const updated = await recoverCogSeedTask(userId, task.taskId, {
+      errorCode: 'worker_restart',
+      projectTaskEvent,
+    });
+    if (!updated) continue;
+    taskIds.push(updated.taskId);
   }
-  const taskIds = recoverable.map((task) => task.taskId);
   const collaborationRecovery = await recoverCogSeedCollaborationSteps(userId);
   await writeJson(cogseedRecoveryStateFile(userId), { schemaVersion: 1, ownerId: userId, recoveredAt: nowIso(), recoveredTaskIds: taskIds });
-  return { recoveredCount: recoverable.length, workflowStepsReconciled: collaborationRecovery.reconciledCount, dispatchedCount: 0, taskIds };
+  return { recoveredCount: taskIds.length, workflowStepsReconciled: collaborationRecovery.reconciledCount, dispatchedCount: 0, taskIds };
+}
+
+export function recoverCogSeedTasks(
+  userId: string,
+  options: CogSeedRecoveryOptions = {},
+): Promise<CogSeedRecoveryReport> {
+  assertCogSeedUserId(userId);
+  const inFlight = inFlightRecoveries.get(userId);
+  if (inFlight) return inFlight;
+  const recovery = runCogSeedTaskRecovery(userId, options);
+  inFlightRecoveries.set(userId, recovery);
+  const clear = () => {
+    if (inFlightRecoveries.get(userId) === recovery) inFlightRecoveries.delete(userId);
+  };
+  void recovery.then(clear, clear);
+  return recovery;
 }
 
 export async function recoverCogSeedCollaborationSteps(userId: string): Promise<{ reconciledCount: number; coordinationIds: string[] }> {

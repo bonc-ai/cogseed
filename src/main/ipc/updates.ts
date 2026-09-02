@@ -19,10 +19,23 @@
  */
 
 import * as updater from '../features/updater/client';
+import * as updaterAuto from '../features/updater/auto';
 import { readUpdaterState } from '../features/updater/state';
 
 /** Throttle progress pushes to the renderer (download chunks are frequent). */
 const PROGRESS_PUSH_INTERVAL_MS = 200;
+
+/**
+ * 自动更新状态推送到渲染层（设置页「自动更新」行）。
+ * 初始化在 app ready 之后进行（auto.ts 内部要求 app.isPackaged 才启用）。
+ */
+export function initAutoUpdateBridge(send: (channel: string, payload: unknown) => void): void {
+  updaterAuto.initAutoUpdate((status) => {
+    try {
+      send('updates:auto', status);
+    } catch { /* window gone */ }
+  });
+}
 
 let _lastProgressPushAt = 0;
 
@@ -69,5 +82,18 @@ export const invokeHandlers = {
 
   'updates.open': async (_payload: unknown, ctx: { userId: string }) => {
     return updater.openDownloaded(ctx.userId);
+  },
+
+  // ── 自动更新（Squirrel.Mac）：状态查询 / 手动检查 / 重启并安装 ──
+  'updates.autoStatus': async () => {
+    return { status: updaterAuto.getAutoUpdateStatus() };
+  },
+
+  'updates.autoCheck': async () => {
+    return { status: updaterAuto.checkAutoUpdate() };
+  },
+
+  'updates.autoInstall': async () => {
+    return { status: updaterAuto.installAutoUpdate() };
   },
 };

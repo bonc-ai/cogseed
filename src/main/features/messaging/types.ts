@@ -61,6 +61,11 @@ export interface MessagingPolicy {
   allowUserIds: string[];
   allowGroupIds: string[];
   requireMentionInGroups: boolean;
+  /** 渠道即节点（第三期）发送白名单：允许经 p3394_send 主动发到本渠道
+   * 实例的 sender agent_id 列表。undefined = 全放行（现状兼容）；
+   * 空数组 = 拒绝所有。速率上限（per-sender 10/min、per-instance
+   * 30/min）为硬护栏，不在此配置。 */
+  channelBridgeSenderAllowlist?: string[];
 }
 
 export interface MessagingInstanceStatus {
@@ -126,6 +131,10 @@ export interface MessagingBinding {
   externalChatId: string;
   externalUserId?: string;
   externalChatTitle?: string;
+  /** Resolved display name of the bound peer (direct chats) or group
+   *  sender — persisted so title upgrades survive without a fresh API
+   *  lookup on the next inbound. */
+  externalUserName?: string;
   cid: string;
   /** 空间化后 workspace 绑定写 spaceId；旧记录保留 projectId 兼容读。 */
   spaceId?: string;
@@ -195,6 +204,8 @@ export interface InboundLedgerEntry {
   cid?: string;
   /** Internal group-chat message id created for this inbound event. */
   internalMessageId?: string;
+  /** P3394 信封 message_id（翻译官模式投影）：与 key (= inboundKey) 双编号
+   * 互查，排障可从渠道事件一路追踪到总线派发。 */
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;

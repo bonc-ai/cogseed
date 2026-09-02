@@ -99,6 +99,11 @@ export interface Conversation {
    * draft. The bus does not bind to it; group membership is dynamic. */
   agent_id: string;
   skill_id: string;
+  /** Per-conversation agent tool permission mode. Maps to the CLI agent's
+   *  `--permission-mode` (Claude Code / Codex). `full` = bypass permissions
+   *  (current default); `auto_approve` / `ask` require the interactive
+   *  approval UI (phase 2) before they are enforced. */
+  permission_mode?: 'full' | 'auto_approve' | 'ask';
   /** Commander session id (`<uid>-gconv-<cid>`). Stored for cleanup;
    * agents in the group have their own per-(conv,agent) session ids derived
    * via state.buildGmemberSessionId. */
@@ -114,9 +119,14 @@ export interface Conversation {
   space_id?: string;
   /** Set when this conversation was created by an auto-task fire (sidebar
    *  "Automation" tab). Used by the renderer to render the clock icon next
-   *  to the title and to group the conv under its originating task in the
-   *  auto-tab expand panel. Stable id; survives task deletion. */
+   * to the title and to group the conv under its originating task in the
+   * auto-tab expand panel. Stable id; survives task deletion. */
   origin_auto_task_id?: string;
+  /** Messaging channel this conversation was created by (e.g. `feishu_lark`,
+   *  `wechat_personal`). Set once at binding creation; the renderer groups
+   *  such conversations under a collapsible per-channel sidebar section.
+   *  Absent → ordinary in-app conversation. */
+  channel_platform?: string;
   /** Optional sidebar pin timestamp. Pinned conversations sort to the top of
    *  whichever sidebar list currently contains them (project or unprojected). */
   pinned_at?: string;
@@ -138,6 +148,8 @@ export interface Conversation {
   /** Record-level conflict clock for aggregate `_index.json` merges. */
   _sync_rev?: number;
   _sync_device_id?: string;
+  /** Main-process-only generation fence for retained terminal result delivery. */
+  _cogseed_result_generation?: string;
   created_at: string;
   updated_at: string;
   /** Derived from group_chat state.json at read time; never persisted on
@@ -289,9 +301,13 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
     created_at: createdAt,
     updated_at: updatedAt,
   };
+  if (typeof raw.permission_mode === 'string' && ['full', 'auto_approve', 'ask'].includes(raw.permission_mode)) {
+    out.permission_mode = raw.permission_mode as Conversation['permission_mode'];
+  }
   if (typeof raw.project_id === 'string' && raw.project_id) out.project_id = raw.project_id;
   if (typeof raw.space_id === 'string' && raw.space_id) out.space_id = raw.space_id;
   if (typeof raw.origin_auto_task_id === 'string' && raw.origin_auto_task_id) out.origin_auto_task_id = raw.origin_auto_task_id;
+  if (typeof raw.channel_platform === 'string' && raw.channel_platform) out.channel_platform = raw.channel_platform;
   if (typeof raw.pinned_at === 'string' && raw.pinned_at) out.pinned_at = raw.pinned_at;
   if (typeof raw.pin_state_updated_at === 'string' && raw.pin_state_updated_at) out.pin_state_updated_at = raw.pin_state_updated_at;
   if (raw.title_manually_set === true) out.title_manually_set = true;
@@ -329,6 +345,10 @@ function _normaliseConversation(raw: any, fallbackCid = ''): Conversation | null
   if (typeof raw[RECORD_SYNC_DEVICE_FIELD] === 'string' && raw[RECORD_SYNC_DEVICE_FIELD]) {
     out._sync_device_id = raw[RECORD_SYNC_DEVICE_FIELD];
   }
+  if (typeof raw._cogseed_result_generation === 'string'
+    && /^cogseed-generation-[A-Za-z0-9_-]+$/.test(raw._cogseed_result_generation)) {
+    out._cogseed_result_generation = raw._cogseed_result_generation;
+  }
   return out;
 }
 
@@ -349,6 +369,78 @@ function _hasFreshParticipantSummary(c: Conversation): boolean {
   if (!Array.isArray(c.agent_ids) || typeof c.commander_in_chat !== 'boolean') return false;
   if (!c.participant_summary_updated_at || c.participant_summary_updated_at !== c.updated_at) return false;
   return !c.agent_id || c.agent_ids.includes(c.agent_id);
+}
+
+// COGSEED-15：会话参与智能体单一事实源。
+// 汇总语义与 listConversations 完全一致：kind==='agent' 去重（同一 Agent 多次调用
+// 只计 1 个；角色/Skill/工具不计入）+ 起始 agent_id 兜底 + commander 独立布尔。
+// 数据源 = members.json（运行协作区域 /api/conversations/:cid/members 同一份文件），
+// 保证会话行、会话页与运行协作区域的数量和名单一致。
+// 不落盘（磁盘索引回写由 listConversations 统一路径负责，避免以空间子集重写全局索引）；
+// 进程内 60s 缓存仅在 bus 空闲时生效——运行中不缓存，与运行协作区域保持同步。
+interface ParticipantSummary { agentIds: string[]; commanderInChat: boolean; }
+const _convSummaryCache = new Map<string, { at: number; summary: ParticipantSummary }>();
+const _convSummaryTtlMs = 60_000;
+
+async function _resolveParticipantSummary(
+  userId: string,
+  c: Conversation,
+  opts?: { liveMembersOnly?: boolean },
+): Promise<ParticipantSummary> {
+  // liveMembersOnly：空间任务行路径——空间索引行由创建/绑定时刻写入，bus 不增量维护，
+  // 行内"新鲜"摘要可能是创建时的旧快照（真实 bug：空间详情 1 个 vs 会话页 2 个）。
+  // 该路径永远以 members.json（运行协作区域数据源）为准，不做行内摘要短路。
+  if (!opts?.liveMembersOnly && _hasFreshParticipantSummary(c)) {
+    return { agentIds: _normaliseAgentIds(c.agent_ids), commanderInChat: c.commander_in_chat === true };
+  }
+  const cacheKey = `${userId}:${c.conversation_id}`;
+  // 运行中的会话（bus 忙）不走缓存：members.json 随 turn 更新，需与运行协作区域同步
+  const bus = require('./group_chat/bus') as typeof import('./group_chat/bus');
+  if (bus.isQuiescent(userId, c.conversation_id)) {
+    const cached = _convSummaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < _convSummaryTtlMs) return cached.summary;
+  }
+  const membersRes = await readMembers(userId, c.conversation_id, c.project_id ?? null).catch(() => null);
+  // 指挥官在场：优先用 members.json 的 commander_spoken 标志（消息落盘时
+  // 由 bus.appendMain 顺手写入）。无标志的老数据懒补记：扫一次 jsonl，
+  // 命中即回写标志 —— 此后只读 members.json 小文件。指挥官从未发言的
+  // 会话 jsonl 极小（或不存在），扫描成本可忽略；真正长且费的是指挥官
+  // 已发言的会话，它们都被标志覆盖，不再进扫描分支。
+  let commanderInChat = membersRes?.commander_spoken === true;
+  if (!commanderInChat) {
+    const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
+    if (fs.existsSync(file)) {
+      try {
+        const text = await fsp.readFile(file, 'utf8');
+        if (/"from"\s*:\s*"commander"/.test(text)) {
+          commanderInChat = true;
+          try {
+            const { markCommanderSpoken } = await import('./group_chat/state');
+            await markCommanderSpoken(userId, c.conversation_id, c.project_id ?? null);
+          } catch { /* 补记失败不阻断展示 */ }
+        }
+      } catch { /* 扫描失败按 false 处理 */ }
+    }
+  }
+  let agentIds: string[] = [];
+  if (membersRes) {
+    const seen = new Set<string>();
+    for (const a of membersRes.actors) {
+      if (a && a.kind === 'agent' && a.id && !seen.has(a.id)) {
+        seen.add(a.id);
+        agentIds.push(a.id);
+      }
+    }
+    // Union in the starting `agent_id` defensively（新建会话 members 文件未落前）
+    if (c.agent_id && !seen.has(c.agent_id)) agentIds.push(c.agent_id);
+  } else if (c.agent_id) {
+    agentIds = [c.agent_id];
+  }
+  const summary: ParticipantSummary = { agentIds: _normaliseAgentIds(agentIds), commanderInChat };
+  if (bus.isQuiescent(userId, c.conversation_id)) {
+    _convSummaryCache.set(cacheKey, { at: Date.now(), summary });
+  }
+  return summary;
 }
 
 function _lastActionMs(c: Conversation | null | undefined): number {
@@ -390,6 +482,7 @@ const CLEARABLE_CONVERSATION_FIELDS = [
   'pin_state_updated_at',
   'title_manually_set',
   'deleted_at',
+  '_cogseed_result_generation',
 ] as const satisfies readonly (keyof Conversation)[];
 
 function hasOwn(obj: object, key: PropertyKey): boolean {
@@ -1144,23 +1237,9 @@ async function _listConversationsUncached(
     const lastActiveMs = Math.max(updatedMs || 0, createdMs || 0);
     const busBusy = !bus.isQuiescent(userId, c.conversation_id);
     const stale = lastActiveMs > 0 && (now - lastActiveMs) > STALE_MS;
-    const [stateRes, membersRes, commRes] = await Promise.allSettled([
+    const [stateRes, summaryRes] = await Promise.allSettled([
       stale ? Promise.resolve(null) : readState(userId, c.conversation_id, c.project_id ?? null),
-      summaryFresh ? Promise.resolve(null) : readMembers(userId, c.conversation_id, c.project_id ?? null),
-      // Substring scan of `<cid>.jsonl` for any `from:"commander"` line.
-      // Cheaper than per-line JSON.parse and good enough — `commander` is
-      // an actor id, never legitimately a free-form value of any other
-      // field. False positives would require a user message containing
-      // that exact quoted pattern (and even then the read returns true,
-      // which is the conservative outcome: show commander when in doubt).
-      summaryFresh ? Promise.resolve(null) : (async () => {
-        const file = conversationMessageReadFile(userId, c.conversation_id, c.project_id ?? null);
-        if (!fs.existsSync(file)) return false;
-        try {
-          const text = await fsp.readFile(file, 'utf8');
-          return /"from"\s*:\s*"commander"/.test(text);
-        } catch { return false; }
-      })(),
+      summaryFresh ? Promise.resolve(null) : _resolveParticipantSummary(userId, c),
     ]);
     if (stale) {
       // Stale: state.json was skipped, only bus quiescence drives processing.
@@ -1170,28 +1249,10 @@ async function _listConversationsUncached(
       processing = s.status === 'running' || busBusy;
       since = processing ? s.last_active_at : null;
     }
-    if (!summaryFresh && commRes.status === 'fulfilled') {
-      commanderInChat = commRes.value;
-    }
-    if (!summaryFresh && membersRes.status === 'fulfilled' && membersRes.value) {
-      const seen = new Set<string>();
-      for (const a of membersRes.value.actors) {
-        if (a && a.kind === 'agent' && a.id && !seen.has(a.id)) {
-          seen.add(a.id);
-          agentIds.push(a.id);
-        }
-      }
-      // Union in the starting `agent_id` defensively — `members.json` is
-      // populated by the bus once a turn runs, so a freshly-created conv
-      // can have agent_id set before its members file lands.
-      if (c.agent_id && !seen.has(c.agent_id)) {
-        agentIds.push(c.agent_id);
-      }
-    } else if (!summaryFresh && c.agent_id) {
-      agentIds = [c.agent_id];
-    }
-    if (!summaryFresh) {
-      c.agent_ids = _normaliseAgentIds(agentIds);
+    if (!summaryFresh && summaryRes.status === 'fulfilled') {
+      agentIds = summaryRes.value.agentIds;
+      commanderInChat = summaryRes.value.commanderInChat;
+      c.agent_ids = agentIds;
       c.commander_in_chat = commanderInChat;
       c.participant_summary_updated_at = c.updated_at;
       summariesToBackfill.push(c);
@@ -1298,7 +1359,15 @@ export async function conversationSpaceId(uid: string, cid: string): Promise<str
   return sid;
 }
 
-export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
+/** 轻量版空间会话列表 —— 仅服务于「最近会话」展示（标题/时间）。
+ *  与 listSpaceConversations 同口径合并空间索引 + 全局索引，但跳过
+ *  _resolveParticipantSummary：那一步会读每个会话的 members.json 并
+ *  把整份 <cid>.jsonl 读进内存做 commander 正则扫描。工作空间中心
+ *  （listSpaces）对 N 个空间 × M 个会话调用它，成本会放大成「全部
+ *  消息字节总和」，是工作空间首屏卡顿的主因之一。最近会话只用到
+ *  convs[0].title / updated_at，不需要智能体名单口径（COGSEED-15 的
+ *  名单一致性只作用于空间任务行，仍走完整版路径）。 */
+export async function listSpaceConversationsLight(userId: string, spaceId: string): Promise<Conversation[]> {
   if (!safeId(spaceId)) return [];
   const byCid = new Map<string, Conversation>();
 
@@ -1320,6 +1389,108 @@ export async function listSpaceConversations(userId: string, spaceId: string): P
   return Array.from(byCid.values())
     .filter((c) => !isDeletedConversation(c))
     .sort(_compareConversationIndexRows);
+}
+
+export async function listSpaceConversations(userId: string, spaceId: string): Promise<Conversation[]> {
+  if (!safeId(spaceId)) return [];
+  const startedAt = Date.now();
+  // 持久化元数据表路径：全部会话空闲（quiescent）且指纹命中 → 直接返回，
+  // 不再逐行读 members.json（COGSEED-15：bus 忙时必须实时，名单随 turn 变）。
+  const meta = await import('./workspace_meta');
+  const bus = require('./group_chat/bus') as typeof import('./group_chat/bus');
+  const tableEntry = await meta.getEntry<Conversation[]>(userId, 'conversations', spaceId);
+  if (tableEntry && Array.isArray(tableEntry.data)) {
+    let allQuiescent = true;
+    for (const c of tableEntry.data) {
+      if (!c || !c.conversation_id || !bus.isQuiescent(userId, c.conversation_id)) {
+        allQuiescent = false;
+        break;
+      }
+    }
+    if (allQuiescent && (await _spaceConversationsStamp(userId, spaceId, tableEntry.data)) === tableEntry.stamp) {
+      log.info('listSpaceConversations table hit', { rows: tableEntry.data.length, ms: Date.now() - startedAt });
+      return tableEntry.data.map((c) => ({ ...c }));
+    }
+  }
+  const byCid = new Map<string, Conversation>();
+
+  const spaceRaw: any = await readJson(spaceChatIndexFile(userId, spaceId));
+  const spaceItems = Array.isArray(spaceRaw)
+    ? spaceRaw : (spaceRaw && Array.isArray(spaceRaw.items) ? spaceRaw.items : []);
+  for (const raw of spaceItems) {
+    const row = _normaliseConversation(raw);
+    if (!row) continue;
+    if (!row.space_id) row.space_id = spaceId;
+    byCid.set(row.conversation_id, row);
+  }
+
+  for (const c of await _readIndexConversations(userId)) {
+    if (c.space_id !== spaceId) continue;
+    if (!byCid.has(c.conversation_id)) byCid.set(c.conversation_id, c);
+  }
+
+  const rows = Array.from(byCid.values())
+    .filter((c) => !isDeletedConversation(c))
+    .sort(_compareConversationIndexRows);
+
+  // COGSEED-15：空间任务行的智能体数量/名单与运行协作区域同一事实源
+  // （members.json 派生，kind==='agent' 去重；liveMembersOnly 跳过行内旧快照）。
+  // 只覆盖返回行，不落盘。
+  await Promise.all(rows.map(async (c) => {
+    const s = await _resolveParticipantSummary(userId, c, { liveMembersOnly: true });
+    c.agent_ids = s.agentIds;
+    c.commander_in_chat = s.commanderInChat;
+  }));
+  // 回写持久化元数据表：下次冷启动/跨空间重进直接查表。
+  try {
+    const meta = await import('./workspace_meta');
+    await meta.putEntry(userId, 'conversations', spaceId, await _spaceConversationsStamp(userId, spaceId, rows), rows);
+  } catch { /* 表写入失败不阻断 */ }
+  // 性能埋点：空间任务列表耗时（诊断用，仅计数/时长）。
+  log.info('listSpaceConversations done', { rows: rows.length, ms: Date.now() - startedAt });
+  return rows;
+}
+
+/** 会话索引文件指纹（全部根）：spaces.list 等工作空间摘要用它做验证。 */
+export async function conversationIndexStamp(userId: string): Promise<string> {
+  const parts: string[] = [];
+  for (const root of conversationRoots(userId)) {
+    parts.push(`ci:${root.indexFile}:${await _fileStamp(root.indexFile)}`);
+  }
+  return parts.join('|');
+}
+
+async function _fileStamp(file: string): Promise<string> {
+  try {
+    const st = await fsp.stat(file);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+async function _entryStamp(dir: string): Promise<string> {
+  try {
+    const st = await fsp.stat(dir);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+/** 空间任务列表的验证指纹：空间会话索引 + 全部会话索引根 + 每行 members
+ *  文件（名单/commander 标志的真源）。三者任一变化即失配 → 实时重算。 */
+async function _spaceConversationsStamp(userId: string, spaceId: string, rows: Conversation[]): Promise<string> {
+  const parts: string[] = [
+    `si:${await _fileStamp(spaceChatIndexFile(userId, spaceId))}`,
+    await conversationIndexStamp(userId),
+  ];
+  for (const c of rows) {
+    if (!c?.conversation_id) continue;
+    const layout = conversationLayout(userId, c.conversation_id, c.project_id ?? null);
+    parts.push(`m:${c.conversation_id}:${await _fileStamp(layout.membersFile)}`);
+  }
+  return parts.join('|');
 }
 
 export interface StartupConversationList {
@@ -1852,6 +2023,51 @@ export async function getConversation(
   return target.find((c) => c.conversation_id === cid) || null;
 }
 
+export type CogSeedConversationDeliveryBinding =
+  | { state: 'missing' }
+  | { state: 'deleted'; generation?: string }
+  | { state: 'active'; generation?: string };
+
+/** Read the durable destination fence without using the user-facing list,
+ * which intentionally filters tombstones. */
+export async function readCogSeedConversationDeliveryBinding(
+  userId: string,
+  cid: string,
+): Promise<CogSeedConversationDeliveryBinding> {
+  if (!safeId(cid)) return { state: 'missing' };
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    if (!target) return { state: 'missing' } as const;
+    const generation = target.conversation._cogseed_result_generation;
+    return isDeletedConversation(target.conversation)
+      ? { state: 'deleted' as const, ...(generation ? { generation } : {}) }
+      : { state: 'active' as const, ...(generation ? { generation } : {}) };
+  });
+}
+
+/** Lazily fence legacy active conversations when the first v2 result is
+ * retained. A deleted row is never revived by this migration. */
+export async function ensureCogSeedConversationDeliveryGeneration(
+  userId: string,
+  cid: string,
+): Promise<string | null> {
+  if (!safeId(cid)) return null;
+  return _withConversationIndexStore(userId, async (store) => {
+    const target = await store.findTarget(cid);
+    if (!target || isDeletedConversation(target.conversation)) return null;
+    if (target.conversation._cogseed_result_generation) {
+      return target.conversation._cogseed_result_generation;
+    }
+    const generation = `cogseed-generation-${genId12()}`;
+    const next = _stampConversationSync(userId, {
+      ...target.conversation,
+      _cogseed_result_generation: generation,
+    });
+    await store.persistTarget(target, next);
+    return generation;
+  });
+}
+
 export interface CreateConversationOptions {
   kind?: ConversationKind;
   agentId?: string;
@@ -1868,10 +2084,17 @@ export interface CreateConversationOptions {
    *  minted the id. Must be a `safeId`; if it collides with an existing conv,
    *  that conv is returned unchanged. Defaults to a fresh generated id. */
   conversationId?: string;
+  /** Internal import-only escape hatch. Explicit ids do not normally revive a
+   * user-deleted Conversation. */
+  reviveDeleted?: boolean;
   /** Set by `features/auto_tasks.ts::_fireTask` so the conversation carries
    *  a back-link to the task that spawned it. Used by the renderer for the
    *  clock-icon prefix and the auto-tab expand-panel grouping. */
   originAutoTaskId?: string;
+  /** Messaging channel platform id (e.g. `feishu_lark`), set by
+   *  `features/messaging/bindings.ts` when a channel conversation is
+   *  created. Renderer groups channel conversations per platform. */
+  channelPlatform?: string;
   /** True if this conversation was imported from another agent (Claude Code,
    *  Codex, etc.) during onboarding. Used to identify imported sessions for
    *  special handling. */
@@ -1891,10 +2114,14 @@ function normaliseConversationTitle(raw: unknown): string {
 
 export async function createConversation(userId: string, {
   kind = 'normal', agentId = '', skillId = '', title = '', projectId = '', spaceId = '', conversationId = '', originAutoTaskId = '',
-  imported = false, needs_welcome = false,
+  channelPlatform = '', imported = false, needs_welcome = false, reviveDeleted = false,
 }: CreateConversationOptions = {}): Promise<Conversation> {
   const explicitCid = conversationId && safeId(conversationId) ? conversationId : '';
-  const outcome = await _withConversationIndexStore(userId, async (store) => {
+  const conversationGuard = explicitCid
+    ? await import('./cogseed_backend/conversation-operation-guard')
+    : null;
+  const create = async (): Promise<Conversation> => {
+    const outcome = await _withConversationIndexStore(userId, async (store) => {
     if (explicitCid) {
       // Externally supplied ids must retain global collision semantics. This
       // rare path may inspect all compact roots; generated ids below do not.
@@ -1903,11 +2130,13 @@ export async function createConversation(userId: string, {
         return { conversation: existing.conversation, action: 'existing' as const };
       }
       if (existing) {
+        if (!reviveDeleted) throw new conversationGuard!.CogSeedConversationUnavailableError();
         const current = existing.conversation;
         const previousProjectId = current.project_id;
         const now = nowIso();
         const revived: Conversation = _stampConversationSync(userId, {
           ...current,
+          _cogseed_result_generation: `cogseed-generation-${genId12()}`,
           title: title ? normaliseConversationTitle(title) : (current.title || t('chat.default_title')),
           kind,
           agent_id: agentId || current.agent_id || '',
@@ -1916,6 +2145,7 @@ export async function createConversation(userId: string, {
           ...(projectId ? { project_id: projectId } : {}),
           ...(spaceId ? { space_id: spaceId } : {}),
           ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+          ...(channelPlatform ? { channel_platform: channelPlatform } : {}),
           ...(imported ? { imported: true } : {}),
           ...(needs_welcome ? { needs_welcome: true } : {}),
           updated_at: now,
@@ -1941,6 +2171,7 @@ export async function createConversation(userId: string, {
     const now = nowIso();
     const created: Conversation = _stampConversationSync(userId, {
       conversation_id: cid,
+      _cogseed_result_generation: `cogseed-generation-${genId12()}`,
       title: normaliseConversationTitle(title),
       kind,
       agent_id: agentId || '',
@@ -1949,6 +2180,7 @@ export async function createConversation(userId: string, {
       ...(projectId ? { project_id: projectId } : {}),
       ...(spaceId ? { space_id: spaceId } : {}),
       ...(originAutoTaskId ? { origin_auto_task_id: originAutoTaskId } : {}),
+      ...(channelPlatform ? { channel_platform: channelPlatform } : {}),
       ...(imported ? { imported: true } : {}),
       ...(needs_welcome ? { needs_welcome: true } : {}),
       created_at: now,
@@ -1959,29 +2191,37 @@ export async function createConversation(userId: string, {
     });
     await store.insert(_conversationRootKey(created.project_id), created);
     return { conversation: created, action: 'created' as const };
-  });
+    });
 
-  const conv = outcome.conversation;
-  if (outcome.action === 'existing') return conv;
+    const conv = outcome.conversation;
+    if (outcome.action === 'existing') return conv;
 
   // 空间内新建会话会让空间产物列表多一个新来源：主动失效产物缓存，
   // 避免下次打开产物 tab 还显示旧列表（动态 import 避免与 spaces_artifacts 成环）。
-  if (spaceId) {
-    try {
-      await import('./spaces_artifacts').then((m) => m.invalidateSpaceArtifacts(spaceId));
-    } catch { /* best-effort：失效失败只是多一次全量扫描 */ }
-  }
+    if (spaceId) {
+      try {
+        await import('./spaces_artifacts').then((m) => m.invalidateSpaceArtifacts(spaceId));
+      } catch { /* best-effort：失效失败只是多一次全量扫描 */ }
+    }
 
   // Touch jsonl so subsequent reads don't 404.
-  const msgFile = conversationMessageFile(userId, conv.conversation_id, conv.project_id ?? null);
-  await fsp.mkdir(path.dirname(msgFile), { recursive: true });
-  await fsp.writeFile(msgFile, '', { flag: 'a' });
-  if (outcome.action === 'revived') {
-    log.info(`revived user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || outcome.previousProjectId || '-'}`);
-  } else {
-    log.info(`created user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || '-'}`);
-  }
-  return conv;
+    const msgFile = conversationMessageFile(userId, conv.conversation_id, conv.project_id ?? null);
+    await fsp.mkdir(path.dirname(msgFile), { recursive: true });
+    await fsp.writeFile(msgFile, '', { flag: 'a' });
+    if (outcome.action === 'revived') {
+      log.info(`revived user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || outcome.previousProjectId || '-'}`);
+    } else {
+      log.info(`created user=${userId} cid=${conv.conversation_id} kind=${kind} agent=${agentId || '-'} skill=${skillId || '-'} project=${projectId || '-'}`);
+    }
+    return conv;
+  };
+  if (!explicitCid) return create();
+  return conversationGuard!.withCogSeedConversationCreation(
+    userId,
+    explicitCid,
+    { reviveDeleted },
+    create,
+  );
 }
 
 export async function updateConversation(
@@ -2190,20 +2430,42 @@ async function _purgeDeletedConversationFiles(userId: string, cid: string, remov
   // own machine-local session files (~/.claude/...) are left alone;
   // claude self-GCs.
   try {
-    const cliSessions = require('./local_agents/sessions');
-    if (typeof cliSessions?.clearForConversation === 'function') {
-      await cliSessions.clearForConversation(userId, cid);
-    }
+    const cliSessions = await import('./local_agents/sessions');
+    await cliSessions.clearForConversation(userId, cid);
   } catch (err) { log.warn(`purge cli sessions user=${userId} cid=${cid}: ${(err as Error).message}`); }
+
+  // Pending terminal results remain execution-owned after the destination is
+  // deleted. Recovery may report the missing destination, but must not destroy
+  // the only durable copy or recreate the conversation implicitly.
 
   log.info(`deleted user=${userId} cid=${cid}`);
 }
 
-export async function deleteConversation(
+async function prepareConversationDeletion(
   userId: string,
   cid: string,
   projectIdHint?: string | null,
-): Promise<boolean> {
+): Promise<{
+  removed: Conversation | null;
+  settled: Promise<void>;
+}> {
+  let settled = Promise.resolve();
+  let markTombstoned = () => {};
+  const tombstoned = new Promise<void>((resolve) => { markTombstoned = resolve; });
+  try {
+    const { cogseedRuntimeController } = await import('./cogseed_backend/runtime-controller');
+    const cancellation = await cogseedRuntimeController.cancelConversationTasksForDeletion(userId, cid);
+    settled = Promise.all([cancellation.settled, tombstoned]).then(async () => {
+      try {
+        await cogseedRuntimeController.reconcileConversationResultDeliveries(userId, cid);
+      } catch (error) {
+        log.warn(`pending result reconciliation failed user=${userId} cid=${cid}: ${(error as Error).message}`);
+      }
+    });
+  } catch {
+    log.warn('Unable to stop CogSeed tasks before deleting a conversation');
+    throw new Error('Unable to stop CogSeed tasks before deleting the conversation');
+  }
   let removed: Conversation | null = null;
   const found = await _withConversationIndexStore(userId, async (store) => {
     const target = await store.findTarget(cid, projectIdHint);
@@ -2224,9 +2486,27 @@ export async function deleteConversation(
     }
     return true;
   });
-  if (!found || !removed) return false;
-  await _purgeDeletedConversationFiles(userId, cid, removed);
-  return true;
+  markTombstoned();
+  return { removed: found ? removed : null, settled };
+}
+
+export async function deleteConversation(
+  userId: string,
+  cid: string,
+  projectIdHint?: string | null,
+): Promise<boolean> {
+  const { withCogSeedConversationDeletionPhases } = await import('./cogseed_backend/conversation-operation-guard');
+  let removed: Conversation | null = null;
+  return withCogSeedConversationDeletionPhases(
+    userId,
+    cid,
+    async () => {
+      const prepared = await prepareConversationDeletion(userId, cid, projectIdHint);
+      removed = prepared.removed;
+      return { removed: !!prepared.removed, settled: prepared.settled };
+    },
+    async () => _purgeDeletedConversationFiles(userId, cid, removed!),
+  );
 }
 
 /** Read raw group messages from `<cid>.jsonl`. UI uses this for initial

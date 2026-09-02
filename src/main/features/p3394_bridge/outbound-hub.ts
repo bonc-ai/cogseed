@@ -46,7 +46,7 @@ interface PendingReply {
 export interface P3394OutboundHubDeps {
   /** Live peer lookup — the app bridge registry. */
   listPeers: () => P3394PeerRecord[];
-  /** Upper bound waiting for the peer's reply. */
+  /** Maximum idle period while waiting for the peer's reply. */
   replyTimeoutMs?: number;
 }
 
@@ -59,6 +59,17 @@ export class P3394OutboundHub {
   constructor(deps: P3394OutboundHubDeps) {
     this.listPeers = deps.listPeers;
     this.replyTimeoutMs = deps.replyTimeoutMs ?? 5 * 60 * 1000;
+  }
+
+  private refreshReplyTimeout(sessionId: string, waiter: PendingReply): void {
+    clearTimeout(waiter.timer);
+    waiter.timer = setTimeout(() => {
+      if (this.pending.get(sessionId) !== waiter) return;
+      this.pending.delete(sessionId);
+      // sent but no longer producing activity: keep it replayable rather than
+      // marking a potentially still-running peer execution as delivery-failed.
+      waiter.reject(new Error('p3394_reply_timeout'));
+    }, this.replyTimeoutMs);
   }
 
   /** Builds the right outbound binding for a peer (guide §12 reduced-profile
@@ -267,6 +278,10 @@ export class P3394OutboundHub {
         return true;
       }
       if (streamEvent.sequence !== undefined) waiter.lastStreamSequence = streamEvent.sequence;
+      // Streaming peers can legitimately run longer than replyTimeoutMs. Treat
+      // the timeout as an inactivity watchdog so live output keeps the turn
+      // attached until its terminal envelope arrives.
+      this.refreshReplyTimeout(envelope.session_id, waiter);
       try {
         waiter.onStream?.(streamEvent);
       } catch (error) {

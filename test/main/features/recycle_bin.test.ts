@@ -597,9 +597,9 @@ describe('global recycle bin', () => {
       `cloud/projects/${pid}/auto_tasks/at_c0ffee12/config.json`,
       `cloud/projects/${pid}/auto_tasks/at_c0ffee12/attachments/brief.txt`,
     ]));
-    expect(fs.existsSync(path.join(paths.userRecycleDir(UID), batch!.id))).toBe(true);
-    const [batchAfterRestore] = await listRecycleBatches(UID);
-    expect(batchAfterRestore.id).toBe(batch!.id);
+    // #113 起：恢复成功（无失败、有进展）→ 批次被消费删除，回收站不再残留。
+    expect(fs.existsSync(path.join(paths.userRecycleDir(UID), batch!.id))).toBe(false);
+    expect(await listRecycleBatches(UID)).toEqual([]);
 
     expect(JSON.parse(await fsp.readFile(abs(`cloud/projects/${pid}/project.json`), 'utf-8')).name).toBe('Client Launch');
     expect(JSON.parse(await fsp.readFile(abs(`cloud/projects/${pid}/chats/_index.json`), 'utf-8'))[0]).toEqual(expect.objectContaining({

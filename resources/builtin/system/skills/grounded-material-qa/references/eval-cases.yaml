@@ -1,0 +1,8 @@
+positive_cases:
+  - "根据这份课程 PDF，第三章讲了什么？"
+  - "资料里有没有提到 ZQX-4421？"
+  - "这个附件（meeting-notes.txt）里总结了什么？"
+negative_cases:
+  - "什么是光合作用？"          # general knowledge, no material scope
+  - "今天的最新股价是多少？"    # time-sensitive web, not materials
+  - "我记得上次讨论过…"         # memory/history, not materials

@@ -30,13 +30,22 @@ export interface P3394GatewayTurnInput {
   uid: string;
   cid: string;
   agent: { agent_id: string; name?: string };
+  /** CogSeed attempt correlation. It is not exposed to the remote model. */
+  executionId?: string;
   cli: string;
   prompt: string;
   /** Working directory to pass to the external agent/gateway (its CLI cwd).
    *  Without this an external agent may fall back to `/` and lose its
    *  project workspace context. */
   workingDir?: string;
+  /** Per-task reasoning effort (unified execution entry). Carried in the
+   *  envelope's CogSeed-private extensions.execution_prefs; only the claude
+   *  gateway runtime consumes it today. */
+  reasoningEffort?: 'off' | 'low' | 'high';
   signal?: AbortSignal;
+  /** Positive-integer process id of the external agent's gateway process,
+   *  when the transport can surface one. Validated at the bus boundary. */
+  onProcessInfo?: (pid: number) => void;
   onCoordinatorActivity?: (event: { kind: string }) => void;
   onProcess?: (data: Record<string, unknown>) => void;
 }
@@ -114,9 +123,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由
   // sessionForGoal(scopeKey=cid, peer) 决定，天然保持稳定，用户可见的会话
   // 连续性不受影响。
-  const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, input.cid + ':turn:' + Date.now().toString(36), {
+  const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
     scopeKey: input.cid,
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+    ...(input.reasoningEffort ? { executionPrefs: { reasoningEffort: input.reasoningEffort } } : {}),
   });
   let envelope = buildEnvelope();
   let streamed = false;

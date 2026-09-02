@@ -97,6 +97,16 @@ protocol.registerSchemesAsPrivileged([
     scheme: 'chat-app',
     privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
   },
+  // `cogseed-plugin://<pkgName>/<relpath>` serves a plugin-provided UI
+  // (manifest `ui.entry`) out of the installed package dir, embedded in a
+  // sandboxed iframe. Same privilege reasoning as `chat-app://`: standard
+  // origin for module scripts / same-origin fetch, secure so the file://
+  // renderer can frame it, stream for Range-aware bodies. The reserved
+  // relpath `__cogseed/plugin-bridge.js` is served from memory, not disk.
+  {
+    scheme: 'cogseed-plugin',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
 ]);
 
 import * as paths from './paths';
@@ -110,6 +120,7 @@ import {
 } from './util/boot_init';
 import { getBootDeviceProfile } from './util/boot-device-profile';
 import * as updaterClient from './features/updater/client';
+import * as updatesIpc from './ipc/updates';
 
 // `CORE_AGENT_AUTH_DIR` is pinned per-uid by `features/users.activateUser()`
 // (runs inside `runBootSelfCheck` below). `resolveAuthDir()` in core-agent
@@ -562,7 +573,27 @@ async function runBootSelfCheck(): Promise<void> {
     log.info('language preferences resolved', { lang, uiLang });
   } catch (err) { log.warn('i18n init failed', { error: (err as Error).message }); }
 
-  // Stage 2: clear stale processing=true conversations from a previous crash.
+  // Stage 2: this is a pre-window correctness barrier, not background boot
+  // maintenance. A fresh main process owns no live CogSeed executors, so
+  // reconcile persisted work before the first window can present it as live.
+  try {
+    const { recoverCogSeedTasksAtBoot } = await import('./features/cogseed_backend/boot-recovery');
+    const recovered = await recoverCogSeedTasksAtBoot(users.getActiveUserId());
+    if (recovered.recoveredCount || recovered.workflowStepsReconciled
+      || recovered.retainedResultsRecovered || recovered.retainedResultsPending) {
+      log.info('CogSeed cold-start recovery complete', {
+        recovered_tasks: recovered.recoveredCount,
+        reconciled_workflows: recovered.workflowStepsReconciled || 0,
+        retained_results_recovered: recovered.retainedResultsRecovered,
+        retained_results_pending: recovered.retainedResultsPending,
+      });
+    }
+  } catch (err) {
+    log.error('CogSeed cold-start recovery failed', { error: (err as Error).message });
+    throw err;
+  }
+
+  // Stage 3: clear stale processing=true conversations from a previous crash.
   try { await chatsFeature.sweepStaleProcessing(users.getActiveUserId()); }
   catch (err) { log.warn('chats sweep failed', { error: (err as Error).message }); }
 
@@ -1086,17 +1117,88 @@ function registerChatAppProtocol(): void {
   });
 }
 
+// `cogseed-plugin://<pkgName>/<relpath>` serves a plugin-provided UI out of
+// the installed package dir (manifest `ui.entry`). Read-only; every request
+// is filtered through `resolvePluginUiFile` (safe name / safe relpath /
+// traversal + symlink guard / served-extension allowlist / regular-file
+// check). The reserved virtual relpath `__cogseed/plugin-bridge.js` is
+// served from the in-memory PLUGIN_BRIDGE_JS constant. The URL host is the
+// package name (safe charset), sidestepping URL-parser divergence the same
+// way `chat-app://cid/...` does. `Access-Control-Allow-Origin: *` is set
+// No `Access-Control-Allow-Origin` is set here on purpose: the plugin page
+// only needs same-origin fetches (its own assets under its own
+// `cogseed-plugin://<pkg>` origin), and a wildcard CORS would let any other
+// origin inside the app (other plugins' UIs, artifact pages) read this
+// plugin's UI assets cross-origin. Least privilege: cross-origin reads stay
+// blocked by default.
+function registerPluginProtocol(): void {
+  protocol.handle('cogseed-plugin', async (request) => {
+    const reqUrl = request.url;
+    try {
+      let u: URL;
+      try { u = new URL(reqUrl); }
+      catch {
+        log.warn('cogseed-plugin: unparseable URL', { reqUrl });
+        return new Response('bad request', { status: 400 });
+      }
+      const name = u.host.toLowerCase();
+      const relPath = (u.pathname || '').replace(/^\/+/, '')
+        .split('/').map((s) => (s ? decodeURIComponent(s) : '')).join('/');
+      if (!name || !/^[a-z0-9][a-z0-9._-]*$/.test(name)) {
+        log.warn('cogseed-plugin: unknown host', { reqUrl, host: u.host });
+        return new Response('bad request', { status: 400 });
+      }
+      if (!relPath) {
+        log.warn('cogseed-plugin: bad URL (empty path)', { reqUrl });
+        return new Response('bad request', { status: 400 });
+      }
+      const uid = users.getActiveUserId();
+      const ui = await import('./features/plugin_ui');
+      // Reserved virtual path: the runtime bridge script (not on disk).
+      if (relPath === ui.PLUGIN_BRIDGE_RELPATH) {
+        return new Response(ui.PLUGIN_BRIDGE_JS, {
+          headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'private, max-age=60' },
+        });
+      }
+      const resolved = ui.resolvePluginUiFile(uid, name, relPath);
+      if (!resolved.ok) {
+        const code = (resolved as { code?: string }).code;
+        const errMsg = (resolved as { error?: string }).error;
+        log.warn('cogseed-plugin: reject', { reqUrl, code, error: errMsg });
+        return new Response(String(errMsg || code || 'error'), { status: _statusFor(code) });
+      }
+      const st = fs.statSync(resolved.absPath!);
+      log.info('cogseed-plugin: serving', { abs: resolved.absPath, mime: resolved.mime, bytes: st.size });
+      return serveFileRange(request, resolved.absPath!, resolved.mime!, st.size);
+    } catch (err) {
+      log.warn('cogseed-plugin serve failed', { reqUrl, error: (err as Error).message });
+      return new Response('error', { status: 500 });
+    }
+  });
+}
+
 // Single-instance lock prevents double-launch from duplicating the backend.
-const gotLock = IS_PACKAGED_LAUNCH_SMOKE
-  || app.requestSingleInstanceLock();
+const gotLock = IS_PACKAGED_LAUNCH_SMOKE  || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   // Account login is stripped, but connector OAuth still returns through the OS protocol. Keep
   // this connector-only receiver outside the removed account protocol module.
   registerConnectorProtocol({ owner: RUNTIME_IDENTITY.protocolOwner });
-  app.whenReady().then(async () => {
+  void app.whenReady().then(async () => {
     await runBootSelfCheck();
+
+    // 版本迁移：检测版本变化，自动清理旧数据
+    try {
+      const { runVersionMigration } = await import('./features/version_migration');
+      const migrationResult = await runVersionMigration();
+      if (migrationResult.migrated) {
+        log.info('version migration completed', migrationResult);
+      }
+    } catch (err) {
+      log.warn('version migration failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+
     // Source-run macOS uses Electron.app's own Info.plist, so set the dock
     // icon at runtime. Packaged builds still pick up the configured icns.
     if (process.platform === 'darwin' && app.dock) {
@@ -1118,10 +1220,11 @@ if (!gotLock) {
     registerKbFileProtocol();
     registerChatMediaProtocol();
     registerChatAppProtocol();
-    // Renderer permission gate. Voice input is stripped from the open-source build, so media
-    // capture is denied; clipboard permissions are kept for copy/paste flows.
+    registerPluginProtocol();
+    // Renderer permission gate. Media capture (microphone) is allowed for voice input;
+    // clipboard permissions are kept for copy/paste flows.
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write' || permission === 'media');
     });
     registerIpc();
     const stopTaskNotifications = taskNotifications.startTaskNotifications({
@@ -1191,6 +1294,11 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
+    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+      updatesIpc.initAutoUpdateBridge((channel, payload) => {
+        ipc.broadcastToRenderer(channel, payload);
+      });
+    }
     registerDeferred('messaging:start', () => messagingFeature.startForUser(users.getActiveUserId()), 'serial', CONNECTORS_BOOTSTRAP_DELAY_MS, {
       resourceClass: 'network',
       preferIdle: true,
@@ -1346,6 +1454,9 @@ if (!gotLock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  }).catch((err) => {
+    log.error('application startup failed', { error: (err as Error).message });
+    app.quit();
   });
 
   app.on('window-all-closed', () => {

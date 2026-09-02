@@ -622,6 +622,10 @@ async function loadAgents(forceRefresh, opts = {}) {
         });
         _agentsCache = sortedAgents;
         _agentsCacheIsSummary = summary;
+        // Unified execution entry: agent defaults (default_model /
+        // default_thinking) feed the composer's exec-config chip — notify
+        // it whenever the cache is refreshed (includes agent-edit writes).
+        try { window.dispatchEvent(new CustomEvent('cogseed:agents-cache-refreshed')); } catch (_) {}
         // Sidebar conv-row badges read agent icon+color from `_agentsCache`
         // (via `_renderConvAgentStackHtml`). Boot order is loadConversations
         // → loadAgents, so the first sidebar render lands before the cache
@@ -799,6 +803,8 @@ function renderAgentsGrid(agents) {
     const deliveryCount = _agentDeliveryCount(a);
     const descClass = desc ? 'agent-card-desc' : 'agent-card-desc is-empty';
     const descText = desc || t('agents.placeholder_unset');
+    const agentName = a.name || t('agents.unnamed');
+    const openLabel = `${t('agents.manage_tooltip')}: ${agentName}`;
     const moreBtn = (isMock || isCommander) ? '' : `<button type="button" class="agent-card-more" data-agent-more title="${moreTitle}" aria-label="${moreTitle}">⋯</button>`;
     const avatarHtml = renderAvatarHtml(a.icon, a.color, {
       size: 32,
@@ -817,10 +823,11 @@ function renderAgentsGrid(agents) {
     const provenanceChips = _isAgentPlatformSource(a.source) ? _agentPlatformStatusChipsHtml(a) : '';
     return `
       <div class="agent-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(a.agent_id)}" data-source="${escapeHtml(a.source || '')}">
+        <button type="button" class="agent-card-open" data-agent-open aria-label="${escapeHtml(openLabel)}"></button>
         <div class="agent-card-header">
           ${avatarHtml}
           <div class="agent-card-title">
-            <span class="agent-card-name">${escapeHtml(a.name || t('agents.unnamed'))}</span>
+            <span class="agent-card-name">${escapeHtml(agentName)}</span>
             ${metaHtml ? `<span class="agent-card-meta">${metaHtml}</span>` : ''}
           </div>
           ${moreBtn}
@@ -1827,6 +1834,7 @@ function _renderAgentDetail(agent, editing) {
   // without entering edit mode. The header chip was removed because
   // it duplicated information the dropdown already exposes.
   _renderAgentDetailRuntime(agent);
+  _renderAgentDetailExecDefaults(agent);
   _renderAgentDetailProjectDir(agent);
   void _renderAgentDetailGateway(agent);
   const localizedDesc = _agentSummary(agent, lang);
@@ -2106,7 +2114,7 @@ async function _renderAgentDetailRuntime(agent) {
       // Mirror the create-modal behaviour: if the user's current name /
       // description are still the defaults of the previous CLI (or empty),
       // follow the new CLI's defaults. Otherwise, leave their edits alone.
-      const updates = { runtime: { kind: 'cli', cli: newCli } };
+      const updates = { runtime: { kind: 'p3394-gateway', cli: newCli } };
       const lang = (typeof getLang === 'function') ? getLang() : 'en';
       const prev = (typeof getCliDefaults === 'function') ? getCliDefaults(currentType) : null;
       const next2 = (typeof getCliDefaults === 'function') ? getCliDefaults(newCli) : null;
@@ -2152,6 +2160,153 @@ async function _renderAgentDetailRuntime(agent) {
       }
     },
   });
+}
+
+/** Unified execution entry — per-agent default execution config (in-process
+ *  agents only): default model + default thinking strength. Persisted via
+ *  `agents.update({ default_model, default_thinking })`; the composer's
+ *  exec-config chip shows these as the baseline and layers task overrides
+ *  on top without ever writing back here. CLI-backed agents keep their
+ *  model binding on `runtime.model` (create modal / runtime section) and
+ *  manage their own reasoning — nothing to configure here. */
+async function _renderAgentDetailExecDefaults(agent) {
+  const section = document.getElementById('agents-detail-exec-defaults-section');
+  const slot = document.getElementById('agents-detail-exec-defaults');
+  if (!section || !slot) return;
+  slot.innerHTML = '';
+  // Only in-process custom agents are editable; builtin/marketplace/CLI stay hidden.
+  const isCli = agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway';
+  if (isCli || agent.source !== 'custom') {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+
+  const FOLLOW_GLOBAL = '__follow_global__';
+  const entries = (typeof window.getModelChipEntries === 'function')
+    ? window.getModelChipEntries()
+    : [];
+  // Unique providers from the configured priority entries.
+  const providers = [];
+  const seenProviders = new Set();
+  for (const e of entries) {
+    if (e && e.provider && !seenProviders.has(e.provider)) {
+      seenProviders.add(e.provider);
+      providers.push(e);
+    }
+  }
+
+  const current = agent.default_model || null;
+
+  slot.innerHTML = `
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_model'))}</span>
+      <span class="ai-select agents-detail-exec-provider"></span>
+      <span class="ai-select agents-detail-exec-model"></span>
+    </div>
+    <div class="agents-detail-exec-row">
+      <span class="agents-detail-exec-key">${escapeHtml(t('agents.exec_default_thinking'))}</span>
+      <span class="ai-select agents-detail-exec-thinking"></span>
+    </div>
+    <div class="agents-detail-exec-hint">${escapeHtml(t('agents.exec_defaults_hint'))}</div>
+  `;
+
+  const providerMount = slot.querySelector('.agents-detail-exec-provider');
+  const modelMount = slot.querySelector('.agents-detail-exec-model');
+  const thinkingMount = slot.querySelector('.agents-detail-exec-thinking');
+
+  let modelSel = null;
+  const currentProvider = current ? current.provider : '';
+  const currentModel = current ? current.model : '';
+
+  const providerOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    ...providers.map((e) => ({ value: e.provider, label: e.providerLabel || e.provider })),
+  ];
+  const providerSel = _aiSelectMount(providerMount, {
+    options: providerOptions,
+    value: currentProvider || FOLLOW_GLOBAL,
+  });
+
+  const setModelSelect = async (providerId, selectedModel) => {
+    if (!modelSel) {
+      modelSel = _aiSelectMount(modelMount, { options: [], value: '' });
+    }
+    if (!providerId) {
+      modelSel.setOptions([
+        { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+      ]);
+      modelSel.setValue(FOLLOW_GLOBAL);
+      return;
+    }
+    modelSel.setOptions([{ value: '__loading__', label: t('common.loading') }]);
+    modelSel.setValue('__loading__');
+    let models = [];
+    try {
+      const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
+      if (res && res.ok && Array.isArray(res.models)) models = res.models;
+    } catch (_) { /* keep empty */ }
+    const options = models
+      .map((m) => (m && typeof m === 'object' ? { value: String(m.id || ''), label: String(m.name || m.id || '') } : null))
+      .filter((o) => o && o.value);
+    if (!options.length) {
+      modelSel.setOptions([{ value: '__none__', label: t('model_chip.no_models') }]);
+      modelSel.setValue('__none__');
+      return;
+    }
+    modelSel.setOptions(options);
+    modelSel.setValue(options.some((o) => o.value === selectedModel) ? selectedModel : options[0].value);
+  };
+
+  const persist = async (updates) => {
+    try {
+      const res = await window.cogseed.invoke('agents.update', { agent_id: agent.agent_id, updates });
+      if (!res || !res.agent) {
+        _agentsLog.warn('agents.update exec defaults failed', { error: res && res.error });
+        return;
+      }
+      if (typeof loadAgents === 'function') await loadAgents(true);
+    } catch (err) {
+      _agentsLog.warn('agents.update exec defaults failed', err);
+    }
+  };
+
+  providerSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) {
+      await persist({ default_model: null });
+      await setModelSelect('', '');
+      return;
+    }
+    await setModelSelect(next, '');
+  });
+
+  // Model select is lazily mounted by setModelSelect; wire its change handler
+  // once via a microtask so `modelSel` is bound.
+  setTimeout(() => {
+    if (!modelSel) return;
+    modelSel.onChange(async (next) => {
+      const providerId = providerSel.getValue ? providerSel.getValue() : currentProvider;
+      if (!providerId || providerId === FOLLOW_GLOBAL || !next || next === '__none__' || next === '__loading__') return;
+      await persist({ default_model: { provider: providerId, model: next } });
+    });
+  }, 0);
+
+  const thinkingOptions = [
+    { value: FOLLOW_GLOBAL, label: t('agents.exec_follow_global') },
+    { value: 'off', label: t('model_effort.off') },
+    { value: 'low', label: t('model_effort.low') },
+    { value: 'high', label: t('model_effort.high') },
+  ];
+  const thinkingSel = _aiSelectMount(thinkingMount, {
+    options: thinkingOptions,
+    value: agent.default_thinking || FOLLOW_GLOBAL,
+  });
+  thinkingSel.onChange(async (next) => {
+    if (next === FOLLOW_GLOBAL) await persist({ default_thinking: null });
+    else if (next === 'off' || next === 'low' || next === 'high') await persist({ default_thinking: next });
+  });
+
+  await setModelSelect(currentProvider, currentModel);
 }
 
 /** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
@@ -2662,98 +2817,24 @@ function _refreshExternalCliSelector() {
  *  +停托管网关）与 停用/启用（disable/enable）。数据来自与 CLI 选择器
  *  同一次 p3394.external.list 往返的 peers 快照（不额外拉 IPC）。 */
 async function _renderExternalPanelPeers() {
+  // 第二期迁移（设计 5.2）：外接节点名册整体迁入侧边栏「智能体总览」
+  // Dashboard（启停/停用/移除/添加远端节点都在那边）。创建弹窗里保留
+  // 一个跳转入口，避免两处维护同一份节点管理逻辑。
   const slot = document.getElementById('agent-ext-peers');
   if (!slot) return;
-  let peers = [];
-  try {
-    // 共享本次 tab 进入时的探测结果（_refreshExternalCliSelector 已用
-    // force 重扫过一次，且 loadExternalPanelData 内部有 in-flight 去重），
-    // 这里不再单独 force——否则每次点击节点操作后的整表单重渲染都会
-    // 再跑一遍完整 detectAll。节点增删后缓存已被 revoke/toggle 置空，
-    // 下一次渲染自然重探。
-    const data = (typeof loadExternalPanelData === 'function')
-      ? await loadExternalPanelData()
-      : null;
-    peers = Array.isArray(data && data.peers) ? data.peers : [];
-  } catch (err) {
-    _agentsLog.warn('p3394 peers load failed', err);
-  }
-  // 本机 CogSeed 自身不当作"已接入节点"展示。
-  const visible = peers.filter((p) => p && p.agent_id && p.agent_id !== 'cogseed');
-  const msgEl = document.getElementById('agent-form-msg');
-  if (!visible.length) {
-    slot.innerHTML = `<div class="agents-ext-peers-empty">${escapeHtml(t('agents.peers.none'))}</div>`;
-    return;
-  }
-  const kindLabel = t('agents.peers.kind');
-  const capLabel = t('agents.peers.capabilities');
-  slot.innerHTML = visible.map((peer) => {
-    const agentId = peer.agent_id;
-    const name = peer.display_name || agentId;
-    const online = !!peer.online;
-    const disabled = !!peer.disabled;
-    const stateText = disabled
-      ? t('agents.peers.state_disabled')
-      : (online ? t('agents.peers.state_online') : t('agents.peers.state_offline'));
-    const kind = peer.node_kind ? escapeHtml(String(peer.node_kind)) : 'agent';
-    const capCount = Array.isArray(peer.capabilities) ? peer.capabilities.length : 0;
-    const loc = peer.locality ? escapeHtml(String(peer.locality)) : '';
-    const metaPieces = [];
-    if (loc) metaPieces.push(loc);
-    if (capCount > 0) metaPieces.push(`${capCount} ${escapeHtml(capLabel)}`);
-    const meta = metaPieces.length ? `<span class="agents-ext-peers-meta">${metaPieces.join(' · ')}</span>` : '';
-    const toggleLabel = disabled
-      ? t('agents.peers.action_enable')
-      : t('agents.peers.action_disable');
-    return `
-      <div class="agents-ext-peer-row ${disabled ? 'is-disabled' : ''}">
-        <span class="agents-detail-gateway-dot ${disabled || !online ? 'is-off' : 'is-on'}"></span>
-        <span class="agents-ext-peer-name" title="${escapeHtml(String(agentId))}">${escapeHtml(name)}</span>
-        <span class="agents-ext-peer-state">${escapeHtml(stateText)}</span>
-        <span class="agents-ext-peer-kind" title="${escapeHtml(kindLabel)}">${kind}</span>
-        ${meta}
-        <span class="agents-ext-peer-actions">
-          <button type="button" class="btn btn-sm" data-peer-act="toggle" data-peer-id="${escapeHtml(String(agentId))}" data-peer-disabled="${disabled ? '1' : '0'}">${escapeHtml(toggleLabel)}</button>
-          <button type="button" class="btn btn-sm is-danger" data-peer-act="revoke" data-peer-id="${escapeHtml(String(agentId))}">${escapeHtml(t('agents.peers.action_remove'))}</button>
-        </span>
-      </div>`;
-  }).join('');
-
-  slot.querySelectorAll('[data-peer-act]').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
+  slot.innerHTML = `
+    <div class="agents-ext-peers-empty agents-ext-peers-moved">
+      <span>${escapeHtml(t('agents.peers.moved'))}</span>
+      <button type="button" class="btn btn-sm" id="agent-ext-peers-open-dashboard">${escapeHtml(t('agents.peers.open_dashboard'))}</button>
+    </div>`;
+  const openBtn = slot.querySelector('#agent-ext-peers-open-dashboard');
+  if (openBtn) {
+    openBtn.addEventListener('click', async (e) => {
       e.preventDefault();
-      const agentId = btn.dataset.peerId;
-      const act = btn.dataset.peerAct;
-      if (!agentId) return;
-      btn.disabled = true;
-      const setMsg = (text, isSuccess) => {
-        if (!msgEl) return;
-        msgEl.textContent = text;
-        msgEl.className = isSuccess ? 'form-msg ok' : 'form-msg err';
-      };
-      try {
-        if (act === 'revoke') {
-          const ok = typeof uiConfirm === 'function'
-            ? await uiConfirm(t('agents.peers.remove_confirm', { name: agentId }))
-            : true;
-          if (!ok) { btn.disabled = false; return; }
-          const res = (typeof revokeP3394Peer === 'function') ? await revokeP3394Peer(agentId) : null;
-          if (res && res.ok) setMsg(t('agents.peers.removed', { name: agentId }), true);
-          else setMsg((res && res.error) || t('agents.peers.action_failed'), false);
-        } else {
-          const nextDisabled = btn.dataset.peerDisabled === '1' ? false : true;
-          const res = (typeof toggleP3394Peer === 'function') ? await toggleP3394Peer(agentId, nextDisabled) : null;
-          if (res && res.ok) setMsg(t('agents.peers.toggled', { name: agentId }), true);
-          else setMsg((res && res.error) || t('agents.peers.action_failed'), false);
-        }
-      } catch (err) {
-        _agentsLog.warn('p3394 peer action failed', { agentId, act, error: err && (err.message || err) });
-        setMsg((err && err.message) || t('agents.peers.action_failed'), false);
-      }
-      btn.disabled = false;
-      void _renderExternalPanelPeers();
+      if (typeof closeAgentModal === 'function') closeAgentModal();
+      if (typeof window.setView === 'function') window.setView('run-center', undefined, { runCenterView: 'agents' });
     });
-  });
+  }
 }
 
 // Track which CLI defaults are currently reflected in the External-tab
@@ -3464,7 +3545,7 @@ function _findInputAreaTop(anchorEl) {
   return null;
 }
 
-function _positionPopoverAboveOrBelow(popover, anchorEl) {
+function _positionPopoverAboveOrBelow(popover, anchorEl, opts = {}) {
   // Make invisible but laid out so we can measure it before positioning.
   popover.style.display = 'flex';
   popover.style.left = '-9999px';
@@ -3479,7 +3560,11 @@ function _positionPopoverAboveOrBelow(popover, anchorEl) {
   // own top. This keeps the popover from overlapping the textarea on
   // chat panels while still working for any other future anchor.
   const aboveRef = _findInputAreaTop(anchorEl);
-  const refTop = aboveRef !== null ? aboveRef : rect.top;
+  // Recipient chips want the popover ANCHORED TO THE BUTTON itself —
+  // aligning to the input area leaves it floating ~100px above the chip
+  // (验收反馈两轮「位置不对」的根因), because the input-area box extends
+  // far above the button row.
+  const refTop = (opts.anchorToButton ? null : aboveRef) ?? rect.top;
   const availAbove = refTop - margin - gap;
   const availBelow = window.innerHeight - rect.bottom - margin - gap;
   const preferAbove = popRect.height <= availAbove || availAbove >= availBelow;
@@ -3526,14 +3611,12 @@ let _pickerLibraryRenderSeq = 0;
 // "本体" tab cache — same lazy-load-once-per-picker-session pattern as
 // _pickerLibraryRows above, but scoped to personalOntology.groups.list (no
 // project-scoped variant, per §3.7's "only the hidden groups sub-dir" bound).
-let _pickerOntologyGroups = null;
-let _pickerOntologyTemplates = null;
+let _pickerOntologyEntries = null;
 let _pickerOntologyLoading = null;
-// 本体 tab：被用户收起的模板（template_id 集合）—— 模板标题行可折叠子组
+// 本体 tab：被用户收起的分组（parentId 集合）—— 分组标题行可折叠子条目。
+// parentId 是 PO contract 给的展示用标识（模板 = templateId），不是 PO 内部 group_id。
 let _pickerOntologyCollapsed = new Set();
 let _pickerOntologyRenderSeq = 0;
-// 最近一次渲染的搜索词（模板分节过滤用）
-let _pickerOntologyLastQuery = '';
 let _agentPickerTab = 'agents';
 let _agentPickerOpenSeq = 0;
 let _agentPickerLoadedTabs = new Set();
@@ -3730,8 +3813,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
     _pickerLibraryRows = null;
     _pickerLibraryLoading = null;
     _pickerLibraryRenderSeq += 1;
-    _pickerOntologyGroups = null;
-    _pickerOntologyTemplates = null;
+    _pickerOntologyEntries = null;
     _pickerOntologyLoading = null;
     _pickerOntologyRenderSeq += 1;
     _pickerArtifactRows = null;
@@ -3767,8 +3849,7 @@ async function _refreshAgentPickerProjectContext(anchorId) {
   _pickerLibraryRows = null;
   _pickerLibraryLoading = null;
   _pickerLibraryRenderSeq += 1;
-  _pickerOntologyGroups = null;
-  _pickerOntologyTemplates = null;
+  _pickerOntologyEntries = null;
   _pickerOntologyLoading = null;
   _pickerOntologyRenderSeq += 1;
   _pickerArtifactRows = null;
@@ -3808,7 +3889,12 @@ async function _openAgentPicker(anchorBtn) {
   // Paint the cached Agent shell in the same interaction frame. Other tabs
   // own their script/data loads and cannot delay this first frame.
   _setAgentPickerTab('agents', { focusSearch: false });
-  _positionPopoverAboveOrBelow(picker, anchorBtn);
+  // Recipient pickers anchor to the @ button itself (紧贴按钮上方弹出)。
+  _positionPopoverAboveOrBelow(picker, anchorBtn, {
+    anchorToButton: anchorBtn.id === 'chat-recipient-chip'
+      || anchorBtn.id === 'new-chat-recipient-chip'
+      || anchorBtn.id === 'auto-recipient-chip',
+  });
   setTimeout(() => document.getElementById('agent-picker-search')?.focus(), 30);
   // Project bindings affect Agent visibility, so refresh them independently
   // and repaint only if this picker session is still current.
@@ -3860,7 +3946,12 @@ function _renderAgentPickerList(filterText) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     return;
   }
-  let agents = (_agentsCache || []).filter((a) => a.enabled !== false);
+  const executableCliRuntimes = new Set(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+  let agents = (_agentsCache || []).filter((a) => {
+    if (a.enabled === false || a.interaction_mode === 'management_only') return false;
+    const runtime = a.runtime;
+    return !runtime || runtime.kind === 'in_process' || executableCliRuntimes.has(runtime.cli);
+  });
   // Project scope: only show agents bound to the active context's project.
   // Applied AFTER the enabled filter (per CLAUDE.md §6 outer-intersection
   // rule). `null` = no project scope, full listing.
@@ -3929,6 +4020,9 @@ function _renderAgentPickerList(filterText) {
   const projectEmptyHint = (!q && _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0)
     ? `<div class="skill-picker-empty-hint">${escapeHtml(t('agents.no_project_agents'))}</div>`
     : '';
+  // 接收者选择器只管「谁执行」（Commander + Agent）；模型的选择与展示统一由
+  // composer 右下角的执行配置 chip 负责（选中 CLI 智能体时该 chip 即管理其
+  // runtime.model）。模型不进这个列表——验收反馈：左侧出现模型属于概念混淆。
   listEl.innerHTML = projectEmptyHint + commanderHtml
     + groupHtml(t('agents.source_custom'), groups.custom)
     + groupHtml(t('agents.source_marketplace'), groups.marketplace);
@@ -4175,61 +4269,56 @@ function _renderLibraryPickerList(listEl, filterText, anchorId) {
   _bindAgentPickerListItems(listEl, anchorId);
 }
 
-async function _loadOntologyPickerGroups() {
+async function _loadOntologyPickerEntries() {
   try {
-    const [gRes, tRes] = await Promise.all([
-      window.cogseed.invoke('personalOntology.groups.list', {}),
-      window.cogseed.invoke('personalOntology.templates.list', {}),
-    ]);
-    const groups = (gRes && gRes.ok !== false && Array.isArray(gRes.groups)) ? gRes.groups : [];
-    const templates = (tRes && tRes.ok !== false && Array.isArray(tRes.templates)) ? tRes.templates : [];
-    _pickerOntologyTemplates = templates;
-    return groups;
+    const res = await window.cogseed.invoke('personalOntology.entries.list', {});
+    return (res && res.ok !== false && Array.isArray(res.entries)) ? res.entries : [];
   } catch (err) {
-    _agentsLog.warn('ontology group picker load failed', err);
+    _agentsLog.warn('ontology entry picker load failed', err);
     return [];
   }
 }
 
-function _ontologyPickerRowHtml(group, checked) {
+function _ontologyPickerRowHtml(entry, checked) {
   return `
-    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}${group.template_id ? ' is-template-child' : ''}" data-kind="ontology_group"
-         data-id="${escapeHtml(group.group_id)}" data-name="${escapeHtml(group.title || '')}">
+    <div class="skill-picker-item is-checkable${checked ? ' is-checked' : ''}${entry.parentId ? ' is-template-child' : ''}" data-kind="ontology_group"
+         data-id="${escapeHtml(entry.ref)}" data-name="${escapeHtml(entry.label || '')}">
       <span class="skill-picker-item-checkbox" aria-hidden="true"></span>
       <div class="skill-picker-item-meta">
-        <div class="skill-picker-item-name">${escapeHtml(group.title || '')}</div>
+        <div class="skill-picker-item-name">${escapeHtml(entry.label || '')}</div>
       </div>
     </div>`;
 }
 
-// 本体 tab 层级渲染：非模板组平铺；模板文件收纳在模板标题行（可折叠）下，
-// 每行 = 一个分节（data-id = 复合 id `groupId::分节`，chat-use 原样透传，
-// 发送时主进程 groups.read 解析分节内容）。
+// 本体 tab 层级渲染：无 parentId 的条目平铺；有 parentId 的收纳在分组标题行
+// （可折叠）下。data-id 一律是 PO contract 给的 opaque ref —— 渲染层不解析、
+// 不拼接，chat-use 原样透传，发送时主进程按 ref 读回内容。
 // 标题行不带 data-id —— 不参与键盘导航（_setAgentPickerActive 只遍历 [data-id]）
 // 也不参与点击选中（_bindAgentPickerListItems 只绑 [data-id]），多选逻辑零改动。
-// 标题行点击折叠/展开子组（data-ontology-template-toggle 单独绑定）。
-function _ontologyPickerSectionsHtml(groups, templates, selectedIds) {
-  const plain = [];
-  for (const g of groups) {
-    if (!g.template_id) plain.push(g);
-  }
-  const q = _pickerOntologyLastQuery || '';
+function _ontologyPickerSectionsHtml(entries, selectedIds) {
   const rows = [];
-  for (const g of plain) {
-    rows.push(_ontologyPickerRowHtml(g, selectedIds.has(g.group_id)));
+  const grouped = new Map(); // parentId → { label, items[] }
+  for (const e of entries) {
+    if (!e || !e.ref) continue;
+    if (!e.parentId) {
+      rows.push(_ontologyPickerRowHtml(e, selectedIds.has(e.ref)));
+      continue;
+    }
+    let bucket = grouped.get(e.parentId);
+    if (!bucket) {
+      bucket = { label: e.parentLabel || e.parentId, items: [] };
+      grouped.set(e.parentId, bucket);
+    }
+    bucket.items.push(e);
   }
-  for (const t of templates || []) {
-    if (!t.installed || !t.sections || !t.sections.length) continue;
-    // 搜索过滤：模板名或分节名命中才显示
-    if (q && !_matchPickerItem(q, t.name, '', '') && !t.sections.some((s) => _matchPickerItem(q, s.title, '', ''))) continue;
-    const collapsed = _pickerOntologyCollapsed.has(t.template_id);
-    rows.push(`<button type="button" class="skill-picker-template-header" data-ontology-template-toggle="${escapeHtml(t.template_id)}">
-      <span class="skill-picker-template-caret">${collapsed ? '▶' : '▼'}</span>${escapeHtml(t.name)}</button>`);
+  for (const [parentId, bucket] of grouped) {
+    const collapsed = _pickerOntologyCollapsed.has(parentId);
+    rows.push(`<button type="button" class="skill-picker-template-header" data-ontology-template-toggle="${escapeHtml(parentId)}">
+      <span class="skill-picker-template-caret">${collapsed ? '▶' : '▼'}</span>${escapeHtml(bucket.label)}</button>`);
     if (!collapsed) {
-      rows.push(`<div class="skill-picker-template-groups">${t.sections.map((s) => {
-        const ref = `${t.group_id}::${s.title}`;
-        return _ontologyPickerRowHtml({ group_id: ref, title: s.title, template_id: t.template_id }, selectedIds.has(ref));
-      }).join('')}</div>`);
+      rows.push(`<div class="skill-picker-template-groups">${
+        bucket.items.map((e) => _ontologyPickerRowHtml(e, selectedIds.has(e.ref))).join('')
+      }</div>`);
     }
   }
   return rows.join('');
@@ -4238,10 +4327,10 @@ function _ontologyPickerSectionsHtml(groups, templates, selectedIds) {
 function _bindAgentPickerTemplateToggles(listEl) {
   for (const btn of listEl.querySelectorAll('[data-ontology-template-toggle]')) {
     btn.addEventListener('click', () => {
-      const tid = btn.dataset.ontologyTemplateToggle;
-      if (!tid) return;
-      if (_pickerOntologyCollapsed.has(tid)) _pickerOntologyCollapsed.delete(tid);
-      else _pickerOntologyCollapsed.add(tid);
+      const pid = btn.dataset.ontologyTemplateToggle;
+      if (!pid) return;
+      if (_pickerOntologyCollapsed.has(pid)) _pickerOntologyCollapsed.delete(pid);
+      else _pickerOntologyCollapsed.add(pid);
       const picker = document.getElementById('agent-picker');
       const search = document.getElementById('agent-picker-search');
       _renderOntologyPickerList(listEl, search ? search.value : '', picker ? picker.dataset.anchorId || '' : '');
@@ -4252,16 +4341,16 @@ function _bindAgentPickerTemplateToggles(listEl) {
 function _renderOntologyPickerList(listEl, filterText, anchorId) {
   const q = (filterText || '').toLowerCase();
   const renderSeq = ++_pickerOntologyRenderSeq;
-  if (!_pickerOntologyGroups) {
+  if (!_pickerOntologyEntries) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
     if (!_pickerOntologyLoading) {
-      _pickerOntologyLoading = _loadOntologyPickerGroups()
-        .then((groups) => {
-          _pickerOntologyGroups = groups || [];
+      _pickerOntologyLoading = _loadOntologyPickerEntries()
+        .then((entries) => {
+          _pickerOntologyEntries = entries || [];
           _pickerOntologyLoading = null;
         })
         .catch(() => {
-          _pickerOntologyGroups = [];
+          _pickerOntologyEntries = [];
           _pickerOntologyLoading = null;
         });
     }
@@ -4275,22 +4364,23 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
     return;
   }
 
-  const allGroups = _pickerOntologyGroups || [];
-  // 搜索匹配组标题/模板名：模板名命中时保留该模板全部预置组
+  const allEntries = _pickerOntologyEntries || [];
+  // 搜索匹配条目标签或分组标签：分组名命中时保留该分组全部条目（与收归前
+  // 「模板名命中保留该模板全部预置组」的行为一致），单一过滤路径。
   const filtered = q
     ? (() => {
-        const templateIds = new Set(
-          allGroups.filter((g) => g.template_name && _matchPickerItem(q, g.template_name, '', ''))
-            .map((g) => g.template_id),
+        const hitParents = new Set(
+          allEntries.filter((e) => e.parentLabel && _matchPickerItem(q, e.parentLabel, '', ''))
+            .map((e) => e.parentId),
         );
-        return allGroups
-          .filter((g) => _matchPickerItem(q, g.title, '', g.group_id) || (g.template_id && templateIds.has(g.template_id)))
-          .sort((a, b) => _pickerMatchScore(q, a.title || a.group_id) - _pickerMatchScore(q, b.title || b.group_id));
+        return allEntries
+          .filter((e) => _matchPickerItem(q, e.label, '', '') || (e.parentId && hitParents.has(e.parentId)))
+          .sort((a, b) => _pickerMatchScore(q, a.label) - _pickerMatchScore(q, b.label));
       })()
-    : allGroups;
+    : allEntries;
 
   if (!filtered.length) {
-    const key = allGroups.length ? 'agent_picker.ontology_no_match' : 'agent_picker.ontology_empty';
+    const key = allEntries.length ? 'agent_picker.ontology_no_match' : 'agent_picker.ontology_empty';
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t(key))}</div>`;
     return;
   }
@@ -4300,8 +4390,7 @@ function _renderOntologyPickerList(listEl, filterText, anchorId) {
     (typeof getChatUseOntologyGroups === 'function' ? getChatUseOntologyGroups(target) : [])
       .map((sel) => sel.id),
   );
-  _pickerOntologyLastQuery = q;
-  listEl.innerHTML = _ontologyPickerSectionsHtml(filtered, _pickerOntologyTemplates, selectedIds);
+  listEl.innerHTML = _ontologyPickerSectionsHtml(filtered, selectedIds);
   _bindAgentPickerTemplateToggles(listEl);
   _bindAgentPickerListItems(listEl, anchorId);
 }

@@ -218,6 +218,9 @@
   "expense_agent.submit.unavailable": "Unable to show submission confirmation; nothing was submitted.",
   "expense_agent.submit.cancelled": "Submission was cancelled; no data was sent to Feishu.",
   "cogseed.runtime_failed": "The Agent stopped before completing this response. Try again.",
+  "messaging.wake_card.noop_title": "No effect",
+  "messaging.wake_card.noop_detail": "This wake request is no longer pending approval (it may already be approved and running); this click changed nothing.",
+  "messaging.direct_chat": "Direct chat",
   "messaging.new_session_confirmation": "Started a new conversation. What would you like to handle next?",
   "messaging.approval.approve": "Approved",
   "messaging.approval.approve_once": "Approved once",
@@ -254,5 +257,6 @@
   "touchpoints.card.button.retry": "Retry",
   "touchpoints.card.button.forget_source": "Forget source",
   "touchpoints.card.button.revoke_grant": "Revoke grant",
-  "touchpoints.card.resolved": "Processed"
+  "touchpoints.card.resolved": "Processed",
+  "dashboard.retry_user_message": "(retry)"
 }

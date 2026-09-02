@@ -172,12 +172,24 @@ describe('agent and skill category tabs', () => {
     context.renderAgentsGrid(agents);
     expect(el('agents-categories').innerHTML).toContain('通用');
     expect(el('agents-categories').innerHTML).not.toContain('未知');
+    expect(el('agents-grid').innerHTML).toContain('class="agent-card-open" data-agent-open');
+    expect(el('agents-grid').innerHTML).toContain('aria-label="agents.manage_tooltip: No Category"');
+    expect(el('agents-grid').innerHTML).not.toContain('role="button" tabindex="0"');
 
     vm.runInContext('_agentsActiveCategory = "general"', context);
     context.renderAgentsGrid(agents);
     expect(el('agents-grid').innerHTML).toContain('No Category');
     expect(el('agents-grid').innerHTML).toContain('Bad Category');
     expect(el('agents-grid').innerHTML).not.toContain('Data Agent');
+  });
+
+  it('uses a native keyboard-accessible detail button without nesting the card controls', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
+    const css = fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
+
+    expect(source).toMatch(/<button type="button" class="agent-card-open" data-agent-open aria-label=/);
+    expect(source).not.toContain('role="button" tabindex="0"');
+    expect(css).toMatch(/\.agent-card:has\(\.agent-card-open:focus-visible\)\s*{[\s\S]*?outline:/);
   });
 
   it('maps missing and non-registry skill categories to General instead of Unknown', () => {
