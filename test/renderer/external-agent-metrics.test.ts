@@ -108,6 +108,23 @@ describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
     expect(line?.titleLines?.some((l) => l.includes('输出 100'))).toBe(true);
   });
 
+  it("外接轮（source:'cli'）只留计时——token/速度/成本段不上线", () => {
+    // 外接用量披露因家而异、输出为估算口径，不满足全量一致上线的标准；
+    // 用时/首token 是本地打点（100% 通用真实），保留。
+    const line = messageMetricsLine({
+      startedAt: 1_000,
+      firstTokenAt: 3_000,
+      completedAt: 6_000,
+      usage: { source: 'cli', inputTokens: 50_000, outputTokens: 9, costUsd: 0.18, measured: true },
+    }) as Record<string, unknown>;
+    expect(line?.rateText ?? null).toBeNull();
+    expect(line?.inText ?? null).toBeNull();
+    expect(line?.outText ?? null).toBeNull();
+    expect(line?.costText ?? null).toBeNull();
+    expect(line?.latencyText).toBe('2');
+    expect(line?.durationMs).toBe(5_000);
+  });
+
   it('measured 口径标 ≈（实测估算与账单精确值明确区分）', () => {
     // CLI 无精确输出数（claude result/assistant 帧自报均不可用），输出为
     // 按文本实测估算 → ↓ 与速度带 ≈ 前缀；精确值（账单/打点）不加。

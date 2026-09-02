@@ -48,6 +48,10 @@ export interface P3394GatewayTurnResult {
       /** 输出为按实际文本的实测估算（CLI 无精确输出数；claude 的 result
        *  与 assistant 帧自报均不可用）——渲染层对 ↓/速度加 ≈ 前缀。 */
       measured?: boolean;
+      /** 用量来源：'api'=内置模型（API 精确，全字段可显示）；
+       *  'cli'=外接智能体（各家披露不一，token/速度/缓存/上下文段不上线，
+       *  只保留计时）。 */
+      source?: 'api' | 'cli';
     };
     model?: string;
   };
@@ -184,6 +188,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     const raw = meta?.usage;
     const usageIn = (raw && typeof raw === 'object') ? raw : undefined;
     const usage: NonNullable<NonNullable<P3394GatewayTurnResult['metrics']>>['usage'] = {};
+    // 来源标记：CLI/网关路径的用量披露因家而异（部分 CLI 不报、claude 的
+    // 输出为估算口径）——不满足「所有外接智能体一致可用」的上线标准，
+    // 渲染层对 source:'cli' 只保留计时段，token/速度/缓存/上下文不上线。
+    if (usageIn) usage.source = 'cli';
     if (typeof usageIn?.input === 'number') usage.inputTokens = usageIn.input;
     if (typeof usageIn?.output === 'number') usage.outputTokens = usageIn.output;
     if (typeof usageIn?.reasoning === 'number') usage.reasoningTokens = usageIn.reasoning;

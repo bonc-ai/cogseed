@@ -111,6 +111,10 @@ export interface GroupMessageMetrics {
     /** 输出为按实际文本的实测估算（CLI 无精确输出数；claude 的 result
      *  与 assistant 帧自报均不可用）——渲染层对 ↓/速度加 ≈ 前缀。 */
     measured?: boolean;
+    /** 用量来源：'api'=内置模型（API 精确，全字段可显示）；
+     *  'cli'=外接智能体（各家披露不一，token/速度/缓存/上下文段不上线，
+     *  只保留计时）。 */
+    source?: 'api' | 'cli';
   };
   toolCalls?: number;
   /** 该回合实际使用的模型 id（CLI 自报或主机下发值）——会话统计的上下文

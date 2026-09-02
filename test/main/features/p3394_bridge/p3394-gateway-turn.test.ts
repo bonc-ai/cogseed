@@ -90,6 +90,19 @@ describe('P3394 gateway turn runner', () => {
     expect(processes.filter((e) => e.type === 'delta' && e.text === 'final openclaw reply')).toHaveLength(1);
   });
 
+  it('tags gateway usage with source:cli (external stats stay off until universal)', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    // 回复信封带 CLI 自报用量 → metrics.usage.source='cli'（渲染层对
+    // source:'cli' 只保留计时，token/速度段不上线——外接披露不通用）。
+    hub.sendAndWait.mockResolvedValueOnce({
+      text: 'ok',
+      envelope: { payload: { metadata: { usage: { input: 10, output: 5 } } } } as never,
+    });
+    const result = await runP3394GatewayTurn(baseInput);
+    expect((result.metrics?.usage as { source?: string })?.source).toBe('cli');
+    expect((result.metrics?.usage as { inputTokens?: number })?.inputTokens).toBe(10);
+  });
+
   it('waits for a busy session to drain instead of failing on p3394_session_conflict', async () => {
     mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
     // 第一次 sendAndWait：同一会话上一轮仍在途 → 冲突；等待会话排空后重发成功。

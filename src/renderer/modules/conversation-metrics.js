@@ -46,6 +46,18 @@ function messageMetricsLine(metrics) {
   // 在首个思考/工具/文本事件时打点（思考段计入窗口，速度不失真）。
   const decodeMs = typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null;
   const hasTools = num(toolCalls) > 0;
+  // 外接智能体（source:'cli'）的用量披露因家而异、输出为估算口径——不满足
+  // 「所有外接一致可用」的上线标准，token/速度/缓存/上下文/成本段全部
+  // 不渲染，只保留本地计时的用时/首token（100% 通用真实）。
+  if (usage && usage.source === 'cli') {
+    return {
+      durationMs,
+      latencyText: ttft === null ? null : formatLatency(ttft),
+      rateText: null, inText: null, outText: null, costText: null,
+      model: (typeof metrics.model === 'string' && metrics.model) || null,
+      titleLines: [],
+    };
+  }
   // DSH 口径：速度 = 生成阶段（decode）吞吐，分子「思考+可见输出」（实测
   // 估算，measured 标 ≈）。注意不用 billedOutput 做分子：claude 的计费输出
   // 把缓存写入等折算计入（实测思考 0+可见 18 时计费 9251），÷窗口得出
@@ -122,6 +134,8 @@ function foldSessionMetrics(metricsList, opts = {}) {
       if (gen > 0) { decodeMs += d; decodeTok += gen; }
     }
     const u = m.usage || {};
+    // 外接轮（source:'cli'）：用量段不上线（计时已在循环前半累计）。
+    if (u.source === 'cli') continue;
     input += num(u.inputTokens);
     output += num(u.outputTokens);
     reasoning += num(u.reasoningTokens);
