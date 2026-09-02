@@ -4105,6 +4105,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
     return { ok: root !== null, root };
   },
+  // 删除一条存档（渲染层删除会话时清理其脑图快照用）。
+  'kb.mindmap.delete': async ({ key }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k) return { ok: false, deleted: false };
+    const deleted = kbMindmap.deleteMindmap(k);
+    return { ok: true, deleted };
+  },
 
   // 脑图弹出独立窗口：新开一个无边框 BrowserWindow 展示 SVG，适合大屏深度查看
   'kb.mindmap.popout': async ({ html }) => {
