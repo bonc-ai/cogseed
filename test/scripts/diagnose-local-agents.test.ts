@@ -261,3 +261,13 @@ describe('diagnose-local-agents: constant registry stays in sync with the app', 
     expect(ENV_KEYS.aider).toBe('COGSEED_AIDER_PATH');
   });
 });
+
+describe('Windows CI CLI discovery gate', () => {
+  it('uses controlled discovery fixtures instead of requiring Codex on the runner', () => {
+    const workflow = fs.readFileSync(path.resolve('.github/workflows/ci.yml'), 'utf8');
+    const platformRunner = fs.readFileSync(path.resolve('scripts/run-platform-native-tests.mjs'), 'utf8');
+
+    expect(workflow).not.toContain('diagnose-local-agents.mjs --json --only codex');
+    expect(platformRunner).toContain('test/scripts/diagnose-local-agents.test.ts');
+  });
+});

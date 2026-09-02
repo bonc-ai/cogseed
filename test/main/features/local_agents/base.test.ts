@@ -125,6 +125,20 @@ describe('local_agents/backends/base', () => {
 
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
   });
+
+  it('falls back to the direct POSIX child when no matching process group exists', () => {
+    const child = { pid: 9753, kill: vi.fn() };
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid < 0) throw Object.assign(new Error('no such process group'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+
+    killProcessTree(child as any, 'SIGTERM', { platform: 'darwin' });
+
+    expect(processKill).toHaveBeenCalledWith(-9753, 'SIGTERM');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    processKill.mockRestore();
+  });
 });
 
 describe('local_agents/backends/base › spawnCli', () => {

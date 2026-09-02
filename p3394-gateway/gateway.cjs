@@ -1590,7 +1590,7 @@ class ClaudePersistentRuntime {
         clearTimeout(turn.timer);
         turn.reject(new Error('agent exited ' + code + (stderrLog ? ': ' + sanitizeStreamText(stderrLog.slice(-300)) : '')));
       }
-      this._dropSession(sessionId);
+      this._dropSession(sessionId, entry);
     });
     this.sessions.set(sessionId, entry);
     return entry;
@@ -1654,9 +1654,12 @@ class ClaudePersistentRuntime {
     entry.idleTimer.unref();
   }
 
-  _dropSession(sessionId) {
+  _dropSession(sessionId, expectedEntry) {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
+    // A replaced process can emit `close` after its successor was installed.
+    // Never let that stale callback delete the live successor session.
+    if (expectedEntry && entry !== expectedEntry) return;
     this.sessions.delete(sessionId);
     if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
     for (const [key, sid] of this.turnKeys) {
@@ -1688,7 +1691,7 @@ class ClaudePersistentRuntime {
     const wantModel = (opts && opts.execPrefs) ? opts.execPrefs.model : null;
     let entry = this.sessions.get(sessionId);
     if (entry && (entry.maxThinkingTokens !== (wantThinking || null) || entry.model !== (wantModel || null)) && !entry.turn) {
-      try { entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      killProcessTree(entry.child, 'SIGTERM');
       this._dropSession(sessionId);
       entry = null;
     }

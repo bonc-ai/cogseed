@@ -490,11 +490,14 @@ async function main() {
   // pid 记到日志/文件，断言第二轮复用进程、不再带 [会话历史] 前缀。 ──
   const persistentAgent = path.join(tmp, 'fake-persistent-agent.cjs');
   const persistentPidFile = path.join(tmp, 'persistent-pid.txt');
+  const persistentDescendantPidFile = path.join(tmp, 'persistent-descendant-pid.txt');
   const persistentLog = path.join(tmp, 'persistent-argv.log');
   fs.writeFileSync(persistentAgent, [
     "'use strict';",
     "const fs = require('fs');",
     "fs.appendFileSync(process.env.FAKE_PERSISTENT_PID, String(process.pid) + '\\n');",
+    "const descendant = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    "fs.appendFileSync(process.env.FAKE_PERSISTENT_DESCENDANT_PID, String(descendant.pid) + '\\n');",
     "fs.appendFileSync(process.env.FAKE_PERSISTENT_LOG, JSON.stringify(process.argv) + '\\n');",
     "process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:'fake-ses'}) + '\\n');",
     "const readline = require('readline');",
@@ -507,7 +510,7 @@ async function main() {
     "  round += 1;",
     "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
     "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
-    "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
+    "  if (text.startsWith('long task')) return; // 挂起，等 cancel 终止整个进程树",
     "  setTimeout(() => {",
     "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
     "    process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'PERSISTENT-' + round + ':' + text.slice(0, 40)}]}}) + '\\n');",
@@ -515,8 +518,14 @@ async function main() {
     "  }, 150);",
     "});",
   ].join('\n'));
+  const persistentCmd = path.join(tmp, 'fake-persistent-agent.cmd');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(persistentCmd, `@echo off\r\n"${process.execPath}" "${persistentAgent}" %*\r\n`);
+  }
+  const persistentCli = process.platform === 'win32' ? persistentCmd : 'node';
+  const persistentCliArgs = process.platform === 'win32' ? '' : persistentAgent;
   const PERSISTENT_PORT = GATEWAY_PORT + 70;
-  const persistentEnv = { ...process.env, P3394_GATEWAY_PORT: String(PERSISTENT_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'persistent-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: persistentAgent, P3394_HEARTBEAT_MS: '0', FAKE_PERSISTENT_PID: persistentPidFile, FAKE_PERSISTENT_LOG: persistentLog };
+  const persistentEnv = { ...process.env, P3394_GATEWAY_PORT: String(PERSISTENT_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'persistent-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'claude', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: persistentCli, P3394_AGENT_CLI_ARGS: persistentCliArgs, P3394_HEARTBEAT_MS: '0', FAKE_PERSISTENT_PID: persistentPidFile, FAKE_PERSISTENT_DESCENDANT_PID: persistentDescendantPidFile, FAKE_PERSISTENT_LOG: persistentLog };
   const persistentGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: persistentEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let persistentGwLog = '';
   persistentGw.stdout.on('data', (c) => { persistentGwLog += c; });
@@ -541,8 +550,25 @@ async function main() {
   check('claude 常驻：多轮复用同一进程（只 spawn 一次）', psPids.length === 1 && psArgvs.length === 1);
   check('claude 常驻：第二轮不带 [会话历史] 前缀', !JSON.stringify(psArgvs[0] || []).includes('[会话历史]'));
   check('claude 常驻：第二轮终态仍正常', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-2:follow up')));
+  // 改模型会重启常驻 CLI。旧进程及其后代必须整树回收，Windows 的 npm/cmd
+  // shim 尤其会把真实 Node CLI 留在孙进程层级。
+  const psModel = { message_id: 'ps-model', session_id: 's-persistent', task_id: 'pstk-model', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'after model change' }] }, extensions: { execution_prefs: { model: 'sonnet' } }, idempotency_key: 'idem-ps-model' };
+  await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psModel }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && received.filter((e) => e.session_id === 's-persistent' && e.kind === 'message').length < 3; i += 1) await sleep(100);
+  try { psPids = fs.readFileSync(persistentPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
+  try { psArgvs = fs.readFileSync(persistentLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch {}
+  let psDescendantPids = [];
+  try { psDescendantPids = fs.readFileSync(persistentDescendantPidFile, 'utf8').split('\n').filter(Boolean).map(Number); } catch {}
+  const oldDescendantPid = psDescendantPids[0] || 0;
+  let oldDescendantGone = oldDescendantPid > 0;
+  for (let i = 0; i < 50 && oldDescendantPid > 0; i += 1) {
+    try { process.kill(oldDescendantPid, 0); oldDescendantGone = false; } catch { oldDescendantGone = true; break; }
+    await sleep(100);
+  }
+  check('claude 常驻：模型切换重启并传入新模型', psPids.length === 2 && JSON.stringify(psArgvs[1] || []).includes('--model') && JSON.stringify(psArgvs[1] || []).includes('sonnet'));
+  check('claude 常驻：模型切换回收旧 CLI 的全部后代', oldDescendantGone);
   // 取消：常驻进程必须被终止（pid 回收），且会话被丢弃。
-  const psMsg3 = { message_id: 'ps3', session_id: 's-persistent', task_id: 'pstk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'long task' }] }, idempotency_key: 'idem-ps3' };
+  const psMsg3 = { message_id: 'ps3', session_id: 's-persistent', task_id: 'pstk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'long task' }] }, extensions: { execution_prefs: { model: 'sonnet' } }, idempotency_key: 'idem-ps3' };
   await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg3 }, GATEWAY_TOKEN);
   await sleep(400);
   const psCtl = { message_id: 'ps4', session_id: 's-persistent', task_id: 'pstk3', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-ps-ctl' };
@@ -550,14 +576,14 @@ async function main() {
   await sleep(400);
   check('claude 常驻：取消回执', received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'));
   let psPidGone = true;
-  const lastPid = Number(psPids[0] || 0);
+  const lastPid = Number(psPids[psPids.length - 1] || 0);
   if (lastPid > 0) {
     try { process.kill(lastPid, 0); psPidGone = false; } catch { /* ESRCH → 已回收 */ }
   }
   check('claude 常驻：取消终止常驻进程（pid 已回收）', lastPid > 0 && psPidGone);
   // 取消后队列必须不卡死：被取消轮次的 deliver promise 若不被 reject，串行
   // 队列会被挂起任务永久阻塞（回归：cancel 曾只置 turn=null 不 reject）。
-  const psMsg4 = { message_id: 'ps5', session_id: 's-persistent', task_id: 'pstk4', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'after cancel' }] }, idempotency_key: 'idem-ps4' };
+  const psMsg4 = { message_id: 'ps5', session_id: 's-persistent', task_id: 'pstk4', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'after cancel' }] }, extensions: { execution_prefs: { model: 'sonnet' } }, idempotency_key: 'idem-ps4' };
   await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psMsg4 }, GATEWAY_TOKEN);
   for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('after cancel')); i += 1) await sleep(100);
   check('claude 常驻：取消后队列不卡死（新消息正常回复）', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:after cancel')));
@@ -568,6 +594,12 @@ async function main() {
   // Windows sometimes still holds the temp dir until child processes have
   // fully exited; retry instead of failing a green protocol run on cleanup.
   await sleep(500);
+  try {
+    const cleanupPids = [persistentPidFile, persistentDescendantPidFile]
+      .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
+    for (const pid of cleanupPids) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    await sleep(200);
+  } catch {}
   try {
     fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   } catch (error) {

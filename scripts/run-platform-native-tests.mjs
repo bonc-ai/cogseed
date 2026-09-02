@@ -31,6 +31,7 @@ const commonSuites = [
   'test/main/features/local_agents/base.test.ts',
   'test/main/features/local_agents/spawn-command.test.ts',
   'test/main/features/local_agents/version.test.ts',
+  'test/scripts/diagnose-local-agents.test.ts',
   'test/main/util/bundled-runtime.test.ts',
   'test/main/util/run-skill.test.ts',
   'test/main/features/packages.test.ts',

@@ -125,7 +125,7 @@ export async function findBinRecursively(
   }
 
   const resolved = isWindows
-    ? await findBinWindowsRecursive(name, roots, timeoutMs)
+    ? await findBinWindowsRecursive(name, roots, timeoutMs, env)
     : await findBinPosixRecursive(name, roots, timeoutMs);
   recursiveCache = { at: Date.now(), key, value: resolved };
   return resolved;
@@ -172,8 +172,14 @@ function cachedWhere(root: string, pattern: string, timeoutMs: number): Promise<
   return promise;
 }
 
-async function findBinWindowsRecursive(name: string, roots: string[], timeoutMs: number): Promise<string | null> {
+async function findBinWindowsRecursive(
+  name: string,
+  roots: string[],
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv,
+): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
+  const allowedNames = new Set(winExtCandidates(env).map(ext => (name + ext).toLowerCase()));
   // `name.*` covers every PATHEXT variant in one query; retain the bare-name
   // query for extensionless shims. Avoid spawning one `where.exe` per suffix.
   const patterns = [name, name + '.*'];
@@ -188,6 +194,7 @@ async function findBinWindowsRecursive(name: string, roots: string[], timeoutMs:
       if (remainingMs <= 0) return null;
       const hits = await cachedWhere(root, pattern, remainingMs);
       for (const line of hits) {
+        if (!allowedNames.has(path.win32.basename(line).toLowerCase())) continue;
         try {
           if (fs.statSync(line).isFile()) return line;
         } catch {
@@ -255,8 +262,8 @@ function uniqueDirs(dirs: string[]): string[] {
  * Returns the candidate extensions to try on Windows, with the empty
  * extension first so an exact-name hit (rare but possible) short-circuits.
  */
-function winExtCandidates(): string[] {
-  const raw = process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD';
+function winExtCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD';
   const exts = raw
     .split(';')
     .map(s => s.trim())

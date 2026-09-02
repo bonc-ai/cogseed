@@ -16,8 +16,6 @@ import {
 import {
   warnWindowsSandboxUnavailable,
   windowsSandboxMode,
-  windowsStrongSandboxAvailable,
-  wrapWindowsStrongSandbox,
 } from "./windows-sandbox.js";
 
 const log = createLogger("sandbox");
@@ -292,15 +290,13 @@ let warnedWindowsFallback = false;
 
 /**
  * Platform dispatch for the OS-enforced write sandbox. macOS uses
- * sandbox-exec; Windows can only enforce writes through a restricted,
- * low-integrity token, which requires an elevated process or privileged
- * broker. Strong mode fails closed when that capability is missing; the
- * default keeps the legacy behavior with a one-time warning.
+ * sandbox-exec. Windows strong mode fails closed until a broker can enforce
+ * per-process writes without mutating persistent directory integrity labels;
+ * the default keeps the legacy behavior with a one-time warning.
  */
 function maybeWrapWithWriteSandbox(
   invocation: ShellInvocation,
   allowedDirs: readonly string[] | undefined,
-  command: string,
   platform: NodeJS.Platform = process.platform,
 ): SpawnInvocation {
   const dirs = uniqueSandboxDirs(allowedDirs);
@@ -309,14 +305,6 @@ function maybeWrapWithWriteSandbox(
     return maybeWrapWithMacWriteSandbox(invocation, dirs);
   }
   if (platform === "win32") {
-    if (windowsStrongSandboxAvailable()) {
-      const wrapped = wrapWindowsStrongSandbox(command, dirs, invocation.kind);
-      return {
-        command: wrapped.command,
-        args: wrapped.args,
-        envPatch: wrapped.envPatch,
-      };
-    }
     const mode = windowsSandboxMode();
     if (mode === "strong") {
       throw new Error(warnWindowsSandboxUnavailable(mode));
@@ -625,7 +613,6 @@ export class SandboxExecutor {
       const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
-        command,
       );
       if (invocation.envPatch) {
         Object.assign(env, invocation.envPatch);
@@ -800,7 +787,6 @@ export class SandboxExecutor {
       const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
-        command,
       );
       if (invocation.envPatch) {
         Object.assign(env, invocation.envPatch);

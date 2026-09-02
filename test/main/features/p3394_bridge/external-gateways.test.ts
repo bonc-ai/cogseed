@@ -96,6 +96,7 @@ describe('P3394 external-agent gateway host', () => {
       expect(response.task_id).toBe('tsk-ext-task-1');
       expect(response.payload.parts[0].type).toBe('text');
       expect(response.payload.parts[0].text).toContain('hello external gateway');
+      expect(fs.existsSync(path.join(path.dirname(registryFile), 'external-gateways', 'hermes.log'))).toBe(false);
       await dialer.close();
     } finally {
       await stopExternalGateway('hermes');

@@ -66,8 +66,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:resources:setup
       - run: npm run test:platform-native
-      - name: Cross-platform CLI agent diagnosis
-        run: node scripts/diagnose-local-agents.mjs --json --only codex
       - name: P3394 gateway protocol smoke
         run: node p3394-gateway/test/smoke.cjs
       - run: npm run build:win

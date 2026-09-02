@@ -14,7 +14,6 @@ import {
 } from "../src/sandbox/executor.js";
 import {
   windowsSandboxMode,
-  windowsSandboxLauncherPath,
   windowsStrongSandboxAvailable,
 } from "../src/sandbox/windows-sandbox.js";
 
@@ -289,15 +288,9 @@ describe("Windows strong sandbox gating", () => {
     expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "nonsense" })).toBe("auto");
   });
 
-  it("reports availability from the explicit test override", () => {
-    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "1" })).toBe(true);
+  it("never enables the unsafe directory-label strong sandbox", () => {
+    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "1" })).toBe(false);
     expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "0" })).toBe(false);
-  });
-
-  it("locates the strong sandbox launcher script in the repo layout", () => {
-    const launcher = windowsSandboxLauncherPath();
-    expect(launcher).not.toBeNull();
-    return expect(fs.access(launcher as string)).resolves.toBeUndefined();
   });
 
   it("fails closed on win32 when strong mode is requested but unavailable", async () => {

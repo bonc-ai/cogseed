@@ -43,6 +43,28 @@ describe('which: recursive install-root discovery', () => {
     }
   });
 
+  it('ignores recursive Windows matches whose extension is not in PATHEXT', async () => {
+    if (process.platform !== 'win32') return;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'which-recursive-noise-'));
+    const nested = path.join(root, 'agent', 'bin');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(nested, 'noise-agent.json'), '{}');
+    try {
+      await expect(findBinRecursively('noise-agent', {
+        env: {
+          LOCALAPPDATA: root,
+          APPDATA: root,
+          PATH: '',
+          PATHEXT: '.EXE;.CMD',
+        },
+        home: root,
+      })).resolves.toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      invalidateCache();
+    }
+  });
+
   it('clears recursive results when the registry cache is invalidated', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'which-recursive-cache-'));
     const nested = path.join(root, 'agent', 'bin');
