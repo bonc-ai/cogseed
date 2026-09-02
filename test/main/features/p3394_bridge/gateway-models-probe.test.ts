@@ -182,6 +182,19 @@ describe('gateway extractClaudeResultUsage — reply-envelope usage payload', ()
     expect(legacyFirst.model).toBe('claude-opus-5');
   });
 
+  it('extracts thinking tokens as reasoning (DSH 口径：思考单列)', () => {
+    // claude 把思考量放在 usage.output_tokens_details.thinking_tokens——
+    // 真实计费量，独立保留；速度与 ↓ 展示按「思考+输出」合计。
+    const out = extractClaudeResultUsage({
+      usage: { input_tokens: 10, output_tokens: 500, output_tokens_details: { thinking_tokens: 420 } },
+    }) as { reasoning?: number; output?: number };
+    expect(out.reasoning).toBe(420);
+    expect(out.output).toBe(500);
+    // 无 details 时不含 reasoning 键。
+    const bare = extractClaudeResultUsage({ usage: { input_tokens: 1 } }) as Record<string, unknown>;
+    expect('reasoning' in bare).toBe(false);
+  });
+
   it('returns undefined without a usage object (legacy frames)', () => {
     expect(extractClaudeResultUsage({ total_cost_usd: 0.01 })).toBeUndefined();
     expect(extractClaudeResultUsage(undefined)).toBeUndefined();

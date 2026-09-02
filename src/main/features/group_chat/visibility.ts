@@ -94,6 +94,10 @@ export interface GroupMessageMetrics {
   usage?: {
     inputTokens?: number;
     outputTokens?: number;
+    /** 思考 token（DSH 口径：reasoning 与最终输出分开统计；claude 的
+     *  output_tokens_details.thinking_tokens，真实计费量）。速度与 ↓ 总量
+     *  按「思考+输出」合计。 */
+    reasoningTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，

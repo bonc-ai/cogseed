@@ -93,6 +93,21 @@ describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
     expect(line?.titleLines?.some((l) => l.includes('CLI 自报成本'))).toBe(true);
   });
 
+  it('DSH 口径：速度与 ↓ 按「思考+输出」合计，title 拆思考/输出', () => {
+    // decode 窗口 2s（firstTokenAt→completedAt），思考 300 + 输出 100
+    // → 400 tok / 2s = 200 tok/s；↓ 显示 400；title 里思考/输出分行。
+    const line = messageMetricsLine({
+      startedAt: 1_000,
+      firstTokenAt: 3_000,
+      completedAt: 5_000,
+      usage: { reasoningTokens: 300, outputTokens: 100 },
+    }) as { rateText: string; outText: string; titleLines: string[] };
+    expect(line?.rateText).toBe('200');
+    expect(line?.outText).toBe('400');
+    expect(line?.titleLines?.some((l) => l.includes('思考 300'))).toBe(true);
+    expect(line?.titleLines?.some((l) => l.includes('输出 100'))).toBe(true);
+  });
+
   it('keeps the legacy shape when no cost/model is reported', () => {
     const line = messageMetricsLine(turn());
     expect(line?.costText ?? null).toBeNull();
