@@ -5,7 +5,7 @@
   "license": "MIT",
   "author": "CogSeed Team",
   "bin": { "p3394-gateway": "gateway.cjs" },
-  "files": ["gateway.cjs", "README.md", "BOOTSTRAP.md", "REVIEW.md", "LICENSE", "NOTICE"],
+  "files": ["gateway.cjs", "models-probe.cjs", "README.md", "BOOTSTRAP.md", "REVIEW.md", "LICENSE", "NOTICE"],
   "engines": { "node": ">=18" },
   "scripts": { "start": "node gateway.cjs" }
 }

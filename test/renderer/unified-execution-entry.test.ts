@@ -48,24 +48,39 @@ describe('unified execution entry — picker scope', () => {
     expect(agents).toMatch(/data-kind="agent"/);
   });
 
-  it('plan B: CLI agents expose NO model picker — models are the CLI\'s own decision', () => {
+  it('external-agent control: CLI agents get a REAL model picker gated by the capability table', () => {
     const chip = read('src/renderer/modules/model-chip.js');
+    const ctl = read('src/renderer/modules/cli-exec-control.js');
     const conv = read('src/renderer/modules/conversation.js');
-    // 网关信封没有 model 栏位，CLI 模型选择是假开关——不允许存在：
-    // 不解析 runtime.model 作为生效值、不渲染模型列表、不请求 CLI 模型目录。
-    expect(chip).not.toMatch(/override\.model \|\| agent\.runtime\.model/);
-    expect(chip).not.toContain('agent.runtime.model ||');
-    expect(chip).not.toContain('_renderCliModelOptions');
-    expect(chip).not.toContain('localAgents.listModels');
-    // chip 统一显示「CLI 默认」+ 说明文案（claude 场景另有模型说明 note）。
-    expect(chip).toContain("t('exec_config.cli_default_model')");
-    expect(chip).toContain("t('exec_config.cli_model_note'");
-    expect(chip).toContain("t('exec_config.effort_cli_note')");
-    // 发送侧：CLI recipient 的历史残留 override.model 不随消息下发。
-    expect(conv).toMatch(/isCliAgentRecipient[\s\S]*?if \(!isCliAgentRecipient\)/);
-    // 真开关保留：claude 的 effort 分段仍在。
+    // 外接智能体执行控制（feat/external-agent-exec-control）：信封已带
+    // execution_prefs.model，能力表内（claude/codex）的 CLI 模型真实可控——
+    // 扫描式模型列表（问 CLI 本身）+ 手输兜底必须存在。
+    expect(chip).toContain('_renderCliModelList');
+    expect(ctl).toContain("'p3394.external.listModels'");
+    expect(ctl).toContain('execControlFor');
+    // 手输兜底：清单外 id 也能用（CLI 接受完整模型名）。
+    expect(ctl).toContain('rememberCustomModel');
+    // 能力表防假开关：模型可控性查表而非硬编码，表外 CLI 不渲染模型区。
+    expect(chip).not.toContain('CLI_EFFORT_SUPPORTED');
+    // 发送侧：模型与强度都通用下发（execution_config 不设白名单——网关按
+    // 参数模板消费，无通道即安全忽略；自定义智能体经
+    // P3394_AGENT_MODEL_ARGS / P3394_AGENT_EFFORT_ARGS 声明即生效）。
+    expect(conv).toContain('window.cliExecControl.effortControllableFor(recipientAgent.runtime.cli)');
+    expect(conv).not.toContain('cliExec && cliExec.model');
+    expect(conv).not.toContain('cliExec && cliExec.effort');
+    // 真开关保留：effort 分段仍在。
     expect(chip).toContain('model-chip-menu-segmented');
     expect(chip).toContain("t('exec_config.effort_cli_forward_note'");
+    expect(chip).toContain("t('exec_config.cli_models_scanning')");
+    // 切到外接智能体时 chip 直接亮出 CLI 当前实际模型（扫描披露的
+    // current），不是笼统的「CLI 默认」占位；recipient 变化触发后台扫描。
+    // CodexHost 显示规则：chip 永远显示具体模型名（current > default 条目 >
+    // 清单第一项），扫描在途显示加载文案——不显示「默认」占位。
+    expect(chip).toContain('effectiveModelLabel');
+    expect(chip).toContain("t('exec_config.cli_models_loading')");
+    expect(chip).toContain('modelIsCliCurrent');
+    expect(chip).toContain('_scanCliCurrentForChips');
+    expect(chip).toContain("t('exec_config.cli_current_model_title'");
   });
 });
 
@@ -91,6 +106,23 @@ describe('unified execution entry — task-scoped exec-config chip', () => {
     expect(chip).toContain("t('exec_config.cli_badge')");
     // Unsupported models disable the effort options with the reason shown.
     expect(chip).toMatch(/model_effort\.unsupported_hint/);
+  });
+
+  it('re-renders the anchor chip at menu-open so chip and menu can never disagree', () => {
+    const chip = read('src/renderer/modules/model-chip.js');
+    // chip 平时靠事件重渲染；事件丢失/时序错位会停在旧态（真机事故：
+    // 接收者已是指挥官，chip 仍显示上一轮 CLI 智能体的「Sonnet 5 · CLI」，
+    // 菜单却列 API 条目）。开菜单瞬间必须用当前状态同步重画锚点 chip——
+    // 菜单与 chip 消费同一个 _effectiveExecConfig，同步重画后必然一致。
+    expect(chip).toMatch(/_toggleExecConfigMenu\(anchor\) {[\s\S]*?_modelChipRenderChip\(anchor\);[\s\S]*?_renderExecConfigMenu\(menu, anchor\)/);
+  });
+
+  it('self-heals a null agents cache instead of silently degrading an agent recipient', () => {
+    const chip = read('src/renderer/modules/model-chip.js');
+    // 接收者是 agent 但缓存为 null（编辑流程置空后回填失败）时，
+    // _recipientAgent 后台补拉 loadAgents——否则 chip/菜单静默滑到
+    // 指挥官的 API 语义，用户对着 ClaudeCode 会话看到 deepseek 条目。
+    expect(chip).toContain('void loadAgents(true)');
   });
 });
 

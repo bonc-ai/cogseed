@@ -358,5 +358,16 @@ async function* runViaP3394Gateway(
     };
     return;
   }
-  yield { type: 'result', ...base, status: 'completed', text: result.text };
+  // 用量/模型自报（runP3394GatewayTurn 的 metrics：usage + CLI 自报 model）随
+  // 终态信封透传——runtime-controller → group-chat-projection → 落库 metrics。
+  // 丢了它，exec 路径（wake→task→exec 投影）的回合用量与回读校验全空。
+  yield {
+    type: 'result',
+    ...base,
+    status: 'completed',
+    text: result.text,
+    ...((result as { metrics?: unknown }).metrics
+      ? { metadata: { metrics: (result as { metrics?: unknown }).metrics } }
+      : {}),
+  };
 }

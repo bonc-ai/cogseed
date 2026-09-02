@@ -1949,6 +1949,10 @@
   <script src="./modules/name-limit.js"></script>
   <script src="./modules/conv-bucket.js"></script>
   <script src="./modules/recall-projection-card.js"></script>
+  <!-- 外接 CLI 执行控制（能力表/模型扫描客户端/窗口解析）。须在
+       conversation-metrics.js 与 model-chip.js 之前加载（两者消费
+       window.cliExecControl）。 -->
+  <script src="./modules/cli-exec-control.js"></script>
   <!-- 纯函数模块：window.conversationMetrics（消息/会话 token 用量格式化）。
        必须在 conversation.js 之前加载（其消费方是 _mountMsgMeta）。 -->
   <script src="./modules/conversation-metrics.js"></script>
