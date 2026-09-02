@@ -150,7 +150,7 @@ function _moreLabel(n) {
 function showValidationReport({ title, titleKey, titleParams, report, okLabel, okLabelKey, forceLabel, forceLabelKey } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay open';
+    overlay.className = 'modal-overlay ui-dialog-overlay';
 
     const violations = (report && Array.isArray(report.violations)) ? report.violations : [];
     // Sort: EXTREME first, then MEDIUM, then LOW. Within a level keep
@@ -188,15 +188,33 @@ function showValidationReport({ title, titleKey, titleParams, report, okLabel, o
     document.body.appendChild(overlay);
 
     const okBtn = overlay.querySelector('[data-act="ok"]');
-    const onKey = (e) => {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === 'Escape' || e.key === 'Enter') finish('close');
-    };
-    const finish = (action = 'close') => {
-      document.removeEventListener('keydown', onKey, true);
+    let settled = false;
+    const settle = (action) => { if (settled) return; settled = true; resolve(action); };
+    const cleanup = () => {
       window.removeEventListener('i18n-change', onI18nChange);
       overlay.remove();
-      resolve(action);
+    };
+    // 四项行为统一走 uiModalController；Enter 仍等价于点击「关闭」。
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          initialFocus: '[data-act="ok"]',
+          onClose: (reason) => {
+            cleanup();
+            if (reason === 'escape') settle('close');
+          },
+        })
+      : null;
+    const onKey = (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') finish('close');
+    };
+    const finish = (action = 'close') => {
+      if (controller) controller.close('action');
+      else { document.removeEventListener('keydown', onKey, true); cleanup(); }
+      settle(action);
     };
     overlay.querySelector('[data-act="force"]')?.addEventListener('click', () => finish('force'));
     okBtn.addEventListener('click', () => finish('close'));
@@ -215,7 +233,8 @@ function showValidationReport({ title, titleKey, titleParams, report, okLabel, o
       if (forceBtn && forceLabelKey) forceBtn.textContent = t(forceLabelKey);
     };
     window.addEventListener('i18n-change', onI18nChange);
-    setTimeout(() => okBtn.focus(), 0);
+    if (controller) controller.open();
+    else setTimeout(() => okBtn.focus(), 0);
   });
 }
 

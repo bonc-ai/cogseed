@@ -134,6 +134,7 @@ Attachments:
 - Do not append cache-busting query strings to renderer resources.
 - Renderer icons come from `modules/icons.js` through `uiIconHtml(...)` or `hydrateUiIcons(...)`; add missing icon names there instead of hard-coding SVG paths or using emoji icons.
 - Shared Renderer primitives are `uiButton(...)`, `uiIconButton(...)`, `uiField(...)`, `uiForm(...)`, `uiEmptyState(...)`, `uiModal(...)`, `uiModalController(...)`, and `uiPageHeader(...)`; extend these seams instead of adding page-local button, form, empty-state, modal, or page-header variants.
+- Any Renderer feature that adds or changes a visible button, form control, empty state, modal, or page header must follow `.agents/skills/cogseed-component-change/SKILL.md` and add real-page integration coverage. `test/renderer/shared-ui-adoption-guard.test.ts` freezes the legacy raw-control baseline; do not raise that baseline to bypass migration or review.
 - Renderer layers use `--z-base`, `--z-raised`, `--z-sticky`, `--z-popover`, `--z-tour`, `--z-overlay`, `--z-modal`, `--z-modal-popover`, `--z-command`, and `--z-toast`, in that order; do not add literal `z-index` values outside `tokens.css`.
 - Keydown action shortcuts in inputs/textareas must ignore IME composition (`e.isComposing || e.keyCode === 229`).
 - Long-running user actions need visible progress; read-heavy network views should use stale-while-revalidate when staleness is acceptable.
