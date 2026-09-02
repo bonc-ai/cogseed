@@ -17,6 +17,7 @@ import {
   compareExpected,
   inspectCliConfig,
   expandSearchDirs,
+  runVersionProbe,
   BIN_NAMES,
   ENV_KEYS,
 } from '../../scripts/diagnose-local-agents.mjs';
@@ -77,6 +78,10 @@ describe('diagnose-local-agents: search dirs mirror registry.ts', () => {
     expect(dirs).toContain('C:\\Users\\tester\\AppData\\Roaming\\npm');
     expect(dirs).toContain('C:\\Users\\tester\\AppData\\Local\\Microsoft\\WindowsApps');
     expect(dirs.some((d) => d.includes('OpenAI\\Codex\\bin'))).toBe(true);
+    expect(dirs).toContain('C:\\Users\\tester\\AppData\\Local\\OpenAI\\Codex\\bin\\*');
+
+    const wbDirs = localCliSearchDirs('workbuddy', 'win32', env, 'C:\\Users\\tester');
+    expect(wbDirs.some((d) => d.includes('WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin'))).toBe(true);
   });
 
   it('expands version-manager wildcard segments only when the tail exists', async () => {
@@ -93,7 +98,7 @@ describe('diagnose-local-agents: search dirs mirror registry.ts', () => {
 });
 
 describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
-  it('finds an executable via extraDirs and skips non-executables on POSIX', async () => {
+  it.runIf(process.platform !== 'win32')('finds an executable via extraDirs and skips non-executables on POSIX', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-'));
     const good = path.join(tmp, 'claude');
     const bad = path.join(tmp, 'codex');
@@ -107,13 +112,35 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     expect(notFound).toBeNull();
   });
 
-  it('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {
+  it.runIf(process.platform !== 'win32')('honors an absolute override path exactly like COGSEED_<TYPE>_PATH', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-abs-'));
     const abs = path.join(tmp, 'my-claude');
     fs.writeFileSync(abs, '#!/bin/sh\n');
     fs.chmodSync(abs, 0o755);
     expect(await whichBin(abs, { env: { PATH: '' } })).toBe(abs);
     expect(await whichBin(path.join(tmp, 'missing'), { env: { PATH: '' } })).toBeNull();
+  });
+
+  it('probes an extensionless Windows shim through its .cmd sibling', async () => {
+    if (process.platform !== 'win32') return;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-win-shim-'));
+    const script = path.join(tmp, 'version-agent.cjs');
+    const shim = path.join(tmp, 'version-agent');
+    fs.writeFileSync(script, "process.stdout.write('version-agent 9.8.7\n');\n");
+    fs.writeFileSync(shim, '#!/bin/sh\n');
+    fs.writeFileSync(`${shim}.cmd`, '@echo off\r\necho version-agent 9.8.7\r\n');
+    await expect(runVersionProbe(shim, ['--version'], { platform: 'win32', env: process.env })).resolves.toBe('9.8.7');
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform === 'win32')('skips a bare npm bash shim and falls through to the .cmd shim', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-win-'));
+    const bare = path.join(tmp, 'claude');
+    const cmd = path.join(tmp, 'claude.CMD');
+    fs.writeFileSync(bare, '#!/bin/sh\necho hi\n');
+    fs.writeFileSync(cmd, '@echo off\r\n');
+    const found = await whichBin('claude', { extraDirs: [tmp], env: { PATH: '', PATHEXT: '.CMD' } });
+    expect(found?.toLowerCase()).toBe(cmd.toLowerCase());
   });
 });
 
@@ -225,10 +252,12 @@ describe('diagnose-local-agents: expected-config snapshot comparison', () => {
 
 describe('diagnose-local-agents: constant registry stays in sync with the app', () => {
   it('knows every CLI, its binary name, and its env override key', () => {
-    expect(Object.keys(BIN_NAMES)).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+    expect(Object.keys(BIN_NAMES)).toEqual(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider']);
     expect(BIN_NAMES.claude).toBe('claude');
     expect(BIN_NAMES.workbuddy).toBe('codebuddy');
     expect(ENV_KEYS.claude).toBe('COGSEED_CLAUDE_PATH');
     expect(ENV_KEYS.workbuddy).toBe('COGSEED_WORKBUDDY_PATH');
+    expect(ENV_KEYS.gemini).toBe('COGSEED_GEMINI_PATH');
+    expect(ENV_KEYS.aider).toBe('COGSEED_AIDER_PATH');
   });
 });

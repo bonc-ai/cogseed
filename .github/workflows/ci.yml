@@ -51,3 +51,22 @@ jobs:
             exit 1
           fi
           echo "✅ All commit author emails are noreply."
+
+  verify-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:resources:setup
+      - run: npm run test:platform-native
+      - name: Cross-platform CLI agent diagnosis
+        run: node scripts/diagnose-local-agents.mjs --json --only codex
+      - name: P3394 gateway protocol smoke
+        run: node p3394-gateway/test/smoke.cjs

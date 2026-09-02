@@ -126,6 +126,9 @@ describe('local_agents/spawn-command', () => {
   });
 
   it('expands node version-manager dirs (nvm/fnm/asdf) into the spawn PATH', () => {
+    // This version-manager layout is a POSIX-only home layout; the win32
+    // branch of buildCliSpawnEnv is covered by the dedicated Windows tests.
+    if (process.platform === 'win32') return;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-env-test-'));
     try {
       const dirs = [
@@ -186,6 +189,10 @@ describe('spawn-command · node fallback (WorkBuddy codebuddy without system nod
   });
 
   it('runs a node-shebang script directly when node is on the spawn PATH', () => {
+    // On Windows there is no kernel shebang support: node-shebang scripts are
+    // intentionally routed through Electron's Node runtime (see
+    // resolveCliCommand); the direct-exec behavior is POSIX-only.
+    if (process.platform === 'win32') return;
     const script = makeTempScript('#!/usr/bin/env node\nconsole.log("x");\n');
     // Same Electron-as-Node caveat as above: provide an explicit node binary
     // so the "node present" branch is deterministic on every runner.
