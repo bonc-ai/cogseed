@@ -312,6 +312,29 @@ describe("Windows strong sandbox gating", () => {
       else process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = oldForce;
     }
   });
+
+  it.each([
+    ["an empty allowlist", []],
+    ["no allowlist", undefined],
+  ] as const)("fails closed on win32 with %s", async (_label, allowedDirs) => {
+    if (process.platform !== "win32") return;
+    const oldMode = process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+    const oldForce = process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+    process.env.COGSEED_WINDOWS_SANDBOX_MODE = "strong";
+    process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = "0";
+    try {
+      const sandbox = new SandboxExecutor({
+        workingDir: os.tmpdir(),
+        allowedDirs,
+      });
+      await expect(sandbox.execute("echo STRONG_BYPASS")).rejects.toThrow("strong sandbox unavailable");
+    } finally {
+      if (oldMode === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_MODE = oldMode;
+      if (oldForce === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = oldForce;
+    }
+  });
 });
 
 describe("augmentPath", () => {

@@ -300,18 +300,18 @@ function maybeWrapWithWriteSandbox(
   platform: NodeJS.Platform = process.platform,
 ): SpawnInvocation {
   const dirs = uniqueSandboxDirs(allowedDirs);
+  const windowsMode = platform === "win32" ? windowsSandboxMode() : null;
+  if (windowsMode === "strong") {
+    throw new Error(warnWindowsSandboxUnavailable(windowsMode));
+  }
   if (!dirs.length) return invocation;
   if (platform === "darwin") {
     return maybeWrapWithMacWriteSandbox(invocation, dirs);
   }
   if (platform === "win32") {
-    const mode = windowsSandboxMode();
-    if (mode === "strong") {
-      throw new Error(warnWindowsSandboxUnavailable(mode));
-    }
     if (!warnedWindowsFallback) {
       warnedWindowsFallback = true;
-      warnWindowsSandboxUnavailable(mode);
+      warnWindowsSandboxUnavailable(windowsMode ?? "auto");
     }
   }
   return invocation;
