@@ -13,7 +13,13 @@ import {
   updateCogSeedTask,
   type CreateCogSeedTaskInput,
 } from './task-store';
-import type { CogSeedTaskEventType, CogSeedTaskRecord, CogSeedTaskStatus } from './types';
+import {
+  COGSEED_TASK_FAILURE_KINDS,
+  type CogSeedTaskEventType,
+  type CogSeedTaskFailureKind,
+  type CogSeedTaskRecord,
+  type CogSeedTaskStatus,
+} from './types';
 import type { WorkflowRun } from '../collaboration_control/types';
 
 const log = createLogger('cogseed-backend:group-chat-bridge');
@@ -48,6 +54,10 @@ export interface GroupChatTaskFinishInput {
   status: 'completed' | 'failed' | 'cancelled' | 'waiting_input';
   messageId?: string;
   errorCode?: string;
+  /** Coarse machine reason, supplied only by callers that genuinely have one.
+   *  Group Chat classifies plan-executor outcomes two levels deep; the paths
+   *  that only synthesise a code must leave this unset rather than guess. */
+  failureKind?: CogSeedTaskFailureKind;
   process?: unknown;
 }
 
@@ -70,6 +80,12 @@ export interface GroupChatTaskBridgeDeps {
 function safeCorrelationId(value: unknown): string | undefined {
   const id = String(typeof value === 'string' ? value : '').trim();
   return id && safeId(id) ? id : undefined;
+}
+
+function safeFailureKind(value: unknown): CogSeedTaskFailureKind | undefined {
+  return typeof value === 'string' && COGSEED_TASK_FAILURE_KINDS.has(value)
+    ? value as CogSeedTaskFailureKind
+    : undefined;
 }
 
 function safeToolName(value: unknown): string | undefined {
@@ -231,11 +247,13 @@ export function createGroupChatTaskBridge(deps: GroupChatTaskBridgeDeps = {}): G
         if (!task || TERMINAL.has(task.status)) return task;
         const messageId = safeCorrelationId(input.messageId);
         const errorCode = safeErrorCode(input.errorCode);
-        if (messageId || errorCode) {
+        const failureKind = safeFailureKind(input.failureKind);
+        if (messageId || errorCode || failureKind) {
           task = await updateTask(input.userId, input.taskId, (current) => ({
             ...current,
             ...(messageId ? { groupChatMessageId: messageId } : {}),
             ...(errorCode ? { errorCode } : {}),
+            ...(failureKind ? { failureKind } : {}),
             updatedAt: nowIso(),
           }));
         }
@@ -247,6 +265,7 @@ export function createGroupChatTaskBridge(deps: GroupChatTaskBridgeDeps = {}): G
         return transitionTask(input.userId, task.taskId, nextStatus, {
           source: 'group-chat',
           ...(errorCode ? { errorCode } : {}),
+          ...(failureKind ? { failureKind } : {}),
         });
       } catch {
         log.warn('Group Chat terminal projection failed', { task_id: maskId(input.taskId) });

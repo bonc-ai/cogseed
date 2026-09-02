@@ -87,6 +87,35 @@ describe('CogSeed P3394 wake dispatcher', () => {
     expect(startCogSeedTask.mock.calls[0]?.[1]).not.toHaveProperty('profileId');
   });
 
+  it('does not start a wake task when admission rejects the Agent', async () => {
+    // Remote wake is a third admission entry point beside Run Center create and
+    // the interactive turn. An offline peer is now rejected there too, and the
+    // rejection must abort the dispatch rather than starting a run that fails
+    // later in execution.
+    const rejection = Object.assign(new Error('CogSeed Agent is unavailable'), { reasonCode: 'offline' });
+    resolveCogSeedAgentExecutionContext.mockRejectedValueOnce(rejection as never);
+    const { cogseedWakeDispatcher } = await import('../../../../src/main/features/cogseed_backend/p3394-wake-dispatcher');
+
+    await expect(cogseedWakeDispatcher.dispatch('user-1', {
+      id: 'wake-offline-1',
+      conversation_id: 'cid-1',
+      execution_domain: 'group_chat',
+      execution_scope_id: 'cid-1',
+      agent_id: 'external-offline',
+      source: 'user_mention',
+      source_actor_id: 'user',
+      objective: 'Reach an offline peer',
+      context_scope: ['conversation:cid-1'],
+      behavior_scope: ['user_mention'],
+      dispatch_payload: { text: 'Reach an offline peer' },
+      status: 'approved',
+      created_at: '2026-08-17T00:00:00.000Z',
+      updated_at: '2026-08-17T00:00:00.000Z',
+    } as never)).rejects.toMatchObject({ reasonCode: 'offline' });
+
+    expect(startCogSeedTask).not.toHaveBeenCalled();
+  });
+
   it('runs a P3394 gateway Agent through the real local CLI adapter', async () => {
     resolveCogSeedAgentExecutionContext.mockResolvedValueOnce({
       agentId: 'external-1',

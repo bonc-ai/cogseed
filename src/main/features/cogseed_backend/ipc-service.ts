@@ -15,6 +15,7 @@ import { cogseedCollaborationStore } from './collaboration-store-adapter';
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import { computeCogSeedBoardGroupProgress } from './board-group-status';
 import type { CollaborationEvent, SharedTaskContext, WorkflowRun } from '../collaboration_control/types';
+import type { GroupMessageFailureKind } from '../group_chat/visibility';
 import type { CollaborationScope } from '../collaboration_control/ports';
 import type { CogSeedSessionRecord, CogSeedTaskEvent, CogSeedTaskRecord, CogSeedTaskStatus } from './types';
 import { t } from '../../i18n';
@@ -149,6 +150,11 @@ export type CogSeedRendererResultDeliveryState = 'not-applicable' | 'pending' | 
 export type CogSeedRendererBoardColumn = 'pending' | 'running' | 'attention' | 'completed' | 'archived';
 
 export interface CogSeedRendererBoardTask extends CogSeedRendererTaskSummary {
+  /** Lifecycle bucket: where this task sits by status and archival, nothing
+   *  else. The renderer's attention column is a separate, derived value. */
+  baseColumn: CogSeedRendererBoardColumn;
+  /** Compatibility alias for `baseColumn`, same value from the same call.
+   *  Retained for one release; renderers must read `baseColumn`. */
   column: CogSeedRendererBoardColumn;
   sessionTitle: string;
   sessionTitleKey: CogSeedRendererTitleKey;
@@ -195,11 +201,30 @@ export interface CogSeedRendererDiagnostics {
   coverage: { liveInvalidation: true; payloadRedaction: true; manualRefresh: true };
 }
 
+/**
+ * Stable, low-cardinality behaviour dimension for a failed task. `errorCode`
+ * stays an open diagnostic string that producers extend without notice, so
+ * consumers must never branch on it — they branch on this instead.
+ */
+export type CogSeedRendererFailureCategory =
+  | 'model_unavailable'
+  | 'provider_transient'
+  | 'provider_error'
+  | 'runtime_failure'
+  | 'worker_restart'
+  | 'conversation_unavailable'
+  | 'agent_unavailable'
+  | 'collaboration_failure'
+  | 'cancelled'
+  | 'unknown';
+
 export interface CogSeedRendererTaskSummary {
   taskId: string;
   sessionId: string;
   requestId: string;
   parentTaskId?: string;
+  /** Authoritative link to the task this one replaces (retry or reassign). */
+  retryOfTaskId?: string;
   coordinationId?: string;
   status: CogSeedTaskStatus;
   title: string;
@@ -207,6 +232,7 @@ export interface CogSeedRendererTaskSummary {
   createdAt: string;
   updatedAt: string;
   errorCode?: string;
+  failureCategory?: CogSeedRendererFailureCategory;
   executionKind?: CogSeedTaskRecord['executionKind'];
   agentId?: string;
   conversationId?: string;
@@ -557,6 +583,90 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
   };
 }
 
+/**
+ * `errorCode` is an open string space: `safeErrorCode` and `runtimeErrorCode`
+ * validate format only, and producers span the model adapter, the core-agent
+ * event mapper, the execution loop, the Runtime controller and Group Chat.
+ * Renderers used to keep private copies of the few codes they knew, so a code
+ * the producers added later — `provider_auth` most damagingly — silently fell
+ * through to "retry", which can never succeed for a credential failure.
+ *
+ * This map is the single behaviour-facing classification. Every entry is
+ * backed by a real producer; unknown codes stay `unknown` rather than being
+ * guessed into a category.
+ */
+const COGSEED_FAILURE_CATEGORY_BY_CODE: Readonly<Record<string, CogSeedRendererFailureCategory>> = Object.freeze({
+  // kernel/model-adapter.ts + model/core-agent/event-mapper.ts
+  provider_auth: 'model_unavailable',
+  provider_not_configured: 'model_unavailable',
+  provider_balance: 'model_unavailable',
+  provider_permission: 'model_unavailable',
+  // group_chat/plan_executor.ts
+  model_preflight: 'model_unavailable',
+
+  provider_rate_limit: 'provider_transient',
+  provider_server_error: 'provider_transient',
+  provider_network: 'provider_transient',
+  provider_timeout: 'provider_transient',
+  provider_no_first_event: 'provider_transient',
+
+  // Catch-all provider branches keep the pre-existing "configure model" route.
+  provider_error: 'provider_error',
+  provider_request: 'provider_error',
+  context_overflow: 'provider_error',
+
+  runtime_failed: 'runtime_failure',
+  runtime_tool_error: 'runtime_failure',
+  max_tool_rounds: 'runtime_failure',
+  runtime_stream_ended: 'runtime_failure',
+  runtime_capture_failed: 'runtime_failure',
+  result_retention_failed: 'runtime_failure',
+
+  runtime_restart: 'worker_restart',
+  worker_restart: 'worker_restart',
+  runtime_watchdog_orphaned: 'worker_restart',
+  runtime_worker_error: 'worker_restart',
+  runtime_worker_failed: 'worker_restart',
+
+  conversation_unavailable: 'conversation_unavailable',
+  runtime_admission_failed: 'agent_unavailable',
+
+  group_chat_run_failed: 'collaboration_failure',
+  group_chat_turn_failed: 'collaboration_failure',
+
+  aborted: 'cancelled',
+  cancelled: 'cancelled',
+  group_chat_turn_cancelled: 'cancelled',
+});
+
+/**
+ * Group Chat already classifies its failures two levels deep. Kinds that carry
+ * a settled meaning win over the code map. `model` deliberately does not:
+ * `plan_executor` defaults a model kind's code to the retryable
+ * `model_stream_error`, yet a credential failure arrives with the same kind, so
+ * only the code is specific enough to choose an action there.
+ */
+const COGSEED_FAILURE_CATEGORY_BY_KIND: Readonly<Partial<Record<GroupMessageFailureKind, CogSeedRendererFailureCategory>>> = Object.freeze({
+  config: 'model_unavailable',
+  dependency: 'collaboration_failure',
+  operation: 'collaboration_failure',
+  runtime: 'runtime_failure',
+  validation: 'unknown',
+});
+
+export function classifyCogSeedFailure(
+  errorCode: string | undefined,
+  failureKind?: GroupMessageFailureKind,
+): CogSeedRendererFailureCategory | undefined {
+  const code = typeof errorCode === 'string' ? errorCode.trim() : '';
+  if (!code && !failureKind) return undefined;
+  if (failureKind) {
+    const byKind = COGSEED_FAILURE_CATEGORY_BY_KIND[failureKind];
+    if (byKind) return byKind;
+  }
+  return COGSEED_FAILURE_CATEGORY_BY_CODE[code] ?? 'unknown';
+}
+
 export function cogSeedRendererBoardColumn(status: CogSeedTaskStatus, archivedAt?: string): CogSeedRendererBoardColumn {
   if (archivedAt) return 'archived';
   if (status === 'created' || status === 'queued') return 'pending';
@@ -583,6 +693,8 @@ function taskSummary(
         ? 'standard'
         : 'legacy';
   const actions = taskActions(task, hasWorkflowStep);
+  const errorCode = rendererSafeIdentifier(task.errorCode);
+  const failureCategory = classifyCogSeedFailure(errorCode, task.failureKind);
   const resultDeliveryState: CogSeedRendererResultDeliveryState = task.resultDeliveryState
     ?? (!task.conversationId || !task.agentId
       ? 'not-applicable'
@@ -605,6 +717,7 @@ function taskSummary(
     sessionId: task.sessionId,
     requestId: task.requestId,
     ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
+    ...(rendererSafeIdentifier(task.retryOfTaskId) ? { retryOfTaskId: rendererSafeIdentifier(task.retryOfTaskId) } : {}),
     ...(task.coordinationId ? { coordinationId: task.coordinationId } : {}),
     status: task.status,
     ...title,
@@ -615,7 +728,8 @@ function taskSummary(
     participantCount,
     resumable: actions.resume,
     resultDeliveryState,
-    ...(rendererSafeIdentifier(task.errorCode) ? { errorCode: rendererSafeIdentifier(task.errorCode) } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(failureCategory ? { failureCategory } : {}),
     ...(task.executionKind ? { executionKind: task.executionKind } : {}),
     ...(rendererSafeIdentifier(task.executionId) ? { executionId: rendererSafeIdentifier(task.executionId) } : {}),
     runtimeKind: task.localCli?.viaP3394Gateway
@@ -1067,9 +1181,12 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         const session = sessionById.get(task.sessionId);
         const groupId = groupIdForTask(task);
         const sessionTitle = rendererSessionTitle(tasksBySession.get(task.sessionId) ?? [task], groupChatModes);
+        // One call, two names: the alias can never disagree with the field.
+        const baseColumn = cogSeedRendererBoardColumn(task.status, task.archivedAt);
         return {
           ...taskSummary(task, false, groupChatModes),
-          column: cogSeedRendererBoardColumn(task.status, task.archivedAt),
+          baseColumn,
+          column: baseColumn,
           sessionTitle: sessionTitle.title,
           sessionTitleKey: sessionTitle.titleKey,
           ...(groupId ? { groupId } : {}),
@@ -1085,7 +1202,9 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         completed: 0,
         archived: 0,
       };
-      for (const task of boardTasks) counts[task.column] += 1;
+      // Lifecycle totals, keyed by the lifecycle column. No renderer reads
+      // these today; they are left in place rather than removed as a drive-by.
+      for (const task of boardTasks) counts[task.baseColumn] += 1;
 
       const groupIds = Array.from(new Set(tasks.map(groupIdForTask).filter((id): id is string => !!id)));
       const groups: CogSeedRendererBoardGroup[] = groupIds.map((groupId) => {

@@ -3910,6 +3910,13 @@ async function runActorTurn(
           : result.kind === 'early' && result.failureCode
             ? { errorCode: result.failureCode }
             : {}),
+        // The plan executor is the one path that classifies its own failure.
+        // Run Center used to see only the code; the kind was dropped here. The
+        // `early` result carries a code but no kind, so it stays unclassified
+        // rather than being assigned one it never produced.
+        ...(result.kind === 'completed' && result.outcome.kind === 'persist' && result.outcome.failureKind
+          ? { failureKind: result.outcome.failureKind }
+          : {}),
         process: processItems,
       });
     }
