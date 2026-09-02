@@ -34,6 +34,12 @@ afterEach(() => {
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
 });
 
+function writeNodeCli(name: string, body: string): string {
+  const file = path.join(os.tmpdir(), `${name}-${process.pid}-${Date.now()}.cjs`);
+  fs.writeFileSync(file, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+  return file;
+}
+
 describe('P3394 external-agent gateway host', () => {
   it('maps every supported CLI to a gateway preset node id', () => {
     expect(p3394ExternalGatewayIdFor('claude')).toBe('claude');
@@ -72,9 +78,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const echoCli = writeNodeCli('p3394-echo-cli', "process.stdout.write(process.argv.slice(2).join(' '));");
     try {
       await stopExternalGateway('hermes');
-      const started = await startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      const started = await startExternalGateway({ cli: 'hermes', binPath: echoCli, alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok, 'start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
       if (!started.ok) throw new Error(started.error);
       const dialer = new P3394HttpChannel('ext-task-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
@@ -94,6 +101,7 @@ describe('P3394 external-agent gateway host', () => {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(echoCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
@@ -249,11 +257,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const failingCli = writeNodeCli('p3394-fail-cli', 'process.exit(3);');
     try {
       await stopExternalGateway('hermes');
-      // 可执行脚本以非零码（3）退出——真实 CLI 执行失败路径（macOS 无 /bin/false）。
-      const failingCli = path.join(os.tmpdir(), 'p3394-fail-cli-' + Date.now() + '.sh');
-      fs.writeFileSync(failingCli, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+      // 跨平台 Node CLI 以非零码（3）退出，验证真实执行失败回信路径。
       const started = await startExternalGateway({ cli: 'hermes', binPath: failingCli, alias: '失败 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok).toBe(true);
       if (!started.ok) throw new Error(started.error);
@@ -272,11 +279,11 @@ describe('P3394 external-agent gateway host', () => {
       expect(text).toContain('p3394_gateway_error');
       expect(text).toMatch(/agent exited 3/);
       await dialer.close();
-      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     } finally {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
