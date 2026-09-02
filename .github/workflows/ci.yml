@@ -1,12 +1,11 @@
 name: CI
 
-# CI (verify) runs only on the cicd branch — the release gate.
-# Day-to-day development merges into develop via review only (no CI);
-# the full verify suite runs once when a PR targets cicd, and again on
-# push to cicd, right before tagging a release.
+# Pull requests to develop and cicd run the macOS and Windows verification jobs.
+# Pushes to cicd repeat the full release gate before tagging a release.
 on:
   pull_request:
     branches:
+      - develop
       - cicd
   push:
     branches:
@@ -40,6 +39,7 @@ jobs:
       - run: npm run tokens:check
       - run: npm run builtin:manifest:check
       - name: Email hygiene gate (release gate)
+        if: github.event_name == 'push' || github.base_ref == 'cicd'
         run: |
           set -euo pipefail
           bad=$(git log --format='%h|%an|%ae' "origin/cicd..HEAD" 2>/dev/null \
@@ -70,3 +70,11 @@ jobs:
         run: node scripts/diagnose-local-agents.mjs --json --only codex
       - name: P3394 gateway protocol smoke
         run: node p3394-gateway/test/smoke.cjs
+      - run: npm run build:win
+      - name: Upload Windows test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: cogseed-windows-x64-${{ github.sha }}
+          path: dist/CogSeed-*-win-x64.exe
+          if-no-files-found: error
+          retention-days: 14

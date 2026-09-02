@@ -57,7 +57,8 @@
     "p3394:hermes-server": "tsx scripts/p3394-hermes-server.ts",
     "p3394:call": "tsx scripts/p3394-call.ts",
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
-    "build:mac": "electron-builder --mac"
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win --x64 --publish never"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
