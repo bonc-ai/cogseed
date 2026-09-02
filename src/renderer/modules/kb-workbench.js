@@ -1199,7 +1199,11 @@
   async function _openFileViewer(payload, scopeName) {
     const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
     let overlay = _ensureFileViewerOverlay();
+    // 打开时恢复上次的窗口尺寸/位置（无记忆则 flex 居中）
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (dialog) _fvApplyWindowRect(dialog);
     overlay.hidden = false;
+    _fvResetZoom(dialog);
     _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
     try {
       const res = await window.cogseed.invoke('kb.openFile', payload);
@@ -1255,6 +1259,16 @@
     scope.id = 'kb-fv-scope';
     headMain.append(title, scope);
     const headActions = el('div', 'kb-fv-head-actions');
+    // 缩放控件：− / 百分比(可点重置) / ＋
+    const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.title = '缩小';
+    const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
+    zoomLabel.type = 'button';
+    zoomLabel.title = '重置缩放（点击回到 100%）';
+    const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
+    zoomInBtn.type = 'button';
+    zoomInBtn.title = '放大';
     const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
     readerBtn.type = 'button';
     readerBtn.id = 'kb-fv-reader';
@@ -1263,7 +1277,7 @@
     closeBtn.type = 'button';
     closeBtn.id = 'kb-fv-close';
     closeBtn.title = '关闭（Esc）';
-    headActions.append(readerBtn, closeBtn);
+    headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, readerBtn, closeBtn);
     head.append(headMain, headActions);
 
     const body = el('div', 'kb-fv-body');
@@ -1281,7 +1295,10 @@
     mdEl.hidden = true;
     body.append(loading, errorEl, textEl, mdEl);
 
-    dialog.append(head, body);
+    const resizeHandle = el('div', 'kb-fv-resize');
+    resizeHandle.title = '拖动调整窗口大小';
+
+    dialog.append(head, body, resizeHandle);
     overlay.appendChild(dialog);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
     document.body.appendChild(overlay);
@@ -1289,13 +1306,161 @@
     readerBtn.addEventListener('click', () => {
       const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
       readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
+      _fvSaveWindowRect();
     });
     // Esc 关闭
     overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
     overlay.tabIndex = -1;
+    zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
+    zoomInBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom + 0.1)));
+    zoomLabel.addEventListener('click', () => _fvSetZoom(dialog, 1));
+    // Ctrl/Cmd + 滚轮 缩放内容（pdf 内部滚轮由 PDFium 自行处理，不劫持）
+    body.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      _fvSetZoom(dialog, _fvZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+    _fvBindTitleDrag(dialog, head);
+    _fvBindResize(dialog, resizeHandle);
     _fileViewerOverlay = overlay;
     _injectFileViewerStyle();
     return overlay;
+  }
+
+  // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
+  const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
+  function _fvClampRect(dialog) {
+    const vw = window.innerWidth; const vh = window.innerHeight;
+    const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
+    const h = Math.min(Math.max(dialog.offsetHeight, 280), vh - 24);
+    dialog.style.width = w + 'px';
+    dialog.style.height = h + 'px';
+    const r = dialog.getBoundingClientRect();
+    dialog.style.left = Math.max(0, Math.min(r.left, vw - w)) + 'px';
+    dialog.style.top = Math.max(0, Math.min(r.top, vh - h)) + 'px';
+  }
+  function _fvAbsolute(dialog) {
+    // 脱离 flex 居中流，改为 overlay 内的绝对定位（记忆 x/y 时用）
+    if (dialog.style.position === 'absolute') return;
+    const r = dialog.getBoundingClientRect();
+    dialog.style.position = 'absolute';
+    dialog.style.margin = '0';
+    dialog.style.left = Math.max(0, r.left) + 'px';
+    dialog.style.top = Math.max(0, r.top) + 'px';
+  }
+  function _fvApplyWindowRect(dialog) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
+      if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
+      dialog.style.position = 'absolute';
+      dialog.style.margin = '0';
+      dialog.style.width = Math.min(Math.max(Number(saved.w), 420), window.innerWidth - 24) + 'px';
+      dialog.style.height = Math.min(Math.max(Number(saved.h), 280), window.innerHeight - 24) + 'px';
+      if (typeof saved.x === 'number' && typeof saved.y === 'number') {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - w)) + 'px';
+        dialog.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - h)) + 'px';
+      } else {
+        dialog.style.left = Math.round((window.innerWidth - dialog.offsetWidth) / 2) + 'px';
+        dialog.style.top = Math.round((window.innerHeight - dialog.offsetHeight) / 2) + 'px';
+      }
+    } catch { /* localStorage 不可用：保持居中 */ }
+  }
+  function _fvSaveWindowRect() {
+    const overlay = document.getElementById('kb-file-viewer');
+    if (!overlay || overlay.hidden) return;
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (!dialog) return;
+    try {
+      const r = dialog.getBoundingClientRect();
+      localStorage.setItem(_FV_RECT_KEY, JSON.stringify({
+        w: Math.round(r.width), h: Math.round(r.height),
+        x: Math.round(r.left), y: Math.round(r.top),
+      }));
+    } catch { /* ignore */ }
+  }
+  function _fvBindTitleDrag(dialog, bar) {
+    if (bar.dataset.fvDragBound) return;
+    bar.dataset.fvDragBound = '1';
+    let sx = 0; let sy = 0; let ox = 0; let oy = 0;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button,input,select,textarea')) return;
+      e.preventDefault();
+      _fvAbsolute(dialog);
+      sx = e.clientX; sy = e.clientY;
+      const r = dialog.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      const onMove = (ev) => {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(window.innerWidth - w, ox + (ev.clientX - sx))) + 'px';
+        dialog.style.top = Math.max(0, Math.min(window.innerHeight - h, oy + (ev.clientY - sy))) + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+  function _fvBindResize(dialog, handle) {
+    if (handle.dataset.fvResizeBound) return;
+    handle.dataset.fvResizeBound = '1';
+    let sx = 0; let sy = 0; let sw = 0; let sh = 0;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _fvAbsolute(dialog);
+      sx = e.clientX; sy = e.clientY;
+      sw = dialog.offsetWidth; sh = dialog.offsetHeight;
+      document.body.classList.add('kb-fv-resizing');
+      const onMove = (ev) => {
+        const w = Math.min(Math.max(sw + (ev.clientX - sx), 420), window.innerWidth - 24);
+        const h = Math.min(Math.max(sh + (ev.clientY - sy), 280), window.innerHeight - 24);
+        dialog.style.width = w + 'px';
+        dialog.style.height = h + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('kb-fv-resizing');
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── 内容缩放（md/text 走容器 zoom；office 走 iframe 文档 zoom；pdf 走 URL zoom 重载） ──
+  let _fvZoom = 1;
+  let _fvCur = null; // { mode: 'md'|'text'|'office'|'pdf', el?, src? }
+  function _fvResetZoom(dialog) {
+    _fvZoom = 1;
+    _fvRenderZoom(dialog);
+  }
+  function _fvSetZoom(dialog, z) {
+    _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
+    _fvRenderZoom(dialog);
+  }
+  function _fvRenderZoom(dialog) {
+    const label = dialog.querySelector('.kb-fv-zoom-label');
+    if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
+    const cur = _fvCur;
+    if (!cur) return;
+    if (cur.mode === 'office' && cur.el && cur.el.contentDocument && cur.el.contentDocument.documentElement) {
+      // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
+      cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
+    } else if (cur.mode === 'pdf' && cur.el) {
+      // PDFium 无外部 zoom API：仅缩放值变化时重载 iframe src 带 zoom 参数
+      const pct = Math.round(_fvZoom * 100);
+      if (cur.lastZoom === pct) return;
+      cur.lastZoom = pct;
+      const base = String(cur.src || '').split('#')[0];
+      cur.el.src = `${base}#toolbar=1&navpanes=0&zoom=${pct}`;
+    } else if (cur.el) {
+      cur.el.style.zoom = String(_fvZoom);
+    }
   }
 
   function _setFileViewerState(overlay, st) {
@@ -1311,6 +1476,7 @@
       try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
       _fvOfficeBlobUrl = null;
     }
+    _fvCur = null; // 内容视图变化：失效上一文件的缩放目标（error/loading 也走这里）
     loading.hidden = !st.loading;
     errorEl.hidden = true; errorEl.textContent = '';
     textEl.hidden = true; textEl.textContent = '';
@@ -1336,9 +1502,11 @@
       mdEl.hidden = false;
       const bodyMd = String(c.content || '');
       mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
+      _fvCur = { mode: 'md', el: mdEl };
     } else if (c.kind === 'text') {
       textEl.hidden = false;
       textEl.textContent = String(c.content || '');
+      _fvCur = { mode: 'text', el: textEl };
     } else if (c.kind === 'pdf') {
       // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
       // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
@@ -1354,17 +1522,26 @@
       frame.title = String(c.name || rel);
       body.appendChild(frame);
       body.classList.add('kb-fv-body--frame');
+      _fvCur = { mode: 'pdf', el: frame, src, lastZoom: 100 };
     } else if (c.kind === 'office') {
-      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式），沙箱 iframe
+      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式）。
+      // sandbox 保持无脚本；allow-same-origin 让父页可对内部文档做 CSS zoom 缩放
       const officeHtml = String(c.html || '');
       _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
       const frame = document.createElement('iframe');
       frame.className = 'kb-fv-frame kb-fv-frame--office';
-      frame.setAttribute('sandbox', '');
+      frame.setAttribute('sandbox', 'allow-same-origin');
       frame.src = _fvOfficeBlobUrl;
       frame.title = String(c.name || c.path || '');
       body.appendChild(frame);
       body.classList.add('kb-fv-body--frame');
+      _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
+      // iframe 就绪后再应用当前缩放（加载完成前 contentDocument 为 null）
+      frame.addEventListener('load', () => {
+        if (_fvCur && _fvCur.el === frame && _fvZoom !== 1) {
+          try { frame.contentDocument.documentElement.style.zoom = String(_fvZoom); } catch (_) { /* ignore */ }
+        }
+      });
     } else {
       errorEl.hidden = false;
       errorEl.textContent = '暂不支持预览该文件';
@@ -1390,24 +1567,40 @@
         width: min(860px, 96vw); max-height: 88vh; border-radius: 12px;
         display: flex; flex-direction: column; overflow: hidden;
         box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
+        min-width: 420px; min-height: 280px;
       }
       .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
       .kb-fv-head {
         display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        padding: 12px 18px; border-bottom: 1px solid rgba(128,128,128,.22);
+        padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
         background: linear-gradient(180deg, rgba(14,159,110,.05), transparent);
+        cursor: move; user-select: none;
       }
       .kb-fv-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
       .kb-fv-title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .kb-fv-scope { font-size: 12px; color: #0E9F6E; opacity: .85; white-space: nowrap; }
-      .kb-fv-head-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+      .kb-fv-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
       .kb-fv-btn, .kb-fv-close {
         border: 1px solid rgba(14,159,110,.35); background: transparent; color: #0E9F6E;
-        font-size: 12px; padding: 4px 12px; border-radius: 8px; cursor: pointer;
+        font-size: 12px; padding: 3px 10px; border-radius: 8px; cursor: pointer;
       }
       .kb-fv-btn:hover { background: #E2F5EC; }
-      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 2px 8px; color: #888; }
+      .kb-fv-zoom-btn { padding: 3px 8px; font-size: 13px; }
+      .kb-fv-zoom-label { min-width: 54px; text-align: center; }
+      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 1px 7px; color: #888; }
       .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
+      .kb-fv-resize {
+        position: absolute; right: 0; bottom: 0;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+      }
+      .kb-fv-resize::after {
+        content: ''; position: absolute; right: 5px; bottom: 5px;
+        width: 7px; height: 7px;
+        border-right: 2px solid rgba(128,128,128,.55);
+        border-bottom: 2px solid rgba(128,128,128,.55);
+      }
+      .kb-fv-resize:hover::after { border-color: #0E9F6E; }
+      body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
       .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
       .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
       .kb-fv-error { color: #c0392b; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
