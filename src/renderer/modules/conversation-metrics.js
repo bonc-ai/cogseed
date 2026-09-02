@@ -65,7 +65,9 @@ function messageMetricsLine(metrics) {
   // 可见生成口径）。billedOutput 只进 title（账单口径真值）。
   const measured = !!(usage && usage.measured);
   const genTokens = num(usage && usage.reasoningTokens) + num(usage && usage.outputTokens);
-  const rateText = !hasTools && decodeMs > 0 && hasUsage && genTokens > 0
+  // 生成窗口护栏：decodeMs < 250ms 视为采样不足（非流式实现成"结束时
+  // 整段一次到达"的伪流式会让窗口趋近 0、速度虚高到荒谬）——不显示。
+  const rateText = !hasTools && decodeMs !== null && decodeMs >= 250 && hasUsage && genTokens > 0
     ? (measured ? '≈' : '') + formatRate(genTokens / (decodeMs / 1_000))
     : null;
   if (!hasUsage && ttft === null) return null;
@@ -131,7 +133,8 @@ function foldSessionMetrics(metricsList, opts = {}) {
       // DSH 口径：decode 吞吐分子 = 思考 + 可见输出（估算口径；计费输出
       // 含缓存写入折算，不是生成吞吐，不做分子）。
       const gen = num(u0.reasoningTokens) + num(u0.outputTokens);
-      if (gen > 0) { decodeMs += d; decodeTok += gen; }
+      // 窗口护栏（同消息行）：伪流式的极短窗口不进速率统计。
+      if (gen > 0 && d >= 250) { decodeMs += d; decodeTok += gen; }
     }
     const u = m.usage || {};
     // 外接轮（source:'cli'）：用量段不上线（计时已在循环前半累计）。

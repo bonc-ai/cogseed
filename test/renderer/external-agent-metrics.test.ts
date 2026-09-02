@@ -125,6 +125,18 @@ describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
     expect(line?.durationMs).toBe(5_000);
   });
 
+  it('伪流式的极短窗口不显示速度（采样不足诚实省略）', () => {
+    // 整段一次到达（窗口 100ms）的伪流式：400 tok / 0.1s = 4000 tok/s
+    // 是荒谬值——窗口 < 250ms 一律不显示速度。
+    const line = messageMetricsLine({
+      startedAt: 1_000,
+      firstTokenAt: 4_900,
+      completedAt: 5_000,
+      usage: { outputTokens: 400 },
+    }) as { rateText: string | null };
+    expect(line?.rateText).toBeNull();
+  });
+
   it('measured 口径标 ≈（实测估算与账单精确值明确区分）', () => {
     // CLI 无精确输出数（claude result/assistant 帧自报均不可用），输出为
     // 按文本实测估算 → ↓ 与速度带 ≈ 前缀；精确值（账单/打点）不加。
