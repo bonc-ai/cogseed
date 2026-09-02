@@ -29638,7 +29638,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .kb-eco-tab.is-ok .kb-sdot { background: var(--kb-green); }
 .kb-eco-tab.is-soon .kb-sdot { background: var(--color-line-strong); }
 .kb-eco-tab .kb-eco-tab-soon {
-  font-size: 10px; line-height: 1; padding: 2px 5px; border-radius: 7px;
+  font-size: var(--font-size-1); line-height: 1; padding: 2px 5px; border-radius: var(--radius-1);
   background: var(--kb-hover); color: var(--kb-text3); font-weight: 500;
 }
 .kb-eco-tab.active .kb-eco-tab-soon { background: var(--kb-accent-weak); color: var(--kb-accent); }
@@ -29662,8 +29662,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; padding: 24px; text-align: center;
 }
-.kb-eco-coming-ico { font-size: 30px; line-height: 1; opacity: .8; }
-.kb-eco-coming-title { font-size: 15px; font-weight: 600; color: var(--kb-text); }
+.kb-eco-coming-ico { font-size: var(--font-size-display); line-height: 1; opacity: .8; }
+.kb-eco-coming-title { font-size: var(--font-size-5); font-weight: 600; color: var(--kb-text); }
 .kb-eco-coming-sub { max-width: 460px; font-size: 12px; line-height: 1.8; color: var(--kb-text2); white-space: pre-line; }
 
 /* 三栏工作台（aside | 分隔条 | mid | 分隔条 | right） */
