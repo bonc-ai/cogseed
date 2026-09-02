@@ -45,10 +45,12 @@ function messageMetricsLine(metrics) {
   const decodeMs = typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null;
   const hasTools = num(toolCalls) > 0;
   // DSH 口径：速度 = 生成阶段（decode）吞吐，分子是「思考 + 输出」合计
-  // （reasoning 与最终文本都是逐 token 生成的）。
+  // （reasoning 与最终文本都是逐 token 生成的）。measured=true（输出为按
+  // 文本的实测估算，CLI 无精确数）时标 ≈，与账单精确值明确区分。
+  const measured = !!(usage && usage.measured);
   const genTokens = num(usage && usage.reasoningTokens) + num(usage && usage.outputTokens);
   const rateText = !hasTools && decodeMs > 0 && hasUsage && genTokens > 0
-    ? formatRate(genTokens / (decodeMs / 1_000))
+    ? (measured ? '≈' : '') + formatRate(genTokens / (decodeMs / 1_000))
     : null;
   if (!hasUsage && ttft === null) return null;
   const titleLines = [];
@@ -68,8 +70,8 @@ function messageMetricsLine(metrics) {
     latencyText: ttft === null ? null : formatLatency(ttft),
     rateText,
     inText: hasUsage ? formatTokens(num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) : null,
-    // ↓ = 思考 + 输出合计（DSH 口径；拆分悬停可见）。
-    outText: hasUsage ? formatTokens(genTokens) : null,
+    // ↓ = 思考 + 输出合计（DSH 口径；拆分悬停可见）。实测估算口径标 ≈。
+    outText: hasUsage ? (measured ? '≈' : '') + formatTokens(genTokens) : null,
     costText: costUsd !== null
       ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : null,
@@ -94,6 +96,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
   let cacheWrite = 0;
   let reportedCostUsd = 0;   // CLI/网关自报成本合计（美元）
   let reportedCostTurns = 0;
+  let hasMeasured = false;   // 任一轮输出为实测估算口径 → 会话级 ↓/速度标 ≈
   let lastUsage = null;
   let lastUsageModel = null; // 自报模型 id——ctx 分母按它解析（CLI 回合不再错用全局模型窗口）
   for (const m of list) {
@@ -116,6 +119,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
     reasoning += num(u.reasoningTokens);
     cacheRead += num(u.cacheReadTokens);
     cacheWrite += num(u.cacheWriteTokens);
+    if (u.measured === true) hasMeasured = true;
     if (typeof u.costUsd === 'number' && Number.isFinite(u.costUsd) && u.costUsd >= 0) {
       reportedCostUsd += u.costUsd;
       reportedCostTurns += 1;
@@ -153,7 +157,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
       : formatTokens(ctx.used))
     : null;
   const ctxHot = !!(ctx && ctx.window > 0 && ctx.used / ctx.window >= 0.8);
-  const rateText = decodeMs > 0 ? formatRate(decodeTok / (decodeMs / 1_000)) : null;
+  const rateText = decodeMs > 0 ? (hasMeasured ? '≈' : '') + formatRate(decodeTok / (decodeMs / 1_000)) : null;
   const ttftAvgText = ttftN > 0 ? formatDuration(ttftMs / ttftN) : null;
   // 成本：任一回合有 CLI 自报成本（美元）→ 显示自报合计（准确，CLI 侧计价）；
   // 否则用价格表估算（¥，下界估算）。两种币种不混算——混算需要汇率，编数字。
@@ -171,7 +175,10 @@ function foldSessionMetrics(metricsList, opts = {}) {
   return {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
-    inText: formatTokens(totalIn), outText: formatTokens(output + reasoning), costText, costReported,
+    inText: formatTokens(totalIn),
+    // ↓ = 思考+输出合计；任一轮为实测估算口径 → 标 ≈。
+    outText: (hasMeasured ? '≈' : '') + formatTokens(output + reasoning),
+    costText, costReported,
   };
 }
 

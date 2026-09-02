@@ -103,6 +103,9 @@ export interface GroupMessageMetrics {
     /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，
      *  渲染层优先消费；缺省时回退价格表估算。 */
     costUsd?: number;
+    /** 输出为按实际文本的实测估算（CLI 无精确输出数；claude 的 result
+     *  与 assistant 帧自报均不可用）——渲染层对 ↓/速度加 ≈ 前缀。 */
+    measured?: boolean;
   };
   toolCalls?: number;
   /** 该回合实际使用的模型 id（CLI 自报或主机下发值）——会话统计的上下文

@@ -108,6 +108,19 @@ describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
     expect(line?.titleLines?.some((l) => l.includes('输出 100'))).toBe(true);
   });
 
+  it('measured 口径标 ≈（实测估算与账单精确值明确区分）', () => {
+    // CLI 无精确输出数（claude result/assistant 帧自报均不可用），输出为
+    // 按文本实测估算 → ↓ 与速度带 ≈ 前缀；精确值（账单/打点）不加。
+    const line = messageMetricsLine({
+      startedAt: 1_000,
+      firstTokenAt: 3_000,
+      completedAt: 5_000,
+      usage: { outputTokens: 400, measured: true },
+    }) as { rateText: string; outText: string };
+    expect(line?.rateText).toBe('≈200');
+    expect(line?.outText).toBe('≈400');
+  });
+
   it('keeps the legacy shape when no cost/model is reported', () => {
     const line = messageMetricsLine(turn());
     expect(line?.costText ?? null).toBeNull();

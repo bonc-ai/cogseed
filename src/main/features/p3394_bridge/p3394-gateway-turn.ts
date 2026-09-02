@@ -40,6 +40,9 @@ export interface P3394GatewayTurnResult {
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       costUsd?: number;
+      /** 输出为按实际文本的实测估算（CLI 无精确输出数时的口径）——
+       *  渲染层对 ↓/速度加 ≈ 前缀与账单精确值区分。 */
+      measured?: boolean;
     };
     model?: string;
   };
@@ -182,6 +185,9 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
     if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
     if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;
+    // 实测口径标记（CLI 无精确输出数时的按文本估算）——渲染层对带此
+    // 标记的 ↓/速度加 ≈ 前缀，与账单精确值明确区分。
+    if (usageIn?.measured === true) usage.measured = true;
     const model = (typeof usageIn?.model === 'string' && usageIn.model) || (typeof meta?.model === 'string' ? meta.model : '');
     const hasUsage = Object.keys(usage).length > 0;
     return {

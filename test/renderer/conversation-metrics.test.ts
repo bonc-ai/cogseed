@@ -75,8 +75,9 @@ describe('foldSessionMetrics', () => {
     expect(f.inText).toBe('1K');
     expect(f.outText).toBe('100');
     expect(f.costText).toBeNull();
-    // 上下文占用 = 最近一次 usage 的 input+output（100+50=150，150/4000≈3.75%→4%）
-    expect(f.ctxText).toBe('150/4K·4%');
+    // 上下文占用 = 最近一次 usage 的窗口内全部内容：input+cacheRead+cacheWrite+output
+    // （100+500+0+50=650，缓存内容同样占窗口，650/4000≈16%）
+    expect(f.ctxText).toBe('650/4K·16%');
     expect(f.ctxHot).toBe(false);
   });
   it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps 3-term sum', () => {
