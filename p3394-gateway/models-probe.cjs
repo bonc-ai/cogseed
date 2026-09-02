@@ -40,6 +40,24 @@ function executionPrefsFor(envelope) {
  *  extractClaudeUsage 同一字段集）：token 计数 + CLI 自报成本 + 实际模型名。
  *  随回复信封 payload.metadata.usage 带回宿主，宿主折进消息 metrics——
  *  网关路径的回合统计由此而来。 */
+/** 输出 token 实测估算（中文字符≈1 token/字，其余≈1 token/4字符）。
+ *  背景：claude CLI result 帧自报的 output_tokens 是聚合/占位口径
+ *  （含不可见思考与工具序列化，实测可比可见输出大数百倍——社区
+ *  issue #25941 / Agent SDK 文档承认 per-step 为 placeholder），照搬会
+ *  严重误导用户对回复长度的判断。输入/缓存/成本仍用 CLI 自报（真实
+ *  计费量级），仅输出按实际流出的正文估算。 */
+function estimateOutputTokens(text) {
+  const s = String(text || '');
+  if (!s) return 0;
+  let cjk = 0;
+  for (const ch of s) {
+    const code = ch.codePointAt(0);
+    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3000 && code <= 0x30ff) || (code >= 0xff00 && code <= 0xffef)) cjk += 1;
+  }
+  const rest = s.length - cjk;
+  return cjk + Math.ceil(rest / 4);
+}
+
 function extractClaudeResultUsage(ev) {
   const u = ev && ev.usage;
   if (!u || typeof u !== 'object') return undefined;
@@ -507,6 +525,7 @@ module.exports = {
   EXEC_EFFORT_TOKENS,
   executionPrefsFor,
   extractClaudeResultUsage,
+  estimateOutputTokens,
   normalizeClaudeInit,
   createClaudeStreamEventClassifier,
   claudeModelsCache,

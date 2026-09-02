@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   executionPrefsFor,
   extractClaudeResultUsage,
+  estimateOutputTokens,
   normalizeClaudeInit,
   claudeModelsCache,
   probeClaudeModels,
@@ -119,6 +120,19 @@ describe('gateway effort channel — effortArgsFor / effortLevelFor', () => {
     expect(effortArgsFor(workbuddyPreset, {})).toBe('--effort {effort}');
     expect(effortLevelFor(workbuddyPreset, 'high')).toBe('high');
     expect(effortLevelFor(workbuddyPreset, 'off')).toBe('minimal');
+  });
+});
+
+describe('gateway estimateOutputTokens — measured output-token heuristic', () => {
+  it('counts CJK as ~1 token/char and the rest as ~1 token/4 chars', () => {
+    expect(estimateOutputTokens('好')).toBe(1);
+    expect(estimateOutputTokens('回复一个字：好')).toBe(7);
+    expect(estimateOutputTokens('')).toBe(0);
+    expect(estimateOutputTokens(undefined)).toBe(0);
+    // 英文 8 字符 → 2 token
+    expect(estimateOutputTokens('abcdefgh')).toBe(2);
+    // 混合：3 个中文 + 4 个英文 → 3 + 1
+    expect(estimateOutputTokens('你好呀abcd')).toBe(4);
   });
 });
 

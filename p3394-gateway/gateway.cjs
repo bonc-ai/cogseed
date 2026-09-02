@@ -555,6 +555,7 @@ function sanitizeStreamText(raw) {
 const {
   executionPrefsFor,
   extractClaudeResultUsage,
+  estimateOutputTokens,
   normalizeClaudeInit,
   createClaudeStreamEventClassifier,
   claudeModelsCache,
@@ -1436,7 +1437,16 @@ class ClaudePersistentRuntime {
       entry.turn = null;
       this._armIdleReclaim(entry.sessionId, entry);
       if (ev.is_error) turn.reject(new Error(ev.error || 'p3394_claude_turn_failed'));
-      else turn.resolve({ text: (turn.accumulated || turn.lastAssistantText || '').trim(), usage: extractClaudeResultUsage(ev) });
+      else {
+        const finalText = (turn.accumulated || turn.lastAssistantText || '').trim();
+        const usage = extractClaudeResultUsage(ev);
+        // 输出 token 用实测口径覆盖自报：claude result 帧的 output_tokens
+        // 是聚合/占位值（含不可见思考与工具序列化，实测可比可见输出大数百
+        // 倍——issue #25941），按实际流出的正文估算才符合用户对「回复了
+        // 多少」的直觉。输入/缓存/成本保留自报（真实计费口径）。
+        if (usage && finalText) usage.output = estimateOutputTokens(finalText) || usage.output;
+        turn.resolve({ text: finalText, usage });
+      }
     }
   }
 
