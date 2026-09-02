@@ -38,9 +38,11 @@ function execControlFor(cli) {
 }
 
 /** 强度是否可控：网关运行时协商（/p3394/models 的 effort_controllable，
- *  由 effortArgs 预设或 P3394_AGENT_EFFORT_ARGS 声明决定）优先；未协商
- *  时兜底表。网关无模板=协商 false（诚实置灰），未扫描=表兜底（乐观，
- *  自建智能体可能配了 env 声明）。 */
+ *  由 effortArgs 模板、effortChannel 专有通道或 P3394_AGENT_EFFORT_ARGS
+ *  声明决定）只在明确 true 时覆盖兜底表；未披露（网关未起/扫空/旧版）
+ *  =「协商未决」走兜底表（已知无通道的 gemini/aider 表内 false 诚实
+ *  置灰，其余 true 乐观显示——自建智能体可能配了声明）。绝不把「未决」
+ *  固化成 false，否则网关恢复窗口的一次扫空会让 UI 永久置灰。 */
 function effortControllableFor(cli) {
   const entry = cachedCliModels(cli);
   if (entry && typeof entry.effortControllable === 'boolean') return entry.effortControllable;
@@ -126,8 +128,12 @@ async function loadCliModels(agentId, cli, opts) {
         current: (res.scanned && typeof res.scanned.current === 'string' && res.scanned.current) || null,
         currentEffort: (res.scanned && typeof res.scanned.currentEffort === 'string' && res.scanned.currentEffort) || null,
         // 能力协商独立于清单：unavailable 也可能可控（无枚举接口但有参数通道）。
-        modelControllable: !!(res.scanned && res.scanned.modelControllable),
-        effortControllable: !!(res.scanned && res.scanned.effortControllable),
+        // 只在网关明确披露 true 时写 true；未披露（网关未起/扫空/旧版网关）
+        // 一律不写字段=「协商未决」，effortControllableFor 回落兜底表——
+        // 否则网关 respawn 窗口的一次扫空会把「未决」固化成 false，UI 永久
+        // 置灰（Command+R 后强度消失的第二成因）。
+        modelControllable: res.scanned && res.scanned.modelControllable === true,
+        ...(res.scanned && res.scanned.effortControllable === true ? { effortControllable: true } : {}),
         staticModels: Array.isArray(res.staticModels) ? res.staticModels : [],
         reason: models.length ? null : ((res.scanned && res.scanned.reason) || 'empty_scan'),
         at: Date.now(),
