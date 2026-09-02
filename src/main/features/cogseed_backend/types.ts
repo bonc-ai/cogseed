@@ -1,4 +1,16 @@
+import type { GroupMessageFailureKind } from '../group_chat/visibility';
+
 export const COGSEED_AGENT_BACKEND_SCHEMA_VERSION = 1 as const;
+
+/** Group Chat's stable failure taxonomy, reused rather than copied. `errorCode`
+ *  stays the fine-grained diagnostic string; this is the coarse machine reason
+ *  that survives a producer adding new codes. Type-only, so nothing in the
+ *  Group Chat runtime is loaded by the task store. */
+export type CogSeedTaskFailureKind = GroupMessageFailureKind;
+
+export const COGSEED_TASK_FAILURE_KINDS: ReadonlySet<string> = new Set<CogSeedTaskFailureKind>([
+  'model', 'config', 'dependency', 'validation', 'operation', 'runtime',
+]);
 
 export type CogSeedActorRole = 'commander' | 'member' | 'child' | 'reviewer';
 export type CogSeedSessionKind = 'generic' | 'commander' | 'member';
@@ -108,6 +120,11 @@ export interface CogSeedTaskRecord {
    * dashboard lists without rewriting its lifecycle status or history. */
   archivedAt?: string;
   errorCode?: string;
+  /** Coarse machine reason paired with `errorCode`, supplied by producers that
+   *  classify their own failures. Persisted because every renderer projection is
+   *  rebuilt from this record: the classification has to survive a refresh and a
+   *  restart, and the terminal response that carried it is discarded. */
+  failureKind?: CogSeedTaskFailureKind;
 }
 
 export interface CogSeedSessionRecord {

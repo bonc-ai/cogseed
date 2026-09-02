@@ -173,4 +173,107 @@ describe('Group Chat task bridge', () => {
     expect(storedEvents).not.toContain('secret-value');
     expect(storedEvents).not.toContain('secret-output');
   });
+
+  it('carries a genuine failure kind through to the persisted task', async () => {
+    let task = record({ status: 'running', groupChatTurnId: 'turn-kind' });
+    const transitionTask = vi.fn(async (
+      _userId: string,
+      _taskId: string,
+      status: CogSeedTaskRecord['status'],
+      payload: Record<string, unknown>,
+    ) => {
+      task = { ...task, status, ...(payload.errorCode ? { errorCode: String(payload.errorCode) } : {}) };
+      return task;
+    });
+    const bridge = createGroupChatTaskBridge({
+      createTask: vi.fn() as never,
+      readTask: (async () => task) as never,
+      updateTask: (async (_userId: string, _taskId: string, mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord) => {
+        task = await mutate(task);
+        return task;
+      }) as never,
+      transitionTask: transitionTask as never,
+      appendEvent: (vi.fn(async () => ({ eventId: 'event-kind' }))) as never,
+      setSessionDisplayName: vi.fn() as never,
+    });
+
+    await bridge.finishTask({
+      userId: 'user-a',
+      taskId: task.taskId,
+      status: 'failed',
+      errorCode: 'model_preflight',
+      failureKind: 'config',
+    });
+
+    // Written on the record, and handed to the transition so the pair stays
+    // together when the transition rewrites the failure fields.
+    expect(task).toMatchObject({ errorCode: 'model_preflight', failureKind: 'config' });
+    expect(transitionTask).toHaveBeenCalledWith('user-a', task.taskId, 'failed', {
+      source: 'group-chat',
+      errorCode: 'model_preflight',
+      failureKind: 'config',
+    });
+  });
+
+  it('drops a failure kind that is not part of the taxonomy', async () => {
+    let task = record({ status: 'running', groupChatTurnId: 'turn-bogus' });
+    const transitionTask = vi.fn(async (_userId: string, _taskId: string, status: CogSeedTaskRecord['status']) => {
+      task = { ...task, status };
+      return task;
+    });
+    const bridge = createGroupChatTaskBridge({
+      createTask: vi.fn() as never,
+      readTask: (async () => task) as never,
+      updateTask: (async (_userId: string, _taskId: string, mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord) => {
+        task = await mutate(task);
+        return task;
+      }) as never,
+      transitionTask: transitionTask as never,
+      appendEvent: (vi.fn(async () => ({ eventId: 'event-bogus' }))) as never,
+      setSessionDisplayName: vi.fn() as never,
+    });
+
+    await bridge.finishTask({
+      userId: 'user-a',
+      taskId: task.taskId,
+      status: 'failed',
+      errorCode: 'group_chat_turn_failed',
+      failureKind: 'made_up_kind' as never,
+    });
+
+    expect(task).not.toHaveProperty('failureKind');
+    expect(transitionTask).toHaveBeenCalledWith('user-a', task.taskId, 'failed', {
+      source: 'group-chat',
+      errorCode: 'group_chat_turn_failed',
+    });
+  });
+
+  it('leaves the kind unset for callers that only synthesise a code', async () => {
+    let task = record({ status: 'running', groupChatTurnId: 'turn-codeonly' });
+    const bridge = createGroupChatTaskBridge({
+      createTask: vi.fn() as never,
+      readTask: (async () => task) as never,
+      updateTask: (async (_userId: string, _taskId: string, mutate: (current: CogSeedTaskRecord) => CogSeedTaskRecord) => {
+        task = await mutate(task);
+        return task;
+      }) as never,
+      transitionTask: (async (_userId: string, _taskId: string, status: CogSeedTaskRecord['status']) => {
+        task = { ...task, status };
+        return task;
+      }) as never,
+      appendEvent: (vi.fn(async () => ({ eventId: 'event-codeonly' }))) as never,
+      setSessionDisplayName: vi.fn() as never,
+    });
+
+    // bus.ts:1602 and bus.ts:3919 have no real kind to give.
+    await bridge.finishTask({
+      userId: 'user-a',
+      taskId: task.taskId,
+      status: 'failed',
+      errorCode: 'group_chat_run_failed',
+    });
+
+    expect(task).toMatchObject({ errorCode: 'group_chat_run_failed' });
+    expect(task).not.toHaveProperty('failureKind');
+  });
 });

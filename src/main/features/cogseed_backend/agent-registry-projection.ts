@@ -5,12 +5,22 @@ import type { AgentRuntime, AgentSummary } from '../agents';
 import { assertCogSeedUserId } from './paths';
 import { listCogSeedTasks } from './task-store';
 import type { CogSeedTaskRecord } from './types';
-import { isCogSeedAgentRuntimeSupported } from './agent-execution-context';
+import {
+  deriveAgentEligibilityFacts,
+  findAgentCliEntry,
+  findAgentPeer,
+  isCogSeedAgentRuntimeSupported,
+  resolveAgentEligibility,
+  type CogSeedAgentEligibilityReason,
+} from './agent-eligibility';
 
 const ACTIVE_STATUSES = new Set(['created', 'queued', 'running', 'waiting_user']);
 
 export type CogSeedRendererAgentSourceKind = 'cogseed' | 'local-cli' | 'p3394';
 export type CogSeedRendererAgentHealth = 'ready' | 'busy' | 'offline' | 'disabled' | 'unsupported' | 'unknown';
+
+export type { CogSeedAgentEligibilityReason } from './agent-eligibility';
+export { resolveAgentEligibility } from './agent-eligibility';
 
 export interface CogSeedRendererAgentSummary {
   agentId: string;
@@ -22,6 +32,8 @@ export interface CogSeedRendererAgentSummary {
   online: boolean;
   enabled: boolean;
   dispatchable: boolean;
+  /** Absent when `dispatchable` is true. */
+  eligibilityReason?: CogSeedAgentEligibilityReason;
   health: CogSeedRendererAgentHealth;
   currentTaskId?: string;
   currentConversationId?: string;
@@ -59,6 +71,10 @@ export interface CogSeedRendererChannelSummary {
 export interface CogSeedRendererAgentRegistryProjection {
   schemaVersion: 1;
   updatedAt: string;
+  /** Main only ever publishes a freshly read registry. Consumers that fall back
+   *  to another channel when this projection is unavailable own the degraded
+   *  states themselves — they must not present a fallback list as fresh. */
+  registryFreshness: 'fresh';
   agents: CogSeedRendererAgentSummary[];
   runtimes: CogSeedRendererRuntimeSummary[];
   channels: CogSeedRendererChannelSummary[];
@@ -173,23 +189,6 @@ function taskStats(tasks: CogSeedTaskRecord[]) {
   };
 }
 
-function localEntry(entries: CogSeedHostCliEntry[], runtime: AgentRuntime | undefined): CogSeedHostCliEntry | undefined {
-  return runtime && runtime.kind !== 'in_process'
-    ? entries.find((entry) => entry.type === runtime.cli)
-    : undefined;
-}
-
-function runtimePeer(
-  peers: CogSeedHostPeer[],
-  agentId: string,
-  runtime: AgentRuntime | undefined,
-): CogSeedHostPeer | undefined {
-  return peers.find((item) => item.agent_id === agentId)
-    ?? (runtime?.kind === 'p3394-gateway'
-      ? peers.find((item) => item.agent_id === runtime.cli)
-      : undefined);
-}
-
 export async function buildCogSeedAgentRegistryProjection(
   userId: string,
   deps: CogSeedAgentRegistryProjectionDeps = {},
@@ -229,31 +228,36 @@ export async function buildCogSeedAgentRegistryProjection(
     const relatedTasks = tasksByAgent.get(agentId) ?? [];
     const active = latestTask(relatedTasks.filter((task) => ACTIVE_STATUSES.has(task.status)));
     const last = latestTask(relatedTasks);
-    const cli = localEntry(cliEntries, runtime);
-    const peer = runtimePeer(peers, agentId, runtime);
+    const cli = findAgentCliEntry(cliEntries, runtime);
+    const peer = findAgentPeer(peers, agentId, runtime);
     if (peer) boundPeerIds.add(peer.agent_id);
     const sourceKind: CogSeedRendererAgentSourceKind = runtime?.kind === 'p3394-gateway'
       ? 'p3394'
       : runtime?.kind === 'cli'
         ? 'local-cli'
         : 'cogseed';
-    const installed = runtime?.kind === 'cli'
-      ? cli?.available === true
-      : runtime?.kind === 'p3394-gateway'
-        ? !!peer || !!cli?.available
-        : true;
-    const online = runtime?.kind === 'p3394-gateway'
-      ? peer?.online === true
-      : installed;
-    const runtimeSupported = isCogSeedAgentRuntimeSupported(runtime);
-    const dispatchable = definition.enabled !== false && installed && online && runtimeSupported && peer?.disabled !== true;
-    const health: CogSeedRendererAgentHealth = definition.enabled === false || peer?.disabled === true
+    // `interaction_mode` was never read here, so a host-owned management
+    // identity projected as dispatchable while the execution admission gate
+    // rejected every attempt. The gate stays the authority; this row now
+    // reports the same answer, from the same shared derivation the gate uses.
+    const facts = deriveAgentEligibilityFacts({
+      enabled: definition.enabled !== false,
+      interactionMode: definition.interaction_mode,
+      runtime,
+      cli,
+      peer,
+    });
+    const { installed, online } = facts;
+    const eligibility = resolveAgentEligibility(facts);
+    const health: CogSeedRendererAgentHealth = eligibility.reasonCode === 'disabled'
+      || eligibility.reasonCode === 'peer_disabled'
+      || eligibility.reasonCode === 'management_only'
       ? 'disabled'
       : active
         ? 'busy'
-        : !runtimeSupported
+        : eligibility.reasonCode === 'unsupported_runtime'
           ? 'unsupported'
-          : !installed || !online
+          : eligibility.reasonCode === 'not_installed' || eligibility.reasonCode === 'offline'
             ? 'offline'
             : 'ready';
     return {
@@ -267,7 +271,8 @@ export async function buildCogSeedAgentRegistryProjection(
       installed,
       online,
       enabled: definition.enabled !== false && peer?.disabled !== true,
-      dispatchable,
+      dispatchable: eligibility.dispatchable,
+      ...(eligibility.reasonCode ? { eligibilityReason: eligibility.reasonCode } : {}),
       health,
       ...(active?.taskId ? { currentTaskId: active.taskId } : {}),
       ...(active?.conversationId ? { currentConversationId: active.conversationId } : {}),
@@ -288,6 +293,18 @@ export async function buildCogSeedAgentRegistryProjection(
     const last = latestTask(relatedTasks);
     const enabled = peer.disabled !== true;
     const executableNode = peer.node_kind === 'agent' || peer.node_kind === 'sub_agent' || peer.node_kind === 'task_agent';
+    // A bare peer has no local install and no Agent definition, so `installed`
+    // is a constant and the node kind stands in for runtime support. Routing it
+    // through the shared resolver keeps the one predicate, and reproduces the
+    // previous `enabled && peer.online && executableNode` exactly.
+    const peerEligibility = resolveAgentEligibility({
+      enabled: true,
+      managementOnly: false,
+      peerDisabled: peer.disabled === true,
+      installed: true,
+      online: peer.online,
+      runtimeSupported: executableNode,
+    });
     agents.push({
       agentId,
       displayName: safeDisplayName(peer.display_name, agentId),
@@ -296,7 +313,8 @@ export async function buildCogSeedAgentRegistryProjection(
       installed: true,
       online: peer.online,
       enabled,
-      dispatchable: enabled && peer.online && executableNode,
+      dispatchable: peerEligibility.dispatchable,
+      ...(peerEligibility.reasonCode ? { eligibilityReason: peerEligibility.reasonCode } : {}),
       health: !enabled ? 'disabled' : active ? 'busy' : !executableNode ? 'unsupported' : peer.online ? 'ready' : 'offline',
       ...(active?.taskId ? { currentTaskId: active.taskId } : {}),
       ...(active?.conversationId ? { currentConversationId: active.conversationId } : {}),
@@ -365,6 +383,7 @@ export async function buildCogSeedAgentRegistryProjection(
   return {
     schemaVersion: 1,
     updatedAt: (deps.now?.() ?? new Date()).toISOString(),
+    registryFreshness: 'fresh',
     agents: agents.sort((left, right) => Number(right.health === 'busy') - Number(left.health === 'busy') || left.displayName.localeCompare(right.displayName)),
     runtimes: runtimes.sort((left, right) => left.displayName.localeCompare(right.displayName)),
     channels: channelViews.sort((left, right) => left.displayName.localeCompare(right.displayName)),

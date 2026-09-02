@@ -26,6 +26,7 @@ import {
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
 import {
   COGSEED_AGENT_BACKEND_SCHEMA_VERSION,
+  COGSEED_TASK_FAILURE_KINDS,
   type CogSeedRequestClaim,
   type CogSeedSessionRecord,
   type CogSeedTaskEventType,
@@ -195,6 +196,10 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
   }
   if (row.archivedAt !== undefined
     && (typeof row.archivedAt !== 'string' || !Number.isFinite(Date.parse(row.archivedAt)))) {
+    throw new Error('malformed CogSeed task');
+  }
+  if (row.failureKind !== undefined
+    && (typeof row.failureKind !== 'string' || !COGSEED_TASK_FAILURE_KINDS.has(row.failureKind))) {
     throw new Error('malformed CogSeed task');
   }
   for (const key of ['groupChatRunId', 'groupChatTurnId', 'groupChatSourceMessageId', 'groupChatMessageId', 'groupChatWorkflowRunId', 'groupChatWorkflowStepId'] as const) {

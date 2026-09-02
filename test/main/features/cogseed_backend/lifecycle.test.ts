@@ -227,4 +227,72 @@ describe('CogSeed task lifecycle', () => {
     expect(retried.skillVersionPins).toEqual(created.skillVersionPins);
     expect(retried.skillVersionPinStatus).toBe('pinned');
   });
+
+  it('persists a failure kind across a reread and keeps it paired with the code', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    const failed = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'failed', {
+      errorCode: 'model_preflight',
+      failureKind: 'config',
+    });
+    expect(failed).toMatchObject({ errorCode: 'model_preflight', failureKind: 'config' });
+
+    // Every renderer projection is rebuilt from this record, so the kind has to
+    // survive the write and come back on a fresh read — not just ride along on
+    // the terminal response, which callers discard.
+    const reread = await tasks.readCogSeedTask(USER, created.taskId);
+    expect(reread).toMatchObject({ errorCode: 'model_preflight', failureKind: 'config' });
+  });
+
+  it('clears a stale failure kind when the task leaves the failed state', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'failed', {
+      errorCode: 'model_preflight',
+      failureKind: 'config',
+    });
+    // `failed -> queued` is the retry-in-place edge. A kind surviving it would
+    // describe a run that no longer exists, and would pair with a future code.
+    const requeued = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    expect(requeued).not.toHaveProperty('failureKind');
+    expect(requeued).not.toHaveProperty('errorCode');
+    await expect(tasks.readCogSeedTask(USER, created.taskId))
+      .resolves.not.toHaveProperty('failureKind');
+  });
+
+  it('ignores a failure kind outside the taxonomy and reads a legacy record without one', async () => {
+    const created = (await createTask()).task;
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const paths = await import('../../../../src/main/features/cogseed_backend/paths');
+
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
+    const failed = await lifecycle.transitionCogSeedTask(USER, created.taskId, 'failed', {
+      errorCode: 'group_chat_turn_failed',
+      failureKind: 'not_a_kind',
+    });
+    expect(failed).not.toHaveProperty('failureKind');
+
+    // A record written before this field existed reads back unchanged.
+    const file = paths.cogseedTaskFile(USER, created.taskId);
+    const legacy = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete legacy.failureKind;
+    fs.writeFileSync(file, JSON.stringify(legacy));
+    await expect(tasks.readCogSeedTask(USER, created.taskId))
+      .resolves.toMatchObject({ errorCode: 'group_chat_turn_failed' });
+
+    // A value that is not part of the taxonomy is rejected on read rather than
+    // reaching the classifier.
+    fs.writeFileSync(file, JSON.stringify({ ...legacy, failureKind: 'made_up' }));
+    await expect(tasks.readCogSeedTask(USER, created.taskId)).rejects.toThrow(/malformed CogSeed task/);
+  });
 });
