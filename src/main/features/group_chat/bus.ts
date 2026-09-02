@@ -1860,6 +1860,10 @@ export interface ProjectedAgentMessageInput {
   turnId: string;
   text: string;
   process?: GroupMessage['process'];
+  /** adapter 透传的回合用量/模型自报（{usage:{...}, model?}，CLI 自报数字
+   *  字段）——exec 投影路径与 bus 派单路径同构落 metrics；model 兼作
+   *  exec_meta 的回读值（CLI 自报即实际，杜绝"展示≠实际"）。 */
+  metrics?: unknown;
   failureKind?: GroupMessageFailureKind;
   failureCode?: string;
   terminalStatus?: 'completed' | 'failed';
@@ -2006,6 +2010,16 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     // 消费 actor 占位而不是留下悬空的三点气泡。
     turn_end: true,
     ...(input.process?.length ? { process: input.process } : {}),
+    // 用量/模型自报落 metrics（宽松透传：{usage:{...}, model?}），CLI 自报
+    // model 兼作 exec_meta.model（回读语义——实际用了什么就展示什么）。
+    ...(input.metrics && typeof input.metrics === 'object'
+      ? {
+          metrics: input.metrics as GroupMessage['metrics'],
+          ...((input.metrics as { model?: unknown }).model
+            ? { exec_meta: { model: String((input.metrics as { model?: unknown }).model) } }
+            : {}),
+        }
+      : {}),
     ...(input.failureKind ? { failure_kind: input.failureKind } : {}),
     ...(input.failureCode ? { failure_code: input.failureCode } : {}),
   };

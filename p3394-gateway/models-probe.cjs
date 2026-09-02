@@ -49,10 +49,20 @@ function extractClaudeResultUsage(ev) {
   if (typeof u.cache_read_input_tokens === 'number') out.cacheRead = u.cache_read_input_tokens;
   if (typeof u.cache_creation_input_tokens === 'number') out.cacheCreate = u.cache_creation_input_tokens;
   if (typeof ev.total_cost_usd === 'number' && Number.isFinite(ev.total_cost_usd)) out.costUsd = ev.total_cost_usd;
-  // 实际模型名与直连 backend 同一双路径（result 帧 message.model 优先、根级
-  // model 兜底）——metrics.model 是会话统计 ctx 分母的解析键。
+  // 实际模型名三路径（新版 claude 把 per-model 用量挪进 result 帧的
+  // modelUsage——canonicalModel 是规范名；旧版走 message.model / 根级
+  // model）——metrics.model 是会话统计 ctx 分母的解析键。
+  const modelUsage = (ev && ev.modelUsage && typeof ev.modelUsage === 'object') ? ev.modelUsage : null;
+  let canonical = '';
+  if (modelUsage) {
+    for (const value of Object.values(modelUsage)) {
+      const c = value && typeof value === 'object' && typeof value.canonicalModel === 'string' ? value.canonicalModel : '';
+      if (c) { canonical = c; break; }
+    }
+  }
   const model = (ev && ev.message && typeof ev.message.model === 'string' && ev.message.model)
-    || (typeof ev.model === 'string' ? ev.model : '');
+    || (typeof ev.model === 'string' ? ev.model : '')
+    || canonical;
   if (model) out.model = model;
   return Object.keys(out).length ? out : undefined;
 }
