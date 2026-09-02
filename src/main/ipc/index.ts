@@ -4277,6 +4277,63 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return shareCogseed.reviewCogseedMember(ctx.userId, spaceId, memberId as number, verdict === 'reject' ? 'reject' : 'approve');
   },
 
+  // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
+  // 文本直读；docx 转 Markdown；pdf 提取文本（分页）；其余返回不支持。
+  'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      let abs: string;
+      let display = p;
+      if (typeof spaceId === 'string' && spaceId) {
+        // 空间库：路径在空间 contexts 目录下（防穿越）
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const { spaceContextsDir } = await import('../paths');
+        const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
+        abs = path.resolve(root, p);
+        if (abs !== root && !abs.startsWith(root + path.sep)) {
+          return { ok: false, error: 'invalid path' };
+        }
+      } else {
+        // 个人库：relPath（含库前缀）经 contexts 安全解析（越界/不存在会 throw）
+        abs = contexts.resolveContextFileAbsPath(p);
+      }
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const ext = path.extname(abs).toLowerCase();
+      const name = path.basename(abs);
+      if (['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'].includes(ext)) {
+        const MAX = 2 * 1024 * 1024;
+        const st = fs.statSync(abs);
+        if (st.size > MAX) return { ok: false, error: 'too_large', size: st.size };
+        let text = fs.readFileSync(abs, 'utf8');
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        // .md/.markdown 渲染为 Markdown（阅读视图），其余文本纯文本展示
+        const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
+        return { ok: true, kind, name, path: display, content: text };
+      }
+      if (ext === '.docx') {
+        const { docxBufferToMarkdown } = await import('../util/extract-docx');
+        const md = await docxBufferToMarkdown(fs.readFileSync(abs));
+        return { ok: true, kind: 'markdown', name, path: display, content: md };
+      }
+      if (ext === '.pdf') {
+        const { pdfBufferToPages } = await import('../util/extract-pdf');
+        const pages = await pdfBufferToPages(fs.readFileSync(abs));
+        const text = pages.map((pg, i) => `--- 第 ${i + 1} 页 ---\n${pg}`).join('\n\n');
+        return { ok: true, kind: 'text', name, path: display, content: text || '（PDF 未提取到文本，可能为扫描件）' };
+      }
+      return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      // contexts.resolveContextFileAbsPath 对缺失文件抛 "not found: <rel>"（ENOENT）
+      const error = code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg;
+      return { ok: false, error };
+    }
+  },
+
   // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
   'kb.importWebUrl': async ({ dir, spaceId, url } = {}, ctx) => {
     const u = String(url || '').trim();
