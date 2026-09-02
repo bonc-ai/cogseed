@@ -45,9 +45,6 @@ export interface P3394GatewayTurnResult {
       measured?: boolean;
     };
     model?: string;
-    /** CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms，含思考段）。
-     *  速度分母权威值；缺省回落本地打点。 */
-    decodeMs?: number;
   };
 }
 
@@ -176,8 +173,6 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   // payload.metadata.usage（CLI 自报，数字字段）。
   const turnStartedAt = Date.now();
   let firstTokenAt: number | null = null;
-  // CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms，覆盖思考段）。
-  let decodeMsReported: number | null = null;
   const extractReplyMetrics = (completedAt: number, replyEnvelope: unknown) => {
     const meta = (replyEnvelope as { payload?: { metadata?: { usage?: Record<string, unknown>; model?: unknown } } } | undefined)
       ?.payload?.metadata;
@@ -190,11 +185,6 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
     if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
     if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;
-    // CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms）——速度分母
-    // 权威值；缺省时渲染层回落本地打点（首文本→终态，思考段会被挤出）。
-    if (typeof usageIn?.decodeMs === 'number' && Number.isFinite(usageIn.decodeMs) && usageIn.decodeMs > 0) {
-      decodeMsReported = usageIn.decodeMs;
-    }
     // 实测口径标记（CLI 无精确输出数时的按文本估算）——渲染层对带此
     // 标记的 ↓/速度加 ≈ 前缀，与账单精确值明确区分。
     if (usageIn?.measured === true) usage.measured = true;
@@ -206,7 +196,6 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       completedAt,
       ...(hasUsage ? { usage } : {}),
       ...(model ? { model } : {}),
-      ...(decodeMsReported !== null ? { decodeMs: decodeMsReported } : {}),
     };
   };
   const send = async (): Promise<{ text: string; replyEnvelope?: unknown }> => {
@@ -224,6 +213,13 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
           // 工具调用/思考结构化事件等）→ process rail；不置 streamed，正文
           // 仍由终态回复一次性落地。
           if (event.kind === 'progress') {
+            // 生成窗口的起点：思考（stream:'item'）与工具调用（'tool'）都是
+            // 模型在逐 token 产出的活动——首 token 打点必须覆盖它们，否则
+            // 分子含思考而分母（首文本→终态）不含思考时段，速度虚高。
+            const structured = (event as { event?: { stream?: unknown } }).event;
+            if (firstTokenAt === null && structured && (structured.stream === 'item' || structured.stream === 'tool')) {
+              firstTokenAt = Date.now();
+            }
             input.onProcess?.({
               type: 'progress',
               text: event.text,
