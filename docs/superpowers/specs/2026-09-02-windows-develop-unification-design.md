@@ -14,7 +14,7 @@
 - 最新 `origin/develop`：`05f6adc8`。
 - 最新 `origin/dev/windows`：`fb1814e0`。
 - `dev/windows` 相对 `develop` 落后 50 个提交、领先 7 个提交。
-- 刘婷婷的大型 UI 更新 `e80d8786` 已在 `develop`，不在旧 Windows 分支基线上。
+- Ltt798599368923 的大型 UI 更新 `e80d8786` 已在 `develop`，不在旧 Windows 分支基线上。
 - Windows 分支包含 Windows CLI 发现、`.cmd` 启动、进程树回收、强沙箱、P3394 适配、诊断脚本、Windows CI 和弹窗关闭按钮等增量。
 - 直接合并会在 `p3394-gateway/gateway.cjs` 产生冲突，因为最新 `develop` 和 Windows 分支都修改了 Agent 启动路径。
 
@@ -51,7 +51,7 @@
 - `p3394-gateway/gateway.cjs` 必须同时保留：
   - `develop` 的模型发现、模型选择、推理强度和用量统计；
   - Windows 的 `spawnCli`、引号感知参数拆分、`.cmd/.bat`、Node shebang 和进程树回收能力。
-- Renderer 以刘婷婷已合入 `develop` 的 UI 体系为准，再叠加 Windows 分支的外接 Agent 弹窗关闭按钮。
+- Renderer 以 Ltt798599368923 已合入 `develop` 的 UI 体系为准，再叠加 Windows 分支的外接 Agent 弹窗关闭按钮。
 - 平台差异通过 `process.platform`、路径解析和构建配置表达，不复制两套功能代码。
 
 ## 验证设计
