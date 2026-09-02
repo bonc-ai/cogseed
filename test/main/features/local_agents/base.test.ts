@@ -125,6 +125,20 @@ describe('local_agents/backends/base', () => {
 
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
   });
+
+  it('falls back to the direct POSIX child when no matching process group exists', () => {
+    const child = { pid: 9753, kill: vi.fn() };
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid < 0) throw Object.assign(new Error('no such process group'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+
+    killProcessTree(child as any, 'SIGTERM', { platform: 'darwin' });
+
+    expect(processKill).toHaveBeenCalledWith(-9753, 'SIGTERM');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    processKill.mockRestore();
+  });
 });
 
 describe('local_agents/backends/base › spawnCli', () => {
@@ -133,7 +147,10 @@ describe('local_agents/backends/base › spawnCli', () => {
     const missingCwd = path.join(root, 'cloud', 'spaces', 'sp_abc123', 'workspace', '任务甲');
     expect(fs.existsSync(missingCwd)).toBe(false);
 
-    const child = spawnCli('/bin/echo', ['hi'], missingCwd);
+    const probe = process.platform === 'win32'
+      ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'echo hi'] }
+      : { command: '/bin/echo', args: ['hi'] };
+    const child = spawnCli(probe.command, probe.args, missingCwd);
     const [code] = await new Promise<[number | null, string]>((resolve) => {
       let out = '';
       child.stdout.setEncoding('utf8');
@@ -153,7 +170,10 @@ describe('local_agents/backends/base › spawnCli', () => {
     const marker = path.join(cwd, 'marker.txt');
     fs.writeFileSync(marker, 'x');
 
-    spawnCli('/bin/echo', ['hi'], cwd);
+    const probe = process.platform === 'win32'
+      ? { command: 'cmd.exe', args: ['/d', '/s', '/c', 'echo hi'] }
+      : { command: '/bin/echo', args: ['hi'] };
+    spawnCli(probe.command, probe.args, cwd);
 
     expect(fs.statSync(marker).isFile()).toBe(true);
   });

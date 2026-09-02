@@ -12,6 +12,7 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   'embedding-model': 'pinned-offline-resource',
   runtime: 'target-runtime-gate',
   builtin: 'builtin-resource-contract',
+  'builtin-packages': 'builtin-package-seed-contract',
   officecli: 'officecli-release-gate',
   guardrail: 'guardrail-scanner-contract',
   'sherpa-onnx': 'pinned-offline-resource',

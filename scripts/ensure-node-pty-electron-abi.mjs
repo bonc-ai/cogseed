@@ -2,17 +2,13 @@
 /**
  * Ensure node-pty's native addon matches the installed Electron ABI.
  *
- * node-pty ships a source build (node-gyp), compiled against system Node on
- * `npm install`, so its ABI won't match Electron. The app loads node-pty
- * through Electron's embedded Node, so we rebuild the addon against the
- * installed Electron version. Mirrors ensure-sqlite-electron-abi.mjs: probe
- * first (cheap, idempotent), rebuild only when the probe fails.
- *
- * Unlike better-sqlite3 (prebuild-install has Electron prebuilds), node-pty is
- * rebuilt from source via @electron/rebuild.
+ * node-pty 1.1 ships Node-API prebuilds for the primary platforms, while a
+ * source build still lands under build/Release. Probe the actual runtime
+ * candidates with Electron first (cheap and idempotent), and rebuild from
+ * source only when no compatible build or prebuild is available.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +19,24 @@ const require_ = createRequire(import.meta.url);
 
 const electronCli = require_.resolve('electron/cli.js');
 const electronPackage = require_.resolve('electron/package.json');
-const nativeAddon = resolve(pcRoot, 'node_modules', 'node-pty', 'build', 'Release', 'pty.node');
+const nodePtyRoot = resolve(pcRoot, 'node_modules', 'node-pty');
+const electronVersion = JSON.parse(readFileSync(electronPackage, 'utf8')).version;
+const rebuildMeta = resolve(nodePtyRoot, 'build', 'Release', '.forge-meta');
+
+function resolveNativeAddons() {
+  const names = process.platform === 'win32'
+    ? ['conpty.node', 'pty.node']
+    : ['pty.node'];
+  const dirs = [
+    resolve(nodePtyRoot, 'build', 'Release'),
+    resolve(nodePtyRoot, 'prebuilds', `${process.platform}-${process.arch}`),
+  ];
+  for (const dir of dirs) {
+    const addons = names.map((name) => resolve(dir, name));
+    if (addons.every(existsSync)) return addons;
+  }
+  return names.map((name) => resolve(dirs[0], name));
+}
 
 function describeResult(result) {
   const parts = [];
@@ -38,7 +51,9 @@ function firstUsefulLine(value) {
 }
 
 function probeElectronAbi({ quiet = false } = {}) {
-  const requireSnippet = `require(${JSON.stringify(nativeAddon)})`;
+  const requireSnippet = resolveNativeAddons()
+    .map((addon) => `require(${JSON.stringify(addon)})`)
+    .join(';');
   const result = spawnSync(process.execPath, [electronCli, '-e', requireSnippet], {
     cwd: pcRoot,
     encoding: 'utf8',
@@ -54,13 +69,18 @@ function probeElectronAbi({ quiet = false } = {}) {
   return false;
 }
 
+function markElectronRebuildComplete() {
+  const { getAbi } = require_('node-abi');
+  mkdirSync(resolve(nodePtyRoot, 'build', 'Release'), { recursive: true });
+  writeFileSync(rebuildMeta, `${process.arch}--${getAbi(electronVersion, 'electron')}`);
+}
+
 // Skip when the installed addon already loads under Electron. Probe in a child
 // process because an incompatible native binary can hard-crash the loader.
 if (probeElectronAbi({ quiet: true })) {
+  markElectronRebuildComplete();
   process.exit(0);
 }
-
-const electronVersion = JSON.parse(readFileSync(electronPackage, 'utf8')).version;
 
 /**
  * Locate the rebuild CLI.
@@ -123,6 +143,7 @@ const result = spawnSync(process.execPath, [
 
 // Runtime probe is authoritative.
 if (probeElectronAbi({ quiet: true })) {
+  markElectronRebuildComplete();
   process.exit(0);
 }
 

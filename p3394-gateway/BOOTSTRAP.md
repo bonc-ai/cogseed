@@ -16,12 +16,13 @@
 
 ```bash
 # a) 已全局安装过 → 直接用
-command -v p3394-gateway
+#    POSIX: command -v p3394-gateway
+#    Windows: where p3394-gateway
 
 # b) CogSeed 自带副本（CogSeed 桌面版内置此包，无需 NPM）：
 #    开发仓库: <仓库根>/p3394-gateway/gateway.cjs
 #    macOS 已安装应用: /Applications/CogSeed*.app/Contents/Resources/app.asar.unpacked/p3394-gateway/gateway.cjs
-#    Windows: <安装目录>/resources/app.asar.unpacked/p3394-gateway/gateway.cjs
+#    Windows 已安装应用: "%LOCALAPPDATA%\Programs\cogseed\resources\app.asar.unpacked\p3394-gateway\gateway.cjs"
 #    找到后直接启动（等同于装了包）:
 node <上面找到的路径>
 
