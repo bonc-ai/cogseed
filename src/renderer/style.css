@@ -7446,6 +7446,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   background: linear-gradient(to bottom, transparent 0%, var(--bg) 20%);
   z-index: 10;
   pointer-events: none;
+  /* The perched squirrel overlaps the composer's upper-right corner. Keep
+     transient panels above the composer out of that visual area. */
+  --chat-composer-squirrel-clearance: clamp(76px, 9vw, 112px);
 }
 
 .chat-input-area {
@@ -7745,9 +7748,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    width without a reserved gutter. */
 .chat-queue {
   pointer-events: auto;
-  width: 80%;
-  max-width: 80%;
-  margin: 0 0 8px 10%;
+  width: auto;
+  max-width: none;
+  margin: 0 calc(10% + var(--chat-composer-squirrel-clearance)) 8px 10%;
   background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(6px);
   border: 1px solid var(--border);
@@ -7767,7 +7770,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    triggers. Left as a placeholder until a future cleanup removes it entirely. */
 .chat-input-wrapper.has-plan-rail .chat-queue {
   margin-left: calc(10% + var(--plan-rail-reserve, 188px));
-  max-width: calc(80% - var(--plan-rail-reserve, 188px));
+  margin-right: calc(10% + var(--chat-composer-squirrel-clearance));
+  width: auto;
+  max-width: none;
 }
 
 /* Narrower panels (skill / agent edit) don't have the 80%-centered shape
@@ -13269,6 +13274,15 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   word-break: break-word;
   padding: 4px 0;
 }
+
+/* Unified sensitive-action approval dialog. */
+.action-approval-details { display: grid; gap: var(--space-3); margin: 0; }
+.action-approval-detail { display: grid; gap: var(--space-1); min-width: 0; }
+.action-approval-detail dt { color: var(--text-secondary); font-size: var(--font-size-1); line-height: 1.4; }
+.action-approval-detail dd { margin: 0; color: var(--text-heading); font-size: var(--font-size-2); line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+.action-approval-detail.is-target dd { max-height: 144px; overflow: auto; padding: var(--space-2); border: 1px solid var(--line-default); border-radius: var(--radius-control); background: var(--surface-subtle); font-family: var(--font-mono); }
+.action-approval-detail.is-risk dd { color: var(--color-warning); }
+.action-approval-detail.is-risk.is-critical dd { color: var(--color-danger); }
 
 /* ─── Buttons ─── */
 .btn {
@@ -21200,8 +21214,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   pointer-events: auto;
   display: grid;
   gap: 6px;
-  margin: 0 auto 8px;
-  width: min(80%, 820px);
+  margin: 0 calc(10% + var(--chat-composer-squirrel-clearance)) 8px 10%;
+  width: min(calc(80% - var(--chat-composer-squirrel-clearance)), 820px);
 }
 
 /* P3394 Agent Wake Gate — ChatGPT-style compact access request strip. */
@@ -21287,8 +21301,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   pointer-events: auto;
   display: grid;
   gap: 6px;
-  margin: 0 auto 8px;
-  width: min(80%, 820px);
+  margin: 0 calc(10% + var(--chat-composer-squirrel-clearance)) 8px 10%;
+  width: min(calc(80% - var(--chat-composer-squirrel-clearance)), 820px);
 }
 .chat-slow-switch {
   margin: 0;

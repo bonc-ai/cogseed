@@ -99,9 +99,36 @@ describe('CogSeed-owned Connector adapter', () => {
         async callTool() { return { ok: true }; },
         async close() {}, async closeAll() {},
       } as any,
+      hostToolClient: {
+        async call(call: { name: string }) {
+          if (call.name === 'action_approval_request') return { content: JSON.stringify({ approved: true, request_id: 'approval-connector', code: 'E_ACTION_APPROVAL_DENIED' }) };
+          return { content: JSON.stringify({ ok: true }) };
+        },
+      } as any,
     });
     await expect(runner.run('list_connector_tools', {})).resolves.toMatchObject({ content: expect.stringContaining('cogseed-connector-search') });
     await expect(runner.run('call_connector_tool', { connector_id: 'cogseed-connector-search', tool_name: 'search', arguments: { query: 'x' } })).resolves.toEqual({ content: JSON.stringify({ ok: true }) });
+  });
+
+  it('does not call a connector tool when the unified approval gate denies it', async () => {
+    const { createRuntimeToolRunner } = await import('../../../../src/main/features/cogseed_runtime/kernel/tools/runner');
+    let callCount = 0;
+    const runner = createRuntimeToolRunner({
+      userId: USER_A, runtimeSessionId: 'mruntime-connector-denied', allowedRoots: [],
+      toolPolicy: { fileRead: 'none', fileWrite: 'none', shell: 'none', skillRun: 'none', network: 'none', connectors: 'enabled' },
+      connectorManager: {
+        async callTool() { callCount += 1; return { ok: true }; },
+        async listTools() { return []; }, async listAllTools() { return []; }, async close() {}, async closeAll() {},
+      } as any,
+      hostToolClient: {
+        async call() { return { content: JSON.stringify({ approved: false, code: 'E_ACTION_APPROVAL_DENIED' }), isError: true }; },
+      } as any,
+    });
+
+    await expect(runner.run('call_connector_tool', {
+      connector_id: 'cogseed-connector-search', tool_name: 'search', arguments: { query: 'x' },
+    })).resolves.toMatchObject({ isError: true, content: expect.stringContaining('E_ACTION_APPROVAL_DENIED') });
+    expect(callCount).toBe(0);
   });
 
 });
