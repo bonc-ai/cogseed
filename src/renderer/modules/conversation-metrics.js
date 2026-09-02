@@ -131,17 +131,22 @@ function foldSessionMetrics(metricsList, opts = {}) {
   const cacheHitText = cacheDenom > 0
     ? `${Math.min(100, Math.round((cacheRead / cacheDenom) * 100))}%`
     : null;
-  // 上下文占用 = 最近一次 usage 的 input+output（设计 §94）。分母解析：
-  // 该回合自报模型 → 调用方给的 resolveWindowForModel（CLI 回合按实际模型
-  // 查窗口）→ 全局 contextWindow 兜底 → 无分母只显示已用量。
+  // 上下文占用 = 最近一次 usage 的「窗口内全部内容」：input + cacheRead +
+  // cacheWrite（缓存的部分也在窗口里，漏算会把 48K 缓存读报成 1.1K 的
+  // 严重低估）+ 输出。分母解析：该回合自报模型 → resolveWindowForModel
+  // （CLI 回合按实际模型查窗口）→ 全局 contextWindow 兜底 → 无分母只显示
+  // 已用量。
   const resolveWindow = typeof opts.resolveWindowForModel === 'function' ? opts.resolveWindowForModel : null;
   const windowFromModel = (resolveWindow && lastUsageModel) ? resolveWindow(lastUsageModel) : null;
   const ctxWindow = (typeof windowFromModel === 'number' && windowFromModel > 0)
     ? windowFromModel
     : num(opts.contextWindow);
+  const ctxUsed = lastUsage
+    ? num(lastUsage.inputTokens) + num(lastUsage.cacheReadTokens) + num(lastUsage.cacheWriteTokens) + num(lastUsage.outputTokens)
+    : 0;
   const ctx = lastUsage && ctxWindow > 0
-    ? { used: num(lastUsage.inputTokens) + num(lastUsage.outputTokens), window: ctxWindow }
-    : (lastUsage ? { used: num(lastUsage.inputTokens) + num(lastUsage.outputTokens), window: 0 } : null);
+    ? { used: ctxUsed, window: ctxWindow }
+    : (lastUsage ? { used: ctxUsed, window: 0 } : null);
   const ctxText = ctx
     ? (ctx.window > 0
       ? `${formatTokens(ctx.used)}/${formatTokens(ctx.window)}·${Math.min(100, Math.round((ctx.used / ctx.window) * 100))}%`
