@@ -40,11 +40,14 @@ export interface P3394GatewayTurnResult {
       cacheReadTokens?: number;
       cacheWriteTokens?: number;
       costUsd?: number;
-      /** 输出为按实际文本的实测估算（CLI 无精确输出数时的口径）——
-       *  渲染层对 ↓/速度加 ≈ 前缀与账单精确值区分。 */
+      /** 输出为按实际文本的实测估算（CLI 无精确输出数；claude 的 result
+       *  与 assistant 帧自报均不可用）——渲染层对 ↓/速度加 ≈ 前缀。 */
       measured?: boolean;
     };
     model?: string;
+    /** CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms，含思考段）。
+     *  速度分母权威值；缺省回落本地打点。 */
+    decodeMs?: number;
   };
 }
 
@@ -173,6 +176,8 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   // payload.metadata.usage（CLI 自报，数字字段）。
   const turnStartedAt = Date.now();
   let firstTokenAt: number | null = null;
+  // CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms，覆盖思考段）。
+  let decodeMsReported: number | null = null;
   const extractReplyMetrics = (completedAt: number, replyEnvelope: unknown) => {
     const meta = (replyEnvelope as { payload?: { metadata?: { usage?: Record<string, unknown>; model?: unknown } } } | undefined)
       ?.payload?.metadata;
@@ -185,6 +190,11 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     if (typeof usageIn?.cacheRead === 'number') usage.cacheReadTokens = usageIn.cacheRead;
     if (typeof usageIn?.cacheCreate === 'number') usage.cacheWriteTokens = usageIn.cacheCreate;
     if (typeof usageIn?.costUsd === 'number') usage.costUsd = usageIn.costUsd;
+    // CLI 自报的 API 级精确生成窗口（duration_ms - ttft_ms）——速度分母
+    // 权威值；缺省时渲染层回落本地打点（首文本→终态，思考段会被挤出）。
+    if (typeof usageIn?.decodeMs === 'number' && Number.isFinite(usageIn.decodeMs) && usageIn.decodeMs > 0) {
+      decodeMsReported = usageIn.decodeMs;
+    }
     // 实测口径标记（CLI 无精确输出数时的按文本估算）——渲染层对带此
     // 标记的 ↓/速度加 ≈ 前缀，与账单精确值明确区分。
     if (usageIn?.measured === true) usage.measured = true;
@@ -196,6 +206,7 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
       completedAt,
       ...(hasUsage ? { usage } : {}),
       ...(model ? { model } : {}),
+      ...(decodeMsReported !== null ? { decodeMs: decodeMsReported } : {}),
     };
   };
   const send = async (): Promise<{ text: string; replyEnvelope?: unknown }> => {

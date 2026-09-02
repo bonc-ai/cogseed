@@ -40,7 +40,8 @@ function executionPrefsFor(envelope) {
  *  extractClaudeUsage 同一字段集）：token 计数 + CLI 自报成本 + 实际模型名。
  *  随回复信封 payload.metadata.usage 带回宿主，宿主折进消息 metrics——
  *  网关路径的回合统计由此而来。 */
-/** 输出 token 实测估算（中文字符≈1 token/字，其余≈1 token/4字符）。
+/** 输出 token 实测估算。中文按 0.75 token/字（Claude tokenizer 对 CJK
+ *  的实测密度，用户锚点校准 156/200≈0.78）、其余 ≈1 token/4字符。
  *  背景：claude CLI result 帧自报的 output_tokens 是聚合/占位口径
  *  （含不可见思考与工具序列化，实测可比可见输出大数百倍——社区
  *  issue #25941 / Agent SDK 文档承认 per-step 为 placeholder），照搬会
@@ -55,7 +56,7 @@ function estimateOutputTokens(text) {
     if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3000 && code <= 0x30ff) || (code >= 0xff00 && code <= 0xffef)) cjk += 1;
   }
   const rest = s.length - cjk;
-  return cjk + Math.ceil(rest / 4);
+  return Math.round(cjk * 0.75) + Math.ceil(rest / 4);
 }
 
 function extractClaudeResultUsage(ev) {
@@ -73,6 +74,15 @@ function extractClaudeResultUsage(ev) {
   const details = u.output_tokens_details;
   if (details && typeof details === 'object' && typeof details.thinking_tokens === 'number') {
     out.reasoning = details.thinking_tokens;
+  }
+  // API 级精确阶段计时（result 帧自报）：duration_ms 总时长 - ttft_ms 首
+  // token 时刻 = 精确生成窗口（DSH 的 decodeMs 精确版）。思考发生在首个
+  // 文字之前，本地打点（首文本→终态）会把思考挤进短窗口、速度虚高——
+  // 自报计时天然覆盖思考段。渲染层有它就不用本地打点兜底。
+  if (typeof ev.duration_ms === 'number' && Number.isFinite(ev.duration_ms)
+    && typeof ev.ttft_ms === 'number' && Number.isFinite(ev.ttft_ms)
+    && ev.duration_ms > ev.ttft_ms) {
+    out.decodeMs = ev.duration_ms - ev.ttft_ms;
   }
   // 实际模型名三路径（新版 claude 把 per-model 用量挪进 result 帧的
   // modelUsage——canonicalModel 是规范名；旧版走 message.model / 根级

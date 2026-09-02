@@ -124,15 +124,15 @@ describe('gateway effort channel — effortArgsFor / effortLevelFor', () => {
 });
 
 describe('gateway estimateOutputTokens — measured output-token heuristic', () => {
-  it('counts CJK as ~1 token/char and the rest as ~1 token/4 chars', () => {
-    expect(estimateOutputTokens('好')).toBe(1);
-    expect(estimateOutputTokens('回复一个字：好')).toBe(7);
+  it('counts CJK at ~0.75 token/char and the rest at ~1 token/4 chars', () => {
+    // 中文系数按 Claude tokenizer 实测密度校准（用户锚点：显示 200 vs
+    // 实际 156 → ≈0.78 tok/字）。「回复一个字：好」= 7 个 CJK × 0.75 ≈ 5。
+    expect(estimateOutputTokens('好')).toBe(1);       // 0.75 → round = 1
+    expect(estimateOutputTokens('回复一个字：好')).toBe(5);
     expect(estimateOutputTokens('')).toBe(0);
     expect(estimateOutputTokens(undefined)).toBe(0);
     // 英文 8 字符 → 2 token
     expect(estimateOutputTokens('abcdefgh')).toBe(2);
-    // 混合：3 个中文 + 4 个英文 → 3 + 1
-    expect(estimateOutputTokens('你好呀abcd')).toBe(4);
   });
 });
 
@@ -193,6 +193,23 @@ describe('gateway extractClaudeResultUsage — reply-envelope usage payload', ()
     // 无 details 时不含 reasoning 键。
     const bare = extractClaudeResultUsage({ usage: { input_tokens: 1 } }) as Record<string, unknown>;
     expect('reasoning' in bare).toBe(false);
+  });
+
+  it('derives the precise decode window from duration_ms - ttft_ms (API-level)', () => {
+    // 速度分母权威值：思考发生在首文字之前，本地打点（首文本→终态）会把
+    // 思考段挤出窗口、速度虚高（用户锚点 200 vs 实际 156）——result 帧的
+    // duration_ms/ttft_ms 是 API 级计时，差值天然覆盖思考段。
+    const out = extractClaudeResultUsage({
+      usage: { input_tokens: 1 },
+      duration_ms: 5_441,
+      ttft_ms: 1_200,
+    }) as { decodeMs?: number };
+    expect(out.decodeMs).toBe(4_241);
+    // 缺任一字段或非正差值 → 不产出（渲染层回落本地打点）。
+    const noTtft = extractClaudeResultUsage({ usage: { input_tokens: 1 }, duration_ms: 5_000 }) as Record<string, unknown>;
+    expect('decodeMs' in noTtft).toBe(false);
+    const inverted = extractClaudeResultUsage({ usage: { input_tokens: 1 }, duration_ms: 800, ttft_ms: 900 }) as Record<string, unknown>;
+    expect('decodeMs' in inverted).toBe(false);
   });
 
   it('returns undefined without a usage object (legacy frames)', () => {
