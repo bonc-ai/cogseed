@@ -58,6 +58,7 @@
     "p3394:call": "tsx scripts/p3394-call.ts",
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
     "build:mac": "electron-builder --mac",
+    "prebuild:win": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
     "build:win": "electron-builder --win --x64 --publish never"
   },
   "devDependencies": {
@@ -86,7 +87,7 @@
     "fastembed": "^2.1.0",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.1",
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.2.108",
     "sherpa-onnx-node": "^1.13.6",
     "socks-proxy-agent": "^8.0.5",

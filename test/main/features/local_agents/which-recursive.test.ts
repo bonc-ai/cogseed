@@ -17,6 +17,7 @@ describe('which: recursive install-root discovery', () => {
       COGSEED_AGENT_SEARCH_ROOTS: 'D:\\cli\\agents;E:\\more\\cli',
     };
     const roots = recursiveSearchRoots('codex', env, 'C:\\Users\\tester');
+    expect(roots.slice(0, 2)).toEqual(['d:\\cli\\agents', 'e:\\more\\cli']);
     expect(roots).toContain('c:\\users\\tester\\appdata\\local');
     expect(roots).toContain('c:\\users\\tester\\appdata\\local\\programs');
     expect(roots).toContain('c:\\users\\tester\\appdata\\roaming');

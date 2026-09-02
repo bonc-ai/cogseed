@@ -53,9 +53,7 @@ jobs:
           echo "✅ All commit author emails are noreply."
 
   verify-windows:
-    # node-pty 1.0.0 does not compile with the VS2026 image behind
-    # windows-latest; keep the supported VS2022 toolchain explicit.
-    runs-on: windows-2022
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:

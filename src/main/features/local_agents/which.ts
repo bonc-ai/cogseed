@@ -65,6 +65,7 @@ export function recursiveSearchRoots(
     .split(isWindows ? ';' : ':')
     .map(s => s.trim())
     .filter(Boolean);
+  roots.push(...extra);
   if (isWindows) {
     const localAppData = env.LOCALAPPDATA || (home ? path.win32.join(home, 'AppData', 'Local') : '');
     const appData = env.APPDATA || (home ? path.win32.join(home, 'AppData', 'Roaming') : '');
@@ -77,7 +78,6 @@ export function recursiveSearchRoots(
       roots.push(path.win32.join(appData, 'npm'));
     }
     if (home) roots.push(path.win32.join(home, '.local', 'bin'));
-    roots.push(...extra);
     return [...new Set(roots.map(r => r.toLowerCase()))].filter(Boolean);
   }
   if (home) {
@@ -88,7 +88,6 @@ export function recursiveSearchRoots(
     roots.push(path.posix.join(home, '.cargo'));
   }
   roots.push('/opt/homebrew', '/usr/local');
-  roots.push(...extra);
   return [...new Set(roots)].filter(Boolean);
 }
 
