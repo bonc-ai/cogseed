@@ -188,10 +188,17 @@ const PRESETS = {
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
-              modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' } },
+              modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' },
+              // 强度专有通道：reasoningEffort → MAX_THINKING_TOKENS env（无
+              // --effort 类参数）——effortChannel 声明让 /models 的
+              // effort_controllable 如实披露（模板通道之外的第二类通道）。
+              effortChannel: 'max-thinking-tokens' },
   codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex',
               // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
-              modelControllable: true },
+              modelControllable: true,
+              // 强度专有通道：low/high → thread/start 的
+              // model_reasoning_effort config（失败降级重试）。
+              effortChannel: 'model-reasoning-effort' },
   opencode: { cli: 'opencode', args: 'run {message}',           id: 'opencode',
               modelArgs: '--model {model}', inspect: { args: ['models'], parser: 'lines' },
               // --variant 即推理强度（run --help 实测："model variant
@@ -1934,10 +1941,13 @@ const server = http.createServer((req, res) => {
           runtime: runtime.name,
           cli: CLI,
           // 能力协商（CodexHost 式）：模型可控 = 有参数模板或专有通道；强度
-          // 可控 = 有 effortArgs 模板（预设声明或 P3394_AGENT_EFFORT_ARGS）。
-          // 宿主据此决定 UI 控件显隐——不再依赖任何硬编码白名单。
+          // 可控 = 有 effortArgs 模板（预设声明或 P3394_AGENT_EFFORT_ARGS）或
+          // effortChannel 专有通道（claude 的 MAX_THINKING_TOKENS、codex 的
+          // model_reasoning_effort——它们不走参数模板）。宿主据此决定 UI
+          // 控件显隐——不再依赖任何硬编码白名单。
           model_controllable: modelControllable(),
-          effort_controllable: !!effortArgsFor(PRESETS[PRESET_NAME] || {}, process.env),
+          effort_controllable: !!effortArgsFor(PRESETS[PRESET_NAME] || {}, process.env)
+            || !!(PRESETS[PRESET_NAME] && PRESETS[PRESET_NAME].effortChannel),
           inspected_at: new Date().toISOString(),
           ...(inspected || {}),
         });
