@@ -978,7 +978,19 @@ function cmdInstall(args) {
           { source });
       }
       let commit = '';
-      if (gitAvailable()) {
+      // Plain local directory (no .git): hard-copy the tree. Used by the
+      // product-bundled packages seeder, which must not require git on the
+      // target machine; such a copy is versioned by the app release instead
+      // of git. Symlinks are preserved as-is so the assertNoSymlinks check
+      // below keeps refusing link-bearing trees (fail-closed parity).
+      const localPlainDir = cls.kind === 'local' && !isDir(path.join(source, '.git'));
+      if (localPlainDir) {
+        fs.cpSync(source, staging, {
+          recursive: true,
+          dereference: false,
+          filter: (srcPath) => !srcPath.split(path.sep).includes('.git'),
+        });
+      } else if (gitAvailable()) {
         // Harden the clone: disable the `ext` transport entirely (blocks
         // `ext::sh -c`), restrict `file` to user-initiated top-level only
         // (blocks submodule file:// re-injection), suppress credential prompts,
@@ -1068,7 +1080,7 @@ function cmdInstall(args) {
       registry.packages = registry.packages.filter((p) => p && p.name !== name);
       registry.packages.push({
         name,
-        repo_url: source,
+        ...(localPlainDir ? {} : { repo_url: source }),
         commit,
         kind: scan.kind,
         skill_roots: scan.skillRoots,

@@ -372,7 +372,7 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
     }
   }
 
-  const readOnlyRoots = Array.from(new Set([...context.roots, ...attachments.roots]));
+  let readOnlyRoots = Array.from(new Set([...context.roots, ...attachments.roots]));
   const request: RuntimeRunRequest = {
     protocol_version: COGSEED_AGENT_RUNTIME_PROTOCOL_VERSION,
     type: 'run',
@@ -391,8 +391,12 @@ export function normalizeRuntimeRunRequest(uid: string, raw: unknown, opts: Runt
   if (typeof workingDir === 'string') {
     request.working_dir = path.resolve(workingDir);
     request.writable_roots = [request.working_dir];
+    // 工作空间目录也作为只读根兜底：无附件的纯文字任务仍能用 search_files /
+    // grep_files 访问自己的工作空间，否则 read_only_roots 为空会触发
+    // E_RUNTIME_NO_ROOTS，让这类 agent 直接失败。
+    readOnlyRoots.push(request.working_dir);
   }
-  if (readOnlyRoots.length) request.read_only_roots = readOnlyRoots;
+  if (readOnlyRoots.length) request.read_only_roots = Array.from(new Set(readOnlyRoots));
   if (capabilities?.length) request.capabilities = [...capabilities] as string[];
   return { ok: true, request };
 }

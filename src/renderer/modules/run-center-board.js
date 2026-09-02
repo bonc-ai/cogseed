@@ -445,6 +445,23 @@
     </div>`;
   }
 
+  // A recommended action is only worth showing when the projection actually
+  // offers it. The queue and the run detail pane both gate on this; when they
+  // drifted apart a restart-orphaned card recommended "Resume" in the list
+  // while the detail pane rendered no button at all.
+  function recommendedActionAvailable(actions, userState, context = {}) {
+    const action = String(userState?.action || '');
+    if (!action) return false;
+    const set = actions || {};
+    if (action === 'configure-model') return true;
+    if (action === 'open-task') return !!context.conversationId;
+    if (action === 'open-handling') return !!context.hasCollaboration || !!context.conversationId;
+    if (action === 'retry') return !!set.retry;
+    if (action === 'resume') return !!set.resume;
+    if (action === 'recover-result') return !!set.recoverResult;
+    return false;
+  }
+
   function queueGroups(runs, options = {}) {
     const groups = { attention: [], active: [], completed: [] };
     for (const run of Array.isArray(runs) ? runs : []) {
@@ -486,7 +503,7 @@
         <strong>${esc(display.title)}</strong>
         ${userState.attention ? `<span class="run-center-queue-reason">${esc(text(userState.reasonKey))}</span>` : ''}
         <span class="run-center-queue-meta"><span>${esc(sequenceLabel)}</span><span>${icon('terminal')}${esc(agent)}</span>${display.shortId ? `<span>${esc(display.shortId)}</span>` : ''}</span>
-        ${userState.actionKey ? `<span class="run-center-queue-recommendation">${esc(text('run_center.recommended_action'))}<b>${esc(text(userState.actionKey))}</b>${icon('chevron-right')}</span>` : ''}
+        ${userState.actionKey && recommendedActionAvailable(task.actions, userState, { conversationId: task.conversationId }) ? `<span class="run-center-queue-recommendation">${esc(text('run_center.recommended_action'))}<b>${esc(text(userState.actionKey))}</b>${icon('chevron-right')}</span>` : ''}
       </button>`;
     };
     const sections = [
@@ -505,6 +522,6 @@
     filteredLogicalTasks, taskForSession, shouldShowSessionTitle, uniqueCardMeta,
     logicalRunKey, logicalTasks, buildRunSequence, shortRunId, userStateForTask,
     displayColumnForTask, matchesTimeFilter, displayRun, buildDisplayRuns, queueGroups,
-    renderQueue, render,
+    recommendedActionAvailable, renderQueue, render,
   });
 })(window);

@@ -1,6 +1,6 @@
 {
   "name": "cogseed",
-  "version": "0.6.0",
+  "version": "0.7.6",
   "private": true,
   "description": "CogSeed desktop — personal cognition asset workspace",
   "main": "bootstrap.cjs",
@@ -197,6 +197,16 @@
       {
         "from": "resources/builtin",
         "to": "builtin",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/builtin-packages",
+        "to": "builtin-packages",
         "filter": [
           "**/*",
           "!**/.DS_Store",

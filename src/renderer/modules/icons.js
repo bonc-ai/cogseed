@@ -124,6 +124,11 @@
     live: '<path d="M12 4a8 8 0 1 1-8 8"></path><path d="M12 4v8h8"></path>',
     box: '<path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><path d="M3.3 7 12 12l8.7-5"></path><path d="M12 22V12"></path>',
     star: '<path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.1 20.9l1.1-6.5L2.5 9.8l6.5-.9z"></path>',
+    activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>',
+    cpu: '<rect x="7" y="7" width="10" height="10" rx="1.5"></rect><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"></path>',
+    // Distinct from the FILE_ICONS entry of the same name: that one is the
+    // file-kind glyph for an archive file, this is the UI action.
+    archive: '<rect x="3" y="4" width="18" height="4" rx="1"></rect><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"></path><path d="M10 12h4"></path>',
     // Hub account surface icons (lucide-style, matching the library above).
     user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle>',
     monitor: '<rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path>',

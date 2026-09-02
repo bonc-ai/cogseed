@@ -3,7 +3,7 @@ import {
   subscribeCogSeedDashboardChanges,
   type CogSeedDashboardChange,
 } from './event-store';
-import { archiveCogSeedTask, markCogSeedTaskRecoverable, retryCogSeedTask } from './lifecycle';
+import { archiveCogSeedTask, markCogSeedTaskRecoverable, retryCogSeedTask, transitionCogSeedTask } from './lifecycle';
 import type { CogSeedRuntimeController, ResumeCogSeedTaskInput, StartCogSeedTaskInput } from './runtime-controller';
 import { assertCogSeedAgentId, assertCogSeedConnectorId, assertCogSeedKbSourceId, assertCogSeedRequestId, assertCogSeedSessionId, assertCogSeedTaskId, assertCogSeedUserId } from './paths';
 import { listCogSeedConnectors } from './connector-store';
@@ -59,6 +59,7 @@ export interface CogSeedIpcServiceDeps {
   admitTask?: typeof createCogSeedTask;
   retryTask?: typeof retryCogSeedTask;
   archiveTask?: typeof archiveCogSeedTask;
+  transitionTask?: typeof transitionCogSeedTask;
   readEvents?: typeof readCogSeedTaskEvents;
   subscribeDashboardChanges?: typeof subscribeCogSeedDashboardChanges;
   resolveAgentExecutionContext?: typeof resolveCogSeedAgentExecutionContext;
@@ -537,7 +538,11 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
       skip: false,
       resume: false,
       recoverResult: false,
-      abort: status === 'created' || status === 'queued' || status === 'running',
+      // `recoverable` is included even though there is no live turn to stop.
+      // A restart leaves Group Chat runs there, and Group Chat cannot resume
+      // them, so abort is the user's only way to dismiss the card — see the
+      // matching branch in `action()`, which settles the task itself.
+      abort: status === 'created' || status === 'queued' || status === 'running' || status === 'recoverable',
       archive,
     };
   }
@@ -720,6 +725,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
   const admitTask = deps.admitTask ?? createCogSeedTask;
   const retryTask = deps.retryTask ?? retryCogSeedTask;
   const archiveTask = deps.archiveTask ?? archiveCogSeedTask;
+  const transitionTask = deps.transitionTask ?? transitionCogSeedTask;
   const readEvents = deps.readEvents ?? readCogSeedTaskEvents;
   const listSessions = deps.listSessions ?? listCogSeedSessions;
   const readSession = deps.readSession ?? readCogSeedSession;
@@ -1181,15 +1187,25 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       const groupChatModes = await conversationAgentCountsForTasks(userId, tasks);
       const directTasks = tasks.filter((task) => task.sessionId === session.sessionId);
       const collaboration = directTasks.length
-        ? await this.collaborationSnapshot(userId, taskId ? { taskId } : { sessionId: session.sessionId })
+        // Hand down the scan we already paid for. Both sides derive the same
+        // `visibleDashboardTasks(listTasks(...))` set, and a session read is a
+        // hot path — the watch stream replays it on every task change.
+        ? await this.collaborationSnapshot(userId, taskId ? { taskId } : { sessionId: session.sessionId }, tasks)
         : null;
       return { session: sessionSummary(session, directTasks, groupChatModes), collaboration };
     },
 
-    async collaborationSnapshot(userId: string, payload: unknown): Promise<CogSeedRendererCollaborationSnapshot> {
+    /** `visibleTasks` lets a caller that has already scanned pass its result
+     * down instead of paying for a second full task-directory read. Omit it
+     * and the snapshot scans for itself, as every external caller does. */
+    async collaborationSnapshot(
+      userId: string,
+      payload: unknown,
+      visibleTasks?: CogSeedTaskRecord[],
+    ): Promise<CogSeedRendererCollaborationSnapshot> {
       assertCogSeedUserId(userId);
       const input = normalizeProjectionInput(payload);
-      const allTasks = await visibleDashboardTasks(userId, await listTasks(userId));
+      const allTasks = visibleTasks ?? await visibleDashboardTasks(userId, await listTasks(userId));
       const visibleTaskById = new Map(allTasks.map((task) => [task.taskId, task]));
       if (input.taskId && !visibleTaskById.has(input.taskId)) {
         throw new Error('CogSeed collaboration task not found');
@@ -1445,6 +1461,15 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
         if (!task.conversationId) throw new Error('Group Chat task has no conversation');
         if (input.action === 'abort') {
           await abortGroupChat(userId, task.conversationId);
+          // A run parked in `recoverable` by a restart has no live turn for
+          // the delegated abort to stop, so nothing would ever move the card
+          // out of the attention column. Settle it here — the state machine
+          // already allows `recoverable -> cancelled`. Runs that are still
+          // created/queued/running are left alone: Group Chat owns their
+          // terminal transition and forcing one would race it.
+          if (task.status === 'recoverable') {
+            await transitionTask(userId, input.taskId, 'cancelled');
+          }
         } else if (input.action === 'retry') {
           if (!input.requestId) throw new Error('requestId required');
           if (!task.groupChatMessageId) throw new Error('Group Chat retry target is unavailable');
