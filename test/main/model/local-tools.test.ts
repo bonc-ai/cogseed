@@ -4,7 +4,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
-const SHELL_SUCCESS_TIMEOUT_MS = process.platform === 'win32' ? 15_000 : 5_000;
+const SHELL_SUCCESS_TIMEOUT_MS = process.platform === 'win32' && process.env.CI
+  ? 60_000
+  : process.platform === 'win32'
+    ? 15_000
+    : 5_000;
 
 // ── Electron mock (for html_to_pdf / markdown_to_pdf paths) ─────────────
 

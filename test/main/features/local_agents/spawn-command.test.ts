@@ -169,14 +169,15 @@ describe('spawn-command · node fallback (WorkBuddy codebuddy without system nod
     // real node binary instead of assuming the runtime's own directory.
     const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-node-path-'));
     try {
-      fs.writeFileSync(path.join(nodeDir, 'node'), '');
+      const nodeName = process.platform === 'win32' ? 'node.exe' : 'node';
+      fs.writeFileSync(path.join(nodeDir, nodeName), '');
       const envWithNode = { PATH: nodeDir };
-      expect(hasNodeOnPath(envWithNode, 'darwin')).toBe(true);
+      expect(hasNodeOnPath(envWithNode, process.platform)).toBe(true);
     } finally {
       fs.rmSync(nodeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
-    const envWithoutNode = { PATH: '/nonexistent-a:/nonexistent-b' };
-    expect(hasNodeOnPath(envWithoutNode, 'darwin')).toBe(false);
+    const envWithoutNode = { PATH: ['/nonexistent-a', '/nonexistent-b'].join(path.delimiter) };
+    expect(hasNodeOnPath(envWithoutNode, process.platform)).toBe(false);
   });
 
   it('falls back to Electron node when the script needs node but PATH has none', () => {

@@ -19,8 +19,9 @@ import {
 
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const IS_WINDOWS = process.platform === "win32";
-const NATIVE_SHELL_STARTUP_BUDGET_MS = IS_WINDOWS ? 15_000 : 5_000;
-const NATIVE_SHELL_TEST_TIMEOUT_MS = IS_WINDOWS ? 25_000 : 10_000;
+const WINDOWS_CI_SHELL_BUDGET_MS = IS_WINDOWS && process.env.CI ? 60_000 : 15_000;
+const NATIVE_SHELL_STARTUP_BUDGET_MS = IS_WINDOWS ? WINDOWS_CI_SHELL_BUDGET_MS : 5_000;
+const NATIVE_SHELL_TEST_TIMEOUT_MS = IS_WINDOWS ? WINDOWS_CI_SHELL_BUDGET_MS + 10_000 : 10_000;
 
 function shellQuote(value: string): string {
   return IS_WINDOWS
