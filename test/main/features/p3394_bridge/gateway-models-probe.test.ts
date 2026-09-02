@@ -148,6 +148,26 @@ describe('gateway extractClaudeResultUsage — reply-envelope usage payload', ()
     expect(out.model).toBe('claude-opus-5-20260101');
   });
 
+  it('falls back to modelUsage.canonicalModel (new claude result frames)', () => {
+    // 新版 claude：result 帧根级/ message.model 均不再携带模型名，per-model
+    // 用量挪进 modelUsage（canonicalModel 是规范名）。真机捕获的形状：
+    // modelUsage: { 'claude-sonnet-5[1M]': { canonicalModel: 'claude-sonnet-5', ... } }
+    const out = extractClaudeResultUsage({
+      usage: { input_tokens: 2790, output_tokens: 9444 },
+      total_cost_usd: 0.1756,
+      modelUsage: { 'claude-sonnet-5[1M]': { canonicalModel: 'claude-sonnet-5', inputTokens: 2790 } },
+    }) as { model?: string; input?: number };
+    expect(out.model).toBe('claude-sonnet-5');
+    expect(out.input).toBe(2790);
+    // 旧字段仍在时优先旧路径（message.model > 根级 model > canonicalModel）。
+    const legacyFirst = extractClaudeResultUsage({
+      usage: { input_tokens: 1 },
+      model: 'claude-opus-5',
+      modelUsage: { x: { canonicalModel: 'claude-sonnet-5' } },
+    }) as { model?: string };
+    expect(legacyFirst.model).toBe('claude-opus-5');
+  });
+
   it('returns undefined without a usage object (legacy frames)', () => {
     expect(extractClaudeResultUsage({ total_cost_usd: 0.01 })).toBeUndefined();
     expect(extractClaudeResultUsage(undefined)).toBeUndefined();

@@ -423,10 +423,15 @@ async function mapRuntimeEvent(
     ));
   }
   if (event.type === 'result' && event.status === 'completed') {
+    // 透传 adapter 终态信封携带的用量/模型自报（metadata.metrics）——
+    // exec 投影路径落库 metrics 与回读校验的数据源。
+    const metricsMeta = event.metadata && typeof (event.metadata as { metrics?: unknown }).metrics === 'object'
+      ? (event.metadata as { metrics?: unknown }).metrics
+      : undefined;
     const terminalEvent: CogSeedTerminalProjectionEvent = {
       eventId: `cogseed-event-terminal-${task.taskId}`,
       type: 'task.completed',
-      payload: { text: String(event.text || '') },
+      payload: { text: String(event.text || ''), ...(metricsMeta ? { metrics: metricsMeta } : {}) },
     };
     return finishRuntimeTask(
       userId,
