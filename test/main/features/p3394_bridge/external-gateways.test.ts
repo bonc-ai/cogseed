@@ -421,4 +421,45 @@ describe('P3394 external-agent gateway host', () => {
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
+
+  it('discloses effort_controllable for proprietary effort channels (claude/codex)', async () => {
+    // claude（MAX_THINKING_TOKENS）/ codex（model_reasoning_effort）的强度走
+    // 专有通道而非 effortArgs 模板——披露必须算上 effortChannel，否则刷新后
+    // 协商 false 压过兜底表、UI 置灰（Command+R 后强度消失的回归）。
+    const token = 'channel-test-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('channel-test-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      const diskRegistry = new P3394PeerRegistry({ filePath: registryFile });
+      if (diskRegistry.resolve(senderId).ok === false) {
+        diskRegistry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    listAgentsMock.mockResolvedValueOnce([]);
+    try {
+      const started = await startExternalGateway({ cli: 'claude', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(started.ok, 'claude start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const res = await fetch(`http://127.0.0.1:${started.value.port}/p3394/models`);
+      const caps = await res.json() as { effort_controllable?: boolean; model_controllable?: boolean };
+      expect(caps.model_controllable).toBe(true);
+      expect(caps.effort_controllable).toBe(true);  // 专有通道 effortChannel
+      void registry;
+    } finally {
+      await stopExternalGateway('claude');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
 });
