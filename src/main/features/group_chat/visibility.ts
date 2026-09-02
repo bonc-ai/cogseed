@@ -111,6 +111,9 @@ export interface GroupMessageMetrics {
   /** 该回合实际使用的模型 id（CLI 自报或主机下发值）——会话统计的上下文
    *  分母按它解析，CLI 回合不再错用 CogSeed 当前选中模型的窗口。 */
   model?: string;
+  /** CLI 自报的 API 级精确生成窗口（claude result 帧 duration_ms - ttft_ms，
+   *  覆盖思考段）。速度分母权威值；缺省回落本地打点（首文本→终态）。 */
+  decodeMs?: number;
 }
 
 export interface GroupMessage {

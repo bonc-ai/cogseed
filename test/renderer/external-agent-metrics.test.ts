@@ -121,6 +121,19 @@ describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
     expect(line?.outText).toBe('≈400');
   });
 
+  it('速度分母优先 CLI 自报 decodeMs（API 级，覆盖思考段）', () => {
+    // 本地打点窗口 = 首 3s→5s = 2s；自报 decodeMs = 4s（含思考段）。
+    // 分子 400 tok：自报分母 → 100 tok/s（正确）；本地打点会虚高到 200。
+    const line = messageMetricsLine({
+      startedAt: 1_000,
+      firstTokenAt: 3_000,
+      completedAt: 5_000,
+      decodeMs: 4_000,
+      usage: { outputTokens: 400 },
+    }) as { rateText: string };
+    expect(line?.rateText).toBe('100');
+  });
+
   it('keeps the legacy shape when no cost/model is reported', () => {
     const line = messageMetricsLine(turn());
     expect(line?.costText ?? null).toBeNull();
