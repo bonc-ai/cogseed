@@ -42,12 +42,9 @@ function messageMetricsLine(metrics) {
   if (typeof startedAt !== 'number' || typeof completedAt !== 'number') return null;
   const durationMs = Math.max(0, completedAt - startedAt);
   const ttft = typeof firstTokenAt === 'number' ? Math.max(0, firstTokenAt - startedAt) : null;
-  // 生成窗口分母：优先 CLI 自报的 API 级精确值（duration_ms - ttft_ms，
-  // 覆盖思考段）；缺省回落本地打点（首文本→终态，思考段会被挤出、速度
-  // 偏高——已知偏差，仅在自报缺失时兜底）。
-  const decodeMs = typeof metrics.decodeMs === 'number' && metrics.decodeMs > 0
-    ? metrics.decodeMs
-    : (typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null);
+  // 生成窗口（decode）：首个生成活动 → 终态。firstTokenAt 由 gateway-turn
+  // 在首个思考/工具/文本事件时打点（思考段计入窗口，速度不失真）。
+  const decodeMs = typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null;
   const hasTools = num(toolCalls) > 0;
   // DSH 口径：速度 = 生成阶段（decode）吞吐，分子是「思考 + 输出」合计
   // （reasoning 与最终文本都是逐 token 生成的）。measured=true（输出为按
@@ -112,10 +109,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
     if (typeof m.firstTokenAt === 'number' && typeof m.startedAt === 'number') {
       ttftMs += Math.max(0, m.firstTokenAt - m.startedAt);
       ttftN += 1;
-      // 分母优先 CLI 自报 decodeMs（API 级、覆盖思考段）；缺省用本地打点。
-      const d = (typeof m.decodeMs === 'number' && m.decodeMs > 0)
-        ? m.decodeMs
-        : Math.max(0, m.completedAt - m.firstTokenAt);
+      const d = Math.max(0, m.completedAt - m.firstTokenAt);
       const u0 = m.usage || {};
       // DSH 口径：decode 吞吐分子 = 思考 + 输出。
       const gen = num(u0.reasoningTokens) + num(u0.outputTokens);

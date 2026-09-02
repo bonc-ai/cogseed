@@ -195,22 +195,6 @@ describe('gateway extractClaudeResultUsage — reply-envelope usage payload', ()
     expect('reasoning' in bare).toBe(false);
   });
 
-  it('derives the precise decode window from duration_ms - ttft_ms (API-level)', () => {
-    // 速度分母权威值：思考发生在首文字之前，本地打点（首文本→终态）会把
-    // 思考段挤出窗口、速度虚高（用户锚点 200 vs 实际 156）——result 帧的
-    // duration_ms/ttft_ms 是 API 级计时，差值天然覆盖思考段。
-    const out = extractClaudeResultUsage({
-      usage: { input_tokens: 1 },
-      duration_ms: 5_441,
-      ttft_ms: 1_200,
-    }) as { decodeMs?: number };
-    expect(out.decodeMs).toBe(4_241);
-    // 缺任一字段或非正差值 → 不产出（渲染层回落本地打点）。
-    const noTtft = extractClaudeResultUsage({ usage: { input_tokens: 1 }, duration_ms: 5_000 }) as Record<string, unknown>;
-    expect('decodeMs' in noTtft).toBe(false);
-    const inverted = extractClaudeResultUsage({ usage: { input_tokens: 1 }, duration_ms: 800, ttft_ms: 900 }) as Record<string, unknown>;
-    expect('decodeMs' in inverted).toBe(false);
-  });
 
   it('returns undefined without a usage object (legacy frames)', () => {
     expect(extractClaudeResultUsage({ total_cost_usd: 0.01 })).toBeUndefined();

@@ -75,15 +75,9 @@ function extractClaudeResultUsage(ev) {
   if (details && typeof details === 'object' && typeof details.thinking_tokens === 'number') {
     out.reasoning = details.thinking_tokens;
   }
-  // API 级精确阶段计时（result 帧自报）：duration_ms 总时长 - ttft_ms 首
-  // token 时刻 = 精确生成窗口（DSH 的 decodeMs 精确版）。思考发生在首个
-  // 文字之前，本地打点（首文本→终态）会把思考挤进短窗口、速度虚高——
-  // 自报计时天然覆盖思考段。渲染层有它就不用本地打点兜底。
-  if (typeof ev.duration_ms === 'number' && Number.isFinite(ev.duration_ms)
-    && typeof ev.ttft_ms === 'number' && Number.isFinite(ev.ttft_ms)
-    && ev.duration_ms > ev.ttft_ms) {
-    out.decodeMs = ev.duration_ms - ev.ttft_ms;
-  }
+  // 注：result 帧的 duration_ms/ttft_ms 计时同样是聚合口径（实测
+  // ttft_ms≈duration_ms、"数到 20"自报 output 8955）——不可用作速度分母，
+  // 生成窗口用宿主本地打点（首个生成活动→终态，见 gateway-turn）。
   // 实际模型名三路径（新版 claude 把 per-model 用量挪进 result 帧的
   // modelUsage——canonicalModel 是规范名；旧版走 message.model / 根级
   // model）——metrics.model 是会话统计 ctx 分母的解析键。
