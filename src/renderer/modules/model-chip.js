@@ -31,6 +31,29 @@ let _modelChipBound = false;
 // reasoning capability). Unknown ids fall back to the name heuristic.
 const _modelReasoningByProvider = new Map();
 
+// auth.listEntries 不带 reasoning 标注，能力表过去只在下钻二级列表时填充
+// ——顶层菜单冷开会对自定义 provider 误显示「该模型不支持」。启动加载
+// 条目时按 provider 预取标注，与下钻共用同一张表（同一数据源）。
+async function _prefetchReasoningForEntries() {
+  const providers = new Set(_modelChipEntries.map((e) => e && e.provider).filter(Boolean));
+  let changed = false;
+  for (const provider of providers) {
+    // 已有表（含标注为空的空表）不再重复拉；IPC 失败不入表，下次打开重试。
+    if (_modelReasoningByProvider.has(provider)) continue;
+    try {
+      const res = await window.cogseed.invoke('auth.listModels', { provider });
+      if (!(res && res.ok && Array.isArray(res.models))) continue;
+      const table = {};
+      for (const m of res.models) {
+        if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
+      }
+      _modelReasoningByProvider.set(String(provider), table);
+      changed = true;
+    } catch { /* 下次打开菜单重试 */ }
+  }
+  return changed;
+}
+
 const _EFFORT_OPTIONS = ['auto', 'off', 'low', 'high'];
 
 function _modelSupportsThinking(modelId) {
@@ -61,6 +84,7 @@ async function refreshModelChipEntries() {
     if (res && res.ok && Array.isArray(res.entries)) {
       _modelChipEntries = res.entries;
       _modelChipRenderAll();
+      void _prefetchReasoningForEntries();
     }
   } catch (err) {
     _modelChipLog.warn('model entries refresh failed', { error: (err && err.message) || String(err) });
@@ -94,7 +118,15 @@ function _recipientAgent(target) {
     const r = (typeof getChatRecipient === 'function') ? getChatRecipient(target) : null;
     if (!r || r.kind !== 'agent' || !r.id) return null;
     const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
-    return list.find((a) => a && a.agent_id === r.id) || null;
+    const hit = list.find((a) => a && a.agent_id === r.id) || null;
+    if (!hit && typeof loadAgents === 'function' && !Array.isArray(_agentsCache)) {
+      // 缓存为 null（agent 编辑等流程会先置空再回填，回填失败则一直空）：
+      // 接收者明明是 agent 却解析不出 spec，chip/菜单会静默滑到指挥官的
+      // API 语义。后台补拉一次，拉回后 agents-cache-refreshed 事件会触发
+      // chip 重渲染自愈；本次渲染先按现状走。
+      try { void loadAgents(true); } catch (_) { /* already running */ }
+    }
+    return hit;
   } catch (_) { return null; }
 }
 
@@ -107,35 +139,54 @@ function _isCliAgent(agent) {
  *  global default. Returns:
  *  { mode:'cli'|'api', model, modelLabel, provider, providerLabel,
  *    effort, effortOverridden, effortSupported, modelOverridden } */
-// CogSeed 能把推理强度真实下发的 CLI：claude（网关信封与本地直连都消费
-// MAX_THINKING_TOKENS）。codex 的直连 backend 虽有 model_reasoning_effort
-// 实现，但用户实际走的 P3394 网关路径（gateway.cjs 驱动 app-server）尚无
-// 强度槽位，主机侧已统一 claude-only 过滤——不放假开关。其余 CLI 同理。
-const CLI_EFFORT_SUPPORTED = new Set(['claude']);
-
+// 外接智能体执行控制：模型/强度的可改性由能力表决定
+// （window.cliExecControl.execControlFor，与主进程 bus 同源）——claude/codex
+// 有真实下发链路（信封 execution_prefs → --model / thread config），其余
+// CLI 不放假开关。
 function _effectiveExecConfig(target) {
   const recipient = (typeof getChatRecipient === 'function') ? getChatRecipient(target) : { kind: 'commander' };
   const override = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
   const defaultEntry = _modelChipEntries[0] || null;
 
-  // CLI-backed local agent（方案 B）：模型不可控——P3394 网关信封没有
-  // model 栏位，实际模型由 CLI 自身配置决定。既不显示 runtime.model
-  // （网关不消费它，显示即误导）也不接受任务级 model 覆盖（假开关）。
-  // 推理强度按 CLI 是否有真实开关（claude）决定可否调整。
+  // CLI-backed local agent（CodexHost 显示规则照抄）：chip 永远显示具体模型名，
+  // 不显示「默认」占位——优先级：任务级覆盖 > agent 默认 runtime.model > 扫描
+  // current（CLI 自报当前）> 清单 default 条目（claude 'default'/workbuddy
+  // 'auto'）> 清单第一项；扫描在途显示「正在加载」；仅完全无数据才占位。
+  // 模型可控性由网关运行时协商（modelControllable）。effort 按兜底能力表。
   const agent = _recipientAgent(target);
   if (recipient.kind === 'agent' && _isCliAgent(agent)) {
     const cliType = (agent.runtime && agent.runtime.cli) || '';
-    const effortSupported = CLI_EFFORT_SUPPORTED.has(cliType);
+    const ctl = (typeof window !== 'undefined' && window.cliExecControl)
+      ? window.cliExecControl
+      : null;
+    const modelSupported = ctl ? ctl.modelControllableFor(cliType) : true;
+    // 强度可控性同模型：网关协商（effort_controllable，自建智能体经
+    // P3394_AGENT_EFFORT_ARGS 声明也协商为 true）优先，未协商走兜底表。
+    const effortSupported = ctl ? ctl.effortControllableFor(cliType) : false;
+    const runtimeModel = (agent.runtime && agent.runtime.model) || '';
+    const scanEntry = ctl ? ctl.cachedCliModels(cliType) : null;
+    const effective = ctl ? ctl.effectiveModelLabel(cliType, scanEntry) : null;
+    const modelChoice = (modelSupported && override.model) ? String(override.model)
+      : (modelSupported && runtimeModel) ? String(runtimeModel)
+      : '';
+    const scanning = ctl && ctl.scanInFlight(cliType) && !scanEntry;
+    const modelLabel = modelChoice
+      || (scanEntry && scanEntry.current)
+      || (effective ? effective.label : '')
+      || (scanning ? t('exec_config.cli_models_loading') : t('exec_config.cli_default_model'));
     return {
       mode: 'cli',
-      model: '',
-      modelLabel: t('exec_config.cli_default_model'),
+      cliType,
+      modelSupported,
+      model: modelChoice,
+      modelLabel,
+      modelIsCliCurrent: !modelChoice && !!(scanEntry && scanEntry.current),
       provider: '',
       providerLabel: cliType,
-      effort: (override.effort === 'low' || override.effort === 'high') ? override.effort : null,
-      effortOverridden: override.effort === 'low' || override.effort === 'high',
+      effort: (override.effort === 'off' || override.effort === 'low' || override.effort === 'high') ? override.effort : null,
+      effortOverridden: override.effort === 'off' || override.effort === 'low' || override.effort === 'high',
       effortSupported,
-      modelOverridden: false,
+      modelOverridden: !!(modelSupported && override.model),
       agent,
     };
   }
@@ -238,6 +289,25 @@ function _modelChipRenderAll() {
   document.querySelectorAll('.model-chip[data-model-target]').forEach((chip) => _modelChipRenderChip(chip));
 }
 
+/** 切到外接智能体时后台拉一次模型扫描（有缓存直接命中）——chip 的
+ *  「CLI 当前模型」标签来自扫描结果的 current 字段，异步回来重渲染。 */
+async function _scanCliCurrentForChips() {
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  if (!ctl) return;
+  const seen = new Set();
+  for (const target of ['conversation', 'new-chat', 'project']) {
+    try {
+      const agent = _recipientAgent(target);
+      if (!_isCliAgent(agent) || !agent.runtime || !agent.runtime.cli) continue;
+      const cli = agent.runtime.cli;
+      if (seen.has(cli)) continue;
+      seen.add(cli);
+      await ctl.loadCliModels(agent.agent_id, cli);
+    } catch { /* 扫描失败保持现状（占位标签）*/ }
+  }
+  _modelChipRenderAll();
+}
+
 function _modelChipRenderChip(chip) {
   const target = _chipTargetForElement(chip);
   const cfg = _effectiveExecConfig(target);
@@ -276,7 +346,9 @@ function _modelChipRenderChip(chip) {
   const overrideMarker = cfg.modelOverridden || cfg.effortOverridden;
   chip.classList.toggle('is-override', !!overrideMarker);
   chip.title = cliMode
-    ? t('exec_config.effort_cli_note')
+    ? (cfg.modelIsCliCurrent
+      ? t('exec_config.cli_current_model_title', { model: cfg.modelLabel })
+      : t('exec_config.effort_cli_note'))
     : t('exec_config.title');
 }
 
@@ -317,7 +389,15 @@ function _bindModelMenuDismiss(menu, anchor) {
   };
   menu._onDocDown = onDocDown;
   menu._onKey = onKey;
-  const onViewportChange = () => _closeModelMenu();
+  // 页面滚动/窗口变化会让 fixed 定位的菜单脱离锚点，照旧收起；但菜单
+  // 自己的滚动（模型列表翻页、搜索框横滚——capture 监听对不冒泡的
+  // scroll 事件同样可见）必须忽略，否则用户一滚菜单就秒关，长清单
+  // 根本翻不动。
+  const onViewportChange = (e) => {
+    const t = e && e.target;
+    if (t && t.nodeType && (t === menu || menu.contains(t))) return;
+    _closeModelMenu();
+  };
   menu._onViewportChange = onViewportChange;
   setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
   document.addEventListener('keydown', onKey, true);
@@ -341,6 +421,11 @@ function _toggleExecConfigMenu(anchor) {
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
 
+  // 开菜单瞬间用当前状态同步重画锚点 chip：chip 平时靠事件重渲染
+  // （recipient/agents-cache 变化），任何一次事件丢失或时序错位都会让它
+  // 停在旧态——用户会看到 chip 写着 A、菜单列着 B。菜单与 chip 读同一个
+  // _effectiveExecConfig，这里同步重画后两者必然一致。
+  _modelChipRenderChip(anchor);
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
   menu.className = 'model-chip-menu model-chip-menu--exec';
@@ -373,16 +458,18 @@ function _renderExecConfigMenu(menu, anchor) {
   header.title = t('exec_config.title');
   menu.appendChild(header);
 
-  // CLI 场景（方案 B：模型不可控、不放假开关）——外接智能体实际用的模型
-  // 由 CLI 自身配置决定，P3394 网关信封没有 model 栏位，CogSeed 无法指定。
-  // 菜单只保留真实生效的控件：claude 的推理档位分段；其余 CLI 仅说明。
+  // CLI 场景（外接智能体执行控制）——能力表内的 CLI（claude/codex）模型与
+  // 强度真实可控：模型列表来自运行时扫描（问 CLI 本身，IPC
+  // p3394.external.listModels）∪ 静态目录 ∪ 手输记忆；表外 CLI 只保留说明
+  // （不放假开关）。扫描失败 → 回落静态+手输，UI 说明原因。
   if (cfg.mode === 'cli') {
     const cliType = cfg.providerLabel || '';
+    if (cfg.modelSupported) {
+      _menuSectionLabel(menu, 'exec_config.section_model', cfg.cliType || cliType);
+      void _renderCliModelList(menu, anchor, cfg, target, cliType);
+    }
+    _menuSectionLabel(menu, 'exec_config.section_effort');
     if (cfg.effortSupported) {
-      const modelNote = document.createElement('div');
-      modelNote.className = 'model-chip-menu-note';
-      modelNote.textContent = t('exec_config.cli_model_note', { cli: cliType });
-      menu.appendChild(modelNote);
       _renderCliEffortSegmented(menu, anchor, cfg, cliType);
     } else {
       const note = document.createElement('div');
@@ -402,6 +489,17 @@ function _renderExecConfigMenu(menu, anchor) {
   if (_modelChipEntries.length || cfg.model) {
     _renderApiProviderRows(menu, anchor, target, cfg);
   }
+
+  // 推理能力标注补拉（冷开兜底）：预取通常在条目加载时已完成，这里只处理
+  // 「菜单先开、标注后到」的窗口——取回新标注且菜单仍停在顶层时原位重画。
+  // changed 才重画（否则「重画→再预取→再重画」死循环），下钻视图不拽回。
+  menu.dataset.view = 'exec';
+  void _prefetchReasoningForEntries().then((changed) => {
+    if (changed && menu.isConnected && menu.dataset.view === 'exec') {
+      _renderExecConfigMenu(menu, anchor);
+      _positionModelMenu(menu, anchor);
+    }
+  });
 
   // ── Effort section ──
   _menuSectionLabel(menu, 'exec_config.section_effort');
@@ -559,6 +657,7 @@ function _applyModelPick(target, cfg, provider, model, modelLabel, providerLabel
  *  capability, cached for the effort gating). */
 async function _openProviderModels(menu, anchor, target, entry, cfg) {
   menu.innerHTML = '';
+  menu.dataset.view = 'providers';
 
   const back = document.createElement('button');
   back.type = 'button';
@@ -637,17 +736,193 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
   _positionModelMenu(menu, anchor);
 }
 
-/** claude 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
- *  把档位写进信封 execution_prefs，网关 claude runtime 转换为
- *  MAX_THINKING_TOKENS 环境变量注入。「关闭」对 claude 不可表达（无可靠的
- *  禁用思考入口），置灰防语义欺骗——选它实际等于「自动」。 */
+/** CLI 模型列表（扫描式）：打开即触发扫描（有缓存用缓存），列表 =
+ *  扫描 ∪ 静态目录 ∪ 手输记忆；选择写任务级 model 覆盖（bare id），再点
+ *  当前行取消覆盖。底部输入框接受任意模型 id（claude 接受别名与完整 id，
+ *  "or a full model ID"），记入 localStorage 供下次直接选。 */
+async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  if (!ctl) return;
+  const agentId = (cfg.agent && cfg.agent.agent_id) || '';
+
+  const loading = document.createElement('div');
+  loading.className = 'model-chip-menu-loading';
+  loading.textContent = t('exec_config.cli_models_scanning');
+  menu.appendChild(loading);
+  _positionModelMenu(menu, anchor);
+
+  const scan = await ctl.loadCliModels(agentId, cliType);
+  // 菜单可能在扫描期间被关闭（或重开为别的菜单）。
+  if (!menu.isConnected) return;
+  loading.remove();
+
+  const merged = ctl.mergedCliModels(cliType, scan);
+
+  // 搜索框（CodexHost 对标：长清单客户端过滤；输入事件 stopPropagation
+  // 防冒泡到宿主键盘处理，搜索框永不 disabled——禁用聚焦元素会丢焦点）。
+  let visibleMerged = merged;
+  const needsSearch = merged.length > 8;
+  if (needsSearch) {
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'model-chip-menu-search';
+    const search = document.createElement('input');
+    search.type = 'text';
+    search.className = 'model-chip-menu-input';
+    search.placeholder = t('exec_config.cli_models_search_ph');
+    search.maxLength = 100;
+    search.addEventListener('input', (e) => {
+      e.stopPropagation();
+      const q = String(search.value || '').trim().toLowerCase();
+      visibleMerged = !q
+        ? merged
+        : merged.filter((m) => m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+      renderModelRows();
+    });
+    for (const type of ['keydown', 'keyup', 'keypress']) {
+      search.addEventListener(type, (e) => e.stopPropagation());
+    }
+    searchWrap.appendChild(search);
+    menu.appendChild(searchWrap);
+    setTimeout(() => { try { search.focus(); } catch (_) { /* menu closed */ } }, 0);
+  }
+
+  const applyPick = (modelId, isCustom) => {
+    try {
+      if (typeof setExecOverride !== 'function') return;
+      const ov = getExecOverride(target) || {};
+      const { effort, ...rest } = ov;
+      if (!modelId) {
+        // 「跟随 CLI」= 清除 model 覆盖，保留 effort。
+        setExecOverride(target, effort ? { effort } : null);
+      } else {
+        if (isCustom && ctl) ctl.rememberCustomModel(cliType, modelId);
+        setExecOverride(target, { effort, model: modelId, ...(ov.modelLabel && ov.model === modelId ? { modelLabel: ov.modelLabel } : {}) });
+      }
+      _modelChipRenderAll();
+    } catch (err) {
+      _modelChipLog.warn('cli model pick failed', { error: (err && err.message) || String(err) });
+    }
+    _closeModelMenu();
+  };
+
+  // 扫描状态说明：失败时一行短注（静态/手输仍可用），不阻塞选择。ready 时
+  // 显示 CLI 自报的当前模型（含思考强度副信息，CodexHost resolvedModelLabel
+  // 式的"CLI 现在真实状态"展示）。
+  if (scan.state !== 'ready') {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    note.textContent = t('exec_config.cli_models_scan_fallback', { cli: cliType });
+    menu.appendChild(note);
+  } else if (scan.current) {
+    const cur = document.createElement('div');
+    cur.className = 'model-chip-menu-note';
+    cur.textContent = scan.currentEffort
+      ? t('exec_config.cli_models_current_with_effort', { model: scan.current, effort: scan.currentEffort })
+      : t('exec_config.cli_models_current', { model: scan.current });
+    menu.appendChild(cur);
+  }
+
+  // 「跟随 CLI」行：清除任务级模型覆盖，回到 CLI 自身默认——副标签亮出
+  // 该默认具体是什么（扫描披露的当前模型）。
+  const followRow = document.createElement('div');
+  followRow.className = 'model-chip-menu-item' + (!cfg.model ? ' is-default' : '');
+  followRow.innerHTML =
+    '<span class="model-chip-menu-main">' +
+    `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.cli_follow_default'))}</span>` +
+    (!cfg.model ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
+    '</span>' +
+    `<span class="model-chip-menu-sub">${escapeHtml(scan.current || cliType)}</span>`;
+  followRow.addEventListener('click', () => applyPick(''));
+  menu.appendChild(followRow);
+
+  // 模型行渲染（搜索过滤后增量重画；无匹配显示提示行）。
+  const rowsHost = document.createElement('div');
+  menu.appendChild(rowsHost);
+  const renderModelRows = () => {
+    rowsHost.textContent = '';
+    if (!visibleMerged.length) {
+      const none = document.createElement('div');
+      none.className = 'model-chip-menu-loading';
+      none.textContent = t('exec_config.cli_models_no_match');
+      rowsHost.appendChild(none);
+      return;
+    }
+    visibleMerged.forEach((m) => {
+    const isCurrent = cfg.model === m.id;
+    const item = document.createElement('div');
+    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
+    item.innerHTML =
+      '<span class="model-chip-menu-main">' +
+      `<span class="model-chip-menu-name">${escapeHtml(m.label)}</span>` +
+      (isCurrent
+        ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
+        : '') +
+      '</span>' +
+      // 副标题优先显示客户端同款描述文案（静态目录条目），无描述回落 id。
+      `<span class="model-chip-menu-sub">${escapeHtml(m.description || m.id)}</span>`;
+    item.addEventListener('click', () => applyPick(m.id, m.source === 'custom'));
+    rowsHost.appendChild(item);
+    });
+  };
+  renderModelRows();
+
+  // 手输行：任意模型 id（claude 明确接受 "a full model ID"；codex 同理）。
+  const customRow = document.createElement('div');
+  customRow.className = 'model-chip-menu-custom';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'model-chip-menu-input';
+  input.placeholder = t('exec_config.cli_model_custom_ph');
+  input.maxLength = 200;
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'model-chip-menu-custom-btn';
+  submit.textContent = t('exec_config.cli_model_custom_add');
+  const submitCustom = () => {
+    const id = String(input.value || '').trim();
+    if (!id) return;
+    applyPick(id, true);
+  };
+  submit.addEventListener('click', (e) => { e.stopPropagation(); submitCustom(); });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); submitCustom(); }
+  });
+  customRow.appendChild(input);
+  customRow.appendChild(submit);
+  menu.appendChild(customRow);
+
+  // 重扫：强制 refresh（网关缓存 + 渲染层缓存都穿透）。
+  const rescan = document.createElement('button');
+  rescan.type = 'button';
+  rescan.className = 'model-chip-menu-rescan';
+  rescan.textContent = t('exec_config.cli_models_rescan');
+  rescan.addEventListener('click', (e) => {
+    e.stopPropagation();
+    void ctl.loadCliModels(agentId, cliType, { refresh: true }).then(() => {
+      _renderExecConfigMenu(menu, anchor);
+      _positionModelMenu(menu, anchor);
+    });
+  });
+  menu.appendChild(rescan);
+  _positionModelMenu(menu, anchor);
+}
+
+/** CLI 的推理档位分段（「自动」= 不干预、跟随 CLI 自身默认）。CogSeed
+ *  把档位写进信封 execution_prefs：claude 走 MAX_THINKING_TOKENS 环境变
+ *  量；hermes/openclaw 等有单次强度参数的走参数模板（网关 effortArgs）。
+ *  「关闭」档仅对能表达禁用的 CLI 开放（hermes --reasoning none /
+ *  openclaw --thinking off）；claude 无禁用入口、codex 的 minimal 对应
+ *  "极简"而非关闭——置灰防语义欺骗。 */
 function _renderCliEffortSegmented(menu, anchor, cfg, cliType) {
   const target = _chipTargetForElement(anchor);
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  const offSupported = ctl ? ctl.execControlFor(cliType).effortOff : false;
   const seg = document.createElement('div');
   seg.className = 'model-chip-menu-segmented';
   _EFFORT_OPTIONS.forEach((level) => {
     const isActive = (cfg.effort || 'auto') === level;
-    const unavailable = level === 'off';
+    const unavailable = level === 'off' && !offSupported;
     const pill = document.createElement('button');
     pill.type = 'button';
     pill.className = 'model-chip-seg-btn'
@@ -698,22 +973,34 @@ function initModelChip() {
       if (e && e.detail && Array.isArray(e.detail.entries)) {
         _modelChipEntries = e.detail.entries;
         _modelChipRenderAll();
+        void _prefetchReasoningForEntries();
       } else {
         refreshModelChipEntries();
       }
     });
     window.addEventListener('i18n-change', () => _modelChipRenderAll());
     // Recipient changes re-resolve the effective config (agent defaults /
-    // API model pick) — the chip must follow the target.
-    window.addEventListener('cogseed:recipient-changed', () => _modelChipRenderAll());
+    // API model pick) — the chip must follow the target. CLI agents also
+    // kick a background model scan so the chip can surface the CLI's REAL
+    // current model (e.g. "Sonnet 5") instead of a generic placeholder.
+    window.addEventListener('cogseed:recipient-changed', () => {
+      _modelChipRenderAll();
+      void _scanCliCurrentForChips();
+    });
     // Agent defaults (default_model / default_thinking) can change from the
     // agent settings page while a chat is open.
     window.addEventListener('cogseed:agents-cache-refreshed', () => _modelChipRenderAll());
   }
   refreshModelChipEntries();
   refreshModelChipEffort();
+  // 恢复会话场景：打开应用就可能停在外接智能体的会话里——预扫一次让
+  // chip 直接显示 CLI 当前模型（有缓存时无感命中）。
+  void _scanCliCurrentForChips();
 }
 
 window.initModelChip = initModelChip;
 window.refreshExecConfigChip = _modelChipRenderAll;
 window.getModelChipEntries = getModelChipEntries;
+// 顶层拖拽区等外部表面需要在视口/视图变化时收起悬浮菜单（boot.js 防御性
+// 调用；top-drag-regions 契约测试钉住此导出）。
+window.closeModelChipMenu = _closeModelMenu;

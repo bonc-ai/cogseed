@@ -59,6 +59,8 @@ export interface CogSeedGroupChatProjectionDeps {
     turnId: string;
     text: string;
     process: ProjectionProcessItem[];
+    /** adapter 透传的用量/模型自报（CLI 自报数字字段），随消息落 metrics。 */
+    metrics?: unknown;
     failureKind?: 'runtime';
     failureCode?: string;
     terminalStatus?: 'completed' | 'failed';
@@ -269,6 +271,7 @@ const defaultDeps: CogSeedGroupChatProjectionDeps = {
       turnId: input.turnId,
       text: handback.text,
       process: input.process,
+      ...(input.metrics ? { metrics: input.metrics } : {}),
       ...(input.failureKind ? { failureKind: input.failureKind } : {}),
       ...(input.failureCode ? { failureCode: input.failureCode } : {}),
       ...(input.terminalStatus ? { terminalStatus: input.terminalStatus } : {}),
@@ -329,6 +332,11 @@ export function createCogSeedGroupChatProjection(
           if (isTerminal(input.event.type)) {
             const terminal = terminalText(input.event);
             if (terminal || input.event.type === 'task.completed') {
+              // adapter → runtime-controller 透传来的用量/模型自报
+              //（payload.metrics：{usage:{...}, model?}）随终态消息落库。
+              const metricsMeta = input.event.payload && typeof (input.event.payload as { metrics?: unknown }).metrics === 'object'
+                ? (input.event.payload as { metrics?: unknown }).metrics
+                : undefined;
               const terminalProjection = await withProjectionConversationEffect(
                 input,
                 deps,
@@ -339,6 +347,7 @@ export function createCogSeedGroupChatProjection(
                   turnId: input.executionId || input.taskId,
                   text: terminal?.text || '',
                   process: nextState.process,
+                  ...(metricsMeta ? { metrics: metricsMeta } : {}),
                   ...(terminal?.failureKind ? { failureKind: terminal.failureKind } : {}),
                   ...(terminal?.failureCode ? { failureCode: terminal.failureCode } : {}),
                   terminalStatus: input.event.type === 'task.failed' ? 'failed' : 'completed',

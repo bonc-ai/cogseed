@@ -11580,6 +11580,74 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--muted);
   padding: 4px 8px 6px;
 }
+/* 二级列表返回行：轻量文字钮（无框，悬停浅底），弱于行级条目。 */
+.model-chip-menu-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 2px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.model-chip-menu-back:hover { background: var(--surface-2); }
+.model-chip-menu-back-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+/* 外接智能体模型菜单：搜索框（长清单客户端过滤，CodexHost 对标）。 */
+.model-chip-menu-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding: 2px 4px 6px;
+}
+.model-chip-menu-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  outline: none;
+}
+.model-chip-menu-input:focus { border-color: var(--primary, var(--border)); }
+/* 手输自定义模型 id 行 + 重扫按钮。 */
+.model-chip-menu-custom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 4px 2px;
+}
+.model-chip-menu-custom .model-chip-menu-input { flex: 1; }
+.model-chip-menu-custom-btn,
+.model-chip-menu-rescan {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  cursor: pointer;
+}
+.model-chip-menu-custom-btn:hover,
+.model-chip-menu-rescan:hover { background: var(--surface-3, var(--surface-2, var(--surface))); }
+.model-chip-menu-rescan {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  text-align: center;
+  color: var(--muted);
+}
 .model-chip-menu-item {
   display: flex;
   flex-direction: column;
@@ -11591,6 +11659,37 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-chip-menu-item:hover { background: var(--surface-2); }
 .model-chip-menu-item.is-default { background: var(--primary-soft); }
+/* 行尾下钻箭头：贴右缘垂直居中的小图标钮。行容器是 column 布局，若让
+   按钮参与流式排版会被拉成第二行的全宽大按钮（吃到全局按钮样式更糟），
+   所以绝对定位；有箭头的行给文字让出右侧空间。特异性压过下方的
+   .model-chip-menu--exec 条目覆盖（同处仅 exec 菜单有箭头行）。 */
+.model-chip-menu--exec .model-chip-menu-item:has(> .model-chip-menu-arrow) { padding-right: 32px; }
+.model-chip-menu-arrow {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.model-chip-menu-arrow:hover {
+  background: var(--surface-3, var(--surface-2, var(--surface)));
+  color: var(--text);
+}
+.model-chip-menu-arrow-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
 /* 主菜单入口：模型 / 思考强度，文字与右箭头同行（覆盖上面的 column）。 */
 .model-chip-menu-item.model-chip-menu-trigger {
   flex-direction: row;
@@ -11762,6 +11861,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .model-chip-menu-section-extra { font-weight: 500; text-transform: none; letter-spacing: 0; }
 .model-chip-menu-note {
+  padding: 3px 10px 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+/* 扫描中 / 无匹配等状态文字：与 note 同层的弱化文本。 */
+.model-chip-menu-loading {
   padding: 3px 10px 5px;
   font-size: 10.5px;
   color: var(--muted);

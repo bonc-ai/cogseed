@@ -176,8 +176,8 @@ describe('conversation message metrics line', () => {
   it('mounts both code paths: streaming finalize and history append', () => {
     // Contract: the finalize placeholder path and the appendChatMessage history
     // path both sync `._msgMetrics` and call `_mountMsgMeta`.
-    const finalizeCalls = source.match(/ph\._msgMetrics = gm\.metrics \|\| null;\s*\n\s*_mountMsgMeta\(ph, gm\.metrics\);/);
-    const historyCalls = source.match(/msgDiv\._msgMetrics = message\.metrics \|\| null;\s*\n\s*_mountMsgMeta\(msgDiv, message\.metrics\);/);
+    const finalizeCalls = source.match(/ph\._msgMetrics = gm\.metrics \|\| null;\s*\n\s*(?:ph\._msgExecMeta = [^\n]*\n\s*)?_mountMsgMeta\(ph, gm\.metrics\);/);
+    const historyCalls = source.match(/msgDiv\._msgMetrics = message\.metrics \|\| null;\s*\n\s*(?:msgDiv\._msgExecMeta = [^\n]*\n\s*)?_mountMsgMeta\(msgDiv, message\.metrics\);/);
     expect(finalizeCalls).not.toBeNull();
     expect(historyCalls).not.toBeNull();
     // History gm → legacy conversion must carry the optional metrics field.
