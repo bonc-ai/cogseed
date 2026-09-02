@@ -38,7 +38,7 @@
     sideCollapsed: false, // 知识库列表面板收起
     treeFilter: '', // 库树搜索关键词（过滤个人库+共享库）
     qaAttachments: [], // 本次提问挂载的附件 [{name, path, size}]（最多 5 个）
-    qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）
+    qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）；脑图条目 {role:'assistant', kind:'mindmap', key, label, ts}
     qaSessions: [], // 会话列表 [{id, title, msgs, ts}]（持久化 localStorage）
     qaSessionId: null, // 当前会话 id
   };
@@ -1473,6 +1473,77 @@
     }
   }
 
+  // 降级/失败提示（source='degraded'）：说明原因并给重试入口，
+  // 避免把「单节点知识库」当正常脑图展示（此前用户以为模型只生成了这么点）。
+  function _mmDegradedHtml(reason) {
+    const texts = {
+      empty: '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
+      timeout: '脑图生成超时：本地模型排队/推理超过 2 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
+      'model-failed': '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。',
+    };
+    const tip = texts[reason] || texts['model-failed'];
+    const withRetry = reason !== 'empty';
+    return '<div class="kb-mm-fail">' + tip
+      + (withRetry ? '<br><button type="button" class="kb-mm-retry-btn">🔄 重新生成</button>' : '')
+      + '</div>';
+  }
+
+  // ── 脑图入会话历史（方案 A）：快照 key + kind:'mindmap' 消息条目 ──
+  // 快照 key 与手动存档（space:xxx / dir:xxx）分开：`<base>#<会话>-<时间戳>`，
+  // 每次生成独立快照，历史里的旧脑图不被新生成覆盖；'#' 标记在存档列表中被过滤。
+  function _mmSnapshotKey() {
+    const base = _state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`;
+    const sid = String(_state.qaSessionId || 'solo').replace(/[^0-9a-zA-Z_-]/g, '');
+    return `${base}#${sid}-${Date.now()}`;
+  }
+
+  // 生成成功（非降级）后：自动存档快照并写入当前会话历史，刷新/切会话可还原
+  function _mmRecordToHistory(root) {
+    if (!root || !root.label) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const key = _mmSnapshotKey();
+    window.cogseed.invoke('kb.mindmap.save', { key, root })
+      .then((r) => {
+        if (!r || !r.ok) return;
+        _state.qaHistory.push({ role: 'assistant', kind: 'mindmap', content: '', key, label: root.label, ts: Date.now() });
+        if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
+        _qaSaveCurrentSession();
+      })
+      .catch(() => { /* 快照失败不阻塞展示；手动存档通道不受影响 */ });
+  }
+
+  // 从会话历史还原一条脑图消息：先占位，再按 key 异步读档渲染
+  function _appendMindmapMessage(box, m) {
+    const ai = document.createElement('div');
+    ai.className = 'kb-qa-msg is-ai';
+    const headLabel = m && m.label ? ' · ' + String(m.label).slice(0, 20) : '';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-mm-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览' + _esc(headLabel) + '</div>'
+      + '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
+    ai.appendChild(body);
+    if (box) box.appendChild(ai);
+    const canvas = body.querySelector('.kb-wb-mm-canvas');
+    if (!m || !m.key || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图存档不可用</div>';
+      return;
+    }
+    window.cogseed.invoke('kb.mindmap.load', { key: m.key })
+      .then((r) => {
+        if (!canvas) return;
+        if (!r || !r.ok || !r.root) {
+          canvas.innerHTML = '<div class="kb-mm-fail">脑图存档已失效（可能已被删除）</div>';
+          return;
+        }
+        const root = r.root;
+        _state.mmCollapsed.clear();
+        canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = root;
+        _bindMindCanvas(canvas);
+      })
+      .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
+  }
+
   // 生成脑图 → 作为产物追加到**对话消息区**（kb-qa-messages），
   // 与问答流同区可见、可滚动，不藏在解析卡的折叠区。
   // 生成脑图 → 调本地 kb.mindmap（多级层级 JSON）→ 对话区渲染精致树形脑图
@@ -1487,7 +1558,7 @@
     body.className = 'kb-qa-msg-body kb-mm-msg';
     body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览</div>'
       + '<div class="kb-wb-mm-canvas" id="kb-wb-mm-canvas">'
-      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–60 秒）…</div></div>';
+      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div></div>';
     ai.appendChild(body);
     box.appendChild(ai);
     const canvas = body.querySelector('.kb-wb-mm-canvas');
@@ -1502,12 +1573,23 @@
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          canvas.innerHTML = _mmDegradedHtml(res.reason);
+          const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
+          if (retryBtn) retryBtn.addEventListener('click', () => {
+            ai.remove();
+            _genMindmap();
+          });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
+        if (res.source === 'generated') _mmRecordToHistory(res.root);
       })
       .catch(() => {
         _mmGenerating = false;
@@ -1540,12 +1622,23 @@
       .then((res) => {
         btn.disabled = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          canvas.innerHTML = _mmDegradedHtml(res.reason);
+          const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
+          if (retryBtn) retryBtn.addEventListener('click', () => {
+            holder.remove();
+            _genMindmapFromText(text, btn);
+          });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
+        if (res.source === 'generated') _mmRecordToHistory(res.root);
       })
       .catch(() => {
         btn.disabled = false;
@@ -1555,7 +1648,11 @@
 
   // 对话区脑图 = 缩略预览：点击 → 唤起弹窗（完整阅读/折叠/编辑/导出都在弹窗内）
   function _bindMindCanvas(canvas) {
-    canvas.addEventListener('click', () => _openMindPreview());
+    canvas.addEventListener('click', () => {
+      // 历史里可能有多张脑图：优先打开当前画布对应的快照树
+      if (canvas._mmRoot) _state.lastMind = canvas._mmRoot;
+      _openMindPreview();
+    });
   }
 
   // 折叠 / 展开一级分支（数据驱动重渲染）
@@ -1865,7 +1962,7 @@
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     _mmGenerating = true;
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒）…</div>';
+    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div>';
     window.cogseed.invoke('kb.mindmap', {
       dir: _state.spaceId ? null : (_state.currentLib || null),
       spaceId: _state.spaceId || null,
@@ -1874,6 +1971,17 @@
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          const wrap = document.getElementById('kb-mm-overlay-wrap');
+          if (wrap) {
+            wrap.innerHTML = _mmDegradedHtml(res.reason)
+              + '<div class="kb-mm-refresh-hint" style="color:var(--kb-muted,#6E8578);font-size:12px;margin-top:8px">原脑图已保留，未受影响</div>';
+            const retryBtn = wrap.querySelector('.kb-mm-retry-btn');
+            if (retryBtn) retryBtn.addEventListener('click', _mmRefreshMindmap);
+          }
+          if (typeof uiToast === 'function') uiToast('重新生成未完成，已保留原脑图', { variant: 'warning' });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
@@ -1898,7 +2006,10 @@
       return;
     }
     window.cogseed.invoke('kb.mindmap.list').then((r) => {
-      const items = (r && Array.isArray(r.items) ? r.items : []).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+      // 历史快照（key 含 '#'）只随会话历史还原，不混进手动存档列表
+      const items = (r && Array.isArray(r.items) ? r.items : [])
+        .filter((m) => !String(m.key || '').includes('#'))
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
       if (!items.length) {
         menu.innerHTML = '<div class="kb-mm-open-item is-empty">还没有保存的脑图</div>';
         return;
@@ -2578,16 +2689,24 @@
     _clearQa();
     if (typeof uiToast === 'function') uiToast('已新建对话', { variant: 'info' });
   }
-  // 载入历史会话：恢复消息区 + 上下文
+  // 载入历史会话：恢复消息区 + 上下文（脑图消息按 kind 走快照读档渲染）
   function _qaLoadSession(id) {
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    _state.qaHistory = (s.msgs || []).map((m) => ({ role: m.role, content: m.content }));
+    _state.qaHistory = (s.msgs || []).map((m) => (
+      m && m.kind === 'mindmap'
+        ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
+        : { role: m.role, content: m.content }
+    ));
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
     for (const m of _state.qaHistory) {
+      if (m.kind === 'mindmap') {
+        _appendMindmapMessage(box, m);
+        continue;
+      }
       const el = document.createElement('div');
       el.className = m.role === 'user' ? 'kb-qa-msg is-user' : 'kb-qa-msg is-ai';
       el.innerHTML = `<div class="kb-qa-msg-body">${_esc(m.content)}</div>`;
@@ -2631,8 +2750,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const id = btn.dataset.histDel;
+        const gone = _state.qaSessions.find((x) => x.id === id);
         _state.qaSessions = _state.qaSessions.filter((x) => x.id !== id);
         if (_state.qaSessionId === id) { _state.qaSessionId = null; _state.qaHistory = []; _clearQa(); }
+        // 删除会话时同步清理其脑图快照存档（key 含 '#' 的条目）
+        if (gone && window.cogseed && typeof window.cogseed.invoke === 'function') {
+          (gone.msgs || []).forEach((m) => {
+            if (m && m.kind === 'mindmap' && m.key) {
+              window.cogseed.invoke('kb.mindmap.delete', { key: m.key }).catch(() => { /* ignore */ });
+            }
+          });
+        }
         _qaPersist();
         _qaOpenHistory(); // 刷新列表
       });
@@ -2718,7 +2846,7 @@
         _state.qaAttachments = [];
         _renderQaAttachments();
       }
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.slice(0, -1) }, (ev) => {
+      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1) }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
