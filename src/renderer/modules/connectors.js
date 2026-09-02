@@ -943,7 +943,7 @@ function _parseEnvLines(text) {
 // single validated IPC route `connectors.add_custom`.
 function _openAddCustomDialog() {
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay ui-dialog-overlay open';
+  overlay.className = 'modal-overlay ui-dialog-overlay';
   overlay.innerHTML = `
     <div class="modal modal-standard ui-dialog connector-custom-dialog" role="dialog" aria-modal="true" aria-labelledby="connector-custom-title">
       <div class="modal-title ui-dialog-title" id="connector-custom-title">${escapeHtml(t('connectors.custom.title'))}</div>
@@ -1002,12 +1002,15 @@ function _openAddCustomDialog() {
     secStdio.style.display = stdio ? '' : 'none';
   });
 
-  const close = () => { document.removeEventListener('keydown', onKey, true); overlay.remove(); };
-  const onKey = (ev) => {
-    if (ev.isComposing || ev.keyCode === 229) return;
-    if (ev.key === 'Escape') close();
+  // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
+  const dialog = overlay.querySelector('[role="dialog"]');
+  const controller = typeof uiModalController === 'function'
+    ? uiModalController({ overlay, dialog, initialFocus: '[data-f="name"]', onClose: () => overlay.remove() })
+    : null;
+  const close = () => {
+    if (controller) controller.close('action');
+    else overlay.remove();
   };
-  document.addEventListener('keydown', onKey, true);
   overlay.querySelector('[data-act="cancel"]').addEventListener('click', close);
 
   const okBtn = overlay.querySelector('[data-act="ok"]');
@@ -1080,7 +1083,8 @@ function _openAddCustomDialog() {
       okBtn.textContent = t('connectors.custom.submit');
     }
   });
-  setTimeout(() => f('name').focus(), 0);
+  if (controller) controller.open();
+  else setTimeout(() => f('name').focus(), 0);
 }
 
 function _formatConnectError(errLike) {
