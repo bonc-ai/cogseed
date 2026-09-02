@@ -23,6 +23,7 @@ import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
 import * as shareFeishu from '../features/share/feishu-share';
+import * as shareCogseed from '../features/share/cogseed-publish';
 import * as personalContextManager from '../features/personal_context/manager';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
@@ -4202,6 +4203,70 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
+  },
+
+  // ── CogSeed 共享服务（方案 C）：发布到 cogseed-share 后端，权限弹窗设置真实生效 ──
+  'kb.share.cogseed.publish': async ({ spaceId, force } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
+    }
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    const joinMode = sp?.join_mode ?? 'direct';
+    const memberPermission = sp?.member_permission ?? 'view_export';
+    return shareCogseed.publishSpaceToCogseedShare(ctx.userId, spaceId, {
+      name: sp?.name || spaceId,
+      joinMode,
+      memberPermission,
+      description: sp?.description,
+    }, { force: force === true });
+  },
+  'kb.share.cogseed.update': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    if (!sp) return { ok: false, code: 'publish_failed', error: 'space not found' };
+    return shareCogseed.publishSpaceToCogseedShare(ctx.userId, spaceId, {
+      name: sp.name || spaceId,
+      joinMode: sp.join_mode ?? 'direct',
+      memberPermission: sp.member_permission ?? 'view_export',
+      description: sp.description,
+    }, { force: true });
+  },
+  'kb.share.cogseed.syncPolicy': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    if (!sp) return { ok: false, error: 'space not found' };
+    return shareCogseed.syncCogseedPolicy(ctx.userId, spaceId, {
+      joinMode: sp.join_mode ?? 'direct',
+      memberPermission: sp.member_permission ?? 'view_export',
+    });
+  },
+  'kb.share.cogseed.revoke': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    return shareCogseed.revokeCogseedShare(ctx.userId, spaceId);
+  },
+  'kb.share.cogseed.list': async (_payload, ctx) => ({ items: await shareCogseed.listCogseedShares(ctx.userId) }),
+  'kb.share.cogseed.get': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
+    return { state: await shareCogseed.getCogseedShare(ctx.userId, spaceId) };
+  },
+  'kb.share.cogseed.config.get': async (_payload, ctx) => {
+    const cfg = await shareCogseed.getCogseedShareConfig(ctx.userId);
+    return { configured: cfg !== null, ...(cfg ? { baseUrl: cfg.baseUrl } : {}) }; // 不回传 apiKey
+  },
+  'kb.share.cogseed.config.set': async ({ baseUrl, apiKey } = {}, ctx) => {
+    const url = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+    const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (!url || !key) return { ok: false, error: '请填写服务地址与 API Key' };
+    await shareCogseed.setCogseedShareConfig(ctx.userId, { baseUrl: url, apiKey: key });
+    return { ok: true };
+  },
+  'kb.share.cogseed.members': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    return shareCogseed.listCogseedMembers(ctx.userId, spaceId);
+  },
+  'kb.share.cogseed.review': async ({ spaceId, memberId, verdict } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !Number.isInteger(memberId)) return { ok: false, error: 'invalid params' };
+    return shareCogseed.reviewCogseedMember(ctx.userId, spaceId, memberId as number, verdict === 'reject' ? 'reject' : 'approve');
   },
 
   // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。

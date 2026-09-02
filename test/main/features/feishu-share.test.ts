@@ -17,7 +17,7 @@ import {
   HttpFeishuShareClient,
   type FeishuShareClient,
 } from '../../../src/main/features/share/feishu-share';
-import { userLocalConfigDir } from '../../../src/main/paths';
+import { userLocalConfigDir, spaceContextsDir } from '../../../src/main/paths';
 
 const UID = 'tester-001';
 
@@ -29,6 +29,15 @@ function clearShareState(): void {
   try { fs.rmSync(shareStateFile(), { force: true }); } catch { /* noop */ }
 }
 
+/** 为测试空间创建 contexts 目录 + mock 文件（collectSpaceMarkdown 直接读原始文件） */
+function seedSpaceContexts(spaceId: string, files: Record<string, string>): void {
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(spaceContextsDir(UID, spaceId), rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content, 'utf8');
+  }
+}
+
 // mock manager 凭据获取 + space 库（share 模块 import 的依赖）
 vi.mock('../../../src/main/features/personal_context/manager', () => ({
   getFeishuShareCredential: vi.fn(async () => ({
@@ -38,6 +47,8 @@ vi.mock('../../../src/main/features/personal_context/manager', () => ({
     unionId: 'mock-union',
     tenantDomain: 'mock.feishu.cn',
   })),
+  resolveTenantDomain: vi.fn(async () => 'mock.feishu.cn'),
+  getCachedTenantDomain: vi.fn(async () => null),
 }));
 
 vi.mock('../../../src/main/features/project_library_indexer', () => ({
@@ -137,6 +148,10 @@ describe('feishu-share › pushSpaceToFeishu', () => {
   beforeEach(() => {
     // 清空状态文件，保证用例间隔离（同一 UID 会累积 feishu-shares.json）
     clearShareState();
+    seedSpaceContexts('sp_1', {
+      'README.md': '# CogSeed\n\n知识库正文。',
+      'docs/guide.md': '# Guide\n\n使用说明。',
+    });
     client = new MockShareClient();
     // 注入 mock client：替换 HttpFeishuShareClient 构造（vi.spyOn 不可行时直接给 push 用）
     // 这里通过 vi.mock 返回的类不可替换，改为在测试中直接验证 push 走 client 接口的编排——
@@ -207,12 +222,16 @@ describe('feishu-share › pushSpaceToFeishu', () => {
   });
 
   it('写入内容包含文件清单（README + docs/guide）', async () => {
+    seedSpaceContexts('sp_3', {
+      'README.md': '# CogSeed\n\n知识库正文。',
+      'docs/guide.md': '# Guide\n\n使用说明。',
+    });
     const res = await pushSpaceToFeishu(UID, 'sp_3');
     expect(res.ok).toBe(true);
     const appendCall = client.calls.find((c) => c.startsWith('appendChildren:'));
     expect(appendCall).toBeDefined();
     const count = Number(appendCall?.split(':')[1] ?? 0);
-    expect(count).toBeGreaterThan(2); // 标题 + 正文段落
+    expect(count).toBeGreaterThan(2); // 标题 + 文件标题 + 正文段落
   });
 });
 

@@ -17,10 +17,11 @@ import * as fs from 'node:fs';
 
 import { createLogger } from '../../logger';
 import { readJson, writeJson, nowIso } from '../../storage';
-import { userLocalConfigDir } from '../../paths';
-import * as spaceLibrary from '../project_library_indexer';
-import { getFeishuShareCredential } from '../personal_context/manager';
+import { userLocalConfigDir, spaceContextsDir } from '../../paths';
+import { getFeishuShareCredential, resolveTenantDomain, getCachedTenantDomain } from '../personal_context/manager';
 import { hasFeishuShareScopes } from '../personal_context/feishu/oauth';
+import { docxBufferToMarkdown } from '../../util/extract-docx';
+import { pdfBufferToPages } from '../../util/extract-pdf';
 
 const log = createLogger('share:feishu');
 
@@ -194,13 +195,29 @@ export class HttpFeishuShareClient implements FeishuShareClient {
   }
 
   async setPublicAccess(token: string, type: 'wiki' | 'docx', access: FeishuShareAccess): Promise<void> {
-    // 新版 permission-public API（v2）：external_access 为 boolean，link_share_entity 三档。
+    // 新版 permission-public API（v2）：external_access 为 boolean。
+    // 完整 body 需含 security_entity（谁可复制/下载）等，否则组织外可读可能不生效。
     // ⚠️ type=wiki 不支持组织外分享（external_access/link_share_entity 均被拒）；
     //    组织外分享必须用 type=docx（对 docx 实体设权限，wiki 链接仍可访问）。
     const map = {
-      anyone: { external_access: true, link_share_entity: 'anyone_readable' },
-      tenant: { external_access: false, link_share_entity: 'tenant_readable' },
-      private: { external_access: false, link_share_entity: 'closed' },
+      anyone: {
+        external_access: true,
+        link_share_entity: 'anyone_readable',
+        security_entity: 'anyone_can_view',
+        comment_entity: 'anyone_can_view',
+        copy_entity: 'anyone_can_view',
+      },
+      tenant: {
+        external_access: false,
+        link_share_entity: 'tenant_readable',
+        security_entity: 'anyone_can_view',
+        comment_entity: 'anyone_can_view',
+        copy_entity: 'anyone_can_view',
+      },
+      private: {
+        external_access: false,
+        link_share_entity: 'closed',
+      },
     } as const;
     const body = map[access];
     await this.request(
@@ -357,24 +374,68 @@ function isValidState(value: unknown): value is FeishuShareState {
 }
 
 // ── 内容收集 ───────────────────────────────────────────────────────────────
-/** 从空间库收集 ready 文件的 Markdown（标题 + 分块正文），供渲染到飞书文档 */
-export function collectSpaceMarkdown(uid: string, spaceId: string, opts: { maxDocs?: number } = {}): { md: string; count: number } {
+/** 从空间 contexts 目录收集文件内容（直接读原始文件，完整正文 + 良好排版）。
+ *  - md/txt：直接读取原文
+ *  - docx：mammoth 转 Markdown（保留标题/列表/表格结构）
+ *  - pdf：pdfjs 提取文本（按页分隔）
+ *  - 其他（图片/二进制）：仅列文件名，不解析内容
+ *  相比旧实现（读索引 chunks）能拿到完整内容，不再"只显示 1 个文件"。 */
+export async function collectSpaceMarkdown(uid: string, spaceId: string, opts: { maxDocs?: number } = {}): Promise<{ md: string; count: number }> {
   const maxDocs = opts.maxDocs ?? MAX_DOCS_PER_SHARE;
-  const files = spaceLibrary
-    .listFiles(uid, spaceId)
-    .filter((f) => f.status === 'ready')
+  const root = spaceContextsDir(uid, spaceId);
+  const files = await _walkContextFiles(root);
+  // 只分享文本类文件（md/txt/docx/pdf）；按路径排序保证稳定顺序
+  const picked = files
+    .filter((f) => /\.(md|txt|markdown|docx|pdf)$/i.test(f))
     .slice(0, maxDocs);
+
   const parts: string[] = [];
-  for (const f of files) {
-    const chunks = spaceLibrary.readFileChunks(uid, spaceId, f.rel_path);
-    const head = (chunks || []).slice(0, 8)
-      .map((c) => (c.title ? `### ${c.title}\n\n${c.content ?? ''}` : `${c.content ?? ''}`))
-      .join('\n\n');
-    if (!head.trim()) continue;
-    parts.push(`## ${f.rel_path}\n\n${head}`);
+  for (const rel of picked) {
+    const abs = path.join(root, rel);
+    let text = '';
+    try {
+      const lower = rel.toLowerCase();
+      if (lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.txt')) {
+        text = fs.readFileSync(abs, 'utf8');
+      } else if (lower.endsWith('.docx')) {
+        text = await docxBufferToMarkdown(fs.readFileSync(abs));
+      } else if (lower.endsWith('.pdf')) {
+        const pages = await pdfBufferToPages(fs.readFileSync(abs));
+        text = pages.map((p, i) => `--- 第 ${i + 1} 页 ---\n${p}`).join('\n\n');
+      }
+    } catch (err) {
+      log.warn('share collect file failed', { rel, error: err instanceof Error ? err.message : String(err) });
+      text = '';
+    }
+    const clean = (text || '').trim();
+    if (!clean) continue; // 空内容跳过（如纯图片 PDF）
+    parts.push(`## 📄 ${rel}\n\n${clean}`);
   }
+
   const md = parts.join('\n\n---\n\n').slice(0, MAX_MD_BYTES_PER_DOC);
-  return { md, count: files.length };
+  return { md, count: picked.length };
+}
+
+/** 递归遍历目录，返回相对路径列表（排除隐藏文件与系统目录） */
+async function _walkContextFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith('.') || e.name === 'chats' || e.name === 'sessions' || e.name === 'chat_attachments' || e.name === 'chat_artifacts' || e.name === 'workspace') continue;
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), rel);
+      else out.push(rel);
+    }
+  };
+  walk(root, '');
+  out.sort();
+  return out;
 }
 
 // ── 分享主流程 ─────────────────────────────────────────────────────────────
@@ -402,11 +463,15 @@ export async function pushSpaceToFeishu(uid: string, spaceId: string, opts: Push
   }
 
   try {
+    // 解析真实租户域名（优先缓存；失败回退 open.feishu.cn 或凭据携带的域名）
+    const tenantDomain = await resolveTenantDomain(uid)
+      ?? credential.tenantDomain
+      ?? await getCachedTenantDomain(uid);
     const client = new HttpFeishuShareClient({
       accessToken: credential.accessToken,
-      tenantDomain: credential.tenantDomain,
+      tenantDomain,
     });
-    const { md, count } = collectSpaceMarkdown(uid, spaceId);
+    const { md, count } = await collectSpaceMarkdown(uid, spaceId);
     const spaceMeta = await _readSpaceMeta(uid, spaceId);
     const spaceName = spaceMeta?.name || spaceId;
 
@@ -439,7 +504,7 @@ export async function pushSpaceToFeishu(uid: string, spaceId: string, opts: Push
       fileCount: count,
       createdAt: existing?.createdAt ?? nowIso(),
       updatedAt: nowIso(),
-      tenantDomain: credential.tenantDomain,
+      tenantDomain: tenantDomain || credential.tenantDomain,
     };
     const items = (await readStates(uid)).filter((s) => s.spaceId !== spaceId);
     items.push(state);
@@ -459,7 +524,7 @@ export async function pushSpaceToFeishu(uid: string, spaceId: string, opts: Push
 export async function shareNeedsUpdate(uid: string, spaceId: string): Promise<{ needed: boolean; current?: FeishuShareState }> {
   const existing = (await readStates(uid)).find((s) => s.spaceId === spaceId);
   if (!existing) return { needed: true };
-  const { md } = collectSpaceMarkdown(uid, spaceId);
+  const { md } = await collectSpaceMarkdown(uid, spaceId);
   const hash = crypto.createHash('sha256').update(md).digest('hex');
   return { needed: existing.contentHash !== hash, current: existing };
 }
