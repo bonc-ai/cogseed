@@ -15,11 +15,12 @@ describe('macOS top drag regions', () => {
     expect(html).toMatch(new RegExp(`id="panel-${panel}"[\\s\\S]*?class="app-top-drag-strip"`));
   });
 
-  it('keeps Connections tabs and Workspace header controls above the drag strip', () => {
-    const raisedHeaderRule = css.match(/\.is-macos \.connections-tabs,\s*\.is-macos \.ws-page-top\s*{([^}]*)}/)?.[1] || '';
+  it('keeps Connections tabs and unified page headers above the drag strip', () => {
+    const raisedHeaderRule = css.match(/\.is-macos \.connections-tabs,\s*\.is-macos \.ws-page-top,\s*\.is-macos \.ui-page-header\s*{([^}]*)}/)?.[1] || '';
     expect(raisedHeaderRule).toContain('z-index: calc(var(--z-raised) + 1);');
     expect(css).toMatch(/\.is-macos \.ws-page-top button,[\s\S]*?\.is-macos \.connections-tabs button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
     expect(css).toMatch(/\.is-macos \.ws-page-top button,[\s\S]*?\.is-macos \.ws-page-top input,[\s\S]*?-webkit-app-region:\s*no-drag;/);
+    expect(css).toMatch(/\.is-macos \.ui-page-header button,[\s\S]*?-webkit-app-region:\s*no-drag;/);
   });
 
   it('keeps the sticky Workspace detail header draggable while preserving its controls', () => {

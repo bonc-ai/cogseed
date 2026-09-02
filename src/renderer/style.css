@@ -334,7 +334,8 @@ html.is-macos body.sidebar-collapsed .sidebar-logo {
 /* Panel-scoped top strips sit above page content; raise each page header so
    its tabs and actions keep their own drag/no-drag behavior. */
 .is-macos .connections-tabs,
-.is-macos .ws-page-top {
+.is-macos .ws-page-top,
+.is-macos .ui-page-header {
   position: relative;
   z-index: calc(var(--z-raised) + 1);
 }
