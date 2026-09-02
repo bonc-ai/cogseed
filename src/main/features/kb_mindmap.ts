@@ -21,8 +21,12 @@ const log = createLogger('kb-mindmap');
 const CACHE_MAX = 50;
 /** 基于对话文本生成时的输入截断（防止超长回答撑爆 LLM 上下文） */
 const DOC_CHAR_CAP = 4000;
-/** LLM 单次脑图生成超时（网络不可达/模型卡住时降级为单节点，避免 UI 无限等待） */
-const MIND_LLM_TIMEOUT_MS = 45 * 1000;
+/** LLM 单次脑图生成超时（网络不可达/模型卡住时降级为单节点，避免 UI 无限等待）。
+ *  注意该预算包含「模型 turn 排队等待 + 模型推理 + 流式输出」全程：实测
+ *  DeepSeek 高峰期单次响应可达 60–90s，若用户同时跑 agent 长对话还会叠加排队，
+ *  45s 会把正常请求误杀成单节点，故放宽到 120s。超时仍降级，且迟到结果会被缓存
+ *  （见 runMindAttempt 的 late-cache），重试可秒出，不会每次都干等。 */
+const MIND_LLM_TIMEOUT_MS = 120 * 1000;
 
 /** 给 Promise 加超时：超时 reject（调用方 catch 后降级）。 */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -45,6 +49,11 @@ export interface KbMindNode {
 export interface KbMindResult {
   root: KbMindNode;
   source: 'generated' | 'cached' | 'degraded';
+  /** 降级原因（source='degraded' 时存在），供 UI 区分提示与重试引导：
+   *  - empty        ：库内没有 ready 文档要点，根本没调 LLM；
+   *  - timeout      ：LLM 排队+推理超过 MIND_LLM_TIMEOUT_MS 被掐断；
+   *  - model-failed ：模型调用返回失败（provider down / 解析失败等）。 */
+  reason?: 'empty' | 'timeout' | 'model-failed';
   fingerprint: string;
 }
 
@@ -96,6 +105,15 @@ export function loadMindmap(key: string): KbMindNode | null {
   return hit && hit.root ? hit.root : null;
 }
 
+/** 删除一条存档（key 不存在返回 false）。会话历史删除时用于清理其脑图快照。 */
+export function deleteMindmap(key: string): boolean {
+  const store = readStore();
+  if (!(key in store)) return false;
+  delete store[key];
+  writeStore(store);
+  return true;
+}
+
 const MIND_SYSTEM_PROMPT = `你是知识库结构整理助手。根据提供的文档要点，输出一个层级思维导图 JSON（协议对齐 NotebookLM mind-map 的层级结构）：
 {"root":{"label":"中心主题","children":[{"label":"分支1","children":[{"label":"子节点1a","children":[]},{"label":"子节点1b","children":[]}]},{"label":"分支2","children":[{"label":"子节点2a","children":[]}]}]}}
 要求：
@@ -106,6 +124,11 @@ const MIND_SYSTEM_PROMPT = `你是知识库结构整理助手。根据提供的�
 5. 只输出 JSON，不要任何额外文字。`;
 
 const cache = new Map<string, KbMindResult>();
+
+/** 同一指纹的在途生成（single-flight）。用户连点生成 / 后台预热 + 手动点击并发时，
+ *  只发起一次 LLM 调用，后到者复用同一 Promise 等待真实结果——避免重复请求
+ *  挤占模型队列（此前"点击两次 = 两个 45s 排队超时"的根因之一）。 */
+const inflight = new Map<string, Promise<KbMindResult>>();
 
 function fingerprint(docLines: string[]): string {
   return createHash('sha256').update(docLines.join('\u0000')).digest('hex').slice(0, 16);
@@ -142,32 +165,84 @@ export async function kbMindmap(
   if (hit && !opts?.force) return { ...hit, source: 'cached' };
 
   if (!docLines.length) {
-    return { root: { label: '知识库', children: [] }, source: 'degraded', fingerprint: fp };
+    return { root: { label: '知识库', children: [] }, source: 'degraded', reason: 'empty', fingerprint: fp };
   }
 
+  const existing = inflight.get(fp);
+  if (existing && !opts?.force) return existing;
+
+  const attempt = runMindAttempt(userId, docLines, fp, deps);
+  inflight.set(fp, attempt);
   try {
-    const res = await withTimeout(deps.complete({
-      userId,
-      message: `请根据以下知识库文档要点生成层级思维导图：\n\n${docLines.join('\n\n')}`,
-      systemPrompt: MIND_SYSTEM_PROMPT,
-      sessionId: `aside-kbmind-${userId}`,
-    }), MIND_LLM_TIMEOUT_MS);
+    return await attempt;
+  } finally {
+    if (inflight.get(fp) === attempt) inflight.delete(fp);
+  }
+}
+
+/** 发起一次真实的 LLM 脑图生成（带超时降级 + 迟到结果兜底缓存）。 */
+async function runMindAttempt(
+  userId: string,
+  docLines: string[],
+  fp: string,
+  deps: KbMindDeps,
+): Promise<KbMindResult> {
+  const startedAt = Date.now();
+  const completion = deps.complete({
+    userId,
+    message: `请根据以下知识库文档要点生成层级思维导图：\n\n${docLines.join('\n\n')}`,
+    systemPrompt: MIND_SYSTEM_PROMPT,
+    sessionId: `aside-kbmind-${userId}`,
+  });
+
+  try {
+    const res = await withTimeout(completion, MIND_LLM_TIMEOUT_MS);
     if (!res.ok) throw new Error(res.error || 'model failed');
     const root = parseMindJson(res.text);
     const result: KbMindResult = { root, source: 'generated', fingerprint: fp };
     cache.set(fp, result);
-    if (cache.size > CACHE_MAX) {
-      const first = cache.keys().next().value;
-      if (first) cache.delete(first);
-    }
+    trimCache();
     return result;
   } catch (err) {
+    const message = (err as Error).message || String(err);
+    const reason = message.startsWith('LLM timeout') ? 'timeout' as const : 'model-failed' as const;
     log.warn('kb mindmap failed, degrading to single node', {
       user_id: maskId(userId),
-      error: (err as Error).message,
+      error: message,
+      wait_ms: Date.now() - startedAt,
     });
-    return { root: { label: '知识库', children: [] }, source: 'degraded', fingerprint: fp };
+    // 迟到结果兜底缓存：仅在超时降级时挂接——底层请求仍在跑，若最终成功就把结果
+    // 写入缓存；用户随即重试（同指纹）即可命中秒出，而不是再等一次完整 LLM。
+    if (reason === 'timeout') {
+      completion.then((res) => {
+        if (!res?.ok || !res.text) return;
+        try {
+          const late = parseMindJson(res.text);
+          if (late && late.label) {
+            cache.set(fp, { root: late, source: 'generated', fingerprint: fp });
+            log.info('kb mindmap late result cached (arrived after timeout)', {
+              user_id: maskId(userId),
+              wait_ms: Date.now() - startedAt,
+            });
+          }
+        } catch { /* 迟到的文本解析失败不影响已返回的降级结果 */ }
+      }).catch(() => { /* 底层请求失败已由降级路径覆盖 */ });
+    }
+    return { root: { label: '知识库', children: [] }, source: 'degraded', reason, fingerprint: fp };
   }
 }
 
-export const _internals = { parseMindJson, fingerprint, clearCacheForTests: () => cache.clear() };
+function trimCache(): void {
+  if (cache.size <= CACHE_MAX) return;
+  const first = cache.keys().next().value;
+  if (first) cache.delete(first);
+}
+
+export const _internals = {
+  parseMindJson,
+  fingerprint,
+  clearCacheForTests: () => {
+    cache.clear();
+    inflight.clear();
+  },
+};
