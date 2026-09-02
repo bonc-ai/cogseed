@@ -4,10 +4,9 @@
 - date: 2026-09-01
 - branch: `feature/spec-workflow-project-memory`
 - baseline at start: `develop` @ `71453450`
-- baseline at MR: rebased onto `origin/develop` @ `220b5fe5` before review; no conflicts, all six files replayed intact
+- baseline at MR: rebased onto `origin/develop` @ `220b5fe5` before opening the MR; no conflicts, all six files replayed intact
 - commit: recorded in this branch's history; this record does not restate its own hash
 - plan: none — direct work, allowed by `spec-work` step 1.4 for a settled request; no plan was back-filled
-- handoff: [PROJECT_HANDOFF.md](../../PROJECT_HANDOFF.md)
 
 ## Goal
 
@@ -40,12 +39,16 @@ same results for the first four rows.
 | Check | Command | Result | Baseline |
 | --- | --- | --- | --- |
 | target file | `npm run test:js -- test/renderer/run-center-attempts.test.ts` | `passed` 4/4 (was 3/3) | `220b5fe5` |
-| record validator | `node scripts/check-spec-records.mjs` | `passed`, exit 0 | `220b5fe5` |
 | typecheck | `npm run typecheck` | `passed`, exit 0 no output | `220b5fe5` |
 | run-center suite | `npm run test:js -- test/renderer/run-center` | 29 passed, 1 pre-existing failure | `71453450` — not re-run after rebase |
 | lint | `npx eslint test/renderer/run-center-attempts.test.ts` | `passed`, exit 0 | `71453450` — not re-run after rebase |
 | full JS suite | `npm run test:js` | `failed` — 9953 passed / 33 failed across 13 files, none introduced here (A/B below) | `220b5fe5` |
 | Python resources | `npm run test:resources` | `not run` | — |
+
+Record validation also passed locally at the time via `scripts/check-spec-records.mjs`, personal
+tooling that is **local-only** — not distributed with this repository or this MR, and **not
+reviewer- or CI-reproducible**. It is recorded here as a local supplementary check, not as
+repository-level verification, and is deliberately kept out of the table above.
 
 ## Remaining risks
 
@@ -82,4 +85,5 @@ above. Treat 33 as approximate.
 
 `git log feature/spec-workflow-project-memory` for the commit that carries this record, and
 `git show <commit> -- test/renderer/run-center-attempts.test.ts` for the change itself. The task is
-registered in [PROJECT_HANDOFF.md](../../PROJECT_HANDOFF.md) under 开发历史. Not pushed; no MR opened.
+recorded in this change record; the branch history carries the corresponding commit. Pushed to the
+feature branch; never merged into `develop`.
