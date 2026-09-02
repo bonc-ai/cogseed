@@ -546,3 +546,96 @@ export async function getFeishuShareCredential(uid: string): Promise<FeishuShare
     unionId,
   };
 }
+
+// ── 租户域名解析（分享链接用：https://{租户域名}.feishu.cn/docx/{token}）───
+const TENANT_DOMAIN_CACHE_FILE = 'feishu-tenant-domain.json';
+
+function tenantDomainCacheFile(uid: string): string {
+  return path.join(userLocalConfigDir(uid), 'personal-context', TENANT_DOMAIN_CACHE_FILE);
+}
+
+/** 读取缓存的租户域名（避免每次分享都调 API） */
+export async function getCachedTenantDomain(uid: string): Promise<string | null> {
+  try {
+    const raw = await readJson<{ domain?: unknown }>(tenantDomainCacheFile(uid));
+    return typeof raw.domain === 'string' && raw.domain.trim() ? raw.domain.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 手动设置租户域名缓存（用户可从飞书文档地址栏获取后填写；空值清除） */
+export async function setTenantDomain(uid: string, domain: string | null): Promise<void> {
+  const file = tenantDomainCacheFile(uid);
+  if (!domain || !domain.trim()) {
+    try { fs.unlinkSync(file); } catch { /* noop */ }
+    return;
+  }
+  const clean = domain.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await writeJson(file, { domain: clean, resolvedAt: nowIso() });
+}
+
+/**
+ * 查询并缓存租户域名（https://{租户域名}.feishu.cn/docx/{token} 的域名部分）。
+ * 走 tenant_access_token → GET /open-apis/tenant/v2/tenant/query，需要应用开通
+ * tenant:tenant:readonly 权限（后台「权限管理」→ 发布后生效）。
+ * 失败返回 null（调用方回退 open.feishu.cn 或用户配置）。
+ */
+export async function resolveTenantDomain(uid: string): Promise<string | null> {
+  const cached = await getCachedTenantDomain(uid);
+  if (cached) return cached;
+  let appId: string;
+  let appSecret: string;
+  try {
+    ({ appId, appSecret } = await resolveShareApp(uid));
+  } catch {
+    return null;
+  }
+  try {
+    // 1. 换 tenant_access_token（应用身份，无需用户授权）
+    const tokenRes = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+    const tokenBody = (await tokenRes.json()) as { code?: number; tenant_access_token?: string; msg?: string };
+    if (tokenBody.code !== 0 || !tokenBody.tenant_access_token) {
+      log.warn('tenant domain: tenant token failed', { code: tokenBody.code, msg: tokenBody.msg });
+      return null;
+    }
+    // 2. 查租户信息（name = 租户名，用于拼域名；部分租户返回 display_id）
+    const res = await fetch('https://open.feishu.cn/open-apis/tenant/v2/tenant/query', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenBody.tenant_access_token}` },
+    });
+    const body = (await res.json()) as { code?: number; data?: { tenant?: { name?: string; display_id?: string } } };
+    if (body.code !== 0) {
+      log.warn('tenant domain: query failed', { code: body.code });
+      return null;
+    }
+    const tenant = body.data?.tenant;
+    // 租户域名 = {租户短域名}.feishu.cn。tenant query 的 name 多为中文名（拼不出
+    // 合法域名），只有纯 ASCII 短标识（如 display_id）才能拼。真实短域名通常从
+    // 文档 URL 或登录跳转的 redirect_uri 里出现（形如 vcn7socq2ws8.feishu.cn）。
+    const candidate = (tenant?.display_id || tenant?.name || '').trim();
+    const domain = /^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(candidate) ? `${candidate}.feishu.cn` : null;
+    if (!domain) {
+      log.warn('tenant domain: tenant name not usable as domain', { candidate: redactDomain(candidate) });
+      return null;
+    }
+    fs.mkdirSync(path.dirname(tenantDomainCacheFile(uid)), { recursive: true });
+    await writeJson(tenantDomainCacheFile(uid), { domain, resolvedAt: nowIso() });
+    log.info('tenant domain resolved', { domain });
+    return domain;
+  } catch (error) {
+    log.warn('tenant domain resolve failed', { error: (error as Error).message });
+    return null;
+  }
+}
+
+/** 域名候选打码（避免日志泄露完整租户标识；短域名本身非机密但保持整洁） */
+function redactDomain(value: string): string {
+  if (value.length <= 4) return '***';
+  return `${value.slice(0, 2)}…${value.slice(-2)}`;
+}

@@ -31191,6 +31191,10 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
 .kb-share-pop--manage { max-width: 420px; }
 .kb-share-manage-list { max-height: 380px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .kb-share-manage-empty { text-align: center; color: #9DB4A6; font-size: 12.5px; padding: 26px 0 18px; line-height: 1.9; }
+/* CogSeed 问答分享管理（方案 C）：成员申请列表 */
+.kb-share-cogseed-members { margin-top: 14px; border-top: 1px solid #EEF1EE; padding-top: 12px; }
+.kb-share-cogseed-members-title { font-size: 13px; font-weight: 700; color: #14281E; margin-bottom: 10px; }
+.kb-share-cogseed-members-empty { text-align: center; color: #9DB4A6; font-size: 12px; padding: 14px 0; }
 .kb-share-manage-item { border: 1px solid #E4EAE5; border-radius: 12px; padding: 12px 14px; background: #fff; }
 .kb-share-manage-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .kb-share-manage-item-name { font-size: 13.5px; font-weight: 700; color: #14281E; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

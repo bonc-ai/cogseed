@@ -3862,6 +3862,10 @@
           <span class="kb-share-pop-row-label">分享到飞书</span>
           <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">›</span></span>
         </div>
+        <div class="kb-share-pop-row" id="kb-share-cogseed-row">
+          <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
+          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">›</span></span>
+        </div>
         <div class="kb-share-pop-actions">
           <button type="button" class="kb-share-pop-btn" id="kb-share-pop-copy-link">${_svg('link')}复制链接</button>
           <button type="button" class="kb-share-pop-btn is-code" id="kb-share-pop-code">${_svg('qrcode')}生成知识码</button>
@@ -3885,6 +3889,16 @@
         _kbShareManageOpen();
       } else {
         await _kbSharePublish(sp);
+      }
+    });
+    // CogSeed 问答行 → 发布到 cogseed-share 后端（权限弹窗设置真实生效）
+    overlay.querySelector('#kb-share-cogseed-row').addEventListener('click', async () => {
+      const state = await _kbCogseedStateOf(sp.space_id);
+      if (state) {
+        overlay.remove();
+        _kbCogseedManageOpen();
+      } else {
+        await _kbCogseedPublish(sp);
       }
     });
     // 复制链接：优先用飞书分享链接（未分享则先发布）
@@ -3933,6 +3947,7 @@
       _kbShareManageOpen();
     });
     _kbRefreshShareStatus(sp);
+    _kbRefreshCogseedStatus(sp);
   }
 
   // 读取空间分享状态（无 → null）
@@ -3943,6 +3958,174 @@
     } catch {
       return null;
     }
+  }
+
+  // ── CogSeed 问答分享（方案 C）──────────────────────────────────────────
+  async function _kbCogseedStateOf(spaceId) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.cogseed.get', { spaceId });
+      return (res && res.state) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function _kbRefreshCogseedStatus(sp) {
+    if (!_kbShareDlg) return;
+    const hint = _kbShareDlg.querySelector('#kb-share-cogseed-hint');
+    if (!hint) return;
+    const state = await _kbCogseedStateOf(sp.space_id);
+    if (state) {
+      hint.innerHTML = `${_esc(state.url)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">›</span>`;
+    } else {
+      hint.innerHTML = '未发布 <span class="kb-share-pop-row-arrow">›</span>';
+    }
+  }
+
+  async function _kbCogseedPublish(sp) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.cogseed.publish', { spaceId: sp.space_id });
+      if (res && res.ok) {
+        if (typeof uiToast === 'function') uiToast('已发布到 CogSeed 问答', { variant: 'success', timeoutMs: 2000 });
+        _kbRefreshCogseedStatus(sp);
+        return res.state;
+      }
+      if (res && res.code === 'not_configured') {
+        _kbCogseedConfigDialog(sp);
+        return null;
+      }
+      if (typeof uiToast === 'function') uiToast('发布失败：' + ((res && res.error) || '未知错误'), { variant: 'error', timeoutMs: 4000 });
+      return null;
+    } catch (err) {
+      _log.warn('kb cogseed publish failed', err);
+      if (typeof uiToast === 'function') uiToast('发布失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      return null;
+    }
+  }
+
+  // CogSeed 共享服务配置弹窗（后端地址 + API Key）
+  function _kbCogseedConfigDialog(sp) {
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--config">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('link')}</span>配置 CogSeed 共享服务</div>
+        <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">服务地址</label>
+          <input type="text" class="kb-share-config-input" id="kb-cogseed-baseurl" placeholder="https://share.cogseed.dev" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">API Key</label>
+          <input type="password" class="kb-share-config-input" id="kb-cogseed-apikey" placeholder="服务方发放的密钥" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-config-cancel">取消</button>
+          <button type="button" class="kb-share-pop-btn is-primary" id="kb-cogseed-config-save">保存并发布</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-cogseed-config-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#kb-cogseed-config-save').addEventListener('click', async (e) => {
+      const baseUrl = overlay.querySelector('#kb-cogseed-baseurl').value.trim();
+      const apiKey = overlay.querySelector('#kb-cogseed-apikey').value.trim();
+      if (!baseUrl || !apiKey) {
+        if (typeof uiToast === 'function') uiToast('请填写服务地址与 API Key', { variant: 'warning' });
+        return;
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('kb.share.cogseed.config.set', { baseUrl, apiKey });
+        if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
+        overlay.remove();
+        await _kbCogseedPublish(sp);
+      } catch (err) {
+        _log.warn('kb cogseed config save failed', err);
+        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // CogSeed 问答管理面板（成员审核 + 复制链接 + 撤销）
+  async function _kbCogseedManageOpen() {
+    _kbMenuHide();
+    const sp = _kbCurSpace();
+    if (!sp) return;
+    const state = await _kbCogseedStateOf(sp.space_id);
+    let members = [];
+    try {
+      const mres = await window.cogseed.invoke('kb.share.cogseed.members', { spaceId: sp.space_id });
+      members = (mres && mres.members) || [];
+    } catch { /* 成员拉取失败不阻断 */ }
+    const pending = members.filter((m) => m.status === 'pending');
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--manage">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>CogSeed 问答分享管理</div>
+        ${state ? `<div class="kb-share-manage-item">
+          <div class="kb-share-manage-item-head">
+            <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
+            <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+          </div>
+          <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
+          <div class="kb-share-manage-item-actions">
+            <button type="button" class="kb-share-manage-btn" data-cogseed-act="copy">复制链接</button>
+            <button type="button" class="kb-share-manage-btn is-danger" data-cogseed-act="revoke">撤销</button>
+          </div>
+        </div>` : '<div class="kb-share-manage-empty">未发布</div>'}
+        <div class="kb-share-cogseed-members">
+          <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
+          ${pending.length === 0 ? '<div class="kb-share-cogseed-members-empty">暂无待审申请</div>' : ''}
+          ${pending.map((m) => `
+            <div class="kb-share-manage-item" data-member-id="${m.id}">
+              <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
+              <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
+              <div class="kb-share-manage-item-actions">
+                <button type="button" class="kb-share-manage-btn" data-member-act="approve">通过</button>
+                <button type="button" class="kb-share-manage-btn is-danger" data-member-act="reject">拒绝</button>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-manage-close">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-cogseed-manage-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', async (e) => {
+      const actBtn = e.target.closest('[data-cogseed-act]');
+      if (actBtn) {
+        const act = actBtn.dataset.cogseedAct;
+        if (act === 'copy') {
+          try { await navigator.clipboard.writeText(state.url); uiToast && uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 }); }
+          catch { uiToast && uiToast('复制失败', { variant: 'warning' }); }
+        } else if (act === 'revoke') {
+          const res = await window.cogseed.invoke('kb.share.cogseed.revoke', { spaceId: sp.space_id });
+          if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); overlay.remove(); _kbShareDialogOpen(); }
+          else uiToast && uiToast('撤销失败', { variant: 'error' });
+        }
+        return;
+      }
+      const memberBtn = e.target.closest('[data-member-act]');
+      if (memberBtn) {
+        const item = memberBtn.closest('[data-member-id]');
+        const memberId = Number(item?.dataset.memberId);
+        const verdict = memberBtn.dataset.memberAct;
+        memberBtn.disabled = true;
+        const res = await window.cogseed.invoke('kb.share.cogseed.review', { spaceId: sp.space_id, memberId, verdict });
+        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? '已通过' : '已拒绝', { variant: 'success', timeoutMs: 1500 }); overlay.remove(); _kbCogseedManageOpen(); }
+        else { uiToast && uiToast('操作失败', { variant: 'error' }); memberBtn.disabled = false; }
+      }
+    });
   }
 
   // 刷新分享弹窗状态行：已分享显示链接状态 + 管理按钮
@@ -4309,6 +4492,14 @@
         if (typeof uiToast === 'function') uiToast(nextPrivate ? '已设为私密' : '权限设置已更新', { variant: 'success', timeoutMs: 1500 });
         _kbPermDlgClose();
         _loadAll();
+        // 同步到 CogSeed 问答后端（权限弹窗设置真实生效；静默失败不打扰）
+        void window.cogseed.invoke('kb.share.cogseed.syncPolicy', { spaceId: sp.space_id })
+          .then((r) => {
+            if (r && r.ok === false && typeof uiToast === 'function') {
+              uiToast('已保存到 CogSeed 分享（权限待同步）：' + (r.error || ''), { variant: 'info', timeoutMs: 3000 });
+            }
+          })
+          .catch(() => { /* 未发布/未配置：无需同步 */ });
       } catch (err) {
         _log.warn('update space perm failed', err);
         if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
