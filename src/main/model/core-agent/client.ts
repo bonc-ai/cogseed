@@ -411,6 +411,11 @@ export interface ModelRunLogDiagnostics {
   firstRawEventMs?: number;
   firstClientEventMs?: number;
   firstTextDeltaMs?: number;
+  /** 首个思考增量（pi-ai thinking_delta）到达时刻——与首文本取早者作为
+   *  「首个生成活动」，速度窗口必须覆盖思考段（reasoner 的 output_tokens
+   *  含思考，分母漏思考段会把速率虚高数倍）。 */
+  firstThinkingDeltaMs?: number;
+  thinkingDeltaChars?: number;
   firstToolMs?: number;
   doneRawEventMs?: number;
   providerDurationMs?: number;
@@ -612,6 +617,14 @@ export function recordModelRawEventForLog(stats: ModelRunLogDiagnostics, ev: unk
         stats.rawTextTimelineRecorded = true;
         noteRunTimelineForLog(stats, 'raw_text_delta', nowMs, `chars=${typeof e.text === 'string' ? e.text.length : 0}`);
       }
+      break;
+    }
+    case 'thinking_delta': {
+      // 生成活动的最早信号之一（reasoner 先思考后作答）——速度窗口的
+      // 起点必须含思考段，否则分子（含思考的 output_tokens）挤进纯输出
+      // 窗口，速率虚高数倍。
+      stats.thinkingDeltaChars = (stats.thinkingDeltaChars || 0) + (typeof e.delta === 'string' ? e.delta.length : 0);
+      noteElapsedOnce(stats, 'firstThinkingDeltaMs', nowMs);
       break;
     }
     case 'tool_delta': {
@@ -1764,7 +1777,11 @@ export async function* streamChatWithModel(opts: ChatOptions): AsyncGenerator<St
       failurePhase: terminalFailurePhase
         || (terminalStatus === 'aborted' ? liveRunFailurePhase(liveRunTimings.phase) : undefined),
       usage: diagnostics.usage,
-      firstTokenMs: diagnostics.firstTextDeltaMs,
+      // 首个生成活动 = min(首思考增量, 首文本增量)——reasoner 的思考先于
+      // 文本，first_token 语义取早者才能让速率窗口覆盖思考段。
+      firstTokenMs: [diagnostics.firstThinkingDeltaMs, diagnostics.firstTextDeltaMs]
+        .filter((v): v is number => typeof v === 'number')
+        .reduce<number | undefined>((acc, v) => (acc === undefined ? v : Math.min(acc, v)), undefined),
       toolCalls: diagnostics.toolStarts > 0 ? diagnostics.toolStarts : undefined,
     });
     log.info('model turn finish', {

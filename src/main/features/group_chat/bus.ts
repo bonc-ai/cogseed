@@ -6273,6 +6273,8 @@ async function runActorTurnBody(
         usageOut.cacheReadTokens = usageIn.cacheReadTokens;
       if (typeof usageIn?.cacheWriteTokens === "number")
         usageOut.cacheWriteTokens = usageIn.cacheWriteTokens;
+      // 内置模型：API 精确用量（全字段可显示）。
+      if (Object.keys(usageOut).length) usageOut.source = "api";
       const toolCalls = Number(agentRunTimingData.tool_calls);
       replyMetrics = {
         startedAt,
@@ -11809,6 +11811,9 @@ async function _runCliAgentTurn(opts: {
               usageOut.billedInputTokens = usageIn.billedInput;
             if (usageIn?.measured === true)
               usageOut.measured = true;
+            // 本段只在外接 CLI 直连（runner.run）的 done 事件里执行——来源
+            // 恒为 cli（外接的 token/速度段不上线，见 visibility.usage.source）。
+            usageOut.source = "cli";
             if (typeof usageIn?.cacheRead === "number")
               usageOut.cacheReadTokens = usageIn.cacheRead;
             if (typeof usageIn?.cacheCreate === "number")
