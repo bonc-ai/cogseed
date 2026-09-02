@@ -549,7 +549,8 @@ describe('Run Center asynchronous tool resilience', () => {
   it('excludes bare runtime peers and clears localized Agent failures before a valid retry', async () => {
     const harness = createHarness({
       includeRuntimePeer: true,
-      startFailure: new Error('CogSeed Agent is unavailable'),
+      // Admission rejections are identified by their code, not their prose.
+      startFailure: Object.assign(new Error('CogSeed Agent is unavailable'), { code: 'E_AGENT_ADMISSION_OFFLINE' }),
     });
     await harness.flush();
 
