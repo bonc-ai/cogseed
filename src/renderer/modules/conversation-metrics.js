@@ -46,9 +46,11 @@ function messageMetricsLine(metrics) {
   // 在首个思考/工具/文本事件时打点（思考段计入窗口，速度不失真）。
   const decodeMs = typeof firstTokenAt === 'number' ? Math.max(0, completedAt - firstTokenAt) : null;
   const hasTools = num(toolCalls) > 0;
-  // DSH 口径：速度 = 生成阶段（decode）吞吐，分子是「思考 + 输出」合计
-  // （reasoning 与最终文本都是逐 token 生成的）。measured=true（输出为按
-  // 文本的实测估算，CLI 无精确数）时标 ≈，与账单精确值明确区分。
+  // DSH 口径：速度 = 生成阶段（decode）吞吐，分子「思考+可见输出」（实测
+  // 估算，measured 标 ≈）。注意不用 billedOutput 做分子：claude 的计费输出
+  // 把缓存写入等折算计入（实测思考 0+可见 18 时计费 9251），÷窗口得出
+  // 1509 tok/s 的"计费单位吞吐"——不是模型打字速度（用户参照 ~156 是
+  // 可见生成口径）。billedOutput 只进 title（账单口径真值）。
   const measured = !!(usage && usage.measured);
   const genTokens = num(usage && usage.reasoningTokens) + num(usage && usage.outputTokens);
   const rateText = !hasTools && decodeMs > 0 && hasUsage && genTokens > 0
@@ -56,7 +58,9 @@ function messageMetricsLine(metrics) {
     : null;
   if (!hasUsage && ttft === null) return null;
   const titleLines = [];
+  const billedOut = num(usage && usage.billedOutputTokens);
   if (hasUsage) {
+    if (billedOut > 0) titleLines.push(`计费输出 ${formatTokens(billedOut)} tok（含思考与内部处理）`);
     if (num(usage.reasoningTokens) > 0) titleLines.push(`思考 ${formatTokens(usage.reasoningTokens)} tok`);
     if (num(usage.outputTokens) > 0) titleLines.push(`输出 ${formatTokens(usage.outputTokens)} tok`);
     if (num(usage.cacheReadTokens) > 0) titleLines.push(`缓存读 ${formatTokens(usage.cacheReadTokens)} tok`);
@@ -99,6 +103,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
   let reportedCostUsd = 0;   // CLI/网关自报成本合计（美元）
   let reportedCostTurns = 0;
   let hasMeasured = false;   // 任一轮输出为实测估算口径 → 会话级 ↓/速度标 ≈
+  let billedOutTotal = 0;    // 计费口径输出总量合计（真值）——速度分子优先
   let lastUsage = null;
   let lastUsageModel = null; // 自报模型 id——ctx 分母按它解析（CLI 回合不再错用全局模型窗口）
   for (const m of list) {
@@ -111,7 +116,8 @@ function foldSessionMetrics(metricsList, opts = {}) {
       ttftN += 1;
       const d = Math.max(0, m.completedAt - m.firstTokenAt);
       const u0 = m.usage || {};
-      // DSH 口径：decode 吞吐分子 = 思考 + 输出。
+      // DSH 口径：decode 吞吐分子 = 思考 + 可见输出（估算口径；计费输出
+      // 含缓存写入折算，不是生成吞吐，不做分子）。
       const gen = num(u0.reasoningTokens) + num(u0.outputTokens);
       if (gen > 0) { decodeMs += d; decodeTok += gen; }
     }
@@ -119,6 +125,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
     input += num(u.inputTokens);
     output += num(u.outputTokens);
     reasoning += num(u.reasoningTokens);
+    billedOutTotal += num(u.billedOutputTokens);
     cacheRead += num(u.cacheReadTokens);
     cacheWrite += num(u.cacheWriteTokens);
     if (u.measured === true) hasMeasured = true;

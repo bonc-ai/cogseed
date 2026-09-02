@@ -98,6 +98,11 @@ export interface GroupMessageMetrics {
      *  output_tokens_details.thinking_tokens，真实计费量）。速度与 ↓ 总量
      *  按「思考+输出」合计。 */
     reasoningTokens?: number;
+    /** 计费口径输出总量（CLI 转发 modelUsage 求和，含思考与内部处理，
+     *  CodexHost calibrated 同源）——真实生成量权威值；速度分子优先。 */
+    billedOutputTokens?: number;
+    /** 计费口径输入总量（modelUsage 求和）。 */
+    billedInputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
     /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，
