@@ -100,6 +100,7 @@ import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
 import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
+import * as actionApproval from '../features/action_approval';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
 import * as cliFallback from '../features/cli_fallback';
@@ -4999,6 +5000,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       throw new Error('invalid mode');
     }
     return permissions.setLocalExecMode(normalized);
+  },
+
+  // Renderer answers an opaque, main-owned action approval request. It never
+  // receives or returns the execution payload itself, preventing UI-side
+  // widening or substitution of the approved action.
+  'actionApproval.respond': async ({ request_id, decision }: { request_id?: unknown; decision?: unknown }) => {
+    if (typeof request_id !== 'string' || !request_id) throw new Error('invalid approval request id');
+    if (decision !== 'approve' && decision !== 'deny') throw new Error('invalid approval decision');
+    return actionApproval.respondActionApproval(request_id, decision);
   },
 
   // ── User-granted folder access (plan §B2) ──────────────────────────────

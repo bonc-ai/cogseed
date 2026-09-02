@@ -6089,7 +6089,7 @@ function _conversationById(cid) {
 function _conversationOperationDialog(options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay';
     const title = escapeHtml(options.title || '');
     const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
     const confirmLabel = escapeHtml(options.confirmLabel || t('common.confirm'));
@@ -6127,11 +6127,26 @@ function _conversationOperationDialog(options = {}) {
     const confirm = overlay.querySelector('[data-operation-confirm]');
     const error = overlay.querySelector('[data-operation-error]');
     let busy = false;
+    let settled = false;
+    const settle = (value) => { if (settled) return; settled = true; resolve(value); };
+    // 四项行为统一走 uiModalController；ESC 因「busy 提交中忽略」的特殊语义由下方
+    // onKey 手写处理（dismissible:false 关掉 controller 的 ESC），滚动锁定/焦点陷阱/
+    // 焦点回归/Cmd+K 仍由 controller 负责。
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          dismissible: false,
+          initialFocus: input ? '[data-operation-title]' : '[data-operation-confirm]',
+        })
+      : null;
     const finish = (value) => {
       if (busy && value == null) return;
-      document.removeEventListener('keydown', onKey, true);
+      settle(value);
+      if (controller) controller.close('action');
+      else document.removeEventListener('keydown', onKey, true);
       overlay.remove();
-      resolve(value);
     };
     const onKey = (event) => {
       if (event.isComposing || event.keyCode === 229) return;
@@ -6170,7 +6185,8 @@ function _conversationOperationDialog(options = {}) {
       }
     });
     document.addEventListener('keydown', onKey, true);
-    setTimeout(() => (input || confirm).focus(), 0);
+    if (controller) controller.open();
+    else setTimeout(() => (input || confirm).focus(), 0);
   });
 }
 
@@ -6381,7 +6397,7 @@ function _openConversationMergePicker(initialCid) {
 
   const overlay = document.createElement('div');
   overlay.id = 'conversation-merge-picker';
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay open';
+  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay';
   overlay.innerHTML = `
     <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
       <div class="conversation-merge-picker-header">
@@ -6411,12 +6427,26 @@ function _openConversationMergePicker(initialCid) {
     .slice()
     .sort(_compareConversationsForSidebar);
   let busy = false;
-  const close = () => {
-    if (busy) return;
+  const dialog = overlay.querySelector('[role="dialog"]');
+  const controller = typeof uiModalController === 'function'
+    ? uiModalController({
+        overlay,
+        dialog,
+        dismissible: false,
+        initialFocus: '[data-merge-picker-search]',
+      })
+    : null;
+  const cleanup = () => {
     _conversationMergePickerOpen = false;
     _conversationMergeSelection.clear();
     overlay.remove();
-    document.removeEventListener('keydown', onKey, true);
+    if (!controller) document.removeEventListener('keydown', onKey, true);
+  };
+  const close = () => {
+    if (busy) return;
+    if (controller) controller.close('action');
+    else document.removeEventListener('keydown', onKey, true);
+    cleanup();
   };
   const onKey = (event) => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -6470,10 +6500,9 @@ function _openConversationMergePicker(initialCid) {
       _rememberConversationResultCard(data.conversation.conversation_id, {
         kind: 'merge', sourceCount: cids.length, agentCount, summary: data.summary || '',
       });
-      _conversationMergePickerOpen = false;
-      _conversationMergeSelection.clear();
-      overlay.remove();
-      document.removeEventListener('keydown', onKey, true);
+      if (controller) controller.close('action', { restoreFocus: false });
+      else document.removeEventListener('keydown', onKey, true);
+      cleanup();
       renderConversationList();
       uiToast(t('chat.merge.success'), { variant: 'success' });
       setView('conversation', data.conversation.conversation_id);
@@ -6490,7 +6519,8 @@ function _openConversationMergePicker(initialCid) {
   });
   document.addEventListener('keydown', onKey, true);
   render();
-  setTimeout(() => search?.focus(), 0);
+  if (controller) controller.open();
+  else setTimeout(() => search?.focus(), 0);
 }
 
 async function _mergeSelectedConversationsWithConfirm() {

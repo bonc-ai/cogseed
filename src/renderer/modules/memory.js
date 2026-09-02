@@ -606,9 +606,15 @@ function _memErrorToText(error) {
 
 // ── Modal shell ──────────────────────────────────────────────────────────────
 
+let _memModalController = null;
+
 function _memCloseModal() {
-  const host = document.getElementById('memory-modal-host');
-  if (host) host.remove();
+  if (_memModalController) {
+    _memModalController.close('action');
+  } else {
+    const host = document.getElementById('memory-modal-host');
+    if (host) host.remove();
+  }
 }
 
 function _memOpenModal(width, innerHtml) {
@@ -619,11 +625,17 @@ function _memOpenModal(width, innerHtml) {
   host.innerHTML = `<div class="memory-modal" style="width:${width}px" role="dialog" aria-modal="true">${innerHtml}</div>`;
   document.body.appendChild(host);
   if (typeof window.hydrateUiIcons === 'function') window.hydrateUiIcons(host);
-  // Esc close. Backdrop clicks are ignored to avoid accidental dismissals.
-  const onKey = (e) => {
-    if (e.key === 'Escape') { _memCloseModal(); document.removeEventListener('keydown', onKey); }
-  };
-  document.addEventListener('keydown', onKey);
+  // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
+  // 背景点击仍被忽略（避免误关）。
+  const dialog = host.querySelector('[role="dialog"]');
+  _memModalController = typeof uiModalController === 'function'
+    ? uiModalController({
+        overlay: host,
+        dialog,
+        onClose: () => { _memModalController = null; host.remove(); },
+      })
+    : null;
+  if (_memModalController) _memModalController.open();
   return host;
 }
 
