@@ -36,13 +36,15 @@
     const tasks = runs.map((run) => run.aggregateTask);
     const now = validDate(nowValue) || new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const userStateForTask = (task) => board?.userStateForTask?.(task) || { attention: task.column === 'attention' };
+    // Every count here is a presentation question, so every count reads the
+    // display column. There is no second answer to fall back to: if the board
+    // module were missing the overview cannot render meaningfully anyway.
+    const displayColumn = (task) => board.displayColumnForTask(task);
     const counts = {
       total: runs.length,
       sessions: new Set(tasks.map((task) => task.sessionId).filter(Boolean)).size,
-      active: tasks.filter((task) => !userStateForTask(task).attention
-        && (task.column === 'pending' || task.column === 'running')).length,
-      attention: tasks.filter((task) => userStateForTask(task).attention).length,
+      active: tasks.filter((task) => ['pending', 'running'].includes(displayColumn(task))).length,
+      attention: tasks.filter((task) => displayColumn(task) === 'attention').length,
       completed: tasks.filter((task) => task.status === 'completed').length,
     };
     const terminalCount = tasks.filter((task) => ['completed', 'failed', 'cancelled'].includes(task.status)).length;
@@ -50,7 +52,7 @@
 
     const statusCounts = ['pending', 'running', 'attention', 'completed', 'archived'].map((column) => ({
       column,
-      count: tasks.filter((task) => (board?.displayColumnForTask?.(task) || task.column) === column).length,
+      count: tasks.filter((task) => displayColumn(task) === column).length,
     })).filter((item) => item.count > 0);
 
     const trend = Array.from({ length: 7 }, (_, index) => {
@@ -64,8 +66,8 @@
       const startedBucket = started ? trendByKey.get(localDayKey(started)) : null;
       const updatedBucket = updated ? trendByKey.get(localDayKey(updated)) : null;
       if (startedBucket) startedBucket.started += 1;
-      if (updatedBucket && run.aggregateTask.column === 'completed') updatedBucket.completed += 1;
-      if (updatedBucket && userStateForTask(run.aggregateTask).attention) updatedBucket.attention += 1;
+      if (updatedBucket && displayColumn(run.aggregateTask) === 'completed') updatedBucket.completed += 1;
+      if (updatedBucket && displayColumn(run.aggregateTask) === 'attention') updatedBucket.attention += 1;
     }
 
     const discoveredSources = new Set(tasks.map((task) => task.sourceKind || 'cogseed'));
@@ -95,10 +97,10 @@
         updatedAt: '',
       };
       current.total += 1;
-      const displayColumn = board?.displayColumnForTask?.(task) || task.column;
-      if (displayColumn === 'pending' || displayColumn === 'running') current.active += 1;
-      if (displayColumn === 'attention') current.attention += 1;
-      if (displayColumn === 'completed') current.completed += 1;
+      const column = displayColumn(task);
+      if (column === 'pending' || column === 'running') current.active += 1;
+      if (column === 'attention') current.attention += 1;
+      if (column === 'completed') current.completed += 1;
       if (String(task.updatedAt || '') > current.updatedAt) current.updatedAt = String(task.updatedAt || '');
       agentMap.set(agentId, current);
     }
@@ -112,11 +114,9 @@
     const recentRuns = [...runs].sort((left, right) =>
       String(right.aggregateTask.updatedAt || '').localeCompare(String(left.aggregateTask.updatedAt || ''))
       || String(left.key || '').localeCompare(String(right.key || '')));
-    const attentionRuns = recentRuns.filter((run) => userStateForTask(run.aggregateTask).attention);
-    const activeRuns = recentRuns.filter((run) => !userStateForTask(run.aggregateTask).attention
-      && ['pending', 'running'].includes(run.aggregateTask.column));
-    const completedRuns = recentRuns.filter((run) => !userStateForTask(run.aggregateTask).attention
-      && run.aggregateTask.column === 'completed');
+    const attentionRuns = recentRuns.filter((run) => displayColumn(run.aggregateTask) === 'attention');
+    const activeRuns = recentRuns.filter((run) => ['pending', 'running'].includes(displayColumn(run.aggregateTask)));
+    const completedRuns = recentRuns.filter((run) => displayColumn(run.aggregateTask) === 'completed');
     return {
       runs,
       counts,

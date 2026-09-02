@@ -73,7 +73,8 @@ describe('Run Center renderer contract', () => {
     expect(source).toContain("invoke('cogseed.session.read'");
     expect(source).toContain("invoke('cogseed.agent.list')");
     expect(source).toContain("invoke('cogseed.task.action'");
-    expect(source).toContain('CogSeedRunCenterBoard?.recommendedActionAvailable?.(');
+    expect(source).toContain('CogSeedRunCenterBoard;');
+    expect(source).toContain('board?.recommendedAction?.(actions, userState, actionContext)');
     expect(source).toContain('data-run-center-action="archive"');
     expect(source).toContain("text('run_center.archive_confirm')");
     expect(source).toContain("invoke(isReassign ? 'cogseed.task.reassign' : 'cogseed.task.start'");
@@ -115,7 +116,7 @@ describe('Run Center renderer contract', () => {
       tasks: [
         { taskId: 'pending', executionId: 'execution-pending', sessionId: 'session-a', conversationId: 'conversation-a', column: 'pending', sourceKind: 'cogseed', title: 'Pending', updatedAt: '2026-08-26T10:00:00.000Z' },
         { taskId: 'running', executionId: 'execution-running', sessionId: 'session-a', conversationId: 'conversation-a', sessionTitle: 'Agent conversation', column: 'running', sourceKind: 'agent', agentId: 'agent-1', worktreeName: 'cogseed-worktree-dev-review', title: 'Running', updatedAt: '2026-08-26T11:00:00.000Z' },
-        { taskId: 'archived', executionId: 'execution-archived', sessionId: 'session-b', status: 'failed', errorCode: 'provider_error', column: 'archived', sourceKind: 'agent', title: 'Archived', updatedAt: '2026-08-26T09:00:00.000Z' },
+        { taskId: 'archived', executionId: 'execution-archived', sessionId: 'session-b', status: 'failed', errorCode: 'provider_error', failureCategory: 'provider_error', column: 'archived', sourceKind: 'agent', title: 'Archived', updatedAt: '2026-08-26T09:00:00.000Z' },
       ],
     };
     expect(board.filteredTasks(projection, '', 'all').map((task: any) => task.taskId)).toEqual(['pending', 'running']);
@@ -311,10 +312,21 @@ describe('Run Center renderer contract', () => {
     expect(fallback.title).not.toContain(tasks[0].title);
     expect(fallback.title).not.toContain(tasks[0].worktreeName);
 
-    expect(board.userStateForTask({ status: 'needs_review' }).action).toBe('open-handling');
-    expect(board.userStateForTask({ status: 'failed', errorCode: 'provider_error' }).action).toBe('configure-model');
-    expect(board.userStateForTask({ status: 'failed', errorCode: 'model_preflight' }).action).toBe('configure-model');
-    expect(board.userStateForTask({ status: 'failed', errorCode: 'task_failed' }).action).toBe('retry');
+    // Review is a collaboration fact, not a task status: no task can ever hold
+    // `needs_review`, so it reaches the resolver only through the snapshot
+    // context the detail pane supplies.
+    expect(board.userStateForTask({ status: 'running' }, { hasReview: true }).action).toBe('open-handling');
+    expect(board.userStateForTask({ status: 'running' }, { hasConflict: true }).action).toBe('open-handling');
+    expect(board.userStateForTask({ status: 'needs_review' }).kind).not.toBe('review');
+    // Behaviour follows Main's classification. The producer's `errorCode` is
+    // deliberately contradictory in the first two cases to prove the renderer
+    // no longer reads it.
+    expect(board.userStateForTask({ status: 'failed', failureCategory: 'model_unavailable', errorCode: 'some_future_auth_code' }).action).toBe('configure-model');
+    expect(board.userStateForTask({ status: 'failed', failureCategory: 'provider_error', errorCode: 'task_failed' }).action).toBe('configure-model');
+    expect(board.userStateForTask({ status: 'failed', failureCategory: 'provider_transient', errorCode: 'provider_auth' }).action).toBe('retry');
+    expect(board.userStateForTask({ status: 'failed', failureCategory: 'unknown', errorCode: 'task_failed' }).action).toBe('retry');
+    // An old projection with no category at all still renders a usable action.
+    expect(board.userStateForTask({ status: 'failed', errorCode: 'provider_error' }).action).toBe('retry');
     expect(board.userStateForTask({ status: 'running', column: 'running' }).attention).toBe(false);
   });
 
@@ -586,7 +598,7 @@ describe('Run Center renderer contract', () => {
       sourceKind: 'agent', agentId: 'review-agent', worktreeName, column: 'running',
       createdAt: '2026-08-27T00:00:00.000Z', updatedAt: '2026-08-27T00:00:01.000Z',
       executionId: 'sensitive-execution-id', executionKind: 'sensitive-execution-kind',
-      runtimeKind: 'sensitive-runtime-kind', errorCode: 'provider_error',
+      runtimeKind: 'sensitive-runtime-kind', errorCode: 'provider_error', failureCategory: 'provider_error',
       conversationMode: 'agent', resultDeliveryState: 'delivered', participantCount: 1, resumable: false,
       actions: { retry: false, skip: false, resume: false, recoverResult: false, abort: true, archive: false },
     };
@@ -1386,6 +1398,7 @@ describe('Run Center renderer contract', () => {
     expect(context.window.activateSettingsTab).toHaveBeenLastCalledWith('credentials');
 
     task.errorCode = 'model_preflight';
+    task.failureCategory = 'model_unavailable';
     click({ runCenterRefresh: '' });
     await waitFor(() => html.includes('data-run-center-configure-model'));
     failedSummary = html.match(/<div class="run-center-summary-flow">([\s\S]*?)<\/div>\s*<\/div><\/main>/)?.[1] || '';
@@ -1401,6 +1414,7 @@ describe('Run Center renderer contract', () => {
     task.column = 'running';
     task.actions.abort = true;
     task.errorCode = 'provider_error';
+    task.failureCategory = 'provider_error';
     click({ runCenterRefresh: '' });
     await waitFor(() => html.includes('data-run-center-queue-task="cogseed-task-renderer"'));
     click({ dashboardBoardTaskId: task.taskId, dashboardBoardSessionId: task.sessionId });

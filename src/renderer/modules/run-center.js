@@ -268,12 +268,18 @@
     const taskId = String(task?.taskId || '').trim();
     return executionId ? `execution:${executionId}` : `task:${taskId || fallbackIndex}`;
   }
+  // Picks the task that represents an attempt. A different question from the
+  // Run-level and card-level resolvers, so it stays its own function — but it
+  // ranks statuses from the board module's single table instead of keeping a
+  // private copy that could drift out of agreement with them.
   function attemptStateTask(members) {
-    const priority = ['failed', 'recoverable', 'waiting_user', 'needs_review', 'blocked', 'running', 'queued', 'pending', 'completed', 'cancelled', 'skipped', 'created'];
-    return priority.map((status) => members
-      .filter((task) => task.status === status)
-      .sort((left, right) => safeTime(right.updatedAt) - safeTime(left.updatedAt))[0])
-      .find(Boolean) || members[0];
+    const ranking = rootWindow.CogSeedRunCenterBoard?.EXECUTION_STATE_PRIORITY || {};
+    const rank = (task) => {
+      const value = ranking[String(task?.status || '')];
+      return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+    };
+    return [...members].sort((left, right) => rank(left) - rank(right)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt))[0] || members[0];
   }
   function attemptTargetTask(members, parentTaskIds) {
     return [...members].sort((left, right) => {
@@ -332,23 +338,44 @@
     if (agentId === 'commander') return text('run_center.commander');
     return text('run_center.assigned_agent');
   }
+  // Presentation state, not domain eligibility: whether this renderer currently
+  // holds Main's eligibility answer at all. Main only ever publishes 'fresh';
+  // its absence means we fell back to the `agents.list` channel, which carries
+  // no install, reachability, runtime or peer facts.
+  function agentRegistryFreshness() {
+    return Array.isArray(state.agentRegistry?.agents)
+      ? String(state.agentRegistry.registryFreshness || 'fresh')
+      : 'unknown';
+  }
+  function agentEligibilityKnown() {
+    return agentRegistryFreshness() === 'fresh';
+  }
   function createAgentCandidates() {
     if (Array.isArray(state.agentRegistry?.agents)) return state.agentRegistry.agents;
+    // Deliberately no `dispatchable`: the fallback list cannot answer that
+    // question, and synthesising an answer from `enabled` is how offline and
+    // uninstalled Agents used to look selectable.
     return (Array.isArray(state.agents) ? state.agents : [])
       .map((agent) => ({
         agentId: String(agent?.agent_id || '').trim(),
         displayName: String(agent?.name || agent?.agent_id || '').trim(),
-        dispatchable: agent?.enabled !== false,
       }))
       .filter((agent) => agent.agentId);
   }
-  function taskDispatchableAgentCandidates() {
-    return createAgentCandidates().filter((agent) => agent.dispatchable
-      && (!Array.isArray(state.agentRegistry?.agents) || !!String(agent.definitionSource || '').trim()));
+  function taskAgentCandidates() {
+    const candidates = createAgentCandidates();
+    // Eligibility unknown: show everything and promise nothing. Main's
+    // admission gate stays the only thing that may refuse a submission.
+    if (!agentEligibilityKnown()) return candidates;
+    return candidates.filter((agent) => agent.dispatchable === true
+      && !!String(agent.definitionSource || '').trim());
   }
   function taskAgentOptionLabel(agent) {
     const name = String(agent?.displayName || '').trim() || text('run_center.assigned_agent');
     const runtimeKind = String(agent?.runtimeKind || '').trim();
+    // Without Main's answer every option is marked unknown, so a stale list
+    // never reads as a list of available Agents.
+    if (!agentEligibilityKnown()) return `${name} · ${text('run_center.agent_health_unknown')}`;
     if (runtimeKind.startsWith('p3394-gateway:')) return `${name} · ${text('run_center.agent_option_local_external')}`;
     if (agent?.sourceKind === 'local-cli' || runtimeKind.startsWith('cli:')) return `${name} · ${text('run_center.agent_option_local_cli')}`;
     return name;
@@ -376,6 +403,20 @@
   }
   function runTask(run) {
     return run?.aggregateTask || run?.representative || null;
+  }
+  function runContainingTask(taskId) {
+    const id = String(taskId || '');
+    if (!id) return null;
+    return allRunModels().find((run) => run.members?.some((member) => member.taskId === id)) || null;
+  }
+  // `retryOfTaskId` is the backend's own link from a replacement task to the
+  // task it replaces. It is the only correct way to find a replacement after a
+  // refresh; timestamps and shared conversations cannot distinguish a
+  // replacement from an unrelated run that happened to land at the same moment.
+  function runReplacingTask(sourceTaskId) {
+    const id = String(sourceTaskId || '');
+    if (!id) return null;
+    return allRunModels().find((run) => run.members?.some((member) => member.retryOfTaskId === id)) || null;
   }
   function orderedVisibleRuns() {
     return [...visibleBoardRuns()].sort((left, right) => {
@@ -555,30 +596,33 @@
       ${hasCoordinationRecords ? '' : `<div class="run-center-collaboration-empty">${icon('check-circle')}<div><strong>${esc(text('run_center.collaboration_empty_title'))}</strong><span>${esc(text('run_center.collaboration_empty_detail'))}</span></div></div>`}
     </div>`;
   }
-  function errorHelpKey(errorCode) {
-    if (errorCode === 'model_preflight') return 'run_center.error_help_model_preflight';
-    if (errorCode === 'provider_error') return 'run_center.error_help_provider_error';
-    if (errorCode === 'group_chat_run_failed') return 'run_center.error_help_group_chat_run_failed';
-    return 'run_center.error_help_default';
+  // Help copy is chosen from Main's failure classification, one key per class.
+  // Categories without dedicated copy fall to the generic key rather than
+  // growing a renderer-side table of producer error codes.
+  const FAILURE_HELP_KEYS = {
+    model_unavailable: 'run_center.error_help_model_preflight',
+    provider_error: 'run_center.error_help_provider_error',
+    collaboration_failure: 'run_center.error_help_group_chat_run_failed',
+  };
+  function failureHelpKey(failureCategory) {
+    return FAILURE_HELP_KEYS[String(failureCategory || '')] || 'run_center.error_help_default';
   }
   function attemptIsFailed(attempt) {
-    return ['failed', 'recoverable', 'blocked'].includes(attempt?.status)
+    return ['failed', 'recoverable'].includes(attempt?.status)
       || attempt?.members?.some((task) => !!task.errorCode);
   }
   function attemptIsRunning(attempt) {
-    return ['created', 'queued', 'pending', 'running', 'waiting_user', 'needs_review'].includes(attempt?.status);
+    return ['created', 'queued', 'running', 'waiting_user'].includes(attempt?.status);
   }
+  // `resultDeliveryState` is only ever not-applicable / pending / delivered /
+  // pending-recovery. This used to also test for 'recovered' and
+  // 'delivered_after_recovery', which no producer has ever written, so that
+  // half of the condition was constantly false. A snapshot cannot show that a
+  // delivery was once pending-recovery, so the badge rests on what is actually
+  // observable: this attempt finished and a later one did not.
   function attemptIsRecovered(attempts, index) {
     const attempt = attempts[index];
-    const deliveryRecovered = attempt?.members?.some((task) => ['recovered', 'delivered_after_recovery'].includes(task.resultDeliveryState));
-    return !!deliveryRecovered || attempt?.status === 'completed' && attempts.slice(index + 1).some(attemptIsFailed);
-  }
-  function failureCategory(errorCode) {
-    if (!errorCode) return 'none';
-    if (errorCode === 'model_preflight') return 'model';
-    if (errorCode === 'provider_error') return 'provider';
-    if (errorCode === 'group_chat_run_failed') return 'collaboration';
-    return 'other';
+    return attempt?.status === 'completed' && attempts.slice(index + 1).some(attemptIsFailed);
   }
   function detailModel() {
     const collaboration = state.detail?.collaboration;
@@ -617,30 +661,25 @@
   function actionEffectKey(action) {
     return `run_center.action_effect_${String(action || 'none').replace(/-/g, '_')}`;
   }
-  function recommendedActionHtml(model, userState, hasCollaboration) {
-    const { task, actions } = model;
+  function actionCandidateHtml(candidate, model, hasCollaboration, primary) {
+    const { task } = model;
     const busy = state.busyAction;
-    const action = userState.action;
+    const action = String(candidate?.action || '');
+    const cls = primary ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+    if (!action) return '';
     if (action === 'configure-model') {
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-configure-model>${icon('settings')}<span>${esc(text(userState.actionKey))}</span></button>`;
+      return `<button type="button" class="${cls}" data-run-center-configure-model>${icon('settings')}<span>${esc(text(candidate.actionKey))}</span></button>`;
     }
     if (action === 'open-task' && task?.conversationId) {
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
+      return `<button type="button" class="${cls}" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(candidate.actionKey))}</span></button>`;
     }
     if (action === 'open-handling') {
-      if (hasCollaboration) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-detail-tab="collaboration">${icon('users')}<span>${esc(text(userState.actionKey))}</span></button>`;
-      if (task?.conversationId) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
+      if (hasCollaboration) return `<button type="button" class="${cls}" data-run-center-detail-tab="collaboration">${icon('users')}<span>${esc(text(candidate.actionKey))}</span></button>`;
+      if (task?.conversationId) return `<button type="button" class="${cls}" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(candidate.actionKey))}</span></button>`;
+      return '';
     }
-    // Same gate the queue applies, so the two surfaces cannot promise
-    // different things about one card.
-    const allowed = rootWindow.CogSeedRunCenterBoard?.recommendedActionAvailable?.(
-      actions, userState, { conversationId: task?.conversationId, hasCollaboration },
-    ) ?? false;
-    if (allowed) {
-      const iconName = action === 'resume' ? 'play-triangle' : 'refresh';
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-action="${esc(action)}" ${busy ? 'disabled' : ''}>${busy === action ? icon('loader', 'ui-icon is-spinning') : icon(iconName)}<span>${esc(text(busy === action ? 'run_center.action_working' : userState.actionKey))}</span></button>`;
-    }
-    return '';
+    const iconName = action === 'resume' ? 'play-triangle' : 'refresh';
+    return `<button type="button" class="${cls}" data-run-center-action="${esc(action)}" ${busy ? 'disabled' : ''}>${busy === action ? icon('loader', 'ui-icon is-spinning') : icon(iconName)}<span>${esc(text(busy === action ? 'run_center.action_working' : candidate.actionKey))}</span></button>`;
   }
   function summaryTabHtml(model) {
     const { collaboration, run, task, aggregateTask, actions } = model;
@@ -652,27 +691,42 @@
       ...aggregateTask,
       resultDeliveryState: task.resultDeliveryState || aggregateTask.resultDeliveryState,
       errorCode: task.errorCode || aggregateTask.errorCode,
+      failureCategory: task.failureCategory || aggregateTask.failureCategory,
     }, { hasReview, hasConflict }) || { stateKey: statusKey(aggregateTask.status), reasonKey: '', action: '', actionKey: '' };
     const hasCollaboration = collaborationAvailable(collaboration, task);
     const destination = resultDestination(task);
     const worktree = task.worktreeName || text('run_center.current_workspace_short');
-    const effect = text(actionEffectKey(userState.action), { worktree, destination });
-    const primaryAction = recommendedActionHtml(model, userState, hasCollaboration);
-    const impact = task.errorCode ? text(errorHelpKey(task.errorCode)) : text(userState.reasonKey);
+    // Main decides which actions exist; the resolver only orders preferences.
+    // The same gate the queue applies, so the two surfaces cannot promise
+    // different things about one card.
+    const actionContext = { conversationId: task?.conversationId, hasCollaboration };
+    const board = rootWindow.CogSeedRunCenterBoard;
+    const primaryCandidate = board?.recommendedAction?.(actions, userState, actionContext) || null;
+    const followUps = (board?.secondaryActions?.(actions, userState, actionContext) || [])
+      .map((candidate) => actionCandidateHtml(candidate, model, hasCollaboration, false))
+      .filter(Boolean)
+      .join('');
+    const effect = text(actionEffectKey(primaryCandidate?.action || ''), { worktree, destination });
+    const primaryAction = primaryCandidate
+      ? actionCandidateHtml(primaryCandidate, model, hasCollaboration, true)
+      : '';
+    const impact = task.failureCategory || task.errorCode
+      ? text(failureHelpKey(task.failureCategory))
+      : text(userState.reasonKey);
     const progress = run?.progress;
     const completion = progress?.total ? Math.round((Number(progress.completed || 0) / Number(progress.total)) * 100) : 0;
     const secondary = [
       actions.abort ? `<button type="button" class="btn btn-sm btn-danger" data-run-center-action="abort" ${state.busyAction ? 'disabled' : ''}>${icon('stop')}<span>${esc(text('run_center.abort'))}</span></button>` : '',
       actions.archive ? `<button type="button" class="btn btn-sm" data-run-center-action="archive" ${state.busyAction ? 'disabled' : ''}>${state.busyAction === 'archive' ? icon('loader', 'ui-icon is-spinning') : icon('archive')}<span>${esc(text(state.busyAction === 'archive' ? 'run_center.action_working' : 'run_center.remove_from_list'))}</span></button>` : '',
       `<button type="button" class="btn btn-sm" data-run-center-reassign>${icon('refresh')}<span>${esc(text('run_center.run_with_agent'))}</span></button>`,
-      task.conversationId && userState.action !== 'open-task' ? `<button type="button" class="btn btn-sm" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button>` : '',
+      task.conversationId && primaryCandidate?.action !== 'open-task' ? `<button type="button" class="btn btn-sm" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button>` : '',
     ].filter(Boolean).join('');
     return `<div class="run-center-summary-flow">
       ${state.actionNotice ? `<div class="run-center-action-feedback is-success" role="status">${icon('check-circle')}<span>${esc(text(state.actionNotice))}</span></div>` : ''}
       ${state.actionError ? `<div class="run-center-action-feedback is-error" role="alert">${icon('warning')}<span>${esc(state.actionError)}</span></div>` : ''}
-      <section class="run-center-summary-row is-event"><span class="run-center-summary-row-icon">${icon(userState.attention ? 'warning' : userState.kind === 'running' ? 'activity' : 'check-circle')}</span><div><small>${esc(text('run_center.summary_what_happened'))}</small><h3>${esc(text(userState.stateKey))}</h3><p>${esc(text(userState.reasonKey))}</p></div></section>
+      <section class="run-center-summary-row is-event"><span class="run-center-summary-row-icon">${icon(userState.attention ? 'warning' : userState.kind === 'running' ? 'activity' : 'check-circle')}</span><div><small>${esc(text('run_center.summary_what_happened'))}</small><h3>${esc((userState.stateKeys || [userState.stateKey]).map((key) => text(key)).join(' · '))}</h3><p>${esc(text(userState.reasonKey))}</p></div></section>
       <section class="run-center-summary-row"><span class="run-center-summary-row-icon">${icon('activity')}</span><div><small>${esc(text('run_center.summary_impact'))}</small><h3>${esc(userState.attention ? text('run_center.summary_attention_impact') : text('run_center.summary_no_blocking_impact'))}</h3><p>${esc(impact)}</p>${progress?.total ? `<div class="run-center-inspector-progress"><span><b>${esc(text('run_center.group_progress'))}</b><strong>${esc(progress.completed)}/${esc(progress.total)}</strong></span><div><i style="width:${completion}%"></i></div></div>` : ''}</div></section>
-      <section class="run-center-summary-row is-action"><span class="run-center-summary-row-icon">${icon('play-triangle')}</span><div><small>${esc(text('run_center.summary_next_action'))}</small><h3>${esc(primaryAction ? text(userState.actionKey) : text('run_center.no_action_required'))}</h3><p>${esc(effect)}</p><div class="run-center-summary-actions">${primaryAction}${secondary}</div></div></section>
+      <section class="run-center-summary-row is-action"><span class="run-center-summary-row-icon">${icon('play-triangle')}</span><div><small>${esc(text('run_center.summary_next_action'))}</small><h3>${esc(primaryCandidate ? text(primaryCandidate.actionKey) : text('run_center.no_action_required'))}</h3><p>${esc(effect)}</p><div class="run-center-summary-actions">${primaryAction}${followUps}${secondary}</div></div></section>
       <section class="run-center-summary-row"><span class="run-center-summary-row-icon">${icon('send')}</span><div><small>${esc(text('run_center.summary_destination'))}</small><h3>${esc(destination)}</h3><p>${esc(text('run_center.summary_destination_detail'))}</p></div></section>
       <dl class="run-center-summary-context"><div><dt>${esc(text('run_center.label_agent'))}</dt><dd>${esc(agentDisplayName(task.agentId) || text('run_center.commander'))}</dd></div><div><dt>${esc(text('run_center.label_execution_source'))}</dt><dd>${esc(text(`run_center.source_${task.sourceKind || 'cogseed'}`))}</dd></div><div><dt>${esc(text('run_center.label_worktree'))}</dt><dd>${esc(worktree)}</dd></div><div><dt>${esc(text('run_center.label_updated'))}</dt><dd>${esc(formatDate(task.updatedAt))}</dd></div>${workflow.phase ? `<div><dt>${esc(text('run_center.label_phase'))}</dt><dd>${esc(workflow.phase)}</dd></div>` : ''}</dl>
     </div>`;
@@ -730,7 +784,11 @@
     if (!state.createMode) return '';
     const selected = selectedTask() || state.detail?.collaboration?.task;
     const agentDataReady = agentOptionsReady();
-    const agents = taskDispatchableAgentCandidates()
+    const eligibilityUnknown = agentDataReady && !agentEligibilityKnown();
+    const statusUnknownNote = eligibilityUnknown
+      ? `<small class="run-center-create-note" role="status">${esc(text('run_center.create_agent_status_unknown'))}</small>`
+      : '';
+    const agents = taskAgentCandidates()
       .filter((agent) => state.createMode !== 'reassign' || agent.agentId !== selected?.agentId);
     const options = agents.map((agent) => `<option value="${esc(agent.agentId)}"${agent.agentId === state.createAgentId ? ' selected' : ''}>${esc(taskAgentOptionLabel(agent))}</option>`).join('');
     const isReassign = state.createMode === 'reassign';
@@ -743,11 +801,11 @@
         <div class="run-center-create-body">
           ${isReassign ? `<div class="run-center-create-private">${icon('shield')}<span>${esc(text('run_center.reassign_private'))}</span></div>` : `<label><span>${esc(text('run_center.create_task_label'))}</span><textarea data-run-center-create-task rows="6" maxlength="64000" placeholder="${esc(text('run_center.create_task_placeholder'))}">${esc(state.createTask)}</textarea></label>`}
           ${isReassign ? `<label><span>${esc(text('run_center.create_agent_label'))}</span><select data-run-center-create-agent ${state.createBusy || !agentDataReady ? 'disabled' : ''}><option value="">${esc(text('run_center.choose_agent'))}</option>${options}</select></label>
-            ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.loading_agents'))}</small>` : ''}
+            ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.loading_agents'))}</small>` : statusUnknownNote}
             ${selected?.worktreeName ? `<div class="run-center-create-private">${icon('git-branch')}<span>${esc(text('run_center.reassign_worktree_inherited', { name: selected.worktreeName }))}</span></div>` : ''}` : `<button type="button" class="run-center-create-advanced-toggle" data-run-center-create-advanced aria-expanded="${String(state.createAdvancedOpen)}" aria-controls="run-center-create-advanced-panel"><span>${icon('settings')}<span><strong>${esc(text('run_center.advanced_options'))}</strong><small>${esc(text('run_center.advanced_defaults'))}</small></span></span>${icon(state.createAdvancedOpen ? 'chevron-up' : 'chevron-down')}</button>
             ${state.createAdvancedOpen ? `<div id="run-center-create-advanced-panel" class="run-center-create-advanced-panel">
               <label><span>${esc(text('run_center.create_agent_label'))}</span><select data-run-center-create-agent ${state.createBusy || !agentDataReady ? 'disabled' : ''}><option value="">${esc(text('run_center.default_agent'))}</option>${options}</select></label>
-              ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.create_agent_unavailable'))}</small>` : ''}
+              ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.create_agent_unavailable'))}</small>` : statusUnknownNote}
               <label><span>${esc(text('run_center.create_isolation_label'))}</span><select data-run-center-create-worktree ${state.createBusy || state.worktreesLoading ? 'disabled' : ''}><option value="">${esc(text('run_center.current_workspace'))}</option>${worktreeOptions}</select></label>
               ${state.worktreesLoading ? `<small class="run-center-create-note" role="status">${esc(text('run_center.worktrees_loading'))}</small>` : state.worktreesError ? `<div class="run-center-create-worktree-retry"><small class="run-center-create-note">${esc(text('run_center.create_worktree_unavailable'))}</small><button type="button" class="btn btn-sm" data-run-center-create-worktrees-retry>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>` : !managedWorktrees.length ? `<small class="run-center-create-note">${esc(text('run_center.create_worktree_empty'))}</small>` : `<small class="run-center-create-note">${esc(text('run_center.create_worktree_note'))}</small>`}
               ${state.createAdvancedError ? `<small class="run-center-create-note is-error" role="status">${esc(state.createAdvancedError)}</small>` : ''}
@@ -1088,11 +1146,26 @@
   function focusCreateControl() {
     focusLater('[data-run-center-create-task], [data-run-center-create-agent]');
   }
+  // Agent admission rejections arrive with a stable `code` from Main, carried
+  // by the invoke envelope. This maps that closed set to copy; the English
+  // message the backend throws is a diagnostic, never a machine signal.
+  //
+  // Distinct from a task's `failureCategory`: that says why a run failed, this
+  // says why an Agent could not take one. The two are deliberately separate.
+  const ADMISSION_REASON_KEYS = {
+    E_AGENT_ADMISSION: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_DISABLED: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_MANAGEMENT_ONLY: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_NOT_INSTALLED: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_OFFLINE: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_PEER_DISABLED: 'run_center.selected_agent_unavailable',
+    E_AGENT_ADMISSION_UNSUPPORTED_RUNTIME: 'run_center.selected_agent_runtime_unavailable',
+  };
   function createFailureMessage(error) {
-    const message = error?.message || String(error);
-    if (message.includes('CogSeed Agent is unavailable')) return text('run_center.selected_agent_unavailable');
-    if (message.includes('CogSeed Agent runtime is not executable')) return text('run_center.selected_agent_runtime_unavailable');
-    return message;
+    const key = ADMISSION_REASON_KEYS[String(error?.code || '')];
+    // Anything else keeps its own message: it is not an admission rejection and
+    // the backend text is the most specific thing available.
+    return key ? text(key) : (error?.message || String(error));
   }
   function clearCreateErrorAfterEdit(focusSelector) {
     if (!state.createError) return;
@@ -1166,7 +1239,11 @@
     const source = state.detail?.collaboration?.task || selectedTask();
     if (!isReassign && !state.createTask.trim()) { state.createError = text('run_center.create_task_required'); render(); focusCreateControl(); return; }
     if (isReassign && !state.createAgentId) { state.createError = text('run_center.choose_agent_required'); render(); focusCreateControl(); return; }
-    if (state.createAgentId && !taskDispatchableAgentCandidates().some((agent) => agent.agentId === state.createAgentId)) {
+    // A local gate is only legitimate while Main's eligibility answer is in
+    // hand. With an unknown registry there is nothing to check against, so the
+    // submission goes through and the admission gate gives the real answer.
+    if (agentEligibilityKnown() && state.createAgentId
+      && !taskAgentCandidates().some((agent) => agent.agentId === state.createAgentId)) {
       state.createError = text('run_center.selected_agent_unavailable');
       render();
       focusLater('[data-run-center-create-agent]');
@@ -1502,9 +1579,10 @@
       ? visibleBefore[archivedIndex + 1]?.key || visibleBefore[archivedIndex - 1]?.key || ''
       : '';
     const archiveScrollSnapshot = action === 'archive' ? captureScroll() : null;
-    const previousRunKeys = new Set(allRunModels().map((run) => run.key));
-    const sourceConversationId = task.conversationId;
-    const sourceSessionId = task.sessionId;
+    // Only an ordinary retry produces a replacement task, and only it has a
+    // channel that returns one. Group Chat retry creates a new turn whose task
+    // is projected later, so it has no synchronous child identity at all.
+    const nativeRetry = action === 'retry' && task.executionKind !== 'group-chat';
     state.busyAction = action;
     state.actionNotice = '';
     state.actionError = '';
@@ -1512,7 +1590,17 @@
     try {
       const payload = { taskId: task.taskId, action };
       if (action === 'retry' || action === 'resume') payload.requestId = `req-run-center-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      await invoke('cogseed.task.action', payload);
+      let replacementTaskId = '';
+      if (nativeRetry) {
+        // The dedicated channel runs the same controller call as the generic
+        // one and returns the resulting task, so the replacement never has to
+        // be identified by inference. It may legitimately be the source task
+        // itself when a retained result was recovered instead of re-run.
+        const replacement = await invoke('cogseed.task.retry', { taskId: task.taskId, requestId: payload.requestId });
+        replacementTaskId = String(replacement?.taskId || '');
+      } else {
+        await invoke('cogseed.task.action', payload);
+      }
       if (action === 'archive') {
         state.detailOpen = false;
         state.detailReturnFocus = '';
@@ -1533,13 +1621,16 @@
         }
         return;
       }
-      const candidates = allRunModels().filter((run) => !previousRunKeys.has(run.key)).filter((run) => {
-        const candidate = runTask(run);
-        return candidate?.sessionId === sourceSessionId
-          || !!sourceConversationId && candidate?.conversationId === sourceConversationId;
-      }).sort((left, right) => safeTime(runTask(right)?.updatedAt) - safeTime(runTask(left)?.updatedAt));
-      const targetRun = candidates[0]
-        || allRunModels().find((run) => run.members?.some((member) => member.taskId === task.taskId))
+      // Authoritative identity first, then the authoritative link, then stay
+      // put. A run that merely shares this conversation, or happens to be the
+      // most recently updated, is not evidence of anything: that inference is
+      // exactly what selected the wrong run when two runs landed together.
+      // Group Chat retry has no link to follow, so it holds its selection
+      // rather than jumping somewhere plausible.
+      const targetRun = (nativeRetry
+        ? runContainingTask(replacementTaskId) || runReplacingTask(task.taskId)
+        : null)
+        || runContainingTask(task.taskId)
         || selectedRunModel();
       const targetTask = runTask(targetRun);
       state.detailTab = 'summary';
@@ -2024,7 +2115,7 @@
   rootWindow.CogSeedRunCenterAttempts = Object.freeze({
     buildAttemptModels,
     reconcileAttemptSelection,
-    failureCategory,
+    failureHelpKey,
   });
   function applyRequestedView(view) {
     const nextView = normalizeView(view);
