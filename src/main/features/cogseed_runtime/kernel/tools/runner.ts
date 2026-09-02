@@ -5,6 +5,7 @@ import { RUNTIME_FILE_TOOLS, runRuntimeFileTool, type RuntimeToolCallContext, ty
 import { normalizeRuntimeRoots } from './permissions';
 import { runRuntimeBashTool } from './shell-tools';
 import { runRuntimeSkillTool } from './skill-tools';
+import { createRuntimeActionApprovalClient, runWithRuntimeActionApproval } from './action-approval';
 import type { CogSeedConnectorManager } from '../../../cogseed_backend/connector-manager';
 import type { CogSeedKbManager } from '../../../cogseed_backend/cogseed-kb-store';
 import { cogseedRuntimeSessionToolResultsDir } from '../../../../paths';
@@ -16,6 +17,7 @@ export interface RuntimeToolRunnerOptions {
   userId: string;
   runtimeSessionId: string;
   requestId?: string;
+  agentId?: string;
   allowedRoots: readonly string[];
   writableRoots?: readonly string[];
   pcDir?: string;
@@ -43,6 +45,12 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
   const catalog = filterRuntimeToolCatalogByCapabilities(getRuntimeToolCatalog(), options.capabilities);
   const allowedRoots = normalizeRuntimeRoots(options.allowedRoots);
   const writableRoots = normalizeRuntimeRoots(options.writableRoots ?? []);
+  const actionApproval = createRuntimeActionApprovalClient({
+    hostToolClient: options.hostToolClient,
+    requestId: options.requestId ?? `req-${options.runtimeSessionId.replace(/^mruntime-/, '')}`,
+    runtimeSessionId: options.runtimeSessionId,
+    actor: options.agentId || 'CogSeed Agent',
+  });
   const callContext: RuntimeToolCallContext = {
     userId: options.userId,
     runtimeSessionId: options.runtimeSessionId,
@@ -52,6 +60,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
     toolPolicy: options.toolPolicy,
     allowedSkillIds: options.allowedSkillIds ?? [],
     skillVersionPins: options.skillVersionPins ?? [],
+    actionApproval,
   };
   const capTokens = options.maxInlineToolResultTokens ?? DEFAULT_INLINE_RESULT_TOKENS;
   const toolResultsDir = cogseedRuntimeSessionToolResultsDir(options.userId, options.runtimeSessionId);
@@ -85,6 +94,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
           userId: options.userId,
           runtimeSessionId: options.runtimeSessionId,
           maxInlineTokens: capTokens,
+          signal: _opts.signal,
         });
       }
       if (name === 'run_skill') {
@@ -92,6 +102,7 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
           userId: options.userId,
           runtimeSessionId: options.runtimeSessionId,
           maxInlineTokens: capTokens,
+          signal: _opts.signal,
         });
       }
       if (name === 'list_connector_tools') {
@@ -105,11 +116,26 @@ export function createRuntimeToolRunner(options: RuntimeToolRunnerOptions): Runt
       if (name === 'call_connector_tool') {
         if (callContext.toolPolicy.connectors !== 'enabled' || !options.connectorManager) return { content: '[E_RUNTIME_CONNECTOR_DISABLED] CogSeed connectors are disabled', isError: true };
         if (typeof input.connector_id !== 'string' || typeof input.tool_name !== 'string' || !input.arguments || typeof input.arguments !== 'object' || Array.isArray(input.arguments)) return { content: '[E_RUNTIME_CONNECTOR_INPUT] connector_id, tool_name, and arguments are required', isError: true };
-        try {
-          return capRuntimeResult('call_connector_tool', { content: JSON.stringify(await options.connectorManager.callTool(options.userId, input.connector_id, input.tool_name, input.arguments as Record<string, unknown>, _opts)) });
-        } catch (error) {
-          return { content: (error instanceof Error ? error.message : String(error)), isError: true };
-        }
+        const connectorId = input.connector_id.trim();
+        const toolName = input.tool_name.trim();
+        const args = input.arguments as Record<string, unknown>;
+        const parameterKeys = Object.keys(args).sort();
+        return runWithRuntimeActionApproval(callContext.actionApproval, {
+          action: 'connector_call',
+          target: `${connectorId} / ${toolName}`,
+          scope: parameterKeys.length ? `仅调用该工具，参数字段：${parameterKeys.join('、')}` : '仅调用该工具，不携带参数字段',
+          auditTarget: `Connector tool: ${connectorId}/${toolName}`,
+          auditScope: parameterKeys.length ? `argument keys: ${parameterKeys.join(', ')}` : 'no argument keys',
+          risk: 'high',
+          reasons: ['external_service_call'],
+          execution: { connector_id: connectorId, tool_name: toolName, arguments: args },
+        }, async () => {
+          try {
+            return capRuntimeResult('call_connector_tool', { content: JSON.stringify(await options.connectorManager!.callTool(options.userId, connectorId, toolName, args, _opts)) });
+          } catch (error) {
+            return { content: (error instanceof Error ? error.message : String(error)), isError: true };
+          }
+        }, _opts.signal);
       }
       if (name === 'search_mate_kb') {
         if (!options.kbManager) return { content: '[E_RUNTIME_KB_DISABLED] CogSeed KB is unavailable', isError: true };
