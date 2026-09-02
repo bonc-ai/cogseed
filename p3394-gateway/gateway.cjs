@@ -1442,11 +1442,14 @@ class ClaudePersistentRuntime {
         const usage = extractClaudeResultUsage(ev);
         // 输出 token 用实测口径覆盖自报：claude result 帧的 output_tokens
         // 是聚合/占位值（含不可见思考与工具序列化，实测可比可见输出大数百
-        // 倍——issue #25941），按实际流出的正文估算才符合用户对「回复了
-        // 多少」的直觉。思考 token（output_tokens_details.thinking_tokens）
-        // 是真实计费量单独保留（DSH 口径：reasoning 与输出分开）；输入/
-        // 缓存/成本保留自报。
-        if (usage && finalText) usage.output = estimateOutputTokens(finalText) || usage.output;
+        // 倍——issue #25941；assistant 帧的 per-message usage 也是坏的
+        // output=0），CLI 流里不存在精确输出数。measured=true 标记此口径
+        // （渲染层加 ≈ 前缀，与账单精确值区分）。思考 token（thinking_
+        // tokens）是真实计费量单独保留；输入/缓存/成本保留自报。
+        if (usage && finalText) {
+          const measured = estimateOutputTokens(finalText);
+          if (measured) { usage.output = measured; usage.measured = true; }
+        }
         turn.resolve({ text: finalText, usage });
       }
     }

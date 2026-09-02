@@ -183,7 +183,7 @@ describe('conversation session stats line', () => {
     expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokV|'))).toBe(true);
     // price in=1 out=2 (cache units absent → 0): (100K*1 + 10K*2)/1M = ¥0.12
     expect(texts).toContain('chat.stats.cost|{"c":"¥0.12"}');
-    // 110K/128K ≈ 86% ≥ 80% threshold → ctx segment carries the hot class.
+    // 160K（含缓存读 50K——缓存同样占窗口）/128K ≈ 125% ≥ 80% → hot。
     const hot = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { className: string };
     expect(hot.className).toBe('seg seg-hot');
     // Cost span explains it is a local-price estimate, not a bill.
@@ -204,7 +204,7 @@ describe('conversation session stats line', () => {
     h.refresh();
     const ctx = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { textContent: string; className: string };
     // Only the used amount shows (no /window·% part), and it is not hot.
-    expect(ctx.textContent).toContain('110K');
+    expect(ctx.textContent).toContain('160K');
     expect(ctx.textContent).not.toContain('%');
     expect(ctx.className).toBe('seg');
   });
