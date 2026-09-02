@@ -11,11 +11,17 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { resolveE2eBin, readCogseedBridgeToken } = require('./p3394-e2e-common.cjs');
 
 const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
-const COGSEED_TOKEN = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-bridge.json'), 'utf8')).token;
-const CODEKEX = '/Applications/ChatGPT.app/Contents/Resources/codex';
+const COGSEED_TOKEN = readCogseedBridgeToken();
+const codexBin = resolveE2eBin('codex', { envKey: 'COGSEED_E2E_CODEX_BIN', macDefault: '/Applications/ChatGPT.app/Contents/Resources/codex' });
 const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
+
+if (process.argv.includes('--list-bin')) {
+  console.log(codexBin || '(not found)');
+  process.exit(codexBin ? 0 : 1);
+}
 
 function freePort() { return new Promise((res) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); }); }
 function getJson(url, t = 3000) { return new Promise((res) => { const r = http.get(url, { timeout: t }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => res({ s: x.statusCode, d })); }); r.on('error', () => res({ s: 0, d: '' })); r.on('timeout', () => { r.destroy(); res({ s: 0, d: '' }); }); }); }
@@ -26,14 +32,18 @@ async function main() {
   const replyPort = await freePort();
   const results = [];
   const mark = (n, ok, d) => { results.push(ok); console.log((ok ? '✓ ' : '✗ ') + n + (d ? ' — ' + d : '')); };
-  mark('codex 二进制存在', fs.existsSync(CODEKEX), CODEKEX);
+  mark('codex 二进制存在', !!codexBin, codexBin || '未找到，可通过 COGSEED_E2E_CODEX_BIN 指定');
+  if (!codexBin) {
+    console.error('未找到 codex CLI。请安装并登录 codex，或设置 COGSEED_E2E_CODEX_BIN 为 codex 绝对路径。');
+    process.exit(1);
+  }
 
   const env = { ...process.env,
     P3394_GATEWAY_PORT: String(gwPort), P3394_GATEWAY_HOST: '127.0.0.1',
     P3394_ADVERTISE_ENDPOINT: `http://127.0.0.1:${gwPort}`,
     P3394_GATEWAY_HOME: path.join(os.tmpdir(), 'p3394-codex-e2e-' + Date.now()),
     P3394_AGENT: 'codex', P3394_AGENT_ID: 'codex', P3394_AGENT_ALIAS: 'Codex-RealE2E',
-    P3394_AGENT_CLI: CODEKEX,
+    P3394_AGENT_CLI: codexBin,
     COGSEED_ENDPOINT, COGSEED_TOKEN,
     P3394_HEARTBEAT_MS: '5000', P3394_AGENT_TIMEOUT_MS: '180000',
     // app-server 是托管的 codex 常驻运行时；加长 heartbeat 防超时

@@ -1521,7 +1521,10 @@
   <!-- Create Agent Modal -->
   <div class="modal-overlay" id="agent-modal">
     <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title">
-      <h3 class="modal-title" id="agent-modal-title" data-i18n="agent_modal.title">New agent</h3>
+      <div class="modal-header">
+        <h3 class="modal-title" id="agent-modal-title" data-i18n="agent_modal.title">New agent</h3>
+        <button type="button" class="modal-close-btn" onclick="closeAgentModal()" data-i18n-title="common.close" title="Close" aria-label="Close">×</button>
+      </div>
 
       <!-- Mode tabs: Create (in-process) / External (cli runtime). Mirrors the
            skill-modal tab pattern; reuses the same .skill-modal-tab styles
