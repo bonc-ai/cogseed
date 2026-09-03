@@ -174,7 +174,19 @@ async function finishClosure(
   return reconcileKstarExtraction(userId, episode, review);
 }
 
-function hostObservableUsageEvidence(episode: KstarEpisodeRecord): {
+function messageHasSuccessfulToolCall(message: GroupKstarMessageInput): boolean {
+  return (message.process || []).some((item) => {
+    const event = item.type === 'event' ? item.event : item.event;
+    if (!event || event.stream !== 'tool' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
+      return false;
+    }
+    const data = event.data as Record<string, unknown>;
+    const phase = typeof data.phase === 'string' ? data.phase.toLowerCase() : '';
+    return (phase === 'end' || phase === 'complete' || phase === 'completed') && data.isError !== true;
+  });
+}
+
+function hostObservableUsageEvidence(episode: KstarEpisodeRecord, message?: GroupKstarMessageInput): {
   evidenceKind: AssetUsageEvidenceKind;
   evidenceRefs: CognitionSourceRef[];
 } | undefined {
@@ -185,56 +197,64 @@ function hostObservableUsageEvidence(episode: KstarEpisodeRecord): {
     subtype: 'execution',
     title: 'Persisted KSTAR episode',
   }]);
-  if (episode.a.toolCalls.some((call) => call.status === 'ok')) {
+  // The evidence must be tied to the exact persisted message that carried the
+  // citation. A successful call elsewhere in the episode proves that the run
+  // did work, but not that this particular asset was adopted.
+  if (!message) return undefined;
+  if (messageHasSuccessfulToolCall(message)) {
     return { evidenceKind: 'tool_call', evidenceRefs: executionRef };
   }
-  const artifactRefs = normalizeCognitionSourceRefs(
-    episode.evidenceRefs.filter((ref) => ref.kind === 'artifact_file' || ref.kind === 'artifact'),
-  );
-  if (episode.r.producedFiles.length || artifactRefs.length) {
-    return { evidenceKind: 'artifact', evidenceRefs: artifactRefs.length ? artifactRefs : executionRef };
-  }
-  if (episode.a.agentActions.some((action) => (
-    action.status !== 'error'
-    && action.status !== 'cancelled'
-    && action.status !== 'unknown'
-    && action.action.trim()
-    && action.action !== 'completed action'
-  ))) {
-    return { evidenceKind: 'agent_action', evidenceRefs: executionRef };
-  }
-  if (episode.r.finalText?.trim()) {
-    return { evidenceKind: 'final_output', evidenceRefs: executionRef };
+  const artifactRefs = normalizeCognitionSourceRefs([
+    ...(message.produced || []).map((file) => ({ kind: 'artifact_file' as const, id: `artifact-${file}` })),
+    ...(message.artifacts || []).map((artifact) => ({ kind: 'artifact_file' as const, id: artifact.id, title: artifact.title })),
+  ]);
+  if (artifactRefs.length) {
+    return { evidenceKind: 'artifact', evidenceRefs: artifactRefs };
   }
   return undefined;
+}
+
+interface InjectedCitationForEpisode {
+  injection: InjectionReceipt;
+  message: GroupKstarMessageInput;
+  ambiguous: boolean;
 }
 
 function injectedCitationsForEpisode(
   episode: KstarEpisodeRecord,
   messages: GroupKstarMessageInput[] | undefined,
   receipts: InjectionReceipt[],
-): InjectionReceipt[] {
+): InjectedCitationForEpisode[] {
   if (!episode.projectionId || !messages?.length || !episode.k.abilityAssetRefs.length) return [];
   const evidenceMessageIds = new Set(episode.evidenceRefs
     .filter((ref) => ref.kind === 'conversation' || ref.kind === 'message')
     .map((ref) => ref.id));
-  const citedKeys = new Set<string>();
+  const citedByMessage = new Map<string, Set<string>>();
   for (const message of messages) {
     if (!evidenceMessageIds.has(message.id)) continue;
     for (const citation of message.recall_citations || []) {
       if (
         citation.projection_id === episode.projectionId
         && episode.k.abilityAssetRefs.includes(citation.asset_id)
-      ) citedKeys.add(`${message.id}:${citation.asset_id}:${citation.version}`);
+      ) {
+        const cited = citedByMessage.get(message.id) || new Set<string>();
+        cited.add(`${citation.asset_id}:${citation.version}`);
+        citedByMessage.set(message.id, cited);
+      }
     }
   }
-  return receipts.filter((receipt) => (
-    receipt.boundary === 'real'
-    && (receipt.status === 'injected' || receipt.status === 'dispatched')
-    && receipt.projectionId === episode.projectionId
-    && !!receipt.messageId
-    && citedKeys.has(`${receipt.messageId}:${receipt.assetId}:${receipt.assetVersion}`)
-  ));
+  return receipts.flatMap((injection) => {
+    if (
+      injection.boundary !== 'real'
+      || (injection.status !== 'injected' && injection.status !== 'dispatched')
+      || injection.projectionId !== episode.projectionId
+      || !injection.messageId
+    ) return [];
+    const message = messages.find((candidate) => candidate.id === injection.messageId);
+    const cited = message ? citedByMessage.get(message.id) : undefined;
+    if (!message || !cited?.has(`${injection.assetId}:${injection.assetVersion}`)) return [];
+    return [{ injection, message, ambiguous: cited.size > 1 }];
+  });
 }
 
 async function persistAssetUsageTruth(
@@ -250,18 +270,20 @@ async function persistAssetUsageTruth(
       await listInjectionReceipts(userId),
     );
     if (!injections.length) return;
-    const observable = hostObservableUsageEvidence(episode);
-    const writes = await Promise.allSettled(injections.map((injection) => recordAssetUsageReceipt(userId, {
-      taskRunId: injection.taskRunId,
-      projectionId: injection.projectionId!,
-      assetId: injection.assetId,
-      assetVersion: injection.assetVersion,
-      injectionReceiptId: injection.id,
-      status: observable ? 'applied' : 'usage_unknown',
-      evidenceKind: observable?.evidenceKind || 'none',
-      evidenceRefs: observable?.evidenceRefs || [],
-      boundary: 'real',
-    })));
+    const writes = await Promise.allSettled(injections.map(({ injection, message, ambiguous }) => {
+      const observable = ambiguous ? undefined : hostObservableUsageEvidence(episode, message);
+      return recordAssetUsageReceipt(userId, {
+        taskRunId: injection.taskRunId,
+        projectionId: injection.projectionId!,
+        assetId: injection.assetId,
+        assetVersion: injection.assetVersion,
+        injectionReceiptId: injection.id,
+        status: observable ? 'applied' : 'usage_unknown',
+        evidenceKind: observable?.evidenceKind || 'none',
+        evidenceRefs: observable?.evidenceRefs || [],
+        boundary: 'real',
+      });
+    }));
     if (writes.some((result) => result.status === 'rejected')) {
       throw new Error('one or more asset usage receipts failed');
     }
