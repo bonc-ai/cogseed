@@ -20,7 +20,7 @@
 
 import type { InboundEnvelope, MessagingInstance } from './types';
 
-export type InboundCommandName = 'permission' | 'forget';
+export type InboundCommandName = 'permission' | 'forget' | 'agent' | 'status' | 'unbind';
 
 export type ForgetCommandAction = 'preview' | 'confirm' | 'cancel';
 
@@ -68,6 +68,7 @@ export function registeredCommandNames(): InboundCommandName[] {
 
 const PERMISSION_RE = /^\/权限(?:\s|$)/;
 const FORGET_RE = /^\/遗忘(?:\s|$)/;
+const AGENT_RE = /^\/agent(?:\s|$)/;
 
 /**
  * 把入站文本解析为命令。只识别本模块维护的命令名；未知 `/xxx` 返回 null
@@ -86,6 +87,9 @@ export function matchInboundCommand(text: string): InboundCommand | null {
     if (args === '确认') return { name: 'forget', args, action: 'confirm' };
     if (args === '取消') return { name: 'forget', args, action: 'cancel' };
     return { name: 'forget', args, action: 'preview' };
+  }
+  if (AGENT_RE.test(trimmed)) {
+    return { name: 'agent', args: trimmed.replace(AGENT_RE, '').trim() };
   }
   return null;
 }
