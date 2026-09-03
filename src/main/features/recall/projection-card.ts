@@ -19,6 +19,8 @@ export interface ProjectionCardAssetSummary {
   /** 已确认投影钉住的版本 ≠ 资产当前版本：修订过但还没进这次注入。 */
   stale?: boolean;
   sourceRefCount: number;
+  /** Deterministic route provenance: semantic, ontology, or both. Legacy
+   * projections may still expose recency_fallback/manual values. */
   matchScore?: number;
   matchMethod?: RecallAssetMatchMethod;
 }
