@@ -27,8 +27,16 @@ import {
   levelOrInfo,
   FileChangeFallbackTracker,
 } from './base.js';
+import { wrapPersistentBackend, registerPersistentAdapter } from '../persistent/index.js';
+import { createClaudeAdapter } from './claude_persistent.js';
 
 const log = createLogger('local-agents:claude');
+
+// Persistent wiring: stream-json duplex adapter (one resident process
+// per conversation window; see claude_persistent.ts). The one-shot
+// backend below stays the fallback path and the reference for event
+// parity.
+registerPersistentAdapter(createClaudeAdapter());
 
 /**
  * Claude Code reads its thinking budget from the documented
@@ -36,13 +44,15 @@ const log = createLogger('local-agents:claude');
  * not tiered presets, so these budgets are our heuristic mapping: unset
  * ('off') keeps the CLI's own default (usually no extended thinking), the
  * tiers raise the budget without touching anything else in the session.
+ * Exported for the persistent adapter (process-lifetime env, applied at
+ * spawn time).
  */
-const CLAUDE_THINKING_TOKENS: Record<'low' | 'high', string> = {
+export const CLAUDE_THINKING_TOKENS: Record<'low' | 'high', string> = {
   low: '8192',
   high: '32000',
 };
 
-export const claudeBackend: LocalBackend = {
+const claudeOneShotBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildClaudeArgs(opts);
     // 'off' → unset: claude has no hard "disable thinking" switch, so the
@@ -525,3 +535,18 @@ function mergeUsage(
   if (typeof inc.model === 'string' && inc.model) out.model = inc.model;
   return out;
 }
+
+// Exported backend: persistent duplex by default. Dispatches carrying
+// a bridge MCP config or customArgs stay one-shot — the bridge server
+// is per-run (fresh socket each dispatch), so a resident process
+// would hold stale MCP endpoints by turn 2; user flags are
+// spawn-time only. See claude_persistent.ts header notes.
+const wrapped = wrapPersistentBackend('claude', claudeOneShotBackend);
+export const claudeBackend: LocalBackend = {
+  async run(opts: BackendRunOptions): Promise<void> {
+    if ((opts.bridge) || (opts.customArgs && opts.customArgs.length)) {
+      return claudeOneShotBackend.run(opts);
+    }
+    return wrapped.run(opts);
+  },
+};
