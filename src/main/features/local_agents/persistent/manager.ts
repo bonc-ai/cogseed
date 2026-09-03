@@ -129,7 +129,9 @@ export class PersistentRuntimeManager {
       .acquire({
         binPath: opts.binPath,
         cwd: opts.cwd,
+        ...(opts.model ? { model: opts.model } : {}),
         ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+        ...(opts.providerEnv ? { providerEnv: opts.providerEnv } : {}),
         onEvent: opts.onEvent,
       })
       .then(win => {

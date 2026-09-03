@@ -113,7 +113,14 @@ export interface PersistentWindow {
 export interface PersistentAcquireOpts {
   binPath: string;
   cwd: string;
+  /** Model for NEW windows — session-level in most CLIs (applied at
+   *  creation; existing windows keep their creation-time model). */
+  model?: string;
   resumeSessionId?: string;
+  /** Custom-provider env — servers spawned per provider fingerprint
+   *  so a switch to different credentials never reuses a process
+   *  launched with the old ones. */
+  providerEnv?: Record<string, string>;
   /** Window-lifetime event sink (process-info on spawn, lifecycle
    *  logs). Turn-time events flow through send's onEvent instead. */
   onEvent: (e: LocalEvent) => void;

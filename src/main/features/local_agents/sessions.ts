@@ -8,6 +8,17 @@
  * after prior visible turns (for example cwd changed), group_chat may
  * bridge that transcript once into the fresh CLI session.
  *
+ * Persistent-runtime semantics (local_agents/persistent/): while a
+ * resident window for this binding is alive, context continuity
+ * lives in the WINDOW — the runner delivers each turn to it directly
+ * and this table is not consulted for history purposes at all. The
+ * stored id still matters: it is the recovery handle when the window
+ * dies (the manager re-opens the CLI conversation from it) and the
+ * reuse key matching a live window to the next dispatch. In other
+ * words resume has been demoted from a per-turn mechanism to a
+ * crash-recovery mechanism; the on-disk shape and read/write paths
+ * are unchanged.
+ *
  * Storage: `<uid>/local/cli-sessions/<cid>.json`, shape:
  *   { "<aid>": { "cli": "claude", "sessionId": "...", "updatedAt": "..." } }
  *
