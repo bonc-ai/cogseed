@@ -457,6 +457,31 @@ describe('RecallView and ContextProjection', () => {
     ]);
     await expect(projection.listContextProjections('user-a', { workspaceId: 'workspace-a' })).resolves.toHaveLength(1);
   });
+
+  it('filters projections by taskRunId and conversationId', async () => {
+    const { projection } = await modules();
+    const recallStore = await import('../../../../src/main/features/recall/store');
+    const first = await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-filter-a', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-filter-a', taskRunId: 'task-filter-a', conversationId: 'cid-filter-a',
+      purpose: 'trace', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [], status: 'preview',
+      createdAt: '2026-09-03T00:00:00.000Z',
+    });
+    const second = await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-filter-b', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-filter-b', taskRunId: 'task-filter-b', conversationId: 'cid-filter-b',
+      purpose: 'trace', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [], status: 'preview',
+      createdAt: '2026-09-03T00:00:01.000Z',
+    });
+
+    await expect(projection.listContextProjections('user-a', { taskRunId: 'task-filter-a' })).resolves.toEqual([
+      expect.objectContaining({ id: first.id, taskRunId: 'task-filter-a' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { taskRunId: 'task-filter-b' })).resolves.toEqual([
+      expect.objectContaining({ id: second.id, taskRunId: 'task-filter-b' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { conversationId: 'cid-filter-a' })).resolves.toEqual([
+      expect.objectContaining({ id: first.id }),
+    ]);
+  });
 });
 
 describe('Recall projection auto-confirm and semantic Top-N', () => {

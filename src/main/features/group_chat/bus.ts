@@ -4293,6 +4293,8 @@ async function runActorTurnBody(
   // task + projection for this turn's user message. The Commander hint must
   // not claim tracked state that doesn't exist (see call site below).
   let hostOpenedTaskThisTurn = false;
+  let hostOpenedRequirementId: string | undefined;
+  let hostForecastStarted = false;
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
@@ -4322,6 +4324,7 @@ async function runActorTurnBody(
       // failed with "forecast proposal is required". Only advertise the
       // tracked state when it is true.
       hostOpenedTaskThisTurn = routing.openedTask;
+      hostOpenedRequirementId = routing.requirementId;
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -5377,7 +5380,24 @@ async function runActorTurnBody(
         // process event so the renderer can show "actually running with X ·
         // effort Y" on the streaming bubble (unified execution entry).
         onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
-          if (isCommander) commanderResolvedRuntime = runtime;
+          if (isCommander) {
+            commanderResolvedRuntime = runtime;
+            if (hostOpenedRequirementId && !hostForecastStarted) {
+              hostForecastStarted = true;
+              const requirementId = hostOpenedRequirementId;
+              void import('../kstar/auto-forecast').then(({ autoForecastForRequirement }) => (
+                autoForecastForRequirement(uid, cid, requirementId, {
+                  allowedToolNames: new Set(runtime.toolNames),
+                })
+              )).catch((error) => {
+                log.warn('kstar auto-forecast async degraded', {
+                  cid: maskId(cid),
+                  requirementId,
+                  error: (error as Error).message,
+                });
+              });
+            }
+          }
           turnExecMeta = {
             provider: runtime.providerId,
             model: runtime.modelId,
@@ -9348,7 +9368,7 @@ async function hostRouteTaskTurn(
   messageText: string | undefined,
   sourceMessageId: string | undefined,
   workspaceId?: string,
-): Promise<{ openedTask: boolean }> {
+): Promise<{ openedTask: boolean; requirementId?: string }> {
   // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
@@ -9485,25 +9505,12 @@ async function hostRouteTaskTurn(
         },
       },
     );
-    // World-model prediction: the host owns forecast generation (dedicated
-    // runner over the committed projection knowledge). Run it ASYNC so the
-    // Commander turn starts immediately — a 10-30s forecast generation must
-    // never gate the user's reply. Errors are logged inside auto-forecast
-    // and execution proceeds without a forecast record if it fails.
-    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, created.requirementId).catch((error) => {
-      log.warn('kstar auto-forecast async degraded', {
-        cid: maskId(cid),
-        requirementId: created.requirementId,
-        error: (error as Error).message,
-      });
-    });
     log.info('kstar host routing opened task', {
       cid: maskId(cid),
       requirementId: created.requirementId,
       sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
     });
-    return { openedTask: true };
+    return { openedTask: true, requirementId: created.requirementId };
   } catch (error) {
     log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
     return { openedTask: false };
@@ -9527,6 +9534,7 @@ async function ensureKstarTaskForDispatch(
   taskText: string,
   sourceMessageId?: string,
   workspaceId?: string,
+  allowedToolNames: ReadonlySet<string> = new Set(),
 ): Promise<{ created: boolean; hint?: string }> {
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
@@ -9574,7 +9582,7 @@ async function ensureKstarTaskForDispatch(
     // runner), ASYNC so the dispatch turn is not gated by the 10-30s
     // generation call.
     const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, result.requirementId).catch((error) => {
+    void autoForecastForRequirement(uid, cid, result.requirementId, { allowedToolNames }).catch((error) => {
       log.warn('kstar auto-forecast async degraded', {
         cid: maskId(cid),
         requirementId: result.requirementId,
@@ -10493,7 +10501,14 @@ async function buildCommanderExtraTools(
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
       // when no KStar task is open (advisory; never blocks the dispatch).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -10702,7 +10717,14 @@ async function buildCommanderExtraTools(
       // Layer 2 routing uplift: named hand-off is a formal task. The
       // auto-track flag is captured so the forecast gate is waived ONLY for
       // the dispatch that actually created the task (ONCE semantics).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -11125,7 +11147,14 @@ async function buildCommanderExtraTools(
       });
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: named worker is a formal task.
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        task,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,

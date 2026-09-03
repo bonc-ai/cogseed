@@ -67,6 +67,39 @@ describe('KSTAR learning evidence', () => {
     await expect(validation.listValidationRecords('user-a')).resolves.toHaveLength(2);
   });
 
+  it('replays a durable validation record after a partial downstream apply without double counting', async () => {
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const validation = await import('../../../../src/main/features/recall/validation-service');
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Recover a partially applied validation.',
+      suggestedType: 'rule', suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'episode-replay' }],
+    });
+
+    await validation.recordValidation('user-a', {
+      assetId: 'asset-created-later', candidateId: candidate.id, taskRunId: 'run-replay', outcome: 'success',
+      evidenceRefs: [{ kind: 'execution_evaluation', id: 'evaluation-replay' }],
+    });
+    await expect(candidates.readRecallCandidate('user-a', candidate.id)).resolves.toMatchObject({ validationCount: 1 });
+
+    await assets.createSystemAbilityAsset('user-a', {
+      schemaVersion: 1, ownerId: 'user-a', id: 'asset-created-later', candidateId: candidate.id,
+      title: 'Recoverable validation asset', statement: candidate.judgment, type: 'rule', scope: 'review',
+      evidenceRefs: [{ kind: 'execution', id: 'episode-replay' }], reviewDecisionId: 'legacy-replay',
+      lifecycleStatus: 'system_precipitated_unverified', status: 'active', maturity: 'seed', version: '1',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }, 'replay test asset');
+
+    expect(await validation.recoverValidationApplications('user-a')).toBe(1);
+    await expect(candidates.readRecallCandidate('user-a', candidate.id)).resolves.toMatchObject({
+      validationCount: 1, consecutiveFailures: 0,
+    });
+    await expect(assets.readAbilityAsset('user-a', 'asset-created-later')).resolves.toMatchObject({
+      validationCount: 1, consecutiveFailures: 0,
+    });
+  });
+
   it('applies promotion policy thresholds without treating injection as proof', async () => {
     const policy = await import('../../../../src/main/features/recall/promotion-policy');
     expect(policy.evaluatePromotionPolicy({ risk: 'low', status: 'pending_review', validationCount: 0, consecutiveFailures: 0 })).toMatchObject({ action: 'hold' });

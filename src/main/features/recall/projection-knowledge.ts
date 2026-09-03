@@ -6,6 +6,8 @@ import { loadOntologyRules } from './ontology-rules';
 import { loadOntologyTaxonomy } from './ontology-taxonomy';
 import { normalizeCognitionSourceRefs } from './source-service';
 import { readAbilityAsset } from './asset-service';
+import { readGroups, listGroupFields } from '../personal_ontology_groups';
+import { splitScopeTerms } from './scope-policy';
 import {
   readContextProjection,
   validateCommittedProjectionAssetVersions,
@@ -20,6 +22,9 @@ const MAX_STATEMENT = 2_000;
 const MAX_EVIDENCE_REFS = 20;
 const MAX_ONTOLOGY_ASSETS = 12;
 const MAX_ONTOLOGY_STATEMENT = 1_000;
+const MAX_ONTOLOGY_FACTS = 24;
+const MAX_ONTOLOGY_FACT_CANDIDATES = 512;
+const MAX_ONTOLOGY_FACT_VALUE = 500;
 
 export interface CommittedProjectionKnowledge {
   projectionId: string;
@@ -31,10 +36,63 @@ export interface CommittedProjectionKnowledge {
   rules: WorldModelCausalRuleRef[];
   /** Durable personal ontology (USER.md + MEMORY.md) as `personal` ability assets. */
   ontologyAssets: WorldModelAbilityAsset[];
+  ontologyFacts: import('./world-model-types').WorldModelOntologyFact[];
   /** T-Box concept definitions (ontology group ledger + field vocabulary). */
   ontologyTaxonomy: Awaited<ReturnType<typeof loadOntologyTaxonomy>>;
   /** R-Box (ontology): durable business rules from relation fields. */
   ontologyRules: Awaited<ReturnType<typeof loadOntologyRules>>['rules'];
+}
+
+async function loadOntologyFacts(
+  userId: string,
+  context: { workspaceId?: string; taskText?: string } = {},
+): Promise<import('./world-model-types').WorldModelOntologyFact[]> {
+  const facts: import('./world-model-types').WorldModelOntologyFact[] = [];
+  let groups: ReturnType<typeof readGroups>;
+  try {
+    groups = readGroups(userId).slice(0, 48);
+  } catch {
+    return facts;
+  }
+  for (const group of groups) {
+    let fields: Awaited<ReturnType<typeof listGroupFields>>;
+    try {
+      fields = await listGroupFields(userId, group.group_id);
+    } catch {
+      continue;
+    }
+    if (!fields.ok || !fields.fields) continue;
+    for (const field of fields.fields) {
+      for (const entry of field.values) {
+        if (entry.project && entry.project !== context.workspaceId) continue;
+        const value = String(entry.value || '').replace(/\s+/g, ' ').trim().slice(0, MAX_ONTOLOGY_FACT_VALUE);
+        if (!value) continue;
+        const factKey = createHash('sha256')
+          .update(`${group.group_id}\0${field.name}\0${value}`)
+          .digest('hex');
+        facts.push({
+          id: `po-fact-${factKey.slice(0, 24)}`,
+          groupTitle: String(group.title || group.group_id).slice(0, 200),
+          field: String(field.name || '').trim().slice(0, 200),
+          value,
+          source: 'personal_ontology',
+          ...(entry.project ? { projectId: entry.project } : {}),
+        });
+        if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
+      }
+      if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
+    }
+    if (facts.length >= MAX_ONTOLOGY_FACT_CANDIDATES) break;
+  }
+  const taskTokens = splitScopeTerms(context.taskText || '').map((token) => token.toLocaleLowerCase());
+  return facts
+    .map((fact, index) => {
+      const searchable = `${fact.groupTitle} ${fact.field} ${fact.value}`.toLocaleLowerCase();
+      return { fact, index, score: taskTokens.filter((token) => searchable.includes(token)).length };
+    })
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, MAX_ONTOLOGY_FACTS)
+    .map(({ fact }) => fact);
 }
 
 function ontologyAssetFromEntry(
@@ -87,6 +145,7 @@ function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
 export async function loadCommittedProjectionKnowledge(
   userId: string,
   projectionId: string,
+  context: { taskText?: string } = {},
 ): Promise<CommittedProjectionKnowledge> {
   const projection = await readContextProjection(userId, projectionId);
   const assetVersions = await validateCommittedProjectionAssetVersions(userId, projection);
@@ -118,6 +177,7 @@ export async function loadCommittedProjectionKnowledge(
         }]
       : []
   ));
+  const ontologyAssets = loadOntologyAssets(userId);
   return {
     projectionId: projection.id,
     projectionConfirmedAt: projection.confirmedAt || projection.decidedAt || projection.createdAt,
@@ -126,7 +186,22 @@ export async function loadCommittedProjectionKnowledge(
     abilityAssets,
     assetVersions: Object.fromEntries(abilityAssets.map((asset) => [asset.id, assetVersions[asset.id]])),
     rules,
-    ontologyAssets: loadOntologyAssets(userId),
+    ontologyAssets,
+    ontologyFacts: [
+      ...(await loadOntologyFacts(userId, {
+        workspaceId: projection.workspaceId,
+        taskText: context.taskText,
+      })),
+      ...ontologyAssets.map((asset) => ({
+        id: asset.id,
+        groupTitle: 'Durable personal context',
+        field: 'memory',
+        value: asset.statement,
+        source: asset.evidenceRefs.some((ref) => ref.id === 'user_profile')
+          ? 'user_profile' as const
+          : 'shared_memory' as const,
+      })),
+    ].slice(0, MAX_ONTOLOGY_FACTS),
     ontologyTaxonomy: await loadOntologyTaxonomy(userId),
     ontologyRules: (await loadOntologyRules(userId)).rules,
   };

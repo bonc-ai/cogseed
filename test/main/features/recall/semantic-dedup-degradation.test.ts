@@ -42,6 +42,17 @@ async function reviewableCandidate(candidates: typeof import('../../../../src/ma
 }
 
 describe('semantic dedup degradation', () => {
+  it('does not require embedding when there is nothing to compare', async () => {
+    const similarity = await import('../../../../src/main/features/recall/similarity');
+    const outcome = await similarity.findSemanticDuplicate(UID, {
+      text: '首条资产不需要执行语义查重。',
+      candidateTexts: [],
+      assetTexts: [],
+    });
+
+    expect(outcome).toEqual({ status: 'no_match' });
+  });
+
   it('reports degraded rather than "no duplicate" when embedding is unavailable', async () => {
     const similarity = await import('../../../../src/main/features/recall/similarity');
     const outcome = await similarity.findSemanticDuplicate(UID, {
@@ -57,6 +68,17 @@ describe('semantic dedup degradation', () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(UID);
     const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    await candidates.saveRecallCandidate(UID, {
+      judgment: '架构评审应先说明产品模型，再进入代码细节。',
+      value: '避免架构评审过早陷入实现讨论。',
+      suggestedType: 'rule',
+      applicableWhen: ['正式评审与架构决策时'],
+      forbiddenWhen: ['内部快速对齐'],
+      suggestedScope: 'review',
+      suggestedAction: 'create',
+      sourceRefs: [{ kind: 'execution', id: 'exec-existing' }],
+      evidenceRefs: [{ kind: 'execution', id: 'exec-existing' }],
+    });
     const candidate = await reviewableCandidate(candidates);
 
     await expect(candidates.autoApplyRecallCandidate(UID, candidate.id))

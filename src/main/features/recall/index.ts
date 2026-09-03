@@ -12,7 +12,7 @@ export type { CognitionSourceAvailability, CognitionSourceControlRecord, Cogniti
 
 export { deferRecallCandidate, importPersonalOntologyCandidate, listRecallCandidates, promoteRecallCandidate, recallCandidateConflictingTypes, readRecallAssetHandoffReceipt, readRecallCandidate, rejectRecallCandidate, updateRecallCandidate, resumeRecallCandidate, saveRecallCandidate, recordRecallCandidateValidation } from './candidate-service';
 export { recordInjectionReceipt, listInjectionReceipts } from './injection-receipt';
-export { recordValidation, listValidationRecords } from './validation-service';
+export { recordValidation, listValidationRecords, recoverValidationApplications } from './validation-service';
 export { evaluatePromotionPolicy } from './promotion-policy';
 export type { AbilityAssetType, RecallAbilityAssetRecord, RecallAssetHandoffReceipt, RecallCandidateRecord, RecallCandidateStatus, SaveRecallCandidateInput } from './candidate-service';
 export { normalizeAbilityAssetOntologyRefs } from './ontology-refs';

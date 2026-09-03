@@ -87,6 +87,7 @@ export interface RecallAssetMatch {
 
 export interface ContextProjectionRecord extends RecallJsonRecord {
   taskRunId: string;
+  conversationId?: string;
   workspaceId?: string;
   purpose: string;
   authorization: ProjectionAuthorization;
@@ -171,6 +172,8 @@ export interface AvailableProjectionAssetSummary {
 }
 
 export interface ListContextProjectionsQuery {
+  taskRunId?: string;
+  conversationId?: string;
   workspaceId?: string;
   status?: ContextProjectionStatus;
   includeExpired?: boolean;
@@ -884,6 +887,10 @@ export async function listContextProjections(
         : projection
     ))
     .filter((projection) => query.workspaceId === undefined || projection.workspaceId === query.workspaceId)
+    .filter((projection) => query.taskRunId === undefined || projection.taskRunId === query.taskRunId)
+    .filter((projection) => query.conversationId === undefined
+      || projection.conversationId === query.conversationId
+      || projection.sourceRefs.some((source) => source.kind === 'conversation' && source.id === query.conversationId))
     .filter((projection) => query.status === undefined || projection.status === query.status)
     .filter((projection) => query.includeExpired === true || projection.status !== 'expired')
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))

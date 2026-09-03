@@ -17,7 +17,9 @@ import type { KstarCandidateProposal, KstarEpisodeRecord } from './types';
  * line share one dedup domain (no duplicate assets, no content duplication).
  *
  * The candidate record carries learningProvenance (projectionId/forecastId/
- * episodeId/attribution) marking the KStar source.
+ * episodeId/attribution) marking the KStar source. forecastId is omitted only
+ * when advisory Forecast generation degraded; the ExtractionRun records that
+ * condition explicitly instead of fabricating an id.
  */
 
 const log = createLogger('kstar.direct-experience-assets');

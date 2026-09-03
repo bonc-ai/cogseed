@@ -30,7 +30,7 @@ import type {
 const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) => boolean> = {
   workspace_unavailable: (s) => !s.environment.workspace.ok,
   model_not_configured: (s) => !s.environment.model.configured,
-  bash_unavailable: (s) => !s.environment.tools.bash,
+  bash_unavailable: (s) => s.environment.tools.bash === false,
   skills_missing: (s) => s.skills.status === 'missing',
   too_few_skills: (s) => s.skills.status === 'ok' && s.skills.total < 10,
   too_few_rules: (s) => s.ontology.totalRules < 5,
@@ -74,7 +74,7 @@ export function collectWorldSnapshot(
     taskRunId: string;
     workspace: { ok: boolean; path?: string };
     model: { configured: boolean; profile?: string };
-    tools: { fileSystem: boolean; bash: boolean };
+    tools: { fileSystem: boolean | 'unknown'; bash: boolean | 'unknown' };
     groupChatStatus: 'idle' | 'running' | 'aborted';
     requirementStatus?: string;
     projectionStatus?: string;

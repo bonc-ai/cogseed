@@ -1,6 +1,10 @@
 import { createLogger } from '../../logger';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
-import { commitCommanderForecast } from './forecast-commit';
+import {
+  commitCommanderForecast,
+  matchedRulesForKnowledge,
+  measureForecastSituation,
+} from './forecast-commit';
 
 /**
  * auto-forecast.ts — the WORLD MODEL owns prediction.
@@ -35,12 +39,13 @@ export const AUTO_FORECAST_TIMEOUT_MS = 30_000;
  *  parseGeneratedForecastCandidates). */
 export const AUTO_FORECAST_PROMPT = [
   'You are the world-model prediction generator for a governed task.',
-  'Given the task goal and the projected ability assets (reusable capability statements), propose 2-4 distinct candidate execution plans that would achieve the goal.',
+  'Given the task goal, projected ability assets, and the bounded Personal Ontology context, propose 2-4 distinct candidate execution plans that would achieve the goal.',
   'Reply with EXACTLY one <kstar-forecast> block containing a JSON array and nothing else around it:',
   '[{"plan":["step 1","step 2"],"expectedTools":["tool-name"],"expectedActors":["commander"],"predictedResult":{"summary":"expected outcome","acceptanceSignals":["signal"]}}, ...]',
   '- plan: 2-6 concrete steps; expectedTools: real tool names or [] when none; expectedActors: "commander" and/or delegated agent names or []; predictedResult.summary: the expected deliverable; predictedResult.acceptanceSignals: 0-3 checkable signals.',
   '- Candidates must differ meaningfully (e.g. direct approach vs delegation vs tool-heavy verification).',
   '- Use the projected ability assets when they fit; do not invent asset names.',
+  '- Treat ontologyFacts as user-scoped context, ontologyRules as constraints, and ontologyTaxonomy as vocabulary. Do not expose or reproduce storage paths.',
 ].join('\n');
 
 /** Tolerant parser: accepts the tagged array, a bare JSON array, prose
@@ -79,6 +84,8 @@ export interface AutoForecastOptions {
 }
 
 let _autoForecastGeneratorForTest: AutoForecastOptions['generate'] | null = null;
+type AutoForecastResult = { ok: boolean; forecastId?: string; reason?: string };
+const autoForecastInFlight = new Map<string, Promise<AutoForecastResult>>();
 
 export function _setAutoForecastGeneratorForTest(
   generate: AutoForecastOptions['generate'] | null,
@@ -91,12 +98,12 @@ export function _setAutoForecastGeneratorForTest(
  *  exists. Never blocks the caller on model failure — returns ok:false and
  *  logs, so the user's task still proceeds (execution is never held hostage
  *  by prediction quality). */
-export async function autoForecastForRequirement(
+async function runAutoForecastForRequirement(
   userId: string,
   conversationId: string,
   requirementId: string,
   options: AutoForecastOptions = {},
-): Promise<{ ok: boolean; forecastId?: string; reason?: string }> {
+): Promise<AutoForecastResult> {
   const setStatus = async (status: import('./requirement-types').KstarForecastStatus, error?: string): Promise<void> => {
     try {
       const { readKstarRequirement, replaceKstarRequirement } = await import('./requirement-store');
@@ -125,7 +132,9 @@ export async function autoForecastForRequirement(
 
     let knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>;
     try {
-      knowledge = await loadCommittedProjectionKnowledge(userId, requirement.projectionId);
+      knowledge = await loadCommittedProjectionKnowledge(userId, requirement.projectionId, {
+        taskText: requirement.goalText,
+      });
     } catch {
       await setStatus('failed', 'projection knowledge unavailable');
       return { ok: false, reason: 'projection knowledge unavailable' };
@@ -135,6 +144,9 @@ export async function autoForecastForRequirement(
       .slice(0, 12)
       .map((asset) => `- [${asset.type}] ${asset.title}: ${asset.statement}`)
       .join('\n');
+    const allowedToolNames = options.allowedToolNames || new Set<string>();
+    const situation = await measureForecastSituation(userId, knowledge.workspaceId, allowedToolNames);
+    const matchedRules = matchedRulesForKnowledge(requirement.goalText, knowledge);
 
     const generate = options.generate || _autoForecastGeneratorForTest || (async (prompt, payload) => {
       const { buildRunner } = await import('../../model/core-agent/runner');
@@ -169,6 +181,19 @@ export async function autoForecastForRequirement(
     const payload = {
       taskGoal: requirement.goalText,
       projectedAbilityAssets: assetLines || '(none projected)',
+      ontologyFacts: knowledge.ontologyFacts.slice(0, 24),
+      ontologyRules: knowledge.ontologyRules.slice(0, 64),
+      ontologyTaxonomy: {
+        groups: knowledge.ontologyTaxonomy.groups.slice(0, 48).map((group) => ({
+          ...group,
+          fields: group.fields.slice(0, 64),
+        })),
+      },
+      matchedRules,
+      situation: {
+        ...(knowledge.workspaceId ? { workspaceId: knowledge.workspaceId } : {}),
+        ...situation,
+      },
       ...(requirement.rHat?.acceptanceSignals?.length
         ? { acceptanceSignals: requirement.rHat.acceptanceSignals }
         : {}),
@@ -200,7 +225,7 @@ export async function autoForecastForRequirement(
       requirementId: requirement.id,
       projectionId: requirement.projectionId,
       candidates: bounded,
-      allowedToolNames: options.allowedToolNames || new Set<string>(),
+      allowedToolNames,
       taskText: requirement.goalText,
       acceptanceCriteria: requirement.rHat?.acceptanceSignals || [],
     });
@@ -221,6 +246,27 @@ export async function autoForecastForRequirement(
     await setStatus('failed', (error as Error).message);
     return { ok: false, reason: (error as Error).message };
   }
+}
+
+/** Coalesce concurrent requests for the same user/requirement. Projection
+ * confirmation can trigger more than one background callback; only one of
+ * those callbacks may generate and commit a forecast. */
+export function autoForecastForRequirement(
+  userId: string,
+  conversationId: string,
+  requirementId: string,
+  options: AutoForecastOptions = {},
+): Promise<AutoForecastResult> {
+  const key = `${userId}:${requirementId}`;
+  const existing = autoForecastInFlight.get(key);
+  if (existing) return existing;
+  const current = runAutoForecastForRequirement(userId, conversationId, requirementId, options);
+  autoForecastInFlight.set(key, current);
+  void current.then(
+    () => { if (autoForecastInFlight.get(key) === current) autoForecastInFlight.delete(key); },
+    () => { if (autoForecastInFlight.get(key) === current) autoForecastInFlight.delete(key); },
+  );
+  return current;
 }
 
 /** Test-only: trigger the forecast generation for a requirement whose

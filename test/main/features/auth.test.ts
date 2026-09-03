@@ -687,6 +687,18 @@ describe('auth › hasConfiguredModel', () => {
       else process.env.ANTHROPIC_API_KEY = prev;
     }
   });
+
+  it('can probe a background task user independently from the active user', async () => {
+    const a = await import('../../../src/main/features/auth');
+    delete process.env.ANTHROPIC_API_KEY;
+    const p = await a.addApiKey('anthropic', 'k-background-xxxxxxxx');
+    await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId: p.profileId });
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('other-user');
+
+    expect(a.hasConfiguredModelForUser(TEST_UID)).toEqual({ configured: true });
+    expect(a.hasConfiguredModelForUser('other-user')).toEqual({ configured: false });
+  });
 });
 
 describe('auth › getConfiguredModelOAuthExpiredMessage', () => {
