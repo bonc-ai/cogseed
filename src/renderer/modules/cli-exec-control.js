@@ -129,10 +129,12 @@ async function loadCliModels(agentId, cli, opts) {
         currentEffort: (res.scanned && typeof res.scanned.currentEffort === 'string' && res.scanned.currentEffort) || null,
         // 能力协商独立于清单：unavailable 也可能可控（无枚举接口但有参数通道）。
         // 只在网关明确披露 true 时写 true；未披露（网关未起/扫空/旧版网关）
-        // 一律不写字段=「协商未决」，effortControllableFor 回落兜底表——
-        // 否则网关 respawn 窗口的一次扫空会把「未决」固化成 false，UI 永久
-        // 置灰（Command+R 后强度消失的第二成因）。
-        modelControllable: res.scanned && res.scanned.modelControllable === true,
+        // 一律不写字段=「协商未决」，effortControllableFor/modelControllableFor
+        // 回落兜底表——否则网关 respawn 窗口的一次扫空会把「未决」固化成
+        // false，UI 永久置灰（Command+R 后控件消失的第二成因；曾因
+        // modelControllable 无条件写布尔踩过：网关未起→静态清单仍渲染但
+        // 模型控件消失）。
+        ...(res.scanned && res.scanned.modelControllable === true ? { modelControllable: true } : {}),
         ...(res.scanned && res.scanned.effortControllable === true ? { effortControllable: true } : {}),
         staticModels: Array.isArray(res.staticModels) ? res.staticModels : [],
         reason: models.length ? null : ((res.scanned && res.scanned.reason) || 'empty_scan'),
