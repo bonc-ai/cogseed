@@ -297,6 +297,40 @@ describe('KStar Commander control service', () => {
       });
   });
 
+  it('rebinds an already-confirmed projection left by an interrupted request', async () => {
+    const seeded = await seedOpenControlState();
+    const projections = await import('../../../../src/main/features/recall/context-projection');
+    const orphan = await projections.previewContextProjection('user-a', {
+      taskRunId: seeded.task.id,
+      workspaceId: 'workspace-a',
+      purpose: 'Recover interrupted projection',
+      taskText: seeded.requirement.goalText,
+      authorization: 'workspace_policy',
+      confirm: true,
+    });
+    const service = await import('../../../../src/main/features/kstar/control-service');
+
+    const result = await service.executeKstarControl(hostContext(), {
+      operation: 'request_projection',
+      idempotencyKey: 'turn-a:projection-rebind',
+      projection: {
+        requirementId: seeded.requirement.id,
+        purpose: 'Recover interrupted projection',
+        taskText: seeded.requirement.goalText,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'projection_confirmed',
+      projectionId: orphan.id,
+    });
+    await expect(seeded.store.readKstarRequirement('user-a', seeded.requirement.id))
+      .resolves.toMatchObject({ projectionId: orphan.id });
+    await expect(projections.listContextProjections('user-a', { taskRunId: seeded.task.id }))
+      .resolves.toHaveLength(1);
+  });
+
   it('commits Forecast candidates with the host-bound allowed tool set', async () => {
     const seeded = await seedOpenControlState();
     const service = await import('../../../../src/main/features/kstar/control-service');

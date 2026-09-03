@@ -1723,6 +1723,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    // This assertion covers both sides of the boundary: the Commander must
+    // receive host-owned Recall context, while the delegated Agent receives
+    // only the explicit dispatch grant. Enable the host routing path so the
+    // test creates the confirmed projection that supplies that context.
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
 
     const candidate = await candidates.saveRecallCandidate(TEST_UID, {
       judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
@@ -1761,7 +1766,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // ...and NEVER the host-side confirmed-assets block.
     expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
     // The Commander itself still gets automatic Recall injection.
-    const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
+    const commanderCall = [..._recordedCalls].reverse().find((c) => c.sid === state.buildGconvSessionId(cid));
     expect(commanderCall).toBeTruthy();
     expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
 
