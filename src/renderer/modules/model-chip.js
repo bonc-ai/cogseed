@@ -160,6 +160,10 @@ function _effectiveExecConfig(target) {
       ? window.cliExecControl
       : null;
     const modelSupported = ctl ? ctl.modelControllableFor(cliType) : true;
+    // CLI 安装检测（D4 步骤 6 状态条）：undefined=探测未决（乐观按已装），
+    // false=明确未装 → chip 警示态 + 菜单顶部未装说明；发消息的失败报错
+    // 走既有 CLI 失败路径（run_failed_detail 本地化气泡）。
+    const cliInstalled = ctl ? ctl.cliAvailableFor(cliType) : undefined;
     // 强度可控性同模型：网关协商（effort_controllable，自建智能体经
     // P3394_AGENT_EFFORT_ARGS 声明也协商为 true）优先，未协商走兜底表。
     const effortSupported = ctl ? ctl.effortControllableFor(cliType) : false;
@@ -185,6 +189,7 @@ function _effectiveExecConfig(target) {
       mode: 'cli',
       cliType,
       modelSupported,
+      cliInstalled,
       model: modelChoice,
       modelLabel,
       modelIsCliCurrent: !modelChoice && !!(scanEntry && scanEntry.current),
@@ -301,6 +306,8 @@ function _modelChipRenderAll() {
 async function _scanCliCurrentForChips() {
   const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
   if (!ctl) return;
+  // 安装检测与模型扫描并行（未装警示的数据源，@ 分组置灰共用同一份缓存）。
+  void ctl.loadCliAvailability();
   const seen = new Set();
   for (const target of ['conversation', 'new-chat', 'project']) {
     try {
@@ -331,6 +338,9 @@ function _modelChipRenderChip(chip) {
     labelEl.textContent = cfg.modelLabel
       || (cliMode ? t('exec_config.cli_default_model') : t('exec_config.no_model'));
   }
+  // 未装警示（D4 步骤 6 状态条）：明确未装时 chip 置警示态（探测未决
+  // undefined 不警示——与能力协商同 Fail-open 原则），title 优先说明未装。
+  chip.classList.toggle('is-cli-missing', cliMode && cfg.cliInstalled === false);
   if (effortEl) {
     if (cliMode) {
       // claude：选了档位就显示档位（本次任务徽标态）；否则显示 CLI 徽标。
@@ -353,9 +363,11 @@ function _modelChipRenderChip(chip) {
   const overrideMarker = cfg.modelOverridden || cfg.effortOverridden;
   chip.classList.toggle('is-override', !!overrideMarker);
   chip.title = cliMode
-    ? (cfg.modelIsCliCurrent
-      ? t('exec_config.cli_current_model_title', { model: cfg.modelLabel })
-      : t('exec_config.effort_cli_note'))
+    ? (cfg.cliInstalled === false
+      ? t('chat.recipient_cli_not_installed', { cli: cfg.cliType || '' })
+      : (cfg.modelIsCliCurrent
+        ? t('exec_config.cli_current_model_title', { model: cfg.modelLabel })
+        : t('exec_config.effort_cli_note')))
     : t('exec_config.title');
 }
 
@@ -465,15 +477,24 @@ function _renderExecConfigMenu(menu, anchor) {
   header.title = t('exec_config.title');
   menu.appendChild(header);
 
-  // CLI 场景（外接智能体执行控制）——能力表内的 CLI（claude/codex）模型与
-  // 强度真实可控：模型列表来自运行时扫描（问 CLI 本身，IPC
-  // p3394.external.listModels）∪ 静态目录 ∪ 手输记忆；表外 CLI 只保留说明
-  // （不放假开关）。扫描失败 → 回落静态+手输，UI 说明原因。
+  // CLI 场景（伪装模型 ID 路由 · 字面步骤 5）：模型区走 _openProviderModels
+  // 标准下钻的伪 provider 分支——清单=auth.listModels('cli-<type>') 全串条目
+  // 出口（与 @ 下钻同源），「跟随 CLI」行/手输/搜索/重扫/未装说明都在该分支
+  // 承载（原扫描式特殊菜单已整体移除）。
   if (cfg.mode === 'cli') {
     const cliType = cfg.providerLabel || '';
+    if (cfg.cliInstalled === false) {
+      const note = document.createElement('div');
+      note.className = 'model-chip-menu-note model-chip-menu-note--warning';
+      note.textContent = t('chat.recipient_cli_not_installed', { cli: cliType });
+      menu.appendChild(note);
+    }
     if (cfg.modelSupported) {
       _menuSectionLabel(menu, 'exec_config.section_model', cfg.cliType || cliType);
-      void _renderCliModelList(menu, anchor, cfg, target, cliType);
+      void _openProviderModels(menu, anchor, target, {
+        provider: 'cli-' + (cfg.cliType || cliType),
+        providerLabel: cliType,
+      }, cfg);
     }
     _menuSectionLabel(menu, 'exec_config.section_effort');
     if (cfg.effortSupported) {
@@ -661,10 +682,18 @@ function _applyModelPick(target, cfg, provider, model, modelLabel, providerLabel
 }
 
 /** Second level: every model of one provider (annotated with reasoning
- *  capability, cached for the effort gating). */
+ *  capability, cached for the effort gating). 伪 provider（cli-<type>）分支
+ *  ——原扫描式特殊菜单（CLI 模型清单/跟随 CLI/手输/重扫）的字面迁移目标：
+ *  清单来自
+ *  auth.listModels('cli-<type>') 的伪装全串条目出口（主进程扫描∪静态，与
+ *  @ 下钻同源）；「跟随 CLI」行清任务级模型覆盖；手输接受任意模型 id 记
+ *  入 localStorage；长清单带客户端搜索；重扫穿透网关与渲染层缓存。 */
 async function _openProviderModels(menu, anchor, target, entry, cfg) {
   menu.innerHTML = '';
   menu.dataset.view = 'providers';
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  const isCliProvider = ctl ? !!ctl.cliTypeFromPseudoProvider(entry.provider) : String(entry.provider || '').startsWith('cli-');
+  const cliType = isCliProvider ? String(entry.provider).slice('cli-'.length) : '';
 
   const back = document.createElement('button');
   back.type = 'button';
@@ -699,7 +728,7 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
     _modelChipLog.warn('list models failed', { error: (err && err.message) || String(err) });
   }
   // Remember the reasoning capability for effort gating on this provider.
-  if (models.length) {
+  if (models.length && !isCliProvider) {
     const table = {};
     for (const m of models) {
       if (m && typeof m === 'object' && typeof m.reasoning === 'boolean') table[String(m.id)] = m.reasoning;
@@ -710,7 +739,51 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
   if (!menu.isConnected) return;
   loading.remove();
 
-  if (!models.length) {
+  // ── 伪 provider 专属：未装说明 / 「跟随 CLI」行 / 扫描状态注 ──
+  if (isCliProvider && ctl && ctl.cliAvailableFor(cliType) === false) {
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note model-chip-menu-note--warning';
+    note.textContent = t('chat.recipient_cli_not_installed', { cli: cliType });
+    menu.appendChild(note);
+  }
+  if (isCliProvider) {
+    const scan = ctl ? ctl.cachedCliModels(cliType) : null;
+    const note = document.createElement('div');
+    note.className = 'model-chip-menu-note';
+    if (scan && scan.state === 'ready' && scan.current) {
+      note.textContent = scan.currentEffort
+        ? t('exec_config.cli_models_current_with_effort', { model: scan.current, effort: scan.currentEffort })
+        : t('exec_config.cli_models_current', { model: scan.current });
+    } else if (scan && scan.state !== 'ready') {
+      note.textContent = t('exec_config.cli_models_scan_fallback', { cli: cliType });
+    } else {
+      note.textContent = t('exec_config.cli_models_scanning');
+    }
+    menu.appendChild(note);
+    // 「跟随 CLI」= 清除任务级模型覆盖（保留 effort），副标亮出 CLI 自报默认。
+    const followRow = document.createElement('div');
+    followRow.className = 'model-chip-menu-item' + (!cfg.model ? ' is-default' : '');
+    followRow.innerHTML =
+      '<span class="model-chip-menu-main">' +
+      `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.cli_follow_default'))}</span>` +
+      (!cfg.model ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
+      '</span>' +
+      `<span class="model-chip-menu-sub">${escapeHtml((scan && scan.current) || cliType)}</span>`;
+    followRow.addEventListener('click', () => {
+      try {
+        const ov = (typeof getExecOverride === 'function') ? (getExecOverride(target) || {}) : {};
+        const { effort, ...rest } = ov;
+        if (typeof setExecOverride === 'function') setExecOverride(target, effort ? { effort } : null);
+        _modelChipRenderAll();
+      } catch (err) {
+        _modelChipLog.warn('cli follow-default failed', { error: (err && err.message) || String(err) });
+      }
+      _closeModelMenu();
+    });
+    menu.appendChild(followRow);
+  }
+
+  if (!models.length && !isCliProvider) {
     const empty = document.createElement('div');
     empty.className = 'model-chip-menu-loading';
     empty.textContent = t('model_chip.no_models');
@@ -719,56 +792,11 @@ async function _openProviderModels(menu, anchor, target, entry, cfg) {
     return;
   }
 
-  models.forEach((m) => {
-    const id = String(m && typeof m === 'object' ? (m.id || m.name || '') : m || '');
-    if (!id) return;
-    const label = String((m && m.name) || id);
-    const isCurrent = cfg.provider === entry.provider && cfg.model === id;
-    const item = document.createElement('div');
-    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
-    item.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
-      (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
-      '</span>' +
-      (m && typeof m === 'object' && m.reasoning === false
-        ? `<span class="model-chip-menu-sub">${escapeHtml(t('exec_config.no_reasoning_note'))}</span>`
-        : '');
-    item.addEventListener('click', () => {
-      _applyModelPick(target, cfg, entry.provider, id, label, entry.providerLabel);
-      _closeModelMenu();
-    });
-    menu.appendChild(item);
-  });
-  _positionModelMenu(menu, anchor);
-}
-
-/** CLI 模型列表（扫描式）：打开即触发扫描（有缓存用缓存），列表 =
- *  扫描 ∪ 静态目录 ∪ 手输记忆；选择写任务级 model 覆盖（bare id），再点
- *  当前行取消覆盖。底部输入框接受任意模型 id（claude 接受别名与完整 id，
- *  "or a full model ID"），记入 localStorage 供下次直接选。 */
-async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
-  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
-  if (!ctl) return;
-  const agentId = (cfg.agent && cfg.agent.agent_id) || '';
-
-  const loading = document.createElement('div');
-  loading.className = 'model-chip-menu-loading';
-  loading.textContent = t('exec_config.cli_models_scanning');
-  menu.appendChild(loading);
-  _positionModelMenu(menu, anchor);
-
-  const scan = await ctl.loadCliModels(agentId, cliType);
-  // 菜单可能在扫描期间被关闭（或重开为别的菜单）。
-  if (!menu.isConnected) return;
-  loading.remove();
-
-  const merged = ctl.mergedCliModels(cliType, scan);
-
-  // 搜索框（CodexHost 对标：长清单客户端过滤；输入事件 stopPropagation
-  // 防冒泡到宿主键盘处理，搜索框永不 disabled——禁用聚焦元素会丢焦点）。
-  let visibleMerged = merged;
-  const needsSearch = merged.length > 8;
+  // ── 模型行（伪 provider：全串 id 归一比较，兼容旧裸 id 覆盖） ──
+  const rowsHost = document.createElement('div');
+  menu.appendChild(rowsHost);
+  let visible = models;
+  const needsSearch = isCliProvider && models.length > 8;
   if (needsSearch) {
     const searchWrap = document.createElement('div');
     searchWrap.className = 'model-chip-menu-search';
@@ -780,147 +808,103 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
     search.addEventListener('input', (e) => {
       e.stopPropagation();
       const q = String(search.value || '').trim().toLowerCase();
-      visibleMerged = !q
-        ? merged
-        : merged.filter((m) => m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q));
+      visible = !q
+        ? models
+        : models.filter((m) => {
+          const name = String((m && m.name) || (m && m.id) || '').toLowerCase();
+          return name.includes(q) || String((m && m.id) || '').toLowerCase().includes(q);
+        });
       renderModelRows();
     });
     for (const type of ['keydown', 'keyup', 'keypress']) {
       search.addEventListener(type, (e) => e.stopPropagation());
     }
     searchWrap.appendChild(search);
-    menu.appendChild(searchWrap);
+    menu.insertBefore(searchWrap, rowsHost);
     setTimeout(() => { try { search.focus(); } catch (_) { /* menu closed */ } }, 0);
   }
-
-  const applyPick = (modelId, isCustom, modelLabel) => {
-    try {
-      if (typeof setExecOverride !== 'function') return;
-      const ov = getExecOverride(target) || {};
-      const { effort, ...rest } = ov;
-      if (!modelId) {
-        // 「跟随 CLI」= 清除 model 覆盖，保留 effort。
-        setExecOverride(target, effort ? { effort } : null);
-      } else {
-        if (isCustom && ctl) ctl.rememberCustomModel(cliType, modelId);
-        // 伪装模型 ID：存全串 cli/<type>@<model>（存储单一真相），label 存
-        // 合并清单的友好名；bus 在 CLI 通道消费前解码，显示层归一。
-        const masked = ctl ? ctl.encodeAgentModel(cliType, modelId) : modelId;
-        const keepLabel = ov.modelLabel && ctl && ctl.bareModelFor(ov.model) === modelId
-          ? { modelLabel: ov.modelLabel }
-          : (modelLabel ? { modelLabel: String(modelLabel) } : {});
-        setExecOverride(target, { effort, model: masked, ...keepLabel });
-      }
-      _modelChipRenderAll();
-    } catch (err) {
-      _modelChipLog.warn('cli model pick failed', { error: (err && err.message) || String(err) });
-    }
-    _closeModelMenu();
-  };
-
-  // 扫描状态说明：失败时一行短注（静态/手输仍可用），不阻塞选择。ready 时
-  // 显示 CLI 自报的当前模型（含思考强度副信息，CodexHost resolvedModelLabel
-  // 式的"CLI 现在真实状态"展示）。
-  if (scan.state !== 'ready') {
-    const note = document.createElement('div');
-    note.className = 'model-chip-menu-note';
-    note.textContent = t('exec_config.cli_models_scan_fallback', { cli: cliType });
-    menu.appendChild(note);
-  } else if (scan.current) {
-    const cur = document.createElement('div');
-    cur.className = 'model-chip-menu-note';
-    cur.textContent = scan.currentEffort
-      ? t('exec_config.cli_models_current_with_effort', { model: scan.current, effort: scan.currentEffort })
-      : t('exec_config.cli_models_current', { model: scan.current });
-    menu.appendChild(cur);
-  }
-
-  // 「跟随 CLI」行：清除任务级模型覆盖，回到 CLI 自身默认——副标签亮出
-  // 该默认具体是什么（扫描披露的当前模型）。
-  const followRow = document.createElement('div');
-  followRow.className = 'model-chip-menu-item' + (!cfg.model ? ' is-default' : '');
-  followRow.innerHTML =
-    '<span class="model-chip-menu-main">' +
-    `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.cli_follow_default'))}</span>` +
-    (!cfg.model ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
-    '</span>' +
-    `<span class="model-chip-menu-sub">${escapeHtml(scan.current || cliType)}</span>`;
-  followRow.addEventListener('click', () => applyPick(''));
-  menu.appendChild(followRow);
-
-  // 模型行渲染（搜索过滤后增量重画；无匹配显示提示行）。
-  const rowsHost = document.createElement('div');
-  menu.appendChild(rowsHost);
   const renderModelRows = () => {
     rowsHost.textContent = '';
-    if (!visibleMerged.length) {
+    if (!visible.length) {
       const none = document.createElement('div');
       none.className = 'model-chip-menu-loading';
       none.textContent = t('exec_config.cli_models_no_match');
       rowsHost.appendChild(none);
       return;
     }
-    visibleMerged.forEach((m) => {
-    // 当前行判定归一：任务级覆盖可能是伪装全串（cli/<type>@<model>，新写入）
-    // 或裸模型 id（旧数据，兼容不迁移）——两边都折算到裸 id 再比。
-    const curBare = cfg.model ? (ctl ? ctl.bareModelFor(cfg.model) : cfg.model) : '';
-    const isCurrent = curBare === m.id;
-    const item = document.createElement('div');
-    item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
-    item.innerHTML =
-      '<span class="model-chip-menu-main">' +
-      `<span class="model-chip-menu-name">${escapeHtml(m.label)}</span>` +
-      (isCurrent
-        ? `<span class="model-chip-menu-default">${escapeHtml(cfg.modelOverridden ? t('exec_config.task_override_badge') : t('exec_config.current_badge'))}</span>`
-        : '') +
-      '</span>' +
-      // 副标题优先显示客户端同款描述文案（静态目录条目），无描述回落 id。
-      `<span class="model-chip-menu-sub">${escapeHtml(m.description || m.id)}</span>`;
-    item.addEventListener('click', () => applyPick(m.id, m.source === 'custom', m.label));
-    rowsHost.appendChild(item);
+    const curBare = cfg.model ? (ctl ? ctl.bareModelFor(cfg.model) : String(cfg.model)) : '';
+    visible.forEach((m) => {
+      const id = String(m && typeof m === 'object' ? (m.id || m.name || '') : m || '');
+      if (!id) return;
+      const label = String((m && m.name) || id);
+      const rowBare = isCliProvider ? (ctl ? ctl.bareModelFor(id) : id) : id;
+      const isCurrent = cfg.provider === entry.provider && curBare === rowBare;
+      const item = document.createElement('div');
+      item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
+      item.innerHTML =
+        '<span class="model-chip-menu-main">' +
+        `<span class="model-chip-menu-name">${escapeHtml(label)}</span>` +
+        (isCurrent ? `<span class="model-chip-menu-default">${escapeHtml(t('exec_config.current_badge'))}</span>` : '') +
+        '</span>' +
+        (m && typeof m === 'object' && m.reasoning === false
+          ? `<span class="model-chip-menu-sub">${escapeHtml(t('exec_config.no_reasoning_note'))}</span>`
+          : (m && typeof m === 'object' && typeof m.contextWindow === 'number' && m.contextWindow > 0
+            ? `<span class="model-chip-menu-sub">${escapeHtml(String(Math.round(m.contextWindow / 1000) + 'K'))}</span>`
+            : ''));
+      item.addEventListener('click', () => {
+        _applyModelPick(target, cfg, entry.provider, id, label, entry.providerLabel);
+        _closeModelMenu();
+      });
+      rowsHost.appendChild(item);
     });
   };
   renderModelRows();
 
-  // 手输行：任意模型 id（claude 明确接受 "a full model ID"；codex 同理）。
-  const customRow = document.createElement('div');
-  customRow.className = 'model-chip-menu-custom';
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'model-chip-menu-input';
-  input.placeholder = t('exec_config.cli_model_custom_ph');
-  input.maxLength = 200;
-  const submit = document.createElement('button');
-  submit.type = 'button';
-  submit.className = 'model-chip-menu-custom-btn';
-  submit.textContent = t('exec_config.cli_model_custom_add');
-  const submitCustom = () => {
-    const id = String(input.value || '').trim();
-    if (!id) return;
-    applyPick(id, true, id);
-  };
-  submit.addEventListener('click', (e) => { e.stopPropagation(); submitCustom(); });
-  input.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); submitCustom(); }
-  });
-  customRow.appendChild(input);
-  customRow.appendChild(submit);
-  menu.appendChild(customRow);
-
-  // 重扫：强制 refresh（网关缓存 + 渲染层缓存都穿透）。
-  const rescan = document.createElement('button');
-  rescan.type = 'button';
-  rescan.className = 'model-chip-menu-rescan';
-  rescan.textContent = t('exec_config.cli_models_rescan');
-  rescan.addEventListener('click', (e) => {
-    e.stopPropagation();
-    void ctl.loadCliModels(agentId, cliType, { refresh: true }).then(() => {
-      _renderExecConfigMenu(menu, anchor);
-      _positionModelMenu(menu, anchor);
+  // ── 伪 provider 专属：手输行（任意模型 id → 伪装全串覆盖 + localStorage 记忆） ──
+  if (isCliProvider) {
+    const customRow = document.createElement('div');
+    customRow.className = 'model-chip-menu-custom';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'model-chip-menu-input';
+    input.placeholder = t('exec_config.cli_model_custom_ph');
+    input.maxLength = 200;
+    const submit = document.createElement('button');
+    submit.type = 'button';
+    submit.className = 'model-chip-menu-custom-btn';
+    submit.textContent = t('exec_config.cli_model_custom_add');
+    const submitCustom = () => {
+      const bare = String(input.value || '').trim();
+      if (!bare || !ctl) return;
+      const masked = ctl.encodeAgentModel(cliType, bare);
+      ctl.rememberCustomModel(cliType, bare);
+      _applyModelPick(target, cfg, entry.provider, masked, bare, entry.providerLabel);
+      _closeModelMenu();
+    };
+    submit.addEventListener('click', (e) => { e.stopPropagation(); submitCustom(); });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); submitCustom(); }
     });
-  });
-  menu.appendChild(rescan);
+    customRow.appendChild(input);
+    customRow.appendChild(submit);
+    menu.appendChild(customRow);
+
+    // 重扫：穿透网关缓存 + 渲染层缓存后重开本视图。
+    const rescan = document.createElement('button');
+    rescan.type = 'button';
+    rescan.className = 'model-chip-menu-rescan';
+    rescan.textContent = t('exec_config.cli_models_rescan');
+    rescan.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const agentId = (cfg.agent && cfg.agent.agent_id) || '';
+      void ctl.loadCliModels(agentId, cliType, { refresh: true }).then(() => {
+        void _openProviderModels(menu, anchor, target, entry, cfg);
+        _positionModelMenu(menu, anchor);
+      });
+    });
+    menu.appendChild(rescan);
+  }
   _positionModelMenu(menu, anchor);
 }
 

@@ -11825,6 +11825,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* CLI 会话未装警示（D4 状态条）：chip 警示描边；菜单内未装说明行。 */
+.model-chip.is-cli-missing .model-chip-label { color: var(--danger, #c0392b); }
+.model-chip-menu-note--warning { color: var(--danger, #c0392b); }
 .picker-model-expand {
   position: absolute;
   right: 4px;

@@ -233,6 +233,43 @@ function bareModelFor(id) {
   return decoded ? decoded.modelId : String(id == null ? '' : id);
 }
 
+// ── CLI 安装检测（D4 诚实降级的唯一数据源） ─────────────────────────────
+// p3394.external.list 的 entries[].available（主进程 detectAll，5 分钟缓存）。
+// chip 的未装警示与 @ 分组置灰共用这一份（agents.js 的 picker 置灰也走
+// loadCliAvailability——消灭第二份缓存）。未决（探测未返回）= null/undefined，
+// 绝不固化成 false（与能力协商同一原则）。
+let _cliAvailableCache = null; // { set: Set<string>, at } | null
+async function loadCliAvailability() {
+  if (_cliAvailableCache && Date.now() - _cliAvailableCache.at < 5 * 60_000) return _cliAvailableCache.set;
+  try {
+    const res = await window.cogseed.invoke('p3394.external.list', {});
+    if (res && res.ok && Array.isArray(res.entries)) {
+      _cliAvailableCache = {
+        set: new Set(res.entries
+          .filter((e) => e && e.available === true)
+          .map((e) => String((e && e.type) || '').trim().toLowerCase())),
+        at: Date.now(),
+      };
+      return _cliAvailableCache.set;
+    }
+  } catch { /* 未决：保持旧缓存 */ }
+  return null;
+}
+
+/** cli 是否已装：true/false=检测明确；undefined=未决（乐观按已装处理）。 */
+function cliAvailableFor(cli) {
+  if (!_cliAvailableCache) return undefined;
+  return _cliAvailableCache.set.has(String(cli || '').trim().toLowerCase());
+}
+
+/** 伪 provider id（cli-<type>）→ cli type；非伪 provider 返回 null。 */
+function cliTypeFromPseudoProvider(provider) {
+  const p = String(provider || '');
+  if (!p.startsWith('cli-')) return null;
+  const type = p.slice('cli-'.length).toLowerCase();
+  return Object.prototype.hasOwnProperty.call(CLI_EXEC_CONTROL, type) ? type : null;
+}
+
 // ── 合并视图：扫描 ∪ 静态 ∪ 手输（menu 渲染直接消费） ─────────────────────
 function mergedCliModels(cli, scanEntry) {
   const seen = new Set();
@@ -288,6 +325,9 @@ if (typeof window !== 'undefined') {
     decodeAgentModel,
     isAgentModel,
     bareModelFor,
+    loadCliAvailability,
+    cliAvailableFor,
+    cliTypeFromPseudoProvider,
   };
 }
 
@@ -307,5 +347,8 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     decodeAgentModel,
     isAgentModel,
     bareModelFor,
+    loadCliAvailability,
+    cliAvailableFor,
+    cliTypeFromPseudoProvider,
   };
 }
