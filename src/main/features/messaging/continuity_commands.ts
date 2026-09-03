@@ -31,19 +31,29 @@ function normalizeNameKey(s: string): string {
   return String(s || '').toLowerCase().replace(/\s+/g, '');
 }
 
-/** 解析用户输入的名字/Id → 目标 agent。匹配显示名（normalize 后）或
- *  原始 agent_id；"指挥官/commander" 视为切回指挥官（重置楼层）。 */
+/** 解析用户输入的名字/Id → 目标 agent。匹配顺序：精确（显示名 normalize
+ *  后或原始 agent_id）→ 唯一前缀（"cod" 命中 Codex；多候选返回歧义名单
+ *  供上层引导）。"指挥官/commander" 视为切回指挥官（重置楼层）。 */
 export async function resolveAgentTarget(name: string): Promise<
-  { kind: 'commander' } | { kind: 'agent'; id: string; name: string } | null
+  | { kind: 'commander' }
+  | { kind: 'agent'; id: string; name: string }
+  | { kind: 'ambiguous'; candidates: string[] }
+  | null
 > {
   const key = normalizeNameKey(name);
   if (!key) return null;
   if (key === '指挥官' || key === 'commander' || key === 'cogseed') return { kind: 'commander' };
-  for (const agent of await listAgents()) {
-    if (agent?.enabled === false) continue;
+  const agents = (await listAgents()).filter((a) => a?.enabled !== false);
+  for (const agent of agents) {
     if (agent.agent_id === name.trim()) return { kind: 'agent', id: agent.agent_id, name: agent.name };
     if (normalizeNameKey(agent.name) === key) return { kind: 'agent', id: agent.agent_id, name: agent.name };
   }
+  const prefixed = agents.filter((a) => normalizeNameKey(a.name).startsWith(key));
+  if (prefixed.length === 1) {
+    const [only] = prefixed;
+    return { kind: 'agent', id: only.agent_id, name: only.name };
+  }
+  if (prefixed.length > 1) return { kind: 'ambiguous', candidates: prefixed.map((a) => a.name) };
   return null;
 }
 
@@ -62,6 +72,12 @@ async function handleAgent(ctx: InboundCommandContext): Promise<InboundCommandOu
   const target = await resolveAgentTarget(args);
   if (!target) {
     return { consumed: true, replyText: t('messaging.continuity.agent_not_found', { name: args }) };
+  }
+  if (target.kind === 'ambiguous') {
+    return {
+      consumed: true,
+      replyText: t('messaging.continuity.agent_ambiguous', { list: target.candidates.join('、') }),
+    };
   }
 
   const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);

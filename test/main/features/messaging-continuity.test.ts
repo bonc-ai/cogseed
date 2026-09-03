@@ -120,7 +120,7 @@ describe('messaging continuity lifecycle (manager harness)', () => {
 
   it('/agent switches the executor floor and confirms in-channel', async () => {
     const { manager, instanceId } = await boot();
-    const switched = await manager.ingestInbound('user-1', envelope(instanceId, '/agent Codex', 'm-1'));
+    const switched = await manager.ingestInbound('user-1', envelope(instanceId, '/agent cod', 'm-1a'));
     expect(switched.accepted).toBe(true);
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     const text = sendMessage.mock.calls[0][1] as string;
@@ -131,6 +131,15 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     expect(all.length).toBeGreaterThan(0);
     const convState = await state.readState('user-1', all[0].cid);
     expect(convState.active_recipient).toBe('agent-codex');
+  });
+
+  it('/agent reports ambiguity when a prefix matches several agents', async () => {
+    const { manager, instanceId } = await boot();
+    await manager.ingestInbound('user-1', envelope(instanceId, '/agent c', 'm-1b'));
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const text = sendMessage.mock.calls[0][1] as string;
+    expect(text).toContain('Codex');
+    expect(text).toContain('Claude Code');
   });
 
   it('/unbind rejects subsequent messages, guides to /new, and /new recovers', async () => {

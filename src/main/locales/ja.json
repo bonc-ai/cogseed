@@ -241,6 +241,7 @@
   "messaging.continuity.badge_commander": "コマンダー",
   "messaging.continuity.agent_switched": "{name} に切り替えました。そのまま話しかけてください。これまでのタスク文脈は自動的に引き継がれます。",
   "messaging.continuity.agent_not_found": "エージェントが見つかりません：{name}。/agent で一覧を確認してください。",
+  "messaging.continuity.agent_ambiguous": "複数が該当します：{list}。完全な名前を送って再試行してください。",
   "messaging.continuity.agent_list": "選択可能なエージェント：{list}",
   "messaging.continuity.agent_none_available": "切り替え可能なエージェントがありません。",
   "messaging.continuity.status_line": "現在のタスク：{title}\n実行中：{agent}",
