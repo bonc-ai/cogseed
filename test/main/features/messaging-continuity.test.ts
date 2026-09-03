@@ -46,6 +46,14 @@ describe('messaging continuity commands (pure)', () => {
     expect(withActorBadge('done', null)).toBe('done');
   });
 
+  it('sanitizeFailureText strips absolute paths but keeps file names', async () => {
+    const { sanitizeFailureText } = await import('../../../src/main/features/messaging/runtime');
+    expect(sanitizeFailureText('ENOENT: /Users/someone/work/cogseed/dist/gateway.cjs missing')).toBe(
+      'ENOENT: gateway.cjs missing',
+    );
+    expect(sanitizeFailureText('plain provider timeout')).toBe('plain provider timeout');
+  });
+
   it('formatAgentList truncates long rosters and appends usage', async () => {
     const { formatAgentList, AGENT_LIST_MAX } = await import('../../../src/main/features/messaging/continuity_commands');
     const many = Array.from({ length: AGENT_LIST_MAX + 8 }, (_v, i) => `Agent${i + 1}`);
@@ -208,18 +216,20 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     const { manager, instanceId } = await boot();
     await manager.ingestInbound('user-1', envelope(instanceId, 'risky task', 'm-40'));
     expect(busListener).toBeTypeOf('function');
-    // 意外失败：带 error 的 turn_silent → 渠道收到失败回执
+    // 意外失败：带 error 的 turn_silent → 渠道收到失败回执；
+    // 未注册的 actor 落"智能体"兜底名，错误串中的绝对路径被剥掉。
     busListener?.({
       type: 'turn_silent',
-      actor: 'agent-codex',
+      actor: 'agent-unknown-xyz',
       turn_id: 'turn-40',
       source_msg_id: 'm-40',
-      error: 'provider timeout',
+      error: 'spawn failed: /Users/dev/project/dist/worker.js ENOENT',
     });
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
     const text = sendMessage.mock.calls[0][1] as string;
-    expect(text).toContain('Codex');
-    expect(text).toContain('provider timeout');
+    expect(text).toContain('智能体');
+    expect(text).not.toContain('/Users');
+    expect(text).toContain('worker.js');
     sendMessage.mockClear();
     // 用户取消 / 正常 silent：不带 error → 渠道保持静默
     busListener?.({
