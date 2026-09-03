@@ -618,6 +618,7 @@
   "chat.quote_remove_title": "Remover cotação",
   "chat.recipient_commander": "Comandante",
   "chat.recipient_cli_agents": "CLIs locais",
+  "chat.recipient_cli_not_installed": "Não detectado · {cli} não instalado",
   "chat.recipient_space_builder": "Construtor de Espaços",
   "chat.recipient_commander_hint": "Destinatário padrão, não é necessário @",
   "chat.recipient_label": "@",

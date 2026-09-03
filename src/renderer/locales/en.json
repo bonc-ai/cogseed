@@ -701,6 +701,7 @@
   "chat.quote_remove_title": "Remove quote",
   "chat.recipient_commander": "Commander",
   "chat.recipient_cli_agents": "Local CLIs",
+  "chat.recipient_cli_not_installed": "Not detected · {cli} is not installed",
   "chat.recipient_space_builder": "Space Builder",
   "chat.recipient_commander_hint": "Default recipient, no @ needed",
   "chat.recipient_label": "@",

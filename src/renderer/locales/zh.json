@@ -701,6 +701,7 @@
   "chat.quote_remove_title": "移除引用",
   "chat.recipient_commander": "cogseed",
   "chat.recipient_cli_agents": "本机 CLI",
+  "chat.recipient_cli_not_installed": "未检测到 · {cli} 未安装",
   "chat.recipient_space_builder": "空间构建师",
   "chat.recipient_commander_hint": "默认接收者，无需 @",
   "chat.recipient_label": "@",

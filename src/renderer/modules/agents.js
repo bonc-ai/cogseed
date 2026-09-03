@@ -3906,9 +3906,18 @@ async function _openAgentPicker(anchorBtn) {
   }).catch(() => {});
   // Unified execution entry: the two chat recipient pickers also list
   // API-connection models — refresh the entries cache and repaint when it
-  // lands (first paint already went out with the cached/empty list).
+  // lands (first paint already went out with the cached/empty list). The
+  // CLI-install probe rides along (D4: unavailable CLIs render as a disabled,
+  // "not detected" row).
   if (anchorBtn.id === 'chat-recipient-chip' || anchorBtn.id === 'new-chat-recipient-chip') {
     _refreshPickerModelEntries().then((changed) => {
+      if (!changed) return;
+      if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
+      if (_agentPickerTab !== 'agents') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderAgentPickerList(search ? search.value : '');
+    });
+    _refreshPickerCliAvailability().then((changed) => {
       if (!changed) return;
       if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
       if (_agentPickerTab !== 'agents') return;
@@ -4191,15 +4200,51 @@ async function _openPickerProviderModels(listEl, anchorId, providerId, providerL
 // 一真相；bus 在 CLI 通道消费前解码为裸 id 下发）。行本身（非 chevron）=
 // 仅选 agent（跟随 CLI 默认模型），走既有 agent 路径。
 
+// 未装 CLI 检测（D4 诚实降级）：agent 实例存在但二进制缺失/版本过旧时，
+// @ 分组行置灰不可选、副标标「未检测到」。数据来自主进程
+// p3394.external.list 的 entries[].available（detectAll 5 分钟缓存）。
+// null = 尚未拉到检测结果 → 保持可选（乐观：一次检测失败不该让分组
+// 永久置灰，与能力协商「未决不固化 false」同一原则）。
+let _pickerCliAvailable = null;
+
+async function _refreshPickerCliAvailability() {
+  try {
+    const res = await window.cogseed.invoke('p3394.external.list', {});
+    if (res && res.ok && Array.isArray(res.entries)) {
+      _pickerCliAvailable = new Set(
+        res.entries
+          .filter((e) => e && e.available === true)
+          .map((e) => String((e && e.type) || '').trim().toLowerCase()),
+      );
+      return true;
+    }
+  } catch { /* keep previous cache */ }
+  return false;
+}
+
+function _cliAgentInstalled(agent) {
+  if (!_pickerCliAvailable) return true;
+  const cli = String((agent && agent.runtime && agent.runtime.cli) || '').trim().toLowerCase();
+  return _pickerCliAvailable.has(cli);
+}
+
 function _renderPickerCliGroup(cliAgents) {
   const items = cliAgents.map((a) => {
     const cli = ((a.runtime && a.runtime.cli) || '').trim();
     const name = a.name || a.agent_id;
+    const installed = _cliAgentInstalled(a);
+    // 未装形态：置灰（is-disabled + aria-disabled + title 说明）、不渲染
+    // 下钻 chevron（扫描必失败，静态清单可选只会引向静默失败）；data-kind
+    // 换成 cli-unavailable 让通用点击绑定走无操作防御分支而非误选 agent。
     return `
-      <div class="skill-picker-item skill-picker-item--cli" data-kind="agent" data-id="${escapeHtml(a.agent_id)}" data-name="${escapeHtml(name)}">
+      <div class="skill-picker-item skill-picker-item--cli${installed ? '' : ' is-disabled'}"
+           data-kind="${installed ? 'agent' : 'cli-unavailable'}"
+           data-id="${escapeHtml(a.agent_id)}"
+           data-name="${escapeHtml(name)}"
+           ${installed ? '' : `aria-disabled="true" title="${escapeHtml(t('chat.recipient_cli_not_installed', { cli }))}"`}>
         <div class="skill-picker-item-name">${escapeHtml(name)}</div>
-        <div class="skill-picker-item-desc">${escapeHtml(cli)}</div>
-        ${_pickerExpandBtn({ 'data-cli-agent': a.agent_id })}
+        <div class="skill-picker-item-desc">${escapeHtml(installed ? cli : t('chat.recipient_cli_not_installed', { cli }))}</div>
+        ${installed ? _pickerExpandBtn({ 'data-cli-agent': a.agent_id }) : ''}
       </div>`;
   }).join('');
   return `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_cli_agents'))}</div>` + items;
@@ -5080,6 +5125,12 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     _consumeAtKeyChar();
     const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
     _focusInput(document.getElementById(inputId));
+    return;
+  }
+  if (kind === 'cli-unavailable') {
+    // 未装 CLI 的置灰行（D4）：置灰 + 「未检测到」副标 + title 已说明原因，
+    // 选中无意义——显式无操作防御（不关 picker、不误选 agent），真正的
+    // 失败报错由发送侧既有 CLI 失败路径承担（run_failed_detail 本地化）。
     return;
   }
   if (kind === 'library') {
