@@ -114,6 +114,14 @@ skill-sentry 2.1.0
     The component's SKILL.md and pyproject.toml explicitly declare
     Apache-2.0. This component is not relicensed by the root MIT LICENSE.
 
+skill-declaration-core 1.3.0
+    Component path: resources/guardrail/skill-declaration-core/
+    Copyright: CogSeed (as declared by the component metadata)
+    License: Apache-2.0
+    License text: resources/guardrail/skill-declaration-core/LICENSE
+    The component's SKILL.md and pyproject.toml explicitly declare
+    Apache-2.0. This component is not relicensed by the root MIT LICENSE.
+
 --------------------------------------------------------------------
 6. Package license texts retained in this repository
 --------------------------------------------------------------------

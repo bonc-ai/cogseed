@@ -1,5 +1,9 @@
 /**
- * Behaviour of a build that ships without the closed-source deep scanner.
+ * Behaviour of a build that ships without the deep scanner.
+ *
+ * The engine (skill-sentry) is open source and normally bundled; this suite
+ * drives the real adapter with `COGSEED_GUARDRAIL_DIR` pointed at a temp root
+ * to exercise the deliberately supported stripped shape.
  *
  * The load-bearing assertion is that such a build can still install a clean
  * skill. Before the `scanner_absent` tier existed, a missing scanner produced
@@ -32,8 +36,8 @@ import { writeInstallReceipt } from '../../../../src/main/features/skill_trust';
 
 /** The real engine in the source tree, standing in for a separately installed one. */
 const REAL_ENGINE = path.resolve(__dirname, '../../../../resources/guardrail/skill-sentry');
-// The open-source tree ships without the engine; engine-backed behaviours can
-// only be exercised where an engine is actually present.
+// Engine-backed behaviours can only be exercised where an engine is actually
+// present (a stripped build or an unpackaged checkout may lack it).
 const HAS_REAL_ENGINE = fs.existsSync(REAL_ENGINE);
 
 let guardrail = '';
