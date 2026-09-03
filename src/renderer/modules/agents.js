@@ -3917,13 +3917,17 @@ async function _openAgentPicker(anchorBtn) {
       const search = document.getElementById('agent-picker-search');
       _renderAgentPickerList(search ? search.value : '');
     });
-    _refreshPickerCliAvailability().then((changed) => {
-      if (!changed) return;
-      if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
-      if (_agentPickerTab !== 'agents') return;
-      const search = document.getElementById('agent-picker-search');
-      _renderAgentPickerList(search ? search.value : '');
-    });
+    // CLI 安装检测与 entries 刷新并行（D4：不可用 CLI 渲染为置灰行；数据
+    // 源=cliExecControl.loadCliAvailability，与 chip 警示共用缓存）。
+    const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+    if (ctl) {
+      void ctl.loadCliAvailability().then(() => {
+        if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
+        if (_agentPickerTab !== 'agents') return;
+        const search = document.getElementById('agent-picker-search');
+        _renderAgentPickerList(search ? search.value : '');
+      });
+    }
   }
 }
 
@@ -4201,31 +4205,16 @@ async function _openPickerProviderModels(listEl, anchorId, providerId, providerL
 // 仅选 agent（跟随 CLI 默认模型），走既有 agent 路径。
 
 // 未装 CLI 检测（D4 诚实降级）：agent 实例存在但二进制缺失/版本过旧时，
-// @ 分组行置灰不可选、副标标「未检测到」。数据来自主进程
-// p3394.external.list 的 entries[].available（detectAll 5 分钟缓存）。
-// null = 尚未拉到检测结果 → 保持可选（乐观：一次检测失败不该让分组
-// 永久置灰，与能力协商「未决不固化 false」同一原则）。
-let _pickerCliAvailable = null;
-
-async function _refreshPickerCliAvailability() {
-  try {
-    const res = await window.cogseed.invoke('p3394.external.list', {});
-    if (res && res.ok && Array.isArray(res.entries)) {
-      _pickerCliAvailable = new Set(
-        res.entries
-          .filter((e) => e && e.available === true)
-          .map((e) => String((e && e.type) || '').trim().toLowerCase()),
-      );
-      return true;
-    }
-  } catch { /* keep previous cache */ }
-  return false;
-}
+// @ 分组行置灰不可选、副标标「未检测到」。数据与 chip 的未装警示共用
+// cliExecControl.loadCliAvailability（p3394.external.list 的
+// entries[].available，主进程 detectAll 5 分钟缓存）——单一数据源。
+// undefined=探测未决 → 保持可选（乐观：一次检测失败不该让分组永久置灰，
+// 与能力协商「未决不固化 false」同一原则）。
 
 function _cliAgentInstalled(agent) {
-  if (!_pickerCliAvailable) return true;
-  const cli = String((agent && agent.runtime && agent.runtime.cli) || '').trim().toLowerCase();
-  return _pickerCliAvailable.has(cli);
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  if (!ctl) return true;
+  return ctl.cliAvailableFor(String((agent && agent.runtime && agent.runtime.cli) || '')) !== false;
 }
 
 function _renderPickerCliGroup(cliAgents) {

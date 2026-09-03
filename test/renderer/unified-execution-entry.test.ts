@@ -59,11 +59,14 @@ describe('unified execution entry — picker scope', () => {
     expect(agents).toMatch(/kind === 'model'[\s\S]*?auto-recipient-chip'\) return/);
     expect(agents).toMatch(/kind === 'cli-model'[\s\S]*?anchorId === 'auto-recipient-chip'\) return/);
     // D4 诚实降级：未装 CLI 的行置灰不可选（is-disabled + aria-disabled +
-    // 「未检测到」副标 + 无下钻 chevron），检测数据来自 p3394.external.list
-    // 的 entries[].available；检测未决（null）保持可选，绝不固化置灰。
-    expect(agents).toContain('_refreshPickerCliAvailability');
-    expect(agents).toContain("'p3394.external.list'");
-    expect(agents).toContain('e.available === true');
+    // 「未检测到」副标 + 无下钻 chevron），检测数据与 chip 未装警示共用
+    // cliExecControl.loadCliAvailability（单一数据源，无第二份缓存）；
+    // 检测未决保持可选，绝不固化置灰。
+    const ctl = read('src/renderer/modules/cli-exec-control.js');
+    expect(ctl).toContain('loadCliAvailability');
+    expect(ctl).toContain('e.available === true');
+    expect(ctl).toContain('cliAvailableFor');
+    expect(agents).toContain('cliAvailableFor');
     expect(agents).toMatch(/installed \? '' : ' is-disabled'/);
     expect(agents).toMatch(/aria-disabled="true"/);
     expect(agents).toContain("t('chat.recipient_cli_not_installed'");
@@ -102,35 +105,40 @@ describe('unified execution entry — picker scope', () => {
     const chip = read('src/renderer/modules/model-chip.js');
     const ctl = read('src/renderer/modules/cli-exec-control.js');
     const conv = read('src/renderer/modules/conversation.js');
-    // 外接智能体执行控制（feat/external-agent-exec-control）：信封已带
-    // execution_prefs.model，能力表内（claude/codex）的 CLI 模型真实可控——
-    // 扫描式模型列表（问 CLI 本身）+ 手输兜底必须存在。
-    expect(chip).toContain('_renderCliModelList');
+    // 外接智能体执行控制（feat/external-agent-exec-control）+ 伪装模型 ID 路由
+    // 字面步骤 5：_renderCliModelList 特殊分支已删，CLI 模型清单走
+    // _openProviderModels 标准下钻的伪 provider 分支（清单=auth.listModels
+    // ('cli-<type>') 全串出口；「跟随 CLI」行/手输/搜索/重扫都在该分支）。
+    expect(chip).not.toContain('_renderCliModelList');
+    expect(chip).toContain('_openProviderModels');
+    expect(chip).toMatch(/provider: 'cli-' \+/);
+    expect(chip).toContain("t('exec_config.cli_follow_default')");
+    expect(chip).toContain('model-chip-menu-custom');
+    expect(chip).toContain("t('exec_config.cli_model_custom_ph')");
+    expect(chip).toContain("t('exec_config.cli_models_rescan')");
+    expect(chip).toContain("t('exec_config.cli_models_search_ph')");
+    // 扫描/手输记忆/能力协商数据源不变。
     expect(ctl).toContain("'p3394.external.listModels'");
     expect(ctl).toContain('execControlFor');
-    // 手输兜底：清单外 id 也能用（CLI 接受完整模型名）。
     expect(ctl).toContain('rememberCustomModel');
-    // 能力表防假开关：模型可控性查表而非硬编码，表外 CLI 不渲染模型区。
     expect(chip).not.toContain('CLI_EFFORT_SUPPORTED');
-    // 发送侧：模型与强度都通用下发（execution_config 不设白名单——网关按
-    // 参数模板消费，无通道即安全忽略；自定义智能体经
-    // P3394_AGENT_MODEL_ARGS / P3394_AGENT_EFFORT_ARGS 声明即生效）。
     expect(conv).toContain('window.cliExecControl.effortControllableFor(recipientAgent.runtime.cli)');
     expect(conv).not.toContain('cliExec && cliExec.model');
     expect(conv).not.toContain('cliExec && cliExec.effort');
     // 真开关保留：effort 分段仍在。
     expect(chip).toContain('model-chip-menu-segmented');
     expect(chip).toContain("t('exec_config.effort_cli_forward_note'");
-    expect(chip).toContain("t('exec_config.cli_models_scanning')");
     // 切到外接智能体时 chip 直接亮出 CLI 当前实际模型（扫描披露的
     // current），不是笼统的「CLI 默认」占位；recipient 变化触发后台扫描。
-    // CodexHost 显示规则：chip 永远显示具体模型名（current > default 条目 >
-    // 清单第一项），扫描在途显示加载文案——不显示「默认」占位。
     expect(chip).toContain('effectiveModelLabel');
     expect(chip).toContain("t('exec_config.cli_models_loading')");
     expect(chip).toContain('modelIsCliCurrent');
     expect(chip).toContain('_scanCliCurrentForChips');
     expect(chip).toContain("t('exec_config.cli_current_model_title'");
+    // D4 步骤 6 状态条：明确未装时 chip 警示（is-cli-missing + title），未决不警示。
+    expect(chip).toContain("t('chat.recipient_cli_not_installed'");
+    expect(chip).toContain("loadCliAvailability");
+    expect(chip).toMatch(/cliInstalled === false/);
   });
 });
 
