@@ -45,6 +45,21 @@ describe('messaging continuity commands (pure)', () => {
     expect(withActorBadge('done', 'Codex')).toBe('【Codex】 done');
     expect(withActorBadge('done', null)).toBe('done');
   });
+
+  it('formatAgentList truncates long rosters and appends usage', async () => {
+    const { formatAgentList, AGENT_LIST_MAX } = await import('../../../src/main/features/messaging/continuity_commands');
+    const many = Array.from({ length: AGENT_LIST_MAX + 8 }, (_v, i) => `Agent${i + 1}`);
+    const rendered = formatAgentList(['指挥官', ...many]);
+    expect(rendered).toContain('指挥官');
+    // 截断上限含首位的指挥官：显示到 Agent14，其余折叠。
+    expect(rendered).toContain('Agent14');
+    expect(rendered).not.toContain('Agent15');
+    expect(rendered).toContain('9');
+    expect(rendered).toContain('/agent');
+    const short = formatAgentList(['指挥官', 'Codex']);
+    expect(short).toContain('Codex');
+    expect(short).not.toContain('等');
+  });
 });
 
 describe('messaging continuity lifecycle (manager harness)', () => {

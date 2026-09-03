@@ -243,6 +243,8 @@
   "messaging.continuity.agent_not_found": "Agente não encontrado: {name}. Envie /agent para ver as opções.",
   "messaging.continuity.agent_ambiguous": "Vários correspondem: {list}. Envie o nome completo para tentar novamente.",
   "messaging.continuity.agent_list": "Agentes disponíveis: {list}",
+  "messaging.continuity.agent_list_more": "e mais {count}",
+  "messaging.continuity.agent_list_usage": "Envie /agent <nome> para trocar o agente executor; depois é só continuar conversando.",
   "messaging.continuity.agent_none_available": "Nenhum agente disponível para troca no momento.",
   "messaging.continuity.status_line": "Tarefa atual: {title}\nExecutor atual: {agent}",
   "messaging.continuity.unbind_done": "Chat desvinculado. Envie /new para iniciar uma nova tarefa.",

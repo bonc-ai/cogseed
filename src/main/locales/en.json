@@ -243,6 +243,8 @@
   "messaging.continuity.agent_not_found": "Agent not found: {name}. Send /agent to list options.",
   "messaging.continuity.agent_ambiguous": "Multiple matches: {list}. Send the full name to retry.",
   "messaging.continuity.agent_list": "Available agents: {list}",
+  "messaging.continuity.agent_list_more": "and {count} more",
+  "messaging.continuity.agent_list_usage": "Send /agent <name> to switch the executing agent; just keep chatting afterwards.",
   "messaging.continuity.agent_none_available": "No switchable agents right now.",
   "messaging.continuity.status_line": "Current task: {title}\nCurrent executor: {agent}",
   "messaging.continuity.unbind_done": "Chat unbound. Send /new to start a new task.",
