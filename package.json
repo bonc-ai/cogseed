@@ -76,7 +76,7 @@
     "vitest": "^4.1.5"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.79.9",
+    "@earendil-works/pi-ai": "^0.84.4",
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@wecom/aibot-node-sdk": "1.0.7",
