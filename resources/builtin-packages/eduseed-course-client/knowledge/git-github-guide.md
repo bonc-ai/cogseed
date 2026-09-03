@@ -17,7 +17,7 @@ git push origin feat/x    # 推分支 → 开 Pull Request
 ## 3. 排错速查
 | 现象 | 处理 |
 |---|---|
-| 403 / 认证失败 | 检查 SSH key 或 token 是否过期（`ssh -T git@github.com` 自测） |
+| 403 / 认证失败 | 检查 SSH key 或 token 是否过期（`ssh -T git@github.com` 自测；documentation example） |
 | 冲突 conflict | 先 `git pull` 再解冲突，不 force push 覆盖他人 |
 | 交错了文件 | `git rm --cached <file>` 移出跟踪，再加进 .gitignore |
 | 想撤销上次 commit | `git reset --soft HEAD~1`（改动还在，重新提交） |

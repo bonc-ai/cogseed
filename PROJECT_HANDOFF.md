@@ -4,23 +4,24 @@
 
 ## 项目快照
 
-- 当前目标：为 Run Center 的纯函数补齐分支与边界测试覆盖。
-- 当前阶段：`2026-09-01-001` 已实施完成，待随本分支提交。
-- 当前分支或提交：`feature/spec-workflow-project-memory`，基线 `origin/develop` @ `220b5fe5`（MR 前已 rebase；任务开始时基线为 `71453450`）。
-- 最后更新：2026-09-01。
+- 当前目标：完成 0.8.0 发版前的远端安全与敏感内容收口。
+- 当前阶段：`2026-09-03-001` 已实施完成，等待清理分支评审。
+- 当前分支或提交：`codex/release-cleanup-0.8.0`，基线 `origin/develop` @ `415ea2b0`。
+- 最后更新：2026-09-03。
 
 ## 正在进行
 
 | 任务 ID | 状态 | 记录 |
 | --- | --- | --- |
 | `2026-09-01-001-failure-category-boundaries` | `completed` | [change](docs/changes/2026-09-01-001-failure-category-boundaries.md) |
+| `2026-09-03-001-release-security-cleanup` | `completed` | [change](docs/changes/2026-09-03-001-release-security-cleanup.md) |
 
 该任务为 direct work，没有对应 plan；`spec-work` 允许范围明确的直接实施，未事后补造 plan。
 
 ## 下一阶段
 
-1. 本分支已 rebase 到 `220b5fe5` 并 force-with-lease 推送，待开 MR 合入 `develop`。
-2. 全量 JS 测试已在 `220b5fe5` 重跑并做了 A/B 对照，本任务对失败数无影响；33 个既有失败待另案处理。
+1. `codex/release-cleanup-0.8.0` 基于 `origin/develop` 收口，待审核后按冻结期流程建立清理 PR；未合并本地开发分支。
+2. 全量 JS 测试为 900 个测试文件通过、9 个失败、8 个跳过；失败集中在未修改模块和隔离环境依赖，待另案处理。
 3. 后续任务由 `spec-plan` / `spec-work` 按 `YYYY-MM-DD-NNN-<topic>` 继续登记。
 
 ## 关键决策与约束
@@ -36,11 +37,11 @@
 
 | 检查 | 命令 | 最近结果 | 证据状态 |
 | --- | --- | --- | --- |
-| 类型检查 | `npm run typecheck` | `passed` | 2026-09-01 rebase 到 `220b5fe5` 后重跑，exit 0 |
+| 类型检查 | `npm run typecheck` | `passed` | 2026-09-03 在 `origin/develop` 隔离清理分支重跑，exit 0 |
 | 目标测试 | `npm run test:js -- test/renderer/run-center-attempts.test.ts` | `passed` | 2026-09-01 rebase 后重跑，4/4 |
 | 记录校验 | `node scripts/check-spec-records.mjs` | `passed` | 2026-09-01 rebase 后重跑，1 条 change 记录 |
 | 全量 JS 测试 | `npm run test:js` | `failed` | 2026-09-01 在 `220b5fe5` 实跑：9953 passed / 33 failed / 13 文件。同基线对照组（不含本任务提交）为 9952 passed / 33 failed / 同一组文件，差值恰为本任务新增的 1 条通过用例 |
-| Python 资源测试 | `npm run test:resources` | `not run` | 本轮未执行；`npm test` 的完整结果因此无证据 |
+| Python 资源测试 | `npm run test:resources` | `passed` | 2026-09-03：308 passed |
 
 ## 已知问题与风险
 
