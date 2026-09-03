@@ -617,6 +617,7 @@
   "chat.quote_includes_references": "Também inclui {count} referências anteriores",
   "chat.quote_remove_title": "Remover cotação",
   "chat.recipient_commander": "Comandante",
+  "chat.recipient_cli_agents": "CLIs locais",
   "chat.recipient_space_builder": "Construtor de Espaços",
   "chat.recipient_commander_hint": "Destinatário padrão, não é necessário @",
   "chat.recipient_label": "@",

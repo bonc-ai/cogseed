@@ -700,6 +700,7 @@
   "chat.quote_includes_references": "同时包含 {count} 条历史引用",
   "chat.quote_remove_title": "移除引用",
   "chat.recipient_commander": "cogseed",
+  "chat.recipient_cli_agents": "本机 CLI",
   "chat.recipient_space_builder": "空间构建师",
   "chat.recipient_commander_hint": "默认接收者，无需 @",
   "chat.recipient_label": "@",

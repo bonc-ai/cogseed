@@ -25,6 +25,10 @@ import type { ChatResolvedRuntime } from "../../model/client";
 
 import { createLogger } from "../../logger";
 import { logErrorRef, logPathRef, maskId } from "../../util/log-redact";
+import {
+  resolveMaskedCliExecConfig,
+  stripMaskedForInProcess,
+} from "../../model/agent_model_routing";
 import { dispatchSlots, fileEditLock } from "../../util/locks";
 import {
   canonicalizePath,
@@ -5095,6 +5099,13 @@ async function runActorTurnBody(
           return { kind: "early" };
         }
       }
+      // 伪装模型 ID 路由（cli/<type>@<model>）：任务级覆盖可能携带伪装全串
+      // （@ 选择器「本机 CLI」分组、chip 的 CLI 模型菜单写入）。进入 CLI 执行
+      // 管线前在此一处解码为裸 id——直连 runner 与网关参数模板只认裸 id；
+      // 原始全串留给 exec_meta（存储单一真相，显示层 decode）。
+      const maskedResolve = resolveMaskedCliExecConfig(item.execConfig);
+      const cliTransportModel = maskedResolve.transportModel;
+      if (maskedResolve.config !== item.execConfig) item.execConfig = maskedResolve.config;
       // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
       // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
       const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
@@ -5188,9 +5199,11 @@ async function runActorTurnBody(
       const cliEffortForwarded
         = item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high";
       turnExecMeta = {
-        ...(cliTurnModel ? { model: cliTurnModel } : {}),
+        // exec_meta 存伪装全串（若本轮以伪装 ID 下发——存储单一真相，显示层
+        // decode）；其余场景与既有语义一致（任务级覆盖 > agent 默认）。
+        ...((cliTransportModel || cliTurnModel) ? { model: cliTransportModel || cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),
-        ...(cliEffortForwarded ? { effort: item.execConfig.effort } : {}),
+        ...(cliEffortForwarded ? { effort: item.execConfig?.effort } : {}),
       };
       finalText = cliOut.text;
       streamingText = cliOut.text;
@@ -5200,14 +5213,15 @@ async function runActorTurnBody(
       // 回读确认（CodexHost 对标的 CogSeed 适配）：CLI 自报的实际模型
       // （usage.model）与下发值不一致时以实际值落 exec_meta——杜绝
       // "展示 ≠ 实际"的假成功，并在日志留痕（CLI 静默换模型可观测）。
+      // 比较用裸值（cliTurnModel 已解码）；requested 日志带伪装全串。
       if (
-        cliTurnMetrics?.model && turnExecMeta?.model &&
-        cliTurnMetrics.model !== turnExecMeta.model
+        cliTurnMetrics?.model && cliTurnModel &&
+        cliTurnMetrics.model !== cliTurnModel
       ) {
         log.warn("external agent model mismatch: CLI used a different model than requested", {
           cid: maskId(cid),
           actor_id: maskId(actor.id),
-          requested: turnExecMeta.model,
+          requested: cliTransportModel || cliTurnModel,
           actual: cliTurnMetrics.model,
         });
         turnExecMeta = { ...turnExecMeta, model: cliTurnMetrics.model };
@@ -5335,6 +5349,22 @@ async function runActorTurnBody(
         = item.execConfig?.effort
           ?? turnAgentSpec?.default_thinking
           ?? thinkingLevelForRun();
+      // 伪装模型 ID 防御（D6 红线）：伪装 CLI 模型/伪 provider 绝不能进入
+      // 内置 API 通道——pickChatEntryGroupForModelOverride 按凭证过滤
+      // provider，伪 provider 无凭证会被吞掉并静默回退默认组（隐蔽假成功）。
+      // 正常链路中伪装 ID 只随 CLI-agent 接收者出现（上面已解码）；落到
+      // 这里说明接收者与覆盖错配（手改 localStorage / 旧会话残留）——显式
+      // 剥离该覆盖并留痕，effort 保留（与 provider 无关的通道）。
+      const inProcSanitize = stripMaskedForInProcess(item.execConfig);
+      if (inProcSanitize.stripped) {
+        log.warn("agent-model routing: masked CLI model reached the in-process path — dropping the model override", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          provider: item.execConfig?.provider,
+          model: item.execConfig?.model,
+        });
+        item.execConfig = inProcSanitize.config;
+      }
       // Effective model override priority: per-task override > agent
       // default (`default_model`). Commander / in-process agents only —
       // CLI turns apply their own model below (runtime.model + override).

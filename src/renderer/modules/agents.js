@@ -3904,6 +3904,18 @@ async function _openAgentPicker(anchorBtn) {
     const search = document.getElementById('agent-picker-search');
     _renderAgentPickerList(search ? search.value : '');
   }).catch(() => {});
+  // Unified execution entry: the two chat recipient pickers also list
+  // API-connection models — refresh the entries cache and repaint when it
+  // lands (first paint already went out with the cached/empty list).
+  if (anchorBtn.id === 'chat-recipient-chip' || anchorBtn.id === 'new-chat-recipient-chip') {
+    _refreshPickerModelEntries().then((changed) => {
+      if (!changed) return;
+      if (openSeq !== _agentPickerOpenSeq || picker.style.display === 'none') return;
+      if (_agentPickerTab !== 'agents') return;
+      const search = document.getElementById('agent-picker-search');
+      _renderAgentPickerList(search ? search.value : '');
+    });
+  }
 }
 
 function _closeAgentPicker() {
@@ -3986,14 +3998,39 @@ function _renderAgentPickerList(filterText) {
   const isRecipientPicker = anchorId === 'chat-recipient-chip'
     || anchorId === 'new-chat-recipient-chip'
     || anchorId === 'auto-recipient-chip';
+  // 伪装模型 ID 路由（最终版）：两个 chat recipient 锚点同时列「API 连接模
+  // 型」与「本机 CLI」分组——伪装 ID `cli/<type>@<model>` 自带执行通道语义，
+  // 出现在接收者选择器是自洽的（化解 408957ef 回撤时"裸模型名属概念混淆"
+  // 的顾虑）。auto 弹窗维持 agent-only 契约。
+  const isChatRecipientPicker = anchorId === 'chat-recipient-chip'
+    || anchorId === 'new-chat-recipient-chip';
   const commanderName = t('chat.recipient_commander');
   const commanderMatchesFilter = !q || commanderName.toLowerCase().includes(q);
-  if (!filtered.length && !(isRecipientPicker && commanderMatchesFilter)) {
+  const isCliAgentSpec = (a) => !!(a && a.runtime
+    && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'));
+  // CLI 分组从全量 agents 筛（含 CLI 类型名的独立匹配，如输入 claude 直达），
+  // 并从 custom/marketplace 分组抽出避免同名条目出现两次。
+  const cliAgentMatches = (a) => {
+    if (!q) return true;
+    const name = (a.name || '').toLowerCase();
+    const desc = pickDesc(a, lang).toLowerCase();
+    const cli = ((a.runtime && a.runtime.cli) || '').toLowerCase();
+    return name.includes(q) || desc.includes(q) || cli.includes(q);
+  };
+  const cliAgents = isChatRecipientPicker
+    ? agents.filter((a) => isCliAgentSpec(a) && cliAgentMatches(a))
+    : [];
+  const nonCliFiltered = filtered.filter((a) => !isCliAgentSpec(a));
+  const apiGroupHtml = (isChatRecipientPicker && _pickerModelEntries.length)
+    ? _renderPickerModelGroup(_pickerModelEntries, q)
+    : '';
+  const cliGroupHtml = cliAgents.length ? _renderPickerCliGroup(cliAgents) : '';
+  if (!filtered.length && !cliAgents.length && !(isRecipientPicker && commanderMatchesFilter) && !apiGroupHtml) {
     listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('agents.no_match'))}</div>`;
     return;
   }
   const groups = { custom: [], marketplace: [] };
-  for (const a of filtered) (groups[_agentSource(a.source)] || groups.custom).push(a);
+  for (const a of nonCliFiltered) (groups[_agentSource(a.source)] || groups.custom).push(a);
   const groupHtml = (label, list) => {
     if (!list.length) return '';
     return `<div class="skill-picker-group-label">${escapeHtml(label)}</div>` +
@@ -4020,13 +4057,208 @@ function _renderAgentPickerList(filterText) {
   const projectEmptyHint = (!q && _pickerBoundAgentIds && _pickerBoundAgentIds.size === 0)
     ? `<div class="skill-picker-empty-hint">${escapeHtml(t('agents.no_project_agents'))}</div>`
     : '';
-  // 接收者选择器只管「谁执行」（Commander + Agent）；模型的选择与展示统一由
-  // composer 右下角的执行配置 chip 负责（选中 CLI 智能体时该 chip 即管理其
-  // runtime.model）。模型不进这个列表——验收反馈：左侧出现模型属于概念混淆。
-  listEl.innerHTML = projectEmptyHint + commanderHtml
+  // 接收者选择器布局——两个执行目标分组必须与 Commander 同屏可见：
+  //   [API 连接模型]（紧凑，1-3 provider 行）
+  //   [本机 CLI]（每个 CLI agent 一行，chevron 下钻扫描模型）
+  //   [本地 Agent]（Commander 紧随，自定义/平台 agent 列表填充余下滚动区）。
+  const localGroupLabel = isChatRecipientPicker
+    ? `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_local_agents'))}</div>`
+    : '';
+  listEl.innerHTML = projectEmptyHint + apiGroupHtml + cliGroupHtml + localGroupLabel + commanderHtml
     + groupHtml(t('agents.source_custom'), groups.custom)
     + groupHtml(t('agents.source_marketplace'), groups.marketplace);
   _bindAgentPickerListItems(listEl, anchorId);
+}
+
+// ─── Unified execution entry: API-connection model rows ─────────────────
+// One row per configured provider (its current priority entry rides the
+// row); the chevron expands every model of that provider (lazy listModels).
+
+let _pickerModelEntries = [];
+
+async function _refreshPickerModelEntries() {
+  try {
+    const res = await window.cogseed.invoke('auth.listEntries');
+    if (res && res.ok && Array.isArray(res.entries)) {
+      _pickerModelEntries = res.entries;
+      return true;
+    }
+  } catch { /* keep previous cache */ }
+  return false;
+}
+
+function _modelRowMatchesFilter(entry, q) {
+  if (!q) return true;
+  const provider = String(entry.providerLabel || entry.provider || '').toLowerCase();
+  const model = String(entry.modelName || entry.model || '').toLowerCase();
+  return provider.includes(q) || model.includes(q);
+}
+
+// 分组行的下钻 chevron：走共享 uiIconButton 工厂（shared-ui-adoption-guard
+// 契约——新控件不新增原生 button 标签字面量），样式由 .picker-model-expand
+// 叠加；工厂不可用（ui-button.js 未加载的极端退化）时用可点 span 兜底。
+function _pickerExpandBtn(dataAttrs) {
+  if (typeof window !== 'undefined' && typeof window.uiIconButton === 'function') {
+    return window.uiIconButton({
+      label: t('agent_picker.expand_models'),
+      icon: 'chevron-right',
+      className: 'picker-model-expand',
+      attrs: dataAttrs,
+    });
+  }
+  const flat = Object.entries(dataAttrs || {})
+    .map(([k, v]) => `${k}="${escapeHtml(String(v))}"`)
+    .join(' ');
+  // ui-button.js 先于本模块加载（index.html:1937 < 1989），此分支仅在工厂
+  // 意外缺失时兜底为纯展示 chevron（不做 role 伪装——category-tabs 守卫
+  // 禁止 span 伪按钮；不可点总比假语义好）。
+  return `<span class="picker-model-expand" ${flat}>›</span>`;
+}
+
+function _renderPickerModelGroup(entries, q) {
+  const rows = entries.filter((e) => e && e.provider && e.model && _modelRowMatchesFilter(e, q));
+  if (!rows.length) return '';
+  const items = rows.map((entry) => {
+    const provider = entry.providerLabel || entry.provider || '';
+    const model = entry.modelName || entry.model || '';
+    return `
+      <div class="skill-picker-item skill-picker-item--model" data-kind="model"
+           data-id="${escapeHtml(entry.provider)}"
+           data-provider="${escapeHtml(entry.provider)}"
+           data-model="${escapeHtml(entry.model)}"
+           data-name="${escapeHtml(model)}"
+           data-provider-label="${escapeHtml(provider)}">
+        <div class="skill-picker-item-name">${escapeHtml(model)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(provider)}</div>
+        ${_pickerExpandBtn({ 'data-provider': entry.provider })}
+      </div>`;
+  }).join('');
+  return `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_api_models'))}</div>` + items;
+}
+
+/** Second level: every model of one provider (from auth.listModels, lazy).
+ *  Picking one selects THAT model as the execution target (not merely the
+ *  provider's current entry). Replaces the picker list until back/close. */
+async function _openPickerProviderModels(listEl, anchorId, providerId, providerLabel) {
+  if (!listEl) return;
+  listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+  let models = [];
+  try {
+    const res = await window.cogseed.invoke('auth.listModels', { provider: providerId });
+    if (res && res.ok && Array.isArray(res.models)) models = res.models;
+  } catch { /* fall through to empty */ }
+  // Picker may have closed while loading.
+  if (!listEl.isConnected) return;
+  const back = `<div class="skill-picker-item skill-picker-item--back" data-kind="__model_back__">
+      <div class="skill-picker-item-name">‹ ${escapeHtml(t('common.back'))}</div>
+    </div>`;
+  const rows = (models.length ? models : []).map((m) => {
+    const id = String(m && typeof m === 'object' ? (m.id || '') : String(m || ''));
+    if (!id) return '';
+    const name = String((m && m.name) || id);
+    return `
+      <div class="skill-picker-item skill-picker-item--model" data-kind="model"
+           data-id="${escapeHtml(providerId)}/${escapeHtml(id)}"
+           data-provider="${escapeHtml(providerId)}"
+           data-model="${escapeHtml(id)}"
+           data-name="${escapeHtml(name)}"
+           data-provider-label="${escapeHtml(providerLabel || providerId)}">
+        <div class="skill-picker-item-name">${escapeHtml(name)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(providerLabel || providerId)}</div>
+      </div>`;
+  }).join('');
+  listEl.innerHTML = back + (rows || `<div class="skill-picker-empty">${escapeHtml(t('model_chip.no_models'))}</div>`);
+  // Back button restores the grouped list (search box keeps its value).
+  const backBtn = listEl.querySelector('.skill-picker-item--back');
+  backBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const search = document.getElementById('agent-picker-search');
+    _renderAgentPickerList(search ? search.value : '');
+  });
+  for (const el of listEl.querySelectorAll('.skill-picker-item[data-id]')) {
+    if (el.classList.contains('skill-picker-item--back')) continue;
+    el.addEventListener('click', async () => {
+      _closeAgentPicker();
+      await _triggerPickerItem(el.dataset.kind || 'model', el.dataset.id, el.dataset.name, anchorId, el.dataset);
+    });
+  }
+}
+
+// ─── 本机 CLI 分组（伪装模型 ID 路由） ────────────────────────────────────
+// 每个 CLI agent 实例一行；chevron 下钻该 CLI 的真实模型清单（运行时扫描 ∪
+// 静态目录，与 chip 同一数据源 cliExecControl.loadCliModels）。选中模型 =
+// 接收者切到该 agent + 任务级覆盖写入伪装全串 `cli/<type>@<model>`（存储单
+// 一真相；bus 在 CLI 通道消费前解码为裸 id 下发）。行本身（非 chevron）=
+// 仅选 agent（跟随 CLI 默认模型），走既有 agent 路径。
+
+function _renderPickerCliGroup(cliAgents) {
+  const items = cliAgents.map((a) => {
+    const cli = ((a.runtime && a.runtime.cli) || '').trim();
+    const name = a.name || a.agent_id;
+    return `
+      <div class="skill-picker-item skill-picker-item--cli" data-kind="agent" data-id="${escapeHtml(a.agent_id)}" data-name="${escapeHtml(name)}">
+        <div class="skill-picker-item-name">${escapeHtml(name)}</div>
+        <div class="skill-picker-item-desc">${escapeHtml(cli)}</div>
+        ${_pickerExpandBtn({ 'data-cli-agent': a.agent_id })}
+      </div>`;
+  }).join('');
+  return `<div class="skill-picker-group-label skill-picker-group-label--section">${escapeHtml(t('chat.recipient_cli_agents'))}</div>` + items;
+}
+
+/** CLI 分组二级视图：该 CLI 的模型清单（扫描 ∪ 静态）+「跟随 CLI」行。
+ *  扫描失败 → 回落静态清单 + 一行说明（诚实降级：可用就列，绝不静默换
+ *  默认）。选模型 = agent 接收者 + 伪装全串覆盖。 */
+async function _openPickerCliAgentModels(listEl, anchorId, agent) {
+  if (!listEl || !agent) return;
+  const cli = ((agent.runtime && agent.runtime.cli) || '').trim();
+  const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+  listEl.innerHTML = `<div class="skill-picker-empty">${escapeHtml(t('common.loading'))}</div>`;
+  const scan = ctl ? await ctl.loadCliModels(agent.agent_id, cli) : null;
+  if (!listEl.isConnected) return;
+  const merged = ctl ? ctl.mergedCliModels(cli, scan) : [];
+  const back = `<div class="skill-picker-item skill-picker-item--back" data-kind="__cli_back__">
+      <div class="skill-picker-item-name">‹ ${escapeHtml(t('common.back'))}</div>
+    </div>`;
+  const scanNote = (scan && scan.state === 'ready' && scan.current)
+    ? `<div class="skill-picker-empty-hint">${escapeHtml(t('exec_config.cli_models_current', { model: scan.current }))}</div>`
+    : (scan && scan.state !== 'ready')
+      ? `<div class="skill-picker-empty-hint">${escapeHtml(t('exec_config.cli_models_scan_fallback', { cli }))}</div>`
+      : '';
+  const rows = merged.map((m) => `
+      <div class="skill-picker-item skill-picker-item--cli-model" data-kind="cli-model"
+           data-id="${escapeHtml(agent.agent_id)}"
+           data-agent-id="${escapeHtml(agent.agent_id)}"
+           data-agent-name="${escapeHtml(agent.name || agent.agent_id)}"
+           data-cli="${escapeHtml(cli)}"
+           data-model="${escapeHtml(m.id)}"
+           data-model-label="${escapeHtml(m.label || m.id)}"
+           data-name="${escapeHtml(m.label || m.id)}">
+        <div class="skill-picker-item-name">${escapeHtml(m.label || m.id)}</div>
+        ${m.description ? `<div class="skill-picker-item-desc">${escapeHtml(m.description)}</div>` : ''}
+      </div>`).join('');
+  // 「跟随 CLI」= 只切接收者、不设覆盖（走既有 agent 路径）。
+  const follow = `
+      <div class="skill-picker-item skill-picker-item--cli-model" data-kind="agent"
+           data-id="${escapeHtml(agent.agent_id)}" data-name="${escapeHtml(agent.name || agent.agent_id)}">
+        <div class="skill-picker-item-name">${escapeHtml(t('exec_config.cli_follow_default'))}</div>
+        <div class="skill-picker-item-desc">${escapeHtml((scan && scan.current) || cli)}</div>
+      </div>`;
+  listEl.innerHTML = back + scanNote
+    + (rows || `<div class="skill-picker-empty">${escapeHtml(t('model_chip.no_models'))}</div>`)
+    + follow;
+  const backBtn = listEl.querySelector('.skill-picker-item--back');
+  backBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const search = document.getElementById('agent-picker-search');
+    _renderAgentPickerList(search ? search.value : '');
+  });
+  for (const el of listEl.querySelectorAll('.skill-picker-item[data-id]')) {
+    if (el.classList.contains('skill-picker-item--back')) continue;
+    el.addEventListener('click', async () => {
+      _closeAgentPicker();
+      await _triggerPickerItem(el.dataset.kind || 'agent', el.dataset.id, el.dataset.name, anchorId, el.dataset);
+    });
+  }
 }
 
 function _matchPickerItem(q, name, desc, extra = '') {
@@ -4414,6 +4646,28 @@ function _bindAgentPickerListItems(listEl, anchorId) {
       if (idx >= 0) _setAgentPickerActive(idx);
     });
   }
+  // Unified execution entry: chevron next to an API-model row expands the
+  // provider's full model list (second level).
+  for (const btn of listEl.querySelectorAll('.picker-model-expand[data-provider]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const providerId = btn.dataset.provider || '';
+      if (!providerId) return;
+      const row = btn.closest('.skill-picker-item--model');
+      _openPickerProviderModels(listEl, anchorId, providerId, row ? (row.dataset.providerLabel || '') : '');
+    });
+  }
+  // 伪装模型 ID 路由：chevron next to a CLI-agent row expands that CLI's
+  // scanned model list (second level; picking writes a masked-id override).
+  for (const btn of listEl.querySelectorAll('.picker-model-expand[data-cli-agent]')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const agentId = btn.dataset.cliAgent || '';
+      if (!agentId) return;
+      const agent = (_agentsCache || []).find((a) => a && a.agent_id === agentId) || null;
+      if (agent) _openPickerCliAgentModels(listEl, anchorId, agent);
+    });
+  }
   _setAgentPickerActive(0);
 }
 
@@ -4765,6 +5019,66 @@ async function _triggerPickerItem(kind, itemId, itemName, anchorId, dataset) {
     const inputId = target === 'new-chat'
       ? 'new-chat-input'
       : (target === 'auto' ? 'auto-task-input' : 'chat-input');
+    _focusInput(document.getElementById(inputId));
+    return;
+  }
+  if (kind === 'model') {
+    // Unified execution entry: an API-connection model becomes the execution
+    // target directly (commander path + per-turn model override — no agent
+    // wrapper). Auto modal keeps agent-only recipients.
+    const ds = dataset || {};
+    const provider = String(ds.provider || '');
+    const model = String(ds.model || '');
+    if (!provider || !model) return;
+    if (anchorId === 'auto-recipient-chip') return;
+    const target = _targetFromPickerAnchor(anchorId);
+    _agentsTrackClick('chat_model_select', {
+      target,
+      provider,
+      model,
+    });
+    setChatRecipient(target, {
+      kind: 'model',
+      provider,
+      model,
+      name: String(itemName || model),
+      providerLabel: ds.providerLabel ? String(ds.providerLabel) : undefined,
+    });
+    _consumeAtKeyChar();
+    const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
+    _focusInput(document.getElementById(inputId));
+    return;
+  }
+  if (kind === 'cli-model') {
+    // 伪装模型 ID 路由：@ 直选某 CLI agent 的某模型 = 接收者切到该 agent +
+    // 任务级覆盖写入伪装全串 cli/<type>@<model>（存储单一真相；bus 在 CLI
+    // 通道消费前解码为裸 id，显示层归一）。顺序必须是先 recipient 后
+    // override——setChatRecipient 换目标时会清空旧覆盖。
+    const ds = dataset || {};
+    const agentId = String(ds.agentId || ds.id || '');
+    const cli = String(ds.cli || '');
+    const modelId = String(ds.model || '');
+    if (!agentId || !cli || !modelId || anchorId === 'auto-recipient-chip') return;
+    const target = _targetFromPickerAnchor(anchorId);
+    _agentsTrackClick('chat_cli_model_select', {
+      target,
+      cli,
+      model: modelId,
+      agent_id: agentId,
+    });
+    setChatRecipient(target, {
+      kind: 'agent',
+      id: agentId,
+      name: String(ds.agentName || agentId),
+    });
+    const ctl = (typeof window !== 'undefined' && window.cliExecControl) ? window.cliExecControl : null;
+    const masked = ctl ? ctl.encodeAgentModel(cli, modelId) : modelId;
+    setExecOverride(target, {
+      model: masked,
+      modelLabel: String(ds.modelLabel || modelId),
+    });
+    _consumeAtKeyChar();
+    const inputId = target === 'new-chat' ? 'new-chat-input' : 'chat-input';
     _focusInput(document.getElementById(inputId));
     return;
   }
