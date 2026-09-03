@@ -426,6 +426,17 @@ export class RuntimeInstance {
         // reference so it can never leak into a later delivery.
         if (event.source_msg_id) this.turnSourceRefs.delete(event.source_msg_id);
         if (streamingEnabled) this.handleCardTurnSilent(currentBinding, event);
+        // 渠道任务接续（G0）：意外失败（event.error 非空）给用户一条明确的
+        // 失败回执，而不是渠道侧一片沉默。正常 silent / 用户取消不带 error。
+        if (event.error) {
+          void this.handleTurnFailure(currentBinding, event).catch((error) => {
+            log.warn('messaging turn-failure notice delivery failed', {
+              instanceId: this.instanceId,
+              key: currentBinding.key,
+              error: (error as Error).message,
+            });
+          });
+        }
         return;
       }
       if (!isMessageEvent(event) || event.turn_end !== true) return;
@@ -649,6 +660,28 @@ export class RuntimeInstance {
     // stops further updates. Unsent drafts are dropped without creating a card.
     this.cardStates.delete(key);
     this.clearToolLinesForTurn(turnId);
+  }
+
+  /** F4 失败回执：把意外失败的回合以带执行者标注的文本回执投回渠道。
+   *  幂等键用 `turn-fail-<turn_id|source_msg_id>`（走出站投递台账，
+   *  平台重发同一事件不会重复打扰用户）。 */
+  private async handleTurnFailure(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'turn_silent' }>,
+  ): Promise<void> {
+    if (!this.isCurrent() || !event.error) return;
+    const failKey = event.turn_id || event.source_msg_id;
+    if (!failKey) return;
+    const label = await resolveActorLabel(this.uid, event.actor);
+    const text = t('messaging.continuity.turn_failed', {
+      agent: label || event.actor.slice(0, 8),
+      error: event.error,
+    });
+    this.trackOutboundDelivery(
+      binding,
+      { id: `turn-fail-${failKey}`, from: event.actor, text },
+      event.source_msg_id,
+    );
   }
 
   private async handleTurnEndMessage(
