@@ -11,6 +11,8 @@ import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
 import type { GroupMessage, WakeRequestSummary } from '../group_chat/visibility';
+import { COMMANDER_ID, USER_ID } from '../group_chat/state';
+import { listAgents } from '../agents';
 import * as ledger from './ledger';
 import type {
   DeliveryLedgerEntry,
@@ -34,6 +36,49 @@ const log = createLogger('messaging:runtime');
 export const OUTBOUND_MAX_ATTEMPTS = 3;
 export const OUTBOUND_RETRY_DELAYS_MS = [1_000, 5_000] as const;
 const MAX_RETRY_TIMER_DELAY_MS = 2_147_000_000;
+
+// ── Actor badge (F1 结果来源标注) ─────────────────────────────────────────
+
+/** agent id → display name cache, per uid, short TTL. Channel replies need
+ *  the executing agent's name on every turn end; reading the agent registry
+ *  each time is a small JSON read, so a 60s cache keeps it cheap while still
+ *  picking up renames reasonably fast. */
+const ACTOR_NAME_TTL_MS = 60_000;
+const actorNameCache = new Map<string, { stamp: number; names: Map<string, string> }>();
+
+async function loadActorNames(uid: string): Promise<Map<string, string>> {
+  const cached = actorNameCache.get(uid);
+  if (cached && Date.now() - cached.stamp < ACTOR_NAME_TTL_MS) return cached.names;
+  const names = new Map<string, string>();
+  try {
+    for (const agent of await listAgents()) {
+      if (agent?.agent_id && typeof agent.name === 'string' && agent.name) {
+        names.set(agent.agent_id, agent.name);
+      }
+    }
+  } catch (error) {
+    log.warn('messaging actor name lookup failed', { uid, error: (error as Error).message });
+  }
+  actorNameCache.set(uid, { stamp: Date.now(), names });
+  return names;
+}
+
+/** Resolve a human-facing badge label for the actor that produced a reply:
+ *  the executing agent's display name, or the localized commander title.
+ *  Returns null when no badge applies (user's own messages, unknown ids) —
+ *  callers skip the prefix rather than leaking a raw actor id. */
+export async function resolveActorLabel(uid: string, actorId: string | undefined): Promise<string | null> {
+  if (!actorId || actorId === USER_ID) return null;
+  if (actorId === COMMANDER_ID) return t('messaging.continuity.badge_commander');
+  const names = await loadActorNames(uid);
+  return names.get(actorId) || null;
+}
+
+/** Prefix a reply with its executor badge. Pure function (exported for tests). */
+export function withActorBadge(text: string, label: string | null): string {
+  if (!label) return text;
+  return `【${label}】 ${text}`;
+}
 
 interface CardStreamState {
   messageId?: string;
@@ -518,6 +563,7 @@ export class RuntimeInstance {
   private async finalizeCardForTurnEnd(
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'message' }>,
+    actorLabel?: string | null,
   ): Promise<boolean> {
     const turnId = cardEventTurnId(event);
     if (!turnId) return false;
@@ -555,9 +601,14 @@ export class RuntimeInstance {
       const adapter = this.adapter;
       if (isCardAdapter(adapter)) {
         try {
+          // F1: the finalized card title carries the executor badge so the
+          // streamed answer is attributed at a glance.
+          const cardTitle = actorLabel
+            ? `${this.instance.displayName} · ${actorLabel}`
+            : this.instance.displayName;
           await adapter.updateCard(
             state.messageId,
-            buildStreamCard(this.instance.displayName, this.toolLinesForTurn(turnId), finalText),
+            buildStreamCard(cardTitle, this.toolLinesForTurn(turnId), withActorBadge(finalText, actorLabel ?? null)),
             this.controller.signal,
           );
           log.info('messaging streaming card finalized ok', {
@@ -607,6 +658,9 @@ export class RuntimeInstance {
     if (!this.isCurrent()) return;
     const turnId = cardEventTurnId(event);
     const message = messageFromEvent(event);
+    // F1: badge every channel reply with the executor so the user can tell
+    // which agent (or the commander) produced a result.
+    const actorLabel = await resolveActorLabel(this.uid, message.from);
     log.info('messaging turn-end handling', {
       instanceId: this.instanceId,
       key: binding.key,
@@ -616,7 +670,7 @@ export class RuntimeInstance {
       cardStateCount: this.cardStates.size,
     });
     if (this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter)) {
-      if (await this.finalizeCardForTurnEnd(binding, event)) return;
+      if (await this.finalizeCardForTurnEnd(binding, event, actorLabel)) return;
       log.info('messaging turn-end card finalize skipped, falling back to text delivery', {
         instanceId: this.instanceId,
         key: binding.key,
@@ -627,6 +681,9 @@ export class RuntimeInstance {
     // trail stays visible without emitting a second message (mirrors Hermes'
     // progress bubbles, folded into the final post).
     const toolLines = turnId ? this.toolLinesForTurn(turnId) : [];
+    if (typeof message.text === 'string' && message.text.trim()) {
+      message.text = withActorBadge(message.text, actorLabel);
+    }
     if (toolLines.length && typeof message.text === 'string') {
       message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
     }
