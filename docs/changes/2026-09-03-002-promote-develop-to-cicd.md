@@ -4,6 +4,7 @@
 - 日期：2026-09-03
 - 分支：`promotion/develop-to-cicd-20260903`
 - 基线：`origin/cicd` @ `dbc2db6748b60e68e4fe8202ca66a6adb87a6d68`
+- 审核：PR #169，目标 `cicd`，未合并
 - 类型：promotion work，无单独 plan
 
 ## 目标
@@ -37,6 +38,6 @@
 
 ## 审核边界
 
-- 本分支只提交到远端 promotion 分支并创建指向 `cicd` 的 PR，等待 `verify` 与 `verify-windows`；不在本任务中合并 PR。
+- 本分支已提交到远端 promotion 分支并创建 PR #169（目标 `cicd`），等待 `verify` 与 `verify-windows`；不在本任务中合并 PR。
 - `trufflehog filesystem . --only-verified` 仍是 0.8.0 最终 release 的必要阻断检查，未完成前不得放行最终发版。
 - `npm audit --omit=dev` 的既有 7 个生产依赖告警（4 high、2 moderate、1 low、0 critical）未由本任务引入，需在最终 release 审核中另行处置。

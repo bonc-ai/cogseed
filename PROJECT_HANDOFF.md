@@ -5,15 +5,15 @@
 ## 项目快照
 
 - 当前目标：完成 0.8.0 发版前的远端安全与敏感内容收口。
-- 当前阶段：`2026-09-03-001` 已实施完成，`2026-09-03-002` 已完成 develop → cicd promotion，等待远端 PR 审核；未批准 0.8.0 最终 release。
-- 当前分支或提交：`promotion/develop-to-cicd-20260903`，基线 `origin/cicd` @ `dbc2db67`，已合入 `origin/develop` @ `dc3898f6`。
+- 当前阶段：`2026-09-03-001` 已实施完成，`2026-09-03-002` 已完成 develop → cicd promotion，PR #169 等待远端审核；未批准 0.8.0 最终 release。
+- 当前分支：`promotion/develop-to-cicd-20260903`，promotion 合并提交 `853ac7b0`；基线 `origin/cicd` @ `dbc2db67`，已合入 `origin/develop` @ `dc3898f6`。
 - 最后更新：2026-09-03。
 
 ## 正在进行
 
 | 任务 ID | 状态 | 记录 |
 | --- | --- | --- |
-| `2026-09-03-002-promote-develop-to-cicd` | `completed` | 基于最新 `origin/cicd` 建立隔离 promotion 分支，合入 `origin/develop` 并解决 45 处同步冲突；验证通过，待推送并提交远端 PR 审核 |
+| `2026-09-03-002-promote-develop-to-cicd` | `completed` | 基于最新 `origin/cicd` 建立隔离 promotion 分支，合入 `origin/develop` 并解决 45 处同步冲突；验证通过，已推送并创建 PR #169 等待审核 |
 | `2026-09-01-001-failure-category-boundaries` | `completed` | [change](docs/changes/2026-09-01-001-failure-category-boundaries.md) |
 | `2026-09-03-001-release-security-cleanup` | `completed` | [change](docs/changes/2026-09-03-001-release-security-cleanup.md) |
 
@@ -21,7 +21,7 @@
 
 ## 下一阶段
 
-1. 推送 `promotion/develop-to-cicd-20260903` 并创建目标为 `cicd` 的 PR，等待 `verify` 与 `verify-windows`，不直接合并。
+1. 跟进 PR #169 的 `verify` 与 `verify-windows`，不直接合并。
 2. 最终 release 前必须补跑 `trufflehog filesystem . --only-verified`；未完成不得放行 0.8.0。
 3. 本次 Electron JS 全量测试为 911 个测试文件通过、7 个跳过；Python 资源测试 308 个通过。
 4. 后续任务由 `spec-plan` / `spec-work` 按 `YYYY-MM-DD-NNN-<topic>` 继续登记。
