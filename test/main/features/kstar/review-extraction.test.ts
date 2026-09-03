@@ -71,6 +71,34 @@ describe('KSTAR review and Recall bridge', () => {
     expect(proposals).toEqual([]);
   });
 
+  it('does not precipitate a review whose only secondary cause is non-reusable', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: -0.8,
+      deltaA: -0.3,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The user denied access to the requested operation.',
+      confidence: 1,
+      lesson: 'Do not retry a denied operation without a new authorization decision.',
+      attributionDetails: [{
+        category: 'permission_blocked',
+        confidence: 1,
+        evidenceRefs: current.evidenceRefs,
+        source: 'deterministic',
+      }],
+      evidenceRefs: current.evidenceRefs,
+    });
+    expect(proposeKstarCandidates(current, review)).toEqual([]);
+  });
+
   it('precipitates a reasoned process-experience lesson even when attribution is unclear', async () => {
     const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
       import('../../../../src/main/features/kstar/review-service'),

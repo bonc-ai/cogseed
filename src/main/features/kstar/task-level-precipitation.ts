@@ -5,6 +5,7 @@ import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
 import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
@@ -216,7 +217,9 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   // Highest-confidence gap across all episodes, only when evidence-gated.
   // 同上：缺口候选必须有推理出的 lesson，不拿 review.reason 的诊断文本充数。
   const gapReview = [...reviews]
-    .filter((review) => review.confidence >= 0.7 && lessonUsable(goal, review.lesson))
+    .filter((review) => attributionAllowsReusableLearning(review)
+      && review.confidence >= 0.7
+      && lessonUsable(goal, review.lesson))
     .sort((a, b) => b.confidence - a.confidence)[0];
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
