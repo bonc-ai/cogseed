@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { MessagingAdapter } from '../../../src/main/features/messaging/types';
+import type { MessagingAdapter, MessagingCardAdapter } from '../../../src/main/features/messaging/types';
 
 let tmpDir = '';
 let previousRoot: string | undefined;
@@ -258,5 +258,91 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     const entry = await ledger.readInbound('user-1', ledger.inboundKey(instanceId, 'm-idem-1'));
     expect(entry?.status).toBe('accepted');
     expect(entry?.cid).toBe(first.cid);
+  });
+
+  it('badges the finalized Feishu streaming card with the executor (F1 card path)', async () => {
+    let cardListener: ((event: unknown) => void) | undefined;
+    const sendCard = vi.fn(async () => ({ deliveryId: 'om_card_1' }));
+    const updateCard = vi.fn(async () => ({}));
+    const adapter: MessagingCardAdapter = {
+      platform: 'feishu_lark',
+      async start(signal, callbacks) {
+        await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+      async stop() {},
+      async checkHealth() {
+        return { kind: 'connected', checkedAt: new Date().toISOString() };
+      },
+      sendMessage: vi.fn(async () => ({})),
+      sendCard,
+      updateCard,
+    };
+    cardListener = undefined;
+    vi.doMock('../../../src/main/features/messaging/adapters', () => ({
+      createAdapter: vi.fn(() => adapter),
+    }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({
+      subscribe: vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
+        cardListener = listener;
+        return () => { cardListener = undefined; };
+      }),
+    }));
+    vi.doMock('../../../src/main/features/agents', () => ({
+      listAgents: vi.fn(async () => [
+        { agent_id: 'agent-codex', name: 'Codex', enabled: true },
+      ]),
+    }));
+    const registry = await import('../../../src/main/features/messaging/registry');
+    const manager = await import('../../../src/main/features/messaging/manager');
+    const { installContinuityCommands } = await import('../../../src/main/features/messaging/continuity_commands');
+    installContinuityCommands();
+    const created = await registry.createInstance('user-1', {
+      platform: 'feishu_lark',
+      displayName: 'Feishu bot',
+      responseMode: 'streaming_card',
+      policy: { allowUserIds: ['user-1'] },
+      secret: { appId: 'cli_1234567890abcdef', appSecret: 'app-secret' },
+    });
+    await manager.setEnabled('user-1', created.id, true);
+    await vi.waitFor(async () => {
+      const instances = await manager.listInstances('user-1');
+      expect(instances[0]?.status.kind).toBe('connected');
+    });
+
+    // 建绑定 + 触发一轮流式 delta（卡片创建）→ 回合结束（卡片 finalize）。
+    const first = await manager.ingestInbound('user-1', {
+      platform: 'feishu_lark' as const,
+      instanceId: created.id,
+      externalMessageId: 'm-card-1',
+      externalChatId: 'chat-9',
+      externalUserId: 'user-1',
+      text: '帮我做幻灯片',
+      isGroup: false,
+      mentionPresent: false,
+      receivedAt: new Date().toISOString(),
+    });
+    expect(first.accepted).toBe(true);
+    expect(cardListener).toBeTypeOf('function');
+    cardListener?.({ type: 'process', actor: 'agent-codex', turn_id: 'turn-card-1', data: { type: 'delta', text: '正在生成…' } });
+    await vi.waitFor(() => expect(sendCard).toHaveBeenCalledTimes(1));
+    cardListener?.({
+      type: 'message',
+      turn_end: true,
+      turn_id: 'turn-card-1',
+      msg: { id: 'reply-card-1', from: 'agent-codex', text: '幻灯片已完成' },
+    });
+    await vi.waitFor(() => expect(updateCard).toHaveBeenCalledTimes(1));
+    const card = updateCard.mock.calls[0][1] as {
+      header?: { title?: { content?: string } };
+      elements?: Array<{ tag?: string; content?: string }>;
+    };
+    expect(card.header?.title?.content).toContain('Feishu bot · Codex');
+    const body = (card.elements || []).map((el) => el.content || '').join('\n');
+    expect(body).toContain('【Codex】');
   });
 });
