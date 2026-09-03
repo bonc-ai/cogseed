@@ -90,6 +90,29 @@ export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'commander'
 export type KstarEvidenceLayer = 'fact' | 'inference' | 'experience';
 export type KstarReviewStatus = 'pending' | 'confirmed' | 'rejected' | 'skipped';
 
+export type KstarSecondaryAttribution =
+  | 'task_interpretation_error'
+  | 'recall_miss'
+  | 'projection_omission'
+  | 'injection_failure'
+  | 'asset_not_applied'
+  | 'asset_not_applicable'
+  | 'asset_conflict'
+  | 'asset_outdated'
+  | 'execution_error'
+  | 'environment_failure'
+  | 'forecast_error'
+  | 'permission_blocked'
+  | 'user_goal_changed'
+  | 'insufficient_evidence';
+
+export interface KstarAttributionDetail {
+  category: KstarSecondaryAttribution;
+  confidence: number;
+  evidenceRefs: CognitionSourceRef[];
+  source: 'deterministic' | 'model' | 'user';
+}
+
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;
   episodeId: string;
@@ -113,6 +136,9 @@ export interface KstarReviewRecord extends KstarJsonRecord {
    *  reusing"). When present it becomes the precipitation judgment instead
    *  of a fixed template sentence. */
   lesson?: string;
+  /** Optional evidence-bound secondary cause(s). Legacy Reviews omit this
+   *  field and remain readable. */
+  attributionDetails?: KstarAttributionDetail[];
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;

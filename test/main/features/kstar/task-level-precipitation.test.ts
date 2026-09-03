@@ -456,6 +456,35 @@ describe('KStar task-level precipitation (B5)', () => {
     expect(result.createdAssetIds).toHaveLength(0);
   });
 
+  it('does not aggregate an excluded-only secondary attribution into a reusable asset', async () => {
+    const epA = episode('kse-b5-permission', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epA);
+    await seedReview(epA, {
+      deltaR: -0.8,
+      deltaA: -0.2,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The operation was blocked by an authorization policy.',
+      confidence: 0.95,
+      lesson: 'Do not retry an operation after an authorization policy blocks it.',
+      attributionDetails: [{
+        category: 'permission_blocked',
+        confidence: 1,
+        evidenceRefs: epA.evidenceRefs,
+        source: 'deterministic',
+      }],
+    });
+    const requirement = await seedRequirement([epA.id]);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = precipitation.aggregateRequirementProposals({
+      requirement,
+      episodes: [epA],
+      reviews: [await (await import('../../../../src/main/features/kstar/review-service')).readKstarReview('user-b5', epA.id)].filter(Boolean) as KstarReviewRecord[],
+    });
+    expect(result).toEqual([]);
+  });
+
   it('tolerates missing episodes/reviews without throwing', async () => {
     const requirement = await seedRequirement(['kse-b5-missing']);
     const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');

@@ -1,5 +1,6 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { lessonLanguageMismatches } from '../../util/language';
+import { attributionAllowsReusableLearning } from './secondary-attribution';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
 /** 从经验内容提炼标题核心（交互规范附录 A 风格：标题体现内容）。
@@ -86,6 +87,7 @@ export function hasLearningSignal(review: KstarReviewRecord): boolean {
  *      >= 0.7 + reason non-empty, so routine successes do not pollute.
  *  "Met expected" with ~0 delta and NO lesson stays un-precipitated. */
 export function clearsPrecipitationGate(review: KstarReviewRecord): boolean {
+  if (!attributionAllowsReusableLearning(review)) return false;
   if (!hasLearningSignal(review)) return false;
   const numericDeltaR = typeof review.deltaR === 'number' && Number.isFinite(review.deltaR) ? review.deltaR : 0;
   const numericDeltaA = typeof review.deltaA === 'number' && Number.isFinite(review.deltaA) ? review.deltaA : 0;
@@ -226,7 +228,7 @@ export function buildKstarDetectionHints(
     );
   }
 
-  if (review.confidence >= 0.7 && review.reason) {
+  if (attributionAllowsReusableLearning(review) && review.confidence >= 0.7 && review.reason) {
     const gapLabel = review.attribution.replace(/_/g, ' ');
     hints.push(
       `DETECTED GAP: Review found a ${gapLabel} — ${review.reason.slice(0, 200)}. ` +

@@ -1,7 +1,8 @@
 import { nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model-types';
-import { readKstarJsonRecord, replaceKstarJsonRecord, writeKstarJsonRecord } from './episode-store';
+import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord, writeKstarJsonRecord } from './episode-store';
+import { normalizeKstarAttributionDetails } from './secondary-attribution';
 import type {
   KstarAttribution,
   KstarEpisodeRecord,
@@ -29,6 +30,7 @@ export interface SaveKstarReviewInput {
   /** Model-reasoned reusable lesson; persisted and used as the precipitation
    *  judgment instead of a fixed template sentence. */
   lesson?: string;
+  attributionDetails?: unknown;
   evidenceRefs: unknown[];
 }
 
@@ -87,8 +89,15 @@ export function createInitialKstarReview(episode: KstarEpisodeRecord): KstarRevi
 export async function saveKstarReviewRecord(
   userId: string,
   record: KstarReviewRecord,
+  episodeEvidenceRefs?: unknown[],
 ): Promise<KstarReviewRecord> {
-  validateStoredReview(userId, record.episodeId, record);
+  const boundEvidenceRefs = record.attributionDetails === undefined
+    ? undefined
+    : episodeEvidenceRefs || (await readKstarEpisode(userId, record.episodeId))?.evidenceRefs;
+  if (record.attributionDetails !== undefined && !boundEvidenceRefs) {
+    throw new Error('kstar episode not found for attribution evidence');
+  }
+  validateStoredReview(userId, record.episodeId, record, boundEvidenceRefs);
   return replaceKstarJsonRecord(userId, 'reviews', record);
 }
 
@@ -122,14 +131,22 @@ export async function saveKstarReview(
     ...(input.confirmedAt ? { confirmedAt: input.confirmedAt } : {}),
     ...(input.lesson?.trim() ? { lesson: boundedReason(input.lesson) } : {}),
     evidenceRefs: normalizeCognitionSourceRefs(input.evidenceRefs),
+    ...(input.attributionDetails !== undefined
+      ? { attributionDetails: normalizeKstarAttributionDetails(input.attributionDetails, episode.evidenceRefs) }
+      : {}),
     createdAt: now,
     updatedAt: now,
   };
   if (!record.evidenceRefs.length) throw new Error('kstar review evidence is required');
-  return saveKstarReviewRecord(userId, record);
+  return saveKstarReviewRecord(userId, record, episode.evidenceRefs);
 }
 
-function validateStoredReview(userId: string, episodeId: string, raw: Record<string, unknown>): KstarReviewRecord {
+function validateStoredReview(
+  userId: string,
+  episodeId: string,
+  raw: Record<string, unknown>,
+  episodeEvidenceRefs?: unknown[],
+): KstarReviewRecord {
   if (
     raw.ownerId !== userId || raw.id !== `ksr-${episodeId}` || raw.episodeId !== episodeId ||
     (raw.expectedResult !== undefined && typeof raw.expectedResult !== 'string') ||
@@ -151,10 +168,23 @@ function validateStoredReview(userId: string, episodeId: string, raw: Record<str
     !Number.isFinite(raw.confidence) || raw.confidence < 0 || raw.confidence > 1 ||
     !Array.isArray(raw.evidenceRefs) || typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string'
   ) throw new Error('malformed kstar review');
-  return raw as KstarReviewRecord;
+  const attributionDetails = raw.attributionDetails === undefined
+    ? undefined
+    : normalizeKstarAttributionDetails(raw.attributionDetails, episodeEvidenceRefs || raw.evidenceRefs);
+  return {
+    ...raw,
+    ...(attributionDetails !== undefined ? { attributionDetails } : {}),
+  } as KstarReviewRecord;
 }
 
 export async function readKstarReview(userId: string, episodeId: string): Promise<KstarReviewRecord | null> {
   const raw = await readKstarJsonRecord(userId, 'reviews', `ksr-${episodeId}`);
-  return raw ? validateStoredReview(userId, episodeId, raw) : null;
+  if (!raw) return null;
+  const episodeEvidenceRefs = raw.attributionDetails === undefined
+    ? undefined
+    : (await readKstarEpisode(userId, episodeId))?.evidenceRefs;
+  if (raw.attributionDetails !== undefined && !episodeEvidenceRefs) {
+    throw new Error('kstar episode not found for attribution evidence');
+  }
+  return validateStoredReview(userId, episodeId, raw, episodeEvidenceRefs);
 }

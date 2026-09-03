@@ -4,6 +4,7 @@ import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall
 import { listInjectionReceipts, type InjectionReceipt } from '../recall/injection-receipt';
 import {
   recordAssetUsageReceipt,
+  listAssetUsageReceipts,
   type AssetUsageEvidenceKind,
 } from '../recall/asset-usage-receipt';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
@@ -132,6 +133,7 @@ async function finishClosure(
   inferReview: KstarReviewInfer = inferKstarReview,
   options: {
     forecast?: WorldModelForecast | null;
+    forecastStatus?: string;
     messages?: Array<{ from: string; text: string; ts?: string }>;
     groupMessages?: GroupKstarMessageInput[];
     conversationId?: string;
@@ -139,6 +141,25 @@ async function finishClosure(
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
   await persistAssetUsageTruth(userId, episode, options.groupMessages, options.conversationId);
+  let attributionReceipts: { injectionReceipts: InjectionReceipt[]; usageReceipts: Awaited<ReturnType<typeof listAssetUsageReceipts>> } = {
+    injectionReceipts: [],
+    usageReceipts: [],
+  };
+  if (episode.taskRunId) {
+    try {
+      const [injectionReceipts, usageReceipts] = await Promise.all([
+        listInjectionReceipts(userId, episode.taskRunId),
+        listAssetUsageReceipts(userId, episode.taskRunId),
+      ]);
+      attributionReceipts = { injectionReceipts, usageReceipts };
+    } catch (error) {
+      log.warn('kstar attribution receipt read degraded', {
+        userId,
+        episodeId: episode.id,
+        error: (error as Error).message,
+      });
+    }
+  }
   let storedReview: KstarReviewRecord | null = null;
   try {
     storedReview = await readKstarReview(userId, episode.id);
@@ -154,7 +175,10 @@ async function finishClosure(
       // （中途变更/失败/临时决策），质量与 Commander review 相当。
       const inferred = await inferReview(userId, episode, {
         ...(options.forecast ? { forecast: options.forecast } : {}),
+        ...(options.forecastStatus ? { forecastStatus: options.forecastStatus } : {}),
         ...(options.messages?.length ? { messages: options.messages } : {}),
+        injectionReceipts: attributionReceipts.injectionReceipts,
+        usageReceipts: attributionReceipts.usageReceipts,
       });
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
@@ -309,6 +333,7 @@ export interface ConfirmKstarReviewInput {
   verdict: KstarReviewVerdict;
   actualResult?: string;
   reason?: string;
+  attributionDetails?: unknown;
 }
 
 function confirmationReviewInput(
@@ -333,6 +358,11 @@ function confirmationReviewInput(
     ...(current.expectedResult ? { expectedResult: current.expectedResult } : {}),
     ...(actualResult ? { actualResult } : {}),
     evidenceRefs: current.evidenceRefs.length ? current.evidenceRefs : episode.evidenceRefs,
+    ...(input.attributionDetails !== undefined
+      ? { attributionDetails: input.attributionDetails }
+      : current.attributionDetails
+        ? { attributionDetails: current.attributionDetails }
+        : {}),
     inferenceMethod: 'user' as const,
     confirmedAt,
   };
@@ -488,6 +518,7 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
       // readWorldModelForecast returns the RECORD (forecast nested under
       // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
       ...(forecast ? { forecast: forecast.forecast } : {}),
+      ...(input.forecastId ? { forecastStatus: forecast ? 'committed' : 'failed' } : {}),
       ...(input.messages?.length ? { messages: input.messages } : {}),
       ...(input.messages?.length ? { groupMessages: input.messages } : {}),
       conversationId: input.conversationId,
