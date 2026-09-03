@@ -6,10 +6,22 @@ function readRendererCss() {
   return fs.readFileSync(path.join(__dirname, '../../src/renderer/style.css'), 'utf8');
 }
 
+const tokensCss = fs.readFileSync(path.join(__dirname, '../../src/renderer/tokens.css'), 'utf8');
+
 function zIndexForSelector(css: string, selector: string) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = css.match(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?z-index:\\s*(\\d+)`));
-  return match ? Number(match[1]) : null;
+  const match = css.match(new RegExp(`${escaped}\\s*\\{[\\s\\S]*?z-index:\\s*([^;]+)`));
+  if (!match) return null;
+  const raw = match[1].trim();
+  const numeric = Number(raw);
+  if (!Number.isNaN(numeric)) return numeric;
+  // 层级已收敛为 token：解析 var(--z-*) 到 tokens.css 里的数值。
+  const tokenMatch = raw.match(/^var\((--z-[a-z-]+)\)$/);
+  if (tokenMatch) {
+    const def = tokensCss.match(new RegExp(`${tokenMatch[1].replace(/-/g, '\\-')}\\s*:\\s*(\\d+)`));
+    if (def) return Number(def[1]);
+  }
+  return null;
 }
 
 describe('floating layer ordering', () => {
@@ -31,7 +43,7 @@ describe('floating layer ordering', () => {
     const menuBlock = css.match(/^\.hub-chip-menu\s*\{[\s\S]*?\}/m)?.[0] || '';
     // 与状态栏重叠 6px：面板与入口视觉连成一体。
     expect(menuBlock).toContain('bottom: calc(100% - 6px)');
-    expect(menuBlock).toContain('z-index: 120');
+    expect(menuBlock).toContain('z-index: var(--z-popover)');
     expect(menuBlock).toContain('padding: 6px 6px 14px');
   });
 

@@ -4517,10 +4517,32 @@ async function loadSkillsCognitionSnapshot() {
   }
 }
 
+/**
+ * 认知资产一级页面 header：统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）。
+ * 标题回答“这是什么模块”；各 tab 内 hero 回答“这一页要完成什么”，因此页级
+ * eyebrow/副标题不再进 header。辅助入口（查看关于我 / 管理来源 / 沉淀活动）作为
+ * 最多三个 secondary/sm 操作；数据属性与原静态按钮一致，事件委托
+ * （.skills-cognition-console 上的 data-cognition-page 与 panel 上的
+ * data-cognition-open-ontology）无需重新绑定。
+ */
+function _renderCognitionPageHeader() {
+  const root = document.getElementById('cognition-page-header');
+  if (!root || typeof uiPageHeader !== 'function') return;
+  root.innerHTML = uiPageHeader({
+    title: _cognitionText('cognition.title', '认知资产'),
+    actions: [
+      { label: _cognitionText('cognition.view_about_me', '查看关于我'), attrs: { 'data-cognition-open-ontology': '' } },
+      { label: _cognitionText('cognition.manage_sources', '管理来源'), attrs: { 'data-cognition-page': 'sources' } },
+      { label: _cognitionText('cognition.capture_activity', '沉淀活动'), attrs: { 'data-cognition-page': 'captures' } },
+    ],
+  });
+}
+
 function initSkillsCognitionConsole() {
   const panel = document.getElementById('panel-recall');
   if (!panel || panel.dataset.cognitionInitialized === '1') return;
   panel.dataset.cognitionInitialized = '1';
+  _renderCognitionPageHeader();
   _cognitionSetPageVisibility(_skillsCognitionState.page);
   // 先起取数、再画首屏。**顺序不能反**：`loading` 是 loadSkillsCognitionSnapshot
   // 自己的重入锁，外部先把它置真，那个函数一进门就 `if (loading) return`，快照
@@ -4857,6 +4879,7 @@ function _skillsSecuritySummaryHtml(skills) {
 // right locale via `_renderSkillSections`.
 window.addEventListener('i18n-change', () => {
   refreshChatUseChips();
+  _renderCognitionPageHeader();
   if (_skillsCache) renderSkillsGrid(_skillsCache);
   if (_selectedSkill?.id && _selectedSkill?.source) {
     // Re-read the same file the user was viewing; null nodeEl preserves

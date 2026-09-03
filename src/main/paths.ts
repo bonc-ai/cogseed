@@ -202,6 +202,11 @@ export const cogseedRuntimeRunDir           = (uid: string, runId: string) => pa
 export const cogseedRuntimeRunMetaFile      = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'meta.json');
 export const cogseedRuntimeRunEventsFile    = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'events.jsonl');
 
+// Human approvals are machine-private execution evidence. They are not
+// conversation content and must not sync across devices.
+export const userActionApprovalsDir          = (uid: string) => path.join(userLocalRoot(uid), 'action_approvals');
+export const actionApprovalAuditFile         = (uid: string) => path.join(userActionApprovalsDir(uid), 'audit.jsonl');
+
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).
 export const userContextsDir        = (uid: string) => path.join(userCloudRoot(uid), 'contexts');

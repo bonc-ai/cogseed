@@ -25,16 +25,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { resolveE2eBin, cogseedStateFilePath, readCogseedBridgeToken } = require('./p3394-e2e-common.cjs');
 
 const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
-const COGSEED_TOKEN = (() => {
-  try {
-    const stateFile = path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-bridge.json');
-    return JSON.parse(fs.readFileSync(stateFile, 'utf8')).token || '';
-  } catch { return ''; }
-})();
-const REGISTRY_FILE = path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-peers.json');
+const COGSEED_TOKEN = readCogseedBridgeToken();
+const REGISTRY_FILE = cogseedStateFilePath('p3394-peers.json');
 const GATEWAY_HOME = path.join(os.tmpdir(), 'p3394-real-e2e-' + Date.now());
+const claudeBin = resolveE2eBin('claude', { envKey: 'COGSEED_E2E_CLAUDE_BIN', macDefault: '/opt/homebrew/bin/claude' });
+
+if (process.argv.includes('--list-bin')) {
+  console.log(claudeBin || '(not found)');
+  process.exit(claudeBin ? 0 : 1);
+}
 
 const results = [];
 const record = (name, ok, detail) => { results.push({ name, ok, detail }); console.log((ok ? '✓ ' : '✗ ') + name + (detail ? ' — ' + detail : '')); };
@@ -87,8 +89,11 @@ async function waitHealth(port, timeoutMs) {
 async function main() {
   const gatewayScript = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
   record('gateway.cjs 存在', fs.existsSync(gatewayScript), gatewayScript);
-  const claudeBin = '/opt/homebrew/bin/claude';
-  record('真实 claude CLI 存在', fs.existsSync(claudeBin), claudeBin);
+  record('真实 claude CLI 存在', !!claudeBin, claudeBin || '未找到，可通过 COGSEED_E2E_CLAUDE_BIN 指定');
+  if (!claudeBin) {
+    console.error('未找到 claude CLI。请安装并登录 claude，或设置 COGSEED_E2E_CLAUDE_BIN 为 claude 绝对路径。');
+    process.exit(1);
+  }
 
   const gatewayPort = await freePort();
   const replyPort = await freePort();

@@ -194,6 +194,22 @@ export function resolveCliCommand(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedCliCommand {
+  // Windows: npm / pnpm / yarn global installs drop a bare-name POSIX shim
+  // (`claude`, `codex`, ... — `#!/bin/sh`) NEXT TO the real Windows entry
+  // (`claude.cmd`, `codex.cmd`). whichBin tries the empty extension first,
+  // so it can hand us the bare name, which CreateProcess cannot execute
+  // (ENOENT → every --version probe fails → "version_unknown" → the CLI is
+  // hidden from the UI even though it's installed). Prefer the .cmd/.bat
+  // sibling when it exists; it flows through the ComSpec branch below.
+  if (platform === 'win32' && !path.win32.extname(binPath)) {
+    for (const alt of [binPath + '.cmd', binPath + '.bat']) {
+      try {
+        if (fs.statSync(alt).isFile()) { binPath = alt; break; }
+      } catch {
+        // keep looking
+      }
+    }
+  }
   if (platform !== 'win32' || !WINDOWS_COMMAND_SCRIPT_RE.test(binPath)) {
     // Node-shebang scripts (e.g. WorkBuddy's bundled `codebuddy`) cannot run
     // when the machine has no `node` on PATH — macOS GUI apps inherit a
@@ -201,8 +217,19 @@ export function resolveCliCommand(
     // is itself an Electron app, so fall back to running the script with our
     // own Node runtime (ELECTRON_RUN_AS_NODE keeps Electron in headless
     // node mode); this keeps such CLIs usable without a system Node install.
-    const pathApi = platform === 'win32' ? path.win32 : path.posix;
-    if (!hasNodeOnPath(env, platform) && isNodeShebangScript(binPath)) {
+    //
+    // Windows additionally has NO kernel shebang support: CreateProcess
+    // rejects extension-less script files outright (spawn ENOENT), so a
+    // node-shebang CLI MUST be routed through a Node runtime there even
+    // when `node` IS on PATH. The old gate (`!hasNodeOnPath(...) &&`) made
+    // WorkBuddy's bundled `codebuddy` fail every version probe on win32
+    // whenever a system node existed → "version_unknown" → UI reported
+    // "未检测到 WorkBuddy CLI". Running ALL win32 shebang launches through
+    // our own Electron runtime is also deterministic: immune to old or
+    // missing system Node (codebuddy requires >= 18.20.8). On POSIX the
+    // kernel resolves the shebang itself, so direct exec stays the fast
+    // path when `node` is on PATH.
+    if (isNodeShebangScript(binPath) && (platform === 'win32' || !hasNodeOnPath(env, platform))) {
       return {
         command: process.execPath,
         args: [binPath, ...args],

@@ -453,25 +453,13 @@
       <section class="panel" id="panel-recall">
         <div class="skills-cognition-console">
           <div class="skills-cognition-surface">
-          <header class="skills-cognition-header">
-            <div class="skills-cognition-heading">
-              <span class="skills-cognition-eyebrow" data-i18n="cognition.workspace_eyebrow">Cognition Assets</span>
-              <h1 data-i18n="cognition.title">认知资产</h1>
-              <p data-i18n="cognition.subtitle">集中处理待办、管理资产，并查看使用效果与版本变化</p>
-            </div>
-            <!-- 辅助入口：来源是输入配置、沉淀活动是后台加工进度，两者都不是
-                 用户来这里要完成的任务，所以不与任务视图并列。 -->
-            <div class="skills-cognition-header-actions">
-              <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-open-ontology data-i18n="cognition.view_about_me">查看关于我</button>
-              <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="sources" data-i18n="cognition.manage_sources">管理来源</button>
-              <button type="button" class="btn btn-sm cognition-aux-entry" data-cognition-page="captures" data-i18n="cognition.capture_activity">沉淀活动</button>
-              <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
-                <span data-ui-icon="refresh"></span>
-              </button>
-            </div>
-          </header>
+          <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
+               标题 + 辅助入口操作；eyebrow/副标题不再进 header（副标题描述由各 tab 内
+               hero 承担），刷新动作移到 tab 条右侧。渲染入口见 skills.js::_renderCognitionPageHeader。 -->
+          <div id="cognition-page-header"></div>
           <div class="skills-cognition-workspace">
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产任务视图" data-i18n-aria-label="cognition.task_views">
+            <div class="skills-cognition-tabs-row">
             <div class="skills-cognition-tab-group" role="presentation">
               <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="archive"></span></span>
@@ -488,6 +476,10 @@
               <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
                 <span class="skills-cognition-tab-icon" aria-hidden="true"><span data-ui-icon="list-ordered"></span></span>
                 <span class="skills-cognition-tab-copy"><strong data-i18n="cognition.governance">版本与治理</strong><small data-i18n="cognition.governance_desc">查看版本变化并控制资产状态</small></span>
+              </button>
+            </div>
+              <button type="button" class="btn btn-sm cognition-refresh-btn" data-cognition-reload data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh" title="刷新" aria-label="刷新">
+                <span data-ui-icon="refresh"></span>
               </button>
             </div>
           </nav>
@@ -673,6 +665,10 @@
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
       <section class="panel" id="panel-connections">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
+             标题为语义 h1，全宽通栏；连接页是 tab 容器，操作落在各 tab 内，故不设页级操作。
+             渲染入口见 connections.js::_renderConnectionsPageHeader。 -->
+        <div id="connections-page-header"></div>
         <div class="connections-container">
           <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="连接">
             <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
@@ -1108,6 +1104,10 @@
 
       <!-- Settings -->
       <section class="panel" id="panel-settings">
+        <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
+             标题为语义 h1，全宽通栏；设置页是 tab 容器，操作落在各 tab 内，故不设页级操作。
+             渲染入口见 settings_tabs.js::_renderSettingsPageHeader。 -->
+        <div id="settings-page-header"></div>
         <div class="settings-container">
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
@@ -1521,7 +1521,10 @@
   <!-- Create Agent Modal -->
   <div class="modal-overlay" id="agent-modal">
     <div class="modal modal-standard" role="dialog" aria-modal="true" aria-labelledby="agent-modal-title">
-      <h3 class="modal-title" id="agent-modal-title" data-i18n="agent_modal.title">New agent</h3>
+      <div class="modal-header">
+        <h3 class="modal-title" id="agent-modal-title" data-i18n="agent_modal.title">New agent</h3>
+        <button type="button" class="modal-close-btn" onclick="closeAgentModal()" data-i18n-title="common.close" title="Close" aria-label="Close">×</button>
+      </div>
 
       <!-- Mode tabs: Create (in-process) / External (cli runtime). Mirrors the
            skill-modal tab pattern; reuses the same .skill-modal-tab styles
@@ -1969,6 +1972,7 @@
   <script src="./modules/bridge.js"></script>
   <script src="./modules/local_agents_launch_confirm.js"></script>
   <script src="./modules/bash_permission.js"></script>
+  <script src="./modules/action-approval.js"></script>
   <script src="./modules/interactive-cli.js"></script>
   <!-- xterm.js (vendored, classic UMD) must load before terminal-panel.js. -->
   <script src="./vendor/xterm/xterm.js"></script>

@@ -868,12 +868,14 @@ describe('messaging manager adapter flow', () => {
         attempts: 1,
       });
 
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 3000 });
-      expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
-        status: 'sent',
-        attempts: 2,
-        externalDeliveryId: 'remote-reply-1',
-      });
+      await vi.waitFor(async () => {
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+          status: 'sent',
+          attempts: 2,
+          externalDeliveryId: 'remote-reply-1',
+        });
+      }, { timeout: 3000 });
 
       busListener?.(outboundEvent);
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1461,7 +1463,7 @@ describe('messaging manager adapter flow', () => {
         template: 'task_approval',
         priority: 'high',
         availableFrom: '2026-08-10T13:00:00.000Z',
-        expiresAt: '2026-09-01T13:00:00.000Z',
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         dedupeKey: 'task:task-1:approval:event-1',
         actionContract: { version: 1, allowedActions: ['approve', 'reject'] },
       });
@@ -1566,7 +1568,7 @@ describe('messaging manager adapter flow', () => {
         template: 'task_approval',
         priority: 'normal',
         availableFrom: '2026-08-10T13:00:00.000Z',
-        expiresAt: '2026-09-01T13:00:00.000Z',
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         dedupeKey: 'task:task-2:approval:event-2',
         actionContract: { version: 1, allowedActions: ['approve'] },
       });
