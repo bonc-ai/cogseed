@@ -69,10 +69,11 @@ describe('messaging continuity lifecycle (manager harness)', () => {
       sendMessage,
     };
     busListener = undefined;
+    const groupSend = vi.fn(async () => ({ ok: true }));
     vi.doMock('../../../src/main/features/messaging/adapters', () => ({
       createAdapter: vi.fn(() => adapter),
     }));
-    vi.doMock('../../../src/main/features/group_chat', () => ({ send: vi.fn(async () => ({ ok: true })) }));
+    vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
     vi.doMock('../../../src/main/features/group_chat/bus', () => ({
       subscribe: vi.fn((_uid: string, _cid: string, listener: (event: unknown) => void) => {
         busListener = listener;
@@ -100,7 +101,7 @@ describe('messaging continuity lifecycle (manager harness)', () => {
       const instances = await manager.listInstances('user-1');
       expect(instances[0]?.status.kind).toBe('connected');
     });
-    return { manager, instanceId: created.id };
+    return { manager, instanceId: created.id, groupSend };
   }
 
   function envelope(instanceId: string, text: string, messageId: string) {
@@ -205,5 +206,23 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 120));
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('redelivering the same inbound message executes exactly once (idempotency regression)', async () => {
+    const { manager, instanceId, groupSend } = await boot();
+    const redelivered = envelope(instanceId, '帮我整理周报', 'm-idem-1');
+    const first = await manager.ingestInbound('user-1', redelivered);
+    expect(first.accepted).toBe(true);
+    // 平台重发同一条消息（同 externalMessageId）：入站台账判重，直接拒绝，
+    // 绝不第二次进入群聊派发。
+    const second = await manager.ingestInbound('user-1', redelivered);
+    expect(second).toMatchObject({ accepted: false, duplicate: true });
+    expect(groupSend).toHaveBeenCalledTimes(1);
+    expect(groupSend).toHaveBeenCalledWith(expect.objectContaining({ text: '帮我整理周报' }));
+    // 台账终态：一次 accepted；重投不产生第二条派发记录。
+    const ledger = await import('../../../src/main/features/messaging/ledger');
+    const entry = await ledger.readInbound('user-1', ledger.inboundKey(instanceId, 'm-idem-1'));
+    expect(entry?.status).toBe('accepted');
+    expect(entry?.cid).toBe(first.cid);
   });
 });
