@@ -13,6 +13,10 @@ import {
   ProcessOutputCapture,
   type StreamedToolOutput,
 } from "./output-capture.js";
+import {
+  warnWindowsSandboxUnavailable,
+  windowsSandboxMode,
+} from "./windows-sandbox.js";
 
 const log = createLogger("sandbox");
 
@@ -69,6 +73,10 @@ type KillableChild = Pick<ChildProcess, "kill" | "pid">;
 type ProcessKiller = typeof process.kill;
 type SpawnFn = typeof spawn;
 
+const WINDOWS_POWERSHELL_UTF8_PREFIX =
+  "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
+  "$OutputEncoding = [Console]::OutputEncoding; ";
+
 export const DEFAULT_SANDBOX_TIMEOUT_MS = 60 * 60_000;
 const KILL_GRACE_MS = 5_000;
 const KILL_SETTLE_GRACE_MS = KILL_GRACE_MS + 1_000;
@@ -82,6 +90,7 @@ export interface ShellInvocation {
 type SpawnInvocation = {
   command: string;
   args: string[];
+  envPatch?: Record<string, string>;
 };
 
 function windowsSystem32Tool(name: string): string {
@@ -193,7 +202,15 @@ export function buildShellInvocation(
   if (platform === "win32" && kind === "powershell") {
     return {
       command: shell,
-      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `${WINDOWS_POWERSHELL_UTF8_PREFIX}${command}`,
+      ],
       kind,
     };
   }
@@ -279,6 +296,37 @@ function maybeWrapWithMacWriteSandbox(
     command: "/usr/bin/sandbox-exec",
     args: ["-p", macWriteSandboxProfile(dirs), invocation.command, ...invocation.args],
   };
+}
+
+let warnedWindowsFallback = false;
+
+/**
+ * Platform dispatch for the OS-enforced write sandbox. macOS uses
+ * sandbox-exec. Windows strong mode fails closed until a broker can enforce
+ * per-process writes without mutating persistent directory integrity labels;
+ * the default keeps the legacy behavior with a one-time warning.
+ */
+function maybeWrapWithWriteSandbox(
+  invocation: ShellInvocation,
+  allowedDirs: readonly string[] | undefined,
+  platform: NodeJS.Platform = process.platform,
+): SpawnInvocation {
+  const dirs = uniqueSandboxDirs(allowedDirs);
+  const windowsMode = platform === "win32" ? windowsSandboxMode() : null;
+  if (windowsMode === "strong") {
+    throw new Error(warnWindowsSandboxUnavailable(windowsMode));
+  }
+  if (!dirs.length) return invocation;
+  if (platform === "darwin") {
+    return maybeWrapWithMacWriteSandbox(invocation, dirs);
+  }
+  if (platform === "win32") {
+    if (!warnedWindowsFallback) {
+      warnedWindowsFallback = true;
+      warnWindowsSandboxUnavailable(windowsMode ?? "auto");
+    }
+  }
+  return invocation;
 }
 
 function decodedTextScore(text: string): number {
@@ -574,10 +622,13 @@ export class SandboxExecutor {
         env.SANDBOX_NO_NETWORK = "1";
       }
 
-      const invocation = maybeWrapWithMacWriteSandbox(
+      const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
       );
+      if (invocation.envPatch) {
+        Object.assign(env, invocation.envPatch);
+      }
       const child = spawn(invocation.command, invocation.args, {
         cwd,
         env,
@@ -745,10 +796,13 @@ export class SandboxExecutor {
       return { pid: null, error: `cannot open log file: ${(err as Error).message}` };
     }
     try {
-      const invocation = maybeWrapWithMacWriteSandbox(
+      const invocation = maybeWrapWithWriteSandbox(
         buildShellInvocation(this.config.shell, command),
         this.config.allowedDirs,
       );
+      if (invocation.envPatch) {
+        Object.assign(env, invocation.envPatch);
+      }
       const child = spawn(invocation.command, invocation.args, {
         cwd: this.config.workingDir,
         env,

@@ -99,6 +99,10 @@ export const RUNTIME_HOST_TOOL_NAMES = Object.freeze([
   'cogseed_delegate', 'cogseed_tasks', 'cogseed_cancel', 'cogseed_retry_step', 'cogseed_skip_step', 'cogseed_resume_workflow', 'cogseed_workflow',
   'messaging_list_targets', 'messaging_send',
   'p3394_send',
+  // Internal only: these are never exposed in the Runtime model tool catalog.
+  // They let an isolated Worker wait for the main-process human approval gate
+  // and append the eventual execution outcome to its local audit journal.
+  'action_approval_request', 'action_approval_execution',
 ] as const);
 
 export type RuntimeHostToolName = typeof RUNTIME_HOST_TOOL_NAMES[number];

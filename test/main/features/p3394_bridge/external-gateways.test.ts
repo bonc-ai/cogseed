@@ -1,12 +1,21 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/registry';
 import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import * as fs from 'node:fs';
+
+// 「声明即生效」端到端（见文末用例）：mock agents 模块让 listAgents 返回
+// 带参数模板声明的 agent。aider 预设有 modelArgs 无 effortArgs——声明的
+// effort_args 注入后 /models 应披露 effort_controllable: true（三跳全证：
+// agent 声明 → spawn env → 网关协商披露）。
+const listAgentsMock = vi.fn(async () => [
+  { agent_id: 'decl-test', name: '声明通道测试', runtime: { kind: 'p3394-gateway', cli: 'aider', effort_args: '--thinking {effort}' } },
+]);
+vi.mock('../../../../src/main/features/agents', () => ({ listAgents: (...args: unknown[]) => listAgentsMock(...args) }));
 
 let previousVariant: string | undefined;
 let variantName: string;
@@ -24,6 +33,12 @@ afterEach(() => {
   else process.env.COGSEED_RUNTIME_VARIANT = previousVariant;
   try { fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', variantName), { recursive: true, force: true }); } catch { /* best effort */ }
 });
+
+function writeNodeCli(name: string, body: string): string {
+  const file = path.join(os.tmpdir(), `${name}-${process.pid}-${Date.now()}.cjs`);
+  fs.writeFileSync(file, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+  return file;
+}
 
 describe('P3394 external-agent gateway host', () => {
   it('maps every supported CLI to a gateway preset node id', () => {
@@ -63,9 +78,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const echoCli = writeNodeCli('p3394-echo-cli', "process.stdout.write(process.argv.slice(2).join(' '));");
     try {
       await stopExternalGateway('hermes');
-      const started = await startExternalGateway({ cli: 'hermes', binPath: '/bin/echo', alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      const started = await startExternalGateway({ cli: 'hermes', binPath: echoCli, alias: '任务 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok, 'start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
       if (!started.ok) throw new Error(started.error);
       const dialer = new P3394HttpChannel('ext-task-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
@@ -80,11 +96,13 @@ describe('P3394 external-agent gateway host', () => {
       expect(response.task_id).toBe('tsk-ext-task-1');
       expect(response.payload.parts[0].type).toBe('text');
       expect(response.payload.parts[0].text).toContain('hello external gateway');
+      expect(fs.existsSync(path.join(path.dirname(registryFile), 'external-gateways', 'hermes.log'))).toBe(false);
       await dialer.close();
     } finally {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(echoCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
@@ -152,6 +170,66 @@ describe('P3394 external-agent gateway host', () => {
     }
   }, 60_000);
 
+  it('runs an absolute extensionless Windows shim through its .cmd sibling', async () => {
+    if (process.platform !== 'win32') return;
+    const token = 'ext-windows-shim-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-windows-shim-'));
+    const shim = path.join(shimDir, 'agent shim');
+    const cliScript = path.join(shimDir, 'fake-agent.cjs');
+    const previousArgs = process.env.P3394_AGENT_CLI_ARGS;
+    fs.writeFileSync(cliScript, "process.stdout.write(process.argv.slice(2).join(' '));\n");
+    // npm on Windows leaves a POSIX shim beside the executable .cmd entry.
+    fs.writeFileSync(shim, '#!/bin/sh\n');
+    fs.writeFileSync(`${shim}.cmd`, '@echo off\r\nnode "%~dp0fake-agent.cjs" %*\r\n');
+    process.env.P3394_AGENT_CLI_ARGS = '-p {message}';
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* isolate */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('ext-windows-shim-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    let replyResolve: ((value: unknown) => void) | null = null;
+    const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
+    channel.subscribe((envelope) => {
+      if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        replyResolve?.(envelope);
+        return;
+      }
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      if (registry.resolve(senderId).ok === false) {
+        registry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const port = ((channel as unknown as { server: import('node:http').Server }).server.address() as { port: number }).port;
+    try {
+      await stopExternalGateway('hermes');
+      const started = await startExternalGateway({ cli: 'hermes', binPath: shim, bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(started.ok).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const dialer = new P3394HttpChannel('ext-windows-shim-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
+      await dialer.dial('hermes');
+      await dialer.send({
+        spec_version: 'p3394/1.0', message_id: 'msg-windows-shim', session_id: 'ses-windows-shim', task_id: 'tsk-windows-shim', kind: 'task', performative: 'request',
+        sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'windows shim works' }] },
+        extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token }, idempotency_key: 'idem-windows-shim',
+      } as never);
+      const response = await Promise.race([reply, new Promise((_, reject) => setTimeout(() => reject(new Error('windows shim reply timeout')), 10_000))]) as { payload: { parts: Array<{ text?: string }> } };
+      expect(response.payload.parts[0].text).toContain('windows shim works');
+      await dialer.close();
+    } finally {
+      await stopExternalGateway('hermes');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(shimDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      if (previousArgs === undefined) delete process.env.P3394_AGENT_CLI_ARGS;
+      else process.env.P3394_AGENT_CLI_ARGS = previousArgs;
+    }
+  }, 60_000);
+
   it('V-03：真实 CLI 执行失败 → gateway 显式错误回信 → CogSeed 感知失败（不静默）', async () => {    const token = 'ext-fail-token';
     const registryFile = p3394StateFile('p3394-peers.json');
     try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
@@ -180,11 +258,10 @@ describe('P3394 external-agent gateway host', () => {
     });
     const server = (channel as unknown as { server: http.Server }).server;
     const port = (server.address() as { port: number }).port;
+    const failingCli = writeNodeCli('p3394-fail-cli', 'process.exit(3);');
     try {
       await stopExternalGateway('hermes');
-      // 可执行脚本以非零码（3）退出——真实 CLI 执行失败路径（macOS 无 /bin/false）。
-      const failingCli = path.join(os.tmpdir(), 'p3394-fail-cli-' + Date.now() + '.sh');
-      fs.writeFileSync(failingCli, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+      // 跨平台 Node CLI 以非零码（3）退出，验证真实执行失败回信路径。
       const started = await startExternalGateway({ cli: 'hermes', binPath: failingCli, alias: '失败 Hermes', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
       expect(started.ok).toBe(true);
       if (!started.ok) throw new Error(started.error);
@@ -203,11 +280,11 @@ describe('P3394 external-agent gateway host', () => {
       expect(text).toContain('p3394_gateway_error');
       expect(text).toMatch(/agent exited 3/);
       await dialer.close();
-      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     } finally {
       await stopExternalGateway('hermes');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(failingCli, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 
@@ -350,6 +427,107 @@ describe('P3394 external-agent gateway host', () => {
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
       try { fs.rmSync(gatewayStateFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
+  it('injects per-agent template declarations into the gateway env (declare-then-controllable)', async () => {
+    // 三跳全证：agent 声明（listAgentsMock）→ spawn env（P3394_AGENT_EFFORT_ARGS）
+    // → 网关协商披露（/models effort_controllable）。aider 预设有 modelArgs、
+    // 无 effortArgs——无声明时 effort_controllable 应为 false，有声明为 true。
+    const token = 'decl-test-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('decl-test-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    // 与其他用例同构：收 hello → 写注册表（startExternalGateway 等 stateFile
+    // 出现该节点才算起动完成）。
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      // 每轮从磁盘重建：同 variant 内 bare→declared 重启会重置注册表文件，
+      // 内存实例的旧记录会挡住新 endpoint 的注册。
+      const diskRegistry = new P3394PeerRegistry({ filePath: registryFile });
+      if (diskRegistry.resolve(senderId).ok === false) {
+        diskRegistry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    const fetchModels = async (port2: number) => {
+      const res = await fetch(`http://127.0.0.1:${port2}/p3394/models`);
+      return res.json() as Promise<{ model_controllable?: boolean; effort_controllable?: boolean }>;
+    };
+    try {
+      // 对照组：无声明（mock 返回空）→ effort 不可控。
+      listAgentsMock.mockResolvedValueOnce([]);
+      const bare = await startExternalGateway({ cli: 'aider', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(bare.ok, 'bare start failed: ' + (bare.ok === false ? bare.error : '')).toBe(true);
+      if (!bare.ok) throw new Error(bare.error);
+      const bareCaps = await fetchModels(bare.value.port);
+      expect(bareCaps.model_controllable).toBe(true);   // aider 预设自带 --model
+      expect(bareCaps.effort_controllable).toBe(false); // 预设无 effort 通道
+      await stopExternalGateway('aider');
+      // 重置注册表：bare 组的旧 aider 记录（旧 endpoint）会让 subscribe
+      // 回调跳过新注册 → declared 的新 endpoint 永远等不到。同 variant
+      // 内重启必须先清（生产路径 stopExternalGateway 不动 peers 注册表）。
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+
+      // 实验组：带声明（文件顶部默认 mock）→ 强度可控。
+      const declared = await startExternalGateway({ cli: 'aider', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(declared.ok, 'declared start failed: ' + (declared.ok === false ? declared.error : '')).toBe(true);
+      if (!declared.ok) throw new Error(declared.error);
+      const declaredCaps = await fetchModels(declared.value.port);
+      expect(declaredCaps.effort_controllable).toBe(true);
+    } finally {
+      await stopExternalGateway('aider');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
+    }
+  }, 60_000);
+
+  it('discloses effort_controllable for proprietary effort channels (claude/codex)', async () => {
+    // claude（MAX_THINKING_TOKENS）/ codex（model_reasoning_effort）的强度走
+    // 专有通道而非 effortArgs 模板——披露必须算上 effortChannel，否则刷新后
+    // 协商 false 压过兜底表、UI 置灰（Command+R 后强度消失的回归）。
+    const token = 'channel-test-token';
+    const registryFile = p3394StateFile('p3394-peers.json');
+    try { fs.rmSync(registryFile, { force: true }); } catch { /* test isolation */ }
+    const registry = new P3394PeerRegistry({ filePath: registryFile });
+    const channel = new P3394HttpChannel('channel-test-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
+    await channel.listen();
+    channel.subscribe((envelope) => {
+      const senderId = envelope.sender.agent_id;
+      const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
+      const diskRegistry = new P3394PeerRegistry({ filePath: registryFile });
+      if (diskRegistry.resolve(senderId).ok === false) {
+        diskRegistry.register({
+          identity: { agent_id: senderId, display_name: senderId },
+          manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
+          ...(endpoints.length ? { endpoints } : {}),
+        });
+      }
+    });
+    const server = (channel as unknown as { server: http.Server }).server;
+    const port = (server.address() as { port: number }).port;
+    listAgentsMock.mockResolvedValueOnce([]);
+    try {
+      const started = await startExternalGateway({ cli: 'claude', binPath: '/bin/echo', bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+      expect(started.ok, 'claude start failed: ' + (started.ok === false ? started.error : '')).toBe(true);
+      if (!started.ok) throw new Error(started.error);
+      const res = await fetch(`http://127.0.0.1:${started.value.port}/p3394/models`);
+      const caps = await res.json() as { effort_controllable?: boolean; model_controllable?: boolean };
+      expect(caps.model_controllable).toBe(true);
+      expect(caps.effort_controllable).toBe(true);  // 专有通道 effortChannel
+      void registry;
+    } finally {
+      await stopExternalGateway('claude');
+      await channel.close();
+      try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
 });

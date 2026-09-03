@@ -39,6 +39,13 @@ const DEFAULT_LOCAL_ACCESS_SENSITIVE_POLICY: LocalAccessSensitivePolicy = {
     'login\\.keychain',
     '^~/(Documents|Desktop|Downloads)(/|$)',
     '^~/Library/(Application Support|Containers|Group Containers|Keychains)(/|$)',
+    // --- Windows 特有条目（pathHaystack 已把路径归一化为 '/' 分隔）---
+    '(^|/)AppData/(Local|Roaming)/Microsoft/(Credentials|Vault)(/|$)',
+    '(^|/)AppData/Local/Google/Chrome/User Data(/|$)',
+    '(^|/)AppData/Local/Microsoft/Edge/User Data(/|$)',
+    '(^|/)Profiles/[^/]+/(key4[.]db|logins[.]json)$',
+    '(^|/)Windows/System32/config/(SAM|SECURITY)$',
+    '(^|/)NTUSER[.]DAT$',
   ],
   sensitive_write_path_patterns: [
     '^~/(\\.bashrc|\\.bash_profile|\\.zshrc|\\.zprofile|\\.profile)$',
@@ -49,8 +56,13 @@ const DEFAULT_LOCAL_ACCESS_SENSITIVE_POLICY: LocalAccessSensitivePolicy = {
     '/etc/cron',
     '/etc/systemd',
     '(^|/)\\.config/autostart(/|$)',
-    '\\\\Start Menu\\\\Programs\\\\Startup',
     '^/etc/',
+    // --- Windows 特有条目（pathHaystack 已把路径归一化为 '/' 分隔）---
+    '(^|/)Start Menu/Programs/Startup(/|$)',
+    '(^|/)Windows/System32/drivers/etc/hosts$',
+    '(^|/)Windows/System32/config(/|$)',
+    '(^|/)Windows/System32/Tasks(/|$)',
+    '(^|/)Users/Public/Desktop(/|$)',
   ],
   sensitive_command_patterns: [
     { category: 'priv_esc', pattern: '(^|[\\s;&|])(?:sudo|su|doas|pkexec)(?:\\s|$)' },
@@ -58,6 +70,11 @@ const DEFAULT_LOCAL_ACCESS_SENSITIVE_POLICY: LocalAccessSensitivePolicy = {
     { category: 'network_egress', pattern: '(^|[\\s;&|])(?:ssh|scp|sftp|rsync|nc|ncat|netcat|telnet|socat)(?:\\s|$)' },
     { category: 'sensitive_path', pattern: '(^|[\\s;&|])security\\s+(?:dump-keychain|find-generic-password|find-internet-password|export)\\b' },
     { category: 'sensitive_path', pattern: '(^|[\\s;&|])crontab(?:\\s|$)' },
+    // --- Windows 特有条目 ---
+    { category: 'priv_esc', pattern: '(^|[\\s;&|])(?:net\\s+user\\b.*?\\s+/(?:add|delete)\\b|net\\s+localgroup\\s+administrators|runas|takeown|icacls)(?:\\s|$)' },
+    { category: 'sensitive_path', pattern: '(^|[\\s;&|])(?:reg\\s+add\\b.*(?:HKLM|HKCU|HKCR|HKU|HKEY)|reg\\s+import\\b|schtasks\\s+/create\\b)' },
+    { category: 'destructive', pattern: '(^|[\\s;&|])(?:bcdedit|diskpart|vssadmin\\s+delete\\s+shadows|format\\s+[a-zA-Z]:)(?:\\s|$)' },
+    { category: 'network_egress', pattern: '(^|[\\s;&|])(?:certutil\\s+(?:-urlcache|-f)|bitsadmin\\s+/transfer|powershell(?:\\s+.*)?(?:DownloadString|Invoke-WebRequest|Start-BitsTransfer))' },
   ],
 };
 
@@ -129,7 +146,9 @@ export function getLocalAccessSensitivePolicy(): LocalAccessSensitivePolicy {
 }
 
 function compile(pattern: string): RegExp | null {
-  try { return new RegExp(pattern, 'i'); }
+  // 'm' 让 ^ / $ 锚定每行行首：pathHaystack 返回 "绝对路径\n~tilde" 两行，
+  // 否则 ^~/... 形式的模式永远匹配不到 tilde 行（历史死模式）。
+  try { return new RegExp(pattern, 'im'); }
   catch { return null; }
 }
 

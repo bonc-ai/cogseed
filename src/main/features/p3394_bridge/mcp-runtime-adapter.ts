@@ -11,6 +11,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as readline from 'node:readline';
 import type { P3394Envelope } from './envelope';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding, P3394RuntimeSnapshot } from './runtime-adapter';
+import { killProcessTree } from '../local_agents/backends/base';
 
 export interface P3394McpRuntimeOptions {
   /** Command + args that start the MCP runtime server (stdio). */
@@ -148,7 +149,7 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
   async close(): Promise<void> {
     if (this.child) {
       this.child.stdin.end();
-      this.child.kill('SIGTERM');
+      killProcessTree(this.child, 'SIGTERM');
       this.child = null;
       this.started = false;
     }

@@ -12,12 +12,22 @@ function _connectionsEl(id) {
   return document.getElementById(id);
 }
 
+// 一级页面 header：统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）。
+// 连接页是六个 tab 的容器，页级没有单一主操作（操作落在各 tab 内），故只渲染
+// 语义 h1 标题，不设操作（PH-05：无操作页面保持同一标题骨架）。
+function _renderConnectionsPageHeader() {
+  const root = _connectionsEl('connections-page-header');
+  if (!root || typeof uiPageHeader !== 'function') return;
+  root.innerHTML = uiPageHeader({ title: typeof t === 'function' ? t('sidebar.connections') : '连接' });
+}
+
 function initConnections() {
   const tabs = document.querySelectorAll('.connections-tab');
   if (!tabs.length) return;
 
   if (!_connectionsBound) {
     _connectionsBound = true;
+    window.addEventListener('i18n-change', _renderConnectionsPageHeader);
     tabs.forEach((btn) => {
       btn.addEventListener('click', () => activateConnectionsTab(btn.dataset.connectionsTab));
     });
@@ -33,6 +43,7 @@ function initConnections() {
   // Restore the last-visible tab across view re-entries (preserves the user's
   // position while inside the panel; defaults to the first tab on first open).
   const lastTab = _connectionsLastTab || document.querySelector('.connections-tab.is-active')?.dataset.connectionsTab || tabs[0].dataset.connectionsTab;
+  _renderConnectionsPageHeader();
   activateConnectionsTab(lastTab);
 }
 

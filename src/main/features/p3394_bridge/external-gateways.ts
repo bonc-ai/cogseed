@@ -20,6 +20,7 @@ import { p3394StateFile, variantRoot } from './runtime-paths';
 import { P3394PeerRegistry } from './registry';
 import { getP3394BridgeInfo } from './app-wiring';
 import { detectOne } from '../local_agents/registry';
+import { killProcessTree } from '../local_agents/backends/base';
 // GUI-launched apps inherit a minimal PATH; the managed gateway's children
 // (e.g. `codebuddy` via a bare preset name) need the same conventional
 // install roots local CLI discovery already knows about.
@@ -100,6 +101,8 @@ function watchGateway(cli: string, child: ChildProcess, input: { binPath?: strin
     if (watched.get(cli) !== child) return;
     watched.delete(cli);
     watchedStartInput.delete(cli);
+    // 网关进程没了，模型扫描缓存随之失效（新进程=新账号状态可能不同清单）。
+    gatewayModelsCache.delete(cli);
     scheduleRestart(cli, input);
   });
 }
@@ -279,6 +282,27 @@ async function doStartExternalGateway(input: {
   const existing = listExternalGateways().find((g) => g.cli === cli && g.running);
   if (existing) return { ok: true, value: existing };
 
+  // 自定义参数模板声明（agent 记录的 runtime.model_args / effort_args）——
+  // 「任意外接智能体接入即可控」的声明通道：spawn 时注入网关 env（覆盖
+  // 进程级同名值）。动态 import 避免 agents ↔ bridge 循环依赖；读取失败
+  // 不阻塞起动（预设模板仍然生效）。
+  const declaredTemplates = await (async () => {
+    try {
+      const { listAgents } = await import('../agents');
+      const agents = await listAgents();
+      const withTemplates = agents.find((a) => {
+        const rt = a?.runtime as { kind?: string; cli?: string; model_args?: unknown; effort_args?: unknown } | undefined;
+        return rt && rt.kind === 'p3394-gateway' && rt.cli === cli
+          && (typeof rt.model_args === 'string' || typeof rt.effort_args === 'string');
+      });
+      const rt = withTemplates?.runtime as { model_args?: string; effort_args?: string } | undefined;
+      return {
+        ...(typeof rt?.model_args === 'string' && rt.model_args.includes('{model}') ? { modelArgs: rt.model_args } : {}),
+        ...(typeof rt?.effort_args === 'string' && rt.effort_args.includes('{effort}') ? { effortArgs: rt.effort_args } : {}),
+      };
+    } catch { return {}; }
+  })();
+
   const scriptPath = gatewayScriptPath();
   if (!fs.existsSync(scriptPath)) return { ok: false, error: 'p3394_gateway_script_missing' };
   let port: number;
@@ -304,6 +328,10 @@ async function doStartExternalGateway(input: {
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
     ...(CLI_TO_RUNTIME_MODE[cli] ? { P3394_AGENT_MODE: CLI_TO_RUNTIME_MODE[cli] } : {}),
+    // per-agent 参数模板声明（「声明即生效」）：注入后网关即可控模型/强度
+    // （预设之外的 CLI 尤其依赖此通道），能力协商随之披露。
+    ...(declaredTemplates.modelArgs ? { P3394_AGENT_MODEL_ARGS: declaredTemplates.modelArgs } : {}),
+    ...(declaredTemplates.effortArgs ? { P3394_AGENT_EFFORT_ARGS: declaredTemplates.effortArgs } : {}),
   };
 
   let child: ChildProcess | null = null;
@@ -340,7 +368,7 @@ async function doStartExternalGateway(input: {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
     if (!registered) {
-      child.kill('SIGTERM');
+      killProcessTree(child, 'SIGTERM');
       const detail = [outLog.trim(), errLog.trim(), 'exit=' + String(child.exitCode)].filter(Boolean).join(' | ').slice(-1500);
       return { ok: false, error: 'p3394_gateway_registration_timeout' + (detail ? ': ' + detail : '') };
     }
@@ -361,7 +389,7 @@ async function doStartExternalGateway(input: {
     watchGateway(cli, child, { binPath: input.binPath, alias, bridgeInfo: input.bridgeInfo });
     return { ok: true, value: { ...record, running: true } };
   } catch (error) {
-    if (child && child.exitCode === null) child.kill('SIGTERM');
+    if (child && child.exitCode === null) killProcessTree(child, 'SIGTERM');
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -390,6 +418,116 @@ export function prewarmExternalGateway(input: {
   })();
 }
 
+// ── 模型发现（CodexHost 式"问 CLI 本身"）────────────────────────────────
+// 托管网关的 /p3394/models 端点按 runtime 枚举 CLI 真实可用模型（claude 的
+// /model 本地命令、opencode 的 models 子命令、codex 的 app-server RPC）。
+// 缓存策略照搬 CodexHost inspect：per-cli 缓存 + single-flight 并发去重 +
+// 失败不缓存（下次自动重试）+ refresh 强制重扫。
+export interface ExternalGatewayModels {
+  status: 'ready' | 'unavailable';
+  models: Array<{ id: string; label: string }>;
+  /** CLI 自己披露的当前默认模型（展示名或 full id）。 */
+  current?: string;
+  /** CLI 自己披露的当前思考强度（claude /model 输出的 effort 档，如
+   *  "xhigh"）——菜单展示用，与模型选择正交。 */
+  currentEffort?: string;
+  /** 网关侧 runtime 名（claude-persistent / codex / oneshot / …）。 */
+  runtime?: string;
+  /** 能力协商（CodexHost 式）：网关是否有模型参数通道（预设模板或
+   *  P3394_AGENT_MODEL_ARGS 自定义声明）。UI 控件显隐的权威依据——取代
+   *  任何硬编码白名单。 */
+  modelControllable?: boolean;
+  /** 同上，强度通道（预设 effortArgs 或 P3394_AGENT_EFFORT_ARGS 声明）。 */
+  effortControllable?: boolean;
+  /** unavailable 时的原因码（诊断用，不展示给用户）。 */
+  reason?: string;
+  error?: string;
+}
+
+const gatewayModelsCache = new Map<string, ExternalGatewayModels>();
+const gatewayModelsInFlight = new Map<string, Promise<ExternalGatewayModels>>();
+const GATEWAY_MODELS_FETCH_TIMEOUT_MS = Number(process.env.COGSEED_P3394_INSPECT_FETCH_MS || 40_000);
+
+async function fetchGatewayModels(port: number): Promise<ExternalGatewayModels> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GATEWAY_MODELS_FETCH_TIMEOUT_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/p3394/models`, { signal: controller.signal });
+    if (!res.ok) return { status: 'unavailable', models: [], reason: 'http_' + res.status };
+    const body = (await res.json()) as Partial<ExternalGatewayModels> & { ok?: boolean; model_controllable?: boolean; effort_controllable?: boolean; current_effort?: string };
+    const models = Array.isArray(body.models)
+      ? body.models
+          .filter((m): m is { id: string; label: string } =>
+            !!m && typeof m === 'object' && typeof m.id === 'string' && m.id.trim().length > 0)
+          .map((m) => ({ id: m.id.trim(), label: (m.label || m.id).trim() }))
+      : [];
+    // 能力协商独立于扫描结果：即使清单枚举失败（unavailable），网关仍能
+    // 告知模型是否可控（有参数通道但无枚举接口的 CLI 很常见）。
+    const modelControllable = body.model_controllable === true || body.modelControllable === true;
+    const effortControllable = body.effort_controllable === true || body.effortControllable === true;
+    const currentEffort = typeof body.current_effort === 'string' && body.current_effort.trim()
+      ? body.current_effort.trim()
+      : undefined;
+    if (body.status === 'ready' && models.length) {
+      return {
+        status: 'ready',
+        models,
+        ...(modelControllable ? { modelControllable: true } : {}),
+        ...(effortControllable ? { effortControllable: true } : {}),
+        ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
+        ...(currentEffort ? { currentEffort } : {}),
+        ...(typeof body.runtime === 'string' ? { runtime: body.runtime } : {}),
+      };
+    }
+    return {
+      status: 'unavailable',
+      models: [],
+      ...(modelControllable ? { modelControllable: true } : {}),
+      ...(effortControllable ? { effortControllable: true } : {}),
+      ...(typeof body.current === 'string' && body.current ? { current: body.current } : {}),
+      ...(typeof body.reason === 'string' ? { reason: body.reason } : { reason: 'gateway_unavailable' }),
+      ...(typeof body.error === 'string' ? { error: body.error } : {}),
+    };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      models: [],
+      reason: error instanceof Error && error.name === 'AbortError' ? 'fetch_timeout' : 'fetch_failed',
+      ...(error instanceof Error ? { error: error.message } : { error: String(error) }),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Enumerates the CLI's real model list through its managed gateway. Does NOT
+ *  auto-start a stopped gateway — scanning is best-effort; the static catalog
+ *  + manual entry remain the fallback on the renderer side. */
+export async function inspectExternalGatewayModels(
+  cli: string,
+  opts: { refresh?: boolean } = {},
+): Promise<ExternalGatewayModels> {
+  const key = String(cli || '').trim();
+  if (!key) return { status: 'unavailable', models: [], reason: 'cli_required' };
+  if (!opts.refresh) {
+    const cached = gatewayModelsCache.get(key);
+    if (cached) return cached;
+  }
+  const inflight = gatewayModelsInFlight.get(key);
+  if (inflight) return inflight;
+  const attempt = (async () => {
+    const gateway = listExternalGateways().find((g) => g.cli === key && g.running);
+    if (!gateway) return { status: 'unavailable' as const, models: [], reason: 'gateway_not_running' };
+    return fetchGatewayModels(gateway.port);
+  })().finally(() => { gatewayModelsInFlight.delete(key); });
+  gatewayModelsInFlight.set(key, attempt);
+  const result = await attempt;
+  // 只缓存 ready（失败不缓存——下次调用自动重试，CodexHost 同款语义）。
+  if (result.status === 'ready') gatewayModelsCache.set(key, result);
+  return result;
+}
+
 /** Stops a managed gateway (SIGTERM, graceful). Keeps the registry entry
  *  so the agent shows as offline rather than vanishing. */
 export async function stopExternalGateway(cli: string): Promise<P3394ExternalGatewayResult<null>> {
@@ -397,7 +535,7 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
   const record = listExternalGateways().find((g) => g.cli === key);
   if (!record) return { ok: true, value: null };
   detachWatch(key);
-  try { process.kill(record.pid, 'SIGTERM'); } catch { /* already gone */ }
+  killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
   // 确认进程退出：SIGTERM 后短暂等待，仍存活则 SIGKILL 兜底——否则僵尸
   // 网关会继续 hello/心跳，删除 agent 后触发投影重建同名 agent。
   if (pidAlive(record.pid)) {
@@ -406,7 +544,7 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     if (pidAlive(record.pid)) {
-      try { process.kill(record.pid, 'SIGKILL'); } catch { /* already gone */ }
+      killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGKILL');
       await new Promise((resolve) => setTimeout(resolve, 200));
       log.warn('P3394 external gateway SIGKILL fallback', { cli: key, pid: record.pid });
     }
@@ -430,7 +568,7 @@ export async function stopAllExternalGateways(): Promise<void> {
   for (const record of listExternalGateways()) {
     if (!record.running) continue;
     detachWatch(record.cli);
-    try { process.kill(record.pid, 'SIGTERM'); } catch { /* already gone */ }
+    killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
   }
   // 清空守护表（连同没有存活记录的 cli）。
   for (const cli of [...watched.keys()]) detachWatch(cli);

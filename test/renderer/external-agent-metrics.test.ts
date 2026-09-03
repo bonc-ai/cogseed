@@ -1,0 +1,101 @@
+import { describe, it, expect } from 'vitest';
+// 会话折叠的外接智能体扩展：CLI 自报成本优先、ctx 分母按回合自报模型解析。
+const { foldSessionMetrics, messageMetricsLine } = require('../../src/renderer/modules/conversation-metrics.js') as {
+  foldSessionMetrics: (list: unknown[], opts: unknown) => Record<string, unknown>;
+  messageMetricsLine: (metrics: unknown) => Record<string, unknown> | null;
+};
+
+const NOW = 1_700_000_000_000;
+
+function turn(overrides: Record<string, unknown> = {}) {
+  return {
+    startedAt: NOW,
+    firstTokenAt: NOW + 500,
+    completedAt: NOW + 3_000,
+    usage: { inputTokens: 1_000, outputTokens: 200 },
+    ...overrides,
+  };
+}
+
+describe('foldSessionMetrics — CLI-reported cost precedence', () => {
+  it('shows the CLI-reported USD total when any turn self-reports costUsd', () => {
+    const f = foldSessionMetrics(
+      [turn({ usage: { inputTokens: 1_000, outputTokens: 200, costUsd: 0.0123 } })],
+      { price: { in: 10, out: 30, cacheRead: 0, cacheWrite: 0 } },
+    ) as { costText: string; costReported: boolean };
+    expect(f.costText).toBe('$0.01');
+    expect(f.costReported).toBe(true);
+  });
+
+  it('falls back to the price-table CNY estimate when nothing self-reports', () => {
+    const f = foldSessionMetrics(
+      [turn()],
+      { price: { in: 10, out: 30, cacheRead: 0, cacheWrite: 0 } },
+    ) as { costText: string; costReported: boolean };
+    expect(f.costText).toMatch(/^¥/);
+    expect(f.costReported).toBe(false);
+  });
+
+  it('sums self-reported costs across turns and never mixes currencies', () => {
+    const f = foldSessionMetrics(
+      [
+        turn({ usage: { inputTokens: 10, outputTokens: 2, costUsd: 1 } }),
+        turn({ usage: { inputTokens: 10, outputTokens: 2, costUsd: 2 } }),
+      ],
+      { price: { in: 10, out: 30, cacheRead: 0, cacheWrite: 0 } },
+    ) as { costText: string };
+    expect(f.costText).toBe('$3.00');
+  });
+});
+
+describe('foldSessionMetrics — per-model context window denominator', () => {
+  it('uses resolveWindowForModel(lastUsage.model) over the global contextWindow', () => {
+    const f = foldSessionMetrics(
+      [turn({ model: 'claude-sonnet-5[1M]' })],
+      {
+        contextWindow: 128_000,
+        resolveWindowForModel: (modelId: string) => (modelId.includes('1M') ? 1_048_576 : null),
+      },
+    ) as { ctxText: string };
+    // used = 1200, window = 1M → 百分比按大窗口算。
+    expect(f.ctxText).toContain('/1M');
+    expect(f.ctxText).toContain('0%');
+  });
+
+  it('falls back to the global window when the model is unknown to the resolver', () => {
+    const f = foldSessionMetrics(
+      [turn({ model: 'mystery-model' })],
+      {
+        contextWindow: 128_000,
+        resolveWindowForModel: () => null,
+      },
+    ) as { ctxText: string };
+    expect(f.ctxText).toContain('/128K');
+  });
+
+  it('shows used-only (no denominator) when neither model nor global window is known', () => {
+    const f = foldSessionMetrics([turn({ model: 'mystery-model' })], {
+      resolveWindowForModel: () => null,
+    }) as { ctxText: string };
+    expect(f.ctxText).toBe('1.2K');
+    expect(f.ctxText).not.toContain('/');
+  });
+});
+
+describe('messageMetricsLine — CLI usage on the per-message meta row', () => {
+  it('surfaces the self-reported cost and the model id', () => {
+    const line = messageMetricsLine(turn({
+      model: 'claude-sonnet-5[1M]',
+      usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.0315 },
+    })) as { costText: string; model: string; titleLines: string[] };
+    expect(line?.costText).toBe('$0.03');
+    expect(line?.model).toBe('claude-sonnet-5[1M]');
+    expect(line?.titleLines?.some((l) => l.includes('CLI 自报成本'))).toBe(true);
+  });
+
+  it('keeps the legacy shape when no cost/model is reported', () => {
+    const line = messageMetricsLine(turn());
+    expect(line?.costText ?? null).toBeNull();
+    expect(line?.model ?? null).toBeNull();
+  });
+});

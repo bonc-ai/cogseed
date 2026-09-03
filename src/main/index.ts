@@ -183,6 +183,7 @@ import * as reflectionOrchestrator from './features/reflection-orchestrator';
 import * as autoTasks from './features/auto_tasks';
 import * as systemSkills from './features/system_skills';
 import * as builtinMarketplaceStartup from './features/builtin_marketplace_startup';
+import * as builtinPackagesStartup from './features/builtin_packages_startup';
 import type { BuiltinMarketplaceSeedResult } from './features/builtin_marketplace';
 import * as chatAttachments from './features/chat_attachments';
 import * as chatArtifacts from './features/chat_artifacts';
@@ -679,6 +680,13 @@ async function seedBuiltinMarketplaceForCurrentUser(
     shouldContinue,
     onChanged: broadcastBuiltinMarketplaceSeedChanged,
   });
+}
+
+async function seedBuiltinPackagesForCurrentUser(
+  reason: string,
+  shouldContinue?: () => boolean,
+): Promise<void> {
+  await builtinPackagesStartup.seedBuiltinPackagesForActiveUser({ reason, shouldContinue });
 }
 
 function marketplaceBootContextStillActive(uid: string): boolean {
@@ -1440,6 +1448,7 @@ if (!gotLock) {
       reflectionOrchestrator.startReflectionLoop(users.getActiveUserId());
     }, 'serial', BOOT_POST_STARTUP_DELAY_MS);
     registerDeferred('builtin-marketplace:seed', () => seedBuiltinMarketplaceForCurrentUser('startup'));
+    registerDeferred('builtin-packages:seed', () => seedBuiltinPackagesForCurrentUser('startup'));
     registerDeferred('auto-tasks:scheduler', () => autoTasks.startScheduler());
     registerDeferred('recall:capture-recovery', async () => {
       const uid = users.getActiveUserId();

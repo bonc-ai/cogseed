@@ -69,8 +69,7 @@
     const initialLibrary = _libraryValue(source);
     const overlay = document.createElement('div');
     overlay.id = 'library-transfer-overlay';
-    overlay.className = 'modal-overlay library-transfer-overlay open';
-    overlay.setAttribute('aria-hidden', 'false');
+    overlay.className = 'modal-overlay library-transfer-overlay';
     overlay.innerHTML = `
       <div class="modal modal-standard library-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="library-transfer-title">
         <div class="modal-header library-transfer-header">
@@ -107,6 +106,7 @@
       </div>
     `;
     document.body.appendChild(overlay);
+    const dialog = overlay.querySelector('[role="dialog"]');
 
     let mode = 'move';
     let targetDir = '';
@@ -119,11 +119,18 @@
     const errorEl = overlay.querySelector('[data-transfer-error]');
     const confirmBtn = overlay.querySelector('[data-transfer-confirm]');
 
-    const close = () => {
-      document.removeEventListener('keydown', onKey, true);
+    // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
+    const cleanup = () => {
       if (onI18nChange) window.removeEventListener('i18n-change', onI18nChange);
       selector?.close?.();
       overlay.remove();
+    };
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({ overlay, dialog, onClose: cleanup })
+      : null;
+    const close = () => {
+      if (controller) controller.close('action');
+      else cleanup();
     };
     const showError = (message, key = '') => {
       currentErrorKey = message ? key : '';
@@ -210,12 +217,6 @@
         showError('');
       });
     });
-    const onKey = (event) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      close();
-    };
-    document.addEventListener('keydown', onKey, true);
     overlay.querySelector('[data-transfer-close]')?.addEventListener('click', close);
     overlay.querySelector('[data-transfer-cancel]')?.addEventListener('click', close);
     confirmBtn.addEventListener('click', async () => {
@@ -286,6 +287,7 @@
       entry_count: paths.length,
       entry_point: opts?.entryPoint || 'menu',
     }, 'click');
+    if (controller) controller.open();
     await refreshFolders(initialLibrary);
     return { close };
   }

@@ -3,9 +3,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
   "version": 1,
-  "serialNumber": "urn:uuid:196bf3f1-28c2-4cba-b398-c6239631b3ad",
+  "serialNumber": "urn:uuid:0c5c80fa-d827-4d07-b74d-16620bb249c3",
   "metadata": {
-    "timestamp": "2026-08-30T15:01:01.212Z",
+    "timestamp": "2026-09-03T02:26:20.719Z",
     "tools": {
       "components": [
         {
@@ -1600,8 +1600,8 @@
     {
       "type": "library",
       "name": "node-pty",
-      "version": "1.0.0",
-      "bom-ref": "cogseed@0.7.6|node-pty@1.0.0",
+      "version": "1.1.0",
+      "bom-ref": "cogseed@0.7.6|node-pty@1.1.0",
       "author": "Microsoft Corporation",
       "description": "Fork pseudoterminals in Node.JS",
       "licenses": [
@@ -1612,7 +1612,7 @@
           }
         }
       ],
-      "purl": "pkg:npm/node-pty@1.0.0",
+      "purl": "pkg:npm/node-pty@1.1.0",
       "externalReferences": [
         {
           "url": "git://github.com/microsoft/node-pty.git",
@@ -1630,12 +1630,12 @@
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/node-pty/-/node-pty-1.0.0.tgz",
+          "url": "https://registry.npmjs.org/node-pty/-/node-pty-1.1.0.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "c2d04c5964bb745666fd582a125ad3bed7ccab81b327af9e745234634cf2cf281449932065dada0d431484222f9238498e67b5e6a5a66f225bb40c78a2de2e64"
+              "content": "db426ab6eb58e893d74d49cbd228f5b9a77b41ed5b693e3a972a25876b1210d0dde2c4f3299e279801647800110cac2694b8cfc7a5ca465c11531c233b2fa552"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -10903,10 +10903,10 @@
     },
     {
       "type": "library",
-      "name": "nan",
-      "version": "2.28.0",
-      "bom-ref": "cogseed@0.7.6|nan@2.28.0",
-      "description": "Native Abstractions for Node.js: C++ header for Node 0.8 -> 26 compatibility",
+      "name": "node-addon-api",
+      "version": "7.1.1",
+      "bom-ref": "cogseed@0.7.6|node-addon-api@7.1.1",
+      "description": "Node.js API (Node-API)",
       "licenses": [
         {
           "license": {
@@ -10915,30 +10915,30 @@
           }
         }
       ],
-      "purl": "pkg:npm/nan@2.28.0",
+      "purl": "pkg:npm/node-addon-api@7.1.1",
       "externalReferences": [
         {
-          "url": "git://github.com/nodejs/nan.git",
+          "url": "git://github.com/nodejs/node-addon-api.git",
           "type": "vcs",
           "comment": "as detected from PackageJson property \"repository.url\""
         },
         {
-          "url": "https://github.com/nodejs/nan#readme",
+          "url": "https://github.com/nodejs/node-addon-api",
           "type": "website",
           "comment": "as detected from PackageJson property \"homepage\""
         },
         {
-          "url": "https://github.com/nodejs/nan/issues",
+          "url": "https://github.com/nodejs/node-addon-api/issues",
           "type": "issue-tracker",
           "comment": "as detected from PackageJson property \"bugs.url\""
         },
         {
-          "url": "https://registry.npmjs.org/nan/-/nan-2.28.0.tgz",
+          "url": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz",
           "type": "distribution",
           "hashes": [
             {
               "alg": "SHA-512",
-              "content": "7d3b03cfdf4e4eadac55e3e119da78a9086081916d2abeb864d57255a8d12ad30e909c587a4a65061e7becf889075daffc3decd84e5c1ad388e392d6a7aae72d"
+              "content": "e66ddbb32ae3156135c5fee7cfb61774de2e76756d5caebf61f827e6a9da84be9b0a47f6c8ab789379ee4ca02d4f8af7206f09351da772c20c759b80cc98c741"
             }
           ],
           "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
@@ -10947,7 +10947,7 @@
       "properties": [
         {
           "name": "cdx:npm:package:path",
-          "value": "node_modules/nan"
+          "value": "node_modules/node-addon-api"
         }
       ]
     },
@@ -38783,7 +38783,7 @@
         "cogseed@0.7.6|fastembed@2.1.0",
         "cogseed@0.7.6|jimp@1.6.1",
         "cogseed@0.7.6|mammoth@1.12.1",
-        "cogseed@0.7.6|node-pty@1.0.0",
+        "cogseed@0.7.6|node-pty@1.1.0",
         "cogseed@0.7.6|pdfjs-dist@6.2.108",
         "cogseed@0.7.6|sherpa-onnx-node@1.13.6",
         "cogseed@0.7.6|socks-proxy-agent@8.0.5",
@@ -39077,9 +39077,9 @@
       ]
     },
     {
-      "ref": "cogseed@0.7.6|node-pty@1.0.0",
+      "ref": "cogseed@0.7.6|node-pty@1.1.0",
       "dependsOn": [
-        "cogseed@0.7.6|nan@2.28.0"
+        "cogseed@0.7.6|node-addon-api@7.1.1"
       ]
     },
     {
@@ -40247,7 +40247,7 @@
       "ref": "cogseed@0.7.6|xmlbuilder@10.1.1"
     },
     {
-      "ref": "cogseed@0.7.6|nan@2.28.0"
+      "ref": "cogseed@0.7.6|node-addon-api@7.1.1"
     },
     {
       "ref": "cogseed@0.7.6|@napi-rs/canvas@1.0.7",

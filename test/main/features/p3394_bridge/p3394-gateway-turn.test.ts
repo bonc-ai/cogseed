@@ -81,7 +81,8 @@ describe('P3394 gateway turn runner', () => {
     const processes: Array<{ type: string; text: string }> = [];
     const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
 
-    expect(result).toEqual({ text: 'final openclaw reply' });
+    expect(result.text).toBe('final openclaw reply');
+    expect(result.metrics).toBeTypeOf('object');
     // 过程日志进 process rail（progress 事件），每条一行。
     expect(processes.filter((e) => e.type === 'progress' && e.text === '[tools] run bash build')).toHaveLength(1);
     expect(processes.filter((e) => e.type === 'progress' && e.text === '[skills] web_search')).toHaveLength(1);
@@ -98,7 +99,8 @@ describe('P3394 gateway turn runner', () => {
     const processes: Array<{ type: string; text: string }> = [];
     const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
 
-    expect(result).toEqual({ text: 'hermes second reply' });
+    expect(result.text).toBe('hermes second reply');
+    expect(result.metrics).toBeTypeOf('object');
     expect(hub.sendAndWait).toHaveBeenCalledTimes(2);
     expect(hub.waitForSessionFree).toHaveBeenCalledTimes(1);
     // 排队等待时给用户进度提示，而不是静默判死。
@@ -123,7 +125,8 @@ describe('P3394 gateway turn runner', () => {
 
     const result = await runP3394GatewayTurn({ ...baseInput, onProcess: () => {} });
 
-    expect(result).toEqual({ text: 'hermes second reply' });
+    expect(result.text).toBe('hermes second reply');
+    expect(result.metrics).toBeTypeOf('object');
     expect(call).toBe(2);
     const firstEnvelope = hub.sendAndWait.mock.calls[0][1] as { message_id: string; session_id: string };
     const secondEnvelope = hub.sendAndWait.mock.calls[1][1] as { message_id: string; session_id: string };
@@ -142,7 +145,8 @@ describe('P3394 gateway turn runner', () => {
 
     const result = await runP3394GatewayTurn({ ...baseInput, signal: controller.signal });
 
-    expect(result).toEqual({ text: '', aborted: true });
+    expect(result.text).toBe('');
+    expect(result.aborted).toBe(true);
     expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
   });
 
@@ -174,7 +178,8 @@ describe('P3394 gateway turn runner', () => {
 
     const result = await runP3394GatewayTurn(baseInput);
 
-    expect(result).toEqual({ text: 'hermes reply' });
+    expect(result.text).toBe('hermes reply');
+    expect(result.metrics).toBeTypeOf('object');
     expect(mocks.startExternalGateway).not.toHaveBeenCalled();
     expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
   });
@@ -182,7 +187,8 @@ describe('P3394 gateway turn runner', () => {
   it('auto-starts the managed gateway when the node is offline and retries successfully', async () => {
     const result = await runP3394GatewayTurn(baseInput);
 
-    expect(result).toEqual({ text: 'hermes reply' });
+    expect(result.text).toBe('hermes reply');
+    expect(result.metrics).toBeTypeOf('object');
     expect(mocks.startExternalGateway).toHaveBeenCalledTimes(1);
     expect(mocks.startExternalGateway).toHaveBeenCalledWith(expect.objectContaining({ cli: 'hermes', binPath: '/usr/local/bin/hermes', alias: 'Hermes' }));
     expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
@@ -196,7 +202,8 @@ describe('P3394 gateway turn runner', () => {
 
     const result = await runP3394GatewayTurn(baseInput);
 
-    expect(result).toEqual({ text: 'hermes after restart' });
+    expect(result.text).toBe('hermes after restart');
+    expect(result.metrics).toBeTypeOf('object');
     expect(mocks.startExternalGateway).toHaveBeenCalledTimes(1);
     expect(hub.sendAndWait).toHaveBeenCalledTimes(2);
   });

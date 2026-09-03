@@ -3,11 +3,11 @@
 // v2（按产品评审建议）：移除 52px 图标竖栏 → 6 个入口迁移为**第二栏顶部的横向
 // 工具栏**（图标+文字，可切紧凑「仅图标」，localStorage 记忆），释放横向空间。
 (function () {
-  // 只保留已落地入口（知识库/笔记/发现）；浏览/Agent/菜单为预留项，不展示避免误导。
+  // 知识库/笔记已落地；发现模块当前为「待开发」占位（不展示内置示例市场数据，避免误导）。
   const ECO_NAV = [
     { key: 'kb', icon: 'folder', label: '知识库', status: 'ok' },
     { key: 'notes', icon: 'file-text', label: '笔记', status: 'ok' },
-    { key: 'discover', icon: 'globe', label: '发现', status: 'ok' },
+    { key: 'discover', icon: 'globe', label: '发现', status: 'soon' },
   ];
   const COMPACT_KEY = 'cogseed.kb.eco.compact';
   let _compact = false;
@@ -25,9 +25,10 @@
   }
 
   function _navBtn(item, active) {
+    const badge = item.status === 'soon' ? '<span class="kb-eco-tab-soon">待开发</span>' : '';
     return `<button type="button" class="kb-eco-tab is-${item.status}${active ? ' active' : ''}" data-kb-eco="${item.key}"
       title="${item.label}" aria-label="${item.label}">
-      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span></button>`;
+      <span class="kb-sdot"></span>${_kbIcon(item.icon)}<span class="kb-eco-tab-label">${_mainLabel(item.label)}</span>${badge}</button>`;
   }
 
   function _applyCompact() {
