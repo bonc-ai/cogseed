@@ -40,7 +40,7 @@ import * as fsp from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 规范 CLI 类型名。 */
-export const CLI_TYPES = Object.freeze(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy']);
+export const CLI_TYPES = Object.freeze(['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider']);
 
 /** 每种 CLI 的默认可执行文件名。 */
 export const BIN_NAMES = Object.freeze({
@@ -59,6 +59,8 @@ export const BIN_NAMES = Object.freeze({
   hermes: 'hermes',
   // WorkBuddy 的 CLI 是 App 内置的 `codebuddy`，不在 PATH 上。
   workbuddy: 'codebuddy',
+  gemini: 'gemini',
+  aider: 'aider',
 });
 
 /** 覆盖二进制路径的环境变量。 */
@@ -69,6 +71,8 @@ export const ENV_KEYS = Object.freeze({
   opencode: 'COGSEED_OPENCODE_PATH',
   hermes: 'COGSEED_HERMES_PATH',
   workbuddy: 'COGSEED_WORKBUDDY_PATH',
+  gemini: 'COGSEED_GEMINI_PATH',
+  aider: 'COGSEED_AIDER_PATH',
 });
 
 /** 每种 CLI 的版本探测命令（按兼容顺序）。 */
@@ -80,6 +84,8 @@ export const VERSION_PROBES = Object.freeze({
   // hermes 的 `version` 子命令在无 TTY 时可能挂起，`--version` 必须排第一。
   hermes: [['--version'], ['version']],
   workbuddy: [['--version']],
+  gemini: [['--version']],
+  aider: [['--version']],
 });
 
 /** 最低版本门槛（镜像 version.ts；缺省 = 无门槛）。 */
@@ -161,10 +167,22 @@ export function localCliSearchDirs(type, platform = process.platform, env = proc
     if (env.NVM_SYMLINK) dirs.push(env.NVM_SYMLINK);
     if (type === 'codex' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'OpenAI', 'Codex', 'bin'));
+      // OpenAI Codex Windows App keeps the CLI under bin/<hash>/codex.exe,
+      // outside PATH and npm; the `*` segment expands over version dirs.
+      dirs.push(path.win32.join(localAppData, 'OpenAI', 'Codex', 'bin', '*'));
     }
     if (type === 'workbuddy' && localAppData) {
       dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Some installers use %LOCALAPPDATA%\WorkBuddy directly (no "Programs").
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', 'app.asar.unpacked', 'cli', 'bin'));
+      // Layout variants (resources\<layer>\cli\bin and direct cli\bin).
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'resources', '*', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'Programs', 'WorkBuddy', 'cli', 'bin'));
+      dirs.push(path.win32.join(localAppData, 'WorkBuddy', 'cli', 'bin'));
     }
+    if (type === 'gemini' && home) dirs.push(path.win32.join(home, '.gemini', 'bin'));
+    if (type === 'aider' && home) dirs.push(path.win32.join(home, '.local', 'bin'));
     return dirs;
   }
   if (home) {
@@ -191,6 +209,8 @@ export function localCliSearchDirs(type, platform = process.platform, env = proc
     dirs.push(pathApi.join(home, 'Applications', '*.app', 'Contents', 'Resources', 'app.asar.unpacked', 'cli', 'bin'));
     dirs.push('/Applications/*.app/Contents/Resources/app.asar.unpacked/cli/bin');
   }
+  if (type === 'gemini' && home) dirs.push(pathApi.join(home, '.local', 'bin'));
+  if (type === 'aider' && home) dirs.push(pathApi.join(home, '.local', 'bin'));
   return dirs;
 }
 
@@ -264,6 +284,132 @@ export async function whichBin(name, opts = {}) {
   return null;
 }
 
+/** 安装目录递归兜底（镜像 which.ts::findBinRecursively）。 */
+function recursiveSearchRoots(name, platform, env, home) {
+  const isWindows = platform === 'win32';
+  const roots = [];
+  const extra = String(env.COGSEED_AGENT_SEARCH_ROOTS || '')
+    .split(isWindows ? ';' : ':')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (isWindows) {
+    const localAppData = env.LOCALAPPDATA || (home ? path.win32.join(home, 'AppData', 'Local') : '');
+    const appData = env.APPDATA || (home ? path.win32.join(home, 'AppData', 'Roaming') : '');
+    if (localAppData) {
+      roots.push(localAppData);
+      roots.push(path.win32.join(localAppData, 'Programs'));
+    }
+    if (appData) {
+      roots.push(appData);
+      roots.push(path.win32.join(appData, 'npm'));
+    }
+    if (home) roots.push(path.win32.join(home, '.local', 'bin'));
+    roots.push(...extra);
+    return [...new Set(roots.map((r) => r.toLowerCase()))].filter(Boolean);
+  }
+  if (home) {
+    roots.push(path.posix.join(home, '.codex'));
+    roots.push(path.posix.join(home, '.local'));
+    roots.push(path.posix.join(home, '.hermes'));
+    roots.push(path.posix.join(home, '.npm-global'));
+    roots.push(path.posix.join(home, '.cargo'));
+  }
+  roots.push('/opt/homebrew', '/usr/local');
+  roots.push(...extra);
+  return [...new Set(roots)].filter(Boolean);
+}
+
+const whereCache = new Map();
+const whereInFlight = new Map();
+
+export async function findBinRecursively(name, opts = {}) {
+  const { platform = process.platform, env = process.env, home = os.homedir(), timeoutMs = 2500 } = opts;
+  if (!name) return null;
+  const roots = recursiveSearchRoots(name, platform, env, home);
+  if (platform === 'win32') {
+    const deadline = Date.now() + timeoutMs;
+    // `name.*` covers every PATHEXT variant in one query; retain the bare-name
+    // query for extensionless shims. Avoid spawning one `where.exe` per suffix.
+    const patterns = [name, name + '.*'];
+    for (const root of roots) {
+      try { if (!fs.statSync(root).isDirectory()) continue; } catch { continue; }
+      for (const pattern of patterns) {
+        if (Date.now() > deadline) return null;
+        const hits = await cachedWhere(root, pattern, Math.max(1, deadline - Date.now()));
+        for (const line of hits) {
+          try { if (fs.statSync(line).isFile()) return line; } catch { /* stale */ }
+        }
+      }
+    }
+    return null;
+  }
+  const deadline = Date.now() + timeoutMs;
+  const seen = new Set();
+  const walk = async (dir, depth) => {
+    if (depth > 4 || seen.has(dir) || Date.now() > deadline) return null;
+    seen.add(dir);
+    let entries;
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      const full = path.posix.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        const hit = await walk(full, depth + 1);
+        if (hit) return hit;
+      } else if (entry.isFile() && entry.name === name && (await isExecutableFile(full, platform))) {
+        return full;
+      }
+    }
+    return null;
+  };
+  for (const root of roots) {
+    const hit = await walk(root, 0);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function cachedWhere(root, pattern, timeoutMs) {
+  const key = `${root}\u0000${pattern}`;
+  const hit = whereCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return Promise.resolve(hit.hits);
+  const pending = whereInFlight.get(key);
+  if (pending) return pending;
+  const promise = new Promise((resolve) => {
+    let settled = false;
+    let stdout = '';
+    const finish = (hits) => {
+      if (settled) return;
+      settled = true;
+      whereCache.set(key, { at: Date.now(), hits });
+      resolve(hits);
+    };
+    let child;
+    try {
+      child = spawn('where.exe', ['/R', root, pattern], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      finish([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      finish([]);
+    }, Math.max(1, timeoutMs));
+    timer.unref?.();
+    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.on('error', () => { clearTimeout(timer); finish([]); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      finish(code === 0 ? stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : []);
+    });
+  }).finally(() => { whereInFlight.delete(key); });
+  whereInFlight.set(key, promise);
+  return promise;
+}
+
 function uniqueDirs(dirs, isWindows) {
   const out = [];
   const seen = new Set();
@@ -289,10 +435,30 @@ async function isExecutableFile(p, platform) {
   try {
     const st = await fsp.stat(p);
     if (!st.isFile()) return false;
-    if (platform === 'win32') return true;
+    if (platform === 'win32') {
+      // 镜像 which.ts：npm 会同时生成无扩展名的 `#!/bin/sh` bash shim 和
+      // `<name>.cmd`。bare shim 无法被 spawn 执行，跳过让 whichBin 命中 .cmd。
+      if (path.extname(p) === '' && await isShebangScript(p)) return false;
+      return true;
+    }
     return (st.mode & 0o111) !== 0;
   } catch {
     return false;
+  }
+}
+
+/** 文件是否以 `#!` 开头（Unix shebang）；Windows spawn 无法直接执行。 */
+async function isShebangScript(p) {
+  let handle;
+  try {
+    handle = await fsp.open(p, 'r');
+    const buf = Buffer.alloc(2);
+    const { bytesRead } = await handle.read(buf, 0, 2, 0);
+    return bytesRead >= 2 && buf[0] === 0x23 /* # */ && buf[1] === 0x21 /* ! */;
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => { /* ignore */ });
   }
 }
 
@@ -428,6 +594,20 @@ export async function detectHermesPyprojectVersion(binPath, home = os.homedir())
 }
 
 /** 运行一次版本探测，返回解析后的版本字符串或 null（镜像 version.ts::detectVersion）。 */
+function resolveWindowsProbePath(binPath, platform) {
+  if (platform !== 'win32' || path.win32.extname(binPath)) return binPath;
+  for (const candidate of [binPath + '.cmd', binPath + '.bat', binPath + '.exe', binPath + '.com', binPath]) {
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch { /* keep looking */ }
+  }
+  return binPath;
+}
+
+function isNodeShebangScript(binPath) {
+  try { return /^#!.*\bnode\b/.test(fs.readFileSync(binPath, 'utf8').slice(0, 256)); } catch { return false; }
+}
+
 export async function runVersionProbe(binPath, versionArgs = ['--version'], opts = {}) {
   const {
     timeoutMs = VERSION_PROBE_TIMEOUT_MS,
@@ -450,19 +630,31 @@ export async function runVersionProbe(binPath, versionArgs = ['--version'], opts
     let stdout = '';
     let stderr = '';
 
-    let command = binPath;
+    const probePath = resolveWindowsProbePath(binPath, platform);
+    let command = probePath;
     let args = [...versionArgs];
     let windowsVerbatimArguments = false;
-    if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(binPath)) {
+    if (platform === 'win32' && /\.(?:cmd|bat)$/i.test(probePath)) {
       command = env.ComSpec || env.COMSPEC || 'cmd.exe';
-      args = ['/d', '/s', '/c', `"${binPath}" ${versionArgs.join(' ')}`];
+      // Match the App's spawn-command quoting: /s /c receives one outer-
+      // quoted command string, with the shim path and each argument quoted
+      // inside it. Without the doubled outer quotes, cmd.exe strips the path
+      // quotes before expansion and a path containing spaces fails to start.
+      const commandLine = [
+        `"${probePath}"`,
+        ...versionArgs.map((arg) => `"${String(arg).replace(/"/g, '\\"')}"`),
+      ].join(' ');
+      args = ['/d', '/s', '/c', `"${commandLine}"`];
       windowsVerbatimArguments = true;
+    } else if (platform === 'win32' && isNodeShebangScript(probePath)) {
+      command = process.execPath;
+      args = [probePath, ...versionArgs];
     }
 
     let child;
     try {
       child = spawn(command, args, {
-        env: buildSpawnEnv(binPath, platform, env, home),
+        env: buildSpawnEnv(probePath, platform, env, home),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         windowsVerbatimArguments,
@@ -498,6 +690,8 @@ export async function runVersionProbe(binPath, versionArgs = ['--version'], opts
     child.on('close', (code) => {
       if (code !== 0) return finish(null);
       const text = `${stdout}\n${stderr}`.trim();
+      // Version probes intentionally return null on malformed output; keep
+      // stderr out of the report but preserve the normal parser path.
       if (!text) return finish(null);
       const sv = parseSemver(text);
       if (!sv) return finish(null);
@@ -719,9 +913,15 @@ export function inspectCliConfig(type, home = os.homedir()) {
       }
     }
   } else {
-    // openclaw / hermes 无本地凭据文件可读（openclaw 用自身 provider 配置；
-    // hermes 登录态在 App 内管理）。只记录目录存在性作为参考。
-    res.notes.push(type === 'hermes' ? 'Hermes 登录态由 App 管理，脚本不读取' : 'OpenClaw 使用自身 provider 配置，无独立凭据文件');
+    // These CLIs keep auth outside the config shapes this read-only probe can
+    // safely interpret. State that explicitly instead of attributing every
+    // unknown CLI to OpenClaw.
+    const note = type === 'hermes'
+      ? 'Hermes 登录态由 App 管理，脚本不读取'
+      : type === 'openclaw'
+        ? 'OpenClaw 使用自身 provider 配置，无独立凭据文件'
+        : `${type} 无可读取的独立凭据文件`;
+    res.notes.push(note);
   }
   return res;
 }
@@ -929,19 +1129,24 @@ export async function diagnoseCli(type, opts = {}) {
   const envPath = (env[ENV_KEYS[type]] || '').trim();
   const candidate = envPath && envPath.length > 0 ? envPath : BIN_NAMES[type];
   const extraDirs = envPath && envPath.length > 0 ? [] : await expandSearchDirs(localCliSearchDirs(type, platform, env, home), platform, home);
-  const resolved = await whichBin(candidate, { extraDirs, platform, env });
+  let resolved = await whichBin(candidate, { extraDirs, platform, env });
+  let usedRecursive = false;
+  if (!resolved && !envPath && !candidate.includes('/') && !candidate.includes('\\')) {
+    resolved = await findBinRecursively(candidate, { platform, env, home, timeoutMs: 2500 });
+    usedRecursive = resolved !== null;
+  }
   if (!resolved) {
     result.binary.source = envPath ? 'env' : 'path+search-dirs';
     result.error = 'not_found';
     result.errorDetail = envPath
       ? `${ENV_KEYS[type]}=${envPath} 不存在或不可执行`
-      : `${BIN_NAMES[type]} 在 PATH 和常见安装位置都找不到`;
+      : `${BIN_NAMES[type]} 在 PATH、常见安装位置和递归安装根都找不到`;
     result.verdict = 'missing_binary';
     return result;
   }
   result.binary.found = true;
   result.binary.path = resolved;
-  result.binary.source = envPath ? 'env' : 'path+search-dirs';
+  result.binary.source = envPath ? 'env' : (usedRecursive ? 'recursive-search' : 'path+search-dirs');
   try { result.binary.realPath = fs.realpathSync(resolved); } catch { result.binary.realPath = null; }
 
   // 2. 版本探测
@@ -1296,7 +1501,7 @@ export function printHelp() {
 
 选项:
   --json                  以 JSON 输出（机器可读）
-  --only <a,b,c>          只检测指定 CLI（claude,codex,openclaw,opencode,hermes,workbuddy）
+  --only <a,b,c>          只检测指定 CLI（claude,codex,openclaw,opencode,hermes,workbuddy,gemini,aider）
   --no-version-probe      跳过版本探测子进程（快速模式；会漏报 version_too_old/unknown）
   --expected <file>       与已知良好配置快照对比（用 --export-expected 生成）
   --export-expected <file> 把本机配置状态导出为脱敏快照

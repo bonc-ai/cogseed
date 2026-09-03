@@ -22,6 +22,9 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as shareFeishu from '../features/share/feishu-share';
+import * as shareCogseed from '../features/share/cogseed-publish';
+import * as personalContextManager from '../features/personal_context/manager';
 import * as modelClient from '../model/client';
 import * as spaces from '../features/spaces';
 import * as spacesArtifacts from '../features/spaces_artifacts';
@@ -97,6 +100,7 @@ import * as imageAuth from '../features/image_auth';
 import * as searchAuth from '../features/search_auth';
 import * as ttsAuth from '../features/tts_auth';
 import * as permissions from '../features/permissions';
+import * as actionApproval from '../features/action_approval';
 import * as appConfig from '../features/config';
 import * as onboardingState from '../features/onboarding_state';
 import * as cliFallback from '../features/cli_fallback';
@@ -1445,7 +1449,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const {
       spaceId, name, icon, template_id, primary_template_id, secondary_template_ids,
       space_type, sustained_outcome, instructions, base_agent, base_agents,
-      main_skill_ref, gate_status,
+      main_skill_ref, gate_status, shared, join_mode, member_permission,
     } = args || {};
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const result = await spaces.updateSpace(ctx.userId, spaceId, {
@@ -1460,6 +1464,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'main_skill_ref') ? { main_skill_ref } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'gate_status') ? { gate_status } : {}),
       ...(Object.prototype.hasOwnProperty.call(args || {}, 'pinned_at') ? { pinned_at: args.pinned_at } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'shared') ? { shared: args.shared } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'join_mode') ? { join_mode: args.join_mode } : {}),
+      ...(Object.prototype.hasOwnProperty.call(args || {}, 'member_permission') ? { member_permission: args.member_permission } : {}),
     });
     if (!result.ok) throw new Error((result as { error: string }).error);
     return { space: result.space };
@@ -4099,6 +4106,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     const root = kbMindmap.loadMindmap(typeof key === 'string' ? key : '');
     return { ok: root !== null, root };
   },
+  // 删除一条存档（渲染层删除会话时清理其脑图快照用）。
+  'kb.mindmap.delete': async ({ key }, ctx) => {
+    const k = typeof key === 'string' && key ? key : '';
+    if (!k) return { ok: false, deleted: false };
+    const deleted = kbMindmap.deleteMindmap(k);
+    return { ok: true, deleted };
+  },
 
   // 脑图弹出独立窗口：新开一个无边框 BrowserWindow 展示 SVG，适合大屏深度查看
   'kb.mindmap.popout': async ({ html }) => {
@@ -4143,6 +4157,124 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       console.error('[kb.mindmap.exportPdf] failed:', err);
       return { ok: false };
     }
+  },
+
+  // KB 分享到飞书（方案 A/B：空间 → 飞书 wiki 公网链接）。
+  // 复制链接/管理面板共用；need_reauthorize → 渲染层引导用 FEISHU_SHARE_SCOPES 重新授权。
+  'kb.share.toFeishu': async ({ spaceId, access, force } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    }
+    const mode = access === 'tenant' || access === 'private' || access === 'anyone' ? access : 'anyone';
+    return shareFeishu.pushSpaceToFeishu(ctx.userId, spaceId, { access: mode, force: force === true });
+  },
+  'kb.share.update': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    return shareFeishu.pushSpaceToFeishu(ctx.userId, spaceId, { force: true });
+  },
+  'kb.share.revoke': async ({ spaceId, mode } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'share_failed', error: 'invalid spaceId' };
+    const revokeMode = mode === 'delete_space' ? 'delete_space' : 'close_link';
+    return shareFeishu.revokeFeishuShare(ctx.userId, spaceId, revokeMode);
+  },
+  'kb.share.list': async (_payload, ctx) => ({ items: await shareFeishu.listFeishuShares(ctx.userId) }),
+  'kb.share.get': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
+    return { state: await shareFeishu.getFeishuShare(ctx.userId, spaceId) };
+  },
+  'kb.share.needsUpdate': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { needed: false };
+    return shareFeishu.shareNeedsUpdate(ctx.userId, spaceId);
+  },
+  // 分享应用配置（独立于消息机器人）：appId/appSecret 存本机，供分享 OAuth 使用。
+  'kb.share.appConfig.get': async (_payload, ctx) => {
+    const cfg = await personalContextManager.getFeishuShareAppConfig(ctx.userId);
+    return { configured: cfg !== null, ...(cfg ? { appId: cfg.appId } : {}) }; // 不回传 appSecret
+  },
+  'kb.share.appConfig.set': async ({ appId, appSecret } = {}, ctx) => {
+    const aid = typeof appId === 'string' ? appId.trim() : '';
+    const secret = typeof appSecret === 'string' ? appSecret.trim() : '';
+    if (!aid || !secret) return { ok: false, error: '请填写 App ID 与 App Secret' };
+    await personalContextManager.setFeishuShareAppConfig(ctx.userId, { appId: aid, appSecret: secret });
+    return { ok: true };
+  },
+  'kb.share.appConfig.clear': async (_payload, ctx) => {
+    await personalContextManager.setFeishuShareAppConfig(ctx.userId, null);
+    return { ok: true };
+  },
+  // 分享授权：用分享专用应用凭据（或回退机器人凭据）发起写权限 OAuth
+  'kb.share.authorize': async (_payload, ctx) => {
+    try {
+      const result = await personalContextManager.beginShareAuthorize(ctx.userId);
+      return { ok: true, ...result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  },
+
+  // ── CogSeed 共享服务（方案 C）：发布到 cogseed-share 后端，权限弹窗设置真实生效 ──
+  'kb.share.cogseed.publish': async ({ spaceId, force } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !await spaces.spaceExists(ctx.userId, spaceId)) {
+      return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
+    }
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    const joinMode = sp?.join_mode ?? 'direct';
+    const memberPermission = sp?.member_permission ?? 'view_export';
+    return shareCogseed.publishSpaceToCogseedShare(ctx.userId, spaceId, {
+      name: sp?.name || spaceId,
+      joinMode,
+      memberPermission,
+      description: sp?.description,
+    }, { force: force === true });
+  },
+  'kb.share.cogseed.update': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, code: 'publish_failed', error: 'invalid spaceId' };
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    if (!sp) return { ok: false, code: 'publish_failed', error: 'space not found' };
+    return shareCogseed.publishSpaceToCogseedShare(ctx.userId, spaceId, {
+      name: sp.name || spaceId,
+      joinMode: sp.join_mode ?? 'direct',
+      memberPermission: sp.member_permission ?? 'view_export',
+      description: sp.description,
+    }, { force: true });
+  },
+  'kb.share.cogseed.syncPolicy': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    const sp = await spaces.getSpace(ctx.userId, spaceId);
+    if (!sp) return { ok: false, error: 'space not found' };
+    return shareCogseed.syncCogseedPolicy(ctx.userId, spaceId, {
+      joinMode: sp.join_mode ?? 'direct',
+      memberPermission: sp.member_permission ?? 'view_export',
+    });
+  },
+  'kb.share.cogseed.revoke': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    return shareCogseed.revokeCogseedShare(ctx.userId, spaceId);
+  },
+  'kb.share.cogseed.list': async (_payload, ctx) => ({ items: await shareCogseed.listCogseedShares(ctx.userId) }),
+  'kb.share.cogseed.get': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { state: null };
+    return { state: await shareCogseed.getCogseedShare(ctx.userId, spaceId) };
+  },
+  'kb.share.cogseed.config.get': async (_payload, ctx) => {
+    const cfg = await shareCogseed.getCogseedShareConfig(ctx.userId);
+    return { configured: cfg !== null, ...(cfg ? { baseUrl: cfg.baseUrl } : {}) }; // 不回传 apiKey
+  },
+  'kb.share.cogseed.config.set': async ({ baseUrl, apiKey } = {}, ctx) => {
+    const url = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+    const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (!url || !key) return { ok: false, error: '请填写服务地址与 API Key' };
+    await shareCogseed.setCogseedShareConfig(ctx.userId, { baseUrl: url, apiKey: key });
+    return { ok: true };
+  },
+  'kb.share.cogseed.members': async ({ spaceId } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+    return shareCogseed.listCogseedMembers(ctx.userId, spaceId);
+  },
+  'kb.share.cogseed.review': async ({ spaceId, memberId, verdict } = {}, ctx) => {
+    if (typeof spaceId !== 'string' || !safeId(spaceId) || !Number.isInteger(memberId)) return { ok: false, error: 'invalid params' };
+    return shareCogseed.reviewCogseedMember(ctx.userId, spaceId, memberId as number, verdict === 'reject' ? 'reject' : 'approve');
   },
 
   // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
@@ -4868,6 +5000,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       throw new Error('invalid mode');
     }
     return permissions.setLocalExecMode(normalized);
+  },
+
+  // Renderer answers an opaque, main-owned action approval request. It never
+  // receives or returns the execution payload itself, preventing UI-side
+  // widening or substitution of the approved action.
+  'actionApproval.respond': async ({ request_id, decision }: { request_id?: unknown; decision?: unknown }) => {
+    if (typeof request_id !== 'string' || !request_id) throw new Error('invalid approval request id');
+    if (decision !== 'approve' && decision !== 'deny') throw new Error('invalid approval decision');
+    return actionApproval.respondActionApproval(request_id, decision);
   },
 
   // ── User-granted folder access (plan §B2) ──────────────────────────────

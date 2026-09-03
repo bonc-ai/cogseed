@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>确认卡片</title>
+</head>
+<body style="margin:0;background:transparent">
+<!--
+  EduSeed 智教助手 · 对话确认卡片宿主（由智能体经 create_artifact 放入对话）。
+  本页不包含任何业务数据：待确认内容放在同目录 confirm-config.json
+  （{op, payload}），iframe 指向插件确认视图；用户点「确认/取消」后，
+  消息经 cogseedArtifact bridge 发回对话，智能体收到后执行/中止写入。
+-->
+<script src="__cogseed/bridge.js"></script>
+<script>
+(function () {
+  'use strict';
+  var frame = document.createElement('iframe');
+  frame.style.cssText = 'width:100%;border:0;display:block;min-height:340px';
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
+  frame.setAttribute('referrerpolicy', 'no-referrer');
+  document.body.appendChild(frame);
+
+  function sendToChat(payload) {
+    if (window.cogseedArtifact && typeof window.cogseedArtifact.send === 'function') {
+      window.cogseedArtifact.send(payload);
+      return;
+    }
+    try { parent.postMessage({ __cogseedArtifact: true, type: 'submit', payload: payload }, '*'); } catch (e) {}
+  }
+
+  function boot() {
+    var qs = '';
+    try {
+      var config = { op: '', payload: null };
+      fetch('./confirm-config.json')
+        .then(function (r) { if (!r.ok) throw new Error('no config'); return r.json(); })
+        .then(function (c) {
+          config = c || {};
+          var q = new URLSearchParams();
+          q.set('op', String(config.op || ''));
+          q.set('payload', JSON.stringify(config.payload || {}));
+          qs = '?' + q.toString();
+          frame.src = 'cogseed-plugin://eduseed-course-client/ui/confirm.html' + qs;
+        })
+        .catch(function () { frame.remove(); });
+    } catch (e) { frame.remove(); }
+  }
+
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || typeof d !== 'object' || d.__cogseedPlugin !== true) return;
+    try { if (ev.source !== frame.contentWindow) return; } catch (e) { return; }
+    if (d.type === 'resize') {
+      var h = Number(d.height);
+      if (isFinite(h) && h > 0) frame.style.height = Math.min(Math.max(h, 120), 900) + 'px';
+      return;
+    }
+    if (d.type === 'confirm') {
+      sendToChat({ action: 'plugin-confirm', op: String(d.op || ''), payload: d.payload });
+      return;
+    }
+    if (d.type === 'cancel') {
+      sendToChat({ action: 'plugin-cancel', op: String(d.op || '') });
+      return;
+    }
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>

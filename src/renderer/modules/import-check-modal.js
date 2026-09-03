@@ -63,9 +63,11 @@
   function showImportCheckResult(opts) {
     return new Promise((resolve) => {
       const overlay = document.createElement('div');
-      overlay.className = 'modal-overlay imp-overlay open';
+      overlay.className = 'modal-overlay imp-overlay';
       const modal = document.createElement('div');
       modal.className = 'modal imp-modal';
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
 
@@ -77,10 +79,20 @@
         if (settled) return;
         settled = true;
         window.removeEventListener('i18n-change', onI18nChange);
-        overlay.classList.remove('open');
+        if (controller) controller.close('action');
+        else overlay.classList.remove('open');
         setTimeout(() => overlay.remove(), 200);
         resolve(action);
       };
+      // 四项行为（ESC / 背景滚动锁定 / 焦点陷阱 / 焦点回归）统一走 uiModalController。
+      const controller = typeof uiModalController === 'function'
+        ? uiModalController({
+            overlay,
+            dialog: modal,
+            onClose: (reason) => { if (reason === 'escape') settle('close'); },
+          })
+        : null;
+      if (controller) controller.open();
 
       const stateDefs = {
         scanning: {

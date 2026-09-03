@@ -1860,6 +1860,10 @@ export interface ProjectedAgentMessageInput {
   turnId: string;
   text: string;
   process?: GroupMessage['process'];
+  /** adapter 透传的回合用量/模型自报（{usage:{...}, model?}，CLI 自报数字
+   *  字段）——exec 投影路径与 bus 派单路径同构落 metrics；model 兼作
+   *  exec_meta 的回读值（CLI 自报即实际，杜绝"展示≠实际"）。 */
+  metrics?: unknown;
   failureKind?: GroupMessageFailureKind;
   failureCode?: string;
   terminalStatus?: 'completed' | 'failed';
@@ -2001,7 +2005,21 @@ export async function appendProjectedAgentMessage(input: ProjectedAgentMessageIn
     to: [USER_ID],
     text,
     turn_id: input.turnId,
+    // 终态投影本身就是该回合的结束消息：落库也带 turn_end，让重放路径
+    // （history reload / 轮询 reconcile）与实时 emit 语义一致，渲染层据此
+    // 消费 actor 占位而不是留下悬空的三点气泡。
+    turn_end: true,
     ...(input.process?.length ? { process: input.process } : {}),
+    // 用量/模型自报落 metrics（宽松透传：{usage:{...}, model?}），CLI 自报
+    // model 兼作 exec_meta.model（回读语义——实际用了什么就展示什么）。
+    ...(input.metrics && typeof input.metrics === 'object'
+      ? {
+          metrics: input.metrics as GroupMessage['metrics'],
+          ...((input.metrics as { model?: unknown }).model
+            ? { exec_meta: { model: String((input.metrics as { model?: unknown }).model) } }
+            : {}),
+        }
+      : {}),
     ...(input.failureKind ? { failure_kind: input.failureKind } : {}),
     ...(input.failureCode ? { failure_code: input.failureCode } : {}),
   };
@@ -5100,16 +5118,18 @@ async function runActorTurnBody(
               cliAgent.runtime?.kind === "p3394-gateway"
                 ? cliAgent.runtime.cli
                 : "",
-            // Unified execution entry: forward the per-task reasoning effort
-            // in the envelope's CogSeed-private execution_prefs. Only claude
-            // gateway runtime consumes it today (MAX_THINKING_TOKENS), and
-            // only low/high are expressible there ('off' has no reliable
-            // claude switch — the UI disables it; guard here so a stale
-            // override can never leak a value the gateway would drop).
-            ...((cliRuntime === "claude"
-              && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high"))
+            // Unified execution entry · 外接智能体执行控制：单轮模型与强度都随
+            // 信封 execution_prefs 下发——**不设静态白名单**：网关按「参数模板」
+            // 决定消费与否（模型：预设声明或 P3394_AGENT_MODEL_ARGS；强度：预设
+            // effortArgs 或 P3394_AGENT_EFFORT_ARGS），无模板的 CLI 安全忽略信封
+            // 字段（跟随自身默认），永远不会拼出它不认识的参数。能力协商
+            // （model_controllable / effort_controllable）由 /p3394/models 披露、
+            // 渲染层消费决定 UI 显隐。off 仅参数模板通道可表达（映射声明见
+            // PRESETS.effortLevels），claude/codex 的 UI 已置灰不会出现。
+            ...((item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high")
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
+            ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
@@ -5153,25 +5173,20 @@ async function runActorTurnBody(
             onProcess: forwardProcess,
           });
       for (const p of cliOut.produced || []) await onFileWritten(p);
-      // Unified execution entry: record what this CLI turn actually ran with
-      // (persisted as exec_meta on the end-of-turn message). Mirrors the
-      // per-turn model choice inside _runCliAgentTurn (override > runtime.model).
+      // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
+      // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认
+      // runtime.model）。
       const cliRuntimeModel =
         cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
           ? cliAgent.runtime.model
           : undefined;
-      // 方案 B（模型不可控不展示）：网关是外接智能体的实际执行路径，信封
-      // 没有 model 栏位——CLI 实际用哪个模型由它自身配置决定。网关 turn 的
-      // exec_meta 因此不写 model（写了就是"展示 ≠ 实际"）；仅近乎废弃的本地
-      // 直连路径真实消费 runtime.model，那里保留真实值。
-      const cliIsGateway = cliAgent.runtime?.kind === "p3394-gateway";
-      const cliTurnModel = cliIsGateway
-        ? undefined
-        : (item.execConfig?.model || cliRuntimeModel);
-      // effort 只在真实下发的场景写 meta（claude 且 low/high——网关与本地
-      // 直连都会消费）；其他 CLI / 'off' 不标注，避免展示一个没生效的配置。
-      const cliEffortForwarded = cliRuntime === "claude"
-        && (item.execConfig?.effort === "low" || item.execConfig?.effort === "high");
+      const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
+      // effort 只在真实下发的场景写 meta（off/low/high——网关与本地直连
+      // 都按模板消费，无模板安全忽略；off 仅参数模板通道可表达，
+      // claude/codex 的 UI 已置灰不会出现）；其他场景不标注，避免展示一个
+      // 没生效的配置。
+      const cliEffortForwarded
+        = item.execConfig?.effort === "off" || item.execConfig?.effort === "low" || item.execConfig?.effort === "high";
       turnExecMeta = {
         ...(cliTurnModel ? { model: cliTurnModel } : {}),
         ...(cliRuntime ? { cli: cliRuntime } : {}),
@@ -5182,6 +5197,21 @@ async function runActorTurnBody(
       // P3394 gateway turns currently report no metrics (no runner.ts done
       // event on that path) — the read degrades to undefined there.
       cliTurnMetrics = (cliOut as { metrics?: GroupMessageMetrics }).metrics;
+      // 回读确认（CodexHost 对标的 CogSeed 适配）：CLI 自报的实际模型
+      // （usage.model）与下发值不一致时以实际值落 exec_meta——杜绝
+      // "展示 ≠ 实际"的假成功，并在日志留痕（CLI 静默换模型可观测）。
+      if (
+        cliTurnMetrics?.model && turnExecMeta?.model &&
+        cliTurnMetrics.model !== turnExecMeta.model
+      ) {
+        log.warn("external agent model mismatch: CLI used a different model than requested", {
+          cid: maskId(cid),
+          actor_id: maskId(actor.id),
+          requested: turnExecMeta.model,
+          actual: cliTurnMetrics.model,
+        });
+        turnExecMeta = { ...turnExecMeta, model: cliTurnMetrics.model };
+      }
       if (cliOut.error) {
         // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
         // 原始后端错误只进日志，不透给渲染层。
@@ -11615,16 +11645,11 @@ async function _runCliAgentTurn(opts: {
     // Unified execution entry: per-task override wins over the agent's
     // saved runtime.model for THIS turn only.
     model: cliModelForTurn,
-    // Per-task reasoning effort — forwarded ONLY for CLIs with a verified
-    // switch. claude consumes MAX_THINKING_TOKENS on both execution paths
-    // (gateway envelope + this direct one). codex's backend has a
-    // model_reasoning_effort implementation ready, but its MAIN path is the
-    // P3394 gateway (ChatGPT app-server driven by gateway.cjs) which has no
-    // effort slot yet — filtering here keeps UI / envelope / direct / meta
-    // four layers consistent (claude-only) instead of honoring effort on a
-    // path the user cannot predict.
-    ...((runtime.cli === "claude"
-      && (opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high"))
+    // Per-task reasoning effort — backends consume the field only when they
+    // have a real channel (claude: MAX_THINKING_TOKENS; codex: maps low/high
+    // to model_reasoning_effort) and safely ignore it otherwise, so no static
+    // gate is needed here. Other CLIs keep their own reasoning configuration.
+    ...((opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high")
       ? { thinkingLevel: opts.item.execConfig.effort }
       : {}),
     customArgs: runtime.custom_args,
@@ -11753,6 +11778,9 @@ async function _runCliAgentTurn(opts: {
               output?: unknown;
               cacheRead?: unknown;
               cacheCreate?: unknown;
+              cost?: unknown;
+              costUsd?: unknown;
+              model?: unknown;
             };
           };
           if (
@@ -11773,6 +11801,15 @@ async function _runCliAgentTurn(opts: {
               usageOut.cacheReadTokens = usageIn.cacheRead;
             if (typeof usageIn?.cacheCreate === "number")
               usageOut.cacheWriteTokens = usageIn.cacheCreate;
+            // CLI 自报成本（claude 的 total_cost_usd，backend 归一为 cost 键）
+            // ——比单价表估算准，消息 meta 与会话统计优先消费。
+            const costUsdRaw =
+              typeof usageIn?.costUsd === "number" ? usageIn.costUsd
+              : typeof usageIn?.cost === "number" ? usageIn.cost
+              : undefined;
+            if (typeof costUsdRaw === "number" && Number.isFinite(costUsdRaw))
+              usageOut.costUsd = costUsdRaw;
+            const cliModel = typeof usageIn?.model === "string" && usageIn.model ? usageIn.model : undefined;
             cliDoneMetrics = {
               startedAt: doneEv.metrics.startedAt,
               firstTokenAt:
@@ -11784,6 +11821,7 @@ async function _runCliAgentTurn(opts: {
               ...(Object.keys(usageOut).length
                 ? { usage: usageOut }
                 : {}),
+              ...(cliModel ? { model: cliModel } : {}),
               ...(cliToolCalls > 0 ? { toolCalls: cliToolCalls } : {}),
             };
           }

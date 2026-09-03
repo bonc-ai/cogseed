@@ -96,8 +96,14 @@ export interface GroupMessageMetrics {
     outputTokens?: number;
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
+    /** CLI 自报成本（美元，claude 的 total_cost_usd 等）。比单价表估算准，
+     *  渲染层优先消费；缺省时回退价格表估算。 */
+    costUsd?: number;
   };
   toolCalls?: number;
+  /** 该回合实际使用的模型 id（CLI 自报或主机下发值）——会话统计的上下文
+   *  分母按它解析，CLI 回合不再错用 CogSeed 当前选中模型的窗口。 */
+  model?: string;
 }
 
 export interface GroupMessage {

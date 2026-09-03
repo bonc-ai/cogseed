@@ -55,6 +55,15 @@ export async function startCogSeedInteractiveFollowup(
     });
   }
   const controller = deps.runtimeController ?? (await import('./runtime-controller')).cogseedRuntimeController;
+  // 执行后端判定与 wake-dispatcher 对齐：runtime.kind 归一后外接智能体一律
+  // 'p3394-gateway'（legacy 'cli' 兼容）——只认 'cli' 会把网关型智能体误判
+  // 成 cogseed-native 由内置模型代答（CLI 从未被调用：模型/强度控制全部
+  // 无效，回复口径也与真实 CLI 不符）。
+  const rt = executionContext.runtime as {
+    kind?: string; cli?: string; model?: string;
+    custom_args?: string[]; cli_provider_id?: string;
+  };
+  const isLocalCli = rt.kind === 'cli' || rt.kind === 'p3394-gateway';
   return controller.startCogSeedTask(userId, {
     requestId,
     task,
@@ -62,14 +71,16 @@ export async function startCogSeedInteractiveFollowup(
     agentId,
     sessionId: session.sessionId,
     ...(parent ? { parentTaskId: parent.taskId } : {}),
-    executionKind: executionContext.runtime.kind === 'cli' ? 'local-cli' : 'cogseed-native',
-    ...(executionContext.runtime.kind === 'cli' ? {
+    executionKind: isLocalCli ? 'local-cli' : 'cogseed-native',
+    ...(isLocalCli ? {
       localCli: {
-        cli: executionContext.runtime.cli,
+        cli: rt.cli,
         agentName: executionContext.agentName,
-        ...(executionContext.runtime.model ? { model: executionContext.runtime.model } : {}),
-        ...(executionContext.runtime.custom_args?.length ? { customArgs: executionContext.runtime.custom_args } : {}),
-        ...(executionContext.runtime.cli_provider_id ? { cliProviderId: executionContext.runtime.cli_provider_id } : {}),
+        ...(rt.model ? { model: rt.model } : {}),
+        ...(rt.custom_args?.length ? { customArgs: rt.custom_args } : {}),
+        ...(rt.cli_provider_id ? { cliProviderId: rt.cli_provider_id } : {}),
+        // 网关型外接智能体：与 wake/对话派发同一条托管 gateway 执行路径。
+        ...(rt.kind === 'p3394-gateway' ? { viaP3394Gateway: true } : {}),
       },
     } : {}),
     ...(executionContext.skillList !== undefined ? { allowedSkillIds: executionContext.skillList } : {}),
