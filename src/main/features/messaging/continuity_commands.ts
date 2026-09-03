@@ -18,7 +18,8 @@ import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import { registerDeferred } from '../../util/boot_init';
 import { listAgents } from '../agents';
-import { COMMANDER_ID, addMember, setActiveRecipient } from '../group_chat/state';
+import { COMMANDER_ID, addMember, readState, setActiveRecipient } from '../group_chat/state';
+import * as chats from '../chats';
 import { registerInboundCommand, type InboundCommandContext, type InboundCommandOutcome } from './commands';
 import * as bindings from './bindings';
 
@@ -86,16 +87,51 @@ async function handleAgent(ctx: InboundCommandContext): Promise<InboundCommandOu
   };
 }
 
+/** 当前执行者显示名：楼层 agent → 注册表名；无楼层 → 指挥官。 */
+async function currentExecutorLabel(uid: string, cid: string): Promise<string> {
+  const state = await readState(uid, cid);
+  const floor = state.active_recipient;
+  if (!floor) return t('messaging.continuity.badge_commander');
+  for (const agent of await listAgents()) {
+    if (agent.agent_id === floor && agent?.enabled !== false) return agent.name;
+  }
+  return t('messaging.continuity.badge_commander');
+}
+
+async function handleStatus(ctx: InboundCommandContext): Promise<InboundCommandOutcome> {
+  const { uid, instance, envelope } = ctx;
+  const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  const conversation = await chats.getConversation(uid, binding.cid);
+  const title = conversation?.title || binding.externalChatTitle || binding.cid;
+  const agent = await currentExecutorLabel(uid, binding.cid);
+  return { consumed: true, replyText: t('messaging.continuity.status_line', { title, agent }) };
+}
+
+async function handleUnbind(ctx: InboundCommandContext): Promise<InboundCommandOutcome> {
+  const { uid, instance, envelope } = ctx;
+  const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  const updated = await bindings.setBindingUnbound(uid, binding.key, true);
+  log.info('continuity chat unbound', {
+    uid,
+    cid: binding.cid,
+    instanceId: instance.id,
+    unboundedAt: updated?.unboundedAt || '',
+  });
+  return { consumed: true, replyText: t('messaging.continuity.unbind_done') };
+}
+
 // ── 安装 ─────────────────────────────────────────────────────────────────
 
 let installed = false;
 
-/** 注册 /agent handler。幂等；由 boot_init deferred 阶段调用。 */
+/** 注册 /agent /status /unbind handler。幂等；由 boot_init deferred 阶段调用。 */
 export function installContinuityCommands(): void {
   if (installed) return;
   installed = true;
   registerInboundCommand('agent', handleAgent);
-  log.info('continuity commands installed (/agent)');
+  registerInboundCommand('status', handleStatus);
+  registerInboundCommand('unbind', handleUnbind);
+  log.info('continuity commands installed (/agent /status /unbind)');
 }
 
 /** 测试辅助：重置安装状态。 */

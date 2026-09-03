@@ -629,6 +629,18 @@ async function handleInboundLocked(
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
+  // 渠道任务接续（G0）撤权：已解绑的渠道会话只放行 /new（上面的分支已
+  // 处理并 return），其余消息——含一切 slash 命令——一律明确拒绝并引导，
+  // 绝不静默吞掉，也绝不无提示地重建绑定。
+  const currentBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  if (currentBinding.unboundedAt) {
+    await completeLedger({ status: 'rejected', reason: 'binding_unbound' });
+    const runtime = runtimes.get(uid)?.get(instance.id);
+    if (runtime) {
+      await runtime.deliverText(currentBinding, envelope, t('messaging.continuity.unbound_reply'));
+    }
+    return { accepted: false, duplicate: false, reason: 'binding_unbound' };
+  }
   // Personal-context slash commands（/权限 /遗忘）：consumed by registered
   // handlers; the reply goes through the same ledger-backed delivery as the
   // session-reset confirmation and never consumes an agent turn.
