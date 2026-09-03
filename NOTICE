@@ -31,9 +31,14 @@ Hermes-Agent
 Component license boundary
 --------------------------
 
-The directory resources/guardrail/skill-sentry/ is a separately licensed
-component. It is distributed under the Apache License, Version 2.0; see its
-local LICENSE file. The root MIT License does not relicense that component.
+The directories under resources/guardrail/ are separately licensed
+components distributed under the Apache License, Version 2.0:
+
+  - resources/guardrail/skill-sentry/            (security scanner engine)
+  - resources/guardrail/skill-declaration-core/  (security declaration engine)
+
+Each has its own local LICENSE file. The root MIT License does not relicense
+those components.
 
 This product includes third-party software.  The complete list of
 third-party components, with their copyright and license information, is

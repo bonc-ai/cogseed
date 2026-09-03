@@ -47,8 +47,13 @@
   function heroKind() {
     const st = state.status;
     if (!st) return 'bad';
-    if (st.scanner !== 'present' || st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered') return 'bad';
-    if (st.scannerIntegrity !== 'verified' || st.declarationIntegrity !== 'verified') return 'warn';
+    // `absent_by_build` is a supported product shape: an open-source build that
+    // intentionally ships without the bundled deep scanner. It is reduced
+    // coverage (a warning), not a malfunction — only `broken`, an unrecognized
+    // scanner state, or tamper evidence is alert-level.
+    if (st.scanner !== 'present' && st.scanner !== 'absent_by_build') return 'bad';
+    if (st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered') return 'bad';
+    if (st.scanner !== 'present' || st.scannerIntegrity !== 'verified' || st.declarationIntegrity !== 'verified') return 'warn';
     return 'ok';
   }
 
@@ -107,16 +112,17 @@
   function componentCardsHtml() {
     const st = state.status || {};
     const scannerOk = st.scanner === 'present';
+    const scannerAbsent = st.scanner === 'absent_by_build';
     const sentryOk = st.scannerIntegrity === 'verified';
     const declarationOk = st.declarationIntegrity === 'verified';
     const cls = (ok) => (ok ? 'ok' : st.scannerIntegrity === 'tampered' || st.declarationIntegrity === 'tampered' ? 'bad' : 'warn');
     return `<div class="sec-grid">
       <div class="sec-card">
         <div class="sec-card-head"><div class="sec-card-name">${esc(t('settings.security.scanner_label'))}</div>
-          <span class="sec-pill ${scannerOk ? 'ok' : 'bad'}">${esc(scannerOk ? t('settings.security.scanner_present') : t('settings.security.scanner_broken'))}</span></div>
+          <span class="sec-pill ${scannerOk ? 'ok' : scannerAbsent ? 'warn' : 'bad'}">${esc(scannerOk ? t('settings.security.scanner_present') : scannerAbsent ? t('settings.security.scanner_absent_build') : st.scanner === 'broken' ? t('settings.security.scanner_broken') : t('settings.security.status_unknown'))}</span></div>
         <div class="sec-card-row"><span>${esc(t('settings.security.integrity_label'))}</span><span>${esc(integrityText(st.scannerIntegrity))}</span></div>
         <div class="sec-card-row"><span>${esc(t('settings.security.ruleset'))}</span><span>${esc(st.sentryRulesetVersion || '—')}</span></div>
-        <div class="sec-card-note">${esc(scannerOk ? t('settings.security.card_scanner_note') : t('settings.security.card_scanner_note_broken'))}</div>
+        <div class="sec-card-note">${esc(scannerOk ? t('settings.security.card_scanner_note') : scannerAbsent ? t('settings.security.scanner_not_present_sub') : t('settings.security.card_scanner_note_broken'))}</div>
       </div>
       <div class="sec-card">
         <div class="sec-card-head"><div class="sec-card-name">${esc(t('settings.security.sentry_engine'))}</div>
@@ -231,7 +237,11 @@
 
   // ── 数据加载与动作 ────────────────────────────────────────────────────────
   async function loadAll() {
-    renderLoading();
+    // First load shows the loading state; re-entry refreshes silently
+    // (stale-while-revalidate) so an engine install/restore or a rescan shows
+    // up the next time the user opens the tab instead of staying on the
+    // snapshot from the first visit.
+    if (!state.status) renderLoading();
     try {
       const r = await window.cogseed.invoke('skills.security.status', {});
       state.status = (r && r.status) || null;
@@ -348,19 +358,16 @@
   function initSecuritySettings() {
     const tabBtn = document.querySelector('[data-settings-tab="security"]');
     if (tabBtn) {
-      tabBtn.addEventListener('click', () => {
-        if (!tabBtn.dataset.securityLoaded) {
-          tabBtn.dataset.securityLoaded = '1';
-          loadAll();
-        }
-      });
+      // No one-shot guard: every activation refreshes. Without this the page
+      // keeps the status from the first visit — a scanner restored while the
+      // app ran stayed "需要留意" until a manual 刷新.
+      tabBtn.addEventListener('click', () => loadAll());
     }
   }
 
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('i18n-change', () => {
-      const tabBtn = document.querySelector('[data-settings-tab="security"]');
-      if (tabBtn?.dataset.securityLoaded === '1') render();
+      if (state.status) render();
     });
   }
 
