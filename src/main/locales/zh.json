@@ -243,6 +243,8 @@
   "messaging.continuity.agent_not_found": "未找到智能体：{name}。发送 /agent 查看可选列表。",
   "messaging.continuity.agent_ambiguous": "有多个匹配：{list}。请发送完整名称再试。",
   "messaging.continuity.agent_list": "可选智能体：{list}",
+  "messaging.continuity.agent_list_more": "等 {count} 个",
+  "messaging.continuity.agent_list_usage": "发送 /agent <名字> 切换执行智能体，切换后直接继续对话即可。",
   "messaging.continuity.agent_none_available": "当前没有可切换的智能体。",
   "messaging.continuity.status_line": "当前任务：{title}\n当前执行：{agent}",
   "messaging.continuity.unbind_done": "已解绑本会话。发送 /new 可开始新任务。",

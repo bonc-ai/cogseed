@@ -25,6 +25,18 @@ import * as bindings from './bindings';
 
 const log = createLogger('messaging:continuity_commands');
 
+/** 列表最多直接展示的名字数；超出部分折叠为「等 N 个」。 */
+export const AGENT_LIST_MAX = 15;
+
+/** 渲染 /agent 无参列表（纯函数，导出供测试）：截断 + 汇总 + 用法提示。 */
+export function formatAgentList(names: readonly string[]): string {
+  const shown = names.slice(0, AGENT_LIST_MAX).join('、');
+  const list = names.length > AGENT_LIST_MAX
+    ? `${shown} ${t('messaging.continuity.agent_list_more', { count: names.length - AGENT_LIST_MAX })}`
+    : shown;
+  return `${t('messaging.continuity.agent_list', { list })}\n${t('messaging.continuity.agent_list_usage')}`;
+}
+
 /** 与 router._normalizeNameKey 同口径：小写 + 去空白，容纳 "Claude Code"
  *  这类带空格显示名与大小写差异。 */
 function normalizeNameKey(s: string): string {
@@ -65,8 +77,8 @@ async function handleAgent(ctx: InboundCommandContext): Promise<InboundCommandOu
   // /agent（无参）：列出可切换的智能体，指挥官总在列。
   if (!args) {
     if (!agents.length) return { consumed: true, replyText: t('messaging.continuity.agent_none_available') };
-    const list = [t('messaging.continuity.badge_commander'), ...agents.map((a) => a.name)].join('、');
-    return { consumed: true, replyText: t('messaging.continuity.agent_list', { list }) };
+    const list = [t('messaging.continuity.badge_commander'), ...agents.map((a) => a.name)];
+    return { consumed: true, replyText: formatAgentList(list) };
   }
 
   const target = await resolveAgentTarget(args);

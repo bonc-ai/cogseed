@@ -243,6 +243,8 @@
   "messaging.continuity.agent_not_found": "エージェントが見つかりません：{name}。/agent で一覧を確認してください。",
   "messaging.continuity.agent_ambiguous": "複数が該当します：{list}。完全な名前を送って再試行してください。",
   "messaging.continuity.agent_list": "選択可能なエージェント：{list}",
+  "messaging.continuity.agent_list_more": "ほか {count} 件",
+  "messaging.continuity.agent_list_usage": "/agent <名前> で実行エージェントを切り替えられます。切り替え後はそのまま話しかけてください。",
   "messaging.continuity.agent_none_available": "切り替え可能なエージェントがありません。",
   "messaging.continuity.status_line": "現在のタスク：{title}\n実行中：{agent}",
   "messaging.continuity.unbind_done": "バインドを解除しました。/new で新しいタスクを開始できます。",
