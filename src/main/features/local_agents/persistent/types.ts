@@ -116,6 +116,9 @@ export interface PersistentAcquireOpts {
   /** Model for NEW windows — session-level in most CLIs (applied at
    *  creation; existing windows keep their creation-time model). */
   model?: string;
+  /** Reasoning-effort hint — also process-lifetime for resident
+   *  windows (backends with a concrete switch consume it at spawn). */
+  thinkingLevel?: 'off' | 'low' | 'high';
   resumeSessionId?: string;
   /** Custom-provider env — servers spawned per provider fingerprint
    *  so a switch to different credentials never reuses a process

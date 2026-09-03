@@ -130,6 +130,7 @@ export class PersistentRuntimeManager {
         binPath: opts.binPath,
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
         ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
         ...(opts.providerEnv ? { providerEnv: opts.providerEnv } : {}),
         onEvent: opts.onEvent,
