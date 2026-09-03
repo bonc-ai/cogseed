@@ -148,6 +148,12 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 5. **create_or_update_submission_record** — `submit-project`（载荷：challengeId/githubRepoUrl/projectTitle/aarText(≥10字)/selfEvaluationText(≥10字)/isPublic/reviewMode；可选 workdir+requiredDeliverables 触发预检）。返回 task_id
 6. **generate_submission_summary** — `get-task` 轮询；组装教授向 `summary_markdown`
+> **异步初评（2026-09-03 平台改造）**：`submit-project` 返回 task_id 后，平台**受理秒回**
+> （task completed + submissionId + pendingReview=true），AI 初评由 review-task-agent
+> 异步执行并回填 evaluationId（一般 1-5 分钟）。`get-task` 轮询时若见
+> pendingReview=true 且尚无 evaluationId，稍候重查或等飞书「AI 初评完成」通知即可；
+> 不要误报失败，也不要重复提交（平台有消息级幂等 + 业务级防重）。
+
 7. **trigger_self_evaluation** — 平台自动触发 AI 初评；`get-evaluation` 查分项/优缺点/建议
 8. **update_portfolio_index** — 平台自动生成作品集条目
 9. **notify_professor_or_course_owner** — 平台飞书通知（学生 + 班级群）
