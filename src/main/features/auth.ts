@@ -64,6 +64,7 @@ import { userAuthProfilesFile, userLocalConfigDir } from '../paths';
 import { safeId } from '../storage';
 import * as localSecrets from '../util/local-secret-store';
 import { safeExternalUserActionUrl } from '../util/window-security';
+import { cliTypeFromPseudoProvider } from '../model/agent_model_routing';
 import { getActiveUserId } from './users';
 import {
   CATALOG,
@@ -1174,9 +1175,64 @@ export async function listProviders(): Promise<{ providers: ProviderEntry[] }> {
  *      minor) version bands from pi-ai's raw list. Only used for
  *      uncurated providers.
  */
+/** 伪 provider（cli-<type>）的模型清单：运行时扫描（网关 /p3394/models，问
+ *  CLI 本身）∪ 静态目录——与渲染层 cliExecControl.loadCliModels 同一数据源
+ *  （同一主进程函数），条目 id 为伪装全串。扫描失败只是降级到静态清单，
+ *  claude 扫描别名同样规范化到客户端公开 id（与 p3394.external.listModels
+ *  IPC 同规则）。全动态 import：auth 不与 p3394_bridge 建立静态依赖。 */
+async function listAgentProviderModels(
+  cliType: string,
+): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] }> {
+  const { encodeAgentModel } = await import('../model/agent_model_routing');
+  let scannedModels: Array<{ id?: string; label?: string }> = [];
+  try {
+    const { inspectExternalGatewayModels } = await import('./p3394_bridge/external-gateways');
+    const scanned = await inspectExternalGatewayModels(cliType);
+    scannedModels = (scanned && Array.isArray(scanned.models)) ? scanned.models : [];
+  } catch { /* 扫描失败 → 静态清单兜底 */ }
+  let staticModels: Array<{ id: string; label: string; contextWindow?: number; default?: boolean; description?: string }> = [];
+  try {
+    const localModels = await import('./local_agents/models');
+    staticModels = localModels.listModels(cliType as never) ?? [];
+  } catch { /* 静态目录缺失不阻塞 */ }
+  let normalized = scannedModels;
+  if (cliType === 'claude') {
+    try {
+      const localModels = await import('./local_agents/models');
+      normalized = scannedModels
+        .map((m) => ({ ...m, id: localModels.canonicalClaudeModelId(String(m?.id ?? '')) ?? '' }))
+        .filter((m) => m.id);
+    } catch { /* 保持原始扫描值 */ }
+  }
+  const seen = new Set<string>();
+  const out: { id: string; name: string; contextWindow?: number }[] = [];
+  const push = (bareId: string, label: string, contextWindow?: number) => {
+    const key = String(bareId || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      id: encodeAgentModel(cliType, key),
+      name: String(label || key),
+      ...(typeof contextWindow === 'number' && contextWindow > 0 ? { contextWindow } : {}),
+    });
+  };
+  for (const m of staticModels) push(m.id, m.label, m.contextWindow);
+  for (const m of normalized) push(String(m?.id ?? ''), m?.label || String(m?.id ?? ''));
+  return { models: out };
+}
+
 export async function listModels(providerId: string): Promise<{ models: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] }> {
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
+  // 伪装模型 ID 路由：伪 provider（cli-<type>）= 本机 CLI 的模型清单出口。
+  // 数据与渲染层 cliExecControl.loadCliModels 完全同源（inspectExternalGatewayModels
+  // 运行时扫描 ∪ local_agents 静态目录——同一主进程函数，无第二份清单逻辑）；
+  // 条目 id 直接给伪装全串 cli/<type>@<model>（存储单一真相，消费方零拼接）。
+  // 伪 provider 不是 API 凭证：listEntries/entry group/凭证过滤全部不经此分支。
+  {
+    const cliType = cliTypeFromPseudoProvider(id);
+    if (cliType) return listAgentProviderModels(cliType);
+  }
   if (isCustomProviderId(id)) {
     // 方案 C：reasoning 标注按识别结果（与 custom_provider_runtime 的
     // 透传判定同一数据源）——识别为支持推理的模型，UI 解锁档位且请求
