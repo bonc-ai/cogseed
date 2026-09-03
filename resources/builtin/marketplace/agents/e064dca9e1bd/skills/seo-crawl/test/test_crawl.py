@@ -50,7 +50,7 @@ GOOD_HTML = """<!doctype html>
   <a href="/about">about</a>
   <a href="https://other.example/x">external</a>
   <a href="#frag">frag</a>
-  <a href="mailto:hi@cogseed.ai">mail</a> <!-- test fixture -->
+  <a href="mailto:hi@cogseed.ai">mail</a>
 </body>
 </html>"""
 
@@ -222,7 +222,7 @@ class ProxyTargetSsrfTest(unittest.TestCase):
         assert_proxy_target_safe("only-proxy-knows.example", 443)  # must not raise
 
     def test_rejects_mixed_public_and_private(self):
-        self._resolves_to(["8.8.8.8", "10.0.0.5"])  # test fixture
+        self._resolves_to(["8.8.8.8", "10.0.0.5"])
         with self.assertRaises(URLSafetyError):
             assert_proxy_target_safe("split.example", 443)
 
@@ -236,7 +236,7 @@ class SsrfObfuscationTest(unittest.TestCase):
         # inside a v6 host. Each MUST be rejected.
         self.assertFalse(is_safe_ip("::ffff:169.254.169.254"))  # cloud metadata
         self.assertFalse(is_safe_ip("::ffff:127.0.0.1"))        # loopback
-        self.assertFalse(is_safe_ip("2002:0a00:0001::1"))       # 6to4 -> 10.0.0.1 (test fixture)
+        self.assertFalse(is_safe_ip("2002:0a00:0001::1"))       # 6to4 -> 10.0.0.1
         # NOTE: the public look-alike "::ffff:8.8.8.8" is intentionally NOT
         # asserted as safe here: on CPython < 3.13 the stdlib ipaddress module
         # marks the whole ::ffff:0:0/96 range is_private/is_reserved, so the
@@ -248,7 +248,7 @@ class SsrfObfuscationTest(unittest.TestCase):
         with self.assertRaises(URLSafetyError):
             validate_url_strict("http://0177.0.0.1/")   # 0177 octal == 127
         with self.assertRaises(URLSafetyError):
-            validate_url_strict("http://167772161/")    # == 10.0.0.1 (test fixture)
+            validate_url_strict("http://167772161/")    # == 10.0.0.1
 
     def test_ipv6_literal_url_rejected(self):
         with self.assertRaises(URLSafetyError):
@@ -282,7 +282,7 @@ class ResolveAndPinTest(unittest.TestCase):
         url_safety._resolve_all = self._orig
 
     def test_resolve_and_pin_rejects_mixed(self):
-        url_safety._resolve_all = lambda host, port: ["8.8.8.8", "10.0.0.5"]  # test fixture
+        url_safety._resolve_all = lambda host, port: ["8.8.8.8", "10.0.0.5"]
         with self.assertRaises(URLSafetyError):
             resolve_and_pin("split.example", 443)
         url_safety._resolve_all = lambda host, port: ["8.8.8.8"]

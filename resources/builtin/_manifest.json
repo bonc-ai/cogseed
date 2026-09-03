@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "492033668e03775f78ad58b7ebb93b15d9f34efdeccfaffb474250a616a40517",
+  "content_tree_sha256": "3f12dbf2eb30976ce4f618516e8afd5eb437a01d7f400bd277359e1e0f0cef83",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -299,8 +299,8 @@
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/skills/seo-crawl/test/test_crawl.py",
-      "bytes": 17617,
-      "sha256": "4284fe2b4358fd54bf4aa1154a7b40d036cc1c070d6d30ba83a07602eaca58aa"
+      "bytes": 17533,
+      "sha256": "613501152c14c4ef900ecf072b7f212451a5dc3514b7e4d379a55e7cc27617ba"
     },
     {
       "path": "marketplace/agents/e064dca9e1bd/skills/seo-cwv/scripts/cwv.py",
