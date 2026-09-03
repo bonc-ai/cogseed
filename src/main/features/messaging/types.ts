@@ -150,6 +150,10 @@ export interface MessagingBinding {
    * random id, never the token; both binding and ledger files are
    * machine-private and are never rendered to the renderer. */
   contextTokenRef?: string;
+  /** 渠道任务接续（G0）撤权：非空 ISO 时间 = 该渠道会话已被用户解绑，
+   *  入站消息被明确拒绝并引导 /new；/new 的 forceNew 轮换会丢弃旧
+   *  binding（连同本标记）重新开始。 */
+  unboundedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

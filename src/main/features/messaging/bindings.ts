@@ -99,6 +99,7 @@ function normalizeBinding(key: string, value: unknown): MessagingBinding | null 
     ...(boundedOptionalText(item.threadId, 512) ? { threadId: boundedOptionalText(item.threadId, 512) } : {}),
     ...(item.replyInThread === true ? { replyInThread: true } : {}),
     ...(boundedOptionalText(item.contextTokenRef, 512) ? { contextTokenRef: boundedOptionalText(item.contextTokenRef, 512) } : {}),
+    ...(typeof item.unboundedAt === 'string' && item.unboundedAt ? { unboundedAt: item.unboundedAt } : {}),
     createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
   };
@@ -330,6 +331,24 @@ export async function removeBindingsForInstance(uid: string, instanceId: string)
     }
     if (removed) await writeBindings(uid, data);
     return removed;
+  });
+}
+
+/** 渠道任务接续（G0）撤权：标记/恢复单个渠道会话绑定。unbound=true 写入
+ *  unboundedAt（入站将被 manager 拒绝并引导 /new）；false 清除标记重新
+ *  激活。binding 保留不删，历史会话与消息文件不受影响。 */
+export async function setBindingUnbound(uid: string, key: string, unbound: boolean): Promise<MessagingBinding | null> {
+  assertUserId(uid);
+  return lockFor(uid).runExclusive(async () => {
+    const data = await readBindings(uid);
+    const binding = data.bindings[key];
+    if (!binding) return null;
+    if (unbound) binding.unboundedAt = nowIso();
+    else delete binding.unboundedAt;
+    binding.updatedAt = nowIso();
+    data.bindings[key] = binding;
+    await writeBindings(uid, data);
+    return { ...binding };
   });
 }
 

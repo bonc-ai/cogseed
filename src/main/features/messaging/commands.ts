@@ -69,6 +69,8 @@ export function registeredCommandNames(): InboundCommandName[] {
 const PERMISSION_RE = /^\/权限(?:\s|$)/;
 const FORGET_RE = /^\/遗忘(?:\s|$)/;
 const AGENT_RE = /^\/agent(?:\s|$)/;
+const STATUS_RE = /^\/status(?:\s|$)/;
+const UNBIND_RE = /^\/unbind(?:\s|$)/;
 
 /**
  * 把入站文本解析为命令。只识别本模块维护的命令名；未知 `/xxx` 返回 null
@@ -90,6 +92,12 @@ export function matchInboundCommand(text: string): InboundCommand | null {
   }
   if (AGENT_RE.test(trimmed)) {
     return { name: 'agent', args: trimmed.replace(AGENT_RE, '').trim() };
+  }
+  if (STATUS_RE.test(trimmed)) {
+    return { name: 'status', args: trimmed.replace(STATUS_RE, '').trim() };
+  }
+  if (UNBIND_RE.test(trimmed)) {
+    return { name: 'unbind', args: trimmed.replace(UNBIND_RE, '').trim() };
   }
   return null;
 }
