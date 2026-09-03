@@ -17,7 +17,7 @@
 import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import { registerDeferred } from '../../util/boot_init';
-import { listAgents } from '../agents';
+import { listAgents, type Agent } from '../agents';
 import { COMMANDER_ID, addMember, readState, setActiveRecipient } from '../group_chat/state';
 import * as chats from '../chats';
 import { registerInboundCommand, type InboundCommandContext, type InboundCommandOutcome } from './commands';
@@ -45,8 +45,12 @@ function normalizeNameKey(s: string): string {
 
 /** 解析用户输入的名字/Id → 目标 agent。匹配顺序：精确（显示名 normalize
  *  后或原始 agent_id）→ 唯一前缀（"cod" 命中 Codex；多候选返回歧义名单
- *  供上层引导）。"指挥官/commander" 视为切回指挥官（重置楼层）。 */
-export async function resolveAgentTarget(name: string): Promise<
+ *  供上层引导）。"指挥官/commander" 视为切回指挥官（重置楼层）。
+ *  可传入调用方已取好的启用名单，避免一次命令重复读注册表。 */
+export async function resolveAgentTarget(
+  name: string,
+  roster?: Agent[],
+): Promise<
   | { kind: 'commander' }
   | { kind: 'agent'; id: string; name: string }
   | { kind: 'ambiguous'; candidates: string[] }
@@ -55,7 +59,7 @@ export async function resolveAgentTarget(name: string): Promise<
   const key = normalizeNameKey(name);
   if (!key) return null;
   if (key === '指挥官' || key === 'commander' || key === 'cogseed') return { kind: 'commander' };
-  const agents = (await listAgents()).filter((a) => a?.enabled !== false);
+  const agents = roster || (await listAgents()).filter((a) => a?.enabled !== false);
   for (const agent of agents) {
     if (agent.agent_id === name.trim()) return { kind: 'agent', id: agent.agent_id, name: agent.name };
     if (normalizeNameKey(agent.name) === key) return { kind: 'agent', id: agent.agent_id, name: agent.name };
@@ -81,7 +85,7 @@ async function handleAgent(ctx: InboundCommandContext): Promise<InboundCommandOu
     return { consumed: true, replyText: formatAgentList(list) };
   }
 
-  const target = await resolveAgentTarget(args);
+  const target = await resolveAgentTarget(args, agents);
   if (!target) {
     return { consumed: true, replyText: t('messaging.continuity.agent_not_found', { name: args }) };
   }
