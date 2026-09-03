@@ -202,6 +202,50 @@ describe('KSTAR task closure', () => {
     ]);
   });
 
+  it('does not apply one injected asset merely because another cited asset has a successful tool call', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-a', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-a', assetVersion: '1', messageId: 'msg-usage-specific-a',
+      boundary: 'real', status: 'injected',
+    });
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-b', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-b', assetVersion: '1', messageId: 'msg-usage-specific-b',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-specific', conversationId: 'cid-usage-specific',
+      projectionId: 'proj-usage-specific', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-usage-specific-user', from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-specific-a', from: 'agent-a', text: 'Used the first asset.', ts: '2026-09-04T00:00:20.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-a', version: '1', projection_id: 'proj-usage-specific' }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'tool-specific-a', name: 'read_file' } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: 'tool-specific-a', name: 'read_file' } } },
+          ],
+        },
+        {
+          id: 'msg-usage-specific-b', from: 'agent-a', text: '', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-b', version: '1', projection_id: 'proj-usage-specific' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user')).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: 'asset-usage-specific-a', status: 'applied', evidenceKind: 'tool_call' }),
+      expect.objectContaining({ assetId: 'asset-usage-specific-b', status: 'usage_unknown', evidenceKind: 'none' }),
+    ]));
+  });
+
   it.each(['failed', 'cancelled', 'timed_out'] as const)(
     'never infers applied for a %s run even when successful action evidence exists',
     async (status) => {
