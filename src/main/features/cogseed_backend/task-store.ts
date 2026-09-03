@@ -12,7 +12,9 @@ import {
   assertCogSeedTaskId,
   assertCogSeedUserId,
   cogseedRequestClaimFile,
+  cogseedTaskEventsFile,
   cogseedTaskFile,
+  cogseedTaskProjectionFile,
   cogseedTasksDirectory,
 } from './paths';
 import {
@@ -559,6 +561,73 @@ export async function listCogSeedTasks(userId: string): Promise<CogSeedTaskRecor
     tasks.push(await readCogSeedTask(userId, taskId).then((task) => { if (!task) throw new Error('CogSeed task disappeared during recovery'); return task; }));
   }
   return tasks.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export interface CogSeedConversationPurgeReport {
+  /** Tasks whose durable files were removed. */
+  purgedTaskIds: string[];
+  /** Held back because a terminal result has not reached its destination yet. */
+  retainedTaskIds: string[];
+  /** Could not be read or removed. Reported, never blindly deleted. */
+  failedTaskIds: string[];
+}
+
+/** Remove the Group Chat shadow tasks a deleted conversation leaves behind.
+ *
+ * Only `group-chat` tasks whose `conversationId` matches exactly are touched.
+ * A per-agent follow-up carries the same conversation id but runs as
+ * `local-cli` / `cogseed-native`; that record is the user's work, not the
+ * conversation's projection, and the Run Center already withholds its dead
+ * conversation exit. Tasks whose terminal result is still undelivered are kept
+ * for the reconciler — the destination being gone must not destroy the only
+ * reference to a result it never received.
+ *
+ * Judged per task, never through the parent chain: a child can outlive a
+ * missing parent and still belong to the conversation it names.
+ */
+export async function purgeCogSeedGroupChatTasksByConversation(
+  userId: string,
+  conversationId: string,
+): Promise<CogSeedConversationPurgeReport> {
+  assertCogSeedUserId(userId);
+  const cid = assertCogSeedConversationId(conversationId);
+  const report: CogSeedConversationPurgeReport = { purgedTaskIds: [], retainedTaskIds: [], failedTaskIds: [] };
+
+  let entries: import('node:fs').Dirent[];
+  try { entries = await fs.readdir(cogseedTasksDirectory(userId), { withFileTypes: true }); }
+  catch (error) { if (isEnoent(error)) return report; throw error; }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const taskId = entry.name.slice(0, -'.json'.length);
+    let task: CogSeedTaskRecord | null = null;
+    try { task = await readCogSeedTask(userId, taskId); }
+    catch { report.failedTaskIds.push(taskId); continue; }
+    if (!task) continue;
+    if (task.executionKind !== 'group-chat' || task.conversationId !== cid) continue;
+    if (task.resultDeliveryState === 'pending' || task.resultDeliveryState === 'pending-recovery') {
+      report.retainedTaskIds.push(taskId);
+      continue;
+    }
+    try {
+      // Claims are keyed by request id, so drop one only while it still points
+      // at this task. Removing it before the record keeps the failure modes
+      // ordered: a claim without a task falls back to a scan, while a task
+      // without a claim would make `readCogSeedTaskByRequestId` throw.
+      if (task.requestId) {
+        const claimFile = cogseedRequestClaimFile(userId, task.requestId);
+        try {
+          const claim = JSON.parse(await fs.readFile(claimFile, 'utf8')) as { taskId?: unknown };
+          if (claim?.taskId === taskId) await fs.rm(claimFile, { force: true });
+        } catch (error) { if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error; }
+      }
+      await fs.rm(cogseedTaskEventsFile(userId, taskId), { force: true });
+      await fs.rm(cogseedTaskProjectionFile(userId, taskId), { force: true });
+      await fs.rm(cogseedTaskFile(userId, taskId), { force: true });
+      report.purgedTaskIds.push(taskId);
+    } catch { report.failedTaskIds.push(taskId); }
+  }
+  return report;
 }
 
 export async function readLatestCogSeedTaskForAgent(

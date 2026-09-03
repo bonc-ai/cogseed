@@ -4310,13 +4310,15 @@ describe('认知资产一级信息架构', () => {
   /** 四个一级任务视图 + 两个辅助入口，都必须在骨架里真实存在。 */
   it('index.html 只有四个一级任务视图，来源与沉淀活动是辅助入口', () => {
     const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf8');
     const tabs = [...html.matchAll(/class="skills-cognition-tab[^"]*"[^>]*data-cognition-page="([a-z]+)"/g)]
       .map((match) => match[1]);
     expect(tabs).toEqual(['assets', 'inbox', 'proofs', 'governance']);
-    // 辅助入口在页头，不在 tablist 里。
-    const aux = [...html.matchAll(/class="btn btn-sm cognition-aux-entry"[^>]*data-cognition-page="([a-z]+)"/g)]
-      .map((match) => match[1]);
-    expect(aux.sort()).toEqual(['captures', 'sources']);
+    // 辅助入口由 uiPageHeader() 的 secondary/sm 操作渲染（页面骨架规格 PH-04），
+    // 挂在 #cognition-page-header 占位节点上，不进 tablist。
+    expect(html).toContain('id="cognition-page-header"');
+    expect(skills).toContain("attrs: { 'data-cognition-page': 'sources' }");
+    expect(skills).toContain("attrs: { 'data-cognition-page': 'captures' }");
   });
 
   /** 老路由必须有兼容映射，不能变死链。 */

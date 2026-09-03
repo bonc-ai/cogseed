@@ -156,6 +156,12 @@ function injectPackageRuntimeSecrets(scriptPath) {
         secrets = JSON.parse(fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkg.name}.json`), 'utf8'));
       } catch { return; }
       if (!secrets || typeof secrets !== 'object') return;
+      // Bundled / plain-local installs carry no repo_url and cannot git-update:
+      // silent auto-update defaults OFF for them (updates ride the app release).
+      // An explicit caller env always wins.
+      if (!pkg.repo_url && !('EDUSEED_PLUGIN_AUTOUPDATE' in process.env)) {
+        process.env.EDUSEED_PLUGIN_AUTOUPDATE = '0';
+      }
       applyPackageSecrets(secrets);
       return;
     }

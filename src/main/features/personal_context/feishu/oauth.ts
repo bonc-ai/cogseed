@@ -33,6 +33,33 @@ export const FEISHU_READ_SCOPES = [
   'im:chat:readonly',
 ] as const;
 
+/**
+ * 分享场景所需写权限（方案 A/B：创建 docx/wiki、写入内容、设置公开权限）。
+ * 只在用户主动触发「分享到飞书」时使用；普通只读同步继续用 FEISHU_READ_SCOPES。
+ *
+ * ⚠️ 刻意不继承 FEISHU_READ_SCOPES：分享场景与个人上下文同步是两套独立授权，
+ * 混在一起会让用户被迫开通日历/群组等无关权限（20027 权限不足）。分享只需要：
+ *  - docx:document：创建及编辑新版文档
+ *  - wiki:wiki：查看、编辑和管理知识库
+ *  - drive:file：上传、下载文件到云空间（附件/封面）
+ *  - docs:permission.setting:write_only：修改云文档权限设置（链接分享三档）
+ * 实测验证点：若 `docs:permission.setting:write_only` 在平台显示为其他名称，
+ * 以「权限管理」搜索结果为准并同步改这里（授权页按此校验，无效权限点报 20043）。
+ */
+export const FEISHU_SHARE_SCOPES = [
+  'docx:document',
+  'wiki:wiki',
+  'drive:file',
+  'docs:permission.setting:write_only',
+] as const;
+
+/** 判断凭据 scopes 是否已含分享写权限（用于 need_reauthorize 检测） */
+export function hasFeishuShareScopes(scopes: string[] | undefined | null): boolean {
+  if (!Array.isArray(scopes) || scopes.length === 0) return false;
+  // 任一拍板的写权限存在即视为具备分享能力（避免要求全部四个名称精确匹配）
+  return scopes.includes('docx:document') || scopes.includes('wiki:wiki') || scopes.includes('docs:permission.setting:write_only');
+}
+
 export interface FeishuOAuthApp {
   appId: string;
   appSecret: string;

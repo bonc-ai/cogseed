@@ -114,9 +114,26 @@ skill-sentry 2.1.0
     The component's SKILL.md and pyproject.toml explicitly declare
     Apache-2.0. This component is not relicensed by the root MIT LICENSE.
 
+skill-declaration-core 1.3.0
+    Component path: resources/guardrail/skill-declaration-core/
+    Copyright: CogSeed (as declared by the component metadata)
+    License: Apache-2.0
+    License text: resources/guardrail/skill-declaration-core/LICENSE
+    The component's SKILL.md and pyproject.toml explicitly declare
+    Apache-2.0. This component is not relicensed by the root MIT LICENSE.
+
 --------------------------------------------------------------------
 6. Package license texts retained in this repository
 --------------------------------------------------------------------
+
+Exif Parser 0.1.12
+    Copyright (c) 2010 Bruno Windels, Daniel Leinich
+    License: MIT
+    License text: third_party_licenses/exif-parser/LICENSE.md
+    Package: https://registry.npmjs.org/exif-parser/-/exif-parser-0.1.12.tgz
+    Package integrity: sha512-c2bQfLNbMzLPmzQuOr8fy0csy84WmwnER81W88DzTp9CYNPJ6yzOj2EZAh9pywYpqHnshVLHQJ8WzldAyfY+Iw==
+    Upstream evidence: https://github.com/bwindels/exif-parser/blob/072126586f21e973f15c9da5d12db207a0fb6b10/LICENSE.md
+    License SHA-256: 3c58bdcad5b1313456b7cf639574708a84a80ee6bddf1a26f0c5fc4d7ab1830b
 
 Mammoth 1.12.0
     (c) 2013 Michael Williamson

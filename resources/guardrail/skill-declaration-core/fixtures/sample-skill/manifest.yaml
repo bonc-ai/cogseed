@@ -1,0 +1,5 @@
+# Compatibility manifest generated from artifact.yaml (unidirectional)
+id: skill.sample.local_format
+name: sample-local-format
+version: "1.0.0"
+security_manifest: references/security-manifest.yaml

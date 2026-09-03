@@ -190,7 +190,9 @@
   margin: 0;
   color: var(--text-heading);
   font-family: var(--font-sans);
-  font-size: var(--font-size-5);
+  /* 页面标题走 --font-size-6（20px）：设计系统 typography.css 明确 page title
+     用它替换旧的 25 / 16 / 20px 三套；--font-size-5 是对话框标题/输入框字号。 */
+  font-size: var(--font-size-6);
   font-weight: var(--font-weight-semibold);
   line-height: var(--line-height-title);
   letter-spacing: var(--tracking-title);

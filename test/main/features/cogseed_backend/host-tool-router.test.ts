@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
 
 import { createCogSeedHostToolRouter } from '../../../../src/main/features/cogseed_backend/host-tool-router';
+import * as paths from '../../../../src/main/paths';
+import {
+  _resetActionApprovalForTest,
+  _setActionApprovalBroadcastForTest,
+  respondActionApproval,
+} from '../../../../src/main/features/action_approval';
 
 const { resolveRuntimeCapabilities, runMessagingHostTool } = vi.hoisted(() => ({
   resolveRuntimeCapabilities: vi.fn(),
@@ -19,6 +26,11 @@ const context: any = { request: { user_id: 'router-user', request_id: 'req-paren
 beforeEach(() => {
   resolveRuntimeCapabilities.mockReset();
   runMessagingHostTool.mockReset();
+});
+
+afterEach(() => {
+  _resetActionApprovalForTest();
+  fs.rmSync(paths.userRoot('router-user'), { recursive: true, force: true });
 });
 
 describe('CogSeed host tool router', () => {
@@ -72,5 +84,34 @@ describe('CogSeed host tool router', () => {
       userId: 'router-user',
       sourceKey: 'req-parent:host-m2',
     }));
+  });
+
+  it('bridges a Worker approval request to the main-owned action gate and records the outcome', async () => {
+    const pushed: any[] = [];
+    _setActionApprovalBroadcastForTest((_channel, payload) => pushed.push(payload));
+    const router = createCogSeedHostToolRouter({});
+    const waiting = router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-a1',
+      name: 'action_approval_request',
+      input: {
+        actor: 'writer', action: 'run_skill', target: 'writer / create', scope: 'run one script',
+        audit_target: 'Skill script: writer/create', audit_scope: 'argument count: 0', risk: 'high',
+        reasons: ['local_skill_execution'], fingerprint: 'b'.repeat(64),
+      },
+    }, context);
+    await vi.waitFor(() => expect(pushed).toHaveLength(1));
+    await respondActionApproval(pushed[0].request_id, 'approve');
+    const approval = await waiting;
+    const requestId = JSON.parse(approval.content).request_id;
+    expect(approval.isError).toBeFalsy();
+
+    await expect(router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-a2',
+      name: 'action_approval_execution', input: { approval_request_id: requestId, phase: 'started' },
+    }, context)).resolves.toEqual({ content: JSON.stringify({ ok: true }) });
+    await expect(router.handle({
+      type: 'host_tool_call', request_id: 'req-parent', runtime_session_id: 'mruntime-parent', call_id: 'host-a3',
+      name: 'action_approval_execution', input: { approval_request_id: requestId, phase: 'succeeded' },
+    }, context)).resolves.toEqual({ content: JSON.stringify({ ok: true }) });
   });
 });

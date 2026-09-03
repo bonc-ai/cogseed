@@ -4,21 +4,23 @@
  * 前置：CogSeed 运行中（8444）+ 本机已装 openclaw（可用 P3394_E2E_OPENCLAW_BIN 指定路径）。
  */
 'use strict';
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { resolveE2eBin, readCogseedBridgeToken } = require('./p3394-e2e-common.cjs');
 
 const COGSEED_ENDPOINT = 'http://127.0.0.1:8444';
-const COGSEED_TOKEN = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', 'cogseed', 'p3394-bridge.json'), 'utf8')).token;
-const OPCLW = process.env.P3394_E2E_OPENCLAW_BIN || 'openclaw';
-function resolveCliBin(candidate) {
-  if (path.isAbsolute(candidate)) return fs.existsSync(candidate) ? candidate : '';
-  try { return spawnSync('which', [candidate], { encoding: 'utf8' }).stdout.trim(); } catch { return ''; }
-}
+const COGSEED_TOKEN = readCogseedBridgeToken();
+const openclawBin = resolveE2eBin('openclaw', { envKey: 'P3394_E2E_OPENCLAW_BIN' });
 const GATEWAY_SCRIPT = path.resolve(__dirname, '..', 'p3394-gateway', 'gateway.cjs');
+
+if (process.argv.includes('--list-bin')) {
+  console.log(openclawBin || '(not found)');
+  process.exit(openclawBin ? 0 : 1);
+}
 
 function freePort() { return new Promise((res) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); }); }
 function getJson(url, t = 3000) { return new Promise((res) => { const r = http.get(url, { timeout: t }, (x) => { let d = ''; x.on('data', (c) => d += c); x.on('end', () => res({ s: x.statusCode, d })); }); r.on('error', () => res({ s: 0, d: '' })); r.on('timeout', () => { r.destroy(); res({ s: 0, d: '' }); }); }); }
@@ -29,15 +31,18 @@ async function main() {
   const replyPort = await freePort();
   const results = [];
   const mark = (n, ok, d) => { results.push(ok); console.log((ok ? '✓ ' : '✗ ') + n + (d ? ' — ' + d : '')); };
-  const openclawBin = resolveCliBin(OPCLW);
-  mark('openclaw 二进制存在', !!openclawBin, OPCLW);
+  mark('openclaw 二进制存在', !!openclawBin, openclawBin || '未找到，可通过 P3394_E2E_OPENCLAW_BIN 指定');
+  if (!openclawBin) {
+    console.error('未找到 openclaw CLI。请安装 openclaw，或设置 P3394_E2E_OPENCLAW_BIN 为 openclaw 绝对路径。');
+    process.exit(1);
+  }
 
   const env = { ...process.env,
     P3394_GATEWAY_PORT: String(gwPort), P3394_GATEWAY_HOST: '127.0.0.1',
     P3394_ADVERTISE_ENDPOINT: `http://127.0.0.1:${gwPort}`,
     P3394_GATEWAY_HOME: path.join(os.tmpdir(), 'p3394-openclaw-e2e-' + Date.now()),
     P3394_AGENT: 'openclaw', P3394_AGENT_ID: 'openclaw', P3394_AGENT_ALIAS: 'OpenClaw-RealE2E',
-    P3394_AGENT_CLI: openclawBin || OPCLW,
+    P3394_AGENT_CLI: openclawBin,
     COGSEED_ENDPOINT, COGSEED_TOKEN,
     P3394_HEARTBEAT_MS: '5000', P3394_AGENT_TIMEOUT_MS: '180000', P3394_AGENT_CLI_ARGS: 'agent --local --json --agent oc-claude --message {message}',
     // app-server 是托管的 codex 常驻运行时；加长 heartbeat 防超时

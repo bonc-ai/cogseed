@@ -6,6 +6,7 @@ import { capToolResult, DEFAULT_INLINE_RESULT_TOKENS, type WrapOpts } from '../.
 import { cogseedRuntimeSessionToolResultsDir, userRoot } from '../../../../paths';
 import { normalizeRuntimePath } from './permissions';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
+import { runWithRuntimeActionApproval } from './action-approval';
 
 function formatError(code: string, message: string): RuntimeToolResult {
   return { content: `[${code}] ${message}`, isError: true };
@@ -85,30 +86,46 @@ export async function runRuntimeBashTool(
     return formatError('E_RUNTIME_PERMISSION_DENIED', 'runtime bash is not enabled by policy');
   }
 
+  let cwd: string;
+  try {
+    cwd = resolveCwd(input.working_dir, ctx);
+  } catch (error) {
+    return formatError((error as { code?: string }).code || 'E_RUNTIME_PATH_DENIED', (error as Error).message);
+  }
   const risk = classifyBashCommand(command);
-  if (risk.risky) {
+  if (risk.risky && ctx.toolPolicy.shell !== 'allow_with_confirmation') {
     return formatError('E_RUNTIME_BASH_REQUIRES_APPROVAL', `runtime bash requires approval for ${risk.reasons.join(', ')}`);
   }
 
-  const cwd = resolveCwd(input.working_dir, ctx);
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    COGSEED_NODE: process.execPath,
-    COGSEED_PC_DIR: ctx.pcDir,
-    COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
-    COGSEED_UID: ctx.userId,
-    ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
+  const execute = async (): Promise<RuntimeToolResult> => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      COGSEED_NODE: process.execPath,
+      COGSEED_PC_DIR: ctx.pcDir,
+      COGSEED_WORKSPACE_ROOT: path.dirname(userRoot(ctx.userId)),
+      COGSEED_UID: ctx.userId,
+      ELECTRON_RUN_AS_NODE: process.env.ELECTRON_RUN_AS_NODE || '1',
+    };
+    const result = await runProcess(command, cwd, env, input.timeoutMs);
+    if (result.timedOut) return formatError('E_RUNTIME_TIMEOUT', 'runtime bash timed out');
+    if (result.code !== 0) {
+      const output = result.stderr || result.stdout || `shell exited with code ${result.code}`;
+      return capRuntimeResult('bash', { content: output, isError: true }, opts);
+    }
+    return capRuntimeResult('bash', { content: result.stdout }, opts);
   };
 
-  const result = await runProcess(command, cwd, env, input.timeoutMs);
-  if (result.timedOut) {
-    return formatError('E_RUNTIME_TIMEOUT', 'runtime bash timed out');
-  }
-  if (result.code !== 0) {
-    const output = result.stderr || result.stdout || `shell exited with code ${result.code}`;
-    return capRuntimeResult('bash', { content: output, isError: true }, opts);
-  }
-  return capRuntimeResult('bash', { content: result.stdout }, opts);
+  if (!risk.risky) return execute();
+  return runWithRuntimeActionApproval(ctx.actionApproval, {
+    action: 'bash',
+    target: command,
+    scope: `仅在工作目录 ${cwd} 中执行这一条命令`,
+    auditTarget: 'Sensitive shell command',
+    auditScope: `risk categories: ${risk.reasons.join(', ')}`,
+    risk: risk.reasons.includes('destructive') || risk.reasons.includes('priv_esc') ? 'critical' : 'high',
+    reasons: risk.reasons,
+    execution: { command, cwd, timeoutMs: input.timeoutMs ?? null },
+  }, execute, opts.signal);
 }
 
 export function formatRuntimeBashCommand(command: string): string {

@@ -8,6 +8,7 @@ import { normalizeRuntimePath, ensureRuntimeAllowedRoots, isRuntimeTranscriptPat
 import type { RuntimeToolName } from './catalog';
 import type { RuntimeToolPolicy } from '../types';
 import type { RuntimeSkillVersionPin } from '../../protocol';
+import type { RuntimeActionApprovalClient } from './action-approval';
 
 export interface RuntimeToolResult {
   content: string;
@@ -28,6 +29,7 @@ export interface RuntimeToolCallContext {
   toolPolicy: RuntimeToolPolicy;
   allowedSkillIds?: readonly string[];
   skillVersionPins?: readonly RuntimeSkillVersionPin[];
+  actionApproval?: RuntimeActionApprovalClient;
 }
 
 export interface RuntimeToolImplementation<TInput = Record<string, unknown>> {
@@ -39,6 +41,7 @@ export interface RuntimeToolResultOptions {
   userId: string;
   runtimeSessionId: string;
   maxInlineTokens?: number;
+  signal?: AbortSignal | null;
 }
 
 function formatError(code: string, message: string): RuntimeToolResult {

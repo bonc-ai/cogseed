@@ -1326,20 +1326,26 @@ function _executionConfigForSend(target, snapshot) {
     };
   }
   const cfg = {};
-  // 方案 B：外接 CLI 智能体的模型由 CLI 自身配置决定（网关信封无 model
-  // 栏位），model 覆盖对其是假开关——历史残留的 override.model 不下发，
-  // 只有 effort（claude 真实消费）继续旅行。
-  const isCliAgentRecipient = snap && snap.kind === 'agent' && snap.id
-    && (() => {
+  // 外接智能体执行控制：模型随 execution_config 通用下发——网关按「模型
+  // 参数模板」（预设或 P3394_AGENT_MODEL_ARGS 自定义声明）消费，无通道的
+  // CLI 安全忽略（跟随自身默认），所以这里不设白名单。effort 同理
+  // （P3394_AGENT_EFFORT_ARGS 自定义声明；网关无模板即忽略信封字段）。
+  const recipientAgent = snap && snap.kind === 'agent' && snap.id
+    ? (() => {
       const list = (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) ? _agentsCache : [];
-      const a = list.find((x) => x && x.agent_id === snap.id);
-      return !!(a && a.runtime && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'));
-    })();
-  if (!isCliAgentRecipient) {
-    if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
-    else if (ov.model) { cfg.model = ov.model; }
-  }
-  if (ov.effort) cfg.effort = ov.effort;
+      return list.find((x) => x && x.agent_id === snap.id) || null;
+    })()
+    : null;
+  const isCliAgentRecipient = !!(recipientAgent && recipientAgent.runtime
+    && (recipientAgent.runtime.kind === 'cli' || recipientAgent.runtime.kind === 'p3394-gateway'));
+  const cliExec = (typeof window !== 'undefined' && window.cliExecControl && isCliAgentRecipient && recipientAgent.runtime)
+    ? window.cliExecControl.effortControllableFor(recipientAgent.runtime.cli) : null;
+  if (ov.provider && ov.model) { cfg.provider = ov.provider; cfg.model = ov.model; }
+  else if (ov.model) { cfg.model = ov.model; }
+  // effort：CLI 智能体按网关协商（effort_controllable，自建智能体经
+  // P3394_AGENT_EFFORT_ARGS 声明即 true）下发；未协商走兜底表（未知 CLI
+  // 乐观放开）。网关无模板时信封字段安全忽略——与 model 同一模式。
+  if (ov.effort && (!isCliAgentRecipient || cliExec)) cfg.effort = ov.effort;
   return Object.keys(cfg).length ? cfg : undefined;
 }
 // The conversation "floor": server-authoritative `StateFile.active_recipient`,
@@ -6083,7 +6089,7 @@ function _conversationById(cid) {
 function _conversationOperationDialog(options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay open';
+    overlay.className = 'modal-overlay ui-dialog-overlay conversation-operation-overlay';
     const title = escapeHtml(options.title || '');
     const message = escapeHtml(options.message || '').replace(/\n/g, '<br />');
     const confirmLabel = escapeHtml(options.confirmLabel || t('common.confirm'));
@@ -6121,11 +6127,26 @@ function _conversationOperationDialog(options = {}) {
     const confirm = overlay.querySelector('[data-operation-confirm]');
     const error = overlay.querySelector('[data-operation-error]');
     let busy = false;
+    let settled = false;
+    const settle = (value) => { if (settled) return; settled = true; resolve(value); };
+    // 四项行为统一走 uiModalController；ESC 因「busy 提交中忽略」的特殊语义由下方
+    // onKey 手写处理（dismissible:false 关掉 controller 的 ESC），滚动锁定/焦点陷阱/
+    // 焦点回归/Cmd+K 仍由 controller 负责。
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          dismissible: false,
+          initialFocus: input ? '[data-operation-title]' : '[data-operation-confirm]',
+        })
+      : null;
     const finish = (value) => {
       if (busy && value == null) return;
-      document.removeEventListener('keydown', onKey, true);
+      settle(value);
+      if (controller) controller.close('action');
+      else document.removeEventListener('keydown', onKey, true);
       overlay.remove();
-      resolve(value);
     };
     const onKey = (event) => {
       if (event.isComposing || event.keyCode === 229) return;
@@ -6164,7 +6185,8 @@ function _conversationOperationDialog(options = {}) {
       }
     });
     document.addEventListener('keydown', onKey, true);
-    setTimeout(() => (input || confirm).focus(), 0);
+    if (controller) controller.open();
+    else setTimeout(() => (input || confirm).focus(), 0);
   });
 }
 
@@ -6375,7 +6397,7 @@ function _openConversationMergePicker(initialCid) {
 
   const overlay = document.createElement('div');
   overlay.id = 'conversation-merge-picker';
-  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay open';
+  overlay.className = 'modal-overlay ui-dialog-overlay conversation-merge-picker-overlay';
   overlay.innerHTML = `
     <div class="conversation-merge-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="conversation-merge-picker-title">
       <div class="conversation-merge-picker-header">
@@ -6405,12 +6427,26 @@ function _openConversationMergePicker(initialCid) {
     .slice()
     .sort(_compareConversationsForSidebar);
   let busy = false;
-  const close = () => {
-    if (busy) return;
+  const dialog = overlay.querySelector('[role="dialog"]');
+  const controller = typeof uiModalController === 'function'
+    ? uiModalController({
+        overlay,
+        dialog,
+        dismissible: false,
+        initialFocus: '[data-merge-picker-search]',
+      })
+    : null;
+  const cleanup = () => {
     _conversationMergePickerOpen = false;
     _conversationMergeSelection.clear();
     overlay.remove();
-    document.removeEventListener('keydown', onKey, true);
+    if (!controller) document.removeEventListener('keydown', onKey, true);
+  };
+  const close = () => {
+    if (busy) return;
+    if (controller) controller.close('action');
+    else document.removeEventListener('keydown', onKey, true);
+    cleanup();
   };
   const onKey = (event) => {
     if (event.isComposing || event.keyCode === 229) return;
@@ -6464,10 +6500,9 @@ function _openConversationMergePicker(initialCid) {
       _rememberConversationResultCard(data.conversation.conversation_id, {
         kind: 'merge', sourceCount: cids.length, agentCount, summary: data.summary || '',
       });
-      _conversationMergePickerOpen = false;
-      _conversationMergeSelection.clear();
-      overlay.remove();
-      document.removeEventListener('keydown', onKey, true);
+      if (controller) controller.close('action', { restoreFocus: false });
+      else document.removeEventListener('keydown', onKey, true);
+      cleanup();
       renderConversationList();
       uiToast(t('chat.merge.success'), { variant: 'success' });
       setView('conversation', data.conversation.conversation_id);
@@ -6484,7 +6519,8 @@ function _openConversationMergePicker(initialCid) {
   });
   document.addEventListener('keydown', onKey, true);
   render();
-  setTimeout(() => search?.focus(), 0);
+  if (controller) controller.open();
+  else setTimeout(() => search?.focus(), 0);
 }
 
 async function _mergeSelectedConversationsWithConfirm() {
@@ -9126,6 +9162,17 @@ async function _fetchCurrentModelContextWindow() {
 }
 window.getCurrentModelContextWindow = getCurrentModelContextWindow;
 
+// 会话统计的 CLI 类型推断：取最近一条带 exec_meta.cli 的 assistant 消息
+// （外接智能体回合的模型窗口解析需要知道 CLI 类型；混合会话按最近的算）。
+function _dominantCliTypeForStats() {
+  let cli = null;
+  document.querySelectorAll('#chat-history .chat-message.assistant').forEach((el) => {
+    const meta = el._msgExecMeta;
+    if (meta && typeof meta.cli === 'string' && meta.cli) cli = meta.cli;
+  });
+  return cli;
+}
+
 // 渲染 #chat-session-stats：段顺序固定 counts → llm → speed → cache →
 // ctx → tokens → cost；ctx 超阈值（≥80%）整段标 .seg-hot 警示色。i18n 走
 // 经典 script 全局 t()（渲染层的 i18n 助手不在 window 上，见 Task 7 教训）。
@@ -9140,7 +9187,14 @@ function _refreshSessionStats() {
   const contextWindow = typeof window.getCurrentModelContextWindow === 'function'
     ? window.getCurrentModelContextWindow() : null;
   const price = _userPriceForStats();
-  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price });
+  // CLI 回合的 ctx 分母：按该回合自报模型解析窗口（cli-exec-control 的
+  // 映射 + 已缓存的扫描条目），解析不到回退全局模型窗口。
+  const resolveWindowForModel = (modelId) => {
+    if (!modelId || !window.cliExecControl) return null;
+    const cli = _dominantCliTypeForStats();
+    return window.cliExecControl.contextWindowForCliModel(cli, modelId, window.cliExecControl.cachedCliModels(cli));
+  };
+  const f = window.conversationMetrics.foldSessionMetrics(list, { contextWindow, price, resolveWindowForModel });
   // 段结构 {k, v, hot}：k=浅色小标签（可空=纯数值段），v=等宽数值。
   // 视觉语言与悬停信息条一致（标签 muted + mono 数值 + 发丝分隔线）。
   const segs = [];
@@ -9149,12 +9203,9 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
   }
   if (f.ttftAvgText) {
-    segs.push({
-      k: t('chat.stats.speedK'),
-      v: f.rateText
-        ? t('chat.stats.speedV', { ttft: f.ttftAvgText, r: f.rateText })
-        : f.ttftAvgText,
-    });
+    // 速率段 2026-09-03 下线（口径反复修正未达标，见 foldSessionMetrics
+    // 的 rateText——计算与数据采集保留，显示待重做后恢复）。
+    segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
   if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
@@ -9177,11 +9228,15 @@ function _refreshSessionStats() {
     seg.appendChild(v);
     box.appendChild(seg);
   });
-  // 费用段标注依据（验收：用户能理解其为估算值）。价格表只有 '*' 默认
-  // 单价、无模型名，title 不带模型字段。
+  // 费用段标注依据：CLI 自报（准确，CLI 侧计价）vs 价格表估算（下界、非
+  // 账单）。价格表只有 '*' 默认单价、无模型名，title 不带模型字段。
   if (f.costText) {
     const costSpan = box.lastElementChild;
-    if (costSpan) costSpan.title = t('chat.stats.costTitle', { c: f.costText });
+    if (costSpan) {
+      costSpan.title = f.costReported
+        ? t('chat.stats.costReportedTitle', { c: f.costText })
+        : t('chat.stats.costTitle', { c: f.costText });
+    }
   }
   _syncStatsWidthToComposer();
 }
@@ -9230,8 +9285,8 @@ function _mountMsgMeta(ph, metrics) {
   const parts = [];
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
-  if (line.rateText) parts.push({ v: t('chat.metrics.rate', { r: line.rateText }) });
   if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {
     const seg = document.createElement('span');
@@ -9493,6 +9548,7 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
   // Token 用量信息条（悬停显示）：历史 gm.metrics 经 _groupMsgToLegacy 透传，
   // 无 metrics 不产生节点；`msgDiv._msgMetrics` 供会话级统计行（Task 8）读取。
   msgDiv._msgMetrics = message.metrics || null;
+  msgDiv._msgExecMeta = message.exec_meta || null;
   _mountMsgMeta(msgDiv, message.metrics);
   // 挂载完成后直刷会话统计行（历史重载也覆盖；无 metrics 的消息也走到
   // 这里，保证清空会话/切换会话时统计行随最新 DOM 状态更新。Task 8）。
@@ -10423,7 +10479,9 @@ function _renderPersistedProcess(msgDiv, items, { expanded = false } = {}) {
       window.planRail.restorePlanEvent(itemEvent);
     }
     if (item && item.type === 'progress') {
-      const preferEventText = itemEvent && ['context', 'compaction', 'runtime'].includes(itemEvent.stream);
+      // 工具调用/思考等结构化事件优先走事件词表（带参数预览/时长/i18n），
+      // 网关的降级纯文本仅在无事件时兜底。
+      const preferEventText = itemEvent && ['context', 'compaction', 'runtime', 'tool', 'item'].includes(itemEvent.stream);
       text = (preferEventText ? _formatEventLine(itemEvent) : '')
         || item.text
         || (itemEvent ? _formatEventLine(itemEvent) : '')
@@ -15241,6 +15299,58 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
     return ph;
   }
 
+  // Wake→task→exec 两级系统的 turn_id 会中途更换（cogseed-task-* →
+  // cogseed-exec-*）。同一 actor 的连续事件必须落在同一条气泡上
+  // Hand-off flicker guard: once the commander has handed the floor to an agent
+  // (server `active_recipient` is an agent), it ends its turn with no more
+  // output — so an in_flight/active_turns sweep must NOT mint a fresh empty
+  // commander placeholder that would flash during the agent's reply and vanish
+  // at turn end. dispatch_to does NOT set the floor, so its post-dispatch
+  // synthesis still creates a placeholder normally (and arrives via a real delta
+  // event, which adopts the bubble it streams into). The commander's pre-hand-off
+  // seg bubble was already created + finalized before the floor was set.
+  // Checked BEFORE adoption/annex so no path can resurrect a commander bubble
+  // while the floor points elsewhere.
+  if (actorId === 'commander') {
+    const floor = _serverFloorByCid.get(cid) || '';
+    if (floor && floor !== 'commander' && floor !== 'user') return null;
+  }
+
+  // Wake→task→exec 两级系统的 turn_id 会中途更换（cogseed-task-* →
+  // cogseed-exec-*）。同一 actor 的连续事件必须落在同一条气泡上
+  // （「一个回合一条消息」纪律）：任何未 finalized 的该 actor 活占位
+  // 直接收编——迁移 map key、改写 dataset.turnId，绝不新建第二条。
+  // 不收编的话，占位会按 turn_id 拆成两条并存（旧的带过程信息、新的
+  // 纯三点），即外接智能体回复时的「多余图标」。tid 为空的调用
+  // （state_changed in_flight 旧格式）同样先收编，否则会去领养
+  // controller 的初始隐藏占位、造成同 actor 双气泡闪现。
+  // 注意 key 归属：带 tid 的 key 是 `cid:turn:tid`（不含 actor），只能
+  // 按 dataset.fromActor 判定占位归属。
+  for (const [liveK, live] of Array.from(_groupPlaceholders.entries())) {
+    if (!liveK.startsWith(`${cid}:`)) continue;
+    if (!live || live.dataset.finalized === '1') continue;
+    if (live.dataset.fromActor !== actorId) continue;
+    if (!live.parentElement) {
+      // 视图切走时脱独的占位（map 里还在、DOM 里没了）：复活并挂回容器，
+      // 而不是跳过它去新建——sendStream/observer 的事件 closure 仍指向
+      // 该节点，复活它才能保住「一个 actor 一条气泡」。否则切回后
+      // runtime 恢复与历史加载赛跑：先到者新建第二条、后到者把旧节点
+      // 挂回来，同屏出现两条（旧的带过程信息、新的纯三点）。
+      const container = document.getElementById('chat-history');
+      if (!container) continue;
+      const emptyEl = container.querySelector('.empty');
+      if (emptyEl) emptyEl.remove();
+      _appendBeforeSpacer(container, live);
+    }
+    _groupPlaceholders.delete(liveK);
+    if (tid) live.dataset.turnId = tid;
+    _stampPlaceholderTriggerMsg(live, sourceMsgId);
+    _seedPlaceholderActivityStart(live, startedAtMs);
+    _setPlaceholderActor(live, actorId, { cid, allowFallback });
+    _groupPlaceholders.set(k, live);
+    return live;
+  }
+
   if (tid) {
     const legacyK = _phKey(cid, actorId);
     const legacyPh = _groupPlaceholders.get(legacyK);
@@ -15277,18 +15387,6 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   }
   const container = document.getElementById('chat-history');
   if (!container) return null;
-  // Hand-off flicker guard: once the commander has handed the floor to an agent
-  // (server `active_recipient` is an agent), it ends its turn with no more
-  // output — so an in_flight/active_turns sweep must NOT mint a fresh empty
-  // commander placeholder that would flash during the agent's reply and vanish
-  // at turn end. dispatch_to does NOT set the floor, so its post-dispatch
-  // synthesis still creates a placeholder normally (and arrives via a real delta
-  // event, which adopts the bubble it streams into). The commander's pre-hand-off
-  // seg bubble was already created + finalized before the floor was set.
-  if (actorId === 'commander') {
-    const floor = _serverFloorByCid.get(cid) || '';
-    if (floor && floor !== 'commander' && floor !== 'user') return null;
-  }
   ph = _createStreamingAssistantMessage(container, { hiddenUntilActor: true, triggerMsgId: sourceMsgId });
   if (tid) ph.dataset.turnId = tid;
   _seedPlaceholderActivityStart(ph, startedAtMs);
@@ -15468,6 +15566,7 @@ function _finalizeActorPlaceholder(ph, gm, cid, archive) {
   // Token 用量信息条（悬停显示）：落盘 gm 带 metrics（Task 4/5）才渲染；
   // `ph._msgMetrics` 同步给会话级统计行（Task 8）读取。
   ph._msgMetrics = gm.metrics || null;
+  ph._msgExecMeta = gm.exec_meta || null;
   _mountMsgMeta(ph, gm.metrics);
 
   // Created-agent chips (commander quick-create / quick-edit) — same actions row.

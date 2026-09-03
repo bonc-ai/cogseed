@@ -146,9 +146,15 @@
     chain.catch(() => {});
   }
 
+  // License 检查完成后刷新当前视图（列表徽章或详情「授权状态」行）。
+  function _refreshViewAfterLicense() {
+    if (_view === 'list') { _renderIfList(); return; }
+    if (_view === 'detail') _render();
+  }
+
   function _checkLicense(pkg) {
     _licenseCache.set(pkg.name, { state: 'checking' });
-    _renderIfList();
+    _refreshViewAfterLicense();
     return _invoke('packages.ui.info', { name: pkg.name })
       .then((res) => {
         if (!(res && res.ok && res.info)) throw new Error((res && res.error) || 'no info');
@@ -158,7 +164,7 @@
           : null;
         if (!(info.config && info.config.configured)) {
           _licenseCache.set(pkg.name, { state: 'unconfigured', latest: newer });
-          _renderIfList();
+          _refreshViewAfterLicense();
           return;
         }
         return _invoke('packages.ui.invoke', {
@@ -172,12 +178,12 @@
           } else {
             _licenseCache.set(pkg.name, { state: 'error', error: (r && r.error) || 'check failed', latest: newer });
           }
-          _renderIfList();
+          _refreshViewAfterLicense();
         });
       })
       .catch((err) => {
         _licenseCache.set(pkg.name, { state: 'error', error: (err && err.message) || String(err) });
-        _renderIfList();
+        _refreshViewAfterLicense();
       });
   }
 
@@ -441,6 +447,14 @@
     addRow(_t('plugins.detail_roles', '面向角色'), roles);
     const license = info && info.license ? [info.license.model, info.license.unit].filter(Boolean).join(' · ') : '';
     addRow(_t('plugins.detail_license', '授权'), license);
+    // 实时授权状态（列表徽章同源）：详情页也给出「已激活/未授权/检查失败」。
+    if (info && info.config && info.config.configured) {
+      const lic = _licenseCache.get(_detailName);
+      const licHtml = lic && _licenseChip(_detailName) !== '<span class="plugins-license is-unknown">—</span>'
+        ? _licenseChip(_detailName)
+        : `<span class="plugins-license is-checking">${_esc(_t('plugins.license_checking', '授权检查中…'))}</span>`;
+      rows.push(`<div class="plugins-detail-row"><span class="plugins-detail-label">${_esc(_t('plugins.detail_license_status', '授权状态'))}</span><span class="plugins-detail-value">${licHtml}</span></div>`);
+    }
     // 技能列表双保险：info 优先，失败/为空回退列表行携带的技能名。
     const infoSkills = (info && Array.isArray(info.skills)) ? info.skills : [];
     const skills = infoSkills.length ? infoSkills : ((pkg && Array.isArray(pkg.skills)) ? pkg.skills : []);
@@ -455,12 +469,16 @@
       icon: pkg.enabled ? 'x' : 'check',
       attrs: { 'data-plugins-detail-action': pkg.enabled ? 'disable' : 'enable' },
     }));
-    actionBtns.push(_btn({
-      label: _t('plugins.update', '更新'),
-      role: 'secondary',
-      icon: 'refresh',
-      attrs: { 'data-plugins-detail-action': 'update' },
-    }));
+    // 内置/本地安装的包没有 git 源（repo_url 为空），升级随 CogSeed 发版，
+    // cogseed-pkg update 会失败——不展示「更新」按钮。
+    if (pkg.repo_url) {
+      actionBtns.push(_btn({
+        label: _t('plugins.update', '更新'),
+        role: 'secondary',
+        icon: 'refresh',
+        attrs: { 'data-plugins-detail-action': 'update' },
+      }));
+    }
     actionBtns.push(_btn({
       label: _t('plugins.remove', '移除'),
       role: 'secondary',
@@ -580,6 +598,9 @@
               : _t('plugins.config_saved', '配置已保存'), 'success', { id });
             _licenseCache.delete(_detailName);
             _openDetail(_detailName);
+            // 保存后立即重查授权，详情「授权状态」与列表徽章即时刷新。
+            const row = (_packagesCache || []).find((p) => p.name === _detailName);
+            if (row) _checkLicense(row);
           } else {
             _toast('plugins.action_failed', _t('plugins.action_failed', '保存失败：{msg}', { msg: (res && res.error) || '' }), 'error', { msg: (res && res.error) || '' });
           }
@@ -601,6 +622,9 @@
           } else {
             _toast('plugins.action_failed', _t('plugins.config_test_fail', '连接失败：{msg}', { msg: (res && res.error) || '' }), 'error', { msg: (res && res.error) || '' });
           }
+          // 无论测试结果如何，刷新一次授权状态行。
+          const row = (_packagesCache || []).find((p) => p.name === _detailName);
+          if (row) _checkLicense(row);
         }
       });
     });

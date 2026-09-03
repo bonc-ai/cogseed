@@ -112,7 +112,7 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
 
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay ui-dialog-overlay open';
+    overlay.className = 'modal-overlay ui-dialog-overlay';
     const initialTitle = localizedTitle();
     const titleHtml = initialTitle ? `<div class="modal-title ui-dialog-title">${_bashEscapeHtml(initialTitle)}</div>` : '';
     const msgHtml = _bashEscapeHtml(localizedMessage()).replace(/\n/g, '<br />');
@@ -157,6 +157,19 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
       </div>
     `;
     document.body.appendChild(overlay);
+    const dialog = overlay.querySelector('[role="dialog"]');
+    let settled = false;
+    const settle = (value) => { if (settled) return; settled = true; resolve(value); };
+    // 四项行为统一走 uiModalController；ESC 因「先关内层 mode 菜单、再关弹窗」的
+    // 嵌套语义由 onKey 手写处理（dismissible:false），滚动锁定/焦点陷阱/回归/Cmd+K 走 controller。
+    const controller = typeof uiModalController === 'function'
+      ? uiModalController({
+          overlay,
+          dialog,
+          dismissible: false,
+          initialFocus: '[data-act="cancel"]',
+        })
+      : null;
 
     const selectedMode = () => {
       return _bashIsMode(selectedModeValue) ? selectedModeValue : safeCurrentMode;
@@ -242,13 +255,17 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
         finish('deny');
       }
     };
-    const finish = (choice) => {
+    const cleanup = () => {
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('click', onDocClick, true);
       window.removeEventListener('i18n-change', onI18nChange);
-      const mode = selectedMode();
       overlay.remove();
-      resolve({ choice, mode });
+    };
+    const finish = (choice) => {
+      const mode = selectedMode();
+      if (controller) controller.close('action');
+      cleanup();
+      settle({ choice, mode });
     };
     overlay.querySelectorAll('[data-act="choice"]').forEach((btn) => {
       btn.addEventListener('click', () => finish(btn.dataset.id || 'deny'));
@@ -272,7 +289,8 @@ function _showBashPermissionModeDialog({ title, message, currentMode, getTitle, 
       if (modeMenu && !modeMenu.hidden) positionMenu();
     };
     window.addEventListener('i18n-change', onI18nChange);
-    setTimeout(() => cancelBtn.focus(), 0);
+    if (controller) controller.open();
+    else setTimeout(() => cancelBtn.focus(), 0);
   });
 }
 
