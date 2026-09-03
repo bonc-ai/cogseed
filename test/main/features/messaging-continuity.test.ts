@@ -188,6 +188,26 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     expect(after.accepted).toBe(true);
   });
 
+  it('a second /unbind and other slash commands are rejected the same way after unbind', async () => {
+    const { manager, instanceId } = await boot();
+    await manager.ingestInbound('user-1', envelope(instanceId, 'hello', 'm-15'));
+    await manager.ingestInbound('user-1', envelope(instanceId, '/unbind', 'm-16'));
+    sendMessage.mockClear();
+    // 撤权状态下 /unbind 自身、/status、/agent 一律按未绑定会话拒绝并引导。
+    for (const [text, id] of [
+      ['/unbind', 'm-17'],
+      ['/status', 'm-18'],
+      ['/agent Codex', 'm-19'],
+    ] as const) {
+      const outcome = await manager.ingestInbound('user-1', envelope(instanceId, text, id));
+      expect(outcome).toMatchObject({ accepted: false, reason: 'binding_unbound' });
+    }
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(3));
+    for (const call of sendMessage.mock.calls) {
+      expect(call[1] as string).toContain('/new');
+    }
+  });
+
   it('/status reports the current task and executor', async () => {
     const { manager, instanceId } = await boot();
     await manager.ingestInbound('user-1', envelope(instanceId, '/status', 'm-20'));
