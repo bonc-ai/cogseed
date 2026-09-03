@@ -129,7 +129,7 @@
 - 存储布局（`paths.ts`）：`<userCloudRoot>/<userId>/kstar/{episodes,reviews,extraction-runs,tasks,requirements,task-states}/*.json`；所有记录带 `schemaVersion/ownerId/id/createdAt/updatedAt`；`safeId` 校验路径段；`fileEditLock`（`episode-store.ts`）做写锁；`writeKstarJsonRecord` 有冲突检测（同 id 不同内容拒绝），`replaceKstarJsonRecord` 支持重建/恢复。
 - 读取校验：`validateEpisode/validateTask/validateRequirement/validateState/validateStoredReview` 逐一校验 ownerId、枚举、必填字段；`listKstarJsonRecords` 跳过损坏记录（单条损坏不拖垮全量）。
 - IPC 安全：`safeId` 校验 + Main 侧 `ctx.userId` 统一注入；模型/渲染器提供的 ID 只当建议（`control-service.ts` 注释明确"model-supplied ids are advisory at most"）；`allowedToolNames` 限制 forecast 候选工具；`kstar.review.confirm` 校验 verdict 枚举。
-- P3394 边界：`p3394_bridge/kstar-episodes.ts` 落盘前 `redact()`，关联 id 白名单恢复；`collectP3394ProposedUpdates` 只把 `proposed_updates` 作为证据注入主沉淀链，绝不自动写回认知资产。
+- P3394 边界：`p3394_bridge/kstar-episodes.ts` 落盘前 `redact()`，关联 id 白名单恢复；P3394 的 ownerless 历史记录与用户 KSTAR 沉淀链隔离，不进入用户资产，也不自动写回认知资产。
 
 ### 1.10 启动集成
 
