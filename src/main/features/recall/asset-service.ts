@@ -172,7 +172,7 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     ? [...new Set(value.appliedReviewDecisionIds.filter((id): id is string => typeof id === 'string' && /^rd_[A-Za-z0-9_-]{8,64}$/.test(id)))]
     : [];
   const appliedValidationIds = Array.isArray(value.appliedValidationIds)
-    ? [...new Set(value.appliedValidationIds.filter((id): id is string => typeof id === 'string' && safeId(id)))].slice(-200)
+    ? [...new Set(value.appliedValidationIds.filter((id): id is string => typeof id === 'string' && safeId(id)))]
     : [];
   const lifecycleStatus: RecallAbilityAssetLifecycleStatus =
     value.lifecycleStatus === 'automatically_extracted_unverified'
@@ -1001,7 +1001,7 @@ export async function recordAbilityAssetValidation(
       consecutiveFailures,
       ...(nextMaturity !== current.maturity ? { maturity: nextMaturity } : {}),
       ...(paused ? { status: 'paused' as const } : {}),
-      ...(validationId ? { appliedValidationIds: [...appliedValidationIds, validationId].slice(-200) } : {}),
+      ...(validationId ? { appliedValidationIds: [...new Set([...appliedValidationIds, validationId])] } : {}),
       updatedAt: new Date().toISOString(),
     };
   });

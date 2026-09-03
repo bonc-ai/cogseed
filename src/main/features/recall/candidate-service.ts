@@ -1092,7 +1092,7 @@ export async function recordRecallCandidateValidation(
       ...candidate,
       validationCount: (candidate.validationCount || 0) + (outcome === 'success' ? 1 : 0),
       ...(outcome === 'success' ? { lastValidatedAt: now, consecutiveFailures: 0 } : { consecutiveFailures: (candidate.consecutiveFailures || 0) + 1 }),
-      ...(validationId ? { appliedValidationIds: [...appliedValidationIds, validationId].slice(-200) } : {}),
+      ...(validationId ? { appliedValidationIds: [...new Set([...appliedValidationIds, validationId])] } : {}),
       updatedAt: now,
     };
   });

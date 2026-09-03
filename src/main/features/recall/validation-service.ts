@@ -57,16 +57,28 @@ export async function recoverValidationApplications(userId: string): Promise<num
   let recovered = 0;
   for (const record of records) {
     if (record.outcome !== 'success' && record.outcome !== 'failure') continue;
+    let applied = false;
     try {
       await recordRecallCandidateValidation(userId, record.candidateId, record.outcome, record.id);
-      await recordAbilityAssetValidation(userId, record.assetId, record.outcome, record.id).catch(() => undefined);
-      recovered += 1;
+      applied = true;
     } catch (error) {
       log.warn('validation application recovery degraded', {
         validationId: record.id,
+        target: 'candidate',
         error: (error as Error).message,
       });
     }
+    try {
+      await recordAbilityAssetValidation(userId, record.assetId, record.outcome, record.id);
+      applied = true;
+    } catch (error) {
+      log.warn('validation application recovery degraded', {
+        validationId: record.id,
+        target: 'asset',
+        error: (error as Error).message,
+      });
+    }
+    if (applied) recovered += 1;
   }
   return recovered;
 }

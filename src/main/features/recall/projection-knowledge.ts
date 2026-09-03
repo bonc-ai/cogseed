@@ -203,6 +203,6 @@ export async function loadCommittedProjectionKnowledge(
       })),
     ].slice(0, MAX_ONTOLOGY_FACTS),
     ontologyTaxonomy: await loadOntologyTaxonomy(userId),
-    ontologyRules: (await loadOntologyRules(userId)).rules,
+    ontologyRules: (await loadOntologyRules(userId, { workspaceId: projection.workspaceId })).rules,
   };
 }

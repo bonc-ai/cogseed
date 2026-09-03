@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { createLogger } from '../../logger';
 import { nowIso, safeId } from '../../storage';
 import { maskId } from '../../util/log-redact';
-import { previewContextProjection } from '../recall/context-projection';
+import { listContextProjections, previewContextProjection } from '../recall/context-projection';
 import { commitCommanderForecast } from './forecast-commit';
 import { assertKstarTransition, KstarInvalidTransitionError } from './state-machine';
 import {
@@ -512,13 +512,22 @@ async function requestProjection(
   if (proposal.requirementId && proposal.requirementId !== requirement.id) {
     assertOwnedId(proposal.requirementId, requirement.id, 'projection.requirementId');
   }
-  // workspace_policy line: the projection is confirmed on creation (no user
-  // candidate confirmation); the card is still posted as a read-only record.
-  const projection = await previewContextProjection(context.userId, {
+  const workspaceId = context.workspaceId || task.workspaceId;
+  // Projection creation and requirement binding are separate durable writes.
+  // If the process dies after the first write, retry the same logical request
+  // by binding the already-confirmed workspace-policy projection instead of
+  // creating an orphan duplicate.
+  const existing = (await listContextProjections(context.userId, {
     taskRunId: task.id,
-    ...(context.workspaceId || task.workspaceId
-      ? { workspaceId: context.workspaceId || task.workspaceId }
-      : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+    status: 'confirmed',
+  })).find((projection) => (
+    projection.authorization === 'workspace_policy'
+    && projection.purpose === proposal.purpose
+  ));
+  const projection = existing || await previewContextProjection(context.userId, {
+    taskRunId: task.id,
+    ...(workspaceId ? { workspaceId } : {}),
     purpose: proposal.purpose,
     taskText: proposal.taskText || requirement.goalText,
     authorization: 'workspace_policy',
