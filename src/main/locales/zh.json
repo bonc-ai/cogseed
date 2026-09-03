@@ -241,6 +241,7 @@
   "messaging.continuity.badge_commander": "指挥官",
   "messaging.continuity.agent_switched": "已切换到 {name}，直接继续对话即可；它会自动获得之前的任务上下文。",
   "messaging.continuity.agent_not_found": "未找到智能体：{name}。发送 /agent 查看可选列表。",
+  "messaging.continuity.agent_ambiguous": "有多个匹配：{list}。请发送完整名称再试。",
   "messaging.continuity.agent_list": "可选智能体：{list}",
   "messaging.continuity.agent_none_available": "当前没有可切换的智能体。",
   "messaging.continuity.status_line": "当前任务：{title}\n当前执行：{agent}",
