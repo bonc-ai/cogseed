@@ -44,6 +44,7 @@
 | 全量 JS 测试 | `node scripts/run-tests.mjs run --maxWorkers=2` | `not rerun` | `415ea2b0` 上为 10092 passed / 11 failed；同步 `882cb823` 后以 PR CI 为准 |
 | Python 资源测试 | `npm run test:resources` | `passed` | 2026-09-03：308 passed |
 | SBOM 正式门禁 | `npm run sbom:check` | `passed` | 626 components in sync；旧 `scripts/check-sbom.cjs` 已退出门禁并删除 |
+| 生产依赖审计 | `npm audit --omit=dev` | `warnings` | 7 个告警：4 high、2 moderate、1 low、0 critical；本任务未改锁文件 |
 
 ## 已知问题与风险
 
@@ -54,6 +55,7 @@
 - 部分用例 flaky：`chat_attachments.test.ts` 在两次运行间为 1↔2 条，`cogseed_backend/runtime-controller.test.ts` 早前失败、后续通过。统计失败数时需留意。
 - 以上均非 `2026-09-01-001` 引入，本任务未修复，也未使其恶化。
 - `trufflehog filesystem . --only-verified` 尚未执行，是 0.8.0 最终 release 阻断条件，不阻塞本次 `develop` 合并审核。
+- 当前锁文件的生产依赖审计有 7 个告警（4 high、2 moderate、1 low），需在最终 release 审核中另行处置或接受风险；不属于本 cleanup 差异引入。
 
 ## 开发历史
 

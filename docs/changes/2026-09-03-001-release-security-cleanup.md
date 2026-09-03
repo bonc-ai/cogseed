@@ -50,7 +50,8 @@
 - `exif-parser` tarball integrity：与 `package-lock.json` 的 SHA-512 一致
 - `exif-parser` license：保留副本与 npm tarball、上游固定 commit 文本一致，SHA-256 为 `3c58bdcad5b1313456b7cf639574708a84a80ee6bddf1a26f0c5fc4d7ab1830b`
 - `exif-parser` 许可证中的作者邮箱属于上游公开版权声明，必须原样保留；差异审计仅对 `third_party_licenses/exif-parser/LICENSE.md` 使用路径级 `PRIVACY_CONTACT` 豁免。
-- 差异安全审计：`PASS_WITH_WARNINGS`，仅覆盖性提示
+- 差异安全审计：`PASS_WITH_WARNINGS`，仅覆盖性提示。审计器按 CycloneDX `name` 裸字段比较 scoped package，曾将 9 个已存在组件误报为缺失；逐项确认它们均以标准 `group` + `name` 结构存在后，仅对 `sbom.cdx.json` 的该规则使用路径级豁免，正式 `npm run sbom:check` 仍独立通过。
+- `npm audit --omit=dev`：发现当前锁文件中 7 个生产依赖告警（4 high、2 moderate、1 low、0 critical）；本任务未修改依赖或锁文件，需在最终 release 审核中另行处置或接受风险。
 - `git diff --check`：passed
 
 在基线 `415ea2b0` 上运行的完整 JS 测试结果为 900 个测试文件通过、9 个失败、8 个跳过；失败位于本次未修改模块，主要涉及隔离环境缺少 embedding-model、workspace 迁移、协作/KStar 时序及 embedding 不可用，未归因于本任务。同步最新 `origin/develop` @ `882cb823` 后未重新运行全量 JS，合并审核以 PR CI 为准。
@@ -59,3 +60,4 @@
 
 - 全库审计会报告测试中的合成 token、路径和邮箱；已确认相关值为公开合成 fixture，本记录保留豁免依据，差异范围未发现真实凭证。
 - 本机未安装 `trufflehog`，verified-only 二次扫描仍为 0.8.0 最终 release 阻断条件；本次只进入 `develop` 合并审核，不代表最终发版批准。
+- 当前锁文件的生产依赖审计仍有 7 个告警；不阻止 cleanup 进入合并审核，但本记录不据此批准最终 release。
