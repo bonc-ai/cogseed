@@ -15673,7 +15673,7 @@ async function getTask(client, taskId) {
     return {
       ok: true,
       status: t.status ?? "unknown",
-      ...t.result ? { result: { ...t.result.submissionId ? { submissionId: t.result.submissionId } : {}, ...t.result.evaluationId ? { evaluationId: t.result.evaluationId } : {}, ...t.result.challengeId ? { challengeId: t.result.challengeId } : {}, ...t.result.error ? { error: t.result.error } : {} } } : {}
+      ...t.result ? { result: { ...t.result.submissionId ? { submissionId: t.result.submissionId } : {}, ...t.result.evaluationId ? { evaluationId: t.result.evaluationId } : {}, ...t.result.challengeId ? { challengeId: t.result.challengeId } : {}, ...t.result.pendingReview === true ? { pendingReview: true } : {}, ...t.result.error ? { error: t.result.error } : {} } } : {}
     };
   } catch (err) {
     return failRead(err);
@@ -16232,6 +16232,17 @@ async function submitAndTrack(client, args) {
     taskResult = task;
     if (task.status === "completed" || task.status === "failed") break;
     await new Promise((r) => setTimeout(r, 1e3));
+  }
+  // 异步初评（2026-09-03 平台改造）：受理即 completed，AI 初评随后回填 evaluationId。
+  // 完成后若 pendingReview=true，继续短轮询（上限 30 次 × 1s）等评分回填。
+  if (taskResult?.status === "completed" && taskResult?.result?.pendingReview === true && !taskResult?.result?.evaluationId) {
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1e3));
+      const refreshed = await getTask(client, submit.task_id);
+      if (!refreshed.ok) break;
+      taskResult = refreshed;
+      if (taskResult?.result?.evaluationId || taskResult?.result?.pendingReview !== true) break;
+    }
   }
   const result = taskResult?.result;
   const status = taskResult?.status === "completed" ? "validated" : taskResult?.status === "failed" ? "failed" : "submitted";
