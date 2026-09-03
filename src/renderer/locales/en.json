@@ -700,6 +700,7 @@
   "chat.quote_includes_references": "Also includes {count} earlier references",
   "chat.quote_remove_title": "Remove quote",
   "chat.recipient_commander": "Commander",
+  "chat.recipient_cli_agents": "Local CLIs",
   "chat.recipient_space_builder": "Space Builder",
   "chat.recipient_commander_hint": "Default recipient, no @ needed",
   "chat.recipient_label": "@",

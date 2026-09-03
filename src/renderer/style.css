@@ -11809,6 +11809,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--text-2, #374151);
 }
 .skill-picker-item--model { position: relative; }
+/* 本机 CLI 分组行（伪装模型 ID 路由）：与 API 模型行同构，chevron 同样
+   依赖 relative 定位下钻该 CLI 的扫描模型清单。 */
+.skill-picker-item--cli { position: relative; }
 .picker-model-expand {
   position: absolute;
   right: 4px;
@@ -11827,6 +11830,14 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .picker-model-expand:hover { background: #eceef2; color: var(--text); }
 .picker-model-expand-icon { width: 13px; height: 13px; }
+/* 分组行下钻按钮由共享 uiIconButton 生成（复合 .ui-icon-button 32px 基样
+   式）——弹窗行内需要 22px，用容器选择器提高特异性钉住，避免两份样式表
+   的加载顺序决定胜负。 */
+.skill-picker-item .picker-model-expand {
+  width: 22px;
+  height: 22px;
+  border: none;
+}
 .skill-picker-item--back .skill-picker-item-name { color: var(--muted); font-size: 12px; }
 
 /* Exec-config menu: compact — the composer menu should read as a light

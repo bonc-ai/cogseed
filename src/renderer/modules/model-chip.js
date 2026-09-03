@@ -169,8 +169,15 @@ function _effectiveExecConfig(target) {
     const modelChoice = (modelSupported && override.model) ? String(override.model)
       : (modelSupported && runtimeModel) ? String(runtimeModel)
       : '';
+    // 任务级覆盖可能是伪装全串（cli/<type>@<model>，@ 选择器/本菜单写入）：
+    // 显示归一到裸模型名；override.modelLabel（合并清单的友好 label）优先。
+    const modelChoiceLabel = modelChoice
+      ? ((modelChoice === String(override.model || '') && override.modelLabel)
+        ? String(override.modelLabel)
+        : (ctl ? ctl.bareModelFor(modelChoice) : modelChoice))
+      : '';
     const scanning = ctl && ctl.scanInFlight(cliType) && !scanEntry;
-    const modelLabel = modelChoice
+    const modelLabel = modelChoiceLabel
       || (scanEntry && scanEntry.current)
       || (effective ? effective.label : '')
       || (scanning ? t('exec_config.cli_models_loading') : t('exec_config.cli_default_model'));
@@ -786,7 +793,7 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
     setTimeout(() => { try { search.focus(); } catch (_) { /* menu closed */ } }, 0);
   }
 
-  const applyPick = (modelId, isCustom) => {
+  const applyPick = (modelId, isCustom, modelLabel) => {
     try {
       if (typeof setExecOverride !== 'function') return;
       const ov = getExecOverride(target) || {};
@@ -796,7 +803,13 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
         setExecOverride(target, effort ? { effort } : null);
       } else {
         if (isCustom && ctl) ctl.rememberCustomModel(cliType, modelId);
-        setExecOverride(target, { effort, model: modelId, ...(ov.modelLabel && ov.model === modelId ? { modelLabel: ov.modelLabel } : {}) });
+        // 伪装模型 ID：存全串 cli/<type>@<model>（存储单一真相），label 存
+        // 合并清单的友好名；bus 在 CLI 通道消费前解码，显示层归一。
+        const masked = ctl ? ctl.encodeAgentModel(cliType, modelId) : modelId;
+        const keepLabel = ov.modelLabel && ctl && ctl.bareModelFor(ov.model) === modelId
+          ? { modelLabel: ov.modelLabel }
+          : (modelLabel ? { modelLabel: String(modelLabel) } : {});
+        setExecOverride(target, { effort, model: masked, ...keepLabel });
       }
       _modelChipRenderAll();
     } catch (err) {
@@ -848,7 +861,10 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
       return;
     }
     visibleMerged.forEach((m) => {
-    const isCurrent = cfg.model === m.id;
+    // 当前行判定归一：任务级覆盖可能是伪装全串（cli/<type>@<model>，新写入）
+    // 或裸模型 id（旧数据，兼容不迁移）——两边都折算到裸 id 再比。
+    const curBare = cfg.model ? (ctl ? ctl.bareModelFor(cfg.model) : cfg.model) : '';
+    const isCurrent = curBare === m.id;
     const item = document.createElement('div');
     item.className = 'model-chip-menu-item' + (isCurrent ? ' is-default' : '');
     item.innerHTML =
@@ -860,7 +876,7 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
       '</span>' +
       // 副标题优先显示客户端同款描述文案（静态目录条目），无描述回落 id。
       `<span class="model-chip-menu-sub">${escapeHtml(m.description || m.id)}</span>`;
-    item.addEventListener('click', () => applyPick(m.id, m.source === 'custom'));
+    item.addEventListener('click', () => applyPick(m.id, m.source === 'custom', m.label));
     rowsHost.appendChild(item);
     });
   };
@@ -881,7 +897,7 @@ async function _renderCliModelList(menu, anchor, cfg, target, cliType) {
   const submitCustom = () => {
     const id = String(input.value || '').trim();
     if (!id) return;
-    applyPick(id, true);
+    applyPick(id, true, id);
   };
   submit.addEventListener('click', (e) => { e.stopPropagation(); submitCustom(); });
   input.addEventListener('keydown', (e) => {

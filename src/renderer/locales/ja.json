@@ -617,6 +617,7 @@
   "chat.quote_includes_references": "過去の参照{count}件も含まれます",
   "chat.quote_remove_title": "引用を削除",
   "chat.recipient_commander": "コマンダー",
+  "chat.recipient_cli_agents": "ローカル CLI",
   "chat.recipient_space_builder": "スペースビルダー",
   "chat.recipient_commander_hint": "デフォルトの宛先です。@ は不要です",
   "chat.recipient_label": "@",

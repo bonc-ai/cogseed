@@ -29,6 +29,10 @@ const LOCALE_KEYS = [
   'exec_config.effort_cli_forward_note',
   'exec_config.effort_cli_off_unavailable',
   'exec_config.no_reasoning_note',
+  'chat.recipient_api_models',
+  'chat.recipient_local_agents',
+  'chat.recipient_cli_agents',
+  'agent_picker.expand_models',
   'settings.thinking.title',
   'agents.exec_default_model',
   'agents.exec_default_thinking',
@@ -36,16 +40,51 @@ const LOCALE_KEYS = [
 ];
 
 describe('unified execution entry — picker scope', () => {
-  it('keeps the recipient picker agent-only — models are the exec-chip\'s job', () => {
+  it('lists API models and local CLIs as recipient groups (masked-id routing)', () => {
     const agents = read('src/renderer/modules/agents.js');
-    // 验收反馈修订：@ 选择器只管「谁执行」，模型一律由右下角执行配置 chip
-    // 管理，否则概念混淆。分组行/下钻逻辑必须不存在于 picker 渲染路径。
-    expect(agents).not.toContain('recipient_api_models');
-    expect(agents).not.toContain('_renderPickerModelGroup');
-    expect(agents).not.toContain('data-kind="model"');
+    // 最终版（伪装模型 ID 路由）：@ 接收者选择器同时列「API 连接模型」与
+    // 「本机 CLI」两组——伪装 ID cli/<type>@<model> 自带执行通道语义，出现
+    // 在接收者列表自洽（化解 408957ef 回撤时「裸模型名属概念混淆」的顾虑）。
+    expect(agents).toContain('_renderPickerModelGroup');
+    expect(agents).toContain("t('chat.recipient_api_models')");
+    expect(agents).toContain('_renderPickerCliGroup');
+    expect(agents).toContain("t('chat.recipient_cli_agents')");
+    expect(agents).toContain('_openPickerCliAgentModels');
+    expect(agents).toContain("data-kind=\"cli-model\"");
+    // 选中 CLI 模型 = agent 接收者 + 伪装全串覆盖；顺序必须先 recipient 后
+    // override（setChatRecipient 换目标时会清空旧覆盖）。
+    expect(agents).toMatch(/kind === 'cli-model'[\s\S]*?setChatRecipient\(target,[\s\S]*?kind: 'agent'[\s\S]*?setExecOverride\(target,[\s\S]*?model: masked/);
+    // auto 弹窗维持 agent-only 契约：两类模型分支都直拒 auto 锚点。
+    expect(agents).toMatch(/kind === 'model'[\s\S]*?auto-recipient-chip'\) return/);
+    expect(agents).toMatch(/kind === 'cli-model'[\s\S]*?anchorId === 'auto-recipient-chip'\) return/);
     // Commander + agents listing intact.
     expect(agents).toContain('__commander__');
     expect(agents).toMatch(/data-kind="agent"/);
+  });
+
+  it('masked agent-model routing — bus contract (D6 red line)', () => {
+    const bus = read('src/main/features/group_chat/bus.ts');
+    const routing = read('src/main/model/agent_model_routing.ts');
+    // 前缀与枚举同源（LOCAL_CLI_TYPES），全串两段格式。
+    expect(routing).toContain("AGENT_MODEL_PREFIX = 'cli/'");
+    expect(routing).toContain('LOCAL_CLI_TYPES');
+    // CLI 通道消费前解码一次：resolve 必须出现在两个 CLI 消费点（网关
+    // isP3394Gateway 分流、_runCliAgentTurn 的 cliModelForTurn）之前。
+    const resolveIdx = bus.indexOf('resolveMaskedCliExecConfig(item.execConfig)');
+    const gatewayIdx = bus.indexOf('const isP3394Gateway = agentsFeat.isP3394GatewayAgent');
+    const cliModelIdx = bus.indexOf('opts.item.execConfig?.model || runtime.model');
+    expect(resolveIdx).toBeGreaterThan(-1);
+    expect(gatewayIdx).toBeGreaterThan(resolveIdx);
+    expect(cliModelIdx).toBeGreaterThan(resolveIdx);
+    // D6 红线：in-process 防御（stripMaskedForInProcess）必须先于
+    // turnModelOverride 组装（pickChatEntryGroupForModelOverride 的凭证
+    // 过滤会吞伪 provider 并静默回退默认组——隐蔽假成功）。
+    const stripIdx = bus.indexOf('stripMaskedForInProcess(item.execConfig)');
+    const overrideIdx = bus.indexOf('const turnModelOverride =');
+    expect(stripIdx).toBeGreaterThan(-1);
+    expect(stripIdx).toBeLessThan(overrideIdx);
+    // exec_meta 存伪装全串（存储单一真相），回读比对用裸值。
+    expect(bus).toContain('cliTransportModel || cliTurnModel');
   });
 
   it('external-agent control: CLI agents get a REAL model picker gated by the capability table', () => {

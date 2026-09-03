@@ -192,6 +192,45 @@ function rememberCustomModel(cli, modelId) {
   }
 }
 
+// ── 伪装模型 ID（cli/<type>@<model>）编码 ────────────────────────────────
+// 与主进程 model/agent_model_routing.ts 同源（经典 script 无 import 能力，
+// 只能复制；一致性由 test/renderer/cli-exec-control.test.ts 钉死——两边漂移
+// 测试即红）。伪装全串是存储单一真相：localStorage 覆盖、@ 选择器选中值、
+// exec_meta 全存全串；bus 在 CLI 通道消费前解码为裸 id，显示层用 bareModelFor
+// 归一（旧裸 id 覆盖原样通过，兼容不迁移）。
+
+const AGENT_MODEL_PREFIX = 'cli/';
+
+function encodeAgentModel(cli, modelId) {
+  const type = String(cli || '').trim().toLowerCase();
+  const model = String(modelId || '').trim();
+  if (!type || !model) return String(modelId || '');
+  return AGENT_MODEL_PREFIX + type + '@' + model;
+}
+
+function decodeAgentModel(id) {
+  if (typeof id !== 'string' || !id.startsWith(AGENT_MODEL_PREFIX)) return null;
+  const rest = id.slice(AGENT_MODEL_PREFIX.length);
+  const at = rest.indexOf('@');
+  if (at <= 0) return null;
+  const cliType = rest.slice(0, at).toLowerCase();
+  const modelId = rest.slice(at + 1);
+  if (!modelId || modelId.includes('@')) return null;
+  // 枚举与 CLI_EXEC_CONTROL 同源（=主进程 LOCAL_CLI_TYPES）。
+  if (!Object.prototype.hasOwnProperty.call(CLI_EXEC_CONTROL, cliType)) return null;
+  return { cliType, modelId };
+}
+
+function isAgentModel(id) {
+  return decodeAgentModel(id) !== null;
+}
+
+/** CLI 通道/显示归一：伪装全串 → 裸模型 id；其余（旧裸 id、空）原样返回。 */
+function bareModelFor(id) {
+  const decoded = decodeAgentModel(id);
+  return decoded ? decoded.modelId : String(id == null ? '' : id);
+}
+
 // ── 合并视图：扫描 ∪ 静态 ∪ 手输（menu 渲染直接消费） ─────────────────────
 function mergedCliModels(cli, scanEntry) {
   const seen = new Set();
@@ -243,6 +282,10 @@ if (typeof window !== 'undefined') {
     customModelsFor,
     rememberCustomModel,
     mergedCliModels,
+    encodeAgentModel,
+    decodeAgentModel,
+    isAgentModel,
+    bareModelFor,
   };
 }
 
@@ -258,5 +301,9 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     effectiveModelLabel,
     customModelsFor,
     rememberCustomModel,
+    encodeAgentModel,
+    decodeAgentModel,
+    isAgentModel,
+    bareModelFor,
   };
 }

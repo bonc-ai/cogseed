@@ -9,8 +9,17 @@ const cliExecControl = require('../../src/renderer/modules/cli-exec-control.js')
   mergedCliModels: (cli: string, entry?: unknown) => Array<{ id: string; label: string; source: string; contextWindow?: number }>;
   customModelsFor: (cli: string) => string[];
   rememberCustomModel: (cli: string, id: string) => void;
+  encodeAgentModel: (cli: string, modelId: string) => string;
+  decodeAgentModel: (id: string) => { cliType: string; modelId: string } | null;
+  isAgentModel: (id: string) => boolean;
+  bareModelFor: (id: string) => string;
 };
 import { execControlFor as mainExecControlFor, contextWindowForCliModel as mainWindowFor } from '../../src/main/features/local_agents/models';
+import {
+  decodeAgentModel as mainDecode,
+  encodeAgentModel as mainEncode,
+  bareModelFor as mainBare,
+} from '../../src/main/model/agent_model_routing';
 
 describe('cli-exec-control capability table parity (renderer vs main)', () => {
   it('renderer CLI_EXEC_CONTROL matches the main-process table for every known CLI', () => {
@@ -105,5 +114,49 @@ describe('cli-exec-control merged model view', () => {
     expect(() => cliExecControl.rememberCustomModel('claude', 'x')).not.toThrow();
     const merged = cliExecControl.mergedCliModels('claude', null);
     expect(Array.isArray(merged)).toBe(true);
+  });
+});
+
+describe('cli-exec-control masked agent-model id parity (renderer vs main)', () => {
+  // 伪装模型 ID（cli/<type>@<model>）的两份实现同源钉死——经典 script 无
+  // import 只能复制，encode/decode/bareModelFor 三函数对同一输入必须给出
+  // 与主进程 model/agent_model_routing.ts 完全一致的结果（漂移即红）。
+  const SAMPLES: Array<string> = [
+    'cli/claude@claude-sonnet-5',
+    'cli/codex@gpt-5.6-sol',
+    'cli/workbuddy@auto',
+    'cli/claude@sonnet[1m]',
+    // 透传契约内的非法形态（两边都必须返回 null / 原值）。
+    'claude-sonnet-5',
+    'cli/claude',
+    'cli/claude@',
+    'cli/claude@a@b',
+    'cli/unknown-cli@x',
+    '',
+  ];
+
+  it('decodeAgentModel agrees with the main-process decoder on every shape', () => {
+    for (const id of SAMPLES) {
+      expect(cliExecControl.decodeAgentModel(id), `decode mismatch for ${id}`).toEqual(mainDecode(id));
+    }
+  });
+
+  it('encodeAgentModel produces the canonical masked string both layers accept', () => {
+    for (const [cli, model] of [['claude', 'claude-sonnet-5'], ['CODEX', 'gpt-5.6-sol'], ['workbuddy', 'auto']] as const) {
+      expect(cliExecControl.encodeAgentModel(cli, model)).toBe(mainEncode(cli, model));
+    }
+    const masked = cliExecControl.encodeAgentModel('claude', 'opus');
+    expect(masked).toBe('cli/claude@opus');
+    expect(cliExecControl.isAgentModel(masked)).toBe(true);
+    expect(cliExecControl.decodeAgentModel(masked)).toEqual({ cliType: 'claude', modelId: 'opus' });
+  });
+
+  it('bareModelFor normalises masked ids and passes legacy bare ids through', () => {
+    for (const id of SAMPLES) {
+      expect(cliExecControl.bareModelFor(id), `bare mismatch for ${id}`).toBe(mainBare(id));
+    }
+    // 旧裸 id 覆盖（兼容不迁移）原样通过——这是 isCurrent 归一比较的依据。
+    expect(cliExecControl.bareModelFor('claude-sonnet-5')).toBe('claude-sonnet-5');
+    expect(cliExecControl.bareModelFor(undefined)).toBe('');
   });
 });
