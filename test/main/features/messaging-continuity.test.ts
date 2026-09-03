@@ -74,7 +74,7 @@ describe('messaging continuity lifecycle (manager harness)', () => {
   let busListener: ((event: unknown) => void) | undefined;
   let sendMessage: ReturnType<typeof vi.fn>;
 
-  async function boot() {
+  async function boot(opts?: { extraAgents?: Array<{ agent_id: string; name: string; enabled?: boolean }> }) {
     sendMessage = vi.fn().mockResolvedValue({ deliveryId: 'delivered' });
     const adapter: MessagingAdapter = {
       platform: 'telegram',
@@ -107,6 +107,7 @@ describe('messaging continuity lifecycle (manager harness)', () => {
       listAgents: vi.fn(async () => [
         { agent_id: 'agent-codex', name: 'Codex', enabled: true },
         { agent_id: 'agent-claude', name: 'Claude Code', enabled: true },
+        ...(opts?.extraAgents || []),
       ]),
     }));
     const registry = await import('../../../src/main/features/messaging/registry');
@@ -163,6 +164,38 @@ describe('messaging continuity lifecycle (manager harness)', () => {
     const text = sendMessage.mock.calls[0][1] as string;
     expect(text).toContain('Codex');
     expect(text).toContain('Claude Code');
+  });
+
+  it('refuses to switch to a disabled agent', async () => {
+    const { manager, instanceId } = await boot({
+      extraAgents: [{ agent_id: 'agent-retired', name: 'Retired', enabled: false }],
+    });
+    const outcome = await manager.ingestInbound('user-1', envelope(instanceId, '/agent Retired', 'm-1c'));
+    expect(outcome.accepted).toBe(true);
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const text = sendMessage.mock.calls[0][1] as string;
+    expect(text).toContain('Retired');
+    expect(text).toContain('/agent');
+    const state = await import('../../../src/main/features/group_chat/state');
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const all = await bindings.listBindings('user-1');
+    const convState = await state.readState('user-1', all[0].cid);
+    expect(convState.active_recipient).toBeUndefined();
+  });
+
+  it('switches back to the commander via the Chinese alias and by raw agent id', async () => {
+    const { manager, instanceId } = await boot();
+    const state = await import('../../../src/main/features/group_chat/state');
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    // 先用 agent_id 精确切换
+    await manager.ingestInbound('user-1', envelope(instanceId, '/agent agent-codex', 'm-1d'));
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+    const all = await bindings.listBindings('user-1');
+    expect((await state.readState('user-1', all[0].cid)).active_recipient).toBe('agent-codex');
+    // 再用中文别名切回指挥官：楼层清空（回默认 commander 路由）
+    await manager.ingestInbound('user-1', envelope(instanceId, '/agent 指挥官', 'm-1e'));
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    expect((await state.readState('user-1', all[0].cid)).active_recipient).toBeUndefined();
   });
 
   it('/unbind rejects subsequent messages, guides to /new, and /new recovers', async () => {
