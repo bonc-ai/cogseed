@@ -239,6 +239,7 @@
   "messaging.candidate_card.rejected": "❌ Rejeitado",
   "messaging.candidate_card.rejected_detail": "❌ Removido do pool de candidatos",
   "messaging.continuity.badge_commander": "Comandante",
+  "messaging.continuity.badge_agent": "Agente",
   "messaging.continuity.agent_switched": "Alterado para {name}. Continue conversando — ele recebe automaticamente o contexto anterior da tarefa.",
   "messaging.continuity.agent_not_found": "Agente não encontrado: {name}. Envie /agent para ver as opções.",
   "messaging.continuity.agent_ambiguous": "Vários correspondem: {list}. Envie o nome completo para tentar novamente.",

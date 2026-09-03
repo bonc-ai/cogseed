@@ -80,6 +80,12 @@ export function withActorBadge(text: string, label: string | null): string {
   return `【${label}】 ${text}`;
 }
 
+/** F4 失败回执的错误摘要清洗（纯函数，导出供测试）：剥掉本地绝对路径
+ *  只留文件名——错误串常含 /Users/<name>/… 前缀，渠道回执不该外泄。 */
+export function sanitizeFailureText(error: string): string {
+  return String(error || '').replace(/(?:\/[A-Za-z0-9._-]+){2,}\/([A-Za-z0-9._-]+)/g, '$1');
+}
+
 interface CardStreamState {
   messageId?: string;
   accumulated: string;
@@ -674,8 +680,8 @@ export class RuntimeInstance {
     if (!failKey) return;
     const label = await resolveActorLabel(this.uid, event.actor);
     const text = t('messaging.continuity.turn_failed', {
-      agent: label || event.actor.slice(0, 8),
-      error: event.error,
+      agent: label || t('messaging.continuity.badge_agent'),
+      error: sanitizeFailureText(event.error),
     });
     this.trackOutboundDelivery(
       binding,

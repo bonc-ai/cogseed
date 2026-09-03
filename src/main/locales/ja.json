@@ -239,6 +239,7 @@
   "messaging.candidate_card.rejected": "❌ 拒否済み",
   "messaging.candidate_card.rejected_detail": "❌ 候補プールから削除",
   "messaging.continuity.badge_commander": "コマンダー",
+  "messaging.continuity.badge_agent": "エージェント",
   "messaging.continuity.agent_switched": "{name} に切り替えました。そのまま話しかけてください。これまでのタスク文脈は自動的に引き継がれます。",
   "messaging.continuity.agent_not_found": "エージェントが見つかりません：{name}。/agent で一覧を確認してください。",
   "messaging.continuity.agent_ambiguous": "複数が該当します：{list}。完全な名前を送って再試行してください。",
