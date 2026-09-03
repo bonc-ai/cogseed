@@ -86,7 +86,7 @@
     "electron-log": "^5.4.4",
     "fastembed": "^2.1.0",
     "jimp": "^1.6.1",
-    "mammoth": "^1.12.1",
+    "mammoth": "^1.12.2",
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.2.108",
     "sherpa-onnx-node": "^1.13.6",
