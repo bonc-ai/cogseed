@@ -15140,7 +15140,6 @@ var init_review = __esm({
 var plugin_runtime_exports = {};
 __export(plugin_runtime_exports, {
   COMMANDS: () => COMMANDS,
-  COURSE_ID: () => COURSE_ID,
   CURRENT_PLUGIN_VERSION: () => CURRENT_PLUGIN_VERSION,
   compareVersions: () => compareVersions,
   default: () => plugin_runtime_default,
@@ -15158,21 +15157,22 @@ var ConfigError = class extends Error {
   }
 };
 function loadConfig(env = process.env) {
-  const mock = env.EDUSEED_MOCK === "1" || env.EDUSEED_MOCK === "true";
-  const missing = REQUIRED_VARS.filter((k) => {
-    if (mock && (k === "EDUSEED_API_KEY" || k === "EDUSEED_SERVER_URL")) return false;
-    return !env[k]?.trim();
+  const pick2 = (name) => env[name];
+  const mock = pick2("EDUSEED_MOCK") === "1" || pick2("EDUSEED_MOCK") === "true";
+  const missing = REQUIRED_VARS.filter((name) => {
+    if (mock && (name === "EDUSEED_API_KEY" || name === "EDUSEED_SERVER_URL")) return false;
+    return !pick2(name)?.trim();
   });
   if (missing.length > 0) {
     throw new ConfigError(
-      `\u7F3A\u5C11\u5FC5\u9700\u73AF\u5883\u53D8\u91CF: ${missing.join(", ")}\u3002\u914D\u7F6E\u65B9\u6CD5\uFF1ACogseed MCP Hub \u7684 env \u6CE8\u5165\uFF0C\u6216\u672C\u5730\u5F00\u53D1\u8BBE EDUSEED_MOCK=1\u3002`
+      `\u7F3A\u5C11\u5FC5\u9700\u73AF\u5883\u53D8\u91CF: ${missing.join(", ")}\u3002\u914D\u7F6E\u65B9\u6CD5\uFF1ACogSeed \u63D2\u4EF6\u8FD0\u884C\u65F6 env \u6CE8\u5165\uFF0C\u6216\u672C\u5730\u5F00\u53D1\u8BBE EDUSEED_MOCK=1\u3002`
     );
   }
-  const serverUrl = (env.EDUSEED_SERVER_URL ?? "").replace(/\/+$/, "");
+  const serverUrl = (pick2("EDUSEED_SERVER_URL") ?? "").replace(/\/+$/, "");
   try {
     const u = new URL(serverUrl);
     const isLocal = ["localhost", "127.0.0.1", "::1"].includes(u.hostname);
-    if (u.protocol === "http:" && !isLocal && env.EDUSEED_ALLOW_INSECURE !== "1") {
+    if (u.protocol === "http:" && !isLocal && pick2("EDUSEED_ALLOW_INSECURE") !== "1") {
       console.warn(
         `[eduseed][\u5B89\u5168\u544A\u8B66] \u5E73\u53F0\u5730\u5740 ${serverUrl} \u4E3A\u660E\u6587 HTTP\uFF1AAPI Key \u53EF\u80FD\u88AB\u94FE\u8DEF\u7A83\u542C/\u7BE1\u6539\u3002\u8BF7\u5C3D\u5FEB\u542F\u7528 HTTPS\uFF08\u4E34\u65F6\u53EF\u7528 EDUSEED_ALLOW_INSECURE=1 \u5173\u95ED\u672C\u544A\u8B66\uFF09\u3002`
       );
@@ -15181,11 +15181,11 @@ function loadConfig(env = process.env) {
   }
   return {
     serverUrl,
-    apiKey: (env.EDUSEED_API_KEY ?? "").trim(),
-    studentId: (env.EDUSEED_STUDENT_ID ?? "").trim(),
-    cohort: (env.EDUSEED_COHORT ?? "").trim(),
+    apiKey: (pick2("EDUSEED_API_KEY") ?? "").trim(),
+    studentId: (pick2("EDUSEED_STUDENT_ID") ?? "").trim(),
+    cohort: (pick2("EDUSEED_COHORT") ?? "").trim(),
     mock,
-    role: env.EDUSEED_ROLE === "teacher" ? "teacher" : "student"
+    role: pick2("EDUSEED_ROLE") === "teacher" ? "teacher" : "student"
   };
 }
 function maskKey(key) {
@@ -15199,7 +15199,7 @@ function fromAgentOf(config2) {
 
 // src/errors.ts
 var TRANSPORT_USER_FACING = {
-  AUTH_FAILED: "api_key \u65E0\u6548\u6216\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u83B7\u53D6 EduSeed-config",
+  AUTH_FAILED: "api_key \u65E0\u6548\u6216\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u83B7\u53D6 eduseed-config",
   FORBIDDEN: "\u65E0\u6743\u6267\u884C\u6B64\u64CD\u4F5C",
   CONFLICT: "\u91CD\u590D\u63D0\u4EA4\uFF0860 \u79D2\u9632\u91CD\u7A97\u53E3\u5185\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
   BUS_UNAVAILABLE: "\u6D88\u606F\u603B\u7EBF\u4E0D\u53EF\u7528\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5",
@@ -15374,7 +15374,7 @@ var PlatformClient = class {
     throw new EduSeedError("NETWORK_ERROR", { cause: lastErr });
   }
   logInfo(msg) {
-    console.error(`[eduseed-mcp] ${msg} (key=${this.maskedKey}, mock=${this.mock})`);
+    console.error(`[eduseed] ${msg} (key=${this.maskedKey}, mock=${this.mock})`);
   }
   /** 日志用：平台地址 */
   serverUrlForLog() {
@@ -15468,7 +15468,7 @@ function mockResponse(path6, method = "GET") {
       total: 2,
       contacts: [
         { agent_id: "teacher-companion-t001", name: "\u738B\u8001\u5E08", kind: "teacher", relation: "teacher", feishu_bound: false, online: true },
-        { agent_id: "student-companion-20230001", name: "\u8D75\u4E3D\u971E", kind: "student", relation: "classmate", feishu_bound: true, online: false, class_id: "C-1" }
+        { agent_id: "student-companion-20230001", name: "\u674E\u540C\u5B66", kind: "student", relation: "classmate", feishu_bound: true, online: false, class_id: "C-1" }
       ]
     });
   }
@@ -16041,7 +16041,8 @@ var getEpisodeOutputSchema = {
   error: external_exports.object({ code: external_exports.string(), message: external_exports.string() }).optional()
 };
 function episodeDir(studentId, dir) {
-  return dir ?? path3.join(process.env.HOME ?? "", ".eduseed", "kstar", studentId);
+  const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
+  return dir ?? path3.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
 }
 function loadAllEpisodes(studentId, dir) {
   const base = episodeDir(studentId, dir);
@@ -16678,7 +16679,8 @@ async function listAgentContacts(client) {
 var fs4 = __toESM(require("node:fs"), 1);
 var path4 = __toESM(require("node:path"), 1);
 function writeDeltaRToEpisode(studentId, challengeId, delta, dir) {
-  const base = dir ?? path4.join(process.env.HOME ?? "", ".eduseed", "kstar", studentId);
+  const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
+  const base = dir ?? path4.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
   let files;
   try {
     files = fs4.readdirSync(base).filter((f) => f.endsWith(".json"));
@@ -16867,7 +16869,7 @@ function defaultRunUpdater(pkgName, pkgRoot) {
 }
 async function maybeSilentUpdate(opts) {
   try {
-    if (process.env.EDUSEED_PLUGIN_AUTOUPDATE !== "1") return;
+    if (process.env.EDUSEED_PLUGIN_AUTOUPDATE === "0") return;
     const statePath = opts.statePath ?? defaultStatePath();
     const now = (opts.now ?? Date.now)();
     const state = readUpdateState(statePath);
@@ -17226,8 +17228,7 @@ async function dispatch(client, config2, command, p) {
       return { ...base, ...result };
     }
     case "license-check": {
-      const courseId = str(p.courseId) ?? COURSE_ID;
-      const resp = await client.post("/api/license/check", { course_id: courseId });
+      const resp = await client.post("/api/license/check", {});
       return { ...base, ...resp };
     }
     case "plugin-version": {
@@ -17281,8 +17282,7 @@ var COMMANDS = [
   { command: "agent-inbox", role: "both", desc: "P3394 \u6536\u4EF6\u7BB1" },
   { command: "agent-contacts", role: "both", desc: "P3394 \u901A\u8BAF\u5F55" }
 ];
-var COURSE_ID = process.env.EDUSEED_COURSE_ID?.trim() || "aix-course-elite20";
-var CURRENT_PLUGIN_VERSION = true ? "0.2.1" : "0.0.0";
+var CURRENT_PLUGIN_VERSION = true ? "0.4.1" : "0.0.0";
 var LICENSE_EXEMPT = /* @__PURE__ */ new Set(["help", "license-check", "health", "plugin-version", "check-deliverables", "prepare-submission"]);
 function compareVersions(a, b) {
   const pa = String(a).trim().replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
@@ -17328,7 +17328,7 @@ function resolveClassProfile(skillDir) {
 async function enforceLicenseGate(client, config2) {
   if (config2.mock || process.env.EDUSEED_REQUIRE_LICENSE === "0") return null;
   try {
-    const resp = await client.post("/api/license/check", { course_id: COURSE_ID });
+    const resp = await client.post("/api/license/check", {});
     if (!resp.ok || !resp.licensed) {
       return {
         ok: false,
@@ -17375,7 +17375,7 @@ async function runRuntime(input) {
   const config2 = loadConfig();
   const client = new PlatformClient(config2);
   console.error(
-    `[eduseed-plugin] cmd=${command} role=${config2.role} student=${config2.studentId || "-"} server=${config2.serverUrl} mock=${config2.mock} from=${fromAgentOf(config2)}${profileUsed ? ` profile=${profileUsed}` : ""}`
+    `[aix-course-plugin] cmd=${command} role=${config2.role} student=${config2.studentId || "-"} server=${config2.serverUrl} mock=${config2.mock} from=${fromAgentOf(config2)}${profileUsed ? ` profile=${profileUsed}` : ""}`
   );
   if (!LICENSE_EXEMPT.has(command)) {
     const gate = await enforceLicenseGate(client, config2);
@@ -17386,7 +17386,7 @@ async function runRuntime(input) {
     if (!config2.mock) {
       void maybeSilentUpdate({
         currentVersion: CURRENT_PLUGIN_VERSION,
-        pkgName: process.env.EduSeed_PKG_NAME?.trim() || "eduseed-course-client",
+        pkgName: process.env.EDUSEED_PKG_NAME?.trim() || "aix-course-elite20",
         serverUrl: config2.serverUrl,
         apiKey: config2.apiKey,
         ...input.skillDir ? { pkgRoot: (0, import_node_path2.resolve)((0, import_node_path2.dirname)((0, import_node_path2.dirname)(input.skillDir))) } : {}
@@ -17408,7 +17408,7 @@ if (isMain) {
   runRuntime({}).then((result) => {
     process.stdout.write(JSON.stringify(result) + "\n");
   }).catch((err) => {
-    process.stderr.write(`[eduseed-plugin] fatal: ${err instanceof Error ? err.message : String(err)}
+    process.stderr.write(`[aix-course-plugin] fatal: ${err instanceof Error ? err.message : String(err)}
 `);
     process.exit(1);
   });
@@ -17416,7 +17416,6 @@ if (isMain) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   COMMANDS,
-  COURSE_ID,
   CURRENT_PLUGIN_VERSION,
   compareVersions,
   parseRuntimeArgs,
