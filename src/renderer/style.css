@@ -11524,6 +11524,14 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    不收回 send 的 auto margin 时，两个 auto 平分剩余空间，chip+mic 会
    悬在正中（chip 自身已带 margin-left:auto，见 .model-chip 主规则）。 */
 .exec-config-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
+/* 首启边界（零配置）：chip 隐藏时（_modelChipRenderChip 在无模型条目、无
+   接收者时置 hidden），上面的相邻选择器不命中，语音按钮 margin 为 0 挂在
+   输入框旁、send 独自贴右——全新用户首启即见错位。给 stt 自身贴右引力，
+   并在 chip 可见时由相邻规则收回，保证两种状态下 [chip]→mic→send 都成组
+   贴右（CDP 几何验证：chip 隐藏时 mic.marginLeft=0 / send marginLeft=auto）。 */
+.chat-stt-btn { margin-left: auto; }
+.chat-stt-btn + .chat-send-btn { margin-left: 0; }
+.exec-config-chip:not([hidden]) + .chat-stt-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
 /* Combined model+effort chip: "model · effort". The effort label is muted
    secondary text; the "·" separator is a lightweight visual divider. */
