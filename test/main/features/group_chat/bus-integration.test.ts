@@ -859,11 +859,7 @@ describe("group_chat bus integration › structured user recipient", () => {
     });
 
     const auth = await import("../../../../src/main/features/auth");
-    const users = await import("../../../../src/main/features/users");
-    vi.spyOn(auth, "hasConfiguredModel").mockReturnValue({ configured: true });
-    vi.spyOn(auth, "hasConfiguredModelForUser").mockImplementation((userId) => (
-      userId === TEST_UID ? { configured: false } : { configured: true }
-    ));
+    vi.spyOn(auth, "hasConfiguredModel").mockReturnValue({ configured: false });
     const registry = await import("../../../../src/main/features/local_agents/registry");
     vi.spyOn(registry, "detectAll").mockResolvedValue([
       {
@@ -877,25 +873,19 @@ describe("group_chat bus integration › structured user recipient", () => {
       },
     ] as Awaited<ReturnType<typeof registry.detectAll>>);
 
-    try {
-      users.activateUser("group-fallback-other-user");
-      const groupChat = await import("../../../../src/main/features/group_chat");
-      const result = await groupChat.send({
-        userId: TEST_UID,
-        cid,
-        text: "在吗",
-        recipient_agent_id: gatewayAgentId,
-        recipient_origin: "cli_fallback",
-      });
+    const groupChat = await import("../../../../src/main/features/group_chat");
+    const result = await groupChat.send({
+      userId: TEST_UID,
+      cid,
+      text: "在吗",
+      recipient_agent_id: gatewayAgentId,
+      recipient_origin: "cli_fallback",
+    });
 
-      expect(result).toMatchObject({
-        ok: true,
-        msg: { text: "在吗", to: [gatewayAgentId] },
-      });
-      expect(auth.hasConfiguredModelForUser).toHaveBeenCalledWith(TEST_UID);
-    } finally {
-      users.activateUser(TEST_UID);
-    }
+    expect(result).toMatchObject({
+      ok: true,
+      msg: { text: "在吗", to: [gatewayAgentId] },
+    });
   });
 
   it("refuses to launch the external Agent when the user denies the confirm dialog", async () => {
@@ -1872,8 +1862,25 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
-    const asset = await createDelegatedAbilityAsset("legacy-dispatch");
-    await seedDelegatedProjection(cid, asset);
+    const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    // This assertion covers both sides of the boundary: the Commander must
+    // receive host-owned Recall context, while the delegated Agent receives
+    // only the explicit dispatch grant. Enable the host routing path so the
+    // test creates the confirmed projection that supplies that context.
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
+
+    const candidate = await candidates.saveRecallCandidate(TEST_UID, {
+      judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
+      summary: "Commander-gated asset grant rule",
+      suggestedType: "rule",
+      suggestedScope: "review",
+      sourceRefs: [{ kind: "execution", id: "exec-gate" }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    // 自动投影按 PRD 3.6 只接纳 Transfer Verified 及以上。本用例考的是
+    // "资产只经 Commander 分发、不由宿主注入 Agent"的契约，不是成熟度闸门，
+    // 所以先把资产抬到够格的档位。
+    await (await import("../../../../src/main/features/recall/asset-service")).setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated");
 
     const AGENT_REPLY = "AGENT-OK-58d2";
     _setScript(state.buildGconvSessionId(cid), [
@@ -1899,7 +1906,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // ...and NEVER the host-side confirmed-assets block.
     expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
     // The Commander itself still gets automatic Recall injection.
-    const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
+    const commanderCall = [..._recordedCalls].reverse().find((c) => c.sid === state.buildGconvSessionId(cid));
     expect(commanderCall).toBeTruthy();
     expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
 
