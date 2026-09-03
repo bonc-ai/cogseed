@@ -1,6 +1,11 @@
 import { createLogger } from '../../logger';
 import { safeId, nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
+import { listInjectionReceipts, type InjectionReceipt } from '../recall/injection-receipt';
+import {
+  recordAssetUsageReceipt,
+  type AssetUsageEvidenceKind,
+} from '../recall/asset-usage-receipt';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
@@ -125,9 +130,15 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
-  options: { forecast?: WorldModelForecast | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
+  options: {
+    forecast?: WorldModelForecast | null;
+    messages?: Array<{ from: string; text: string; ts?: string }>;
+    groupMessages?: GroupKstarMessageInput[];
+    conversationId?: string;
+  } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
+  await persistAssetUsageTruth(userId, episode, options.groupMessages, options.conversationId);
   let storedReview: KstarReviewRecord | null = null;
   try {
     storedReview = await readKstarReview(userId, episode.id);
@@ -161,6 +172,114 @@ async function finishClosure(
     }
   }
   return reconcileKstarExtraction(userId, episode, review);
+}
+
+function hostObservableUsageEvidence(episode: KstarEpisodeRecord): {
+  evidenceKind: AssetUsageEvidenceKind;
+  evidenceRefs: CognitionSourceRef[];
+} | undefined {
+  if (episode.r.status !== 'completed') return undefined;
+  const executionRef = normalizeCognitionSourceRefs([{
+    kind: 'execution_evaluation',
+    id: episode.id,
+    subtype: 'execution',
+    title: 'Persisted KSTAR episode',
+  }]);
+  if (episode.a.toolCalls.some((call) => call.status === 'ok')) {
+    return { evidenceKind: 'tool_call', evidenceRefs: executionRef };
+  }
+  const artifactRefs = normalizeCognitionSourceRefs(
+    episode.evidenceRefs.filter((ref) => ref.kind === 'artifact_file' || ref.kind === 'artifact'),
+  );
+  if (episode.r.producedFiles.length || artifactRefs.length) {
+    return { evidenceKind: 'artifact', evidenceRefs: artifactRefs.length ? artifactRefs : executionRef };
+  }
+  if (episode.a.agentActions.some((action) => (
+    action.status !== 'error'
+    && action.status !== 'cancelled'
+    && action.status !== 'unknown'
+    && action.action.trim()
+    && action.action !== 'completed action'
+  ))) {
+    return { evidenceKind: 'agent_action', evidenceRefs: executionRef };
+  }
+  if (episode.r.finalText?.trim()) {
+    return { evidenceKind: 'final_output', evidenceRefs: executionRef };
+  }
+  return undefined;
+}
+
+function injectedCitationsForEpisode(
+  episode: KstarEpisodeRecord,
+  messages: GroupKstarMessageInput[] | undefined,
+  receipts: InjectionReceipt[],
+): InjectionReceipt[] {
+  if (!episode.projectionId || !messages?.length || !episode.k.abilityAssetRefs.length) return [];
+  const evidenceMessageIds = new Set(episode.evidenceRefs
+    .filter((ref) => ref.kind === 'conversation' || ref.kind === 'message')
+    .map((ref) => ref.id));
+  const citedKeys = new Set<string>();
+  for (const message of messages) {
+    if (!evidenceMessageIds.has(message.id)) continue;
+    for (const citation of message.recall_citations || []) {
+      if (
+        citation.projection_id === episode.projectionId
+        && episode.k.abilityAssetRefs.includes(citation.asset_id)
+      ) citedKeys.add(`${message.id}:${citation.asset_id}:${citation.version}`);
+    }
+  }
+  return receipts.filter((receipt) => (
+    receipt.boundary === 'real'
+    && (receipt.status === 'injected' || receipt.status === 'dispatched')
+    && receipt.projectionId === episode.projectionId
+    && !!receipt.messageId
+    && citedKeys.has(`${receipt.messageId}:${receipt.assetId}:${receipt.assetVersion}`)
+  ));
+}
+
+async function persistAssetUsageTruth(
+  userId: string,
+  episode: KstarEpisodeRecord,
+  messages?: GroupKstarMessageInput[],
+  conversationId?: string,
+): Promise<void> {
+  try {
+    const injections = injectedCitationsForEpisode(
+      episode,
+      messages,
+      await listInjectionReceipts(userId),
+    );
+    if (!injections.length) return;
+    const observable = hostObservableUsageEvidence(episode);
+    const writes = await Promise.allSettled(injections.map((injection) => recordAssetUsageReceipt(userId, {
+      taskRunId: injection.taskRunId,
+      projectionId: injection.projectionId!,
+      assetId: injection.assetId,
+      assetVersion: injection.assetVersion,
+      injectionReceiptId: injection.id,
+      status: observable ? 'applied' : 'usage_unknown',
+      evidenceKind: observable?.evidenceKind || 'none',
+      evidenceRefs: observable?.evidenceRefs || [],
+      boundary: 'real',
+    })));
+    if (writes.some((result) => result.status === 'rejected')) {
+      throw new Error('one or more asset usage receipts failed');
+    }
+  } catch (error) {
+    log.warn('kstar asset usage persistence degraded', {
+      userId,
+      episodeId: episode.id,
+      error: (error as Error).message,
+    });
+    await recordKstarFailure(userId, {
+      stage: 'capture',
+      errorCode: 'asset_usage_persistence_failed',
+      errorMessage: 'KSTAR asset usage persistence degraded; terminal result was preserved.',
+      operationKey: `usage-${episode.id}`,
+      ...(conversationId ? { conversationId } : {}),
+      episodeId: episode.id,
+    }).catch(() => undefined);
+  }
 }
 
 export type KstarReviewVerdict = 'met' | 'partial' | 'not_met' | 'skip';
@@ -348,6 +467,8 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
       // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
       ...(forecast ? { forecast: forecast.forecast } : {}),
       ...(input.messages?.length ? { messages: input.messages } : {}),
+      ...(input.messages?.length ? { groupMessages: input.messages } : {}),
+      conversationId: input.conversationId,
     });
   });
   try {
