@@ -156,9 +156,10 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
   const causalRule = value.causalRule === undefined ? undefined : normalizeCausalRule(value.causalRule);
   const validationCount = value.validationCount === undefined ? undefined : Number(value.validationCount);
   const consecutiveFailures = value.consecutiveFailures === undefined ? undefined : Number(value.consecutiveFailures);
+  const lastValidatedAt = value.lastValidatedAt === undefined ? undefined : String(value.lastValidatedAt);
   if ((validationCount !== undefined && (!Number.isInteger(validationCount) || validationCount < 0))
     || (consecutiveFailures !== undefined && (!Number.isInteger(consecutiveFailures) || consecutiveFailures < 0))
-    || (value.lastValidatedAt !== undefined && (typeof value.lastValidatedAt !== 'string' || Number.isNaN(Date.parse(value.lastValidatedAt))))) {
+    || (value.lastValidatedAt !== undefined && (typeof value.lastValidatedAt !== 'string' || Number.isNaN(Date.parse(lastValidatedAt!))))) {
     throw new Error('malformed recall ability asset validation evidence');
   }
   const recommendedAction = value.recommendedAction;
@@ -169,6 +170,9 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     : [value.candidateId as string];
   const appliedReviewDecisionIds = Array.isArray(value.appliedReviewDecisionIds)
     ? [...new Set(value.appliedReviewDecisionIds.filter((id): id is string => typeof id === 'string' && /^rd_[A-Za-z0-9_-]{8,64}$/.test(id)))]
+    : [];
+  const appliedValidationIds = Array.isArray(value.appliedValidationIds)
+    ? [...new Set(value.appliedValidationIds.filter((id): id is string => typeof id === 'string' && safeId(id)))].slice(-200)
     : [];
   const lifecycleStatus: RecallAbilityAssetLifecycleStatus =
     value.lifecycleStatus === 'automatically_extracted_unverified'
@@ -186,14 +190,15 @@ function asAsset(value: RecallJsonRecord): RecallAbilityAssetRecord {
     lifecycleStatus,
     sourceCandidateIds,
     appliedReviewDecisionIds,
+    appliedValidationIds,
     evidenceRefs,
     ...(ontologyRefs ? { ontologyRefs } : {}),
     ...relationContract,
     ...(scopePolicy ? { scopePolicy } : {}),
     ...(causalRule ? { causalRule } : {}),
-    ...(value.validationCount !== undefined ? { validationCount: value.validationCount } : {}),
-    ...(value.lastValidatedAt !== undefined ? { lastValidatedAt: value.lastValidatedAt } : {}),
-    ...(value.consecutiveFailures !== undefined ? { consecutiveFailures: value.consecutiveFailures } : {}),
+    ...(validationCount !== undefined ? { validationCount } : {}),
+    ...(lastValidatedAt !== undefined ? { lastValidatedAt } : {}),
+    ...(consecutiveFailures !== undefined ? { consecutiveFailures } : {}),
   } as RecallAbilityAssetRecord;
 }
 
@@ -968,6 +973,7 @@ export async function recordAbilityAssetValidation(
   userId: string,
   assetId: string,
   outcome: 'success' | 'failure',
+  validationId?: string,
 ): Promise<RecallAbilityAssetRecord> {
   if (!safeId(assetId)) throw new Error('invalid ability asset id');
   let maturityAdvanced: { from: RecallAbilityAssetRecord['maturity']; to: RecallAbilityAssetRecord['maturity'] } | undefined;
@@ -976,6 +982,8 @@ export async function recordAbilityAssetValidation(
     if (!raw) throw new Error('recall ability asset not found');
     const current = asAsset(raw);
     if (current.status === 'purged' || current.status === 'deleted') return current;
+    const appliedValidationIds = current.appliedValidationIds || [];
+    if (validationId && appliedValidationIds.includes(validationId)) return current;
     const validationCount = (current.validationCount || 0) + (outcome === 'success' ? 1 : 0);
     const consecutiveFailures = outcome === 'success' ? 0 : (current.consecutiveFailures || 0) + 1;
     // Two independent positive outcomes establish repeatability for a seed.
@@ -993,6 +1001,7 @@ export async function recordAbilityAssetValidation(
       consecutiveFailures,
       ...(nextMaturity !== current.maturity ? { maturity: nextMaturity } : {}),
       ...(paused ? { status: 'paused' as const } : {}),
+      ...(validationId ? { appliedValidationIds: [...appliedValidationIds, validationId].slice(-200) } : {}),
       updatedAt: new Date().toISOString(),
     };
   });

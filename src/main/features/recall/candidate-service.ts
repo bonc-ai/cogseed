@@ -127,6 +127,8 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   validationCount?: number;
   lastValidatedAt?: string;
   consecutiveFailures?: number;
+  /** Validation record ids already applied to this candidate. */
+  appliedValidationIds?: string[];
   userModifiedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -186,6 +188,7 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   validationCount?: number;
   lastValidatedAt?: string;
   consecutiveFailures?: number;
+  appliedValidationIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -499,7 +502,11 @@ function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | 
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance');
   const record = value as Record<string, unknown>;
-  if (!safeId(record.projectionId) || !safeId(record.forecastId) || !safeId(record.episodeId)) {
+  if (
+    !safeId(record.projectionId)
+    || (record.forecastId !== undefined && !safeId(record.forecastId))
+    || !safeId(record.episodeId)
+  ) {
     throw new Error('malformed candidate learning provenance ids');
   }
   if (!KSTAR_ATTRIBUTIONS.has(record.attribution as KstarLearningProvenance['attribution'])) {
@@ -511,7 +518,7 @@ function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | 
   const resultDelta = normalizeResultDelta(record.resultDelta);
   return {
     projectionId: record.projectionId as string,
-    forecastId: record.forecastId as string,
+    ...(record.forecastId ? { forecastId: record.forecastId as string } : {}),
     episodeId: record.episodeId as string,
     ruleRefs,
     attribution: record.attribution as KstarLearningProvenance['attribution'],
@@ -1070,16 +1077,22 @@ export async function recordRecallCandidateValidation(
   userId: string,
   candidateId: string,
   outcome: 'success' | 'failure',
+  validationId?: string,
 ): Promise<RecallCandidateRecord> {
   if (!safeId(candidateId)) throw new Error('invalid candidate id');
   const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
     if (!current) throw new Error('recall candidate not found');
     const candidate = asCandidate(current);
+    const appliedValidationIds = Array.isArray(candidate.appliedValidationIds)
+      ? candidate.appliedValidationIds
+      : [];
+    if (validationId && appliedValidationIds.includes(validationId)) return candidate;
     const now = new Date().toISOString();
     return {
       ...candidate,
       validationCount: (candidate.validationCount || 0) + (outcome === 'success' ? 1 : 0),
       ...(outcome === 'success' ? { lastValidatedAt: now, consecutiveFailures: 0 } : { consecutiveFailures: (candidate.consecutiveFailures || 0) + 1 }),
+      ...(validationId ? { appliedValidationIds: [...appliedValidationIds, validationId].slice(-200) } : {}),
       updatedAt: now,
     };
   });

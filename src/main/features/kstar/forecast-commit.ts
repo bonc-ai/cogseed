@@ -1,6 +1,8 @@
 import * as fs from 'node:fs/promises';
 
 import { nowIso, safeId } from '../../storage';
+import { fileEditLock } from '../../util/locks';
+import { hasConfiguredModelForUser } from '../auth';
 import { getWorkspacePath } from '../user_workspace';
 import { loadCommittedProjectionKnowledge } from '../recall/projection-knowledge';
 import { evaluateRules } from '../recall/rule-engine';
@@ -8,10 +10,12 @@ import {
   applyCausalRules,
   buildWorldModelForecastRecord,
   collectWorldSnapshot,
+  readWorldModelForecast,
   saveWorldModelSnapshot,
   saveWorldModelForecast,
 } from '../recall/world-model';
 import {
+  recomputeCandidateScore,
   selectWorldModelCandidate,
   validateWorldModelCandidate,
 } from '../recall/world-model-scoring';
@@ -20,6 +24,7 @@ import type {
   WorldModelCandidateForecast,
   WorldModelForecast,
   WorldModelForecastRecord,
+  WorldModelKnowledge,
   WorldModelSimulationInput,
 } from '../recall/world-model-types';
 import {
@@ -77,9 +82,73 @@ async function workspaceAvailable(userId: string, workspaceId?: string): Promise
   }
 }
 
+const FILE_SYSTEM_TOOLS = new Set([
+  'read_file', 'write_file', 'edit_file', 'delete_file', 'list_files', 'stat_file',
+]);
+const SHELL_TOOLS = new Set([
+  'bash', 'interactive_cli_start', 'interactive_cli_read', 'interactive_cli_send', 'interactive_cli_close',
+]);
+
+export async function measureForecastSituation(
+  userId: string,
+  workspaceId: string | undefined,
+  allowedToolNames: ReadonlySet<string>,
+): Promise<{
+  workspaceAvailable: boolean;
+  modelConfigured: boolean;
+  fileSystemAvailable: boolean | 'unknown';
+  shellAvailable: boolean | 'unknown';
+  availableTools: string[];
+}> {
+  const availableTools = [...new Set(allowedToolNames)].sort();
+  const toolScopeKnown = availableTools.length > 0;
+  return {
+    workspaceAvailable: await workspaceAvailable(userId, workspaceId),
+    modelConfigured: hasConfiguredModelForUser(userId).configured,
+    fileSystemAvailable: toolScopeKnown
+      ? availableTools.some((name) => FILE_SYSTEM_TOOLS.has(name))
+      : 'unknown',
+    shellAvailable: toolScopeKnown
+      ? availableTools.some((name) => SHELL_TOOLS.has(name))
+      : 'unknown',
+    availableTools,
+  };
+}
+
+export function matchedRulesForKnowledge(
+  taskText: string,
+  knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>,
+): NonNullable<WorldModelKnowledge['matchedRules']> {
+  return evaluateRules({
+    taskText,
+    ontologyRules: knowledge.ontologyRules,
+    assetRules: knowledge.abilityAssets.flatMap((asset) => (
+      asset.causalRule ? [{ assetId: asset.id, rule: asset.causalRule }] : []
+    )),
+  }).matchedRules.map((rule) => rule.source === 'ontology'
+    ? {
+        source: 'ontology' as const,
+        ruleId: rule.ruleId,
+        trigger: rule.trigger,
+        subject: rule.subject,
+        object: rule.object,
+      }
+    : {
+        source: 'asset' as const,
+        ruleId: rule.ruleId,
+        trigger: rule.trigger,
+        cause: rule.cause,
+        effect: rule.effect,
+        mitigation: rule.mitigation,
+        severity: rule.severity,
+        deltaR: rule.deltaR,
+      });
+}
+
 function predictedRisksForKnowledge(
   snapshot: ReturnType<typeof collectWorldSnapshot>,
   rules: WorldModelSimulationInput['k']['rules'],
+  matchedRules: NonNullable<WorldModelKnowledge['matchedRules']> = [],
 ): PredictedRisk[] {
   const out: PredictedRisk[] = [];
   for (const entry of rules) {
@@ -87,6 +156,21 @@ function predictedRisksForKnowledge(
     for (const hit of applyCausalRules(snapshot, [rule])) {
       out.push({ ...hit, ruleId: 'rule' in entry ? entry.id : hit.ruleId });
     }
+  }
+  // Ontology R-Box relations do not carry a deterministic failure predicate.
+  // A matched relation is still an explicit task-relevant constraint, so keep
+  // it in the forecast as a conservative unknown-risk signal instead of
+  // silently limiting R-Box to prompt decoration.
+  for (const rule of matchedRules) {
+    if (rule.source !== 'ontology' || out.some((risk) => risk.ruleId === rule.ruleId)) continue;
+    out.push({
+      ruleId: rule.ruleId,
+      cause: rule.trigger,
+      effect: `Verify the ontology relation ${rule.subject || ''} -> ${rule.object || ''}.`.trim(),
+      mitigation: 'Validate the relation against the current task evidence before relying on it.',
+      severity: 'medium',
+      deltaR: 'unknown',
+    });
   }
   return out;
 }
@@ -143,12 +227,10 @@ function assertInput(userId: string, input: CommitForecastInput): void {
   }
 }
 
-export async function commitCommanderForecast(
+async function commitCommanderForecastUnlocked(
   userId: string,
   input: CommitForecastInput,
 ): Promise<WorldModelForecastRecord> {
-  assertInput(userId, input);
-
   const requirement = await readKstarRequirement(userId, input.requirementId);
   const task = await readKstarTask(userId, input.taskRunId);
   if (
@@ -166,9 +248,22 @@ export async function commitCommanderForecast(
     );
   }
 
+  if (requirement.forecastId) {
+    const existing = await readWorldModelForecast(userId, requirement.forecastId);
+    if (
+      existing
+      && existing.ownerId === userId
+      && existing.requirementId === requirement.id
+      && existing.taskRunId === task.id
+      && existing.projectionId === input.projectionId
+    ) return existing;
+  }
+
+  const taskText = normalizedText(input.taskText, 4_000);
+
   let knowledge: Awaited<ReturnType<typeof loadCommittedProjectionKnowledge>>;
   try {
-    knowledge = await loadCommittedProjectionKnowledge(userId, input.projectionId);
+    knowledge = await loadCommittedProjectionKnowledge(userId, input.projectionId, { taskText });
   } catch (error) {
     const code = (error as { code?: unknown })?.code;
     if (code === 'projection_not_committed' || code === 'projection_expired') {
@@ -202,13 +297,14 @@ export async function commitCommanderForecast(
     );
   }
 
-  const workspaceIsAvailable = await workspaceAvailable(userId, effectiveWorkspaceId);
+  const situation = await measureForecastSituation(userId, effectiveWorkspaceId, input.allowedToolNames);
+  const workspaceIsAvailable = situation.workspaceAvailable;
   const rules = knowledge.rules.map((entry) => entry.rule);
   const snapshot = collectWorldSnapshot(userId, {
     taskRunId: task.id,
     workspace: { ok: workspaceIsAvailable },
-    model: { configured: true },
-    tools: { fileSystem: true, bash: true },
+    model: { configured: situation.modelConfigured },
+    tools: { fileSystem: situation.fileSystemAvailable, bash: situation.shellAvailable },
     groupChatStatus: 'running',
     requirementStatus: requirement.status,
     projectionStatus: 'confirmed',
@@ -220,38 +316,14 @@ export async function commitCommanderForecast(
     ontology: {
       totalAssets: knowledge.abilityAssets.length + knowledge.ontologyAssets.length,
       activeAssets: knowledge.abilityAssets.length + knowledge.ontologyAssets.length,
-      totalRules: rules.length,
+      totalRules: rules.length + knowledge.ontologyRules.length,
     },
   });
 
-  const taskText = normalizedText(input.taskText, 4_000);
   // Rule engine: which rules actually apply to THIS task? Text-triggered
   // evaluation over ontology R-Box rules + asset ΔR lessons; the matched
   // subset rides into K so the Commander reasons over relevant rules only.
-  const matchedRules = evaluateRules({
-    taskText,
-    ontologyRules: knowledge.ontologyRules,
-    assetRules: knowledge.abilityAssets.flatMap((asset) => (
-      asset.causalRule ? [{ assetId: asset.id, rule: asset.causalRule }] : []
-    )),
-  }).matchedRules.map((rule) => rule.source === 'ontology'
-    ? {
-        source: 'ontology' as const,
-        ruleId: rule.ruleId,
-        trigger: rule.trigger,
-        subject: rule.subject,
-        object: rule.object,
-      }
-    : {
-        source: 'asset' as const,
-        ruleId: rule.ruleId,
-        trigger: rule.trigger,
-        cause: rule.cause,
-        effect: rule.effect,
-        mitigation: rule.mitigation,
-        severity: rule.severity,
-        deltaR: rule.deltaR,
-      });
+  const matchedRules = matchedRulesForKnowledge(taskText, knowledge);
   const simulationInput: WorldModelSimulationInput = {
     k: {
       projectionId: knowledge.projectionId,
@@ -261,6 +333,7 @@ export async function commitCommanderForecast(
       assetVersions: knowledge.assetVersions,
       rules: knowledge.rules,
       ontologyAssets: knowledge.ontologyAssets,
+      ontologyFacts: knowledge.ontologyFacts,
       ontologyTaxonomy: knowledge.ontologyTaxonomy,
       ontologyRules: knowledge.ontologyRules,
       ...(matchedRules.length ? { matchedRules } : {}),
@@ -271,14 +344,14 @@ export async function commitCommanderForecast(
       conversationSummary: taskText,
       environment: {
         workspaceAvailable: workspaceIsAvailable,
-        modelConfigured: true,
-        fileSystemAvailable: true,
-        shellAvailable: true,
+        modelConfigured: situation.modelConfigured,
+        fileSystemAvailable: situation.fileSystemAvailable,
+        shellAvailable: situation.shellAvailable,
       },
       execution: {
         groupChatStatus: 'running',
         availableActors: ['commander'],
-        availableTools: [...new Set(input.allowedToolNames)].sort(),
+        availableTools: situation.availableTools,
         accessConstraints: [],
         energyConstraints: [],
       },
@@ -298,15 +371,25 @@ export async function commitCommanderForecast(
     },
   };
 
-  const predictedRisks = predictedRisksForKnowledge(snapshot, knowledge.rules);
+  const predictedRisks = predictedRisksForKnowledge(snapshot, knowledge.rules, matchedRules);
   const candidates = validateCandidates(input.candidates, {
     allowedToolNames: input.allowedToolNames,
     allowedRuleRefs: new Set(knowledge.rules.map((entry) => entry.id)),
     predictedRisks,
   });
-  const selected = selectWorldModelCandidate(candidates);
+  const ontologyRiskMatched = matchedRules.some((rule) => rule.source === 'ontology');
+  const scoredCandidates = ontologyRiskMatched
+    ? candidates.map((candidate) => ({
+        ...candidate,
+        score: recomputeCandidateScore({
+          ...candidate.score,
+          riskPenalty: Math.max(candidate.score.riskPenalty, 0.5),
+        }),
+      }))
+    : candidates;
+  const selected = selectWorldModelCandidate(scoredCandidates);
   const forecast: WorldModelForecast = {
-    candidates,
+    candidates: scoredCandidates,
     selectedCandidateId: selected.id,
     aHat: selected.aHat,
     rHat: selected.rHat,
@@ -320,7 +403,7 @@ export async function commitCommanderForecast(
     projectionId: knowledge.projectionId,
     projectionConfirmedAt: knowledge.projectionConfirmedAt,
     assetVersions: knowledge.assetVersions,
-    ruleRefs: knowledge.rules.map((entry) => entry.id),
+    ruleRefs: [...new Set(matchedRules.map((rule) => rule.ruleId))],
     snapshotId: snapshot.id,
     forecast,
     simulationInput,
@@ -343,4 +426,13 @@ export async function commitCommanderForecast(
     );
   }
   return record;
+}
+
+export async function commitCommanderForecast(
+  userId: string,
+  input: CommitForecastInput,
+): Promise<WorldModelForecastRecord> {
+  assertInput(userId, input);
+  return fileEditLock(`kstar-forecast-commit:${userId}:${input.requirementId}`)
+    .runExclusive(() => commitCommanderForecastUnlocked(userId, input));
 }

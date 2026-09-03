@@ -130,7 +130,8 @@ export interface KstarLearningSignal {
 
 export interface KstarLearningProvenance {
   projectionId: string;
-  forecastId: string;
+  /** Missing only when advisory Forecast generation degraded before execution. */
+  forecastId?: string;
   episodeId: string;
   ruleRefs: string[];
   attribution: KstarAttribution;
@@ -160,7 +161,7 @@ export interface KstarExtractionRunRecord extends KstarJsonRecord {
   episodeId: string;
   reviewId: string;
   candidateIds: string[];
-  status: 'created' | 'partial' | 'failed';
+  status: 'created' | 'partial' | 'degraded' | 'failed';
   /** Result ids are populated when the requirement-level extraction pass runs. */
   createdAssetIds?: string[];
   mergedIntoIds?: string[];

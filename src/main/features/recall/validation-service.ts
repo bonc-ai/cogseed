@@ -3,12 +3,15 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { nowIso, safeId } from '../../storage';
+import { createLogger } from '../../logger';
 import { readRecallJsonRecord, updateRecallJsonRecord } from './store';
 import { recallJsonRecordPath } from './paths';
 import type { RecallJsonRecord } from './types';
 import { recordRecallCandidateValidation } from './candidate-service';
 import { recordAbilityAssetValidation } from './asset-service';
 import type { CognitionSourceRef } from './source-service';
+
+const log = createLogger('recall.validation');
 
 export interface ValidationRecord extends RecallJsonRecord {
   schemaVersion: 1;
@@ -30,21 +33,42 @@ export async function recordValidation(
   // classification.
   const id = `val-${createHash('sha256').update(`${input.assetId}:${input.candidateId}:${input.taskRunId}`).digest('hex').slice(0, 24)}`;
   const record: ValidationRecord = { schemaVersion: 1, ownerId: userId, id, ...input, createdAt: nowIso() };
-  let created = false;
   const stored = await updateRecallJsonRecord(userId, 'validation-records', id, (current) => {
     if (current) return current;
-    created = true;
     return record;
   });
-  if (!created) return stored as unknown as ValidationRecord;
-  if (input.outcome === 'success' || input.outcome === 'failure') {
-    await recordRecallCandidateValidation(userId, input.candidateId, input.outcome);
+  const durableRecord = stored as unknown as ValidationRecord;
+  const outcome = durableRecord.outcome;
+  if (outcome === 'success' || outcome === 'failure') {
+    // Replay downstream applications even when the validation record already
+    // exists. A crash after this durable record but before a counter update is
+    // therefore recoverable; appliedValidationIds make replay idempotent.
+    await recordRecallCandidateValidation(userId, input.candidateId, outcome, id);
     // A validation can outlive a legacy candidate/asset handoff. The outcome
     // record and candidate ledger remain authoritative even when the asset was
     // purged or never existed in older data.
-    await recordAbilityAssetValidation(userId, input.assetId, input.outcome).catch(() => undefined);
+    await recordAbilityAssetValidation(userId, input.assetId, outcome, id).catch(() => undefined);
   }
-  return record;
+  return durableRecord;
+}
+
+export async function recoverValidationApplications(userId: string): Promise<number> {
+  const records = await listValidationRecords(userId);
+  let recovered = 0;
+  for (const record of records) {
+    if (record.outcome !== 'success' && record.outcome !== 'failure') continue;
+    try {
+      await recordRecallCandidateValidation(userId, record.candidateId, record.outcome, record.id);
+      await recordAbilityAssetValidation(userId, record.assetId, record.outcome, record.id).catch(() => undefined);
+      recovered += 1;
+    } catch (error) {
+      log.warn('validation application recovery degraded', {
+        validationId: record.id,
+        error: (error as Error).message,
+      });
+    }
+  }
+  return recovered;
 }
 
 export async function listValidationRecords(userId: string): Promise<ValidationRecord[]> {

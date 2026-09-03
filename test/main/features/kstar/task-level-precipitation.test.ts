@@ -16,17 +16,25 @@ vi.mock('../../../../src/main/features/kb_embed', () => ({
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
+let previousRuntimeVariant: string | undefined;
+let testRuntimeVariant: string;
 
 beforeEach(() => {
   vi.resetModules();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-kstar-tasklevel-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
+  previousRuntimeVariant = process.env.COGSEED_RUNTIME_VARIANT;
+  testRuntimeVariant = 'kstar-tasklevel-p3394-' + Math.random().toString(36).slice(2, 8);
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  process.env.COGSEED_RUNTIME_VARIANT = testRuntimeVariant;
 });
 
 afterEach(() => {
   if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+  fs.rmSync(path.join(os.homedir(), '.cogseed', 'runtime-variants', testRuntimeVariant), { recursive: true, force: true });
+  if (previousRuntimeVariant === undefined) delete process.env.COGSEED_RUNTIME_VARIANT;
+  else process.env.COGSEED_RUNTIME_VARIANT = previousRuntimeVariant;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -93,6 +101,38 @@ async function seedRequirement(episodeIds: string[]): Promise<import('../../../.
   return requirement;
 }
 
+async function seedForecastRecord(input: {
+  id: string;
+  requirementId: string;
+  projectionId: string;
+  ruleRefs: string[];
+}): Promise<void> {
+  const recallStore = await import('../../../../src/main/features/recall/store');
+  await recallStore.writeRecallJsonRecord('user-b5', 'world-model-forecasts', input.id, {
+    schemaVersion: 1,
+    ownerId: 'user-b5',
+    id: input.id,
+    taskRunId: 'task-b5-provenance',
+    requirementId: input.requirementId,
+    projectionId: input.projectionId,
+    projectionConfirmedAt: '2026-08-16T00:00:00.000Z',
+    assetVersions: {},
+    ruleRefs: input.ruleRefs,
+    snapshotId: 'snap-b5-provenance',
+    input: {
+      k: { abilityAssetRefs: [], rules: [] },
+      s: { conversationSummary: 'Build the report' },
+      t: { userGoal: 'Build the report', constraints: [] },
+    },
+    forecast: {
+      aHat: { plan: [], expectedTools: [], expectedActors: [] },
+      rHat: { summary: 'The report is built.', acceptanceSignals: [], predictedFiles: [] },
+      predictedRisks: [],
+    },
+    createdAt: '2026-08-16T00:00:00.000Z',
+  });
+}
+
 const learningReview = {
   expectedResult: 'The report is built.',
   actualResult: 'The report was built with the workflow.',
@@ -105,6 +145,34 @@ const learningReview = {
 };
 
 describe('KStar task-level precipitation (B5)', () => {
+  it('does not import ownerless P3394 updates from user A into user B while retaining B local precipitation', async () => {
+    const p3394Episodes = await import('../../../../src/main/features/p3394_bridge/kstar-episodes');
+    p3394Episodes.recordP3394Episode({
+      session_id: 'ses-user-a',
+      task_id: 'tsk-user-a',
+      goal: '用户 A 的协作任务',
+      agent_id: 'hermes',
+      status: 'completed',
+      actions: [],
+      proposed_updates: [{ goal: '用户 A 的私有工作流' }],
+    });
+
+    const epB = episode('kse-b5-ownerless-p3394', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
+    await seedEpisode(epB);
+    await seedReview(epB, learningReview);
+    const requirement = await seedRequirement([epB.id]);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', requirement);
+
+    expect(result.proposals).toHaveLength(1);
+    expect(result.proposals[0].sourceRefs.some((ref) => ref.kind === 'authorized_external_system')).toBe(false);
+    expect(JSON.stringify(result.proposals)).not.toContain('用户 A 的私有工作流');
+    expect(result.createdAssetIds).toHaveLength(1);
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    expect((await assets.listAbilityAssets('user-b5')).some((asset) => asset.id === result.createdAssetIds[0])).toBe(true);
+  });
+
   it('aggregates two episodes into one skill_method asset carrying both episodes evidence', async () => {
     const epA = episode('kse-b5-a', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]);
     const epB = episode('kse-b5-b', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }, { name: 'grep' }]);
@@ -149,6 +217,79 @@ describe('KStar task-level precipitation (B5)', () => {
     const saved = await candidates.listRecallCandidates('user-b5');
     expect(saved.some((c) => c.status === 'confirmed')).toBe(true);
     expect(result.candidateIds).toHaveLength(1);
+  });
+
+  it('carries persisted Projection, Forecast, Episode, Review and delta provenance into candidates', async () => {
+    const ep = {
+      ...episode('kse-b5-provenance', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]),
+      projectionId: 'proj-b5-provenance',
+      forecastId: 'wf-b5-provenance',
+    };
+    await seedEpisode(ep);
+    await seedReview(ep, {
+      ...learningReview,
+      actionDelta: {
+        missingTools: [], unexpectedTools: [], missingActors: [], unexpectedActors: [],
+        missingPlanSteps: [], extraActions: [], failedActions: [], orderMismatch: false,
+      },
+      resultDelta: {
+        acceptanceSignals: [{ signal: 'report exists', status: 'met', evidence: 'file check' }],
+        missingPredictedFiles: [], unexpectedProducedFiles: [], terminalStatus: 'completed',
+      },
+    });
+    const requirement = await seedRequirement([ep.id]);
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    const linkedRequirement = { ...requirement, projectionId: 'proj-b5-provenance', forecastId: 'wf-b5-provenance' };
+    await requirementStore.replaceKstarRequirement('user-b5', linkedRequirement);
+    await seedForecastRecord({
+      id: 'wf-b5-provenance',
+      requirementId: linkedRequirement.id,
+      projectionId: 'proj-b5-provenance',
+      ruleRefs: ['rule:asset-b5:1'],
+    });
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', linkedRequirement);
+
+    expect(result.proposals[0].learningProvenance).toMatchObject({
+      projectionId: 'proj-b5-provenance',
+      forecastId: 'wf-b5-provenance',
+      episodeId: ep.id,
+      attribution: 'execution_gap',
+      ruleRefs: ['rule:asset-b5:1'],
+    });
+    expect(result.proposals[0].learningProvenance?.actionDelta).toBeDefined();
+    expect(result.proposals[0].learningProvenance?.resultDelta).toBeDefined();
+  });
+
+  it('keeps missing Forecast provenance explicit and marks ExtractionRun degraded', async () => {
+    const ep = {
+      ...episode('kse-b5-no-forecast', 'Build the report', [{ name: 'read_file' }, { name: 'write_file' }]),
+      projectionId: 'proj-b5-no-forecast',
+      forecastId: 'wf-b5-missing',
+    };
+    await seedEpisode(ep);
+    await seedReview(ep, learningReview);
+    const requirement = await seedRequirement([ep.id]);
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    const linkedRequirement = { ...requirement, projectionId: ep.projectionId, forecastId: ep.forecastId };
+    await requirementStore.replaceKstarRequirement('user-b5', linkedRequirement);
+
+    const precipitation = await import('../../../../src/main/features/kstar/task-level-precipitation');
+    const result = await precipitation.precipitateRequirementLevel('user-b5', linkedRequirement);
+
+    expect(result.proposals[0].learningProvenance).toMatchObject({
+      projectionId: ep.projectionId,
+      episodeId: ep.id,
+      attribution: 'execution_gap',
+      ruleRefs: [],
+    });
+    expect(result.proposals[0].learningProvenance).not.toHaveProperty('forecastId');
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    expect(await episodeStore.readKstarJsonRecord('user-b5', 'extraction-runs', `ksx-${ep.id}`)).toMatchObject({
+      status: 'degraded',
+      error: 'Forecast provenance is unavailable; candidate evidence is incomplete.',
+    });
   });
 
   it('is idempotent: re-running precipitation does not duplicate assets', async () => {

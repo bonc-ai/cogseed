@@ -57,7 +57,7 @@ function validExtractionRun(userId: string, episodeId: string, reviewId: string,
   if (
     raw.ownerId !== userId || raw.id !== runId || raw.episodeId !== episodeId || raw.reviewId !== reviewId ||
     !Array.isArray(raw.candidateIds) || raw.candidateIds.some((id) => typeof id !== 'string') ||
-    !['created', 'partial', 'failed'].includes(String(raw.status)) ||
+    !['created', 'partial', 'degraded', 'failed'].includes(String(raw.status)) ||
     (raw.createdAssetIds !== undefined && (!Array.isArray(raw.createdAssetIds) || raw.createdAssetIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
     (raw.mergedIntoIds !== undefined && (!Array.isArray(raw.mergedIntoIds) || raw.mergedIntoIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
     (raw.updateCandidateIds !== undefined && (!Array.isArray(raw.updateCandidateIds) || raw.updateCandidateIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||

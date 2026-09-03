@@ -29,6 +29,11 @@ describe('KSTAR extraction run results', () => {
     const result = await (await import('../../../../src/main/features/kstar/task-level-precipitation')).precipitateRequirementLevel('user-a', requirement);
     const run = await episodes.readKstarJsonRecord('user-a', 'extraction-runs', `ksx-${episode.id}`);
     expect(result.candidateIds.length).toBeGreaterThan(0);
-    expect(run).toMatchObject({ candidateIds: result.candidateIds, createdAssetIds: result.createdAssetIds, status: 'partial' });
+    expect(run).toMatchObject({
+      candidateIds: result.candidateIds,
+      createdAssetIds: result.createdAssetIds,
+      status: 'degraded',
+      error: 'Forecast provenance is unavailable; candidate evidence is incomplete.',
+    });
   });
 });

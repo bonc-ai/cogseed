@@ -204,6 +204,56 @@ describe('Commander Forecast host commit', () => {
     expect(forecastFiles()).toEqual([`${record.id}.json`]);
   });
 
+  it('records measured model and tool capabilities in the persisted Snapshot', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+
+    const record = await forecast.commitCommanderForecast('user-a', {
+      ...seeded.input,
+      allowedToolNames: new Set(['read_file']),
+    });
+    const snapshotPath = path.join(
+      tmpDir,
+      'user-a',
+      'cloud',
+      'recall',
+      'records',
+      'world-model-snapshots',
+      `${record.snapshotId}.json`,
+    );
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+
+    expect(snapshot.environment.tools).toEqual({ fileSystem: true, bash: false });
+    expect(snapshot.environment.model.configured).toBeTypeOf('boolean');
+    expect(snapshot.environment.model.configured).not.toBe(true);
+  });
+
+  it('records unknown tool capability when the runtime tool scope is unavailable', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+
+    expect(record.input.s.environment).toMatchObject({
+      fileSystemAvailable: 'unknown',
+      shellAvailable: 'unknown',
+    });
+    expect(record.input.s.execution.availableTools).toEqual([]);
+  });
+
+  it('coalesces concurrent host commits for one Requirement', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+
+    const [first, second] = await Promise.all([
+      forecast.commitCommanderForecast('user-a', seeded.input),
+      forecast.commitCommanderForecast('user-a', seeded.input),
+    ]);
+
+    expect(second.id).toBe(first.id);
+    expect(forecastFiles()).toEqual([`${first.id}.json`]);
+  });
+
   it.each([
     ['unavailable tool', candidate({ expectedTools: ['made_up_tool'] }), 'kstar_unavailable_tool'],
   ])('maps %s to a stable code without persisting', async (_label, invalidCandidate, code) => {
@@ -351,6 +401,50 @@ describe('Commander Forecast host commit', () => {
     expect(record.input.k.abilityAssetRefs).toEqual([seeded.selectedAsset.id]);
   });
 
+  it('loads bounded Personal Ontology field values into K as A-Box facts', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '工作方式');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '输出偏好', '先给结论，再给证据', '手动');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+
+    expect(record.input.k.ontologyFacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        groupTitle: '工作方式',
+        field: '输出偏好',
+        value: '先给结论，再给证据',
+        source: 'personal_ontology',
+      }),
+    ]));
+    expect(record.input.k.ontologyFacts!.length).toBeLessThanOrEqual(24);
+    expect(record.input.k.ontologyFacts!.every((fact) => fact.value.length <= 500)).toBe(true);
+  });
+
+  it('filters Personal Ontology facts by project and ranks task-relevant facts before the cap', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '项目知识');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '偏好', '全局输出规范', '手动');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '偏好', '另一个项目的私有事实', '智能', 'workspace-b');
+    for (let index = 0; index < 24; index += 1) {
+      await groups.appendFieldValue('user-a', group.group!.group_id, '背景', `无关历史事实 ${index}`, '手动');
+    }
+    await groups.appendFieldValue('user-a', group.group!.group_id, '认证', 'OAuth 回调必须校验 state', '智能', 'workspace-a');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', seeded.input);
+    const facts = record.input.k.ontologyFacts || [];
+
+    expect(facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: '全局输出规范' }),
+      expect.objectContaining({ value: 'OAuth 回调必须校验 state', projectId: 'workspace-a' }),
+    ]));
+    expect(facts.some((fact) => fact.value === '另一个项目的私有事实')).toBe(false);
+    expect(facts.length).toBeLessThanOrEqual(24);
+  });
+
   it('loads the ontology R-Box (relation rules) into K alongside asset rules (R-Box)', async () => {
     const seeded = await seedForecastBoundary({ confirmed: true });
     const groups = await import('../../../../src/main/features/personal_ontology_groups');
@@ -394,6 +488,28 @@ describe('Commander Forecast host commit', () => {
         }),
       ]),
     );
+  });
+
+  it('turns a matched ontology R-Box relation into a persisted risk signal', async () => {
+    const seeded = await seedForecastBoundary({ confirmed: true });
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '认证');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '协议', 'OAuth → 回调安全', '手动');
+
+    const forecast = await import('../../../../src/main/features/kstar/forecast-commit');
+    const record = await forecast.commitCommanderForecast('user-a', {
+      ...seeded.input,
+      taskText: 'OAuth callback state validation missing',
+    });
+
+    expect(record.forecast.predictedRisks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: expect.stringMatching(/^ontr-/),
+        severity: 'medium',
+        deltaR: 'unknown',
+      }),
+    ]));
+    expect(record.forecast.candidates.every((candidate) => candidate.score.riskPenalty >= 0.5)).toBe(true);
   });
 
   it('degrades gracefully when memory files are absent (Q4)', async () => {

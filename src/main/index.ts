@@ -1454,6 +1454,12 @@ if (!gotLock) {
       const uid = users.getActiveUserId();
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+    registerDeferred('recall:validation-recovery', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { recoverValidationApplications } = await import('./features/recall/validation-service');
+      await recoverValidationApplications(uid);
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
 
 
 
