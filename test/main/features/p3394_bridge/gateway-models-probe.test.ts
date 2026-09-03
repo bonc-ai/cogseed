@@ -405,14 +405,14 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     '  provider: opencode-go',
     '  base_url: \'\'',
     'providers:',
-    '  agnes:',
-    '    base_url: https://apihub.agnes-ai.com/v1',
-    '    default_model: agnes-2.0-flash',
+    '  example-provider:',
+    '    base_url: https://apihub.example.com/v1',
+    '    default_model: example-model-2.0-flash',
     '    models:',
-    '      - agnes-2.0-flash',
+    '      - example-model-2.0-flash',
   ].join('\n');
   const HERMES_CACHE = JSON.stringify({
-    agnes: { fp: 'x', at: 1, models: ['agnes-2.0-flash'] },
+    'example-provider': { fp: 'x', at: 1, models: ['example-model-2.0-flash'] },
     'opencode-go': { fp: 'y', at: 2, models: ['minimax-m3', 'kimi-k3', 'deepseek-v4-flash'] },
   });
 
@@ -440,9 +440,9 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
         minimax: { baseUrl: 'x', api: 'anthropic-messages', models: [
           { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', reasoning: true, contextWindow: 204800 },
         ] },
-        agnes: { api: 'openai-completions', models: [{ id: 'agnes-2.5-flash' }] },
+        example: { api: 'openai-completions', models: [{ id: 'example-model-2.5-flash' }] },
       } },
-      agents: { defaults: { model: { primary: 'agnes/agnes-2.5-flash' } }, list: [] },
+      agents: { defaults: { model: { primary: 'example/example-model-2.5-flash' } }, list: [] },
     });
     const result = probeConfigModels({
       configModels: 'openclaw',
@@ -455,10 +455,10 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     expect(result.status).toBe('ready');
     expect(result.models).toEqual([
       { id: 'MiniMax-M2.7', label: 'MiniMax M2.7', contextWindow: 204800 },
-      { id: 'agnes-2.5-flash', label: 'agnes-2.5-flash' },
+      { id: 'example-model-2.5-flash', label: 'example-model-2.5-flash' },
     ]);
     // primary 的 provider/ 前缀剥掉，与清单 id 同口径（isCurrent 命中）。
-    expect(result.current).toBe('agnes-2.5-flash');
+    expect(result.current).toBe('example-model-2.5-flash');
   });
 
   it('returns no_config_probe for unknown config keys', () => {
