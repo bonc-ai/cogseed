@@ -32,6 +32,7 @@ const LOCALE_KEYS = [
   'chat.recipient_api_models',
   'chat.recipient_local_agents',
   'chat.recipient_cli_agents',
+  'chat.recipient_cli_not_installed',
   'agent_picker.expand_models',
   'settings.thinking.title',
   'agents.exec_default_model',
@@ -57,6 +58,16 @@ describe('unified execution entry — picker scope', () => {
     // auto 弹窗维持 agent-only 契约：两类模型分支都直拒 auto 锚点。
     expect(agents).toMatch(/kind === 'model'[\s\S]*?auto-recipient-chip'\) return/);
     expect(agents).toMatch(/kind === 'cli-model'[\s\S]*?anchorId === 'auto-recipient-chip'\) return/);
+    // D4 诚实降级：未装 CLI 的行置灰不可选（is-disabled + aria-disabled +
+    // 「未检测到」副标 + 无下钻 chevron），检测数据来自 p3394.external.list
+    // 的 entries[].available；检测未决（null）保持可选，绝不固化置灰。
+    expect(agents).toContain('_refreshPickerCliAvailability');
+    expect(agents).toContain("'p3394.external.list'");
+    expect(agents).toContain('e.available === true');
+    expect(agents).toMatch(/installed \? '' : ' is-disabled'/);
+    expect(agents).toMatch(/aria-disabled="true"/);
+    expect(agents).toContain("t('chat.recipient_cli_not_installed'");
+    expect(agents).toContain("kind === 'cli-unavailable'");
     // Commander + agents listing intact.
     expect(agents).toContain('__commander__');
     expect(agents).toMatch(/data-kind="agent"/);

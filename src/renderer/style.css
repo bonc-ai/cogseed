@@ -11812,6 +11812,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 /* 本机 CLI 分组行（伪装模型 ID 路由）：与 API 模型行同构，chevron 同样
    依赖 relative 定位下钻该 CLI 的扫描模型清单。 */
 .skill-picker-item--cli { position: relative; }
+/* 未装 CLI 的置灰行（D4 诚实降级）：半透明 + 禁指针，副标已标「未检测到」。 */
+.skill-picker-item.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .picker-model-expand {
   position: absolute;
   right: 4px;
