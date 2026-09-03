@@ -21,6 +21,9 @@ import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
+// 副作用导入：确保 /agent 等接续命令的 handler 在 boot deferred 阶段注册
+// （安装幂等，与 personal-context 的注册互不干扰）。
+import './continuity_commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
 import { RuntimeInstance } from './runtime';
