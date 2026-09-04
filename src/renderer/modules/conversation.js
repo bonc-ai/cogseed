@@ -12443,6 +12443,12 @@ function _makeConvChatController(cid, options = {}) {
           // `_finishStreamingMsg` can synchronously start the next queued
           // controller. Delete only if the map still belongs to this send.
           if (_convChatCtrls.get(id) === self) _convChatCtrls.delete(id);
+        } else {
+          // Stale-guard fallback: a newer controller owns the slot, so this
+          // send must not settle it — but if nothing is actually live
+          // anymore (map cleaned up without finalization), heal the busy
+          // flag so the pending queue drains instead of stalling.
+          _healStaleGroupBusy(id);
         }
         if (typeof options.onDone === 'function') {
           try { options.onDone(result); } catch (_) {}
@@ -13397,6 +13403,11 @@ function _observeConversationRunFromPlanAction(cid, opts = {}) {
       if (activated) {
         if (_observerShouldDeferCleanup(cid, allowWithController)) {
           if (window.ConversationInfo) window.ConversationInfo.refreshFiles(cid, { silent: true });
+          // Deferred cleanup hands finalization to the primary controller.
+          // If that controller already vanished (its onDone guard rejected
+          // a stale settle and cleaned the map without finalizing), heal
+          // here so the busy flag and pending queue don't stall.
+          _healStaleGroupBusy(cid);
         } else {
           setGroupConversationBusy(cid, false);
           _removeEmptyStreamingPlaceholder(msgEl);
@@ -14401,6 +14412,27 @@ function _streamingMarkAborted(msg) {
   }
   const details = msg.querySelector('.stream-process');
   if (details) details.style.display = '';
+}
+
+/**
+ * 状态自愈保险丝:当主进程流已关闭、但本会话已无任何活跃控制器
+ * (pendingConvs 无条目且 _convChatCtrls 无条目)时,强制清掉残留的
+ * busy 标记并排空"待发送"队列。防的是 turn 结束信号与 UI 状态机的
+ * 竞态——busy 卡死会让队列永远停在"待发送"。
+ * 幂等,可重复调用;有活跃控制器时绝不动(让正常路径处理)。
+ */
+function _healStaleGroupBusy(cid) {
+  if (!cid) return;
+  if (pendingConvs.has(cid)) return;
+  if (_convChatCtrls.has(cid)) return;
+  if (!isGroupConversationBusy(cid)) return;
+  _convLog.warn(`healing stale group busy state cid=${cid}`);
+  setGroupConversationBusy(cid, false);
+  stopPolling(cid);
+  _updateConvSidebarBadge(cid, false);
+  if (cid === currentCid) _updateConvSendUI(cid);
+  // Fire-and-forget: _dispatchNextQueued is async and guarded by isConvPending.
+  Promise.resolve(_dispatchNextQueued(cid)).catch(() => {});
 }
 
 function _finishStreamingMsg(cid) {
