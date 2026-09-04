@@ -104,7 +104,23 @@ describe('local_agents/backends/workbuddy › buildWorkbuddyArgs', () => {
 
 describe('local_agents/models › workbuddy catalog', () => {
   it('exposes auto as the default plus pinnable ids', () => {
-    expect(listModels('workbuddy').map(m => m.id)).toEqual(['auto', 'glm-5.2', 'glm-5.1', 'hy3']);
+    expect(listModels('workbuddy').map(m => m.id)).toEqual([
+      'auto',
+      'hy4-preview',
+      'hy3',
+      'hy3-x',
+      'glm-5.3',
+      'glm-5.3-flash',
+      'glm-5.2',
+      'glm-5.1',
+      'glm-5v-turbo',
+      'minimax-m3',
+      'kimi-k3-1',
+      'kimi-k2.7',
+      'kimi-k2.6',
+      'deepseek-v4-flash',
+      'deepseek-v4-pro',
+    ]);
     expect(defaultModel('workbuddy')).toBe('auto');
   });
 });

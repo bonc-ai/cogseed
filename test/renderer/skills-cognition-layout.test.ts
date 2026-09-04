@@ -70,10 +70,13 @@ describe('Recall cognition workspace layout', () => {
       expect(html).toContain(`data-cognition-page-body="${page}"`);
     }
     // 来源与沉淀活动降为页头辅助入口：仍有 pane，但不占任务视图的位置。
+    // 辅助入口按钮由 skills.js 的 uiPageHeader() 渲染（页面骨架规格 PH-04），
+    // pane 本体仍留在 index.html。
     for (const aux of ['sources', 'captures']) {
-      expect(html).toContain(`data-cognition-page="${aux}"`);
       expect(html).toContain(`data-cognition-page-body="${aux}"`);
     }
+    expect(sliceFunction(skillsSource, '_renderCognitionPageHeader')).toContain("attrs: { 'data-cognition-page': 'sources' }");
+    expect(sliceFunction(skillsSource, '_renderCognitionPageHeader')).toContain("attrs: { 'data-cognition-page': 'captures' }");
     const tabNav = html.slice(html.indexOf('id="skills-cognition-tabs"'), html.indexOf('</nav>', html.indexOf('id="skills-cognition-tabs"')));
     for (const aux of ['sources', 'captures']) {
       expect(tabNav).not.toContain(`data-cognition-page="${aux}"`);
@@ -196,14 +199,16 @@ describe('Recall cognition workspace layout', () => {
       expect(navHtml).not.toContain(`data-cognition-page="${page}"`);
       // 页面本体仍在，只是入口换了位置。
       expect(html).toContain(`data-cognition-page-body="${page}"`);
-      expect(html).toContain(`class="btn btn-sm cognition-aux-entry" data-cognition-page="${page}"`);
     }
-    // 辅助入口不得伪装成 tab：没有 role="tab"，就不该出现在 tablist 语义里。
-    const headerStart = html.indexOf('class="skills-cognition-header"');
-    const headerHtml = html.slice(headerStart, html.indexOf('</header>', headerStart));
-    expect(headerHtml).toContain('cognition-aux-entry');
-    expect(headerHtml).toContain('class="skills-cognition-header-actions"');
-    expect(headerHtml).not.toContain('role="tab"');
+    // 辅助入口由 uiPageHeader() 的 secondary/sm 操作渲染（页面骨架规格 PH-04），
+    // 挂在 #cognition-page-header 占位节点上，不再手写 .cognition-aux-entry。
+    expect(html).toContain('id="cognition-page-header"');
+    const headerFn = sliceFunction(skillsSource, '_renderCognitionPageHeader');
+    expect(headerFn).toContain("attrs: { 'data-cognition-page': 'sources' }");
+    expect(headerFn).toContain("attrs: { 'data-cognition-page': 'captures' }");
+    expect(headerFn).toContain('uiPageHeader');
+    // 辅助入口不得伪装成 tab：uiButton 渲染不产生 role="tab"。
+    expect(headerFn).not.toContain('role="tab"');
   });
 
   // 技能市场与外部 Skill 库是「可用资源」，安装/导入不等于用户已确认拥有，
@@ -250,7 +255,7 @@ describe('Recall cognition workspace layout', () => {
     expect(surfaceStart).toBeGreaterThan(0);
     expect(surfaceEnd).toBeGreaterThan(surfaceStart);
     const surfaceHtml = html.slice(surfaceStart, surfaceEnd);
-    expect(surfaceHtml).toContain('class="skills-cognition-header"');
+    expect(surfaceHtml).toContain('id="cognition-page-header"');
     expect(surfaceHtml).toContain('class="skills-cognition-workspace"');
     expect(surfaceHtml).toContain('class="skills-cognition-main" id="skills-cognition-main" tabindex="0"');
     expect(surfaceHtml).toContain('id="skills-cognition-tabs"');
@@ -261,9 +266,8 @@ describe('Recall cognition workspace layout', () => {
     const css = recallCss;
     const navStart = html.indexOf('id="skills-cognition-tabs"');
     const navHtml = html.slice(navStart, html.indexOf('</nav>', navStart));
-    expect(html).toContain('class="skills-cognition-heading"');
-    expect(html).toContain('class="skills-cognition-header-actions"');
-    expect(html).toContain('data-i18n="cognition.workspace_eyebrow"');
+    expect(html).toContain('id="cognition-page-header"');
+    expect(sliceFunction(skillsSource, '_renderCognitionPageHeader')).toContain("title: _cognitionText('cognition.title', '认知资产')");
     expect(navHtml).toContain('data-i18n-aria-label="cognition.task_views"');
     for (const key of ['inbox_desc', 'my_assets_desc', 'proofs_desc', 'governance_desc']) {
       expect(navHtml).toContain(`data-i18n="cognition.${key}"`);
@@ -332,12 +336,16 @@ describe('Recall cognition workspace layout', () => {
   it('uses a task-oriented cognition header and removes the personal tag surface', () => {
     const skills = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/skills.js'), 'utf-8');
     const zh = JSON.parse(fs.readFileSync(path.join(__dirname, '../../src/renderer/locales/zh.json'), 'utf-8'));
-    expect(html).toContain('<h1 data-i18n="cognition.title">认知资产</h1>');
-    expect(html).toContain('data-i18n="cognition.workspace_eyebrow"');
+    // 一级页面标题统一由 uiPageHeader() 渲染为语义 h1（页面骨架规格 PH-01），
+    // eyebrow/副标题不再进 header（PH-02）。
+    const headerFn = sliceFunction(skillsSource, '_renderCognitionPageHeader');
+    expect(headerFn).toContain('uiPageHeader');
+    expect(headerFn).toContain("title: _cognitionText('cognition.title', '认知资产')");
+    expect(headerFn).not.toContain('eyebrow');
+    expect(headerFn).not.toContain('cognition.subtitle');
     expect(zh['cognition.title']).toBe('认知资产');
     expect(zh['cognition.subtitle']).toContain('管理资产');
-    expect(recallCss).toMatch(/\.skills-cognition-header\s*\{[^}]*padding:\s*24px 28px 20px;/s);
-    expect(recallCss).toMatch(/\.skills-cognition-header h1\s*\{[^}]*font-size:\s*24px;/s);
+    expect(recallCss).toMatch(/#cognition-page-header \.ui-page-header\s*\{[^}]*width:\s*100%;/s);
     expect(recallCss).not.toContain('.ability-profile-');
     expect(recallCss).not.toContain('.ability-personal-memory-');
     expect(skills).not.toContain("window.cogseed.invoke('personalOntology.profile.summary'");

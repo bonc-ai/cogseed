@@ -11,13 +11,14 @@
  * 当前按 OS 分配动态端口实现；验证时若不支持，改为固定端口并在应用配置中写死。
  */
 import { shell } from 'electron';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createLogger } from '../../logger';
 import { nowIso, readJson, writeJson } from '../../storage';
 import { userLocalConfigDir } from '../../paths';
 import * as messagingRegistry from '../messaging/registry';
 import { OAuthManager, OAuthConnectionStatus } from './oauth-manager';
-import { buildFeishuAuthorizeUrl, createFeishuTokenEndpoint, FEISHU_READ_SCOPES } from './feishu/oauth';
+import { buildFeishuAuthorizeUrl, createFeishuTokenEndpoint, FEISHU_READ_SCOPES, FEISHU_SHARE_SCOPES } from './feishu/oauth';
 import { startOAuthCallbackServer, type OAuthCallbackServerHandle } from './callback-server';
 import { HttpFeishuApiClient } from './feishu/api-client';
 import { createFeishuProvider } from './feishu/provider';
@@ -110,11 +111,14 @@ async function resolveFeishuApp(uid: string, instanceId?: string): Promise<{ app
 /**
  * 发起飞书授权：启动回调服务器 → 打开授权页 → 后台等待回调并兑换。
  * 非阻塞：立即返回；授权结果通过 getStatus 轮询获取。
+ * scopes 缺省为只读（个人上下文同步用）；分享场景传 FEISHU_SHARE_SCOPES
+ * （方案 A/B：创建 docx/wiki + 写内容 + 设权限，需用户重新授权一次）。
  */
 export async function beginAuthorize(
   uid: string,
-  opts: { instanceId?: string } = {},
+  opts: { instanceId?: string; scopes?: readonly string[] } = {},
 ): Promise<BeginAuthorizeResult> {
+  const scopes = opts.scopes && opts.scopes.length > 0 ? [...opts.scopes] : [...FEISHU_READ_SCOPES];
   // 已有进行中的授权流：先关闭旧回调服务器（端口释放 + wait reject），
   // 防止用户连点「连接」导致回调服务器泄漏与状态混乱。
   const existing = flows.get(flowKey(uid, PROVIDER_ID));
@@ -135,8 +139,8 @@ export async function beginAuthorize(
   const endpoint = createFeishuTokenEndpoint({ app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT } });
   const oauth = new OAuthManager(endpoint);
   try {
-    const request = await oauth.beginAuthorize(uid, PROVIDER_ID, [...FEISHU_READ_SCOPES], (state) =>
-      buildFeishuAuthorizeUrl({ appId, appSecret, redirectUri: handle.redirectUri }, state, [...FEISHU_READ_SCOPES]));
+    const request = await oauth.beginAuthorize(uid, PROVIDER_ID, scopes, (state) =>
+      buildFeishuAuthorizeUrl({ appId, appSecret, redirectUri: handle.redirectUri }, state, scopes));
     flows.set(flowKey(uid, PROVIDER_ID), { providerId: PROVIDER_ID, handle });
     void shell.openExternal(request.authUrl).catch((error) => {
       log.warn('open feishu authorize url failed', { error: (error as Error).message });
@@ -173,6 +177,74 @@ export async function beginAuthorize(
       .catch(async (error) => {
         // 超时/取消：收敛挂起的 connecting 状态为可重试的 disconnected。
         log.warn('feishu oauth callback not completed', { error: (error as Error).message });
+        const status = await oauth.cancelAuthorize(uid, PROVIDER_ID).catch(() => undefined);
+        if (status) broadcastAuthorizationStatus(uid, status);
+      })
+      .finally(() => {
+        flows.delete(flowKey(uid, PROVIDER_ID));
+      });
+    return { redirectUri: handle.redirectUri, status: await oauth.getStatus(uid, PROVIDER_ID) };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * 分享场景授权：与 beginAuthorize 流程一致，但凭据源用分享专用应用配置
+ * （feishu-share-app.json，可独立于消息机器人配置），scope 固定为写权限集合。
+ * 未配置分享应用时抛错（渲染层应先用 kb.share.appConfig.set 保存凭据）。
+ */
+export async function beginShareAuthorize(uid: string): Promise<BeginAuthorizeResult> {
+  const existing = flows.get(flowKey(uid, PROVIDER_ID));
+  if (existing) {
+    await existing.handle.close().catch(() => undefined);
+    flows.delete(flowKey(uid, PROVIDER_ID));
+  }
+  const { appId, appSecret } = await resolveShareApp(uid); // 分享专用配置优先
+  let handle: OAuthCallbackServerHandle;
+  try {
+    handle = await startOAuthCallbackServer({ port: FEISHU_OAUTH_CALLBACK_PORT });
+  } catch (error) {
+    throw new Error(
+      `回调端口 ${FEISHU_OAUTH_CALLBACK_PORT} 启动失败：${(error as Error).message}。` +
+      `请关闭占用该端口的程序后重试（飞书要求回调地址固定，无法自动换端口）。`,
+    );
+  }
+  const endpoint = createFeishuTokenEndpoint({ app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT } });
+  const oauth = new OAuthManager(endpoint);
+  const scopes = [...FEISHU_SHARE_SCOPES];
+  try {
+    const request = await oauth.beginAuthorize(uid, PROVIDER_ID, scopes, (state) =>
+      buildFeishuAuthorizeUrl({ appId, appSecret, redirectUri: handle.redirectUri }, state, scopes));
+    flows.set(flowKey(uid, PROVIDER_ID), { providerId: PROVIDER_ID, handle });
+    void shell.openExternal(request.authUrl).catch((error) => {
+      log.warn('open feishu share authorize url failed', { error: (error as Error).message });
+    });
+    void handle.wait()
+      .then(async ({ code, state }) => {
+        const result = await oauth.completeAuthorize(uid, PROVIDER_ID, code, state, handle.redirectUri);
+        log.info('feishu share oauth completed', { status: result.kind });
+        broadcastAuthorizationStatus(uid, result);
+        if (result.kind === 'connected') {
+          void (async () => {
+            try {
+              const credential = await oauth.getCredential(uid, PROVIDER_ID);
+              if (!credential) return;
+              const health = await endpoint.healthCheck(credential.accessToken);
+              if (health.ok && health.identity?.name) {
+                await oauth.setIdentityLabel(uid, PROVIDER_ID, health.identity.name).catch((error) => {
+                  log.warn('oauth identity label write failed', { uid, error: (error as Error).message });
+                });
+              }
+            } catch (error) {
+              log.warn('feishu share identity resolution failed', { uid, error: (error as Error).message });
+            }
+          })();
+        }
+      })
+      .catch(async (error) => {
+        log.warn('feishu share oauth callback not completed', { error: (error as Error).message });
         const status = await oauth.cancelAuthorize(uid, PROVIDER_ID).catch(() => undefined);
         if (status) broadcastAuthorizationStatus(uid, status);
       })
@@ -378,4 +450,192 @@ export async function revoke(uid: string, providerId: string): Promise<OAuthConn
 export async function healthCheck(uid: string, providerId: string): Promise<OAuthConnectionStatus> {
   const { appId, appSecret } = await resolveFeishuApp(uid);
   return createManager(appId, appSecret).healthCheck(uid, providerId);
+}
+
+// ── 分享场景凭据（方案 A/B：feishu-share 复用）───────────────────────────
+export interface FeishuShareCredential {
+  accessToken: string;
+  scopes: string[];
+  tenantKey: string;
+  unionId: string;
+  tenantDomain?: string;
+}
+
+/** 分享专用飞书应用配置（独立于消息机器人，存 <uid>/local/config/…） */
+export interface FeishuShareAppConfig {
+  appId: string;
+  appSecret: string;
+}
+
+const SHARE_APP_CONFIG_FILE = 'feishu-share-app.json';
+
+function shareAppConfigFile(uid: string): string {
+  return path.join(userLocalConfigDir(uid), 'personal-context', SHARE_APP_CONFIG_FILE);
+}
+
+/** 读取分享专用应用配置；未配置返回 null */
+export async function getFeishuShareAppConfig(uid: string): Promise<FeishuShareAppConfig | null> {
+  try {
+    const raw = await readJson<{ appId?: unknown; appSecret?: unknown }>(shareAppConfigFile(uid));
+    if (typeof raw.appId === 'string' && raw.appId.trim() && typeof raw.appSecret === 'string' && raw.appSecret.trim()) {
+      return { appId: raw.appId.trim(), appSecret: raw.appSecret.trim() };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 保存分享专用应用配置（空值 = 清除） */
+export async function setFeishuShareAppConfig(uid: string, config: FeishuShareAppConfig | null): Promise<void> {
+  const file = shareAppConfigFile(uid);
+  if (!config || !config.appId.trim() || !config.appSecret.trim()) {
+    try { fs.unlinkSync(file); } catch { /* noop */ }
+    return;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await writeJson(file, { appId: config.appId.trim(), appSecret: config.appSecret.trim() });
+}
+
+/**
+ * 解析分享场景的飞书应用凭据。
+ * 优先级：分享专用配置（feishu-share-app.json）→ 消息机器人凭据（兼容已绑定用户）。
+ * 与 resolveFeishuApp 的区别：分享不要求绑定消息机器人，独立配置即可用。
+ */
+async function resolveShareApp(uid: string): Promise<{ appId: string; appSecret: string }> {
+  const own = await getFeishuShareAppConfig(uid);
+  if (own) return own;
+  return resolveFeishuApp(uid); // 回退：已绑定机器人用户无需重复配置
+}
+
+/**
+ * 获取用于「分享到飞书」的凭据。
+ * - 未配置分享应用且未绑定机器人 / 未授权 → 返回 null（调用方引导配置/授权）；
+ * - 返回 accessToken + scopes（调用方用 hasFeishuShareScopes 判断是否需重授权）
+ *   + 身份（tenantKey/unionId）。
+ * 注意：分享需要写权限，若 scopes 只含只读集合，调用方应引导用户用
+ * FEISHU_SHARE_SCOPES 重新授权（beginAuthorize({ scopes: FEISHU_SHARE_SCOPES })）。
+ */
+export async function getFeishuShareCredential(uid: string): Promise<FeishuShareCredential | null> {
+  let appId: string;
+  let appSecret: string;
+  try {
+    ({ appId, appSecret } = await resolveShareApp(uid));
+  } catch {
+    return null; // 未配置分享应用 / 未绑定机器人
+  }
+  const endpoint = createFeishuTokenEndpoint({ app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT } });
+  const oauth = new OAuthManager(endpoint);
+  const credential = await oauth.getCredential(uid, PROVIDER_ID);
+  if (!credential) return null; // 未授权
+  let tenantKey = '';
+  let unionId = '';
+  try {
+    const health = await endpoint.healthCheck(credential.accessToken);
+    if (health.ok) {
+      tenantKey = health.identity?.tenantKey ?? '';
+      unionId = health.identity?.unionId ?? '';
+    }
+  } catch (error) {
+    log.warn('feishu share credential identity check failed', { uid, error: (error as Error).message });
+  }
+  return {
+    accessToken: credential.accessToken,
+    scopes: credential.scopes ?? [],
+    tenantKey,
+    unionId,
+  };
+}
+
+// ── 租户域名解析（分享链接用：https://{租户域名}.feishu.cn/docx/{token}）───
+const TENANT_DOMAIN_CACHE_FILE = 'feishu-tenant-domain.json';
+
+function tenantDomainCacheFile(uid: string): string {
+  return path.join(userLocalConfigDir(uid), 'personal-context', TENANT_DOMAIN_CACHE_FILE);
+}
+
+/** 读取缓存的租户域名（避免每次分享都调 API） */
+export async function getCachedTenantDomain(uid: string): Promise<string | null> {
+  try {
+    const raw = await readJson<{ domain?: unknown }>(tenantDomainCacheFile(uid));
+    return typeof raw.domain === 'string' && raw.domain.trim() ? raw.domain.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 手动设置租户域名缓存（用户可从飞书文档地址栏获取后填写；空值清除） */
+export async function setTenantDomain(uid: string, domain: string | null): Promise<void> {
+  const file = tenantDomainCacheFile(uid);
+  if (!domain || !domain.trim()) {
+    try { fs.unlinkSync(file); } catch { /* noop */ }
+    return;
+  }
+  const clean = domain.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await writeJson(file, { domain: clean, resolvedAt: nowIso() });
+}
+
+/**
+ * 查询并缓存租户域名（https://{租户域名}.feishu.cn/docx/{token} 的域名部分）。
+ * 走 tenant_access_token → GET /open-apis/tenant/v2/tenant/query，需要应用开通
+ * tenant:tenant:readonly 权限（后台「权限管理」→ 发布后生效）。
+ * 失败返回 null（调用方回退 open.feishu.cn 或用户配置）。
+ */
+export async function resolveTenantDomain(uid: string): Promise<string | null> {
+  const cached = await getCachedTenantDomain(uid);
+  if (cached) return cached;
+  let appId: string;
+  let appSecret: string;
+  try {
+    ({ appId, appSecret } = await resolveShareApp(uid));
+  } catch {
+    return null;
+  }
+  try {
+    // 1. 换 tenant_access_token（应用身份，无需用户授权）
+    const tokenRes = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+    });
+    const tokenBody = (await tokenRes.json()) as { code?: number; tenant_access_token?: string; msg?: string };
+    if (tokenBody.code !== 0 || !tokenBody.tenant_access_token) {
+      log.warn('tenant domain: tenant token failed', { code: tokenBody.code, msg: tokenBody.msg });
+      return null;
+    }
+    // 2. 查租户信息（name = 租户名，用于拼域名；部分租户返回 display_id）
+    const res = await fetch('https://open.feishu.cn/open-apis/tenant/v2/tenant/query', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenBody.tenant_access_token}` },
+    });
+    const body = (await res.json()) as { code?: number; data?: { tenant?: { name?: string; display_id?: string } } };
+    if (body.code !== 0) {
+      log.warn('tenant domain: query failed', { code: body.code });
+      return null;
+    }
+    const tenant = body.data?.tenant;
+    // 租户域名 = {租户短域名}.feishu.cn。tenant query 的 name 多为中文名（拼不出
+    // 合法域名），只有纯 ASCII 短标识（如 display_id）才能拼。真实短域名通常从
+    // 文档 URL 或登录跳转的 redirect_uri 里出现（形如 vcn7socq2ws8.feishu.cn）。
+    const candidate = (tenant?.display_id || tenant?.name || '').trim();
+    const domain = /^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(candidate) ? `${candidate}.feishu.cn` : null;
+    if (!domain) {
+      log.warn('tenant domain: tenant name not usable as domain', { candidate: redactDomain(candidate) });
+      return null;
+    }
+    fs.mkdirSync(path.dirname(tenantDomainCacheFile(uid)), { recursive: true });
+    await writeJson(tenantDomainCacheFile(uid), { domain, resolvedAt: nowIso() });
+    log.info('tenant domain resolved', { domain });
+    return domain;
+  } catch (error) {
+    log.warn('tenant domain resolve failed', { error: (error as Error).message });
+    return null;
+  }
+}
+
+/** 域名候选打码（避免日志泄露完整租户标识；短域名本身非机密但保持整洁） */
+function redactDomain(value: string): string {
+  if (value.length <= 4) return '***';
+  return `${value.slice(0, 2)}…${value.slice(-2)}`;
 }

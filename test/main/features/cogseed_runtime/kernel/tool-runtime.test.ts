@@ -36,6 +36,14 @@ function runner(
     toolPolicy: policy,
     allowedSkillIds,
     skillVersionPins,
+    hostToolClient: {
+      async call(call: { name: string }) {
+        if (call.name === 'action_approval_request') {
+          return { content: JSON.stringify({ approved: true, request_id: 'approval-test-once', code: 'E_ACTION_APPROVAL_DENIED' }) };
+        }
+        return { content: JSON.stringify({ ok: true }) };
+      },
+    } as never,
     ...(maxInlineToolResultTokens ? { maxInlineToolResultTokens } : {}),
   });
 }

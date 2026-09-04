@@ -711,6 +711,20 @@
 
   // ── 空间中心 ──────────────────────────────────────────────────────────────
 
+  // 一级页面 header 统一走 uiPageHeader()（页面骨架规格）：标题 + 单一操作，
+  // 操作统一 secondary/sm，不区分主次；副标题（tagline）移到正文区（.ws-tagline）。
+  // 新建空间的 data-ws 属性保留，_bind() 仍按它挂点击。
+  function _renderCenterPageHeader() {
+    const createLabel = _t('ws.new_space', '新建空间');
+    if (typeof uiPageHeader !== 'function') {
+      return `<header class="ui-page-header"><div class="ui-page-header__body"><div class="ui-page-header__title-row"><h1 class="ui-page-header__title">${_t('ws.center_title', '工作空间')}</h1></div></div><button type="button" class="ws-primary" data-ws="create-space">${createLabel}</button></header>`;
+    }
+    return uiPageHeader({
+      title: _t('ws.center_title', '工作空间'),
+      actions: [{ label: createLabel, icon: 'plus', attrs: { 'data-ws': 'create-space' } }],
+    });
+  }
+
   function _renderCenter() {
     const spaces = _spaces.filter((s) => !_centerSearch
       || `${_spaceDisplayName(s)} ${s.sustained_outcome || ''} ${s.template_names || ''} ${s.last_conversation_title || ''}`.toLowerCase().includes(_centerSearch.toLowerCase()));
@@ -723,14 +737,10 @@
       : (a, b) => String(b.last_conversation_at || b.updated_at || '').localeCompare(String(a.last_conversation_at || a.updated_at || '')));
 
     return `
-    <div class="ws-view ws-center">
-      <header class="ws-page-top">
-        <div>
-          <h1>${_t('ws.center_title', '工作空间')}</h1>
-          <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
-        </div>
-        <button class="ws-primary" data-ws="create-space">${_icon('plus', 'ui-icon ws-btn-ico')}${_t('ws.new_space', '新建空间')}</button>
-      </header>
+    <div class="ws-view">
+      <div class="ws-center-header">${_renderCenterPageHeader()}</div>
+      <div class="ws-center">
+      <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
 
       <section class="ws-section">
         <div class="ws-section-head">
@@ -764,6 +774,7 @@
              <div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
           : (!_scenarios.length ? `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>` : '')}
       </section>
+      </div>
     </div>`;
   }
 

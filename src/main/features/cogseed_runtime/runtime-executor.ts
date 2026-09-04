@@ -107,6 +107,7 @@ export function createDefaultNativeRuntimeExecutor(
       userId: request.userId,
       runtimeSessionId: request.runtimeSessionId,
       requestId: request.requestId,
+      ...(request.agentId ? { agentId: request.agentId } : {}),
       allowedRoots: request.readOnlyRoots,
       writableRoots: request.writableRoots,
       pcDir: PC_ROOT,
