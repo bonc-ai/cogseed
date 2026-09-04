@@ -1,5 +1,5 @@
 /**
- * Material-boundary hybrid search (COGSEED-39 ① Phase 2 + 4.3).
+ * Material-boundary hybrid search (知识库问答 ① Phase 2 + 4.3).
  *
  * Retrieval entry for the "reliable Q&A within a material set" workstream:
  * fuses Library vector search (semantic, via the existing sqlite-vec KB)
@@ -7,7 +7,7 @@
  * using reciprocal rank fusion (RRF).
  *
  * Why hybrid: vector search alone misses exact terms / ids / filenames that
- * the embedding blurs (e.g. "COGSEED-39", "IPC 0012"), and keyword-only
+ * the embedding blurs (e.g. "知识库问答", "order-42"), and keyword-only
  * misses synonyms. The fusion keeps both signals and returns a unified hit
  * shape — `{source, scope, path, chunkIdx, snippet, score}` — that later
  * phases (material-boundary model, answer verification) consume as the
