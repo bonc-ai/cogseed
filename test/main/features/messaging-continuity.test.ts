@@ -54,6 +54,18 @@ describe('messaging continuity commands (pure)', () => {
     expect(sanitizeFailureText('plain provider timeout')).toBe('plain provider timeout');
   });
 
+  it('sanitizeFailureText also strips non-ASCII and Windows path segments', async () => {
+    const { sanitizeFailureText } = await import('../../../src/main/features/messaging/runtime');
+    // 中文用户名目录：枚举 ASCII 的旧正则会漏掉 /Users/牛保康/ 前缀。
+    expect(sanitizeFailureText('failed: /Users/牛保康/project/report.md unreadable')).toBe(
+      'failed: report.md unreadable',
+    );
+    // Windows 反斜杠绝对路径。
+    expect(sanitizeFailureText('spawn C:\\Users\\admin\\AppData\\cli.exe failed')).toBe(
+      'spawn cli.exe failed',
+    );
+  });
+
   it('formatAgentList truncates long rosters and appends usage', async () => {
     const { formatAgentList, AGENT_LIST_MAX } = await import('../../../src/main/features/messaging/continuity_commands');
     const many = Array.from({ length: AGENT_LIST_MAX + 8 }, (_v, i) => `Agent${i + 1}`);

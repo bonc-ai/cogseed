@@ -632,6 +632,10 @@ async function handleInboundLocked(
   // 渠道任务接续（G0）撤权：已解绑的渠道会话只放行 /new（上面的分支已
   // 处理并 return），其余消息——含一切 slash 命令——一律明确拒绝并引导，
   // 绝不静默吞掉，也绝不无提示地重建绑定。
+  // （读 binding 与拒绝之间的窗口与本 handler 的处理锁并不同锁，理论上
+  // 存在瞬态 TOCTOU；但 /unbind 与 /new 都经 bindings 文件锁串行落盘，
+  // 最坏结果是并发消息读到旧状态、晚一轮才被拒——单条消息的可接受
+  // 延迟，不构成越权。）
   const currentBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
   if (currentBinding.unboundedAt) {
     await completeLedger({ status: 'rejected', reason: 'binding_unbound' });
