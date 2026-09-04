@@ -1,0 +1,12 @@
+# 兼容清单模板（根目录 manifest.yaml）
+# 只能由 artifact.yaml 单向生成；关键字段与安全引用必须与制品主清单保持一致
+
+id: REQUIRED_INPUT
+name: REQUIRED_INPUT
+version: REQUIRED_INPUT
+description: REQUIRED_INPUT
+owner: REQUIRED_INPUT
+security_ontology: cogseed.security.skill@1.1.1
+security_manifest: references/security-manifest.yaml
+entrypoint: SKILL.md
+evals: evals/evals.json

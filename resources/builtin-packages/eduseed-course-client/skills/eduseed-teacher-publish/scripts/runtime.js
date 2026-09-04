@@ -15168,7 +15168,7 @@ function loadConfig(env = process.env) {
       `\u7F3A\u5C11\u5FC5\u9700\u73AF\u5883\u53D8\u91CF: ${missing.join(", ")}\u3002\u914D\u7F6E\u65B9\u6CD5\uFF1ACogseed MCP Hub \u7684 env \u6CE8\u5165\uFF0C\u6216\u672C\u5730\u5F00\u53D1\u8BBE EDUSEED_MOCK=1\u3002`
     );
   }
-  const serverUrl = (env.EDUSEED_SERVER_URL ?? "http://49.233.169.16").replace(/\/+$/, "");
+  const serverUrl = (env.EDUSEED_SERVER_URL ?? "").replace(/\/+$/, "");
   try {
     const u = new URL(serverUrl);
     const isLocal = ["localhost", "127.0.0.1", "::1"].includes(u.hostname);

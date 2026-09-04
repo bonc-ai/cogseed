@@ -427,14 +427,15 @@ describe('security matrix › guardrail is shipped', () => {
     expect(froms).toContain('resources/guardrail');
   });
 
-  it('ships the shared gate and declares the engine absent', () => {
-    // The open-source tree intentionally ships without the deep-scanner
-    // engine: the gate script stays, and the marker declares the omission so
-    // a fresh checkout reports `scanner_absent` instead of `unknown`.
-    for (const rel of ['scan_gate.py', 'SCANNER_ABSENT']) {
+  it('ships the shared gate and the deep-scanner engine', () => {
+    // The deep-scanner engine (skill-sentry) is open source and ships with the
+    // product; its integrity is pinned beside the tree. The SCANNER_ABSENT
+    // marker must not be present — a build that ships the engine must not
+    // describe itself as a stripped one.
+    for (const rel of ['scan_gate.py', 'skill-sentry']) {
       expect(fs.existsSync(path.join(GUARDRAIL, rel)), rel).toBe(true);
     }
-    expect(fs.existsSync(path.join(GUARDRAIL, 'skill-sentry')), 'engine').toBe(false);
+    expect(fs.existsSync(path.join(GUARDRAIL, 'SCANNER_ABSENT')), 'marker').toBe(false);
   });
 });
 

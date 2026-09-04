@@ -479,7 +479,7 @@ function openclawConfigModels(fsMod, pathMod, env, readFileSync) {
   }
   if (!models.length) return { status: 'unavailable', reason: 'config_no_models' };
   const primary = String(((cfg.agents && cfg.agents.defaults && cfg.agents.defaults.model) || {}).primary || '').trim();
-  // primary 形如 "agnes/agnes-2.5-flash"（provider 前缀）——剥前缀与清单
+  // primary 形如 "example/example-model-2.5-flash"（provider 前缀）——剥前缀与清单
   // id 同口径，UI 的 isCurrent 才能命中；裸 id 原样。
   const current = primary ? (primary.includes('/') ? primary.split('/').slice(1).join('/') : primary) : '';
   return { status: 'ready', models, ...(current ? { current } : {}) };

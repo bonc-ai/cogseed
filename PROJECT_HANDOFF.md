@@ -4,24 +4,26 @@
 
 ## 项目快照
 
-- 当前目标：为 Run Center 的纯函数补齐分支与边界测试覆盖。
-- 当前阶段：`2026-09-01-001` 已实施完成，待随本分支提交。
-- 当前分支或提交：`feature/spec-workflow-project-memory`，基线 `origin/develop` @ `220b5fe5`（MR 前已 rebase；任务开始时基线为 `71453450`）。
-- 最后更新：2026-09-01。
+- 当前目标：完成 0.8.0 发版前的远端安全与敏感内容收口。
+- 当前阶段：`2026-09-03-001` 已实施完成，获准进入 `develop` 合并审核；未批准 0.8.0 最终 release。
+- 当前分支或提交：`codex/release-cleanup-0.8.0`，基线 `origin/develop` @ `882cb823`。
+- 最后更新：2026-09-03。
 
 ## 正在进行
 
 | 任务 ID | 状态 | 记录 |
 | --- | --- | --- |
 | `2026-09-01-001-failure-category-boundaries` | `completed` | [change](docs/changes/2026-09-01-001-failure-category-boundaries.md) |
+| `2026-09-03-001-release-security-cleanup` | `completed` | [change](docs/changes/2026-09-03-001-release-security-cleanup.md) |
 
 该任务为 direct work，没有对应 plan；`spec-work` 允许范围明确的直接实施，未事后补造 plan。
 
 ## 下一阶段
 
-1. 本分支已 rebase 到 `220b5fe5` 并 force-with-lease 推送，待开 MR 合入 `develop`。
-2. 全量 JS 测试已在 `220b5fe5` 重跑并做了 A/B 对照，本任务对失败数无影响；33 个既有失败待另案处理。
-3. 后续任务由 `spec-plan` / `spec-work` 按 `YYYY-MM-DD-NNN-<topic>` 继续登记。
+1. `codex/release-cleanup-0.8.0` 基于最新 `origin/develop` 收口，进入合并审核；未合并本地开发分支。
+2. 最终 release 前必须补跑 `trufflehog filesystem . --only-verified`；未完成不得放行 0.8.0。
+3. 全量 JS 测试为 900 个测试文件通过、9 个失败、8 个跳过；失败集中在未修改模块和隔离环境依赖，待另案处理。
+4. 后续任务由 `spec-plan` / `spec-work` 按 `YYYY-MM-DD-NNN-<topic>` 继续登记。
 
 ## 关键决策与约束
 
@@ -36,11 +38,13 @@
 
 | 检查 | 命令 | 最近结果 | 证据状态 |
 | --- | --- | --- | --- |
-| 类型检查 | `npm run typecheck` | `passed` | 2026-09-01 rebase 到 `220b5fe5` 后重跑，exit 0 |
-| 目标测试 | `npm run test:js -- test/renderer/run-center-attempts.test.ts` | `passed` | 2026-09-01 rebase 后重跑，4/4 |
-| 记录校验 | `node scripts/check-spec-records.mjs` | `passed` | 2026-09-01 rebase 后重跑，1 条 change 记录 |
-| 全量 JS 测试 | `npm run test:js` | `failed` | 2026-09-01 在 `220b5fe5` 实跑：9953 passed / 33 failed / 13 文件。同基线对照组（不含本任务提交）为 9952 passed / 33 failed / 同一组文件，差值恰为本任务新增的 1 条通过用例 |
-| Python 资源测试 | `npm run test:resources` | `not run` | 本轮未执行；`npm test` 的完整结果因此无证据 |
+| 类型检查 | `npm run typecheck` | `passed` | 2026-09-03 在 `origin/develop` 隔离清理分支重跑，exit 0 |
+| 目标测试 | `npx vitest run ...gateway-models-probe...` + guardrail 专项 | `passed` | 2026-09-03：37/37 + 40/40 |
+| 记录校验 | `node scripts/check-spec-records.mjs` | `not run` | 当前 `origin/develop` 不包含该脚本 |
+| 全量 JS 测试 | `node scripts/run-tests.mjs run --maxWorkers=2` | `not rerun` | `415ea2b0` 上为 10092 passed / 11 failed；同步 `882cb823` 后以 PR CI 为准 |
+| Python 资源测试 | `npm run test:resources` | `passed` | 2026-09-03：308 passed |
+| SBOM 正式门禁 | `npm run sbom:check` | `passed` | 626 components in sync；旧 `scripts/check-sbom.cjs` 已退出门禁并删除 |
+| 生产依赖审计 | `npm audit --omit=dev` | `warnings` | 7 个告警：4 high、2 moderate、1 low、0 critical；本任务未改锁文件 |
 
 ## 已知问题与风险
 
@@ -50,7 +54,10 @@
 - 上游 `220b5fe5` 带入两处新失败：`packaged-resource-gate.test.ts`（3 条）与 `messaging.test.ts`（1 条）。在不含本任务提交的对照组中同样失败，与本任务无关。
 - 部分用例 flaky：`chat_attachments.test.ts` 在两次运行间为 1↔2 条，`cogseed_backend/runtime-controller.test.ts` 早前失败、后续通过。统计失败数时需留意。
 - 以上均非 `2026-09-01-001` 引入，本任务未修复，也未使其恶化。
+- `trufflehog filesystem . --only-verified` 尚未执行，是 0.8.0 最终 release 阻断条件，不阻塞本次 `develop` 合并审核。
+- 当前锁文件的生产依赖审计有 7 个告警（4 high、2 moderate、1 low），需在最终 release 审核中另行处置或接受风险；不属于本 cleanup 差异引入。
 
 ## 开发历史
 
 - 2026-09-01 · `2026-09-01-001-failure-category-boundaries` · `completed` · 无 plan（direct work）· [change](docs/changes/2026-09-01-001-failure-category-boundaries.md) — 为 `failureCategory` 补齐 5 个分支与 3 类边界断言，仅改测试文件，未动源码。
+- 2026-09-03 · `2026-09-03-001-release-security-cleanup` · `completed` · 无 plan（direct work）· [change](docs/changes/2026-09-03-001-release-security-cleanup.md) — 清理真实配置痕迹、退出旧 SBOM 计数门禁、补齐 `exif-parser` MIT 证据，并保留 fixture 豁免与 TruffleHog release 阻断条件。
