@@ -1115,7 +1115,7 @@
     _bindEmptyActions();
     list.querySelectorAll('[data-kb-space-file]').forEach((el) => {
       el.addEventListener('click', () => {
-        if (typeof uiToast === 'function') uiToast('空间库原文查看：后续版本支持', { variant: 'info' });
+        _openFileViewer({ spaceId: _state.spaceId, path: el.dataset.kbSpaceFile }, _state.spaceName || '');
       });
       // 共享库文件右键：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除（对齐 ima）
       el.addEventListener('contextmenu', (e) => {
@@ -1190,10 +1190,439 @@
     if (el) el.textContent = String(n);
   }
 
+  // ── 文件查看（点击文件行 → 打开原文查看器）──
   function _openFile(relPath) {
-    // S2 接入 anchor-resolver 原文查看器；S1 先提示。
-    if (typeof uiToast === 'function') uiToast('原文查看器：S2 上线（anchor-resolver 已就绪）', { variant: 'info' });
-    _log.info('open file', relPath);
+    _openFileViewer({ path: relPath }, _state.currentLib || '');
+  }
+
+  // 打开原文查看 overlay：个人库传 {path}；共享空间库传 {spaceId, path}
+  async function _openFileViewer(payload, scopeName) {
+    const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
+    let overlay = _ensureFileViewerOverlay();
+    // 打开时恢复上次的窗口尺寸/位置（无记忆则 flex 居中）
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (dialog) _fvApplyWindowRect(dialog);
+    overlay.hidden = false;
+    _fvResetZoom(dialog);
+    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
+    try {
+      const res = await window.cogseed.invoke('kb.openFile', payload);
+      if (!res || !res.ok) {
+        const errMsg = (res && res.error) || '打开失败';
+        const friendly = errMsg === 'too_large'
+          ? `文件超过 2MB 预览上限（${res && res.size ? Math.round(res.size / 1024 / 1024) : ''}MB），暂不支持在线预览`
+          : errMsg === 'file not found' ? '文件不存在或已被移动'
+            : /暂不支持预览/.test(errMsg) ? errMsg : errMsg;
+        _setFileViewerState(overlay, {
+          error: friendly,
+          title: (payload && payload.path || '').split('/').pop() || '原文查看',
+          scope,
+        });
+        if (typeof uiToast === 'function') uiToast('无法预览该文件', { variant: 'warning' });
+        return;
+      }
+      _setFileViewerState(overlay, { content: res, title: res.name || (payload && payload.path || '').split('/').pop(), scope });
+    } catch (err) {
+      _setFileViewerState(overlay, {
+        error: (err && err.message) || String(err),
+        title: (payload && payload.path || '').split('/').pop() || '原文查看',
+        scope,
+      });
+      if (typeof uiToast === 'function') uiToast('打开文件失败', { variant: 'error' });
+    }
+  }
+
+  // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
+  // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
+  let _fileViewerOverlay = null;
+  let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
+  function _ensureFileViewerOverlay() {
+    if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-fv-overlay');
+    overlay.id = 'kb-file-viewer';
+    overlay.hidden = true;
+
+    const dialog = el('section', 'kb-fv-dialog');
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const head = el('header', 'kb-fv-head');
+    const headMain = el('div', 'kb-fv-head-main');
+    const title = el('span', 'kb-fv-title', '原文查看');
+    title.id = 'kb-fv-title';
+    const scope = el('span', 'kb-fv-scope');
+    scope.id = 'kb-fv-scope';
+    headMain.append(title, scope);
+    const headActions = el('div', 'kb-fv-head-actions');
+    // 缩放控件：− / 百分比(可点重置) / ＋
+    const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.title = '缩小';
+    const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
+    zoomLabel.type = 'button';
+    zoomLabel.title = '重置缩放（点击回到 100%）';
+    const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
+    zoomInBtn.type = 'button';
+    zoomInBtn.title = '放大';
+    const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
+    readerBtn.type = 'button';
+    readerBtn.id = 'kb-fv-reader';
+    readerBtn.title = '切换阅读宽度';
+    const closeBtn = el('button', 'kb-fv-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.id = 'kb-fv-close';
+    closeBtn.title = '关闭（Esc）';
+    headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, readerBtn, closeBtn);
+    head.append(headMain, headActions);
+
+    const body = el('div', 'kb-fv-body');
+    const loading = el('div', 'kb-fv-loading', '正在读取文件…');
+    loading.id = 'kb-fv-loading';
+    loading.hidden = true;
+    const errorEl = el('div', 'kb-fv-error');
+    errorEl.id = 'kb-fv-error';
+    errorEl.hidden = true;
+    const textEl = el('pre', 'kb-fv-text');
+    textEl.id = 'kb-fv-text';
+    textEl.hidden = true;
+    const mdEl = el('div', 'kb-fv-md');
+    mdEl.id = 'kb-fv-md';
+    mdEl.hidden = true;
+    body.append(loading, errorEl, textEl, mdEl);
+
+    const resizeHandle = el('div', 'kb-fv-resize');
+    resizeHandle.title = '拖动调整窗口大小';
+
+    dialog.append(head, body, resizeHandle);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
+    document.body.appendChild(overlay);
+    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
+    readerBtn.addEventListener('click', () => {
+      const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
+      readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
+      _fvSaveWindowRect();
+    });
+    // Esc 关闭
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
+    overlay.tabIndex = -1;
+    zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
+    zoomInBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom + 0.1)));
+    zoomLabel.addEventListener('click', () => _fvSetZoom(dialog, 1));
+    // Ctrl/Cmd + 滚轮 缩放内容（pdf 内部滚轮由 PDFium 自行处理，不劫持）
+    body.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      _fvSetZoom(dialog, _fvZoom + (e.deltaY < 0 ? 0.1 : -0.1));
+    }, { passive: false });
+    _fvBindTitleDrag(dialog, head);
+    _fvBindResize(dialog, resizeHandle);
+    _fileViewerOverlay = overlay;
+    _injectFileViewerStyle();
+    return overlay;
+  }
+
+  // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
+  const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
+  function _fvClampRect(dialog) {
+    const vw = window.innerWidth; const vh = window.innerHeight;
+    const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
+    const h = Math.min(Math.max(dialog.offsetHeight, 280), vh - 24);
+    dialog.style.width = w + 'px';
+    dialog.style.height = h + 'px';
+    const r = dialog.getBoundingClientRect();
+    dialog.style.left = Math.max(0, Math.min(r.left, vw - w)) + 'px';
+    dialog.style.top = Math.max(0, Math.min(r.top, vh - h)) + 'px';
+  }
+  function _fvAbsolute(dialog) {
+    // 脱离 flex 居中流，改为 overlay 内的绝对定位（记忆 x/y 时用）
+    if (dialog.style.position === 'absolute') return;
+    const r = dialog.getBoundingClientRect();
+    dialog.style.position = 'absolute';
+    dialog.style.margin = '0';
+    dialog.style.left = Math.max(0, r.left) + 'px';
+    dialog.style.top = Math.max(0, r.top) + 'px';
+  }
+  function _fvApplyWindowRect(dialog) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
+      if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
+      dialog.style.position = 'absolute';
+      dialog.style.margin = '0';
+      dialog.style.width = Math.min(Math.max(Number(saved.w), 420), window.innerWidth - 24) + 'px';
+      dialog.style.height = Math.min(Math.max(Number(saved.h), 280), window.innerHeight - 24) + 'px';
+      if (typeof saved.x === 'number' && typeof saved.y === 'number') {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - w)) + 'px';
+        dialog.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - h)) + 'px';
+      } else {
+        dialog.style.left = Math.round((window.innerWidth - dialog.offsetWidth) / 2) + 'px';
+        dialog.style.top = Math.round((window.innerHeight - dialog.offsetHeight) / 2) + 'px';
+      }
+    } catch { /* localStorage 不可用：保持居中 */ }
+  }
+  function _fvSaveWindowRect() {
+    const overlay = document.getElementById('kb-file-viewer');
+    if (!overlay || overlay.hidden) return;
+    const dialog = overlay.querySelector('.kb-fv-dialog');
+    if (!dialog) return;
+    try {
+      const r = dialog.getBoundingClientRect();
+      localStorage.setItem(_FV_RECT_KEY, JSON.stringify({
+        w: Math.round(r.width), h: Math.round(r.height),
+        x: Math.round(r.left), y: Math.round(r.top),
+      }));
+    } catch { /* ignore */ }
+  }
+  function _fvBindTitleDrag(dialog, bar) {
+    if (bar.dataset.fvDragBound) return;
+    bar.dataset.fvDragBound = '1';
+    let sx = 0; let sy = 0; let ox = 0; let oy = 0;
+    bar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button,input,select,textarea')) return;
+      e.preventDefault();
+      _fvAbsolute(dialog);
+      sx = e.clientX; sy = e.clientY;
+      const r = dialog.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      const onMove = (ev) => {
+        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
+        dialog.style.left = Math.max(0, Math.min(window.innerWidth - w, ox + (ev.clientX - sx))) + 'px';
+        dialog.style.top = Math.max(0, Math.min(window.innerHeight - h, oy + (ev.clientY - sy))) + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+  function _fvBindResize(dialog, handle) {
+    if (handle.dataset.fvResizeBound) return;
+    handle.dataset.fvResizeBound = '1';
+    let sx = 0; let sy = 0; let sw = 0; let sh = 0;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _fvAbsolute(dialog);
+      sx = e.clientX; sy = e.clientY;
+      sw = dialog.offsetWidth; sh = dialog.offsetHeight;
+      document.body.classList.add('kb-fv-resizing');
+      const onMove = (ev) => {
+        const w = Math.min(Math.max(sw + (ev.clientX - sx), 420), window.innerWidth - 24);
+        const h = Math.min(Math.max(sh + (ev.clientY - sy), 280), window.innerHeight - 24);
+        dialog.style.width = w + 'px';
+        dialog.style.height = h + 'px';
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('kb-fv-resizing');
+        _fvSaveWindowRect();
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  }
+
+  // ── 内容缩放（md/text 走容器 zoom；office 走 iframe 文档 zoom；pdf 走 URL zoom 重载） ──
+  let _fvZoom = 1;
+  let _fvCur = null; // { mode: 'md'|'text'|'office'|'pdf', el?, src? }
+  function _fvResetZoom(dialog) {
+    _fvZoom = 1;
+    _fvRenderZoom(dialog);
+  }
+  function _fvSetZoom(dialog, z) {
+    _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
+    _fvRenderZoom(dialog);
+  }
+  function _fvRenderZoom(dialog) {
+    const label = dialog.querySelector('.kb-fv-zoom-label');
+    if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
+    const cur = _fvCur;
+    if (!cur) return;
+    if (cur.mode === 'office' && cur.el && cur.el.contentDocument && cur.el.contentDocument.documentElement) {
+      // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
+      cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
+    } else if (cur.mode === 'pdf' && cur.el) {
+      // PDFium 无外部 zoom API：仅缩放值变化时重载 iframe src 带 zoom 参数
+      const pct = Math.round(_fvZoom * 100);
+      if (cur.lastZoom === pct) return;
+      cur.lastZoom = pct;
+      const base = String(cur.src || '').split('#')[0];
+      cur.el.src = `${base}#toolbar=1&navpanes=0&zoom=${pct}`;
+    } else if (cur.el) {
+      cur.el.style.zoom = String(_fvZoom);
+    }
+  }
+
+  function _setFileViewerState(overlay, st) {
+    const loading = overlay.querySelector('#kb-fv-loading');
+    const errorEl = overlay.querySelector('#kb-fv-error');
+    const textEl = overlay.querySelector('#kb-fv-text');
+    const mdEl = overlay.querySelector('#kb-fv-md');
+    const body = overlay.querySelector('.kb-fv-body');
+    // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
+    body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
+    body.classList.remove('kb-fv-body--frame');
+    if (_fvOfficeBlobUrl) {
+      try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
+      _fvOfficeBlobUrl = null;
+    }
+    _fvCur = null; // 内容视图变化：失效上一文件的缩放目标（error/loading 也走这里）
+    loading.hidden = !st.loading;
+    errorEl.hidden = true; errorEl.textContent = '';
+    textEl.hidden = true; textEl.textContent = '';
+    mdEl.hidden = true; mdEl.innerHTML = '';
+    if (st.title) overlay.querySelector('#kb-fv-title').textContent = st.title;
+    const scopeEl = overlay.querySelector('#kb-fv-scope');
+    scopeEl.textContent = st.scope ? `来自「${st.scope}」` : '';
+    scopeEl.hidden = !st.scope;
+    overlay.querySelector('#kb-fv-reader').textContent = '⇱ 阅读模式';
+    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--reader');
+    if (st.error) {
+      errorEl.hidden = false;
+      errorEl.textContent = String(st.error);
+      return;
+    }
+    const c = st.content;
+    if (!c || !c.kind) {
+      errorEl.hidden = false;
+      errorEl.textContent = '文件内容为空';
+      return;
+    }
+    if (c.kind === 'markdown') {
+      mdEl.hidden = false;
+      const bodyMd = String(c.content || '');
+      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
+      _fvCur = { mode: 'md', el: mdEl };
+    } else if (c.kind === 'text') {
+      textEl.hidden = false;
+      textEl.textContent = String(c.content || '');
+      _fvCur = { mode: 'text', el: textEl };
+    } else if (c.kind === 'pdf') {
+      // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
+      // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
+      const rel = String(c.path || '');
+      const sid = c.spaceId ? String(c.spaceId) : '';
+      const enc = (s) => String(s).split('/').map(encodeURIComponent).join('/');
+      const src = sid
+        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
+        : `kb-file://kb/${enc(rel)}`;
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--pdf';
+      frame.src = `${src}#toolbar=1&navpanes=0`;
+      frame.title = String(c.name || rel);
+      body.appendChild(frame);
+      body.classList.add('kb-fv-body--frame');
+      _fvCur = { mode: 'pdf', el: frame, src, lastZoom: 100 };
+    } else if (c.kind === 'office') {
+      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式）。
+      // sandbox 保持无脚本；allow-same-origin 让父页可对内部文档做 CSS zoom 缩放
+      const officeHtml = String(c.html || '');
+      _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
+      const frame = document.createElement('iframe');
+      frame.className = 'kb-fv-frame kb-fv-frame--office';
+      frame.setAttribute('sandbox', 'allow-same-origin');
+      frame.src = _fvOfficeBlobUrl;
+      frame.title = String(c.name || c.path || '');
+      body.appendChild(frame);
+      body.classList.add('kb-fv-body--frame');
+      _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
+      // iframe 就绪后再应用当前缩放（加载完成前 contentDocument 为 null）
+      frame.addEventListener('load', () => {
+        if (_fvCur && _fvCur.el === frame && _fvZoom !== 1) {
+          try { frame.contentDocument.documentElement.style.zoom = String(_fvZoom); } catch (_) { /* ignore */ }
+        }
+      });
+    } else {
+      errorEl.hidden = false;
+      errorEl.textContent = '暂不支持预览该文件';
+      return;
+    }
+    overlay.focus();
+  }
+
+  let _fvStyleInjected = false;
+  function _injectFileViewerStyle() {
+    if (_fvStyleInjected || document.getElementById('kb-file-viewer-style')) return;
+    _fvStyleInjected = true;
+    const style = document.createElement('style');
+    style.id = 'kb-file-viewer-style';
+    style.textContent = `
+      .kb-fv-overlay {
+        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
+        display: flex; align-items: center; justify-content: center; padding: 24px;
+      }
+      .kb-fv-overlay[hidden] { display: none; }
+      .kb-fv-dialog {
+        background: var(--surface, #fff); color: var(--text, #1f2329);
+        width: min(860px, 96vw); max-height: 88vh; border-radius: 12px;
+        display: flex; flex-direction: column; overflow: hidden;
+        box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
+        min-width: 420px; min-height: 280px;
+      }
+      .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
+      .kb-fv-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
+        background: linear-gradient(180deg, rgba(14,159,110,.05), transparent);
+        cursor: move; user-select: none;
+      }
+      .kb-fv-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+      .kb-fv-title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .kb-fv-scope { font-size: 12px; color: #0E9F6E; opacity: .85; white-space: nowrap; }
+      .kb-fv-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+      .kb-fv-btn, .kb-fv-close {
+        border: 1px solid rgba(14,159,110,.35); background: transparent; color: #0E9F6E;
+        font-size: 12px; padding: 3px 10px; border-radius: 8px; cursor: pointer;
+      }
+      .kb-fv-btn:hover { background: #E2F5EC; }
+      .kb-fv-zoom-btn { padding: 3px 8px; font-size: 13px; }
+      .kb-fv-zoom-label { min-width: 54px; text-align: center; }
+      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 1px 7px; color: #888; }
+      .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
+      .kb-fv-resize {
+        position: absolute; right: 0; bottom: 0;
+        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
+      }
+      .kb-fv-resize::after {
+        content: ''; position: absolute; right: 5px; bottom: 5px;
+        width: 7px; height: 7px;
+        border-right: 2px solid rgba(128,128,128,.55);
+        border-bottom: 2px solid rgba(128,128,128,.55);
+      }
+      .kb-fv-resize:hover::after { border-color: #0E9F6E; }
+      body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
+      .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
+      .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
+      .kb-fv-error { color: #c0392b; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+      .kb-fv-text {
+        white-space: pre-wrap; word-break: break-word; margin: 0;
+        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+        font-size: 13px; line-height: 1.7; color: inherit;
+      }
+      .kb-fv-markdown { font-size: 14px; line-height: 1.8; }
+      .kb-fv-dialog--reader .kb-fv-body { padding: 32px 56px; }
+      .kb-fv-dialog--reader .kb-fv-markdown { font-size: 16px; }
+      .kb-fv-dialog--reader .kb-fv-text { font-size: 15px; font-family: inherit; }
+      /* pdf / office 嵌入 iframe：占满正文区，独立滚动，正文区本身不滚 */
+      .kb-fv-body--frame { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .kb-fv-body--frame .kb-fv-frame {
+        flex: 1; width: 100%; border: 0; min-height: 0;
+        background: #fff; border-radius: 0 0 12px 12px;
+      }
+      .kb-fv-dialog--reader .kb-fv-body--frame { padding: 0; }
+      .kb-fv-frame--office { background: #eef2f7; }
+    `;
+    document.head.appendChild(style);
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -2846,7 +3275,17 @@
         _state.qaAttachments = [];
         _renderQaAttachments();
       }
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1) }, (ev) => {
+      const handle = window.cogseed.stream('kbqa.askStream', {
+        question: q,
+        space_id: _state.spaceId || null,
+        k: 8,
+        attach_paths: attachPaths,
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
+        model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
+          ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
+          : undefined,
+      }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
@@ -3067,8 +3506,11 @@
             <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" hidden>当前解析降级，问答能力受限</div>
             <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
-              <select class="kb-qa-model" id="kb-qa-model" title="问答模型（真实配置）"></select>
-              <span class="kb-qa-divider"></span>
+              <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" title="选择问答模型">
+                <span class="kb-qa-model-chip-ico">🧠</span>
+                <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
+                <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
+              </button>
               <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
                 <button type="button" class="kb-qa-icon-btn" id="kb-qa-attach" title="上传附件">${_svg('paperclip')}</button>
@@ -3079,7 +3521,6 @@
                   <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
                 </div>
               </div>
-              <button type="button" class="kb-qa-icon-btn" id="kb-qa-tools" title="更多工具">${_svg('tools')}</button>
               <button type="button" class="kb-qa-send" id="kb-qa-send" title="发送" disabled>${_svg('send')}</button>
             </div>
             <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
@@ -3423,9 +3864,10 @@
         if (typeof uiToast === 'function') uiToast('选择附件失败', { variant: 'error' });
       }
     });
-    // 更多工具：占位菜单
-    document.getElementById('kb-qa-tools')?.addEventListener('click', () => {
-      if (typeof uiToast === 'function') uiToast('更多工具：即将上线', { variant: 'info' });
+    // 模型配置：点击模型 chip 打开已配置模型选择弹层（不用填 key，key 在设置里配）
+    document.getElementById('kb-qa-tools')?.addEventListener('click', (e) => {
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      _openQaModelPicker();
     });
     // 脑图预览层事件：缩放 / 平移 / 关闭
     document.getElementById('kb-mm-export-btn')?.addEventListener('click', (e) => {
@@ -3563,39 +4005,178 @@
     document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
     document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
     _syncSendState();
-    _loadModelOptions();
+    _restoreQaModelSelection();
+    _renderQaModelChip();
+    _refreshQaModelChipLabel();
     _loadAll();
   }
 
-  // 模型下拉：真实配置（auth.listEntries），截断显示 + hover 全名
-  function _loadModelOptions() {
-    const sel = document.getElementById('kb-qa-model');
-    if (!sel) return;
-    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      sel.innerHTML = '<option>默认模型</option>';
-      return;
-    }
-    window.cogseed.invoke('auth.listEntries', { includeUnavailable: true })
+  // ── 问答模型配置：直接在已配置模型（设置里配好的 auth entries）中点选，
+  //    无需在此填 key。选择记忆到 localStorage，重启后恢复。 ──
+  const QA_MODEL_STORE_KEY = 'cogseed.kb-qa.model.entryId';
+  let _qaModelEntry = null; // { entryId, provider, providerLabel, model, modelName } | null（null = 默认模型）
+
+  function _restoreQaModelSelection() {
+    try {
+      const saved = localStorage.getItem(QA_MODEL_STORE_KEY);
+      _qaModelEntry = saved ? { entryId: saved } : null;
+    } catch (_) { _qaModelEntry = null; }
+  }
+
+  function _currentQaModelLabel(entries) {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return '';
+    const hit = (entries || []).find((e) => e && e.entryId === _qaModelEntry.entryId);
+    if (!hit) return '';
+    _qaModelEntry = {
+      entryId: hit.entryId,
+      provider: hit.provider,
+      providerLabel: hit.providerLabel || hit.provider,
+      model: hit.model,
+      modelName: hit.modelName || hit.model,
+    };
+    return `${hit.providerLabel || hit.provider} · ${hit.modelName || hit.model}`;
+  }
+
+  function _renderQaModelChip() {
+    const nameEl = document.getElementById('kb-qa-model-name');
+    if (!nameEl) return;
+    nameEl.textContent = _qaModelEntry && _qaModelEntry.entryId && _qaModelEntry.modelName
+      ? `${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}`
+      : '默认模型';
+    nameEl.title = nameEl.textContent;
+  }
+
+  // 仅存了 entryId 恢复时后台补拉一次真实条目，让 chip 显示模型名
+  function _refreshQaModelChipLabel() {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    window.cogseed.invoke('auth.listEntries', {})
       .then((res) => {
         const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
-        if (!entries.length) {
-          sel.innerHTML = '<option>未配置模型（请到设置配置）</option>';
-          return;
+        const hit = entries.find((e) => e && e.entryId === _qaModelEntry.entryId);
+        if (hit) {
+          _qaModelEntry = {
+            entryId: hit.entryId,
+            provider: hit.provider,
+            providerLabel: hit.providerLabel || hit.provider,
+            model: hit.model,
+            modelName: hit.modelName || hit.model,
+          };
+          _renderQaModelChip();
         }
-        sel.innerHTML = entries.map((e, i) => {
-          const label = `${e.provider || ''} · ${e.modelName || e.model || ''}`;
-          return `<option value="${i}" title="${_esc(label)}">${_esc(label)}</option>`;
-        }).join('');
-        const first = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-        if (first) sel.title = first.title || first.textContent;
-        sel.addEventListener('change', () => {
-          const opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-          if (opt) sel.title = opt.title || opt.textContent;
-        });
+      })
+      .catch(() => { /* 保持默认标签 */ });
+  }
+
+  // 弹出模型选择：列出所有已配置（可用）模型；空态引导去设置一次配好 key
+  function _openQaModelPicker() {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('问答服务不可用', { variant: 'warning' });
+      return;
+    }
+    window.cogseed.invoke('auth.listEntries', {})
+      .then((res) => {
+        const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries.filter((e) => e && e.modelAvailable !== false) : [];
+        _buildQaModelPicker(entries);
       })
       .catch(() => {
-        sel.innerHTML = '<option>默认模型</option>';
+        if (typeof uiToast === 'function') uiToast('获取模型列表失败', { variant: 'error' });
       });
+  }
+
+  function _buildQaModelPicker(entries) {
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-qa-model-overlay');
+    overlay.id = 'kb-qa-model-picker';
+    const pop = el('div', 'kb-qa-model-pop');
+    const head = el('div', 'kb-qa-model-pop-head');
+    head.append(el('span', 'kb-qa-model-pop-title', '选择问答模型'), el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
+    const closeBtn = el('button', 'kb-qa-model-pop-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.title = '关闭（Esc）';
+    head.appendChild(closeBtn);
+    pop.appendChild(head);
+
+    const list = el('div', 'kb-qa-model-pop-list');
+    const currentId = _qaModelEntry && _qaModelEntry.entryId;
+
+    // 「默认模型」行：清空自选，走系统默认
+    const defRow = el('button', 'kb-qa-model-item');
+    defRow.type = 'button';
+    const defIco = el('span', 'kb-qa-model-item-check', currentId ? '' : '✓');
+    const defMain = el('span', 'kb-qa-model-item-main');
+    defMain.append(el('span', 'kb-qa-model-item-name', '默认模型'), el('span', 'kb-qa-model-item-sub', '系统配置的默认问答模型'));
+    defRow.append(defIco, defMain);
+    defRow.addEventListener('click', () => { _selectQaModel(null); overlay.remove(); });
+    list.appendChild(defRow);
+
+    if (!entries.length) {
+      const empty = el('div', 'kb-qa-model-empty');
+      empty.append(
+        el('div', 'kb-qa-model-empty-title', '尚未配置模型'),
+        el('div', 'kb-qa-model-empty-sub', '到设置中配置一次 API Key 后即可在此选择'),
+      );
+      list.appendChild(empty);
+    } else {
+      for (const e of entries) {
+        const row = el('button', 'kb-qa-model-item');
+        row.type = 'button';
+        row.dataset.entryId = String(e.entryId || '');
+        const ico = el('span', 'kb-qa-model-item-check', currentId === e.entryId ? '✓' : '');
+        const main = el('span', 'kb-qa-model-item-main');
+        const name = el('span', 'kb-qa-model-item-name', `${e.providerLabel || e.provider} · ${e.modelName || e.model}`);
+        const sub = el('span', 'kb-qa-model-item-sub', e.model || '');
+        main.append(name, sub);
+        row.append(ico, main);
+        row.addEventListener('click', () => { _selectQaModel(e); overlay.remove(); });
+        list.appendChild(row);
+      }
+    }
+    pop.appendChild(list);
+
+    const foot = el('div', 'kb-qa-model-pop-foot');
+    const manageBtn = el('button', 'kb-qa-model-pop-manage', '去设置管理模型');
+    manageBtn.type = 'button';
+    manageBtn.addEventListener('click', () => {
+      overlay.remove();
+      if (typeof window.setView === 'function') window.setView('settings');
+      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    });
+    foot.appendChild(manageBtn);
+    pop.appendChild(foot);
+
+    overlay.appendChild(pop);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    overlay.tabIndex = -1;
+    document.body.appendChild(overlay);
+    overlay.focus();
+  }
+
+  function _selectQaModel(entry) {
+    if (entry) {
+      _qaModelEntry = {
+        entryId: entry.entryId,
+        provider: entry.provider,
+        providerLabel: entry.providerLabel || entry.provider,
+        model: entry.model,
+        modelName: entry.modelName || entry.model,
+      };
+    } else {
+      _qaModelEntry = null;
+    }
+    try {
+      localStorage.setItem(QA_MODEL_STORE_KEY, _qaModelEntry ? String(_qaModelEntry.entryId) : '');
+    } catch (_) { /* localStorage 不可用 */ }
+    _renderQaModelChip();
+    if (typeof uiToast === 'function') {
+      uiToast(_qaModelEntry ? `问答模型已切换：${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}` : '已切回默认模型', { variant: 'success', timeoutMs: 2000 });
+    }
   }
 
   // 无输入时发送按钮置灰；有内容恢复可用
