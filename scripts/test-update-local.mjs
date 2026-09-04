@@ -30,7 +30,7 @@
  *      sha256) and prints the launch command for the old client.
  *
  * The app-side clicking (check → download → restart-and-install) is a
- * manual step; see docs/design/auto-update-local-verify.md.
+ * manual step, exercised with this script end to end.
  *
  * Usage:
  *   node scripts/test-update-local.mjs [--new-version 0.0.6] [--port 4870]

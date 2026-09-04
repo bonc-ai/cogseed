@@ -147,7 +147,21 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 ### Phase B — 写入阶段（步骤 5-9）
 
 5. **create_or_update_submission_record** — `submit-project`（载荷：challengeId/githubRepoUrl/projectTitle/aarText(≥10字)/selfEvaluationText(≥10字)/isPublic/reviewMode；可选 workdir+requiredDeliverables 触发预检）。返回 task_id
-6. **generate_submission_summary** — `get-task` 轮询；组装教授向 `summary_markdown`
+6. **generate_submission_summary** — `get-task` 轮询**至任务终态**（见下方终态规则）；按终态组装教授向 `summary_markdown`
+> **任务终态规则（硬性）**：`submit-project` 返回 task_id 后，用 `get-task` 轮询
+> **到任务终态为止**（pending → processing → completed / failed），终态后分叉：
+> - `completed`（result 含 submissionId；pendingReview=true 表示 AI 初评异步回填中）→
+>   **立即结束本轮回复**，告诉学生"提交成功，AI 初评约 1-5 分钟回填，稍后可以问我
+>   「我上次评分多少」，或等飞书「AI 初评完成」通知"。**禁止再轮询等待
+>   evaluationId / 分数**——评分是异步的，继续等只会拖长回合。
+> - `failed`（result.error 带平台错误文案）→ **如实转告学生该文案**（缺必填项、
+>   仓库/交付物问题等，以平台返回为准），按文案修复后重新提交，再轮询到终态。
+>   错误处理只认平台返回的 error 文案，不臆造、不绕过、不为特定错误另设流程。
+> - 轮询间隔 2-5 秒，单次提交最多轮询约 2 分钟；仍未到终态 → 按最后一次看到的
+>   状态如实说明并结束（pending / processing 表示平台还在处理，**不是失败**，
+>   不要误报失败）。
+> - 平台有消息级幂等 + 业务级防重，**同一任务不要重复提交**；修复后重交是新任务。
+
 7. **trigger_self_evaluation** — 平台自动触发 AI 初评；`get-evaluation` 查分项/优缺点/建议
 8. **update_portfolio_index** — 平台自动生成作品集条目
 9. **notify_professor_or_course_owner** — 平台飞书通知（学生 + 班级群）
@@ -191,7 +205,7 @@ outputs:
 
 ## 停止规则
 
-用户停止；缺交付物且不补充；平台 401/503；挑战已关闭；**学生未确认提交摘要**。
+用户停止；缺交付物且不补充；平台 401/503；挑战已关闭；**学生未确认提交摘要**；任务到达终态后按终态收尾（completed → 结束报成功、不再等待评分；failed → 按平台错误文案修复重交）。
 
 ## 失败行为
 

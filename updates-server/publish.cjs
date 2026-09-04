@@ -21,7 +21,7 @@
  * (same version+platform+arch replaces the previous entry in place).
  *
  * The catalog is served by updates-server/server.cjs; the client contract is
- * docs/design/updates-api.md. Remember to commit releases.json after
+ * documented inline in the updates-server README. Remember to commit releases.json after
  * publishing and to make the artifact reachable at
  * {UPDATES_SERVER_PUBLIC_BASE}/downloads/<file>.
  */

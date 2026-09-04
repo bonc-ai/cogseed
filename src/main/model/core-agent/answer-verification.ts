@@ -1,5 +1,5 @@
 /**
- * Answer verification (COGSEED-39 ① Phase 5) — citation reconciliation.
+ * Answer verification (知识库问答 ① Phase 5) — citation reconciliation.
  *
  * Turns the Phase 1 "answer only from materials" rule from a prompt-level
  * convention into a checkable mechanism: given a draft answer and the
