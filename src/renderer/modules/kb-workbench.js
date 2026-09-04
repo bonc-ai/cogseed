@@ -3275,7 +3275,17 @@
         _state.qaAttachments = [];
         _renderQaAttachments();
       }
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1) }, (ev) => {
+      const handle = window.cogseed.stream('kbqa.askStream', {
+        question: q,
+        space_id: _state.spaceId || null,
+        k: 8,
+        attach_paths: attachPaths,
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
+        model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
+          ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
+          : undefined,
+      }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
@@ -3496,8 +3506,11 @@
             <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" hidden>当前解析降级，问答能力受限</div>
             <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
-              <select class="kb-qa-model" id="kb-qa-model" title="问答模型（真实配置）"></select>
-              <span class="kb-qa-divider"></span>
+              <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" title="选择问答模型">
+                <span class="kb-qa-model-chip-ico">🧠</span>
+                <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
+                <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
+              </button>
               <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
                 <button type="button" class="kb-qa-icon-btn" id="kb-qa-attach" title="上传附件">${_svg('paperclip')}</button>
@@ -3508,7 +3521,6 @@
                   <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
                 </div>
               </div>
-              <button type="button" class="kb-qa-icon-btn" id="kb-qa-tools" title="更多工具">${_svg('tools')}</button>
               <button type="button" class="kb-qa-send" id="kb-qa-send" title="发送" disabled>${_svg('send')}</button>
             </div>
             <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
@@ -3852,9 +3864,10 @@
         if (typeof uiToast === 'function') uiToast('选择附件失败', { variant: 'error' });
       }
     });
-    // 更多工具：占位菜单
-    document.getElementById('kb-qa-tools')?.addEventListener('click', () => {
-      if (typeof uiToast === 'function') uiToast('更多工具：即将上线', { variant: 'info' });
+    // 模型配置：点击模型 chip 打开已配置模型选择弹层（不用填 key，key 在设置里配）
+    document.getElementById('kb-qa-tools')?.addEventListener('click', (e) => {
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      _openQaModelPicker();
     });
     // 脑图预览层事件：缩放 / 平移 / 关闭
     document.getElementById('kb-mm-export-btn')?.addEventListener('click', (e) => {
@@ -3992,39 +4005,178 @@
     document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
     document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
     _syncSendState();
-    _loadModelOptions();
+    _restoreQaModelSelection();
+    _renderQaModelChip();
+    _refreshQaModelChipLabel();
     _loadAll();
   }
 
-  // 模型下拉：真实配置（auth.listEntries），截断显示 + hover 全名
-  function _loadModelOptions() {
-    const sel = document.getElementById('kb-qa-model');
-    if (!sel) return;
-    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      sel.innerHTML = '<option>默认模型</option>';
-      return;
-    }
-    window.cogseed.invoke('auth.listEntries', { includeUnavailable: true })
+  // ── 问答模型配置：直接在已配置模型（设置里配好的 auth entries）中点选，
+  //    无需在此填 key。选择记忆到 localStorage，重启后恢复。 ──
+  const QA_MODEL_STORE_KEY = 'cogseed.kb-qa.model.entryId';
+  let _qaModelEntry = null; // { entryId, provider, providerLabel, model, modelName } | null（null = 默认模型）
+
+  function _restoreQaModelSelection() {
+    try {
+      const saved = localStorage.getItem(QA_MODEL_STORE_KEY);
+      _qaModelEntry = saved ? { entryId: saved } : null;
+    } catch (_) { _qaModelEntry = null; }
+  }
+
+  function _currentQaModelLabel(entries) {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return '';
+    const hit = (entries || []).find((e) => e && e.entryId === _qaModelEntry.entryId);
+    if (!hit) return '';
+    _qaModelEntry = {
+      entryId: hit.entryId,
+      provider: hit.provider,
+      providerLabel: hit.providerLabel || hit.provider,
+      model: hit.model,
+      modelName: hit.modelName || hit.model,
+    };
+    return `${hit.providerLabel || hit.provider} · ${hit.modelName || hit.model}`;
+  }
+
+  function _renderQaModelChip() {
+    const nameEl = document.getElementById('kb-qa-model-name');
+    if (!nameEl) return;
+    nameEl.textContent = _qaModelEntry && _qaModelEntry.entryId && _qaModelEntry.modelName
+      ? `${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}`
+      : '默认模型';
+    nameEl.title = nameEl.textContent;
+  }
+
+  // 仅存了 entryId 恢复时后台补拉一次真实条目，让 chip 显示模型名
+  function _refreshQaModelChipLabel() {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    window.cogseed.invoke('auth.listEntries', {})
       .then((res) => {
         const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
-        if (!entries.length) {
-          sel.innerHTML = '<option>未配置模型（请到设置配置）</option>';
-          return;
+        const hit = entries.find((e) => e && e.entryId === _qaModelEntry.entryId);
+        if (hit) {
+          _qaModelEntry = {
+            entryId: hit.entryId,
+            provider: hit.provider,
+            providerLabel: hit.providerLabel || hit.provider,
+            model: hit.model,
+            modelName: hit.modelName || hit.model,
+          };
+          _renderQaModelChip();
         }
-        sel.innerHTML = entries.map((e, i) => {
-          const label = `${e.provider || ''} · ${e.modelName || e.model || ''}`;
-          return `<option value="${i}" title="${_esc(label)}">${_esc(label)}</option>`;
-        }).join('');
-        const first = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-        if (first) sel.title = first.title || first.textContent;
-        sel.addEventListener('change', () => {
-          const opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-          if (opt) sel.title = opt.title || opt.textContent;
-        });
+      })
+      .catch(() => { /* 保持默认标签 */ });
+  }
+
+  // 弹出模型选择：列出所有已配置（可用）模型；空态引导去设置一次配好 key
+  function _openQaModelPicker() {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('问答服务不可用', { variant: 'warning' });
+      return;
+    }
+    window.cogseed.invoke('auth.listEntries', {})
+      .then((res) => {
+        const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries.filter((e) => e && e.modelAvailable !== false) : [];
+        _buildQaModelPicker(entries);
       })
       .catch(() => {
-        sel.innerHTML = '<option>默认模型</option>';
+        if (typeof uiToast === 'function') uiToast('获取模型列表失败', { variant: 'error' });
       });
+  }
+
+  function _buildQaModelPicker(entries) {
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-qa-model-overlay');
+    overlay.id = 'kb-qa-model-picker';
+    const pop = el('div', 'kb-qa-model-pop');
+    const head = el('div', 'kb-qa-model-pop-head');
+    head.append(el('span', 'kb-qa-model-pop-title', '选择问答模型'), el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
+    const closeBtn = el('button', 'kb-qa-model-pop-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.title = '关闭（Esc）';
+    head.appendChild(closeBtn);
+    pop.appendChild(head);
+
+    const list = el('div', 'kb-qa-model-pop-list');
+    const currentId = _qaModelEntry && _qaModelEntry.entryId;
+
+    // 「默认模型」行：清空自选，走系统默认
+    const defRow = el('button', 'kb-qa-model-item');
+    defRow.type = 'button';
+    const defIco = el('span', 'kb-qa-model-item-check', currentId ? '' : '✓');
+    const defMain = el('span', 'kb-qa-model-item-main');
+    defMain.append(el('span', 'kb-qa-model-item-name', '默认模型'), el('span', 'kb-qa-model-item-sub', '系统配置的默认问答模型'));
+    defRow.append(defIco, defMain);
+    defRow.addEventListener('click', () => { _selectQaModel(null); overlay.remove(); });
+    list.appendChild(defRow);
+
+    if (!entries.length) {
+      const empty = el('div', 'kb-qa-model-empty');
+      empty.append(
+        el('div', 'kb-qa-model-empty-title', '尚未配置模型'),
+        el('div', 'kb-qa-model-empty-sub', '到设置中配置一次 API Key 后即可在此选择'),
+      );
+      list.appendChild(empty);
+    } else {
+      for (const e of entries) {
+        const row = el('button', 'kb-qa-model-item');
+        row.type = 'button';
+        row.dataset.entryId = String(e.entryId || '');
+        const ico = el('span', 'kb-qa-model-item-check', currentId === e.entryId ? '✓' : '');
+        const main = el('span', 'kb-qa-model-item-main');
+        const name = el('span', 'kb-qa-model-item-name', `${e.providerLabel || e.provider} · ${e.modelName || e.model}`);
+        const sub = el('span', 'kb-qa-model-item-sub', e.model || '');
+        main.append(name, sub);
+        row.append(ico, main);
+        row.addEventListener('click', () => { _selectQaModel(e); overlay.remove(); });
+        list.appendChild(row);
+      }
+    }
+    pop.appendChild(list);
+
+    const foot = el('div', 'kb-qa-model-pop-foot');
+    const manageBtn = el('button', 'kb-qa-model-pop-manage', '去设置管理模型');
+    manageBtn.type = 'button';
+    manageBtn.addEventListener('click', () => {
+      overlay.remove();
+      if (typeof window.setView === 'function') window.setView('settings');
+      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    });
+    foot.appendChild(manageBtn);
+    pop.appendChild(foot);
+
+    overlay.appendChild(pop);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    overlay.tabIndex = -1;
+    document.body.appendChild(overlay);
+    overlay.focus();
+  }
+
+  function _selectQaModel(entry) {
+    if (entry) {
+      _qaModelEntry = {
+        entryId: entry.entryId,
+        provider: entry.provider,
+        providerLabel: entry.providerLabel || entry.provider,
+        model: entry.model,
+        modelName: entry.modelName || entry.model,
+      };
+    } else {
+      _qaModelEntry = null;
+    }
+    try {
+      localStorage.setItem(QA_MODEL_STORE_KEY, _qaModelEntry ? String(_qaModelEntry.entryId) : '');
+    } catch (_) { /* localStorage 不可用 */ }
+    _renderQaModelChip();
+    if (typeof uiToast === 'function') {
+      uiToast(_qaModelEntry ? `问答模型已切换：${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}` : '已切回默认模型', { variant: 'success', timeoutMs: 2000 });
+    }
   }
 
   // 无输入时发送按钮置灰；有内容恢复可用

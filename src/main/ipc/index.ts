@@ -5739,12 +5739,20 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history, model }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
       return;
     }
+    // 用户在问答框模型配置里选的模型（provider+model）；未传则走默认优先级组
+    const mo = (model && typeof model === 'object' &&
+      typeof (model as { provider?: unknown }).provider === 'string' &&
+      (model as { provider?: unknown }).provider &&
+      typeof (model as { model?: unknown }).model === 'string' &&
+      (model as { model?: unknown }).model)
+      ? { provider: (model as { provider: string }).provider, model: (model as { model: string }).model }
+      : undefined;
     try {
       const events = kbQa.kbAskStream(ctx.userId, {
         spaceId: space_id ? String(space_id) : null,
@@ -5761,6 +5769,7 @@ const streamHandlers: Record<string, StreamHandler> = {
           // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
+          ...(mo ? { modelOverride: mo } : {}),
           abortSignal: signal,
         }) as AsyncIterable<{ type: string; text?: string }>,
       });
