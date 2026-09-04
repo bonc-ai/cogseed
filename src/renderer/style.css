@@ -29889,21 +29889,21 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 }
 .kb-qa-model-pop {
   width: min(360px, 92vw); margin-top: 12vh; background: var(--color-white);
-  border-radius: 14px; box-shadow: 0 18px 56px color-mix(in srgb, var(--color-black) 30%, transparent);
+  border-radius: 12px; box-shadow: 0 18px 56px color-mix(in srgb, var(--color-black) 30%, transparent);
   overflow: hidden; display: flex; flex-direction: column;
 }
 .kb-qa-model-pop-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; }
 .kb-qa-model-pop-title { font-size: 14.5px; font-weight: 650; color: var(--kb-text); flex: none; }
 .kb-qa-model-pop-hint { flex: 1; font-size: 11.5px; color: var(--kb-text3); }
 .kb-qa-model-pop-close {
-  flex: none; width: 24px; height: 24px; border-radius: 7px; border: 0;
+  flex: none; width: 24px; height: 24px; border-radius: 6px; border: 0;
   background: transparent; color: var(--kb-text3); cursor: pointer; font-size: 14px;
 }
 .kb-qa-model-pop-close:hover { background: var(--kb-hover); color: var(--kb-text); }
 .kb-qa-model-pop-list { padding: 2px 8px 8px; overflow: auto; max-height: 46vh; }
 .kb-qa-model-item {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  border: 0; background: transparent; border-radius: 10px; padding: 8px 10px;
+  border: 0; background: transparent; border-radius: 8px; padding: 8px 10px;
   cursor: pointer; color: var(--kb-text); font: inherit;
 }
 .kb-qa-model-item:hover { background: var(--kb-hover); }
@@ -29920,7 +29920,7 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-model-pop-foot { padding: 8px 16px 14px; border-top: 1px solid var(--kb-border); }
 .kb-qa-model-pop-manage {
   width: 100%; border: 1px solid var(--kb-border); background: transparent;
-  border-radius: 10px; padding: 8px; font-size: 13px; color: var(--kb-green, #0E9F6E);
+  border-radius: 8px; padding: 8px; font-size: 13px; color: var(--kb-green, #0E9F6E);
   cursor: pointer;
 }
 .kb-qa-model-pop-manage:hover { background: var(--kb-brand-soft, #E2F5EC); }
