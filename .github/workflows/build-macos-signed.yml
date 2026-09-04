@@ -1,7 +1,7 @@
 # GitHub Actions Workflow: 自动构建、签名、公证 macOS .dmg
 #
-# 发布流程: 在 cicd 分支上打 tag (如 v0.7.6) 触发本流程
-#           发布前先把 package.json 的 version 改成与 tag 一致 → 合并进 cicd → 打 v* tag → CD 打包发布
+# 发布流程: develop 经 promotion PR 合入 cicd → 在 cicd tip 上打 tag (如 v0.6.0) 触发本流程
+#           promotion PR 内完成 package.json 版本号 bump 与 CHANGELOG 定稿,tag 版本必须与之一致 → 打 v* tag → CD 打包发布
 # 产物: 签名+公证后的 .dmg,自动发布到 GitHub Release
 #
 # 注意: tag 不绑定分支,所以下面加了防呆检查:
@@ -42,7 +42,7 @@ jobs:
       # 步骤 1.1b: 校验 tag 来源分支(防呆)
       # tag 本身不绑分支,任何人在任何分支打 v* tag 都会触发本流程。
       # 这里强制要求:tag 指向的提交必须已经在 cicd 分支上,
-      # 否则直接失败,防止有人误在 dev/develop/main 等分支上打 tag 触发正式发布。
+      # 否则直接失败,防止有人误在 dev/develop 等分支上打 tag 触发正式发布。
       # 手动触发(workflow_dispatch)时跳过此检查,方便调试。
       - name: Verify tag comes from cicd branch
         if: startsWith(github.ref, 'refs/tags/')
@@ -56,13 +56,13 @@ jobs:
             echo "✅ tag 指向的提交已包含在 cicd 分支,允许发布"
           else
             echo "❌ 这个 tag 不在 cicd 分支上,拒绝构建发布"
-            echo "   正确流程: 先把代码合并进 cicd 分支,再在 cicd 上打 tag"
+            echo "   正确流程: 先走 promotion PR 把代码合入 cicd 分支,再在 cicd tip 上打 tag"
             exit 1
           fi
 
       # 步骤 1.1c: 校验 tag 版本与源码版本一致(防呆)
       # 版本号的唯一来源是源码里的 package.json:打 tag 前必须先把 version 改成
-      # 与 tag 相同并合入 cicd。不一致直接失败,避免出现"源码还是旧版本、
+      # 与 tag 相同并随 promotion PR 合入 cicd。不一致直接失败,避免出现"源码还是旧版本、
       # 靠流水线构建时改写"的版本追溯断档(如 v0.6.0 标签里的 package.json 仍是 0.0.5)。
       # 这里用 sed 提取版本号,不依赖 Node,放在 setup-node 之前也能跑。
       - name: Verify package.json version matches tag
@@ -73,7 +73,7 @@ jobs:
           echo "tag 版本: $TAG_VERSION / package.json 版本: $SRC_VERSION"
           if [ "$TAG_VERSION" != "$SRC_VERSION" ]; then
             echo "❌ package.json 的 version ($SRC_VERSION) 与 tag ($GITHUB_REF_NAME) 不一致,拒绝发布"
-            echo "   正确流程: 把 package.json 的 version 改成 $TAG_VERSION 并合并进 cicd,"
+            echo "   正确流程: 把 package.json 的 version 改成 $TAG_VERSION 并随 promotion PR 合入 cicd,"
             echo "   然后删掉旧 tag 重打: git push origin :refs/tags/$GITHUB_REF_NAME && git tag $GITHUB_REF_NAME && git push origin $GITHUB_REF_NAME"
             exit 1
           fi

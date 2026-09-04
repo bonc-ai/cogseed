@@ -1,5 +1,5 @@
 /**
- * Anchor resolver (COGSEED-39 ② P1) — chunk-level citation → char-level position.
+ * Anchor resolver (知识库问答 ② P1) — chunk-level citation → char-level position.
  *
  * Given a citation anchor (`source`/`scope`/`path`/`chunkIdx`, optional
  * `quote`) this resolves the anchor to a concrete character range in the
