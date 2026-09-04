@@ -281,10 +281,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path6) {
-  if (!path6)
+function getElementAtPath(obj, path7) {
+  if (!path7)
     return obj;
-  return path6.reduce((acc, key) => acc?.[key], obj);
+  return path7.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -612,11 +612,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path6, issues) {
+function prefixIssues(path7, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path6);
+    iss.path.unshift(path7);
     return iss;
   });
 }
@@ -833,16 +833,16 @@ function flattenError(error51, mapper = (issue2) => issue2.message) {
 }
 function formatError(error51, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -869,17 +869,17 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error52, path6 = []) => {
+  const processError = (error52, path7 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path7, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path7, ...issue2.path]);
       } else {
-        const fullpath = [...path6, ...issue2.path];
+        const fullpath = [...path7, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -911,8 +911,8 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path6) {
+  const path7 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path7) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -14230,13 +14230,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path6 = ref.slice(1).split("/").filter(Boolean);
-  if (path6.length === 0) {
+  const path7 = ref.slice(1).split("/").filter(Boolean);
+  if (path7.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path6[0] === defsKey) {
-    const key = path6[1];
+  if (path7[0] === defsKey) {
+    const key = path7[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -15048,7 +15048,7 @@ async function getDashboard(client) {
     ]);
     const submissions = Array.isArray(subsResp.submissions) ? subsResp.submissions : [];
     const completed = submissions.filter((s) => s.status === "accepted" || s.task_state === "COMPLETED").length;
-    const pendingReview = submissions.filter((s) => (s.status ?? "").includes("review")).length;
+    const pendingReview = submissions.filter((s) => s.status === "submitted" || (s.status ?? "").includes("review")).length;
     return {
       ok: true,
       stats: {
@@ -15299,13 +15299,25 @@ var PlatformClient = class {
     this.mock = config2.mock;
     this.maskedKey = maskKey(config2.apiKey);
   }
+  /** 平台地址（本地缓存键用，不含密钥）。 */
+  get baseUrl() {
+    return this.base;
+  }
+  /** 缓存键身份：学号（从 from_agent 派生，不落明文学号到缓存文件名）。 */
+  get cacheIdentity() {
+    return this.fromAgent.replace(/^student-companion-/, "");
+  }
+  /** mock 模式标记（缓存只在真实模式写入）。 */
+  get isMock() {
+    return this.mock;
+  }
   /** GET JSON（平台 REST API） */
-  async get(path6) {
-    return this.request(path6, { method: "GET" });
+  async get(path7) {
+    return this.request(path7, { method: "GET" });
   }
   /** POST JSON（平台 REST API） */
-  async post(path6, body) {
-    return this.request(path6, { method: "POST", body });
+  async post(path7, body) {
+    return this.request(path7, { method: "POST", body });
   }
   /** POST Envelope 到 Agent 通道（/api/eduseed），返回 task_id */
   async postEnvelope(messageType, toAgent, payload) {
@@ -15321,9 +15333,9 @@ var PlatformClient = class {
     }
     return resp;
   }
-  async request(path6, init) {
+  async request(path7, init) {
     if (this.mock) {
-      return mockResponse(path6, init.method);
+      return mockResponse(path7, init.method);
     }
     const headers = {
       Accept: "application/json",
@@ -15333,7 +15345,7 @@ var PlatformClient = class {
     let lastErr;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const resp = await fetch(`${this.base}${path6}`, {
+        const resp = await fetch(`${this.base}${path7}`, {
           method: init.method,
           headers,
           ...init.body !== void 0 ? { body: JSON.stringify(init.body) } : {}
@@ -15388,8 +15400,8 @@ var PlatformClient = class {
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
-function mockResponse(path6, method = "GET") {
-  if (path6.startsWith("/api/challenges")) {
+function mockResponse(path7, method = "GET") {
+  if (path7.startsWith("/api/challenges")) {
     return Promise.resolve({
       ok: true,
       challenges: [
@@ -15403,7 +15415,7 @@ function mockResponse(path6, method = "GET") {
       ]
     });
   }
-  if (path6.startsWith("/api/tasks/")) {
+  if (path7.startsWith("/api/tasks/")) {
     return Promise.resolve({
       ok: true,
       task: {
@@ -15413,17 +15425,17 @@ function mockResponse(path6, method = "GET") {
       }
     });
   }
-  if (path6.startsWith("/api/submissions")) {
+  if (path7.startsWith("/api/submissions")) {
     return Promise.resolve({ ok: true, submissions: [] });
   }
-  if (path6.startsWith("/api/evaluations") && method === "POST") {
+  if (path7.startsWith("/api/evaluations") && method === "POST") {
     return Promise.resolve({
       ok: true,
       evaluationId: "eval-mock-1",
       message: "\u540C\u4F34\u8BC4\u5BA1\u5DF2\u63D0\u4EA4\uFF08mock\uFF09"
     });
   }
-  if (path6.startsWith("/api/evaluations")) {
+  if (path7.startsWith("/api/evaluations")) {
     return Promise.resolve({
       ok: true,
       evaluations: [
@@ -15432,7 +15444,7 @@ function mockResponse(path6, method = "GET") {
       ]
     });
   }
-  if (path6 === "/api/plugin/version") {
+  if (path7 === "/api/plugin/version") {
     return Promise.resolve({
       ok: true,
       course_id: "aix-course-elite20",
@@ -15441,7 +15453,7 @@ function mockResponse(path6, method = "GET") {
       checked_at: (/* @__PURE__ */ new Date()).toISOString()
     });
   }
-  if (path6 === "/api/license/check") {
+  if (path7 === "/api/license/check") {
     return Promise.resolve({
       ok: true,
       licensed: true,
@@ -15449,20 +15461,20 @@ function mockResponse(path6, method = "GET") {
       message: "mock \u6A21\u5F0F\uFF1A\u6388\u6743\u6821\u9A8C\u8DF3\u8FC7"
     });
   }
-  if (path6 === "/api/eduseed") {
+  if (path7 === "/api/eduseed") {
     return Promise.resolve({ ok: true, task_id: `task-mock-${Date.now()}` });
   }
-  if (path6 === "/api/p3394/envelope") {
+  if (path7 === "/api/p3394/envelope") {
     return Promise.resolve({
       ok: true,
       message_id: `mcp-msg-mock-${Date.now()}`,
       delivered_to: ["teacher-companion-mock"]
     });
   }
-  if (path6.startsWith("/api/p3394/inbox")) {
+  if (path7.startsWith("/api/p3394/inbox")) {
     return Promise.resolve({ ok: true, messages: [], unread: 0 });
   }
-  if (path6 === "/api/p3394/contacts") {
+  if (path7 === "/api/p3394/contacts") {
     return Promise.resolve({
       ok: true,
       total: 2,
@@ -15476,9 +15488,9 @@ function mockResponse(path6, method = "GET") {
 }
 
 // src/plugin-runtime.ts
-var import_node_fs2 = require("node:fs");
-var import_node_path2 = require("node:path");
-var import_node_os2 = require("node:os");
+var import_node_fs3 = require("node:fs");
+var import_node_path3 = require("node:path");
+var import_node_os3 = require("node:os");
 
 // src/tools/local.ts
 var fs = __toESM(require("node:fs"), 1);
@@ -15563,6 +15575,41 @@ function checkDeliverables(workdir, requiredDeliverables) {
 
 // src/tools/read.ts
 init_zod();
+var import_node_url = require("node:url");
+
+// src/challenge-cache.ts
+var import_node_crypto = require("node:crypto");
+var import_node_fs = __toESM(require("node:fs"), 1);
+var import_node_os = __toESM(require("node:os"), 1);
+var import_node_path = __toESM(require("node:path"), 1);
+var CHALLENGE_CACHE_TTL_MS = 9e4;
+function challengeCachePath(serverUrl, studentIdentity) {
+  const h = (0, import_node_crypto.createHash)("sha256").update(`${serverUrl}\0${studentIdentity}`).digest("hex").slice(0, 16);
+  return import_node_path.default.join(import_node_os.default.tmpdir(), "eduseed-plugin-cache", `challenges-${h}.json`);
+}
+function readChallengeCache(file2, now = Date.now()) {
+  try {
+    const raw = import_node_fs.default.readFileSync(file2, "utf8");
+    const entry = JSON.parse(raw);
+    if (typeof entry.fetchedAt !== "number" || !Array.isArray(entry.challenges)) return null;
+    if (now - entry.fetchedAt > CHALLENGE_CACHE_TTL_MS) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+function writeChallengeCache(file2, entry) {
+  try {
+    import_node_fs.default.mkdirSync(import_node_path.default.dirname(file2), { recursive: true });
+    const tmp = `${file2}.${process.pid}.tmp`;
+    import_node_fs.default.writeFileSync(tmp, JSON.stringify(entry), { mode: 384 });
+    import_node_fs.default.renameSync(tmp, file2);
+  } catch {
+  }
+}
+
+// src/tools/read.ts
+var import_meta = {};
 var listChallengesOutputSchema = {
   ok: external_exports.boolean(),
   challenges: external_exports.array(
@@ -15601,6 +15648,8 @@ var getTaskOutputSchema = {
   result: external_exports.object({
     submissionId: external_exports.string().optional(),
     evaluationId: external_exports.string().optional(),
+    challengeId: external_exports.string().optional(),
+    pendingReview: external_exports.boolean().optional(),
     error: external_exports.string().optional()
   }).optional(),
   error: external_exports.object({ code: external_exports.string(), message: external_exports.string() }).optional()
@@ -15620,22 +15669,58 @@ var listMySubmissionsOutputSchema = {
   ),
   error: external_exports.object({ code: external_exports.string(), message: external_exports.string() }).optional()
 };
+function currentModuleFile() {
+  try {
+    if (typeof __filename === "string" && __filename) return __filename;
+  } catch {
+  }
+  try {
+    return (0, import_node_url.fileURLToPath)(import_meta.url);
+  } catch {
+    return "";
+  }
+}
+function spawnChallengeCacheRefresh() {
+  try {
+    const self = currentModuleFile();
+    if (!self || self.endsWith(".ts")) return;
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, [self, "list-challenges"], {
+      env: { ...process.env, EDUSEED_CACHE_REFRESH: "1" },
+      detached: true,
+      stdio: "ignore"
+    });
+    child.unref();
+  } catch {
+  }
+}
+function mapChallengeList(list) {
+  return list.map((c) => ({
+    challenge_id: c.challenge_id ?? "",
+    title: c.title ?? "",
+    status: c.status ?? "",
+    ...c.brief ? { brief: c.brief } : {},
+    ...c.objective ? { objective: c.objective } : {},
+    ...c.deadline ? { deadline: c.deadline } : {},
+    ...c.required_deliverables ? { required_deliverables: c.required_deliverables } : {}
+  }));
+}
 async function listChallenges(client) {
+  const cacheFile = challengeCachePath(client.baseUrl, client.cacheIdentity);
+  const isRefreshChild = process.env.EDUSEED_CACHE_REFRESH === "1";
+  if (!isRefreshChild) {
+    const cached2 = readChallengeCache(cacheFile);
+    if (cached2) {
+      spawnChallengeCacheRefresh();
+      return { ok: true, challenges: cached2.challenges };
+    }
+  }
   try {
     const resp = await client.get("/api/challenges");
     const list = Array.isArray(resp.challenges) ? resp.challenges : [];
-    return {
-      ok: true,
-      challenges: list.map((c) => ({
-        challenge_id: c.challenge_id ?? "",
-        title: c.title ?? "",
-        status: c.status ?? "",
-        ...c.brief ? { brief: c.brief } : {},
-        ...c.objective ? { objective: c.objective } : {},
-        ...c.deadline ? { deadline: c.deadline } : {},
-        ...c.required_deliverables ? { required_deliverables: c.required_deliverables } : {}
-      }))
-    };
+    const mapped = mapChallengeList(list);
+    if (!client.isMock) writeChallengeCache(cacheFile, { fetchedAt: Date.now(), challenges: mapped });
+    return { ok: true, challenges: mapped };
   } catch (err) {
     return { ...failRead(err), challenges: [] };
   }
@@ -15673,7 +15758,7 @@ async function getTask(client, taskId) {
     return {
       ok: true,
       status: t.status ?? "unknown",
-      ...t.result ? { result: { ...t.result.submissionId ? { submissionId: t.result.submissionId } : {}, ...t.result.evaluationId ? { evaluationId: t.result.evaluationId } : {}, ...t.result.challengeId ? { challengeId: t.result.challengeId } : {}, ...t.result.error ? { error: t.result.error } : {} } } : {}
+      ...t.result ? { result: { ...t.result.submissionId ? { submissionId: t.result.submissionId } : {}, ...t.result.evaluationId ? { evaluationId: t.result.evaluationId } : {}, ...t.result.challengeId ? { challengeId: t.result.challengeId } : {}, ...t.result.pendingReview === true ? { pendingReview: true } : {}, ...t.result.error ? { error: t.result.error } : {} } } : {}
     };
   } catch (err) {
     return failRead(err);
@@ -15918,8 +16003,8 @@ function buildProfessorSummary(input) {
 }
 
 // src/kstar.ts
-var fs2 = __toESM(require("node:fs"), 1);
-var path2 = __toESM(require("node:path"), 1);
+var fs3 = __toESM(require("node:fs"), 1);
+var path3 = __toESM(require("node:path"), 1);
 var seq = 0;
 function newEpisodeId() {
   seq += 1;
@@ -16002,10 +16087,10 @@ function recordLearningDelta(episode, score) {
 }
 function persistEpisode(episode, opts) {
   try {
-    const base = opts?.dir ?? path2.join(process.env.HOME ?? "", ".eduseed", "kstar", episode.S.student_id);
-    fs2.mkdirSync(base, { recursive: true });
-    const file2 = path2.join(base, `${episode.episode_id}.json`);
-    fs2.writeFileSync(file2, JSON.stringify(episode, null, 2), { mode: 384 });
+    const base = opts?.dir ?? path3.join(process.env.HOME ?? "", ".eduseed", "kstar", episode.S.student_id);
+    fs3.mkdirSync(base, { recursive: true });
+    const file2 = path3.join(base, `${episode.episode_id}.json`);
+    fs3.writeFileSync(file2, JSON.stringify(episode, null, 2), { mode: 384 });
     return file2;
   } catch {
     return null;
@@ -16013,8 +16098,8 @@ function persistEpisode(episode, opts) {
 }
 
 // src/episode-query.ts
-var fs3 = __toESM(require("node:fs"), 1);
-var path3 = __toESM(require("node:path"), 1);
+var fs4 = __toESM(require("node:fs"), 1);
+var path4 = __toESM(require("node:path"), 1);
 init_zod();
 var listEpisodesOutputSchema = {
   ok: external_exports.boolean(),
@@ -16042,20 +16127,20 @@ var getEpisodeOutputSchema = {
 };
 function episodeDir(studentId, dir) {
   const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
-  return dir ?? path3.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
+  return dir ?? path4.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
 }
 function loadAllEpisodes(studentId, dir) {
   const base = episodeDir(studentId, dir);
   let files;
   try {
-    files = fs3.readdirSync(base).filter((f) => f.endsWith(".json"));
+    files = fs4.readdirSync(base).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
   const out = [];
   for (const f of files) {
     try {
-      out.push(JSON.parse(fs3.readFileSync(path3.join(base, f), "utf-8")));
+      out.push(JSON.parse(fs4.readFileSync(path4.join(base, f), "utf-8")));
     } catch {
       continue;
     }
@@ -16145,6 +16230,7 @@ var submitAndTrackOutputSchema = {
     failed_count: external_exports.number()
   }).optional(),
   evaluation_record_id: external_exports.string().optional(),
+  pendingReview: external_exports.boolean().optional(),
   portfolio_update_status: external_exports.enum(["updated", "skipped", "failed"]).optional(),
   summary_markdown: external_exports.string().optional(),
   error: external_exports.object({ code: external_exports.string(), message: external_exports.string(), field: external_exports.string().optional() }).optional()
@@ -16235,7 +16321,7 @@ async function submitAndTrack(client, args) {
     await new Promise((r) => setTimeout(r, 1e3));
   }
   const result = taskResult?.result;
-  const status = taskResult?.status === "completed" ? "validated" : taskResult?.status === "failed" ? "failed" : "submitted";
+  const status = taskResult?.status === "completed" ? result?.pendingReview === true && !result?.evaluationId ? "submitted" : "validated" : taskResult?.status === "failed" ? "failed" : "submitted";
   const portfolioStatus = result?.submissionId ? "updated" : "skipped";
   appendStep(episode, "6 generate_submission_summary", "passed", status === "validated" ? "\u4EFB\u52A1 completed" : `\u4EFB\u52A1 ${status}`);
   recordSubmissionOutcome(episode, {
@@ -16268,13 +16354,16 @@ async function submitAndTrack(client, args) {
     status: status ?? "submitted",
     ...result?.error ? { error: result.error } : {}
   });
+  const finalSummary = status === "submitted" && result?.pendingReview === true ? `${summaryMarkdown}
+
+> \u2705 \u5DF2\u53D7\u7406\uFF1AAI \u521D\u8BC4\u5728\u540E\u53F0\u8FDB\u884C\u4E2D\uFF0C\u8BC4\u5206\u51FA\u6765\u540E\u5E73\u53F0\u4F1A\u63A8\u9001\u7ED9\u4F60\uFF1B\u7A0D\u540E\u95EE"\u6211\u4E0A\u6B21\u8BC4\u5206\u591A\u5C11"\u5373\u53EF\u67E5\u8BE2\u3002` : summaryMarkdown;
   let teacherNotified = false;
   if (args.notifyTeacherId && taskResult?.status === "completed") {
     try {
       const { sendNotification: sendNotification2 } = await Promise.resolve().then(() => (init_review(), review_exports));
       const notify = await sendNotification2(client, {
         target: "teacher_dm",
-        text: summaryMarkdown
+        text: finalSummary
       });
       teacherNotified = notify.ok;
       appendStep(episode, "9 notify_professor", notify.ok ? "passed" : "failed", notify.ok ? "\u6559\u5E08\u6458\u8981\u5DF2\u53D1\u9001" : "\u6559\u5E08\u901A\u77E5\u5931\u8D25");
@@ -16288,10 +16377,11 @@ async function submitAndTrack(client, args) {
     ...teacherNotified ? { teacher_notified: true } : {},
     ...result?.submissionId ? { submission_record_id: result.submissionId } : {},
     submission_status: status,
+    ...result?.pendingReview === true ? { pendingReview: true } : {},
     ...validationReport ? { validation_report: validationReport } : {},
     ...result?.evaluationId ? { evaluation_record_id: result.evaluationId } : {},
     portfolio_update_status: portfolioStatus,
-    summary_markdown: summaryMarkdown,
+    summary_markdown: finalSummary,
     ...result?.error ? { error: { code: "WRITE_FAILED", message: result.error } } : {}
   };
 }
@@ -16639,8 +16729,8 @@ async function getAgentInbox(client, args) {
     const q = new URLSearchParams();
     if (args.limit) q.set("limit", String(args.limit));
     if (args.cursor) q.set("cursor", args.cursor);
-    const path6 = `/api/p3394/inbox${q.size ? `?${q.toString()}` : ""}`;
-    const resp = await client.get(path6);
+    const path7 = `/api/p3394/inbox${q.size ? `?${q.toString()}` : ""}`;
+    const resp = await client.get(path7);
     if (!resp.ok) {
       return { ok: false, error: { code: "INBOX_FAILED", message: resp.error ?? "\u8BFB\u53D6\u6536\u4EF6\u7BB1\u5931\u8D25" } };
     }
@@ -16676,21 +16766,21 @@ async function listAgentContacts(client) {
 }
 
 // src/delta-r-writeback.ts
-var fs4 = __toESM(require("node:fs"), 1);
-var path4 = __toESM(require("node:path"), 1);
+var fs5 = __toESM(require("node:fs"), 1);
+var path5 = __toESM(require("node:path"), 1);
 function writeDeltaRToEpisode(studentId, challengeId, delta, dir) {
   const safeId = /^[A-Za-z0-9_-]{1,64}$/.test(studentId) ? studentId : "invalid-id";
-  const base = dir ?? path4.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
+  const base = dir ?? path5.join(process.env.HOME ?? "", ".eduseed", "kstar", safeId);
   let files;
   try {
-    files = fs4.readdirSync(base).filter((f) => f.endsWith(".json"));
+    files = fs5.readdirSync(base).filter((f) => f.endsWith(".json"));
   } catch {
     return { ok: false, error: { code: "NOT_FOUND", message: `\u65E0 episode \u8BB0\u5F55\uFF08${studentId}\uFF09` } };
   }
   let best = null;
   for (const f of files) {
     try {
-      const episode = JSON.parse(fs4.readFileSync(path4.join(base, f), "utf-8"));
+      const episode = JSON.parse(fs5.readFileSync(path5.join(base, f), "utf-8"));
       if (episode.K.challenge_id !== challengeId) continue;
       if (episode.T.task_type !== "submission") continue;
       const ts = Date.parse(episode.ts);
@@ -16707,9 +16797,9 @@ function writeDeltaRToEpisode(studentId, challengeId, delta, dir) {
     ...delta.actual !== void 0 ? { actual: delta.actual } : {},
     ...delta.attribution !== void 0 ? { attribution: delta.attribution } : {}
   });
-  const file2 = path4.join(base, best.file);
+  const file2 = path5.join(base, best.file);
   try {
-    fs4.writeFileSync(file2, JSON.stringify(best.episode, null, 2), { mode: 384 });
+    fs5.writeFileSync(file2, JSON.stringify(best.episode, null, 2), { mode: 384 });
     return { ok: true, episode_id: best.episode.episode_id, file: file2 };
   } catch (err) {
     return { ok: false, error: { code: "WRITE_FAILED", message: err instanceof Error ? err.message : String(err) } };
@@ -16717,8 +16807,8 @@ function writeDeltaRToEpisode(studentId, challengeId, delta, dir) {
 }
 
 // src/teacher-kstar.ts
-var fs5 = __toESM(require("node:fs"), 1);
-var path5 = __toESM(require("node:path"), 1);
+var fs6 = __toESM(require("node:fs"), 1);
+var path6 = __toESM(require("node:path"), 1);
 function recordTeacherReviewEpisode(input, opts) {
   const episode = createEpisode({
     studentId: `teacher-${input.teacherId}`,
@@ -16739,11 +16829,11 @@ function recordTeacherReviewEpisode(input, opts) {
     ...input.aiScore !== void 0 ? { delta_r: { predicted: input.aiScore, actual: input.score, attribution: `\u6559\u5E08\u7EC8\u5BA1\u5224\u5B9A ${input.action}\uFF08\u4E0E AI \u5206\u5DEE ${input.score - input.aiScore}\uFF09` } } : {}
   };
   try {
-    const root = opts?.dir ?? path5.join(process.env.HOME ?? "", ".eduseed", "kstar");
-    const base = path5.join(root, `teacher-${input.teacherId}`);
-    fs5.mkdirSync(base, { recursive: true });
-    const file2 = path5.join(base, `${episode.episode_id}.json`);
-    fs5.writeFileSync(file2, JSON.stringify(episode, null, 2), { mode: 384 });
+    const root = opts?.dir ?? path6.join(process.env.HOME ?? "", ".eduseed", "kstar");
+    const base = path6.join(root, `teacher-${input.teacherId}`);
+    fs6.mkdirSync(base, { recursive: true });
+    const file2 = path6.join(base, `${episode.episode_id}.json`);
+    fs6.writeFileSync(file2, JSON.stringify(episode, null, 2), { mode: 384 });
     return { ok: true, episode_id: episode.episode_id, file: file2 };
   } catch (err) {
     return { ok: false, error: { code: "WRITE_FAILED", message: err instanceof Error ? err.message : String(err) } };
@@ -16752,20 +16842,20 @@ function recordTeacherReviewEpisode(input, opts) {
 
 // src/plugin-update.ts
 var import_node_child_process = require("node:child_process");
-var import_node_fs = require("node:fs");
-var import_node_path = require("node:path");
-var import_node_os = require("node:os");
+var import_node_fs2 = require("node:fs");
+var import_node_path2 = require("node:path");
+var import_node_os2 = require("node:os");
 var DEFAULT_CHECK_INTERVAL_MS = 6 * 3600 * 1e3;
 var DEFAULT_LOCK_TTL_MS = 10 * 60 * 1e3;
 var DEFAULT_BACKOFF_AFTER = 3;
 var DEFAULT_BACKOFF_MS = 24 * 3600 * 1e3;
 function defaultStatePath() {
-  return (0, import_node_path.join)((0, import_node_os.homedir)(), ".eduseed", "plugin-update-state.json");
+  return (0, import_node_path2.join)((0, import_node_os2.homedir)(), ".eduseed", "plugin-update-state.json");
 }
 function readUpdateState(statePath) {
   try {
-    if (!(0, import_node_fs.existsSync)(statePath)) return {};
-    const d = JSON.parse((0, import_node_fs.readFileSync)(statePath, "utf8"));
+    if (!(0, import_node_fs2.existsSync)(statePath)) return {};
+    const d = JSON.parse((0, import_node_fs2.readFileSync)(statePath, "utf8"));
     return typeof d === "object" && d !== null ? d : {};
   } catch {
     return {};
@@ -16773,8 +16863,8 @@ function readUpdateState(statePath) {
 }
 function writeUpdateState(statePath, state) {
   try {
-    (0, import_node_fs.mkdirSync)((0, import_node_path.join)(statePath, ".."), { recursive: true });
-    (0, import_node_fs.writeFileSync)(statePath, JSON.stringify(state));
+    (0, import_node_fs2.mkdirSync)((0, import_node_path2.join)(statePath, ".."), { recursive: true });
+    (0, import_node_fs2.writeFileSync)(statePath, JSON.stringify(state));
   } catch {
   }
 }
@@ -16830,16 +16920,16 @@ function defaultFetchLatest(serverUrl, apiKey) {
 }
 function findCogseedPkgCli() {
   const env = process.env;
-  if (env.COGSEED_PKG && (0, import_node_fs.existsSync)(env.COGSEED_PKG)) return env.COGSEED_PKG;
+  if (env.COGSEED_PKG && (0, import_node_fs2.existsSync)(env.COGSEED_PKG)) return env.COGSEED_PKG;
   if (env.COGSEED_PC_DIR) {
-    const p = (0, import_node_path.join)(env.COGSEED_PC_DIR, "bin", "cogseed-pkg.cjs");
-    if ((0, import_node_fs.existsSync)(p)) return p;
+    const p = (0, import_node_path2.join)(env.COGSEED_PC_DIR, "bin", "cogseed-pkg.cjs");
+    if ((0, import_node_fs2.existsSync)(p)) return p;
   }
   const candidates = process.platform === "darwin" ? [
     "/Applications/CogSeed.app/Contents/Resources/app.asar.unpacked/bin/cogseed-pkg.cjs",
     "/Applications/CogSeed Dev.app/Contents/Resources/app.asar.unpacked/bin/cogseed-pkg.cjs"
   ] : [];
-  return candidates.find((p) => (0, import_node_fs.existsSync)(p)) ?? null;
+  return candidates.find((p) => (0, import_node_fs2.existsSync)(p)) ?? null;
 }
 function defaultRunUpdater(pkgName, pkgRoot) {
   const cli = findCogseedPkgCli();
@@ -16854,7 +16944,7 @@ function defaultRunUpdater(pkgName, pkgRoot) {
       detail: r.status === 0 ? `cogseed-pkg update ok` : `cogseed-pkg update exit=${r.status}: ${(r.stderr || "").slice(-300)}`
     };
   }
-  if (pkgRoot && (0, import_node_fs.existsSync)((0, import_node_path.join)(pkgRoot, ".git"))) {
+  if (pkgRoot && (0, import_node_fs2.existsSync)((0, import_node_path2.join)(pkgRoot, ".git"))) {
     const r = (0, import_node_child_process.spawnSync)("git", ["-C", pkgRoot, "pull", "--ff-only"], {
       timeout: 12e4,
       windowsHide: true,
@@ -17298,9 +17388,9 @@ function compareVersions(a, b) {
 }
 function writeVersionCache(latest) {
   try {
-    const dir = (0, import_node_path2.join)((0, import_node_os2.homedir)(), ".eduseed");
-    (0, import_node_fs2.mkdirSync)(dir, { recursive: true });
-    (0, import_node_fs2.writeFileSync)((0, import_node_path2.join)(dir, "plugin-version-cache.json"), JSON.stringify({ checkedAt: Date.now(), latest }));
+    const dir = (0, import_node_path3.join)((0, import_node_os3.homedir)(), ".eduseed");
+    (0, import_node_fs3.mkdirSync)(dir, { recursive: true });
+    (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "plugin-version-cache.json"), JSON.stringify({ checkedAt: Date.now(), latest }));
   } catch {
   }
 }
@@ -17308,9 +17398,9 @@ function resolveClassProfile(skillDir) {
   const out = {};
   if (!skillDir) return out;
   try {
-    const profilePath = (0, import_node_path2.join)(skillDir, "..", "..", "course", "class-profile.yaml");
-    if (!(0, import_node_fs2.existsSync)(profilePath)) return out;
-    const raw = (0, import_node_fs2.readFileSync)(profilePath, "utf8");
+    const profilePath = (0, import_node_path3.join)(skillDir, "..", "..", "course", "class-profile.yaml");
+    if (!(0, import_node_fs3.existsSync)(profilePath)) return out;
+    const raw = (0, import_node_fs3.readFileSync)(profilePath, "utf8");
     for (const line of raw.split("\n")) {
       const m = /^\s*(platform_url|student_id|role|cohort)\s*:\s*["']?([^"'#\n]+)["']?\s*$/.exec(line);
       if (!m) continue;
@@ -17389,7 +17479,7 @@ async function runRuntime(input) {
         pkgName: process.env.EDUSEED_PKG_NAME?.trim() || "aix-course-elite20",
         serverUrl: config2.serverUrl,
         apiKey: config2.apiKey,
-        ...input.skillDir ? { pkgRoot: (0, import_node_path2.resolve)((0, import_node_path2.dirname)((0, import_node_path2.dirname)(input.skillDir))) } : {}
+        ...input.skillDir ? { pkgRoot: (0, import_node_path3.resolve)((0, import_node_path3.dirname)((0, import_node_path3.dirname)(input.skillDir))) } : {}
       });
     }
     return result;
