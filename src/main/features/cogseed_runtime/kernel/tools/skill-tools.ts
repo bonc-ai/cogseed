@@ -13,6 +13,7 @@ import { normalizeRuntimePath } from './permissions';
 import { captureSkillTree } from '../../../skills/snapshot-service';
 import { verifySkillRuntimeSnapshot } from '../../../skills/runtime-snapshot-service';
 import type { RuntimeToolCallContext, RuntimeToolResult, RuntimeToolResultOptions } from './file-tools';
+import { runWithRuntimeActionApproval } from './action-approval';
 
 function formatError(code: string, message: string): RuntimeToolResult {
   return { content: `[${code}] ${message}`, isError: true };
@@ -152,22 +153,32 @@ export async function runRuntimeSkillTool(
       ...(input.agent_id ? { COGSEED_AGENT_ID: String(input.agent_id) } : {}),
     };
     const runSkillPath = path.join(ctx.pcDir, 'bin', 'run-skill.cjs');
-    const result = await runProcess([
-      runSkillPath,
-      skillId,
-      script,
-      '--',
-      ...args,
-    ], cwd, env, undefined);
+    const execute = async (): Promise<RuntimeToolResult> => {
+      const result = await runProcess([
+        runSkillPath,
+        skillId,
+        script,
+        '--',
+        ...args,
+      ], cwd, env, undefined);
+      if (result.timedOut) return formatError('E_RUNTIME_TIMEOUT', 'runtime run_skill timed out');
+      if (result.code !== 0) {
+        const output = result.stderr || result.stdout || `run-skill exited with code ${result.code}`;
+        return capRuntimeResult('run_skill', { content: output, isError: true }, opts);
+      }
+      return capRuntimeResult('run_skill', { content: result.stdout }, opts);
+    };
 
-    if (result.timedOut) {
-      return formatError('E_RUNTIME_TIMEOUT', 'runtime run_skill timed out');
-    }
-    if (result.code !== 0) {
-      const output = result.stderr || result.stdout || `run-skill exited with code ${result.code}`;
-      return capRuntimeResult('run_skill', { content: output, isError: true }, opts);
-    }
-    return capRuntimeResult('run_skill', { content: result.stdout }, opts);
+    return runWithRuntimeActionApproval(ctx.actionApproval, {
+      action: 'run_skill',
+      target: `${skillId} / ${script}`,
+      scope: `仅运行该 Skill 脚本，工作目录：${cwd}`,
+      auditTarget: `Skill script: ${skillId}/${script}`,
+      auditScope: `argument count: ${args.length}`,
+      risk: 'high',
+      reasons: ['local_skill_execution'],
+      execution: { skill_id: skillId, script, args, cwd, agent_id: input.agent_id || null },
+    }, execute, opts.signal);
   } catch (err) {
     return formatError((err as { code?: string }).code || 'E_RUNTIME_TOOL_FAILED', (err as Error).message);
   }

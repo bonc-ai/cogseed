@@ -122,7 +122,7 @@ export interface SpaceResources {
   invalid_refs: { skills: string[]; agents: string[] };
 }
 
-export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long' | 'invalid_space_type';
+export type SpaceError = 'name_empty' | 'name_dup' | 'not_found' | 'too_long' | 'invalid_space_type' | 'invalid_join_mode' | 'invalid_member_permission';
 
 // ── 空间扩展─────────────────────
 
@@ -871,6 +871,9 @@ export async function updateSpace(
     gate_status?: SpaceGateStatus | null;
     main_skill_ref?: SpaceAssetRef | null;
     pinned_at?: string | null;
+    shared?: boolean;
+    join_mode?: 'direct' | 'apply' | 'invite';
+    member_permission?: 'view_export' | 'view_only' | 'hidden';
   },
 ): Promise<{ ok: true; space: Space } | { ok: false; error: SpaceError }> {
   const cur = await _readSpace(uid, spaceId);
@@ -929,6 +932,17 @@ export async function updateSpace(
   }
   if (opts.pinned_at !== undefined) {
     cur.pinned_at = opts.pinned_at === null || !opts.pinned_at ? undefined : opts.pinned_at;
+  }
+  // 分享/权限字段（图 1 权限设置弹窗：设为私密 / 成员权限 / 加入方式）
+  if (opts.shared !== undefined) cur.shared = opts.shared === true;
+  if (opts.join_mode !== undefined) {
+    if (opts.join_mode === 'direct' || opts.join_mode === 'apply' || opts.join_mode === 'invite') cur.join_mode = opts.join_mode;
+    else return { ok: false, error: 'invalid_join_mode' };
+  }
+  if (opts.member_permission !== undefined) {
+    if (opts.member_permission === 'view_export' || opts.member_permission === 'view_only' || opts.member_permission === 'hidden') {
+      cur.member_permission = opts.member_permission;
+    } else return { ok: false, error: 'invalid_member_permission' };
   }
   cur.updated_at = nowIso();
   await _writeSpace(uid, cur);

@@ -73,7 +73,7 @@ describe('Run Center renderer contract', () => {
     expect(source).toContain("invoke('cogseed.session.read'");
     expect(source).toContain("invoke('cogseed.agent.list')");
     expect(source).toContain("invoke('cogseed.task.action'");
-    expect(source).toContain("action === 'recover-result' ? actions.recoverResult : false");
+    expect(source).toContain('CogSeedRunCenterBoard?.recommendedActionAvailable?.(');
     expect(source).toContain('data-run-center-action="archive"');
     expect(source).toContain("text('run_center.archive_confirm')");
     expect(source).toContain("invoke(isReassign ? 'cogseed.task.reassign' : 'cogseed.task.start'");

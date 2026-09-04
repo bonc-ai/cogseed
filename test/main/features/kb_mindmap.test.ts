@@ -26,6 +26,7 @@ import {
   saveMindmap,
   listMindmaps,
   loadMindmap,
+  deleteMindmap,
   mindKey,
 } from '../../../src/main/features/kb_mindmap';
 import { collectReadyDocLines } from '../../../src/main/features/kb_summary';
@@ -81,6 +82,7 @@ describe('kb_mindmap', () => {
     collectMock.mockReturnValue([]);
     const res = await kbMindmap('u1', { dir: 'lib' }, { complete: completeOk('{}') });
     expect(res.source).toBe('degraded');
+    expect(res.reason).toBe('empty');
     expect(res.root.label).toBe('知识库');
     expect(res.root.children).toEqual([]);
   });
@@ -90,6 +92,7 @@ describe('kb_mindmap', () => {
     const complete = vi.fn(async () => ({ ok: false, text: '', error: 'provider down' }));
     const res = await kbMindmap('u1', { dir: 'lib' }, { complete });
     expect(res.source).toBe('degraded');
+    expect(res.reason).toBe('model-failed');
   });
 
   it('parses the tree out of model text with code fences', () => {
@@ -116,6 +119,52 @@ describe('kb_mindmap', () => {
     const forced = await kbMindmap('u1', { dir: 'lib', force: true }, { complete });
     expect(forced.source).toBe('generated');
     expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces concurrent duplicate requests into one LLM call (single-flight)', async () => {
+    collectMock.mockReturnValue(['## lib/a.pdf\nx']);
+    type CompleteRes = { ok: boolean; text: string; error: string };
+    let release!: (v: CompleteRes) => void;
+    const gate = new Promise<CompleteRes>((r) => { release = r; });
+    const complete = vi.fn(() => gate);
+    // 未 await 即发起第二次：应复用同一在途 Promise，不重复调 LLM
+    const p1 = kbMindmap('u1', { dir: 'lib' }, { complete });
+    const p2 = kbMindmap('u1', { dir: 'lib' }, { complete });
+    expect(complete).toHaveBeenCalledTimes(1);
+    release({ ok: true, text: SAMPLE, error: '' });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.source).toBe('generated');
+    expect(r2.source).toBe('generated');
+    expect(r2.root.children.length).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('degrades on LLM timeout and caches the late-arriving success for instant retry', async () => {
+    vi.useFakeTimers();
+    try {
+      collectMock.mockReturnValue(['## lib/a.pdf\nx']);
+      type CompleteRes = { ok: boolean; text: string; error: string };
+      let release!: (v: CompleteRes) => void;
+      const gate = new Promise<CompleteRes>((r) => { release = r; });
+      const complete = vi.fn(() => gate);
+      const firstP = kbMindmap('u1', { dir: 'lib' }, { complete });
+      await vi.advanceTimersByTimeAsync(121_000); // 超过 120s 上限
+      const first = await firstP;
+      expect(first.source).toBe('degraded');
+      expect(first.reason).toBe('timeout');
+      expect(first.root).toEqual({ label: '知识库', children: [] });
+      // 迟到的成功结果到达 → 兜底写入缓存；随即重试（同指纹）应秒出且不再调 LLM
+      release({ ok: true, text: SAMPLE, error: '' });
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      const second = await kbMindmap('u1', { dir: 'lib' }, { complete });
+      expect(second.source).toBe('cached');
+      expect(second.root.label).toBe('软件工程与AI');
+      expect(second.root.children.length).toBe(2);
+      expect(complete).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -170,5 +219,14 @@ describe('kb_mindmap store', () => {
     // 简短短语 + source 备注要求
     expect(sys.systemPrompt).toContain('简短短语');
     expect(sys.systemPrompt).toContain('source');
+  });
+
+  it('deletes a saved mind map by key (returns false for missing keys)', () => {
+    const key = mindKey('sp-del');
+    saveMindmap(key, { label: '待删', children: [] });
+    expect(loadMindmap(key)?.label).toBe('待删');
+    expect(deleteMindmap(key)).toBe(true);
+    expect(loadMindmap(key)).toBeNull();
+    expect(deleteMindmap('space:nope')).toBe(false);
   });
 });

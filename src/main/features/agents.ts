@@ -411,6 +411,12 @@ export type AgentRuntime =
       custom_args?: string[];
       /** Optional synthetic custom-provider id (`cp:<id>`). */
       cli_provider_id?: string;
+      /** 自定义模型参数模板（含 {model} 占位，如 '--model {model}'）——
+       *  spawn 网关时注入 P3394_AGENT_MODEL_ARGS。预设之外的智能体声明
+       *  即获得模型控制（「任意外接智能体可直接接进来」的声明通道）。 */
+      model_args?: string;
+      /** 同上，强度参数模板（含 {effort} 占位）→ P3394_AGENT_EFFORT_ARGS。 */
+      effort_args?: string;
     };
 
 export interface AgentInterfaceContract {
@@ -1070,6 +1076,15 @@ function _normalizeRuntime(raw: unknown): AgentRuntime | null {
   }
   if (typeof r.cli_provider_id === 'string' && r.cli_provider_id.trim().startsWith('cp:')) {
     out.cli_provider_id = r.cli_provider_id.trim();
+  }
+  // 自定义参数模板声明（「声明即生效」通道）：spawn 网关时注入
+  // P3394_AGENT_MODEL_ARGS / P3394_AGENT_EFFORT_ARGS——任意外接智能体
+  // （预设之外）接入即可控模型与强度。模板必须含 {model}/{effort} 占位。
+  if (typeof r.model_args === 'string' && r.model_args.includes('{model}')) {
+    out.model_args = r.model_args.trim().slice(0, 200);
+  }
+  if (typeof r.effort_args === 'string' && r.effort_args.includes('{effort}')) {
+    out.effort_args = r.effort_args.trim().slice(0, 200);
   }
   return out;
 }
