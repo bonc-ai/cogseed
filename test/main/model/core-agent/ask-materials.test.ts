@@ -1,5 +1,5 @@
 /**
- * ask-materials (COGSEED-39 ① Phase 4a) — evidence service thresholds.
+ * ask-materials (知识库问答 ① Phase 4a) — evidence service thresholds.
  *
  * Uses the same hermetic setup as material-search tests: fake embeddings,
  * mocked embedder, temp workspace root.
