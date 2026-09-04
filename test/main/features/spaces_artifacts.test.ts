@@ -85,7 +85,7 @@ describe('spaces › listSpaceArtifacts（空间产物聚合）', () => {
   });
 });
 
-describe('spaces › 产物无确认态（COGSEED-16：产出即正式）', () => {
+describe('spaces › 产物无确认态（产物确认态：产出即正式）', () => {
   async function makeSpaceWithProduced() {
     const spaces = await import('../../../src/main/features/spaces');
     const chats = await import('../../../src/main/features/chats');
@@ -215,7 +215,7 @@ describe('spaces › 工作区兜底扫描（未登记 produced 的产物文件�
     expect(names).toContain('报告.html'); // 工作区兜底（html 放行）
     const htmlEntry = artifacts.find((a) => a.name === '报告.html');
     expect(htmlEntry?.source).toBe('produced');
-    expect(htmlEntry?.confirmed).toBe(true); // COGSEED-16：兜底扫描的产出同样直接正式
+    expect(htmlEntry?.confirmed).toBe(true); // 产物确认态：兜底扫描的产出同样直接正式
   });
 });
 

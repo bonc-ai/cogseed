@@ -2909,7 +2909,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   visibility: visible;
   opacity: 1;
 }
-/* COGSEED-19：空间组头「+」快速建任务入口——与 ⋯ 同款 hover 显现交互 */
+/* 空间快捷建任务：空间组头「+」快速建任务入口——与 ⋯ 同款 hover 显现交互 */
 .conv-space-quick-task {
   flex: 0 0 auto;
   width: 20px;

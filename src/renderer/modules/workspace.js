@@ -112,7 +112,7 @@
 
   // ── 三 tab 数据映射（后端形状 → 渲染形状）──────────────────────────────
 
-  /** 会话 → 任务行。COGSEED-15：智能体数量 = 空间可用清单数（与对话无关；
+  /** 会话 → 任务行。空间可用智能体：智能体数量 = 空间可用清单数（与对话无关；
    *  usableCount 由空间 meta 注入，缺失时回退会话级名单长度）。 */
   function _mapConversation(c, usableCount) {
     const agentN = typeof usableCount === 'number'
@@ -339,7 +339,7 @@
       _invoke('spaces.conversations.list', { spaceId }),
       _invoke('recall.assets.listForSpace', { spaceId }),
     ]);
-    // COGSEED-15：空间可用智能体数（空间 meta 缓存；与会话是否对话过无关）
+    // 空间可用智能体：空间可用智能体数（空间 meta 缓存；与会话是否对话过无关）
     const spaceMeta = _spaces.find((s) => s && s.space_id === spaceId);
     const usableCount = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
       ? spaceMeta.usable_agents.length
@@ -616,8 +616,8 @@
   let _createBaseAgents = [];     // 弹窗选中的基础 Agent 列表（cli type；多选，探测结果首项为默认）
   let _createAgentTouched = false; // 用户是否手动改过基础 Agent 选择（探测合并时尊重，不回落首项）
   let _createAgentOpen = false;   // 新建空间弹窗内的基础 Agent 多选弹窗
-  let _createImportDir = null;    // COGSEED-18：弹窗内选择的本地文件夹（绝对路径；null=未选择）
-  let _importing = null;          // COGSEED-18：进行中的导入 {spaceId, done, total}（null=无导入）
+  let _createImportDir = null;    // 本地文件夹导入：弹窗内选择的本地文件夹（绝对路径；null=未选择）
+  let _importing = null;          // 本地文件夹导入：进行中的导入 {spaceId, done, total}（null=无导入）
   let _abilityKind = 'role';       // 能力弹窗当前 tab：role | task | skill
   let _abilityOpen = false;
   // ── 任务引用选择器（@ 引用空间产物与资产）──────────────────────────────────
@@ -2536,10 +2536,10 @@
     _bindArtScroll();
   }
 
-  let _importProgressBound = false; // COGSEED-18：推送订阅只注册一次（onPushEvent 每次调用都新增 listener）
+  let _importProgressBound = false; // 本地文件夹导入：推送订阅只注册一次（onPushEvent 每次调用都新增 listener）
 
   function _bind(root) {
-    // COGSEED-18：导入进度推送（preload 白名单 workspace-import:）→ 弹窗内进度行实时刷新
+    // 本地文件夹导入：导入进度推送（preload 白名单 workspace-import:）→ 弹窗内进度行实时刷新
     if (!_importProgressBound && window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
       _importProgressBound = true;
       window.cogseed.onPushEvent('workspace-import:progress', (p) => {
@@ -2758,7 +2758,7 @@
     // 表单输入持久化（调整能力会 _reRender，避免已填名称/指令被重置）
     const cnInput = root.querySelector('[data-ws="create-name"]');
     if (cnInput) cnInput.addEventListener('input', () => { _createName = cnInput.value; });
-    // COGSEED-18：本地文件夹选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
+    // 本地文件夹导入：本地文件夹选择 / 清除（整行为可点击选择区；取消对话框 → 保持未选择，不报错）
     root.querySelectorAll('[data-ws="pick-import-dir"]').forEach((el) => el.addEventListener('click', async () => {
       const res = await _invoke('common.pickDirectory', { title: _t('ws.import_folder_pick', '选择本地文件夹') });
       if (res && !res.cancelled && res.path) { _createImportDir = res.path; _reRender(); }
@@ -2882,7 +2882,7 @@
     // 额外技能/智能体绑定（复用 spaces.resources.add）
     for (const id of extraSkills) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'skill', id });
     for (const id of extraAgents) await _invoke('spaces.resources.add', { spaceId: space.space_id, kind: 'agent', id });
-    // COGSEED-18：选择了本地文件夹 → 创建完成后整体导入（弹窗停留显示进度，完成后进入空间）
+    // 本地文件夹导入：选择了本地文件夹 → 创建完成后整体导入（弹窗停留显示进度，完成后进入空间）
     if (_createImportDir) {
       _importing = { spaceId: space.space_id, done: 0, total: 0 };
       _reRender();
@@ -2914,7 +2914,7 @@
     _go('space', { spaceId: space.space_id });
   }
 
-  /** COGSEED-18：绝对路径 → 显示用文件夹名（/ 与 \ 通吃）。 */
+  /** 本地文件夹导入：绝对路径 → 显示用文件夹名（/ 与 \ 通吃）。 */
   function _importDirBasename(p) {
     const parts = String(p || '').split(/[\\/]+/).filter(Boolean);
     return parts[parts.length - 1] || p;

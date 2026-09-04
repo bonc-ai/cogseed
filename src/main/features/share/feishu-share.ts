@@ -45,7 +45,7 @@ export interface FeishuShareState {
   fileCount: number;
   createdAt: string;
   updatedAt: string;
-  /** 飞书租户域名（如 bonc.feishu.cn），拼链接用；缺省用 open.feishu.cn 占位 */
+  /** 飞书租户域名（如 example.feishu.cn），拼链接用；缺省用 open.feishu.cn 占位 */
   tenantDomain?: string;
 }
 
@@ -88,7 +88,7 @@ export interface HttpFeishuShareClientOptions {
   accessToken: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
-  /** 真实租户域名（如 bonc.feishu.cn）；缺省用 open.feishu.cn */
+  /** 真实租户域名（如 example.feishu.cn）；缺省用 open.feishu.cn */
   tenantDomain?: string;
 }
 

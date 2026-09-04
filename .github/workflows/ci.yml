@@ -1,11 +1,12 @@
 name: CI
 
-# Pull requests to develop and cicd run the macOS and Windows verification jobs.
-# Pushes to cicd repeat the full release gate before tagging a release.
+# CI (verify + verify-windows) runs only on the cicd branch — the release gate.
+# Day-to-day development merges into develop via review only (no CI);
+# the full macOS and Windows verification runs once when a PR targets cicd,
+# and again on push to cicd, right before tagging a release.
 on:
   pull_request:
     branches:
-      - develop
       - cicd
   push:
     branches:
