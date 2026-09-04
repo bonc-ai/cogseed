@@ -53,6 +53,13 @@ import type { KstarTaskLifecycleSnapshot } from '../kstar/lifecycle-adapter';
  *  authoritative source. */
 export const busIsQuiescent = isQuiescent;
 
+/** Re-export so the IPC stream layer can synthesise a final idle
+ *  `state_changed` snapshot before closing a stream (safety fuse in
+ *  ipc/index.ts). The renderer clears its "replying" flag only on a
+ *  non-running snapshot; if the stream closes first, the UI stays stuck
+ *  in replying mode and queued messages never drain. */
+export { readState };
+
 export interface GroupChatRuntimeStatus {
   processing: boolean;
   processing_since: string | null;
