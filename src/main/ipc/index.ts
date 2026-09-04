@@ -5862,6 +5862,46 @@ const streamHandlers: Record<string, StreamHandler> = {
         const w = wake; wake = null; w?.();
       });
       try {
+        /**
+         * Safety fuse: before this stream closes on quiescence, synthesise a
+         * final idle `state_changed` snapshot and relay it. The renderer's
+         * liveness model clears its busy flag only when a non-running
+         * snapshot arrives; the async status transition can land just after
+         * this loop decides to return, leaving the UI stuck in "replying"
+         * and the message queue stuck in "pending send".
+         */
+        const finalIdleSnapshot = async (): Promise<GroupEvent | null> => {
+          if (!groupChat.busIsQuiescent(ctx.userId, cid)) return null;
+          try {
+            const state = await groupChat.readState(ctx.userId, cid);
+            if (state.status === 'running') return null;
+            const inFlight = Array.isArray(state.in_flight) ? state.in_flight : [];
+            if (inFlight.length > 0) return null;
+            return {
+              type: 'state_changed',
+              cid,
+              state,
+              active_turns: [],
+            };
+          } catch (err) {
+            log.warn(`groupEvents final idle snapshot failed cid=${cid}: ${(err as Error).message}`);
+            // The bus itself says idle; fall back to a minimal idle snapshot
+            // so the renderer can still clear its busy flag and drain the
+            // composer queue. Missing here would re-create the stuck-pending
+            // bug for a file-read failure.
+            return {
+              type: 'state_changed',
+              cid,
+              state: {
+                version: 1,
+                status: 'idle' as const,
+                last_active_at: new Date().toISOString(),
+                in_flight: [],
+              },
+              active_turns: [],
+            };
+          }
+        };
         while (!cancelled) {
           while (buf.length) {
             const ev = buf.shift()!;
@@ -5887,9 +5927,23 @@ const streamHandlers: Record<string, StreamHandler> = {
               }
             }
             yield ev;
-            if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) return;
+            if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) {
+              const snap = await finalIdleSnapshot();
+              if (snap) {
+                yield snap;
+                return;
+              }
+              // State flipped again while we were reading (a new turn raced
+              // in). Keep the stream open; fresh events will arrive shortly.
+            }
           }
-          if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) return;
+          if (sawWorkActivity && groupChat.busIsQuiescent(ctx.userId, cid)) {
+            const snap = await finalIdleSnapshot();
+            if (snap) {
+              yield snap;
+              return;
+            }
+          }
           if (cancelled) break;
           await new Promise<void>((resolve) => { wake = resolve; });
         }
