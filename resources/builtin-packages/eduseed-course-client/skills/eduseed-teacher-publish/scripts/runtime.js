@@ -15229,7 +15229,7 @@ var USER_FACING = {
   ...TRANSPORT_USER_FACING,
   ...DOMAIN_USER_FACING
 };
-var NseapError = class extends Error {
+var EduSeedError = class extends Error {
   code;
   status;
   /** 错误附带字段名（如 INPUT_MISSING(field) 的 field） */
@@ -15240,7 +15240,7 @@ var NseapError = class extends Error {
   body;
   constructor(code, opts) {
     super(opts?.message ?? USER_FACING[code]);
-    this.name = "NseapError";
+    this.name = "EduSeedError";
     this.code = code;
     if (opts?.status !== void 0) this.status = opts.status;
     if (opts?.field !== void 0) this.field = opts.field;
@@ -15317,7 +15317,7 @@ var PlatformClient = class {
     };
     const resp = await this.post("/api/eduseed", body);
     if (!resp.ok) {
-      throw new NseapError("INTERNAL", { message: resp.error ?? "\u5E73\u53F0\u62D2\u7EDD\u8BF7\u6C42" });
+      throw new EduSeedError("INTERNAL", { message: resp.error ?? "\u5E73\u53F0\u62D2\u7EDD\u8BF7\u6C42" });
     }
     return resp;
   }
@@ -15357,13 +15357,13 @@ var PlatformClient = class {
         } catch {
           bodyObj = void 0;
         }
-        throw new NseapError(code, {
+        throw new EduSeedError(code, {
           status: resp.status,
           message: text.slice(0, 200),
           ...bodyObj !== void 0 ? { body: bodyObj } : {}
         });
       } catch (err) {
-        if (err instanceof NseapError) throw err;
+        if (err instanceof EduSeedError) throw err;
         lastErr = err;
         if (attempt < MAX_RETRIES) {
           await sleep(RETRY_BACKOFF_MS[attempt] ?? 1e3);
@@ -15371,7 +15371,7 @@ var PlatformClient = class {
         }
       }
     }
-    throw new NseapError("NETWORK_ERROR", { cause: lastErr });
+    throw new EduSeedError("NETWORK_ERROR", { cause: lastErr });
   }
   logInfo(msg) {
     console.error(`[eduseed-mcp] ${msg} (key=${this.maskedKey}, mock=${this.mock})`);
@@ -16621,7 +16621,7 @@ async function sendAgentMessage(client, config2, args) {
       ...resp.replay ? { replay: true } : {}
     };
   } catch (err) {
-    if (err instanceof NseapError && typeof err.body === "object" && err.body !== null) {
+    if (err instanceof EduSeedError && typeof err.body === "object" && err.body !== null) {
       const b = err.body;
       if (b.reason || b.detail || b.error) {
         const reason = b.reason;
@@ -16629,7 +16629,7 @@ async function sendAgentMessage(client, config2, args) {
         return { ok: false, reason, detail: b.detail, error: { code: reason ?? err.code, message } };
       }
     }
-    const code = err instanceof NseapError ? err.code : "NETWORK_ERROR";
+    const code = err instanceof EduSeedError ? err.code : "NETWORK_ERROR";
     return { ok: false, error: { code, message: err instanceof Error ? err.message : String(err) } };
   }
 }

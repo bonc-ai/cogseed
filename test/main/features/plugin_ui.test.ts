@@ -208,7 +208,7 @@ describe('plugin_ui › runtime config store', () => {
     installPkg('withui');
     const origin = 'https://edu.example.com';
     const b64 = Buffer.from(origin, 'utf8').toString('base64url');
-    const v2key = `eduseed1.${b64}.nseap-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
+    const v2key = `eduseed1.${b64}.course-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ ok: true, agent_id: 'student-companion-S-3', role: 'student', person_id: 'S-3' }),
       { status: 200, headers: { 'content-type': 'application/json' } },
