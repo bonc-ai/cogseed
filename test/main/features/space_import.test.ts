@@ -42,7 +42,7 @@ async function spaceContent(sid: string): Promise<string> {
   return paths.spaceContentDir(UID, sid);
 }
 
-describe('space_import › 本地文件夹整体导入（COGSEED-18）', () => {
+describe('space_import › 本地文件夹整体导入（本地文件夹导入）', () => {
   it('多级目录整体复制进空间 imports/，保留相对结构', async () => {
     const src = path.join(tmpDir, 'src-folder');
     fs.mkdirSync(path.join(src, 'sub', 'deep'), { recursive: true });
