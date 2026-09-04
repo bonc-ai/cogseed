@@ -88,7 +88,7 @@
     "jimp": "^1.6.1",
     "mammoth": "^1.12.1",
     "node-pty": "^1.1.0",
-    "pdfjs-dist": "^6.2.108",
+    "pdfjs-dist": "^6.3.289",
     "sherpa-onnx-node": "^1.13.6",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
