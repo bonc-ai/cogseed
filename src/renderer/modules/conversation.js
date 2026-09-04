@@ -1813,7 +1813,7 @@ function _refreshChatHeader() {
     // path as the sidebar conv row + chat-msg avatar — uniform icon
     // style across surfaces. The trailing "N agents" count only counts
     // real agents.
-    // COGSEED-15：空间会话按「空间可用智能体清单」渲染头像与数量（与是否对话过无关，
+    // 空间可用智能体：空间会话按「空间可用智能体清单」渲染头像与数量（与是否对话过无关，
     // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
     const spaceMeta = conv && conv.space_id ? _spaceById(conv.space_id) : null;
     const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
@@ -5670,7 +5670,7 @@ function _renderConvAgentStackHtml(c) {
   //   the list fresh, so a freshly @-mentioned agent shows up before the
   //   next `listConversations` lands.
   // Cap at 4 slots total.
-  // COGSEED-15：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
+  // 空间可用智能体：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
   // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
   const spaceMeta = c.space_id ? _spaceById(c.space_id) : null;
   const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
@@ -6778,7 +6778,7 @@ function _spaceById(sid) {
   return _sidebarSpaces.find((s) => s && s.space_id === sid) || null;
 }
 
-/** COGSEED-19：空间组头「+」——在该空间下直接创建任务，立即进入会话页。
+/** 空间快捷建任务：空间组头「+」——在该空间下直接创建任务，立即进入会话页。
  *  无二次弹窗；创建失败 toast 提示，不打断侧栏。 */
 async function _quickNewTaskInSpace(sid) {
   if (!sid) return;
@@ -7030,7 +7030,7 @@ function _bindConversationSidebarItems(container, opts = {}) {
       _openSpaceActionMenu(el, el.dataset.convSpaceMore || '');
     });
   });
-  // COGSEED-19：空间组头「+」→ 直接在该空间下新建任务并进入会话页（无二次弹窗）
+  // 空间快捷建任务：空间组头「+」→ 直接在该空间下新建任务并进入会话页（无二次弹窗）
   container.querySelectorAll('[data-conv-space-quick-task]').forEach((el) => {
     if (el.dataset.quickTaskBound === '1') return;
     el.dataset.quickTaskBound = '1';

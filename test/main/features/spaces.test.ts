@@ -560,13 +560,13 @@ describe('spaces › listSpaces 失效数（真实有效集合，假阳性回归
     const me = list.find((s) => s.space_id === created.space.space_id);
     expect(me).toBeDefined();
     expect(me?.skill_count).toBe(6); // bundle 5 + extra 1
-    // COGSEED-15：清单只含 CogSeed + 外接智能体；模板引用的内置 Agent 不计入
+    // 空间可用智能体：清单只含 CogSeed + 外接智能体；模板引用的内置 Agent 不计入
     expect(me?.agent_count).toBe(1);
     expect(me?.usable_agents).toEqual(['commander']);
     expect(me?.invalid_count).toBe(0); // 全有效 → 不误报失效
   });
 
-  it('COGSEED-15：可用清单 = CogSeed + 外接智能体（模板内置 Agent 不计入）', async () => {
+  it('空间可用智能体：可用清单 = CogSeed + 外接智能体（模板内置 Agent 不计入）', async () => {
     BUNDLE_AGENTS.forEach((id) => visibleAgentIds.add(id)); // 内置 Agent 可见（模板引用）
     visibleAgentIds.add('ag-1');
     const extId = 'agent-claude-code';
@@ -602,7 +602,7 @@ describe('spaces › listSpaces 失效数（真实有效集合，假阳性回归
     const me = list.find((s) => s.space_id === created.space.space_id);
     expect(me).toBeDefined();
     expect(me?.skill_count).toBe(7); // bundle 5 + extra 2（含失效）
-    expect(me?.agent_count).toBe(1); // COGSEED-15：清单= CogSeed + 外接（此处无外接 → 1）
+    expect(me?.agent_count).toBe(1); // 空间可用智能体：清单= CogSeed + 外接（此处无外接 → 1）
     expect(me?.usable_agents).toEqual(['commander']);
     expect(me?.invalid_count).toBe(2); // 仅 2 个真失效
   });

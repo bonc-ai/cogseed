@@ -688,7 +688,7 @@ async function _isConversationRecordedFile(userId: string, cid: string, absPath:
 
 async function _isAllowedFileActionPath(userId: string, payload: any, absPath: string): Promise<boolean> {
   if (isPathAllowed(absPath, await _ipcFileSandboxAllowedRoots(userId, payload))) return true;
-  // COGSEED-18：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
+  // 本地文件夹导入：空间内容目录内的文件放行（文件夹导入产物在 `<空间>/imports/` 下，
   // 条目无 cid）。仅当调用方显式声明 spaceId 且该空间属于当前用户——防越权。
   const spaceId = payload?.spaceId;
   if (typeof spaceId === 'string' && safeId(spaceId) && await spaces.spaceExists(userId, spaceId)) {
@@ -1612,7 +1612,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, path: victim };
   },
 
-  // COGSEED-18：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
+  // 本地文件夹导入：新建空间时本地文件夹整体导入（复制进空间内容目录 imports/，保留目录结构）。
   // 进度经 broadcastToRenderer 推送 'workspace-import:progress'（preload PUSH_EVENT_PREFIXES 白名单内）。
   'workspace.importFolder': async ({ spaceId, sourceDir } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
