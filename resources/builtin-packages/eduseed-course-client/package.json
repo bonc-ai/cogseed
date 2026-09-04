@@ -1,6 +1,6 @@
 {
   "name": "eduseed-course-client",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "EduSeed 课程客户端（CogSeed 内置 Course Plugin）——课程无关薄客户端；课程内容与业务数据在 EduSeed 平台，随 CogSeed 发版升级。"
 }
