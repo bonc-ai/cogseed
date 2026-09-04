@@ -114,4 +114,79 @@ describe('Run Center recommended-action gate', () => {
     expect(html).toContain('run_center.recommended_action');
     expect(html).toContain('run_center.resume');
   });
+
+  /**
+   * R1. A model credential failure used to recommend "retry", which can never
+   * succeed: the renderer held a two-code allowlist and `provider_auth` was not
+   * in it. Behaviour now comes from Main's classification, so the renderer does
+   * not need to know any of these codes exist.
+   */
+  it('sends every model-configuration failure to model setup, whatever the code', () => {
+    const board = loadBoard();
+
+    for (const errorCode of ['provider_auth', 'provider_not_configured', 'provider_permission',
+      'provider_balance', 'model_preflight']) {
+      const state = board.userStateForTask({ status: 'failed', failureCategory: 'model_unavailable', errorCode });
+      expect(state.action, errorCode).toBe('configure-model');
+      expect(state.actionKey, errorCode).toBe('run_center.configure_model');
+    }
+  });
+
+  it('handles a code the renderer has never seen, as long as the category is authoritative', () => {
+    const board = loadBoard();
+
+    // The point of the contract: a producer can add a code tomorrow and the
+    // renderer needs no change to route it correctly.
+    const state = board.userStateForTask({
+      status: 'failed', failureCategory: 'model_unavailable', errorCode: 'provider_seat_limit_reached_2027',
+    });
+    expect(state.action).toBe('configure-model');
+  });
+
+  it('follows the category when the producer code would suggest otherwise', () => {
+    const board = loadBoard();
+
+    // `provider_auth` was one of the codes the old table keyed on. If the
+    // renderer still read codes, this would wrongly say "configure model".
+    expect(board.userStateForTask({
+      status: 'failed', failureCategory: 'provider_transient', errorCode: 'provider_auth',
+    }).action).toBe('retry');
+
+    // And the reverse: a code that means nothing to the renderer, in a category
+    // that does.
+    expect(board.userStateForTask({
+      status: 'failed', failureCategory: 'model_unavailable', errorCode: 'task_failed',
+    }).action).toBe('configure-model');
+  });
+
+  it('keeps a usable recovery action for unknown and missing categories', () => {
+    const board = loadBoard();
+
+    for (const task of [
+      { status: 'failed', failureCategory: 'unknown', errorCode: 'some_cli_status' },
+      { status: 'failed', failureCategory: 'runtime_failure', errorCode: 'runtime_failed' },
+      { status: 'failed', errorCode: 'provider_error' },
+      { status: 'failed' },
+    ]) {
+      const state = board.userStateForTask(task);
+      expect(state.action, JSON.stringify(task)).toBe('retry');
+      expect(state.actionKey, JSON.stringify(task)).toBeTruthy();
+      expect(board.recommendedActionAvailable({ ...noActions, retry: true }, state)).toBe(true);
+    }
+  });
+
+  it('exposes the model-configuration rule as one category set', () => {
+    const board = loadBoard();
+
+    expect(board.requiresModelConfiguration({ failureCategory: 'model_unavailable' })).toBe(true);
+    expect(board.requiresModelConfiguration({ failureCategory: 'provider_error' })).toBe(true);
+    for (const category of ['provider_transient', 'runtime_failure', 'worker_restart',
+      'conversation_unavailable', 'agent_unavailable', 'collaboration_failure', 'cancelled', 'unknown']) {
+      expect(board.requiresModelConfiguration({ failureCategory: category }), category).toBe(false);
+    }
+    // Producer codes are not categories.
+    expect(board.requiresModelConfiguration({ errorCode: 'provider_auth' })).toBe(false);
+    expect(board.requiresModelConfiguration({})).toBe(false);
+    expect(board.requiresModelConfiguration(null)).toBe(false);
+  });
 });

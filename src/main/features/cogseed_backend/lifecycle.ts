@@ -7,7 +7,7 @@ import {
   updateCogSeedTask,
   updateCogSeedTaskWithEvent,
 } from './task-store';
-import type { CogSeedTaskRecord, CogSeedTaskStatus } from './types';
+import { COGSEED_TASK_FAILURE_KINDS, type CogSeedTaskFailureKind, type CogSeedTaskRecord, type CogSeedTaskStatus } from './types';
 
 const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus[]>> = {
   created: ['queued', 'cancelled', 'recoverable'],
@@ -57,6 +57,12 @@ function safeErrorCode(value: unknown): string | undefined {
   return code && code.length <= 120 && /^[A-Za-z0-9_.:-]+$/.test(code) ? code : undefined;
 }
 
+function safeFailureKind(value: unknown): CogSeedTaskFailureKind | undefined {
+  return typeof value === 'string' && COGSEED_TASK_FAILURE_KINDS.has(value)
+    ? value as CogSeedTaskFailureKind
+    : undefined;
+}
+
 export async function transitionCogSeedTask(
   userId: string,
   taskId: string,
@@ -66,6 +72,7 @@ export async function transitionCogSeedTask(
   assertCogSeedUserId(userId);
   assertCogSeedTaskId(taskId);
   const errorCode = safeErrorCode(payload.errorCode);
+  const failureKind = safeFailureKind(payload.failureKind);
   return updateCogSeedTaskWithEvent(userId, taskId, (task) => {
     if (task.status === nextStatus) return task;
     if (isTerminal(task.status) || !TRANSITIONS[task.status].includes(nextStatus)) {
@@ -77,8 +84,13 @@ export async function transitionCogSeedTask(
       updatedAt: nowIso(),
       ...(isTerminal(nextStatus) ? { terminalAt: nowIso() } : {}),
     };
+    // `failureKind` moves in lockstep with `errorCode`. A kind left behind from
+    // an earlier failure would pair with a fresh code and classify the task by
+    // the wrong reason, which is worse than carrying no kind at all.
     delete next.errorCode;
+    delete next.failureKind;
     if (errorCode && (nextStatus === 'failed' || nextStatus === 'recoverable')) next.errorCode = errorCode;
+    if (failureKind && (nextStatus === 'failed' || nextStatus === 'recoverable')) next.failureKind = failureKind;
     return next;
   }, { type: eventType(nextStatus), payload });
 }
@@ -132,7 +144,10 @@ export async function finalizeCogSeedTaskFromRetainedResult(
       updatedAt: timestamp,
       terminalAt: timestamp,
     };
+    // No producer supplies a kind on the retained-result path; clearing it keeps
+    // the pair consistent rather than letting a prior kind describe this code.
     delete next.errorCode;
+    delete next.failureKind;
     if (nextStatus === 'failed' && errorCode) next.errorCode = errorCode;
     return next;
   }, { type: nextStatus === 'completed' ? 'task.completed' : 'task.failed', payload: eventPayload });

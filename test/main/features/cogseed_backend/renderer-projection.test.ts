@@ -476,6 +476,153 @@ describe('CogSeed renderer-safe projections', () => {
     });
   });
 
+  it('projects authoritative retry lineage and a behaviour-facing failure category', async () => {
+    // Both links already exist on the record; only `parentTaskId` used to be
+    // projected, so the renderer had to guess which run replaced which.
+    const sourceTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-lineage-source',
+      status: 'failed' as const,
+      errorCode: 'provider_auth',
+      coordinationId: undefined,
+    };
+    const replacementTask = {
+      ...parentTask,
+      taskId: 'cogseed-task-lineage-child',
+      requestId: 'req-lineage-child',
+      status: 'failed' as const,
+      retryOfTaskId: sourceTask.taskId,
+      errorCode: 'some_cli_status',
+      coordinationId: undefined,
+      updatedAt: '2026-08-05T00:02:00.000Z',
+    };
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [session]),
+      listTasks: vi.fn(async () => [sourceTask, replacementTask]),
+      readTask: vi.fn(async () => sourceTask),
+      readSession: vi.fn(async () => session),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 0),
+    } as any);
+
+    const board = await service.boardProjection('renderer-user');
+    const source = board.tasks.find((task: any) => task.taskId === sourceTask.taskId);
+    const replacement = board.tasks.find((task: any) => task.taskId === replacementTask.taskId);
+
+    expect(source).not.toHaveProperty('retryOfTaskId');
+    expect(replacement).toMatchObject({ retryOfTaskId: sourceTask.taskId });
+
+    // A credential failure must be classifiable without the renderer knowing
+    // the producer's code vocabulary; an unmapped code stays `unknown`.
+    expect(source).toMatchObject({ errorCode: 'provider_auth', failureCategory: 'model_unavailable' });
+    expect(replacement).toMatchObject({ errorCode: 'some_cli_status', failureCategory: 'unknown' });
+  });
+
+  it('classifies a Group Chat failure by its kind and keeps the kind out of the projection', async () => {
+    // A plan-executor config failure. Its code happens to be mapped too, but the
+    // kind is what makes this classifiable when a producer adds a new code.
+    const configFailure = {
+      ...parentTask,
+      taskId: 'cogseed-task-kind-config',
+      status: 'failed' as const,
+      executionKind: 'group-chat' as const,
+      errorCode: 'some_new_preflight_code',
+      failureKind: 'config' as const,
+      coordinationId: undefined,
+    };
+    // The model exception: kind alone would suggest a retryable stream error,
+    // but the concrete code says the credentials are the problem.
+    const authFailure = {
+      ...parentTask,
+      taskId: 'cogseed-task-kind-model-auth',
+      requestId: 'req-kind-model-auth',
+      status: 'failed' as const,
+      executionKind: 'group-chat' as const,
+      errorCode: 'provider_auth',
+      failureKind: 'model' as const,
+      coordinationId: undefined,
+    };
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [session]),
+      listTasks: vi.fn(async () => [configFailure, authFailure]),
+      readTask: vi.fn(async () => configFailure),
+      readSession: vi.fn(async () => session),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 2),
+    } as any);
+
+    const board = await service.boardProjection('renderer-user');
+    const byId = new Map(board.tasks.map((task: any) => [task.taskId, task]));
+    expect(byId.get(configFailure.taskId)).toMatchObject({ failureCategory: 'model_unavailable' });
+    expect(byId.get(authFailure.taskId)).toMatchObject({ failureCategory: 'model_unavailable' });
+
+    // The kind is an input to classification, not a projected field: renderers
+    // consume the category and must not gain a second vocabulary to branch on.
+    expect(byId.get(configFailure.taskId)).not.toHaveProperty('failureKind');
+    expect(JSON.stringify(board)).not.toContain('failureKind');
+  });
+
+  it('publishes the lifecycle column under both names, from one answer', async () => {
+    // `column` is the compatibility alias for `baseColumn`. They come from a
+    // single call, so a consumer reading either during the deprecation window
+    // can never get a different answer.
+    const statuses = ['created', 'queued', 'running', 'waiting_user', 'completed', 'failed', 'cancelled', 'recoverable'] as const;
+    const columnTasks = statuses.map((status, index) => ({
+      ...parentTask,
+      taskId: `cogseed-task-column-${index}`,
+      requestId: `req-column-${index}`,
+      status,
+      coordinationId: undefined,
+    })).concat([{
+      ...parentTask,
+      taskId: 'cogseed-task-column-archived',
+      requestId: 'req-column-archived',
+      status: 'failed' as const,
+      archivedAt: '2026-08-05T00:05:00.000Z',
+      coordinationId: undefined,
+    }] as never);
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [session]),
+      listTasks: vi.fn(async () => columnTasks),
+      readTask: vi.fn(async () => columnTasks[0]),
+      readSession: vi.fn(async () => session),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 0),
+    } as any);
+
+    const board = await service.boardProjection('renderer-user');
+    expect(board.tasks).toHaveLength(columnTasks.length);
+    for (const task of board.tasks) {
+      expect(task.baseColumn, task.taskId).toBeTruthy();
+      expect(task.column, task.taskId).toBe(task.baseColumn);
+    }
+    expect(board.tasks.find((task: any) => task.taskId === 'cogseed-task-column-archived')?.baseColumn)
+      .toBe('archived');
+    // The lifecycle counts stay keyed by the lifecycle column.
+    const total = Object.values(board.counts).reduce((sum: number, value) => sum + Number(value), 0);
+    expect(total).toBe(columnTasks.length);
+  });
+
+  it('omits the failure category for tasks that did not fail', async () => {
+    const cleanTask = { ...parentTask, taskId: 'cogseed-task-no-failure', status: 'completed' as const, coordinationId: undefined };
+    const service = createCogSeedIpcService({
+      listSessions: vi.fn(async () => [session]),
+      listTasks: vi.fn(async () => [cleanTask]),
+      readTask: vi.fn(async () => cleanTask),
+      readSession: vi.fn(async () => session),
+      readEvents: vi.fn(async () => []),
+      isConversationAvailable: vi.fn(async () => true),
+      countConversationAgents: vi.fn(async () => 0),
+    } as any);
+
+    const [projected] = (await service.boardProjection('renderer-user')).tasks;
+    expect(projected).not.toHaveProperty('errorCode');
+    expect(projected).not.toHaveProperty('failureCategory');
+  });
+
   it('hides deleted Group Chat conversations while keeping non-chat tasks visible', async () => {
     const deletedSession = { ...session, sessionId: 'cogseed-session-gconv-deleted', conversationId: 'deleted-conversation' };
     const deletedTask = {

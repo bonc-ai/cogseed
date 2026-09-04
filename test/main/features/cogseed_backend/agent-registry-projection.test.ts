@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildCogSeedAgentRegistryProjection } from '../../../../src/main/features/cogseed_backend/agent-registry-projection';
+import { buildCogSeedAgentRegistryProjection, resolveAgentEligibility } from '../../../../src/main/features/cogseed_backend/agent-registry-projection';
 
 describe('CogSeed Agent Registry projection', () => {
   it('normalizes supported runtimes and excludes private execution data', async () => {
@@ -141,5 +141,83 @@ describe('CogSeed Agent Registry projection', () => {
     expect(serialized).not.toContain('abcd…ef');
     expect(serialized).not.toContain('token=must-not-cross');
     expect(serialized).not.toContain('endpoint');
+    expect(projection.registryFreshness).toBe('fresh');
+    expect(projection.agents.find((agent) => agent.agentId === 'capability-peer'))
+      .toMatchObject({ eligibilityReason: 'unsupported_runtime' });
+  });
+
+  it('reports one machine reason per ineligible Agent and none when dispatchable', async () => {
+    const projection = await buildCogSeedAgentRegistryProjection('registry-user', {
+      listAgentSummaries: vi.fn(async () => [
+        { agent_id: 'ready-agent', name: 'Ready', enabled: true, source: 'custom', runtime: { kind: 'in_process' } },
+        { agent_id: 'off-agent', name: 'Switched off', enabled: false, source: 'custom', runtime: { kind: 'in_process' } },
+        // Host-owned management identity. The execution admission gate has
+        // always rejected it; the projection used to advertise it anyway.
+        { agent_id: 'workbench-agent', name: 'Workbench', enabled: true, source: 'marketplace', runtime: { kind: 'in_process' }, interaction_mode: 'management_only' },
+        { agent_id: 'missing-cli-agent', name: 'Missing CLI', enabled: true, source: 'custom', runtime: { kind: 'cli', cli: 'codex' } },
+        { agent_id: 'unsupported-agent', name: 'Unsupported', enabled: true, source: 'custom', runtime: { kind: 'cli', cli: 'gemini' } },
+        { agent_id: 'offline-peer-agent', name: 'Offline gateway', enabled: true, source: 'custom', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+        { agent_id: 'blocked-peer-agent', name: 'Blocked peer', enabled: true, source: 'custom', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
+      ] as any),
+      detectAll: vi.fn(async () => [
+        { type: 'codex', available: false },
+        { type: 'gemini', available: true },
+        { type: 'claude', available: true },
+      ] as any),
+      listTasks: vi.fn(async () => []),
+      listChannels: vi.fn(async () => []),
+      listPeers: vi.fn(() => [
+        { agent_id: 'offline-peer-agent', node_kind: 'agent', online: false, disabled: false },
+        { agent_id: 'blocked-peer-agent', node_kind: 'agent', online: true, disabled: true },
+      ] as any),
+      listGateways: vi.fn(() => []),
+      listRemoteNodes: vi.fn(() => ({ ok: true as const, nodes: [] })),
+      now: () => new Date('2026-09-01T00:00:00.000Z'),
+    });
+
+    const reasonById = new Map(projection.agents.map((agent) => [agent.agentId, agent.eligibilityReason]));
+    expect(reasonById.get('ready-agent')).toBeUndefined();
+    expect(reasonById.get('off-agent')).toBe('disabled');
+    expect(reasonById.get('workbench-agent')).toBe('management_only');
+    expect(reasonById.get('missing-cli-agent')).toBe('not_installed');
+    expect(reasonById.get('unsupported-agent')).toBe('unsupported_runtime');
+    expect(reasonById.get('offline-peer-agent')).toBe('offline');
+    expect(reasonById.get('blocked-peer-agent')).toBe('peer_disabled');
+
+    const byId = new Map(projection.agents.map((agent) => [agent.agentId, agent]));
+    expect(byId.get('ready-agent')).toMatchObject({ dispatchable: true, health: 'ready' });
+    // The badge must agree with the eligibility answer; a management identity
+    // shown as "ready" but refused at dispatch is the divergence being closed.
+    expect(byId.get('workbench-agent')).toMatchObject({ dispatchable: false, health: 'disabled' });
+    for (const agent of projection.agents) {
+      expect(agent.dispatchable, agent.agentId).toBe(agent.eligibilityReason === undefined);
+    }
+  });
+});
+
+describe('resolveAgentEligibility', () => {
+  const eligible = {
+    enabled: true, managementOnly: false, peerDisabled: false,
+    installed: true, online: true, runtimeSupported: true,
+  };
+
+  it('admits an Agent only when every condition holds', () => {
+    expect(resolveAgentEligibility(eligible)).toEqual({ dispatchable: true });
+  });
+
+  it('names exactly one reason per failing condition', () => {
+    expect(resolveAgentEligibility({ ...eligible, enabled: false })).toEqual({ dispatchable: false, reasonCode: 'disabled' });
+    expect(resolveAgentEligibility({ ...eligible, managementOnly: true })).toEqual({ dispatchable: false, reasonCode: 'management_only' });
+    expect(resolveAgentEligibility({ ...eligible, peerDisabled: true })).toEqual({ dispatchable: false, reasonCode: 'peer_disabled' });
+    expect(resolveAgentEligibility({ ...eligible, runtimeSupported: false })).toEqual({ dispatchable: false, reasonCode: 'unsupported_runtime' });
+    expect(resolveAgentEligibility({ ...eligible, installed: false })).toEqual({ dispatchable: false, reasonCode: 'not_installed' });
+    expect(resolveAgentEligibility({ ...eligible, online: false })).toEqual({ dispatchable: false, reasonCode: 'offline' });
+  });
+
+  it('reports the policy reason first when several conditions fail at once', () => {
+    expect(resolveAgentEligibility({
+      enabled: false, managementOnly: true, peerDisabled: true,
+      installed: false, online: false, runtimeSupported: false,
+    })).toEqual({ dispatchable: false, reasonCode: 'disabled' });
   });
 });

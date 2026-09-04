@@ -56,33 +56,41 @@ describe('Run Center run and attempt identity', () => {
     expect(reordered.selected.key).toBe('execution:selected');
     expect(reordered.index).toBe(1);
     expect(removed.selected.key).toBe('execution:new');
-    expect(attemptsApi.failureCategory('provider_error')).toBe('provider');
-    expect(attemptsApi.failureCategory('private-unmapped-code')).toBe('other');
   });
 
-  it('maps every failure code to its category and treats near-miss codes as unmapped', () => {
+  /**
+   * Supersedes the branch coverage of the renderer's own `failureCategory`
+   * classifier, which was deleted in task 3.2. That function decided a category
+   * from the producer's `errorCode`; Main now owns that decision, so what needs
+   * pinning here is the other half — that a given authoritative category picks
+   * the right help copy, whatever code accompanies it.
+   */
+  it('picks help copy from the authoritative failure category, not the producer code', () => {
     const attemptsApi = loadAttemptsApi();
 
-    expect(attemptsApi.failureCategory('model_preflight')).toBe('model');
-    expect(attemptsApi.failureCategory('provider_error')).toBe('provider');
-    expect(attemptsApi.failureCategory('group_chat_run_failed')).toBe('collaboration');
-    expect(attemptsApi.failureCategory('unknown_code')).toBe('other');
+    expect(attemptsApi.failureHelpKey('model_unavailable')).toBe('run_center.error_help_model_preflight');
+    expect(attemptsApi.failureHelpKey('provider_error')).toBe('run_center.error_help_provider_error');
+    expect(attemptsApi.failureHelpKey('collaboration_failure')).toBe('run_center.error_help_group_chat_run_failed');
 
-    // An absent code is "no failure", not an unmapped one: the detail pane keys
-    // its error banner off 'none', so a succeeded run must never reach 'other'.
+    // Categories without dedicated copy share the generic key rather than
+    // reintroducing a per-code table.
+    for (const category of ['provider_transient', 'runtime_failure', 'worker_restart',
+      'conversation_unavailable', 'agent_unavailable', 'cancelled', 'unknown']) {
+      expect(attemptsApi.failureHelpKey(category), category).toBe('run_center.error_help_default');
+    }
+
+    // A projection with no category — an older backend, or a task that did not
+    // fail — must still resolve to a renderable key rather than throwing.
     for (const empty of [undefined, null, '', 0, false, NaN]) {
-      expect(attemptsApi.failureCategory(empty)).toBe('none');
+      expect(attemptsApi.failureHelpKey(empty)).toBe('run_center.error_help_default');
     }
+    expect(attemptsApi.failureHelpKey(42)).toBe('run_center.error_help_default');
+    expect(attemptsApi.failureHelpKey({})).toBe('run_center.error_help_default');
 
-    // Matching is exact: a code that differs only by case or padding falls to
-    // 'other' and loses its category, so producers must emit the literal code.
-    for (const nearMiss of ['Provider_Error', 'PROVIDER_ERROR', ' provider_error', 'provider_error ']) {
-      expect(attemptsApi.failureCategory(nearMiss)).toBe('other');
+    // A producer error code is not a category and must not be treated as one.
+    for (const code of ['provider_auth', 'model_preflight', 'group_chat_run_failed']) {
+      expect(attemptsApi.failureHelpKey(code), code).toBe('run_center.error_help_default');
     }
-
-    // A truthy non-string is unmapped rather than throwing.
-    expect(attemptsApi.failureCategory(42)).toBe('other');
-    expect(attemptsApi.failureCategory({})).toBe('other');
   });
 
   it('uses queue and board modes, embeds summary/history, reveals collaboration on demand, and retains stable selection', async () => {
