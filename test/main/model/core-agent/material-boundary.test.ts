@@ -1,5 +1,5 @@
 /**
- * material-boundary (COGSEED-39 ① Phase 3) — material set resolution.
+ * material-boundary (知识库问答 ① Phase 3) — material set resolution.
  *
  * Hermetic tests with a temp workspace root:
  *   - attachments of a conversation land in the set with inScope computed

@@ -79,7 +79,7 @@ async function invoke(payload: Record<string, unknown>): Promise<any> {
   );
 }
 
-describe('ipc › workspace.openFile（COGSEED-18：空间导入产物打开）', () => {
+describe('ipc › workspace.openFile（本地文件夹导入：空间导入产物打开）', () => {
   it('带 spaceId 且文件在空间内容目录内 → 放行并调用系统打开', async () => {
     const { spaceId, filePath } = await makeSpaceWithImportedFile();
     const res = await invoke({ path: filePath, cid: '', spaceId });

@@ -1,5 +1,5 @@
 /**
- * anchor-resolver (COGSEED-39 ② P1) — citation anchor → char-level position.
+ * anchor-resolver (知识库问答 ② P1) — citation anchor → char-level position.
  *
  * Hermetic tests with a temp workspace root: insert a Library text file,
  * then resolve an anchor and assert exact char ranges, fuzzy locating,

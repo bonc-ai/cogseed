@@ -1,5 +1,5 @@
 /**
- * Anchor resolution feature (COGSEED-39 ② P1) — IPC-facing entry for
+ * Anchor resolution feature (知识库问答 ② P1) — IPC-facing entry for
  * `cogseed.anchor.resolve`.
  *
  * Lives in the features layer (not cogseed_backend) because it calls the
