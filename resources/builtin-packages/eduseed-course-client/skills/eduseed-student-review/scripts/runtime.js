@@ -17282,7 +17282,7 @@ var COMMANDS = [
   { command: "agent-inbox", role: "both", desc: "P3394 \u6536\u4EF6\u7BB1" },
   { command: "agent-contacts", role: "both", desc: "P3394 \u901A\u8BAF\u5F55" }
 ];
-var CURRENT_PLUGIN_VERSION = true ? "0.4.1" : "0.0.0";
+var CURRENT_PLUGIN_VERSION = true ? "0.4.2" : "0.0.0";
 var LICENSE_EXEMPT = /* @__PURE__ */ new Set(["help", "license-check", "health", "plugin-version", "check-deliverables", "prepare-submission"]);
 function compareVersions(a, b) {
   const pa = String(a).trim().replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
