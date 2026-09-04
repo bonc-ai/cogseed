@@ -15048,7 +15048,9 @@ async function getDashboard(client) {
     ]);
     const submissions = Array.isArray(subsResp.submissions) ? subsResp.submissions : [];
     const completed = submissions.filter((s) => s.status === "accepted" || s.task_state === "COMPLETED").length;
-    const pendingReview = submissions.filter((s) => s.status === "submitted" || (s.status ?? "").includes("review")).length;
+    const pendingReview = submissions.filter(
+      (s) => s.status === "submitted" || s.status === "checked" || (s.status ?? "").includes("review")
+    ).length;
     return {
       ok: true,
       stats: {
@@ -15821,7 +15823,7 @@ async function submitProject(client, args, challengeRequiredDeliverables) {
         localIssues,
         error: {
           code: "INPUT_MISSING",
-          // 领域错误码：模板分类
+          // 领域错误码：Richard 模板 taxonomy
           message: `\u7F3A\u5C11\u4EA4\u4ED8\u7269: ${check2.missing.join("\u3001")}\u3002\u8BF7\u8865\u5145\u540E\u91CD\u65B0\u63D0\u4EA4\u3002`,
           ...check2.missing.length === 1 ? { field: check2.missing[0] } : {}
         }
