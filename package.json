@@ -72,7 +72,7 @@
     "electron-builder": "^26.15.3",
     "eslint": "^10.9.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.67.0",
+    "typescript-eslint": "^8.68.0",
     "vitest": "^4.1.5"
   },
   "dependencies": {
