@@ -12,11 +12,16 @@ import {
   defaultShellForPlatform,
   killProcessTree,
 } from "../src/sandbox/executor.js";
+import {
+  windowsSandboxMode,
+  windowsStrongSandboxAvailable,
+} from "../src/sandbox/windows-sandbox.js";
 
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 const IS_WINDOWS = process.platform === "win32";
-const NATIVE_SHELL_STARTUP_BUDGET_MS = IS_WINDOWS ? 15_000 : 5_000;
-const NATIVE_SHELL_TEST_TIMEOUT_MS = IS_WINDOWS ? 25_000 : 10_000;
+const WINDOWS_CI_SHELL_BUDGET_MS = IS_WINDOWS && process.env.CI ? 60_000 : 15_000;
+const NATIVE_SHELL_STARTUP_BUDGET_MS = IS_WINDOWS ? WINDOWS_CI_SHELL_BUDGET_MS : 5_000;
+const NATIVE_SHELL_TEST_TIMEOUT_MS = IS_WINDOWS ? WINDOWS_CI_SHELL_BUDGET_MS + 10_000 : 10_000;
 
 function shellQuote(value: string): string {
   return IS_WINDOWS
@@ -276,6 +281,63 @@ describe("killProcessTree", () => {
   });
 });
 
+describe("Windows strong sandbox gating", () => {
+  it("parses COGSEED_WINDOWS_SANDBOX_MODE", () => {
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "" })).toBe("auto");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "strong" })).toBe("strong");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "fallback" })).toBe("fallback");
+    expect(windowsSandboxMode({ COGSEED_WINDOWS_SANDBOX_MODE: "nonsense" })).toBe("auto");
+  });
+
+  it("never enables the unsafe directory-label strong sandbox", () => {
+    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "1" })).toBe(false);
+    expect(windowsStrongSandboxAvailable({ COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE: "0" })).toBe(false);
+  });
+
+  it("fails closed on win32 when strong mode is requested but unavailable", async () => {
+    if (process.platform !== "win32") return;
+    const oldMode = process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+    const oldForce = process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+    process.env.COGSEED_WINDOWS_SANDBOX_MODE = "strong";
+    process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = "0";
+    try {
+      const sandbox = new SandboxExecutor({
+        workingDir: os.tmpdir(),
+        allowedDirs: [os.tmpdir()],
+      });
+      await expect(sandbox.execute("echo hello")).rejects.toThrow("strong sandbox unavailable");
+    } finally {
+      if (oldMode === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_MODE = oldMode;
+      if (oldForce === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = oldForce;
+    }
+  });
+
+  it.each([
+    ["an empty allowlist", []],
+    ["no allowlist", undefined],
+  ] as const)("fails closed on win32 with %s", async (_label, allowedDirs) => {
+    if (process.platform !== "win32") return;
+    const oldMode = process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+    const oldForce = process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+    process.env.COGSEED_WINDOWS_SANDBOX_MODE = "strong";
+    process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = "0";
+    try {
+      const sandbox = new SandboxExecutor({
+        workingDir: os.tmpdir(),
+        allowedDirs,
+      });
+      await expect(sandbox.execute("echo STRONG_BYPASS")).rejects.toThrow("strong sandbox unavailable");
+    } finally {
+      if (oldMode === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_MODE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_MODE = oldMode;
+      if (oldForce === undefined) delete process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE;
+      else process.env.COGSEED_WINDOWS_SANDBOX_AVAILABLE_FORCE = oldForce;
+    }
+  });
+});
+
 describe("augmentPath", () => {
   it("prepends /opt/homebrew/bin when it's missing (Apple Silicon case)", () => {
     const out = augmentPath("/usr/bin:/bin", "darwin", {});
@@ -397,19 +459,21 @@ describe("augmentPath", () => {
       expect(inv.args).toEqual(["/d", "/s", "/c", command]);
     });
 
-    it("passes PowerShell commands through without bash-syntax rewriting", () => {
+    it("passes PowerShell commands through with UTF-8 output and without bash-syntax rewriting", () => {
       const command = '$COGSEED_NODE "$COGSEED_PC_DIR/bin/run-skill.cjs" calculator eval';
       const inv = buildShellInvocation("powershell.exe", command, "win32");
       expect(inv.kind).toBe("powershell");
-      expect(inv.args).toEqual([
+      expect(inv.args.slice(0, -1)).toEqual([
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        command,
       ]);
+      expect(inv.args.at(-1)).toContain("[Console]::OutputEncoding");
+      expect(inv.args.at(-1)).toContain("$OutputEncoding = [Console]::OutputEncoding");
+      expect(inv.args.at(-1)?.endsWith(command)).toBe(true);
     });
 
     it("keeps explicit Git Bash-style shells POSIX-shaped on Windows", () => {

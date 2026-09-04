@@ -38,7 +38,7 @@
     sideCollapsed: false, // 知识库列表面板收起
     treeFilter: '', // 库树搜索关键词（过滤个人库+共享库）
     qaAttachments: [], // 本次提问挂载的附件 [{name, path, size}]（最多 5 个）
-    qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）
+    qaHistory: [], // 当前会话消息 [{role, content}]（多轮上下文）；脑图条目 {role:'assistant', kind:'mindmap', key, label, ts}
     qaSessions: [], // 会话列表 [{id, title, msgs, ts}]（持久化 localStorage）
     qaSessionId: null, // 当前会话 id
   };
@@ -72,6 +72,9 @@
     chip: '<rect x="5" y="7" width="14" height="10" rx="2.5"/><path d="M9 7V4.5M15 7V4.5M9 19.5V17M15 19.5V17M10.5 12h3"/>',
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
     'chevron-right': '<path d="m9 6 6 6-6 6"/>',
+    'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    'qrcode': '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM21 14h.01M14 21h.01"/>',
+    'lock': '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     'panel-collapse': '<rect x="4" y="5" width="6" height="14" rx="1.5"/><rect x="14" y="5" width="6" height="14" rx="1.5"/>',
     'popout': '<path d="M15 3h6v6"/><path d="m10 14 11-11"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
     'history': '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
@@ -1470,6 +1473,77 @@
     }
   }
 
+  // 降级/失败提示（source='degraded'）：说明原因并给重试入口，
+  // 避免把「单节点知识库」当正常脑图展示（此前用户以为模型只生成了这么点）。
+  function _mmDegradedHtml(reason) {
+    const texts = {
+      empty: '当前知识库暂无已解析文档要点，无法生成多级脑图（仅显示中心节点）。请先在知识库中导入并解析文档。',
+      timeout: '脑图生成超时：本地模型排队/推理超过 2 分钟未返回，已降级为仅中心节点。模型通道繁忙，请稍后点击重试。',
+      'model-failed': '脑图生成失败（模型暂不可用），已降级为仅中心节点。请稍后点击重试。',
+    };
+    const tip = texts[reason] || texts['model-failed'];
+    const withRetry = reason !== 'empty';
+    return '<div class="kb-mm-fail">' + tip
+      + (withRetry ? '<br><button type="button" class="kb-mm-retry-btn">🔄 重新生成</button>' : '')
+      + '</div>';
+  }
+
+  // ── 脑图入会话历史（方案 A）：快照 key + kind:'mindmap' 消息条目 ──
+  // 快照 key 与手动存档（space:xxx / dir:xxx）分开：`<base>#<会话>-<时间戳>`，
+  // 每次生成独立快照，历史里的旧脑图不被新生成覆盖；'#' 标记在存档列表中被过滤。
+  function _mmSnapshotKey() {
+    const base = _state.spaceId ? `space:${_state.spaceId}` : `dir:${_state.currentLib || 'global'}`;
+    const sid = String(_state.qaSessionId || 'solo').replace(/[^0-9a-zA-Z_-]/g, '');
+    return `${base}#${sid}-${Date.now()}`;
+  }
+
+  // 生成成功（非降级）后：自动存档快照并写入当前会话历史，刷新/切会话可还原
+  function _mmRecordToHistory(root) {
+    if (!root || !root.label) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const key = _mmSnapshotKey();
+    window.cogseed.invoke('kb.mindmap.save', { key, root })
+      .then((r) => {
+        if (!r || !r.ok) return;
+        _state.qaHistory.push({ role: 'assistant', kind: 'mindmap', content: '', key, label: root.label, ts: Date.now() });
+        if (_state.qaHistory.length > 40) _state.qaHistory.splice(0, _state.qaHistory.length - 40);
+        _qaSaveCurrentSession();
+      })
+      .catch(() => { /* 快照失败不阻塞展示；手动存档通道不受影响 */ });
+  }
+
+  // 从会话历史还原一条脑图消息：先占位，再按 key 异步读档渲染
+  function _appendMindmapMessage(box, m) {
+    const ai = document.createElement('div');
+    ai.className = 'kb-qa-msg is-ai';
+    const headLabel = m && m.label ? ' · ' + String(m.label).slice(0, 20) : '';
+    const body = document.createElement('div');
+    body.className = 'kb-qa-msg-body kb-mm-msg';
+    body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览' + _esc(headLabel) + '</div>'
+      + '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
+    ai.appendChild(body);
+    if (box) box.appendChild(ai);
+    const canvas = body.querySelector('.kb-wb-mm-canvas');
+    if (!m || !m.key || !window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图存档不可用</div>';
+      return;
+    }
+    window.cogseed.invoke('kb.mindmap.load', { key: m.key })
+      .then((r) => {
+        if (!canvas) return;
+        if (!r || !r.ok || !r.root) {
+          canvas.innerHTML = '<div class="kb-mm-fail">脑图存档已失效（可能已被删除）</div>';
+          return;
+        }
+        const root = r.root;
+        _state.mmCollapsed.clear();
+        canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = root;
+        _bindMindCanvas(canvas);
+      })
+      .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
+  }
+
   // 生成脑图 → 作为产物追加到**对话消息区**（kb-qa-messages），
   // 与问答流同区可见、可滚动，不藏在解析卡的折叠区。
   // 生成脑图 → 调本地 kb.mindmap（多级层级 JSON）→ 对话区渲染精致树形脑图
@@ -1484,7 +1558,7 @@
     body.className = 'kb-qa-msg-body kb-mm-msg';
     body.innerHTML = '<div class="kb-mm-msg-head">🧠 脑图预览</div>'
       + '<div class="kb-wb-mm-canvas" id="kb-wb-mm-canvas">'
-      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–60 秒）…</div></div>';
+      + '<div class="kb-mm-loading">正在生成多级脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div></div>';
     ai.appendChild(body);
     box.appendChild(ai);
     const canvas = body.querySelector('.kb-wb-mm-canvas');
@@ -1499,12 +1573,23 @@
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          canvas.innerHTML = _mmDegradedHtml(res.reason);
+          const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
+          if (retryBtn) retryBtn.addEventListener('click', () => {
+            ai.remove();
+            _genMindmap();
+          });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
+        if (res.source === 'generated') _mmRecordToHistory(res.root);
       })
       .catch(() => {
         _mmGenerating = false;
@@ -1537,12 +1622,23 @@
       .then((res) => {
         btn.disabled = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          canvas.innerHTML = _mmDegradedHtml(res.reason);
+          const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
+          if (retryBtn) retryBtn.addEventListener('click', () => {
+            holder.remove();
+            _genMindmapFromText(text, btn);
+          });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
         _state.mmSearchHits = new Set();
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
+        if (res.source === 'generated') _mmRecordToHistory(res.root);
       })
       .catch(() => {
         btn.disabled = false;
@@ -1552,7 +1648,11 @@
 
   // 对话区脑图 = 缩略预览：点击 → 唤起弹窗（完整阅读/折叠/编辑/导出都在弹窗内）
   function _bindMindCanvas(canvas) {
-    canvas.addEventListener('click', () => _openMindPreview());
+    canvas.addEventListener('click', () => {
+      // 历史里可能有多张脑图：优先打开当前画布对应的快照树
+      if (canvas._mmRoot) _state.lastMind = canvas._mmRoot;
+      _openMindPreview();
+    });
   }
 
   // 折叠 / 展开一级分支（数据驱动重渲染）
@@ -1862,7 +1962,7 @@
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     _mmGenerating = true;
     const wrap = document.getElementById('kb-mm-overlay-wrap');
-    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒）…</div>';
+    if (wrap) wrap.innerHTML = '<div class="kb-mm-fail" style="color:var(--kb-muted,#6E8578)">正在重新生成脑图（本地模型推理中，约 30–60 秒，复杂知识库最长约 2 分钟）…</div>';
     window.cogseed.invoke('kb.mindmap', {
       dir: _state.spaceId ? null : (_state.currentLib || null),
       spaceId: _state.spaceId || null,
@@ -1871,6 +1971,17 @@
       .then((res) => {
         _mmGenerating = false;
         if (!res || !res.root) throw new Error('empty mindmap');
+        if (res.source === 'degraded') {
+          const wrap = document.getElementById('kb-mm-overlay-wrap');
+          if (wrap) {
+            wrap.innerHTML = _mmDegradedHtml(res.reason)
+              + '<div class="kb-mm-refresh-hint" style="color:var(--kb-muted,#6E8578);font-size:12px;margin-top:8px">原脑图已保留，未受影响</div>';
+            const retryBtn = wrap.querySelector('.kb-mm-retry-btn');
+            if (retryBtn) retryBtn.addEventListener('click', _mmRefreshMindmap);
+          }
+          if (typeof uiToast === 'function') uiToast('重新生成未完成，已保留原脑图', { variant: 'warning' });
+          return;
+        }
         _state.lastMind = res.root;
         _state.mmCollapsed.clear();
         _state.mmFocus = null;
@@ -1895,7 +2006,10 @@
       return;
     }
     window.cogseed.invoke('kb.mindmap.list').then((r) => {
-      const items = (r && Array.isArray(r.items) ? r.items : []).sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+      // 历史快照（key 含 '#'）只随会话历史还原，不混进手动存档列表
+      const items = (r && Array.isArray(r.items) ? r.items : [])
+        .filter((m) => !String(m.key || '').includes('#'))
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
       if (!items.length) {
         menu.innerHTML = '<div class="kb-mm-open-item is-empty">还没有保存的脑图</div>';
         return;
@@ -2575,16 +2689,24 @@
     _clearQa();
     if (typeof uiToast === 'function') uiToast('已新建对话', { variant: 'info' });
   }
-  // 载入历史会话：恢复消息区 + 上下文
+  // 载入历史会话：恢复消息区 + 上下文（脑图消息按 kind 走快照读档渲染）
   function _qaLoadSession(id) {
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    _state.qaHistory = (s.msgs || []).map((m) => ({ role: m.role, content: m.content }));
+    _state.qaHistory = (s.msgs || []).map((m) => (
+      m && m.kind === 'mindmap'
+        ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
+        : { role: m.role, content: m.content }
+    ));
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
     for (const m of _state.qaHistory) {
+      if (m.kind === 'mindmap') {
+        _appendMindmapMessage(box, m);
+        continue;
+      }
       const el = document.createElement('div');
       el.className = m.role === 'user' ? 'kb-qa-msg is-user' : 'kb-qa-msg is-ai';
       el.innerHTML = `<div class="kb-qa-msg-body">${_esc(m.content)}</div>`;
@@ -2628,8 +2750,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const id = btn.dataset.histDel;
+        const gone = _state.qaSessions.find((x) => x.id === id);
         _state.qaSessions = _state.qaSessions.filter((x) => x.id !== id);
         if (_state.qaSessionId === id) { _state.qaSessionId = null; _state.qaHistory = []; _clearQa(); }
+        // 删除会话时同步清理其脑图快照存档（key 含 '#' 的条目）
+        if (gone && window.cogseed && typeof window.cogseed.invoke === 'function') {
+          (gone.msgs || []).forEach((m) => {
+            if (m && m.kind === 'mindmap' && m.key) {
+              window.cogseed.invoke('kb.mindmap.delete', { key: m.key }).catch(() => { /* ignore */ });
+            }
+          });
+        }
         _qaPersist();
         _qaOpenHistory(); // 刷新列表
       });
@@ -2715,7 +2846,7 @@
         _state.qaAttachments = [];
         _renderQaAttachments();
       }
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.slice(0, -1) }, (ev) => {
+      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1) }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
@@ -3161,7 +3292,7 @@
     });
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
-      if (typeof uiToast === 'function') uiToast('分享功能开发中（即将支持链接/邀请）', { variant: 'info' });
+      _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
     document.getElementById('kb-wb-more-btn')?.addEventListener('click', (e) => {
@@ -3820,8 +3951,692 @@
     });
   }
 
-  async function _kbRenameSpace(spaceId) {
-    const sp = _state.spaces.find((s) => s.space_id === spaceId);
+  // ── 共享知识库分享弹窗（图 2）+ 权限设置弹窗（图 1，对标 ima）──
+  let _kbShareDlg = null; // 分享弹窗
+  let _kbPermDlg = null;  // 权限设置弹窗
+
+  function _kbCurSpace() {
+    return _state.spaces.find((s) => s.space_id === _state.spaceId) || null;
+  }
+
+  // 图 2：分享弹窗 —— 知识库信息卡 + 分享方式行（点击跳权限设置）+ 复制链接/生成知识码
+  function _kbShareDialogOpen() {
+    _kbMenuHide();
+    const sp = _kbCurSpace();
+    const isSpace = !!_state.spaceId;
+    if (!isSpace || !sp) {
+      if (typeof uiToast === 'function') uiToast('请先选择共享知识库', { variant: 'warning' });
+      return;
+    }
+    _kbPermDlgClose();
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>分享</div>
+        <div class="kb-share-pop-card">
+          <span class="kb-share-pop-folder">${_svg('folder')}</span>
+          <div class="kb-share-pop-card-meta">
+            <div class="kb-share-pop-count">${_esc(sp.name || '共享知识库')}</div>
+            <div class="kb-share-pop-creator"><span class="kb-share-pop-avatar">我</span>我创建</div>
+          </div>
+        </div>
+        <div class="kb-share-pop-row" id="kb-share-pop-perm-row">
+          <span class="kb-share-pop-row-label">选择分享方式</span>
+          <span class="kb-share-pop-row-hint">${_kbSharePermSummary(sp)} <span class="kb-share-pop-row-arrow">›</span></span>
+        </div>
+        <div class="kb-share-pop-row" id="kb-share-pop-status-row">
+          <span class="kb-share-pop-row-label">分享到飞书</span>
+          <span class="kb-share-pop-row-hint" id="kb-share-pop-status-hint">未分享 <span class="kb-share-pop-row-arrow">›</span></span>
+        </div>
+        <div class="kb-share-pop-row" id="kb-share-cogseed-row">
+          <span class="kb-share-pop-row-label">发布到 CogSeed 问答</span>
+          <span class="kb-share-pop-row-hint" id="kb-share-cogseed-hint">未发布 <span class="kb-share-pop-row-arrow">›</span></span>
+        </div>
+        <div class="kb-share-pop-actions">
+          <button type="button" class="kb-share-pop-btn" id="kb-share-pop-copy-link">${_svg('link')}复制链接</button>
+          <button type="button" class="kb-share-pop-btn is-code" id="kb-share-pop-code">${_svg('qrcode')}生成知识码</button>
+          <button type="button" class="kb-share-pop-btn is-manage" id="kb-share-pop-manage" hidden>${_svg('settings', 'kb-share-ico')}管理</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    _kbShareDlg = overlay;
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    // 点分享方式行 → 跳权限设置弹窗
+    overlay.querySelector('#kb-share-pop-perm-row').addEventListener('click', () => {
+      overlay.remove();
+      _kbPermDialogOpen();
+    });
+    // 分享状态行 → 已分享时跳管理面板
+    overlay.querySelector('#kb-share-pop-status-row').addEventListener('click', async () => {
+      const state = await _kbShareStateOf(sp.space_id);
+      if (state) {
+        overlay.remove();
+        _kbShareManageOpen();
+      } else {
+        await _kbSharePublish(sp);
+      }
+    });
+    // CogSeed 问答行 → 发布到 cogseed-share 后端（权限弹窗设置真实生效）
+    overlay.querySelector('#kb-share-cogseed-row').addEventListener('click', async () => {
+      const state = await _kbCogseedStateOf(sp.space_id);
+      if (state) {
+        overlay.remove();
+        _kbCogseedManageOpen();
+      } else {
+        await _kbCogseedPublish(sp);
+      }
+    });
+    // 复制链接：优先用飞书分享链接（未分享则先发布）
+    overlay.querySelector('#kb-share-pop-copy-link').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      const label = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '分享中…';
+      try {
+        let state = await _kbShareStateOf(sp.space_id);
+        if (!state) state = await _kbSharePublish(sp, { silent: true });
+        if (!state) return;
+        await navigator.clipboard.writeText(state.url);
+        if (typeof uiToast === 'function') uiToast('飞书分享链接已复制', { variant: 'success', timeoutMs: 2000 });
+        _kbRefreshShareStatus(sp);
+      } catch (err) {
+        _log.warn('kb share copy failed', err);
+        if (typeof uiToast === 'function') uiToast('分享失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = label;
+      }
+    });
+    // 生成知识码（二维码）：先确保已分享
+    overlay.querySelector('#kb-share-pop-code').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        let state = await _kbShareStateOf(sp.space_id);
+        if (!state) state = await _kbSharePublish(sp, { silent: true });
+        if (!state) return;
+        _kbQrCodeShow(state.url, sp.name);
+      } catch (err) {
+        _log.warn('kb share qr failed', err);
+        if (typeof uiToast === 'function') uiToast('生成知识码失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    // 管理面板
+    overlay.querySelector('#kb-share-pop-manage').addEventListener('click', (e) => {
+      e.stopPropagation();
+      overlay.remove();
+      _kbShareManageOpen();
+    });
+    _kbRefreshShareStatus(sp);
+    _kbRefreshCogseedStatus(sp);
+  }
+
+  // 读取空间分享状态（无 → null）
+  async function _kbShareStateOf(spaceId) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.get', { spaceId });
+      return (res && res.state) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── CogSeed 问答分享（方案 C）──────────────────────────────────────────
+  async function _kbCogseedStateOf(spaceId) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.cogseed.get', { spaceId });
+      return (res && res.state) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function _kbRefreshCogseedStatus(sp) {
+    if (!_kbShareDlg) return;
+    const hint = _kbShareDlg.querySelector('#kb-share-cogseed-hint');
+    if (!hint) return;
+    const state = await _kbCogseedStateOf(sp.space_id);
+    if (state) {
+      hint.innerHTML = `${_esc(state.url)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">›</span>`;
+    } else {
+      hint.innerHTML = '未发布 <span class="kb-share-pop-row-arrow">›</span>';
+    }
+  }
+
+  async function _kbCogseedPublish(sp) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.cogseed.publish', { spaceId: sp.space_id });
+      if (res && res.ok) {
+        if (typeof uiToast === 'function') uiToast('已发布到 CogSeed 问答', { variant: 'success', timeoutMs: 2000 });
+        _kbRefreshCogseedStatus(sp);
+        return res.state;
+      }
+      if (res && res.code === 'not_configured') {
+        _kbCogseedConfigDialog(sp);
+        return null;
+      }
+      if (typeof uiToast === 'function') uiToast('发布失败：' + ((res && res.error) || '未知错误'), { variant: 'error', timeoutMs: 4000 });
+      return null;
+    } catch (err) {
+      _log.warn('kb cogseed publish failed', err);
+      if (typeof uiToast === 'function') uiToast('发布失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      return null;
+    }
+  }
+
+  // CogSeed 共享服务配置弹窗（后端地址 + API Key）
+  function _kbCogseedConfigDialog(sp) {
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--config">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('link')}</span>配置 CogSeed 共享服务</div>
+        <div class="kb-share-config-tip">发布到 CogSeed 问答需要共享服务地址与 API Key（由 CogSeed 共享服务提供方发放；自托管可自行部署）：</div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">服务地址</label>
+          <input type="text" class="kb-share-config-input" id="kb-cogseed-baseurl" placeholder="https://share.cogseed.dev" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">API Key</label>
+          <input type="password" class="kb-share-config-input" id="kb-cogseed-apikey" placeholder="服务方发放的密钥" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-config-cancel">取消</button>
+          <button type="button" class="kb-share-pop-btn is-primary" id="kb-cogseed-config-save">保存并发布</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-cogseed-config-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#kb-cogseed-config-save').addEventListener('click', async (e) => {
+      const baseUrl = overlay.querySelector('#kb-cogseed-baseurl').value.trim();
+      const apiKey = overlay.querySelector('#kb-cogseed-apikey').value.trim();
+      if (!baseUrl || !apiKey) {
+        if (typeof uiToast === 'function') uiToast('请填写服务地址与 API Key', { variant: 'warning' });
+        return;
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('kb.share.cogseed.config.set', { baseUrl, apiKey });
+        if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
+        overlay.remove();
+        await _kbCogseedPublish(sp);
+      } catch (err) {
+        _log.warn('kb cogseed config save failed', err);
+        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // CogSeed 问答管理面板（成员审核 + 复制链接 + 撤销）
+  async function _kbCogseedManageOpen() {
+    _kbMenuHide();
+    const sp = _kbCurSpace();
+    if (!sp) return;
+    const state = await _kbCogseedStateOf(sp.space_id);
+    let members = [];
+    try {
+      const mres = await window.cogseed.invoke('kb.share.cogseed.members', { spaceId: sp.space_id });
+      members = (mres && mres.members) || [];
+    } catch { /* 成员拉取失败不阻断 */ }
+    const pending = members.filter((m) => m.status === 'pending');
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--manage">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>CogSeed 问答分享管理</div>
+        ${state ? `<div class="kb-share-manage-item">
+          <div class="kb-share-manage-item-head">
+            <span class="kb-share-manage-item-name">${_esc(state.spaceName)}</span>
+            <span class="kb-share-manage-item-badge is-anyone">${_esc({ direct: '直接加入', apply: '需申请', invite: '仅邀请' }[state.joinMode] || state.joinMode)}</span>
+          </div>
+          <div class="kb-share-manage-item-meta">${_esc(state.url)}</div>
+          <div class="kb-share-manage-item-actions">
+            <button type="button" class="kb-share-manage-btn" data-cogseed-act="copy">复制链接</button>
+            <button type="button" class="kb-share-manage-btn is-danger" data-cogseed-act="revoke">撤销</button>
+          </div>
+        </div>` : '<div class="kb-share-manage-empty">未发布</div>'}
+        <div class="kb-share-cogseed-members">
+          <div class="kb-share-cogseed-members-title">成员申请${pending.length ? `（${pending.length} 待审）` : ''}</div>
+          ${pending.length === 0 ? '<div class="kb-share-cogseed-members-empty">暂无待审申请</div>' : ''}
+          ${pending.map((m) => `
+            <div class="kb-share-manage-item" data-member-id="${m.id}">
+              <div class="kb-share-manage-item-head"><span class="kb-share-manage-item-name">${_esc(m.display_name || '匿名访客')}</span></div>
+              <div class="kb-share-manage-item-meta">${_esc(m.note || '无理由')} · ${_esc(String(m.created_at || '').slice(0, 16))}</div>
+              <div class="kb-share-manage-item-actions">
+                <button type="button" class="kb-share-manage-btn" data-member-act="approve">通过</button>
+                <button type="button" class="kb-share-manage-btn is-danger" data-member-act="reject">拒绝</button>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-cogseed-manage-close">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-cogseed-manage-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', async (e) => {
+      const actBtn = e.target.closest('[data-cogseed-act]');
+      if (actBtn) {
+        const act = actBtn.dataset.cogseedAct;
+        if (act === 'copy') {
+          try { await navigator.clipboard.writeText(state.url); uiToast && uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 }); }
+          catch { uiToast && uiToast('复制失败', { variant: 'warning' }); }
+        } else if (act === 'revoke') {
+          const res = await window.cogseed.invoke('kb.share.cogseed.revoke', { spaceId: sp.space_id });
+          if (res && res.ok) { uiToast && uiToast('已撤销', { variant: 'success' }); overlay.remove(); _kbShareDialogOpen(); }
+          else uiToast && uiToast('撤销失败', { variant: 'error' });
+        }
+        return;
+      }
+      const memberBtn = e.target.closest('[data-member-act]');
+      if (memberBtn) {
+        const item = memberBtn.closest('[data-member-id]');
+        const memberId = Number(item?.dataset.memberId);
+        const verdict = memberBtn.dataset.memberAct;
+        memberBtn.disabled = true;
+        const res = await window.cogseed.invoke('kb.share.cogseed.review', { spaceId: sp.space_id, memberId, verdict });
+        if (res && res.ok) { uiToast && uiToast(verdict === 'approve' ? '已通过' : '已拒绝', { variant: 'success', timeoutMs: 1500 }); overlay.remove(); _kbCogseedManageOpen(); }
+        else { uiToast && uiToast('操作失败', { variant: 'error' }); memberBtn.disabled = false; }
+      }
+    });
+  }
+
+  // 刷新分享弹窗状态行：已分享显示链接状态 + 管理按钮
+  async function _kbRefreshShareStatus(sp) {
+    if (!_kbShareDlg) return;
+    const hint = _kbShareDlg.querySelector('#kb-share-pop-status-hint');
+    const manage = _kbShareDlg.querySelector('#kb-share-pop-manage');
+    const state = await _kbShareStateOf(sp.space_id);
+    if (!hint || !manage) return;
+    if (state) {
+      const accessText = { anyone: '互联网可读', tenant: '组织内可读', private: '已关闭' }[state.access] || state.access;
+      hint.innerHTML = `${_esc(accessText)}<span class="kb-share-pop-status-dot"></span><span class="kb-share-pop-row-arrow">›</span>`;
+      manage.hidden = false;
+    } else {
+      hint.textContent = '未分享';
+      manage.hidden = true;
+    }
+  }
+
+  // 发布到飞书：返回分享状态；需要授权时引导重新授权
+  async function _kbSharePublish(sp, opts = {}) {
+    try {
+      const res = await window.cogseed.invoke('kb.share.toFeishu', { spaceId: sp.space_id, access: 'anyone' });
+      if (res && res.ok) {
+        if (!opts.silent && typeof uiToast === 'function') {
+          uiToast('已发布到飞书', { variant: 'success', timeoutMs: 2000 });
+        }
+        _kbRefreshShareStatus(sp);
+        return res.state;
+      }
+      if (res && res.code === 'need_reauthorize') {
+        const go = typeof uiConfirm === 'function'
+          ? await uiConfirm('分享到飞书需要文档写权限，是否现在重新授权？', '重新授权')
+          : window.confirm('分享到飞书需要文档写权限，是否现在重新授权？');
+        if (go) {
+          try {
+            await window.cogseed.invoke('kb.share.authorize', {});
+            if (typeof uiToast === 'function') uiToast('请在浏览器完成飞书授权，完成后点击「复制链接」重试', { variant: 'info', timeoutMs: 4000 });
+          } catch (err) {
+            _log.warn('kb share authorize failed', err);
+          }
+        }
+        return null;
+      }
+      if (res && res.code === 'not_configured') {
+        _kbShareConfigDialog(sp);
+        return null;
+      }
+      if (res && res.code === 'enterprise_share_disabled') {
+        if (typeof uiToast === 'function') uiToast(res.error || '企业禁止组织外分享，请在飞书管理后台开启', { variant: 'error', timeoutMs: 5000 });
+        return null;
+      }
+      if (typeof uiToast === 'function') uiToast('分享失败：' + ((res && res.error) || '未知错误'), { variant: 'error', timeoutMs: 4000 });
+      return null;
+    } catch (err) {
+      _log.warn('kb share publish failed', err);
+      if (typeof uiToast === 'function') uiToast('分享失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+      return null;
+    }
+  }
+
+  // 分享应用配置弹窗（独立于消息机器人）：填写飞书开放平台应用 App ID/Secret
+  function _kbShareConfigDialog(sp) {
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--config">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('link')}</span>配置飞书分享</div>
+        <div class="kb-share-config-tip">分享到飞书需要一个飞书开放平台应用。到 <a href="https://open.feishu.cn/app" target="_blank" rel="noopener">open.feishu.cn/app</a> 创建企业自建应用后，在「凭证与基础信息」页复制 App ID 与 App Secret 填入：</div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">App ID</label>
+          <input type="text" class="kb-share-config-input" id="kb-share-config-appid" placeholder="cli_xxxxxxxx" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-config-field">
+          <label class="kb-share-config-label">App Secret</label>
+          <input type="password" class="kb-share-config-input" id="kb-share-config-secret" placeholder="应用密钥" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="kb-share-config-tip is-warn">应用需在「权限管理」开通：docx:document、wiki:wiki、drive:file、docs:permission.setting:write_only</div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-share-config-cancel">取消</button>
+          <button type="button" class="kb-share-pop-btn is-primary" id="kb-share-config-save">保存并授权</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-share-config-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#kb-share-config-save').addEventListener('click', async (e) => {
+      const appId = overlay.querySelector('#kb-share-config-appid').value.trim();
+      const appSecret = overlay.querySelector('#kb-share-config-secret').value.trim();
+      if (!appId || !appSecret) {
+        if (typeof uiToast === 'function') uiToast('请填写 App ID 与 App Secret', { variant: 'warning' });
+        return;
+      }
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('kb.share.appConfig.set', { appId, appSecret });
+        if (!res || res.ok !== true) throw new Error((res && res.error) || '保存失败');
+        overlay.remove();
+        if (typeof uiToast === 'function') uiToast('应用凭据已保存，正在发起授权…', { variant: 'info', timeoutMs: 2500 });
+        // 保存后触发重新授权（分享写权限 scope，走分享专用凭据）
+        try {
+          await window.cogseed.invoke('kb.share.authorize', {});
+          if (typeof uiToast === 'function') uiToast('请在浏览器完成飞书授权，完成后重新点击「复制链接」', { variant: 'info', timeoutMs: 5000 });
+        } catch (err) {
+          _log.warn('kb share authorize after config failed', err);
+        }
+      } catch (err) {
+        _log.warn('kb share app config save failed', err);
+        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // 知识码：二维码弹窗（复用内置 qrcode-generator）
+  function _kbQrCodeShow(url, name) {
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--qr">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('qrcode')}</span>知识码</div>
+        <div class="kb-share-qr-body">
+          <div class="kb-share-qr-img" id="kb-share-qr-img"></div>
+          <div class="kb-share-qr-name">${_esc(name || '共享知识库')}</div>
+          <div class="kb-share-qr-url">${_esc(url)}</div>
+        </div>
+        <div class="kb-share-pop-actions">
+          <button type="button" class="kb-share-pop-btn" id="kb-share-qr-copy">${_svg('link')}复制链接</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    // 生成二维码 SVG
+    const host = overlay.querySelector('#kb-share-qr-img');
+    try {
+      if (typeof qrcode === 'function') {
+        const code = qrcode(0, 'M');
+        code.addData(url, 'Byte');
+        code.make();
+        host.innerHTML = code.createSvgTag(4, 4);
+        const svg = host.querySelector('svg');
+        if (svg) { svg.style.width = '160px'; svg.style.height = '160px'; }
+      } else {
+        host.innerHTML = '<span class="kb-share-qr-fallback">扫码功能不可用</span>';
+      }
+    } catch (err) {
+      _log.warn('kb qr generate failed', err);
+      host.innerHTML = '<span class="kb-share-qr-fallback">扫码功能不可用</span>';
+    }
+    overlay.querySelector('#kb-share-qr-copy').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(url);
+        if (typeof uiToast === 'function') uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 });
+      } catch {
+        if (typeof uiToast === 'function') uiToast('复制失败，请手动复制', { variant: 'warning' });
+      }
+    });
+  }
+
+  // 分享管理面板（方案 B：列表 / 更新内容 / 撤销 / 复制链接 / 二维码）
+  async function _kbShareManageOpen() {
+    _kbMenuHide();
+    let items = [];
+    try {
+      const res = await window.cogseed.invoke('kb.share.list', {});
+      items = (res && res.items) || [];
+    } catch (err) {
+      _log.warn('kb share list failed', err);
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--manage">
+        <button type="button" class="kb-share-pop-close" title="关闭">✕</button>
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('share')}</span>分享管理</div>
+        <div class="kb-share-manage-list" id="kb-share-manage-list">
+          ${items.length === 0 ? '<div class="kb-share-manage-empty">还没有分享到飞书的知识库<br><span>打开知识库 → 分享 → 复制链接</span></div>' : ''}
+          ${items.map((item, idx) => `
+            <div class="kb-share-manage-item" data-idx="${idx}">
+              <div class="kb-share-manage-item-head">
+                <span class="kb-share-manage-item-name">${_esc(item.spaceName || item.spaceId)}</span>
+                <span class="kb-share-manage-item-badge is-${item.access}">${({ anyone: '公开', tenant: '组织内', private: '私密' })[item.access] || item.access}</span>
+              </div>
+              <div class="kb-share-manage-item-meta">${item.fileCount} 个文档 · ${_esc(item.url)}</div>
+              <div class="kb-share-manage-item-actions">
+                <button type="button" class="kb-share-manage-btn" data-act="copy">复制链接</button>
+                <button type="button" class="kb-share-manage-btn" data-act="qr">知识码</button>
+                <button type="button" class="kb-share-manage-btn" data-act="update">更新内容</button>
+                <button type="button" class="kb-share-manage-btn is-danger" data-act="revoke">撤销</button>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-share-manage-close">关闭</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kb-share-pop-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('#kb-share-manage-close').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#kb-share-manage-list').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const item = items[Number(btn.closest('.kb-share-manage-item').dataset.idx)];
+      if (!item) return;
+      const act = btn.dataset.act;
+      if (act === 'copy') {
+        try {
+          await navigator.clipboard.writeText(item.url);
+          if (typeof uiToast === 'function') uiToast('链接已复制', { variant: 'success', timeoutMs: 1500 });
+        } catch {
+          if (typeof uiToast === 'function') uiToast('复制失败', { variant: 'warning' });
+        }
+      } else if (act === 'qr') {
+        _kbQrCodeShow(item.url, item.spaceName);
+      } else if (act === 'update') {
+        btn.disabled = true;
+        const label = btn.textContent;
+        btn.textContent = '更新中…';
+        try {
+          const res = await window.cogseed.invoke('kb.share.update', { spaceId: item.spaceId });
+          if (res && res.ok) {
+            if (typeof uiToast === 'function') uiToast('内容已更新', { variant: 'success', timeoutMs: 1500 });
+            _kbShareManageOpen(); // 刷新面板
+          } else {
+            if (typeof uiToast === 'function') uiToast('更新失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
+            btn.disabled = false;
+            btn.textContent = label;
+          }
+        } catch (err) {
+          _log.warn('kb share update failed', err);
+          if (typeof uiToast === 'function') uiToast('更新失败', { variant: 'error' });
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      } else if (act === 'revoke') {
+        const mode = typeof uiConfirm === 'function'
+          ? await uiConfirm('撤销后链接将失效。同时删除飞书云端副本吗？', '仅关闭链接', '删除云端副本')
+          : (window.confirm('撤销后链接将失效。是否同时删除飞书云端副本？') ? 'delete_space' : 'close_link');
+        if (!mode) return;
+        btn.disabled = true;
+        try {
+          const res = await window.cogseed.invoke('kb.share.revoke', { spaceId: item.spaceId, mode });
+          if (res && res.ok) {
+            if (typeof uiToast === 'function') uiToast('已撤销分享', { variant: 'success', timeoutMs: 1500 });
+            _kbShareManageOpen();
+          } else {
+            if (typeof uiToast === 'function') uiToast('撤销失败：' + ((res && res.error) || '未知错误'), { variant: 'error' });
+            btn.disabled = false;
+          }
+        } catch (err) {
+          _log.warn('kb share revoke failed', err);
+          if (typeof uiToast === 'function') uiToast('撤销失败', { variant: 'error' });
+          btn.disabled = false;
+        }
+      }
+    });
+  }
+
+  // 分享权限摘要（对齐图 2 说明行：成员可查看内容，加入无需确认）
+  function _kbSharePermSummary(sp) {
+    const perm = sp.member_permission || 'view_export';
+    const join = sp.join_mode || 'direct';
+    const permText = { view_export: '成员可查看导出', view_only: '成员仅可查看', hidden: '成员不可查看' }[perm] || '成员可查看导出';
+    const joinText = { direct: '加入无需确认', apply: '加入需管理员确认', invite: '仅邀请加入' }[join] || '加入无需确认';
+    return `${permText}，${joinText}`;
+  }
+
+  function _kbShareDlgClose() {
+    if (_kbShareDlg) { _kbShareDlg.remove(); _kbShareDlg = null; }
+  }
+  function _kbPermDlgClose() {
+    if (_kbPermDlg) { _kbPermDlg.remove(); _kbPermDlg = null; }
+  }
+
+  // 图 1：权限设置弹窗 —— 设为私密开关 + 成员权限/加入方式下拉 + 取消/确定
+  function _kbPermDialogOpen() {
+    _kbMenuHide();
+    const sp = _kbCurSpace();
+    if (!sp) return;
+    const perm = sp.member_permission || 'view_export';
+    const join = sp.join_mode || 'direct';
+    const isPrivate = sp.shared !== true;
+    const permLabel = { view_export: '内容可查看和导出', view_only: '内容可查看但不可导出', hidden: '内容不可查看' }[perm] || '内容可查看和导出';
+    const joinLabel = { direct: '直接加入', apply: '申请加入（管理员批准）', invite: '仅邀请加入' }[join] || '直接加入';
+    const overlay = document.createElement('div');
+    overlay.className = 'kb-share-pop-overlay';
+    overlay.innerHTML = `
+      <div class="kb-share-pop kb-share-pop--perm">
+        <div class="kb-share-pop-head"><span class="kb-share-pop-head-ico">${_svg('lock')}</span>权限设置</div>
+        <div class="kb-share-perm-block">
+          <div class="kb-share-perm-row">
+            <div class="kb-share-perm-texts">
+              <div class="kb-share-perm-title">设为私密</div>
+              <div class="kb-share-perm-desc">开启后知识库仅自己可见</div>
+            </div>
+            <button type="button" class="kb-share-toggle${isPrivate ? ' is-on' : ''}" id="kb-perm-private" role="switch" aria-checked="${isPrivate ? 'true' : 'false'}"><span class="kb-share-toggle-dot"></span></button>
+          </div>
+        </div>
+        <div class="kb-share-perm-block">
+          <div class="kb-share-perm-row">
+            <span class="kb-share-perm-title">成员权限</span>
+            <div class="kb-share-select-wrap">
+              <select class="kb-share-select" id="kb-perm-member">
+                <option value="view_export"${perm === 'view_export' ? ' selected' : ''}>内容可查看和导出</option>
+                <option value="view_only"${perm === 'view_only' ? ' selected' : ''}>内容可查看但不可导出</option>
+                <option value="hidden"${perm === 'hidden' ? ' selected' : ''}>内容不可查看</option>
+              </select>
+            </div>
+          </div>
+          <div class="kb-share-perm-row">
+            <span class="kb-share-perm-title">加入方式</span>
+            <div class="kb-share-select-wrap">
+              <select class="kb-share-select" id="kb-perm-join">
+                <option value="direct"${join === 'direct' ? ' selected' : ''}>直接加入</option>
+                <option value="apply"${join === 'apply' ? ' selected' : ''}>申请加入（管理员批准）</option>
+                <option value="invite"${join === 'invite' ? ' selected' : ''}>仅邀请加入</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="kb-share-pop-actions kb-share-pop-actions--right">
+          <button type="button" class="kb-share-pop-btn" id="kb-perm-cancel">取消</button>
+          <button type="button" class="kb-share-pop-btn is-primary" id="kb-perm-ok">确定</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    _kbPermDlg = overlay;
+    const privateBtn = overlay.querySelector('#kb-perm-private');
+    const setPrivate = (on) => {
+      privateBtn.classList.toggle('is-on', on);
+      privateBtn.setAttribute('aria-checked', on ? 'true' : 'false');
+    };
+    privateBtn.addEventListener('click', () => setPrivate(!privateBtn.classList.contains('is-on')));
+    overlay.querySelector('#kb-perm-cancel').addEventListener('click', _kbPermDlgClose);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) _kbPermDlgClose(); });
+    overlay.querySelector('#kb-perm-ok').addEventListener('click', async () => {
+      const nextPerm = overlay.querySelector('#kb-perm-member').value;
+      const nextJoin = overlay.querySelector('#kb-perm-join').value;
+      const nextPrivate = privateBtn.classList.contains('is-on');
+      const okBtn = overlay.querySelector('#kb-perm-ok');
+      okBtn.disabled = true;
+      try {
+        const res = await window.cogseed.invoke('spaces.update', {
+          spaceId: sp.space_id,
+          shared: !nextPrivate,
+          member_permission: nextPerm,
+          join_mode: nextJoin,
+        });
+        if (res && res.ok === false) throw new Error(res.error || 'update failed');
+        // 更新本地 state
+        const local = _state.spaces.find((s) => s.space_id === sp.space_id);
+        if (local) {
+          local.shared = !nextPrivate;
+          local.member_permission = nextPerm;
+          local.join_mode = nextJoin;
+        }
+        if (typeof uiToast === 'function') uiToast(nextPrivate ? '已设为私密' : '权限设置已更新', { variant: 'success', timeoutMs: 1500 });
+        _kbPermDlgClose();
+        _loadAll();
+        // 同步到 CogSeed 问答后端（权限弹窗设置真实生效；静默失败不打扰）
+        void window.cogseed.invoke('kb.share.cogseed.syncPolicy', { spaceId: sp.space_id })
+          .then((r) => {
+            if (r && r.ok === false && typeof uiToast === 'function') {
+              uiToast('已保存到 CogSeed 分享（权限待同步）：' + (r.error || ''), { variant: 'info', timeoutMs: 3000 });
+            }
+          })
+          .catch(() => { /* 未发布/未配置：无需同步 */ });
+      } catch (err) {
+        _log.warn('update space perm failed', err);
+        if (typeof uiToast === 'function') uiToast('保存失败：' + ((err && err.message) || String(err)), { variant: 'error' });
+        okBtn.disabled = false;
+      }
+    });
+  }
+
+  async function _kbRenameSpace(spaceId) {    const sp = _state.spaces.find((s) => s.space_id === spaceId);
     const cur = (sp && sp.name) || '';
     const next = typeof uiPrompt === 'function' ? await uiPrompt('重命名共享知识库：', cur) : window.prompt('重命名共享知识库：', cur);
     if (!next || !next.trim() || next.trim() === cur) return;

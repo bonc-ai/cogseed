@@ -1,0 +1,52 @@
+[
+  {
+    "id": "exit-pass-0",
+    "result": "PASS",
+    "exit_code": 0
+  },
+  {
+    "id": "exit-warn-10",
+    "result": "PASS_WITH_WARNINGS",
+    "exit_code": 10
+  },
+  {
+    "id": "exit-needs-input-11",
+    "result": "NEEDS_INPUT",
+    "exit_code": 11
+  },
+  {
+    "id": "exit-not-ready-12",
+    "result": "NOT_READY",
+    "exit_code": 12
+  },
+  {
+    "id": "exit-fail-20",
+    "result": "FAIL",
+    "exit_code": 20
+  },
+  {
+    "id": "exit-block-31",
+    "result": "BLOCK",
+    "exit_code": 31
+  },
+  {
+    "id": "exit-mutated-32",
+    "result": "SUBJECT_MUTATED",
+    "exit_code": 32
+  },
+  {
+    "id": "exit-digest-33",
+    "result": "DIGEST_MISMATCH",
+    "exit_code": 33
+  },
+  {
+    "id": "exit-incomplete-34",
+    "result": "REPORT_SET_INCOMPLETE",
+    "exit_code": 34
+  },
+  {
+    "id": "exit-exec-40",
+    "result": "EXECUTION_ERROR",
+    "exit_code": 40
+  }
+]

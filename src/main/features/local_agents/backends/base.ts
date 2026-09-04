@@ -270,11 +270,10 @@ export function killProcessTree(
     try {
       process.kill(-pid, signal);
       return;
-    } catch (err) {
-      // ESRCH: the group is already gone — nothing left to signal.
-      if ((err as NodeJS.ErrnoException).code === 'ESRCH') return;
-      // Any other error (e.g. the child never became a group leader):
-      // fall through to a best-effort direct kill.
+    } catch {
+      // The child may have been spawned without `detached`, so no process
+      // group with pgid=pid exists (ESRCH). Fall through to the direct child;
+      // calling kill on an already-exited child is harmless.
     }
   }
   try { child.kill(signal); } catch { /* already gone */ }

@@ -62,6 +62,7 @@ const _rendererFeatureManifest = Object.freeze({
   ],
   kb: [
     { src: './modules/kb-eco.js' },
+    { src: './vendor/qrcode-generator/qrcode.js' },
     { src: './modules/kb-workbench.js' },
     { src: './modules/kb-notes.js' },
     { src: './modules/kb-discover.js' },

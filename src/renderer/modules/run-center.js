@@ -631,9 +631,11 @@
       if (hasCollaboration) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-detail-tab="collaboration">${icon('users')}<span>${esc(text(userState.actionKey))}</span></button>`;
       if (task?.conversationId) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
     }
-    const allowed = action === 'retry' ? actions.retry
-      : action === 'resume' ? actions.resume
-        : action === 'recover-result' ? actions.recoverResult : false;
+    // Same gate the queue applies, so the two surfaces cannot promise
+    // different things about one card.
+    const allowed = rootWindow.CogSeedRunCenterBoard?.recommendedActionAvailable?.(
+      actions, userState, { conversationId: task?.conversationId, hasCollaboration },
+    ) ?? false;
     if (allowed) {
       const iconName = action === 'resume' ? 'play-triangle' : 'refresh';
       return `<button type="button" class="btn btn-sm btn-primary" data-run-center-action="${esc(action)}" ${busy ? 'disabled' : ''}>${busy === action ? icon('loader', 'ui-icon is-spinning') : icon(iconName)}<span>${esc(text(busy === action ? 'run_center.action_working' : userState.actionKey))}</span></button>`;

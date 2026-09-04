@@ -65,3 +65,7 @@ package.json.new
 # updates-server installer artifacts (large binaries; published via
 # updates-server/publish.cjs which copies them here)
 /updates-server/downloads/
+
+# Internal dev skills must not be tracked in the public repo.
+# Keep a local copy outside the checkout (e.g. ~/Desktop/cogseed-open-source-audit).
+.agents/skills/cogseed-open-source-audit/

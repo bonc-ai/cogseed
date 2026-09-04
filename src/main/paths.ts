@@ -202,6 +202,11 @@ export const cogseedRuntimeRunDir           = (uid: string, runId: string) => pa
 export const cogseedRuntimeRunMetaFile      = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'meta.json');
 export const cogseedRuntimeRunEventsFile    = (uid: string, runId: string) => path.join(cogseedRuntimeRunDir(uid, runId), 'events.jsonl');
 
+// Human approvals are machine-private execution evidence. They are not
+// conversation content and must not sync across devices.
+export const userActionApprovalsDir          = (uid: string) => path.join(userLocalRoot(uid), 'action_approvals');
+export const actionApprovalAuditFile         = (uid: string) => path.join(userActionApprovalsDir(uid), 'audit.jsonl');
+
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).
 export const userContextsDir        = (uid: string) => path.join(userCloudRoot(uid), 'contexts');
@@ -509,6 +514,15 @@ export const packagedGuardrailDir = () => packagedResourceDir('guardrail');
 export const packagedBuiltinMarketplaceDir = () => path.join(packagedBuiltinDir(), 'marketplace');
 export const packagedBuiltinMarketplaceAgentsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'agents');
 export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuiltinMarketplaceDir(), 'skills');
+
+/**
+ * Product-bundled external packages (`resources/builtin-packages/`).
+ * Startup seeds them into the per-user packages tree (see
+ * `features/builtin_packages.ts`); the installer CLI stays the single
+ * writer of the packages registry. Kept outside `builtin/` so the
+ * marketplace content-tree manifest/hash never covers these trees.
+ */
+export const packagedBuiltinPackagesDir = () => packagedResourceDir('builtin-packages');
 
 // Hidden system skills (product protocols, not user skills). Source files ship
 // with the app under `resources/builtin/system/skills/`; startup mirrors them

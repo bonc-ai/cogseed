@@ -117,7 +117,8 @@ describe('packaged-resource-gate', () => {
   it('requires every package extraResources destination to have shared contract ownership', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
     expect(verifyExtraResourcesConfig(pkg.build.extraResources)).toEqual([
-      'embedding-model', 'sherpa-onnx', 'runtime', 'builtin', 'officecli', 'guardrail', '.',
+      'embedding-model', 'sherpa-onnx', 'runtime', 'builtin', 'builtin-packages',
+      'officecli', 'guardrail', '.',
     ]);
   });
 

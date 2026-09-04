@@ -49,10 +49,10 @@
 .ws-btn-ico { width: 15px; height: 15px; }
 
 /* ── 空间中心 ── */
-.ws-center { max-width: 1180px; margin: 0 auto; padding: 30px 34px 64px; }
-.ws-page-top { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin-bottom: 26px; }
-.ws-page-top h1 { font-size: 25px; font-weight: 720; letter-spacing: -.3px; color: #18221c; }
-.ws-page-top p { margin: 6px 0 0; color: var(--ws-muted); font-size: 13px; }
+.ws-center { max-width: 1180px; margin: 0 auto; padding: 24px 34px 64px; }
+/* 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06），
+   全宽通栏（.ws-center-header 是 .ws-view 的直接子级），副标题 tagline 移入正文区。 */
+.ws-center-header .ui-page-header { width: 100%; box-sizing: border-box; }
 
 .ws-section { margin-bottom: 30px; }
 .ws-section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 13px; }
@@ -74,7 +74,7 @@
 .ws-filters button:hover { color: #247d52; }
 .ws-filters button.active { color: #176f45; background: #fff; box-shadow: 0 1px 3px rgba(25,43,33,.07); font-weight: 600; }
 .ws-filters-compact { margin-bottom: 13px; }
-.ws-filters-compact button { padding: 0 9px; font-size: 10px; }
+.ws-filters-compact button { padding: 0 9px; font-size: var(--font-size-1); }
 
 .ws-space-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 15px; }
 .ws-space-card {
@@ -102,13 +102,13 @@
 /* 更多菜单（meta 信息收进菜单，卡片主体保持原型极简） */
 .ws-card-top { position: relative; }
 .ws-more-menu {
-  position: absolute; top: 32px; right: 0; z-index: var(--z-raised); min-width: 172px; padding: 6px;
+  position: absolute; top: 32px; right: 0; z-index: var(--z-popover); min-width: 172px; padding: 6px;
   border: 1px solid var(--ws-line); border-radius: 10px; background: #fff;
   box-shadow: 0 10px 28px rgba(25,43,33,.12);
 }
 .ws-more-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border-radius: 6px; }
 .ws-more-row:hover { background: var(--ws-soft); }
-.ws-more-row span { color: #8a938e; font-size: 10px; white-space: nowrap; }
+.ws-more-row span { color: #8a938e; font-size: var(--font-size-1); white-space: nowrap; }
 .ws-more-row strong { color: #46534b; font-size: 11px; font-weight: 600; max-width: 150px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 /* 更多菜单操作区（删除空间） */
 .ws-more-actions { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--ws-line); }
@@ -123,8 +123,8 @@
 }
 .ws-more-action:hover { background: var(--ws-soft); }
 
-/* 标语 + 中心工具行（搜索 + 排序） */
-.ws-tagline { margin: 6px 0 0; color: var(--ws-muted); font-size: 13px; line-height: 1.7; max-width: 620px; }
+/* 标语（页面说明，已从 header 移入正文区）+ 中心工具行（搜索 + 排序） */
+.ws-tagline { margin: 16px 0 24px; color: var(--ws-muted); font-size: 13px; line-height: 1.7; max-width: 620px; }
 .ws-center-tools { display: flex; align-items: center; gap: 8px; }
 .ws-sort {
   height: 36px; padding: 0 8px; border: 1px solid var(--ws-line-strong); border-radius: 8px;
@@ -133,9 +133,9 @@
 .ws-sort:focus { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
 .ws-desc { margin: 13px 0 0; color: #68756d; font-size: 12px; line-height: 1.65; }
 .ws-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.ws-meta span { padding: 4px 7px; border: 1px solid #e5ece8; border-radius: 6px; color: #647169; background: #f6f9f7; font-size: 10px; }
+.ws-meta span { padding: 4px 7px; border: 1px solid #e5ece8; border-radius: 6px; color: #647169; background: #f6f9f7; font-size: var(--font-size-1); }
 .ws-recent { display: flex; align-items: flex-end; justify-content: space-between; gap: 9px; margin-top: 13px; padding-top: 11px; border-top: 1px solid #edf1ef; }
-.ws-recent small { display: block; margin-bottom: 3px; color: #a0a8a3; font-size: 10px; }
+.ws-recent small { display: block; margin-bottom: 3px; color: #a0a8a3; font-size: var(--font-size-1); }
 .ws-recent strong { display: block; max-width: 180px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #4f5c54; font-size: 11px; }
 .ws-recent button { color: #178451; font-size: 11px; font-weight: 600; }
 .ws-recent button:hover { color: #0f7042; }
@@ -157,7 +157,7 @@
 .ws-template-card h3 { font-size: 13px; font-weight: 680; color: #303a34; }
 .ws-template-card p { margin: 6px 0 0; color: #758079; font-size: 11px; line-height: 1.7; }
 .ws-template-bottom { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: auto; padding-top: 12px; border-top: 1px solid #edf1ef; }
-.ws-template-bottom span { color: #929b96; font-size: 10px; }
+.ws-template-bottom span { color: #929b96; font-size: var(--font-size-1); }
 .ws-template-bottom button { color: #178451; font-size: 11px; font-weight: 600; }
 /* 从模板创建区：场景组 + 角色模板组（旧「场景」入口迁入新面板） */
 .ws-create-group-label { margin: 4px 0 10px; color: #8a938e; font-size: 11px; font-weight: 600; }
@@ -189,7 +189,7 @@
 .ws-space-tabs button { position: relative; min-height: 40px; padding: 0 2px; color: #818b85; font-size: 12px; }
 .ws-space-tabs button.active { color: #176f45; font-weight: 650; }
 .ws-space-tabs button.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--ws-accent); }
-.ws-space-tabs span { display: inline-grid; place-items: center; min-width: 18px; height: 17px; margin-left: 5px; border-radius: 9px; color: #607068; background: #e9efeb; font-size: 10px; }
+.ws-space-tabs span { display: inline-grid; place-items: center; min-width: 18px; height: 17px; margin-left: 5px; border-radius: 9px; color: #607068; background: #e9efeb; font-size: var(--font-size-1); }
 .ws-space-tabs button.active span { color: #176f45; background: #e8f4ed; }
 .ws-space-pane { max-width: 1040px; margin: 0 auto; padding: 22px 28px 48px; }
 
@@ -204,9 +204,9 @@
 .ws-session-icon { display: grid; place-items: center; width: 29px; height: 29px; border-radius: 9px; color: #247e52; background: #eaf6ef; }
 .ws-session-icon .ui-icon { width: 15px; height: 15px; }
 .ws-session-row strong { display: block; margin-bottom: 4px; color: #314038; font-size: 12px; font-weight: 650; }
-.ws-session-row small { display: block; color: #8c958f; font-size: 10px; }
-.ws-session-row em { color: #5f7568; font-size: 10px; font-style: normal; }
-.ws-session-row time { color: #9da59f; font-size: 10px; }
+.ws-session-row small { display: block; color: #8c958f; font-size: var(--font-size-1); }
+.ws-session-row em { color: #5f7568; font-size: var(--font-size-1); font-style: normal; }
+.ws-session-row time { color: #9da59f; font-size: var(--font-size-1); }
 .ws-session-row b { color: #8d9199; display: grid; place-items: center; }
 .ws-session-row b .ui-icon { width: 14px; height: 14px; }
 .ws-row-more-btn { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: #8d9199; cursor: pointer; }
@@ -218,22 +218,22 @@
 .ws-info-note strong { color: #536158; }
 
 .ws-asset-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; padding: 3px; border-radius: 9px; background: #edf3ef; }
-.ws-asset-filters button { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; padding: 0 9px; border-radius: 6px; color: #758179; font-size: 10px; }
+.ws-asset-filters button { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; padding: 0 9px; border-radius: 6px; color: #758179; font-size: var(--font-size-1); }
 .ws-asset-filters button:hover { color: #237a50; }
 .ws-asset-filters button.active { color: #157c4b; background: #fff; box-shadow: 0 1px 5px rgba(35,58,45,.08); }
 .ws-asset-filters button.active strong { font-weight: 650; }
-.ws-asset-filters span { color: #92969f; font-size: 9px; }
+.ws-asset-filters span { color: #92969f; font-size: var(--font-size-1); }
 .ws-asset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
 .ws-asset-card { position: relative; display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 10px; min-height: 110px; padding: 13px; border: 1px solid var(--ws-line); border-radius: 12px; background: #fff; }
 .ws-asset-card .ws-unbind { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 20px; height: 20px; border: none; border-radius: 6px; background: transparent; color: #9aa49d; cursor: pointer; }
 .ws-asset-card .ws-unbind:hover { background: #f3f5f4; color: #d9534f; }
-.ws-asset-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #208b58; background: #e9f7f0; font-size: 10px; font-weight: 700; }
+.ws-asset-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #208b58; background: #e9f7f0; font-size: var(--font-size-1); font-weight: 700; }
 .ws-asset-mark.mark-决策规则与方法 { color: #8c641e; background: #f8f0df; }
 .ws-asset-mark.mark-文档模板及项目事实 { color: #477394; background: #eaf2f7; }
 .ws-asset-mark.mark-可复用的技能 { color: #337656; background: #e6f2eb; }
 .ws-asset-card h3 { margin: 0 0 5px; color: #314038; font-size: 12px; }
-.ws-asset-card p { margin: 0; color: #69766e; font-size: 10px; line-height: 1.55; }
-.ws-asset-card footer { margin-top: 9px; color: #7f8a83; font-size: 9px; }
+.ws-asset-card p { margin: 0; color: #69766e; font-size: var(--font-size-1); line-height: 1.55; }
+.ws-asset-card footer { margin-top: 9px; color: #7f8a83; font-size: var(--font-size-1); }
 
 /* ── 配置抽屉 ── */
 .ws-config-panel {
@@ -250,7 +250,7 @@
 .ws-drawer-close .ui-icon { width: 15px; height: 15px; }
 .ws-config-body { flex: 1; overflow: auto; padding: 15px 17px; }
 .ws-config-body section { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e8e9ec; }
-.ws-config-body label { display: block; margin-bottom: 7px; color: #738078; font-size: 10px; font-weight: 600; }
+.ws-config-body label { display: block; margin-bottom: 7px; color: #738078; font-size: var(--font-size-1); font-weight: 600; }
 .ws-config-body p { margin: 0; color: #56635b; font-size: 11px; line-height: 1.7; }
 /* 设置抽屉可编辑：指令 textarea + 保存行 + 主技能/失效引用行 */
 .ws-config-body textarea[data-ws="config-instructions"] {
@@ -260,22 +260,22 @@
 }
 .ws-config-body textarea[data-ws="config-instructions"]:focus { border-color: #9fc8b1; box-shadow: 0 0 0 2px rgba(33,120,77,.08); }
 .ws-config-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-.ws-config-hint { color: #9aa49d; font-size: 10px; }
+.ws-config-hint { color: #9aa49d; font-size: var(--font-size-1); }
 .ws-config-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ws-config-value { color: #56635b; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-ability-edit { margin-left: auto; }
 .ws-agent-row { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 0 9px; border: 1px solid var(--ws-line); border-radius: 8px; background: #fff; }
-.ws-agent-row > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; color: #fff; background: #1f9d62; font-size: 9px; font-weight: 700; }
+.ws-agent-row > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; color: #fff; background: #1f9d62; font-size: var(--font-size-1); font-weight: 700; }
 .ws-agent-row strong { display: block; font-size: 11px; color: #465249; }
-.ws-agent-row small { display: block; margin-top: 1px; color: #969aa4; font-size: 9px; }
+.ws-agent-row small { display: block; margin-top: 1px; color: #969aa4; font-size: var(--font-size-1); }
 .ws-agent-row .ws-ability-edit { margin-left: auto; }
 /* 可协作 AI 工具 Agent：复刻原型 v010-agent-strip（浅灰容器 + 品牌色 logo 方块 + 克制选中态） */
 .ws-tool-strip { grid-column: 1 / -1; padding: 14px; border: 1px solid #e0e8e3; border-radius: 11px; background: #f8faf9; }
 .ws-tool-strip-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .ws-tool-strip-head strong { color: #34463c; font-size: 12px; }
-.ws-tool-strip-head small { color: #89938d; font-size: 9px; }
+.ws-tool-strip-head small { color: #89938d; font-size: var(--font-size-1); }
 .ws-tool-row { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; }
-.ws-view .ws-tool-tile { display: grid; justify-items: center; gap: 6px; min-width: 66px; padding: 8px 7px; border: 1px solid transparent; border-radius: 9px; color: #536159; background: transparent; font-size: 9px; font-family: inherit; cursor: pointer; }
+.ws-view .ws-tool-tile { display: grid; justify-items: center; gap: 6px; min-width: 66px; padding: 8px 7px; border: 1px solid transparent; border-radius: 9px; color: #536159; background: transparent; font-size: var(--font-size-1); font-family: inherit; cursor: pointer; }
 /* 未选中保持原样；hover 只描边不白底；选中 = 仅浅绿方框描边，背景/文字不动 */
 .ws-view .ws-tool-tile:hover { border-color: #bfdbc9; }
 .ws-view .ws-tool-tile.selected { border-color: #79c49e; }
@@ -290,11 +290,11 @@
 .ws-config-ability-card.task .ws-config-ability-icon { color: #477394; background: #eaf2f7; }
 .ws-config-ability-content { min-width: 0; }
 .ws-config-ability-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.ws-config-ability-title strong { color: #4b5750; font-size: 10px; font-weight: 650; }
-.ws-config-ability-title span { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; color: #527060; background: #edf4f0; font-size: 9px; }
+.ws-config-ability-title strong { color: #4b5750; font-size: var(--font-size-1); font-weight: 650; }
+.ws-config-ability-title span { display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; color: #527060; background: #edf4f0; font-size: var(--font-size-1); }
 .ws-config-ability-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.ws-config-ability-chips span { max-width: 100%; padding: 3px 6px; border: 1px solid #e3e9e5; border-radius: 6px; color: #5b685f; background: #f6f9f7; font-size: 9px; overflow-wrap: anywhere; }
-.ws-config-panel > footer { padding: 11px 17px; border-top: 1px solid var(--ws-line); color: #748078; background: #fff; font-size: 9px; line-height: 1.55; }
+.ws-config-ability-chips span { max-width: 100%; padding: 3px 6px; border: 1px solid #e3e9e5; border-radius: 6px; color: #5b685f; background: #f6f9f7; font-size: var(--font-size-1); overflow-wrap: anywhere; }
+.ws-config-panel > footer { padding: 11px 17px; border-top: 1px solid var(--ws-line); color: #748078; background: #fff; font-size: var(--font-size-1); line-height: 1.55; }
 
 /* ── 任务页 ── */
 .ws-task-page { display: grid; grid-template-columns: minmax(520px,1fr) 326px; min-height: 100%; background: #fff; }
@@ -310,7 +310,7 @@
 .ws-header-actions .ui-icon { width: 15px; height: 15px; }
 
 .ws-conversation { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 0 30px; }
-.ws-date-sep { display: flex; align-items: center; gap: 11px; margin: 0 auto 22px; width: min(760px, calc(100% - 48px)); color: #a2aaa5; font-size: 10px; }
+.ws-date-sep { display: flex; align-items: center; gap: 11px; margin: 0 auto 22px; width: min(760px, calc(100% - 48px)); color: #a2aaa5; font-size: var(--font-size-1); }
 .ws-date-sep::before, .ws-date-sep::after { content: ""; flex: 1; height: 1px; background: #edf1ee; }
 .ws-msg { display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 12px; width: min(760px, calc(100% - 48px)); margin: 0 auto 26px; }
 .ws-avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; font-size: 11px; }
@@ -322,7 +322,7 @@
 .ws-user .ws-body { padding: 13px 15px; border: 1px solid #e7ece9; border-radius: 4px 13px 13px; background: #f5f7f6; }
 .ws-user .ws-body p { margin: 0; }
 
-.ws-used-capabilities { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 4px 7px; border-radius: 7px; color: #66736b; background: #f4f7f5; font-size: 10px; width: fit-content; }
+.ws-used-capabilities { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 4px 7px; border-radius: 7px; color: #66736b; background: #f4f7f5; font-size: var(--font-size-1); width: fit-content; }
 .ws-used-capabilities b { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border: 1px solid #dde6e1; border-radius: 6px; color: #506057; background: #fff; font-weight: 550; }
 .ws-used-capabilities b .ui-icon { width: 12px; height: 12px; }
 
@@ -333,16 +333,16 @@
 .ws-candidate-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: #247e52; background: #eaf6ef; }
 .ws-candidate-icon.cognition { color: #376f54; background: #eaf2ee; }
 .ws-candidate-icon .ui-icon { width: 17px; height: 17px; }
-.ws-candidate-head small { display: block; margin-bottom: 2px; color: #6f7c74; font-size: 10px; }
+.ws-candidate-head small { display: block; margin-bottom: 2px; color: #6f7c74; font-size: var(--font-size-1); }
 .ws-candidate-head h3 { font-size: 12px; font-weight: 680; color: #26342c; }
-.ws-pill { align-self: start; padding: 3px 8px; border-radius: 99px; font-size: 9px; font-weight: 620; }
+.ws-pill { align-self: start; padding: 3px 8px; border-radius: 99px; font-size: var(--font-size-1); font-weight: 620; }
 .ws-pill.pending { color: #94620b; background: #fff4d8; }
 .ws-pill.done { color: #157e4d; background: #e5f7ed; }
-.ws-journey { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 13px 0 7px; padding: 10px; border: 1px solid #edf1ee; border-radius: 9px; background: #f8faf9; font-size: 9px; }
+.ws-journey { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 13px 0 7px; padding: 10px; border: 1px solid #edf1ee; border-radius: 9px; background: #f8faf9; font-size: var(--font-size-1); }
 .ws-journey span { padding: 4px 7px; border: 1px solid #dde5e0; border-radius: 5px; color: #58635d; background: #fff; }
 .ws-journey b { color: #a4a9b2; font-weight: 400; }
 .ws-candidate-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
-.ws-candidate-actions button { min-height: 30px; padding: 0 10px; border: 1px solid #d6dfda; border-radius: 8px; color: #526058; background: #fff; font-size: 10px; }
+.ws-candidate-actions button { min-height: 30px; padding: 0 10px; border: 1px solid #d6dfda; border-radius: 8px; color: #526058; background: #fff; font-size: var(--font-size-1); }
 .ws-candidate-actions button:hover { border-color: #b9d8c7; color: #168550; background: #f4fbf7; }
 .ws-candidate-actions button.solid { border-color: #1fa664; color: #fff; background: #1fa664; font-weight: 600; }
 .ws-candidate-actions button.solid:hover { background: #178a53; }
@@ -363,13 +363,13 @@
 .ws-round:hover { color: #168551; background: #eaf7f0; }
 .ws-round .ui-icon { width: 17px; height: 17px; }
 .ws-composer-spacer { flex: 1; }
-.ws-model-btn { display: inline-flex; align-items: center; gap: 3px; height: 30px; padding: 0 8px; border-radius: 7px; color: #6e7973; font-size: 10px; }
+.ws-model-btn { display: inline-flex; align-items: center; gap: 3px; height: 30px; padding: 0 8px; border-radius: 7px; color: #6e7973; font-size: var(--font-size-1); }
 .ws-model-btn:hover { background: #f3f6f4; }
 .ws-model-btn .ui-icon { width: 13px; height: 13px; }
 .ws-send { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: #1f9d62; box-shadow: 0 5px 12px rgba(31,166,100,.22); }
 .ws-send:hover { background: #178b54; }
 .ws-send .ui-icon { width: 16px; height: 16px; }
-.ws-composer-wrap > p { margin: 6px auto 0; width: fit-content; color: #a4aca7; font-size: 9px; text-align: center; }
+.ws-composer-wrap > p { margin: 6px auto 0; width: fit-content; color: #a4aca7; font-size: var(--font-size-1); text-align: center; }
 
 /* 任务 tab：不再内联开新任务输入条——右上角「新建任务」跳标准会话对话框，
    新任务引用/附件都在标准 composer 里完成（与主对话一致）。 */
@@ -389,7 +389,7 @@
 .ws-ref-tabs { display: flex; gap: 4px; padding: 3px; border: 1px solid #e2e9e5; border-radius: 9px; background: #f0f4f2; }
 .ws-ref-tabs button { min-height: 28px; padding: 0 10px; border-radius: 6px; color: #6e7a73; font-size: 11px; }
 .ws-ref-tabs button.active { color: #176f45; background: #fff; box-shadow: 0 1px 3px rgba(25,43,33,.07); font-weight: 600; }
-.ws-ref-tabs button span { margin-left: 4px; font-size: 9px; opacity: .7; }
+.ws-ref-tabs button span { margin-left: 4px; font-size: var(--font-size-1); opacity: .7; }
 .ws-ref-head input {
   flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--ws-line-strong); border-radius: 8px; outline: none; font-size: 12px;
 }
@@ -406,11 +406,11 @@
 .ws-ref-item.picked { border-color: #79c49e; background: #f3fbf7; }
 .ws-ref-check {
   display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #cbd5cf; border-radius: 5px;
-  color: #fff; background: #fff; font-size: 10px;
+  color: #fff; background: #fff; font-size: var(--font-size-1);
 }
 .ws-ref-item.picked .ws-ref-check { border-color: #20a965; background: #20a965; }
 .ws-ref-item strong { display: block; color: #3d4942; font-size: 12px; }
-.ws-ref-item small { display: block; margin-top: 2px; color: #8a938e; font-size: 10px; }
+.ws-ref-item small { display: block; margin-top: 2px; color: #8a938e; font-size: var(--font-size-1); }
 .ws-ref-empty { padding: 32px 0; text-align: center; color: #9aa39e; font-size: 12px; }
 .ws-ref-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--ws-line); }
 .ws-ref-foot > span { color: #8a938e; font-size: 11px; }
@@ -418,7 +418,7 @@
 .ws-context-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--ws-line); background: #f7f9f8; }
 .ws-context-panel > header { display: flex; align-items: center; justify-content: space-between; height: 58px; padding: 0 17px; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-context-panel > header strong { display: block; color: #2a332e; font-size: 12px; }
-.ws-context-panel > header small { display: block; margin-top: 1px; color: #9aa29d; font-size: 9px; }
+.ws-context-panel > header small { display: block; margin-top: 1px; color: #9aa29d; font-size: var(--font-size-1); }
 .ws-context-panel > header button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: #7b857f; }
 .ws-context-panel > header button:hover { background: #f1f5f2; }
 .ws-context-panel > header .ui-icon { width: 15px; height: 15px; }
@@ -426,40 +426,40 @@
 .ws-context-panel > nav button { position: relative; min-width: 70px; padding: 0 11px; color: #818b85; font-size: 11px; }
 .ws-context-panel > nav button.active { color: #147d4c; font-weight: 650; }
 .ws-context-panel > nav button.active::after { content: ""; position: absolute; right: 11px; bottom: -1px; left: 11px; height: 2px; background: #20a964; }
-.ws-context-panel > nav span { display: inline-grid; place-items: center; min-width: 16px; height: 16px; margin-left: 3px; border-radius: 8px; color: #6e7772; background: #eef2ef; font-size: 8px; }
+.ws-context-panel > nav span { display: inline-grid; place-items: center; min-width: 16px; height: 16px; margin-left: 3px; border-radius: 8px; color: #6e7772; background: #eef2ef; font-size: var(--font-size-1); }
 .ws-context-content { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
 .ws-context-card { padding: 13px; border: 1px solid #e1e7e3; border-radius: 12px; background: #fff; margin-bottom: 12px; }
 .ws-context-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 11px; }
-.ws-context-title strong { display: block; color: #344038; font-size: 10px; }
-.ws-context-title small { display: block; margin-top: 2px; color: #9aa29d; font-size: 8px; }
-.ws-context-title button { color: #168b53; font-size: 9px; }
-.ws-context-help { margin: 0 0 11px; color: #8c958f; font-size: 9px; line-height: 1.5; }
+.ws-context-title strong { display: block; color: #344038; font-size: var(--font-size-1); }
+.ws-context-title small { display: block; margin-top: 2px; color: #9aa29d; font-size: var(--font-size-1); }
+.ws-context-title button { color: #168b53; font-size: var(--font-size-1); }
+.ws-context-help { margin: 0 0 11px; color: #8c958f; font-size: var(--font-size-1); line-height: 1.5; }
 .ws-artifact-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; align-items: center; gap: 8px; width: 100%; padding: 9px; border: 1px solid #e3e9e5; border-radius: 9px; background: #fbfdfc; }
 .ws-artifact-row > span { display: grid; place-items: center; width: 30px; height: 32px; border-radius: 6px; color: #218e59; background: #eaf8f1; }
 .ws-artifact-row > span .ui-icon { width: 15px; height: 15px; }
-.ws-artifact-row strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #415047; font-size: 9px; }
-.ws-artifact-row small { display: block; margin-top: 2px; color: #9aa29d; font-size: 8px; }
+.ws-artifact-row strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #415047; font-size: var(--font-size-1); }
+.ws-artifact-row small { display: block; margin-top: 2px; color: #9aa29d; font-size: var(--font-size-1); }
 .ws-artifact-row b { color: #a1a6af; display: grid; place-items: center; }
 .ws-artifact-row b .ui-icon { width: 13px; height: 13px; }
 .ws-panel-asset-list { display: flex; flex-direction: column; gap: 6px; }
 .ws-panel-asset-list button { position: relative; padding: 9px 10px; border: 1px solid #e7ebe8; border-radius: 9px; background: #fbfdfc; text-align: left; }
 .ws-panel-asset-list button:hover { border-color: #bddacb; background: #f7fbf9; }
-.ws-panel-asset-list span { display: inline-block; margin-bottom: 5px; padding: 2px 5px; border-radius: 4px; color: #357a56; background: #e9f5ee; font-size: 7px; }
-.ws-panel-asset-list strong { display: block; padding-right: 50px; color: #4b5850; font-size: 9px; }
-.ws-panel-asset-list small { position: absolute; right: 9px; bottom: 9px; color: #9ca49f; font-size: 7px; }
+.ws-panel-asset-list span { display: inline-block; margin-bottom: 5px; padding: 2px 5px; border-radius: 4px; color: #357a56; background: #e9f5ee; font-size: var(--font-size-1); }
+.ws-panel-asset-list strong { display: block; padding-right: 50px; color: #4b5850; font-size: var(--font-size-1); }
+.ws-panel-asset-list small { position: absolute; right: 9px; bottom: 9px; color: #9ca49f; font-size: var(--font-size-1); }
 
 /* ── 弹窗 ── */
-/* 浮层整体声明 no-drag：macOS 无边框窗口下，工作空间顶部条（.ws-page-top 等）
+/* 浮层整体声明 no-drag：macOS 无边框窗口下，工作空间顶部条（.ui-page-header）
    是窗口拖拽区（-webkit-app-region: drag），拖拽区在 OS 层优先命中，会吞掉
    覆盖在它上面的弹窗按钮的鼠标事件（典型：新建空间弹窗右上角叉号，弹窗顶满
    高时叉号落进顶部拖拽带，点了没反应、连 mousedown 都进不了页面）。
    no-drag 让整个弹窗子树退出拖拽命中，保证弹窗内所有控件可点。 */
-.ws-scrim { position: fixed; inset: 0; z-index: var(--z-overlay); display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
+.ws-scrim { position: fixed; inset: 0; z-index: var(--z-modal); display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(25,36,30,.42); -webkit-app-region: no-drag; }
 .ws-dialog { display: flex; flex-direction: column; width: min(720px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-dialog-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-dialog-head > div { display: flex; align-items: center; gap: 10px; }
 .ws-dialog-head h2 { font-size: 17px; font-weight: 700; color: #1f2b24; }
-.ws-dialog-head span { padding: 4px 7px; border-radius: 6px; color: #177f4d; background: #e8f6ee; font-size: 10px; font-weight: 600; }
+.ws-dialog-head span { padding: 4px 7px; border-radius: 6px; color: #177f4d; background: #e8f6ee; font-size: var(--font-size-1); font-weight: 600; }
 .ws-dialog-head > button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: #839088; font-size: 18px; }
 .ws-dialog-head > button:hover { color: #287a53; background: #edf5f0; }
 .ws-dialog-head > button .ui-icon { width: 15px; height: 15px; }
@@ -468,14 +468,14 @@
 .ws-form-grid label { display: block; }
 .ws-form-grid label.full { grid-column: 1 / -1; }
 .ws-form-grid label > span { display: flex; justify-content: space-between; margin-bottom: 7px; font-size: 11px; font-weight: 650; color: #3d4a42; }
-.ws-form-grid em { color: #9aa39e; font-size: 9px; font-style: normal; font-weight: 400; }
+.ws-form-grid em { color: #9aa39e; font-size: var(--font-size-1); font-style: normal; font-weight: 400; }
 .ws-form-grid input, .ws-form-grid select, .ws-form-grid textarea { width: 100%; border: 1px solid var(--ws-line-strong); border-radius: 8px; outline: none; background: #fff; }
 .ws-form-grid input, .ws-form-grid select { height: 40px; padding: 0 10px; }
 .ws-form-grid textarea { height: 76px; padding: 9px 10px; resize: none; line-height: 1.6; font-size: 12px; }
 .ws-form-grid input:focus, .ws-form-grid select:focus, .ws-form-grid textarea:focus { border-color: #6fb18c; box-shadow: 0 0 0 3px rgba(31,157,98,.12); }
 .ws-cap-heading { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--ws-line); border-radius: 10px; background: #f8faf9; }
 .ws-cap-heading h3 { font-size: 12px; color: #314038; }
-.ws-cap-heading p { margin: 4px 0 0; color: #718078; font-size: 10px; }
+.ws-cap-heading p { margin: 4px 0 0; color: #718078; font-size: var(--font-size-1); }
 .ws-cap-list { margin-top: 12px; overflow: hidden; border: 1px solid var(--ws-line); border-radius: 11px; }
 .ws-cap-row { display: flex; align-items: center; gap: 11px; min-height: 62px; padding: 10px 12px; border-bottom: 1px solid var(--ws-line); background: #fff; }
 .ws-cap-row:last-child { border-bottom: 0; }
@@ -486,18 +486,18 @@
 .ws-cap-main { flex: 1; min-width: 0; }
 .ws-cap-top { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
 .ws-cap-top strong { font-size: 11px; color: #455149; }
-.ws-cap-top span { padding: 2px 6px; border-radius: 99px; color: #5d7568; background: #edf4f0; font-size: 9px; }
+.ws-cap-top span { padding: 2px 6px; border-radius: 99px; color: #5d7568; background: #edf4f0; font-size: var(--font-size-1); }
 .ws-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.ws-chips i { padding: 3px 6px; border: 1px solid #e1e8e4; border-radius: 5px; color: #5f6c64; background: #f5f8f6; font-size: 9px; font-style: normal; }
+.ws-chips i { padding: 3px 6px; border: 1px solid #e1e8e4; border-radius: 5px; color: #5f6c64; background: #f5f8f6; font-size: var(--font-size-1); font-style: normal; }
 .ws-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 0 22px; border-top: 1px solid var(--ws-line); background: #fbfdfc; }
-.ws-dialog-foot small { max-width: 430px; color: #78857d; font-size: 10px; line-height: 1.5; }
+.ws-dialog-foot small { max-width: 430px; color: #78857d; font-size: var(--font-size-1); line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: 8px; }
 
-.ws-ability-scrim { z-index: var(--z-overlay); background: rgba(25,36,30,.46); }
+.ws-ability-scrim { z-index: var(--z-modal); background: rgba(25,36,30,.46); }
 .ws-ability-dialog { display: flex; flex-direction: column; width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
 .ws-ability-head { display: flex; align-items: center; justify-content: space-between; min-height: 60px; padding: 0 22px; border-bottom: 1px solid var(--ws-line); }
 .ws-ability-head h2 { font-size: 16px; font-weight: 700; color: #1f2b24; }
-.ws-ability-head p { margin: 4px 0 0; color: #89938d; font-size: 10px; }
+.ws-ability-head p { margin: 4px 0 0; color: #89938d; font-size: var(--font-size-1); }
 .ws-ability-head > button { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: #839088; font-size: 18px; }
 .ws-ability-head > button:hover { color: #287a53; background: #edf5f0; }
 .ws-ability-main { display: grid; grid-template-columns: 176px minmax(0,1fr); flex: 1; min-height: 0; }
@@ -507,31 +507,31 @@
 .ws-ability-main > nav { padding: 13px 10px; border-right: 1px solid var(--ws-line); background: #f6f9f7; }
 .ws-ability-main > nav button { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 38px; padding: 0 10px; border-radius: 8px; color: #657169; font-size: 11px; }
 .ws-ability-main > nav button.active { color: #157c4b; background: #e5f4eb; font-weight: 650; }
-.ws-ability-main > nav span { color: #7d8982; font-size: 9px; }
+.ws-ability-main > nav span { color: #7d8982; font-size: var(--font-size-1); }
 .ws-ability-pane { min-width: 0; padding: 18px 20px; overflow-y: auto; }
 .ws-option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .ws-ability-limit-hint { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px; color: #7a5b22; background: #fbf3e2; font-size: 11px; line-height: 1.6; }
 .ws-option-card { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 9px; min-height: 80px; padding: 11px; border: 1px solid var(--ws-line); border-radius: 10px; background: #fff; text-align: left; }
 .ws-option-card:hover { border-color: #afd2bf; background: #fbfdfc; }
 .ws-option-card.selected { border-color: #79c49e; background: #f3fbf7; }
-.ws-check { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #cbd5cf; border-radius: 5px; color: #fff; background: #fff; font-size: 10px; }
+.ws-check { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #cbd5cf; border-radius: 5px; color: #fff; background: #fff; font-size: var(--font-size-1); }
 .ws-option-card.selected .ws-check { border-color: #20a965; background: #20a965; }
 .ws-option-card strong { margin-right: 7px; color: #3d4942; font-size: 11px; }
-.ws-option-card em { padding: 2px 5px; border-radius: 5px; color: #177e4d; background: #e6f5ec; font-size: 9px; font-style: normal; }
-.ws-option-card p { margin: 5px 0 0; color: #808a84; font-size: 10px; line-height: 1.55; }
+.ws-option-card em { padding: 2px 5px; border-radius: 5px; color: #177e4d; background: #e6f5ec; font-size: var(--font-size-1); font-style: normal; }
+.ws-option-card p { margin: 5px 0 0; color: #808a84; font-size: var(--font-size-1); line-height: 1.55; }
 /* ── 角色 tab：主/副区分（新建空间能力弹窗）── */
 .ws-role-group-label { margin: 14px 0 8px; color: #657169; font-size: 11px; font-weight: 650; }
 .ws-role-group-label:first-child { margin-top: 0; }
 .ws-option-card.is-primary { border-color: #20a965; background: #f0faf5; }
 .ws-option-card.is-secondary { border-color: #79c49e; background: #f7fbf9; }
-.ws-option-card .ws-role-badge { padding: 2px 6px; border-radius: 99px; color: #177e4d; background: #e6f5ec; font-size: 9px; font-style: normal; font-weight: 650; }
+.ws-option-card .ws-role-badge { padding: 2px 6px; border-radius: 99px; color: #177e4d; background: #e6f5ec; font-size: var(--font-size-1); font-style: normal; font-weight: 650; }
 .ws-option-card .ws-role-badge.is-primary { color: #fff; background: #20a965; }
 .ws-option-card.is-primary strong { color: #146b41; }
-.ws-role-primary-btn { position: absolute; right: 10px; top: 10px; padding: 3px 8px; border: 1px solid #c4e3d2; border-radius: 6px; color: #177e4d; background: #fff; font-size: 9px; cursor: pointer; }
+.ws-role-primary-btn { position: absolute; right: 10px; top: 10px; padding: 3px 8px; border: 1px solid #c4e3d2; border-radius: 6px; color: #177e4d; background: #fff; font-size: var(--font-size-1); cursor: pointer; }
 .ws-role-primary-btn:hover { border-color: #20a965; background: #eef9f3; }
 .ws-option-card.is-secondary { position: relative; }
 .ws-option-card.is-secondary > div { padding-right: 58px; }
-.ws-chip-tag { margin-right: 4px; padding: 1px 4px; border-radius: 4px; color: #fff; background: #20a965; font-size: 8px; font-style: normal; font-weight: 650; }
+.ws-chip-tag { margin-right: 4px; padding: 1px 4px; border-radius: 4px; color: #fff; background: #20a965; font-size: var(--font-size-1); font-style: normal; font-weight: 650; }
 .ws-config-ability-chips span .ws-chip-tag, .ws-chips i .ws-chip-tag { display: inline-block; }
 .ws-ability-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 60px; padding: 0 22px; border-top: 1px solid var(--ws-line); background: #fbfdfc; }
 
@@ -552,7 +552,7 @@
 .ws-empty-current > span { display: grid; place-items: center; width: 42px; height: 42px; margin: 0 auto; border-radius: 12px; color: #7ba28e; background: #edf6f1; }
 .ws-empty-current > span .ui-icon { width: 22px; height: 22px; }
 .ws-empty-current strong { display: block; margin: 10px 0 4px; color: #68746d; font-size: 11px; }
-.ws-empty-current p { max-width: 190px; margin: 0 auto; color: #9aa39e; font-size: 9px; line-height: 1.65; }
+.ws-empty-current p { max-width: 190px; margin: 0 auto; color: #9aa39e; font-size: var(--font-size-1); line-height: 1.65; }
 
 /* ── toast ── */
 .ws-toast {

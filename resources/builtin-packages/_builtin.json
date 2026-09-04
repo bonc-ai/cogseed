@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "name": "eduseed-course-client",
+      "source_version": "0.4.1",
+      "rel_dir": "eduseed-course-client"
+    }
+  ]
+}

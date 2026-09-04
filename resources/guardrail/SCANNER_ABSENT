@@ -1,8 +1,0 @@
-This build intentionally ships without the bundled deep scanner.
-
-Its presence makes the app report `scanner_absent` rather than `unknown`:
-skill installs are allowed and local red lines are still enforced, but deep
-scanning is unavailable until a scanner is installed separately.
-
-Do not delete this file to "fix" a missing scanner — without it the app treats
-the absence as a malfunction and refuses every skill install.

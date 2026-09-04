@@ -13,7 +13,7 @@ const conversationMetrics = require('../../src/renderer/modules/conversation-met
 };
 
 const STATS_KEYS = [
-  'counts', 'llmK', 'speedK', 'speedV', 'cacheK', 'ctxK', 'tokK', 'tokV', 'cost', 'costTitle',
+  'counts', 'llmK', 'speedK', 'cacheK', 'ctxK', 'tokK', 'tokV', 'cost', 'costTitle',
 ] as const;
 
 function extractFunction(name: string): string {
@@ -177,7 +177,9 @@ describe('conversation session stats line', () => {
     const texts = h.box.children.map((c) => String(c.textContent));
     expect(texts.some((s) => s.startsWith('chat.stats.counts|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.llmK|'))).toBe(true);
-    expect(texts.some((s) => s.includes('chat.stats.speedK|') && s.includes('chat.stats.speedV|'))).toBe(true);
+    // 速率下线后 speed 段只显示首 token 平均值，不再拼 tok/s。
+    expect(texts.some((s) => s.includes('chat.stats.speedK|'))).toBe(true);
+    expect(texts.some((s) => s.includes('tok/s'))).toBe(false);
     expect(texts.some((s) => s.includes('chat.stats.cacheK|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.ctxK|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokV|'))).toBe(true);

@@ -6,6 +6,7 @@ import { cogseedBrowserAdapter } from './browser-adapter';
 import { createCogSeedCoordinator, type CogSeedCoordinator } from './coordinator';
 import { cogseedControlService } from './cogseed-control-service';
 import { resolveRuntimeCapabilities } from './messaging-capability-policy';
+import { recordActionApprovalExecution, requestActionApproval } from '../action_approval';
 
 interface HostAdapter { run(name: any, input: Record<string, unknown>, scope: CogSeedHostToolScope, opts?: { signal?: AbortSignal | null }): Promise<CogSeedHostToolResult> }
 export interface CogSeedHostToolRouterDeps { office?: HostAdapter; browser?: HostAdapter; coordinator?: CogSeedCoordinator }
@@ -37,6 +38,47 @@ export function createCogSeedHostToolRouter(deps: CogSeedHostToolRouterDeps = {}
         readOnlyRoots: request.read_only_roots ?? [], writableRoots: request.writable_roots ?? [],
         ...(request.working_dir ? { workingDir: request.working_dir } : {}),
       };
+      // Internal Worker-only approval bridge. The model never sees these as
+      // Runtime tools; the host receives the original request/session from the
+      // JSONL envelope and does not trust any user/session identity in input.
+      if (call.name === 'action_approval_request') {
+        const input = call.input || {};
+        const text = (value: unknown) => typeof value === 'string' ? value : '';
+        const result = await requestActionApproval({
+          userId: request.user_id,
+          runtimeSessionId: request.runtime_session_id,
+          runtimeRequestId: request.request_id,
+          actor: text(input.actor),
+          action: input.action as any,
+          target: text(input.target),
+          scope: text(input.scope),
+          auditTarget: text(input.audit_target),
+          auditScope: text(input.audit_scope),
+          risk: input.risk as any,
+          reasons: Array.isArray(input.reasons) ? input.reasons.filter((item): item is string => typeof item === 'string') : [],
+          fingerprint: text(input.fingerprint),
+          signal: context.signal,
+        });
+        if ('requestId' in result) return { content: JSON.stringify({ approved: true, request_id: result.requestId }) };
+        return { content: JSON.stringify({ approved: false, code: result.code }), isError: true };
+      }
+      if (call.name === 'action_approval_execution') {
+        const input = call.input || {};
+        const requestId = typeof input.approval_request_id === 'string' ? input.approval_request_id : '';
+        const phase = input.phase === 'started' || input.phase === 'succeeded' || input.phase === 'failed' ? input.phase : null;
+        if (!requestId || !phase) return { content: '[E_ACTION_APPROVAL_INVALID] invalid approval execution event', isError: true };
+        const result = await recordActionApprovalExecution({
+          userId: request.user_id,
+          runtimeSessionId: request.runtime_session_id,
+          runtimeRequestId: request.request_id,
+          requestId,
+          phase,
+          ...(typeof input.result_code === 'string' ? { resultCode: input.result_code } : {}),
+        });
+        return result.handled
+          ? { content: JSON.stringify({ ok: true }) }
+          : { content: '[E_ACTION_APPROVAL_NOT_ACTIVE] approval is not active for this Runtime action', isError: true };
+      }
       if (call.name.startsWith('office_')) return cap(await office.run(call.name as any, call.input, scope, { signal: context.signal }));
       if (call.name.startsWith('browser_')) return cap(await browser.run(call.name as any, call.input, scope, { signal: context.signal }));
       // Proactive messaging: the capability must be re-derived from the

@@ -1,0 +1,83 @@
+{
+  "manifest_version": "1.0",
+  "kind": "eduseed-course-plugin",
+  "course_id": "aix-course-elite20",
+  "name": {
+    "zh": "EduSeed 课程客户端",
+    "en": "EduSeed Course Client"
+  },
+  "description": {
+    "zh": "EduSeed 课程学习入口。学生端：查看挑战、预检交付物、提交项目、查看评分与教师反馈、课后复盘；教师端：创建挑战、发布作业、跟踪班级进度、完成终审。全部数据同步 EduSeed 平台，评分经 AI 初评、教师终审。",
+    "en": "The EduSeed course portal. Students: browse challenges, precheck deliverables, submit projects, view scores and teacher feedback, and reflect after each challenge. Teachers: create challenges, publish assignments, track class progress, and finalize reviews. All data syncs with the EduSeed platform, with AI first-pass grading and teacher final review."
+  },
+  "version": "0.4.1",
+  "compatible_cogseed": ">=1.0.0",
+  "audience_roles": [
+    "student",
+    "teacher"
+  ],
+  "skill_roots": [
+    "skills"
+  ],
+  "runtime_entrypoint": "skills/*/scripts/runtime.js",
+  "requires": {
+    "platform": {
+      "endpoint_env": "EDUSEED_SERVER_URL",
+      "min_version": "三端分离 v2.0 (a8d694c)"
+    },
+    "models": [
+      "deepseek-chat"
+    ],
+    "external": [
+      "feishu-bitable",
+      "github"
+    ]
+  },
+  "permissions": {
+    "network": [
+      "<EDUSEED_SERVER_URL>",
+      "open.feishu.cn",
+      "api.github.com"
+    ],
+    "files": {
+      "read": [
+        "<学生项目目录，由用户指定>"
+      ],
+      "write": []
+    }
+  },
+  "license": {
+    "model": "per-class-paid",
+    "unit": "student-seat",
+    "terms": "按班级学生席位数授权；安装不授权，激活才计数；换班/新增班级需新增授权。"
+  },
+  "lifecycle": {
+    "status": "draft",
+    "registry": "eduseed-course-registry",
+    "stages": "Draft -> Tested -> Approved for Pilot -> Published -> Deprecated -> Archived"
+  },
+  "support": {
+    "owner": "EduSeed 平台团队",
+    "known_issues": "见 README.md 第 8 节",
+    "feedback_channel": "GitHub Issues"
+  },
+  "ui": {
+    "entry": "ui/confirm.html",
+    "commands": [
+      "license-check",
+      "health",
+      "plugin-version",
+      "list-challenges",
+      "get-challenge",
+      "get-dashboard",
+      "list-my-submissions",
+      "get-task",
+      "get-evaluation",
+      "submit-project",
+      "check-deliverables",
+      "publish-challenge",
+      "submit-review"
+    ]
+  },
+  "owner": "EduSeed 平台团队"
+}

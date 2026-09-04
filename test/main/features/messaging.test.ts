@@ -868,12 +868,14 @@ describe('messaging manager adapter flow', () => {
         attempts: 1,
       });
 
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2), { timeout: 3000 });
-      expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
-        status: 'sent',
-        attempts: 2,
-        externalDeliveryId: 'remote-reply-1',
-      });
+      await vi.waitFor(async () => {
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+          status: 'sent',
+          attempts: 2,
+          externalDeliveryId: 'remote-reply-1',
+        });
+      }, { timeout: 3000 });
 
       busListener?.(outboundEvent);
       await new Promise((resolve) => setTimeout(resolve, 10));

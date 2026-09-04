@@ -137,7 +137,8 @@ describe('conversation message metrics line', () => {
     });
     expect(segTexts.some((s) => s.startsWith('mseg:') && s.includes('chat.metrics.durationK|'))).toBe(true);
     expect(segTexts.some((s) => s.includes('chat.metrics.ttftK|'))).toBe(true);
-    expect(segTexts.some((s) => s.includes('chat.metrics.rate|'))).toBe(true);
+    // 速率段 2026-09-03 下线：tok/s 不再渲染（口径反复修正未达标）。
+    expect(segTexts.some((s) => s.includes('tok/s'))).toBe(false);
     expect(segTexts.some((s) => s.includes('chat.metrics.tokensK|') && s.includes('chat.metrics.tokensV|'))).toBe(true);
     // Hover tooltip carries the cache breakdown lines.
     expect(meta.title).toContain('缓存读 8K tok');
@@ -146,7 +147,7 @@ describe('conversation message metrics line', () => {
     mount(ph, FULL_METRICS);
     expect(ph.children.length).toBe(1);
     expect(row.children.length).toBe(1);
-    expect((meta.children as Array<Record<string, unknown>>).length).toBe(4);
+    expect((meta.children as Array<Record<string, unknown>>).length).toBe(3);
   });
 
   it('produces no msg-meta node for messages without metrics', () => {
@@ -167,7 +168,6 @@ describe('conversation message metrics line', () => {
       )) as Record<string, string>;
       expect(raw['chat.metrics.durationK'], `${locale}.durationK`).toBeTruthy();
       expect(raw['chat.metrics.ttftK'], `${locale}.ttftK`).toBeTruthy();
-      expect(raw['chat.metrics.rate'], `${locale}.rate`).toBeTruthy();
       expect(raw['chat.metrics.tokensK'], `${locale}.tokensK`).toBeTruthy();
       expect(raw['chat.metrics.tokensV'], `${locale}.tokensV`).toBeTruthy();
     }
@@ -176,8 +176,8 @@ describe('conversation message metrics line', () => {
   it('mounts both code paths: streaming finalize and history append', () => {
     // Contract: the finalize placeholder path and the appendChatMessage history
     // path both sync `._msgMetrics` and call `_mountMsgMeta`.
-    const finalizeCalls = source.match(/ph\._msgMetrics = gm\.metrics \|\| null;\s*\n\s*_mountMsgMeta\(ph, gm\.metrics\);/);
-    const historyCalls = source.match(/msgDiv\._msgMetrics = message\.metrics \|\| null;\s*\n\s*_mountMsgMeta\(msgDiv, message\.metrics\);/);
+    const finalizeCalls = source.match(/ph\._msgMetrics = gm\.metrics \|\| null;\s*\n\s*(?:ph\._msgExecMeta = [^\n]*\n\s*)?_mountMsgMeta\(ph, gm\.metrics\);/);
+    const historyCalls = source.match(/msgDiv\._msgMetrics = message\.metrics \|\| null;\s*\n\s*(?:msgDiv\._msgExecMeta = [^\n]*\n\s*)?_mountMsgMeta\(msgDiv, message\.metrics\);/);
     expect(finalizeCalls).not.toBeNull();
     expect(historyCalls).not.toBeNull();
     // History gm → legacy conversion must carry the optional metrics field.

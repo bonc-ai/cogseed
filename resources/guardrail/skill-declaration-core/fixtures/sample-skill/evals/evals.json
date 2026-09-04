@@ -1,0 +1,9 @@
+{
+  "evals": [
+    {
+      "id": "format-basic",
+      "prompt": "Format hello",
+      "expect": "hello"
+    }
+  ]
+}

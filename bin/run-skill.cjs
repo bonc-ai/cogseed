@@ -119,7 +119,7 @@ function workspaceRoot() {
 // A package with a plugin-provided UI stores its runtime credentials at
 // `<uid>/local/packages/.secrets/<pkg>.json` (0600, machine-private; written
 // by the plugin config flow in features/plugin_ui.ts). When the invoked skill
-// lives inside such a package, its EDUSEED_* / NSEAP_* platform keys are
+// lives inside such a package, its EDUSEED_* platform keys are
 // merged into the environment right before the skill script runs — so
 // conversation-driven plugin calls (the agent as "remote control") work
 // without the user exporting keys by hand.
@@ -156,6 +156,12 @@ function injectPackageRuntimeSecrets(scriptPath) {
         secrets = JSON.parse(fs.readFileSync(path.join(packagesRoot, '.secrets', `${pkg.name}.json`), 'utf8'));
       } catch { return; }
       if (!secrets || typeof secrets !== 'object') return;
+      // Bundled / plain-local installs carry no repo_url and cannot git-update:
+      // silent auto-update defaults OFF for them (updates ride the app release).
+      // An explicit caller env always wins.
+      if (!pkg.repo_url && !('EDUSEED_PLUGIN_AUTOUPDATE' in process.env)) {
+        process.env.EDUSEED_PLUGIN_AUTOUPDATE = '0';
+      }
       applyPackageSecrets(secrets);
       return;
     }
@@ -167,24 +173,20 @@ function applyPackageSecrets(secrets) {
     ? secrets.server_url.trim() : '';
   const apiKey = typeof secrets.api_key === 'string' && secrets.api_key.trim()
     ? secrets.api_key.trim() : '';
-  if (apiKey && !process.env.EDUSEED_API_KEY && !process.env.NSEAP_API_KEY) {
+  if (apiKey && !process.env.EDUSEED_API_KEY) {
     process.env.EDUSEED_API_KEY = apiKey;
-    process.env.NSEAP_API_KEY = apiKey;
   }
   if (serverUrl) {
     if (!process.env.EDUSEED_SERVER_URL) process.env.EDUSEED_SERVER_URL = serverUrl;
-    if (!process.env.NSEAP_SERVER_URL) process.env.NSEAP_SERVER_URL = serverUrl;
   }
   const studentId = typeof secrets.student_id === 'string' && secrets.student_id.trim()
     ? secrets.student_id.trim() : '';
   if (studentId) {
     if (!process.env.EDUSEED_STUDENT_ID) process.env.EDUSEED_STUDENT_ID = studentId;
-    if (!process.env.NSEAP_STUDENT_ID) process.env.NSEAP_STUDENT_ID = studentId;
   }
   const role = secrets.role === 'teacher' ? 'teacher' : (secrets.role === 'student' ? 'student' : '');
   if (role) {
     if (!process.env.EDUSEED_ROLE) process.env.EDUSEED_ROLE = role;
-    if (!process.env.NSEAP_ROLE) process.env.NSEAP_ROLE = role;
   }
   if (typeof secrets.cohort === 'string' && secrets.cohort.trim() && !process.env.EDUSEED_COHORT) {
     process.env.EDUSEED_COHORT = secrets.cohort.trim();

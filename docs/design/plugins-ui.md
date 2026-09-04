@@ -40,7 +40,7 @@
 - 技能执行唯一通道仍是 `bin/run-skill.cjs`（AGENTS.md 不变量）。
 - `run-skill.cjs` 在 `locateSkillScript` 之后调用 `injectPackageRuntimeSecrets`：
   按 `_registry.json` 把技能目录反查到所属包，存在 `.secrets/<pkg>.json` 时
-  注入 `EDUSEED_*` / `NSEAP_*`（仅补齐调用方未显式设置的变量）。
+  注入 `EDUSEED_*`（仅补齐调用方未显式设置的变量）。
   - 覆盖两条执行路径：核心智能体的 run-skill 直通工具、bash 内的 run-skill 调用。
   - 密钥不会出现在 bash `env` 输出或任何工具结果中。
 
