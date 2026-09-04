@@ -220,7 +220,7 @@ jobs:
 
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # dmg + zip 都挂到 Release：zip 供 hub 自动更新 feed 使用
           files: |
