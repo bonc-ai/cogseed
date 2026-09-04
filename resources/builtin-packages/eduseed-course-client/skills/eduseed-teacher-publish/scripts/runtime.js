@@ -16869,7 +16869,7 @@ function defaultRunUpdater(pkgName, pkgRoot) {
 }
 async function maybeSilentUpdate(opts) {
   try {
-    if (process.env.EDUSEED_PLUGIN_AUTOUPDATE === "0") return;
+    if (process.env.EDUSEED_PLUGIN_AUTOUPDATE !== "1") return;
     const statePath = opts.statePath ?? defaultStatePath();
     const now = (opts.now ?? Date.now)();
     const state = readUpdateState(statePath);
