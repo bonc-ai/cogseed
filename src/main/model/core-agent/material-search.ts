@@ -7,7 +7,7 @@
  * using reciprocal rank fusion (RRF).
  *
  * Why hybrid: vector search alone misses exact terms / ids / filenames that
- * the embedding blurs (e.g. "知识库问答", "IPC 0012"), and keyword-only
+ * the embedding blurs (e.g. "知识库问答", "order-42"), and keyword-only
  * misses synonyms. The fusion keeps both signals and returns a unified hit
  * shape — `{source, scope, path, chunkIdx, snippet, score}` — that later
  * phases (material-boundary model, answer verification) consume as the

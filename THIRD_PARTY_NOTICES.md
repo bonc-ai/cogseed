@@ -56,7 +56,8 @@ sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
     Evidence: the archived model README declares `license: apache-2.0`; the
     upstream sherpa-onnx repository publishes the Apache-2.0 license.
     The model is downloaded during installation and packaged as an offline
-    resource. Full Apache-2.0 text: third_party_licenses/pdfjs-dist/LICENSE.
+    resource. Full Apache-2.0 text:
+    third_party_licenses/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/LICENSE.
 
 --------------------------------------------------------------------
 3. Dual-licensed component used under MIT

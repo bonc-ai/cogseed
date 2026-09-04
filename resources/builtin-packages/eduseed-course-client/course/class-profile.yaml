@@ -8,7 +8,7 @@ feishu:
   app_id_ref: "env:FEISHU_APP_ID"
   app_secret_ref: "env:FEISHU_APP_SECRET"
   app_token: "<REPLACE: 飞书 Base URL /base/ 后那段>"
-  # SEC-AUDIT MCP-11：表 ID 随插件包分发，不落真实值（运行时经平台 API 访问，不直连飞书）
+  # 表 ID 随插件包分发占位，不落真实值（运行时经平台 API 访问，不直连飞书）
   tables:
     students: "<REPLACE>"
     challenges: "<REPLACE>"
@@ -22,7 +22,7 @@ feishu:
 
 auth:
   role: "student"                        # student | teacher
-  student_id: ""                         # SEC-AUDIT MCP-02：不落真实学号；
+  student_id: ""                         # 不落真实学号；
                                          # 学号由安装者经 env:EDUSEED_STUDENT_ID 注入（env 优先）
   api_key_ref: "env:EDUSEED_API_KEY"
   cohort_ref: "env:EDUSEED_COHORT"         # 可选
