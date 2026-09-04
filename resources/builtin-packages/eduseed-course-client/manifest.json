@@ -59,7 +59,7 @@
   "support": {
     "owner": "EduSeed 平台团队",
     "known_issues": "见 README.md 第 8 节",
-    "feedback_channel": "MeshSeed COGSEED-*"
+    "feedback_channel": "GitHub Issues"
   },
   "ui": {
     "entry": "ui/confirm.html",
