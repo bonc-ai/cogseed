@@ -9,6 +9,12 @@
  * an error page (the renderer keeps the library usable).
  *
  * Read-only: never writes to chats / artifacts; one non-streaming LLM call.
+ *
+ * Single-shot & stateless: callers must run it against an ephemeral model session
+ * (see ipc 'kb.summary'), so a failed parse that the user retries never accumulates
+ * history that later triggers a ~30s context compaction on the next attempt. The
+ * LLM call is also hard-aborted when the timeout fires, so a stalled provider can't
+ * keep holding the model turn lock and silently delay later turns.
  */
 
 import { createHash } from 'node:crypto';
@@ -44,24 +50,37 @@ export interface KbSummaryDeps {
     message: string;
     systemPrompt: string;
     sessionId: string;
+    /** 超时中止信号：接线方应透传给 chatWithModel.abortSignal。 */
+    signal?: AbortSignal;
   }) => Promise<{ ok: boolean; text: string; error: string }>;
 }
 
-const CHUNKS_PER_FILE = 3;
-const CHUNK_CHAR_CAP = 400;
-const DOC_CHAR_CAP = 1200;
-const FILES_CAP = 12;
+const CHUNKS_PER_FILE = 2; // 每文件取前 N 个 chunk
+const CHUNK_CHAR_CAP = 300; // 每 chunk 截断字符
+const DOC_CHAR_CAP = 900; // 每文件拼进 prompt 的总字符上限
+const FILES_CAP = 10; // 单库最多纳入的文件数
 const CACHE_MAX = 50;
-/** LLM 单次解析超时（网络不可达/模型卡住时降级，避免 UI 无限等待） */
-const SUMMARY_LLM_TIMEOUT_MS = 45 * 1000;
+/** LLM 单次解析超时。先 abort 上游请求（释放模型 turn 锁、停止浪费生成）再降级，
+ *  避免 UI 无限"正在解析…"。120s 与 kb_mindmap 对齐，覆盖慢端点首字数十秒的真实完成时间。 */
+const SUMMARY_LLM_TIMEOUT_MS = 120 * 1000;
 
-/** 给 Promise 加超时：超时 reject（调用方 catch 后降级）。 */
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+/** 超时 + 中止：到点先 abort（真正停掉服务端生成、释放单飞模型锁），再以超时错误
+ *  reject。比"只 reject 不取消"干净——被掐断的请求不会继续占着模型锁拖慢后续调用。 */
+function withTimeout<T>(p: Promise<T>, ctrl: AbortController, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`LLM timeout after ${ms}ms`)), ms);
+    const t = setTimeout(() => {
+      ctrl.abort();
+      reject(new Error(`LLM timeout after ${ms}ms`));
+    }, ms);
     p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
     );
   });
 }
@@ -198,15 +217,19 @@ async function kbSummarizeInner(
 
   const docLines = collectReadyDocLines(userId, { dir, spaceId });
 
+  const ctrl = new AbortController();
   try {
-    // LLM 调用加超时兜底：网络不可达/模型卡住时 45s 后降级，避免 UI 无限"正在解析…"
+    // 会话按单发无状态运行（接线方以 ephemeralSession 调用，见 ipc 'kb.summary'）：
+    // 不累积历史，避免失败重试后触发 ~30s 的上下文压缩。超时先 abort 再降级。
     const res = await withTimeout(
       deps.complete({
         userId,
         message: `请整理以下知识库文档要点：\n\n${docLines.join('\n\n')}`,
         systemPrompt: SUMMARY_SYSTEM_PROMPT,
         sessionId: `aside-kbsummary-${userId}`,
+        signal: ctrl.signal,
       }),
+      ctrl,
       SUMMARY_LLM_TIMEOUT_MS,
     );
     if (!res.ok) throw new Error(res.error || 'model failed');

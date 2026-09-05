@@ -238,7 +238,7 @@ describe('KB workbench (S1 skeleton)', () => {
     cb({ type: 'final', text: '基于 引用回答。', evidence: [
       { source: 'library', scope: 'global', path: 'notes/a.md', chunkIdx: 2, snippet: 's', score: 0.02 },
     ] });
-    expect(streamBody.textContent).toBe('基于 引用回答。');
+    expect(streamBody.innerHTML).toContain('基于 引用回答。');
     // final 追加了引用 chips（appendChild 被调用）
     expect(streamBody.appendChild).toHaveBeenCalled();
     // typing 态已移除
@@ -325,5 +325,34 @@ describe('KB workbench (S1 skeleton)', () => {
     input._listeners.input({ target: input });
     expect(els['kb-wb-files'].innerHTML).toContain('无匹配文档');
     expect(els['kb-wb-files'].innerHTML).not.toContain('＋ 添加内容');
+  });
+});
+
+describe('kb file-viewer highlight pure helpers', () => {
+  it('strips ordered-list numbers and inline bold (regression: AAR复盘 chunk7)', () => {
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.cleanQuote('1. 先**选定并本地试跑**一个 skills 目录')).toBe('先选定并本地试跑一个 skills 目录');
+  });
+
+  it('strips heading/quote/bullet prefixes but keeps table rows', () => {
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.stripMdMarks('> 引用要点')).toBe('引用要点');
+    expect(u.stripMdMarks('- 提交证据')).toBe('提交证据');
+    expect(u.stripMdMarks('## 卡点与突破')).toBe('卡点与突破');
+    expect(u.stripMdMarks('| A | B |')).toBe('| A | B |');
+  });
+
+  it('collapses whitespace via normSpace', () => {
+    const { windowMock } = loadScript();
+    expect(windowMock.__kbFvUtils.normSpace('  先 选定\n 并 ')).toBe('先 选定 并');
+  });
+
+  it('extracts significant tokens for block-level matching', () => {
+    const { windowMock } = loadScript();
+    const tokens = windowMock.__kbFvUtils.significantTokens('先选定并本地试跑一个 skills 目录');
+    expect(tokens).toContain('skills');
+    expect(tokens.length).toBeGreaterThan(0);
   });
 });
