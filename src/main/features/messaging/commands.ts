@@ -20,7 +20,7 @@
 
 import type { InboundEnvelope, MessagingInstance } from './types';
 
-export type InboundCommandName = 'permission' | 'forget' | 'agent' | 'status' | 'unbind';
+export type InboundCommandName = 'permission' | 'forget' | 'agent' | 'status' | 'unbind' | 'pair' | 'mute' | 'unmute';
 
 export type ForgetCommandAction = 'preview' | 'confirm' | 'cancel';
 
@@ -71,6 +71,9 @@ const FORGET_RE = /^\/遗忘(?:\s|$)/;
 const AGENT_RE = /^\/agent(?:\s|$)/;
 const STATUS_RE = /^\/status(?:\s|$)/;
 const UNBIND_RE = /^\/unbind(?:\s|$)/;
+const PAIR_RE = /^\/pair(?:\s|$)/;
+const MUTE_RE = /^\/mute(?:\s|$)/;
+const UNMUTE_RE = /^\/unmute(?:\s|$)/;
 
 /**
  * 把入站文本解析为命令。只识别本模块维护的命令名；未知 `/xxx` 返回 null
@@ -98,6 +101,15 @@ export function matchInboundCommand(text: string): InboundCommand | null {
   }
   if (UNBIND_RE.test(trimmed)) {
     return { name: 'unbind', args: trimmed.replace(UNBIND_RE, '').trim() };
+  }
+  if (PAIR_RE.test(trimmed)) {
+    return { name: 'pair', args: trimmed.replace(PAIR_RE, '').trim() };
+  }
+  if (MUTE_RE.test(trimmed)) {
+    return { name: 'mute', args: trimmed.replace(MUTE_RE, '').trim() };
+  }
+  if (UNMUTE_RE.test(trimmed)) {
+    return { name: 'unmute', args: trimmed.replace(UNMUTE_RE, '').trim() };
   }
   return null;
 }

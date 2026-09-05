@@ -608,11 +608,7 @@ async function handleInboundLocked(
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
       const runtime = runtimes.get(uid)?.get(instance.id);
       if (runtime) {
-        const oldListener = runtime.listeners.get(binding.key);
-        if (oldListener) {
-          oldListener();
-          runtime.listeners.delete(binding.key);
-        }
+        runtime.detachBindingListener(binding.key);
         runtime.bindingContexts.set(binding.key, binding);
         await runtime.attachBindingListener(binding);
         await runtime.deliverConfirmationMessage(binding, envelope);
@@ -654,6 +650,13 @@ async function handleInboundLocked(
     if (outcome.consumed) {
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
       const runtime = runtimes.get(uid)?.get(instance.id);
+      if (runtime) {
+        // 与下方常规入站路径同款刷新：命令可能改变绑定状态（G2 /mute
+        // /pair 落盘 mutedAt / 新 cid），出站快照必须跟上，否则静音拦不住、
+        // 监听重挂不触发。
+        runtime.bindingContexts.set(binding.key, binding);
+        await runtime.attachBindingListener(binding);
+      }
       if (outcome.replyText && runtime) {
         await runtime.deliverText(binding, envelope, outcome.replyText);
       } else if (outcome.replyText) {

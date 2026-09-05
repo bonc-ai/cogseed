@@ -28,6 +28,46 @@ const log = createLogger('messaging:continuity_commands');
 /** 列表最多直接展示的名字数；超出部分折叠为「等 N 个」。 */
 export const AGENT_LIST_MAX = 15;
 
+// ── 跨渠道配对（G2-1）─────────────────────────────────────────────────────
+
+/** 配对码有效期（毫秒）：10 分钟内到另一渠道输入，过时作废。 */
+export const PAIR_CODE_TTL_MS = 10 * 60 * 1000;
+
+/** 待消费配对：A 渠道生成 → B 渠道输入。仅存内存（重启即失效，可接受——
+ *  配对是一次性动作）；一次性消费后即删。跨实例（渠道）由调用方校验。 */
+interface PendingPair {
+  uid: string;
+  sourceInstanceId: string;
+  sourceKey: string;
+  targetCid: string;
+  targetTitle: string;
+  expiresAt: number;
+}
+
+const pendingPairs = new Map<string, PendingPair>();
+
+function sweepExpiredPairs(now: number): void {
+  for (const [code, pair] of pendingPairs) {
+    if (pair.expiresAt <= now) pendingPairs.delete(code);
+  }
+}
+
+/** 生成 6 位数字配对码（加密随机，前导零保留）。导出供测试。 */
+export function generatePairCode(): string {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return String(buf[0] % 1_000_000).padStart(6, '0');
+}
+
+/** 供测试注入时钟与重置状态。 */
+export const _pairTestHooks = {
+  setNow: (fn: () => number) => { nowProvider = fn; },
+  reset: () => { pendingPairs.clear(); nowProvider = defaultNow; },
+  pendingCount: () => pendingPairs.size,
+};
+const defaultNow = () => Date.now();
+let nowProvider = defaultNow;
+
 /** 渲染 /agent 无参列表（纯函数，导出供测试）：截断 + 汇总 + 用法提示。 */
 export function formatAgentList(names: readonly string[]): string {
   const shown = names.slice(0, AGENT_LIST_MAX).join('、');
@@ -136,7 +176,36 @@ async function handleStatus(ctx: InboundCommandContext): Promise<InboundCommandO
   const conversation = await chats.getConversation(uid, binding.cid);
   const title = conversation?.title || binding.externalChatTitle || binding.cid;
   const agent = await currentExecutorLabel(uid, binding.cid);
-  return { consumed: true, replyText: t('messaging.continuity.status_line', { title, agent }) };
+  // G2-1：任务已接渠道——列出与本绑定同任务（同 cid）的其他启用渠道，
+  // 含静音中的（静音只是不出声，仍是任务成员），当前渠道打头。
+  const peers = await bindings.listBindingsForTask(uid, binding.cid);
+  const other = peers.filter((b) => b.key !== binding.key);
+  let channelsLine = '';
+  if (other.length > 0) {
+    const names: string[] = [];
+    for (const b of other) {
+      const label = b.instanceId === instance.id ? instance.displayName : await channelLabelFor(uid, b.instanceId);
+      names.push(`${label}${b.mutedAt ? t('messaging.continuity.muted_tag') : ''}`);
+    }
+    channelsLine = `\n${t('messaging.continuity.status_channels', { list: names.join('、') })}`;
+  }
+  const selfMuted = binding.mutedAt ? `\n${t('messaging.continuity.muted_self')}` : '';
+  return {
+    consumed: true,
+    replyText: `${t('messaging.continuity.status_line', { title, agent })}${channelsLine}${selfMuted}`,
+  };
+}
+
+/** 绑定所属渠道的展示名：经实例注册表反查 displayName，查不到回退实例 id 前缀。 */
+async function channelLabelFor(uid: string, instanceId: string): Promise<string> {
+  try {
+    const { getInstance } = await import('./registry');
+    const inst = await getInstance(uid, instanceId);
+    if (inst?.displayName) return inst.displayName;
+  } catch {
+    /* registry read is best-effort */
+  }
+  return instanceId.slice(0, 8);
 }
 
 async function handleUnbind(ctx: InboundCommandContext): Promise<InboundCommandOutcome> {
@@ -152,18 +221,99 @@ async function handleUnbind(ctx: InboundCommandContext): Promise<InboundCommandO
   return { consumed: true, replyText: t('messaging.continuity.unbind_done') };
 }
 
+// ── 跨渠道配对（G2-1）：/pair ─────────────────────────────────────────────
+
+async function handlePair(ctx: InboundCommandContext): Promise<InboundCommandOutcome> {
+  const { uid, instance, envelope } = ctx;
+  const args = ctx.command.args.trim();
+  const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+
+  // /pair（无参）：在当前任务上生成配对码，等另一渠道输入。
+  if (!args) {
+    sweepExpiredPairs(nowProvider());
+    const code = generatePairCode();
+    const conversation = await chats.getConversation(uid, binding.cid);
+    const title = conversation?.title || binding.externalChatTitle || binding.cid;
+    pendingPairs.set(code, {
+      uid,
+      sourceInstanceId: instance.id,
+      sourceKey: binding.key,
+      targetCid: binding.cid,
+      targetTitle: title,
+      expiresAt: nowProvider() + PAIR_CODE_TTL_MS,
+    });
+    log.info('continuity pair code created', { uid, cid: binding.cid, instanceId: instance.id });
+    return {
+      consumed: true,
+      replyText: t('messaging.continuity.pair_created', {
+        code,
+        minutes: Math.round(PAIR_CODE_TTL_MS / 60_000),
+        title,
+      }),
+    };
+  }
+
+  // /pair CODE：把本渠道加入配对码所属任务。一次性消费（成功即删）。
+  sweepExpiredPairs(nowProvider());
+  const pair = pendingPairs.get(args);
+  if (!pair || pair.expiresAt <= nowProvider() || pair.uid !== uid) {
+    return { consumed: true, replyText: t('messaging.continuity.pair_invalid') };
+  }
+  if (pair.sourceInstanceId === instance.id && pair.sourceKey === binding.key) {
+    return { consumed: true, replyText: t('messaging.continuity.pair_same_channel') };
+  }
+  const pointed = await bindings.pointBindingToTask(uid, binding.key, pair.targetCid);
+  pendingPairs.delete(args);
+  log.info('continuity pair joined', {
+    uid,
+    fromCid: binding.cid,
+    toCid: pair.targetCid,
+    instanceId: instance.id,
+    sourceInstanceId: pair.sourceInstanceId,
+  });
+  return {
+    consumed: true,
+    replyText: t('messaging.continuity.pair_joined', {
+      title: pointed ? pair.targetTitle : binding.externalChatTitle || pair.targetCid,
+    }),
+  };
+}
+
+// ── 跨渠道治理（G2-2）：/mute /unmute ──────────────────────────────────────
+
+async function handleMute(ctx: InboundCommandContext, mute: boolean): Promise<InboundCommandOutcome> {
+  const { uid, instance, envelope } = ctx;
+  const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  const updated = await bindings.setBindingMuted(uid, binding.key, mute);
+  log.info('continuity channel mute toggled', {
+    uid,
+    cid: binding.cid,
+    instanceId: instance.id,
+    muted: mute,
+    mutedAt: updated?.mutedAt || '',
+  });
+  return {
+    consumed: true,
+    replyText: mute ? t('messaging.continuity.mute_on') : t('messaging.continuity.mute_off'),
+  };
+}
+
 // ── 安装 ─────────────────────────────────────────────────────────────────
 
 let installed = false;
 
-/** 注册 /agent /status /unbind handler。幂等；由 boot_init deferred 阶段调用。 */
+/** 注册 /agent /status /unbind /pair /mute /unmute handler。幂等；由
+ *  boot_init deferred 阶段调用。 */
 export function installContinuityCommands(): void {
   if (installed) return;
   installed = true;
   registerInboundCommand('agent', handleAgent);
   registerInboundCommand('status', handleStatus);
   registerInboundCommand('unbind', handleUnbind);
-  log.info('continuity commands installed (/agent /status /unbind)');
+  registerInboundCommand('pair', handlePair);
+  registerInboundCommand('mute', (ctx) => handleMute(ctx, true));
+  registerInboundCommand('unmute', (ctx) => handleMute(ctx, false));
+  log.info('continuity commands installed (/agent /status /unbind /pair /mute /unmute)');
 }
 
 /** 测试辅助：重置安装状态。 */
