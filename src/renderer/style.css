@@ -7368,9 +7368,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
      the measured floating input wrapper height so quote previews / queues
      keep the scrollbar track clear of the composer. We use padding-bottom (NOT bigger margin)
      because the goal is more whitespace inside the scroll view, not
-     pushing the viewport upward — that was the wrong fix earlier. */
+     pushing the viewport upward — that was the wrong fix earlier.
+     The docked terminal (#terminal-panel) is an in-flow flex sibling of
+     .chat-history, so it already lifts the history — do NOT add
+     --terminal-height to this margin: reserving it twice collapses the
+     history to ~100px and leaves a white void in the middle of the pane. */
   padding: 24px 10% 80px;
-  margin-bottom: calc(var(--chat-input-reserve, 140px) + var(--terminal-height, 0px));
+  margin-bottom: var(--chat-input-reserve, 140px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -9975,7 +9979,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   scroll-margin-bottom: 24px;
 }
 .chat-history .delete-confirm-card {
-  scroll-margin-bottom: calc(var(--chat-input-reserve, 140px) + var(--terminal-height, 0px) + 24px);
+  /* Terminal is an in-flow sibling (not overlay) — reserve only the input
+     area so the card scrolls clear of the floating composer. */
+  scroll-margin-bottom: calc(var(--chat-input-reserve, 140px) + 24px);
 }
 .skills-chat-messages .delete-confirm-card,
 .agents-chat-messages .delete-confirm-card {
@@ -25118,7 +25124,6 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: flex;
   flex-direction: column;
   height: 280px;
-  max-height: 46vh;
   min-height: 140px;
   border-top: 1px solid var(--border-strong);
   background: var(--surface);
@@ -25127,6 +25132,38 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .terminal-panel[hidden] {
   display: none !important;
+}
+/* Drag-to-resize splitter at the panel's top edge (see terminal-panel.js
+   _termStartResize). Max height is clamped in JS to keep composer + a slice
+   of history visible, so no CSS max-height cap is needed here. */
+.terminal-resize-handle {
+  flex: 0 0 8px;
+  cursor: ns-resize;
+  touch-action: none;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+.terminal-resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 52px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong, #c8ccd4);
+  opacity: 0.55;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+.terminal-resize-handle:hover::after,
+.terminal-resize-handle.is-dragging::after {
+  opacity: 1;
+  background: var(--primary, #2563eb);
+}
+body.is-terminal-resizing {
+  user-select: none;
 }
 @keyframes terminal-slide-up {
   from { transform: translateY(12px); opacity: 0; }
