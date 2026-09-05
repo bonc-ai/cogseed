@@ -24,6 +24,7 @@ let _termActiveId = null;
 let _termSeq = 0;
 let _termBound = false;
 let _termResizeObserver = null;
+let _termResizeBound = false;
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -231,6 +232,60 @@ function _termFitActive() {
   }
 }
 
+// Largest height the docked terminal may occupy. The panel is an in-flow flex
+// child, so its space comes out of .chat-history — leave the header and the
+// floating composer (its reserve) plus ~48px of history visible.
+function _termMaxPanelHeight() {
+  const panel = _termPanelEl();
+  if (!panel) return 0;
+  const pane = panel.closest('.chat-main-pane');
+  const paneH = pane ? pane.clientHeight : window.innerHeight;
+  const headerEl = pane ? pane.querySelector('.chat-header') : null;
+  const headerH = headerEl ? headerEl.offsetHeight : 0;
+  const reserveRaw = pane ? getComputedStyle(pane).getPropertyValue('--chat-input-reserve') : '0px';
+  const reserveH = Math.max(0, parseFloat(reserveRaw) || 0);
+  return Math.max(140, paneH - headerH - reserveH - 48);
+}
+
+// Draggable splitter between the terminal and the conversation: pointer-drag
+// on the handle resizes the panel height between 140px and _termMaxPanelHeight.
+// The ResizeObserver below also refits xterm + re-syncs --terminal-height, so
+// the composer and history follow every drag frame.
+function _termStartResize(e) {
+  const panel = _termPanelEl();
+  const handle = e.currentTarget;
+  if (!panel || !handle) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = panel.offsetHeight;
+  const MIN_H = 140;
+
+  const applyH = (clientY) => {
+    const maxH = _termMaxPanelHeight();
+    const h = Math.min(Math.max(startH + (startY - clientY), MIN_H), maxH);
+    panel.style.height = `${Math.round(h)}px`;
+    _termSyncHeight();
+    _termFitActive();
+  };
+  const onMove = (ev) => applyH(ev.clientY);
+  const onEnd = () => {
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onEnd);
+    handle.removeEventListener('pointercancel', onEnd);
+    handle.classList.remove('is-dragging');
+    document.body.classList.remove('is-terminal-resizing');
+    _termSyncHeight();
+    _termFitActive();
+  };
+  try { handle.setPointerCapture(e.pointerId); } catch (_) { /* best effort */ }
+  handle.classList.add('is-dragging');
+  document.body.classList.add('is-terminal-resizing');
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onEnd);
+  handle.addEventListener('pointercancel', onEnd);
+}
+
 // ── DOM chrome (tab bar + view containers) ─────────────────────────────────
 
 function _termRenderChrome() {
@@ -243,9 +298,17 @@ function _termRenderChrome() {
   let body = panel.querySelector('.terminal-body');
   if (!bar || !body) {
     panel.innerHTML =
+      '<div class="terminal-resize-handle" data-term-resize role="separator" aria-orientation="horizontal" ' +
+      `title="${_termEsc(_termT('terminal_panel.resize_hint', 'Drag to resize terminal'))}"></div>` +
       '<div class="terminal-tabbar"></div><div class="terminal-body"></div>';
     bar = panel.querySelector('.terminal-tabbar');
     body = panel.querySelector('.terminal-body');
+    // Bind the drag-to-resize splitter once (chrome is built exactly once).
+    if (!_termResizeBound) {
+      _termResizeBound = true;
+      const handle = panel.querySelector('[data-term-resize]');
+      if (handle) handle.addEventListener('pointerdown', _termStartResize);
+    }
   }
 
   const tabsHtml = Array.from(_termTabs.values())
@@ -442,6 +505,18 @@ function _termBind() {
     });
     _termResizeObserver.observe(panel);
   }
+
+  // Window shrink can leave a dragged-too-tall panel overflowing the pane:
+  // clamp its inline height back under the computed max.
+  window.addEventListener('resize', () => {
+    if (!_termIsOpen()) return;
+    const maxH = _termMaxPanelHeight();
+    if (panel.offsetHeight > maxH) {
+      panel.style.height = `${maxH}px`;
+      _termSyncHeight();
+      _termFitActive();
+    }
+  });
 
   // Re-render tab chrome labels on locale change.
   window.addEventListener('i18n-change', () => {
