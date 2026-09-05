@@ -4097,9 +4097,12 @@ async function runActorTurnBody(
   // happened with the Commander or another Agent before this turn. Carry a
   // bounded digest of that missed context into the new Agent session; the
   // helper advances a per-Agent watermark so the same history is not repeated.
+  // G-26: covers every dispatch source (user direct, commander dispatch,
+  // agent→agent) so an external gateway agent dispatched a task also receives
+  // the digest — previously only direct user messages triggered it.
   if (
     actor.kind === "agent"
-    && item.fromActorId === USER_ID
+    && item.fromActorId !== actor.id
     && !item.internalControl
     && !item.tap
   ) {
@@ -5102,6 +5105,18 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
+      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
+      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
+      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
+      let gatewayTurnGoal: string | undefined;
+      try {
+        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+        const lifecycle = await readKstarTaskLifecycle(uid, cid);
+        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
+          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
+        }
+      } catch { /* KStar 不可用时退回默认稳定会话 */ }
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -5130,16 +5145,32 @@ async function runActorTurnBody(
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
+            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
+            //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
+            ...(item.references && item.references.length
+              ? {
+                  references: item.references.slice(0, 20).map((r) => ({
+                    source_cid: r.source_cid,
+                    source_msg_id: r.source_msg_id,
+                    from_actor: r.from_actor,
+                    ...(r.from_name ? { from_name: r.from_name } : {}),
+                    source_ts: r.source_ts,
+                    text: String(r.text || '').slice(0, 500),
+                  })),
+                }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
-            // payload envelope instead. Fall back to unwrapping that so a
-            // dispatched external agent never receives an empty prompt.
+            // payload envelope instead. G-26: keep the `<msg from=… to=…>`
+            // envelope on dispatched turns so the external agent can see who
+            // dispatched the task and who it was routed to (multi-agent
+            // routing context); direct user text stays unwrapped as before.
             prompt: [
               switchedContextDigest,
               _firstNonBlankText(
                 (item as { sourceMessageText?: string }).sourceMessageText,
-                _unwrapLlmTurnPayload(item.llmPayload),
                 item.llmPayload,
               ),
             ].filter(Boolean).join("\n\n"),
@@ -5157,21 +5188,18 @@ async function runActorTurnBody(
             },
             onProcess: forwardProcess,
           })
-        : await _runCliAgentTurn({
-            uid,
-            cid,
-            actor,
-            agent: cliAgent,
-            item,
-            slice,
-            workingDir: cliWorkingDir,
-            ...(turnProjectId ? { projectId: turnProjectId } : {}),
-            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
-            signal: w.abortController.signal,
-            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-            onProcess: forwardProcess,
-          });
+        // G-19（兼容期结束）：legacy `cli` runtime 读回即迁移为 p3394-gateway
+        // （G-05 迁移器），直连执行分支已删除——此处不再有非网关路径。
+        : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
+            return {
+              text: "",
+              produced: [],
+              error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
+              failureKind: "runtime",
+              failureCode: "p3394_gateway_unreachable",
+              infrastructureFailure: true,
+            };
+          })();
       for (const p of cliOut.produced || []) await onFileWritten(p);
       // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
       // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认

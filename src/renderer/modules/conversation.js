@@ -1639,6 +1639,13 @@ const _SCENARIO_CONFIGS = {
     agentId: 'a316881746f9',
     agentNames: ['ProductDeveloper'],
   },
+  // T4 目标模式：不绑智能体（_scenarioApplyAgent 落 commander 收件人）。
+  // 模板激活"目标→拆解→审核→派发"链：KStar 自动追踪 goalText、
+  // commander 出子任务计划（manage_execution_plan → plan rail 展示）、
+  // 每次派发的智能体唤醒经用户审批（wake gate）。
+  goal: {
+    templateKey: 'new_chat.quick.tmpl.goal',
+  },
 };
 // English fallback templates — used when the i18n table doesn't yet carry
 // the scenario template key (Step 9 backfills the full set). Each template
@@ -1649,6 +1656,7 @@ const _SCENARIO_TEMPLATES_FALLBACK_EN = {
   seo_geo: 'Analyze SEO and GEO for [website/page URL]: crawl the page, diagnose technical/content/schema issues, find opportunities, and produce an action plan.',
   office: 'Organize [document/materials]: turn it into a polished document, table, presentation, or PDF-ready deliverable.',
   rnd: 'Build [software/app/feature]: clarify requirements, design the implementation plan, write the code, test it, and verify completion.',
+  goal: 'Goal: [describe what you want to achieve]. First break this goal into a sub-task plan (milestones and steps) and show it to me for confirmation; after I confirm, dispatch each step to the right agents. Every agent wake-up goes through my approval.',
 };
 
 function _pickGreetingKey(date) {

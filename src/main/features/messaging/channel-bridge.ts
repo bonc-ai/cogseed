@@ -7,8 +7,13 @@
  * outbound-hub 的 HTTP dial——渠道节点没有网络端点，它是进程内虚拟节点。
  */
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import { getP3394PeerRegistry } from '../p3394_bridge/app-wiring';
 import { buildP3394BridgeManifest } from '../p3394_bridge/manifest';
+import { p3394ObjectStoreResolve, p3394ObjectsRoot } from '../p3394_bridge/object-store';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
 import type { MessagingInstance } from './types';
 
@@ -74,14 +79,86 @@ export function unregisterChannelBridgeNode(instanceId: string): void {
  *   per (uid, instance) 总 30 条/分钟。进程内护栏（重启清零），
  *   防的是失控智能体刷屏，不是计费精度。
  * - 卡片：parts 中 {type:'json', data:{card}} 格子还原为投递 card 参数
- *   （飞书交互卡片等渠道特有结构，信封不丢特性）。 */
+ *   （飞书交互卡片等渠道特有结构，信封不丢特性）。
+ * - 文件（T2a 渠道回传，2026-08-25 真机修复）：resource/artifact/image
+ *   part 支持 filesToResourceParts 产生的两种真实 uri 形态——data:…;
+ *   base64 内联（格式白名单→解码→digest 校验→落临时文件）与
+ *   p3394-object:sha256 引用（格式白名单→对象存储 resolve→根边界复
+ *   核）。不接受裸本地绝对路径（信封是不可信输入，任意路径读取属
+ *   信息泄露）；文件名走 basename 白名单清洗。文本送达后逐个经
+ *   sendFile 投递（上限 5 个/信封），不单独消耗限流配额；文件
+ *   sourceKey 带序号独立幂等；失败上报不回滚文本。 */
+const CHANNEL_BRIDGE_FILE_PARTS_MAX = 5;
+/** 严格白名单：本实现接受的内容寻址引用形态（sha256 十六进制 64 位）。 */
+const SAFE_OBJECT_URI_RE = /^p3394-object:sha256:[a-f0-9]{64}$/;
+/** 严格白名单：本实现接受的内联形态（data:mime[;param];base64,payload）。 */
+const SAFE_DATA_URI_RE = /^data:[a-z0-9.+-]+\/[a-z0-9.+-]*(?:;[a-z0-9.+=-]+)*;base64,[A-Za-z0-9+/=]+$/;
+
+const MEDIA_EXT_BY_TYPE: Record<string, string> = {
+  'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json',
+  'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg',
+  'image/gif': '.gif', 'image/webp': '.webp', 'text/csv': '.csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+};
+
+/** 文件名白名单清洗：去路径段（防穿越）、只留安全字符、截断。 */
+function sanitizeFileName(raw: unknown, fallbackExt: string): string {
+  const base = typeof raw === 'string' ? path.basename(String(raw).trim()) : '';
+  const cleaned = base.replace(/[^A-Za-z0-9._\-\u4e00-\u9fff]/g, '_').slice(0, 120);
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return 'p3394-file-' + crypto.randomUUID().slice(0, 8) + fallbackExt;
+  }
+  return /\.[A-Za-z0-9]{1,8}$/.test(cleaned) ? cleaned : cleaned + fallbackExt;
+}
+
+/** 把信封文件 part 物化成本地文件（sendProactiveFile 需要路径）。
+ *  返回 null 表示不可物化（跳过，不阻塞其余投递）。 */
+function materializeFilePart(part: { uri?: unknown; name?: unknown; media_type?: unknown; digest?: unknown }): { path: string; name: string } | null {
+  const uri = typeof part.uri === 'string' ? part.uri : '';
+  const mediaType = typeof part.media_type === 'string' && MEDIA_EXT_BY_TYPE[part.media_type] ? part.media_type : '';
+  const ext = mediaType ? MEDIA_EXT_BY_TYPE[mediaType] : '';
+  const name = sanitizeFileName(part.name, ext);
+  if (!uri) return null;
+  // ① 内容寻址引用：格式白名单 → 对象存储 resolve → 对象根边界复核。
+  if (SAFE_OBJECT_URI_RE.test(uri)) {
+    const resolved = p3394ObjectStoreResolve(uri);
+    if (resolved.ok === false) return null;
+    const objectsRoot = p3394ObjectsRoot();
+    if (resolved.value !== objectsRoot && !resolved.value.startsWith(objectsRoot + path.sep)) return null;
+    return { path: resolved.value, name };
+  }
+  // ② 内联 data:…;base64,：格式白名单 → 解码 → digest 校验（不符丢
+  //    弃）→ 临时目录落盘（hex 命名 + tmp 根边界复核，幂等覆盖）。
+  if (!SAFE_DATA_URI_RE.test(uri)) return null;
+  const b64 = uri.slice(uri.indexOf(';base64,') + ';base64,'.length);
+  let buf: Buffer;
+  try { buf = Buffer.from(b64, 'base64'); } catch { return null; }
+  if (!buf.length) return null;
+  const digest = crypto.createHash('sha256').update(buf).digest('hex');
+  if (typeof part.digest === 'string' && /^[a-f0-9]{64}$/i.test(part.digest) && part.digest.toLowerCase() !== digest) return null;
+  const tmpRoot = os.tmpdir();
+  const tmp = path.join(tmpRoot, 'p3394-channel-' + digest.slice(0, 24) + ext);
+  if (!tmp.startsWith(tmpRoot + path.sep)) return null;
+  try {
+    fs.mkdirSync(tmpRoot, { recursive: true });
+    fs.writeFileSync(tmp, buf);
+  } catch { return null; }
+  return { path: tmp, name };
+}
+
 export async function deliverToChannelBridge(
   uid: string,
   agentId: string,
   envelope: P3394Envelope,
   send: (uid: string, input: { instanceId: string; recipientId: string; text: string; sourceKey: string; card?: Record<string, unknown> }) => Promise<unknown>,
   ownerResolver: (uid: string, instanceId: string) => Promise<{ recipientId: string } | null>,
-  options?: { allowedSenders?: string[] },
+  options?: {
+    allowedSenders?: string[];
+    /** 文件投递通道（生产环境传 manager.sendProactiveFile 的包装）。
+     *  未提供时信封里的文件 part 被忽略（向后兼容）。 */
+    sendFile?: (uid: string, input: { instanceId: string; recipientId: string; path: string; name?: string; sourceKey: string }) => Promise<unknown>;
+  },
 ): Promise<{ ok: true; receipt: P3394Envelope } | { ok: false; error: string }> {
   const instanceId = instanceIdFromChannelBridgeAgentId(agentId);
   if (!instanceId) return { ok: false, error: 'p3394_not_a_channel_bridge' };
@@ -119,6 +196,37 @@ export async function deliverToChannelBridge(
     }
     return { ok: false, error: (error as Error).message || 'p3394_channel_bridge_delivery_failed' };
   }
+  // T2a 文件投递：文本送达后，把信封里的 resource/artifact/image part
+  // 物化（data:/object: 两种真实形态，白名单校验）后逐个发给 owner。
+  // 单个文件失败不回滚已送达的文本（文件是附件语义），但整个投递按
+  // 失败上报（调用方可重试整信封——文本走幂等台账不会重复，文件
+  // sourceKey 独立带序号，重试同样幂等）。
+  let deliveredFiles = 0;
+  if (options?.sendFile) {
+    const fileParts = (envelope.payload?.parts || [])
+      .filter((part) => part.type === 'resource' || part.type === 'artifact' || part.type === 'image')
+      .slice(0, CHANNEL_BRIDGE_FILE_PARTS_MAX)
+      .map((part) => materializeFilePart(part))
+      .filter((f): f is { path: string; name: string } => f !== null);
+    for (let i = 0; i < fileParts.length; i += 1) {
+      const file = fileParts[i];
+      try {
+        await options.sendFile(uid, {
+          instanceId,
+          recipientId: owner.recipientId,
+          path: file.path,
+          name: file.name,
+          sourceKey: `p3394:${envelope.message_id}:file:${i}`,
+        });
+        deliveredFiles += 1;
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError') {
+          return { ok: false, error: 'p3394_channel_bridge_aborted' };
+        }
+        return { ok: false, error: `p3394_channel_bridge_file_failed:${(error as Error).message || 'unknown'}` };
+      }
+    }
+  }
   const receipt: P3394Envelope = {
     ...envelope,
     message_id: `${envelope.message_id}:receipt`,
@@ -126,7 +234,7 @@ export async function deliverToChannelBridge(
     performative: 'inform',
     sender: { agent_id: agentId },
     recipients: [envelope.sender],
-    payload: { parts: [{ type: 'text', text: 'channel bridge delivered' }] },
+    payload: { parts: [{ type: 'text', text: deliveredFiles > 0 ? `channel bridge delivered (${deliveredFiles} file(s))` : 'channel bridge delivered' }] },
   };
   return { ok: true, receipt };
 }
