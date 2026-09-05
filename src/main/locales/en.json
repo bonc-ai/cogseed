@@ -260,6 +260,7 @@
   "messaging.continuity.muted_tag": " (muted)",
   "messaging.continuity.muted_self": "This channel is currently muted; send /unmute to unmute.",
   "messaging.continuity.status_channels": "Channels on this task: {list}",
+  "messaging.continuity.pair_task_rotated": "This task was rotated (/new) on another channel; this channel has followed it to the new task automatically — just keep chatting.",
   "personal_context.candidate.title": "Pending: personal ontology candidate",
   "personal_context.candidate.approve": "✅ Confirm",
   "personal_context.candidate.reject": "❌ Reject",

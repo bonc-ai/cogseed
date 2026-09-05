@@ -605,8 +605,41 @@ async function handleInboundLocked(
   // (mirrors Hermes' `/new` session reset).
   if (isNewSessionCommand(text)) {
     try {
+      // 先取旧任务 cid（forceNew 会轮换），配对的其他渠道要跟着搬家。
+      const previous = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const oldCid = previous.cid;
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
       const runtime = runtimes.get(uid)?.get(instance.id);
+      // 跨渠道接续（G2）：/new 不许重新制造信息孤岛——与旧任务配对的渠道
+      // 一并指向新任务并重挂监听，各自收到一条跟随通知。
+      if (binding.cid !== oldCid) {
+        const peers = await bindings.listBindingsForTask(uid, oldCid);
+        for (const peer of peers) {
+          if (peer.key === binding.key) continue;
+          const moved = await bindings.pointBindingToTask(uid, peer.key, binding.cid);
+          if (!moved) continue;
+          const peerRuntime = runtimes.get(uid)?.get(peer.instanceId);
+          if (peerRuntime) {
+            peerRuntime.bindingContexts.set(peer.key, moved);
+            await peerRuntime.attachBindingListener(moved);
+            void peerRuntime
+              .deliverSystemNotice(moved, t('messaging.continuity.pair_task_rotated'))
+              .catch((error) => {
+                log.warn('messaging pair-rotation notice failed', {
+                  instanceId: peer.instanceId,
+                  key: peer.key,
+                  error: (error as Error).message,
+                });
+              });
+          }
+          log.info('continuity peer followed task rotation', {
+            uid,
+            instanceId: peer.instanceId,
+            fromCid: oldCid,
+            toCid: binding.cid,
+          });
+        }
+      }
       if (runtime) {
         runtime.detachBindingListener(binding.key);
         runtime.bindingContexts.set(binding.key, binding);

@@ -231,6 +231,11 @@ async function handlePair(ctx: InboundCommandContext): Promise<InboundCommandOut
   // /pair（无参）：在当前任务上生成配对码，等另一渠道输入。
   if (!args) {
     sweepExpiredPairs(nowProvider());
+    // 同一渠道同时只保留一个有效码：重新生成时作废旧码，避免多码并存
+    // 让用户拿错（旧码未过期仍可用的困惑大于便利）。
+    for (const [old, pair] of pendingPairs) {
+      if (pair.sourceKey === binding.key) pendingPairs.delete(old);
+    }
     const code = generatePairCode();
     const conversation = await chats.getConversation(uid, binding.cid);
     const title = conversation?.title || binding.externalChatTitle || binding.cid;

@@ -260,6 +260,7 @@
   "messaging.continuity.muted_tag": " (mudo)",
   "messaging.continuity.muted_self": "Este canal está mudo no momento; envie /unmute para reativar.",
   "messaging.continuity.status_channels": "Canais nesta tarefa: {list}",
+  "messaging.continuity.pair_task_rotated": "Esta tarefa foi reiniciada (/new) em outro canal; este canal a acompanhou automaticamente para a nova tarefa — continue a conversar.",
   "personal_context.candidate.title": "Pendente: candidato da ontologia pessoal",
   "personal_context.candidate.approve": "✅ Confirmar",
   "personal_context.candidate.reject": "❌ Rejeitar",
