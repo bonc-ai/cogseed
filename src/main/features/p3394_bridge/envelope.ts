@@ -350,5 +350,26 @@ export function validateP3394Envelope(input: unknown): P3394EnvelopeValidationRe
     ...(input as unknown as P3394Envelope),
     spec_version: input.spec_version,
   };
-  return { ok: true, envelope: normalized };
+  return { ok: true, envelope: freezeEnvelope(normalized) };
+}
+
+/** A5（指南 §16）：语义信封一经生成不可变。验证通过的入站信封冻结
+ *  语义字段容器（顶层字段 + payload + parts + participants）——下游需要
+ *  变更时必须重建信封（conflict retry 等已是重建语义）。extensions 的
+ *  深层键保留可变（传输层路由信息允许追加），语义字段不可改。 */
+function freezeEnvelope<T extends P3394Envelope>(envelope: T): T {
+  Object.freeze(envelope);
+  if (envelope.payload) {
+    Object.freeze(envelope.payload);
+    if (Array.isArray(envelope.payload.parts)) {
+      Object.freeze(envelope.payload.parts);
+      for (const part of envelope.payload.parts) Object.freeze(part);
+    }
+  }
+  if (Array.isArray(envelope.recipients)) {
+    Object.freeze(envelope.recipients);
+    for (const recipient of envelope.recipients) Object.freeze(recipient);
+  }
+  if (envelope.sender) Object.freeze(envelope.sender);
+  return envelope;
 }

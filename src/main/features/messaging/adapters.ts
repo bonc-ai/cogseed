@@ -443,7 +443,18 @@ function normalizeFeishuEvent(
   const createTime = Number.isFinite(rawCreateTime)
     ? new Date((rawCreateTime > 10_000_000_000 ? rawCreateTime : rawCreateTime * 1000))
     : new Date();
+  // G-17 多模态：图片消息提取 image_key（引用式，不下载字节）——投影为
+  // P3394 信封 parts.image 格子；text 保持"[图片]"占位保证路由不丢。
+  let imageKeys: string[] | undefined;
+  if (messageType === 'image') {
+    try {
+      const parsed = JSON.parse(message.content || '{}');
+      const key = parsed && typeof parsed.image_key === 'string' ? parsed.image_key.trim() : '';
+      if (key) imageKeys = [key];
+    } catch { /* malformed image content — 占位文本仍可路由 */ }
+  }
   return {
+    ...(imageKeys ? { imageKeys } : {}),
     platform: 'feishu_lark',
     instanceId: instance.id,
     externalMessageId: message.message_id,
@@ -453,7 +464,10 @@ function normalizeFeishuEvent(
     isGroup,
     mentionPresent: botMentionTokens.length > 0 || mentionsAll,
     ...(botMentionTokens.length ? { botMentionTokens } : {}),
-    replyToMessageId: message.message_id,
+    // 被回复消息 = 飞书 parent_id（回复事件才带）；此前误填 message_id
+    // （自己的 id），导致每条消息都被投影成"回复"（metadata.reply_to_
+    // message_id 恒等于 external_message_id，下游误判）。
+    ...(message.parent_id?.trim() ? { replyToMessageId: message.parent_id.trim() } : {}),
     ...(message.thread_id?.trim() || message.root_id?.trim() ? { replyInThread: true } : {}),
     receivedAt: Number.isNaN(createTime.getTime()) ? new Date().toISOString() : createTime.toISOString(),
   };

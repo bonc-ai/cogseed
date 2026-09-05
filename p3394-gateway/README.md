@@ -62,6 +62,27 @@ CogSeed 对话里说"问一下 Hermes"，Commander 就会通过 P3394 直接调�
 
 ## 适配其他 Agent（任意名字都可接入）
 
+### 三步接入（统一包 · 装包即用，G-35）
+
+本包就是**任意智能体的 P3394 统一接入包**：装上它，任何一次性命令行形态的
+智能体（不原生讲协议也行）立即成为一个讲 `p3394-sscli/1.0` 的 P3394 节点
+（内置通用垫片协议化：delta 流式 / 会话连续 / 取消 / 心跳）。
+
+```bash
+# 1. 拿到本包（CogSeed 仓库 p3394-gateway/ 目录，或已安装的桌面版内置副本）
+# 2. 一条命令接入你的智能体（--agent 启动默认走 sscli）：
+node gateway.cjs --agent my-agent --exec my-agent --args '{message} --headless'
+# 3. 在 CogSeed「智能体总览 → 外接·本机」添加 my-agent 即可协作。
+#    （原生讲 p3394-sscli 协议的智能体加 --native 直连，不经垫片）
+```
+
+命令行参数：`--agent <名>  --exec <命令>  --args '<参数模板>'  --port <端口>
+--home <目录>  --native`（`node gateway.cjs --help` 有完整说明；参数优先于
+同名环境变量）。CogSeed 托管侧同样默认全量 sscli：任意自接 CLI 经垫片接入，
+个别 CLI 需回退 oneshot 时设 `COGSEED_P3394_SSCLI_EXCLUDE=名字1,名字2`。
+
+### 环境变量方式（等价）
+
 **预设只是便捷模板，不是白名单**——P3394 面向任意智能体/任意程序，`P3394_AGENT` 填任何名字都能启动：
 
 | 情况 | 身份 | 实际执行 |
@@ -108,9 +129,27 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
   输出边增长，不必等工具+回复跑完）；`openclaw` 预设整体排除（其 CLI 无中间
   分片、最终 JSON 回复信封写在 stderr 末尾，保持一次性回发）。可用
   `P3394_DISABLE_ONESHOT_STREAM=1` 关闭。
+- **CLI 原生会话恢复（resume，G-27）**：预设表登记了 `resumeArgs` 的 CLI
+  （opencode `--session`、openclaw `--session-id`、claude 降级模式 `--resume`）
+  由网关在会话目录维护 `cli-session.json`（CLI 自己的会话号），下轮 spawn
+  自动追加恢复参数——CLI 自己恢复完整上下文，prompt 只带本轮新内容，**不再
+  回放 `[会话历史]`**。会话号来源两种：从 CLI 输出按 `sessionIdPattern`
+  正则提取（opencode/claude），或由网关生成 UUID 传入（`sessionGenerate`，
+  openclaw）。会话被拒（not found / expired 等特征）时自动清绑定、退回
+  transcript 回放重试一次。未登记 resume 的 CLI（gemini/hermes/aider/
+  workbuddy）行为不变，继续 transcript 回放兜底；常驻后端（claude 常驻 /
+  codex app-server）自管会话，不走此机制。新 CLI 接入 resume 只需在预设表
+  加同款字段。
 - **sscli**：`P3394_AGENT_MODE=sscli` 常驻单个 CLI 进程，按 `p3394-sscli/1.0`
   JSONL 协议交换 hello / open_session / deliver / 事件 / cancel / heartbeat
-  （指南 §9.2），适合支持结构化会话协议的 Agent Runtime。
+  （指南 §9.2）。**已全面落地（过渡桥）**：原生讲协议的 CLI 直连
+  （`P3394_SSCLI_NATIVE=1`，目前为测试桩与未来原生支持者预留）；其余全部
+  预设（hermes/gemini/aider/openclaw/opencode/workbuddy）由 CogSeed 托管时
+  自动经 **sscli-shim 通用垫片**（`sscli-shim.cjs`）接入——shim 对网关讲
+  协议、内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致，
+  会话状态落 `<home>/shim-sessions/`）。P3394 标准推广、CLI 原生实现协议
+  后撤垫片换直连即可，登记与上层零改动。`COGSEED_P3394_SSCLI_SHIM=0`
+  可单独撤垫片回退 oneshot（claude 不受影响）。
 
 两种模式通用：
 

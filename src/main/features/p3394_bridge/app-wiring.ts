@@ -363,6 +363,8 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
       : [];
     const helloDataPolicy = ext && typeof ext.data_policy === 'string' && ext.data_policy.trim() ? ext.data_policy.trim().slice(0, 120) : undefined;
     const helloCostPolicy = ext && typeof ext.cost_policy === 'string' && ext.cost_policy.trim() ? ext.cost_policy.trim().slice(0, 120) : undefined;
+    // G-18：对端网关自报 pid（探活数据源）——仅采纳正整数。
+    const helloPid = ext && typeof ext.pid === 'number' && Number.isInteger(ext.pid) && ext.pid > 0 ? ext.pid : undefined;
     // 投影触发：任何带可回叫端点的 hello/首次来信都尝试把本地节点投影
     // 进 AI 团队（projectP3394NodeToTeam 内部幂等 + 查重，重复调用无害）。
     const existing = bridge.registry.resolve(senderId);
@@ -377,6 +379,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
         ...(helloChannels.length ? { preferred_channels: helloChannels } : {}),
         ...(helloDataPolicy ? { data_policy: helloDataPolicy } : {}),
         ...(helloCostPolicy ? { cost_policy: helloCostPolicy } : {}),
+        ...(helloPid ? { gateway_pid: helloPid } : {}),
         ...(helloLocality ? { locality: helloLocality } : { locality: 'same_host' as P3394Locality }),
         trust_policy: 'p3394-bearer',
       });
@@ -397,6 +400,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
         ...(helloChannels.length ? { preferred_channels: helloChannels } : {}),
         ...(helloDataPolicy ? { data_policy: helloDataPolicy } : {}),
         ...(helloCostPolicy ? { cost_policy: helloCostPolicy } : {}),
+        ...(helloPid ? { gateway_pid: helloPid } : {}),
         ...(helloLocality ? { locality: helloLocality } : {}),
         ...(existing.value.trust_policy ? { trust_policy: existing.value.trust_policy } : {}),
         ...(existing.value.expected_identity ? { expected_identity: existing.value.expected_identity } : {}),
@@ -730,6 +734,8 @@ export interface P3394PeerSummary {
   /** 在线状态：最近一次 hello/心跳/入站活动在窗口内视为 online。 */
   online: boolean;
   last_seen_at?: string;
+  /** G-18：网关进程自报 pid（hello 数据源，正整数）。 */
+  gateway_pid?: number;
 }
 
 const ONLINE_WINDOW_MS = 90 * 1000;
@@ -751,6 +757,7 @@ export function listP3394Peers(): P3394PeerSummary[] {
     disabled: peer.disabled === true,
     online: !!peer.last_seen_at && now - new Date(peer.last_seen_at).getTime() < ONLINE_WINDOW_MS,
     ...(peer.last_seen_at ? { last_seen_at: peer.last_seen_at } : {}),
+    ...(typeof peer.gateway_pid === 'number' ? { gateway_pid: peer.gateway_pid } : {}),
   }));
 }
 

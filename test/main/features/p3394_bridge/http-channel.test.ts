@@ -109,6 +109,36 @@ describe('P3394HttpChannel real network transport', () => {
     expect(received).toContain('msg-http-roundtrip');
   });
 
+  it('refuses a performative the peer manifest does not support (D2, §17.3)', async () => {
+    // 对端能力不足 → 明确拒绝，不静默降级：协商拿到的 manifest 声明
+    // supported_performatives 不含 cancel 时，发送 cancel 信封必须抛
+    // p3394_capability_unsupported（指南 §18 反模式：静默丢弃不支持语义）。
+    const port = nextPort();
+    const server = new P3394HttpChannel('server', { listen: { port }, authToken: 'tok' });
+    const m = manifest('cogseed-agent') as unknown as {
+      capability_profile: { supported_performatives: string[] };
+    };
+    m.capability_profile.supported_performatives = ['request', 'inform'];
+    server.setLocalManifest(m as never);
+    openServers.push(server);
+    await server.listen();
+
+    const client = new P3394HttpChannel('client', {
+      dial: { endpoints: [endpointFor(port)], bearerToken: 'tok' },
+    });
+    openServers.push(client);
+    const negotiation = await client.negotiate();
+    expect(negotiation.ok).toBe(true);
+    await expect(client.send(envelope({ performative: 'cancel' })))
+      .rejects.toThrow('p3394_capability_unsupported:cancel');
+    // 对端未收到任何 cancel 信封（能力拒绝在发送前拦截）。
+    const received: string[] = [];
+    server.subscribe((e) => received.push(e.message_id));
+    await expect(client.send(envelope({ performative: 'cancel' })))
+      .rejects.toThrow('p3394_capability_unsupported:cancel');
+    expect(received).toEqual([]);
+  });
+
   it('fails closed when the dial token is wrong (401 on manifest)', async () => {
     const port = nextPort();
     const server = new P3394HttpChannel('server', { listen: { port }, authToken: 'secret' });

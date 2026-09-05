@@ -79,6 +79,24 @@ describe('P3394 task state machine (SDK design §7.1)', () => {
     expect(tasks.settle('t1', 'failed').state).toBe('failed'); // idempotent terminal
   });
 
+  it('settles a cancel/completed race exactly once: first settlement wins (C5, §17.2)', () => {
+    // 竞态方向一：runtime 报 completed 先落地，跨节点 cancel 随后到达 →
+    // 保持 completed，迟到的 cancel 被拒（不产生第二份终态/账本记录）。
+    const first = new P3394BridgeTaskManager(() => 'now');
+    first.submit({ task_id: 't1', session_id: 's1', message_id: 'm1' });
+    first.start('t1');
+    first.settle('t1', 'completed');
+    expect(() => first.settle('t1', 'cancelled')).toThrow('p3394_task_transition_completed_to_cancelled');
+    expect(first.require('t1').state).toBe('completed');
+    // 竞态方向二：cancel 先落地，迟到的 completed 被拒 → 保持 cancelled。
+    const second = new P3394BridgeTaskManager(() => 'now');
+    second.submit({ task_id: 't1', session_id: 's1', message_id: 'm1' });
+    second.start('t1');
+    second.settle('t1', 'cancelled');
+    expect(() => second.settle('t1', 'completed')).toThrow('p3394_task_transition_cancelled_to_completed');
+    expect(second.require('t1').state).toBe('cancelled');
+  });
+
   it('supports parallel tasks in one session', () => {
     const tasks = new P3394BridgeTaskManager(() => 'now');
     tasks.submit({ task_id: 't1', session_id: 's1', message_id: 'm1' });
