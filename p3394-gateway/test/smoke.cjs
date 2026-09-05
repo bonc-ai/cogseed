@@ -269,7 +269,7 @@ async function main() {
     "});",
   ].join('\n'));
   const FLOOD_PORT = GATEWAY_PORT + 70;
-  const floodEnv = { ...process.env, P3394_GATEWAY_PORT: String(FLOOD_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'flood-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: floodAgent, P3394_HEARTBEAT_MS: '0' };
+  const floodEnv = { ...process.env, P3394_GATEWAY_PORT: String(FLOOD_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'flood-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_SSCLI_NATIVE: '1', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: floodAgent, P3394_HEARTBEAT_MS: '0' };
   const floodGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: floodEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   await sleep(900);
   const floodMsg = { message_id: 'fl1', session_id: 's-flood', task_id: 'fltk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'flood me' }] }, idempotency_key: 'idem-flood1' };
@@ -307,6 +307,65 @@ async function main() {
   check('openclaw 一次性回发：不产生 stream delta 帧', !ocEvents.some((e) => e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta'));
   check('openclaw 一次性回发：终态回复正常', received.some((e) => e.session_id === 's-oc' && (e.payload.parts[0].text || '').includes('OC-REPLY-ONE-SHOT')));
   ocGw.kill('SIGTERM');
+
+  // G-27 CLI 原生会话恢复（oneshot resume）：opencode 形态（--session 续聊 +
+  // 输出含 sessionID 可提取）。假 CLI 带 --session 时回 RESUMED(id) 前缀、
+  // 无 --session 回 FRESH 前缀；--session 值以 poison 开头时报 session not
+  // found 退出非零（验证被拒清绑定 + transcript 回放重试一次的降级链）。
+  const resumeAgent = path.join(tmp, 'fake-resume-agent.cjs');
+  fs.writeFileSync(resumeAgent, [
+    "'use strict';",
+    "const argv = process.argv.slice(2);",
+    "const sessIdx = argv.indexOf('--session');",
+    "const sessionId = sessIdx >= 0 ? argv[sessIdx + 1] : null;",
+    "const msg = argv[0] || '';",
+    "if (sessionId && sessionId.startsWith('poison')) {",
+    "  process.stderr.write('Error: session not found: ' + sessionId + '\\n');",
+    "  process.exit(1);",
+    "}",
+    "const prefix = sessionId ? 'RESUMED(' + sessionId + '): ' : 'FRESH: ';",
+    "process.stdout.write(JSON.stringify({ sessionID: 'oc-fixed-sess', text: prefix + msg }) + '\\n');",
+    "process.exit(0);",
+  ].join('\n'));
+  const RESUME_PORT = GATEWAY_PORT + 90;
+  const resumeHome = path.join(tmp, 'resume-home');
+  const resumeEnv = { ...process.env, P3394_GATEWAY_PORT: String(RESUME_PORT), P3394_GATEWAY_HOME: resumeHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: resumeAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const resumeGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: resumeEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const cliSessionFileOf = (sid) => path.join(resumeHome, 'sessions', sid, 'cli-session.json');
+
+  // 第一轮（s-r1）：无绑定 → FRESH 前缀；输出含 sessionID → cli-session.json 落盘
+  const r1 = { message_id: 'rm1', session_id: 's-r1', task_id: 'rtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first turn' }] }, idempotency_key: 'idem-r1' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r1 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  check('resume：首轮无 resume 参数（FRESH 前缀）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('FRESH: first turn')));
+  const r1CliSession = fs.existsSync(cliSessionFileOf('s-r1')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r1'), 'utf8')) : null;
+  check('resume：会话号从输出提取并落盘 cli-session.json', !!(r1CliSession && r1CliSession.sessionId === 'oc-fixed-sess' && r1CliSession.cli === 'opencode'));
+
+  // 第二轮（s-r1 同会话）：带 --session 续聊；不回放 [会话历史]（纯增量）
+  const r2 = { message_id: 'rm2', session_id: 's-r1', task_id: 'rtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second turn' }] }, idempotency_key: 'idem-r2' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r2 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  const r2Reply = received.find((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('second turn'));
+  check('resume：第二轮带 --session 续聊（RESUMED 前缀）', !!(r2Reply && (r2Reply.payload.parts[0].text || '').includes('RESUMED(oc-fixed-sess): second turn')));
+  check('resume：第二轮不回放 [会话历史]（纯增量，CLI 自管记忆）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[会话历史]') && !(r2Reply.payload.parts[0].text || '').includes('first turn')));
+  // G-39 协作提示词每会话只注一次：首轮回显 prompt 含 hint；resume 第二轮
+  // 纯增量（无历史回放），若重注会出现在回显里。
+  check('协作提示词：每会话首轮注入（第一轮回显含 hint）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('[P3394 协作工具]')));
+  check('协作提示词：第二轮不重注（纯增量无 hint）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[P3394 协作工具]')));
+
+  // 被拒重试（s-r2）：预埋毒会话号 → CLI 报 session not found → 清绑定、
+  // transcript 回放重跑一次 → 最终成功且为 FRESH 形态
+  fs.mkdirSync(path.dirname(cliSessionFileOf('s-r2')), { recursive: true });
+  fs.writeFileSync(cliSessionFileOf('s-r2'), JSON.stringify({ cli: 'opencode', sessionId: 'poison-9', updatedAt: new Date().toISOString() }));
+  const r3 = { message_id: 'rm3', session_id: 's-r2', task_id: 'rtk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'retry turn' }] }, idempotency_key: 'idem-r3' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r3 }, GATEWAY_TOKEN);
+  await sleep(1500);
+  check('resume：被拒后清绑定带回放重试（最终 FRESH 成功）', received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('FRESH: retry turn')));
+  check('resume：被拒重试不外发错误信封', !received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('p3394_gateway_error')));
+  const r3CliSession = fs.existsSync(cliSessionFileOf('s-r2')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r2'), 'utf8')) : null;
+  check('resume：被拒后毒绑定被新会话号覆盖', !!(r3CliSession && r3CliSession.sessionId === 'oc-fixed-sess'));
+  resumeGw.kill('SIGTERM');
 
   // cancel 控制帧：长任务被终止，只回取消回执
   const cancelEnv = { message_id: 'm7', session_id: 's7', task_id: 'tsk-cancel-1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-5000 long task' }] }, idempotency_key: 'idem7' };
@@ -413,7 +472,7 @@ async function main() {
   // ── SSCLI 模式：常驻 CLI + JSONL 协议 ──
   const sscliLog = path.join(tmp, 'sscli-ops.jsonl');
   const SSCLI_PORT = GATEWAY_PORT + 30;
-  const sscliEnv = { ...process.env, P3394_GATEWAY_PORT: String(SSCLI_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'sscli-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: path.join(__dirname, 'fake-sscli-agent.cjs'), SSCLI_LOG_FILE: sscliLog };
+  const sscliEnv = { ...process.env, P3394_GATEWAY_PORT: String(SSCLI_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'sscli-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_SSCLI_NATIVE: '1', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: path.join(__dirname, 'fake-sscli-agent.cjs'), SSCLI_LOG_FILE: sscliLog };
   const sscliGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: sscliEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let sscliGwLog = '';
   sscliGw.stdout.on('data', (c) => { sscliGwLog += c; });
@@ -433,6 +492,182 @@ async function main() {
   check('SSCLI 协议：hello/open_session/deliver 已交换', sscliOps.some((o) => o.op === 'hello') && sscliOps.some((o) => o.op === 'open_session') && sscliOps.some((o) => o.op === 'deliver'));
   check('SSCLI 会话复用：open_session 只发一次', sscliOps.filter((o) => o.op === 'open_session').length === 1);
   sscliGw.kill('SIGTERM');
+
+  // ── sscli-shim 通用垫片：非原生协议 CLI（hermes 形态）登记进 sscli 后，
+  // 网关经 sscli-shim 常驻垫片驱动一次性 CLI——协议帧（delta/completed）、
+  // transcript 回放会话连续、垫片会话目录隔离。P3394 标准推广后撤垫片
+  // 换直连，本用例即"过渡桥"的回归钉子。 ──
+  const shimAgent = path.join(tmp, 'fake-shim-agent.cjs');
+  fs.writeFileSync(shimAgent, [
+    "'use strict';",
+    "const msg = process.argv[2] || '';",
+    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧；附带 cwd。",
+    "// stderr 模拟 CLI 过程日志：工具行 + 噪声行（延迟 200ms 发，避开网关",
+    "// 80ms progress 合并窗口，保证噪声行独立成帧可被断言）。",
+    "process.stderr.write('[tools] Reading file src/x.ts\\n');",
+    "setTimeout(() => process.stderr.write('node:internal deprecation warning noise\\n'), 200);",
+    "process.stdout.write('SHIM-');",
+    "setTimeout(() => { process.stdout.write('REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); }, 350);",
+  ].join('\n'));
+  const SHIM_PORT = GATEWAY_PORT + 95;
+  const shimHome = path.join(tmp, 'shim-home');
+  const shimRequestedCwd = path.join(tmp, 'shim-requested-cwd');
+  fs.mkdirSync(shimRequestedCwd, { recursive: true });
+  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
+  const shimGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let shimGwLog = '';
+  shimGw.stdout.on('data', (c) => { shimGwLog += c; });
+  shimGw.stderr.on('data', (c) => { shimGwLog += c; });
+  await sleep(900);
+  check('shim：非原生 CLI 登记后走 sscli 模式', shimGwLog.includes('runtime: sscli'));
+  const shimMsg1 = { message_id: 'shm1', session_id: 'shim-s1', task_id: 'shtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'first shim turn' }] }, idempotency_key: 'shim-idem1', extensions: { working_dir: shimRequestedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg1 }, GATEWAY_TOKEN);
+  // 等终态回复（delta 事件帧会先到，不能作为"完成"信号）。
+  const shimDone1 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('first shim turn'));
+  for (let i = 0; i < 50 && !shimDone1(); i += 1) await sleep(100);
+  check('shim：终态回复（deliver → shim → CLI → completed）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('SHIM-REPLY: first shim turn')));
+  check('shim：open_session workspace 作为 CLI cwd 生效（指南 §9.2）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('CWD:' + fs.realpathSync(shimRequestedCwd))));
+  const shimDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  check('shim：stdout chunk 转协议 delta 帧实时回发', shimDeltas.length >= 2 && shimDeltas.some((e) => (e.payload.parts[0].text || '').includes('SHIM-')));
+  const shimProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress');
+  check('shim：stderr 工具日志转 progress 帧（过程栏可见）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('[tools] Reading file')));
+  check('shim：stderr 噪声行被过滤（告警/调试不进过程栏）', !shimProgress.some((e) => (e.payload.parts[0].text || '').includes('node:internal')));
+  check('shim：冷启动提示进 progress 帧（spawn 即告知）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('正在启动')));
+  const shimMsg2 = { message_id: 'shm2', session_id: 'shim-s1', task_id: 'shtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second shim turn' }] }, idempotency_key: 'shim-idem2' };
+  await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg2 }, GATEWAY_TOKEN);
+  const shimDone2 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('second shim turn'));
+  for (let i = 0; i < 50 && !shimDone2(); i += 1) await sleep(100);
+  check('shim：transcript 回放保证会话连续（第二轮 prompt 含第一轮）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('first shim turn') && (e.payload.parts[0].text || '').includes('second shim turn')));
+  const shimTranscript = path.join(shimHome, 'shim-sessions', 'shim-s1', 'transcript.jsonl');
+  check('shim：会话状态落垫片独立目录', fs.existsSync(shimTranscript));
+  shimGw.kill('SIGTERM');
+
+  // ── G-38 信封型 CLI 走垫片（openclaw --json 形态）：stdout 整体是 JSON
+  // 信封，垫片须提取 payloads[].text 作正文（终态经 completed.text 回传），
+  // 且不得把 JSON 碎片流式灌进气泡（零 delta 帧）。G-34 切垫片时该能力
+  // 遗漏——整坨 JSON 当正文回发的回归钉子。 ──
+  const shimOcAgent = path.join(tmp, 'fake-shim-openclaw.cjs');
+  fs.writeFileSync(shimOcAgent, [
+    "'use strict';",
+    "const msg = process.argv[2] || '';",
+    "const payload = JSON.stringify({ payloads: [{ text: 'OC-SHIM-REPLY: ' + msg }], meta: { agentMeta: { model: 'fake-model', usage: { total: 1 } } } });",
+    "setTimeout(() => { process.stdout.write(payload); process.exit(0); }, 150);",
+  ].join('\n'));
+  const SHIM_OC_PORT = GATEWAY_PORT + 97;
+  const shimOcEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'shim-oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimOcAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
+  const shimOcGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimOcEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let shimOcGwLog = '';
+  shimOcGw.stdout.on('data', (c) => { shimOcGwLog += c; });
+  shimOcGw.stderr.on('data', (c) => { shimOcGwLog += c; });
+  await sleep(900);
+  check('shim openclaw：登记后走 sscli 模式', shimOcGwLog.includes('runtime: sscli'));
+  const shimOcMsg = { message_id: 'socm1', session_id: 'shim-oc-s1', task_id: 'soctk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'openclaw' }], payload: { parts: [{ type: 'text', text: 'envelope turn' }] }, idempotency_key: 'shim-oc-idem1', extensions: { reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(SHIM_OC_PORT, 'POST', '/p3394/envelope', { envelope: shimOcMsg }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message'); i += 1) await sleep(100);
+  const shimOcFinal = received.filter((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('shim openclaw：JSON 信封提取为正文（completed.text 终态）', shimOcFinal.includes('OC-SHIM-REPLY: envelope turn'));
+  check('shim openclaw：信封不漏进气泡（无 payloads/meta 键）', !shimOcFinal.includes('"payloads"') && !shimOcFinal.includes('agentMeta'));
+  const shimOcDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  check('shim openclaw：信封型不流式（零 delta 帧）', shimOcDeltas.length === 0);
+  const shimOcProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('shim openclaw：冷启动提示仍生效', shimOcProgress.includes('正在启动'));
+  shimOcGw.kill('SIGTERM');
+
+  // ── opencode 常驻（server 模式）：fake opencode server 实现 /session、
+  // /session/:id/message（同步终态）与 /event（SSE）。验证：runtime 选择、
+  // 正文 delta 透传（reasoning 流不混入）、工具 progress 帧、server 进程
+  // 跨会话/跨轮复用。真 opencode 的端到端实测见账本 G-37。 ──
+  const fakeOcServer = path.join(tmp, 'fake-opencode-server.cjs');
+  fs.writeFileSync(fakeOcServer, [
+    '#!/usr/bin/env node',
+    "'use strict';",
+    "const http = require('http');",
+    "const fs = require('fs');",
+    "if (process.env.FAKE_OC_PID) fs.appendFileSync(process.env.FAKE_OC_PID, process.pid + '\\n');",
+    "let sseClients = [];",
+    "let sessionSeq = 0;",
+    "const server = http.createServer((req, res) => {",
+    "  const send = (obj) => { for (const r of sseClients) r.write('data: ' + JSON.stringify(obj) + '\\n\\n'); };",
+    "  if (req.method === 'POST' && req.url === '/session') {",
+    "    sessionSeq += 1;",
+    "    res.writeHead(200, { 'content-type': 'application/json' });",
+    "    res.end(JSON.stringify({ id: 'ses_fake_' + sessionSeq, title: 'fake' }));",
+    "    return;",
+    "  }",
+    "  const mMsg = req.url.match(/^\\/session\\/([^/]+)\\/message$/);",
+    "  if (req.method === 'POST' && mMsg) {",
+    "    const sid = decodeURIComponent(mMsg[1]);",
+    "    let body = '';",
+    "    req.on('data', (c) => { body += c; });",
+    "    req.on('end', () => {",
+    "      const prompt = JSON.parse(body).parts[0].text;",
+    //      reasoning part 先建映射，其 delta 必须被网关丢弃（不进正文气泡）
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_r', type: 'reasoning', text: 'thinking' } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_r', field: 'text', delta: 'REASONING-NOISE' } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_t', type: 'text', text: '' } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'echo FAKE-TOOL' } } } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'completed' } } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'OC-PERSIST-' } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'REPLY: ' + prompt.slice(0, 20) } });",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: ' + prompt.slice(0, 20) }] }));",
+    "    });",
+    "    return;",
+    "  }",
+    "  if (req.method === 'GET' && req.url === '/event') {",
+    "    res.writeHead(200, { 'content-type': 'text/event-stream' });",
+    "    res.write('data: ' + JSON.stringify({ type: 'server.connected', properties: {} }) + '\\n\\n');",
+    "    sseClients.push(res);",
+    "    req.on('close', () => { sseClients = sseClients.filter((r) => r !== res); });",
+    "    return;",
+    "  }",
+    "  res.writeHead(404); res.end('{}');",
+    "});",
+    "server.listen(0, '127.0.0.1', () => {",
+    "  process.stdout.write('opencode server listening on http://127.0.0.1:' + server.address().port + '\\n');",
+    "});",
+  ].join('\n'));
+  fs.chmodSync(fakeOcServer, 0o755);
+  const OC_PERSIST_PORT = GATEWAY_PORT + 96;
+  const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
+  // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
+  // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
+  const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
+  fs.mkdirSync(ocSharedCwd, { recursive: true });
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile };
+  const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ocPersistGwLog = '';
+  ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
+  ocPersistGw.stderr.on('data', (c) => { ocPersistGwLog += c; });
+  await sleep(900);
+  check('opencode 常驻：默认启用（runtime: opencode-persistent）', ocPersistGwLog.includes('runtime: opencode-persistent'));
+  const ocEnv1 = { message_id: 'ocm1', session_id: 'oc-fs1', task_id: 'oct1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first oc turn' }] }, idempotency_key: 'oc-idem1', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv1 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message'); i += 1) await sleep(100);
+  check('opencode 常驻：终态回复（HTTP 同步响应 parts 提取）', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY: first oc turn')));
+  // 过程帧晚于终态到达（SSE 与同步 HTTP 分属两条连接 + 网关 80ms 合并
+  // flush），终态一到就断言会抢跑——留出宽限窗口再验帧。
+  await sleep(500);
+  const ocDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('opencode 常驻：SSE 正文 delta 实时透传', ocDeltas.includes('OC-PERSIST-'));
+  check('opencode 常驻：reasoning 流不混入正文（partID 映射过滤）', !ocDeltas.includes('REASONING-NOISE'));
+  const ocProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('opencode 常驻：工具调用实时进 progress 帧（带参数）', ocProgress.includes('🔧 bash echo FAKE-TOOL'));
+  check('opencode 常驻：工具完成提示进 progress 帧', ocProgress.includes('✅ bash 完成'));
+  // 第二轮（同会话）+ 新会话各一条：server 进程全周期只 spawn 一次（按 cwd 复用）。
+  // 隔开首轮的 SSE 宽限窗口再连发，避免同会话两轮 turn 在宽限期内叠加。
+  await sleep(300);
+  const ocEnv2 = { message_id: 'ocm2', session_id: 'oc-fs1', task_id: 'oct2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second oc turn' }] }, idempotency_key: 'oc-idem2', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv2 }, GATEWAY_TOKEN);
+  const ocEnv3 = { message_id: 'ocm3', session_id: 'oc-fs2', task_id: 'oct3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'other session' }] }, idempotency_key: 'oc-idem3', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv3 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 80 && received.filter((e) => (e.session_id === 'oc-fs1' || e.session_id === 'oc-fs2') && e.kind === 'message').length < 3; i += 1) await sleep(100);
+  check('opencode 常驻：第二轮回信正常', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('second oc turn')));
+  check('opencode 常驻：跨会话回信正常', received.some((e) => e.session_id === 'oc-fs2' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('other session')));
+  let ocPids = [];
+  try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
+  check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
+  ocPersistGw.kill('SIGTERM');
 
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
@@ -511,6 +746,15 @@ async function main() {
     "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
     "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
     "  if (text.startsWith('long task')) return; // 挂起，等 cancel 终止整个进程树",
+    "  if (round === 1) {",
+    "    // 工具调用事件流：block_start 报名 → input_json_delta 流式参数 →",
+    "    // block_stop 收尾 → user 帧 tool_result。网关解析为 process rail 帧。",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'tool_use',id:'tu1',name:'Bash',input:{}}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'{\"command\":\"npm test\"}'}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_stop',index:0}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tu1',content:'ok'}]}}) + '\\n');",
+    "  }",
+    "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
     "  setTimeout(() => {",
     "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
     "    process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'PERSISTENT-' + round + ':' + text.slice(0, 40)}]}}) + '\\n');",
@@ -538,6 +782,10 @@ async function main() {
   const psDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
   check('claude 常驻：第一轮 delta 实时回发', psDeltas.includes('PERSISTENT-1'));
   check('claude 常驻：第一轮终态 = 累积文本', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:first round')));
+  const psProgress = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('claude 常驻：tool_use 工具名进 progress 帧', psProgress.includes('🔧 Bash'));
+  check('claude 常驻：工具参数摘要进 progress 帧', psProgress.includes('npm test'));
+  check('claude 常驻：tool_result 完成提示进 progress 帧', psProgress.includes('工具执行完成'));
   // 第二轮：进程必须复用（pid 只记一次、argv 只记一次），且不带 [会话历史]
   // 前缀（进程内上下文自动延续）。
   const psMsg2 = { message_id: 'ps2', session_id: 's-persistent', task_id: 'pstk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'follow up' }] }, idempotency_key: 'idem-ps2' };

@@ -132,3 +132,9 @@ process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 // which a crash mid-test would take with it. Tests that need the real
 // resolution order unset this themselves.
 process.env.CORE_AGENT_AUTH_DIR = path.join(tmpRoot, 'core-agent-auth');
+
+// G-20 教训：session-import 的 welcome Action Plan 在「未配置 API 模型」时
+// 会回退真实调用宿主机 CLI（pickBestCliForFallback → spawn）。测试行为随
+// 机器装的 CLI 变化——开发机装了 hermes/openclaw 后该用例真跑 CLI，extraction
+// 状态卡 pending 数分钟超时。统一关闭：测试不依赖宿主机状态。
+process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK = '1';

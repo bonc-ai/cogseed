@@ -11,6 +11,7 @@
 import { detectOne } from '../local_agents/registry.js';
 import { getP3394OutboundHub } from './app-wiring';
 import { buildP3394OutboundEnvelope } from '../cogseed_backend/p3394-host-adapter';
+import type { P3394OutboundReference } from '../cogseed_backend/p3394-host-adapter';
 import { p3394ExternalGatewayIdFor, startExternalGateway } from './external-gateways';
 import { createLogger } from '../../logger';
 
@@ -63,6 +64,13 @@ export interface P3394GatewayTurnInput {
    *  Carried in extensions.execution_prefs.model; claude (--model) and codex
    *  (thread/start model) gateway runtimes consume it. */
   model?: string;
+  /** G-28 话题隔离：会话级话题标识（当前开放的 KStar 需求 id）。同 goal
+   *  复用 P3394 会话、异 goal 开新会话（sessionForGoal）；缺省时保持
+   *  (cid, peer) 稳定会话（原行为）。 */
+  goal?: string;
+  /** T1 引用信封化：本轮消息携带的结构化引用快照，进信封
+   *  payload.metadata.references（正文文本已含人类可读版）。 */
+  references?: P3394OutboundReference[];
   signal?: AbortSignal;
   /** Positive-integer process id of the external agent's gateway process,
    *  when the transport can surface one. Validated at the bus boundary. */
@@ -139,13 +147,21 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   }
 
   input.onCoordinatorActivity?.({ kind: 'activity' });
+  // G-18：网关进程 pid 数据源——hello 自报进注册表（gateway_pid），turn
+  // 开始即喂给内存协调器（正整数，与 bus 边界同一校验）。
+  if (typeof peer?.gateway_pid === 'number' && Number.isInteger(peer.gateway_pid) && peer.gateway_pid > 0) {
+    input.onProcessInfo?.(peer.gateway_pid);
+  }
   input.onProcess?.({ type: 'progress', text: '正在通过 P3394 与 ' + (input.agent.name || nodeId) + ' 协作…' });
   // 信封按需重建：message_id/idempotency_key 每次发送都必须是新的（重试时
   // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由
-  // sessionForGoal(scopeKey=cid, peer) 决定，天然保持稳定，用户可见的会话
-  // 连续性不受影响。
+  // sessionForGoal(scopeKey=cid, peer, goal) 决定——goal 缺省时 (cid, peer)
+  // 稳定复用，goal 变化（话题切换）自动开新会话（G-28）；executionId 入
+  // message id 保持逐轮唯一，用户可见的会话连续性不受影响。
   const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
     scopeKey: input.cid,
+    ...(input.goal && input.goal.trim() ? { goal: input.goal.trim() } : {}),
+    ...(input.references && input.references.length ? { references: input.references } : {}),
     ...(input.workingDir ? { workingDir: input.workingDir } : {}),
     ...((input.reasoningEffort || input.model)
       ? { executionPrefs: {
