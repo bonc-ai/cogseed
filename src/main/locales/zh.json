@@ -260,6 +260,7 @@
   "messaging.continuity.muted_tag": "（静音）",
   "messaging.continuity.muted_self": "本渠道当前处于静音状态，发送 /unmute 解除。",
   "messaging.continuity.status_channels": "本任务已接渠道：{list}",
+  "messaging.continuity.pair_task_rotated": "本任务已在另一渠道开启新篇章（/new），本渠道已自动跟随到新任务，继续对话即可。",
   "personal_context.candidate.title": "待确认：个人本体候选",
   "personal_context.candidate.approve": "✅ 确认",
   "personal_context.candidate.reject": "❌ 拒绝",

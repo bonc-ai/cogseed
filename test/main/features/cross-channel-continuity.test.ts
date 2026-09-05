@@ -295,6 +295,83 @@ describe('cross-channel continuity lifecycle (manager harness)', () => {
     expect(status).toContain('静音');
   });
 
+  it('/new rotates the task for every paired channel, with a follow notice', async () => {
+    const ctx = await boot();
+    const { alphaCid } = await bootstrapTwoTasks(ctx);
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceA, '/pair', 'm-a2', 'chat-A'));
+    const code = ((sentTexts('chat-A').at(-1) as string).match(/(\d{6})/) || [])[1];
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, `/pair ${code}`, 'm-b2', 'chat-B'));
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, 'rebind kick', 'm-b3', 'chat-B'));
+
+    // A 开新任务：B 应跟随到新 cid 并收到通知。
+    sendMessage.mockClear();
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceA, '/new', 'm-a5', 'chat-A'));
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const all = await bindings.listBindings('user-1');
+    const newAlpha = all.find((x) => x.externalChatId === 'chat-A')!;
+    const beta = all.find((x) => x.externalChatId === 'chat-B')!;
+    expect(newAlpha.cid).not.toBe(alphaCid);
+    expect(beta.cid).toBe(newAlpha.cid);
+    await vi.waitFor(() => {
+      const notices = sentTexts('chat-B').filter((x) => x.includes('跟随'));
+      expect(notices.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // 跟随后的广播：新任务的回复仍双渠道可达。
+    sendMessage.mockClear();
+    emit(newAlpha.cid, {
+      type: 'message',
+      turn_end: true,
+      msg: { id: 'reply-r1', from: 'agent-codex', text: 'after rotation' },
+    });
+    await vi.waitFor(() => {
+      expect(sentTexts('chat-A').some((x) => x.includes('after rotation'))).toBe(true);
+      expect(sentTexts('chat-B').some((x) => x.includes('after rotation'))).toBe(true);
+    });
+  });
+
+  it('regenerating a pairing code invalidates the previous one for the same channel', async () => {
+    const ctx = await boot();
+    await bootstrapTwoTasks(ctx);
+    const { _pairTestHooks } = ctx;
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceA, '/pair', 'm-a2', 'chat-A'));
+    await vi.waitFor(() => expect(_pairTestHooks.pendingCount()).toBe(1));
+    const code1 = ((sentTexts('chat-A').at(-1) as string).match(/(\d{6})/) || [])[1];
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceA, '/pair', 'm-a3', 'chat-A'));
+    await vi.waitFor(() => expect(_pairTestHooks.pendingCount()).toBe(1));
+    const code2 = ((sentTexts('chat-A').at(-1) as string).match(/(\d{6})/) || [])[1];
+    expect(code2).not.toBe(code1);
+    // 旧码已作废。
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, `/pair ${code1}`, 'm-b2', 'chat-B'));
+    await vi.waitFor(() => expect(sentTexts('chat-B').length).toBeGreaterThanOrEqual(1));
+    expect(sentTexts('chat-B').at(-1)).toContain('无效');
+  });
+
+  it('joining a task clears a stale mute flag from the previous task', async () => {
+    const ctx = await boot();
+    const { alphaCid } = await bootstrapTwoTasks(ctx);
+    // B 在自己的旧任务上静音，随后加入 A 的任务：静音不应带过去。
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, '/mute', 'm-b2', 'chat-B'));
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceA, '/pair', 'm-a2', 'chat-A'));
+    const code = ((sentTexts('chat-A').at(-1) as string).match(/(\d{6})/) || [])[1];
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, `/pair ${code}`, 'm-b3', 'chat-B'));
+    await ctx.manager.ingestInbound('user-1', envelope(ctx.instanceB, 'rebind kick', 'm-b4', 'chat-B'));
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const all = await bindings.listBindings('user-1');
+    expect(all.find((x) => x.externalChatId === 'chat-B')!.mutedAt).toBeUndefined();
+    // 任务回复两边都到（B 未静音）。
+    sendMessage.mockClear();
+    emit(alphaCid, {
+      type: 'message',
+      turn_end: true,
+      msg: { id: 'reply-c1', from: 'agent-codex', text: 'stale mute cleared' },
+    });
+    await vi.waitFor(() => {
+      expect(sentTexts('chat-A').some((x) => x.includes('stale mute cleared'))).toBe(true);
+      expect(sentTexts('chat-B').some((x) => x.includes('stale mute cleared'))).toBe(true);
+    });
+  });
+
   it('unbinding one channel leaves the paired peer untouched', async () => {
     const ctx = await boot();
     const { alphaCid } = await bootstrapTwoTasks(ctx);

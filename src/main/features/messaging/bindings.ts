@@ -372,8 +372,10 @@ export async function setBindingMuted(uid: string, key: string, muted: boolean):
 
 /** 跨渠道接续（G2-1）配对加入：把本渠道绑定指向同一用户的另一任务
  *  （targetCid）。旧 cid 的会话文件与历史全部保留（与 /new 轮换同义，
- *  仅改"新消息进哪个任务"）。调用方负责让 runtime 重挂总线监听
- *  （rebindBindingListener），否则本渠道收不到新任务的出站事件。 */
+ *  仅改"新消息进哪个任务"）。加入即新开始：残留的静音标记一并清除，
+ *  避免渠道带着旧任务的 mutedAt 进来却收不到回复、用户无从得知。
+ *  调用方负责让 runtime 重挂总线监听（attachBindingListener 依 cid
+ *  变化自适应），否则本渠道收不到新任务的出站事件。 */
 export async function pointBindingToTask(
   uid: string,
   key: string,
@@ -386,6 +388,7 @@ export async function pointBindingToTask(
     const binding = data.bindings[key];
     if (!binding || binding.cid === targetCid) return binding ? { ...binding } : null;
     binding.cid = targetCid;
+    delete binding.mutedAt;
     binding.updatedAt = nowIso();
     data.bindings[key] = binding;
     await writeBindings(uid, data);

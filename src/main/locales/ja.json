@@ -260,6 +260,7 @@
   "messaging.continuity.muted_tag": "（ミュート中）",
   "messaging.continuity.muted_self": "このチャンネルは現在ミュート中です。/unmute で解除できます。",
   "messaging.continuity.status_channels": "このタスクに接続中のチャンネル：{list}",
+  "messaging.continuity.pair_task_rotated": "このタスクは別チャンネルで新しく開始されました（/new）。このチャンネルは自動的に新しいタスクへ追従しました。そのまま話しかけてください。",
   "personal_context.candidate.title": "確認待ち：パーソナルオントロジー候補",
   "personal_context.candidate.approve": "✅ 確認",
   "personal_context.candidate.reject": "❌ 拒否",

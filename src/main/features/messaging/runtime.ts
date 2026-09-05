@@ -510,6 +510,24 @@ export class RuntimeInstance {
     this.listenerCids.delete(key);
   }
 
+  /** 跨渠道接续（G2-1）：向绑定渠道投递一条系统通知（非命令回声、非
+   *  任务回复——用于"任务已被另一渠道翻新，本渠道已跟随"这类跨渠道
+   *  联动提示）。合成唯一 externalMessageId 保证台账幂等。 */
+  async deliverSystemNotice(binding: MessagingBinding, text: string): Promise<void> {
+    const envelope: InboundEnvelope = {
+      platform: this.instance.platform as InboundEnvelope['platform'],
+      instanceId: this.instanceId,
+      externalMessageId: `sys-${binding.key}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      externalChatId: binding.externalChatId,
+      externalUserId: binding.externalUserId,
+      text: '',
+      isGroup: binding.conversationScope === 'group_sender',
+      mentionPresent: false,
+      receivedAt: new Date().toISOString(),
+    };
+    await this.deliverText(binding, envelope, text);
+  }
+
   // ── Approval cards ───────────────────────────────────────────────────────
 
   /** Bridge a pending wake request into an interactive approval card on the
