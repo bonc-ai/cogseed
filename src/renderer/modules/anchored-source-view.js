@@ -99,6 +99,13 @@
   }
 
   async function openAnchorViewer(anchor) {
+    // 整篇原文优先：library 源且 KB 工作台已提供整篇查看器桥 → 打开整篇并高亮/翻页
+    if (anchor && anchor.source !== 'attachment' && typeof window.__openKbSourceDocument === 'function') {
+      try {
+        const ok = await window.__openKbSourceDocument(anchor);
+        if (ok) return;
+      } catch (_) { /* 打开失败回落片段查看器 */ }
+    }
     const overlay = _ensureOverlay();
     overlay.hidden = false;
     _setMeta('定位中…');
