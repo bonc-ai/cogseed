@@ -152,13 +152,21 @@ export function p3394ExternalGatewayIdFor(cliType: string): string | null {
  *  回退开关：COGSEED_P3394_STREAM_JSON=0 全部回 oneshot（紧急回退）；
  *  COGSEED_P3394_SSCLI_SHIM=0 仅撤垫片（claude 保持 sscli）。 */
 const streamJsonEnabled = String(process.env.COGSEED_P3394_STREAM_JSON ?? '1') !== '0';
-const sscliShimEnabled = String(process.env.COGSEED_P3394_SSCLI_SHIM ?? '1') !== '0';
+// 垫片默认关闭：develop 语义是 MODE=sscli 即假定 CLI 原生讲协议（仅
+// claude），其他 CLI 走 oneshot；二期 G-35 的"任意 CLI 经 sscli-shim 走
+// sscli"作为显式开启的扩展能力保留（=1 时生效）。调用时读取（与排除表
+// 同模式），便于测试与运行时切换。
+function sscliShimEnabledNow(): boolean {
+  return String(process.env.COGSEED_P3394_SSCLI_SHIM ?? '0') === '1';
+}
 /** 排除表调用时读取（运行时可配置；单次 split 开销可忽略）。 */
 function sscliExcludeHas(key: string): boolean {
   return String(process.env.COGSEED_P3394_SSCLI_EXCLUDE ?? '')
     .split(',').some((s) => s.trim().toLowerCase() === key && key);
 }
-/** 任意 CLI 的运行时模式判定（导出供测试）：G-35"任意智能体走 sscli"。 */
+/** 任意 CLI 的运行时模式判定（导出供测试）。默认与 develop 的静态表
+ *  等价（仅 claude→sscli，codex 走专有后端，其余 oneshot）；垫片显式
+ *  开启后扩展为 G-35"任意智能体（含未知名自接）走 sscli"。 */
 export function runtimeModeForCli(cli: string): string | undefined {
   if (!streamJsonEnabled) return undefined;
   const key = String(cli || '').trim().toLowerCase();
@@ -166,7 +174,7 @@ export function runtimeModeForCli(cli: string): string | undefined {
   if (key === 'codex') return undefined;
   // claude 的 stream-json 包装器不依赖 shim，shim 关闭也保留 sscli。
   if (key === 'claude') return 'sscli';
-  if (!sscliShimEnabled || sscliExcludeHas(key)) return undefined;
+  if (!sscliShimEnabledNow() || sscliExcludeHas(key)) return undefined;
   return 'sscli';
 }
 

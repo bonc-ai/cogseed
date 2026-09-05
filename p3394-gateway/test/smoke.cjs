@@ -513,7 +513,7 @@ async function main() {
   const shimHome = path.join(tmp, 'shim-home');
   const shimRequestedCwd = path.join(tmp, 'shim-requested-cwd');
   fs.mkdirSync(shimRequestedCwd, { recursive: true });
-  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
   const shimGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let shimGwLog = '';
   shimGw.stdout.on('data', (c) => { shimGwLog += c; });
@@ -554,7 +554,7 @@ async function main() {
     "setTimeout(() => { process.stdout.write(payload); process.exit(0); }, 150);",
   ].join('\n'));
   const SHIM_OC_PORT = GATEWAY_PORT + 97;
-  const shimOcEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'shim-oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimOcAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const shimOcEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'shim-oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimOcAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
   const shimOcGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimOcEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let shimOcGwLog = '';
   shimOcGw.stdout.on('data', (c) => { shimOcGwLog += c; });
@@ -746,6 +746,15 @@ async function main() {
     "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
     "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
     "  if (text.startsWith('long task')) return; // 挂起，等 cancel 终止整个进程树",
+    "  if (round === 1) {",
+    "    // 工具调用事件流：block_start 报名 → input_json_delta 流式参数 →",
+    "    // block_stop 收尾 → user 帧 tool_result。网关解析为 process rail 帧。",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'tool_use',id:'tu1',name:'Bash',input:{}}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'{\"command\":\"npm test\"}'}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_stop',index:0}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tu1',content:'ok'}]}}) + '\\n');",
+    "  }",
+    "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
     "  setTimeout(() => {",
     "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
     "    process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'PERSISTENT-' + round + ':' + text.slice(0, 40)}]}}) + '\\n');",

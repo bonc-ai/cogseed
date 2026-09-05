@@ -539,23 +539,47 @@ describe('P3394 external-agent gateway host', () => {
 });
 
 describe('G-35 任意智能体走 sscli（runtimeModeForCli）', () => {
-  it('未知名自接 CLI → sscli（经通用垫片，不再限定预设名单）', () => {
-    expect(runtimeModeForCli('my-custom-bot')).toBe('sscli');
-    expect(runtimeModeForCli('')).toBe('sscli');
-  });
-  it('预设 CLI → sscli；codex → 专属后端（undefined）', () => {
-    for (const cli of ['hermes', 'gemini', 'aider', 'openclaw', 'opencode', 'workbuddy']) {
-      expect(runtimeModeForCli(cli)).toBe('sscli');
+  // 融合后语义：默认对齐 develop 静态表（仅 claude→sscli，其余 oneshot）；
+  // 垫片（COGSEED_P3394_SSCLI_SHIM=1）显式开启后才是二期 G-35 的
+  // "任意智能体（含未知名自接）经通用垫片走 sscli"。
+  function withShim<T>(fn: () => T): T {
+    const prev = process.env.COGSEED_P3394_SSCLI_SHIM;
+    process.env.COGSEED_P3394_SSCLI_SHIM = '1';
+    try { return fn(); } finally {
+      if (prev === undefined) delete process.env.COGSEED_P3394_SSCLI_SHIM;
+      else process.env.COGSEED_P3394_SSCLI_SHIM = prev;
     }
+  }
+  it('默认：仅 claude→sscli，其余预设/未知名 oneshot（develop 语义）', () => {
+    expect(runtimeModeForCli('claude')).toBe('sscli');
     expect(runtimeModeForCli('codex')).toBeUndefined();
+    for (const cli of ['hermes', 'gemini', 'aider', 'openclaw', 'opencode', 'workbuddy', 'my-custom-bot', '']) {
+      expect(runtimeModeForCli(cli)).toBeUndefined();
+    }
+  });
+  it('垫片开启：未知名自接 CLI → sscli（经通用垫片，不再限定预设名单）', () => {
+    withShim(() => {
+      expect(runtimeModeForCli('my-custom-bot')).toBe('sscli');
+      expect(runtimeModeForCli('')).toBe('sscli');
+    });
+  });
+  it('垫片开启：预设 CLI → sscli；codex → 专属后端（undefined）', () => {
+    withShim(() => {
+      for (const cli of ['hermes', 'gemini', 'aider', 'openclaw', 'opencode', 'workbuddy']) {
+        expect(runtimeModeForCli(cli)).toBe('sscli');
+      }
+      expect(runtimeModeForCli('codex')).toBeUndefined();
+    });
   });
   it('排除表 COGSEED_P3394_SSCLI_EXCLUDE 命中 → 回 oneshot', () => {
     const prev = process.env.COGSEED_P3394_SSCLI_EXCLUDE;
     process.env.COGSEED_P3394_SSCLI_EXCLUDE = 'weird-cli, another';
     try {
-      expect(runtimeModeForCli('weird-cli')).toBeUndefined();
-      expect(runtimeModeForCli('another')).toBeUndefined();
-      expect(runtimeModeForCli('other')).toBe('sscli');
+      withShim(() => {
+        expect(runtimeModeForCli('weird-cli')).toBeUndefined();
+        expect(runtimeModeForCli('another')).toBeUndefined();
+        expect(runtimeModeForCli('other')).toBe('sscli');
+      });
     } finally {
       if (prev === undefined) delete process.env.COGSEED_P3394_SSCLI_EXCLUDE;
       else process.env.COGSEED_P3394_SSCLI_EXCLUDE = prev;

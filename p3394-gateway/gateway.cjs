@@ -242,6 +242,13 @@ const PRESETS = {
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
   // 统一执行入口（模型/强度模板）与 G-27 resume 续聊登记并存于同表：
   // 模板字段由 /p3394/models 能力协商消费，resume 字段供降级模式续聊。
+  hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
+              // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
+              // 配置（configModels 声明式枚举，见 models-probe.cjs）。
+              // --reasoning 单次覆盖（none|minimal|low|medium|high|xhigh/
+              // max|ultra）——off 映射 none（CLI 无 "off" 词）。
+              modelArgs: '-m {model}', configModels: 'hermes',
+              effortArgs: '--reasoning {effort}', effortLevels: { off: 'none' } },
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
               modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' },
               // 强度专有通道：reasoningEffort → MAX_THINKING_TOKENS env（无
@@ -1504,7 +1511,12 @@ class SscliRuntime {
     // CLI）；否则经 sscli-shim 通用垫片包装——shim 对本 runtime 讲协议、
     // 内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致）。
     // 标准推广、CLI 原生化后撤垫片即可，上层零改动。
-    if (String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
+    // 默认直连（develop 语义：MODE=sscli 即假定原生协议——含 claude 常驻
+    // 与测试 fake-agent）；二期垫片（sscli-shim 过渡桥）仅在网关侧显式
+    // P3394_SSCLI_SHIM=1 且非 native 时启用，主进程侧的选择开关
+    // （COGSEED_P3394_SSCLI_SHIM）与网关侧此开关相互独立。
+    const sscliShim = String(process.env.P3394_SSCLI_SHIM || '').trim() === '1';
+    if (!sscliShim || String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
       this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
     } else {
       const resumeCfg = preset ? {
@@ -1609,8 +1621,11 @@ class StreamJsonRuntime {
       if (onProgress && event) {
         const name = (event.data && event.data.name) || '';
         const phase = (event.data && event.data.phase) || '';
+        const summary = (event.data && event.data.summary) || '';
         const fallback = event.stream === 'tool'
-          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          ? (phase === 'result' ? '工具执行完成'
+            : phase === 'end' ? `🔧 ${name}${summary ? `：${summary}` : ' 执行完成'}`
+            : `🔧 ${name}…`)
           : (phase === 'end' ? '思考完成' : '思考中');
         onProgress(fallback, event);
       }
@@ -1775,7 +1790,13 @@ class ClaudePersistentRuntime {
     // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env；
     // --model 是进程级参数——两者的变更由 deliver 的 drop/respawn 对齐）。
     const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
-    const child = spawnCli(CLI, this._args(model), { cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, this._args(model), {
+      cwd: cwd || undefined, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'],
+      // detached：子进程自成进程组（POSIX），killProcessTree 的
+      // process.kill(-pid) 组杀由此生效——否则后代成为孤儿杀不掉
+      // （Windows 走 taskkill /t 不依赖此参数）。
+      detached: true,
+    });
     entry.child = child;
     let stderrLog = '';
     child.stderr.on('data', (chunk) => {
@@ -1892,8 +1913,11 @@ class ClaudePersistentRuntime {
       if (onProgress && event) {
         const name = (event.data && event.data.name) || '';
         const phase = (event.data && event.data.phase) || '';
+        const summary = (event.data && event.data.summary) || '';
         const fallback = event.stream === 'tool'
-          ? (phase === 'end' ? `工具 ${name} 执行完成` : `运行了工具 ${name}`)
+          ? (phase === 'result' ? '工具执行完成'
+            : phase === 'end' ? `🔧 ${name}${summary ? `：${summary}` : ' 执行完成'}`
+            : `🔧 ${name}…`)
           : (phase === 'end' ? '思考完成' : '思考中');
         onProgress(fallback, event);
       }

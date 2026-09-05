@@ -70,21 +70,41 @@ function extractClaudeResultUsage(ev) {
 // ── claude stream-json 过程帧分类（CodexHost 式工具调用/思考可见性）────
 // 每轮一个分类器实例（有状态：content_block index → 块类型）。输入原始
 // stream-json 行对象，输出宿主过程栏已支持的结构化事件（stream:'tool'/
-// 'item'reasoning），文本 delta/终态帧不归它管（返回 null 走原路径）。
+// 'item'reasoning），文本 delta/终态帧不归它管（返回原路径）。
+// P3394 二期找回补强（G-26 过程可见性）：input_json_delta 流式拼接工具
+// 参数，content_block_stop 解析出最有信息量的字段（command/file_path/
+// pattern 等）作摘要；user 帧的 tool_result 转完成提示——过程栏能看到
+// "在跑什么、跑到哪"而不只是"在调工具"。
 function createClaudeStreamEventClassifier() {
-  const blockTypes = new Map(); // index → { type, name }
+  const blockTypes = new Map(); // index → { type, name, jsonBuf }
   let thinkingOpen = false;
+  const summarizeToolInput = (input) => {
+    if (!input || typeof input !== 'object') return '';
+    const v = input.file_path || input.command || input.pattern || input.path
+      || input.url || input.query || input.keyword || input.description;
+    return v ? String(v).slice(0, 120) : '';
+  };
   return function classify(line) {
     let ev;
     try { ev = typeof line === 'string' ? JSON.parse(line) : line; } catch { return null; }
-    if (!ev || ev.type !== 'stream_event' || !ev.event || typeof ev.event !== 'object') return null;
+    if (!ev) return null;
+    // user 帧 tool_result：工具执行完成的明确信号（claude 双工流式里
+    // content_block_stop 只表示参数发完，真正执行完以 tool_result 为准）。
+    if (ev.type === 'user' && ev.message && Array.isArray(ev.message.content)) {
+      const hasToolResult = ev.message.content.some(
+        (c) => c && c.type === 'tool_result' && typeof c.tool_use_id === 'string',
+      );
+      if (hasToolResult) return { stream: 'tool', data: { name: '', phase: 'result' } };
+      return null;
+    }
+    if (ev.type !== 'stream_event' || !ev.event || typeof ev.event !== 'object') return null;
     const inner = ev.event;
     const idx = typeof inner.index === 'number' ? inner.index : -1;
     if (inner.type === 'content_block_start') {
       const block = (inner.content_block && typeof inner.content_block === 'object') ? inner.content_block : {};
       const type = String(block.type || '');
       const name = typeof block.name === 'string' ? block.name : '';
-      blockTypes.set(idx, { type, name });
+      blockTypes.set(idx, { type, name, jsonBuf: '' });
       if (type === 'tool_use') {
         const input = (block.input && typeof block.input === 'object' && Object.keys(block.input).length)
           ? block.input : null;
@@ -96,12 +116,22 @@ function createClaudeStreamEventClassifier() {
       }
       return null;
     }
+    if (inner.type === 'content_block_delta' && inner.delta && inner.delta.type === 'input_json_delta'
+      && typeof inner.delta.partial_json === 'string') {
+      const block = blockTypes.get(idx);
+      if (block && block.type === 'tool_use' && block.jsonBuf.length < 64 * 1024) {
+        block.jsonBuf += inner.delta.partial_json;
+      }
+      return null;
+    }
     if (inner.type === 'content_block_stop') {
       const block = blockTypes.get(idx);
       blockTypes.delete(idx);
       if (!block) return null;
       if (block.type === 'tool_use') {
-        return { stream: 'tool', data: { name: block.name || 'tool', phase: 'end' } };
+        let summary = '';
+        try { summary = summarizeToolInput(JSON.parse(block.jsonBuf || '{}')); } catch { /* 保留空摘要 */ }
+        return { stream: 'tool', data: { name: block.name || 'tool', phase: 'end', ...(summary ? { summary } : {}) } };
       }
       if (block.type === 'thinking' && thinkingOpen) {
         thinkingOpen = false;
