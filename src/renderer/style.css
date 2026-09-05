@@ -7368,9 +7368,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
      the measured floating input wrapper height so quote previews / queues
      keep the scrollbar track clear of the composer. We use padding-bottom (NOT bigger margin)
      because the goal is more whitespace inside the scroll view, not
-     pushing the viewport upward — that was the wrong fix earlier. */
+     pushing the viewport upward — that was the wrong fix earlier.
+     The docked terminal (#terminal-panel) is an in-flow flex sibling of
+     .chat-history, so it already lifts the history — do NOT add
+     --terminal-height to this margin: reserving it twice collapses the
+     history to ~100px and leaves a white void in the middle of the pane. */
   padding: 24px 10% 80px;
-  margin-bottom: calc(var(--chat-input-reserve, 140px) + var(--terminal-height, 0px));
+  margin-bottom: var(--chat-input-reserve, 140px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -9975,7 +9979,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   scroll-margin-bottom: 24px;
 }
 .chat-history .delete-confirm-card {
-  scroll-margin-bottom: calc(var(--chat-input-reserve, 140px) + var(--terminal-height, 0px) + 24px);
+  /* Terminal is an in-flow sibling (not overlay) — reserve only the input
+     area so the card scrolls clear of the floating composer. */
+  scroll-margin-bottom: calc(var(--chat-input-reserve, 140px) + 24px);
 }
 .skills-chat-messages .delete-confirm-card,
 .agents-chat-messages .delete-confirm-card {
