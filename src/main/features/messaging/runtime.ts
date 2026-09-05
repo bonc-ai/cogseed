@@ -129,6 +129,10 @@ export class RuntimeInstance {
   readonly controller = new AbortController();
   started: Promise<void> = Promise.resolve();
   readonly listeners = new Map<string, () => void>();
+  /** 跨渠道接续（G2-1）：每个已挂监听实际订阅的 cid。attachBindingListener
+   *  依此识别"绑定被配对指向了另一任务"（同 key、cid 变了）并自动重挂——
+   *  否则入站路径的幂等检查会让旧任务的订阅一直占着 key。 */
+  private readonly listenerCids = new Map<string, string>();
   readonly outboundDeliveries = new Set<Promise<void>>();
   active = true;
   statusWrite: Promise<void> = Promise.resolve();
@@ -343,6 +347,15 @@ export class RuntimeInstance {
     message: OutboundMessage,
     turnSourceMsgId?: string,
   ): void {
+    // G2-2 静音：本渠道只进不出——台账型出站（回合正文/失败回执）整体抑制。
+    if (binding.mutedAt) {
+      log.info('messaging outbound suppressed (binding muted)', {
+        instanceId: this.instanceId,
+        key: binding.key,
+        messageId: message.id,
+      });
+      return;
+    }
     const delivery = this.deliverGroupMessage(binding, message, turnSourceMsgId);
     this.outboundDeliveries.add(delivery);
     void delivery.then(
@@ -380,6 +393,10 @@ export class RuntimeInstance {
   async deliverText(binding: MessagingBinding, envelope: InboundEnvelope, text: string): Promise<void> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) return;
+    // G2-2 静音说明：本方法承载的是"用户刚敲的命令的即时回声"（命令回执、
+    // 撤权引导），不拦——否则静音渠道里 /status 无响应、/unmute 的解除
+    // 确认也被吞，用户无法自救。静音只抑制任务产出（trackOutboundDelivery
+    // 与流式卡片）。
     const key = ledger.deliveryKey(this.instanceId, envelope.externalMessageId);
     const begun = await ledger.beginDelivery(
       this.uid,
@@ -392,9 +409,17 @@ export class RuntimeInstance {
   // ── Binding bus listener ─────────────────────────────────────────────────
 
   /** Subscribe to the bound conversation's group-chat bus events and route
-   * them into the reply/card machinery. One listener per binding key. */
+   *  them into the reply/card machinery. One listener per binding key;
+   *  re-attaching after the binding was pointed at a different task (G2-1
+   *  /pair) swaps the subscription to the new cid automatically. */
   async attachBindingListener(binding: MessagingBinding): Promise<void> {
-    if (!this.isCurrent() || this.listeners.has(binding.key)) return;
+    if (!this.isCurrent()) return;
+    if (this.listeners.has(binding.key)) {
+      // True idempotency requires the SAME cid; a changed cid means the
+      // binding joined another task — tear the old subscription down first.
+      if (this.listenerCids.get(binding.key) === binding.cid) return;
+      this.detachBindingListener(binding.key);
+    }
     const streamingEnabled = this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter);
     log.info('messaging binding listener attached', { instanceId: this.instanceId, key: binding.key, cid: binding.cid, streamingEnabled });
     const unsubscribe = subscribe(this.uid, binding.cid, (event: GroupEvent) => {
@@ -464,6 +489,25 @@ export class RuntimeInstance {
       });
     });
     this.listeners.set(binding.key, unsubscribe);
+    this.listenerCids.set(binding.key, binding.cid);
+  }
+
+  /** 退订并移除一个绑定的总线监听（attach 重挂与外部清理共用）。 */
+  detachBindingListener(key: string): void {
+    const unsubscribe = this.listeners.get(key);
+    if (unsubscribe) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        log.warn('messaging bus listener unsubscribe failed', {
+          instanceId: this.instanceId,
+          key,
+          error: (error as Error).message,
+        });
+      }
+    }
+    this.listeners.delete(key);
+    this.listenerCids.delete(key);
   }
 
   // ── Approval cards ───────────────────────────────────────────────────────
@@ -558,6 +602,8 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'process' }>,
   ): void {
+    // G2-2 静音：流式卡片同样属于出站，静音渠道不创建/更新卡片。
+    if (binding.mutedAt) return;
     const data = event.data && typeof event.data === 'object' ? event.data : {};
     const isDelta = data.type === 'delta' && typeof data.text === 'string';
     if (!isDelta && !toolLinesFromProcessEvent(event).length) return;
@@ -660,6 +706,8 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'turn_silent' }>,
   ): void {
+    // G2-2 静音：静音渠道不收尾卡片（没有开过的卡片不需要收）。
+    if (binding.mutedAt) return;
     const turnId = cardEventTurnId(event);
     if (!turnId) return;
     const key = cardStateKey(binding.key, turnId);

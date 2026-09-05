@@ -100,6 +100,7 @@ function normalizeBinding(key: string, value: unknown): MessagingBinding | null 
     ...(item.replyInThread === true ? { replyInThread: true } : {}),
     ...(boundedOptionalText(item.contextTokenRef, 512) ? { contextTokenRef: boundedOptionalText(item.contextTokenRef, 512) } : {}),
     ...(typeof item.unboundedAt === 'string' && item.unboundedAt ? { unboundedAt: item.unboundedAt } : {}),
+    ...(typeof item.mutedAt === 'string' && item.mutedAt ? { mutedAt: item.mutedAt } : {}),
     createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : nowIso(),
   };
@@ -350,6 +351,56 @@ export async function setBindingUnbound(uid: string, key: string, unbound: boole
     await writeBindings(uid, data);
     return { ...binding };
   });
+}
+
+/** 跨渠道接续（G2-2）静音：muted=true 写入 mutedAt（本渠道只进不出，
+ *  出站正文/卡片/回执由 runtime 统一抑制）；false 恢复。 */
+export async function setBindingMuted(uid: string, key: string, muted: boolean): Promise<MessagingBinding | null> {
+  assertUserId(uid);
+  return lockFor(uid).runExclusive(async () => {
+    const data = await readBindings(uid);
+    const binding = data.bindings[key];
+    if (!binding) return null;
+    if (muted) binding.mutedAt = nowIso();
+    else delete binding.mutedAt;
+    binding.updatedAt = nowIso();
+    data.bindings[key] = binding;
+    await writeBindings(uid, data);
+    return { ...binding };
+  });
+}
+
+/** 跨渠道接续（G2-1）配对加入：把本渠道绑定指向同一用户的另一任务
+ *  （targetCid）。旧 cid 的会话文件与历史全部保留（与 /new 轮换同义，
+ *  仅改"新消息进哪个任务"）。调用方负责让 runtime 重挂总线监听
+ *  （rebindBindingListener），否则本渠道收不到新任务的出站事件。 */
+export async function pointBindingToTask(
+  uid: string,
+  key: string,
+  targetCid: string,
+): Promise<MessagingBinding | null> {
+  assertUserId(uid);
+  if (!safeId(targetCid)) return null;
+  return lockFor(uid).runExclusive(async () => {
+    const data = await readBindings(uid);
+    const binding = data.bindings[key];
+    if (!binding || binding.cid === targetCid) return binding ? { ...binding } : null;
+    binding.cid = targetCid;
+    binding.updatedAt = nowIso();
+    data.bindings[key] = binding;
+    await writeBindings(uid, data);
+    return { ...binding };
+  });
+}
+
+/** 跨渠道接续（G2-1）：列出同一 uid 下与 targetCid 指向同一任务的全部
+ *  启用绑定（含已静音的——静音只是出站抑制，仍是任务成员）。 */
+export async function listBindingsForTask(uid: string, targetCid: string): Promise<MessagingBinding[]> {
+  assertUserId(uid);
+  const data = await readBindings(uid);
+  return Object.values(data.bindings).filter(
+    (b) => b.cid === targetCid && !b.unboundedAt,
+  );
 }
 
 export const _bindingsTestHooks = { bindingKey, legacyBindingKey, readBindings };
