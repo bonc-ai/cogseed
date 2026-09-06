@@ -196,6 +196,7 @@ import * as taskNotifications from './features/task_notifications';
 import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
 import { startAutoCloseRecovery, startGroupKstarClosure } from './features/kstar/task-closure';
 import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
+import { startTaskAutoArchiveOrchestrator } from './features/kb_task_auto_archive';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -1304,6 +1305,8 @@ if (!gotLock) {
     app.once('before-quit', stopAutoCloseRecovery);
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
+    const stopTaskAutoArchive = startTaskAutoArchiveOrchestrator();
+    app.once('before-quit', stopTaskAutoArchive);
     app.once('before-quit', () => {
       void stopP3394Bridge().catch(() => {});
       // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
