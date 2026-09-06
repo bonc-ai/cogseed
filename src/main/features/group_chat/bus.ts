@@ -1819,7 +1819,7 @@ export interface ProjectedGroupProcessInput {
   cid: string;
   agentId: string;
   turnId: string;
-  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
+  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta' | 'progress'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
     | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
   data: Record<string, unknown>;
