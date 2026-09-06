@@ -40,7 +40,7 @@ describe('P3394 protocol MVP', () => {
       interface_contract: {
         version: 1,
         role: 'external_expert',
-        runtime: { kind: 'cli', cli: 'codex' },
+        runtime: { kind: 'p3394-gateway', cli: 'codex' },
         io: { input: 'task_message', output: 'final_message_with_artifacts' },
         governance: {
           session_role: 'participant_only',
@@ -59,10 +59,13 @@ describe('P3394 protocol MVP', () => {
       p3394_version: 'p3394-lite-mvp/1',
       normative_interface: 'handle_message',
     });
-    expect(manifest.channels).toEqual(expect.arrayContaining([
+    // G-19 收口：契约 runtime 归一二态后 `cli` channel 死分支已删——外接
+    // 网关契约只声明 group_chat 通道（与收口前线上实际行为一致：持久化契约
+    // 由 agents.ts 派生，gateway 契约本就不触发 cli channel）。
+    expect(manifest.channels).toEqual([
       expect.objectContaining({ channel: 'group_chat', principal_source: 'cogseed_user' }),
-      expect.objectContaining({ channel: 'cli', id: 'codex', principal_source: 'cogseed_runtime' }),
-    ]));
+    ]);
+    expect(manifest.channels.some((c) => c.channel === 'cli')).toBe(false);
     expect(manifest.session.ownership.role).toBe('participant_only');
     expect(manifest.capability.declarations.map((d) => d.name)).toEqual(expect.arrayContaining([
       'handle_message',

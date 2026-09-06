@@ -63,7 +63,7 @@ export async function startCogSeedInteractiveFollowup(
     kind?: string; cli?: string; model?: string;
     custom_args?: string[]; cli_provider_id?: string;
   };
-  const isLocalCli = rt.kind === 'cli' || rt.kind === 'p3394-gateway';
+  const isLocalCli = rt.kind === 'p3394-gateway';
   return controller.startCogSeedTask(userId, {
     requestId,
     task,

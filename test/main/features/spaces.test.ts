@@ -15,7 +15,7 @@ vi.mock('../../../src/main/features/skills', () => ({
 vi.mock('../../../src/main/features/agents', () => ({
   listAgents: async () => Array.from(visibleAgentIds).map((agent_id) =>
     externalCliAgentIds.has(agent_id)
-      ? { agent_id, name: agent_id, runtime: { kind: 'cli', cli: agent_id } }
+      ? { agent_id, name: agent_id, runtime: { kind: 'p3394-gateway', cli: agent_id } }
       : { agent_id, name: agent_id }),
 }));
 
@@ -147,15 +147,15 @@ describe('spaces › resolveSpaceResources（纯函数）', () => {
   });
 
   it('base_agent 映射兼容网关外接 CLI——源码契约', () => {
-    // 网关外接 CLI 的 runtime.kind 是 'p3394-gateway'，不是 'cli'。
-    // baseAgentToAgentId 若只认 'cli'，空间 base_agents 选了外接 CLI
-    // 也映射不到成员 → effective_agents 缺它 → 空间会话 @ tab 看不到
-    // （回归：2026-08-17 实机）。此处做源码级契约保护。
+    // 网关外接 CLI 的 runtime.kind 是 'p3394-gateway'（G-19 收口：legacy
+    // 'cli' 读回即迁移，归一后二态）。baseAgentToAgentId 必须认网关型，
+    // 否则空间 base_agents 选了外接 CLI 也映射不到成员 → effective_agents
+    // 缺它 → 空间会话 @ tab 看不到（回归：2026-08-17 实机）。源码级契约保护。
     const source = fs.readFileSync(path.join(__dirname, '../../../src/main/features/spaces.ts'), 'utf8');
     const start = source.indexOf('function baseAgentToAgentId');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, start + 1200);
-    expect(body).toContain("a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway'");
+    expect(body).toContain("a.runtime.kind === 'p3394-gateway'");
   });
 
   it('extra 与 bundle 重复的 id 去重（保留模板优先序）', () => {
@@ -571,7 +571,7 @@ describe('spaces › listSpaces 失效数（真实有效集合，假阳性回归
     visibleAgentIds.add('ag-1');
     const extId = 'agent-claude-code';
     visibleAgentIds.add(extId);
-    externalCliAgentIds.add(extId); // 外接 CLI：runtime.kind=cli
+    externalCliAgentIds.add(extId); // 外接 CLI：runtime.kind=p3394-gateway
 
     const spaces = await loadSpaces();
     const created = await spaces.createSpace(TEST_UID, { name: '外接空间', template_id: 'student', base_agents: [extId] });

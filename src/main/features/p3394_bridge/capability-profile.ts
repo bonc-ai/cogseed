@@ -57,9 +57,12 @@ export function buildP3394CapabilityProfile(agent: Agent): P3394CapabilityProfil
   const boundaryResult = validateIdentityRuntimeBoundary(identityResult.identity, agent.runtime);
   if (boundaryResult.ok === false) return { ok: false, error: boundaryResult.error };
 
-  const runtimeKind: P3394RuntimeKind = agent.runtime?.kind === 'cli' ? 'local-cli' : 'cogseed-native';
+  // G-19：归一后 runtime 无 'cli'——原 `=== 'cli' ? 'local-cli'` 死臂已删，
+  // 恒为 cogseed-native（与删除前实际行为一致；gateway 的 local-cli 归属
+  // 不在此判定）。原 `local-cli` capability 门与 supports_artifacts 门均因
+  // 此恒不触发/恒 false，一并按死臂折叠。
+  const runtimeKind: P3394RuntimeKind = 'cogseed-native';
   const capabilities = ['handle_message'];
-  if (runtimeKind === 'local-cli') capabilities.push('local-cli');
 
   const skillScope = dedupeStrings(agent.skill_list);
   if (Array.isArray(agent.skill_list)) capabilities.push('cogseed-skill-scope');
@@ -70,7 +73,7 @@ export function buildP3394CapabilityProfile(agent: Agent): P3394CapabilityProfil
     capabilities: Array.from(new Set(capabilities)),
     supported_performatives: [...P3394_ENVELOPE_PERFORMATIVES],
     supports_streaming: false,
-    supports_artifacts: runtimeKind === 'local-cli',
+    supports_artifacts: false, // G-19 死臂折叠：runtimeKind 恒 cogseed-native
     ...(Array.isArray(agent.skill_list) ? { skill_scope: skillScope } : {}),
   };
 

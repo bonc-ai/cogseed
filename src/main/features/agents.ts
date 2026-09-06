@@ -243,12 +243,12 @@ export interface Agent {
   runtime_stats?: AgentRuntimeStats;
   /** Execution backend. Missing / `kind === 'in_process'` (the default)
    *  means the agent runs through `core-agent` like every existing
-   *  agent. `kind === 'cli'` routes the worker turn through
-   *  `features/local_agents/runner.ts` to spawn a local coding CLI
-   *  (claude code / codex / openclaw / opencode / hermes). The field is
+   *  agent. `kind === 'p3394-gateway'` routes the worker turn through
+   *  the P3394 bridge gateway (one protocol for any local coding CLI:
+   *  claude code / codex / openclaw / opencode / hermes). The field is
    *  set at create time from the modal's runtime selector and edited
-   *  via the dedicated `chat_agent_setup_cli.md` prompt; the LLM
-   *  doesn't author it directly. */
+   *  via the dedicated agent-setup prompts; the LLM doesn't author it
+   *  directly. */
   runtime?: AgentRuntime;
   /** Normalized CogSeed agent protocol contract. Derived at load time and
    *  optionally persisted so runtime callers have one stable governance shape
@@ -385,20 +385,6 @@ function _canonicalOutputFormat(v: unknown): Exclude<OutputFormat, 'markdown_onl
 export type AgentRuntime =
   | { kind: 'in_process' }
   | {
-      kind: 'cli';
-      /** Canonical CLI type — must match `LOCAL_CLI_TYPES` in
-       *  `features/local_agents/registry.ts`. Validated on read; an
-       *  unknown value drops the runtime field entirely. */
-      cli: string;
-      /** Optional model id; empty means "let the CLI pick its default". */
-      model?: string;
-      /** Extra CLI flags appended after our own args. Strings only;
-       *  not shell-parsed by us. */
-      custom_args?: string[];
-      /** Optional synthetic custom-provider id (`cp:<id>`). */
-      cli_provider_id?: string;
-    }
-  | {
       /** P3394-managed external agent: every turn goes through the bridge's
        *  outbound hub to the agent's p3394-gateway node — one protocol for
        *  any external agent (agent-modal 「外接」tab, P3394 way). */
@@ -419,10 +405,27 @@ export type AgentRuntime =
       effort_args?: string;
     };
 
+/** Legacy 直连 `cli` runtime 的原始形态：只合法存在于磁盘旧数据与写入入口
+ *  （create/update 的入参侧）——G-19 后 `_normalizeRuntime` 把它一律读回为
+ *  p3394-gateway（磁盘迁移见 `_migrateLegacyCliRuntime`），`Agent.runtime`
+ *  上永远只有二态 `AgentRuntime`。 */
+export interface LegacyCliAgentRuntimeInput {
+  kind: 'cli';
+  /** Canonical CLI type（同 LOCAL_CLI_TYPES）。 */
+  cli: string;
+  model?: string;
+  custom_args?: string[];
+  cli_provider_id?: string;
+}
+
+/** 写入路径（create/update/编辑提示词）接受的 runtime 入参：二态 + 待归一的
+ *  legacy 原始形态。读取路径永远返回归一后的 `AgentRuntime`。 */
+export type AgentRuntimeInput = AgentRuntime | LegacyCliAgentRuntimeInput;
+
 export interface AgentInterfaceContract {
   version: 1;
   role: 'cogseed_core' | 'external_expert';
-  runtime: { kind: 'in_process' } | { kind: 'cli'; cli: string } | { kind: 'p3394-gateway'; cli: string };
+  runtime: { kind: 'in_process' } | { kind: 'p3394-gateway'; cli: string };
   io: {
     input: 'task_message';
     output: 'final_message' | 'final_message_with_artifacts';
@@ -1103,8 +1106,9 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
  *  core-agent. Single source of truth — group_chat / chats / renderer
  *  all import this rather than re-checking `runtime?.kind` directly.
  *  G-19（兼容期结束）：legacy `cli` 直连已删除（读回即迁移为
- *  p3394-gateway，见 _migrateLegacyRuntime），本判定与
- *  isP3394GatewayAgent 等价，保留为语义别名。 */
+ *  p3394-gateway，见 _migrateLegacyCliRuntime），本判定与
+ *  isP3394GatewayAgent 等价，保留为 deprecated 语义别名（R1 类型级
+ *  收窄后 AgentRuntime 联合已无 'cli' 成员）。 */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
   return !!agent && agent.runtime?.kind === 'p3394-gateway';
 }
@@ -1123,13 +1127,11 @@ function deriveAgentInterfaceContract(
   runtime: AgentRuntime | null | undefined,
   outputFormat: ReturnType<typeof _canonicalOutputFormat>,
 ): AgentInterfaceContract {
-  if (runtime?.kind === 'cli' || runtime?.kind === 'p3394-gateway') {
+  if (runtime?.kind === 'p3394-gateway') {
     return {
       version: 1,
       role: 'external_expert',
-      runtime: runtime.kind === 'p3394-gateway'
-        ? { kind: 'p3394-gateway', cli: runtime.cli }
-        : { kind: 'cli', cli: runtime.cli },
+      runtime: { kind: 'p3394-gateway', cli: runtime.cli },
       io: { input: 'task_message', output: _agentContractOutput(outputFormat) },
       governance: {
         session_role: 'participant_only',
@@ -1249,9 +1251,7 @@ export function getCliProjectDirInfoForAgent(
   projectId?: string,
 ): AgentCliProjectDirInfo {
   const workspacePath = getWorkspacePath(userId, projectId);
-  const cli = agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway'
-    ? agent.runtime.cli
-    : '';
+  const cli = agent.runtime?.kind === 'p3394-gateway' ? agent.runtime.cli : '';
   const isCoding = cliIsCodingAgent(cli);
   const entry = isCoding ? _readAgentRuntimeConfig(userId).project_dirs[agent.agent_id] : undefined;
   const customPath = entry?.path ? path.resolve(entry.path) : '';
@@ -1289,9 +1289,7 @@ export async function setAgentCliProjectDir(
   if (!safeId(agentId)) return null;
   const agent = await getAgent(agentId);
   if (!agent) return null;
-  const cli = agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway'
-    ? agent.runtime.cli
-    : '';
+  const cli = agent.runtime?.kind === 'p3394-gateway' ? agent.runtime.cli : '';
   if (!cliIsCodingAgent(cli)) {
     const err: any = new Error('agent is not an external coding agent');
     err.code = 'E_AGENT_NOT_CODING_CLI';
@@ -1704,8 +1702,9 @@ export interface CreateAgentOptions {
   knowhow?: string[];
   standards?: string[];
   /** Picked at create time from the modal's runtime selector. Stored as
-   *  authored — `normalizeAgent` validates on read. */
-  runtime?: AgentRuntime;
+   *  authored — `normalizeAgent` validates on read. Accepts the legacy
+   *  raw `cli` shape; it normalizes to `p3394-gateway` on persist. */
+  runtime?: AgentRuntimeInput;
   /** Marketplace category code. Empty string / omitted remains tolerated for legacy/manual specs. */
   category?: string;
   /** Output rendering preference picked in the create-modal dropdown. Validated against
@@ -1878,7 +1877,7 @@ export async function createCustomAgent(
   // selection is the implicit default and not written to disk so old
   // tooling diffs cleanly.
   const rt = _normalizeRuntime(runtime);
-  if (rt && (rt.kind === 'cli' || rt.kind === 'p3394-gateway')) {
+  if (rt && rt.kind === 'p3394-gateway') {
     data.runtime = rt;
     // Coding CLIs (claude / codex) need a working directory. We inject
     // a `project_dir` input dependency so the standard agent-input-form
@@ -1974,11 +1973,12 @@ export interface UpdateAgentFields {
   knowhow?: string[] | null;
   standards?: string[] | null;
   /** Three-way update:
-   *   AgentRuntime → replace (validated; in_process collapses to "drop")
-   *   null         → drop runtime (revert to in_process default)
-   *   omitted      → untouched
+   *   AgentRuntimeInput → replace (validated; in_process collapses to "drop";
+   *                       legacy raw `cli` normalizes to `p3394-gateway`)
+   *   null              → drop runtime (revert to in_process default)
+   *   omitted           → untouched
    *  Authored by the create modal + edit UI, not the LLM edit prompt. */
-  runtime?: AgentRuntime | null;
+  runtime?: AgentRuntimeInput | null;
   /** Marketplace category code. Empty string drops the field; omitted = untouched.
    *  Authored by hidden create defaults or by the agent-edit LLM via the `<category>` sub-tag.
    *  Missing model output is repaired to the default category on create. */
@@ -2290,13 +2290,15 @@ async function _applyAgentUpdates(
     // authored for a CLI runtime. The renderer enforces this in the
     // detail-page selector; we mirror it here so the rule survives
     // any other update path (tests, future scripts, IPC misuse).
-    const existingKind: 'cli' | 'in_process' = data.runtime &&
-      _normalizeRuntime(data.runtime)?.kind === 'p3394-gateway' ? 'cli' : 'in_process';
-    const incomingKind: 'cli' | 'in_process' | null = v === null
-      ? 'in_process'
-      : (_normalizeRuntime(v)?.kind === 'p3394-gateway' ? 'cli' : 'in_process');
-    if (incomingKind !== null && incomingKind !== existingKind) {
-      log.warn(`agent ${agentId}: ignored runtime kind switch ${existingKind} → ${incomingKind}`);
+    const existingExternal = !!data.runtime &&
+      _normalizeRuntime(data.runtime)?.kind === 'p3394-gateway';
+    // v === null 语义上是「回退 in_process」（incomingExternal = false）——
+    // 与既存外接型冲突时同样走「忽略并告警」分支（原 incomingKind 逻辑）。
+    const incomingExternal = v === null
+      ? false
+      : _normalizeRuntime(v)?.kind === 'p3394-gateway';
+    if (incomingExternal !== existingExternal) {
+      log.warn(`agent ${agentId}: ignored runtime kind switch ${existingExternal ? 'external' : 'in_process'} → ${incomingExternal ? 'external' : 'in_process'}`);
     } else if (v === null) {
       delete data.runtime;
     } else {
@@ -2304,13 +2306,14 @@ async function _applyAgentUpdates(
       if (!rt || rt.kind === 'in_process') delete data.runtime;
       else data.runtime = rt;
     }
-    // Reconcile the project_dir input with the (post-update) cli kind.
+    // Reconcile the project_dir input with the (post-update) external kind.
     // Coding cli ↔ project_dir input is a contract, not a user-authored
     // schema: swap claude → codex keeps it, swap to a non-coding cli
     // drops it, etc. We don't touch any other input the user defined.
-    const finalCli = data.runtime && _normalizeRuntime(data.runtime)?.kind === 'cli'
-      ? (_normalizeRuntime(data.runtime) as Extract<AgentRuntime, { kind: 'cli' }>).cli
-      : '';
+    // G-19 保真说明：归一后 `_normalizeRuntime` 只回二态，原 `kind === 'cli'`
+    // 取值半边恒假（finalCli 恒 ''→ project_dir 输入在 runtime 更新时总被
+    // 移除）——此为既有行为，本次仅删除死半边，不改语义。
+    const finalCli = '';
     const wantsProjectDir = cliIsCodingAgent(finalCli);
     const inputs = Array.isArray(data.inputs) ? validateAgentInputs(data.inputs) : [];
     const without = inputs.filter((i) => i.id !== PROJECT_DIR_INPUT_ID);
@@ -2827,10 +2830,10 @@ export function buildAgentEditSystemPrompt(agent: {
   standards?: string[];
   category?: string;
   interactive?: boolean;
-  /** When the agent is CLI-backed, switch to `chat_agent_setup_cli.md`
-   *  which omits workflow/skills authoring and tells the LLM not to
-   *  emit those sub-tags. */
-  runtime?: AgentRuntime;
+  /** Legacy field kept for call-site compatibility. G-19 后归一只回二态，
+   *  原 `kind === 'cli' → chat_agent_setup_cli.md` 切换臂为死分支已删
+   *  （runtime 永远不会是 'cli'，模板恒为 `chat_agent_setup.md`）。 */
+  runtime?: AgentRuntimeInput;
 }): string {
   // Resolve all three forms into a single legacy `$description` placeholder
   // (template still uses $description in this phase) plus the bilingual
@@ -2840,11 +2843,6 @@ export function buildAgentEditSystemPrompt(agent: {
   const zh = (agent.description_zh || '').trim() || (legacy && isChinese ? legacy : '');
   const en = (agent.description_en || '').trim() || (legacy && !isChinese ? legacy : '');
   const display = legacy || zh || en;
-  const isCli = agent.runtime?.kind === 'cli';
-  // Pick the right template + the placeholder set it expects. The CLI
-  // template doesn't reference `$workflow` (workflow is hidden for CLI
-  // agents) but does reference the runtime cli + model so the LLM can
-  // talk concretely about which CLI it is.
   const profile = normalizeAgentProfile({
     profile: agent.profile,
     knowhow: agent.knowhow,
@@ -2854,33 +2852,20 @@ export function buildAgentEditSystemPrompt(agent: {
   const standardsText = profile?.standards?.length ? profile.standards.join('\n') : '(not provided)';
   const inputsJson = Array.isArray(agent.inputs) ? JSON.stringify(agent.inputs, null, 2) : '(not provided)';
   const skillsText = Array.isArray(agent.skill_list) ? agent.skill_list.join('\n') : '(not provided)';
-  const body = isCli
-    ? prompts.load('chat_agent_setup_cli', {
-        // Runtime cli + model are deliberately NOT passed: the LLM is
-        // told to stay CLI-agnostic in the description, and surfacing
-        // the current binding tempts it to name the CLI inline (which
-        // forbiddenly bakes a brand into the description).
-        name: agent.name || '',
-        description_zh: zh || '(not provided)',
-        description_en: en || '(not provided)',
-        inputs_json: inputsJson,
-        category: agent.category || '(not provided)',
-        interactive: agent.interactive === true ? 'true' : 'false',
-      })
-    : prompts.load('chat_agent_setup', {
-        name: agent.name || '',
-        description: display || '(not provided)',
-        description_zh: zh || '(not provided)',
-        description_en: en || '(not provided)',
-        icon: avatars.isKnownIcon(agent.icon) ? agent.icon : '(not provided)',
-        workflow: (agent.workflow || '').trim() || '(not provided)',
-        skills: skillsText || '(not provided)',
-        inputs_json: inputsJson,
-        knowhow_text: knowhowText,
-        standards_text: standardsText,
-        category: agent.category || '(not provided)',
-        interactive: agent.interactive === true ? 'true' : 'false',
-      });
+  const body = prompts.load('chat_agent_setup', {
+    name: agent.name || '',
+    description: display || '(not provided)',
+    description_zh: zh || '(not provided)',
+    description_en: en || '(not provided)',
+    icon: avatars.isKnownIcon(agent.icon) ? agent.icon : '(not provided)',
+    workflow: (agent.workflow || '').trim() || '(not provided)',
+    skills: skillsText || '(not provided)',
+    inputs_json: inputsJson,
+    knowhow_text: knowhowText,
+    standards_text: standardsText,
+    category: agent.category || '(not provided)',
+    interactive: agent.interactive === true ? 'true' : 'false',
+  });
   const tail = buildLanguageDirective(getLanguage());
   return `${body}\n\n---\n\n${tail}\n\n---\n\n${buildRuntimeDatetimeBlock()}`;
 }

@@ -177,15 +177,19 @@ const RELATIONSHIP_SPEECH_ACTS: Record<P3394Relationship, 'unrestricted' | P3394
 };
 
 function agentContract(agent: Agent): AgentInterfaceContract {
+  // G-19 保真说明：归一后 agent.runtime 只有二态，原各 `kind === 'cli'` 臂为
+  // 死臂（运行时恒走 else）——删除后无持久化契约的兜底仍恒为
+  // cogseed_core / in_process（与删除前实际行为一致）。持久化契约由
+  // agents.ts 派生覆盖（gateway → external_expert），走上面快路。
   return agent.interface_contract || {
     version: 1,
-    role: agent.runtime?.kind === 'cli' ? 'external_expert' : 'cogseed_core',
-    runtime: agent.runtime?.kind === 'cli' ? { kind: 'cli', cli: agent.runtime.cli } : { kind: 'in_process' },
+    role: 'cogseed_core',
+    runtime: { kind: 'in_process' },
     io: { input: 'task_message', output: 'final_message' },
     governance: {
-      session_role: agent.runtime?.kind === 'cli' ? 'participant_only' : 'owner_capable',
+      session_role: 'owner_capable',
       data_scope: 'visibility_slice_with_workspace',
-      uses_mate_skills: agent.runtime?.kind !== 'cli',
+      uses_mate_skills: true,
       records_process: true,
       records_tool_evidence: true,
     },
@@ -201,15 +205,6 @@ export function buildP3394Level2Manifest(agent: Agent): P3394LiteManifest {
     principal_source: 'cogseed_user',
     security: { inbound: { mode: 'implicit' } },
   }];
-  if (contract.runtime.kind === 'cli') {
-    channels.push({
-      id: contract.runtime.cli,
-      scope: '$PATH',
-      channel: 'cli',
-      principal_source: 'cogseed_runtime',
-      security: { inbound: { mode: 'implicit' } },
-    });
-  }
 
   return {
     version: 1,

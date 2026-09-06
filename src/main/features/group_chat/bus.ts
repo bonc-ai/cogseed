@@ -137,6 +137,7 @@ import {
 } from "../../util/project-layout";
 import { cachedConversationSpace } from "../chat_attachments";
 import * as agentsFeat from "../agents";
+import { resolveAgentExecutor } from "../agent-executor";
 import * as commanderRuntimeStats from "../commander_runtime_stats";
 import { getThinkingLevel } from "../config";
 import {
@@ -150,7 +151,6 @@ function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
 }
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
-  activityFromLocalEvent,
   activityFromProcessEvent,
   probeProcessLiveness,
   startTurnLeaseMonitor,
@@ -987,11 +987,7 @@ async function p3394ProtocolProcessItem(input: {
             phase: "normalized",
             ok: false,
             agent_id: input.actor.id,
-            role:
-              contract?.role ||
-              (input.agent.runtime?.kind === "cli"
-                ? "external_expert"
-                : "cogseed_core"),
+            role: contract?.role || "cogseed_core",
             relationship,
             speech_act: speechAct,
             error: error.body.reason_code,
@@ -1013,14 +1009,8 @@ async function p3394ProtocolProcessItem(input: {
           phase: "normalized",
           ok: true,
           agent_id: input.actor.id,
-          role:
-            contract?.role ||
-            (input.agent.runtime?.kind === "cli"
-              ? "external_expert"
-              : "cogseed_core"),
-          runtime_kind:
-            contract?.runtime.kind ||
-            (input.agent.runtime?.kind === "cli" ? "cli" : "in_process"),
+          role: contract?.role || "cogseed_core",
+          runtime_kind: contract?.runtime.kind || "in_process",
           p3394_level: manifest.conformance.p3394_level,
           relationship: result.message.metadata.relationship,
           speech_act: speechAct,
@@ -1029,8 +1019,7 @@ async function p3394ProtocolProcessItem(input: {
           canonical_session_id: result.message.canonical_session_id,
           session_role: manifest.session.ownership.role,
           uses_mate_skills:
-            contract?.governance.uses_mate_skills ??
-            input.agent.runtime?.kind !== "cli",
+            contract?.governance.uses_mate_skills ?? true,
         },
       },
     },
@@ -3462,16 +3451,6 @@ function _isSlashCommand(text: string): boolean {
   return /^\/[A-Za-z][A-Za-z0-9_-]*(?=\s|$)/.test(text);
 }
 
-/** Treat the CLI's reply as "no useful text" when it's empty / whitespace
- *  or the literal "(no content)" sentinel some CLIs (claude code in
- *  particular) emit for slash commands that have no -p-mode effect. The
- *  slash-command success-return path uses this to swap an empty bubble
- *  for a confirmation note. */
-function _looksLikeNoOutput(text: string): boolean {
-  const t = (text || "").trim();
-  return t === "" || /^\(\s*no\s+content\s*\)$/i.test(t);
-}
-
 /** Strip a leading `@<recipient>` mention (display name or id form) and
  *  the whitespace separator that follows it. Used by the slash-command
  *  fast-path so `@Claude Code /new` collapses to `/new` before slash
@@ -4807,7 +4786,7 @@ async function runActorTurnBody(
   // and firstTokenAt (startedAt + first_token_ms) on the persisted reply.
   let agentRunResultAt: number | undefined;
   // Settled-reply metrics for the CLI-backed turn (assembled inside
-  // _runCliAgentTurn off the runner's done event). Undefined on internal
+  // the P3394 gateway turn result). Undefined on internal
   // model turns — those derive metrics from agentRunTimingData instead.
   let cliTurnMetrics: GroupMessageMetrics | undefined;
   // Wire the commander segment flush now that `streamingText` exists. Called
@@ -4940,7 +4919,7 @@ async function runActorTurnBody(
     let cliWorkingDir = wsRoot;
     if (
       agentsFeat.cliIsCodingAgent(
-        cliAgent.runtime?.kind === "cli" || cliAgent.runtime?.kind === "p3394-gateway"
+        cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.cli
           : "",
       )
@@ -5061,7 +5040,7 @@ async function runActorTurnBody(
       // 永久记住，「允许一次」记住到本会话结束），之后轮次静默放行。拒绝时
       // 消息不发送：向用户回一个明确提示并终止本回合。
       const cliRuntime =
-        cliAgent.runtime?.kind === "cli" || cliAgent.runtime?.kind === "p3394-gateway"
+        cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.cli
           : "";
       if (cliRuntime) {
@@ -5100,7 +5079,6 @@ async function runActorTurnBody(
       }
       // P3394 外接智能体：每一轮都通过桥的出站 hub 与受管网关节点协作
       // （同一协议覆盖 Hermes/Claude Code/Codex/OpenClaw/WorkBuddy 等）。
-      const isP3394Gateway = agentsFeat.isP3394GatewayAgent(cliAgent);
       // Required-input gate（第二期收口：直连与网关两通道共用）：必填输入
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
@@ -5117,12 +5095,14 @@ async function runActorTurnBody(
           gatewayTurnGoal = "req:" + lifecycle.requirement.id;
         }
       } catch { /* KStar 不可用时退回默认稳定会话 */ }
+      // R2 执行收口：外接轮次统一经 AgentExecutor（gateway 路径）。cwd /
+      // 首次唤起确认 / process 转发等前置逻辑保持在总线原位。G-19（兼容期
+      // 结束）：legacy `cli` 直连 else-臂为不可达死分支已删——进入本分支的
+      // cliAgent 必为网关型（:4435 判定），其「错误经返回值」的语义由
+      // executor 的错误 outcome 承载。
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
-        : isP3394Gateway
-        ? await (
-            await import("../p3394_bridge/p3394-gateway-turn")
-          ).runP3394GatewayTurn({
+        : await resolveAgentExecutor(cliAgent).run({
             uid,
             cid,
             agent: {
@@ -5187,25 +5167,13 @@ async function runActorTurnBody(
               }
             },
             onProcess: forwardProcess,
-          })
-        // G-19（兼容期结束）：legacy `cli` runtime 读回即迁移为 p3394-gateway
-        // （G-05 迁移器），直连执行分支已删除——此处不再有非网关路径。
-        : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
-            return {
-              text: "",
-              produced: [],
-              error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
-              failureKind: "runtime",
-              failureCode: "p3394_gateway_unreachable",
-              infrastructureFailure: true,
-            };
-          })();
+          });
       for (const p of cliOut.produced || []) await onFileWritten(p);
       // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
       // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认
       // runtime.model）。
       const cliRuntimeModel =
-        cliAgent.runtime && (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+        cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.model
           : undefined;
       const cliTurnModel = item.execConfig?.model || cliRuntimeModel;
@@ -5243,8 +5211,7 @@ async function runActorTurnBody(
       if (cliOut.error) {
         // 第二期收口对齐：用户可见的失败文案统一本地化（与直连路径同文案），
         // 原始后端错误只进日志，不透给渲染层。
-        const failedCli = cliAgent.runtime &&
-          (cliAgent.runtime.kind === "cli" || cliAgent.runtime.kind === "p3394-gateway")
+        const failedCli = cliAgent.runtime?.kind === "p3394-gateway"
           ? cliAgent.runtime.cli
           : "";
         errText = t("cli_agent.run_failed_detail", {
@@ -6271,8 +6238,8 @@ async function runActorTurnBody(
   let persistedMsg: GroupMessage | null = null;
   if (outcome.kind === "persist") {
     // Task 5: usage/timing metrics for this settled reply. CLI turns arrive
-    // fully assembled from _runCliAgentTurn (runner attaches startedAt /
-    // firstTokenAt to the terminal done event); internal model turns rebuild
+    // fully assembled from the gateway turn result (settled-reply usage
+    // carried on the reply envelope); internal model turns rebuild
     // them from the agent_run_result payload — duration_ms anchors startedAt,
     // first_token_ms anchors firstTokenAt relative to it. Fields the source
     // didn't report are omitted, never fabricated.
@@ -11532,523 +11499,6 @@ async function _maybeBuildCliInputForm(
   return `<agent-input-form>\n${body}\n</agent-input-form>`;
 }
 
-async function _runCliAgentTurn(opts: {
-  uid: string;
-  cid: string;
-  actor: { id: string; kind: ActorKind };
-  agent: import("../agents").Agent;
-  item: QueueItem;
-  slice: GroupMessage[];
-  projectId?: string;
-  spaceId?: string;
-  workingDir: string;
-  signal: AbortSignal;
-  onCoordinatorActivity?: (event: CoordinatorActivityEvent) => void;
-  onProcessInfo?: (pid: number) => void;
-  onProcess: (data: Record<string, unknown>) => void;
-}): Promise<{
-  text: string;
-  error?: string;
-  aborted?: boolean;
-  produced?: string[];
-  failureKind?: GroupMessageFailureKind;
-  failureCode?: string;
-  infrastructureFailure?: boolean;
-  /** Settled-reply metrics assembled from the runner's terminal done event
-   *  (startedAt/firstTokenAt + backend usage) plus the local tool-call count.
-   *  Absent when no backend done event carried metrics (missing CLI,
-   *  pre-dispatch rejection — nothing real ran). */
-  metrics?: GroupMessageMetrics;
-}> {
-  const runtime = opts.agent.runtime as Extract<
-    NonNullable<import("../agents").AgentRuntime>,
-    { kind: "cli" }
-  >;
-
-  // Unified execution entry: a per-task model override replaces the CLI's
-  // bound model for THIS turn only (runtime.model is the agent's saved
-  // default). CLI overrides carry a bare model id (no provider — the model
-  // is passed to the external CLI directly). Reasoning effort is forwarded
-  // per task too, but ONLY for CLIs with a real switch (see the runner.run
-  // thinkingLevel filter below — claude today); other CLIs keep their own
-  // reasoning configuration.
-  const cliModelForTurn = opts.item.execConfig?.model || runtime.model;
-  opts.onProcess({
-    type: "event",
-    event: {
-      stream: "execution",
-      data: {
-        phase: "config",
-        actor: opts.actor.id,
-        agent_id: opts.agent.agent_id,
-        ...(cliModelForTurn ? { model: cliModelForTurn } : {}),
-        cli: runtime.cli,
-        runtime: "cli",
-      },
-    },
-  });
-
-  // Required-input gate: a CLI agent never runs an LLM, so the form-emit
-  // logic in `chat_agent_in_group.md` (where in-process agents check their
-  // inputs_schema and emit `<agent-input-form>` themselves) doesn't fire.
-  // We mirror that here: if any required input is unfulfilled, return a
-  // synthetic body containing the form block — runTurn's
-  // `extractFormFromFinal` then lifts it into a `form` payload, the
-  // renderer shows the picker, and the user's submission re-dispatches
-  // through the standard pipeline. Only the `project_dir` input is
-  // currently auto-injected, but the gate is generic so future required
-  // inputs reuse the same path.
-  const formBlock = await _maybeBuildCliInputForm(
-    opts.uid,
-    opts.cid,
-    opts.agent,
-  );
-  if (formBlock) return { text: formBlock };
-
-  // Look up any prior CLI session bound to this (cid, aid, cli). If
-  // present, we ask the CLI to resume it (claude: `--resume <id>`,
-  // codex: `thread/resume`). With a valid resume handle, the prompt stays
-  // current-turn-only: CLI agents persist their own conversation records,
-  // and duplicating host chat history here bloats context and can confuse
-  // the CLI's native memory. Without a handle, but with prior visible
-  // turns, we bridge that transcript into the fresh CLI session.
-  const cliSessions = await import("../local_agents/sessions");
-  const resumeSessionId = await cliSessions.getSessionId(
-    opts.uid,
-    opts.cid,
-    opts.agent.agent_id,
-    runtime.cli,
-  );
-  const bridgeHistory =
-    !resumeSessionId && _hasPriorVisibleCliHistory(opts.item, opts.slice);
-  const promptText = await _buildCliPrompt(
-    opts.uid,
-    opts.cid,
-    opts.agent,
-    opts.item,
-    opts.slice,
-    bridgeHistory,
-    opts.spaceId,
-  );
-  // When `_buildCliPrompt` took the slash-command fast-path, promptText is
-  // the raw `/cmd …` we forwarded. Remember the command name so the
-  // success-return path below can swap CLI's (no content)/empty result
-  // for a helpful note instead of leaving an empty bubble — common with
-  // session-control slashes like `/new` / `/clear` that no-op in -p mode.
-  const slashCommandName = _isSlashCommand(promptText)
-    ? (/^(\/[A-Za-z][A-Za-z0-9_-]*)/.exec(promptText)?.[1] ?? null)
-    : null;
-  const runner = await import("../local_agents/runner");
-
-  let accText = "";
-  let resultText = "";
-  let aborted = false;
-  let backendSessionId: string | undefined;
-  // Task 5 metrics inputs: tool-call count (tool-event phase="use") and the
-  // terminal done event's timing/usage payload.
-  let cliToolCalls = 0;
-  let cliDoneMetrics: GroupMessageMetrics | undefined;
-  const produced = new Set<string>();
-  const pendingToolPaths = new Map<string, string[]>();
-  // Set when the CLI rejects our `--resume <id>` (e.g. claude code's
-  // "No conversation found with session ID …"). Triggers a one-time
-  // cleanup of the cliSessions binding so the next dispatch starts
-  // fresh instead of replaying the same broken resume forever. Detect
-  // by stderr-line pattern because there is no structured signal —
-  // each CLI phrases it slightly differently but they all carry the
-  // session-id hex.
-  let resumeRejected = false;
-  const _RESUME_REJECTED_PATTERNS = [
-    /No conversation found with session ID/i,
-    /session.*(not found|does not exist|expired|invalid)/i,
-  ];
-
-  const result = await runner.run({
-    uid: opts.uid,
-    cid: opts.cid,
-    agentId: opts.agent.agent_id,
-    agentName: opts.agent.name || opts.agent.agent_id,
-    ...(opts.projectId ? { projectId: opts.projectId } : {}),
-    cli: runtime.cli as import("../local_agents/registry").LocalCliType,
-    // Unified execution entry: per-task override wins over the agent's
-    // saved runtime.model for THIS turn only.
-    model: cliModelForTurn,
-    // Per-task reasoning effort — backends consume the field only when they
-    // have a real channel (claude: MAX_THINKING_TOKENS; codex: maps low/high
-    // to model_reasoning_effort) and safely ignore it otherwise, so no static
-    // gate is needed here. Other CLIs keep their own reasoning configuration.
-    ...((opts.item.execConfig?.effort === "low" || opts.item.execConfig?.effort === "high")
-      ? { thinkingLevel: opts.item.execConfig.effort }
-      : {}),
-    customArgs: runtime.custom_args,
-    ...(runtime.cli_provider_id ? { cliProviderId: runtime.cli_provider_id } : {}),
-    resumeSessionId: resumeSessionId || undefined,
-    prompt: promptText,
-    cwd: opts.workingDir,
-    signal: opts.signal,
-    onEvent: (e) => {
-      opts.onCoordinatorActivity?.(activityFromLocalEvent(e));
-      // Translate each LocalEvent into the `process` event shape the
-      // renderer's group-chat listener expects so output streams live
-      // into the placeholder bubble (text-delta) and the process rail
-      // (tool-event, stderr, process-info). Without this, the renderer
-      // treats every event as an unrecognized shape and only the final
-      // text appears at turn-end.
-      switch (e.type) {
-        case "text-delta":
-          if (typeof (e as any).text === "string") {
-            accText += (e as any).text as string;
-            // Slash-command turns: buffer text-delta in `accText` instead
-            // of streaming to the bubble. The success-return path below
-            // either swaps the body for "已发送命令 …" (CLI returned
-            // empty / "(no content)") or hands the accumulated text in
-            // one shot as the final msg.text. Streaming would otherwise
-            // flash the CLI's "(no content)" before our substitution
-            // lands, since renderer commits each delta to the bubble.
-            if (!slashCommandName) {
-              opts.onProcess({ type: "delta", text: (e as any).text });
-            }
-          }
-          break;
-        case "thinking":
-          if (typeof (e as any).text === "string") {
-            opts.onProcess({ type: "progress", text: (e as any).text });
-          }
-          break;
-        case "tool-event":
-          if ((e as any).phase === "use") {
-            cliToolCalls += 1;
-            const paths = extractWritablePathsFromCliTool(
-              e as any,
-              opts.workingDir,
-            );
-            if (paths.length)
-              pendingToolPaths.set(String((e as any).callId || ""), paths);
-          } else if ((e as any).phase === "result") {
-            const callId = String((e as any).callId || "");
-            const paths = pendingToolPaths.get(callId) || [];
-            for (const p of paths) produced.add(p);
-            if (callId) pendingToolPaths.delete(callId);
-          }
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "file-change":
-          for (const p of normalizeCliProducedPaths(
-            (e as any).paths,
-            opts.workingDir,
-          ))
-            produced.add(p);
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "process-info": {
-          const rawPid = (e as { pid?: unknown }).pid;
-          if (
-            typeof rawPid === "number" &&
-            Number.isInteger(rawPid) &&
-            rawPid > 0
-          ) {
-            opts.onProcessInfo?.(rawPid);
-          }
-          opts.onProcess({
-            type: "event",
-            event: { stream: "cli", data: { type: "process-info" } },
-          });
-          break;
-        }
-        case "status":
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "stderr-line":
-          if (resumeSessionId && typeof (e as any).line === "string") {
-            const line = (e as any).line as string;
-            if (_RESUME_REJECTED_PATTERNS.some((re) => re.test(line)))
-              resumeRejected = true;
-          }
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-          break;
-        case "done": {
-          if (typeof (e as any).output === "string")
-            resultText = (e as any).output as string;
-          if ((e as any).status === "cancelled") aborted = true;
-          if (typeof (e as any).sessionId === "string")
-            backendSessionId = (e as any).sessionId as string;
-          // Task 5: settle reply metrics off the runner-attached
-          // startedAt/firstTokenAt plus the backend's usage totals (input /
-          // output / cacheRead / cacheCreate → GroupMessageMetrics.usage).
-          const doneEv = e as {
-            metrics?: { startedAt?: unknown; firstTokenAt?: unknown };
-            usage?: {
-              input?: unknown;
-              output?: unknown;
-              cacheRead?: unknown;
-              cacheCreate?: unknown;
-              cost?: unknown;
-              costUsd?: unknown;
-              model?: unknown;
-            };
-          };
-          if (
-            doneEv.metrics &&
-            typeof doneEv.metrics.startedAt === "number" &&
-            Number.isFinite(doneEv.metrics.startedAt)
-          ) {
-            const usageIn =
-              doneEv.usage && typeof doneEv.usage === "object"
-                ? doneEv.usage
-                : undefined;
-            const usageOut: NonNullable<GroupMessageMetrics["usage"]> = {};
-            if (typeof usageIn?.input === "number")
-              usageOut.inputTokens = usageIn.input;
-            if (typeof usageIn?.output === "number")
-              usageOut.outputTokens = usageIn.output;
-            if (typeof usageIn?.cacheRead === "number")
-              usageOut.cacheReadTokens = usageIn.cacheRead;
-            if (typeof usageIn?.cacheCreate === "number")
-              usageOut.cacheWriteTokens = usageIn.cacheCreate;
-            // CLI 自报成本（claude 的 total_cost_usd，backend 归一为 cost 键）
-            // ——比单价表估算准，消息 meta 与会话统计优先消费。
-            const costUsdRaw =
-              typeof usageIn?.costUsd === "number" ? usageIn.costUsd
-              : typeof usageIn?.cost === "number" ? usageIn.cost
-              : undefined;
-            if (typeof costUsdRaw === "number" && Number.isFinite(costUsdRaw))
-              usageOut.costUsd = costUsdRaw;
-            const cliModel = typeof usageIn?.model === "string" && usageIn.model ? usageIn.model : undefined;
-            cliDoneMetrics = {
-              startedAt: doneEv.metrics.startedAt,
-              firstTokenAt:
-                typeof doneEv.metrics.firstTokenAt === "number" &&
-                Number.isFinite(doneEv.metrics.firstTokenAt)
-                  ? doneEv.metrics.firstTokenAt
-                  : null,
-              completedAt: Date.now(),
-              ...(Object.keys(usageOut).length
-                ? { usage: usageOut }
-                : {}),
-              ...(cliModel ? { model: cliModel } : {}),
-              ...(cliToolCalls > 0 ? { toolCalls: cliToolCalls } : {}),
-            };
-          }
-          break;
-        }
-        default:
-          opts.onProcess({
-            type: "event",
-            event: {
-              stream: "cli",
-              data: e as unknown as Record<string, unknown>,
-            },
-          });
-      }
-    },
-  });
-
-  // Session ordering is part of retry correctness: a same-Agent retry must
-  // not read the old binding while the failed attempt's newest backend id is
-  // still being written. The sessions module owns persistence-error logging;
-  // this layer verifies the authoritative value without logging session ids.
-  let sessionPersistenceFailed = false;
-  if (resumeRejected) {
-    log.warn("cli session expired; clearing resume binding", {
-      cid: maskId(opts.cid),
-      agent_id: maskId(opts.agent.agent_id),
-      cli: runtime.cli,
-    });
-    await cliSessions.clearForAgent(opts.uid, opts.cid, opts.agent.agent_id);
-  }
-  if (backendSessionId) {
-    await cliSessions.setSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-      backendSessionId,
-    );
-    const persisted = await cliSessions.getSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-    );
-    sessionPersistenceFailed = persisted !== backendSessionId;
-  } else if (resumeRejected) {
-    const persisted = await cliSessions.getSessionId(
-      opts.uid,
-      opts.cid,
-      opts.agent.agent_id,
-      runtime.cli,
-    );
-    sessionPersistenceFailed = persisted !== null;
-  }
-  if (sessionPersistenceFailed && result.status !== "cancelled") {
-    return {
-      text: resultText || accText,
-      error: t("cli_agent.run_failed_detail", {
-        name: opts.agent.name || runtime.cli,
-        cli: runtime.cli,
-      }),
-      produced: Array.from(produced),
-      failureKind: "runtime",
-      failureCode: "cli_session_persistence_failed",
-      infrastructureFailure: true,
-      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-    };
-  }
-  if (result.status === "missing_cli") {
-    const vars = {
-      name: opts.agent.name || runtime.cli,
-      cli: runtime.cli,
-      path: result.cliPath || "",
-      version: result.cliVersion || "",
-    };
-    const msg =
-      result.cliError === "version_unknown"
-        ? t("cli_agent.version_unknown", vars)
-        : result.cliError === "version_too_old"
-          ? t("cli_agent.version_too_old", vars)
-          : t("cli_agent.not_found", vars);
-    return {
-      text: "",
-      error: msg,
-      aborted: false,
-      produced: Array.from(produced),
-      failureKind: "dependency",
-      failureCode: result.cliError || "missing_cli",
-      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-    };
-  }
-  if (result.status === "cancelled") {
-    return {
-      text: resultText || accText,
-      aborted: true,
-      produced: Array.from(produced),
-      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-    };
-  }
-  if (result.status === "failed" || result.status === "timeout") {
-    const vars = { name: opts.agent.name || runtime.cli, cli: runtime.cli };
-    // Backend errors remain available to runner diagnostics, but they are
-    // internal implementation details and may contain paths, stderr, or
-    // protocol prose. User copy is derived from structured terminal state.
-    let detail = resumeRejected
-      ? t("cli_agent.session_expired_detail", vars)
-      : result.status === "timeout"
-        ? t("cli_agent.timeout_detail", vars)
-        : t("cli_agent.run_failed_detail", vars);
-    // 本地代理未运行 → 给出明确的根因提示。很多用户把 CLI（Codex / Claude 等）
-    // 配成走本地代理（CC Switch 等），代理没开时 CLI 必然失败。探测本地代理
-    // 端口不可达时，报错直接说明，而不是笼统的「未能完成任务」。
-    try {
-      const { readCliModelEndpoint, probeModelEndpointReachable } = await import("../local_agents/active_config.js");
-      const cli = runtime.cli as string;
-      const ep = readCliModelEndpoint(cli as never);
-      if (ep && ep.isLocalProxy) {
-        const reachable = await probeModelEndpointReachable(cli as never);
-        if (reachable === false) {
-          detail = t("cli_agent.local_proxy_unreachable", {
-            name: opts.agent.name || runtime.cli,
-            cli: runtime.cli,
-            url: ep.baseUrl,
-          });
-        }
-      }
-    } catch { /* probe is best-effort — fall through to the generic detail */ }
-    return {
-      text: resultText || accText,
-      error: detail,
-      produced: Array.from(produced),
-      failureKind: "runtime",
-      failureCode: result.status === "timeout" ? "cli_timeout" : "cli_failed",
-      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-    };
-  }
-  const finalText = resultText || accText;
-  if (slashCommandName && _looksLikeNoOutput(finalText)) {
-    return {
-      text: t("cli_agent.slash_no_output", { cmd: slashCommandName }),
-      produced: Array.from(produced),
-      ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-    };
-  }
-  return {
-    text: finalText,
-    produced: Array.from(produced),
-    ...(cliDoneMetrics ? { metrics: cliDoneMetrics } : {}),
-  };
-}
-
-function normalizeCliProducedPaths(
-  paths: unknown,
-  workingDir: string,
-): string[] {
-  if (!Array.isArray(paths)) return [];
-  const out = new Set<string>();
-  for (const raw of paths) {
-    if (typeof raw !== "string" || !raw.trim()) continue;
-    const abs = path.isAbsolute(raw)
-      ? path.normalize(raw)
-      : path.resolve(workingDir, raw);
-    out.add(abs);
-  }
-  return Array.from(out);
-}
-
-function extractWritablePathsFromCliTool(
-  e: Record<string, unknown>,
-  workingDir: string,
-): string[] {
-  const tool = String(e.tool || "").toLowerCase();
-  if (!/(write|edit|patch|multiedit|create|save)/.test(tool)) return [];
-  const input =
-    e.input && typeof e.input === "object"
-      ? (e.input as Record<string, unknown>)
-      : {};
-  const candidates: unknown[] = [
-    input.path,
-    input.file,
-    input.file_path,
-    input.filePath,
-    input.filename,
-  ];
-  if (Array.isArray(input.files)) {
-    for (const f of input.files) {
-      if (typeof f === "string") candidates.push(f);
-      else if (f && typeof f === "object") {
-        const obj = f as Record<string, unknown>;
-        candidates.push(obj.path, obj.file_path, obj.filePath);
-      }
-    }
-  }
-  return normalizeCliProducedPaths(
-    candidates.filter((p): p is string => typeof p === "string"),
-    workingDir,
-  );
-}
-
 async function _buildCliPrompt(
   uid: string,
   cid: string,
@@ -12089,7 +11539,11 @@ async function _buildCliPrompt(
   // and never see the project-dir-switching rules — the host doesn't
   // route their cwd through `coding_project_dir` and the form
   // wouldn't fire on their submissions anyway.
-  const cli = agent.runtime?.kind === "cli" ? agent.runtime.cli : "";
+  // 本构造器仅测试可达（_buildCliPromptForTest；直连执行链 G-19 已删）。
+  // 保留 legacy `cli` 原始输入的读取（松化 cast——原始对象上 'cli' 合法），
+  // 归一 agent（生产路径）恒走 ''，行为与收口前一致。
+  const rawRuntime = agent.runtime as { kind?: string; cli?: string } | undefined;
+  const cli = rawRuntime?.kind === "cli" ? rawRuntime.cli : "";
   let outputProtocolBlock = "";
   if (agentsFeat.cliIsCodingAgent(cli)) {
     const inputs = Array.isArray(agent.inputs) ? agent.inputs : [];
@@ -12328,15 +11782,6 @@ async function _extractImportedCliContext(uid: string, cid: string): Promise<str
     // Fall back to '' — no context block is better than failing the dispatch.
   }
   return "";
-}
-
-function _hasPriorVisibleCliHistory(
-  item: QueueItem,
-  slice: GroupMessage[],
-): boolean {
-  return _priorVisibleCliHistory(item, slice).some((m) =>
-    (m.text || "").trim(),
-  );
 }
 
 export interface EnqueueCommanderControlInput {
