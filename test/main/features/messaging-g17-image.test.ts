@@ -187,8 +187,8 @@ describe('inbound ledger image keys (G-17)', () => {
 // ── G-17：manager 派发投影链 ─────────────────────────────────────────
 
 describe('G-17 inbound image projection dispatch', () => {
-  function fakeFeishuAdapter(): MessagingAdapter {
-    return {
+  function fakeFeishuAdapter(downloadImage?: (imageKey: string) => Promise<Buffer>): MessagingAdapter {
+    const base: MessagingAdapter = {
       platform: 'feishu_lark',
       async start(signal, callbacks) {
         await callbacks.onStatus({ kind: 'connected', checkedAt: new Date().toISOString() });
@@ -208,12 +208,13 @@ describe('G-17 inbound image projection dispatch', () => {
         return { deliveryId: 'remote-1' };
       },
     };
+    return downloadImage ? { ...base, downloadImage } : base;
   }
 
-  async function setupFlow() {
+  async function setupFlow(adapterOverride?: MessagingAdapter) {
     const groupSend = vi.fn(async () => ({ ok: true, msg: { id: 'm-1' } }));
     const subscribe = vi.fn(() => () => {});
-    const adapter = fakeFeishuAdapter();
+    const adapter = adapterOverride ?? fakeFeishuAdapter();
     vi.doMock('../../../src/main/features/messaging/adapters', () => ({
       createAdapter: vi.fn(() => adapter),
     }));
@@ -298,6 +299,69 @@ describe('G-17 inbound image projection dispatch', () => {
     expect(peerMap.lookupChannelPeer('feishu_lark', instanceId, 'ou_abcdefgh12345678')).toMatchObject({
       peerAlias: 'user-fs-12345678',
     });
+
+    await manager.stopForUser('user-1');
+  });
+
+  it('downloads image bytes and dispatches with imported attachments (G-17 byte path)', async () => {
+    // PNG magic + padding：downloadImage 返回字节，manager 导入会话附件目录
+    // 并把附件名放进派发 attachments（视觉多模态链与桌面端发图同路）。
+    const pngBytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(64, 1),
+    ]);
+    const downloadImage = vi.fn(async () => pngBytes);
+    const { groupSend, manager, instanceId } = await setupFlow(fakeFeishuAdapter(downloadImage));
+    const inbound = await manager.ingestInbound('user-1', {
+      platform: 'feishu_lark',
+      instanceId,
+      externalMessageId: 'om_image_bytes_1',
+      externalChatId: 'ou_abcdefgh12345678',
+      externalUserId: 'ou_abcdefgh12345678',
+      text: '[图片]',
+      isGroup: false,
+      mentionPresent: false,
+      imageKeys: ['img_v2_bytes'],
+      receivedAt: new Date().toISOString(),
+    });
+    await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+    expect(inbound.accepted).toBe(true);
+    expect(downloadImage).toHaveBeenCalledWith('img_v2_bytes');
+
+    const dispatch = groupSend.mock.calls[0][0] as { attachments?: string[] };
+    expect(dispatch.attachments).toEqual(['feishu-img_v2_bytes.png']);
+    // 附件真实导入会话目录（COGSEED_WORKSPACE_ROOT 已隔离到 tmpDir）。
+    const { listAttachments } = await import('../../../src/main/features/chat_attachments');
+    const stored = listAttachments('user-1', String(inbound.cid)).find((a) => a.name === 'feishu-img_v2_bytes.png');
+    expect(stored).toBeTruthy();
+    expect(stored?.kind === 'image' || stored?.mime?.startsWith('image/')).toBe(true);
+
+    await manager.stopForUser('user-1');
+  });
+
+  it('keeps dispatch working (no attachments) when image download fails', async () => {
+    const downloadImage = vi.fn(async () => {
+      throw new Error('feishu api down');
+    });
+    const { groupSend, manager, instanceId } = await setupFlow(fakeFeishuAdapter(downloadImage));
+    const inbound = await manager.ingestInbound('user-1', {
+      platform: 'feishu_lark',
+      instanceId,
+      externalMessageId: 'om_image_fail_1',
+      externalChatId: 'ou_abcdefgh12345678',
+      externalUserId: 'ou_abcdefgh12345678',
+      text: '[图片]',
+      isGroup: false,
+      mentionPresent: false,
+      imageKeys: ['img_v2_fail'],
+      receivedAt: new Date().toISOString(),
+    });
+    await vi.waitFor(() => expect(groupSend).toHaveBeenCalledTimes(1));
+    expect(inbound.accepted).toBe(true);
+    const dispatch = groupSend.mock.calls[0][0] as { attachments?: string[]; text: string };
+    // 下载失败不阻塞：占位文本照常派发、不携带 attachments。
+    expect(dispatch.text).toBe('[图片]');
+    expect(dispatch.attachments).toBeUndefined();
 
     await manager.stopForUser('user-1');
   });
