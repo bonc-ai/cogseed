@@ -187,7 +187,7 @@ describe('inbound ledger image keys (G-17)', () => {
 // ── G-17：manager 派发投影链 ─────────────────────────────────────────
 
 describe('G-17 inbound image projection dispatch', () => {
-  function fakeFeishuAdapter(downloadImage?: (imageKey: string) => Promise<Buffer>): MessagingAdapter {
+  function fakeFeishuAdapter(downloadImage?: (fileKey: string) => Promise<Buffer>): MessagingAdapter {
     const base: MessagingAdapter = {
       platform: 'feishu_lark',
       async start(signal, callbacks) {
@@ -208,7 +208,7 @@ describe('G-17 inbound image projection dispatch', () => {
         return { deliveryId: 'remote-1' };
       },
     };
-    return downloadImage ? { ...base, downloadImage } : base;
+    return downloadImage ? { ...base, downloadMessageImage: (_mid: string, fk: string) => downloadImage(fk) } : base;
   }
 
   async function setupFlow(adapterOverride?: MessagingAdapter) {
