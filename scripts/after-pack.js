@@ -4,6 +4,30 @@
 const fs = require('fs');
 const path = require('path');
 
+const WINDOWS_SHERPA_PACKAGE = 'sherpa-onnx-win-x64';
+const WINDOWS_SHERPA_FILES = Object.freeze([
+  'sherpa-onnx.node',
+  'onnxruntime.dll',
+  'onnxruntime_providers_shared.dll',
+  'sherpa-onnx-c-api.dll',
+  'sherpa-onnx-cxx-api.dll',
+]);
+
+function verifyWindowsSherpaRuntime(resourcesPath) {
+  const runtimeDir = path.join(
+    resourcesPath,
+    'app.asar.unpacked',
+    'node_modules',
+    WINDOWS_SHERPA_PACKAGE,
+  );
+  const missing = WINDOWS_SHERPA_FILES.filter((file) => !fs.existsSync(path.join(runtimeDir, file)));
+  if (missing.length) {
+    throw new Error(
+      `Windows speech runtime is missing from the package: ${missing.join(', ')} (${runtimeDir})`,
+    );
+  }
+}
+
 exports.default = async function(context) {
   const appOutDir = context.appOutDir;
   const platform = context.electronPlatformName;
@@ -19,8 +43,13 @@ exports.default = async function(context) {
     if (fs.existsSync(runtimePath)) {
       removeArchiveDirs(runtimePath);
     }
+    return;
   }
+
+  if (platform === 'win32') verifyWindowsSherpaRuntime(path.join(appOutDir, 'resources'));
 };
+
+exports.verifyWindowsSherpaRuntime = verifyWindowsSherpaRuntime;
 
 function removeArchiveDirs(dir) {
   if (!fs.existsSync(dir)) return;
