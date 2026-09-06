@@ -30141,6 +30141,25 @@ body.kb-wb-resizing .kb-wb-divider { z-index: var(--z-popover); }
 .kb-qa-mm-action .kb-wb-mm-canvas { border: 1px solid var(--kb-border); border-radius: 10px; background: #fff; min-height: 90px; cursor: pointer; }
 .kb-qa-mm-action .kb-mm-loading { color: var(--kb-muted, #9DB4A6); font-size: 12px; padding: 26px 16px; text-align: center; }
 .kb-qa-mm-action .kb-mm-fail { color: var(--kb-danger, #C0392B); font-size: 12px; padding: 26px 16px; text-align: center; }
+/* 未找到时的跨库引导卡片（前往对应个人库目录并自动重问） */
+.kb-qa-suggest {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: 12px; padding: 8px 10px;
+  border: 1px dashed rgba(217, 119, 6, .45); border-radius: 8px;
+  background: rgba(217, 119, 6, .07);
+  font-size: 12px; color: var(--kb-muted, #9DB4A6);
+}
+.kb-qa-suggest-txt b { color: var(--kb-fg-2, #35513F); }
+.kb-qa-suggest-txt code {
+  font-size: 11px; color: var(--kb-fg-2, #35513F);
+  background: rgba(14, 159, 110, .08); border-radius: 4px; padding: 0 4px;
+}
+.kb-qa-suggest-btn {
+  font-size: 12px; color: #fff; background: var(--kb-green, #0E9F6E);
+  border: 1px solid transparent; border-radius: 8px; padding: 4px 14px; cursor: pointer;
+  transition: background .15s;
+}
+.kb-qa-suggest-btn:hover { background: var(--kb-green-strong, #0C8A5F); }
 .kb-qa-refs-toggle {
   font-size: 12px; color: var(--kb-accent); background: var(--kb-accent-weak);
   border: 1px solid var(--kb-blue-line); border-radius: 8px; padding: 4px 12px; cursor: pointer;
@@ -31340,3 +31359,99 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   background: #F7F9F7; font-size: 13px; color: #1F2A24; outline: none; box-sizing: border-box;
 }
 .kb-share-config-input:focus { border-color: var(--color-brand, #0E9F6E); background: #fff; }
+
+/* ── KB 问答回答卡视觉分层（评审改版：正文给人看，引用给溯源，操作主按钮化）── */
+/* 正文阅读：加大行高，降低密度 */
+.kb-qa-msg.is-ai .kb-qa-msg-body { line-height: 1.6; }
+.kb-qa-msg.is-ai .kb-qa-msg-body p { margin: 6px 0; }
+
+/* 明确“未找到/无相关”结论：浅灰提示块，和有效信息隔离 */
+.kb-qa-msg.is-ai .kb-qa-msg-body.is-notfound {
+  background: #f7f8fa; color: #666; border-style: dashed;
+  border-color: var(--kb-border, #DDE4DD);
+}
+
+/* 资料来源折叠区：与正文/操作区分割开 */
+.kb-qa-src {
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--kb-border, #DDE4DD);
+}
+.kb-qa-src-toggle {
+  font-size: 11.5px; color: #888; background: transparent; border: none; padding: 2px 0;
+  cursor: pointer; letter-spacing: .2px; user-select: none;
+}
+.kb-qa-src-toggle:hover { color: var(--kb-accent, #2F6FED); }
+.kb-qa-src-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.kb-qa-src-list[hidden] { display: none; }
+.kb-qa-src-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+}
+.kb-qa-src-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; color: #666; text-align: left;
+  background: transparent; border: none; padding: 1px 2px; cursor: pointer; border-radius: 4px;
+}
+.kb-qa-src-path:hover { color: var(--kb-accent, #2F6FED); background: rgba(47, 111, 237, .06); }
+.kb-qa-src-copy {
+  flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; color: #999; background: transparent; border: none; cursor: pointer; border-radius: 4px;
+  opacity: 0; transition: opacity .12s, color .12s;
+}
+.kb-qa-src-row:hover .kb-qa-src-copy { opacity: 1; }
+.kb-qa-src-copy:hover { color: var(--kb-accent, #2F6FED); background: rgba(47, 111, 237, .08); }
+
+/* 「生成脑图」主操作按钮：主题色填充，与引用区拉开间距 */
+.kb-qa-mm-btn {
+  background: var(--kb-green, #0E9F6E); border-color: transparent; color: #fff;
+  box-shadow: 0 1px 3px rgba(14, 159, 110, .25);
+}
+.kb-qa-mm-btn:hover:not(:disabled) { background: #0C8A5F; color: #fff; }
+.kb-qa-mm-btn:disabled { background: #B9D8C9; color: #fff; box-shadow: none; }
+.kb-qa-mm-action { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--kb-border, #E4EAE4); }
+.kb-qa-mm-action .kb-mm-msg { margin-top: 12px; }
+
+/* ── AI 解析卡（同样分层：结论/文档/来源）── */
+.kb-wb-one-liner {
+  display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px;
+  background: #f7f8fa; border: 1px solid var(--kb-border, #E4EAE4);
+  border-radius: 10px; margin-bottom: 14px; line-height: 1.6;
+}
+.kb-wb-one-liner-tag {
+  flex: none; font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  background: rgba(14, 159, 110, .12); color: var(--kb-green, #0E9F6E);
+  white-space: nowrap; align-self: flex-start;
+}
+.kb-wb-one-liner-text { font-size: 13px; color: #44554C; }
+.kb-wb-doc {
+  background: #fff; border: 1px solid var(--kb-border, #E4EAE4);
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+}
+.kb-wb-doc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.kb-wb-doc-name { font-weight: 600; font-size: 13px; color: var(--kb-text, #22372B); }
+.kb-wb-doc-text { margin-top: 6px; font-size: 12.5px; color: #66756C; line-height: 1.6; }
+.kb-wb-analysis-body .kb-qa-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px; color: #888; background: transparent;
+  border: 1px solid var(--kb-border, #E4EAE4); border-radius: 6px;
+  max-width: 320px;
+}
+.kb-wb-analysis-body .kb-qa-chip:hover { color: var(--kb-accent, #2F6FED); border-color: rgba(47, 111, 237, .4); }
+
+/* AI 回答正文“人读友好”排版：结构分块 + 行间距 + 列表缩进 */
+.kb-qa-msg.is-ai .kb-qa-msg-body { white-space: normal; overflow-wrap: break-word; }
+.kb-qa-msg.is-ai .kb-qa-msg-body b { font-weight: 600; color: var(--kb-text, #22372B); }
+.kb-qa-msg.is-ai .kb-qa-msg-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em; color: #35513F;
+  background: rgba(14, 159, 110, .1); border-radius: 4px; padding: 0 4px;
+}
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-block { margin: 7px 0; }
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-line { line-height: 1.6; margin: 2px 0; }
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li {
+  position: relative; padding-left: 17px; margin: 2px 0; line-height: 1.6; color: var(--kb-text, #22372B);
+}
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li::before {
+  content: '•'; position: absolute; left: 3px; color: var(--kb-green, #0E9F6E);
+}
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num { padding-left: 0; }
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num::before { content: none; }
