@@ -118,7 +118,7 @@ describe('packaged-resource-gate', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
     expect(verifyExtraResourcesConfig(pkg.build.extraResources)).toEqual([
       'embedding-model', 'sherpa-onnx', 'runtime', 'builtin', 'builtin-packages',
-      'officecli', 'guardrail', '.',
+      'discovery-catalog', 'officecli', 'guardrail', '.',
     ]);
   });
 

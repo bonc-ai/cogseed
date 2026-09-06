@@ -159,6 +159,27 @@ function loadScript() {
 }
 
 describe('KB workbench (S1 skeleton)', () => {
+  it('opens file rows in the real source viewer instead of the S2 placeholder toast', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../../src/renderer/modules/kb-workbench.js'),
+      'utf8',
+    );
+
+    expect(source).toMatch(/function _openFile[\s\S]*?__openAnchorViewer\(\{[\s\S]*?view: 'document'/);
+    expect(source).not.toContain('原文查看器：S2 上线（anchor-resolver 已就绪）');
+  });
+
+  it('reconnects the KB event stream after a previous page stream has ended', async () => {
+    const { windowMock } = loadScript();
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => expect(windowMock.cogseed.stream).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    windowMock.renderKbWorkbench();
+
+    await vi.waitFor(() => expect(windowMock.cogseed.stream).toHaveBeenCalledTimes(2));
+  });
+
   it('renders the library tree from contexts.tree top-level dirs', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();

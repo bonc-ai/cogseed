@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
 import * as personalContextManager from '../features/personal_context/manager';
@@ -4363,6 +4364,44 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }));
     return { summary, files };
   },
+
+  // ── Knowledge Base Discover (catalog + subscriptions + source overview) ──
+  'kb.discover.list': async (_payload, ctx) => kbDiscovery.listDiscoverView(ctx.userId),
+  'kb.discover.subscription.set': async ({ itemId, saved } = {}, ctx) => {
+    if (typeof itemId !== 'string' || typeof saved !== 'boolean') {
+      return { ok: false, error: 'invalid discovery subscription request' };
+    }
+    return kbDiscovery.setDiscoverSubscription(ctx.userId, itemId, saved);
+  },
+  'kb.discover.package.import': async ({ packageId } = {}, ctx) => {
+    if (typeof packageId !== 'string') return { ok: false, imported: 0, updated: 0, skipped: 0, error: 'invalid package id' };
+    return kbDiscovery.importOfficialPackage(ctx.userId, packageId);
+  },
+  'kb.discover.feishu.config.set': async ({ appId, appSecret } = {}, ctx) => {
+    await (await import('../features/kb_discovery_feishu')).setFeishuDiscoverApp(ctx.userId, { appId, appSecret });
+    return { ok: true };
+  },
+  'kb.discover.feishu.authorize': async (_payload, ctx) => {
+    const result = await (await import('../features/kb_discovery_feishu')).beginFeishuDiscoverAuthorize(ctx.userId);
+    return { ok: true, redirectUri: result.redirectUri, status: result.status };
+  },
+  'kb.discover.feishu.documents.list': async (_payload, ctx) => {
+    const items = await (await import('../features/kb_discovery_feishu')).listFeishuWikiDocuments(ctx.userId);
+    return { ok: true, items };
+  },
+  'kb.discover.feishu.documents.import': async ({ documentIds } = {}, ctx) => {
+    if (!Array.isArray(documentIds) || documentIds.some((id) => typeof id !== 'string')) return { ok: false, imported: 0, skipped: 0, alreadyImported: 0, empty: 0, items: [], error: 'invalid document selection' };
+    return (await import('../features/kb_discovery_feishu')).importFeishuWikiDocuments(ctx.userId, documentIds);
+  },
+  'kb.discover.feishu.documents.sync': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).syncImportedFeishuWikiDocuments(ctx.userId)
+  ),
+  'kb.discover.feishu.disconnect': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).disconnectFeishuDiscover(ctx.userId)
+  ),
+  'kb.discover.feishu.remove': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).removeFeishuDiscoverSource(ctx.userId)
+  ),
 
   // Force a disk-vs-db reconcile pass. Useful after users drop files into
   // contexts/ via Finder, or when vector.db is swapped out by sync and the

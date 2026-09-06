@@ -219,6 +219,14 @@
         ]
       },
       {
+        "from": "resources/discovery-catalog",
+        "to": "discovery-catalog",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store"
+        ]
+      },
+      {
         "from": "resources/officecli",
         "to": "officecli",
         "filter": [

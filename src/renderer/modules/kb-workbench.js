@@ -1191,9 +1191,21 @@
   }
 
   function _openFile(relPath) {
-    // S2 接入 anchor-resolver 原文查看器；S1 先提示。
-    if (typeof uiToast === 'function') uiToast('原文查看器：S2 上线（anchor-resolver 已就绪）', { variant: 'info' });
-    _log.info('open file', relPath);
+    if (typeof window.__openAnchorViewer === 'function') {
+      window.__openAnchorViewer({
+        source: 'library',
+        scope: _state.spaceId ? 'space' : 'global',
+        path: relPath,
+        chunkIdx: 1,
+        ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
+        view: 'document',
+      });
+      return;
+    }
+    if (typeof uiToast === 'function') {
+      const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
+      uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
+    }
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -2339,10 +2351,11 @@
       const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
       if (hit) {
         window.__openAnchorViewer({
-          source: _state.spaceId ? 'space' : 'library',
-          scope: _state.spaceId || 'global',
+          source: 'library',
+          scope: _state.spaceId ? 'space' : 'global',
           path: hit,
           chunkIdx: 0,
+          ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         });
         return;
       }
@@ -2922,6 +2935,9 @@
         scope: ref.scope || 'global',
         path: ref.path,
         chunkIdx: ref.chunkIdx,
+        ...(ref.quote ? { quote: ref.quote } : {}),
+        ...(ref.cid ? { cid: ref.cid } : {}),
+        ...(ref.spaceId ? { spaceId: ref.spaceId } : {}),
       });
       return;
     }
@@ -2933,14 +2949,17 @@
     if (_state.streamHandle) return;
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
     try {
-      _state.streamHandle = window.cogseed.stream('kb.events', {}, (ev) => {
+      const handle = window.cogseed.stream('kb.events', {}, (ev) => {
         const inner = ev && ev.event;
         if (!inner || !inner.relPath) return;
         if (inner.status === 'deleted') _state.kbStatus.delete(inner.relPath);
         else _state.kbStatus.set(inner.relPath, { status: inner.status, chunks: inner.chunks, kind: inner.kind, error: inner.error });
         _renderFiles();
       });
-      _state.streamHandle.promise.catch(() => { /* ignore */ });
+      _state.streamHandle = handle;
+      handle.promise.catch(() => { /* ignore */ }).finally(() => {
+        if (_state.streamHandle === handle) _state.streamHandle = null;
+      });
     } catch (err) {
       _log.warn('subscribe kb.events failed', err);
     }

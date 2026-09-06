@@ -24,6 +24,7 @@ function boundedString(value: unknown, field: string, max: number): string | und
 
 export async function anchorResolveIpc(userId: string, payload: unknown): Promise<unknown> {
   const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const view = raw.view === 'document' ? 'document' : 'anchor';
   const scopeRaw = boundedString(raw.scope, 'scope', 32) ?? '';
   const scope = scopeRaw === 'space' ? 'space'
     : scopeRaw === 'conversation' ? 'conversation' : 'global';
@@ -36,7 +37,7 @@ export async function anchorResolveIpc(userId: string, payload: unknown): Promis
   }
 
   const chunkNum = Number(raw.chunkIdx);
-  if (!Number.isFinite(chunkNum) || chunkNum < 0) {
+  if (view === 'anchor' && (!Number.isFinite(chunkNum) || chunkNum < 0)) {
     return { resolved: false, reason: 'bad_input' };
   }
 
@@ -46,7 +47,8 @@ export async function anchorResolveIpc(userId: string, payload: unknown): Promis
       source,
       scope,
       path: pathValue,
-      chunkIdx: Math.floor(chunkNum),
+      chunkIdx: Number.isFinite(chunkNum) && chunkNum >= 0 ? Math.floor(chunkNum) : 0,
+      view,
       ...(typeof raw.quote === 'string' && raw.quote.trim() ? { quote: boundedString(raw.quote, 'quote', 2000)! } : {}),
       ...(typeof raw.cid === 'string' && raw.cid.trim() ? { cid: boundedString(raw.cid, 'cid', 200)! } : {}),
       ...(typeof raw.spaceId === 'string' && raw.spaceId.trim() ? { spaceId: boundedString(raw.spaceId, 'spaceId', 200)! } : {}),
