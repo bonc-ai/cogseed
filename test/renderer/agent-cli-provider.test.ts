@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { readAgentsModuleSource, runAgentsModules } from './helpers/load-agents-modules';
 
 const root = path.join(__dirname, '../..');
-const source = fs.readFileSync(path.join(root, 'src/renderer/modules/agents.js'), 'utf8');
+// agents 系模块拼接源（拆分后创建路径在 agents-create.js 等文件里）。
+const source = readAgentsModuleSource();
 const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
 
 function loadAgentProviderHelpers() {
@@ -15,7 +17,8 @@ function loadAgentProviderHelpers() {
     t: (key: string) => key, setTimeout, clearTimeout, console,
   };
   vm.createContext(context);
-  vm.runInContext(source, context, { filename: 'agents.js' });
+  // agents 系模块按 index.html 顺序整体求值。
+  runAgentsModules(context);
   return window;
 }
 

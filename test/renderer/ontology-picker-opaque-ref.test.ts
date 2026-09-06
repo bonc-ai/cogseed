@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { readAgentsModuleSource } from './helpers/load-agents-modules';
 
 /**
  * @ Picker「本体」tab 在 opaque ref 上的行为回归。
@@ -12,10 +11,8 @@ import * as vm from 'node:vm';
  * 选中（data-id 恒等于 contract 给的 ref，原样透传给 chat-use）。
  */
 
-const agentsSource = fs.readFileSync(
-  path.join(__dirname, '../../src/renderer/modules/agents.js'),
-  'utf8',
-);
+// agents 系模块拼接源（拆分后本体 picker 渲染在 agents-picker.js）。
+const agentsSource = readAgentsModuleSource();
 
 function extractFn(name: string): string {
   const marker = `function ${name}(`;

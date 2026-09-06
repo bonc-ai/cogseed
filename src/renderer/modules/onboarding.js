@@ -1245,12 +1245,18 @@ async function _csDetectCodingClis() {
 // 'error'. Never throws — team connect must survive a create failure.
 async function _csEnsureCliAgent(cli, existingAgents) {
   try {
-    const already = (existingAgents || []).some((a) => {
-      const rt = a && a.runtime;
-      return rt && rt.kind === 'cli' && rt.cli === cli;
-    });
+    // 幂等查重：用 agents.js 的统一外接判定 _isExternalCliAgent（R1）。
+    // 旧写法只认 runtime.kind === 'cli'，而主进程 _normalizeRuntime 把
+    // legacy 'cli' 一律读回为 'p3394-gateway'，导致该判定恒假、每次重复
+    // 创建。统一判定修复后 already 才真正生效。
+    const already = (existingAgents || []).some((a) => (
+      _isExternalCliAgent(a) && a.runtime.cli === cli
+    ));
     if (already) return 'exists';
-    const res = await window.cogseed.invoke('agents.create', {
+    // 统一创建入口（R3）：与 agents-create.js 创建弹窗同一条 agents.create
+    // 通道（createAgentViaIpc 运行时经共享全局词法环境解析，不抛错、
+    // 失败返回 { ok:false, error }，与下面的 res && res.agent 分支兼容）。
+    const res = await createAgentViaIpc({
       name: _csAgentNameForCli(cli),
       description: _csT('cli_fallback.agent_description', '本机 {name} 命令行，作为 AI 团队成员执行任务', {
         name: _csAgentNameForCli(cli),

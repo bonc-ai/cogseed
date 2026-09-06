@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { runAgentsModules } from './helpers/load-agents-modules';
 
 // @ 选择器空间化改造（任务④）：
 //   - tab 集合按「会话是否绑空间」区分（空间 = 智能体/技能/产物/资产；无空间 = 智能体/技能）；
@@ -112,8 +111,8 @@ function loadAgentPicker() {
     conversations: [],
   };
   vm.createContext(context);
-  const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
-  vm.runInContext(code, context, { filename: 'agents.js' });
+  // agents 系模块按 index.html 顺序整体求值（拆分后含 agents-picker.js 等）。
+  runAgentsModules(context);
   return { context, el };
 }
 

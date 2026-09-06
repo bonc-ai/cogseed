@@ -81,7 +81,8 @@ describe('出生继承视图的接线', () => {
   });
 
   it('渲染函数把 null 与空数组分开处理', () => {
-    const src = readSrc('modules/agents.js');
+    // 拆分后详情区（含继承视图）在 agents-detail.js。
+    const src = readSrc('modules/agents-detail.js');
     // null 走 none_recorded，空数组走 empty——两个分支必须都在。
     expect(src).toContain('agents.inheritance_none_recorded');
     expect(src).toContain('agents.inheritance_empty');
@@ -89,7 +90,7 @@ describe('出生继承视图的接线', () => {
   });
 
   it('六种排除原因在渲染层都有对应分支', () => {
-    const src = readSrc('modules/agents.js');
+    const src = readSrc('modules/agents-detail.js');
     // 后端的 reason 取值 → 文案 key（user_excluded 的 key 刻意短一截）
     const branches: Record<string, string> = {
       user_excluded: 'agents.inheritance_excluded_user',

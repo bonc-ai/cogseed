@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { agentsModuleFilenames } from './helpers/load-agents-modules';
 
 class FakeClassList {
   classes = new Set<string>();
@@ -153,7 +154,9 @@ function loadCategoryRenderers() {
     _mpShowReviewStatusUi: () => false,
   };
   vm.createContext(context);
-  for (const file of ['agents.js', 'skills.js']) {
+  // agents 系模块（index.html 顺序）+ skills.js 一起求值：拆分后
+  // _canEditAgentMemory 等在 agents-detail.js、picker 渲染在 agents-picker.js。
+  for (const file of [...agentsModuleFilenames(), 'skills.js']) {
     const code = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules', file), 'utf8');
     vm.runInContext(code, context, { filename: file });
   }
@@ -343,7 +346,8 @@ describe('agent and skill category tabs', () => {
 
     expect(context._canEditAgentDefinition({ source: 'marketplace' })).toBe(false);
     expect(context._canEditAgentMemory({ source: 'marketplace' })).toBe(true);
-    expect(context._canEditAgentMemory({ source: 'marketplace', runtime: { kind: 'cli', cli: 'codex' } })).toBe(false);
+    // 主进程归一化后外接 runtime.kind 恒为 'p3394-gateway'（R1 统一判定）。
+    expect(context._canEditAgentMemory({ source: 'marketplace', runtime: { kind: 'p3394-gateway', cli: 'codex' } })).toBe(false);
     expect(menu.innerHTML).toContain('data-action="edit"');
     expect(menu.innerHTML).not.toContain('data-action="delete"');
   });

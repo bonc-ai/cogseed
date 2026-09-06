@@ -12763,9 +12763,12 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   try {
     const listRes = await window.cogseed.invoke('agents.list', {});
 
+    // 查重判定用 agents.js 的统一外接判定 _isExternalCliAgent（R1）：
+    // 主进程 _normalizeRuntime 把 legacy 'cli' 一律读回 'p3394-gateway'，
+    // 原双检的 'cli' 半边恒假，删掉后半边语义不变。
     agent = (listRes && listRes.agents || []).find(
       (a) => a && a.runtime
-        && (a.runtime.kind === 'cli' || a.runtime.kind === 'p3394-gateway')
+        && _isExternalCliAgent(a)
         && a.runtime.cli === cli,
     );
   } catch (_) { /* agents list unavailable */ }
@@ -12775,7 +12778,10 @@ async function _maybeApplyCliFallback(cid, opts = {}) {
   if (!agent) {
     try {
       const name = cli === 'claude' ? 'Claude' : (cli === 'codex' ? 'Codex' : (cli === 'opencode' ? 'OpenCode' : 'WorkBuddy'));
-      const res = await window.cogseed.invoke('agents.create', {
+      // 统一创建入口（R3）：与 agents-create.js 创建弹窗同一条 agents.create
+      // 通道（createAgentViaIpc 运行时经共享全局词法环境解析；失败不抛错，
+      // 返回 { ok:false } 走下面的 agent 判空分支，行为与原 try/catch 一致）。
+      const res = await createAgentViaIpc({
 
         name,
         description: t('cli_fallback.agent_description', { name }),
@@ -12912,7 +12918,9 @@ async function _maybeAutoSwitchCliOnFailure(cid, ev) {
     const a = newRecipient && (listRes && listRes.agents || []).find(
       (x) => x && String(x.agent_id) === String(newRecipient.id),
     );
-    if (a && a.runtime && a.runtime.kind === 'cli') {
+    // R1：与上面的查重判定同步 —— 原单检 kind === 'cli' 在主进程归一化后
+    // 恒假（偏好持久化分支从未真正执行过），统一为 _isExternalCliAgent。
+    if (_isExternalCliAgent(a)) {
       const cur = await window.cogseed.invoke('prefs.getCliFallback');
       if (cur && typeof cur.cli === 'string' && cur.cli && String(cur.cli) !== String(a.runtime.cli)) {
         await window.cogseed.invoke('prefs.setCliFallback', { cli: String(a.runtime.cli) });

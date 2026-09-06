@@ -169,7 +169,9 @@ describe('renderer lazy feature loader', () => {
   });
 
   it('opens the recipient picker before loading tab-specific catalogs', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
+    // 拆分后 picker 区块（_openAgentPicker / _ensureAgentPickerTabData）在
+    // agents-picker.js（agents 系 script 顺序见 index.html）。
+    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents-picker.js'), 'utf8');
     const start = source.indexOf('async function _openAgentPicker');
     const end = source.indexOf('\nfunction _closeAgentPicker', start);
     const openBody = source.slice(start, end);
@@ -266,8 +268,9 @@ describe('renderer lazy feature loader', () => {
   });
 
   it('re-probes local CLI runtimes when an Agent detail selector is rendered', () => {
+    // 拆分后详情区（_renderAgentDetailRuntime）在 agents-detail.js。
     const source = fs.readFileSync(
-      path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
+      path.join(__dirname, '../../src/renderer/modules/agents-detail.js'), 'utf8');
     const start = source.indexOf('async function _renderAgentDetailRuntime');
     const end = source.indexOf('async function _renderAgentDetailProjectDir', start);
     const runtimeSelector = source.slice(start, end);

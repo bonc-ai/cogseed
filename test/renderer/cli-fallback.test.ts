@@ -68,6 +68,15 @@ function buildSandbox(routes: Record<string, unknown | ((payload: unknown) => un
     t: translateZh,
     uiToast: (message: string, opts: unknown) => { toasts.push({ message, opts }); },
     _convLog: { info: () => {}, warn: () => {}, error: () => {} },
+    // 镜像 agents-create.js 的统一创建入口（R3）：conversation.js 的现建
+    // 调用经 createAgentViaIpc 走 agents.create 通道。
+    createAgentViaIpc: (payload: unknown) => sandbox.window.cogseed.invoke('agents.create', payload),
+    // 镜像 agents.js 修复后的统一外接判定（R1）：主进程归一化后 runtime.kind
+    // 只会是 'in_process' / 'p3394-gateway'，判定不再保留 legacy 'cli' 半边。
+    _isExternalCliAgent: (a: unknown) => {
+      const rt = (a as any)?.runtime;
+      return !!(a && rt && rt.kind === 'p3394-gateway');
+    },
     // conversation.js 中该正则定义在抽取段起点之前，这里按源码镜像补上。
     _LEADING_MENTION_RE: /^@([A-Za-z0-9_一-鿿-]+)\s?/u,
     // 慢切换检测在 vm 里不会真的发射定时器；注入一个记数桩，供
@@ -116,7 +125,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -150,7 +159,7 @@ describe('commander CLI fallback', () => {
       'agents.list': { agents: [] }, // no CLI agent exists yet
       'agents.create': (payload: unknown) => {
         created.push(payload);
-        return { agent: { agent_id: 'agent-codex-new', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } } };
+        return { agent: { agent_id: 'agent-codex-new', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } } };
       },
     });
 
@@ -174,7 +183,7 @@ describe('commander CLI fallback', () => {
       'agents.list': { agents: [] }, // no CLI agent yet → auto-create
       'agents.create': (payload: unknown) => {
         created.push(payload);
-        return { agent: { agent_id: 'agent-wb-new', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } } };
+        return { agent: { agent_id: 'agent-wb-new', name: 'WorkBuddy', runtime: { kind: 'p3394-gateway', cli: 'workbuddy' } } };
       },
     });
 
@@ -340,7 +349,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } },
+          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'p3394-gateway', cli: 'workbuddy' } },
         ],
       },
     });
@@ -369,7 +378,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -396,7 +405,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -413,7 +422,7 @@ describe('commander CLI fallback', () => {
       'prefs.getCliFallback': { cli: 'claude' },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -431,7 +440,7 @@ describe('commander CLI fallback', () => {
       'prefs.getCliFallback': { cli: 'codex' },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
         ],
       },
     });
@@ -489,7 +498,7 @@ describe('commander CLI fallback', () => {
       'prefs.getCliFallback': { cli: 'codex' },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
         ],
       },
     }, { recipient: { kind: 'commander' } });
@@ -549,8 +558,8 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
-          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'cli', cli: 'workbuddy' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-wb-1', name: 'WorkBuddy', runtime: { kind: 'p3394-gateway', cli: 'workbuddy' } },
         ],
       },
     });
@@ -575,7 +584,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
         ],
       },
     });
@@ -601,7 +610,7 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
         ],
       },
     });
@@ -633,8 +642,8 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -668,8 +677,8 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -775,8 +784,8 @@ describe('commander CLI fallback', () => {
       },
       'agents.list': {
         agents: [
-          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
-          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'cli', cli: 'claude' } },
+          { agent_id: 'agent-codex-1', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+          { agent_id: 'agent-claude-1', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
         ],
       },
     });
@@ -816,7 +825,7 @@ describe('external-agent slow-response switch', () => {
   it('only recognizes cli / p3394-gateway runtimes as external agents', () => {
     const sandbox = sandboxWithAgents([
       { agent_id: 'a-claude', name: 'Claude', runtime: { kind: 'p3394-gateway', cli: 'claude' } },
-      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
       { agent_id: 'a-inproc', name: 'Commander', runtime: { kind: 'in_process' } },
     ]);
     expect(sandbox._isExternalGroupActor('a-claude')).toBe(true);
@@ -853,7 +862,7 @@ describe('external-agent slow-response switch', () => {
 
   it('does not arm the slow switch for non-external actors even with a process event', () => {
     const sandbox = sandboxWithAgents([
-      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'cli', cli: 'codex' } },
+      { agent_id: 'a-cli', name: 'Codex', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
     ]);
     sandbox._armSlowSwitch('cid-x', 'commander', 'turn-1', '');
     expect((sandbox as any)._slowTimers).toHaveLength(0);
