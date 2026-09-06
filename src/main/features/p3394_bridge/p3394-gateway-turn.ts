@@ -13,9 +13,33 @@ import { getP3394OutboundHub } from './app-wiring';
 import { buildP3394OutboundEnvelope } from '../cogseed_backend/p3394-host-adapter';
 import type { P3394OutboundReference } from '../cogseed_backend/p3394-host-adapter';
 import { p3394ExternalGatewayIdFor, startExternalGateway } from './external-gateways';
+import { isP3394LoopbackEndpoint } from './executor';
 import { createLogger } from '../../logger';
 
 const log = createLogger('p3394-bridge:gateway-turn');
+
+/** §12 流帧词表（与 outbound-hub 一致）：progress/status/artifact 是过程帧
+ *  （process rail），delta 是正文增量（气泡）。此处只做展示文案组装。 */
+type P3394TurnStreamKind = 'delta' | 'progress' | 'status' | 'artifact';
+
+interface P3394TurnStreamEvent {
+  text: string;
+  kind: P3394TurnStreamKind;
+  event?: Record<string, unknown>;
+}
+
+/** 过程帧（progress/status/artifact）的 process-rail 文案：status/artifact
+ *  带 [status]/[artifact] 前缀与结构化数据里的 state/uri 信息（无正文时
+ *  也能看到阶段/产物线索）；progress 原文透传。 */
+function streamFrameRailText(event: P3394TurnStreamEvent): string {
+  if (event.kind === 'progress') return event.text;
+  const structured = event.event && typeof event.event === 'object' ? event.event : {};
+  const state = typeof structured.state === 'string' && structured.state ? structured.state : '';
+  const uri = typeof structured.uri === 'string' && structured.uri ? structured.uri : '';
+  const label = event.kind === 'status' ? '[status]' : '[artifact]';
+  const pieces = [label, event.text, state, uri].filter((piece) => typeof piece === 'string' && piece.trim());
+  return pieces.join(' ');
+}
 
 export interface P3394GatewayTurnResult {
   text: string;
@@ -140,8 +164,22 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   };
 
   const peers = await import('./app-wiring').then((m) => m.listP3394Peers());
-  const peer = peers.find((candidate) => candidate.agent_id === nodeId);
-  if (!peer || peer.endpoints.length === 0) {
+  // 身份匹配：agent_id 优先；display_name（注册表显示名，远端节点注入时为
+  // 用户录入的 label）作为别名兜底——按 label 建 runtime.cli 的智能体卡也
+  // 能路由到对应 peer。
+  const peer = peers.find((candidate) => candidate.agent_id === nodeId)
+    ?? peers.find((candidate) => (candidate.display_name || '').trim() === nodeId);
+  // 远端路由（X-4）：peer 带非回环端点（remote-nodes 显式注入的跨机节点，
+  // dial_token/expected_identity 均为用户录入）→ 纯出站 turn：不做本机网关
+  // 托管/自愈（远端网关不归本机管），错误按远端语义映射
+  // （p3394_remote_timeout / p3394_peer_has_no_endpoint）。回环/本地 peer
+  // 与查不到 peer 的场景落回既有托管网关 spawn 逻辑（零改动）。
+  const isRemotePeerTurn = !!peer
+    && (peer.endpoints ?? []).some((endpoint) => !isP3394LoopbackEndpoint(endpoint));
+  // 规范路由目标：别名（display_name）命中后必须改按 peer 的 agent_id 出站
+  // ——outbound-hub / 入站匹配都按 agent_id 识别，原始别名串会查不到 peer。
+  const routeNodeId = peer ? peer.agent_id : nodeId;
+  if (!peer || (peer.endpoints ?? []).length === 0) {
     const recoveryError = await recoverGateway();
     if (recoveryError) return recoveryError;
   }
@@ -152,13 +190,17 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
   if (typeof peer?.gateway_pid === 'number' && Number.isInteger(peer.gateway_pid) && peer.gateway_pid > 0) {
     input.onProcessInfo?.(peer.gateway_pid);
   }
-  input.onProcess?.({ type: 'progress', text: '正在通过 P3394 与 ' + (input.agent.name || nodeId) + ' 协作…' });
+  input.onProcess?.({
+    type: 'progress',
+    text: (isRemotePeerTurn ? '正在通过 P3394 与远端节点 ' : '正在通过 P3394 与 ')
+      + (input.agent.name || nodeId) + ' 协作…',
+  });
   // 信封按需重建：message_id/idempotency_key 每次发送都必须是新的（重试时
   // 复用旧信封会被对端按幂等去重，吞掉本条消息的语义）；session_id 由
   // sessionForGoal(scopeKey=cid, peer, goal) 决定——goal 缺省时 (cid, peer)
   // 稳定复用，goal 变化（话题切换）自动开新会话（G-28）；executionId 入
   // message id 保持逐轮唯一，用户可见的会话连续性不受影响。
-  const buildEnvelope = () => buildP3394OutboundEnvelope(nodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
+  const buildEnvelope = () => buildP3394OutboundEnvelope(routeNodeId, prompt, `${input.cid}:turn:${input.executionId || 'legacy'}:${Date.now().toString(36)}`, {
     scopeKey: input.cid,
     ...(input.goal && input.goal.trim() ? { goal: input.goal.trim() } : {}),
     ...(input.references && input.references.length ? { references: input.references } : {}),
@@ -214,18 +256,17 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
         throw abortError;
       }
       try {
-        const reply = await hub.sendAndWait(nodeId, envelope, (event) => {
+        const reply = await hub.sendAndWait(routeNodeId, envelope, (event) => {
           if (input.signal?.aborted) return;
-          // progress 帧（openclaw 的 [skills]/[tools] 过程日志、claude 的
-          // 工具调用/思考结构化事件等）→ process rail；不置 streamed，正文
-          // 仍由终态回复一次性落地。
-          if (event.kind === 'progress') {
+          // 过程帧（§12 词表 progress/status/artifact：openclaw 的
+          // [skills]/[tools] 过程日志、claude 的工具调用/思考结构化事件、
+          // 阶段切换/产物通报）→ process rail；不置 streamed，正文仍由终态
+          // 回复一次性落地。status/artifact 文案带前缀与 state/uri 信息。
+          if (event.kind === 'progress' || event.kind === 'status' || event.kind === 'artifact') {
             input.onProcess?.({
               type: 'progress',
-              text: event.text,
-              ...((event as { event?: unknown }).event
-                ? { event: (event as { event: unknown }).event }
-                : {}),
+              text: streamFrameRailText(event),
+              ...(event.event ? { event: event.event } : {}),
             });
             return;
           }
@@ -261,7 +302,10 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     } catch (firstError) {
       const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
       const recoverable = /ECONNREFUSED|ECONNRESET|EPIPE|p3394_(?:manifest|send)_(?:timeout|failed)|p3394_manifest_http_5/.test(firstMessage);
-      if (!recoverable || !presetNodeId) throw firstError;
+      // 远端 peer（非回环端点）不做本机网关自愈：远端网关进程不归本机托管，
+      // recoverGateway 的 spawn 逻辑只会误起一个本机 CLI 实例。错误直接透传
+      // 并按远端语义映射失败码。
+      if (!recoverable || !presetNodeId || isRemotePeerTurn) throw firstError;
       const recoveryError = await recoverGateway();
       if (recoveryError) return recoveryError;
       envelope = buildEnvelope(); // 网关重启后重发：换新信封，避免旧幂等键
@@ -277,11 +321,21 @@ export async function runP3394GatewayTurn(input: P3394GatewayTurnInput): Promise
     const message = error instanceof Error ? error.message : String(error);
     log.warn('P3394 gateway turn failed', { cli: input.cli, nodeId, error: message });
     if (input.signal?.aborted) return { text: '', aborted: true };
+    // 失败码分类：远端 peer 用远端语义（回复超时=远端无响应、无端点=对端
+    // 未注册端点）；本地路径保持既有词表，兼容上层重试/文案逻辑。
+    let failureCode = 'p3394_send_failed';
+    if (isRemotePeerTurn) {
+      if (message.includes('p3394_reply_timeout')) failureCode = 'p3394_remote_timeout';
+      else if (message.includes('p3394_peer_has_no_endpoint')) failureCode = 'p3394_peer_has_no_endpoint';
+      else if (message.includes('p3394_peer_not_registered')) failureCode = 'p3394_peer_not_registered';
+    } else if (message.includes('p3394_reply_timeout')) {
+      failureCode = 'p3394_reply_timeout';
+    }
     return {
       text: '',
       error: message,
       failureKind: 'runtime',
-      failureCode: message.includes('p3394_reply_timeout') ? 'p3394_reply_timeout' : 'p3394_send_failed',
+      failureCode,
       infrastructureFailure: true,
     };
   }

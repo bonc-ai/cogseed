@@ -7,7 +7,13 @@
  * relay shape + delivery-only relay) without network.
  */
 import { describe, expect, it } from 'vitest';
-import { MAX_FORWARD_HOPS, forwardEnvelopeToPeer, type P3394PeerForwardDeps } from '../../../../src/main/features/p3394_bridge/peer-forward';
+import {
+  MAX_FORWARD_HOPS,
+  forwardEnvelopeToPeer,
+  registerChannelBridgeForwarder,
+  type P3394ChannelBridgeForwardRequest,
+  type P3394PeerForwardDeps,
+} from '../../../../src/main/features/p3394_bridge/peer-forward';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 
 function makeEnvelope(overrides: Partial<P3394Envelope> = {}): P3394Envelope {
@@ -45,7 +51,7 @@ function makeDeps(overrides: Partial<P3394PeerForwardDeps> = {}): {
   const audit: Array<Record<string, unknown>> = [];
   const completed = new Set<string>();
   const pending = new Set<string>();
-  const registered = new Map<string, { identity: { agent_id: string }; endpoints?: string[] }>([
+  const registered = new Map<string, { identity: { agent_id: string }; endpoints?: string[]; node_kind?: string; dial_token?: string; expected_identity?: string }>([
     ['node-a', { identity: { agent_id: 'node-a' }, endpoints: ['http://127.0.0.1:9100'] }],
     ['node-b', { identity: { agent_id: 'node-b' }, endpoints: ['http://127.0.0.1:9200'] }],
     // 远程/非回环 target（H-03：默认不可转发，需显式授权）。
@@ -243,5 +249,160 @@ describe('P3394 peer forwarding', () => {
 
     expect(result).toEqual({ ok: false, error: 'p3394_forward_too_many_hops' });
     expect(calls).toHaveLength(0);
+  });
+
+  // ── 渠道节点分流（X-4：B 机 CLI forward 到 channel_bridge）───────────
+
+  it('diverts a channel_bridge target to the registered forwarder and relays the receipt to the sender', async () => {
+    const requests: P3394ChannelBridgeForwardRequest[] = [];
+    registerChannelBridgeForwarder(async (request) => {
+      requests.push(request);
+      return { ok: true, receiptText: 'channel bridge delivered' };
+    });
+    try {
+      const { deps, calls, sendOnceCalls, audit, completed } = makeDeps({
+        resolveAgent: (id) => {
+          // channel_bridge 是无端点的进程内虚拟节点。
+          if (id === 'channel-inst1') {
+            return { ok: true as const, value: { identity: { agent_id: 'channel-inst1' }, endpoints: [], node_kind: 'channel_bridge' } };
+          }
+          const value = makeDeps().deps.resolveAgent(id);
+          return value;
+        },
+      });
+      const envelope = makeEnvelope();
+
+      const result = await forwardEnvelopeToPeer(envelope, 'channel-inst1', deps);
+
+      expect(result).toEqual({ ok: true });
+      // 分流命中注册回调：拿到原始信封（sender=原发送方）与目标 agent_id。
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.targetAgentId).toBe('channel-inst1');
+      expect(requests[0]!.envelope).toBe(envelope);
+      // 不走 outbound-hub 的 sendAndWait（无 HTTP dial）。
+      expect(calls).toHaveLength(0);
+      // 回执作为"目标回复"回发原 sender：终端消息走 delivery-only sendOnce。
+      expect(sendOnceCalls).toHaveLength(1);
+      expect(sendOnceCalls[0]!.agentId).toBe('node-a');
+      expect(sendOnceCalls[0]!.envelope.reply_to).toBe('msg-1');
+      expect(sendOnceCalls[0]!.envelope.payload.parts[0]).toMatchObject({ type: 'text', text: 'channel bridge delivered' });
+      // 幂等闭环：completed 落账。
+      expect(completed.has('channel-inst1:idem-1')).toBe(true);
+      const events = audit.map((record) => record.event);
+      expect(events).toContain('peer.forward.channel_bridge');
+      expect(events).toContain('peer.forward.reply');
+    } finally {
+      registerChannelBridgeForwarder(null);
+    }
+  });
+
+  it('returns p3394_channel_bridge_forwarder_unavailable when no forwarder is registered', async () => {
+    registerChannelBridgeForwarder(null);
+    try {
+      const { deps, calls, audit, pending } = makeDeps({
+        resolveAgent: (id) => (
+          id === 'channel-inst1'
+            ? { ok: true as const, value: { identity: { agent_id: 'channel-inst1' }, endpoints: [], node_kind: 'channel_bridge' } }
+            : makeDeps().deps.resolveAgent(id)
+        ),
+      });
+      const envelope = makeEnvelope();
+
+      const result = await forwardEnvelopeToPeer(envelope, 'channel-inst1', deps);
+
+      expect(result).toEqual({ ok: false, error: 'p3394_channel_bridge_forwarder_unavailable' });
+      expect(calls).toHaveLength(0);
+      // 无 handler 直接拒绝：不占幂等账本（pending 未记账）。
+      expect(pending.has('channel-inst1:idem-1')).toBe(false);
+      expect(audit.some((record) => record.event === 'peer.forward.reject' && record.metadata?.reason === 'channel_bridge_forwarder_unavailable')).toBe(true);
+    } finally {
+      registerChannelBridgeForwarder(null);
+    }
+  });
+
+  it('releases the idempotency key when the channel-bridge delivery fails', async () => {
+    registerChannelBridgeForwarder(async () => ({ ok: false, error: 'p3394_channel_bridge_rate_limited' }));
+    try {
+      const { deps, pending, completed, sendOnceCalls } = makeDeps({
+        resolveAgent: (id) => (
+          id === 'channel-inst1'
+            ? { ok: true as const, value: { identity: { agent_id: 'channel-inst1' }, endpoints: [], node_kind: 'channel_bridge' } }
+            : makeDeps().deps.resolveAgent(id)
+        ),
+      });
+
+      const result = await forwardEnvelopeToPeer(makeEnvelope(), 'channel-inst1', deps);
+
+      expect(result).toEqual({ ok: false, error: 'p3394_channel_bridge_rate_limited' });
+      expect(sendOnceCalls).toHaveLength(0);
+      // 失败释放 pending：同 key 可重试（P1-2 同一纪律）。
+      expect(pending.has('channel-inst1:idem-1')).toBe(false);
+      expect(completed.has('channel-inst1:idem-1')).toBe(false);
+    } finally {
+      registerChannelBridgeForwarder(null);
+    }
+  });
+
+  // ── 无回调时的内置默认放行策略（显式信任来源）───────────────────────
+
+  it('X-4: allows a remote-injected target (expected_identity/dial_token) by the builtin default policy', async () => {
+    const { deps, calls } = makeDeps({
+      resolveAgent: (id) => (
+        id === 'node-b-remote'
+          ? {
+              ok: true as const,
+              value: {
+                identity: { agent_id: 'node-b-remote' },
+                endpoints: ['http://192.168.1.20:8444'],
+                expected_identity: 'node-b-remote',
+                dial_token: 'p3394-b-token',
+              },
+            }
+          : makeDeps().deps.resolveAgent(id)
+      ),
+    });
+
+    const result = await forwardEnvelopeToPeer(makeEnvelope(), 'node-b-remote', deps);
+
+    expect(result).toEqual({ ok: true });
+    expect(calls[0]!.agentId).toBe('node-b-remote');
+  });
+
+  it('X-4: keeps rejecting an unmarked non-loopback target under the builtin default policy', async () => {
+    const { deps, calls } = makeDeps();
+
+    const result = await forwardEnvelopeToPeer(makeEnvelope(), 'node-remote', deps);
+
+    expect(result).toEqual({ ok: false, error: 'p3394_forward_target_remote_not_authorized' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('X-4: an injected isForwardTargetAllowed callback fully overrides the builtin default', async () => {
+    // 回调拒绝：即使目标带显式信任标记也不放行。
+    const strict = makeDeps({
+      isForwardTargetAllowed: () => false,
+      resolveAgent: (id) => (
+        id === 'node-b-remote'
+          ? {
+              ok: true as const,
+              value: {
+                identity: { agent_id: 'node-b-remote' },
+                endpoints: ['http://192.168.1.20:8444'],
+                expected_identity: 'node-b-remote',
+                dial_token: 'p3394-b-token',
+              },
+            }
+          : makeDeps().deps.resolveAgent(id)
+      ),
+    });
+    const strictResult = await forwardEnvelopeToPeer(makeEnvelope(), 'node-b-remote', strict.deps);
+    expect(strictResult).toEqual({ ok: false, error: 'p3394_forward_target_remote_not_authorized' });
+    expect(strict.calls).toHaveLength(0);
+
+    // 回调放行：无标记的远程目标也可（既有 H-03 显式授权语义不变）。
+    const permissive = makeDeps({ isForwardTargetAllowed: () => true });
+    const permissiveResult = await forwardEnvelopeToPeer(makeEnvelope(), 'node-remote', permissive.deps);
+    expect(permissiveResult).toEqual({ ok: true });
+    expect(permissive.calls[0]!.agentId).toBe('node-remote');
   });
 });

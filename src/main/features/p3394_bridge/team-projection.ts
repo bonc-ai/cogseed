@@ -6,8 +6,11 @@
  * — a visible card with the external badge, dispatchable through @ in any
  * conversation. No manual 外接 flow needed: talk once, it joins the team.
  *
- * Scope (local-first): only same-host nodes are projected. A cloud agent
- * that merely posts messages (no endpoint) stays a registry peer.
+ * Scope (local-first): same-host nodes (loopback endpoints) are projected
+ * automatically. Explicitly trusted remote nodes (remote-nodes injection /
+ * registry-registered with dial_token or expected_identity) also project so
+ * they are @-mentionable cross-device; a remote node that merely self-reports
+ * non-loopback endpoints (untrusted hello) stays a registry peer.
  */
 
 import * as fs from 'node:fs';
@@ -211,11 +214,24 @@ export function unsuppressNodeProjection(nodeId: string): void {
 /**
  * Projects a self-registered LOCAL node into the AI 团队 (idempotent).
  * Returns the agent id when projected (or already projected).
+ *
+ * 信任边界（X-4 远端建卡）：本地节点（全部回环端点）自动投影；远端节点
+ * （含非回环端点）仅当身份来自显式信任来源时建卡——判据是 dial_token /
+ * expected_identity 存在（remote-nodes 注入与注册表登记的显式添加特征，
+ * 注入侧 expected_identity 必填、token 必填），或调用方显式 trusted 标记。
+ * 纯 hello 自报的非回环端点保持 skip_non_local：入站自注册不应让任意远端
+ * 自动进团队目录（对称于 app-wiring 的 S-02 hello 回环白名单，这是投影侧
+ * 的第二道闸）。
  */
 export async function projectP3394NodeToTeam(input: {
   nodeId: string;
   alias?: string;
   endpoints?: string[];
+  /** 显式信任标记（remote-nodes 注入 / 注册表登记携带的凭据特征）。 */
+  dial_token?: string;
+  expected_identity?: string;
+  /** 调用方显式声明信任（优先于上面两个标记的判据）。 */
+  trusted?: boolean;
 }): Promise<{ projected: boolean; agent_id?: string; reason?: string }> {
   const nodeId = String(input.nodeId || '').trim();
   if (!nodeId || nodeId === 'cogseed') return { projected: false, reason: 'skip_local' };
@@ -231,14 +247,20 @@ export async function projectP3394NodeToTeam(input: {
   }
 
   // 聚焦本地：只有同机节点（回环端点）自动投影；无端点的纯客户端不投影。
+  // 远端节点（含非回环端点）需要显式信任特征（见函数头注释）才投影。
   const endpoints = (input.endpoints ?? []).filter((v) => typeof v === 'string' && v.startsWith('http'));
-  const allLoopback = endpoints.length > 0 && endpoints.every((endpoint) => {
+  const isLoopbackEndpoint = (endpoint: string): boolean => {
     try {
       const host = new URL(endpoint).hostname.toLowerCase();
       return host === '127.0.0.1' || host === 'localhost' || host === '::1';
     } catch { return false; }
-  });
-  if (!allLoopback) return { projected: false, reason: 'skip_non_local' };
+  };
+  const allLoopback = endpoints.length > 0 && endpoints.every(isLoopbackEndpoint);
+  const explicitlyTrusted = input.trusted === true
+    || (typeof input.dial_token === 'string' && input.dial_token.trim().length > 0)
+    || (typeof input.expected_identity === 'string' && input.expected_identity.trim().length > 0);
+  if (!allLoopback && !explicitlyTrusted) return { projected: false, reason: 'skip_non_local' };
+  const isRemoteNode = !allLoopback;
 
   // 已投影过 → 只有目标 Agent 仍存在时才幂等返回。Agent 被删除后，
   // 必须允许当前在线 P3394 节点重新进入 AI 团队目录，不能被陈旧映射卡死。
@@ -276,8 +298,14 @@ export async function projectP3394NodeToTeam(input: {
   const rawBase = (input.alias || (known ? known.name : nodeId)).trim();
   const sanitizedBase = rawBase.replace(/[^A-Za-z0-9_\-\u4e00-\u9fff]+/g, '').slice(0, 60);
   const baseName = sanitizedBase || String(nodeId).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60) || 'p3394-agent';
-  const descriptionZh = known ? known.description_zh : '本地智能体——通过 P3394 协议自动接入的协作节点，在对话里 @ 它即可协作。';
-  const descriptionEn = known ? known.description_en : 'Local agent auto-connected over the P3394 protocol as a collaboration node; @ it in any conversation to collaborate.';
+  // 远端信任节点（跨机显式接入）与本地自动接入的描述区分：用户能从卡片
+  // 文案看出这是另一台设备上的智能体。
+  const descriptionZh = known ? known.description_zh : (isRemoteNode
+    ? '远端智能体——通过 P3394 协议显式接入的跨机协作节点，在对话里 @ 它即可协作。'
+    : '本地智能体——通过 P3394 协议自动接入的协作节点，在对话里 @ 它即可协作。');
+  const descriptionEn = known ? known.description_en : (isRemoteNode
+    ? 'Remote agent explicitly connected over the P3394 protocol as a cross-device collaboration node; @ it in any conversation to collaborate.'
+    : 'Local agent auto-connected over the P3394 protocol as a collaboration node; @ it in any conversation to collaborate.');
 
   // 名称冲突：优先原名，占用则加「P3394」后缀，仍冲突则跳过。
   const nameTaken = (name: string) => existingAgents.some((agent) => (agent.name || '').trim() === name);

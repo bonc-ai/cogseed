@@ -367,4 +367,78 @@ describe('CogSeed Backend local CLI execution adapter', () => {
       metadata: { code: 'p3394_reply_timeout', p3394: true },
     });
   });
+
+  it('routes gateway progress frames to the process rail (metadata) instead of the bubble (text)', async () => {
+    // 过程帧三形态：progress（纯文本）、status（带 state）、artifact（带 uri）。
+    // 它们必须以 metadata 形态出队（不进气泡正文），artifact 帧的 uri/name
+    // 提到 metadata 顶层对齐 runtime-controller 的 kernel_event:'artifact' 分支。
+    let emitProcess: ((data: Record<string, unknown>) => void) | undefined;
+    let finishTurn: ((value: { text: string }) => void) | undefined;
+    gatewayTurnMock.runP3394GatewayTurn.mockImplementationOnce((input: any) => new Promise((resolve) => {
+      emitProcess = input.onProcess;
+      finishTurn = resolve;
+    }));
+    const { createCogSeedLocalCliExecutionAdapter } = await import('../../../../src/main/features/cogseed_backend/local-cli-execution-adapter');
+    const adapter = createCogSeedLocalCliExecutionAdapter({ runCli: vi.fn() } as any);
+    const iterator = adapter.run({
+      userId: 'cli-adapter-user',
+      conversationId: 'cid-cli-adapter',
+      agentId: 'agent-cli-adapter',
+      agentName: 'ClaudeCode',
+      requestId: 'req-cli-gw-rail',
+      taskId: 'cogseed-task-cli-gw-rail',
+      sessionId: 'cogseed-session-cli-gw-rail',
+      runtimeSessionId: 'mruntime-cli-gw-rail',
+      task: 'Rail this via gateway.',
+      context: [],
+      localCli: { cli: 'claude', viaP3394Gateway: true },
+    })[Symbol.asyncIterator]();
+
+    const first = iterator.next();
+    await vi.waitFor(() => expect(emitProcess).toBeTypeOf('function'));
+    emitProcess?.({ type: 'progress', text: '[tools] run bash build' });
+    await expect(first).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: 'event',
+        status: 'running',
+        metadata: { kernel_event: 'progress', text: '[tools] run bash build' },
+      },
+    });
+    // 不带顶层 text（顶层 text 会被 runtime-controller 映射成 model.delta 进气泡）。
+    expect((await Promise.resolve(first)).value).not.toHaveProperty('text');
+
+    const second = iterator.next();
+    emitProcess?.({ type: 'progress', text: '[artifact] build report p3394-object:sha256:abcd', event: { uri: 'p3394-object:sha256:abcd', name: 'report.md', media_type: 'text/markdown' } });
+    await expect(second).resolves.toMatchObject({
+      done: false,
+      value: {
+        type: 'event',
+        status: 'running',
+        metadata: {
+          kernel_event: 'artifact',
+          uri: 'p3394-object:sha256:abcd',
+          name: 'report.md',
+          media_type: 'text/markdown',
+          text: '[artifact] build report p3394-object:sha256:abcd',
+        },
+      },
+    });
+
+    // delta 帧保持进气泡（顶层 text）。
+    const third = iterator.next();
+    emitProcess?.({ type: 'delta', text: 'live chunk' });
+    await expect(third).resolves.toMatchObject({
+      done: false,
+      value: { type: 'event', status: 'running', text: 'live chunk' },
+    });
+
+    emitProcess?.({ type: 'final', text: 'final body' });
+    finishTurn?.({ text: 'final body' });
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { type: 'result', status: 'completed', text: 'final body' },
+    });
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
 });

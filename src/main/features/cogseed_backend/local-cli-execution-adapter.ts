@@ -292,7 +292,11 @@ async function* runViaP3394Gateway(
   const base = { request_id: input.requestId, runtime_session_id: input.runtimeSessionId };
   const prompt = promptFromInput(input);
   const { runP3394GatewayTurn } = await import('../p3394_bridge/p3394-gateway-turn');
-  const runningEvents: Array<{ text: string }> = [];
+  // 队列元素二态：delta 帧（text）→ 顶层 text 的 running 事件（气泡流）；
+  // 过程帧（metadata）→ kernel_event 标记的 running 事件（process rail）。
+  // 顶层 text 只给 delta：runtime-controller 把带 text 的 running 事件映射成
+  // model.delta（气泡），过程帧绝不能带顶层 text。
+  const runningEvents: Array<{ text?: string; metadata?: Record<string, unknown> }> = [];
   let wakeConsumer: (() => void) | undefined;
   let settled = false;
   let result: Awaited<ReturnType<typeof runP3394GatewayTurn>> | undefined;
@@ -303,22 +307,52 @@ async function* runViaP3394Gateway(
     wake?.();
   };
   const turn = runP3394GatewayTurn({
-      uid: input.userId,
-      cid: input.conversationId,
-      agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
-      ...(input.executionId ? { executionId: input.executionId } : {}),
-      cli: input.localCli.cli,
-      prompt,
-      ...(input.workingDir ? { workingDir: input.workingDir } : {}),
-      signal: opts.signal ?? undefined,
-      onProcess: (data) => {
-        const typed = data as { type?: string; text?: string };
-        if (typed.type === 'delta' && typeof typed.text === 'string' && typed.text) {
-          runningEvents.push({ text: typed.text });
-          notifyConsumer();
-        }
-      },
-    })
+    uid: input.userId,
+    cid: input.conversationId,
+    agent: { agent_id: input.agentId, name: input.agentName || input.localCli.agentName || input.agentId },
+    ...(input.executionId ? { executionId: input.executionId } : {}),
+    cli: input.localCli.cli,
+    prompt,
+    ...(input.workingDir ? { workingDir: input.workingDir } : {}),
+    signal: opts.signal ?? undefined,
+    onProcess: (data) => {
+      const typed = data as { type?: string; text?: string; event?: unknown };
+      if (typed.type === 'delta' && typeof typed.text === 'string' && typed.text) {
+        runningEvents.push({ text: typed.text });
+        notifyConsumer();
+        return;
+      }
+      // 过程帧（progress/status/artifact——gateway-turn onStream 统一组装，
+      // 文案已带 [status]/[artifact] 前缀与 state/uri 信息）→ process rail：
+      // text 收进 metadata（不进气泡正文）；artifact 帧的 uri/name/
+      // media_type/digest 提到 metadata 顶层，对齐 runtime-controller 的
+      // kernel_event:'artifact' 分支，直接落任务事件表的 artifact 行。
+      if (typed.type === 'progress' && typeof typed.text === 'string' && typed.text) {
+        const structured = typed.event && typeof typed.event === 'object'
+          ? typed.event as Record<string, unknown>
+          : undefined;
+        const pick = (key: string): string | undefined => {
+          const value = structured?.[key];
+          return typeof value === 'string' && value ? value : undefined;
+        };
+        const uri = pick('uri');
+        const artifactFields = {
+          ...(uri !== undefined ? { uri } : {}),
+          ...(pick('name') !== undefined ? { name: pick('name') } : {}),
+          ...(pick('media_type') !== undefined ? { media_type: pick('media_type') } : {}),
+          ...(pick('digest') !== undefined ? { digest: pick('digest') } : {}),
+        };
+        runningEvents.push({
+          metadata: {
+            kernel_event: uri !== undefined ? 'artifact' : 'progress',
+            text: typed.text,
+            ...artifactFields,
+          },
+        });
+        notifyConsumer();
+      }
+    },
+  })
     .then((value) => { result = value; })
     .catch((error: unknown) => { runError = error; })
     .finally(() => {
@@ -329,7 +363,11 @@ async function* runViaP3394Gateway(
   while (!settled || runningEvents.length > 0) {
     const item = runningEvents.shift();
     if (item) {
-      yield { type: 'event', ...base, status: 'running', text: item.text };
+      if (item.metadata) {
+        yield { type: 'event', ...base, status: 'running', metadata: item.metadata };
+      } else {
+        yield { type: 'event', ...base, status: 'running', text: item.text };
+      }
       continue;
     }
     if (!settled) {

@@ -134,6 +134,77 @@ describe('P3394 node -> AI team projection', () => {
     expect(self.reason).toBe('skip_local');
   });
 
+  it('projects an explicitly trusted remote node (remote-nodes injection markers) into the team', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(testUid);
+    const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
+    // X-4：remote-nodes 注入的跨机节点携带 expected_identity/dial_token
+    //（用户显式添加的信任特征）→ 允许建 AI 团队卡片（群聊 @ 可达）。
+    const result = await mod.projectP3394NodeToTeam({
+      nodeId: 'b-node-agent',
+      alias: 'B机智能体',
+      endpoints: ['http://192.168.1.20:8444'],
+      expected_identity: 'b-node-agent',
+      dial_token: 'p3394-b-token',
+    });
+    expect(result.projected).toBe(true);
+    expect(result.agent_id).toBeTruthy();
+
+    const agents = await import('../../../../src/main/features/agents');
+    const created = (await agents.listAgents()).find((a) => a.agent_id === result.agent_id);
+    expect(created).toBeTruthy();
+    // 卡片 runtime 指向远端节点 id → 派发经 p3394-gateway-turn 远端路由。
+    expect(created?.runtime).toEqual({ kind: 'p3394-gateway', cli: 'b-node-agent' });
+    // 远端节点描述区分于本地自动接入（用户能看出这是另一台设备的智能体）。
+    expect(created?.description_zh).toContain('远端');
+    expect(created?.description_en).toContain('Remote agent');
+
+    // 幂等：再次投影同节点返回 already_projected。
+    const again = await mod.projectP3394NodeToTeam({
+      nodeId: 'b-node-agent',
+      alias: 'B机智能体',
+      endpoints: ['http://192.168.1.20:8444'],
+      expected_identity: 'b-node-agent',
+      dial_token: 'p3394-b-token',
+    });
+    expect(again.projected).toBe(false);
+    expect(again.agent_id).toBe(result.agent_id);
+    expect(again.reason).toBe('already_projected');
+  });
+
+  it('still skips a hello-self-reported non-loopback node without explicit trust markers', async () => {
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(testUid);
+    const mod = await import('../../../../src/main/features/p3394_bridge/team-projection');
+    // 纯 hello 自报的非回环端点（无 dial_token/expected_identity/trusted）：
+    // skip_non_local 语义保留给非信任来源（S-02 对称闸）。
+    const untrusted = await mod.projectP3394NodeToTeam({
+      nodeId: 'stranger-remote',
+      endpoints: ['http://203.0.113.9:9000'],
+    });
+    expect(untrusted.projected).toBe(false);
+    expect(untrusted.reason).toBe('skip_non_local');
+
+    // 单独 dial_token（无 expected_identity）同样算显式信任特征。
+    const tokenOnly = await mod.projectP3394NodeToTeam({
+      nodeId: 'token-only-remote',
+      endpoints: ['http://192.168.1.21:8444'],
+      dial_token: 'p3394-token',
+    });
+    expect(tokenOnly.projected).toBe(true);
+
+    // trusted 显式标记（调用方声明）。既有去重语义：同测试内已存在无 cli
+    // 匹配的 p3394-gateway 卡片时，后续未知 nodeId 走 existing_agent 复用
+    //（不重复建卡）——这里验证信任标记使其跳过 skip_non_local 闸门。
+    const flagged = await mod.projectP3394NodeToTeam({
+      nodeId: 'flagged-remote',
+      endpoints: ['http://192.168.1.22:8444'],
+      trusted: true,
+    });
+    expect(flagged.reason).not.toBe('skip_non_local');
+    expect(flagged.agent_id).toBe(tokenOnly.agent_id);
+  });
+
   it('does not auto-recreate a deleted agent whose node is suppressed (gateway still alive)', async () => {
     const users = await import('../../../../src/main/features/users');
     users.activateUser(testUid);
