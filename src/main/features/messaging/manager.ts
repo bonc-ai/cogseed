@@ -633,6 +633,7 @@ async function handleInboundLocked(
     isGroup: envelope.isGroup,
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
+    imageCount: envelope.imageKeys?.length ?? 0,
   });
   // Q3 open_id→Peer 映射：飞书入站即记录（幂等；无变化时零写盘）。
   // 纯元数据采集——失败仅 warn，绝不阻塞派发主链路。
