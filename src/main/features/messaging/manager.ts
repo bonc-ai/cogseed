@@ -20,9 +20,12 @@ import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
+import { channelPeerAlias, ensureChannelPeer } from '../p3394_bridge/channel-peer-map';
+import { P3394_ENVELOPE_VERSION, type P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
+import { normalizeInboundImageKeys } from './ledger';
 import { RuntimeInstance } from './runtime';
 import type {
   AdapterCallbacks,
@@ -512,11 +515,17 @@ async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: Inboun
     for (const item of batch.payloads) {
       if (item.envelope.contextTokenRef) lastTokenRef = item.envelope.contextTokenRef;
     }
+    // G-17：聚合批次内全部图片引用（去重保序、上限 9）——合并后的文本只剩
+    // 占位符时，图片本身不能跟着批次的文本折叠一起丢掉。
+    const batchImageKeys = normalizeInboundImageKeys(
+      batch.payloads.flatMap((item) => item.envelope.imageKeys || []),
+    );
     const envelope: InboundEnvelope = {
       ...first,
       externalMessageId: batch.ids[0],
       text: batch.text,
       ...(lastTokenRef !== undefined ? { contextTokenRef: lastTokenRef } : {}),
+      ...(batchImageKeys ? { imageKeys: batchImageKeys } : {}),
     };
     const result = await handleInbound(uid, envelope);
     firstResolve(result);
@@ -568,6 +577,46 @@ export async function enqueueInbound(uid: string, envelope: InboundEnvelope): Pr
   });
 }
 
+/** G-17 入站图片投影：构造随派发消息携带的最小 P3394 信封。它是渠道
+ *  事件的投影元数据（不进协议边界、不做完整信封校验），字段形态对齐
+ *  P3394Envelope：文本 part 保路由，image part 用引用式 uri。 */
+function buildInboundImageEnvelope(input: {
+  key: string;
+  cid: string;
+  platform: MessagingPlatform;
+  instanceId: string;
+  externalMessageId: string;
+  senderAlias: string;
+  text: string;
+  imageKeys: string[];
+}): P3394Envelope {
+  return {
+    spec_version: P3394_ENVELOPE_VERSION,
+    message_id: `inbound:${input.key}`,
+    session_id: input.cid,
+    kind: 'message',
+    performative: 'inform',
+    sender: { agent_id: input.senderAlias, channel_instance_id: input.instanceId },
+    recipients: [{ agent_id: 'commander' }],
+    payload: {
+      parts: [
+        { type: 'text', text: input.text },
+        ...input.imageKeys.map((imageKey) => ({
+          type: 'image' as const,
+          uri: `feishu-image:${imageKey}`,
+          name: imageKey,
+        })),
+      ],
+      metadata: {
+        platform: input.platform,
+        instance_id: input.instanceId,
+        external_message_id: input.externalMessageId,
+      },
+    },
+    idempotency_key: `inbound:${input.key}`,
+  };
+}
+
 async function handleInboundLocked(
   uid: string,
   envelope: InboundEnvelope,
@@ -582,8 +631,22 @@ async function handleInboundLocked(
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
   });
+  // Q3 open_id→Peer 映射：飞书入站即记录（幂等；无变化时零写盘）。
+  // 纯元数据采集——失败仅 warn，绝不阻塞派发主链路。
+  if (envelope.platform === 'feishu_lark' && envelope.externalUserId) {
+    try {
+      ensureChannelPeer(envelope.platform, envelope.instanceId, envelope.externalUserId, envelope.externalUserName);
+    } catch (error) {
+      log.warn('messaging channel peer map update failed', {
+        instanceId: envelope.instanceId,
+        error: logErrorSummary(error),
+      });
+    }
+  }
+  // G-17：规整入站图片引用（去空/去重/上限 9），台账完成记录与派发信封共用。
+  const imageKeys = normalizeInboundImageKeys(envelope.imageKeys);
   const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
-    ledger.completeInbound(uid, key, patch);
+    ledger.completeInbound(uid, key, imageKeys ? { ...patch, imageKeys } : patch);
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
@@ -663,10 +726,29 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
+    // G-17：图片入站投影为最小 P3394 信封（派发元数据，字段形态对齐
+    // P3394Envelope 但不强求通过 validateP3394Envelope 完整校验——它不进
+    // 协议边界，只随消息贯穿派发链）：parts[0] 文本占位保证路由不退化，
+    // 其后每个 image_key 一个引用式格子 {type:'image', uri:'feishu-image:
+    // <key>'}（不内联字节，下载/物化由消费方决定）。message_id 带台账
+    // key 可互查；sender 用 Q3 渠道 peer 别名（同一 open_id 恒定）。
+    const p3394Envelope = imageKeys
+      ? buildInboundImageEnvelope({
+        key,
+        cid: binding.cid,
+        platform: envelope.platform,
+        instanceId: envelope.instanceId,
+        externalMessageId: envelope.externalMessageId,
+        senderAlias: channelPeerAlias(envelope.platform, envelope.externalUserId),
+        text,
+        imageKeys,
+      })
+      : undefined;
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,
       text,
+      ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
     });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message
