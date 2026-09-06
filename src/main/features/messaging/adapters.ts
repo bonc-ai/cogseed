@@ -1372,20 +1372,54 @@ export class FeishuAdapter implements MessagingCardAdapter {
         : (err as Error)?.message || String(err);
       throw new Error(`Feishu image download failed: ${detail}`);
     }
-    const stream = (response && typeof (response as { on?: unknown }).on === 'function')
-      ? response
-      : (response as { data?: unknown } | null)?.data;
-    if (!stream || typeof (stream as { on?: unknown }).on !== 'function') {
-      throw new Error('Feishu image download failed: no byte stream in response');
+    // The SDK wraps binary endpoints inconsistently across versions: the
+    // payload may be a Readable stream, an axios response whose .data is a
+    // Buffer/base64 string, or the raw Buffer itself. Handle all shapes.
+    const bytes = await extractBinaryBytes(response);
+    if (!bytes || bytes.length === 0) {
+      const shape = response === null || response === undefined
+        ? String(response)
+        : `${typeof response}${typeof response === 'object' ? ` keys=[${Object.keys(response as Record<string, unknown>).slice(0, 8).join(',')}]` : ''}`;
+      throw new Error(`Feishu image download failed: no bytes in response (shape: ${shape})`);
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream as AsyncIterable<Buffer>) {
-      if (chunk) chunks.push(chunk);
-    }
-    const bytes = Buffer.concat(chunks);
-    if (bytes.length === 0) throw new Error('Feishu image download failed: empty body');
     return bytes;
   }
+}
+
+/** Best-effort binary extraction across SDK response shapes. */
+async function extractBinaryBytes(response: unknown): Promise<Buffer | null> {
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    (value && typeof value === 'object' ? value as Record<string, unknown> : null);
+  const collectStream = async (stream: unknown): Promise<Buffer | null> => {
+    if (!stream || typeof (stream as { on?: unknown }).on !== 'function') return null;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<unknown>) {
+      if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferView | string));
+    }
+    return Buffer.concat(chunks);
+  };
+  // Shape 1: the payload itself is the stream.
+  const direct = await collectStream(response);
+  if (direct && direct.length > 0) return direct;
+  const record = asRecord(response);
+  if (record) {
+    // Shape 2: axios-style { data } wrapper — stream, Buffer, or base64.
+    const collected = await collectStream(record.data);
+    if (collected && collected.length > 0) return collected;
+    const data = record.data;
+    if (Buffer.isBuffer(data) && data.length > 0) return data;
+    if (typeof data === 'string' && data.length > 0) return Buffer.from(data, 'base64');
+    // Shape 3: nested { data: { data } } (some SDK versions double-wrap).
+    const inner = asRecord(data);
+    if (inner) {
+      const innerCollected = await collectStream(inner.data);
+      if (innerCollected && innerCollected.length > 0) return innerCollected;
+      if (Buffer.isBuffer(inner.data) && inner.data.length > 0) return inner.data;
+    }
+  }
+  if (Buffer.isBuffer(response) && response.length > 0) return response;
+  if (typeof response === 'string' && response.length > 0) return Buffer.from(response, 'base64');
+  return null;
 }
 
 const wecomSdkLogger = {

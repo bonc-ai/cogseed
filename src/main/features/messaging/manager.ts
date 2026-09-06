@@ -770,10 +770,19 @@ async function handleInboundLocked(
               fs.rmSync(tmpPath, { force: true });
             }
           } catch (err) {
+            // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
+            // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
+            // 权限/参数问题。
+            const message = err instanceof Error ? err.message : String(err);
+            const codeMatch = message.match(/code=([^ ]+)/);
+            const msgMatch = message.match(/msg=(.*)$/);
             log.warn('messaging inbound image download failed', {
               instanceId: envelope.instanceId,
               imageKey,
-              error: logErrorSummary(err),
+              errorName: err instanceof Error ? err.name : 'Error',
+              feishuCode: codeMatch ? codeMatch[1] : undefined,
+              feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
+              errorDetail: message.slice(0, 240),
             });
           }
         }
