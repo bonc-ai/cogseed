@@ -2,7 +2,7 @@ import type { P3394Envelope } from './envelope';
 import { validateP3394Envelope } from './envelope';
 import { P3394AuditJournal } from './audit-journal';
 import { P3394IdempotencyStore } from './idempotency';
-import { P3394PeerRegistry, type P3394PeerRecord } from './registry';
+import { P3394PeerRegistry, type P3394AliasResolutionContext, type P3394PeerRecord } from './registry';
 import { P3394ReplayProtector } from './replay-protection';
 
 export interface P3394BridgeDeliveryReceipt {
@@ -66,14 +66,20 @@ export class P3394BridgeKernel {
     this.audit = deps.audit ?? new P3394AuditJournal();
   }
 
-  send(envelopeInput: unknown, options: { epoch?: number } = {}): P3394BridgeSendResult {
+  /**
+   * 发送选项。`epoch` 触发 per-sender replay 保护；`sessionAliases` 是
+   * §17.4 Session-Scoped Alias 绑定（alias → agent_id，只在本会话内生效，
+   * 优先于全局 alias）。不传时行为与历史完全一致（无会话级绑定）。
+   */
+  send(envelopeInput: unknown, options: { epoch?: number; sessionAliases?: Record<string, string> } = {}): P3394BridgeSendResult {
     const validation = validateP3394Envelope(envelopeInput);
     if (validation.ok === false) {
       this.audit.append({ event: 'envelope.validate', actor_id: 'unknown', status: 'rejected', metadata: { reason: validation.error.reason } });
       return { ok: false, error: validation.error };
     }
     const envelope: P3394Envelope = validation.envelope;
-    const sender = this.registry.resolve(envelope.sender.agent_id);
+    const resolutionContext: P3394AliasResolutionContext = options.sessionAliases ? { sessionAliases: options.sessionAliases } : {};
+    const sender = this.registry.resolve(envelope.sender.agent_id, resolutionContext);
     if (sender.ok === false) {
       this.audit.append({ event: 'peer.resolve.sender', actor_id: envelope.sender.agent_id, status: 'rejected', metadata: { ...sender.error } });
       return { ok: false, error: sender.error };
@@ -85,7 +91,7 @@ export class P3394BridgeKernel {
     }
     const recipientIds: string[] = [];
     for (let i = 0; i < envelope.recipients.length; i += 1) {
-      const recipient = this.registry.resolve(envelope.recipients[i].agent_id);
+      const recipient = this.registry.resolve(envelope.recipients[i].agent_id, resolutionContext);
       if (recipient.ok === false) {
         this.audit.append({ event: 'peer.resolve.recipient', actor_id: envelope.sender.agent_id, target_id: envelope.recipients[i].agent_id, status: 'rejected', metadata: { ...recipient.error } });
         return { ok: false, error: recipient.error };

@@ -74,6 +74,11 @@ export interface P3394BridgeExecutorDeps {
   maxArtifactAutoReplyBytes?: number;
   /** Per-session auto artifact reply count cap (0 disables; S-06). */
   maxArtifactAutoRepliesPerSession?: number;
+  /** §17.4 Session-Scoped Alias 绑定来源：按 session id 返回该会话内的
+   *  alias → agent_id 映射（优先于全局 alias；返回 undefined 表示该会话
+   *  无会话级绑定，走全局解析——与历史行为完全一致）。生产方可接到
+   *  会话对象/UI 会话绑定点上。 */
+  sessionAliasesFor?: (sessionId: string) => Record<string, string> | undefined;
   /** Clock for lifecycle records. */
   now?: () => string;
 }
@@ -111,6 +116,7 @@ export class P3394BridgeExecutor {
   private readonly artifactCounts = new Map<string, number>();
   private readonly maxArtifactAutoReplyBytes: number;
   private readonly maxArtifactAutoRepliesPerSession: number;
+  private readonly sessionAliasesFor: ((sessionId: string) => Record<string, string> | undefined) | undefined;
 
   constructor(deps: P3394BridgeExecutorDeps) {
     this.bridge = deps.bridge;
@@ -128,6 +134,7 @@ export class P3394BridgeExecutor {
     this.now = deps.now ?? (() => new Date().toISOString());
     this.maxArtifactAutoReplyBytes = deps.maxArtifactAutoReplyBytes ?? P3394_CHANNEL_LIMITS.maxArtifactAutoReplyBytes;
     this.maxArtifactAutoRepliesPerSession = deps.maxArtifactAutoRepliesPerSession ?? P3394_CHANNEL_LIMITS.maxArtifactAutoRepliesPerSession;
+    this.sessionAliasesFor = deps.sessionAliasesFor;
   }
 
   /**
@@ -170,7 +177,13 @@ export class P3394BridgeExecutor {
    * handling stays in the kernel; only accepted envelopes reach the runtime.
    */
   execute(envelopeInput: unknown): P3394BridgeExecutorResult {
-    const sent = this.bridge.send(envelopeInput, p3394EnvelopeEpochOption(envelopeInput));
+    // §17.4 Session-Scoped Alias：本会话内的 alias 绑定优先于全局 alias；
+    // 无绑定（或 sessionAliasesFor 未配置）时透传空，行为与历史一致。
+    const sessionAliases = this.sessionAliasesFor?.(p3394InputSessionId(envelopeInput));
+    const sent = this.bridge.send(envelopeInput, {
+      ...(p3394EnvelopeEpochOption(envelopeInput) ?? {}),
+      ...(sessionAliases && Object.keys(sessionAliases).length > 0 ? { sessionAliases } : {}),
+    });
     if (sent.ok === false) return { ok: false, error: sent.error };
     // Replayed duplicates are acknowledged but never executed again.
     if (sent.receipt.replay) {
@@ -321,6 +334,8 @@ export class P3394BridgeExecutor {
           if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
             this.tasks.settle(p3394TaskId, event.kind);
             // KSTAR 闭环：每个任务终态产出一份 episode（goal/动作轨迹/结果/AAR）。
+            // proposed_updates 与 resumeForward 恢复路径对齐（N-17 对称性）：
+            // 三种终态都产出 Learn-What 候选，outcome 由 status 语义映射。
             this.recordEpisode?.({
               session_id: envelope.session_id,
               task_id: p3394TaskId,
@@ -329,6 +344,7 @@ export class P3394BridgeExecutor {
               status: event.kind,
               result: lastDelta.slice(0, 24_000) || undefined,
               actions,
+              proposed_updates: this.proposedUpdatesFor(goal, event.kind, lastDelta.slice(0, 24_000) || undefined, actions),
             });
             // §11 结果自动回发：对端先开口 → CogSeed 回答自动送回（若对端
             // 声明了 reply_endpoint）。失败也回发 error 信封。
@@ -360,6 +376,8 @@ export class P3394BridgeExecutor {
           status: 'failed',
           result: lastDelta.slice(0, 24_000) || undefined,
           actions: [...actions, { sequence: sequence + 1, kind: 'failed', at: this.now(), error: message }],
+          // 异常失败路径同样产出 Learn-What 候选（与正常终态/恢复路径对齐）。
+          proposed_updates: this.proposedUpdatesFor(goal, 'failed', lastDelta.slice(0, 24_000) || undefined, actions),
         });
       } finally {
         this.forwards.delete(p3394TaskId);
@@ -620,6 +638,15 @@ function p3394EnvelopeGoal(envelope: P3394Envelope): string {
     return (metadata as Record<string, unknown>).goal as string;
   }
   return 'p3394-inbound-task';
+}
+
+/** 入站输入的 session_id（无或不合法时返回空串，供 sessionAliasesFor 查询）。 */
+function p3394InputSessionId(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const sessionId = (input as { session_id?: unknown }).session_id;
+    if (typeof sessionId === 'string' && sessionId.trim()) return sessionId;
+  }
+  return '';
 }
 
 /**

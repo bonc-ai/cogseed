@@ -98,13 +98,22 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
     expect(result.profile.capabilities).not.toContain('local-cli');
   });
 
-  it('maps CLI runtime to local-cli and includes local-cli capability', () => {
-    const result = buildP3394CapabilityProfile(agent({ runtime: { kind: 'cli', cli: 'codex', model: 'gpt-5' } }));
+  it('maps external (gateway / legacy raw cli) runtimes to cogseed-native after G-19 collapse', () => {
+    // G-19 收口：legacy `cli` 死臂已删——gateway 与原始 `cli` 形态都归
+    // cogseed-native（local-cli capability 不再触发，与收口前线上实际行为一致：
+    // 生产路径 runtime 永远不会是 'cli'）。
+    const gateway = buildP3394CapabilityProfile(agent({ runtime: { kind: 'p3394-gateway', cli: 'codex', model: 'gpt-5' } }));
+    expect(gateway.ok).toBe(true);
+    if (!gateway.ok) throw new Error('expected capability profile success');
+    expect(gateway.profile.runtime_kind).toBe('cogseed-native');
+    expect(gateway.profile.capabilities).toContain('handle_message');
+    expect(gateway.profile.capabilities).not.toContain('local-cli');
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected capability profile success');
-    expect(result.profile.runtime_kind).toBe('local-cli');
-    expect(result.profile.capabilities).toEqual(expect.arrayContaining(['handle_message', 'local-cli']));
+    const legacyRaw = buildP3394CapabilityProfile(agent({ runtime: { kind: 'cli', cli: 'codex', model: 'gpt-5' } as never }));
+    expect(legacyRaw.ok).toBe(true);
+    if (!legacyRaw.ok) throw new Error('expected capability profile success');
+    expect(legacyRaw.profile.runtime_kind).toBe('cogseed-native');
+    expect(legacyRaw.profile.capabilities).not.toContain('local-cli');
   });
 
   it('deduplicates skill_list and creates cogseed-skill-scope capability', () => {
@@ -117,6 +126,8 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
   });
 
   it('builds manifest with identity, runtime, capability profile, channel declaration, session/security/conformance', () => {
+    // legacy `cli` 原始输入：字段透传、输出归一为 p3394-gateway（与
+    // agents._normalizeRuntime「读回即网关」语义一致，G-19 收口）。
     const result = buildP3394BridgeManifest(agent({
       runtime: { kind: 'cli', cli: 'codex', model: 'gpt-5' },
       skill_list: ['research'],
@@ -126,9 +137,9 @@ describe('P3394 bridge identity, capability profile, and manifest', () => {
     if (!result.ok) throw new Error('expected manifest success');
     expect(result.manifest.spec_version).toBe('p3394/1.0');
     expect(result.manifest.identity.agent_id).toBe('agent-bridge-001');
-    expect(result.manifest.runtime).toEqual({ kind: 'cli', cli: 'codex', model: 'gpt-5' });
+    expect(result.manifest.runtime).toEqual({ kind: 'p3394-gateway', cli: 'codex', model: 'gpt-5' });
     expect(result.manifest.capability_profile.agent_id).toBe('agent-bridge-001');
-    expect(result.manifest.capability_profile.runtime_kind).toBe('local-cli');
+    expect(result.manifest.capability_profile.runtime_kind).toBe('cogseed-native');
     expect(result.manifest.channels).toEqual([
       {
         id: 'local-agent-bridge',

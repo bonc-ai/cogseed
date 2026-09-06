@@ -29,6 +29,19 @@ function allFacts(overrides: Partial<P3394WiringDoctorFacts> = {}): P3394WiringD
   };
 }
 
+function manifestFor(id: string) {
+  return {
+    spec_version: 'p3394/1.0',
+    identity: { agent_id: id, display_name: id },
+    runtime: { kind: 'in_process' },
+    capability_profile: { agent_id: id, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request', 'response', 'inform', 'accept', 'reject', 'cancel', 'error', 'negotiate'], supports_streaming: false, supports_artifacts: false },
+    channels: [{ id: 'local-agent-bridge', kind: 'local', direction: 'inbound-outbound' }],
+    session: { scope: 'per-conversation', requires_session_id: true },
+    security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true },
+    conformance: { level: 'bridge-phase-1', registry: false, agent_home: false, runtime_adapter: false },
+  } as never;
+}
+
 describe('P3394 wiring doctor input assembly (V-01)', () => {
   it('fully bound wiring reports all pass', () => {
     const report = runP3394BridgeDoctor(buildP3394WiringDoctorInput(allFacts()));
@@ -66,5 +79,33 @@ describe('P3394 wiring doctor input assembly (V-01)', () => {
     expect(check?.status).toBe('fail');
     expect(check?.reason).toContain('cancellation');
     expect(check?.reason).toContain('multi_party_sessions');
+  });
+
+  it('maps every §16 prototype acceptance item to a check ref (guide v1.1 §16)', () => {
+    const report = runP3394BridgeDoctor(buildP3394WiringDoctorInput(allFacts({ manifest: manifestFor('doctor-agent') })));
+    for (let item = 1; item <= 15; item += 1) {
+      const ref = `§16-${item}`;
+      const matching = report.checks.filter((check) => check.ref === ref);
+      expect(matching.length > 0, ref).toBe(true);
+      // 每条 §16 检查只有 pass（wiring 可证）或 warn（需运行时验证），不虚报 fail。
+      for (const check of matching) {
+        expect(['pass', 'warn'], `${ref} → ${check.name}`).toContain(check.status);
+      }
+    }
+  });
+
+  it('runtime-verification items stay warn without breaking ok (§16-5/8/10/13/14…)', () => {
+    const report = runP3394BridgeDoctor(buildP3394WiringDoctorInput(allFacts({ manifest: manifestFor('doctor-agent') })));
+    expect(report.ok).toBe(true);
+    const runtimeVerificationNames = [
+      'envelope-immutability', 'session-continuity', 'goal-isolation',
+      'restart-recovery', 'kstar-episodes', 'remote-fallback', 'reduced-profile',
+    ];
+    for (const name of runtimeVerificationNames) {
+      const check = report.checks.find((c) => c.name === name);
+      expect(check, name).toBeDefined();
+      expect(check?.status, name).toBe('warn');
+      expect(check?.reason, name).toContain('runtime verification');
+    }
   });
 });
