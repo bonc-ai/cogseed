@@ -193,7 +193,8 @@ export interface InboundEnvelope {
   contextTokenRef?: string;
   /** G-17 多模态：渠道入站消息携带的图片引用（飞书 image_key 等）。
    *  引用式记录（不下载字节）；text 为"[图片]"占位保证路由不丢。
-   *  （2026-08-26 理清：仅作渠道消息元数据，不再投影进 P3394 信封。） */
+   *  派发时投影进 P3394 信封 parts.image 格子（uri: feishu-image:<key>），
+   *  并随台账完成记录持久化（InboundLedgerEntry.imageKeys，上限 9）。 */
   imageKeys?: string[];
   receivedAt: string;
   /** Synthetic feedback event (a reaction on one of our messages), not a
@@ -213,6 +214,9 @@ export interface InboundLedgerEntry {
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
+  /** G-17 入站图片引用（飞书 image_key）：台账持久化的渠道消息元数据，
+   *  与派发信封 parts.image 的 feishu-image:<key> 引用互查（上限 9）。 */
+  imageKeys?: string[];
   reason?: string;
   receivedAt: string;
   updatedAt: string;
