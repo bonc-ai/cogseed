@@ -30,6 +30,10 @@ import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
 import { normalizeInboundImageKeys } from './ledger';
 import { RuntimeInstance } from './runtime';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { importAttachmentFromPath, imageExtForBytes } from '../chat_attachments';
 import type {
   AdapterCallbacks,
   CardActionEnvelope,
@@ -800,10 +804,41 @@ async function handleInboundLocked(
         imageKeys,
       })
       : undefined;
+    // G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
+    // 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
+    // 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
+    const attachmentNames: string[] = [];
+    if (imageKeys?.length && instance.platform === 'feishu_lark') {
+      const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
+      if (typeof adapter?.downloadImage === 'function') {
+        for (const imageKey of imageKeys) {
+          try {
+            const bytes = await adapter.downloadImage(imageKey);
+            const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
+            const tmpPath = path.join(os.tmpdir(), `${name}.inbound`);
+            fs.writeFileSync(tmpPath, bytes);
+            try {
+              const imported = await importAttachmentFromPath(uid, binding.cid, tmpPath, name);
+              if (imported.ok) attachmentNames.push(imported.info.name);
+              else log.warn('messaging inbound image import failed', { instanceId: envelope.instanceId, imageKey, error: (imported as { error: string }).error });
+            } finally {
+              fs.rmSync(tmpPath, { force: true });
+            }
+          } catch (err) {
+            log.warn('messaging inbound image download failed', {
+              instanceId: envelope.instanceId,
+              imageKey,
+              error: logErrorSummary(err),
+            });
+          }
+        }
+      }
+    }
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,
       text,
+      ...(attachmentNames.length ? { attachments: attachmentNames } : {}),
       ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
     });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');

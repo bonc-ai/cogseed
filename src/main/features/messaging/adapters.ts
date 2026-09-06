@@ -1339,6 +1339,29 @@ export class FeishuAdapter implements MessagingCardAdapter {
     const messageId = response.data?.message_id;
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
+
+  /** G-17 byte path: fetch the raw image bytes behind an inbound image_key
+   * (im/v1/images/{image_key}). The SDK returns a binary stream for this
+   * endpoint; both the response object and a .data wrapper are handled. */
+  async downloadImage(imageKey: string): Promise<Buffer> {
+    if (!imageKey || !/^[A-Za-z0-9_\/.-]{1,256}$/.test(imageKey)) {
+      throw new Error('Feishu image download failed: invalid image_key');
+    }
+    const response = await this.client.im.v1.image.get({ path: { image_key: imageKey } }) as unknown;
+    const stream = (response && typeof (response as { on?: unknown }).on === 'function')
+      ? response
+      : (response as { data?: unknown } | null)?.data;
+    if (!stream || typeof (stream as { on?: unknown }).on !== 'function') {
+      throw new Error('Feishu image download failed: no byte stream in response');
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<Buffer>) {
+      if (chunk) chunks.push(chunk);
+    }
+    const bytes = Buffer.concat(chunks);
+    if (bytes.length === 0) throw new Error('Feishu image download failed: empty body');
+    return bytes;
+  }
 }
 
 const wecomSdkLogger = {

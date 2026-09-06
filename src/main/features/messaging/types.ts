@@ -338,6 +338,10 @@ export interface MessagingAdapter {
     signal?: AbortSignal,
     context?: MessagingSendContext,
   ): Promise<{ deliveryId?: string }>;
+  /** Download the raw bytes of an inbound image reference (G-17 byte path).
+   * Optional: adapters whose platform has no retrievable image store leave it
+   * unset; inbound images then stay reference-only in the envelope. */
+  downloadImage?(imageKey: string): Promise<Buffer>;
 }
 
 export interface MessagingCardAdapter extends MessagingAdapter {
