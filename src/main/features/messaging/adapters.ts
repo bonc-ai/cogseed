@@ -1391,7 +1391,10 @@ async function extractBinaryBytes(response: unknown): Promise<Buffer | null> {
     if (!stream || typeof (stream as { on?: unknown }).on !== 'function') return null;
     const chunks: Buffer[] = [];
     for await (const chunk of stream as AsyncIterable<unknown>) {
-      if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBufferView | string));
+      if (!chunk) continue;
+      if (Buffer.isBuffer(chunk)) chunks.push(chunk);
+      else if (typeof chunk === 'string') chunks.push(Buffer.from(chunk, 'utf8'));
+      else chunks.push(Buffer.from(chunk as Uint8Array));
     }
     return Buffer.concat(chunks);
   };
