@@ -755,10 +755,10 @@ async function handleInboundLocked(
     const attachmentNames: string[] = [];
     if (imageKeys?.length && instance.platform === 'feishu_lark') {
       const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
-      if (typeof adapter?.downloadImage === 'function') {
+      if (typeof adapter?.downloadMessageImage === 'function') {
         for (const imageKey of imageKeys) {
           try {
-            const bytes = await adapter.downloadImage(imageKey);
+            const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
             const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
             const tmpPath = path.join(os.tmpdir(), `${name}.inbound`);
             fs.writeFileSync(tmpPath, bytes);
