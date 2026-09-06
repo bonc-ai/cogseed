@@ -15,6 +15,11 @@ import {
   p3394ExternalDescriptorFromManifest,
   validateP3394ExternalAdapterDescriptor,
 } from '../../../../src/main/features/p3394_bridge/external-adapters';
+import {
+  generateP3394SigningKeyPair,
+  P3394MessageSigner,
+} from '../../../../src/main/features/p3394_bridge/message-signing';
+import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 
 let counter = 0;
 const openServers: P3394HttpChannel[] = [];
@@ -85,6 +90,147 @@ describe('P3394HttpChannel real network transport', () => {
     } finally {
       fs.rmSync(certDir, { recursive: true, force: true });
     }
+  });
+
+  it('§15 mTLS: accepts a client with a CA-signed certificate and rejects one without', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-mtls-'));
+    try {
+      // 私有 CA + 服务端证书（SAN 127.0.0.1）+ 客户端证书（受 CA 信任）。
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'ca.key'), '-out', path.join(dir, 'ca.pem'), '-days', '1', '-subj', '/CN=p3394-test-ca'], { stdio: 'ignore' });
+      execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'server.key'), '-out', path.join(dir, 'server.csr'), '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
+      fs.writeFileSync(path.join(dir, 'server.ext'), 'subjectAltName=IP:127.0.0.1\n');
+      execFileSync('openssl', ['x509', '-req', '-in', path.join(dir, 'server.csr'), '-CA', path.join(dir, 'ca.pem'), '-CAkey', path.join(dir, 'ca.key'), '-out', path.join(dir, 'server.pem'), '-days', '1', '-extfile', path.join(dir, 'server.ext')], { stdio: 'ignore' });
+      execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'client.key'), '-out', path.join(dir, 'client.csr'), '-subj', '/CN=p3394-test-client'], { stdio: 'ignore' });
+      execFileSync('openssl', ['x509', '-req', '-in', path.join(dir, 'client.csr'), '-CA', path.join(dir, 'ca.pem'), '-CAkey', path.join(dir, 'ca.key'), '-out', path.join(dir, 'client.pem'), '-days', '1'], { stdio: 'ignore' });
+
+      const port = nextPort();
+      const server = new P3394HttpChannel('mtls-server', {
+        listen: {
+          host: '127.0.0.1', port,
+          // 路径形式传 TLS 材料（PEM 文件路径命中即读文件）。
+          tls: {
+            cert: path.join(dir, 'server.pem'),
+            key: path.join(dir, 'server.key'),
+            ca: path.join(dir, 'ca.pem'),
+            requestCert: true,
+            rejectUnauthorized: true,
+          },
+        },
+        authToken: 'mtls-token',
+      });
+      server.setLocalManifest(manifest('cogseed-mtls'));
+      openServers.push(server);
+      await server.listen();
+      // mTLS 生效时 descriptor 才声明 mtls 身份证明（消灭假广告）。
+      expect(server.descriptor.capabilities.identity_proofs).toEqual(['bearer-token', 'mtls']);
+
+      const received: string[] = [];
+      server.subscribe((incoming) => { received.push(incoming.message_id); });
+
+      // 客户端不带证书：TLS 握手层直接拒绝（negotiation 失败）。
+      const bare = new P3394HttpChannel('mtls-bare-client', {
+        dial: { endpoints: [`https://127.0.0.1:${port}`], bearerToken: 'mtls-token', tls: { ca: path.join(dir, 'ca.pem') } },
+      });
+      openServers.push(bare);
+      const bareResult = await bare.negotiate();
+      expect(bareResult.ok).toBe(false);
+      await bare.close();
+
+      // 客户端带 CA 签发的证书：握手通过，全链路（manifest→envelope）正常。
+      const certified = new P3394HttpChannel('mtls-client', {
+        dial: {
+          endpoints: [`https://127.0.0.1:${port}`],
+          bearerToken: 'mtls-token',
+          tls: {
+            ca: path.join(dir, 'ca.pem'),
+            cert: path.join(dir, 'client.pem'),
+            key: path.join(dir, 'client.key'),
+          },
+          expected_identity: 'cogseed-mtls',
+        },
+      });
+      openServers.push(certified);
+      await certified.dial('cogseed-mtls');
+      await certified.send(envelope({ message_id: 'msg-mtls-1' }));
+      await waitFor(() => received.includes('msg-mtls-1'));
+      expect(received).toEqual(['msg-mtls-1']);
+      await certified.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('§15 rejects the dial when the server certificate is not signed by the trusted CA', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-ca-'));
+    try {
+      // 两个独立 CA：服务端证书由 rogue CA 签发；客户端只信任 good CA。
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'good-ca.key'), '-out', path.join(dir, 'good-ca.pem'), '-days', '1', '-subj', '/CN=good-ca'], { stdio: 'ignore' });
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'rogue-ca.key'), '-out', path.join(dir, 'rogue-ca.pem'), '-days', '1', '-subj', '/CN=rogue-ca'], { stdio: 'ignore' });
+      execFileSync('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', path.join(dir, 'server.key'), '-out', path.join(dir, 'server.csr'), '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
+      fs.writeFileSync(path.join(dir, 'server.ext'), 'subjectAltName=IP:127.0.0.1\n');
+      execFileSync('openssl', ['x509', '-req', '-in', path.join(dir, 'server.csr'), '-CA', path.join(dir, 'rogue-ca.pem'), '-CAkey', path.join(dir, 'rogue-ca.key'), '-out', path.join(dir, 'server.pem'), '-days', '1', '-extfile', path.join(dir, 'server.ext')], { stdio: 'ignore' });
+
+      const port = nextPort();
+      const server = new P3394HttpChannel('rogue-server', {
+        listen: { host: '127.0.0.1', port, tls: { cert: path.join(dir, 'server.pem'), key: path.join(dir, 'server.key') } },
+        authToken: 'ca-token',
+      });
+      server.setLocalManifest(manifest('cogseed-rogue'));
+      openServers.push(server);
+      await server.listen();
+
+      const client = new P3394HttpChannel('ca-client', {
+        dial: { endpoints: [`https://127.0.0.1:${port}`], bearerToken: 'ca-token', tls: { ca: path.join(dir, 'good-ca.pem') } },
+      });
+      openServers.push(client);
+      // 证书链不受信任 → 握手失败（fail-closed，绝不静默跳过校验）。
+      const result = await client.negotiate();
+      expect(result.ok).toBe(false);
+      await client.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('declares identity_proofs honestly: no mtls claim without requestCert', () => {
+    const plain = new P3394HttpChannel('plain');
+    expect(plain.descriptor.capabilities.identity_proofs).toEqual(['bearer-token']);
+    const tlsOnly = new P3394HttpChannel('tls-only', { listen: { port: 1, tls: { cert: 'cert', key: 'key' } } });
+    expect(tlsOnly.descriptor.capabilities.identity_proofs).toEqual(['bearer-token']);
+  });
+
+  it('serves GET /p3394/peers (bearer auth, summary shape, no secrets)', async () => {
+    const port = nextPort();
+    const server = new P3394HttpChannel('peers-server', {
+      listen: { port },
+      authToken: 'peers-token',
+      peersSummary: () => [
+        { agent_id: 'hermes', alias: 'Hermes', node_kind: 'agent', online: true, capabilities: ['handle_message'] },
+      ],
+    });
+    openServers.push(server);
+    await server.listen();
+
+    const fetchPeers = (token: string | null) => new Promise<{ status: number; body: string }>((resolve) => {
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const req = http.request({ host: '127.0.0.1', port, path: '/p3394/peers', method: 'GET', headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.end();
+    });
+
+    // 无 token / 错 token → 401（fail closed，同其他路由）。
+    expect((await fetchPeers(null)).status).toBe(401);
+    expect((await fetchPeers('wrong')).status).toBe(401);
+    const ok = await fetchPeers('peers-token');
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(ok.body)).toEqual({
+      ok: true,
+      peers: [{ agent_id: 'hermes', alias: 'Hermes', node_kind: 'agent', online: true, capabilities: ['handle_message'] }],
+    });
   });
 
   it('negotiates and delivers an envelope across a real HTTP round trip', async () => {
@@ -285,6 +431,68 @@ describe('P3394HttpChannel real network transport', () => {
     });
     expect(status).toBe(422);
     expect(received).toEqual([]);
+  });
+
+  it('§15 message signing: signs outbound, verifies inbound, rejects tampered payloads (422)', async () => {
+    const port = nextPort();
+    // 模拟两个节点各自的 signer：双方互信公钥。
+    const alice = new P3394MessageSigner({ schema_version: 1, identity: generateP3394SigningKeyPair('alice-key'), trusted: {} });
+    const bob = new P3394MessageSigner({ schema_version: 1, identity: generateP3394SigningKeyPair('bob-key'), trusted: {} });
+    bob.trustKey('remote-agent', { keyid: alice.keyid, public_key: alice.publicKey });
+    const server = new P3394HttpChannel('signing-server', {
+      listen: { port },
+      authToken: 'sig-token',
+      signing: { verify: (env) => bob.verifyEnvelope(env) },
+    });
+    server.setLocalManifest(manifest('cogseed-signing'));
+    openServers.push(server);
+    const received: string[] = [];
+    server.subscribe((e) => received.push(e.message_id));
+    await server.listen();
+
+    const client = new P3394HttpChannel('signing-client', {
+      dial: { endpoints: [endpointFor(port)], bearerToken: 'sig-token' },
+      signing: { sign: (env) => alice.signEnvelope(env) },
+    });
+    openServers.push(client);
+    await client.dial('cogseed-signing');
+    await client.send(envelope({ message_id: 'msg-signed-1' }));
+    await waitFor(() => received.includes('msg-signed-1'));
+    expect(received).toEqual(['msg-signed-1']);
+    await client.close();
+
+    // 篡改 payload 的"已签名"信封 → 入站验签失败，明确 422 + 错误码。
+    const signed = alice.signEnvelope(envelope({ message_id: 'msg-tampered-1' }) as never);
+    signed.payload.parts[0].text = 'tampered content';
+    const response = await new Promise<{ status: number; body: string }>((resolve) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/p3394/envelope', method: 'POST', headers: { Authorization: 'Bearer sig-token', 'Content-Type': 'application/json' } }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.end(JSON.stringify({ envelope: signed }));
+    });
+    expect(response.status).toBe(422);
+    expect(JSON.parse(response.body)).toMatchObject({ ok: false, error: 'p3394_signature_invalid' });
+    expect(received).toEqual(['msg-signed-1']);
+  });
+
+  it('§15 message signing: disabled wiring leaves envelopes untouched (zero impact)', async () => {
+    const port = nextPort();
+    const server = new P3394HttpChannel('nosign-server', { listen: { port }, authToken: 'tok' });
+    server.setLocalManifest(manifest('cogseed-agent'));
+    openServers.push(server);
+    const seen: P3394Envelope[] = [];
+    server.subscribe((e) => seen.push(e));
+    await server.listen();
+    const client = new P3394HttpChannel('nosign-client', { dial: { endpoints: [endpointFor(port)], bearerToken: 'tok' } });
+    openServers.push(client);
+    await client.negotiate();
+    await client.send(envelope({ message_id: 'msg-nosign-1' }));
+    await waitFor(() => seen.some((e) => e.message_id === 'msg-nosign-1'));
+    // 未启用签名：信封不携带 sig 扩展，链路与既有行为完全一致。
+    expect(seen.find((e) => e.message_id === 'msg-nosign-1')?.extensions?.sig).toBeUndefined();
+    await client.close();
   });
 });
 

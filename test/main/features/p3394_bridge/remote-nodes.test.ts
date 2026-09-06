@@ -5,11 +5,16 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import {
   listRemoteNodes, addRemoteNode, removeRemoteNode, testRemoteNode,
+  listRemoteNodesInternal, updateRemoteNode,
 } from '../../../../src/main/features/p3394_bridge/remote-nodes';
 
 // 状态文件按 runtime variant 隔离，用临时 variant 防止污染真实配置
 const VARIANT = `test-remote-nodes-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 process.env.COGSEED_RUNTIME_VARIANT = VARIANT;
+
+function stateFile(): string {
+  return path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT, 'p3394-remote-nodes.json');
+}
 
 function cleanupState(): void {
   const dir = path.join(os.homedir(), '.cogseed', 'runtime-variants', VARIANT);
@@ -45,8 +50,40 @@ describe('p3394 remote nodes store', () => {
     }
   });
 
+  it('状态文件以 0600 落盘（明文 token 不泄给同机其他用户）', () => {
+    const added = addRemoteNode({ label: 'secret-holder', endpoint: 'http://192.0.2.30:8444', token: 'tok-secret-1234' });
+    expect(added.ok).toBe(true);
+    expect(fs.existsSync(stateFile())).toBe(true);
+    const mode = fs.statSync(stateFile()).mode & 0o777;
+    expect(mode).toBe(0o600);
+    // 文件内容不含 .tmp 半成品（原子写）。
+    expect(fs.existsSync(stateFile() + '.tmp')).toBe(false);
+    if (added.ok) removeRemoteNode(added.node.id);
+  });
+
+  it('tls 材料：add 带路径 → 内部明文读取可见 → update 可清除', () => {
+    const added = addRemoteNode({
+      label: 'tls-node',
+      endpoint: 'https://192.0.2.40:8444',
+      token: 'tok-tls',
+      expected_identity: 'peer-tls',
+      tls: { ca: '/etc/p3394/ca.pem', cert: '/etc/p3394/client.pem', key: '/etc/p3394/client.key' },
+    });
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    const internal = listRemoteNodesInternal().find((node) => node.id === added.node.id);
+    expect(internal?.tls).toEqual({ ca: '/etc/p3394/ca.pem', cert: '/etc/p3394/client.pem', key: '/etc/p3394/client.key' });
+    // 渲染视图不回显 tls 材料。
+    expect(listRemoteNodes().nodes.find((node) => node.id === added.node.id && 'tls' in node)).toBeUndefined();
+    // 未传 tls 的 update 保留；传空对象清除。
+    updateRemoteNode(added.node.id, { label: 'tls-node-2' });
+    expect(listRemoteNodesInternal().find((node) => node.id === added.node.id)?.tls).toBeDefined();
+    updateRemoteNode(added.node.id, { tls: {} });
+    expect(listRemoteNodesInternal().find((node) => node.id === added.node.id)?.tls).toBeUndefined();
+    removeRemoteNode(added.node.id);
+  });
+
   it('update: 改 label/身份不动 token；改 endpoint 去重校验', async () => {
-    const { updateRemoteNode } = await import('../../../../src/main/features/p3394_bridge/remote-nodes');
     const a = addRemoteNode({ label: '节点A', endpoint: 'http://192.0.2.9:8444', token: 'tok-a', expected_identity: 'peer-a' });
     const b = addRemoteNode({ label: '节点B', endpoint: 'http://192.0.2.8:8444', token: 'tok-b', expected_identity: 'peer-b' });
     expect(a.ok && b.ok).toBe(true);

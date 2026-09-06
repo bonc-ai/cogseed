@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { AddressInfo } from 'node:net';
 import { P3394OutboundHub, p3394EnvelopeReplyText } from '../../../../src/main/features/p3394_bridge/outbound-hub';
 import { outboxListForReplay, outboxRecordSubmitted } from '../../../../src/main/features/p3394_bridge/outbound-outbox';
+import { buildP3394MappingReport } from '../../../../src/main/features/p3394_bridge/reduced-profiles';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 import type { P3394PeerRecord } from '../../../../src/main/features/p3394_bridge/registry';
@@ -216,6 +217,105 @@ describe('P3394OutboundHub (real HTTP against a mock peer)', () => {
     ]);
     // progress 帧不消费终态 waiter：终态回复仍正常 resolve。
     expect(result.text).toBe('hello cogseed, reply here');
+  });
+
+  it('forwards status/artifact frames as stream frames (no premature waiter settlement)', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const events: Array<{ kind: string; text: string; event?: Record<string, unknown> }> = [];
+    const sendPromise = hub.sendAndWait('hermes', envelope(), (event) => events.push({
+      kind: event.kind, text: event.text, ...(event.event ? { event: event.event } : {}),
+    }));
+    // §12 帧白名单扩容：status/artifact 与 delta/progress 同走流帧路径——
+    // 刷超时 + onStream 回调 + 绝不提前结算 waiter。
+    expect(hub.tryResolveReply(streamEnvelope('phase: researching', 1, 'status'))).toBe(true);
+    // artifact 帧允许无 text parts（内容整体在 stream_data，只认帧名）。
+    const artifactFrame = envelope({
+      message_id: 'msg-out-stream-art',
+      kind: 'event',
+      performative: 'inform',
+      sender: { agent_id: 'hermes' },
+      recipients: [{ agent_id: 'cogseed' }],
+      payload: {
+        parts: [],
+        metadata: { stream_event: 'artifact', stream_seq: 2, stream_data: { artifact: 'report.md', bytes: 128 } },
+      },
+      idempotency_key: 'idem-out-stream-art',
+    } as never);
+    expect(hub.tryResolveReply(artifactFrame)).toBe(true);
+    // waiter 仍在（未被中间帧结算）：终态回复照常命中。
+    expect(hub.tryResolveReply(replyEnvelope())).toBe(true);
+    const result = await sendPromise;
+    expect(events).toEqual([
+      { kind: 'status', text: 'phase: researching' },
+      { kind: 'artifact', text: '', event: { artifact: 'report.md', bytes: 128 } },
+    ]);
+    expect(result.text).toBe('hello cogseed, reply here');
+  });
+
+  it('unknown frame names stay on the terminal path (whitelist only admits the four stream kinds)', async () => {
+    const endpoint = await startPeer();
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'hermes', display_name: 'Hermes' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: [endpoint],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = hubFor([peer]);
+    const chunks: string[] = [];
+    const sendPromise = hub.sendAndWait('hermes', envelope(), (event) => chunks.push(event.text));
+    // 白名单外的帧名不是流帧：按既有终态语义处理（结算 waiter）。
+    expect(hub.tryResolveReply(streamEnvelope('mystery', 1, 'unknown-kind' as 'delta'))).toBe(true);
+    const result = await sendPromise;
+    expect(chunks).toEqual([]);
+    expect(result.text).toBe('mystery');
+  });
+
+  it('§16-14 rejects a reduced-profile binding whose report drops a required UMF field', async () => {
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'a2a-peer', display_name: 'A2A Peer' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      endpoints: ['p3394+a2a:http://127.0.0.1:1'],
+      updated_at: new Date().toISOString(),
+    };
+    // 注入坏报告：session_id 被 drop → 绑定必须拒绝（fail-loud），不静默降级。
+    const hub = new P3394OutboundHub({
+      listPeers: () => [peer],
+      replyTimeoutMs: 2000,
+      mappingReportFor: (target) => {
+        const report = buildP3394MappingReport(target);
+        return { ...report, fields: report.fields.map((f) => (f.field === 'session_id' ? { ...f, disposition: 'dropped' as const } : f)) };
+      },
+    });
+    await expect(hub.sendAndWait('a2a-peer', envelope())).rejects.toThrow('p3394_reduced_profile_invalid:session_id');
+  });
+
+  it('§16-14 attaches a validated mapping report to reduced bindings (audit context)', async () => {
+    const peer: P3394PeerRecord = {
+      identity: { agent_id: 'model-peer', display_name: 'Model Peer' },
+      aliases: [],
+      manifest: MANIFEST as never,
+      node_kind: 'model_runtime',
+      endpoints: ['http://127.0.0.1:1/v1'],
+      updated_at: new Date().toISOString(),
+    };
+    const hub = new P3394OutboundHub({ listPeers: () => [peer], replyTimeoutMs: 2000 });
+    // 绑定构建发生在 dial 之前：坏 endpoint 让 dial 失败，但 report 已生成
+    // 并挂在绑定上下文（mappingReportForPeer 可查，供日志/审计）。
+    await expect(hub.sendAndWait('model-peer', envelope({ session_id: 'ses-model-1' }))).rejects.toThrow();
+    const report = hub.mappingReportForPeer('model-peer');
+    expect(report).toBeDefined();
+    expect(report?.target).toBe('openai-model');
+    expect(report?.session_semantics).toBe('local-bridge');
   });
 
   it('treats stream activity as a reply-timeout heartbeat', async () => {

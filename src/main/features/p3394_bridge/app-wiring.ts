@@ -14,6 +14,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -25,7 +26,7 @@ import { P3394BridgeExecutor, isP3394LoopbackEndpoint } from './executor';
 import { buildP3394BridgeManifest } from './manifest';
 import { P3394CogseedRuntimeAdapter } from './cogseed-runtime-adapter';
 import { P3394ConversationRuntimeAdapter } from './conversation-runtime';
-import { P3394HttpChannel } from './http-channel';
+import { P3394HttpChannel, type P3394HttpListenConfig } from './http-channel';
 import { missingP3394ChannelCapabilities } from './channel-adapter';
 import { P3394OutboundHub } from './outbound-hub';
 import { P3394PeerRegistry, type P3394Locality, type P3394NodeKind } from './registry';
@@ -36,6 +37,13 @@ import { buildP3394WiringDoctorInput, runP3394BridgeDoctor, type P3394DoctorRepo
 import { loadP3394EventCursors, persistP3394EventCursors, recordP3394EventCursor } from './event-cursor-store';
 import { P3394RecoveryController } from './recovery-controller';
 import { redactP3394Secrets } from './secrets';
+import { P3394MessageSigner } from './message-signing';
+import { listRemoteNodesInternal, setRemoteNodesChangedListener } from './remote-nodes';
+import {
+  P3394_REMOTE_NODE_TRUST_POLICY,
+  resolveP3394PeerByPolicy,
+  syncP3394RemoteNodesToRegistry,
+} from './remote-node-injection';
 import * as groupChatBus from '../group_chat/bus';
 
 const log = createLogger('p3394-bridge:app-wiring');
@@ -115,7 +123,48 @@ const forwardedPending = new Set<string>();
 
 
 function generatedToken(): string {
-  return `p3394-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  // CSPRNG（crypto.randomBytes）：Math.random 非密码学安全，桥 token 是入站
+  // 唯一认证因子，不能有可预测性。
+  return `p3394-${crypto.randomBytes(18).toString('base64url')}`;
+}
+
+/** §15 TLS 监听设置：COGSEED_P3394_TLS_CERT/_TLS_KEY（PEM 文件路径，两者
+ *  都存在才启用 https）；COGSEED_P3394_TLS_CA 客户端证书 CA；
+ *  COGSEED_P3394_REQUIRE_CLIENT_CERT=1 开 mTLS（requestCert +
+ *  rejectUnauthorized）。未配置时保持 http（回环默认，零影响）。 */
+interface P3394BridgeTlsSettings {
+  enabled: boolean;
+  scheme: 'http' | 'https';
+  listen?: P3394HttpListenConfig['tls'];
+  /** 网关回连校验用的 CA 文件路径（显式 CA，自签时为 cert 本身）。 */
+  caFile: string;
+}
+
+export function readP3394BridgeTlsSettings(): P3394BridgeTlsSettings {
+  const certPath = (process.env.COGSEED_P3394_TLS_CERT || '').trim();
+  const keyPath = (process.env.COGSEED_P3394_TLS_KEY || '').trim();
+  const caPath = (process.env.COGSEED_P3394_TLS_CA || '').trim();
+  let certExists = false;
+  let keyExists = false;
+  try {
+    certExists = !!certPath && fs.existsSync(certPath);
+    keyExists = !!keyPath && fs.existsSync(keyPath);
+  } catch { /* fs 故障 → 按未配置处理 */ }
+  if (!certExists || !keyExists) return { enabled: false, scheme: 'http', caFile: '' };
+  let caExists = false;
+  try { caExists = !!caPath && fs.existsSync(caPath); } catch { /* ignore */ }
+  const requireClientCert = process.env.COGSEED_P3394_REQUIRE_CLIENT_CERT === '1';
+  return {
+    enabled: true,
+    scheme: 'https',
+    listen: {
+      cert: certPath,
+      key: keyPath,
+      ...(caExists ? { ca: caPath } : {}),
+      ...(requireClientCert ? { requestCert: true, rejectUnauthorized: true } : {}),
+    },
+    caFile: caExists ? caPath : certPath,
+  };
 }
 
 /** Bridge runtime state file: holds the stable inbound token so the peer's
@@ -224,17 +273,68 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
 
   // 跨机器：COGSEED_P3394_HOST 可绑定局域网地址（默认回环，安全优先）。
   const listenHost = process.env.COGSEED_P3394_HOST || '127.0.0.1';
+  // §15：TLS 材料配置后 https listen；endpoint 全部按 scheme 拼（网关回连、
+  // handle.endpoint、respawn bridgeInfo 三处一致）。
+  const tlsSettings = readP3394BridgeTlsSettings();
+  const bridgeEndpointUrl = `${tlsSettings.scheme}://${listenHost}:${port}`;
+  // 消息签名（§15 可选，默认关闭）：COGSEED_P3394_SIGNING=1 启用。密钥生成/
+  // 落盘失败不阻塞桥（签名功能降级为未启用，Bearer 仍生效）。
+  let signing: import('./http-channel').P3394HttpChannelOptions['signing'] | undefined;
+  if (process.env.COGSEED_P3394_SIGNING === '1') {
+    try {
+      const signer = P3394MessageSigner.loadOrCreate();
+      signing = {
+        sign: (envelope) => signer.signEnvelope(envelope),
+        verify: (envelope) => signer.verifyEnvelope(envelope),
+      };
+      log.info('P3394 message signing enabled', { keyid: signer.keyid });
+    } catch (error) {
+      log.warn('P3394 message signing unavailable; continuing without signatures', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
   const channel = new P3394HttpChannel('cogseed-app', {
-    listen: { host: listenHost, port },
+    listen: { host: listenHost, port, ...(tlsSettings.listen ? { tls: tlsSettings.listen } : {}) },
     authToken: token,
     // C-04：认证失败进入内核审计（可追溯；入站速率限制兜底审计量）。
     audit: (record) => {
       bridge.audit.append({ ...record, actor_id: 'http-listener' });
     },
+    ...(signing ? { signing } : {}),
+    // §7.2 只读发现端点数据源：注册表摘要（不含 token/endpoint 敏感字段）。
+    peersSummary: () => p3394PeerDiscoverySummary(bridge.registry),
   });
   channel.setLocalManifest(manifestOf('cogseed'));
 
-  outboundHub = new P3394OutboundHub({ listPeers: () => bridge.registry.list() });
+  outboundHub = new P3394OutboundHub({
+    listPeers: () => bridge.registry.list(),
+    // per-peer 出站 TLS 材料（§15）：remote-nodes 显式配置的 https 节点带
+    // 的 CA/客户端证书，按 endpoint 匹配注入 dial。
+    tlsForPeer: (peer) => {
+      const node = listRemoteNodesInternal().find((candidate) => (peer.endpoints ?? []).includes(candidate.endpoint));
+      return node?.tls;
+    },
+  });
+
+  // remote-nodes → 注册表注入（§7.2）：用户显式配置的远端节点同步进注册表，
+  // p3394_send/findByCapability 才能命中（跨机出站断点修复）。之后 remote-
+  // nodes 任何变更（add/update/remove）都触发 re-sync（对账式，幂等）。
+  try {
+    const syncResult = syncP3394RemoteNodesToRegistry(bridge.registry);
+    if (syncResult.registered.length > 0) {
+      log.info('P3394 remote nodes injected into registry at boot', syncResult);
+    }
+  } catch (error) {
+    log.warn('P3394 remote node injection failed at boot', { error: error instanceof Error ? error.message : String(error) });
+  }
+  setRemoteNodesChangedListener(() => {
+    const registryNow = activeHandle?.registry;
+    if (!registryNow) return;
+    try {
+      syncP3394RemoteNodesToRegistry(registryNow);
+    } catch (error) {
+      log.warn('P3394 remote node re-sync failed', { error: error instanceof Error ? error.message : String(error) });
+    }
+  });
 
   // 事件游标（R-06/S-05）：记录最后确认写入 resultFile 的事件序列，
   // 断线恢复按游标续读，不重放已确认事件。
@@ -458,7 +558,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
             persistForwardIdempotency(forwardedIdempotency);
           },
           markFailed: (key) => { forwardedPending.delete(key); },
-          bridgeInfo: { endpoint: `http://${listenHost}:${port}`, token },
+          bridgeInfo: { endpoint: bridgeEndpointUrl, token },
         });
         if (outcome.ok === false) {
           log.warn('P3394 peer forward rejected', { from: senderId, to: rawForwardTo, error: outcome.error });
@@ -498,7 +598,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
   });
 
   const handle: P3394AppBridgeHandle = {
-    endpoint: `http://${listenHost}:${port}`,
+    endpoint: bridgeEndpointUrl,
     port,
     token,
     channel,
@@ -561,7 +661,7 @@ async function buildBridge(port: number, token: string, conversation: boolean): 
   // 以 p3394_bridge_unavailable 失败。显式带上本桥自己的 endpoint/token。
   try {
     const { respawnManagedGateways } = await import('./external-gateways');
-    const outcome = await respawnManagedGateways({ bridgeInfo: { endpoint: `http://${listenHost}:${port}`, token } });
+    const outcome = await respawnManagedGateways({ bridgeInfo: { endpoint: bridgeEndpointUrl, token } });
     if (outcome.restarted.length > 0 || outcome.failed.length > 0) {
       log.info('P3394 managed gateways recovered at boot', outcome);
     }
@@ -699,22 +799,34 @@ export function exportP3394DoctorState(): void {
 
 /** Resolve a p3394_send peer argument: agent id / alias first, then a
  *  capability (best local-first match). Returns the canonical agent_id the
- *  envelope must address, plus its display name. */
+ *  envelope must address, plus its display name.
+ *  §16-13 Policy 门：本地能力不足时是否允许远端回退由
+ *  COGSEED_P3394_ALLOW_REMOTE_CAPABILITY 决定（默认 0 只本地，未命中明确
+ *  报 p3394_capability_not_available_locally，不静默外呼）。 */
 export function resolveP3394Peer(
   input: string,
 ): { ok: true; agent_id: string; display_name: string } | { ok: false; error: string } {
-  const requested = String(input || '').trim();
-  if (!requested) return { ok: false, error: 'p3394_peer_not_registered' };
   if (!activeHandle) return { ok: false, error: 'p3394_bridge_unavailable' };
-  const byId = activeHandle.registry.resolve(requested);
-  if (byId.ok) {
-    return { ok: true, agent_id: byId.value.identity.agent_id, display_name: byId.value.identity.display_name };
-  }
-  const byCapability = activeHandle.registry.findByCapability(requested, { preferLocal: true });
-  if (byCapability.ok) {
-    return { ok: true, agent_id: byCapability.value.identity.agent_id, display_name: byCapability.value.identity.display_name };
-  }
-  return { ok: false, error: 'p3394_peer_not_registered' };
+  return resolveP3394PeerByPolicy(activeHandle.registry, input, {
+    allowRemoteCapability: process.env.COGSEED_P3394_ALLOW_REMOTE_CAPABILITY === '1',
+  });
+}
+
+/** §7.2 只读发现端点（GET /p3394/peers）的注册表摘要：只有身份/类别/
+ *  在线/能力，绝不含 token 与 endpoint（敏感字段不进发现面）。 */
+function p3394PeerDiscoverySummary(
+  registry: P3394PeerRegistry,
+): Array<{ agent_id: string; alias?: string; node_kind: string; online: boolean; capabilities: string[] }> {
+  const now = Date.now();
+  return registry.list().map((peer) => ({
+    agent_id: peer.identity.agent_id,
+    ...(peer.identity.display_name && peer.identity.display_name !== peer.identity.agent_id
+      ? { alias: peer.identity.display_name }
+      : {}),
+    node_kind: peer.node_kind ?? 'agent',
+    online: !!peer.last_seen_at && now - new Date(peer.last_seen_at).getTime() < ONLINE_WINDOW_MS,
+    capabilities: [...(peer.capabilities ?? [])],
+  }));
 }
 
 /** Registry snapshot for the p3394_peers tool (id / name / capabilities /
@@ -765,9 +877,14 @@ export function listP3394Peers(): P3394PeerSummary[] {
  * the AI team UI. The peer registry is the online truth; team-projection owns
  * idempotent Agent creation and stale-mapping recovery. */
 export async function syncP3394TeamDirectory(): Promise<void> {
+  // 本地节点自动投影；远端节点（remote-nodes 显式注入，trust_policy 标记
+  // p3394-remote-node）也进团队目录——信任判据由 projectP3394NodeToTeam 内部
+  // 把关（纯 hello 自报非回环仍 skip_non_local）。摘要视图不含凭据字段，故
+  // 以注入标记 + trusted 显式声明传递信任。
   const peers = listP3394Peers().filter((peer) => (
     peer.online
-    && peer.locality === 'same_host'
+    && (peer.locality === 'same_host'
+      || peer.trust_policy === 'p3394-remote-node')
     && peer.endpoints.length > 0
     && peer.agent_id !== 'cogseed'
   ));
@@ -775,6 +892,7 @@ export async function syncP3394TeamDirectory(): Promise<void> {
     nodeId: peer.agent_id,
     alias: peer.display_name,
     endpoints: peer.endpoints,
+    trusted: peer.trust_policy === 'p3394-remote-node' || peer.locality === 'same_host',
   })));
 }
 
@@ -823,6 +941,8 @@ export function fetchP3394ObjectFromEndpoint(endpoint: string, digest: string, b
 
 /** Shuts the bridge down (app quit). */
 export async function stopP3394Bridge(): Promise<void> {
+  // 解除 remote-nodes 变更监听：桥停了注册表不在，re-sync 无处可写。
+  setRemoteNodesChangedListener(null);
   if (outboundHub) {
     await outboundHub.close();
     outboundHub = null;
@@ -871,6 +991,10 @@ export async function sweepP3394Peers(): Promise<{ revoked: string[] }> {
     const agentId = peer.identity.agent_id;
     if (agentId === 'cogseed') continue;
     if (peer.disabled) continue;
+    // remote-node 注入的远端节点不参与 stale 清理：跨机节点没有本机 hello/
+    // 心跳可刷新 last_seen，TTL 清理会误删用户显式配置（re-sync 虽会重建，
+    // 但 30s sweep 与注入之间的反复 revoke/register 会造成注册表抖动）。
+    if (peer.trust_policy === P3394_REMOTE_NODE_TRUST_POLICY) continue;
     if (!staleIds.has(agentId)) continue;
     if (liveGatewayNodeIds.has(agentId)) continue;
     activeHandle.registry.revoke(agentId);

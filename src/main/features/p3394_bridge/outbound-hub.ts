@@ -14,10 +14,16 @@ import { P3394ModelRuntimeAdapter } from './model-runtime-adapter';
 import type { P3394ChannelAdapter } from './channel-adapter';
 import { P3394OutboundClient } from './outbound';
 import { outboxListForReplay, outboxMarkCompleted, outboxMarkFailed, outboxMarkSent, outboxRecordSubmitted } from './outbound-outbox';
+import { buildP3394MappingReport, validateP3394MappingReport, type P3394MappingReport, type P3394ReducedTarget } from './reduced-profiles';
 import type { P3394Envelope } from './envelope';
 import type { P3394PeerRecord } from './registry';
 
 const log = createLogger('p3394-bridge:outbound-hub');
+
+/** §12 流帧词表：四种中间帧都走流路径（刷超时 + onStream 回调 + 不结算
+ *  waiter）。白名单外或未知帧名一律返回 null——由调用方按终态处理，绝不
+ *  把"不认识的帧"当流帧吞掉，也不把已知流帧误判成终态提前结算。 */
+const P3394_STREAM_EVENT_KINDS: ReadonlySet<string> = new Set(['delta', 'progress', 'status', 'artifact']);
 
 export interface P3394OutboundReply {
   text: string;
@@ -26,8 +32,10 @@ export interface P3394OutboundReply {
 
 export interface P3394OutboundStreamEvent {
   text: string;
-  /** 'delta' → 正文增量（可见气泡）；'progress' → process rail 过程日志（工具调用等）。 */
-  kind: 'delta' | 'progress';
+  /** 'delta' → 正文增量（可见气泡）；'progress' → 过程日志（工具调用等）；
+   *  'status' → 状态通报（阶段切换等）；'artifact' → 产物/中间产物通报。
+   *  status/artifact 与 delta/progress 同路径：不结算 waiter、回调 onStream。 */
+  kind: 'delta' | 'progress' | 'status' | 'artifact';
   /** 结构化过程事件（stream:'tool' / item reasoning 等，网关 claude 流解析
    *  产出）——宿主过程栏按 event 词表渲染；旧网关只有 text。 */
   event?: Record<string, unknown>;
@@ -46,22 +54,45 @@ interface PendingReply {
   lastStreamSequence?: number;
 }
 
+/** Per-peer 出站 TLS 材料（PEM 字符串或文件路径）：remote-nodes 显式配置
+ *  的 https 节点携带的信任材料，dial 时透传给 https 客户端（§15）。 */
+export interface P3394OutboundTlsMaterial {
+  ca?: string;
+  cert?: string;
+  key?: string;
+  rejectUnauthorized?: boolean;
+}
+
 export interface P3394OutboundHubDeps {
   /** Live peer lookup — the app bridge registry. */
   listPeers: () => P3394PeerRecord[];
   /** Maximum idle period while waiting for the peer's reply. */
   replyTimeoutMs?: number;
+  /** 按 peer 查出站 TLS 材料（app-wiring 从 remote-nodes 注入；可选）。 */
+  tlsForPeer?: (peer: P3394PeerRecord) => P3394OutboundTlsMaterial | undefined;
+  /** §16-14 reduced-profile 映射报告工厂（默认 §12 表；测试可注入坏报告）。 */
+  mappingReportFor?: (target: P3394ReducedTarget) => P3394MappingReport;
 }
 
 export class P3394OutboundHub {
   private readonly listPeers: () => P3394PeerRecord[];
   private readonly replyTimeoutMs: number;
-  private readonly channels = new Map<string, { signature: string; channel: P3394ChannelAdapter }>();
+  private readonly tlsForPeer: (peer: P3394PeerRecord) => P3394OutboundTlsMaterial | undefined;
+  private readonly mappingReportFor: (target: P3394ReducedTarget) => P3394MappingReport;
+  private readonly channels = new Map<string, { signature: string; channel: P3394ChannelAdapter; report?: P3394MappingReport }>();
   private readonly pending = new Map<string, PendingReply>();
 
   constructor(deps: P3394OutboundHubDeps) {
     this.listPeers = deps.listPeers;
     this.replyTimeoutMs = deps.replyTimeoutMs ?? 5 * 60 * 1000;
+    this.tlsForPeer = deps.tlsForPeer ?? (() => undefined);
+    this.mappingReportFor = deps.mappingReportFor ?? buildP3394MappingReport;
+  }
+
+  /** 最近一次非原生绑定（a2a/model_runtime）生成的 mapping report（§16-14
+   *  审计/日志用）；按 agent_id 查，未生成或原生绑定为 undefined。 */
+  mappingReportForPeer(agentId: string): P3394MappingReport | undefined {
+    return this.channels.get(agentId)?.report;
   }
 
   private refreshReplyTimeout(sessionId: string, waiter: PendingReply): void {
@@ -79,30 +110,61 @@ export class P3394OutboundHub {
    *  table): native P3394 HTTP by default, A2A for p3394+a2a endpoints, and a
    *  reduced model-runtime binding for model_runtime nodes / openai+ endpoints.
    *  Non-native bindings loop their reply envelopes back into the inbound
-   *  matcher so sendAndWait waiters resolve normally. */
-  private buildChannelFor(peer: P3394PeerRecord): P3394ChannelAdapter {
+   *  matcher so sendAndWait waiters resolve normally.
+   *  §16-14：降级绑定必须先生成并通过 mapping report 校验——required UMF
+   *  字段被 drop 的绑定在此拒绝（fail-loud），不静默降级。 */
+  private buildChannelFor(peer: P3394PeerRecord): { channel: P3394ChannelAdapter; report?: P3394MappingReport } {
     const endpoint = peer.endpoints?.[0] ?? '';
     if (endpoint.startsWith('p3394+a2a')) {
+      const report = this.validatedMappingReport('a2a', peer);
       const channel = new P3394A2AChannel('cogseed-outbound-a2a', { endpoint: endpoint.slice('p3394+a2a:'.length) });
       channel.subscribe((envelope) => { this.tryResolveReply(envelope); });
-      return channel;
+      return { channel, report };
     }
     if (endpoint.startsWith('openai+') || peer.node_kind === 'model_runtime') {
+      const report = this.validatedMappingReport('openai-model', peer);
       const channel = new P3394ModelRuntimeAdapter('cogseed-outbound-model', {
         endpoint,
         model: process.env.COGSEED_P3394_MODEL_MODEL || 'auto',
       });
       channel.subscribe((envelope) => { this.tryResolveReply(envelope); });
-      return channel;
+      return { channel, report };
     }
+    return { channel: this.buildHttpChannelFor(peer) };
+  }
+
+  /** §16-14 reduced-profile 报告：生成 + 校验，required 字段被 drop 即抛
+   *  p3394_reduced_profile_invalid（绑定拒绝），绝不带着坏映射上线。 */
+  private validatedMappingReport(target: P3394ReducedTarget, peer: P3394PeerRecord): P3394MappingReport {
+    const report = this.mappingReportFor(target);
+    const validated = validateP3394MappingReport(report);
+    if (validated.ok === false) {
+      log.warn('P3394 reduced-profile binding rejected (required field dropped)', {
+        peer: peer.identity.agent_id, target, field: validated.error.field,
+      });
+      throw new Error('p3394_reduced_profile_invalid:' + validated.error.field);
+    }
+    log.info('P3394 reduced-profile binding validated', {
+      peer: peer.identity.agent_id, target, session_semantics: report.session_semantics,
+    });
+    return report;
+  }
+
+  /** 原生 P3394 HTTP 出站通道；https 端点按 per-peer TLS 材料（remote-nodes
+   *  注入的 CA/客户端证书）dial（§15）。 */
+  private buildHttpChannelFor(peer: P3394PeerRecord): P3394ChannelAdapter {
+    const endpoints = [...(peer.endpoints ?? [])];
+    const peerTls = this.tlsForPeer(peer);
+    const wantsTls = !!peerTls || endpoints.some((endpoint) => endpoint.startsWith('https'));
     return new P3394HttpChannel('cogseed-outbound', {
       dial: {
-        endpoints: [...(peer.endpoints ?? [])],
+        endpoints,
         // Registry expected_identity → dial-time identity verification.
         ...(peer.expected_identity ? { expected_identity: peer.expected_identity } : {}),
         // Per-peer outbound credential (dial_token, optional) — the outbound
         // hub must be able to reach authenticated peers.
         ...(peer.dial_token ? { bearerToken: peer.dial_token } : {}),
+        ...(wantsTls ? { tls: { ...peerTls } } : {}),
       },
     });
   }
@@ -116,9 +178,9 @@ export class P3394OutboundHub {
     if (existing && existing.signature === signature) return existing.channel;
     // Endpoint set changed → rebuild the channel so the new endpoints are used.
     if (existing) void existing.channel.close().catch(() => {});
-    const channel = this.buildChannelFor(peer);
-    this.channels.set(peer.identity.agent_id, { signature, channel });
-    return channel;
+    const built = this.buildChannelFor(peer);
+    this.channels.set(peer.identity.agent_id, { signature, channel: built.channel, ...(built.report ? { report: built.report } : {}) });
+    return built.channel;
   }
 
   /** Sends an envelope to a registered peer and waits for its reply.
@@ -338,14 +400,19 @@ function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamE
   if (envelope.kind !== 'event') return null;
   const metadata = envelope.payload.metadata;
   const streamEvent = metadata && metadata.stream_event;
-  if (streamEvent !== 'delta' && streamEvent !== 'progress') return null;
+  // 帧白名单（§12）：delta/progress/status/artifact 四种中间帧。白名单外的
+  // 未知帧名返回 null 走终态路径——但绝不把四种已知流帧漏进终态（否则
+  // waiter 被提前结算，后续真实终态到达时 session 已无人等待）。
+  if (typeof streamEvent !== 'string' || !P3394_STREAM_EVENT_KINDS.has(streamEvent)) return null;
   // Do not trim deltas: a chunk can intentionally end with a space or a
   // newline, and the renderer appends it directly to the visible bubble.
   const text = envelope.payload.parts
     .filter((part) => part.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text as string)
     .join('\n');
-  if (!text) return null;
+  // status/artifact 帧允许无 text parts：内容可整体位于 stream_data（结构化
+  // 状态/产物事件），只认帧名即可，不能因 text 为空掉回终态分支。
+  if (!text && streamEvent !== 'status' && streamEvent !== 'artifact') return null;
   const sequence = typeof metadata.stream_seq === 'number' ? metadata.stream_seq : undefined;
   const sourceMessageId = typeof metadata.stream_source_message_id === 'string'
     ? metadata.stream_source_message_id
@@ -356,7 +423,7 @@ function p3394EnvelopeStreamEvent(envelope: P3394Envelope): P3394OutboundStreamE
     : undefined;
   return {
     text,
-    kind: streamEvent,
+    kind: streamEvent as P3394OutboundStreamEvent['kind'],
     ...(structuredEvent ? { event: structuredEvent } : {}),
     envelope,
     ...(sequence !== undefined ? { sequence } : {}),
