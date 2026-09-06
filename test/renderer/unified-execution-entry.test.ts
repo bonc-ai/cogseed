@@ -16,6 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readAgentsModuleSource } from './helpers/load-agents-modules';
 
 const root = path.join(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -37,7 +38,8 @@ const LOCALE_KEYS = [
 
 describe('unified execution entry — picker scope', () => {
   it('keeps the recipient picker agent-only — models are the exec-chip\'s job', () => {
-    const agents = read('src/renderer/modules/agents.js');
+    // agents 系模块拼接源（拆分后 picker 渲染在 agents-picker.js）。
+    const agents = readAgentsModuleSource();
     // 验收反馈修订：@ 选择器只管「谁执行」，模型一律由右下角执行配置 chip
     // 管理，否则概念混淆。分组行/下钻逻辑必须不存在于 picker 渲染路径。
     expect(agents).not.toContain('recipient_api_models');
@@ -160,8 +162,10 @@ describe('unified execution entry — send path and bubble meta', () => {
     expect(bus).toMatch(/item\.execConfig\?\.effort[\s\S]*?turnAgentSpec\?\.default_thinking[\s\S]*?thinkingLevelForRun\(\)/);
     // model override reaches streamChatWithModel…
     expect(bus).toMatch(/turnModelOverride \? \{ modelOverride: turnModelOverride \}/);
-    // …CLI turns swap their model per task…
-    expect(bus).toMatch(/opts\.item\.execConfig\?\.model \|\| runtime\.model/);
+    // …CLI turns swap their model per task（R1 收窄后经 kind 守卫取 runtime.model，
+    // 语义等价：p3394-gateway 有 model 才取，in_process 本就无 model 字段）…
+    expect(bus).toMatch(/item\.execConfig\?\.model \|\| cliRuntimeModel/);
+    expect(bus).toMatch(/cliAgent\.runtime\?\.kind === "p3394-gateway"\s*\?\s*cliAgent\.runtime\.model\s*:\s*undefined/);
     // …and the end-of-turn message persists exec_meta.
     expect(bus).toMatch(/turnExecMeta \? \{ exec_meta: turnExecMeta \}/);
   });
@@ -169,7 +173,8 @@ describe('unified execution entry — send path and bubble meta', () => {
 
 describe('unified execution entry — agent defaults and settings', () => {
   it('exposes per-agent default model/thinking in the agent detail (custom in-process only)', () => {
-    const agents = read('src/renderer/modules/agents.js');
+    // 拆分后详情区（_renderAgentDetailExecDefaults）在 agents-detail.js。
+    const agents = read('src/renderer/modules/agents-detail.js');
     expect(agents).toContain('_renderAgentDetailExecDefaults');
     expect(agents).toMatch(/default_model: \{ provider: providerId, model: next \}/);
     expect(agents).toMatch(/default_thinking: null/);

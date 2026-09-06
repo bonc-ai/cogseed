@@ -175,7 +175,8 @@ describe('synced PC surface regressions', () => {
   it('keeps Settings local execution modes and edits the commander avatar from AI Team', () => {
     const html = read('src/renderer/index.html');
     const settings = read('src/renderer/modules/settings.js');
-    const agents = read('src/renderer/modules/agents.js');
+    // 拆分后指挥官头像编辑（prefs.setCommanderAvatar）在 agents-detail.js。
+    const agents = read('src/renderer/modules/agents-detail.js');
     const locales = ['en', 'zh', 'ja', 'pt'].map((lang) => readJson(`src/renderer/locales/${lang}.json`));
 
     for (const marker of [

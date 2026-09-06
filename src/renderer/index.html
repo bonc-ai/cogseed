@@ -1986,7 +1986,13 @@
   <!-- DOMPurify must load before utils.js so inline connector SVGs are sanitized, not disabled. -->
   <script src="./vendor/dompurify/purify.min.js"></script>
   <script src="./modules/name-sort.js"></script>
+  <!-- agents 系模块（R4 拆分）：agents.js 持有共享模块态（_agentsCache 等顶层
+       let）与列表/Use 流；detail/create/picker 按职责拆出，经共享全局词法
+       环境跨文件引用 —— 顺序不可调换。 -->
   <script src="./modules/agents.js"></script>
+  <script src="./modules/agents-detail.js"></script>
+  <script src="./modules/agents-create.js"></script>
+  <script src="./modules/agents-picker.js"></script>
   <script src="./modules/expense-workbench.js"></script>
   <script src="./modules/expense-agent-cards.js"></script>
   <script src="./modules/auto-title.js"></script>

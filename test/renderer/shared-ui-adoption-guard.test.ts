@@ -12,7 +12,12 @@ const sharedControlFactories = new Set([
 
 const legacyRawControlBaseline: Record<string, number> = {
   'account-chip.js': 4,
-  'agents.js': 15,
+  // agents 系拆分（R4）：原生控件预算随代码迁移——列表/Use 流留在 agents.js，
+  // 详情编辑区 8 个、picker 2 个（本体分组标题行 / 任务引用 chip 移除按钮）
+  // 分别记到 agents-detail.js / agents-picker.js。
+  'agents.js': 5,
+  'agents-detail.js': 8,
+  'agents-picker.js': 2,
   'auto.js': 6,
   'avatar-picker.js': 2,
   'bash_permission.js': 5,

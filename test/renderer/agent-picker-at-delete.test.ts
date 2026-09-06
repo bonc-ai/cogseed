@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as vm from 'node:vm';
+import { readAgentsModuleSource } from './helpers/load-agents-modules';
 
-const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/agents.js'), 'utf8');
+// agents 系模块（拆分后 _consumeAtKeyChar 在 agents-picker.js、
+// bindAgentPickers 在 agents.js）拼接源码上提取函数体。
+const source = readAgentsModuleSource();
 
 function extractFunction(name: string): string {
   const marker = `function ${name}`;
