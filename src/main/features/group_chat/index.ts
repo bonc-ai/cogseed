@@ -496,7 +496,7 @@ async function _validateUserRoute(
     // API model is unavailable. This prevents a forged renderer payload from
     // silently bypassing normal model selection or Wake approval.
     const runtime = agent.runtime;
-    if (!runtime || (runtime.kind !== 'cli' && runtime.kind !== 'p3394-gateway')) {
+    if (!runtime || runtime.kind !== 'p3394-gateway') {
       throw new Error('invalid CLI fallback recipient');
     }
     const cli = runtime.cli;
@@ -1677,7 +1677,10 @@ export async function markFormSubmittedAndDispatch(
     if (projDir) {
       const agentsFeat = await import('../agents');
       const ag = await agentsFeat.getAgentForChatDispatch(userId, agentId);
-      const cli = ag?.runtime?.kind === 'cli' ? ag.runtime.cli : '';
+      // G-19 保真：归一后 runtime 无 'cli'，原 `kind === 'cli'` 取值臂为死臂
+      // （恒走 else ''）——删除后此路径维持现状（不设 coding project_dir）。
+      void ag;
+      const cli = '';
       if (agentsFeat.cliIsCodingAgent(cli)) {
         const prev = await readState(userId, cid);
         const oldDir = prev.coding_project_dir || '';

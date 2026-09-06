@@ -1406,7 +1406,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!onboardingState.getOnboardingCompleted()) {
       filteredAgents = agentRows.filter((agent) => {
         const runtime = agent && agent.runtime;
-        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+        if (runtime && runtime.kind === 'p3394-gateway') {
           return false;
         }
         return true;
@@ -1530,7 +1530,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (!onboardingState.getOnboardingCompleted()) {
       filteredAgents = sAgents.filter((agent) => {
         const runtime = agent && agent.runtime;
-        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+        if (runtime && runtime.kind === 'p3394-gateway') {
           return false;
         }
         return true;
@@ -3226,7 +3226,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       agentList = agentList.filter((agent) => {
         const runtime = agent && agent.runtime;
         // 过滤掉所有 CLI 类型的 Agent
-        if (runtime && (runtime.kind === 'cli' || runtime.kind === 'p3394-gateway')) {
+        if (runtime && runtime.kind === 'p3394-gateway') {
           return false;
         }
         return true;

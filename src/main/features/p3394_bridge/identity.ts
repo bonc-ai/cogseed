@@ -1,4 +1,4 @@
-import type { Agent, AgentRuntime } from '../agents';
+import type { Agent, AgentRuntime, LegacyCliAgentRuntimeInput } from '../agents';
 
 export interface P3394AgentIdentity {
   agent_id: string;
@@ -117,14 +117,16 @@ export function validateP3394AgentIdentity(value: unknown): P3394IdentityValidat
 
 function explicitModelProfile(runtimeOrProfile: unknown): { field: string; model?: string } | null {
   if (!runtimeOrProfile || typeof runtimeOrProfile !== 'object' || Array.isArray(runtimeOrProfile)) return null;
-  const raw = runtimeOrProfile as Partial<AgentRuntime> & { model?: unknown };
+  // 松化为原始磁盘形态（kind?: string）：legacy `cli` 原始对象仍归
+  // 'runtime.model' 字段名——与归一前行为一致（只读 .kind/.model）。
+  const raw = runtimeOrProfile as { kind?: string; model?: unknown };
   if (typeof raw.model !== 'string' || !raw.model.trim()) return null;
   return { field: raw.kind === 'cli' ? 'runtime.model' : 'model', model: raw.model.trim() };
 }
 
 export function validateIdentityRuntimeBoundary(
   identity: Pick<P3394AgentIdentity, 'agent_id'>,
-  runtimeOrProfile: AgentRuntime | { model?: string } | undefined,
+  runtimeOrProfile: AgentRuntime | LegacyCliAgentRuntimeInput | { model?: string } | undefined,
 ): P3394RuntimeBoundaryValidationResult {
   const modelProfile = explicitModelProfile(runtimeOrProfile);
   if (modelProfile?.model === identity.agent_id) {

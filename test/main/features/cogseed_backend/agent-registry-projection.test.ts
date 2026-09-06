@@ -10,8 +10,8 @@ describe('CogSeed Agent Registry projection', () => {
     const cliTypes = ['claude', 'codex', 'openclaw', 'opencode', 'hermes', 'workbuddy', 'gemini', 'aider'] as const;
     const projection = await buildCogSeedAgentRegistryProjection('registry-user', {
       listAgentSummaries: vi.fn(async () => [
-        { agent_id: 'codex-agent', name: 'Bearer do-not-leak', enabled: true, source: '/Users/private/agent.json', runtime: { kind: 'cli', cli: 'codex' } },
-        { agent_id: 'gemini-agent', name: 'Gemini draft', enabled: true, source: 'custom', runtime: { kind: 'cli', cli: 'gemini' } },
+        { agent_id: 'codex-agent', name: 'Bearer do-not-leak', enabled: true, source: '/Users/private/agent.json', runtime: { kind: 'p3394-gateway', cli: 'codex' } },
+        { agent_id: 'gemini-agent', name: 'Gemini draft', enabled: true, source: 'custom', runtime: { kind: 'p3394-gateway', cli: 'gemini' } },
         { agent_id: 'commander', name: 'Commander', enabled: true, source: 'platform', runtime: { kind: 'in_process' } },
       ] as any),
       detectAll: vi.fn(async () => cliTypes.map((type) => ({
@@ -39,9 +39,12 @@ describe('CogSeed Agent Registry projection', () => {
 
     expect(projection.updatedAt).toBe('2026-08-27T00:03:00.000Z');
     expect(projection.agents).toEqual(expect.arrayContaining([
+      // G-19 收口：外接只有网关一种——legacy `cli` 投影臂已删。无 peer 时
+      // 网关 agent online/dispatchable 为 false（在线状态由 peer 决定），
+      // 有活跃任务时 health 仍为 busy。
       expect.objectContaining({
-        agentId: 'codex-agent', displayName: 'codex-agent', sourceKind: 'local-cli',
-        runtimeKind: 'cli:codex', health: 'busy', dispatchable: true,
+        agentId: 'codex-agent', displayName: 'codex-agent', sourceKind: 'p3394',
+        runtimeKind: 'p3394-gateway:codex', health: 'busy', dispatchable: false, online: false,
         currentTaskId: 'cogseed-task-private', currentConversationId: 'run-center-safe',
       }),
       expect.objectContaining({ agentId: 'gemini-agent', health: 'unsupported', dispatchable: false }),

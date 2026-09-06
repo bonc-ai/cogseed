@@ -234,14 +234,10 @@ export async function buildCogSeedAgentRegistryProjection(
     if (peer) boundPeerIds.add(peer.agent_id);
     const sourceKind: CogSeedRendererAgentSourceKind = runtime?.kind === 'p3394-gateway'
       ? 'p3394'
-      : runtime?.kind === 'cli'
-        ? 'local-cli'
-        : 'cogseed';
-    const installed = runtime?.kind === 'cli'
-      ? cli?.available === true
-      : runtime?.kind === 'p3394-gateway'
-        ? !!peer || !!cli?.available
-        : true;
+      : 'cogseed';
+    const installed = runtime?.kind === 'p3394-gateway'
+      ? !!peer || !!cli?.available
+      : true;
     const online = runtime?.kind === 'p3394-gateway'
       ? peer?.online === true
       : installed;
@@ -261,7 +257,7 @@ export async function buildCogSeedAgentRegistryProjection(
       displayName: safeDisplayName(definition.name, agentId),
       sourceKind,
       definitionSource: safeIdentifier(definition.source, 'unknown'),
-      runtimeKind: runtime?.kind === 'cli' || runtime?.kind === 'p3394-gateway'
+      runtimeKind: runtime?.kind === 'p3394-gateway'
         ? `${runtime.kind}:${safeIdentifier(runtime.cli, 'unknown')}`
         : 'in_process',
       installed,
@@ -308,7 +304,9 @@ export async function buildCogSeedAgentRegistryProjection(
 
   const runtimes: CogSeedRendererRuntimeSummary[] = cliEntries.map((entry) => {
     const gateway = gateways.find((item) => item.cli === entry.type);
-    const supported = isCogSeedAgentRuntimeSupported({ kind: 'cli', cli: entry.type });
+    // 归一后二态探活：isCogSeedAgentRuntimeSupported 只读 .cli，传网关形态等价
+    // （legacy {kind:'cli'} 构造已随联合收窄删除）。
+    const supported = isCogSeedAgentRuntimeSupported({ kind: 'p3394-gateway', cli: entry.type });
     const installed = entry.available === true;
     return {
       runtimeId: `local-cli:${entry.type}`,

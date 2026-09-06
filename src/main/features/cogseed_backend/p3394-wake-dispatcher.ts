@@ -34,26 +34,20 @@ export const cogseedWakeDispatcher: WakeDispatcher = {
         request.conversation_id,
       );
       const agentRuntime = executionContext.runtime;
-      const localCli: CogSeedLocalCliConfig | undefined = agentRuntime.kind === 'cli'
+      // G-19 后归一只回二态：legacy `cli` 直连臂已删（读回即迁移为
+      // p3394-gateway），外接唤醒只剩托管 gateway 一条执行路径。
+      const localCli: CogSeedLocalCliConfig | undefined = agentRuntime.kind === 'p3394-gateway'
         ? {
             cli: agentRuntime.cli,
             agentName: executionContext.agentName,
             ...(agentRuntime.model ? { model: agentRuntime.model } : {}),
             ...(agentRuntime.custom_args?.length ? { customArgs: agentRuntime.custom_args } : {}),
             ...(agentRuntime.cli_provider_id ? { cliProviderId: agentRuntime.cli_provider_id } : {}),
+            // 统一执行路径：外接智能体的 wake 与对话分派都走托管 gateway
+            // （P3394 UMF），由 local-cli-execution-adapter 的 gateway 分支执行。
+            viaP3394Gateway: true,
           }
-        : agentRuntime.kind === 'p3394-gateway'
-          ? {
-              cli: agentRuntime.cli,
-              agentName: executionContext.agentName,
-              ...(agentRuntime.model ? { model: agentRuntime.model } : {}),
-              ...(agentRuntime.custom_args?.length ? { customArgs: agentRuntime.custom_args } : {}),
-              ...(agentRuntime.cli_provider_id ? { cliProviderId: agentRuntime.cli_provider_id } : {}),
-              // 统一执行路径：外接智能体的 wake 与对话分派都走托管 gateway
-              // （P3394 UMF），由 local-cli-execution-adapter 的 gateway 分支执行。
-              viaP3394Gateway: true,
-            }
-          : undefined;
+        : undefined;
       const workingDir = localCli
         ? await (await import('./local-cli-execution-adapter')).resolveCogSeedLocalCliWorkingDir({
             userId,
