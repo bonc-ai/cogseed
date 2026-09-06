@@ -503,6 +503,16 @@ async function mapRuntimeEvent(
         ...(event.metadata?.isError === true && toolError ? { error: toolError.slice(0, 2000) } : {}),
       });
       if (stored) await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
+    } else if (kernelEvent === 'progress') {
+      // 网关过程帧（status/artifact 之外的进度提示）：text 走 metadata（与
+      // local-cli-execution-adapter 的 kernel_event 约定一致），落 progress
+      // 事件进过程栏 rail，不进正文气泡（投影层 group-chat-projection 认识
+      // type:'progress'）。
+      const progressText = typeof event.metadata?.text === 'string' ? event.metadata.text.trim() : '';
+      if (progressText) {
+        const stored = await appendCogSeedTaskEventIfActive(userId, task.taskId, 'progress', { text: progressText });
+        if (stored) await projectTaskEventBestEffort(userId, task, stored, projectTaskEvent);
+      }
     } else if (kernelEvent === 'artifact') {
       const artifact: Record<string, unknown> = {};
       for (const key of ['uri', 'digest', 'name', 'media_type'] as const) {

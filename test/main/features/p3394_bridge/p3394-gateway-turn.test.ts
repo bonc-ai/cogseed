@@ -293,4 +293,111 @@ describe('P3394 gateway turn runner', () => {
     const [, , , noRefs] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { references?: unknown[] }];
     expect(noRefs?.references).toBeUndefined();
   });
+
+  // ── 远端执行路由（X-4）────────────────────────────────────────────────
+
+  it('routes a non-loopback registered peer through the outbound path without local gateway management', async () => {
+    // remote-nodes 注入的跨机节点：非回环端点 + expected_identity/dial_token。
+    mocks.listP3394Peers.mockResolvedValueOnce([
+      { agent_id: 'b-node-agent', display_name: 'B机智能体', endpoints: ['http://192.168.1.20:8444'] },
+    ]);
+    mocks.p3394ExternalGatewayIdFor.mockReturnValueOnce(null); // 未知 cli → nodeId = cli 本身
+
+    const result = await runP3394GatewayTurn({ ...baseInput, cli: 'b-node-agent' });
+
+    expect(result.text).toBe('hermes reply');
+    expect(mocks.startExternalGateway).not.toHaveBeenCalled();
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
+    // 信封形态：task/request、sender=本机身份 cogseed、recipients=[peer]。
+    // 信封构造器入参（peer）与出站目标都是对端规范 agent_id；recipients/
+    // sender 断言走构造器契约定桩（buildP3394OutboundEnvelope 的真实实现
+    // 按 peer 参数落 recipients——这里验证参数正确传入）。
+    const [sentId, envelope] = hub.sendAndWait.mock.calls[0] as unknown as [string, {
+      kind: string; performative: string; sender: { agent_id: string };
+    }];
+    expect(sentId).toBe('b-node-agent');
+    expect(mocks.buildP3394OutboundEnvelope.mock.calls[0][0]).toBe('b-node-agent');
+    expect(envelope.kind).toBe('task');
+    expect(envelope.performative).toBe('request');
+    expect(envelope.sender.agent_id).toBe('cogseed');
+  });
+
+  it('matches a remote peer by its display name (label alias) when the cli names the label', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([
+      { agent_id: 'b-node-agent', display_name: 'B机节点', endpoints: ['http://192.168.1.20:8444'] },
+    ]);
+    mocks.p3394ExternalGatewayIdFor.mockReturnValueOnce(null);
+
+    const result = await runP3394GatewayTurn({ ...baseInput, cli: 'B机节点' });
+
+    expect(result.text).toBe('hermes reply');
+    expect(hub.sendAndWait.mock.calls[0][0]).toBe('b-node-agent');
+  });
+
+  it('maps a remote reply timeout to p3394_remote_timeout without local recovery', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([
+      { agent_id: 'b-node-agent', endpoints: ['http://192.168.1.20:8444'] },
+    ]);
+    mocks.p3394ExternalGatewayIdFor.mockReturnValueOnce(null);
+    hub.sendAndWait.mockRejectedValueOnce(new Error('p3394_reply_timeout'));
+
+    const result = await runP3394GatewayTurn({ ...baseInput, cli: 'b-node-agent' });
+
+    expect(result.failureCode).toBe('p3394_remote_timeout');
+    expect(result.infrastructureFailure).toBe(true);
+    // 远端超时不做本机网关自愈（拉起本机 CLI 于事无补）。
+    expect(mocks.startExternalGateway).not.toHaveBeenCalled();
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry with gateway recovery on transport errors for a remote peer', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([
+      { agent_id: 'b-node-agent', endpoints: ['http://192.168.1.20:8444'] },
+    ]);
+    mocks.p3394ExternalGatewayIdFor.mockReturnValueOnce(null);
+    hub.sendAndWait.mockRejectedValueOnce(new Error('ECONNREFUSED 192.168.1.20:8444'));
+
+    const result = await runP3394GatewayTurn({ ...baseInput, cli: 'b-node-agent' });
+
+    expect(result.failureCode).toBe('p3394_send_failed');
+    expect(mocks.startExternalGateway).not.toHaveBeenCalled();
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the managed-gateway path for loopback peers (zero change)', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    hub.sendAndWait
+      .mockRejectedValueOnce(new Error('ECONNREFUSED 127.0.0.1:9100'))
+      .mockResolvedValueOnce({ text: 'hermes after restart' });
+
+    const result = await runP3394GatewayTurn(baseInput);
+
+    // 本地回环 peer 的传输错误仍触发托管网关自愈 + 重发（既有行为）。
+    expect(result.text).toBe('hermes after restart');
+    expect(mocks.startExternalGateway).toHaveBeenCalledTimes(1);
+    expect(hub.sendAndWait).toHaveBeenCalledTimes(2);
+  });
+
+  // ── status/artifact 帧消费（§12 词表 → process rail）──────────────────
+
+  it('routes status and artifact frames to the process rail with kind prefixes and state/uri detail', async () => {
+    mocks.listP3394Peers.mockResolvedValueOnce([{ agent_id: 'hermes', endpoints: ['http://127.0.0.1:9100'] }]);
+    hub.sendAndWait.mockImplementation(async (_nodeId, _envelope, onStream) => {
+      onStream?.({ text: '正在等待审批', kind: 'status', envelope: {} as never, sequence: 1 });
+      onStream?.({ text: '', kind: 'status', event: { state: 'waiting_approval' }, envelope: {} as never, sequence: 2 });
+      onStream?.({ text: 'build report', kind: 'artifact', event: { uri: 'p3394-object:sha256:abcd', name: 'report.md' }, envelope: {} as never, sequence: 3 });
+      return { text: 'final reply' };
+    });
+    const processes: Array<{ type: string; text: string }> = [];
+    const result = await runP3394GatewayTurn({ ...baseInput, onProcess: (event) => { processes.push(event as never); } });
+
+    expect(result.text).toBe('final reply');
+    // 三种过程帧都进 process rail（progress 事件），不进气泡正文。
+    const rail = processes.filter((e) => e.type === 'progress').map((e) => e.text);
+    expect(rail).toContain('[status] 正在等待审批');
+    expect(rail).toContain('[status] waiting_approval');
+    expect(rail).toContain('[artifact] build report p3394-object:sha256:abcd');
+    // 气泡正文只有终态回复一次性落地（status/artifact 帧不产生 delta）。
+    expect(processes.filter((e) => e.type === 'delta')).toEqual([{ type: 'delta', text: 'final reply' }]);
+  });
 });
