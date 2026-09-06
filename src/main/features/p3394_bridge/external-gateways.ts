@@ -338,6 +338,17 @@ async function doStartExternalGateway(input: {
   }
   const alias = String(input.alias || '').trim().slice(0, 60) || mapping.id;
   const gatewayHome = path.join(variantRoot(), 'external-gateways', cli);
+  // §15：主进程 bridge 启用 https 时（读同一组 env：COGSEED_P3394_TLS_CERT/
+  // _TLS_KEY），bridgeInfo.endpoint 已是 https:// ——网关回连必须拿到 CA 才能
+  // 校验主进程证书（网关包读 P3394_TLS_CA）。显式 CA 缺省时自签 cert 即 CA。
+  // 网关自身仍监听回环 http（127.0.0.1 非远程 Channel，§15 不强制）。
+  const gatewayTlsCa = (() => {
+    const ca = (process.env.COGSEED_P3394_TLS_CA || '').trim();
+    const cert = (process.env.COGSEED_P3394_TLS_CERT || '').trim();
+    const caPath = ca || cert;
+    if (!caPath) return '';
+    try { return fs.existsSync(caPath) ? caPath : ''; } catch { return ''; }
+  })();
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     ELECTRON_RUN_AS_NODE: '1',
@@ -347,6 +358,7 @@ async function doStartExternalGateway(input: {
     P3394_GATEWAY_HOME: gatewayHome,
     COGSEED_ENDPOINT: bridgeInfo.endpoint,
     COGSEED_TOKEN: bridgeInfo.token,
+    ...(gatewayTlsCa ? { P3394_TLS_CA: gatewayTlsCa } : {}),
     P3394_AGENT: mapping.preset,
     P3394_AGENT_ID: mapping.id,
     P3394_AGENT_ALIAS: alias,

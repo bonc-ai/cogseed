@@ -26,11 +26,13 @@
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import { createLogger } from '../../logger';
 import { validateP3394Envelope, type P3394Envelope } from './envelope';
 import { p3394ObjectStoreGet } from './object-store';
 import { P3394_CHANNEL_LIMITS, P3394RateLimiter } from './channel-limits';
 import { buildP3394ChannelDescriptor, type P3394ChannelAdapter, type P3394ChannelDeliveryReceipt, type P3394ChannelDescriptor, type P3394ChannelHealth, type P3394ChannelListener, type P3394ChannelListenerResult } from './channel-adapter';
+import type { P3394SignatureVerdict } from './message-signing';
 import type { P3394BridgeManifest } from './manifest';
 
 const log = createLogger('p3394-bridge:http-channel');
@@ -39,8 +41,18 @@ export interface P3394HttpListenConfig {
   /** Defaults to loopback; public binds require explicit configuration. */
   host?: string;
   port: number;
-  /** Optional TLS server context (cert/key PEM). */
-  tls?: { cert: string; key: string };
+  /** Optional TLS server context (cert/key PEM 或 PEM 文件路径；§15 生产
+   *  远程 Channel 强制 TLS)。 */
+  tls?: {
+    cert: string;
+    key: string;
+    /** 客户端证书 CA（mTLS 服务端校验用；PEM 或路径）。 */
+    ca?: string;
+    /** 要求客户端证书（mTLS）。 */
+    requestCert?: boolean;
+    /** 拒绝无法校验的客户端证书（mTLS 生效需与 requestCert 同开）。 */
+    rejectUnauthorized?: boolean;
+  };
 }
 
 export interface P3394HttpDialConfig {
@@ -51,8 +63,14 @@ export interface P3394HttpDialConfig {
    *  the registry's expected_identity check (guide §2.3: alias ≠ identity;
    *  verify the remote identity after connecting). */
   expected_identity?: string;
-  /** Optional TLS client settings for https endpoints. */
-  tls?: { ca?: string; rejectUnauthorized?: boolean };
+  /** Optional TLS client settings for https endpoints (§15)：ca 校验对端
+   *  证书，cert/key 携带 mTLS 客户端证书。全部支持 PEM 字符串或文件路径。 */
+  tls?: {
+    ca?: string;
+    cert?: string;
+    key?: string;
+    rejectUnauthorized?: boolean;
+  };
 }
 
 export interface P3394HttpChannelOptions {
@@ -68,6 +86,15 @@ export interface P3394HttpChannelOptions {
   maxConcurrentRequests?: number;
   /** 认证/边界失败审计回调（C-04）：由 wiring 注入 kernel 审计。 */
   audit?: (record: { event: string; status: 'rejected'; metadata: Record<string, unknown> }) => void;
+  /** 消息签名（§15 可选）：send 出站附加签名 / subscribe 入站验签。
+   *  未注入时零开销零影响（默认关闭，wiring 按 COGSEED_P3394_SIGNING 配）。 */
+  signing?: {
+    sign?: (envelope: P3394Envelope) => P3394Envelope;
+    verify?: (envelope: P3394Envelope) => P3394SignatureVerdict;
+  };
+  /** GET /p3394/peers 只读发现端点的数据源（wiring 注入注册表摘要；
+   *  不含 token/endpoint 等敏感字段）。 */
+  peersSummary?: () => Array<Record<string, unknown>>;
   now?: () => number;
 }
 
@@ -84,6 +111,20 @@ const NEGOTIATE_CACHE_TTL_MS = 60_000;
 const ENVELOPE_PATH = '/p3394/envelope';
 const HEALTH_PATH = '/p3394/health';
 const OBJECTS_PATH_PREFIX = '/p3394/objects/';
+/** 只读发现端点（§7.2）：Bearer 鉴权同其他路由，返回注册表摘要（不含
+ *  token/endpoint 敏感字段）——B 机 CLI 可枚举 A 节点。 */
+const PEERS_PATH = '/p3394/peers';
+
+/** PEM 材料 resolver：传 PEM 文件路径（文件存在）则读文件，否则按 PEM
+ *  字符串原样使用。路径未命中不报错——调用方的 env 配错会在 TLS 握手
+ *  阶段 fail-loud。 */
+function resolvePemMaterial(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    if (fs.existsSync(value)) return fs.readFileSync(value, 'utf8');
+  } catch { /* unreadable → treat as inline PEM below */ }
+  return value;
+}
 
 export type P3394HttpNegotiationResult =
   | { ok: true; peer_agent_id: string; peer_manifest: P3394BridgeManifest }
@@ -91,20 +132,10 @@ export type P3394HttpNegotiationResult =
 
 export class P3394HttpChannel implements P3394ChannelAdapter {
   readonly channel_id: string;
-  readonly descriptor: P3394ChannelDescriptor = buildP3394ChannelDescriptor({
-    id: 'org.p3394.channel.native_https',
-    schemes: ['p3394+https', 'p3394+wss'],
-    roles: ['listener', 'dialer'],
-    bindings: ['umf-json'],
-    capabilities: {
-      streaming: 'bidirectional',
-      durable_tasks: true,
-      cancellation: true,
-      artifacts: 'inline',
-      multi_party_sessions: true,
-      identity_proofs: ['bearer-token', 'mtls'],
-    },
-  });
+  /** §15 identity_proofs 动态化：只有 listener 真实配置了 mTLS
+   *  （requestCert）才声明 'mtls'，否则只声明 'bearer-token'——descriptor
+   *  是能力承诺，声明未实际启用的证明方式等于假广告。 */
+  readonly descriptor: P3394ChannelDescriptor;
   private readonly options: P3394HttpChannelOptions;
   private readonly now: () => number;
   private readonly listeners = new Set<P3394ChannelListener>();
@@ -123,6 +154,22 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
   constructor(channel_id = 'http', options: P3394HttpChannelOptions = {}) {
     this.channel_id = channel_id;
     this.options = options;
+    const listenTls = options.listen?.tls;
+    const mtlsEnabled = listenTls?.requestCert === true && listenTls.rejectUnauthorized !== false;
+    this.descriptor = buildP3394ChannelDescriptor({
+      id: 'org.p3394.channel.native_https',
+      schemes: ['p3394+https', 'p3394+wss'],
+      roles: ['listener', 'dialer'],
+      bindings: ['umf-json'],
+      capabilities: {
+        streaming: 'bidirectional',
+        durable_tasks: true,
+        cancellation: true,
+        artifacts: 'inline',
+        multi_party_sessions: true,
+        identity_proofs: mtlsEnabled ? ['bearer-token', 'mtls'] : ['bearer-token'],
+      },
+    });
     this.now = options.now ?? (() => Date.now());
     const perMinute = options.maxInboundRequestsPerMinute ?? P3394_CHANNEL_LIMITS.maxInboundRequestsPerMinute;
     this.inboundLimiter = perMinute <= 0 ? null : new P3394RateLimiter(perMinute, 60_000, this.now());
@@ -221,6 +268,17 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
         res.end(JSON.stringify({ ok: true, manifest: this.localManifest }));
         return;
       }
+      if (req.method === 'GET' && req.url === PEERS_PATH) {
+        // 只读发现端点（§7.2）：同 Bearer 鉴权；摘要由 wiring 注入，不含
+        // token/endpoint 等敏感字段（B 机 CLI 枚举 A 节点用）。
+        if (!this.authorized(req)) {
+          this.rejectUnauthorized(res, PEERS_PATH);
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, peers: this.options.peersSummary?.() ?? [] }));
+        return;
+      }
       if (req.method === 'POST' && req.url === ENVELOPE_PATH) {
         if (!this.authorized(req)) {
           this.rejectUnauthorized(res, ENVELOPE_PATH);
@@ -273,6 +331,17 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
             res.end(JSON.stringify({ ok: false, error: validation.error.reason }));
             return;
           }
+          // 消息签名验签（§15 可选启用）：验签失败 → 拒绝并审计。无签名
+          // 扩展是否放行由注入的 verify 决定（wiring 侧兼容渐进部署）。
+          if (this.options.signing?.verify) {
+            const verdict = this.options.signing.verify(validation.envelope);
+            if (verdict.ok === false) {
+              this.options.audit?.({ event: 'http.signature.reject', status: 'rejected', metadata: { path: ENVELOPE_PATH, error: verdict.error } });
+              res.writeHead(422, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: 'p3394_signature_invalid' }));
+              return;
+            }
+          }
           let rejected: P3394ChannelListenerResult | null = null;
           for (const listener of [...this.listeners]) {
             const result = listener(validation.envelope);
@@ -293,7 +362,13 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     };
 
     const server = listenConfig.tls
-      ? https.createServer({ cert: listenConfig.tls.cert, key: listenConfig.tls.key }, requestHandler)
+      ? https.createServer({
+        cert: resolvePemMaterial(listenConfig.tls.cert),
+        key: resolvePemMaterial(listenConfig.tls.key),
+        ...(listenConfig.tls.ca ? { ca: resolvePemMaterial(listenConfig.tls.ca) } : {}),
+        ...(listenConfig.tls.requestCert !== undefined ? { requestCert: listenConfig.tls.requestCert } : {}),
+        ...(listenConfig.tls.rejectUnauthorized !== undefined ? { rejectUnauthorized: listenConfig.tls.rejectUnauthorized } : {}),
+      }, requestHandler)
       : http.createServer(requestHandler);
     server.on('error', (error) => {
       log.warn('P3394 http listener error', { error: error.message });
@@ -313,7 +388,16 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     const expected = this.authToken();
     if (!expected) return true; // no token configured on the listener side
     const header = req.headers.authorization;
-    return typeof header === 'string' && header === 'Bearer ' + expected;
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+    const provided = header.slice('Bearer '.length);
+    // 时序安全比较（防逐字节计时侧信道）：长度先比（长度不是机密，不等
+    // 即拒），等长才用 crypto.timingSafeEqual 恒时比较内容。
+    if (provided.length !== expected.length) return false;
+    try {
+      return crypto.timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'));
+    } catch {
+      return false;
+    }
   }
 
   /** Channel contract dial; negotiation results are available via negotiate().
@@ -413,6 +497,9 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     if (supported && !supported.includes(envelope.performative)) {
       throw new Error('p3394_capability_unsupported:' + envelope.performative);
     }
+    // 出站签名（§15 可选启用）：本节点开启签名时附加 extensions.sig；
+    // 未注入 signing 时原样发送（零开销零影响）。
+    const outboundEnvelope = this.options.signing?.sign ? this.options.signing.sign(envelope) : envelope;
     return new Promise((resolve, reject) => {
       const url = new URL(endpoint);
       const request = this.requestFor(url, 'POST', ENVELOPE_PATH, dialConfig);
@@ -431,7 +518,7 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
         });
       });
       request.on('error', reject);
-      request.end(JSON.stringify({ envelope }), 'utf8');
+      request.end(JSON.stringify({ envelope: outboundEnvelope }), 'utf8');
     });
   }
 
@@ -444,16 +531,25 @@ export class P3394HttpChannel implements P3394ChannelAdapter {
     const isTls = url.protocol === 'https:';
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (dialConfig.bearerToken) headers.Authorization = 'Bearer ' + dialConfig.bearerToken;
+    // §15：https 端点透传 CA（校验对端证书）与 cert/key（mTLS 客户端证书），
+    // PEM 材料支持文件路径（存在即读）。undefined 字段显式剔除，避免把
+    // 空值传进 TLS options。
     const options: https.RequestOptions = {
       hostname: url.hostname,
       port: url.port ? Number(url.port) : (isTls ? 443 : 80),
       path,
       method,
       headers,
-      ...(isTls && dialConfig.tls
-        ? { ca: dialConfig.tls.ca, rejectUnauthorized: dialConfig.tls.rejectUnauthorized }
-        : {}),
     };
+    if (isTls && dialConfig.tls) {
+      const ca = resolvePemMaterial(dialConfig.tls.ca);
+      const cert = resolvePemMaterial(dialConfig.tls.cert);
+      const key = resolvePemMaterial(dialConfig.tls.key);
+      if (ca) options.ca = ca;
+      if (cert) options.cert = cert;
+      if (key) options.key = key;
+      if (dialConfig.tls.rejectUnauthorized !== undefined) options.rejectUnauthorized = dialConfig.tls.rejectUnauthorized;
+    }
     const transport = isTls ? https : http;
     return transport.request(options);
   }

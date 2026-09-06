@@ -7,8 +7,16 @@ import { P3394HttpChannel } from './http-channel';
 /**
  * 第二期 Dashboard：远端 P3394 节点的配置存储与连通性校验。
  * 配置存 per-variant 状态目录（与 p3394-peers.json 相邻）；token 只落
- * 机器私有文件，返回渲染层时打码。
+ * 机器私有文件（0600），返回渲染层时打码。
  */
+
+/** per-node TLS 信任材料（PEM 字符串或文件路径；§15：endpoint 为 https 时
+ *  出站 dial 使用——ca 校验对端，cert/key 携带 mTLS 客户端证书）。 */
+export interface P3394RemoteNodeTls {
+  ca?: string;
+  cert?: string;
+  key?: string;
+}
 
 export interface P3394RemoteNode {
   id: string;
@@ -18,6 +26,8 @@ export interface P3394RemoteNode {
   expected_identity?: string;
   enabled: boolean;
   created_at: string;
+  /** 可选 per-node TLS 材料（endpoint https 时出站用）。 */
+  tls?: P3394RemoteNodeTls;
 }
 
 /** 渲染层视图：token 打码，永远不回明文。 */
@@ -53,7 +63,31 @@ function readFile(): RemoteNodesFile {
 function writeFile(data: RemoteNodesFile): void {
   const file = stateFilePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  const tmp = file + '.tmp';
+  // 0600 + tmp/rename 原子写：文件含明文 dial token（以及可选 TLS 私钥
+  // 路径），必须仅本用户可读，且读者永远不会看到半截 JSON。
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf8');
+  try { fs.chmodSync(tmp, 0o600); } catch { /* best effort（umask 兜底之上的显式收紧） */ }
+  fs.renameSync(tmp, file);
+  notifyRemoteNodesChanged();
+}
+
+/** remote-nodes 变更通知（app-wiring 注册：触发注册表 re-sync）。 */
+type RemoteNodesListener = () => void;
+let changeListener: RemoteNodesListener | null = null;
+
+export function setRemoteNodesChangedListener(listener: RemoteNodesListener | null): void {
+  changeListener = listener;
+}
+
+function notifyRemoteNodesChanged(): void {
+  try { changeListener?.(); } catch { /* 监听方故障不影响存储写入 */ }
+}
+
+/** main 进程内部读取（明文，含 token/tls）：供注册表注入与出站 TLS 材料
+ *  匹配使用；渲染层永远走 listRemoteNodes 的打码视图。 */
+export function listRemoteNodesInternal(): P3394RemoteNode[] {
+  return Object.values(readFile().nodes);
 }
 
 function normalizeEndpoint(input: unknown): string | null {
@@ -82,6 +116,19 @@ function toView(node: P3394RemoteNode): P3394RemoteNodeView {
   };
 }
 
+/** tls 输入校验：只接受非空字符串字段（PEM 或文件路径），其余丢弃。 */
+function normalizeTls(input: unknown): P3394RemoteNodeTls | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+  const pick = (key: 'ca' | 'cert' | 'key'): string | undefined =>
+    typeof raw[key] === 'string' && (raw[key] as string).trim() ? (raw[key] as string).trim() : undefined;
+  const ca = pick('ca');
+  const cert = pick('cert');
+  const key = pick('key');
+  if (!ca && !cert && !key) return undefined;
+  return { ...(ca ? { ca } : {}), ...(cert ? { cert } : {}), ...(key ? { key } : {}) };
+}
+
 export function listRemoteNodes(): { ok: true; nodes: P3394RemoteNodeView[] } {
   const data = readFile();
   return { ok: true, nodes: Object.values(data.nodes).map(toView) };
@@ -92,6 +139,7 @@ export function addRemoteNode(input: {
   endpoint?: unknown;
   token?: unknown;
   expected_identity?: unknown;
+  tls?: unknown;
 }): { ok: true; node: P3394RemoteNodeView } | { ok: false; error: { reason: string; message: string } } {
   const endpoint = normalizeEndpoint(input.endpoint);
   if (!endpoint) {
@@ -105,6 +153,7 @@ export function addRemoteNode(input: {
   const expectedIdentity = typeof input.expected_identity === 'string' && input.expected_identity.trim()
     ? input.expected_identity.trim()
     : undefined;
+  const tls = normalizeTls(input.tls);
   const data = readFile();
   const duplicate = Object.values(data.nodes).find((node) => node.endpoint === endpoint);
   if (duplicate) {
@@ -119,6 +168,7 @@ export function addRemoteNode(input: {
     ...(expectedIdentity ? { expected_identity: expectedIdentity } : {}),
     enabled: true,
     created_at: new Date().toISOString(),
+    ...(tls ? { tls } : {}),
   };
   data.nodes[id] = node;
   writeFile(data);
@@ -136,13 +186,14 @@ export function removeRemoteNode(id: unknown): { ok: boolean; expected_identity?
   return { ok: true, expected_identity: node.expected_identity };
 }
 
-/** 编辑远端节点：label/期望身份/endpoint/token 任意子集；
+/** 编辑远端节点：label/期望身份/endpoint/token/tls 任意子集；
  * 未传 token 保留原值；endpoint 变更做去重校验。 */
 export function updateRemoteNode(id: unknown, input: {
   label?: unknown;
   endpoint?: unknown;
   token?: unknown;
   expected_identity?: unknown;
+  tls?: unknown;
 }): { ok: true; node: P3394RemoteNodeView } | { ok: false; error: { reason: string; message: string } } {
   if (typeof id !== 'string' || !id) return { ok: false, error: { reason: 'invalid_id', message: '节点 id 无效' } };
   const data = readFile();
@@ -165,6 +216,7 @@ export function updateRemoteNode(id: unknown, input: {
   const nextIdentity = input.expected_identity === undefined
     ? node.expected_identity
     : (typeof input.expected_identity === 'string' && input.expected_identity.trim() ? input.expected_identity.trim() : undefined);
+  const nextTls = input.tls === undefined ? node.tls : normalizeTls(input.tls);
   const updated: P3394RemoteNode = {
     ...node,
     label: nextLabel,
@@ -172,6 +224,12 @@ export function updateRemoteNode(id: unknown, input: {
     token: nextToken,
     ...(nextIdentity ? { expected_identity: nextIdentity } : {}),
   };
+  // tls 三态：未传保留；传入有效覆盖；传入空/无效清除（...node 会带上旧
+  // 值，必须显式删掉）。
+  if (input.tls !== undefined) {
+    if (nextTls) updated.tls = nextTls;
+    else delete updated.tls;
+  }
   data.nodes[id] = updated;
   writeFile(data);
   return { ok: true, node: toView(updated) };
@@ -192,6 +250,7 @@ export async function testRemoteNodeById(id: unknown): Promise<RemoteNodeTestRes
     endpoint: node.endpoint,
     token: node.token,
     expected_identity: node.expected_identity,
+    ...(node.tls ? { tls: node.tls } : {}),
   });
 }
 
@@ -200,6 +259,7 @@ export async function testRemoteNode(input: {
   endpoint?: unknown;
   token?: unknown;
   expected_identity?: unknown;
+  tls?: unknown;
 }): Promise<RemoteNodeTestResult> {
   const endpoint = normalizeEndpoint(input.endpoint);
   if (!endpoint) return { ok: false, error: { reason: 'invalid_endpoint', message: '远端节点地址无效' } };
@@ -207,11 +267,13 @@ export async function testRemoteNode(input: {
   const expectedIdentity = typeof input.expected_identity === 'string' && input.expected_identity.trim()
     ? input.expected_identity.trim()
     : undefined;
+  const tls = normalizeTls(input.tls);
   const channel = new P3394HttpChannel('remote-probe', {
     dial: {
       endpoints: [endpoint],
       bearerToken: token,
       ...(expectedIdentity ? { expected_identity: expectedIdentity } : {}),
+      ...(tls ? { tls } : {}),
     },
     timeoutMs: 8_000,
   });
