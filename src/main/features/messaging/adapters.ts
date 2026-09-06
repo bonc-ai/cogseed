@@ -1403,6 +1403,12 @@ async function extractBinaryBytes(response: unknown): Promise<Buffer | null> {
   if (direct && direct.length > 0) return direct;
   const record = asRecord(response);
   if (record) {
+    // Shape 0: SDK file wrapper { writeFile, getReadableStream, headers } —
+    // lark node-sdk returns this for binary endpoints in recent versions.
+    if (typeof record.getReadableStream === 'function') {
+      const viaSdkStream = await collectStream((record.getReadableStream as () => unknown)());
+      if (viaSdkStream && viaSdkStream.length > 0) return viaSdkStream;
+    }
     // Shape 2: axios-style { data } wrapper — stream, Buffer, or base64.
     const collected = await collectStream(record.data);
     if (collected && collected.length > 0) return collected;
