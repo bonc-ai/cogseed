@@ -2,7 +2,7 @@
 # 凭证一律 env: 引用，本文件不存明文密钥。
 class_profile: v1
 class_id: cohort-A
-platform_url: "http://localhost:3000"
+platform_url: ""   # 留空：平台地址由 API Key v2 自带
 
 feishu:
   app_id_ref: "env:FEISHU_APP_ID"

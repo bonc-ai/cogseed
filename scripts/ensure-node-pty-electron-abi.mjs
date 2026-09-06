@@ -6,9 +6,15 @@
  * source build still lands under build/Release. Probe the actual runtime
  * candidates with Electron first (cheap and idempotent), and rebuild from
  * source only when no compatible build or prebuild is available.
+ *
+ * Also repairs a node-pty 1.1.0 packaging defect: the npm tarball ships the
+ * macOS `spawn-helper` prebuild without the execute bit, which makes
+ * `posix_spawn` of the helper fail (integrated terminal reports
+ * "posix_spawnp failed."). Restore mode 0755 whenever a prebuild helper is
+ * present so fresh installs and packaged builds get a working terminal.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,9 +81,47 @@ function markElectronRebuildComplete() {
   writeFileSync(rebuildMeta, `${process.arch}--${getAbi(electronVersion, 'electron')}`);
 }
 
+/**
+ * Repair node-pty 1.1.0's missing execute bit on the macOS spawn-helper.
+ *
+ * node-pty's unix backend spawns `prebuilds/<platform>-<arch>/spawn-helper`
+ * via posix_spawn before exec'ing the user's shell. The npm tarball ships
+ * that helper as mode 0644 (upstream packaging bug), so a fresh install uses
+ * the prebuild and every integrated-terminal open fails with the generic
+ * "posix_spawnp failed." (pty.cc hides the real EACCES errno).
+ *
+ * Only touched when the file exists, so win32 (ConPTY, no helper) and linux
+ * (no prebuilds; source build already produces 0755) are no-ops. Idempotent:
+ * mode already has an execute bit → skipped.
+ */
+function ensureSpawnHelperExecutable() {
+  const prebuildsRoot = resolve(nodePtyRoot, 'prebuilds');
+  let entries;
+  try {
+    entries = readdirSync(prebuildsRoot, { withFileTypes: true });
+  } catch {
+    return; // prebuilds/ missing (source-only layout)
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const helper = resolve(prebuildsRoot, entry.name, 'spawn-helper');
+    if (!existsSync(helper)) continue; // win32/linux have no spawn-helper
+    try {
+      const mode = statSync(helper).mode;
+      if ((mode & 0o111) === 0) {
+        chmodSync(helper, 0o755);
+        console.log(`[ensure-node-pty-electron-abi] restored execute bit on ${helper}`);
+      }
+    } catch (err) {
+      console.warn(`[ensure-node-pty-electron-abi] cannot chmod ${helper}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
 // Skip when the installed addon already loads under Electron. Probe in a child
 // process because an incompatible native binary can hard-crash the loader.
 if (probeElectronAbi({ quiet: true })) {
+  ensureSpawnHelperExecutable();
   markElectronRebuildComplete();
   process.exit(0);
 }
@@ -143,6 +187,7 @@ const result = spawnSync(process.execPath, [
 
 // Runtime probe is authoritative.
 if (probeElectronAbi({ quiet: true })) {
+  ensureSpawnHelperExecutable();
   markElectronRebuildComplete();
   process.exit(0);
 }

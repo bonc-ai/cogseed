@@ -569,7 +569,7 @@
   .ws-task-page { grid-template-columns: minmax(480px,1fr) 290px; }
 }
 
-/* COGSEED-18：本地文件夹选择行——与表单输入控件同构（40px 高、同款边框圆角），
+/* 本地文件夹导入：本地文件夹选择行——与表单输入控件同构（40px 高、同款边框圆角），
    融合进 ws-form-grid，避免割裂感。 */
 .ws-import-picker {
   display: flex; align-items: center; gap: 8px; width: 100%; height: 40px;
