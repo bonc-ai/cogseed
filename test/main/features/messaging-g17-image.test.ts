@@ -389,3 +389,41 @@ describe('G-17 inbound image projection dispatch', () => {
     await manager.stopForUser('user-1');
   });
 });
+
+// ── G-17：飞书二进制响应多形态兼容 ───────────────────────────────────
+
+describe('G-17 feishu binary response shapes', () => {
+  it('extracts bytes from stream / Buffer / base64 / wrapped shapes', async () => {
+    const { Readable } = await import('node:stream');
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(16, 7)]);
+    const cases: Array<[string, unknown]> = [
+      ['stream', Readable.from([png])],
+      ['buffer', png],
+      ['base64', png.toString('base64')],
+      ['axios {data:buffer}', { data: png }],
+      ['axios {data:stream}', { data: Readable.from([png]) }],
+      ['double-wrapped {data:{data:buffer}}', { data: { data: png } }],
+      ['double-wrapped {data:{data:stream}}', { data: { data: Readable.from([png]) } }],
+    ];
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    for (const [label, shape] of cases) {
+      const adapter = Object.create(FeishuAdapter.prototype) as FeishuAdapter;
+      (adapter as unknown as { client: unknown }).client = {
+        im: { v1: { messageResource: { get: async () => shape } } },
+      };
+      const bytes = await adapter.downloadMessageImage('om_test123', 'img_v2_shape');
+      expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      expect(label).toBeTruthy();
+    }
+  });
+
+  it('rejects empty and unusable shapes with a diagnosable message', async () => {
+    const { FeishuAdapter } = await import('../../../src/main/features/messaging/adapters');
+    const adapter = Object.create(FeishuAdapter.prototype) as FeishuAdapter;
+    (adapter as unknown as { client: unknown }).client = {
+      im: { v1: { messageResource: { get: async () => ({ code: 0, msg: 'ok' }) } } },
+    };
+    await expect(adapter.downloadMessageImage('om_test123', 'img_v2_empty'))
+      .rejects.toThrow(/no bytes in response \(shape:/);
+  });
+});
