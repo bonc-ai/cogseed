@@ -397,6 +397,7 @@ describe('G-17 feishu binary response shapes', () => {
     const { Readable } = await import('node:stream');
     const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(16, 7)]);
     const cases: Array<[string, unknown]> = [
+      ['sdk file wrapper {getReadableStream,writeFile,headers}', { getReadableStream: () => Readable.from([png]), writeFile: async () => {}, headers: {} }],
       ['stream', Readable.from([png])],
       ['buffer', png],
       ['base64', png.toString('base64')],
