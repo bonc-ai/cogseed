@@ -8,7 +8,8 @@
 'use strict';
 
 const http = require('http');
-const { spawn } = require('child_process');
+const https = require('https');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -72,11 +73,13 @@ const cogseedServer = http.createServer((req, res) => {
   res.end();
 });
 
-function request(port, method, pathName, body, token) {
+function request(port, method, pathName, body, token, tlsCaPath) {
   return new Promise((resolve, reject) => {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = 'Bearer ' + token;
-    const req = http.request({ host: '127.0.0.1', port, method, path: pathName, headers }, (res) => {
+    const options = { host: '127.0.0.1', port, method, path: pathName, headers };
+    if (tlsCaPath) options.ca = fs.readFileSync(tlsCaPath);
+    const req = (tlsCaPath ? https : http).request(options, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => resolve({ status: res.statusCode, body: data }));
@@ -93,11 +96,15 @@ function sha256(content) { return crypto.createHash('sha256').update(content).di
 
 async function main() {
   await new Promise((resolve) => cogseedServer.listen(COGSEED_PORT, '127.0.0.1', resolve));
+  // workspace allowlist（§9.2）：默认允许根是网关 HOME 树（会话工作区天然
+  // 合法）；测试要把 working_dir 指到 tmp 下的目录，须显式声明额外允许根。
+  const tmpReal = fs.realpathSync(tmp);
   const env = {
     ...process.env,
     P3394_GATEWAY_PORT: String(GATEWAY_PORT),
     P3394_GATEWAY_TOKEN: GATEWAY_TOKEN,
     P3394_GATEWAY_HOME: path.join(tmp, 'home'),
+    P3394_GATEWAY_ALLOWED_ROOTS: tmpReal,
     COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT,
     COGSEED_TOKEN,
     P3394_AGENT_CLI: 'node',
@@ -113,7 +120,8 @@ async function main() {
   await sleep(900);
 
   const failures = [];
-  const check = (name, cond) => { if (!cond) failures.push(name); else console.log('  ✓ ' + name); };
+  let passed = 0;
+  const check = (name, cond) => { if (!cond) failures.push(name); else { passed += 1; console.log('  ✓ ' + name); } };
 
   console.log('p3394-gateway smoke:');
 
@@ -149,6 +157,14 @@ async function main() {
   check('回复内容来自 Agent 模型', received.some((e) => (e.payload.parts[0].text || '').includes('FAKE-REPLY: hello')));
   check('extensions.working_dir 作为 CLI cwd 生效', received.some((e) => (e.payload.parts[0].text || '').includes('CWD:' + requestedRealCwd)));
   check('回复 recipient 为原 sender', received.some((e) => e.recipients[0].agent_id === 'cogseed'));
+
+  // workspace allowlist（§9.2）负向：working_dir 指向允许根（网关 HOME 树 +
+  // P3394_GATEWAY_ALLOWED_ROOTS）之外的目录时必须拒绝并回显式错误信，
+  // 不能静默丢弃（对端会干等超时）也不能放行（任意 cwd 委托执行）。
+  const denyEnv = { message_id: 'm9', session_id: 's9', task_id: 't9', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'deny me' }] }, idempotency_key: 'idem9', extensions: { working_dir: os.homedir(), reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: denyEnv }, GATEWAY_TOKEN);
+  await sleep(800);
+  check('workspace allowlist：允许根外的 working_dir 被拒绝（显式错误信）', received.some((e) => e.session_id === 's9' && (e.payload.parts[0].text || '').includes('working_dir_outside_allowed_roots')));
 
   // 会话连续性：同一 session 的第二条消息带上历史 transcript
   const env2 = { message_id: 'm5', session_id: 's1', task_id: 't5', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second turn' }] }, idempotency_key: 'idem5' };
@@ -513,7 +529,7 @@ async function main() {
   const shimHome = path.join(tmp, 'shim-home');
   const shimRequestedCwd = path.join(tmp, 'shim-requested-cwd');
   fs.mkdirSync(shimRequestedCwd, { recursive: true });
-  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
+  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, P3394_GATEWAY_ALLOWED_ROOTS: tmpReal, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0', P3394_SSCLI_SHIM: '1' };
   const shimGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let shimGwLog = '';
   shimGw.stdout.on('data', (c) => { shimGwLog += c; });
@@ -533,6 +549,18 @@ async function main() {
   check('shim：stderr 工具日志转 progress 帧（过程栏可见）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('[tools] Reading file')));
   check('shim：stderr 噪声行被过滤（告警/调试不进过程栏）', !shimProgress.some((e) => (e.payload.parts[0].text || '').includes('node:internal')));
   check('shim：冷启动提示进 progress 帧（spawn 即告知）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('正在启动')));
+  // 标准 §9.2 事件帧（status/artifact）双发超集：status working 于 deliver
+  // 开始、status 终态于 completed/failed 前、artifact 于 completed 前携带
+  // transcript 的内容寻址 uri。断言透传到 CogSeed 的 stream_event 原样保留，
+  // 且均为非终态流帧（终态仍只有 message 回复）。
+  const shimStatusEvents = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'status');
+  check('shim：标准 status working 帧透传（§9.2）', shimStatusEvents.some((e) => (e.payload.parts[0].text || '').includes('working')));
+  check('shim：标准 status 终态帧透传（completed）', shimStatusEvents.some((e) => (e.payload.parts[0].text || '').includes('completed')));
+  const shimTranscriptPath = path.join(shimHome, 'shim-sessions', 'shim-s1', 'transcript.jsonl');
+  const shimArtifacts = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'artifact');
+  const shimExpectedUri = 'p3394-object:sha256:' + sha256(fs.readFileSync(shimTranscriptPath));
+  check('shim：completed 附 transcript artifact 帧（p3394-object:sha256 uri）', shimArtifacts.some((e) => (e.payload.parts[0].text || '').includes(shimExpectedUri)));
+  check('shim：artifact 帧 stream_data 携带 uri（结构化透传）', shimArtifacts.some((e) => e.payload.metadata.stream_data && e.payload.metadata.stream_data.uri === shimExpectedUri));
   const shimMsg2 = { message_id: 'shm2', session_id: 'shim-s1', task_id: 'shtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second shim turn' }] }, idempotency_key: 'shim-idem2' };
   await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg2 }, GATEWAY_TOKEN);
   const shimDone2 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('second shim turn'));
@@ -572,6 +600,60 @@ async function main() {
   const shimOcProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
   check('shim openclaw：冷启动提示仍生效', shimOcProgress.includes('正在启动'));
   shimOcGw.kill('SIGTERM');
+
+  // ── shim workspace 防御（§9.2）：绕过网关直接给 shim 喂 open_session，
+  // workspace 指向 HOME 树外且不在 --allow-root 内 → deliver 必须被拒
+  // （failed 帧 p3394_workspace_not_allowed），CLI 不被执行。 ──
+  const shimGuardCli = path.join(tmp, 'fake-shim-guard-agent.cjs');
+  fs.writeFileSync(shimGuardCli, [
+    "'use strict';",
+    "require('fs').writeFileSync(process.env.SHIM_GUARD_FLAG, 'executed');",
+    "process.stdout.write('should-not-run');",
+  ].join('\n'));
+  const shimGuardHome = path.join(tmp, 'shim-guard-home');
+  const shimGuardFlag = path.join(tmp, 'shim-guard-flag.txt');
+  const shimGuard = spawn('node', [path.join(__dirname, '..', 'sscli-shim.cjs'), '--exec', 'node', '--args', shimGuardCli, '--home', shimGuardHome], { env: { ...process.env, SHIM_GUARD_FLAG: shimGuardFlag }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let shimGuardOut = '';
+  shimGuard.stdout.on('data', (c) => { shimGuardOut += c; });
+  await sleep(500);
+  shimGuard.stdin.write(JSON.stringify({ op: 'hello', protocol: 'p3394-sscli/1.0', request_id: 'g1' }) + '\n');
+  shimGuard.stdin.write(JSON.stringify({ op: 'open_session', session_id: 'sg1', workspace: os.homedir(), request_id: 'g2' }) + '\n');
+  shimGuard.stdin.write(JSON.stringify({ op: 'deliver', session_id: 'sg1', request_id: 'g3', message: { payload: { parts: [{ type: 'text', text: 'sneak cwd' }] } } }) + '\n');
+  await sleep(800);
+  const shimGuardLines = shimGuardOut.split('\n').filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  check('shim 防御：HOME 树外 workspace 被拒（p3394_workspace_not_allowed）', shimGuardLines.some((o) => o.event === 'failed' && o.error === 'p3394_workspace_not_allowed'));
+  check('shim 防御：拒绝路径不执行 CLI', !fs.existsSync(shimGuardFlag));
+  check('shim 防御：拒绝前仍发标准 status 帧（working → failed）', shimGuardLines.some((o) => o.event === 'status' && o.state === 'working') && shimGuardLines.some((o) => o.event === 'status' && o.state === 'failed'));
+  shimGuard.kill('SIGTERM');
+
+  // ── 标准入口别名（Q5）：serve 子命令 + --alias/--runtime-command/
+  // --runtime-args/--channel，一条命令接入并完成一轮对话（对齐标准指南
+  // §9.2 示例形态）。fake-sscli-agent 原生讲协议 → native 直连。 ──
+  const SERVE_PORT = GATEWAY_PORT + 98;
+  const serveEnv = { ...process.env, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_HEARTBEAT_MS: '0' };
+  const serveGw = spawn('node', [
+    path.join(__dirname, '..', 'gateway.cjs'), 'serve',
+    '--alias', 'serve-agent',
+    '--runtime-command', 'node',
+    '--runtime-args', path.join(__dirname, 'fake-sscli-agent.cjs'),
+    '--home', path.join(tmp, 'serve-home'),
+    '--channel', 'p3394+http://127.0.0.1:' + SERVE_PORT,
+  ], { env: serveEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let serveGwLog = '';
+  serveGw.stdout.on('data', (c) => { serveGwLog += c; });
+  serveGw.stderr.on('data', (c) => { serveGwLog += c; });
+  await sleep(900);
+  check('serve 别名：--alias 默认走 sscli 模式', serveGwLog.includes('runtime: sscli'));
+  check('serve 别名：--channel p3394+http://host:port 提取监听地址', serveGwLog.includes('P3394 endpoint on http://127.0.0.1:' + SERVE_PORT));
+  const serveHealth = await request(SERVE_PORT, 'GET', '/p3394/health');
+  check('serve 别名：--channel 端口上可访问（身份=--alias 名）', serveHealth.status === 200 && serveHealth.body.includes('serve-agent'));
+  const serveMsg = { message_id: 'sv1', session_id: 'serve-s1', task_id: 'svtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'serve-agent' }], payload: { parts: [{ type: 'text', text: 'hello serve' }] }, idempotency_key: 'serve-idem1' };
+  await request(SERVE_PORT, 'POST', '/p3394/envelope', { envelope: serveMsg }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'serve-s1'); i += 1) await sleep(100);
+  check('serve 别名：--runtime-command/--runtime-args 完成一轮对话', received.some((e) => e.session_id === 'serve-s1' && (e.payload.parts[0].text || '').includes('SSCLI-REPLY: hello serve')));
+  const serveStatusEvents = received.filter((e) => e.kind === 'event' && e.session_id === 'serve-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'status');
+  check('serve 别名：native CLI 的 status 帧经网关透传（§9.2）', serveStatusEvents.some((e) => (e.payload.parts[0].text || '').includes('working')));
+  serveGw.kill('SIGTERM');
 
   // ── opencode 常驻（server 模式）：fake opencode server 实现 /session、
   // /session/:id/message（同步终态）与 /event（SSE）。验证：runtime 选择、
@@ -634,7 +716,7 @@ async function main() {
   // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
   const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
   fs.mkdirSync(ocSharedCwd, { recursive: true });
-  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile };
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), P3394_GATEWAY_ALLOWED_ROOTS: tmpReal, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile };
   const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let ocPersistGwLog = '';
   ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
@@ -668,6 +750,65 @@ async function main() {
   try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
   check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
   ocPersistGw.kill('SIGTERM');
+
+  // ── 网关 TLS 化：openssl 自签证书（SAN 含 127.0.0.1）→ https 假 CogSeed
+  // + 网关出站走 P3394_TLS_CA 回连 + 网关自身 P3394_GATEWAY_TLS_CERT/_KEY
+  // 以 https 监听。openssl 不可用的环境跳过本组（不视为失败）。 ──
+  const sslDir = path.join(tmp, 'tls');
+  fs.mkdirSync(sslDir, { recursive: true });
+  const tlsKeyPath = path.join(sslDir, 'key.pem');
+  const tlsCertPath = path.join(sslDir, 'cert.pem');
+  const tlsCnfPath = path.join(sslDir, 'openssl.cnf');
+  fs.writeFileSync(tlsCnfPath, [
+    '[req]', 'distinguished_name=dn', 'x509_extensions=v3', 'prompt=no',
+    '[dn]', 'CN=localhost',
+    '[v3]', 'subjectAltName=IP:127.0.0.1,DNS:localhost',
+  ].join('\n'));
+  const opensslRun = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', tlsKeyPath, '-out', tlsCertPath, '-days', '2', '-nodes', '-config', tlsCnfPath], { stdio: 'ignore' });
+  if (opensslRun.error || opensslRun.status !== 0) {
+    console.log('  (skip) openssl 不可用，跳过 TLS 用例');
+  } else {
+    const TLS_COGSEED_PORT = COGSEED_PORT + 80;
+    const tlsReceived = [];
+    const tlsServer = https.createServer({ key: fs.readFileSync(tlsKeyPath), cert: fs.readFileSync(tlsCertPath) }, (req, res) => {
+      if (req.url && req.url.startsWith('/p3394/envelope') && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          if (req.headers.authorization !== 'Bearer ' + COGSEED_TOKEN) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+            return;
+          }
+          try { tlsReceived.push(JSON.parse(body).envelope); } catch {}
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, message_id: 'ok' }));
+        });
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((resolve) => tlsServer.listen(TLS_COGSEED_PORT, '127.0.0.1', resolve));
+    const TLS_GW_PORT = GATEWAY_PORT + 99;
+    const tlsEnv = { ...process.env, P3394_GATEWAY_PORT: String(TLS_GW_PORT), P3394_GATEWAY_TOKEN: GATEWAY_TOKEN, P3394_GATEWAY_HOME: path.join(tmp, 'tls-home'), COGSEED_ENDPOINT: 'https://127.0.0.1:' + TLS_COGSEED_PORT, COGSEED_TOKEN, P3394_TLS_CA: tlsCertPath, P3394_GATEWAY_TLS_CERT: tlsCertPath, P3394_GATEWAY_TLS_KEY: tlsKeyPath, P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: fakeCli + ' {message}', FAKE_CLI_COUNT_FILE: countFile, P3394_HEARTBEAT_MS: '0' };
+    const tlsGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: tlsEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    let tlsGwLog = '';
+    tlsGw.stdout.on('data', (c) => { tlsGwLog += c; });
+    tlsGw.stderr.on('data', (c) => { tlsGwLog += c; });
+    await sleep(900);
+    check('TLS：网关自身 https 监听生效（P3394_GATEWAY_TLS_CERT/_KEY）', tlsGwLog.includes('P3394 endpoint on https://127.0.0.1:' + TLS_GW_PORT));
+    const tlsHealth = await request(TLS_GW_PORT, 'GET', '/p3394/health', undefined, undefined, tlsCertPath);
+    check('TLS：https 入站请求可达（自签证书 + CA 校验）', tlsHealth.status === 200);
+    check('TLS：hello 注册经 https 回连成功（P3394_TLS_CA）', tlsReceived.some((e) => e.kind === 'control' && e.payload && e.payload.metadata && e.payload.metadata.registration === true));
+    check('TLS：ADVERTISE_ENDPOINT 按监听 scheme 自报 https', tlsReceived.some((e) => e.extensions && Array.isArray(e.extensions.endpoints) && e.extensions.endpoints[0] === 'https://127.0.0.1:' + TLS_GW_PORT));
+    const tlsMsg = { message_id: 'tm1', session_id: 'tls-s1', task_id: 'ttk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'tls hello' }] }, idempotency_key: 'tls-idem1', extensions: { reply_endpoint: 'https://127.0.0.1:' + TLS_COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+    await request(TLS_GW_PORT, 'POST', '/p3394/envelope', { envelope: tlsMsg }, GATEWAY_TOKEN, tlsCertPath);
+    for (let i = 0; i < 50 && !tlsReceived.some((e) => e.session_id === 'tls-s1'); i += 1) await sleep(100);
+    check('TLS：一轮对话回复经 https 回发成功', tlsReceived.some((e) => e.session_id === 'tls-s1' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: tls hello')));
+    tlsGw.kill('SIGTERM');
+    tlsServer.close();
+  }
 
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
@@ -865,7 +1006,7 @@ async function main() {
     try { console.error('=== psArgvs: ' + fs.readFileSync(persistentLog, 'utf8')); } catch {}
     process.exit(1);
   }
-  console.log('ALL PASS');
+  console.log('ALL PASS (' + passed + ' checks)');
   process.exit(0);
 }
 

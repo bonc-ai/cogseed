@@ -76,9 +76,21 @@ node gateway.cjs --agent my-agent --exec my-agent --args '{message} --headless'
 #    （原生讲 p3394-sscli 协议的智能体加 --native 直连，不经垫片）
 ```
 
-命令行参数：`--agent <名>  --exec <命令>  --args '<参数模板>'  --port <端口>
---home <目录>  --native`（`node gateway.cjs --help` 有完整说明；参数优先于
-同名环境变量）。CogSeed 托管侧同样默认全量 sscli：任意自接 CLI 经垫片接入，
+命令行参数：`[serve] --agent/--alias <名>  --exec/--runtime-command <命令>
+--args/--runtime-args '<参数模板>'  --port <端口>  --home <目录>
+--channel <p3394+https://host:port|host:port>  --native`（`node gateway.cjs
+--help` 有完整说明；参数优先于同名环境变量）。`serve` 是标准入口子命令
+（对齐标准指南 §9.2 示例形态，与直接启动等价）；`--alias`/`--runtime-command`/
+`--runtime-args` 是 `--agent`/`--exec`/`--args` 的标准别名；`--channel` 声明
+监听通道并提取绑定地址与端口。标准形态一条命令：
+
+```bash
+p3394 serve --alias @raymond --home ./home \
+     --runtime-command "cli --p3394-jsonl" --channel p3394+https://0.0.0.0:3394
+# （非回环绑定须同时配置 P3394_GATEWAY_TOKEN，否则启动即拒绝）
+```
+
+CogSeed 托管侧同样默认全量 sscli：任意自接 CLI 经垫片接入，
 个别 CLI 需回退 oneshot 时设 `COGSEED_P3394_SSCLI_EXCLUDE=名字1,名字2`。
 
 ### 环境变量方式（等价）
@@ -150,6 +162,24 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
   会话状态落 `<home>/shim-sessions/`）。P3394 标准推广、CLI 原生实现协议
   后撤垫片换直连即可，登记与上层零改动。`COGSEED_P3394_SSCLI_SHIM=0`
   可单独撤垫片回退 oneshot（claude 不受影响）。
+- **标准事件帧（§9.2 超集兼容）**：sscli 通道在现有 delta/progress/
+  completed/failed 帧之外补发标准帧——`status`（deliver 开始 `state:working`、
+  终态前 `state:completed/failed`）与 `artifact`（completed 前携带会话
+  transcript 的内容寻址 `uri: p3394-object:sha256:<digest>`）。网关把它们
+  作为非终态流帧转发给 CogSeed（`stream_event: status|artifact`，
+  `stream_data` 携带 `state`/`uri`），结算仍只有 completed/failed。
+- **workspace allowlist（§9.2）**：信封 `extensions.working_dir` 声明的 CLI
+  工作目录必须在允许根内——默认允许根为网关会话根（`<home>` 树，会话
+  工作区天然合法），`P3394_GATEWAY_ALLOWED_ROOTS` 可声明额外扩展根（路径
+  分隔符分隔的多根）；sscli-shim 侧对 open_session workspace 做同款防御
+  复检（HOME 树 + 网关转发的允许根，越界回 `p3394_workspace_not_allowed`）。
+  越界的 working_dir 会被拒绝并回显式 `[p3394_gateway_error]
+  working_dir_outside_allowed_roots` 错误信。
+- **TLS**：远程 Channel 生产形态强制 TLS 的两侧——出站按 `COGSEED_ENDPOINT`
+  的 scheme（`https://`）自动走 TLS，可选 `P3394_TLS_CA`（自定义受信 CA）与
+  `P3394_TLS_CERT`/`P3394_TLS_KEY`（mTLS 客户端证书对）；网关自身监听配
+  `P3394_GATEWAY_TLS_CERT`/`P3394_GATEWAY_TLS_KEY` 后以 https 服务并把
+  `ADVERTISE_ENDPOINT` 自报为 `https://`。未配置时保持 http 回环默认形态。
 
 两种模式通用：
 
@@ -178,10 +208,16 @@ P3394_AGENT_CLI=my-agent P3394_AGENT_CLI_ARGS='ask {message}' p3394-gateway
 | `P3394_GATEWAY_HOST` | 127.0.0.1 | 监听地址（跨机器填局域网 IP；默认回环，安全优先） |
 | `P3394_HEARTBEAT_MS` | 60000 | 心跳间隔（向 CogSeed 报活刷新在线状态；0 关闭） |
 | `P3394_GATEWAY_HOME` | ~/.p3394-gateway | 会话目录/transcript/工作区根目录 |
-| `P3394_ADVERTISE_ENDPOINT` | http://127.0.0.1:9000 | 启动时向 CogSeed 自报的本端地址（跨机器填对端可达的 IP） |
+| `P3394_GATEWAY_ALLOWED_ROOTS` | 空 | workspace allowlist 额外允许根（§9.2）：`extensions.working_dir` 必须落在网关会话根（默认）或这些根内（路径分隔符分隔多根，realpath 比较）；空 = 仅会话根 |
+| `P3394_ADVERTISE_ENDPOINT` | http://127.0.0.1:9000 | 启动时向 CogSeed 自报的本端地址（跨机器填对端可达的 IP；网关开 TLS 时默认拼 https://） |
 | `P3394_GATEWAY_TOKEN` | 空 | 本端入站鉴权（空 = 不鉴权，仅回环监听） |
-| `COGSEED_ENDPOINT` | http://127.0.0.1:8444 | 回复发回的 CogSeed 端点 |
+| `P3394_GATEWAY_TLS_CERT` | 空 | 网关自身 TLS 监听的证书 PEM 路径（与 _KEY 成对配置后以 https 服务） |
+| `P3394_GATEWAY_TLS_KEY` | 空 | 网关自身 TLS 监听的私钥 PEM 路径（与 _CERT 成对配置后以 https 服务） |
+| `COGSEED_ENDPOINT` | http://127.0.0.1:8444 | 回复发回的 CogSeed 端点（scheme 为 https:// 时出站自动走 TLS） |
 | `COGSEED_TOKEN` | 空 | 回发 CogSeed 的 Bearer 令牌 |
+| `P3394_TLS_CA` | 空 | 出站 https 的自定义受信 CA（PEM 路径；配置后严格校验服务端证书，自签/私有 CA 场景） |
+| `P3394_TLS_CERT` | 空 | 出站 https 的 mTLS 客户端证书 PEM 路径（与 _KEY 成对生效） |
+| `P3394_TLS_KEY` | 空 | 出站 https 的 mTLS 客户端私钥 PEM 路径（与 _CERT 成对生效） |
 | `P3394_AGENT` | hermes | 预设名：hermes/claude/codex/opencode/gemini/aider |
 | `P3394_AGENT_ID` | 随预设 | 本节点 agent_id（写进 manifest） |
 | `P3394_AGENT_ALIAS` | 空 | 自报显示名（写进 sender.alias 与 manifest；CogSeed 对话里显示这个名字） |

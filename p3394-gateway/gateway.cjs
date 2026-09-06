@@ -61,6 +61,7 @@
 'use strict';
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -68,33 +69,54 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 // ── 命令行参数（G-35 统一包快速接入）：环境变量之外的便捷入口——
-//   node gateway.cjs --agent <名> [--exec <命令>] [--args '<参数模板>']
-//                   [--port <端口>] [--home <目录>] [--native]
+//   node gateway.cjs [serve] --agent <名> [--exec <命令>] [--args '<参数模板>']
+//                    [--port <端口>] [--home <目录>] [--native]
+//                    [--channel p3394+https://host:port]
 //   参数优先于环境变量；--native 即 P3394_SSCLI_NATIVE=1（CLI 原生讲
 //   p3394-sscli 协议时直连，不经垫片）。这让"任意智能体装包即用"成为
 //   一条命令的事，不再要求手配 env。
+//   标准入口别名（Q5，对齐标准指南示例形态）：
+//     serve               显式子命令（可省略）：常驻服务语义，与直接启动等价
+//     --alias <名>        等价 --agent
+//     --runtime-command   等价 --exec
+//     --runtime-args      等价 --args
+//     --channel <url>     监听通道：p3394+https://host:port 或裸 host:port
+//                         （提取 host/port 设 P3394_GATEWAY_HOST/PORT）
 function _parseArgv() {
   const out = {};
   const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i += 1) {
+  const start = argv[0] === 'serve' ? 1 : 0;
+  if (start === 1) out.serve = '1';
+  for (let i = start; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--agent') out.agent = argv[i + 1];
-    else if (a === '--exec') out.exec = argv[i + 1];
-    else if (a === '--args') out.args = argv[i + 1];
+    if (a === '--agent' || a === '--alias') out.agent = argv[i + 1];
+    else if (a === '--exec' || a === '--runtime-command') out.exec = argv[i + 1];
+    else if (a === '--args' || a === '--runtime-args') out.args = argv[i + 1];
     else if (a === '--port') out.port = argv[i + 1];
     else if (a === '--home') out.home = argv[i + 1];
     else if (a === '--native') out.native = '1';
+    else if (a === '--channel') out.channel = argv[i + 1];
     else if (a === '--help' || a === '-h') {
       console.log([
         'p3394-gateway — 任意智能体的 P3394 接入包（装包即成一个 P3394 节点）',
         '',
-        '用法：node gateway.cjs --agent <智能体名> [选项]',
-        '  --agent <名>    智能体身份名（内置预设名用其模板；任意名=同名命令）',
-        '  --exec <命令>   实际执行的命令（默认：预设命令或与 --agent 同名）',
-        '  --args <模板>   参数模板，{message} 为消息占位（默认预设模板或 {message}）',
-        '  --port <端口>   本端监听端口（默认 9000；也可 P3394_GATEWAY_PORT）',
-        '  --home <目录>   会话/工作区根（默认 ~/.p3394-gateway）',
-        '  --native        该智能体原生讲 p3394-sscli/1.0 协议，直连不经垫片',
+        '用法：node gateway.cjs [serve] --agent <智能体名> [选项]',
+        '  serve                        显式子命令（可省略）：常驻服务，与直接启动等价',
+        '  --agent <名> / --alias <名>  智能体身份名（内置预设名用其模板；任意名=同名命令）',
+        '  --exec <命令> / --runtime-command <命令>',
+        '                               实际执行的命令（默认：预设命令或与 --agent 同名）',
+        '  --args <模板> / --runtime-args <模板>',
+        '                               参数模板，{message} 为消息占位（默认预设模板或 {message}）',
+        '  --port <端口>                本端监听端口（默认 9000；也可 P3394_GATEWAY_PORT）',
+        '  --home <目录>                会话/工作区根（默认 ~/.p3394-gateway）',
+        '  --channel <url>              监听通道：p3394+https://host:port 或裸 host:port',
+        '                               （提取 host/port 作为本端绑定地址与端口）',
+        '  --native                     该智能体原生讲 p3394-sscli/1.0 协议，直连不经垫片',
+        '',
+        '示例（标准指南 §9.2 形态）：',
+        '  p3394 serve --alias @raymond --home ./home \\',
+        '       --runtime-command "cli --p3394-jsonl" --channel p3394+https://0.0.0.0:3394',
+        '  （非回环绑定须同时配置 P3394_GATEWAY_TOKEN，否则启动即拒绝）',
         '',
         '运行模式：默认经 sscli-shim 通用垫片走 p3394-sscli/1.0（任意一次性',
         '命令行智能体零改造接入）；原生协议智能体加 --native。',
@@ -118,6 +140,23 @@ if (_ARGV.args) process.env.P3394_AGENT_CLI_ARGS = _ARGV.args;
 if (_ARGV.port) process.env.P3394_GATEWAY_PORT = _ARGV.port;
 if (_ARGV.home) process.env.P3394_GATEWAY_HOME = _ARGV.home;
 if (_ARGV.native) process.env.P3394_SSCLI_NATIVE = _ARGV.native;
+// --channel：解析 p3394+https://host:port / p3394+http://host:port / 裸
+// host:port，提取绑定地址与端口（写入对应 env，与 --port/--host 同通道）。
+if (_ARGV.channel) {
+  let rest = String(_ARGV.channel).trim();
+  if (rest.toLowerCase().startsWith('p3394+')) rest = rest.slice('p3394+'.length);
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(rest)) rest = 'http://' + rest; // 裸 host:port
+  try {
+    const channelUrl = new URL(rest);
+    if (channelUrl.hostname) _ARGV.channelHost = channelUrl.hostname.replace(/^\[|\]$/g, '');
+    if (channelUrl.port) _ARGV.channelPort = channelUrl.port;
+  } catch {
+    console.error('[p3394-gateway] 无法解析 --channel ' + _ARGV.channel + '（期待 p3394+https://host:port 或 host:port）');
+    process.exit(2);
+  }
+}
+if (_ARGV.channelHost) process.env.P3394_GATEWAY_HOST = _ARGV.channelHost;
+if (_ARGV.channelPort) process.env.P3394_GATEWAY_PORT = _ARGV.channelPort;
 
 const PORT = Number(process.env.P3394_GATEWAY_PORT || 9000);
 // 跨机器：可绑定局域网地址（默认回环，安全优先）。
@@ -127,7 +166,14 @@ const COGSEED_ENDPOINT = (process.env.COGSEED_ENDPOINT || 'http://127.0.0.1:8444
 const COGSEED_TOKEN = (process.env.COGSEED_TOKEN || '').trim();
 const GATEWAY_HOME = (process.env.P3394_GATEWAY_HOME || path.join(os.homedir(), '.p3394-gateway')).trim();
 const isLoopbackHost = GATEWAY_HOST === '127.0.0.1' || GATEWAY_HOST === 'localhost' || GATEWAY_HOST === '::1';
-const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || 'http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
+// 入站 TLS（网关自身 server）：远程 Channel 生产形态强制 TLS 的本端侧。
+// 两个 PEM 路径都配置时以 https.createServer 监听，并按同 scheme 自报
+// ADVERTISE_ENDPOINT；未配置保持 http 现状（本地回环默认形态）。
+const GATEWAY_TLS_CERT_PATH = (process.env.P3394_GATEWAY_TLS_CERT || '').trim();
+const GATEWAY_TLS_KEY_PATH = (process.env.P3394_GATEWAY_TLS_KEY || '').trim();
+const GATEWAY_TLS_ENABLED = Boolean(GATEWAY_TLS_CERT_PATH && GATEWAY_TLS_KEY_PATH);
+const GATEWAY_SCHEME = GATEWAY_TLS_ENABLED ? 'https' : 'http';
+const ADVERTISE_ENDPOINT = (process.env.P3394_ADVERTISE_ENDPOINT || GATEWAY_SCHEME + '://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT).replace(/\/$/, '');
 // 心跳：定期向 CogSeed 报告在线（默认 60s；0 关闭）。
 const HEARTBEAT_MS = Number(process.env.P3394_HEARTBEAT_MS ?? 60 * 1000);
 // V-04 反向入口：P3394_SEND_TASK 非空时，启动后向 CogSeed 发起一次任务，
@@ -161,6 +207,50 @@ const STREAM_TOTAL_CAP_CHARS = 512 * 1024;
 // 请求超时：对端不响应时 socket 必须被销毁（触发 error → 现有重试/告警路径），
 // 不能无限挂起泄漏连接。
 const OUTBOUND_HTTP_TIMEOUT_MS = 15 * 1000;
+
+// ── 出站 TLS（P3394_TLS_*）：远程 Channel 强制 TLS 的对端侧。 ──
+//   P3394_TLS_CA    自定义受信 CA（PEM 文件路径）——配置后 https 出站
+//                   rejectUnauthorized:true 并以此 CA 校验服务端证书（自签/
+//                   私有 CA 场景）；未配置走系统默认 CA。
+//   P3394_TLS_CERT / P3394_TLS_KEY  mTLS 客户端证书对（PEM 文件路径，成对
+//                   配置才生效）。
+// 各出站调用点经 httpRequestFor() 按 URL scheme 选 http/https 模块，错误
+// 处理语义（重试/吞错/resolve null）保持在各调用点不变。
+let _outboundTlsOptionsCache = null;
+function outboundTlsOptions() {
+  if (_outboundTlsOptionsCache) return _outboundTlsOptionsCache;
+  const opts = {};
+  const caPath = (process.env.P3394_TLS_CA || '').trim();
+  const certPath = (process.env.P3394_TLS_CERT || '').trim();
+  const keyPath = (process.env.P3394_TLS_KEY || '').trim();
+  try {
+    if (caPath) {
+      opts.ca = fs.readFileSync(caPath);
+      opts.rejectUnauthorized = true;
+    }
+    if (certPath && keyPath) {
+      opts.cert = fs.readFileSync(certPath);
+      opts.key = fs.readFileSync(keyPath);
+    }
+  } catch (error) {
+    console.error('[p3394-gateway] 读取 TLS 材料（P3394_TLS_*）失败: ' + (error && error.message ? error.message : String(error)));
+  }
+  _outboundTlsOptionsCache = opts;
+  return opts;
+}
+function isHttpsTarget(target) {
+  if (target && typeof target === 'object' && target.protocol) return String(target.protocol).toLowerCase() === 'https:';
+  return String(target || '').toLowerCase().startsWith('https://');
+}
+/** 出站请求统一入口：按目标 URL 的 scheme 选 http/https 模块；https 时并入
+ *  P3394_TLS_CA/CERT/KEY 客户端材料。签名与 http.request 兼容（URL 字符串/
+ *  URL 对象 + options + callback）。 */
+function httpRequestFor(target, options, callback) {
+  if (!isHttpsTarget(target)) return http.request(target, options, callback);
+  const tls = outboundTlsOptions();
+  const merged = Object.keys(tls).length ? Object.assign({}, options || {}, tls) : options;
+  return https.request(target, merged, callback);
+}
 // H-03 fail-closed：绑定非回环接口时必须在启动前配置入站鉴权令牌，
 // 否则任意内网主机都能无密码调用本网关（命令/数据面全暴露）。
 if (!isLoopbackHost && !AUTH_TOKEN) {
@@ -229,24 +319,17 @@ const replyWaiters = new Map(); // message_id → 处理回信的函数
 //   同样的模板即可获得模型控制。
 // inspect：模型枚举通道声明（args+parser；无声明=unavailable 回落静态/手输）。
 const PRESETS = {
-  hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
-              // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
-              // 配置（configModels 声明式枚举，见 models-probe.cjs）。
-              // --reasoning 单次覆盖（none|minimal|low|medium|high|xhigh|
-              // max|ultra）——off 映射 none（CLI 无 "off" 词）。
-              modelArgs: '-m {model}', configModels: 'hermes',
-              effortArgs: '--reasoning {effort}', effortLevels: { off: 'none' } },
   // claude 声明 stream-json 输出（sscli 主导下的流式包装器）：-p 配合
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
   // 统一执行入口（模型/强度模板）与 G-27 resume 续聊登记并存于同表：
   // 模板字段由 /p3394/models 能力协商消费，resume 字段供降级模式续聊。
+  // hermes：-m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
+  // 配置（configModels 声明式枚举，见 models-probe.cjs）；--reasoning 单次
+  // 覆盖（none|minimal|low|medium|high|xhigh|max|ultra）——off 映射 none
+  // （CLI 无 "off" 词）。
   hermes:   { cli: 'hermes',  args: '-z {message} --cli',       id: 'hermes',
-              // -m/--model 单次覆盖（--help 实测）；清单+当前模型读 CLI 自身
-              // 配置（configModels 声明式枚举，见 models-probe.cjs）。
-              // --reasoning 单次覆盖（none|minimal|low|medium|high|xhigh/
-              // max|ultra）——off 映射 none（CLI 无 "off" 词）。
               modelArgs: '-m {model}', configModels: 'hermes',
               effortArgs: '--reasoning {effort}', effortLevels: { off: 'none' } },
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
@@ -556,6 +639,34 @@ function configuredWorkingDirRoots() {
     });
 }
 
+/** workspace allowlist（标准 §9.2 九项必备之一）：允许根 = 网关会话根
+ * （默认，天然合法——<GATEWAY_HOME> 树涵盖 sessionDir 的父目录
+ * <GATEWAY_HOME>/sessions 与 sscli-shim 的 --home）∪
+ * P3394_GATEWAY_ALLOWED_ROOTS 声明的额外扩展根（realpath 后比较）。
+ * 未声明 working_dir 时 fallback 的 sessionDir 永远在默认根内。 */
+function gatewayAllowedRoots() {
+  const roots = [];
+  for (const candidate of [GATEWAY_HOME, path.join(GATEWAY_HOME, 'sessions')]) {
+    const resolved = path.resolve(candidate);
+    try { roots.push(fs.realpathSync(resolved)); } catch { roots.push(resolved); }
+  }
+  for (const root of configuredWorkingDirRoots()) roots.push(root);
+  return roots;
+}
+
+/** 纵深防御：作为 CLI cwd / shim --home 传入的路径必须在 allowlist 内。
+ *  （spawnCli 本身不做校验——CLI 可执行文件路径不是 cwd，校验它只会误伤。） */
+function assertWorkspaceAllowed(target) {
+  if (!target) return;
+  const resolved = path.resolve(target);
+  let real = resolved;
+  try { real = fs.realpathSync(resolved); } catch { /* keep resolved */ }
+  const roots = gatewayAllowedRoots();
+  if (!roots.some((root) => pathWithinRoot(real, root))) {
+    throw new Error('p3394_workspace_not_allowed');
+  }
+}
+
 /** Resolve the requested CLI cwd without changing the gateway-owned session
  * workspace used for attachments, transcripts, and returned artifacts. */
 function resolveEnvelopeWorkingDir(envelope, fallback) {
@@ -571,8 +682,19 @@ function resolveEnvelopeWorkingDir(envelope, fallback) {
   if (!path.isAbsolute(raw.trim())) throw new Error('working_dir_must_be_absolute');
   const requested = path.resolve(raw.trim());
   if (requested === path.parse(requested).root) throw new Error('working_dir_root_forbidden');
-  const roots = configuredWorkingDirRoots();
-  if (roots.length && !roots.some((root) => pathWithinRoot(requested, root))) {
+  const roots = gatewayAllowedRoots();
+  // 快速预检也按 realpath 对齐（macOS 的 /tmp→/private/tmp 符号链接会让
+  // 未解析路径与已解析允许根永不匹配）：不存在的路径取最近存在祖先。
+  const resolveRealForCheck = (p) => {
+    let node = p;
+    while (!fs.existsSync(node)) {
+      const parent = path.dirname(node);
+      if (parent === node) break;
+      node = parent;
+    }
+    try { return fs.realpathSync(node); } catch { return path.resolve(node); }
+  };
+  if (!roots.some((root) => pathWithinRoot(resolveRealForCheck(requested), root))) {
     throw new Error('working_dir_outside_allowed_roots');
   }
   // Reject an existing symlink/junction before mkdirSync can follow it. For a
@@ -580,7 +702,7 @@ function resolveEnvelopeWorkingDir(envelope, fallback) {
   // an allowed-root boundary through a symlinked parent.
   try {
     const existingReal = fs.realpathSync(requested);
-    if (roots.length && !roots.some((root) => pathWithinRoot(existingReal, root))) {
+    if (!roots.some((root) => pathWithinRoot(existingReal, root))) {
       throw new Error('working_dir_outside_allowed_roots');
     }
   } catch (error) {
@@ -593,7 +715,7 @@ function resolveEnvelopeWorkingDir(envelope, fallback) {
     }
     let ancestorReal = ancestor;
     try { ancestorReal = fs.realpathSync(ancestor); } catch { /* checked below */ }
-    if (roots.length && !roots.some((root) => pathWithinRoot(ancestorReal, root))) {
+    if (!roots.some((root) => pathWithinRoot(ancestorReal, root))) {
       throw new Error('working_dir_outside_allowed_roots');
     }
   }
@@ -601,7 +723,7 @@ function resolveEnvelopeWorkingDir(envelope, fallback) {
   if (!fs.statSync(requested).isDirectory()) throw new Error('working_dir_not_directory');
   let realRequested;
   try { realRequested = fs.realpathSync(requested); } catch { realRequested = requested; }
-  if (roots.length && !roots.some((root) => pathWithinRoot(realRequested, root))) {
+  if (!roots.some((root) => pathWithinRoot(realRequested, root))) {
     throw new Error('working_dir_outside_allowed_roots');
   }
   return realRequested;
@@ -725,7 +847,16 @@ function fetchObjectPart(digestRef, endpoint, token) {
     try { url = new URL(endpoint.replace(/\/$/, '') + '/p3394/objects/' + digest); } catch { resolve(null); return; }
     const headers = {};
     if (token) headers.Authorization = 'Bearer ' + token;
-    const req = http.request({ hostname: url.hostname, port: url.port ? Number(url.port) : 80, path: url.pathname, method: 'GET', headers }, (res) => {
+    // 按 endpoint scheme 选 http/https（https 时并入 P3394_TLS_* 客户端材料）。
+    const useTls = url.protocol === 'https:';
+    const req = (useTls ? https : http).request({
+      hostname: url.hostname,
+      port: url.port ? Number(url.port) : (useTls ? 443 : 80),
+      path: url.pathname,
+      method: 'GET',
+      headers,
+      ...(useTls ? outboundTlsOptions() : {}),
+    }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => { resolve(res.statusCode === 200 ? Buffer.concat(chunks) : null); });
@@ -1331,6 +1462,9 @@ class CodexAppServerRuntime {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     const cwd = (opts && opts.cwd) || null;
+    // thread/start 的 cwd 参数把关（纵深防御：opts.cwd 源头已过
+    // resolveEnvelopeWorkingDir，这里防止未来调用路径绕过 allowlist）。
+    if (cwd) assertWorkspaceAllowed(cwd);
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
@@ -1470,6 +1604,16 @@ class SscliRuntime {
       } else if (parsed.event === 'progress' && typeof parsed.text === 'string') {
         // 工具过程/冷启动提示（shim stderr 识别、native CLI 自报）→ process rail。
         entry.onProgress?.(parsed.text);
+      } else if (parsed.event === 'status') {
+        // 标准 §9.2 status 帧（state: working/completed/failed）：非终态流帧，
+        // 转 progress 通道（[status] 前缀文案 + stream_event:'status' 透传），
+        // 绝不参与 pending 结算——结算仍只有 completed/failed。
+        const state = typeof parsed.state === 'string' ? parsed.state : '';
+        entry.onProgress?.('[status] ' + (state || 'unknown'), { streamEventKind: 'status', state });
+      } else if (parsed.event === 'artifact' && typeof parsed.uri === 'string') {
+        // 标准 §9.2 artifact 帧（uri: p3394-object:sha256:...）：同走 progress
+        // 通道（[artifact] 前缀 + stream_event:'artifact' 透传），非终态。
+        entry.onProgress?.('[artifact] ' + parsed.uri, { streamEventKind: 'artifact', uri: parsed.uri });
       }
       if (parsed.event === 'completed') {
         this.pending.delete(parsed.request_id);
@@ -1517,8 +1661,15 @@ class SscliRuntime {
     // （COGSEED_P3394_SSCLI_SHIM）与网关侧此开关相互独立。
     const sscliShim = String(process.env.P3394_SSCLI_SHIM || '').trim() === '1';
     if (!sscliShim || String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
+      // native 分支不传 spawn cwd：CLI 的工作目录经 open_session.workspace
+      // 下发，其值已由 resolveEnvelopeWorkingDir 过 workspace allowlist
+      // （token 校验 + 允许根 + symlink realpath）——此处无需重复把关。
       this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
     } else {
+      // shim 分支：--home 必须在允许根内（防御配置漂移/未来 --home 来源
+      // 变化），并把 P3394_GATEWAY_ALLOWED_ROOTS 转发给 shim 做同款防御
+      // 校验（shim 侧 HOME 树 + 额外允许根，见 sscli-shim.cjs）。
+      assertWorkspaceAllowed(GATEWAY_HOME);
       const resumeCfg = preset ? {
         ...(typeof preset.resumeArgs === 'string' ? { resumeArgs: preset.resumeArgs } : {}),
         ...(typeof preset.sessionIdPattern === 'string' ? { sessionIdPattern: preset.sessionIdPattern } : {}),
@@ -1530,6 +1681,7 @@ class SscliRuntime {
         '--args', CLI_ARGS,
         '--home', GATEWAY_HOME,
         '--preset', PRESET_NAME,
+        ...configuredWorkingDirRoots().flatMap((root) => ['--allow-root', root]),
         ...(Object.keys(resumeCfg).length
           ? ['--resume-config', Buffer.from(JSON.stringify(resumeCfg), 'utf8').toString('base64')]
           : []),
@@ -2148,7 +2300,7 @@ class OpencodeRuntime {
   _postJson(base, pathName, body) {
     return new Promise((resolve, reject) => {
       const data = JSON.stringify(body);
-      const req = http.request(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+      const req = httpRequestFor(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
         let buf = '';
         res.on('data', (c) => { buf += c; });
         res.on('end', () => {
@@ -2172,7 +2324,7 @@ class OpencodeRuntime {
     try {
       const msg = await new Promise((resolve, reject) => {
         const data = JSON.stringify({ parts: [{ type: 'text', text: text + note + hint }] });
-        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        const req = httpRequestFor(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
           let buf = '';
           res.on('data', (c) => { buf += c; });
           res.on('end', () => {
@@ -2268,7 +2420,7 @@ function postReply(envelope, replyText, resourceParts, turnUsage) {
   let attempt = 0;
   const deliver = () => {
     attempt += 1;
-    const req = http.request(url, { method: 'POST', headers }, (res) => {
+    const req = httpRequestFor(url, { method: 'POST', headers }, (res) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         console.log('[p3394-gateway] reply delivered ' + res.statusCode);
       } else {
@@ -2329,7 +2481,7 @@ function postStreamEvent(envelope, text, sequence, kind, structuredEvent) {
   const headers = { 'Content-Type': 'application/json' };
   if (replyToken) headers.Authorization = 'Bearer ' + replyToken;
   return new Promise((resolve) => {
-    const req = http.request(url, { method: 'POST', headers }, (res) => {
+    const req = httpRequestFor(url, { method: 'POST', headers }, (res) => {
       res.resume();
       res.on('end', () => {
         if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -2395,9 +2547,22 @@ function createStreamEmitter(envelope) {
       armFlush('delta');
     },
     // openclaw 过程日志（[skills]/[tools] 等）→ progress 帧，process rail 展示。
-    pushProgress(text) {
+    // meta（可选第二参）：带 streamEventKind 的标准事件帧（§9.2 status/
+    // artifact）——立即独立成帧且 kind 原样透传（stream_event:'status'/
+    // 'artifact'），与文本合并通道互不干扰；一律非终态、绝不结算。
+    pushProgress(text, meta) {
       if (typeof text !== 'string' || !text) return;
       if (streamedChars >= STREAM_TOTAL_CAP_CHARS) return;
+      if (meta && typeof meta === 'object' && typeof meta.streamEventKind === 'string') {
+        streamedChars += text.length;
+        sequence += 1;
+        const seq = sequence;
+        const kind = meta.streamEventKind;
+        const structured = Object.assign({}, meta);
+        delete structured.streamEventKind;
+        chain = chain.then(() => postStreamEvent(envelope, text, seq, kind, structured));
+        return;
+      }
       streamedChars += text.length;
       progressBuffer += (progressBuffer && !/\n$/.test(progressBuffer) ? '\n' : '') + text;
       armFlush('progress');
@@ -2533,7 +2698,7 @@ async function handleEnvelope(envelope) {
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
     // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
     // peerCallHint：二期 per-session 一次注入（hintMark 落盘标记，重注无害）。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line, meta) => stream.pushProgress(line, meta));
     if (peerHintThisTurn && hintMark) {
       try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
     }
@@ -2561,7 +2726,7 @@ async function handleEnvelope(envelope) {
   }
 }
 
-const server = http.createServer((req, res) => {
+const inboundHandler = (req, res) => {
   if (req.url && req.url.startsWith('/p3394/manifest')) {
     json(res, 200, { ok: true, manifest: MANIFEST });
     return;
@@ -2694,7 +2859,7 @@ const server = http.createServer((req, res) => {
       const url = new URL(COGSEED_ENDPOINT + '/p3394/envelope');
       const headers = { 'Content-Type': 'application/json' };
       if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
-      const fwdReq = http.request(url, { method: 'POST', headers }, (r) => {
+      const fwdReq = httpRequestFor(url, { method: 'POST', headers }, (r) => {
         // 读取桥的响应体：非 2xx（如 p3394_forward_invalid_target 422）必须
         // 立即失败返回，否则 replyWaiters 会空等 PEER_CALL_TIMEOUT_MS 超时。
         let resBody = '';
@@ -2782,7 +2947,16 @@ const server = http.createServer((req, res) => {
     return;
   }
   json(res, 404, { ok: false, error: 'not_found' });
-});
+};
+
+// 入站 server 按 P3394_GATEWAY_TLS_CERT/_KEY 决定 http/https（远程 Channel
+// 生产形态强制 TLS 的本端侧）；未配置保持 http（本地回环默认形态）。
+const server = GATEWAY_TLS_ENABLED
+  ? https.createServer({
+    cert: fs.readFileSync(GATEWAY_TLS_CERT_PATH),
+    key: fs.readFileSync(GATEWAY_TLS_KEY_PATH),
+  }, inboundHandler)
+  : http.createServer(inboundHandler);
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
@@ -2801,7 +2975,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 server.listen(PORT, GATEWAY_HOST, () => {
-  console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
+  console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on ' + GATEWAY_SCHEME + '://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);
   console.log('[p3394-gateway] runtime: ' + runtimeFor().name);
   console.log('[p3394-gateway] replies to ' + COGSEED_ENDPOINT + ' · preset: ' + PRESET_NAME + (PRESET_NAME === 'codex' ? ' · runtime: Codex Desktop app-server (' + CODEX_APP_SERVER + ')' : ' · CLI: ' + CLI + ' ' + CLI_ARGS));
   // codex 预热：gateway 一启动就把 app-server 拉起来（冷启动实测 ~8s，
@@ -2868,7 +3042,7 @@ function sendTaskOneShot(text, attempt = 1) {
     process.exit(1);
     return false;
   };
-  const req = http.request(url, { method: 'POST', headers }, (res) => {
+  const req = httpRequestFor(url, { method: 'POST', headers }, (res) => {
     res.resume();
     if (!(res.statusCode >= 200 && res.statusCode < 300)) {
       retry('rejected ' + res.statusCode);
@@ -2906,7 +3080,7 @@ function sendHeartbeat() {
   const url = new URL(COGSEED_ENDPOINT.replace(/\/$/, '') + '/p3394/envelope');
   const headers = { 'Content-Type': 'application/json' };
   if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
-  const req = http.request(url, { method: 'POST', headers }, (res) => { res.resume(); });
+  const req = httpRequestFor(url, { method: 'POST', headers }, (res) => { res.resume(); });
   req.setTimeout(OUTBOUND_HTTP_TIMEOUT_MS, () => req.destroy());
   req.on('error', () => { /* CogSeed 离线：下一拍重试即可 */ });
   req.end(JSON.stringify({ envelope: beat }));
@@ -2943,7 +3117,7 @@ function registerWithCogseed() {
   const url = new URL(COGSEED_ENDPOINT.replace(/\/$/, '') + '/p3394/envelope');
   const headers = { 'Content-Type': 'application/json' };
   if (COGSEED_TOKEN) headers.Authorization = 'Bearer ' + COGSEED_TOKEN;
-  const req = http.request(url, { method: 'POST', headers }, (res) => {
+  const req = httpRequestFor(url, { method: 'POST', headers }, (res) => {
     const ok = res.statusCode >= 200 && res.statusCode < 300;
     console.log('[p3394-gateway] registered with CogSeed: ' + res.statusCode + (ok ? ' (ok)' : ''));
     res.resume();
