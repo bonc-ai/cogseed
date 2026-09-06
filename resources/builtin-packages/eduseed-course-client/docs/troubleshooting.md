@@ -47,19 +47,8 @@
 3. 已知：任务超 60s 会回源飞书权威状态，稍等即可。
 
 ### 插件版本与静默自动更新（v0.2.0 起）
-- **机制**：每次执行课程命令后，后台限流检查平台版本公告栏（6 小时一次）；发现新版本自动静默升级（优先 cogseed-pkg update，含安全扫描），全程不打断使用。
-- **关闭自动更新**：环境变量 `EDUSEED_PLUGIN_AUTOUPDATE=0`。
+- **机制**：自动更新默认关闭（安全审查 E-P2c：防无签名静默更新）。显式设置环境变量 `EDUSEED_PLUGIN_AUTOUPDATE=1` 后，每次执行课程命令才后台限流检查平台版本公告栏（6 小时一次）；发现新版本自动静默升级（优先 cogseed-pkg update，含安全扫描），全程不打断使用。
+- **开启自动更新**：环境变量 `EDUSEED_PLUGIN_AUTOUPDATE=1`。
 - **手动立即升级**：`随 CogSeed 发版自动升级（内置版），无需手动操作。
 - **升级失败怎么看**：状态文件 `~/.eduseed/plugin-update-state.json`（lastErrorAt / errorCount；连续失败 3 次自动退避 24 小时）。
 - **v0.1.x 老版本升级失败**：老安装没有持久化 token，手动升级前先跑一次新 install.sh 重新安装（会配置自动更新凭证）。
-
-## 运维工具速查（v0.4.1 新增）
-
-| 工具 | 用途 | 位置 |
-|---|---|---|
-| 健康告警 | 平台挂了自动发飞书群 | `nseap-platform/scripts/health-alert.mjs`（常驻，见脚本头部用法）|
-| 回滚手册 | 5 分钟回滚步骤 | `nseap-platform/deploy/rollback-runbook.md` |
-| 并发压测 | 上线前容量验证 | `nseap-platform/scripts/load-test.mjs`（只读+未授权门路径，零数据污染）|
-| 部署自检 | 上线后逐项核验 | `nseap-platform/scripts/deploy-check.sh` |
-
-> 运维联系人：平台运维值班人。线上服务异常先看健康告警群消息，按回滚手册处理。
