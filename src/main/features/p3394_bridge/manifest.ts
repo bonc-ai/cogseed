@@ -1,4 +1,4 @@
-import type { Agent, AgentRuntime } from '../agents';
+import type { Agent, AgentRuntime, LegacyCliAgentRuntimeInput } from '../agents';
 import { buildP3394CapabilityProfile, validateP3394CapabilityProfile, type P3394CapabilityProfile } from './capability-profile';
 import { normalizeP3394AgentIdentity, validateP3394AgentIdentity, validateIdentityRuntimeBoundary, type P3394AgentIdentity } from './identity';
 
@@ -92,16 +92,56 @@ function fail(
   return { ok: false, error: { reason, field, message } };
 }
 
-function normalizeRuntime(runtime: AgentRuntime | undefined): AgentRuntime {
-  return runtime?.kind === 'cli'
-    ? {
-        kind: 'cli',
-        cli: runtime.cli,
-        ...(runtime.model ? { model: runtime.model } : {}),
-        ...(runtime.custom_args?.length ? { custom_args: [...runtime.custom_args] } : {}),
-        ...(runtime.cli_provider_id ? { cli_provider_id: runtime.cli_provider_id } : {}),
-      }
-    : { kind: 'in_process' };
+/**
+ * §17.1 Secret Redaction：manifest 是会被协商交换/落盘的共享工件，
+ * runtime.custom_args 不得携带 secret 形态值。两种形态都拒绝（fail-closed）：
+ *  - 桥 token 形态 `p3394-<slug>-<slug>`（对齐 secrets.ts BRIDGE_TOKEN_PATTERN）；
+ *  - 高熵 blob：32+ 连续 [A-Za-z0-9]（无分隔符的长随机串，真实 CLI 参数
+ *    几乎不会长这样）。
+ */
+const SECRET_SHAPED_CUSTOM_ARG_PATTERNS: RegExp[] = [
+  /p3394-[A-Za-z0-9]{8,}-[A-Za-z0-9]{8,}/,
+  /[A-Za-z0-9]{32,}/,
+];
+
+function findSecretShapedCustomArg(customArgs: string[]): { index: number } | null {
+  for (let index = 0; index < customArgs.length; index += 1) {
+    for (const pattern of SECRET_SHAPED_CUSTOM_ARG_PATTERNS) {
+      if (pattern.test(customArgs[index])) return { index };
+    }
+  }
+  return null;
+}
+
+function rejectSecretShapedCustomArg(
+  customArgs: string[] | undefined,
+): { ok: true } | { ok: false; error: P3394BridgeManifestValidationError } {
+  if (!customArgs?.length) return { ok: true };
+  const secret = findSecretShapedCustomArg(customArgs);
+  if (secret) {
+    return fail(
+      'invalid_runtime',
+      `runtime.custom_args[${secret.index}]`,
+      'P3394 bridge manifest runtime.custom_args must not carry secret-shaped values (bridge tokens or high-entropy blobs); pass credentials through the secrets channel instead.',
+    );
+  }
+  return { ok: true };
+}
+
+function normalizeRuntime(runtime: AgentRuntime | LegacyCliAgentRuntimeInput | undefined): AgentRuntime {
+  // legacy `cli` 原始输入（磁盘旧数据/调用方直造）：字段照旧透传，输出归一为
+  // p3394-gateway（与 agents._normalizeRuntime「读回即网关」语义一致）。
+  // 其余输入（含 p3394-gateway）保持原有 else-臂行为：折叠为 in_process。
+  if (runtime?.kind === 'cli') {
+    return {
+      kind: 'p3394-gateway',
+      cli: runtime.cli,
+      ...(runtime.model ? { model: runtime.model } : {}),
+      ...(runtime.custom_args?.length ? { custom_args: [...runtime.custom_args] } : {}),
+      ...(runtime.cli_provider_id ? { cli_provider_id: runtime.cli_provider_id } : {}),
+    };
+  }
+  return { kind: 'in_process' };
 }
 
 function validateRuntime(value: unknown): { ok: true; runtime: AgentRuntime } | { ok: false; error: P3394BridgeManifestValidationError } {
@@ -110,10 +150,14 @@ function validateRuntime(value: unknown): { ok: true; runtime: AgentRuntime } | 
   }
   const raw = value as Record<string, unknown>;
   if (raw.kind === 'in_process') return { ok: true, runtime: { kind: 'in_process' } };
-  if (raw.kind === 'cli' && typeof raw.cli === 'string' && raw.cli.trim()) {
-    const runtime: AgentRuntime = { kind: 'cli', cli: raw.cli.trim() };
+  // legacy `cli` 磁盘形态与归一后的 `p3394-gateway` 形态同样接受，输出一律
+  // 归一为 p3394-gateway（序列化/解析往返一致）。
+  if ((raw.kind === 'cli' || raw.kind === 'p3394-gateway') && typeof raw.cli === 'string' && raw.cli.trim()) {
+    const runtime: AgentRuntime = { kind: 'p3394-gateway', cli: raw.cli.trim() };
     if (typeof raw.model === 'string' && raw.model.trim()) runtime.model = raw.model.trim();
     if (Array.isArray(raw.custom_args)) runtime.custom_args = raw.custom_args.filter((value): value is string => typeof value === 'string');
+    const secretCheck = rejectSecretShapedCustomArg(runtime.custom_args);
+    if (secretCheck.ok === false) return { ok: false, error: secretCheck.error };
     if (typeof raw.cli_provider_id === 'string' && raw.cli_provider_id.trim()) runtime.cli_provider_id = raw.cli_provider_id.trim();
     return { ok: true, runtime };
   }
@@ -125,6 +169,8 @@ export function buildP3394BridgeManifest(agent: Agent): P3394BridgeManifestResul
   if (identityResult.ok === false) return { ok: false, error: identityResult.error };
 
   const runtime = normalizeRuntime(agent.runtime);
+  const buildSecretCheck = rejectSecretShapedCustomArg(runtime.kind === 'p3394-gateway' ? runtime.custom_args : undefined);
+  if (buildSecretCheck.ok === false) return { ok: false, error: buildSecretCheck.error };
   const boundaryResult = validateIdentityRuntimeBoundary(identityResult.identity, runtime);
   if (boundaryResult.ok === false) return { ok: false, error: boundaryResult.error };
 
