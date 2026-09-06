@@ -46,6 +46,9 @@ function parseArgv(argv) {
     else if (a === '--home') out.home = argv[i + 1];
     else if (a === '--preset') out.preset = argv[i + 1];
     else if (a === '--resume-config') out.resumeConfig = argv[i + 1];
+    else if (a === '--allow-root') {
+      if (argv[i + 1]) (out.allowRoots = out.allowRoots || []).push(argv[i + 1]);
+    }
     else if (a === '--') { out.rest = argv.slice(i + 1); break; }
   }
   return out;
@@ -58,6 +61,36 @@ try {
   RESUME = CFG.resumeConfig ? JSON.parse(Buffer.from(CFG.resumeConfig, 'base64').toString('utf8')) : null;
 } catch { RESUME = null; }
 const HOME = String(CFG.home || path.join(os.homedir(), '.p3394-gateway')).trim();
+// 额外允许根（网关从 P3394_GATEWAY_ALLOWED_ROOTS 转发；realpath 对齐网关）。
+const ALLOW_ROOTS = (CFG.allowRoots || [])
+  .map((value) => path.resolve(String(value || '').trim()))
+  .filter(Boolean)
+  .map((value) => { try { return fs.realpathSync(value); } catch { return value; } });
+
+// workspace allowlist 防御（标准 §9.2）：deliver 的 cwd 来自 open_session
+// 声明的 workspace——网关侧已过 allowlist，这里防御性复检：cwd 必须在 HOME
+// 树内（或在网关转发的额外允许根内），否则拒绝并回 failed 帧，绝不把
+// 任意目录当 CLI 工作目录。
+function pathWithinRoot(target, root) {
+  const normalize = (value) => {
+    const normalized = path.normalize(path.resolve(value));
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const t = normalize(target);
+  const r = normalize(root);
+  return t === r || t.startsWith(r + path.sep);
+}
+function cwdAllowed(cwd) {
+  if (!cwd) return true;
+  const roots = [];
+  const homeResolved = path.resolve(HOME);
+  try { roots.push(fs.realpathSync(homeResolved)); } catch { roots.push(homeResolved); }
+  for (const root of ALLOW_ROOTS) roots.push(root);
+  const resolved = path.resolve(cwd);
+  let real = resolved;
+  try { real = fs.realpathSync(resolved); } catch { /* keep resolved */ }
+  return roots.some((root) => pathWithinRoot(real, root));
+}
 
 function sanitizeStreamText(s) {
   s = String(s || '');
@@ -155,6 +188,32 @@ function emit(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
 function emitEvent(fields) {
   eventSeq += 1;
   emit({ ...fields, sequence: eventSeq });
+}
+
+// ── 标准 §9.2 事件帧（超集兼容，不替代 delta/progress/completed/failed）──
+//   status   {event:'status', request_id, sequence, state:'working'|'completed'|'failed'}
+//   artifact {event:'artifact', request_id, sequence, uri:'p3394-object:sha256:...'}
+// deliver 开始发 status:working；终态前发 status 终态帧；completed 时附带
+// 会话 transcript 的内容寻址 artifact 帧（产物文件无法可靠探测，transcript
+// 是每轮确定存在的会话产物）。status/artifact 都是非终态帧，pending 的
+// 结算仍只有 completed/failed。
+function emitStatus(requestId, state) {
+  emitEvent({ event: 'status', request_id: requestId, state });
+}
+function emitCompleted(requestId, text, sid) {
+  emitStatus(requestId, 'completed');
+  try {
+    const tFile = transcriptFile(sid);
+    if (fs.existsSync(tFile)) {
+      const digest = crypto.createHash('sha256').update(fs.readFileSync(tFile)).digest('hex');
+      emitEvent({ event: 'artifact', request_id: requestId, uri: 'p3394-object:sha256:' + digest });
+    }
+  } catch { /* transcript 读取失败：artifact 帧 best-effort 跳过 */ }
+  emitEvent({ event: 'completed', request_id: requestId, text });
+}
+function emitFailed(requestId, error) {
+  emitStatus(requestId, 'failed');
+  emitEvent({ event: 'failed', request_id: requestId, error });
 }
 
 // ── 工具过程可见性（best-effort）──
@@ -265,16 +324,22 @@ function runCliOnce(requestId, prompt, extraArgs, cwd) {
 
 async function handleDeliver(op) {
   const sid = op.session_id || 'default';
+  // 标准 §9.2：deliver 开始即发 status:working（请求已受理、正在执行）。
+  emitStatus(op.request_id, 'working');
   const text = String(op.message && op.message.payload && op.message.payload.parts
     && op.message.payload.parts[0] && op.message.payload.parts[0].text || '');
   if (!text.trim()) {
-    emitEvent({ event: 'failed', request_id: op.request_id, error: 'shim_empty_message' });
+    emitFailed(op.request_id, 'shim_empty_message');
     return;
   }
   // 指南 §9.2：open_session 声明的 workspace 即 CLI 工作目录（与 oneshot
   // 模式的 extensions.working_dir 语义一致——否则 CLI 退回网关目录，丢
-  // 项目上下文）。
+  // 项目上下文）。allowlist 防御：cwd 必须在 HOME 树/额外允许根内。
   const cwd = sessionWorkspaces.get(sid) || null;
+  if (!cwdAllowed(cwd)) {
+    emitFailed(op.request_id, 'p3394_workspace_not_allowed');
+    return;
+  }
   // G-27 同款降级链：resume 优先（不回放），被拒清绑定回放重试一次。
   if (resumeCapable()) {
     const cliSessionId = currentOrGeneratedCliSessionId(sid);
@@ -286,7 +351,7 @@ async function handleDeliver(op) {
         const out = extractReplyText(raw);
         appendTranscript(sid, 'in', text);
         appendTranscript(sid, 'out', out);
-        emitEvent({ event: 'completed', request_id: op.request_id, text: out });
+        emitCompleted(op.request_id, out, sid);
         return;
       } catch (err) {
         if (!resumeRejectedByText(err && err.message)) throw err;
@@ -303,7 +368,7 @@ async function handleDeliver(op) {
   const out = extractReplyText(raw);
   appendTranscript(sid, 'in', text);
   appendTranscript(sid, 'out', out);
-  emitEvent({ event: 'completed', request_id: op.request_id, text: out });
+  emitCompleted(op.request_id, out, sid);
 }
 
 // ── p3394-sscli/1.0 协议主循环 ──
@@ -329,7 +394,7 @@ process.stdin.on('data', (chunk) => {
     } else if (op.op === 'deliver') {
       handleDeliver(op).catch((err) => {
         const message = (err && err.message) || String(err);
-        emitEvent({ event: 'failed', request_id: op.request_id, error: message });
+        emitFailed(op.request_id, message);
       });
     } else if (op.op === 'cancel') {
       if (activeTurn && activeTurn.child) {
