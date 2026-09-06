@@ -513,7 +513,7 @@ export function createKbTools(opts: KbToolsOpts): AgentTool[] {
 }
 
 /**
- * `ask_materials` — grounded Q&A evidence service (COGSEED-39 ① Phase 4a).
+ * `ask_materials` — grounded Q&A evidence service (知识库问答 ① Phase 4a).
  * Runs the material-set hybrid search (Library + attachments), applies a
  * fused-score threshold, and returns an evidence package with a citation
  * contract — or an explicit no-material / low-confidence marker. The model
@@ -576,7 +576,7 @@ function createAskMaterialsTool(opts: KbToolsOpts): AgentTool {
  * `material_list` — inventory the full material boundary for the current
  * conversation: Library files (global + space) plus conversation
  * attachments and space artifacts, each marked in-scope or not
- * (COGSEED-39 ① Phase 3). Read-only.
+ * (知识库问答 ① Phase 3). Read-only.
  */
 function createMaterialListTool(opts: KbToolsOpts): AgentTool {
   const hasSpace = !!opts.spaceId;
@@ -661,7 +661,7 @@ function createMaterialListTool(opts: KbToolsOpts): AgentTool {
  * Library, fusing both signals with RRF. Same read-only posture as
  * kb_search, but returns a unified hit shape (scope/path/chunkIdx + snippet)
  * that doubles as the citation anchor for grounded answering
- * (COGSEED-39 ① Phase 2).
+ * (知识库问答 ① Phase 2).
  */
 function createMaterialSearchTool(opts: KbToolsOpts): AgentTool {
   const hasSpace = !!opts.spaceId;
