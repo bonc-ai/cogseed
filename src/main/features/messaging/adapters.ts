@@ -1343,14 +1343,35 @@ export class FeishuAdapter implements MessagingCardAdapter {
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
 
-  /** G-17 byte path: fetch the raw image bytes behind an inbound image_key
-   * (im/v1/images/{image_key}). The SDK returns a binary stream for this
-   * endpoint; both the response object and a .data wrapper are handled. */
-  async downloadImage(imageKey: string): Promise<Buffer> {
-    if (!imageKey || !/^[A-Za-z0-9_\/.-]{1,256}$/.test(imageKey)) {
-      throw new Error('Feishu image download failed: invalid image_key');
+  /** G-17 byte path: fetch the raw bytes behind an inbound message image.
+   * Uses the per-message resource endpoint (im/v1/messages/:message_id/
+   * resources/:file_key?ty=image) — the bare im/v1/images/:image_key endpoint
+   * 400s for peer-sent images without the im:resource receive mode. The SDK
+   * returns a binary stream; both the response object and a .data wrapper are
+   * handled. */
+  async downloadMessageImage(messageId: string, fileKey: string): Promise<Buffer> {
+    const safeMessageId = messageId?.trim() || '';
+    if (!/^om_[A-Za-z0-9]{1,128}$/.test(safeMessageId)) {
+      throw new Error('Feishu image download failed: invalid message_id');
     }
-    const response = await this.client.im.v1.image.get({ path: { image_key: imageKey } }) as unknown;
+    if (!fileKey || !/^[A-Za-z0-9_\/.-]{1,256}$/.test(fileKey)) {
+      throw new Error('Feishu image download failed: invalid file_key');
+    }
+    let response: unknown;
+    try {
+      response = await this.client.im.v1.messageResource.get({
+        path: { message_id: safeMessageId, file_key: fileKey },
+        params: { type: 'image' },
+      }) as unknown;
+    } catch (err) {
+      // Surface the feishu error code/msg from the axios body — the generic
+      // axios message alone ("status code 400") is not diagnosable.
+      const body = (err as { response?: { data?: unknown } })?.response?.data;
+      const detail = body && typeof body === 'object'
+        ? `code=${String((body as { code?: unknown }).code)} msg=${String((body as { msg?: unknown }).msg)}`
+        : (err as Error)?.message || String(err);
+      throw new Error(`Feishu image download failed: ${detail}`);
+    }
     const stream = (response && typeof (response as { on?: unknown }).on === 'function')
       ? response
       : (response as { data?: unknown } | null)?.data;
