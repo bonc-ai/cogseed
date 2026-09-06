@@ -4059,6 +4059,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（见 kb_summary 头注）。
+          ephemeralSession: true,
+          // kb_summary 超时到点会先 abort：透传信号真正中止上游请求、释放模型 turn 锁。
+          ...(opts.signal ? { abortSignal: opts.signal } : {}),
           skillList: [],
           disableTools: true,
         });
@@ -4083,6 +4088,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（kb.summary/kb.mindmap 同款）。
+          ephemeralSession: true,
           skillList: [],
           disableTools: true,
         });
@@ -5739,12 +5747,14 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history, model }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, dir, question, k, attach_paths, history, model }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
       return;
     }
+    // 渲染层传入当前所在个人库目录：空 = 整库检索；非空 = 只在该目录内检索。
+    const dirScoped = typeof dir === 'string' && dir.trim() ? dir.trim().replace(/^\/+|\/+$/g, '') || null : null;
     // 用户在问答框模型配置里选的模型（provider+model）；未传则走默认优先级组
     const mo = (model && typeof model === 'object' &&
       typeof (model as { provider?: unknown }).provider === 'string' &&
@@ -5756,6 +5766,7 @@ const streamHandlers: Record<string, StreamHandler> = {
     try {
       const events = kbQa.kbAskStream(ctx.userId, {
         spaceId: space_id ? String(space_id) : null,
+        dir: dirScoped,
         question: q,
         k: typeof k === 'number' ? k : undefined,
         attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
@@ -5766,6 +5777,11 @@ const streamHandlers: Record<string, StreamHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单问无状态：kb-qa 的证据边界随目录/空间变化，持久 aside 会话会把
+          // 之前其它范围的检索内容"记忆"进来，导致回答引用越界内容（如本次
+          // 引用上轮别处检索到的 AST.pdf#chunk 61）。多轮上下文已由渲染层通过
+          // history 文本参数显式提供，不需要模型侧会话记忆。
+          ephemeralSession: true,
           // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
