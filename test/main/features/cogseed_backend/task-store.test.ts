@@ -30,6 +30,38 @@ async function backendPaths() {
 }
 
 describe('CogSeed task and session store', () => {
+  it('persists a planned task without creating an execution or active session', async () => {
+    const store = await backend();
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const result = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-store-planned',
+      task: 'Save this work for later.',
+      initialStatus: 'planned',
+      agentId: 'agent-planned',
+      conversationId: 'run-center-planned',
+      spaceId: 'space-planned',
+    });
+
+    expect(result.task).toMatchObject({
+      status: 'planned',
+      plannedAt: expect.any(String),
+      agentId: 'agent-planned',
+      conversationId: 'run-center-planned',
+      spaceId: 'space-planned',
+      resultDeliveryState: 'not-applicable',
+    });
+    expect(result.task).not.toHaveProperty('executionId');
+    expect(result.task).not.toHaveProperty('runtimeWorkerId');
+    await expect(store.readCogSeedSession(USER_A, result.task.sessionId)).resolves.not.toHaveProperty('activeTaskId');
+    await expect(events.readCogSeedTaskEvents(USER_A, result.task.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.planned', sequence: 1, payload: { requestId: 'req-store-planned' } }),
+    ]);
+    await expect(store.createCogSeedTask(USER_A, {
+      requestId: 'req-store-planned',
+      task: 'Save this work for later.',
+    })).rejects.toThrow(/payload conflict/i);
+  });
+
   it('creates a CogSeed-owned cloud task/session mapping and reads it from the owner root', async () => {
     const store = await backend();
     const paths = await backendPaths();
@@ -357,6 +389,137 @@ describe('CogSeed task and session store', () => {
       localCli: { cli: 'claude' },
     });
     expect(plain.task.localCli?.viaP3394Gateway).not.toBe(true);
+  });
+
+  it('purges every task shown as archived in the owner scope without touching hidden safety assets', async () => {
+    const store = await backend();
+    const paths = await backendPaths();
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const completeAndArchive = async (userId: string, requestId: string, task: string) => {
+      const created = await store.createCogSeedTask(userId, { requestId, task });
+      await lifecycle.transitionCogSeedTask(userId, created.task.taskId, 'queued');
+      await lifecycle.transitionCogSeedTask(userId, created.task.taskId, 'running');
+      await lifecycle.transitionCogSeedTask(userId, created.task.taskId, 'completed');
+      await lifecycle.archiveCogSeedTask(userId, created.task.taskId);
+      return created.task;
+    };
+
+    const archived = await completeAndArchive(USER_A, 'req-purge-hidden', 'Hidden archived run.');
+    const archivedWithNewerSessionTask = await completeAndArchive(USER_A, 'req-purge-old-pointer', 'Archived older run.');
+    const cancelled = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-purge-cancelled',
+      task: 'Cancelled terminal run shown in the Archived column.',
+    });
+    await lifecycle.transitionCogSeedTask(USER_A, cancelled.task.taskId, 'cancelled');
+    const newer = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-purge-new-pointer',
+      task: 'New active run must keep the session pointer.',
+      sessionId: archivedWithNewerSessionTask.sessionId,
+    });
+    const unarchived = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-purge-unarchived',
+      task: 'Visible non-archived run.',
+      initialStatus: 'planned',
+    });
+    const retained = await store.createCogSeedTask(USER_A, {
+      requestId: 'req-purge-retained',
+      task: 'Legacy archived run whose result is still pending.',
+      initialStatus: 'planned',
+    });
+    await lifecycle.archiveCogSeedTask(USER_A, retained.task.taskId);
+    const retainedFile = paths.cogseedTaskFile(USER_A, retained.task.taskId);
+    const retainedRecord = JSON.parse(fs.readFileSync(retainedFile, 'utf8'));
+    retainedRecord.resultDeliveryState = 'pending-recovery';
+    fs.writeFileSync(retainedFile, JSON.stringify(retainedRecord));
+    const otherUserArchived = await completeAndArchive(USER_B, 'req-purge-other-user', 'Other owner archived run.');
+
+    const projectionFile = paths.cogseedTaskProjectionFile(USER_A, archived.taskId);
+    fs.mkdirSync(path.dirname(projectionFile), { recursive: true });
+    fs.writeFileSync(projectionFile, '{}');
+    const executionDir = paths.cogseedExecutionDir(USER_A, archived.executionId!);
+    fs.mkdirSync(executionDir, { recursive: true });
+    fs.writeFileSync(path.join(executionDir, 'record.json'), '{"recallProof":true}');
+
+    await expect(store.readCogSeedSession(USER_A, archived.sessionId)).resolves.toMatchObject({ activeTaskId: archived.taskId });
+    await expect(store.readCogSeedSession(USER_A, newer.task.sessionId)).resolves.toMatchObject({ activeTaskId: newer.task.taskId });
+
+    const report = await store.purgeCogSeedArchivedTasks(USER_A);
+
+    expect(report.purgedTaskIds).toEqual(expect.arrayContaining([
+      archived.taskId,
+      archivedWithNewerSessionTask.taskId,
+      cancelled.task.taskId,
+    ]));
+    expect(report.purgedTaskIds).toHaveLength(3);
+    expect(report.retainedTaskIds).toEqual([retained.task.taskId]);
+    expect(report.failedTaskIds).toEqual([]);
+    for (const file of [
+      paths.cogseedRequestClaimFile(USER_A, archived.requestId),
+      paths.cogseedTaskEventsFile(USER_A, archived.taskId),
+      projectionFile,
+      paths.cogseedTaskFile(USER_A, archived.taskId),
+    ]) expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(path.join(executionDir, 'record.json'))).toBe(true);
+    await expect(store.readCogSeedSession(USER_A, archived.sessionId)).resolves.not.toHaveProperty('activeTaskId');
+    await expect(store.readCogSeedSession(USER_A, newer.task.sessionId)).resolves.toMatchObject({ activeTaskId: newer.task.taskId });
+    await expect(store.readCogSeedTask(USER_A, unarchived.task.taskId)).resolves.not.toBeNull();
+    await expect(store.readCogSeedTask(USER_A, cancelled.task.taskId)).resolves.toBeNull();
+    await expect(store.readCogSeedTask(USER_A, retained.task.taskId)).resolves.not.toBeNull();
+    await expect(store.readCogSeedTask(USER_B, otherUserArchived.taskId)).resolves.not.toBeNull();
+
+    await expect(store.purgeCogSeedArchivedTasks(USER_A)).resolves.toEqual({
+      purgedTaskIds: [], retainedTaskIds: [retained.task.taskId], failedTaskIds: [],
+    });
+  });
+
+  it('serializes request-ID reads with archived-record purges', async () => {
+    let taskFile = '';
+    let pauseTaskRead = false;
+    let allowTaskRead: () => void = () => {};
+    let signalTaskRead: () => void = () => {};
+    const taskReadGate = new Promise<void>((resolve) => { allowTaskRead = resolve; });
+    const taskReadStarted = new Promise<void>((resolve) => { signalTaskRead = resolve; });
+
+    vi.doMock('node:fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('node:fs/promises')>();
+      return {
+        ...actual,
+        readFile: async (...args: Parameters<typeof actual.readFile>) => {
+          if (pauseTaskRead && path.resolve(String(args[0])) === taskFile) {
+            pauseTaskRead = false;
+            signalTaskRead();
+            await taskReadGate;
+          }
+          return (actual.readFile as (...readArgs: Parameters<typeof actual.readFile>) => ReturnType<typeof actual.readFile>)(...args);
+        },
+      };
+    });
+
+    try {
+      const store = await backend();
+      const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+      const paths = await backendPaths();
+      const locks = await import('../../../../src/main/util/locks');
+      const archived = await store.createCogSeedTask(USER_A, {
+        requestId: 'req-purge-read-lock',
+        task: 'Archived task read during cleanup.',
+        initialStatus: 'planned',
+      });
+      await lifecycle.archiveCogSeedTask(USER_A, archived.task.taskId);
+      taskFile = paths.cogseedTaskFile(USER_A, archived.task.taskId);
+      pauseTaskRead = true;
+
+      const reading = store.readCogSeedTaskByRequestId(USER_A, archived.task.requestId);
+      await taskReadStarted;
+      expect(locks.fileEditLock(paths.cogseedRequestClaimFile(USER_A, archived.task.requestId)).isLocked()).toBe(true);
+
+      const purging = store.purgeCogSeedArchivedTasks(USER_A);
+      allowTaskRead();
+      await expect(reading).resolves.toMatchObject({ taskId: archived.task.taskId });
+      await expect(purging).resolves.toMatchObject({ purgedTaskIds: [archived.task.taskId] });
+    } finally {
+      vi.doUnmock('node:fs/promises');
+    }
   });
 
 

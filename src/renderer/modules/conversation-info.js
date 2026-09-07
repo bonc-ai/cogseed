@@ -1509,6 +1509,16 @@ const ConversationInfo = (() => {
     var runsHtml = totalRuns
       ? runsCountLine + runsList + runsToggle
       : '<div class="conversation-info-empty is-small">' + escapeHtml(_label('conversation_info.carried.runs_empty', '本会话暂无执行记录。')) + '</div>';
+    var viewAllRuns = _cid && typeof window.openRunCenterForTask === 'function' && typeof window.uiButton === 'function'
+      ? window.uiButton({
+        label: _label('conversation_info.run_context.view_all_runs', '查看全部运行'),
+        role: 'ghost',
+        size: 'sm',
+        iconEnd: 'arrow-right',
+        className: 'conversation-info-run-center-link',
+        attrs: { 'data-open-run-center-for-task': true },
+      })
+      : '';
     var collabRef = _latestCollaborationRef(protocolEvents);
     var contextIds = [];
     sorted.forEach(function (execution) {
@@ -1589,6 +1599,7 @@ const ConversationInfo = (() => {
       paneOpen('runs') +
         resumeHtml +
         runsHtml +
+        viewAllRuns +
         contextRefHtml +
         permissionDetailHtml +
         '<div class="conversation-info-carried-permission">' + _uiIcon('shield-check', 'conversation-info-carried-permission-icon') + '<span>' + escapeHtml(permissionNote) + '</span></div>' +
@@ -2261,6 +2272,13 @@ const ConversationInfo = (() => {
     if (body && body.dataset.bound !== '1') {
       body.dataset.bound = '1';
       body.addEventListener('click', (ev) => {
+        const openRunCenter = ev.target.closest('[data-open-run-center-for-task]');
+        if (openRunCenter) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (typeof window.openRunCenterForTask === 'function') window.openRunCenterForTask(_cid);
+          return;
+        }
         const runContextTab = ev.target.closest('[data-run-context-tab]');
         if (runContextTab) {
           ev.preventDefault();
@@ -2510,7 +2528,7 @@ const ConversationInfo = (() => {
   }
   function openCollaboration(cid) {
     if (cid) _cid = cid;
-    openAndSetTab('collaboration');
+    openAndSetTab('proof');
   }
   function openProtocol(cid) {
     if (cid) _cid = cid;
@@ -2524,6 +2542,8 @@ const ConversationInfo = (() => {
     _renderBody();
   }
   function openAndSetTab(tab) {
+    const requested = String(tab || '').trim();
+    _activeRunContextTab = ['runs', 'source', 'proof', 'assets'].includes(requested) ? requested : 'proof';
     _setOpen(true);
     _syncChrome();
     _renderBody();
