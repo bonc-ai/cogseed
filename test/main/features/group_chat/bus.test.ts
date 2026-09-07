@@ -987,6 +987,39 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     expect(digestOnly).not.toContain('现在开始实现需求A');
   });
 
+  it('feeds the missed-conversation digest to the floor agent after a /agent-style switch (no re-@)', async () => {
+    const bus = await import('../../../../src/main/features/group_chat/bus');
+    const state = await import('../../../../src/main/features/group_chat/state');
+    // Phase 1: user ↔ commander thread, invisible to the agent's visibility
+    // slice — identical setup to the @mention variant above.
+    await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: '先和指挥官敲定需求B的技术方案',
+    });
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    // Phase 2: simulate exactly what the messaging /agent command handler
+    // does (continuity_commands.handleAgent): roster the agent, then hand the
+    // conversation floor to it — no @mention involved.
+    await state.addMember(TEST_UID, TEST_CID, { kind: 'agent', id: AGENT_ID, name: AGENT_NAME });
+    await state.setActiveRecipient(TEST_UID, TEST_CID, AGENT_ID);
+
+    // Phase 3: the next plain user message routes to the floor agent and its
+    // first turn must carry the digest of the conversation it missed — this
+    // is what lets a channel user keep going after switching executors.
+    const msg = await bus.enqueue({
+      uid: TEST_UID, cid: TEST_CID, fromActorId: 'user',
+      text: '继续实现需求B的下一步',
+    });
+    expect(msg.to).toEqual([AGENT_ID]);
+    await waitForQuiescent(TEST_UID, TEST_CID);
+
+    const agentCall = streamProbe.messages.find((m) => m.includes('继续实现需求B的下一步'));
+    expect(agentCall).toBeTruthy();
+    expect(agentCall).toContain('<group-context-summary>');
+    expect(agentCall).toContain('先和指挥官敲定需求B的技术方案');
+  });
+
   it('strips agent result markers and records model failures separately from errors', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const paths = await import('../../../../src/main/paths');
