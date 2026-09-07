@@ -31,6 +31,8 @@ describe('packaged-dev verifier', () => {
         '/package.json', '/bootstrap.cjs', '/src/main/install-data-root.cjs',
         '/src/main/util/migrate-source-data-root.cjs', '/.build/build-info.json',
         '/src/main/index.ts', '/src/renderer/modules/agents.js',
+        '/src/main/util/image-transform.ts',
+        '/node_modules/@jsquash/webp/codec/dec/webp_dec.wasm',
       ],
       readAsarFile: () => Buffer.from(JSON.stringify({ channel: 'packaged-dev', commit: 'abc123', dirty: false })),
       exists: (candidate: string) => candidate.endsWith('app.asar') || fs.existsSync(candidate),
