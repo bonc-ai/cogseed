@@ -1053,6 +1053,8 @@ describe('group_chat bus › enqueue routing + persistence', () => {
     // outside the summary block.
     const digestPart = String(call.prompt).split('</group-context-summary>')[0] ?? '';
     expect(digestPart).not.toContain('执行网关上下文注入的验证任务');
+  });
+
   it('feeds the missed-conversation digest to the floor agent after a /agent-style switch (no re-@)', async () => {
     const bus = await import('../../../../src/main/features/group_chat/bus');
     const state = await import('../../../../src/main/features/group_chat/state');
