@@ -44,8 +44,8 @@ describe('messageMetricsLine', () => {
     expect(line.inText).toBe('12.2K');
     expect(line.outText).toBe('940');
   });
-  it('computes rate for tool-free turns', () => {
-    expect(messageMetricsLine(base)?.rateText).toBe('14'); // 940 tok / 66s ≈ 14.2
+  it('rate is disabled (rateText always null)', () => {
+    expect(messageMetricsLine(base)?.rateText).toBeNull();
   });
   it('returns null when nothing recorded', () => {
     expect(messageMetricsLine(null)).toBeNull();
@@ -75,17 +75,18 @@ describe('foldSessionMetrics', () => {
     expect(f.inText).toBe('1K');
     expect(f.outText).toBe('100');
     expect(f.costText).toBeNull();
-    // 上下文占用 = 最近一次 usage 的 input+output（100+50=150，150/4000≈3.75%→4%）
-    expect(f.ctxText).toBe('150/4K·4%');
+    // 上下文占用 = 最近一次 usage 的 prompt 侧压力 input+cacheRead+cacheWrite
+    // （100+500+0=600，600/4000=15%，与 DSH pressureFrom 口径一致）
+    expect(f.ctxText).toBe('600/4K·15%');
     expect(f.ctxHot).toBe(false);
   });
-  it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps 3-term sum', () => {
+  it('cache hit uses billedInput denominator (DSH parity), inText keeps 3-term sum', () => {
     const f = foldSessionMetrics(
       [m({ usage: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 100 } })],
       { contextWindow: null, price: null },
     );
-    // 300/(100+300)=75%，不含 cacheWrite（与 usage_ledger.ts dashboard 口径一致）
-    expect(f.cacheHitText).toBe('75%');
+    // 300/(100+300+100)=60%，含 cacheWrite（与 DSH billedInputTokens 口径一致）
+    expect(f.cacheHitText).toBe('60%');
     // inText 口径不变：input+cacheRead+cacheWrite 三项和
     expect(f.inText).toBe('500');
     // 展示层拆分（4a）：纯 fresh 输入与缓存读单独输出，供主读数拆开标注

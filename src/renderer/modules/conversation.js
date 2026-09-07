@@ -9224,8 +9224,7 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
   }
   if (f.ttftAvgText) {
-    // 速率段 2026-09-03 下线（口径反复修正未达标，见 foldSessionMetrics
-    // 的 rateText——计算与数据采集保留，显示待重做后恢复）。
+    // 速率段继续停显（step 级/时间口径反复不收敛，见 foldSessionMetrics rateText）。
     segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });

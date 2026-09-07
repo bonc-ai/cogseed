@@ -137,7 +137,7 @@ describe('conversation message metrics line', () => {
     });
     expect(segTexts.some((s) => s.startsWith('mseg:') && s.includes('chat.metrics.durationK|'))).toBe(true);
     expect(segTexts.some((s) => s.includes('chat.metrics.ttftK|'))).toBe(true);
-    // 速率段 2026-09-03 下线：tok/s 不再渲染（口径反复修正未达标）。
+    // 速率段停显：tok/s 不再渲染（口径反复不收敛，见 conversation-metrics.js）。
     expect(segTexts.some((s) => s.includes('tok/s'))).toBe(false);
     // fixture 带 cacheRead → 主读数走拆分模板（fresh 输入 + 缓存读标注），
     // 不再把缓存并入"输入"（4a：合并展示造成"输入过大"误读）。
