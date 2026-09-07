@@ -868,13 +868,15 @@ describe('messaging manager adapter flow', () => {
         msg: { id: 'reply-1', from: 'commander', text: 'reply from agent' },
       };
       busListener?.(outboundEvent);
-      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
       // The first attempt failed, so the ledger schedules a bounded automatic
       // retry instead of waiting for another bus broadcast.
-      expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
-        status: 'retry_pending',
-        attempts: 1,
+      await vi.waitFor(async () => {
+        expect(await ledger.getDelivery('user-1', ledger.deliveryKey(created.id, 'reply-1'))).toMatchObject({
+          status: 'retry_pending',
+          attempts: 1,
+        });
       });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
 
       await vi.waitFor(async () => {
         expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -3130,4 +3132,3 @@ describe('iLink URL trust split (API base vs scan URL)', () => {
     expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
   });
 });
-

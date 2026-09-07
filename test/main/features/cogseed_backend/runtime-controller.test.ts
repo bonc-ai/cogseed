@@ -109,6 +109,53 @@ function runtimeFrom(events: RuntimeEventEnvelope[]): CogSeedAgentRuntimeFacade 
 }
 
 describe('CogSeed Runtime controller', () => {
+  it('starts one planned task in place and single-flights concurrent launch attempts', async () => {
+    const runtime = runtimeFrom([]);
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => undefined) } as any);
+    const created = await tasks.createCogSeedTask(USER, {
+      requestId: 'req-save-planned-controller',
+      task: 'Run this saved task once.',
+      initialStatus: 'planned',
+    });
+
+    const [first, second] = await Promise.all([
+      controller.startPlannedCogSeedTask(USER, created.task.taskId, {
+        requestId: 'req-start-planned-controller-a', task: created.task.task,
+      }),
+      controller.startPlannedCogSeedTask(USER, created.task.taskId, {
+        requestId: 'req-start-planned-controller-b', task: created.task.task,
+      }),
+    ]);
+
+    expect(first.taskId).toBe(created.task.taskId);
+    expect(second.taskId).toBe(created.task.taskId);
+    expect(first.executionId).toBeTruthy();
+    expect(second.executionId).toBe(first.executionId);
+    await eventually(() => expect(runtime.inputs).toHaveLength(1));
+    await expect(tasks.readCogSeedTask(USER, created.task.taskId)).resolves.toMatchObject({
+      taskId: created.task.taskId,
+      executionId: first.executionId,
+    });
+  });
+
+  it('does not recover a saved planned task that has never entered execution', async () => {
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+    const controller = createCogSeedRuntimeController({ runtime: runtimeFrom([]) });
+    const created = await tasks.createCogSeedTask(USER, {
+      requestId: 'req-save-planned-recovery',
+      task: 'Keep this task waiting for the user.',
+      initialStatus: 'planned',
+    });
+
+    await expect(controller.recoverOrphanedTasks(USER)).resolves.toMatchObject({ taskIds: [] });
+    const persisted = await tasks.readCogSeedTask(USER, created.task.taskId);
+    expect(persisted).toMatchObject({ status: 'planned' });
+    expect(persisted).not.toHaveProperty('executionId');
+  });
+
   it('projects persisted Runtime lifecycle events back to the original Group Chat conversation', async () => {
     await createConversation('cid-projection');
     const runtime = runtimeFrom([

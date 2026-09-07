@@ -49,12 +49,12 @@ class FakeElement {
 function loadSettingsTabsModule() {
   const tabs = [
     new FakeElement({ settingsTab: 'data' }, ['settings-tab', 'is-active']),
-    new FakeElement({ settingsTab: 'credentials' }, ['settings-tab']),
+    new FakeElement({ settingsTab: 'configuration' }, ['settings-tab']),
     new FakeElement({ settingsTab: 'general' }, ['settings-tab']),
   ];
   const panes = [
     new FakeElement({ settingsPane: 'data' }, ['settings-tab-pane']),
-    new FakeElement({ settingsPane: 'credentials' }, ['settings-tab-pane']),
+    new FakeElement({ settingsPane: 'configuration' }, ['settings-tab-pane']),
     new FakeElement({ settingsPane: 'general' }, ['settings-tab-pane']),
   ];
   panes[1].hidden = true;
@@ -111,7 +111,7 @@ describe('settings tabs module', () => {
     const settingsScript = '<script src="./modules/settings.js"></script>';
 
     expect(fs.existsSync(modulePath)).toBe(true);
-    expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
+    expect(indexHtml).toContain('data-settings-tab="configuration" data-i18n="settings.tab.configuration"');
     // 触点已从设置迁至「连接 > 触点」，设置不再保留消息平台 tab。
     expect(indexHtml).not.toContain('data-i18n="settings.tab.messaging"');
     expect(indexHtml).toContain('data-connections-pane="touchpoints"');
@@ -195,6 +195,14 @@ describe('settings tabs module', () => {
     expect(panes[0].hidden).toBe(false);
     expect(panes[1].hidden).toBe(true);
     expect(panes[2].hidden).toBe(true);
+  });
+
+  it('keeps credentials as an alias for the canonical configuration tab', () => {
+    const { window, tabs, panes } = loadSettingsTabsModule();
+
+    expect(window.activateSettingsTab('credentials')).toBe('configuration');
+    expect(tabs[1].classList.contains('is-active')).toBe(true);
+    expect(panes[1].hidden).toBe(false);
   });
 
   it('keeps Feishu China and Lark Global as distinct supported channels', () => {

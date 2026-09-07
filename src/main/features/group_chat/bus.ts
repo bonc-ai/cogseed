@@ -4293,6 +4293,8 @@ async function runActorTurnBody(
   // task + projection for this turn's user message. The Commander hint must
   // not claim tracked state that doesn't exist (see call site below).
   let hostOpenedTaskThisTurn = false;
+  let hostOpenedRequirementId: string | undefined;
+  let hostForecastStarted = false;
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
@@ -4322,6 +4324,7 @@ async function runActorTurnBody(
       // failed with "forecast proposal is required". Only advertise the
       // tracked state when it is true.
       hostOpenedTaskThisTurn = routing.openedTask;
+      hostOpenedRequirementId = routing.requirementId;
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -5377,7 +5380,24 @@ async function runActorTurnBody(
         // process event so the renderer can show "actually running with X ·
         // effort Y" on the streaming bubble (unified execution entry).
         onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
-          if (isCommander) commanderResolvedRuntime = runtime;
+          if (isCommander) {
+            commanderResolvedRuntime = runtime;
+            if (hostOpenedRequirementId && !hostForecastStarted) {
+              hostForecastStarted = true;
+              const requirementId = hostOpenedRequirementId;
+              void import('../kstar/auto-forecast').then(({ autoForecastForRequirement }) => (
+                autoForecastForRequirement(uid, cid, requirementId, {
+                  allowedToolNames: new Set(runtime.toolNames),
+                })
+              )).catch((error) => {
+                log.warn('kstar auto-forecast async degraded', {
+                  cid: maskId(cid),
+                  requirementId,
+                  error: (error as Error).message,
+                });
+              });
+            }
+          }
           turnExecMeta = {
             provider: runtime.providerId,
             model: runtime.modelId,
@@ -6381,6 +6401,16 @@ async function runActorTurnBody(
       if (failedUsageWrites.length) {
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(persistedRecallCitations.map((citation) => recordInjectionReceipt(uid, {
+        assetId: citation.asset_id,
+        assetVersion: citation.version,
+        taskRunId: item.turnId,
+        projectionId: citation.projection_id,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'injected',
+      })));
     }
     if (dispatchedUsage.length) {
       // Commander-dispatched grants ride the same usage ledger so the asset
@@ -6398,6 +6428,15 @@ async function runActorTurnBody(
       if (failedDispatchedWrites.length) {
         log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(dispatchedUsage.map((grant) => recordInjectionReceipt(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'dispatched',
+      })));
     }
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
@@ -7450,6 +7489,26 @@ async function guardKstarPrivilegedDispatch(
     if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
     state.taskRun.projectionId = provenance.projectionId;
     state.taskRun.forecastId = provenance.forecastId;
+    // Keep the durable CogSeed task aligned with the in-memory run provenance
+    // so either side can be used as the audit entry point after a restart.
+    if (lifecycle.task?.cogseedTaskId) {
+      try {
+        const { updateCogSeedTask } = await import('../cogseed_backend/task-store');
+        await updateCogSeedTask(state.uid, lifecycle.task.cogseedTaskId, (task) => ({
+          ...task,
+          kstarTaskId: lifecycle.task!.id,
+          ...(lifecycle.requirement?.id ? { kstarRequirementId: lifecycle.requirement.id } : {}),
+          kstarProjectionId: provenance.projectionId,
+          kstarForecastId: provenance.forecastId,
+          updatedAt: new Date().toISOString(),
+        }));
+      } catch (error) {
+        log.warn('kstar provenance bridge degraded', {
+          cid: maskId(state.cid),
+          error: logErrorRef(error),
+        });
+      }
+    }
   }
   return { provenance };
 }
@@ -9309,13 +9368,17 @@ async function hostRouteTaskTurn(
   messageText: string | undefined,
   sourceMessageId: string | undefined,
   workspaceId?: string,
-): Promise<{ openedTask: boolean }> {
+): Promise<{ openedTask: boolean; requirementId?: string }> {
   // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
   const { isObviouslyTrivial, isClosingIntent } = await import('../kstar/task-intent');
+  const recordRouting = async (decision: import('../kstar/requirement-types').KstarRoutingDecision): Promise<void> => {
+    await import('../kstar/requirement-store').then((store) => store.recordKstarRoutingDecision(uid, cid, decision)).catch(() => undefined);
+  };
   if (isClosingIntent(messageText)) {
+    await recordRouting({ at: nowIso(), kind: 'closing_intent', isTask: true, continuation: true, reason: 'closing intent', ...(sourceMessageId ? { sourceMessageId } : {}) });
     // Deterministic closing intent ("完成/搞定/结束"): close the open task
     // via the finish path (requirement precipitation runs) and NEVER open a
     // new task from it. Checked before the trivial filter so it cannot be
@@ -9359,7 +9422,9 @@ async function hostRouteTaskTurn(
     }
     return { openedTask: false };
   }
-  if (isObviouslyTrivial(messageText)) return { openedTask: false };
+  if (isObviouslyTrivial(messageText)) {
+    return { openedTask: false };
+  }
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
@@ -9369,6 +9434,7 @@ async function hostRouteTaskTurn(
     const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
     if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
     if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
+    await recordRouting({ at: nowIso(), kind: 'model_judged', isTask: true, continuation: verdict.continuation, reason: 'model routing verdict', ...(sourceMessageId ? { sourceMessageId } : {}) });
 
     if (openRequirement && verdict.continuation === false) {
       // Model judged: user moved to a NEW task while one was open. Close the
@@ -9439,25 +9505,12 @@ async function hostRouteTaskTurn(
         },
       },
     );
-    // World-model prediction: the host owns forecast generation (dedicated
-    // runner over the committed projection knowledge). Run it ASYNC so the
-    // Commander turn starts immediately — a 10-30s forecast generation must
-    // never gate the user's reply. Errors are logged inside auto-forecast
-    // and execution proceeds without a forecast record if it fails.
-    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, created.requirementId).catch((error) => {
-      log.warn('kstar auto-forecast async degraded', {
-        cid: maskId(cid),
-        requirementId: created.requirementId,
-        error: (error as Error).message,
-      });
-    });
     log.info('kstar host routing opened task', {
       cid: maskId(cid),
       requirementId: created.requirementId,
       sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
     });
-    return { openedTask: true };
+    return { openedTask: true, requirementId: created.requirementId };
   } catch (error) {
     log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
     return { openedTask: false };
@@ -9481,6 +9534,7 @@ async function ensureKstarTaskForDispatch(
   taskText: string,
   sourceMessageId?: string,
   workspaceId?: string,
+  allowedToolNames: ReadonlySet<string> = new Set(),
 ): Promise<{ created: boolean; hint?: string }> {
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
@@ -9528,7 +9582,7 @@ async function ensureKstarTaskForDispatch(
     // runner), ASYNC so the dispatch turn is not gated by the 10-30s
     // generation call.
     const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, result.requirementId).catch((error) => {
+    void autoForecastForRequirement(uid, cid, result.requirementId, { allowedToolNames }).catch((error) => {
       log.warn('kstar auto-forecast async degraded', {
         cid: maskId(cid),
         requirementId: result.requirementId,
@@ -9547,23 +9601,76 @@ async function ensureKstarTaskForDispatch(
 
 /**
  * Host-side validation of Commander-granted ability assets. The Commander
- * picks assets by id; the host verifies each is a real, active asset so a
- * hallucinated or stale id can never leak into a delegated turn. Returns
- * the granted ids (deduped, order-preserving) or a tool-error result.
+ * picks assets by id; the host verifies each is in the current confirmed
+ * Projection, frozen at the current asset version, and allowed for the target
+ * runtime so a hallucinated or stale id can never leak into a delegated turn.
+ * Returns the granted ids (deduped, order-preserving) or a tool-error result.
+ */
+type DispatchedAbilityAssetResolution =
+  | { ok: true; assetIds: string[] }
+  | { ok: false; error: string };
+
+const DISPATCHED_ASSET_ERRORS = Object.freeze({
+  malformed: "`ability_assets` must be an array of asset ids",
+  tooMany: "`ability_assets` supports at most 24 assets per dispatch",
+  projectionRequired: "Ability assets require a current confirmed Projection.",
+  outsideProjection: "Ability assets must be a subset of the current confirmed Projection.",
+  projectionStale: "Ability assets are not available at the confirmed Projection version.",
+  unauthorized: "Unknown ability asset or unauthorized ability asset.",
+  runtimeDenied: "Ability asset is not allowed for this dispatch.",
+});
+
+/**
+ * Validate an explicit cross-Agent asset grant against the current KSTAR
+ * lifecycle before the existing live runtime gate. An omitted or empty grant
+ * deliberately bypasses this lookup: delegated work without asset context is
+ * independent of whether the conversation has opened a governed task.
+ *
+ * The Projection is authoritative for membership and the stored version map
+ * is authoritative for freshness. Error text is intentionally stable and
+ * never includes a requested/allowed id, Projection contents, or live gate
+ * reasons; the Commander cannot use an authorization failure as an asset
+ * enumeration oracle.
  */
 async function resolveDispatchedAbilityAssets(
   uid: string,
+  cid: string,
   value: unknown,
   context: AssetRuntimeContext,
-): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
+): Promise<DispatchedAbilityAssetResolution> {
   if (value === undefined) return { ok: true, assetIds: [] };
   if (!Array.isArray(value)) {
-    return { ok: false, error: "`ability_assets` must be an array of asset ids" };
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.malformed };
   }
   const rawIds = value.map((entry) => String(entry || "").trim()).filter(Boolean);
   if (rawIds.length > 24) {
-    return { ok: false, error: "`ability_assets` supports at most 24 assets per dispatch" };
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.tooMany };
   }
+  if (!rawIds.length) return { ok: true, assetIds: [] };
+
+  let lifecycle: Awaited<ReturnType<typeof import("../kstar/lifecycle-adapter").readKstarTaskLifecycle>>;
+  try {
+    const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+    lifecycle = await readKstarTaskLifecycle(uid, cid);
+  } catch {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
+  }
+  const projection = lifecycle.requirement && lifecycle.projection;
+  if (!projection || projection.status !== "confirmed") {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
+  }
+
+  const projectionAssetIds = new Set(projection.assetIds);
+  if (rawIds.some((assetId) => !projectionAssetIds.has(assetId))) {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.outsideProjection };
+  }
+  try {
+    const { validateCommittedProjectionAssetVersions } = await import("../recall/context-projection");
+    await validateCommittedProjectionAssetVersions(uid, projection);
+  } catch {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
+  }
+
   const granted: string[] = [];
   const seen = new Set<string>();
   for (const rawId of rawIds) {
@@ -9573,15 +9680,15 @@ async function resolveDispatchedAbilityAssets(
     try {
       asset = await readAbilityAsset(uid, rawId);
     } catch {
-      return { ok: false, error: `unknown ability asset: ${rawId}` };
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
     }
-    if (!asset) return { ok: false, error: `unknown ability asset: ${rawId}` };
+    if (!asset) return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
+    if (projection.assetVersions?.[asset.id] !== asset.version) {
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
+    }
     const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
     if (!gate.eligible) {
-      return {
-        ok: false,
-        error: `ability asset is not allowed for this dispatch: ${rawId} (${gate.reasons.join(", ")})`,
-      };
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.runtimeDenied };
     }
     granted.push(asset.id);
   }
@@ -10438,7 +10545,7 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: dispatchActor.id,
         purpose: message,
@@ -10447,7 +10554,14 @@ async function buildCommanderExtraTools(
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
       // when no KStar task is open (advisory; never blocks the dispatch).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -10646,7 +10760,7 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: handoffActor.id,
         purpose: message,
@@ -10656,7 +10770,14 @@ async function buildCommanderExtraTools(
       // Layer 2 routing uplift: named hand-off is a formal task. The
       // auto-track flag is captured so the forecast gate is waived ONLY for
       // the dispatch that actually created the task (ONCE semantics).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -10999,7 +11120,7 @@ async function buildCommanderExtraTools(
           name: "Worker",
           joined_at: nowIso(),
         };
-        const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
           ...currentRecallScope,
           purpose: task,
           taskText: task,
@@ -11071,7 +11192,7 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: namedActor.id,
         purpose: task,
@@ -11079,7 +11200,14 @@ async function buildCommanderExtraTools(
       });
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: named worker is a formal task.
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        task,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,

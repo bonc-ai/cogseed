@@ -227,6 +227,7 @@
       size: a.size,
       sizeLabel: _artifactSizeLabel(a.size),
       agentId: a.agentId || '',
+      agentIds: Array.isArray(a.agentIds) ? a.agentIds : [],
       agents: _agentSummaryLabel(a.agentId, a.agentIds),
       timeGroup: _artifactTimeGroup(a.time),
       timeLabel: _artifactTimeLabel(a.time),
@@ -310,11 +311,20 @@
     };
   }
 
-  /** 加载某空间的三 tab 数据（真实 IPC；切空间才重载）。切空间重置筛选，避免残留困惑。
-   *  任务/资产先渲染（两者只需读索引，毫秒级），产物列表后台到达后再并入刷新——
-   *  产物聚合是磁盘全扫，若同步等它，任务 tab 首屏会被拖慢（卡顿感知源之一）。 */
-  async function _loadSpaceDetail(spaceId) {
-    if (!spaceId || _detailLoadedFor === spaceId) return;
+  // Change the data owner before rendering its heading. Never pair a new
+  // space's controls with the previous space's tasks, artifacts or assets.
+  function _selectSpace(spaceId, invalidate = false) {
+    if (_detailSpaceId === spaceId && !invalidate) return;
+    _detailSpaceId = spaceId;
+    _detailRevision++;
+    _detailLoadedFor = null;
+    _detailRequest = null;
+    _sessions = [];
+    _assets = [];
+    _artifacts = [];
+    _detailPending = {};
+    _detailErrors = {};
+    _artifactsLoading = false;
     _artifactFilter = 'all';
     _assetFilter = 'all';
     // 产物页查找状态随空间切换重置（避免残留上一个空间的筛选困惑）
@@ -334,34 +344,54 @@
     _artBrokenPaths = new Set(); // 失效集合随空间隔离
     _artHealthSeq++;
     _resetArtScroll(); // 切空间回顶（旧滚动位置对新列表无意义）
-    _detailLoadedFor = spaceId; // 先占位：防止并发进入重复加载；产物结果返回时按此判断是否已过期
-    const [convRes, assetRes] = await Promise.all([
-      _invoke('spaces.conversations.list', { spaceId }),
-      _invoke('recall.assets.listForSpace', { spaceId }),
-    ]);
-    // 空间可用智能体：空间可用智能体数（空间 meta 缓存；与会话是否对话过无关）
-    const spaceMeta = _spaces.find((s) => s && s.space_id === spaceId);
-    const usableCount = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
-      ? spaceMeta.usable_agents.length
-      : undefined;
-    _sessions = (Array.isArray(convRes.conversations) ? convRes.conversations : []).map((c) => _mapConversation(c, usableCount));
-    // 资产 tab = 本空间沉淀的认知资产（recall 按 spaceId 过滤；空间可读全局但显示只显示本空间）
-    _assets = (Array.isArray(assetRes.assets) ? assetRes.assets : []).map(_mapRecallAsset);
-    // 产物后台加载：不阻塞任务/资产首屏；已切走空间则丢弃过期结果
+  }
+
+  /** Independent reads, all guarded by request revision AND space identity.
+   *  A -> B -> A and same-space retries must reject the first A's response too.
+   *  Retain safe data only for the same space; failures stay locally retryable. */
+  async function _loadSpaceDetail(spaceId) {
+    if (!_workspaceActive || _view !== 'space' || !spaceId || spaceId !== _detailSpaceId || !_space()) return;
+    if (_detailLoadedFor === spaceId) return _detailRequest;
+    const revision = ++_detailRevision;
+    _artHealthSeq++;
+    _detailLoadedFor = spaceId;
+    _detailPending = { tasks: true, assets: true, artifacts: true };
+    _detailErrors = {};
     _artifactsLoading = true;
-    if (_view === 'space' && _spaceTab === 'artifacts') _reRender(); // 立即渲染骨架屏
-    void _invoke('spaces.artifacts.list', { spaceId }).then((artRes) => {
-      if (_detailLoadedFor !== spaceId) return;
-      _artifacts = (Array.isArray(artRes.artifacts) ? artRes.artifacts : []).map(_mapArtifact);
-      _artifactsLoading = false;
-      _reRender();
-      void _probeArtifactHealth(spaceId); // 后台失效探测（静默，完成后就地标记）
-    }).catch(() => {
-      if (_detailLoadedFor !== spaceId) return;
-      _artifacts = [];
-      _artifactsLoading = false;
-      _reRender();
+    const isCurrent = () => revision === _detailRevision && _detailSpaceId === spaceId
+      && _workspaceActive && _view === 'space' && !!_space();
+    const reads = [
+      ['tasks', 'spaces.conversations.list', 'conversations'],
+      ['assets', 'recall.assets.listForSpace', 'assets'],
+      ['artifacts', 'spaces.artifacts.list', 'artifacts'],
+    ].map(async ([tab, channel, field]) => {
+      try {
+        const result = await _invoke(channel, { spaceId });
+        if (!isCurrent()) return;
+        if (result.error) throw new Error(String(result.error));
+        const items = Array.isArray(result[field]) ? result[field] : [];
+        if (tab === 'tasks') {
+          const usableCount = _space()?.usable_agents?.length || undefined;
+          _sessions = items.map((item) => _mapConversation(item, usableCount));
+        } else if (tab === 'assets') _assets = items.map(_mapRecallAsset);
+        else _artifacts = items.map(_mapArtifact);
+      } catch (_) {
+        if (!isCurrent()) return;
+        _detailErrors[tab] = true;
+        _detailLoadedFor = null;
+      } finally {
+        if (isCurrent()) {
+          _detailPending[tab] = false;
+          if (tab === 'artifacts') _artifactsLoading = false;
+          _reRender();
+        }
+      }
+      if (isCurrent() && tab === 'artifacts' && !_detailErrors[tab]) void _probeArtifactHealth(spaceId);
     });
+    // Disk-heavy artifact aggregation does not block opening tasks/assets.
+    _detailRequest = Promise.all(reads.slice(0, 2));
+    _reRender();
+    return _detailRequest;
   }
 
   // ── 真实数据（由 _loadData 填充）─────────────────────────────────────────
@@ -393,6 +423,18 @@
   }
   let _loaded = false;     // 是否已成功加载过（区分「加载中」与「加载失败」）
   let _loadError = '';     // 加载失败原因
+  let _dataRevision = 0;
+  let _dataLoadedAt = 0;
+  const _SPACE_REFRESH_MS = 5000;
+  const _CATALOG_REFRESH_MS = 30000;
+  const _catalogs = Object.fromEntries(['templates', 'skills', 'agents'].map((kind) => [kind,
+    { revision: 0, request: null, loaded: false, error: false, at: 0 }]));
+  let _warmupRequest = null;
+  let _workspaceActive = false;
+  let _entryRevision = 0;
+  let _entryRequest = null;
+  let _entryLoading = false;
+  let _renderedHtml = null;
 
   // 空间详情/任务页的三 tab 数据（阶段 2 起接真实 IPC：spaces.conversations/artifacts/assets.list）
   let _sessions = [];        // 任务 = 空间下会话（listSpaceConversations）
@@ -402,6 +444,10 @@
   // 这行注释此前写的是 bindings，导致「绑定后不生效」被误判成用户可见缺陷。
   let _assets = [];
   let _detailLoadedFor = null;  // 已加载详情的 space_id（切空间才重载）
+  let _detailRevision = 0;
+  let _detailRequest = null;
+  let _detailPending = {};
+  let _detailErrors = {};
   let _artifactsLoading = false; // 产物聚合在途（渲染列表骨架屏）
   const _ARTIFACT_FILTERS = ['all', 'document', 'spreadsheet', 'presentation', 'web'];
   const _ASSET_FILTERS = ['all', 'personal', 'rule', 'template', 'skill_method'];
@@ -494,60 +540,111 @@
     return (ids || []).map((id) => map.get(id) || { id, name: id, desc: '' });
   }
 
-  async function _loadData() {
-    // `localAgents.list` probes every installed CLI binary on this machine
-    // (spawns `--version` per CLI, up to seconds on a hung probe). It must
-    // NOT gate the workspace view: load the fast, index-backed data first and
-    // fold in the CLI probe result when it arrives.
-    const [spacesRes, templatesRes, scenariosRes, skillsRes, agentsRes] = await Promise.all([
-      _invoke('spaces.list'),
-      _invoke('personalOntology.templates.catalog'),
-      _invoke('personalOntology.scenarios.list'),
-      _invoke('skills.list'),
-      _invoke('agents.list'),
-    ]);
-    if (spacesRes.error && templatesRes.error) {
-      _loadError = (spacesRes.error || '') + ' / ' + (templatesRes.error || '');
-      _loaded = false;
-      return;
-    }
-    _spaces = Array.isArray(spacesRes.spaces) ? spacesRes.spaces : [];
-    _templates = Array.isArray(templatesRes.templates) ? templatesRes.templates.map(_localizeTemplate) : [];
-    _scenarios = Array.isArray(scenariosRes.scenarios) ? scenariosRes.scenarios.map(_localizeScenario) : [];
-    const uiLang = typeof getLang === 'function' ? getLang() : 'zh';
-    _skillCatalog = Array.isArray(skillsRes.skills)
-      ? skillsRes.skills.map((s) => ({
-          id: s.id,
-          name: s.name || s.id,
-          desc: (uiLang === 'zh' ? (s.description_zh || s.description_en) : (s.description_en || s.description_zh) || '').trim(),
-        }))
-      : [];
-    _agentCatalog = Array.isArray(agentsRes.agents)
-      ? agentsRes.agents.map((a) => ({
-          id: a.agent_id, name: a.name || a.agent_id,
-          desc: (uiLang === 'zh' ? (a.description_zh || a.description_en) : (a.description_en || a.description_zh) || '').trim(),
-          // 保留 runtime 供基础 Agent 合并使用（外接 CLI agent = 基础 Agent）
-          runtime: (a && a.runtime) || null,
-          // 头像同源：与 AI 团队面板外接 agent 同一份 icon/color（renderAvatarHtml）
-          icon: (a && a.icon) || undefined,
-          color: (a && a.color) || undefined,
-        }))
-      : [];
-    _loaded = true;
-    _loadError = '';
-    // 详情默认指向第一个空间
-    if (_detailSpaceId === null && _spaces.length) _detailSpaceId = _spaces[0].space_id;
+  function _loadData() {
+    const revision = ++_dataRevision;
+    const request = (async () => {
+      // Only space metadata belongs on the first-paint path. Mutations call
+      // this directly to supersede older reads, bypassing the navigation cache.
+      const spacesRes = await _invoke('spaces.list');
+      if (revision !== _dataRevision) return;
+      if (spacesRes.error || !Array.isArray(spacesRes.spaces)) {
+        _loadError = _t('ws.refresh_failed', '刷新失败，已保留最近的数据。');
+        return;
+      }
+      _spaces = spacesRes.spaces;
+      if (_detailSpaceId && !_space()) _selectSpace(_detailSpaceId, true);
+      _loaded = true;
+      _dataLoadedAt = Date.now();
+      _loadError = '';
+      // A cached card may have been opened while this catalog was in flight.
+      // Update today's view, not the navigation that requested the catalog.
+      _reRender();
+    })().finally(() => { if (_warmupRequest === request) _warmupRequest = null; });
+    _warmupRequest = request;
+    return request;
+  }
+
+  function _invalidateSpaceData() {
+    _dataLoadedAt = 0;
+    _dataRevision++;
+    _warmupRequest = null;
+  }
+
+  // Independent, short-lived display catalogs. Security stays in the existing
+  // skills.list handler; ordinary space navigation no longer invokes it.
+  function _loadCatalog(kind, { force = false } = {}) {
+    const state = _catalogs[kind];
+    if (!state) return Promise.resolve();
+    if (!force && state.request) return state.request;
+    if (!force && state.loaded && !state.error && Date.now() - state.at < _CATALOG_REFRESH_MS) return Promise.resolve();
+    const revision = ++state.revision;
+    state.error = false;
+    const queries = kind === 'templates'
+      ? [['personalOntology.templates.catalog', 'templates'], ['personalOntology.scenarios.list', 'scenarios']]
+      : [[`${kind}.list`, kind]];
+    const promise = (async () => {
+      try {
+        const results = await Promise.all(queries.map(([channel]) => _invoke(channel)));
+        if (revision !== state.revision) return;
+        if (results.some((result, i) => result.error || !Array.isArray(result[queries[i][1]]))) throw new Error('catalog unavailable');
+        const uiLang = typeof getLang === 'function' ? getLang() : 'zh';
+        if (kind === 'templates') {
+          _templates = results[0].templates.map(_localizeTemplate);
+          _scenarios = results[1].scenarios.map(_localizeScenario);
+        } else if (kind === 'skills') {
+          _skillCatalog = results[0].skills.map((s) => ({ id: s.id, name: s.name || s.id,
+            desc: ((uiLang === 'zh' ? s.description_zh || s.description_en : s.description_en || s.description_zh) || '').trim() }));
+        } else {
+          _agentCatalog = results[0].agents.map((a) => ({ id: a.agent_id, name: a.name || a.agent_id,
+            desc: ((uiLang === 'zh' ? a.description_zh || a.description_en : a.description_en || a.description_zh) || '').trim(),
+            runtime: a.runtime || null, icon: a.icon || undefined, color: a.color || undefined }));
+          _mergeCliProbeResult(_cliProbeResult);
+          let labelsChanged = false;
+          _artifacts = _artifacts.map((a) => {
+            const agents = _agentSummaryLabel(a.agentId, a.agentIds);
+            if (agents !== a.agents) labelsChanged = true;
+            return { ...a, agents };
+          });
+          // Virtual rows are outside the retained outer HTML. Refresh through
+          // their existing owner when labels change, without replacing inputs.
+          if (labelsChanged && _workspaceActive && _view === 'space' && _spaceTab === 'artifacts') _refreshArtifactResults();
+        }
+        state.loaded = true;
+        state.at = Date.now();
+      } catch (_) {
+        if (revision === state.revision) state.error = true;
+      } finally {
+        if (revision === state.revision) { state.request = null; _reRender(); }
+      }
+    })();
+    state.request = promise;
+    _reRender();
+    return promise;
+  }
+
+  function _configurationReady() {
+    return Object.values(_catalogs).every((state) => state.loaded && !state.error && !state.request);
+  }
+
+  function _ensureConfigurationCatalogs() {
+    for (const kind of Object.keys(_catalogs)) void _loadCatalog(kind);
+    _warmCliCatalog();
+  }
+
+  let _cliProbeResult = {};
+  function _warmCliCatalog() {
     // ── 后台探测本机 CLI，完成后并入基础 Agent 候选并刷新视图 ──
     // 只探测一次：保存空间/改名等后续 _loadData 不重探（CLI 安装状态
     // 在会话内不变，主进程也有 5min 缓存），避免候选列表闪动。
     if (_cliProbeDone) return;
     _cliProbeDone = true;
-    _mergeCliProbeResult({});
+    _mergeCliProbeResult(_cliProbeResult);
     void _invoke('localAgents.list').then((cliRes) => {
+      _cliProbeResult = cliRes;
       _mergeCliProbeResult(cliRes);
       _reRender();
     }).catch(() => {
-      // 探测 IPC 抛错：本次不标记完成，下次 _loadData 再试（避免
+      // 探测处理抛错：本次不标记完成，下次打开配置再试（避免
       // 一次性失败导致整个会话都拿不到 CLI 候选）。
       _cliProbeDone = false;
     });
@@ -642,71 +739,129 @@
   let _roleEditOpen = false;       // 角色（主模板）选择弹窗
 
   function _space() {
-    return _spaces.find((s) => s.space_id === _detailSpaceId) || _spaces[0] || null;
+    return _spaces.find((s) => s.space_id === _detailSpaceId) || null;
   }
 
   // ── render 入口 ───────────────────────────────────────────────────────────
 
-  async function renderWorkspace() {
-    _view = 'center';
+  function warmWorkspace({ force = false } = {}) {
+    if (_warmupRequest) return _warmupRequest;
+    if (!force && _loaded && !_loadError && Date.now() - _dataLoadedAt < _SPACE_REFRESH_MS) return Promise.resolve();
+    return _loadData();
+  }
+
+  // Called by boot BEFORE showing the retained panel, and by the lazy entry
+  // when it has just loaded. Re-clicking the active entry preserves its view.
+  function prepareWorkspaceView() {
+    const requested = _pendingOpenSpaceId || window.__cogseedPendingOpenSpace || null;
+    _pendingOpenSpaceId = null;
+    window.__cogseedPendingOpenSpace = null;
+    if (_workspaceActive && !requested) return;
+    _workspaceActive = true;
+    _entryRevision++;
+    _entryLoading = !_loaded || !!_loadError || Date.now() - _dataLoadedAt >= _SPACE_REFRESH_MS || (!!requested && !_spaces.some((s) => s.space_id === requested));
+    _view = requested ? 'space' : 'center';
+    if (requested) _selectSpace(requested);
     _createOpen = false;
     _abilityOpen = false;
     _configOpen = false;
-    const root = document.getElementById('ws-view');
-    if (!root) return;
-    root.innerHTML = `<div class="ws-loading">${_t('ws.loading', '加载中…')}</div>`;
-    try {
-      await _loadData();
-      // 会话面包屑「空间名」在 workspace.js 懒加载完成前被点击时，目标空间 id
-      // 暂存在 window 上；首次进入工作空间面板时在这里消费一次。
-      if (!_pendingOpenSpaceId && window.__cogseedPendingOpenSpace) {
-        _pendingOpenSpaceId = window.__cogseedPendingOpenSpace;
-        window.__cogseedPendingOpenSpace = null;
+    if (requested && _space()) void _loadSpaceDetail(requested);
+    _reRender();
+  }
+
+  function leaveWorkspace() {
+    if (!_workspaceActive) return;
+    _workspaceActive = false;
+    _entryRevision++;
+    _entryLoading = false;
+    _detailRevision++;
+    _detailLoadedFor = null;
+    _detailPending = {};
+    _artHealthSeq++;
+    _pendingOpenSpaceId = null;
+    window.__cogseedPendingOpenSpace = null;
+  }
+
+  async function renderWorkspace({ force = false } = {}) {
+    prepareWorkspaceView();
+    const revision = _entryRevision;
+    if (_entryRequest?.revision === revision) return _entryRequest.promise;
+    const unknownTarget = _view === 'space' && !_space();
+    _entryLoading = force || unknownTarget || !_loaded || !!_loadError || Date.now() - _dataLoadedAt >= _SPACE_REFRESH_MS;
+    _reRender();
+    // Templates are a secondary section; capability catalogs are only read
+    // when a configuration surface (or artifact author labels) needs them.
+    if (_view === 'center') void _loadCatalog('templates');
+    const promise = (async () => {
+      try { await warmWorkspace({ force: force || unknownTarget }); }
+      catch (_) { _loadError = _t('ws.refresh_failed', '刷新失败，已保留最近的数据。'); }
+      if (!_workspaceActive || revision !== _entryRevision) return;
+      _entryLoading = false;
+      if (_view === 'space' && _space()) {
+        // Starts loading before rendering the first empty detail frame.
+        void _loadSpaceDetail(_detailSpaceId);
       }
-      if (_pendingOpenSpaceId) {
-        _detailSpaceId = _pendingOpenSpaceId;
-        _pendingOpenSpaceId = null;
-        _view = 'space';
-        _reRender();
-        _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
-      } else {
-        _reRender();
-      }
-    } catch (err) {
-      _loadError = (err && err.message) || String(err);
-      _loaded = false;
       _reRender();
-    }
+    })();
+    _entryRequest = { revision, promise };
+    try { await promise; }
+    finally { if (_entryRequest?.promise === promise) _entryRequest = null; }
   }
 
   function _go(view, opts) {
+    _entryRevision++;
+    _entryLoading = false;
     _view = view;
-    if (opts && opts.spaceId) _detailSpaceId = opts.spaceId;
+    if (opts && opts.spaceId) _selectSpace(opts.spaceId);
     if (opts && opts.tab) _spaceTab = opts.tab;
     _configOpen = false;
     _createOpen = false;
     _abilityOpen = false;
-    _reRender();
-    // 进入空间详情时异步加载三 tab 真数据（切空间重载）
-    if (view === 'space' && _detailSpaceId) {
-      _loadSpaceDetail(_detailSpaceId).then(() => _reRender());
+    if (view === 'space' && _detailSpaceId) void _loadSpaceDetail(_detailSpaceId);
+    else {
+      _detailRevision++;
+      _detailLoadedFor = null;
+      _detailPending = {};
+      void _loadCatalog('templates');
     }
+    _reRender();
+  }
+
+  function _loadingHtml(detail = false) {
+    return `<div class="${detail ? 'ws-detail-loading' : 'ws-loading'}" role="status"${detail ? ' data-ws-detail-loading' : ''}>${escapeHtml(_t('ws.loading', '加载中…'))}</div>`;
+  }
+
+  function _retryState(action, title) {
+    return window.uiEmptyState({ kind: 'actionable', title,
+      action: { label: _t('ws.retry', '重试'), role: 'secondary', attrs: { 'data-ws': action } } });
+  }
+
+  function _catalogStatus(kind) {
+    const states = kind === 'configuration' ? Object.values(_catalogs) : [_catalogs[kind]];
+    const failed = states.some((state) => state.error);
+    return `<div data-ws-catalog="${kind}" aria-busy="${states.some((state) => !!state.request)}">${failed
+      ? window.uiEmptyState({ kind: 'actionable', title: _t('ws.catalog_load_failed', '目录加载失败，请重试。'),
+          action: { label: _t('ws.retry', '重试'), role: 'secondary', attrs: { 'data-ws': 'retry-catalog', 'data-catalog': kind } } })
+      : _loadingHtml(true)}</div>`;
+  }
+
+  function _refreshNotice() {
+    // Keep the status row's height stable across refreshes: no content jump.
+    if (!_loadError && !_entryLoading) return '<div class="ws-refresh-notice" aria-hidden="true"></div>';
+    const retry = _loadError && !_entryLoading ? window.uiButton({ label: _t('ws.retry', '重试'),
+      size: 'sm', attrs: { 'data-ws': 'retry-load' } }) : '';
+    return `<div class="ws-refresh-notice" role="status"><span>${escapeHtml(_entryLoading
+      ? _t('ws.refreshing', '正在刷新…') : _loadError)}</span>${retry}</div>`;
   }
 
   function _render() {
-    if (!_loaded) return _renderLoadError();
+    if (!_loaded) return _entryLoading ? _loadingHtml() : _renderLoadError();
     if (_view === 'space') return _renderSpace();
     return _renderCenter();
   }
 
   function _renderLoadError() {
-    return `
-    <div class="ws-view ws-center">
-      <div class="ws-load-error">
-        <p>${_t('ws.load_error', '加载失败')}：${escapeHtml(_loadError)}</p>
-        <button class="ws-primary" data-ws="retry-load">${_t('ws.retry', '重试')}</button>
-      </div>
-    </div>`;
+    return `<div class="ws-view ws-recovery-page">${_retryState('retry-load', _t('ws.load_error', '加载失败'))}</div>`;
   }
 
   // ── 空间中心 ──────────────────────────────────────────────────────────────
@@ -739,6 +894,7 @@
     return `
     <div class="ws-view">
       <div class="ws-center-header">${_renderCenterPageHeader()}</div>
+      ${_refreshNotice()}
       <div class="ws-center">
       <p class="ws-tagline">${_t('ws.center_tagline', '工作空间越用越懂你的专属空间，让工作自然接续，让成果持续积累，让认知持续沉淀。')}</p>
 
@@ -765,14 +921,15 @@
         <div class="ws-section-head">
           <div class="ws-section-title"><h2>${_t('ws.from_template', '从模板创建')}</h2><span class="ws-count">${_scenarios.length + _templates.length}</span></div>
         </div>
-        ${_scenarios.length
+        ${_catalogs.templates.error || !_catalogs.templates.loaded ? _catalogStatus('templates') : ''}
+        ${_catalogs.templates.loaded ? `${_scenarios.length
           ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
              <div class="ws-template-grid ws-scene-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
           : ''}
         ${_templates.length
           ? `<div class="ws-create-group-label">${_t('ws.templates_group', '角色模板')}</div>
              <div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
-          : (!_scenarios.length ? `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>` : '')}
+          : (!_scenarios.length ? `<div class="ws-empty">${_t('ws.no_templates', '暂无可用空间模板。')}</div>` : '')}` : ''}
       </section>
       </div>
     </div>`;
@@ -863,7 +1020,15 @@
 
   function _renderSpace() {
     const sp = _space();
-    if (!sp) return `<div class="ws-view ws-center"><div class="ws-empty">${_t('ws.no_spaces', '还没有工作空间。')}</div></div>`;
+    if (!sp) {
+      if (_entryLoading) return _loadingHtml();
+      if (_loadError) return _renderLoadError();
+      return `<div class="ws-view ws-recovery-page" data-ws-space-unavailable>${window.uiEmptyState({
+        kind: 'actionable', title: _t('ws.space_unavailable', '该工作空间已删除或不可用'),
+        hint: _t('ws.space_unavailable_hint', '请返回空间中心选择其他空间。'),
+        action: { label: _t('ws.back_to_center', '返回空间中心'), role: 'secondary', attrs: { 'data-ws': 'back-to-center' } },
+      })}</div>`;
+    }
     const tabMeta = { tasks: { label: _t('ws.tab_tasks', '任务'), count: _sessions.length },
       artifacts: { label: _t('ws.tab_artifacts', '产物'), count: _artifacts.length },
       assets: { label: _t('ws.tab_assets', '资产'), count: _assets.length } };
@@ -871,6 +1036,7 @@
     return `
     <div class="ws-view ws-space-page ${_configOpen ? 'ws-config-open' : ''}">
       <div class="ws-space-main">
+        ${_refreshNotice()}
         <header class="ws-space-head">
           <div class="ws-space-back-row">
             <button class="ws-back" data-ws="back-to-center" title="${_t('ws.back_to_center', '返回空间中心')}">${_icon('chevron-left', 'ui-icon')}${_t('ws.back_to_center', '返回空间中心')}</button>
@@ -901,9 +1067,14 @@
   }
 
   function _renderSpacePane(sp) {
-    if (_spaceTab === 'artifacts') return _renderArtifactsPane();
-    if (_spaceTab === 'assets') return _renderAssetsPane();
-    return _renderTasksPane();
+    const items = _spaceTab === 'artifacts' ? _artifacts : _spaceTab === 'assets' ? _assets : _sessions;
+    const pending = _detailPending[_spaceTab] || (_entryLoading && _detailLoadedFor !== sp.space_id);
+    if (pending && !items.length) return _loadingHtml(true);
+    const error = _detailErrors[_spaceTab];
+    const retry = error ? _retryState('retry-detail', _t('ws.detail_load_failed', '无法刷新此空间的内容，请重试。')) : '';
+    if (error && !items.length) return retry;
+    const notice = pending ? `<p class="ws-refresh-notice" role="status">${escapeHtml(_t('ws.refreshing', '正在刷新…'))}</p>` : '';
+    return notice + retry + (_spaceTab === 'artifacts' ? _renderArtifactsPane() : _spaceTab === 'assets' ? _renderAssetsPane() : _renderTasksPane());
   }
 
   function _renderTasksPane() {
@@ -927,12 +1098,14 @@
    *  （与主对话同一个 composer：+ 附件 / To / 工作空间 / @ 引用产物资产 / 发送）。 */
   async function _startNewTask(spaceId) {
     if (!spaceId) return;
+    const revision = _entryRevision;
     const res = await _invoke('conversations.create', { spaceId });
     if (res.error || !res.conversation) {
       _stub(_t('ws.task_create_failed', '新建任务失败：{reason}', { reason: res.error || _t('ws.unknown_error', '未知错误') }));
       return;
     }
     const cid = res.conversation.conversation_id;
+    _invalidateSpaceData();
     // 新任务同步进侧栏 conversations 缓存（否则空间组/最近区缺这条，直到下次刷新）
     if (typeof conversations !== 'undefined' && Array.isArray(conversations)
       && !conversations.some((c) => c && c.conversation_id === cid)) {
@@ -940,9 +1113,11 @@
       if (res.conversation.space_id) conversations.unshift(conv);
     }
     if (typeof renderConversationList === 'function') renderConversationList();
-    // 刷新空间任务列表（回来时任务数/最近任务更新），然后跳到标准会话页
+    // Completion belongs to the initiating navigation, not a later space or
+    // another page. Do not wait for unrelated detail reads to open the task.
+    if (!_workspaceActive || revision !== _entryRevision || _detailSpaceId !== spaceId) return;
     _detailLoadedFor = null;
-    _loadSpaceDetail(spaceId).then(() => { if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true }); });
+    if (typeof setView === 'function') setView('conversation', cid, { skipLoad: true });
   }
 
   /** 任务行「移出空间」= 解绑会话（conversations.setSpace 传空 spaceId）。 */
@@ -952,6 +1127,7 @@
       _stub(_t('ws.task_unbind_failed', '移出空间失败：{reason}', { reason: res.error || _t('ws.unknown_error', '未知错误') }));
       return;
     }
+    _invalidateSpaceData();
     // 同步侧栏：本地 conversations 里该会话 space_id 清掉（回「最近任务」，空间组消失）
     if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
       const idx = conversations.findIndex((c) => c && c.conversation_id === cid);
@@ -1807,6 +1983,7 @@
       return;
     }
     const cid = res.conversation.conversation_id;
+    _invalidateSpaceData();
     const reference = {
       kind: 'artifact',
       name: a.name,
@@ -1935,6 +2112,7 @@
     <aside class="ws-config-panel">
       <header><h2>${_t('ws.space_settings', '空间设置')}</h2><button class="ws-drawer-close" data-ws="config-close" aria-label="${_t('ws.close', '关闭')}">${_icon('x', 'ui-icon')}</button></header>
       <div class="ws-config-body">
+        ${!_configurationReady() ? _catalogStatus('configuration') : `
         <section><label>${_t('ws.default_goal', '默认目标/指令')}</label>
           <textarea data-ws="config-instructions" maxlength="4000" rows="4" placeholder="${_t('ws.instruction_ph', '填写空间的背景、目标、工作方式、输出要求等')}">${escapeHtml(instructionsValue)}</textarea>
           <div class="ws-config-actions"><button class="ws-secondary" data-ws="save-instructions">${_t('ws.save', '保存')}</button><span class="ws-config-hint">${_t('ws.config_footer', '配置更新后，从下一次交互开始生效。')}</span></div>
@@ -1968,6 +2146,7 @@
             ${invalidCount ? `<button class="ws-secondary" data-ws="prune-invalid">${_t('ws.prune', '清理')}</button>` : ''}
           </div>
         </section>
+        `}
       </div>
     </aside>`;
   }
@@ -2004,6 +2183,7 @@
           <button data-ws="close-create">${_icon('x', 'ui-icon')}</button>
         </header>
         <div class="ws-dialog-body">
+          ${!_configurationReady() ? _catalogStatus('configuration') : `
           <div class="ws-form-grid">
             <label class="full"><span>${_t('ws.space_name', '空间名称')} <em>${_t('ws.required', '必填')}</em></span>
               <input data-ws="create-name" value="${escapeHtml(_createName)}" placeholder="${_t('ws.space_name_ph', '请输入空间名称')}" maxlength="60" autocomplete="off" spellcheck="false" /></label>
@@ -2047,12 +2227,13 @@
                 <button class="ws-secondary" data-ws="open-ability" data-kind="${k}">${_t('ws.adjust', '调整')}</button>
               </div>`).join('')}
           </div>
+          `}
         </div>
         <footer class="ws-dialog-foot">
           <small>${_t('ws.create_footer', '创建后将自动进入空间的第一个新任务。')}</small>
           <div>
             <button class="ws-secondary" data-ws="close-create">${_t('ws.cancel', '取消')}</button>
-            <button class="ws-primary" data-ws="confirm-create">${_t('ws.create_space', '创建空间')}</button>
+            ${window.uiButton({ label: _t('ws.create_space', '创建空间'), role: 'primary', disabled: !_configurationReady(), attrs: { 'data-ws': 'confirm-create' } })}
           </div>
         </footer>
       </section>
@@ -2555,7 +2736,15 @@
     root.querySelectorAll('[data-ws="noop"]').forEach((el) => el.addEventListener('click', (e) => e.stopPropagation()));
 
     // 加载失败重试
-    root.querySelectorAll('[data-ws="retry-load"]').forEach((el) => el.addEventListener('click', () => renderWorkspace()));
+    root.querySelectorAll('[data-ws="retry-load"]').forEach((el) => el.addEventListener('click', () => renderWorkspace({ force: true })));
+    root.querySelectorAll('[data-ws="retry-catalog"]').forEach((el) => el.addEventListener('click', () => {
+      if (el.dataset.catalog === 'configuration') _ensureConfigurationCatalogs();
+      else void _loadCatalog(el.dataset.catalog);
+    }));
+    root.querySelectorAll('[data-ws="retry-detail"]').forEach((el) => el.addEventListener('click', () => {
+      _detailLoadedFor = null;
+      void _loadSpaceDetail(_detailSpaceId);
+    }));
 
     // 空间中心
     root.querySelectorAll('[data-ws="create-space"]').forEach((el) => el.addEventListener('click', () => _openCreate(null)));
@@ -2636,6 +2825,7 @@
     // 空间详情
     root.querySelectorAll('[data-ws="space-tab"]').forEach((el) => el.addEventListener('click', () => {
       _spaceTab = el.dataset.tab;
+      if (_spaceTab === 'artifacts') void _loadCatalog('agents');
       // 产物/资产 tab：切到时强制重载（对话里新产出/新确认立即可见，避免缓存旧数据）
       if ((el.dataset.tab === 'artifacts' || el.dataset.tab === 'assets') && _detailSpaceId) {
         _detailLoadedFor = null;
@@ -2646,7 +2836,11 @@
     }));
     // 空间详情「返回空间中心」（返回上级）
     root.querySelectorAll('[data-ws="back-to-center"]').forEach((el) => el.addEventListener('click', () => _go('center')));
-    root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => { _configOpen = !_configOpen; _reRender(); }));
+    root.querySelectorAll('[data-ws="space-settings"]').forEach((el) => el.addEventListener('click', () => {
+      _configOpen = !_configOpen;
+      if (_configOpen) _ensureConfigurationCatalogs();
+      _reRender();
+    }));
     root.querySelectorAll('[data-ws="config-close"]').forEach((el) => el.addEventListener('click', () => { _configOpen = false; _reRender(); }));
     // ── 空间设置抽屉（可编辑）──
     const ci = root.querySelector('[data-ws="config-instructions"]');
@@ -2833,6 +3027,7 @@
 
   /** 创建空间（真实 IPC：spaces.create + 额外资源绑定）。 */
   async function _createSpace() {
+    if (!_configurationReady()) return;
     const name = String(_createName || '').trim();
     if (!name) { _stub(_t('ws.name_required', '请填写空间名称')); return; }
     const instructions = String(_createInstruction || '').trim();
@@ -2952,6 +3147,7 @@
     // 新建弹窗每次打开重置"已触碰"标记：探测合并的回落首项仅对
     // 用户尚未手动选择时生效；已选的 _createBaseAgents 保留为默认候选。
     _createAgentTouched = false;
+    _ensureConfigurationCatalogs();
     _reRender();
   }
 
@@ -2972,6 +3168,7 @@
     _createOpen = true;
     _abilityOpen = false;
     _createAgentOpen = false;
+    _ensureConfigurationCatalogs();
     _reRender();
   }
 
@@ -2986,8 +3183,11 @@
   }
 
   function _reRender() {
+    if (!_workspaceActive) return;
     const root = document.getElementById('ws-view');
     if (!root) return;
+    root.setAttribute('aria-busy', String(!_loaded ? _entryLoading : _view === 'space'
+      ? (!_space() ? _entryLoading : !!_detailPending[_spaceTab]) : false));
     // 重建前捕获搜索框焦点/光标：innerHTML 全量替换会销毁输入框。
     // 搜索框在打字过程中触发的重建必须把焦点还给用户，否则每敲一次就失焦。
     const active = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
@@ -3003,12 +3203,19 @@
     if (_baseAgentEditOpen) html += _renderBaseAgentModal();
     if (_roleEditOpen) html += _renderRoleModal();
     if (_refPickerOpen) html += _renderRefPicker();
+    // Unchanged background responses must not destroy focused controls or
+    // artifact previews. This is still the existing full-page renderer.
+    // Browser serialization normalizes attributes/entities, so comparing
+    // root.innerHTML to the source string would still destroy identical DOM.
+    if (_renderedHtml === html) return;
     // 卡片预览的 blob URL 随旧 DOM 一并作废（每次重建前吊销，防内存堆积）
     _revokeArtCardBlobs();
     root.innerHTML = html;
+    _renderedHtml = html;
     _bind(root);
     if (_view === 'space' && _spaceTab === 'artifacts') {
       if (_artifactView === 'list') {
+        _artVWinRange = null; // The replaced DOM has a new, empty row window.
         _updateArtVWindow(); // 按当前滚动位置填充可视窗口
       } else {
         _initArtCardPreviews(); // 缩略图懒加载
@@ -3044,7 +3251,11 @@
     const templateNameUntouched = !!previousTemplate && _createName === previousTemplate.name;
     const templateInstructionUntouched = !!previousTemplate && _createInstruction === (previousTemplate.description || '');
     const scenarioNameUntouched = !!previousScenario && _createName === previousScenario.name;
-    await _loadData();
+    await Promise.all([
+      _loadData(),
+      ...Object.keys(_catalogs).filter((kind) => _catalogs[kind].loaded || _catalogs[kind].request)
+        .map((kind) => _loadCatalog(kind, { force: true })),
+    ]);
     const nextTemplate = _templates.find((item) => item.templateId === _createTemplate) || null;
     const nextScenario = _scenarios.find((item) => item.scenarioId === _createScenario) || null;
     if (templateNameUntouched && nextTemplate) _createName = nextTemplate.name;
@@ -3059,7 +3270,11 @@
 
   /** 侧栏「空间」＋ 入口：加载空间中心并打开新建空间弹窗（先渲染再弹窗）。 */
   async function openWorkspaceCreate() {
+    if (typeof currentView === 'string' && !['workspace', 'spaces'].includes(currentView)) return;
+    prepareWorkspaceView();
+    const revision = _entryRevision;
     try { await renderWorkspace(); } catch (_) {}
+    if (!_workspaceActive || revision !== _entryRevision || !_loaded) return;
     _openCreate(null);
   }
   /** 会话面包屑「空间名」入口：切到工作空间面板并直接打开指定空间详情。 */
@@ -3070,6 +3285,9 @@
     if (typeof setView === 'function') setView('workspace');
   }
   window.renderWorkspace = renderWorkspace;
+  window.warmWorkspace = warmWorkspace;
+  window.prepareWorkspaceView = prepareWorkspaceView;
+  window.leaveWorkspace = leaveWorkspace;
   window.openWorkspaceCreate = openWorkspaceCreate;
   window.openWorkspaceSpace = openWorkspaceSpace;
   window.addEventListener('i18n-change', () => { void _refreshForLanguageChange(); });

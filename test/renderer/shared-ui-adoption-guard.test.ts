@@ -51,8 +51,6 @@ const legacyRawControlBaseline: Record<string, number> = {
   'recall-projection-card.js': 4,
   'run-center-agents.js': 5,
   'run-center-board.js': 3,
-  'run-center-overview.js': 5,
-  'run-center.js': 52,
   'search.js': 3,
   'settings-security.js': 7,
   'settings.js': 25,
@@ -65,6 +63,17 @@ const legacyRawControlBaseline: Record<string, number> = {
   'validation-report-view.js': 2,
   'workspace.js': 80,
 };
+
+// Detail extraction moved legacy markup out of run-center.js. Freeze the two
+// files as one owner so the extraction cannot raise the former 52-control
+// budget. The remaining raw detail controls are composite, roving-tab widgets
+// whose rich-content contract is not represented by uiButton.
+const extractedLegacyGroups = [{
+  label: 'Run Center controller and extracted detail renderer',
+  files: ['run-center.js', 'run-center-detail.js'],
+  limit: 33,
+}];
+const extractedLegacyFiles = new Set(extractedLegacyGroups.flatMap((group) => group.files));
 
 function rendererModules(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -83,12 +92,19 @@ describe('renderer shared UI adoption guard', () => {
   it('does not increase legacy raw-control usage or introduce it in new modules', () => {
     for (const relativePath of rendererModules(modulesRoot)) {
       if (sharedControlFactories.has(relativePath)) continue;
+      if (extractedLegacyFiles.has(relativePath)) continue;
       const source = fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8');
       const allowed = legacyRawControlBaseline[relativePath] || 0;
       expect(
         rawControlCount(source),
         `${relativePath} adds raw controls; use the shared Renderer primitives instead`,
       ).toBeLessThanOrEqual(allowed);
+    }
+    for (const group of extractedLegacyGroups) {
+      const actual = group.files.reduce((count, relativePath) => count
+        + rawControlCount(fs.readFileSync(path.join(modulesRoot, relativePath), 'utf8')), 0);
+      expect(actual, `${group.label} adds raw controls; use the shared Renderer primitives instead`)
+        .toBeLessThanOrEqual(group.limit);
     }
   });
 });
