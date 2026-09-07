@@ -143,8 +143,11 @@ describe('conversation message metrics line', () => {
     // 不再把缓存并入"输入"（4a：合并展示造成"输入过大"误读）。
     expect(segTexts.some((s) => s.includes('chat.metrics.tokensK|') && s.includes('chat.metrics.tokensVCache|'))).toBe(true);
     expect(segTexts.some((s) => s.includes('chat.metrics.tokensV|'))).toBe(false);
-    // Hover tooltip carries the cache breakdown lines.
-    expect(meta.title).toContain('缓存读 8K tok');
+    // Hover tooltip 对齐 DeepSeek 官方 harness 四字段：未缓存输入 / 缓存读取 /
+    // 缓存命中（+缓存写）。
+    expect(meta.title).toContain('未缓存输入');
+    expect(meta.title).toContain('缓存读取 8K tok');
+    expect(meta.title).toContain('缓存命中');
 
     // Idempotent re-mount (e.g. finalize then refresh) updates, never duplicates.
     mount(ph, FULL_METRICS);

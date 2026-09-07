@@ -5983,7 +5983,7 @@
   "chat.metrics.ttftK": "TTFT",
   "chat.metrics.tokensK": "Token",
   "chat.metrics.tokensV": "↑{i} ↓{o}",
-  "chat.metrics.tokensVCache": "↑{i} (cache {c}) ↓{o}",
+  "chat.metrics.tokensVCache": "↑{i} (cache {c}·{h}) ↓{o}",
   "chat.metrics.cacheReadK": "Cache read {v} tok",
   "chat.metrics.cacheWriteK": "Cache write {v} tok",
   "chat.metrics.cliCostK": "CLI-reported cost {v}",
@@ -5993,7 +5993,7 @@
   "chat.stats.ctxK": "Context",
   "chat.stats.tokK": "Token",
   "chat.stats.tokV": "↑{i} ↓{o}",
-  "chat.stats.tokVCache": "↑{i} (cache {c}) ↓{o}",
+  "chat.stats.tokVCache": "↑{i} (cache {c}·{h}) ↓{o}",
   "hub.account.bound_local": "Local identity bound",
   "hub.account.not_bound": "Local identity not bound",
   "hub.chip.menu.devices": "Devices",
@@ -6558,7 +6558,7 @@
   "plugins.detail_commit": "Commit",
   "plugins.detail_kind": "Kind",
   "plugins.detail_license": "License",
-   "plugins.detail_license_status": "License status",
+  "plugins.detail_license_status": "License status",
   "plugins.detail_repo": "Source",
   "plugins.detail_roles": "Audience",
   "plugins.detail_section_commands": "Commands available in conversations",
@@ -6608,5 +6608,7 @@
   "plugins.config_server_hint_legacy": "Only legacy keys need this; new keys carry their own address.",
   "plugins.new_version": "New version v{ver}",
   "plugins.new_version_short": "v{ver}",
-  "plugins.detail_new_version": "New version"
+  "plugins.detail_new_version": "New version",
+  "chat.metrics.uncachedInputK": "Uncached input {v} tok",
+  "chat.metrics.cacheHitK": "Cache hit {v}"
 }

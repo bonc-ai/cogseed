@@ -54,7 +54,15 @@ function messageMetricsLine(metrics) {
   if (!hasUsage && ttft === null) return null;
   const titleLines = [];
   if (hasUsage) {
-    if (num(usage.cacheReadTokens) > 0) titleLines.push(tt('chat.metrics.cacheReadK', { v: formatTokens(usage.cacheReadTokens) }, `缓存读 ${formatTokens(usage.cacheReadTokens)} tok`));
+    // 对齐 DeepSeek 官方 harness 的四字段明细：未缓存输入 / 缓存读取 /
+    // 缓存写 / （命中率为独立标注）。缓存读行在最前——官方次序。
+    titleLines.push(tt('chat.metrics.uncachedInputK', { v: formatTokens(usage.inputTokens) }, `未缓存输入 ${formatTokens(usage.inputTokens)} tok`));
+    if (num(usage.cacheReadTokens) > 0) {
+      titleLines.push(tt('chat.metrics.cacheReadK', { v: formatTokens(usage.cacheReadTokens) }, `缓存读取 ${formatTokens(usage.cacheReadTokens)} tok`));
+      // 命中率 = cacheRead/(input+cacheRead)，与 usage_ledger dashboard 口径一致（§101）
+      const denom = num(usage.inputTokens) + num(usage.cacheReadTokens);
+      titleLines.push(tt('chat.metrics.cacheHitK', { v: `${Math.min(100, Math.round((num(usage.cacheReadTokens) / denom) * 100))}%` }, `缓存命中 ${Math.min(100, Math.round((num(usage.cacheReadTokens) / denom) * 100))}%`));
+    }
     if (num(usage.cacheWriteTokens) > 0) titleLines.push(tt('chat.metrics.cacheWriteK', { v: formatTokens(usage.cacheWriteTokens) }, `缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`));
   }
   // CLI 自报成本（claude 的 total_cost_usd 等，美元）——比价格表估算准。
@@ -62,6 +70,11 @@ function messageMetricsLine(metrics) {
     ? usage.costUsd
     : null;
   if (costUsd !== null) titleLines.push(tt('chat.metrics.cliCostK', { v: `$${costUsd.toFixed(4)}` }, `CLI 自报成本 $${costUsd.toFixed(4)}`));
+  // 单回合命中率（主读数行内标注用，官方 harness 同款独立标注）。
+  const hitDenom = num(usage.inputTokens) + num(usage.cacheReadTokens);
+  const cacheHitText = hasUsage && hitDenom > 0 && num(usage.cacheReadTokens) > 0
+    ? `${Math.min(100, Math.round((num(usage.cacheReadTokens) / hitDenom) * 100))}%`
+    : null;
   return {
     durationMs,
     latencyText: ttft === null ? null : formatLatency(ttft),
@@ -71,6 +84,7 @@ function messageMetricsLine(metrics) {
     // + 单独的缓存读标注，避免"输入过大"观感（缓存读取复用前缀非新增输入）。
     inFreshText: hasUsage && num(usage.inputTokens) > 0 ? formatTokens(num(usage.inputTokens)) : null,
     cacheReadText: hasUsage && num(usage.cacheReadTokens) > 0 ? formatTokens(num(usage.cacheReadTokens)) : null,
+    cacheHitText,
     outText: hasUsage ? formatTokens(num(usage.outputTokens)) : null,
     costText: costUsd !== null
       ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`

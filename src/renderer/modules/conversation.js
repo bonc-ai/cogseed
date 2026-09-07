@@ -9233,7 +9233,7 @@ function _refreshSessionStats() {
   segs.push({
     k: t('chat.stats.tokK'),
     v: f.cacheReadText
-      ? t('chat.stats.tokVCache', { i: f.inFreshText, c: f.cacheReadText, o: f.outText })
+      ? t('chat.stats.tokVCache', { i: f.inFreshText, c: f.cacheReadText, h: f.cacheHitText, o: f.outText })
       : t('chat.stats.tokV', { i: f.inText, o: f.outText }),
   });
   if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
@@ -9312,12 +9312,12 @@ function _mountMsgMeta(ph, metrics) {
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
   if (line.inText) {
-    // 有缓存读取时主读数拆开标注（fresh 输入 + 缓存读），不再把缓存并入
-    // "输入"——缓存是前缀复用不是新增内容，合并展示会造成"输入过大"的误读。
+    // 有缓存读取时主读数拆开标注（fresh 输入 + 缓存读 + 命中率），
+    // 对齐 DeepSeek 官方 harness 的字段口径，不再把缓存并入"输入"。
     parts.push({
       k: t('chat.metrics.tokensK'),
       v: line.cacheReadText
-        ? t('chat.metrics.tokensVCache', { i: line.inFreshText, c: line.cacheReadText, o: line.outText })
+        ? t('chat.metrics.tokensVCache', { i: line.inFreshText, c: line.cacheReadText, h: line.cacheHitText, o: line.outText })
         : t('chat.metrics.tokensV', { i: line.inText, o: line.outText }),
     });
   }
