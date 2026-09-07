@@ -122,6 +122,12 @@ const projectionMock = vi.hoisted(() => ({
   confirmContextProjection: vi.fn(async (_uid: string, id: string) => ({ id, status: 'confirmed' })),
   readContextProjection: vi.fn(async (_uid: string, id: string) => ({ id })),
 }));
+const kstarTraceMock = vi.hoisted(() => ({
+  readKstarTrace: vi.fn(async (_uid: string, input: unknown) => ({ conversationId: 'cid-a', ...input as object, nodes: [] })),
+}));
+const kstarFailuresMock = vi.hoisted(() => ({
+  listKstarFailures: vi.fn(async () => []),
+}));
 const kstarClosureMock = vi.hoisted(() => ({
   confirmKstarReview: vi.fn(async () => ({ episode: {}, review: {} })),
 }));
@@ -194,6 +200,8 @@ vi.mock('../../../src/main/features/recall/capture-settings', () => captureSetti
 vi.mock('../../../src/main/features/recall/recall-view-service', () => viewMock);
 vi.mock('../../../src/main/features/recall/teaching-service', () => teachingMock);
 vi.mock('../../../src/main/features/recall/context-projection', () => projectionMock);
+vi.mock('../../../src/main/features/kstar/trace', () => kstarTraceMock);
+vi.mock('../../../src/main/features/kstar/failure-service', () => kstarFailuresMock);
 vi.mock('../../../src/main/features/kstar/projection-decision-service', () => projectionDecisionMock);
 vi.mock('../../../src/main/features/kstar/task-closure', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/main/features/kstar/task-closure')>()),
@@ -526,6 +534,32 @@ describe('ipc › recall candidate governance', () => {
     expect(captureMock.startHistoricalRecallCapture).not.toHaveBeenCalledWith(UID, '../bad');
     await expect(call('recall.projections.list', { status: 'unknown' }))
       .resolves.toMatchObject({ ok: false });
+  });
+
+  it('forwards projection filters and returns recoverable KSTAR read errors', async () => {
+    await expect(call('recall.projections.list', {
+      taskRunId: 'run-filter', conversationId: 'cid-filter', workspaceId: 'workspace-a',
+      status: 'preview', includeExpired: true, limit: 10,
+    })).resolves.toMatchObject({ ok: true, projections: [] });
+    expect(projectionMock.listContextProjections).toHaveBeenCalledWith(UID, {
+      taskRunId: 'run-filter', conversationId: 'cid-filter', workspaceId: 'workspace-a',
+      status: 'preview', includeExpired: true, limit: 10,
+    });
+    await expect(call('recall.projections.list', { taskRunId: '../bad' })).resolves.toMatchObject({ ok: false, error: expect.any(String) });
+    await expect(call('recall.projections.list', { conversationId: '../bad' })).resolves.toMatchObject({ ok: false, error: expect.any(String) });
+
+    kstarTraceMock.readKstarTrace.mockRejectedValueOnce(new Error('trace unavailable'));
+    kstarFailuresMock.listKstarFailures.mockRejectedValueOnce(new Error('failure list unavailable'));
+    await expect(call('kstar.trace.read', { taskId: 'task-a' })).resolves.toMatchObject({ ok: false, error: 'trace unavailable' });
+    await expect(call('kstar.failures.list', { conversationId: 'cid-a' })).resolves.toMatchObject({ ok: false, error: 'failure list unavailable' });
+  });
+
+  it('validates and forwards task-only KSTAR trace references', async () => {
+    await expect(call('kstar.trace.read', { taskId: 'task-a' })).resolves.toMatchObject({ ok: true, trace: { taskId: 'task-a' } });
+    expect(kstarTraceMock.readKstarTrace).toHaveBeenCalledWith(UID, { taskId: 'task-a' });
+    await expect(call('kstar.trace.read', {})).resolves.toMatchObject({ ok: false, error: expect.any(String) });
+    await expect(call('kstar.trace.read', { conversationId: '../bad' })).resolves.toMatchObject({ ok: false, error: expect.any(String) });
+    await expect(call('kstar.failures.list', { conversationId: '../bad' })).resolves.toMatchObject({ ok: false, error: expect.any(String) });
   });
 
   it('routes only validated Recall message feedback through the active user boundary', async () => {

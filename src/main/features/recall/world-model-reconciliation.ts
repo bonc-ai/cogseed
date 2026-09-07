@@ -170,7 +170,7 @@ function reconcileResults(forecast: WorldModelForecast, episode: KstarEpisodeRec
     unexpectedProducedFiles,
     terminalStatus: episode.r.status,
   };
-  if (episode.r.status === 'failed' || episode.r.status === 'cancelled') {
+  if (episode.r.status === 'failed' || episode.r.status === 'cancelled' || episode.r.status === 'timed_out') {
     return { deltaR: -1, detail };
   }
   const known: boolean[] = acceptanceSignals

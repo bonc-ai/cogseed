@@ -247,4 +247,65 @@ describe('KSTAR review inference', () => {
       },
     });
   });
+
+  it('accepts model secondary attribution only when it cites an Episode evidence id', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const result = await inference.inferKstarReview('user-a', episode(), {
+      runModel: async () => JSON.stringify({
+        outcome: 'worse_than_expected',
+        attribution: 'execution_gap',
+        deltaR: -0.4,
+        deltaA: -0.2,
+        reason: 'The recorded execution missed a required check.',
+        confidence: 0.85,
+        needsConfirmation: false,
+        attributionDetails: [{
+          category: 'execution_error',
+          confidence: 0.8,
+          evidenceRefIds: ['execution:run-a'],
+        }],
+      }),
+    });
+
+    expect(result.review.attributionDetails).toMatchObject([{
+      category: 'execution_error',
+      source: 'model',
+      evidenceRefs: [{ kind: 'execution', id: 'run-a' }],
+    }]);
+
+    const rejected = await inference.inferKstarReview('user-a', episode(), {
+      runModel: async () => JSON.stringify({
+        outcome: 'worse_than_expected',
+        attribution: 'execution_gap',
+        deltaR: -0.4,
+        deltaA: -0.2,
+        reason: 'The model cited an unavailable source.',
+        confidence: 0.85,
+        needsConfirmation: false,
+        attributionDetails: [{
+          category: 'execution_error',
+          confidence: 0.8,
+          evidenceRefIds: ['execution:not-in-episode'],
+        }],
+      }),
+    });
+    expect(rejected.inferenceMethod).toBe('unknown');
+    expect(rejected.review.attributionDetails).toMatchObject([{
+      category: 'insufficient_evidence',
+      source: 'deterministic',
+    }]);
+  });
+
+  it('lets deterministic permission facts override model secondary attribution', async () => {
+    const inference = await import('../../../../src/main/features/kstar/review-inference');
+    const result = await inference.inferKstarReview('user-a', episode({
+      r: { status: 'failed', failureKind: 'permission', failureCode: 'permission_denied', producedFiles: [] },
+    }), {
+      runModel: async () => { throw new Error('must not run for a terminal failure'); },
+    });
+    expect(result.review.attributionDetails).toMatchObject([{
+      category: 'permission_blocked',
+      source: 'deterministic',
+    }]);
+  });
 });
