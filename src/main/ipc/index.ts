@@ -54,6 +54,8 @@ import * as kstarProjectionDecision from '../features/kstar/projection-decision-
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
+import * as kstarTrace from '../features/kstar/trace';
+import * as kstarFailures from '../features/kstar/failure-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -957,6 +959,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.create(ctx.userId, payload),
   'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -964,6 +967,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.archived.purge': async (_payload, ctx) => cogseedBackend.cogseedIpcService.purgeArchived(ctx.userId),
   'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
@@ -2673,7 +2677,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
   'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
-  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+  'recall.projections.list': async ({ taskRunId, conversationId, workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid task run id');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
     if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
     if (status !== undefined && !['preview', 'confirmed', 'deferred', 'rejected', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
     if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
@@ -2681,6 +2687,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return {
       ok: true,
       projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(taskRunId !== undefined ? { taskRunId } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
         ...(workspaceId !== undefined ? { workspaceId } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(includeExpired !== undefined ? { includeExpired } : {}),
@@ -2711,6 +2719,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     try {
       const review = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
       return { ok: true, review: review ? { reviewState: review.reviewState } : null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.trace.read': async ({ conversationId, taskId } = {}, ctx) => {
+    if ((conversationId === undefined && taskId === undefined)
+      || (conversationId !== undefined && !safeId(conversationId))
+      || (taskId !== undefined && !safeId(taskId))) return { ok: false, error: 'invalid kstar trace input' };
+    try {
+      return { ok: true, trace: await kstarTrace.readKstarTrace(ctx.userId, { ...(conversationId !== undefined ? { conversationId } : {}), ...(taskId !== undefined ? { taskId } : {}) }) };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.failures.list': async ({ conversationId } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) return { ok: false, error: 'invalid kstar failure conversation id' };
+    try {
+      return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId !== undefined ? { conversationId } : {}) };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
