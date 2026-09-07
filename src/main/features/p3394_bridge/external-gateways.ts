@@ -356,15 +356,6 @@ async function doStartExternalGateway(input: {
     P3394_GATEWAY_HOST: '127.0.0.1',
     P3394_ADVERTISE_ENDPOINT: 'http://127.0.0.1:' + port,
     P3394_GATEWAY_HOME: gatewayHome,
-    // §9.2 workspace allowlist 信任链对齐：主进程派发时下发的会话工作区
-    // （extensions.working_dir）在用户数据树内（userWorkspace / spaces /
-    // projects 的公共祖先 = workspace root）。把该根注入网关允许根，
-    // 网关侧校验语义保持不放松——只扩大到主进程自己的合法值域。
-    ...(process.env.COGSEED_WORKSPACE_ROOT ? {
-      P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, gatewayHome]
-        .filter(Boolean)
-        .join(path.delimiter),
-    } : {}),
     COGSEED_ENDPOINT: bridgeInfo.endpoint,
     COGSEED_TOKEN: bridgeInfo.token,
     ...(gatewayTlsCa ? { P3394_TLS_CA: gatewayTlsCa } : {}),
