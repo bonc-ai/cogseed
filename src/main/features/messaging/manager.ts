@@ -23,6 +23,9 @@ import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channe
 import { channelPeerAlias, ensureChannelPeer } from '../p3394_bridge/channel-peer-map';
 import { P3394_ENVELOPE_VERSION, type P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
+// 副作用导入：确保 /agent 等接续命令的 handler 在 boot deferred 阶段注册
+// （安装幂等，与 personal-context 的注册互不干扰）。
+import './continuity_commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
 import { normalizeInboundImageKeys } from './ledger';
@@ -670,14 +673,43 @@ async function handleInboundLocked(
   // (mirrors Hermes' `/new` session reset).
   if (isNewSessionCommand(text)) {
     try {
+      // 先取旧任务 cid（forceNew 会轮换），配对的其他渠道要跟着搬家。
+      const previous = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const oldCid = previous.cid;
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
       const runtime = runtimes.get(uid)?.get(instance.id);
-      if (runtime) {
-        const oldListener = runtime.listeners.get(binding.key);
-        if (oldListener) {
-          oldListener();
-          runtime.listeners.delete(binding.key);
+      // 跨渠道接续（G2）：/new 不许重新制造信息孤岛——与旧任务配对的渠道
+      // 一并指向新任务并重挂监听，各自收到一条跟随通知。
+      if (binding.cid !== oldCid) {
+        const peers = await bindings.listBindingsForTask(uid, oldCid);
+        for (const peer of peers) {
+          if (peer.key === binding.key) continue;
+          const moved = await bindings.pointBindingToTask(uid, peer.key, binding.cid);
+          if (!moved) continue;
+          const peerRuntime = runtimes.get(uid)?.get(peer.instanceId);
+          if (peerRuntime) {
+            peerRuntime.bindingContexts.set(peer.key, moved);
+            await peerRuntime.attachBindingListener(moved);
+            void peerRuntime
+              .deliverSystemNotice(moved, t('messaging.continuity.pair_task_rotated'))
+              .catch((error) => {
+                log.warn('messaging pair-rotation notice failed', {
+                  instanceId: peer.instanceId,
+                  key: peer.key,
+                  error: (error as Error).message,
+                });
+              });
+          }
+          log.info('continuity peer followed task rotation', {
+            uid,
+            instanceId: peer.instanceId,
+            fromCid: oldCid,
+            toCid: binding.cid,
+          });
         }
+      }
+      if (runtime) {
+        runtime.detachBindingListener(binding.key);
         runtime.bindingContexts.set(binding.key, binding);
         await runtime.attachBindingListener(binding);
         await runtime.deliverConfirmationMessage(binding, envelope);
@@ -694,6 +726,22 @@ async function handleInboundLocked(
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
+  // 渠道任务接续（G0）撤权：已解绑的渠道会话只放行 /new（上面的分支已
+  // 处理并 return），其余消息——含一切 slash 命令——一律明确拒绝并引导，
+  // 绝不静默吞掉，也绝不无提示地重建绑定。
+  // （读 binding 与拒绝之间的窗口与本 handler 的处理锁并不同锁，理论上
+  // 存在瞬态 TOCTOU；但 /unbind 与 /new 都经 bindings 文件锁串行落盘，
+  // 最坏结果是并发消息读到旧状态、晚一轮才被拒——单条消息的可接受
+  // 延迟，不构成越权。）
+  const currentBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  if (currentBinding.unboundedAt) {
+    await completeLedger({ status: 'rejected', reason: 'binding_unbound' });
+    const runtime = runtimes.get(uid)?.get(instance.id);
+    if (runtime) {
+      await runtime.deliverText(currentBinding, envelope, t('messaging.continuity.unbound_reply'));
+    }
+    return { accepted: false, duplicate: false, reason: 'binding_unbound' };
+  }
   // Personal-context slash commands（/权限 /遗忘）：consumed by registered
   // handlers; the reply goes through the same ledger-backed delivery as the
   // session-reset confirmation and never consumes an agent turn.
@@ -703,6 +751,13 @@ async function handleInboundLocked(
     if (outcome.consumed) {
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
       const runtime = runtimes.get(uid)?.get(instance.id);
+      if (runtime) {
+        // 与下方常规入站路径同款刷新：命令可能改变绑定状态（G2 /mute
+        // /pair 落盘 mutedAt / 新 cid），出站快照必须跟上，否则静音拦不住、
+        // 监听重挂不触发。
+        runtime.bindingContexts.set(binding.key, binding);
+        await runtime.attachBindingListener(binding);
+      }
       if (outcome.replyText && runtime) {
         await runtime.deliverText(binding, envelope, outcome.replyText);
       } else if (outcome.replyText) {
