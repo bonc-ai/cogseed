@@ -55,6 +55,7 @@ let tmpDir: string;
 let homeDir: string;
 let prevWs: string | undefined;
 let prevHome: string | undefined;
+let prevUserProfile: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
@@ -65,7 +66,9 @@ beforeEach(async () => {
   // points at a clean per-test dir — never the real ~/.claude.
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-home-'));
   prevHome = process.env.HOME;
+  prevUserProfile = process.env.USERPROFILE;
   process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
   __nextChat = () => ({ ok: true, text: '' });
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -74,8 +77,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
-  process.env.HOME = prevHome;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevHome;
+  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = prevUserProfile;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.rmSync(homeDir, { recursive: true, force: true });
 });

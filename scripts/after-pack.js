@@ -3,14 +3,27 @@
 
 const fs = require('fs');
 const path = require('path');
+const { verifyPackagedEntrypointPayload } = require('../bin/packaged-entrypoint-gate.cjs');
 
 exports.default = async function(context) {
   const appOutDir = context.appOutDir;
   const platform = context.electronPlatformName;
 
+  if (platform === 'win32') {
+    verifyPackagedEntrypointPayload(
+      path.join(appOutDir, 'resources', 'app.asar.unpacked'),
+      { projectRoot: path.resolve(__dirname, '..') },
+    );
+  }
+
   if (platform === 'darwin') {
     const appPath = path.join(appOutDir, `${context.packager.appInfo.productName}.app`);
     const resourcesPath = path.join(appPath, 'Contents', 'Resources');
+
+    verifyPackagedEntrypointPayload(
+      path.join(resourcesPath, 'app.asar.unpacked'),
+      { projectRoot: path.resolve(__dirname, '..') },
+    );
 
     console.log('[after-pack] Removing archive files to prevent signing errors...');
 

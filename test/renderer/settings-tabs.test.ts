@@ -305,7 +305,7 @@ describe('settings tabs module', () => {
   });
 
   it('clears the wecom flow when the auth popup is blocked', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(source).toContain("labelFor('messaging.wecom_qr.popup_blocked', ''), 'error')");
     expect(source).toContain(`setNotice(labelFor('messaging.wecom_qr.popup_blocked', ''), 'error');
         await cancelWecomFlow({ silent: true, render: false });`);
@@ -383,7 +383,7 @@ describe('settings tabs module', () => {
   });
 
   it('treats a start response without qrUrl/qrCode as start-failed and renders the error in the QR area', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     // 启动响应既无 qrUrl 也无 qrCode → 按启动失败处理，绝不展示空二维码区域
     expect(source).toContain("if (!state.wechat.qrSource && !WECHAT_TERMINAL_STATES.has(state.wechat.state))");
     expect(source).toContain("state.wechat.error = labelFor('messaging.wechat_qr.start_failed', '')");
@@ -413,7 +413,7 @@ describe('settings tabs module', () => {
   });
 
   it('renders the wechat card with iLink copy and toggles the scan button to cancel while active', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(source).toContain("labelFor('messaging.wechat_qr.title', '')");
     expect(source).toContain("labelFor('messaging.wechat_qr.subtitle', '')");
     expect(source).toContain("flowActive ? 'messaging.wechat_qr.cancel' : 'messaging.wechat_qr.start'");
