@@ -15,6 +15,7 @@ import {
   p3394ExternalDescriptorFromManifest,
   validateP3394ExternalAdapterDescriptor,
 } from '../../../../src/main/features/p3394_bridge/external-adapters';
+import { OPENSSL_EXECUTABLE } from '../../../helpers/tls-capabilities';
 
 let counter = 0;
 const openServers: P3394HttpChannel[] = [];
@@ -64,12 +65,12 @@ afterEach(async () => {
 });
 
 describe('P3394HttpChannel real network transport', () => {
-  it('negotiates and delivers over a real HTTPS round trip with bearer auth', async () => {
+  it.skipIf(!OPENSSL_EXECUTABLE)('negotiates and delivers over a real HTTPS round trip with bearer auth', async () => {
     const certDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-tls-'));
     const key = path.join(certDir, 'key.pem');
     const cert = path.join(certDir, 'cert.pem');
     try {
-      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
+      execFileSync(OPENSSL_EXECUTABLE!, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
       const port = nextPort();
       const server = new P3394HttpChannel('https-server', { listen: { host: '127.0.0.1', port, tls: { key: fs.readFileSync(key, 'utf8'), cert: fs.readFileSync(cert, 'utf8') } }, authToken: 'tls-token' });
       server.setLocalManifest(manifest('cogseed-tls')); openServers.push(server);

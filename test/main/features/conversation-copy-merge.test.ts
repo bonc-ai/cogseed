@@ -32,6 +32,7 @@ vi.mock('../../../src/main/model/client', () => ({
 const TEST_UID = 'copy-merge-user';
 let tmpDir: string;
 let previousWorkspace: string | undefined;
+const activeGroupCids = new Set<string>();
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-copy-merge-'));
@@ -39,6 +40,7 @@ beforeEach(async () => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
   modelCalls.length = 0;
+  activeGroupCids.clear();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
   const i18n = await import('../../../src/main/i18n');
@@ -46,7 +48,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await drainMainRuntimeForTest();
+  const groupChat = await import('../../../src/main/features/group_chat');
+  await Promise.all(Array.from(activeGroupCids, (cid) => groupChat.abort(TEST_UID, cid)));
+  await drainMainRuntimeForTest(TEST_UID);
   process.env.COGSEED_WORKSPACE_ROOT = previousWorkspace;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -443,6 +447,8 @@ function makeProject(name: string): { ok: true; project: { project_id: string; n
     const merged = await feature.mergeConversations(TEST_UID, [first.conversation_id, second.conversation_id], {
       title: 'Send merged',
     });
+    activeGroupCids.add(cloned.newConversation.conversation_id);
+    activeGroupCids.add(merged.newConversation.conversation_id);
 
     for (const [cid, text] of [
       [cloned.newConversation.conversation_id, 'Continue after copy'],

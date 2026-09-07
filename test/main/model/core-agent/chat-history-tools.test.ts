@@ -22,9 +22,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await drainMainRuntimeForTest();
+  await drainMainRuntimeForTest(TEST_UID);
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 });
 
 function ctxFor(state: Record<string, unknown> = {}) {

@@ -9,6 +9,11 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCogSeedWorktreeManager } from '../../../../src/main/features/cogseed_backend/worktree-manager';
+import {
+  DIRECTORY_LINKS_SUPPORTED,
+  DIRECTORY_LINK_TYPE,
+} from '../../../helpers/fs-capabilities';
+import { removeGitFixture } from '../../../helpers/remove-git-fixture';
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -33,7 +38,7 @@ describe('CogSeed worktree manager', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    removeGitFixture(tempRoot);
   });
 
   function manager(overrides: Parameters<typeof createCogSeedWorktreeManager>[0] = {}) {
@@ -111,12 +116,14 @@ describe('CogSeed worktree manager', () => {
       expectedBranch: 'dev/occupied',
     })).rejects.toMatchObject({ code: 'E_WORKTREE_OUTSIDE_MANAGED_ROOT' });
 
-    const link = path.join(tempRoot, 'cogseed-worktree-link');
-    fs.symlinkSync(created.path, link, 'dir');
-    await expect(service.remove('worktree-user', {
-      path: link,
-      expectedBranch: 'dev/occupied',
-    })).rejects.toMatchObject({ code: 'E_WORKTREE_SYMLINK' });
+    if (DIRECTORY_LINKS_SUPPORTED) {
+      const link = path.join(tempRoot, 'cogseed-worktree-link');
+      fs.symlinkSync(created.path, link, DIRECTORY_LINK_TYPE);
+      await expect(service.remove('worktree-user', {
+        path: link,
+        expectedBranch: 'dev/occupied',
+      })).rejects.toMatchObject({ code: 'E_WORKTREE_SYMLINK' });
+    }
     await expect(service.remove('worktree-user', {
       path: created.path,
       expectedBranch: 'dev/occupied',

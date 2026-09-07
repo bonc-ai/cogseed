@@ -123,6 +123,13 @@ function pageForText(text: string, charStart: number): number | undefined {
   return page;
 }
 
+/** PDF chunk title（形如 p.7 / p.7-8 / Page 3）→ 起始页码。索引时已记录，最可靠。 */
+function pdfPageFromChunkTitle(title: string | null | undefined): number | undefined {
+  if (!title) return undefined;
+  const m = String(title).match(/(?:^|\D)(\d{1,4})(?:\D|$)/);
+  return m ? Number(m[1]) : undefined;
+}
+
 /**
  * Resolve a citation anchor to a character range in the source document.
  * Returns `resolved: false` (with a reason) instead of throwing when the
@@ -135,6 +142,8 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
   // ── Resolve abs path + read the chunk text ─────────────────────────────
   let absPath: string;
   let chunkText: string | null = null;
+  // pdf chunk title（形如 p.7 / p.7-8）：chunk 级页码的最可靠来源
+  let chunkTitle: string | null = null;
 
   if (source === 'attachment') {
     if (!target.cid) return { resolved: false, reason: 'bad_input' };
@@ -147,11 +156,15 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
     if (!target.spaceId) return { resolved: false, reason: 'bad_input' };
     absPath = path.join(spaceContextsDir(userId, target.spaceId), displayPath);
     const chunks = spaceLibrary.readFileChunks(userId, target.spaceId, displayPath);
-    chunkText = chunks.find((c) => c.chunk_idx === target.chunkIdx)?.content?.trim() ?? null;
+    const meta = chunks.find((c) => c.chunk_idx === target.chunkIdx);
+    chunkText = meta?.content?.trim() ?? null;
+    chunkTitle = meta?.title ?? null;
   } else {
     absPath = path.join(userContextsDir(userId), displayPath);
     const chunks = kb.readFileChunks(userId, displayPath);
-    chunkText = chunks.find((c) => c.chunk_idx === target.chunkIdx)?.content?.trim() ?? null;
+    const meta = chunks.find((c) => c.chunk_idx === target.chunkIdx);
+    chunkText = meta?.content?.trim() ?? null;
+    chunkTitle = meta?.title ?? null;
   }
 
   // ── Scope check: source must be inside its allowed root ────────────────
@@ -171,22 +184,35 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
   // readRange: plain text reads the file directly; rich docs require an
   // existing file-indexer cache (NeedStatError → no_cache) and carry the
   // PDF page map.
-  let text: string;
+  let text: string | null = null;
   try {
     const read = await fileIndexer.readRange(userId, absPath, {});
     text = read.content;
   } catch (err) {
     const name = (err as Error).name || '';
-    if (name.includes('NeedStat')) {
+    if (name.includes('NeedStat') && source === 'library') {
+      // KB 向量索引与 file-indexer 缓存并不同步：富文档（pdf/docx/html 等）若
+      // 只经 kb 索引、从未走文件索引器，此处会 no_cache。此时用向量库按 chunk
+      // 顺序拼接整篇文本做降级定位——文本即 kb 索引时的提取结果，足以定位被
+      // 引用的段落；拼接为空（该文件确实无索引文本）才保持 no_cache。
+      const rows = scope === 'space'
+        ? spaceLibrary.readFileChunks(userId, target.spaceId!, displayPath)
+        : kb.readFileChunks(userId, displayPath);
+      const joined = (rows || []).map((c) => c.content || '').join('\n').trim();
+      if (!joined) return { resolved: false, reason: 'no_cache', absPath, displayPath };
+      text = joined;
+    } else if (name.includes('NeedStat')) {
       return { resolved: false, reason: 'no_cache', absPath, displayPath };
+    } else {
+      log.warn('anchor_resolver: extract failed', {
+        user_id: maskId(userId),
+        abs_path: displayPath,
+        error: (err as Error).message,
+      });
+      return { resolved: false, reason: 'no_text', absPath, displayPath };
     }
-    log.warn('anchor_resolver: extract failed', {
-      user_id: maskId(userId),
-      abs_path: displayPath,
-      error: (err as Error).message,
-    });
-    return { resolved: false, reason: 'no_text', absPath, displayPath };
   }
+  if (!text) return { resolved: false, reason: 'no_text', absPath, displayPath };
 
   const needle = target.quote?.trim() || chunkText;
   if (!needle) return { resolved: false, reason: 'not_found', absPath, displayPath };
@@ -196,7 +222,10 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
     return { resolved: false, reason: 'not_found', absPath, displayPath, totalChars: text.length };
   }
 
-  const page = pageForText(text, located.start);
+  // 页优先取 file-indexer 文本里的 `--- page N ---`；拿不到再用向量库 pdf chunk
+  // title（p.N / p.N-M）兜底——不依赖 file-indexer 缓存是否已生成。
+  const isPdf = /\.pdf$/i.test(displayPath);
+  const page = pageForText(text, located.start) ?? (isPdf ? pdfPageFromChunkTitle(chunkTitle) : undefined);
   return {
     resolved: true,
     absPath,

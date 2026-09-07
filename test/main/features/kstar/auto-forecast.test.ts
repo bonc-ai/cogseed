@@ -57,6 +57,46 @@ describe('KStar world-model auto-forecast', () => {
     expect(requirement?.forecastId).toBe(res.forecastId);
   });
 
+  it('passes bounded personal ontology context and situation to the forecast generator', async () => {
+    const seeded = await seedConfirmedRequirement('cid-af-ontology');
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const group = await groups.createGroup('user-a', '代码审查');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '输出偏好', '先列风险再给方案', '手动');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '领域关系', 'Review → code', '手动');
+    const af = await import('../../../../src/main/features/kstar/auto-forecast');
+    let receivedPayload: unknown;
+    af._setAutoForecastGeneratorForTest(async (_prompt, payload) => {
+      receivedPayload = payload;
+      return GENERATOR();
+    });
+
+    await af.autoForecastForRequirement('user-a', 'cid-af-ontology', seeded.requirementId, {
+      allowedToolNames: new Set(['read_file', 'bash']),
+    });
+
+    expect(receivedPayload).toMatchObject({
+      ontologyTaxonomy: { groups: expect.any(Array) },
+      ontologyRules: expect.arrayContaining([expect.objectContaining({ subject: 'Review', object: 'code' })]),
+      ontologyFacts: expect.arrayContaining([expect.objectContaining({
+        groupTitle: '代码审查',
+        field: '输出偏好',
+        value: '先列风险再给方案',
+        source: 'personal_ontology',
+      })]),
+      matchedRules: expect.arrayContaining([expect.objectContaining({
+        source: 'ontology',
+        subject: 'Review',
+        object: 'code',
+      })]),
+      situation: expect.objectContaining({
+        modelConfigured: expect.any(Boolean),
+        availableTools: ['bash', 'read_file'],
+      }),
+    });
+    expect(JSON.stringify(receivedPayload)).not.toContain('MEMORY.md');
+    expect(JSON.stringify(receivedPayload).length).toBeLessThan(40_000);
+  });
+
   it('is idempotent — a second call reuses the existing forecast', async () => {
     const cid = 'cid-af-2';
     const seeded = await seedConfirmedRequirement(cid);
@@ -67,6 +107,27 @@ describe('KStar world-model auto-forecast', () => {
     const second = await af.autoForecastForRequirement('user-a', cid, seeded.requirementId);
     expect(second.ok).toBe(true);
     expect(second.forecastId).toBe(first.forecastId);
+  });
+
+  it('coalesces concurrent generation for one requirement into one forecast', async () => {
+    const seeded = await seedConfirmedRequirement('cid-af-concurrent');
+    const af = await import('../../../../src/main/features/kstar/auto-forecast');
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let generationCalls = 0;
+    const generate = async () => {
+      generationCalls += 1;
+      await gate;
+      return GENERATOR();
+    };
+    const first = af.autoForecastForRequirement('user-a', 'cid-af-concurrent', seeded.requirementId, { generate });
+    const second = af.autoForecastForRequirement('user-a', 'cid-af-concurrent', seeded.requirementId, { generate });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release?.();
+    const [left, right] = await Promise.all([first, second]);
+    expect(generationCalls).toBe(1);
+    expect(left).toMatchObject({ ok: true });
+    expect(right).toEqual(left);
   });
 
   it('skips (ok:false) when the requirement has no confirmed projection yet', async () => {

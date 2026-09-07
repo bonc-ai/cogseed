@@ -1,17 +1,47 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { PassThrough } from 'node:stream';
 import {
   parseSemver,
   compareSemver,
   checkMinVersion,
   detectVersion,
   MIN_VERSIONS,
+  __versionTestHooks,
 } from '../../../../src/main/features/local_agents/version';
 
 const isWindows = process.platform === 'win32';
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
+
+function fakeProbeChild() {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: ReturnType<typeof vi.fn>;
+    unref: ReturnType<typeof vi.fn>;
+  };
+  child.pid = 1234;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = vi.fn(() => true);
+  child.unref = vi.fn(() => child);
+  return child;
+}
+
+function deferredVoid() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 function writeVersionCli(tmpDir: string, name: string, output: string, stderr = false): string {
   const binPath = path.join(tmpDir, isWindows ? `${name}.cmd` : name);
@@ -155,7 +185,12 @@ describe('local_agents/version › detectVersion', () => {
 
   it('retries once when a probe times out silently (zero output)', async () => {
     const script = path.join(tmpDir, 'silent-hang.js');
-    fs.writeFileSync(script, "setInterval(() => {}, 1000);");
+    const attemptsFile = path.join(tmpDir, 'silent-hang-attempts.txt');
+    fs.writeFileSync(script, `
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(attemptsFile)}, 'attempt\\n');
+setInterval(() => {}, 1000);
+`);
     const launcher = path.join(tmpDir, isWindows ? 'silent-hang.cmd' : 'silent-hang');
     if (isWindows) {
       fs.writeFileSync(launcher, `@echo off\r\n"${TEST_NODE}" "${script}"\r\n`);
@@ -163,18 +198,228 @@ describe('local_agents/version › detectVersion', () => {
       fs.writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(TEST_NODE)} ${JSON.stringify(script)}\n`);
       fs.chmodSync(launcher, 0o755);
     }
-    const startedAt = performance.now();
     expect(await detectVersion(launcher, 200)).toBeNull();
-    const elapsed = performance.now() - startedAt;
-    // 零输出超时 → 重试一次：总耗时至少 2×timeout，证明重试路径发生；
-    // 不重试时约为单次 timeout（≈200ms），此处下界远高于它。
-    expect(elapsed).toBeGreaterThanOrEqual(390);
-    expect(elapsed).toBeLessThan(5_000);
+    const attempts = fs.readFileSync(attemptsFile, 'utf8').trim().split(/\r?\n/);
+    expect(attempts).toEqual(['attempt', 'attempt']);
+  });
+
+  it('does not let a kill error bypass the child close barrier', async () => {
+    vi.useFakeTimers();
+    const child = fakeProbeChild();
+    const killTree = vi.fn(() => {
+      child.emit('error', new Error('kill denied'));
+      return Promise.resolve();
+    });
+    let settled = false;
+    try {
+      const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+        spawnFn: vi.fn(() => child) as any,
+        killTree: killTree as any,
+        platform: 'win32',
+        terminationGraceMs: 30,
+        terminationDeadlineMs: 100,
+      }).then((outcome) => {
+        settled = true;
+        return outcome;
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(settled).toBe(false);
+      expect(killTree).toHaveBeenCalledTimes(1);
+
+      child.emit('close', null);
+      await expect(probe).resolves.toEqual({ kind: 'silent-timeout' });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(killTree).toHaveBeenCalledTimes(1);
+      expect(child.listenerCount('error')).toBe(0);
+    } finally {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['close-first', 'kill-first'] as const)(
+    'waits for Windows child close and tree-kill completion (%s)',
+    async (first) => {
+      vi.useFakeTimers();
+      const child = fakeProbeChild();
+      const killDone = deferredVoid();
+      const killTree = vi.fn(() => killDone.promise);
+      let settled = false;
+      try {
+        const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+          spawnFn: vi.fn(() => child) as any,
+          killTree: killTree as any,
+          platform: 'win32',
+          terminationGraceMs: 30,
+          terminationDeadlineMs: 100,
+        }).then((outcome) => {
+          settled = true;
+          return outcome;
+        });
+
+        await vi.advanceTimersByTimeAsync(20);
+        expect(killTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+
+        if (first === 'close-first') child.emit('close', null);
+        else killDone.resolve();
+        await flushMicrotasks();
+        expect(settled).toBe(false);
+
+        if (first === 'close-first') killDone.resolve();
+        else child.emit('close', null);
+        await expect(probe).resolves.toEqual({ kind: 'silent-timeout' });
+        expect(child.listenerCount('error')).toBe(0);
+        expect(killTree).toHaveBeenCalledTimes(1);
+      } finally {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(['close-first', 'kill-first'] as const)(
+    'keeps the deadline error sink until close and tree-kill completion (%s)',
+    async (first) => {
+      vi.useFakeTimers();
+      const child = fakeProbeChild();
+      const killDone = deferredVoid();
+      const killTree = vi.fn(() => killDone.promise);
+      try {
+        const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+          spawnFn: vi.fn(() => child) as any,
+          killTree: killTree as any,
+          platform: 'win32',
+          terminationGraceMs: 30,
+          terminationDeadlineMs: 100,
+        });
+
+        await vi.advanceTimersByTimeAsync(120);
+        await expect(probe).resolves.toEqual({ kind: 'unavailable' });
+        expect(killTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+        expect(child.stdout.destroyed).toBe(true);
+        expect(child.stderr.destroyed).toBe(true);
+        expect(child.unref).toHaveBeenCalledOnce();
+        expect(child.listenerCount('error')).toBe(1);
+
+        if (first === 'close-first') child.emit('close', null);
+        else killDone.resolve();
+        await flushMicrotasks();
+        expect(child.listenerCount('error')).toBe(1);
+        expect(() => child.emit('error', new Error('late taskkill fallback'))).not.toThrow();
+        expect(child.listenerCount('error')).toBe(1);
+
+        if (first === 'close-first') killDone.resolve();
+        else child.emit('close', null);
+        await flushMicrotasks();
+        expect(child.listenerCount('error')).toBe(0);
+        expect(child.listenerCount('close')).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('escalates the POSIX process group immediately when the wrapper closes during grace', async () => {
+    vi.useFakeTimers();
+    const child = fakeProbeChild();
+    const signals: NodeJS.Signals[] = [];
+    const killTree = vi.fn((_child, signal: NodeJS.Signals) => {
+      signals.push(signal);
+      return Promise.resolve();
+    });
+    try {
+      const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+        spawnFn: vi.fn(() => child) as any,
+        killTree: killTree as any,
+        platform: 'linux',
+        terminationGraceMs: 30,
+        terminationDeadlineMs: 100,
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      child.emit('close', null);
+      await flushMicrotasks();
+      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+      await expect(probe).resolves.toEqual({ kind: 'silent-timeout' });
+
+      await vi.advanceTimersByTimeAsync(30);
+      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(child.listenerCount('error')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks a POSIX silent timeout unavailable when the termination grace expires', async () => {
+    vi.useFakeTimers();
+    const child = fakeProbeChild();
+    const signals: NodeJS.Signals[] = [];
+    const killTree = vi.fn((_child, signal: NodeJS.Signals) => {
+      signals.push(signal);
+      return Promise.resolve();
+    });
+    try {
+      const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+        spawnFn: vi.fn(() => child) as any,
+        killTree: killTree as any,
+        platform: 'linux',
+        terminationGraceMs: 30,
+        terminationDeadlineMs: 100,
+      });
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+
+      child.emit('close', null);
+      await expect(probe).resolves.toEqual({ kind: 'unavailable' });
+      expect(child.listenerCount('error')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['void', () => undefined],
+    ['throw', () => { throw new Error('kill threw'); }],
+    ['rejection', () => Promise.reject(new Error('kill rejected'))],
+  ] as const)('normalizes an injected killTree %s result', async (_kind, behavior) => {
+    vi.useFakeTimers();
+    const child = fakeProbeChild();
+    try {
+      const probe = __versionTestHooks.probeVersionOnce('fake-cli', 20, ['--version'], {
+        spawnFn: vi.fn(() => child) as any,
+        killTree: vi.fn(behavior) as any,
+        platform: 'win32',
+        terminationGraceMs: 30,
+        terminationDeadlineMs: 100,
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      child.emit('close', null);
+      await expect(probe).resolves.toEqual({ kind: 'silent-timeout' });
+      expect(child.listenerCount('error')).toBe(0);
+    } finally {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      vi.useRealTimers();
+    }
   });
 
   it.runIf(isWindows)('times out a Windows command shim and terminates its descendant process tree', async () => {
     const script = path.join(tmpDir, 'hanging-version.js');
-    const pidFile = path.join(tmpDir, 'descendant.pid');
+    const pidFile = path.join(tmpDir, 'descendant-pids.txt');
     fs.writeFileSync(script, `
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
@@ -182,7 +427,7 @@ const child = spawn(${JSON.stringify(TEST_NODE)}, ['-e', 'setInterval(() => {}, 
   stdio: 'ignore',
   windowsHide: true,
 });
-fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+fs.appendFileSync(${JSON.stringify(pidFile)}, String(child.pid) + '\\n');
 setInterval(() => {}, 1000);
 `);
     const launcher = path.join(tmpDir, 'hanging-version.cmd');
@@ -194,13 +439,19 @@ setInterval(() => {}, 1000);
     expect(await detectVersion(launcher, 1_500)).toBeNull();
     expect(performance.now() - startedAt).toBeLessThan(5_000);
 
-    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    const pids = fs.readFileSync(pidFile, 'utf8')
+      .trim()
+      .split(/\r?\n/)
+      .map(Number);
+    expect(pids).toHaveLength(2);
     const deadline = Date.now() + 2_000;
-    let alive = true;
-    while (alive && Date.now() < deadline) {
-      try { process.kill(pid, 0); } catch { alive = false; }
-      if (alive) await new Promise(resolve => setTimeout(resolve, 25));
+    const alive = new Set(pids);
+    while (alive.size > 0 && Date.now() < deadline) {
+      for (const pid of alive) {
+        try { process.kill(pid, 0); } catch { alive.delete(pid); }
+      }
+      if (alive.size > 0) await new Promise(resolve => setTimeout(resolve, 25));
     }
-    expect(alive).toBe(false);
+    expect([...alive]).toEqual([]);
   });
 });

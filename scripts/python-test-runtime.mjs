@@ -6,7 +6,13 @@ function unique(values) {
   return values.filter((value, index, all) => value && all.indexOf(value) === index);
 }
 
-export function buildPythonCandidates({ appRoot, platform = process.platform, arch = process.arch, env = process.env, pathApi = path }) {
+export function buildPythonCandidates({
+  appRoot,
+  platform = process.platform,
+  arch = process.arch,
+  env = process.env,
+  pathApi = platform === 'win32' ? path.win32 : path.posix,
+}) {
   const venvPython = platform === 'win32'
     ? pathApi.resolve(appRoot, 'venv', 'Scripts', 'python.exe')
     : pathApi.resolve(appRoot, 'venv', 'bin', 'python');

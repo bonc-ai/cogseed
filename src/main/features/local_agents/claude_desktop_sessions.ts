@@ -95,18 +95,19 @@ interface DesktopSessionMeta {
  *  machine can have either or both installed. */
 export function claudeDesktopRoots(homedir = os.homedir(), platform = process.platform): string[] {
   const bases: string[] = [];
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
 
   if (platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
+    const appData = process.env.APPDATA || pathApi.join(homedir, 'AppData', 'Roaming');
     bases.push(appData);
   } else if (platform === 'darwin') {
-    bases.push(path.join(homedir, 'Library', 'Application Support'));
+    bases.push(pathApi.join(homedir, 'Library', 'Application Support'));
   } else {
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(homedir, '.config');
+    const configHome = process.env.XDG_CONFIG_HOME || pathApi.join(homedir, '.config');
     bases.push(configHome);
   }
 
-  return bases.flatMap(base => [path.join(base, 'Claude'), path.join(base, 'Claude-3p')]);
+  return bases.flatMap(base => [pathApi.join(base, 'Claude'), pathApi.join(base, 'Claude-3p')]);
 }
 
 /**

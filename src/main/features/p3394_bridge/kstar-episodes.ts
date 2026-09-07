@@ -94,10 +94,9 @@ export function recordP3394Episode(
   return file;
 }
 
-/** 读取全部已落盘的 P3394 episode（N-17 桥接：主 KStar 沉淀链按会话关联
- *  读取外部智能体的协作样本，proposed_updates 作为额外证据注入）。
+/** 读取全部已落盘的 P3394 episode。
  *  单个文件损坏跳过而不是整体抛错——一份读不出来的 episode 不该让整个
- *  沉淀退化为空。 */
+ *  P3394 本地沉淀退化为空。 */
 export async function listP3394Episodes(): Promise<P3394KstarEpisode[]> {
   const root = path.join(variantRoot(), 'p3394-kstar');
   let sessionDirs: string[];
@@ -130,20 +129,4 @@ export async function listP3394Episodes(): Promise<P3394KstarEpisode[]> {
     }
   }
   return out.sort((a, b) => String(a.completed_at || '').localeCompare(String(b.completed_at || '')));
-}
-
-/** 关联读取：给定群聊会话 id，返回该会话相关的 P3394 episode 的
- *  proposed_updates（Learn-What 候选）。会话 id 与 P3394 session_id 是
- *  不同命名空间，无法直接映射——这里按时间窗近似：取最近 N 分钟内的
- *  episode 作为"协作上下文"（调用方决定窗口）。返回扁平数组。 */
-export async function collectP3394ProposedUpdates(sinceMs: number): Promise<unknown[]> {
-  const episodes = await listP3394Episodes();
-  const since = new Date(sinceMs).toISOString();
-  const updates: unknown[] = [];
-  for (const episode of episodes) {
-    if (episode.completed_at && episode.completed_at >= since) {
-      for (const update of episode.proposed_updates || []) updates.push(update);
-    }
-  }
-  return updates;
 }

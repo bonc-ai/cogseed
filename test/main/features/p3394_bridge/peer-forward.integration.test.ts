@@ -25,6 +25,7 @@ const GATEWAY_SCRIPT = path.join(REPO_ROOT, 'p3394-gateway', 'gateway.cjs');
 const VARIANT = 'p3394-fwd-int-' + Math.random().toString(36).slice(2, 8);
 const BRIDGE_PORT = 18000 + Math.floor(Math.random() * 1000);
 const BRIDGE_TOKEN = 'fwd-int-token';
+const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
 
 let bridgeHandle: { close: () => Promise<void> } | null = null;
 const children: ChildProcess[] = [];
@@ -88,14 +89,14 @@ function startGateway(port: number, agent: string, cli: string): ChildProcess {
     P3394_AGENT: agent,
     P3394_AGENT_ID: agent,
     P3394_AGENT_ALIAS: agent,
-    P3394_AGENT_CLI: cli,
-    P3394_AGENT_CLI_ARGS: '{message}',
+    P3394_AGENT_CLI: TEST_NODE,
+    P3394_AGENT_CLI_ARGS: `${JSON.stringify(cli)} {message}`,
     COGSEED_ENDPOINT: `http://127.0.0.1:${BRIDGE_PORT}`,
     COGSEED_TOKEN: BRIDGE_TOKEN,
     P3394_HEARTBEAT_MS: '5000',
     P3394_AGENT_TIMEOUT_MS: '30000',
   };
-  const child = spawn(process.execPath, [GATEWAY_SCRIPT], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(TEST_NODE, [GATEWAY_SCRIPT], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout?.on('data', () => { /* keep pipe drained */ });
   child.stderr?.on('data', () => { /* keep pipe drained */ });
   children.push(child);
@@ -118,10 +119,10 @@ beforeAll(async () => {
   activateUser('u-fwd-int-' + Math.random().toString(36).slice(2, 10));
 
   // 真实可执行 CLI 脚本（确定性输出）。
-  cliA = path.join(tmpDir, 'cli-a.sh');
-  cliB = path.join(tmpDir, 'cli-b.sh');
-  fs.writeFileSync(cliA, '#!/bin/sh\necho "A-CLI received: $*"\n', { mode: 0o755 });
-  fs.writeFileSync(cliB, '#!/bin/sh\necho "B-CLI received: $*"\n', { mode: 0o755 });
+  cliA = path.join(tmpDir, 'cli-a.cjs');
+  cliB = path.join(tmpDir, 'cli-b.cjs');
+  fs.writeFileSync(cliA, 'process.stdout.write("A-CLI received: " + process.argv.slice(2).join(" ") + "\\n");\n');
+  fs.writeFileSync(cliB, 'process.stdout.write("B-CLI received: " + process.argv.slice(2).join(" ") + "\\n");\n');
 
   // 真实 Bridge（async：监听失败换端口重试后返回 handle）。
   const { maybeStartP3394Bridge } = await import('../../../../src/main/features/p3394_bridge/app-wiring');
