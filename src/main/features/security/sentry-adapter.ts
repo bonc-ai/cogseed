@@ -485,23 +485,23 @@ function hasPyYaml(python: string): boolean {
  * Cached: the probe spawns a process, and the answer cannot change within a
  * session.
  */
-let _pythonChoice: string | null = null;
-function resolvePython(): string {
-  if (_pythonChoice) return _pythonChoice;
+let _pythonCandidates: string[] | null = null;
+function resolvePythonCandidates(): string[] {
+  if (_pythonCandidates) return _pythonCandidates;
   const candidates = pythonCandidates();
-  const full = candidates.find(hasPyYaml);
-  if (full) {
-    _pythonChoice = full;
+  const usable = candidates.filter(hasPyYaml);
+  if (usable.length) {
+    _pythonCandidates = usable;
   } else {
     // No interpreter has PyYAML. Still scan — built-in rules plus our local red
     // lines are better than nothing — but the verdict carries `rulesDegraded`
     // so callers can disclose the weaker coverage.
-    _pythonChoice = candidates[0];
+    _pythonCandidates = candidates.slice(0, 1);
     log.warn('no python with PyYAML found; sentry will run on built-in rules only', {
       tried: candidates.length,
     });
   }
-  return _pythonChoice;
+  return _pythonCandidates;
 }
 
 function readVersion(file: string): string {
@@ -510,6 +510,26 @@ function readVersion(file: string): string {
   } catch {
     return '';
   }
+}
+
+class ScannerProcessExitError extends Error {
+  constructor(readonly exitCode: number | null, stderr: string) {
+    super(`exit ${exitCode}: ${stderr || 'no output'}`);
+  }
+}
+
+/**
+ * Windows reports native child-process faults as NTSTATUS values in the
+ * 0xC0000000 range. They are distinct from scanner-defined non-zero exits and
+ * can be transient under sustained process churn, so the adapter retries one
+ * fresh process before returning `unknown`.
+ */
+export function isRetryableScannerProcessExit(
+  code: number | null,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== 'win32' || code === null) return false;
+  return (code >>> 0) >= 0xC0000000;
 }
 
 /**
@@ -669,10 +689,10 @@ async function runGate(
   redLines: string[],
 ): Promise<SentryScanResult> {
   const thru = <T extends SentryScanResult>(r: T): T => r;
-  const python = resolvePython();
+  const pythons = resolvePythonCandidates();
   let raw: string;
   try {
-    raw = await new Promise<string>((resolve, reject) => {
+    const runOnce = (python: string) => new Promise<string>((resolve, reject) => {
       const child = spawn(python, [gate, engineRoot, skillDir], {
         cwd: engineRoot,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -723,9 +743,27 @@ async function runGate(
       child.on('close', (code) => {
         clearTimeout(timer);
         if (code === 0 && out.trim()) resolve(out);
-        else reject(new Error(`exit ${code}: ${err.slice(0, 200) || 'no output'}`));
+        else reject(new ScannerProcessExitError(code, err.slice(0, 200)));
       });
     });
+    raw = await (async () => {
+      let lastError: Error | undefined;
+      for (const python of pythons) {
+        try {
+          return await runOnce(python);
+        } catch (err) {
+          lastError = err as Error;
+          if (!(err instanceof ScannerProcessExitError)
+            || !isRetryableScannerProcessExit(err.exitCode)) throw err;
+          log.warn('sentry scanner process crashed; trying next interpreter', {
+            skillDir,
+            exitCode: err.exitCode,
+            python,
+          });
+        }
+      }
+      throw lastError ?? new Error('no python interpreter available');
+    })();
   } catch (err) {
     const msg = (err as Error).message || 'spawn_failed';
     log.warn('sentry scan could not run', { skillDir, error: msg });

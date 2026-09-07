@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
@@ -13,7 +14,8 @@ beforeEach(() => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await drainMainRuntimeForTest('user-a');
   if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });

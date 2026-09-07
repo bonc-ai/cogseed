@@ -232,6 +232,47 @@ describe('local_agents/registry', () => {
     expect(r.error).toBeUndefined();
   });
 
+  it('does not start an alternate Hermes probe after the discovery budget is spent', async () => {
+    const attemptsFile = path.join(tmpDir, 'hermes-probe-attempts.txt');
+    const script = path.join(tmpDir, 'hanging-hermes.js');
+    fs.writeFileSync(script, `
+const fs = require('node:fs');
+fs.appendFileSync(${JSON.stringify(attemptsFile)}, String(process.argv[2]) + '\\n');
+setInterval(() => {}, 1000);
+`);
+    const fake = path.join(tmpDir, isWindows ? 'hanging-hermes.cmd' : 'hanging-hermes');
+    if (isWindows) {
+      fs.writeFileSync(fake, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      fs.writeFileSync(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`);
+      fs.chmodSync(fake, 0o755);
+    }
+    process.env.PATH = '';
+    process.env.COGSEED_HERMES_PATH = fake;
+
+    const r = await detectOne('hermes');
+
+    expect(r.available).toBe(false);
+    expect(r.error).toBe('version_unknown');
+    const attempts = fs.readFileSync(attemptsFile, 'utf8').trim().split(/\r?\n/);
+    // The first form gets its one starvation retry. Starting the alternate
+    // `version` form after that would exceed the workspace-view budget.
+    expect(attempts).toEqual(['--version', '--version']);
+  });
+
+  it('still tries the alternate Hermes probe after a fast unparseable result', async () => {
+    const fake = writeArgAwareMockCli(path.join(tmpDir, 'alternate-hermes'), {
+      '--version': 'Hermes Agent version unavailable',
+      version: 'Hermes Agent v0.18.2',
+    });
+    process.env.PATH = '';
+    process.env.COGSEED_HERMES_PATH = fake;
+
+    const r = await detectOne('hermes');
+
+    expect(r).toMatchObject({ available: true, version: '0.18.2' });
+  });
+
   it('falls back to --version for Hermes installations without the version subcommand', async () => {
     const fake = writeArgAwareMockCli(path.join(tmpDir, 'legacy-hermes'), {
       '--version': 'Hermes Agent v0.17.0',

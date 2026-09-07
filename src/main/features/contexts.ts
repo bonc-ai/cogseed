@@ -238,11 +238,12 @@ export interface ImportableFile {
  */
 export async function collectImportableFilesFromDir(absDir: string): Promise<ImportableFile[]> {
   const out: ImportableFile[] = [];
+  const compareNames = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
   async function walk(d: string, rel: string) {
     if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
     let entries;
     try { entries = await fsp.readdir(d, { withFileTypes: true }); } catch { return; }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    entries.sort((a, b) => compareNames(a.name, b.name));
     for (const e of entries) {
       if (out.length >= MAX_FOLDER_IMPORT_FILES) return;
       if (e.name.startsWith('.') || CONTEXTS_IGNORE.has(e.name)) continue;

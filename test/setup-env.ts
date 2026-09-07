@@ -124,6 +124,13 @@ if (process.platform === 'win32') {
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vitest-'));
 process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 
+// `os.homedir()` reads USERPROFILE on Windows and HOME on POSIX. Redirect both
+// before test modules load so global skill/session discovery cannot read from
+// or write fixtures into the developer's real ~/.claude and ~/.codex trees.
+// Tests for real home-resolution precedence explicitly unset or replace these.
+process.env.HOME = tmpRoot;
+process.env.USERPROFILE = tmpRoot;
+
 // Same inheritance, sharper edge: `users.activateUser()` pins
 // `CORE_AGENT_AUTH_DIR` to the active user's `<uid>/local/config/`, and the
 // app exports it to children. `src/core-agent/test/auth.test.ts` deletes the

@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = path.join(__dirname, '../../..');
-const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8');
+const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8').replace(/\r\n/g, '\n');
 
 describe('source runtime launchers', () => {
   it('locks this worktree to cogseed and passes that identity to Electron', () => {
@@ -39,7 +39,7 @@ describe('source runtime launchers', () => {
     expect(bootstrap).toContain('allowWorkspaceOverride: isPackagedDev');
   });
 
-  it('rejects every shell argument or environment attempt to override cogseed', () => {
+  it.skipIf(process.platform === 'win32')('rejects every shell argument or environment attempt to override cogseed', () => {
     for (const variant of ['main', 'cognition', 'expense', 'cogseed', 'optimization']) {
       const result = spawnSync('bash', [path.join(root, 'run.sh'), `--variant=${variant}`], {
         encoding: 'utf8',
@@ -65,6 +65,40 @@ describe('source runtime launchers', () => {
         COGSEED_RUNTIME_VARIANT: '',
         COGSEED_WORKSPACE_ROOT: path.join(root, 'shared-data-that-must-not-be-used'),
       },
+    });
+    expect(sharedRoot.status).toBe(2);
+    expect(sharedRoot.stderr).toContain('inherited COGSEED_WORKSPACE_ROOT is not allowed');
+  });
+
+  it.runIf(process.platform === 'win32')('rejects every Windows launcher argument or environment attempt to override cogseed', () => {
+    const runWindows = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(
+      'cmd.exe',
+      ['/d', '/s', '/c', ['run.cmd', ...args].join(' ')],
+      { cwd: root, encoding: 'utf8', env },
+    );
+
+    for (const variant of ['main', 'cognition', 'expense', 'cogseed', 'optimization']) {
+      const result = runWindows([`--variant=${variant}`], {
+        ...process.env,
+        COGSEED_RUNTIME_VARIANT: '',
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Unknown argument: --variant');
+    }
+
+    for (const variant of ['main', 'cognition', 'expense', 'optimization']) {
+      const result = runWindows([], {
+        ...process.env,
+        COGSEED_RUNTIME_VARIANT: variant,
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`COGSEED_RUNTIME_VARIANT=${variant} is not allowed`);
+    }
+
+    const sharedRoot = runWindows([], {
+      ...process.env,
+      COGSEED_RUNTIME_VARIANT: '',
+      COGSEED_WORKSPACE_ROOT: path.join(root, 'shared-data-that-must-not-be-used'),
     });
     expect(sharedRoot.status).toBe(2);
     expect(sharedRoot.stderr).toContain('inherited COGSEED_WORKSPACE_ROOT is not allowed');

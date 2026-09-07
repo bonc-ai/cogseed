@@ -95,6 +95,10 @@ async function runCogSeedTaskRecovery(
     taskIds.push(updated.taskId);
   }
   const collaborationRecovery = await recoverCogSeedCollaborationSteps(userId);
+  // Directory traversal order differs between Windows and macOS. Recovery is
+  // order-independent, so sort the recovered ids to make both the persisted
+  // state and the report deterministic across platforms.
+  taskIds.sort();
   await writeJson(cogseedRecoveryStateFile(userId), { schemaVersion: 1, ownerId: userId, recoveredAt: nowIso(), recoveredTaskIds: taskIds });
   return { recoveredCount: taskIds.length, workflowStepsReconciled: collaborationRecovery.reconciledCount, dispatchedCount: 0, taskIds };
 }
