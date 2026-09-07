@@ -957,6 +957,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.create(ctx.userId, payload),
   'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -964,6 +965,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.archived.purge': async (_payload, ctx) => cogseedBackend.cogseedIpcService.purgeArchived(ctx.userId),
   'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),

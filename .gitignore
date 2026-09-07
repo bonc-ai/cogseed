@@ -47,6 +47,7 @@ package.json.new
 
 # local build identity and development package output
 /.build
+/build-info.json
 /dist-dev
 build-info.json
 

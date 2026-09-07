@@ -97,28 +97,17 @@
       const stats = aggregateStats(group.entries);
       const installed = items.some((item) => item.installed === true);
       const dispatchable = items.some((item) => item.dispatchable === true);
-      const gatewayControllable = runtime?.gatewayControllable === true;
-      const gatewayRunning = runtime?.gatewayRunning === true;
       const current = group.entries.find((item) => item.currentTaskId)
         || group.entries.find((item) => item.currentConversationId)
         || group.entries[0];
-      let health = aggregateHealth(items);
-      if (stats.active > 0) health = 'busy';
-      else if (items.some((item) => item.health === 'error')) health = 'error';
-      else if (dispatchable) health = 'ready';
-      else if (items.some((item) => item.health === 'unsupported')) health = 'unsupported';
-      else if (!installed) health = 'offline';
-      else if (gatewayControllable && !gatewayRunning) health = 'disconnected';
       return {
         ...group,
         cli: executorCli(runtime || group.entries[0]),
         displayName: EXECUTOR_NAMES[executorCli(runtime || group.entries[0])] || group.displayName,
         stats,
-        health,
+        health: aggregateHealth(items),
         installed,
         dispatchable,
-        gatewayControllable,
-        gatewayRunning,
         currentTaskId: current?.currentTaskId,
         currentConversationId: current?.currentConversationId,
         latest: items.map((item) => item.lastActiveAt).filter(Boolean).sort().at(-1),
@@ -169,29 +158,18 @@
       ].filter(Boolean);
       return items.length ? `<div class="run-center-registry-stats">${items.map((item) => `<span>${esc(item)}</span>`).join('')}</div>` : '';
     };
-    const actions = (agent) => `<div class="run-center-registry-actions">${agent.currentTaskId ? `<button type="button" class="btn btn-sm" data-run-center-agent-task="${esc(agent.currentTaskId)}">${icon('panel-list')}<span>${esc(text('run_center.agent_open_current_task'))}</span></button>` : ''}${agent.currentConversationId ? `<button type="button" class="run-center-icon-btn" data-run-center-agent-conversation="${esc(agent.currentConversationId)}" title="${esc(text('run_center.agent_open_current_conversation'))}" aria-label="${esc(text('run_center.agent_open_current_conversation'))}">${icon('message-square')}</button>` : ''}</div>`;
+    const actions = (agent) => `<div class="run-center-registry-actions">${agent.currentConversationId ? `<button type="button" class="btn btn-sm" data-run-center-agent-conversation="${esc(agent.currentConversationId)}">${icon('message-square')}<span>${esc(text('run_center.agent_open_current_task'))}</span></button>` : agent.currentTaskId ? `<button type="button" class="btn btn-sm" data-run-center-agent-task="${esc(agent.currentTaskId)}">${icon('panel-list')}<span>${esc(text('run_center.agent_open_current_task'))}</span></button>` : ''}</div>`;
+    const settingsAction = typeof root.uiButton === 'function' ? root.uiButton({
+      label: text('run_center.agent_configure_in_settings'),
+      size: 'sm',
+      icon: 'settings',
+      attrs: { 'data-run-center-agent-settings': true },
+    }) : '';
 
     const memberRow = (agent) => `<article class="run-center-registry-instance is-native"><div class="run-center-registry-instance-main"><strong>${esc(agent.displayName || agent.agentId)}</strong>${activity(agent.lastActiveAt) ? `<small>${esc(activity(agent.lastActiveAt))}</small>` : ''}</div><span class="run-center-agent-health is-${esc(agent.health || 'unknown')}">${esc(health(agent.health))}</span>${stats(agent.stats || {})}${actions(agent)}</article>`;
-    const nativeGroup = model.nativeGroup ? `<section class="run-center-registry-section is-native"><header><div><h2>${esc(text('run_center.native_agents_section'))}</h2><p>${esc(text('run_center.native_agents_section_detail'))}</p></div></header><details class="run-center-native-agent-group"><summary><span class="run-center-registry-type-icon">${icon('users')}</span><div class="run-center-registry-identity"><strong>${esc(text('run_center.native_agent_group'))}</strong><span>${esc(text('run_center.native_agent_group_detail'))}</span></div><span class="run-center-native-count">${esc(text('run_center.native_agent_members', { count: model.nativeGroup.members.length }))}</span>${stats(model.nativeGroup.stats)}${icon('chevron-down', 'run-center-agent-group-chevron')}</summary><div class="run-center-agent-group-body">${model.nativeGroup.members.map(memberRow).join('')}</div></details></section>` : '';
+    const nativeGroup = model.nativeGroup ? `<section class="run-center-registry-section is-native"><header><div><h2>${esc(text('run_center.native_agents_section'))}</h2><p>${esc(text('run_center.native_agents_section_detail'))}</p></div></header><details class="run-center-native-agent-group"><summary><span class="run-center-registry-type-icon">${icon('users')}</span><div class="run-center-registry-identity"><strong>${esc(text('run_center.native_agent_group'))}</strong><span>${esc(text('run_center.native_agent_group_detail'))}</span></div><span class="run-center-native-count">${esc(text('run_center.native_agent_members', { count: model.nativeGroup.members.length }))}</span>${stats(model.nativeGroup.stats)}${icon('chevron-down', 'run-center-agent-group-chevron')}</summary><div class="run-center-agent-group-body" data-run-center-scroll-key="agent-native-group">${model.nativeGroup.members.map(memberRow).join('')}</div></details></section>` : '';
 
     const externalRows = model.externalExecutors.map((executor) => {
-      const busyAction = String(options.busyGateway || '');
-      const isGatewayBusy = busyAction.startsWith(`${executor.cli}:`);
-      const gatewayAction = busyAction.endsWith(':start') ? 'start' : 'stop';
-      const gatewayLocked = executor.stats.active > 0;
-      const gatewayDisabled = !executor.gatewayControllable || gatewayLocked || isGatewayBusy;
-      const gatewayStateKey = isGatewayBusy
-        ? (gatewayAction === 'start' ? 'run_center.agent_gateway_connecting' : 'run_center.agent_gateway_disconnecting')
-        : executor.gatewayRunning
-          ? 'run_center.agent_gateway_connected'
-          : 'run_center.agent_gateway_disconnected';
-      const gatewayHelpKey = gatewayLocked
-        ? 'run_center.agent_gateway_busy_help'
-        : !executor.installed
-          ? 'run_center.agent_gateway_not_installed_help'
-          : executor.health === 'unsupported'
-            ? 'run_center.agent_gateway_unsupported_help'
-            : 'run_center.agent_gateway_help';
       const detailKey = executor.runtimes.some((runtime) => runtime.sourceKind === 'p3394' && runtime.runtimeKind === 'p3394-remote')
         ? 'run_center.agent_executor_remote_detail'
         : !executor.installed
@@ -199,9 +177,7 @@
           : executor.health === 'unsupported'
             ? 'run_center.agent_executor_unsupported_detail'
             : 'run_center.agent_executor_installed_detail';
-      const gatewayControl = executor.cli ? `<label class="toggle-switch run-center-executor-toggle" title="${esc(text(gatewayHelpKey))}"><span class="run-center-executor-toggle-copy"><strong>${esc(text('run_center.agent_gateway_control'))}</strong><small>${esc(text(gatewayStateKey))}</small></span><input type="checkbox" data-run-center-agent-gateway="${esc(executor.cli)}" aria-label="${esc(text('run_center.agent_gateway_toggle_aria', { name: executor.displayName }))}"${executor.gatewayRunning ? ' checked' : ''}${gatewayDisabled ? ' disabled' : ''}></label>` : '';
-      const rowError = executor.cli && options.gatewayError === executor.cli ? `<small class="run-center-executor-error" role="status">${esc(text('run_center.agent_gateway_failed'))}</small>` : '';
-      return `<article class="run-center-executor-row"><span class="run-center-registry-mark">${esc(String(executor.displayName || '?').slice(0, 1).toLocaleUpperCase())}</span><div class="run-center-registry-identity"><strong>${esc(executor.displayName)}</strong><span>${esc(text(detailKey))}</span>${activity(executor.latest) ? `<small>${esc(activity(executor.latest))}</small>` : ''}</div><span class="run-center-agent-health is-${esc(executor.health)}">${esc(health(executor.health))}</span>${stats(executor.stats)}${actions(executor)}${gatewayControl}${rowError}</article>`;
+      return `<article class="run-center-executor-row"><span class="run-center-registry-mark">${esc(String(executor.displayName || '?').slice(0, 1).toLocaleUpperCase())}</span><div class="run-center-registry-identity"><strong>${esc(executor.displayName)}</strong><span>${esc(text(detailKey))}</span>${activity(executor.latest) ? `<small>${esc(activity(executor.latest))}</small>` : ''}</div><span class="run-center-agent-health is-${esc(executor.health)}">${esc(health(executor.health))}</span>${stats(executor.stats)}${actions(executor)}</article>`;
     }).join('');
     const hasExternalMatches = !!externalRows;
     const externalContent = `<div class="run-center-executor-list">${externalRows}</div>`;
@@ -216,9 +192,9 @@
     return `<div class="run-center-agent-registry">
       ${options.error ? `<div class="run-center-registry-warning" role="status">${icon('warning')}<span>${esc(text('run_center.agents_stale', { error: options.error }))}</span></div>` : ''}
       <div class="run-center-registry-summary" aria-label="${esc(text('run_center.agents_summary'))}">${metric(model.counts.native, 'run_center.agent_native_count')}${metric(model.counts.external, 'run_center.agent_external_count')}${metric(model.counts.busy, 'run_center.agent_busy_task_count')}${metric(model.counts.attention, 'run_center.agent_attention_task_count')}</div>
-      <div class="run-center-registry-toolbar is-global"><label>${icon('search')}<input type="search" value="${esc(options.search || '')}" data-run-center-agent-search placeholder="${esc(text('run_center.agent_search_placeholder'))}" aria-label="${esc(text('run_center.agent_search_placeholder'))}"></label><div class="run-center-registry-filters">${['all', 'available', 'busy', 'attention', 'offline'].map((value) => `<button type="button" data-run-center-agent-filter="${value}" aria-pressed="${String((options.filter || 'all') === value)}" class="${(options.filter || 'all') === value ? 'is-active' : ''}">${esc(text(`run_center.agent_filter_${value}`))}</button>`).join('')}</div></div>
+      <div class="run-center-registry-toolbar is-global"><label>${icon('search')}<input type="search" value="${esc(options.search || '')}" data-run-center-agent-search placeholder="${esc(text('run_center.agent_search_placeholder'))}" aria-label="${esc(text('run_center.agent_search_placeholder'))}"></label><div class="run-center-registry-filters" data-run-center-scroll-key="agent-filters">${['all', 'available', 'busy', 'attention', 'offline'].map((value) => `<button type="button" data-run-center-agent-filter="${value}" aria-pressed="${String((options.filter || 'all') === value)}" class="${(options.filter || 'all') === value ? 'is-active' : ''}">${esc(text(`run_center.agent_filter_${value}`))}</button>`).join('')}</div></div>
       ${nativeGroup}
-      <section class="run-center-registry-section is-external"><header><div><h2>${esc(text('run_center.external_agents_section'))}</h2><p>${esc(text('run_center.external_agents_section_detail'))}</p></div></header>${hasExternalMatches ? externalContent : stateView(model.counts.external ? 'run_center.agents_no_matches' : 'run_center.runtimes_empty')}</section>
+      <section class="run-center-registry-section is-external"><header><div><h2>${esc(text('run_center.external_agents_section'))}</h2><p>${esc(text('run_center.external_agents_section_detail'))}</p></div>${settingsAction}</header>${hasExternalMatches ? externalContent : stateView(model.counts.external ? 'run_center.agents_no_matches' : 'run_center.runtimes_empty')}</section>
       ${channelRows ? `<section class="run-center-registry-section"><header><div><h2>${esc(text('run_center.channels_section'))}</h2><p>${esc(text('run_center.channels_section_detail'))}</p></div></header><ul>${channelRows}</ul></section>` : ''}
     </div>`;
   }

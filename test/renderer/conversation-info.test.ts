@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
@@ -36,6 +36,7 @@ function renderFilesResult(snapshot: {
   candidates?: any[];
   activeTab?: 'files' | 'attachments' | 'collaboration' | 'protocol' | 'carried';
   panelClosed?: boolean;
+  openRunCenterForTask?: (conversationId: string) => boolean;
 }, afterMount?: (context: any) => Promise<void> | void): Promise<RenderFilesResult> {
   const elements = new Map<string, any>();
   const getEl = (id: string) => {
@@ -112,6 +113,10 @@ function renderFilesResult(snapshot: {
         focusCalls.push([kind, ref, messageId]);
         return true;
       },
+      ...(snapshot.openRunCenterForTask ? {
+        openRunCenterForTask: snapshot.openRunCenterForTask,
+        uiButton: (options: any) => `<button type="button" class="${options.className || ''}" data-open-run-center-for-task>${options.label}</button>`,
+      } : {}),
       cogseed: {
         sync: {
           getEnabled: async () => ({ ok: true, enabled: snapshot.syncEnabled === true }),
@@ -223,6 +228,41 @@ describe('ConversationInfo Collaboration tab shell', () => {
     expect(html).not.toContain('data-info-tab=');
     expect(html).toContain('id="conversation-info-body"');
     expect(html).toContain('conversation_info.title');
+  });
+
+  it('honors the requested run-context tab when opened externally', async () => {
+    const result = await renderFilesResult({
+      history: [], files: { items: [], count: 0 },
+    }, async (context) => {
+      context.window.ConversationInfo.openAndSetTab('proof');
+      const body = context.document.getElementById('conversation-info-body');
+      for (let index = 0; index < 100 && body.innerHTML.includes('Loading'); index += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    expect(result.html).toContain('class="run-context-tab is-active" data-run-context-tab="proof"');
+    expect(result.html).toContain('class="run-context-pane" data-run-context-pane="proof"');
+    expect(result.html).toContain('class="run-context-pane" hidden data-run-context-pane="runs"');
+  });
+
+  it('opens all runs for the bound conversation from the run context', async () => {
+    const openRunCenterForTask = vi.fn(() => true);
+    const result = await renderFilesResult({
+      history: [], files: { items: [], count: 0 }, openRunCenterForTask,
+    }, async (context) => {
+      const body = context.document.getElementById('conversation-info-body');
+      body.onclick({
+        target: {
+          closest: (selector: string) => selector === '[data-open-run-center-for-task]' ? {} : null,
+        },
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      });
+    });
+
+    expect(result.html).toContain('data-open-run-center-for-task');
+    expect(openRunCenterForTask).toHaveBeenCalledWith('c1');
   });
 
   it('renders a single run-context panel instead of per-feature tabs', () => {
