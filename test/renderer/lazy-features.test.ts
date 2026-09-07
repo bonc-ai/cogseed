@@ -50,6 +50,7 @@ describe('renderer lazy feature loader', () => {
       './modules/touchpoint-settings.js',
       './modules/memory.js',
       './modules/settings-security.js',
+      './modules/run-center-settings.js',
     ]);
     expect(appended.every((script) => script.async === false)).toBe(true);
   });
@@ -89,7 +90,34 @@ describe('renderer lazy feature loader', () => {
     await expect(skills.context.loadRendererFeature('skills')).resolves.toBeUndefined();
   });
 
-  it('loads the workspace surface on demand and uses its lightweight resource catalog', async () => {
+  it('keeps only the lightweight Run Center projection resident', async () => {
+    const html = fs.readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
+    const manifest = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/lazy-features.js'), 'utf8');
+    expect(html).toContain('<script src="./modules/run-center-model.js"></script>');
+    expect(html).toContain('<script src="./modules/run-center-global.js"></script>');
+    for (const script of [
+      'run-center-board.js',
+      'run-center-detail.js',
+      'run-center-overview.js',
+      'run-center-agents.js',
+      'run-center.js',
+    ]) {
+      expect(html).not.toContain(`<script src="./modules/${script}"></script>`);
+    }
+    expect(manifest).not.toContain("{ src: './modules/run-center-model.js' }");
+    expect(manifest).not.toContain("{ src: './modules/run-center-global.js' }");
+
+    const { context, appended } = loadFeatureLoader();
+    await context.loadRendererFeature('run-center');
+    expect(appended.map((script) => script.src)).toEqual([
+      './modules/run-center-board.js',
+      './modules/run-center-detail.js',
+      './modules/run-center-agents.js',
+      './modules/run-center.js',
+    ]);
+  });
+
+  it('loads the workspace surface on demand', async () => {
     // 9.1 重构：spaces surface 更名为 workspace（lazy-features manifest 用
     // workspace key + workspace.js；spaces.js 已废弃且无引用）。
     const { context, appended } = loadFeatureLoader();
@@ -97,20 +125,20 @@ describe('renderer lazy feature loader', () => {
     expect(appended.map((script) => script.src)).toEqual(['./modules/workspace.js']);
 
     const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
-    expect(source).toContain("_invoke('skills.list')");
-    expect(source).toContain("_invoke('agents.list')");
+    // Actual IPC calls and deferred capability loading are exercised through
+    // page navigation/clicks in workspace-navigation.test.ts.
     expect(source).toContain('renderWorkspace');
   });
 
-  it('workspace surface：COGSEED-16 无确认态 + COGSEED-19 悬浮「+」新建任务入口', () => {
+  it('workspace surface：产物确认态 无确认态 + 空间快捷建任务 悬浮「+」新建任务入口', () => {
     const js = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/workspace.js'), 'utf8');
-    // COGSEED-16：产物确认 UI 与通道全部移除（无按钮、无状态条、无 IPC 调用）
+    // 产物确认态：产物确认 UI 与通道全部移除（无按钮、无状态条、无 IPC 调用）
     expect(js).not.toContain('confirm-artifact');
     expect(js).not.toContain('reject-artifact');
     expect(js).not.toContain('spaces.artifacts.confirm');
     expect(js).not.toContain('spaces.artifacts.reject');
     expect(js).not.toContain('ws.candidate_pending');
-    // COGSEED-19：左侧空间组头「+」直接新建该空间下任务（conversation.js 侧栏入口，无二次弹窗）
+    // 空间快捷建任务：左侧空间组头「+」直接新建该空间下任务（conversation.js 侧栏入口，无二次弹窗）
     const convJs = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/conversation.js'), 'utf8');
     expect(convJs).toContain('data-conv-space-quick-task');
     expect(convJs).toContain('_quickNewTaskInSpace');
@@ -118,7 +146,7 @@ describe('renderer lazy feature loader', () => {
     expect(styleCss).toContain('.conv-list-section-header:hover .conv-space-quick-task');
     // 中心页卡片的旧入口已移除（入口统一到左侧空间组）
     expect(js).not.toContain('data-ws="quick-task"');
-    // COGSEED-18：新建空间弹窗本地文件夹选择 + 导入进度订阅（workspace-import:progress 推送）
+    // 本地文件夹导入：新建空间弹窗本地文件夹选择 + 导入进度订阅（workspace-import:progress 推送）
     expect(js).toContain('data-ws="pick-import-dir"');
     expect(js).toContain("_invoke('workspace.importFolder'");
     expect(js).toContain('workspace-import:progress');
@@ -216,19 +244,17 @@ describe('renderer lazy feature loader', () => {
     expect(source).not.toContain('primeProjectDetailShell');
   });
 
-  it('upgrades the Agent startup summary once without force-refreshing every tab visit', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf8');
-    const start = source.indexOf("} else if (view === 'agents')");
-    const end = source.indexOf("} else if (view === 'skills')", start);
-    const branch = source.slice(start, end);
+  it('routes the legacy Agent entry into Settings and upgrades the startup summary there', () => {
+    const boot = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/boot.js'), 'utf8');
+    const settings = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/run-center-settings.js'), 'utf8');
 
-    expect(branch).toContain("_loadViewFeature('agents', 'agents'");
-    expect(branch.indexOf("_loadViewFeature('agents', 'agents'")).toBeLessThan(
-      branch.indexOf('renderAgentsList(_agentsCache)'),
-    );
-    expect(branch).toContain('const needsFullListing');
-    expect(branch).toContain('loadAgents(false)');
-    expect(branch).not.toContain('loadAgents(forceRefresh)');
+    expect(boot).toContain("const openLegacyAgentSettings = view === 'agents'");
+    expect(boot).toContain("if (openLegacyAgentSettings) view = 'settings'");
+    expect(boot).not.toContain("} else if (view === 'agents')");
+    expect(boot).toContain("const settingsTab = openLegacyAgentSettings ? 'configuration' : opts.settingsTab");
+    expect(boot).toContain("const settingsAnchor = openLegacyAgentSettings ? 'agents' : opts.settingsAnchor");
+    expect(settings).toContain('async function refreshAgentManagement()');
+    expect(settings).toContain('await loadAgents(false)');
   });
 
   it('opens one Agent detail without refreshing the complete Agent list first', () => {

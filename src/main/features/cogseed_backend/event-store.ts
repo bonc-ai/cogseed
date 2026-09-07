@@ -9,6 +9,7 @@ import { COGSEED_AGENT_BACKEND_SCHEMA_VERSION, type CogSeedTaskEvent, type CogSe
 
 const MAX_EVENT_PAYLOAD_CHARS = 16_384;
 const COGSEED_TASK_EVENT_TYPES = new Set<string>([
+  'task.planned',
   'task.created',
   'task.queued',
   'task.started',

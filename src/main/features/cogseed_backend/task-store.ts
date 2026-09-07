@@ -20,6 +20,7 @@ import {
 import {
   getOrCreateCogSeedAgentSession,
   getOrCreateCogSeedSession,
+  clearCogSeedSessionActiveTask,
   readCogSeedSession,
   setCogSeedSessionActiveTask,
 } from './session-store';
@@ -38,6 +39,7 @@ import { ensureSkillRuntimeSnapshot } from '../skills/runtime-snapshot-service';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
 
 const COGSEED_TASK_STATUSES = new Set<string>([
+  'planned',
   'created',
   'queued',
   'running',
@@ -60,6 +62,9 @@ export {
 export interface CreateCogSeedTaskInput {
   requestId: string;
   task: string;
+  initialStatus?: 'created' | 'planned';
+  spaceId?: string;
+  worktreeName?: string;
   sessionId?: string;
   conversationId?: string;
   agentId?: string;
@@ -90,6 +95,10 @@ export interface CreateCogSeedTaskInput {
 export interface CreateCogSeedTaskResult {
   task: CogSeedTaskRecord;
   created: boolean;
+}
+
+export interface AdmitPlannedCogSeedTaskInput extends CreateCogSeedTaskInput {
+  runtimeWorkerId: string;
 }
 
 async function resolveSkillVersionPins(
@@ -197,6 +206,18 @@ function validateTask(userId: string, value: unknown, expectedTaskId?: string): 
     && (typeof row.archivedAt !== 'string' || !Number.isFinite(Date.parse(row.archivedAt)))) {
     throw new Error('malformed CogSeed task');
   }
+  if (row.plannedAt !== undefined
+    && (typeof row.plannedAt !== 'string' || !Number.isFinite(Date.parse(row.plannedAt)))) {
+    throw new Error('malformed CogSeed task');
+  }
+  if (row.spaceId !== undefined && (typeof row.spaceId !== 'string' || !safeId(row.spaceId))) {
+    throw new Error('malformed CogSeed task');
+  }
+  if (row.worktreeName !== undefined
+    && (typeof row.worktreeName !== 'string' || path.basename(row.worktreeName) !== row.worktreeName
+      || !/^cogseed-worktree-[A-Za-z0-9._-]+$/.test(row.worktreeName))) {
+    throw new Error('malformed CogSeed task');
+  }
   for (const key of ['groupChatRunId', 'groupChatTurnId', 'groupChatSourceMessageId', 'groupChatMessageId', 'groupChatWorkflowRunId', 'groupChatWorkflowStepId'] as const) {
     if (row[key] !== undefined && (typeof row[key] !== 'string' || !safeId(row[key]))) {
       throw new Error('malformed CogSeed task');
@@ -278,7 +299,10 @@ function validateClaim(userId: string, requestId: string, value: unknown): CogSe
 
 function createRequestFingerprint(input: CreateCogSeedTaskInput, normalizedTask: string): string {
   return cogSeedRequestFingerprint('create', {
+    initialStatus: input.initialStatus ?? 'created',
     task: normalizedTask,
+    spaceId: input.spaceId,
+    worktreeName: input.worktreeName,
     sessionId: input.sessionId,
     conversationId: input.conversationId,
     agentId: input.agentId,
@@ -327,18 +351,20 @@ async function repairTaskCreationArtifacts(
 ): Promise<void> {
   const firstEvents = await readCogSeedTaskEvents(userId, task.taskId, 0, 1);
   const firstEvent = firstEvents[0];
-  if (firstEvent?.type === 'task.created'
+  const creationEventType = task.plannedAt ? 'task.planned' : 'task.created';
+  if (firstEvent?.type === creationEventType
     && firstEvent.payload.requestId !== undefined
     && firstEvent.payload.requestId !== task.requestId) {
     throw new Error('CogSeed task creation event is inconsistent');
   }
-  if (firstEvent && firstEvent.type !== 'task.created' && task.status === 'created') {
+  if (firstEvent && firstEvent.type !== creationEventType
+    && ((task.plannedAt && task.status === 'planned') || (!task.plannedAt && task.status === 'created'))) {
     throw new Error('CogSeed task creation event is inconsistent');
   }
 
   const session = await readCogSeedSession(userId, task.sessionId);
   if (!session) throw new Error('CogSeed task references a missing session');
-  if (session.activeTaskId !== task.taskId) {
+  if (task.status !== 'planned' && session.activeTaskId !== task.taskId) {
     const currentActive = session.activeTaskId
       ? await readCogSeedTask(userId, session.activeTaskId)
       : null;
@@ -351,7 +377,7 @@ async function repairTaskCreationArtifacts(
   }
 
   if (!firstEvent) {
-    await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, 'task.created', {
+    await appendCogSeedTaskEvent(userId, task.taskId, task.sessionId, creationEventType, {
       requestId: task.requestId,
     });
   }
@@ -370,6 +396,7 @@ export async function ensureCogSeedTaskCreationArtifacts(
 }
 
 const STATUS_EVENT: Readonly<Partial<Record<CogSeedTaskRecord['status'], CogSeedTaskEventType>>> = {
+  planned: 'task.planned',
   queued: 'task.queued',
   running: 'task.started',
   waiting_user: 'task.waiting_user',
@@ -380,6 +407,7 @@ const STATUS_EVENT: Readonly<Partial<Record<CogSeedTaskRecord['status'], CogSeed
 };
 
 const EVENT_STATUS = new Map<CogSeedTaskEventType, CogSeedTaskRecord['status']>([
+  ['task.planned', 'planned'],
   ['task.created', 'created'],
   ['task.queued', 'queued'],
   ['task.started', 'running'],
@@ -534,10 +562,15 @@ export async function readCogSeedTaskByRequestId(userId: string, requestId: stri
   assertCogSeedUserId(userId);
   const claimFile = cogseedRequestClaimFile(userId, assertCogSeedRequestId(requestId));
   try {
-    const claim = validateClaim(userId, requestId, JSON.parse(await fs.readFile(claimFile, 'utf8')));
-    const task = await readCogSeedTask(userId, claim.taskId);
-    if (!task) throw new Error('CogSeed request claim references a missing task');
-    return task;
+    // Purges remove the claim before its task under this same lock. Keep the
+    // paired read atomic so callers receive a valid pre-purge task or the
+    // normal post-purge `null` fallback, never the transient middle state.
+    return await fileEditLock(claimFile).runExclusive(async () => {
+      const claim = validateClaim(userId, requestId, JSON.parse(await fs.readFile(claimFile, 'utf8')));
+      const task = await readCogSeedTask(userId, claim.taskId);
+      if (!task) throw new Error('CogSeed request claim references a missing task');
+      return task;
+    });
   } catch (error) {
     if (isEnoent(error)) {
       const orphaned = (await listCogSeedTasks(userId)).filter((task) => task.requestId === requestId);
@@ -570,6 +603,71 @@ export interface CogSeedConversationPurgeReport {
   retainedTaskIds: string[];
   /** Could not be read or removed. Reported, never blindly deleted. */
   failedTaskIds: string[];
+}
+
+export type CogSeedArchivedTaskPurgeReport = CogSeedConversationPurgeReport;
+
+function isRunCenterArchivedTask(task: Pick<CogSeedTaskRecord, 'status' | 'archivedAt'>): boolean {
+  // The board intentionally places cancelled terminal runs in the Archived
+  // column even though they predate the explicit archivedAt lifecycle field.
+  // Cleanup must follow the user's visible archive boundary, not just the
+  // newer persistence marker, or those cards can never be removed.
+  return !!task.archivedAt || task.status === 'cancelled';
+}
+
+/** Permanently remove Run Center records that the current user already
+ * archived, including cancelled terminal runs that the board automatically
+ * places in its Archived column. Durable Recall execution proofs and shared
+ * session/conversation assets intentionally remain outside this boundary. */
+export async function purgeCogSeedArchivedTasks(
+  userId: string,
+): Promise<CogSeedArchivedTaskPurgeReport> {
+  assertCogSeedUserId(userId);
+  const report: CogSeedArchivedTaskPurgeReport = { purgedTaskIds: [], retainedTaskIds: [], failedTaskIds: [] };
+
+  let entries: import('node:fs').Dirent[];
+  try { entries = await fs.readdir(cogseedTasksDirectory(userId), { withFileTypes: true }); }
+  catch (error) { if (isEnoent(error)) return report; throw error; }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const taskId = entry.name.slice(0, -'.json'.length);
+    let candidate: CogSeedTaskRecord | null = null;
+    try { candidate = await readCogSeedTask(userId, taskId); }
+    catch { report.failedTaskIds.push(taskId); continue; }
+    if (!candidate || !isRunCenterArchivedTask(candidate)) continue;
+
+    const claimFile = cogseedRequestClaimFile(userId, candidate.requestId);
+    const taskFile = cogseedTaskFile(userId, taskId);
+    try {
+      await fileEditLock(claimFile).runExclusive(async () => {
+        await fileEditLock(taskFile).runExclusive(async () => {
+          const task = await readCogSeedTask(userId, taskId);
+          if (!task) return;
+          if (!isRunCenterArchivedTask(task)) return;
+          if (task.resultDeliveryState === 'pending' || task.resultDeliveryState === 'pending-recovery') {
+            report.retainedTaskIds.push(taskId);
+            return;
+          }
+
+          try {
+            const claim = JSON.parse(await fs.readFile(claimFile, 'utf8')) as { taskId?: unknown };
+            if (claim?.taskId === taskId) await fs.rm(claimFile, { force: true });
+          } catch (error) {
+            if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error;
+          }
+          await fs.rm(cogseedTaskEventsFile(userId, taskId), { force: true });
+          await fs.rm(cogseedTaskProjectionFile(userId, taskId), { force: true });
+          await clearCogSeedSessionActiveTask(userId, task.sessionId, taskId);
+          await fs.rm(taskFile, { force: true });
+          report.purgedTaskIds.push(taskId);
+        });
+      });
+    } catch {
+      report.failedTaskIds.push(taskId);
+    }
+  }
+  return report;
 }
 
 /** Remove the Group Chat shadow tasks a deleted conversation leaves behind.
@@ -661,6 +759,18 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
   if (input.executionKind === 'group-chat' && !input.groupChatRunId) {
     throw new Error('CogSeed Group Chat run id is required');
   }
+  const initialStatus = input.initialStatus ?? 'created';
+  if (initialStatus === 'planned' && input.executionKind === 'group-chat') {
+    throw new Error('CogSeed Group Chat tasks cannot be saved as planned');
+  }
+  const spaceId = input.spaceId ? String(input.spaceId).trim() : undefined;
+  if (spaceId && !safeId(spaceId)) throw new Error('invalid CogSeed space id');
+  const worktreeName = input.worktreeName ? String(input.worktreeName).trim() : undefined;
+  if (worktreeName && (path.basename(worktreeName) !== worktreeName
+    || !/^cogseed-worktree-[A-Za-z0-9._-]+$/.test(worktreeName))) {
+    throw new Error('invalid managed worktree name');
+  }
+  if (spaceId && worktreeName) throw new Error('CogSeed planned task cannot combine a space and Worktree');
   const requestFingerprint = createRequestFingerprint(input, task);
   const claimFile = cogseedRequestClaimFile(userId, requestId);
 
@@ -752,16 +862,21 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
       taskId: `cogseed-task-${genId12()}`,
       sessionId: session.sessionId,
       runtimeSessionId: session.runtimeSessionId,
-      executionId: 'cogseed-exec-' + genId12(),
+      ...(initialStatus === 'created' ? { executionId: 'cogseed-exec-' + genId12() } : {}),
       requestId,
       requestFingerprint,
       ownerId: userId,
-      status: 'created',
+      status: initialStatus,
       task,
+      ...(initialStatus === 'planned' ? { plannedAt: createdAt } : {}),
+      ...(spaceId ? { spaceId } : {}),
+      ...(worktreeName ? { worktreeName } : {}),
       ...(requestedConversationId ? { conversationId: requestedConversationId } : {}),
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       ...(input.executionKind ? { executionKind: input.executionKind } : {}),
-      ...(requestedConversationId && requestedAgentId && input.executionKind !== 'group-chat'
+      ...(initialStatus === 'planned'
+        ? { resultDeliveryState: 'not-applicable' as const }
+        : requestedConversationId && requestedAgentId && input.executionKind !== 'group-chat'
         ? { resultDeliveryState: 'pending' as const }
         : {}),
       ...(input.groupChatRunId ? { groupChatRunId: input.groupChatRunId } : {}),
@@ -803,4 +918,73 @@ export async function createCogSeedTask(userId: string, input: CreateCogSeedTask
     await writeJson(claimFile, claim);
     return { task: taskRecord, created: true };
   });
+}
+
+export async function admitPlannedCogSeedTask(
+  userId: string,
+  taskId: string,
+  input: AdmitPlannedCogSeedTaskInput,
+): Promise<CogSeedTaskRecord> {
+  assertCogSeedUserId(userId);
+  assertCogSeedTaskId(taskId);
+  const requestedAgentId = input.agentId ? assertCogSeedAgentId(String(input.agentId)) : undefined;
+  const requestedConversationId = input.conversationId
+    ? assertCogSeedConversationId(String(input.conversationId))
+    : undefined;
+  const allowedSkillIds = input.allowedSkillIds !== undefined
+    ? Array.from(new Set(input.allowedSkillIds.map((item) => assertCogSeedAgentId(String(item)))))
+    : undefined;
+  const skillVersionPins = await resolveSkillVersionPins(
+    userId,
+    allowedSkillIds,
+    input.skillVersionPins,
+    input.preserveSkillVersionPins === true,
+  );
+  const abilityAssetIds = normalizeAbilityAssetIds(input.abilityAssetIds);
+  const workingDir = typeof input.workingDir === 'string' ? input.workingDir.trim() : undefined;
+  if (workingDir && !path.isAbsolute(workingDir)) throw new Error('CogSeed working directory must be absolute');
+  const runtimeWorkerId = String(input.runtimeWorkerId || '').trim();
+  if (!runtimeWorkerId.startsWith('cogseed-worker-')) throw new Error('invalid CogSeed Runtime worker id');
+
+  const admitted = await updateCogSeedTaskWithEvent(userId, taskId, (current) => {
+    if (current.status !== 'planned') return current;
+    if (current.archivedAt) throw new Error('CogSeed planned task is archived');
+    if (current.task !== String(input.task || '').trim()
+      || current.agentId !== requestedAgentId
+      || current.conversationId !== requestedConversationId) {
+      throw new Error('CogSeed planned task launch payload mismatch');
+    }
+    const updatedAt = nowIso();
+    return {
+      ...current,
+      status: 'queued',
+      executionId: current.executionId || `cogseed-exec-${genId12()}`,
+      runtimeWorkerId,
+      ...(input.executionKind ? { executionKind: input.executionKind } : {}),
+      ...(allowedSkillIds !== undefined ? { allowedSkillIds } : {}),
+      ...(skillVersionPins?.length ? { skillVersionPins } : {}),
+      ...(allowedSkillIds?.length
+        ? { skillVersionPinStatus: skillVersionPins?.length === allowedSkillIds.length ? 'pinned' as const : 'unpinned' as const }
+        : {}),
+      ...(input.localCli ? {
+        localCli: {
+          cli: String(input.localCli.cli || '').trim(),
+          ...(input.localCli.agentName ? { agentName: String(input.localCli.agentName) } : {}),
+          ...(input.localCli.model ? { model: String(input.localCli.model) } : {}),
+          ...(input.localCli.customArgs?.length ? { customArgs: input.localCli.customArgs.map(String) } : {}),
+          ...(input.localCli.cliProviderId ? { cliProviderId: String(input.localCli.cliProviderId) } : {}),
+          ...(input.localCli.viaP3394Gateway ? { viaP3394Gateway: true } : {}),
+        },
+      } : {}),
+      ...(input.profileId ? { profileId: String(input.profileId) } : {}),
+      ...(abilityAssetIds?.length ? { abilityAssetIds } : {}),
+      ...(workingDir ? { workingDir } : {}),
+      resultDeliveryState: requestedConversationId && requestedAgentId ? 'pending' : 'not-applicable',
+      updatedAt,
+    };
+  }, { type: 'task.queued', payload: { source: 'planned' } });
+  if (admitted.status === 'queued') {
+    await setCogSeedSessionActiveTask(userId, admitted.sessionId, admitted.taskId);
+  }
+  return admitted;
 }

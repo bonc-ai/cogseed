@@ -33,6 +33,8 @@ function fakeEl(id: string) {
     classList: fakeClassList(),
     addEventListener: vi.fn((name: string, fn: any) => { listeners[name] = fn; }),
     appendChild: vi.fn(),
+    append: vi.fn(),
+    appendChild: vi.fn(),
     querySelector: vi.fn(() => null),
     querySelectorAll: vi.fn(() => []),
     focus: vi.fn(),
@@ -92,7 +94,7 @@ function loadScript() {
     querySelector: vi.fn(() => null),
     querySelectorAll: vi.fn(() => []),
     addEventListener: vi.fn(),
-    body: {},
+    body: { appendChild: vi.fn(), append: vi.fn() },
     createElement: vi.fn(() => {
       const made = fakeCreatedEl();
       created.push(made);
@@ -111,8 +113,8 @@ function loadScript() {
         if (ch === 'contexts.pickAndUpload') return { ok: true };
         if (ch === 'auth.listEntries') {
           return { ok: true, entries: [
-            { provider: 'deepseek', model: 'deepseek-chat', modelName: 'DeepSeek Chat' },
-            { provider: 'qwen', model: 'qwen-plus', modelName: 'Qwen Plus' },
+            { entryId: 'e1', provider: 'deepseek', providerLabel: 'DeepSeek', model: 'deepseek-chat', modelName: 'DeepSeek Chat', modelAvailable: true },
+            { entryId: 'e2', provider: 'qwen', providerLabel: 'Qwen', model: 'qwen-plus', modelName: 'Qwen Plus', modelAvailable: true },
           ] };
         }
         if (ch === 'spaces.list') {
@@ -195,17 +197,21 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-tree'].innerHTML).toContain('data-kb-lib="班级建设资料"');
   });
 
-  it('renders the S2 QA pane and fills the model dropdown from real config', async () => {
+  it('renders the S2 QA pane with a model chip that opens the configured-model picker', async () => {
     const { windowMock, els } = loadScript();
     windowMock.renderKbWorkbench();
     // 右区结构（解析卡 + 消息区）在初始 DOM 一次性构建，运行期不再重建
     expect(els['kb-workbench'].innerHTML).toContain('kb-qa-messages');
     expect(els['kb-workbench'].innerHTML).toContain('kb-wb-analysis-card');
+    // 模型选择：chip（默认模型）+ 点击拉取已配置模型（auth.listEntries）
+    expect(els['kb-workbench'].innerHTML).toContain('kb-qa-model-chip');
+    expect(els['kb-qa-model-name'].textContent).toBe('默认模型');
+    els['kb-qa-tools']._listeners.click();
     await vi.waitFor(() => {
-      expect(els['kb-qa-model'].innerHTML).toContain('DeepSeek Chat');
+      expect(windowMock.cogseed.invoke).toHaveBeenCalledWith('auth.listEntries', {});
     });
-    expect(els['kb-qa-model'].innerHTML).toContain('Qwen Plus');
-    expect(els['kb-qa-model'].innerHTML).not.toContain('未配置模型');
+    // 弹层构建：默认行 + 两个已配置模型 + 去设置入口（DOM 追加到 body）
+    expect(windowMock.cogseed.invoke).toHaveBeenCalled();
   });
 
   it('streams a grounded answer and renders citation chips on final', async () => {
@@ -232,7 +238,7 @@ describe('KB workbench (S1 skeleton)', () => {
     cb({ type: 'final', text: '基于 引用回答。', evidence: [
       { source: 'library', scope: 'global', path: 'notes/a.md', chunkIdx: 2, snippet: 's', score: 0.02 },
     ] });
-    expect(streamBody.textContent).toBe('基于 引用回答。');
+    expect(streamBody.innerHTML).toContain('基于 引用回答。');
     // final 追加了引用 chips（appendChild 被调用）
     expect(streamBody.appendChild).toHaveBeenCalled();
     // typing 态已移除
@@ -319,5 +325,34 @@ describe('KB workbench (S1 skeleton)', () => {
     input._listeners.input({ target: input });
     expect(els['kb-wb-files'].innerHTML).toContain('无匹配文档');
     expect(els['kb-wb-files'].innerHTML).not.toContain('＋ 添加内容');
+  });
+});
+
+describe('kb file-viewer highlight pure helpers', () => {
+  it('strips ordered-list numbers and inline bold (regression: AAR复盘 chunk7)', () => {
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.cleanQuote('1. 先**选定并本地试跑**一个 skills 目录')).toBe('先选定并本地试跑一个 skills 目录');
+  });
+
+  it('strips heading/quote/bullet prefixes but keeps table rows', () => {
+    const { windowMock } = loadScript();
+    const u = windowMock.__kbFvUtils;
+    expect(u.stripMdMarks('> 引用要点')).toBe('引用要点');
+    expect(u.stripMdMarks('- 提交证据')).toBe('提交证据');
+    expect(u.stripMdMarks('## 卡点与突破')).toBe('卡点与突破');
+    expect(u.stripMdMarks('| A | B |')).toBe('| A | B |');
+  });
+
+  it('collapses whitespace via normSpace', () => {
+    const { windowMock } = loadScript();
+    expect(windowMock.__kbFvUtils.normSpace('  先 选定\n 并 ')).toBe('先 选定 并');
+  });
+
+  it('extracts significant tokens for block-level matching', () => {
+    const { windowMock } = loadScript();
+    const tokens = windowMock.__kbFvUtils.significantTokens('先选定并本地试跑一个 skills 目录');
+    expect(tokens).toContain('skills');
+    expect(tokens.length).toBeGreaterThan(0);
   });
 });

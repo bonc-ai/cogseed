@@ -22,6 +22,7 @@ export interface CogSeedSessionLineage {
 }
 
 export type CogSeedTaskStatus =
+  | 'planned'
   | 'created'
   | 'queued'
   | 'running'
@@ -68,6 +69,11 @@ export interface CogSeedTaskRecord {
   ownerId: string;
   status: CogSeedTaskStatus;
   task: string;
+  /** A saved Run Center task has no executor until the user starts it. */
+  plannedAt?: string;
+  /** Trusted deferred execution choices. Neither field is projected verbatim. */
+  spaceId?: string;
+  worktreeName?: string;
   conversationId?: string;
   agentId?: string;
   executionKind?: CogSeedTaskExecutionKind;
@@ -164,6 +170,7 @@ export interface CogSeedRequestClaim {
 }
 
 export type CogSeedTaskEventType =
+  | 'task.planned'
   | 'task.created'
   | 'task.queued'
   | 'task.started'

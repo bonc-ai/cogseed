@@ -1,5 +1,5 @@
 /**
- * Material-set boundary model (COGSEED-39 ① Phase 3).
+ * Material-set boundary model (知识库问答 ① Phase 3).
  *
  * Defines what counts as "material" for a conversation and resolves the
  * current material set from live app state:

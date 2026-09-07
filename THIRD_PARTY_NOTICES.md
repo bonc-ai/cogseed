@@ -45,9 +45,21 @@ ws 8.21.3                             MIT      https://github.com/websockets/ws
 yaml 2.9.0                            ISC      https://github.com/eemeli/yaml
 zod 3.25.76                           MIT      https://github.com/colinhacks/zod
 
+--------------------------------------------------------------------
+2. Downloaded offline speech-recognition model
+--------------------------------------------------------------------
+
+sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
+    License: Apache-2.0
+    Source: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+    Download: https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2
+    Evidence: the archived model README declares `license: apache-2.0`; the
+    upstream sherpa-onnx repository publishes the Apache-2.0 license.
+    The model is downloaded during installation and packaged as an offline
+    resource. Full Apache-2.0 text: third_party_licenses/pdfjs-dist/LICENSE.
 
 --------------------------------------------------------------------
-2. Dual-licensed component used under MIT
+3. Dual-licensed component used under MIT
 --------------------------------------------------------------------
 
 jszip 3.10.1
@@ -57,7 +69,7 @@ jszip 3.10.1
     https://github.com/Stuk/jszip
 
 --------------------------------------------------------------------
-3. Vendored renderer libraries
+4. Vendored renderer libraries
 --------------------------------------------------------------------
 
 The following third-party libraries are vendored under src/renderer/vendor/.
@@ -91,7 +103,7 @@ Chart.js 4.5.1 (chart.umd.min.js)
     CogSeed vendors the unmodified UMD distribution for offline Renderer use.
 
 --------------------------------------------------------------------
-4. Office document engine
+5. Office document engine
 --------------------------------------------------------------------
 
 OfficeCLI v1.0.131
@@ -103,7 +115,7 @@ OfficeCLI v1.0.131
     The accompanying license text is resources/officecli/LICENSE.
 
 --------------------------------------------------------------------
-5. Separately licensed CogSeed component
+6. Separately licensed CogSeed component
 --------------------------------------------------------------------
 
 skill-sentry 2.1.0
@@ -123,7 +135,7 @@ skill-declaration-core 1.3.0
     Apache-2.0. This component is not relicensed by the root MIT LICENSE.
 
 --------------------------------------------------------------------
-6. Package license texts retained in this repository
+7. Package license texts retained in this repository
 --------------------------------------------------------------------
 
 Exif Parser 0.1.12
@@ -151,7 +163,7 @@ PDF.js (pdfjs-dist) 6.2.108
     third_party_licenses/pdfjs-dist/LICENSE*
 
 --------------------------------------------------------------------
-7. Apache-2.0 production transitive npm dependencies
+8. Apache-2.0 production transitive npm dependencies
 --------------------------------------------------------------------
 
 The following unmodified components are resolved from the production npm
@@ -268,7 +280,7 @@ Dual/multi-licensed production components used under a permissive option
       in section 1; CogSeed uses the MIT option.
 
 --------------------------------------------------------------------
-8. Adapted source code
+9. Adapted source code
 --------------------------------------------------------------------
 
 AI Agent Board
@@ -282,7 +294,7 @@ AI Agent Board
     adapted files retain the upstream copyright and SPDX license declaration.
 
 --------------------------------------------------------------------
-9. License text policy
+10. License text policy
 --------------------------------------------------------------------
 
 The license files above are copied verbatim from the exact package versions
@@ -293,7 +305,7 @@ node_modules remain authoritative for an installed checkout.
 
 
 --------------------------------------------------------------------
-9. Development npm dependencies
+11. Development npm dependencies
 --------------------------------------------------------------------
 
 The following packages are build/test tooling used to develop and verify

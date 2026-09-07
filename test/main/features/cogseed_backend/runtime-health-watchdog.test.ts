@@ -139,6 +139,29 @@ describe('CogSeed Runtime health watchdog', () => {
     await watchdog.shutdown();
   });
 
+  it('does not probe or recover planned tasks', async () => {
+    const controllerOwnsTask = vi.fn(async () => false);
+    const probeProcess = vi.fn(async () => 'missing' as const);
+    const recoverTask = vi.fn(async () => true);
+    const watchdog = createCogSeedRuntimeHealthWatchdog({
+      listTasks: async () => [task('planned', {
+        status: 'planned', executionId: undefined, runtimeWorkerId: undefined,
+      })],
+      controllerOwnsTask,
+      probeProcess,
+      recoverTask,
+      orphanGraceMs: 0,
+    });
+    watchdog.watchUser(USER);
+    watchdog.start();
+
+    await expect(watchdog.scanNow()).resolves.toMatchObject({ scannedCount: 0, recoveredCount: 0 });
+    expect(controllerOwnsTask).not.toHaveBeenCalled();
+    expect(probeProcess).not.toHaveBeenCalled();
+    expect(recoverTask).not.toHaveBeenCalled();
+    await watchdog.shutdown();
+  });
+
   it('stops periodic scheduling and prevents a shutdown-overlapping scan from recovering', async () => {
     vi.useFakeTimers();
     let release!: (rows: CogSeedTaskRecord[]) => void;
