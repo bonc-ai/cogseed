@@ -56,7 +56,7 @@ beforeEach(async () => {
   const autoForecast = await import('../../../../src/main/features/kstar/auto-forecast');
   autoForecast._setAutoForecastGeneratorForTest(async () => JSON.stringify([
     { id: 'c1', plan: ['Inspect', 'Verify'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
-    { id: 'c2', plan: ['Draft', 'Deliver'], expectedTools: ['write_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+    { id: 'c2', plan: ['Review context', 'Deliver'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
   ]));
 });
 
@@ -150,6 +150,7 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
 
     await bus.enqueue({ uid: 'user-a', cid, fromActorId: 'user', text: '帮我修复登录问题' });
     await waitForQuiescent(bus, cid);
+    await vi.waitFor(() => expect(forecastFiles()).toHaveLength(1), { timeout: 4_000 });
 
     expect(modelCalls).toHaveLength(1);
     // The Commander sees NO KStar tool — governance is host-side.
@@ -164,7 +165,17 @@ describe('World-model-centric KStar (Commander tool surface removed)', () => {
     expect(recordFiles('tasks')).toHaveLength(1);
     expect(recordFiles('requirements')).toHaveLength(1);
     expect(projectionFiles()).toHaveLength(1);
-    expect(forecastFiles()).toHaveLength(1);
+    const forecast = JSON.parse(fs.readFileSync(path.join(
+      tmpDir,
+      'user-a',
+      'cloud',
+      'recall',
+      'records',
+      'world-model-forecasts',
+      forecastFiles()[0],
+    ), 'utf8'));
+    expect(forecast.input.s.execution.availableTools).toContain('read_file');
+    expect(forecast.input.s.environment.fileSystemAvailable).toBe(true);
   });
 
   it('does not mutate an existing Task when Commander makes no control call', async () => {

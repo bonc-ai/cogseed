@@ -61,7 +61,7 @@ beforeEach(async () => {
   const autoForecast = await import('../../../../src/main/features/kstar/auto-forecast');
   autoForecast._setAutoForecastGeneratorForTest(async () => JSON.stringify([
     { id: 'c1', plan: ['Inspect', 'Verify'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done' } },
-    { id: 'c2', plan: ['Draft', 'Deliver'], expectedTools: ['write_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
+    { id: 'c2', plan: ['Draft', 'Deliver'], expectedTools: ['read_file'], expectedActors: ['commander'], predictedResult: { summary: 'done too' } },
   ]));
 });
 

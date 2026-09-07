@@ -40,7 +40,7 @@ export interface RecallMessageCitation {
   projection_id: string;
   forecast_id?: string;
   match_score?: number;
-  match_method: 'semantic' | 'manual';
+  match_method: 'semantic' | 'ontology' | 'semantic_ontology' | 'recency_fallback' | 'manual';
 }
 
 /** Immutable snapshot of one visible message referenced from another task.
