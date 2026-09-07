@@ -166,6 +166,7 @@
       "node_modules/resolve-pkg-maps/**/*",
       "node_modules/esbuild/**/*",
       "node_modules/@esbuild/**/*",
+      "node_modules/@jsquash/**/*",
       "node_modules/better-sqlite3/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/bindings/**/*",

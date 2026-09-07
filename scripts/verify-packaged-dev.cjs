@@ -16,7 +16,11 @@ const ASAR_REQUIRED = Object.freeze([
   'src/main/util/migrate-source-data-root.cjs',
   '.build/build-info.json',
   'src/main/index.ts',
+  'src/main/util/image-transform.ts',
   'src/renderer/modules/agents.js',
+  // 飞书图片链（G-17）的 webp 解码器 wasm：asarUnpack 后 asar 头中仍保留
+  // 条目（内容指向 unpacked 树）——缺失=发布版图片功能必坏，打包校验必须拦下。
+  'node_modules/@jsquash/webp/codec/dec/webp_dec.wasm',
 ]);
 const RESOURCE_REQUIRED = Object.freeze([
   ['builtin', '_manifest.json'],
