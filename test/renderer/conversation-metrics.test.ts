@@ -88,6 +88,23 @@ describe('foldSessionMetrics', () => {
     expect(f.cacheHitText).toBe('75%');
     // inText 口径不变：input+cacheRead+cacheWrite 三项和
     expect(f.inText).toBe('500');
+    // 展示层拆分（4a）：纯 fresh 输入与缓存读单独输出，供主读数拆开标注
+    expect(f.inFreshText).toBe('100');
+    expect(f.cacheReadText).toBe('300');
+  });
+  it('inFreshText/cacheReadText stay null when no fresh input or no cache read', () => {
+    const noCache = foldSessionMetrics(
+      [m({ usage: { inputTokens: 200, outputTokens: 10 } })],
+      { contextWindow: null, price: null },
+    );
+    expect(noCache.inFreshText).toBe('200');
+    expect(noCache.cacheReadText).toBeNull();
+    const onlyCache = foldSessionMetrics(
+      [m({ usage: { cacheReadTokens: 400, outputTokens: 10 } })],
+      { contextWindow: null, price: null },
+    );
+    expect(onlyCache.inFreshText).toBeNull();
+    expect(onlyCache.cacheReadText).toBe('400');
   });
   it('flags ctx >= 80%', () => {
     const f = foldSessionMetrics(

@@ -9230,7 +9230,12 @@ function _refreshSessionStats() {
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
   if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
-  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  segs.push({
+    k: t('chat.stats.tokK'),
+    v: f.cacheReadText
+      ? t('chat.stats.tokVCache', { i: f.inFreshText, c: f.cacheReadText, o: f.outText })
+      : t('chat.stats.tokV', { i: f.inText, o: f.outText }),
+  });
   if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
   box.innerHTML = '';
   box.hidden = false;
@@ -9306,7 +9311,16 @@ function _mountMsgMeta(ph, metrics) {
   const parts = [];
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
-  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  if (line.inText) {
+    // 有缓存读取时主读数拆开标注（fresh 输入 + 缓存读），不再把缓存并入
+    // "输入"——缓存是前缀复用不是新增内容，合并展示会造成"输入过大"的误读。
+    parts.push({
+      k: t('chat.metrics.tokensK'),
+      v: line.cacheReadText
+        ? t('chat.metrics.tokensVCache', { i: line.inFreshText, c: line.cacheReadText, o: line.outText })
+        : t('chat.metrics.tokensV', { i: line.inText, o: line.outText }),
+    });
+  }
   if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {

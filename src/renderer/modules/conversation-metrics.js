@@ -34,6 +34,10 @@ function formatLatency(ms) {
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
 
+// 悬停明细 i18n：运行时全局 t 可用（i18n.js 经典 script 先行加载）则用翻译
+// 键；测试 CJS 桥环境 t 不存在，退回中文文案保持既有断言不破。
+const tt = (key, vars, fallback) => (typeof t === 'function' ? t(key, vars) : fallback);
+
 function messageMetricsLine(metrics) {
   if (!metrics || typeof metrics !== 'object') return null;
   const { startedAt, firstTokenAt, completedAt, usage, toolCalls } = metrics;
@@ -50,19 +54,23 @@ function messageMetricsLine(metrics) {
   if (!hasUsage && ttft === null) return null;
   const titleLines = [];
   if (hasUsage) {
-    if (num(usage.cacheReadTokens) > 0) titleLines.push(`缓存读 ${formatTokens(usage.cacheReadTokens)} tok`);
-    if (num(usage.cacheWriteTokens) > 0) titleLines.push(`缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`);
+    if (num(usage.cacheReadTokens) > 0) titleLines.push(tt('chat.metrics.cacheReadK', { v: formatTokens(usage.cacheReadTokens) }, `缓存读 ${formatTokens(usage.cacheReadTokens)} tok`));
+    if (num(usage.cacheWriteTokens) > 0) titleLines.push(tt('chat.metrics.cacheWriteK', { v: formatTokens(usage.cacheWriteTokens) }, `缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`));
   }
   // CLI 自报成本（claude 的 total_cost_usd 等，美元）——比价格表估算准。
   const costUsd = (usage && typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) && usage.costUsd >= 0)
     ? usage.costUsd
     : null;
-  if (costUsd !== null) titleLines.push(`CLI 自报成本 $${costUsd.toFixed(4)}`);
+  if (costUsd !== null) titleLines.push(tt('chat.metrics.cliCostK', { v: `$${costUsd.toFixed(4)}` }, `CLI 自报成本 $${costUsd.toFixed(4)}`));
   return {
     durationMs,
     latencyText: ttft === null ? null : formatLatency(ttft),
     rateText,
     inText: hasUsage ? formatTokens(num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) : null,
+    // 展示层拆分（4a）：合并值 inText 保留对账口径；主读数改用纯 fresh 输入
+    // + 单独的缓存读标注，避免"输入过大"观感（缓存读取复用前缀非新增输入）。
+    inFreshText: hasUsage && num(usage.inputTokens) > 0 ? formatTokens(num(usage.inputTokens)) : null,
+    cacheReadText: hasUsage && num(usage.cacheReadTokens) > 0 ? formatTokens(num(usage.cacheReadTokens)) : null,
     outText: hasUsage ? formatTokens(num(usage.outputTokens)) : null,
     costText: costUsd !== null
       ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -157,6 +165,9 @@ function foldSessionMetrics(metricsList, opts = {}) {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
     inText: formatTokens(totalIn), outText: formatTokens(output), costText, costReported,
+    // 展示层拆分（4a）：与单回合口径一致——纯 fresh 输入 + 缓存读单独标注。
+    inFreshText: input > 0 ? formatTokens(input) : null,
+    cacheReadText: cacheRead > 0 ? formatTokens(cacheRead) : null,
   };
 }
 

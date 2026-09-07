@@ -182,7 +182,9 @@ describe('conversation session stats line', () => {
     expect(texts.some((s) => s.includes('tok/s'))).toBe(false);
     expect(texts.some((s) => s.includes('chat.stats.cacheK|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.ctxK|'))).toBe(true);
-    expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokV|'))).toBe(true);
+    // 会话 fixture 带 cacheRead → Token 段走拆分模板（fresh 输入 + 缓存读）。
+    expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokVCache|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.tokV|'))).toBe(false);
     // price in=1 out=2 (cache units absent → 0): (100K*1 + 10K*2)/1M = ¥0.12
     expect(texts).toContain('chat.stats.cost|{"c":"¥0.12"}');
     // 110K/128K ≈ 86% ≥ 80% threshold → ctx segment carries the hot class.
