@@ -6,6 +6,7 @@ import {
   createAutomaticContextProjection,
   readContextProjection,
   type ContextProjectionRecord,
+  type RecallAssetMatchMethod,
   type ProjectionSemanticOptions,
 } from './context-projection';
 import type { RecallProjectionCard } from './projection-card';
@@ -36,7 +37,7 @@ export interface RecallPromptCitation {
   projectionId: string;
   forecastId?: string;
   matchScore?: number;
-  matchMethod: 'semantic' | 'manual';
+  matchMethod: RecallAssetMatchMethod;
 }
 
 export interface RecallTurnPromptContext {
@@ -60,7 +61,7 @@ export interface RecallTurnPromptInput {
 
 interface ProjectionForPrompt {
   projection: ContextProjectionRecord;
-  matchMethod: RecallPromptCitation['matchMethod'];
+  matchMethod: RecallAssetMatchMethod;
 }
 
 function safePromptText(value: unknown, max: number): string {
@@ -200,6 +201,12 @@ async function buildPromptContextForProjections(
         const forbiddenWhen = snapshot?.forbiddenWhen ?? liveAsset.forbiddenWhen;
         seenAssets.add(assetId);
         const match = matches.get(assetId);
+        // Manual projections keep their historical manual citation semantics;
+        // automatic projections expose the per-asset route that was actually
+        // selected (semantic, ontology, or both).
+        const citationMatchMethod = matchMethod === 'manual'
+          ? 'manual' as const
+          : match?.matchMethod || matchMethod;
         records.push({
           projection_id: projection.id,
           task_run_id: safePromptText(projection.taskRunId, 160),
@@ -223,8 +230,8 @@ async function buildPromptContextForProjections(
           version: safePromptText(version, 40),
           scope: safePromptText(scope, 500),
           projectionId: projection.id,
-          ...(matchMethod === 'semantic' && match ? { matchScore: match.matchScore } : {}),
-          matchMethod,
+          ...(citationMatchMethod !== 'manual' && match ? { matchScore: match.matchScore } : {}),
+          matchMethod: citationMatchMethod,
         });
       } catch (error) {
         log.warn('read confirmed projection asset for prompt failed', {
