@@ -452,7 +452,10 @@ describe("group_chat collaboration › workflow lifecycle", () => {
     });
     storageMocks.writeJson.mockImplementation(
       async (filePath: string, data: unknown) => {
-        if (filePath.includes("/workflow_runs/") && runWriteCount++ === 0) {
+        if (
+          path.basename(path.dirname(filePath)) === "workflow_runs" &&
+          runWriteCount++ === 0
+        ) {
           markFirstRunWriteStarted();
           await firstRunWriteGate;
         }

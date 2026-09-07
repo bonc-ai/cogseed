@@ -4,6 +4,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -23,7 +24,7 @@ describe('updater state', () => {
     const missing = readUpdaterState(`${UID}-missing`);
     expect(missing).toEqual(defaultUpdaterState());
 
-    fs.mkdirSync(userUpdaterStateFile(`${UID}-corrupt`).replace(/[^/]+$/, ''), { recursive: true });
+    fs.mkdirSync(path.dirname(userUpdaterStateFile(`${UID}-corrupt`)), { recursive: true });
     fs.writeFileSync(userUpdaterStateFile(`${UID}-corrupt`), '{not json', 'utf8');
     expect(readUpdaterState(`${UID}-corrupt`)).toEqual(defaultUpdaterState());
   });

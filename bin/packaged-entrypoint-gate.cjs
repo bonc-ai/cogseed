@@ -164,6 +164,20 @@ function verifyBuildFilesConfig(build) {
   return expectedExclusions;
 }
 
+function verifyPackageRuntimeDependencies(packageJson) {
+  const dependencies = packageJson?.dependencies || {};
+  const verified = [];
+  for (const spec of PACKAGED_JS_LOADER_FILES) {
+    if (!dependencies[spec.packageName]) {
+      throw new Error(
+        `[packaged-entrypoint-gate] missing direct runtime dependency: ${spec.packageName}`,
+      );
+    }
+    verified.push(spec.packageName);
+  }
+  return verified;
+}
+
 function verifyRuntimeConsumerReferences(projectRoot) {
   const catalogRefs = [];
   const activeGoogleIds = [];
@@ -230,6 +244,7 @@ function verifySourceEntrypointContract(projectRoot) {
 
   const packageJson = readJson('package.json', path.join(projectRoot, 'package.json'));
   verifyBuildFilesConfig(packageJson.build);
+  verifyPackageRuntimeDependencies(packageJson);
   verifyRuntimeConsumerReferences(projectRoot);
   const packageLock = readJson('package-lock.json', path.join(projectRoot, 'package-lock.json'));
   for (const spec of PACKAGED_JS_LOADER_FILES) packageLockVersion(packageLock, spec.packageName);
@@ -312,6 +327,7 @@ module.exports = {
   PACKAGED_JS_LOADER_FILES,
   requiredPackagedEntrypointVerificationEntries,
   verifyBuildFilesConfig,
+  verifyPackageRuntimeDependencies,
   verifyPackagedEntrypointPayload,
   verifySourceEntrypointContract,
 };

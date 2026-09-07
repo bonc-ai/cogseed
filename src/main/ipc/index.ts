@@ -54,6 +54,8 @@ import * as kstarProjectionDecision from '../features/kstar/projection-decision-
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
+import * as kstarTrace from '../features/kstar/trace';
+import * as kstarFailures from '../features/kstar/failure-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -957,6 +959,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.create(ctx.userId, payload),
   'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -964,6 +967,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.archived.purge': async (_payload, ctx) => cogseedBackend.cogseedIpcService.purgeArchived(ctx.userId),
   'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
@@ -2673,7 +2677,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
   'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
-  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+  'recall.projections.list': async ({ taskRunId, conversationId, workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid task run id');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
     if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
     if (status !== undefined && !['preview', 'confirmed', 'deferred', 'rejected', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
     if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
@@ -2681,6 +2687,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return {
       ok: true,
       projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(taskRunId !== undefined ? { taskRunId } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
         ...(workspaceId !== undefined ? { workspaceId } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(includeExpired !== undefined ? { includeExpired } : {}),
@@ -2711,6 +2719,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     try {
       const review = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
       return { ok: true, review: review ? { reviewState: review.reviewState } : null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.trace.read': async ({ conversationId, taskId } = {}, ctx) => {
+    if ((conversationId === undefined && taskId === undefined)
+      || (conversationId !== undefined && !safeId(conversationId))
+      || (taskId !== undefined && !safeId(taskId))) return { ok: false, error: 'invalid kstar trace input' };
+    try {
+      return { ok: true, trace: await kstarTrace.readKstarTrace(ctx.userId, { ...(conversationId !== undefined ? { conversationId } : {}), ...(taskId !== undefined ? { taskId } : {}) }) };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.failures.list': async ({ conversationId } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) return { ok: false, error: 'invalid kstar failure conversation id' };
+    try {
+      return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId !== undefined ? { conversationId } : {}) };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
@@ -4059,6 +4085,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（见 kb_summary 头注）。
+          ephemeralSession: true,
+          // kb_summary 超时到点会先 abort：透传信号真正中止上游请求、释放模型 turn 锁。
+          ...(opts.signal ? { abortSignal: opts.signal } : {}),
           skillList: [],
           disableTools: true,
         });
@@ -4083,6 +4114,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（kb.summary/kb.mindmap 同款）。
+          ephemeralSession: true,
           skillList: [],
           disableTools: true,
         });
@@ -4275,6 +4309,89 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'kb.share.cogseed.review': async ({ spaceId, memberId, verdict } = {}, ctx) => {
     if (typeof spaceId !== 'string' || !safeId(spaceId) || !Number.isInteger(memberId)) return { ok: false, error: 'invalid params' };
     return shareCogseed.reviewCogseedMember(ctx.userId, spaceId, memberId as number, verdict === 'reject' ? 'reject' : 'approve');
+  },
+
+  // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
+  // 文本直读（md 渲染为 Markdown）；docx/xlsx/pptx 转排版化 HTML 预览；
+  // pdf 走 kb-file:// 原生 PDFium iframe（排版不失真），此处只校验返回路径。
+  'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      let abs: string;
+      let display = p;
+      let spaceRoot: string | null = null;
+      if (typeof spaceId === 'string' && spaceId) {
+        // 空间库：路径在空间 contexts 目录下（防穿越）
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const { spaceContextsDir } = await import('../paths');
+        const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
+        spaceRoot = root;
+        abs = path.resolve(root, p);
+        if (abs !== root && !abs.startsWith(root + path.sep)) {
+          return { ok: false, error: 'invalid path' };
+        }
+      } else {
+        // 个人库：relPath（含库前缀）经 contexts 安全解析（越界/不存在会 throw）
+        abs = contexts.resolveContextFileAbsPath(p);
+      }
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const ext = path.extname(abs).toLowerCase();
+      const name = path.basename(abs);
+      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      if (TEXT_EXTS.includes(ext)) {
+        const MAX = 2 * 1024 * 1024;
+        const st = fs.statSync(abs);
+        if (st.size > MAX) return { ok: false, error: 'too_large', size: st.size };
+        let text = fs.readFileSync(abs, 'utf8');
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        // .md/.markdown 渲染为 Markdown（阅读视图），其余文本纯文本展示
+        const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
+        return { ok: true, kind, name, path: display, content: text };
+      }
+      const officeKind = _officePreviewKindForExt(ext);
+      if (officeKind) {
+        // docx / xlsx / pptx → 排版化 HTML 预览（与 produced.officePreviewHtml 同链）
+        const st = fs.statSync(abs);
+        const MAX_OFFICE = 50 * 1024 * 1024;
+        if (st.size > MAX_OFFICE) return { ok: false, error: 'too_large', size: st.size };
+        const cacheKey = `${abs}:${st.size}:${st.mtimeMs}:kb`;
+        const cached = _officePreviewCacheGet(cacheKey);
+        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html };
+        try {
+          const buf = fs.readFileSync(abs);
+          let fragment = '';
+          if (officeKind === 'word') {
+            const { docxBufferToHtml } = await import('../util/extract-docx');
+            fragment = await docxBufferToHtml(buf);
+          } else if (officeKind === 'spreadsheet') {
+            const { xlsxBufferToHtml } = await import('../util/extract-office');
+            fragment = xlsxBufferToHtml(buf);
+          } else {
+            const { pptxBufferToHtml } = await import('../util/extract-office');
+            fragment = pptxBufferToHtml(buf);
+          }
+          const html = _wrapOfficePreviewHtml(officeKind, name, fragment || '<p class="office-muted">（暂无可见内容）</p>');
+          _officePreviewCachePut(cacheKey, html, officeKind);
+          return { ok: true, kind: 'office', officeKind, name, path: display, html };
+        } catch (err) {
+          return { ok: false, error: String((err as Error).message || 'preview failed'), name };
+        }
+      }
+      if (ext === '.pdf') {
+        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src
+        return { ok: true, kind: 'pdf', name, path: display, spaceId: spaceRoot ? (typeof spaceId === 'string' ? spaceId : undefined) : undefined };
+      }
+      return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      // contexts.resolveContextFileAbsPath 对缺失文件抛 "not found: <rel>"（ENOENT）
+      const error = code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg;
+      return { ok: false, error };
+    }
   },
 
   // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
@@ -5656,15 +5773,26 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, dir, question, k, attach_paths, history, model }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
       return;
     }
+    // 渲染层传入当前所在个人库目录：空 = 整库检索；非空 = 只在该目录内检索。
+    const dirScoped = typeof dir === 'string' && dir.trim() ? dir.trim().replace(/^\/+|\/+$/g, '') || null : null;
+    // 用户在问答框模型配置里选的模型（provider+model）；未传则走默认优先级组
+    const mo = (model && typeof model === 'object' &&
+      typeof (model as { provider?: unknown }).provider === 'string' &&
+      (model as { provider?: unknown }).provider &&
+      typeof (model as { model?: unknown }).model === 'string' &&
+      (model as { model?: unknown }).model)
+      ? { provider: (model as { provider: string }).provider, model: (model as { model: string }).model }
+      : undefined;
     try {
       const events = kbQa.kbAskStream(ctx.userId, {
         spaceId: space_id ? String(space_id) : null,
+        dir: dirScoped,
         question: q,
         k: typeof k === 'number' ? k : undefined,
         attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
@@ -5675,9 +5803,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单问无状态：kb-qa 的证据边界随目录/空间变化，持久 aside 会话会把
+          // 之前其它范围的检索内容"记忆"进来，导致回答引用越界内容（如本次
+          // 引用上轮别处检索到的 AST.pdf#chunk 61）。多轮上下文已由渲染层通过
+          // history 文本参数显式提供，不需要模型侧会话记忆。
+          ephemeralSession: true,
           // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
+          ...(mo ? { modelOverride: mo } : {}),
           abortSignal: signal,
         }) as AsyncIterable<{ type: string; text?: string }>,
       });

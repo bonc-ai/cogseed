@@ -45,7 +45,7 @@ function resolveLocalElectronDist({
   if (!electronVersion || !exists(cacheRoot)) return '';
   const zipName = `electron-v${electronVersion}-darwin-arm64.zip`;
   for (const directory of listDirs(cacheRoot)) {
-    const candidate = path.join(cacheRoot, directory, zipName);
+    const candidate = path.posix.join(cacheRoot, directory, zipName);
     if (exists(candidate)) return candidate;
   }
   return '';

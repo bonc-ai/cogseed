@@ -7,8 +7,14 @@ import { createLogger } from '../../logger';
 import { listAbilityAssets, readAbilityAsset } from './asset-service';
 import { recallJsonRecordPath } from './paths';
 import { listWorkspaceAssetReferences } from './workspace-refs';
-import { isAssetScopeAllowed, matchesScopeToken, scopeIncludes } from './scope-policy';
+import { isAssetScopeAllowed, scopeIncludes } from './scope-policy';
 import { loadOntologyGroupTitleMap } from './ontology-taxonomy';
+import { buildRecallTaskContract } from './task-contract';
+import {
+  rankOntologyMatches,
+  mergeHybridMatches,
+  type HybridMatchMethod,
+} from './hybrid-retrieval';
 import { readRecallJsonRecord, updateRecallJsonRecord, writeRecallJsonRecord } from './store';
 import type { RecallJsonRecord } from './types';
 import type { RecallAbilityAssetRecord } from './candidate-service';
@@ -77,7 +83,7 @@ function inactiveAssetOmissionReason(
   return `asset_${status}` as OmittedAssetRef['reason'];
 }
 
-export type RecallAssetMatchMethod = 'semantic' | 'recency_fallback' | 'manual';
+export type RecallAssetMatchMethod = HybridMatchMethod;
 
 export interface RecallAssetMatch {
   assetId: string;
@@ -87,6 +93,7 @@ export interface RecallAssetMatch {
 
 export interface ContextProjectionRecord extends RecallJsonRecord {
   taskRunId: string;
+  conversationId?: string;
   workspaceId?: string;
   purpose: string;
   authorization: ProjectionAuthorization;
@@ -96,7 +103,7 @@ export interface ContextProjectionRecord extends RecallJsonRecord {
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
   expiresAt?: string;
-  /** True when the selection fell back to recency order (embedding failure). */
+  /** True when semantic retrieval degraded; reliable ontology matches may remain. */
   selectionDegraded?: boolean;
   status: ContextProjectionStatus;
   createdAt: string;
@@ -149,7 +156,7 @@ export interface BuildRecallViewResult {
   assetMatches?: RecallAssetMatch[];
   sourceRefs: CognitionSourceRef[];
   omittedRefs: OmittedAssetRef[];
-  /** Semantic embedding was unavailable; selection degraded to recency order. */
+  /** Semantic embedding was unavailable; selection retained ontology matches only. */
   degraded?: boolean;
 }
 
@@ -171,6 +178,8 @@ export interface AvailableProjectionAssetSummary {
 }
 
 export interface ListContextProjectionsQuery {
+  taskRunId?: string;
+  conversationId?: string;
   workspaceId?: string;
   status?: ContextProjectionStatus;
   includeExpired?: boolean;
@@ -216,7 +225,7 @@ function validateAssetMatches(value: unknown): RecallAssetMatch[] | undefined {
     const match = raw as Record<string, unknown>;
     if (typeof match.assetId !== 'string' || !safeId(match.assetId)) throw new Error('malformed context projection matches');
     if (typeof match.matchScore !== 'number' || !Number.isFinite(match.matchScore) || match.matchScore < 0 || match.matchScore > 1) throw new Error('malformed context projection matches');
-    if (match.matchMethod !== 'semantic' && match.matchMethod !== 'recency_fallback' && match.matchMethod !== 'manual') throw new Error('malformed context projection matches');
+    if (match.matchMethod !== 'semantic' && match.matchMethod !== 'ontology' && match.matchMethod !== 'semantic_ontology' && match.matchMethod !== 'recency_fallback' && match.matchMethod !== 'manual') throw new Error('malformed context projection matches');
     return { assetId: match.assetId, matchScore: match.matchScore, matchMethod: match.matchMethod } as RecallAssetMatch;
   });
 }
@@ -411,17 +420,18 @@ interface SemanticSelection {
   degraded: boolean;
 }
 
-/** Shared semantic selection: rank eligible assets against the query text,
- *  drop scores below the relevance threshold, cap to Top-N, and record
- *  low-relevance exclusions. Embedding failure degrades to recency order
- *  with an explicit flag instead of silently injecting everything. */
+/** Shared hybrid selection: rank already-eligible assets against semantic and
+ * ontology evidence, drop weak semantic-only matches, cap to Top-N, and record
+ * low-relevance exclusions. Embedding failure never turns into a recency
+ * injection; reliable ontology matches may still survive the degraded route. */
 async function applySemanticSelection(
   userId: string,
   assets: RecallAbilityAssetRecord[],
   queryText: string,
   options: ProjectionSemanticOptions,
   omittedRefs: OmittedAssetRef[],
-  skipOnDegrade = false,
+  purposeText = '',
+  workspaceId?: string,
 ): Promise<SemanticSelection> {
   const minScore = Number.isFinite(options.minScore)
     ? Math.max(0, Math.min(1, Number(options.minScore)))
@@ -434,83 +444,78 @@ async function applySemanticSelection(
     : DEFAULT_SELECTION_LIMIT;
   if (!queryText || !queryText.trim() || !assets.length) return { assets: assets.slice(0, limit), degraded: false };
 
-  let ranked: Awaited<ReturnType<typeof rankAssetsBySemanticMatch>>;
+  const contract = await buildRecallTaskContract(userId, {
+    taskText: queryText,
+    ...(purposeText ? { purpose: purposeText } : {}),
+    ...(workspaceId ? { workspaceId } : {}),
+  });
+  const ontologyMatches = rankOntologyMatches(assets, contract);
+  let semanticMatches: Array<{ assetId: string; matchScore: number }> = [];
   let degraded = false;
   try {
-    ranked = await rankAssetsBySemanticMatch(userId, queryText, assets, options);
+    const ranked = await rankAssetsBySemanticMatch(userId, queryText, assets, options);
+    semanticMatches = ranked.assetMatches;
   } catch (error) {
-    log.warn('semantic recall ranking unavailable; using recency fallback', { userId, error: (error as Error).message });
+    log.warn('semantic recall ranking unavailable; retaining reliable ontology matches only', { userId, error: (error as Error).message });
     degraded = true;
-    if (skipOnDegrade) return { assets: [], degraded: true };
-    ranked = {
-      assets,
-      assetMatches: assets.map((asset) => ({ assetId: asset.id, matchScore: 0, matchMethod: 'recency_fallback' as const })),
-    };
   }
 
-  let orderedAssets = ranked.assets;
-  let assetMatches = ranked.assetMatches;
-  if (assetMatches) {
-    const matchByAssetId = new Map(assetMatches.map((match) => [match.assetId, match]));
-    const droppedByRelevance: string[] = [];
-    // Dual-signal admission: an asset must clear BOTH the absolute hard floor
-    // (noise gate) and the relative-significance gate (score >= best * ratio)
-    // when the batch's best score is itself meaningful. A weak pool therefore
-    // yields fewer assets instead of force-filling Top-N with irrelevant ones.
-    const semanticMatches = assetMatches.filter((match) => match.matchMethod === 'semantic');
-    const bestScore = semanticMatches.reduce((best, match) => Math.max(best, match.matchScore), 0);
-    const relativeFloor = bestScore * relativeSignificance;
-    orderedAssets = orderedAssets.filter((asset) => {
-      const match = matchByAssetId.get(asset.id);
-      if (!match || match.matchMethod !== 'semantic') return true;
-      if (match.matchScore < minScore) {
-        droppedByRelevance.push(asset.id);
-        return false;
+  const merged = mergeHybridMatches(assets, semanticMatches, ontologyMatches);
+  const semanticOnly = merged.assetMatches.filter((match) => match.matchMethod === 'semantic');
+  const bestScore = semanticOnly.reduce((best, match) => Math.max(best, match.matchScore), 0);
+  const relativeFloor = bestScore * relativeSignificance;
+  const acceptedIds = new Set<string>();
+  for (const match of merged.assetMatches) {
+    if (match.matchMethod === 'semantic') {
+      const score = match.matchScore;
+      if (score < minScore || (bestScore > minScore && score < relativeFloor)) {
+        omittedRefs.push({ assetId: match.assetId, reason: 'low_relevance' });
+        continue;
       }
-      if (bestScore > minScore && match.matchScore < relativeFloor) {
-        droppedByRelevance.push(asset.id);
-        return false;
-      }
-      return true;
-    });
-    for (const assetId of droppedByRelevance) {
-      omittedRefs.push({ assetId, reason: 'low_relevance' });
     }
-    assetMatches = assetMatches.filter((match) => (
-      match.matchMethod !== 'semantic' || orderedAssets.some((asset) => asset.id === match.assetId)
-    ));
+    acceptedIds.add(match.assetId);
   }
-  // M5 type diversity: guarantee one highest-scoring asset per type before
-  // filling the remaining slots by score, so Top-N is not dominated by a
-  // single asset type. Order stays score-descending within the same type.
-  const diverse: RecallAbilityAssetRecord[] = [];
+  for (const asset of assets) {
+    if (!acceptedIds.has(asset.id)) {
+      const alreadyOmitted = omittedRefs.some((ref) => ref.assetId === asset.id && ref.reason === 'low_relevance');
+      if (!alreadyOmitted) omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
+    }
+  }
+
+  const acceptedAssets = assets.filter((asset) => acceptedIds.has(asset.id));
+  // M5 type diversity: guarantee one highest-ranked asset per type before
+  // filling the remaining slots. The hybrid module already gives dual-route
+  // evidence priority, so this pass only applies the existing Top-N policy.
+  const acceptedMatches = merged.assetMatches.filter((match) => acceptedIds.has(match.assetId));
+  const acceptedById = new Map(acceptedAssets.map((asset) => [asset.id, asset]));
+  const orderedMatches = acceptedMatches.filter((match) => acceptedById.has(match.assetId));
+  const selectedMatches: typeof orderedMatches = [];
   const seenTypes = new Set<string>();
-  for (const asset of orderedAssets) {
+  for (const match of orderedMatches) {
+    const asset = acceptedById.get(match.assetId)!;
     if (seenTypes.has(asset.type)) continue;
     seenTypes.add(asset.type);
-    diverse.push(asset);
-    if (diverse.length >= limit) break;
+    selectedMatches.push(match);
+    if (selectedMatches.length >= limit) break;
   }
-  if (diverse.length < limit) {
-    const picked = new Set(diverse.map((asset) => asset.id));
-    for (const asset of orderedAssets) {
-      if (picked.has(asset.id)) continue;
-      diverse.push(asset);
-      if (diverse.length >= limit) break;
+  if (selectedMatches.length < limit) {
+    const picked = new Set(selectedMatches.map((match) => match.assetId));
+    for (const match of orderedMatches) {
+      if (picked.has(match.assetId)) continue;
+      picked.add(match.assetId);
+      selectedMatches.push(match);
+      if (selectedMatches.length >= limit) break;
     }
   }
-  if (diverse.length < orderedAssets.length) {
-    const picked = new Set(diverse.map((asset) => asset.id));
-    for (const asset of orderedAssets) {
-      if (!picked.has(asset.id)) omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
-    }
+  const selectedIds = new Set(selectedMatches.map((match) => match.assetId));
+  for (const asset of acceptedAssets) {
+    if (!selectedIds.has(asset.id)) omittedRefs.push({ assetId: asset.id, reason: 'low_relevance' });
   }
-  orderedAssets = diverse;
-  if (assetMatches) {
-    const pickedIds = new Set(orderedAssets.map((asset) => asset.id));
-    assetMatches = assetMatches.filter((match) => pickedIds.has(match.assetId));
-  }
-  return { assets: orderedAssets, ...(assetMatches ? { assetMatches } : {}), degraded };
+  return {
+    assets: selectedMatches.map((match) => acceptedById.get(match.assetId)!),
+    assetMatches: selectedMatches,
+    degraded,
+  };
 }
 
 export async function buildRecallView(userId: string, input: ProjectionInput, options: ProjectionSemanticOptions = {}): Promise<BuildRecallViewResult> {
@@ -544,7 +549,7 @@ export async function buildRecallView(userId: string, input: ProjectionInput, op
   // Ranking runs only on real task text: a short purpose label (e.g.
   // 'review') is not a meaningful query, and skipping the embed avoids
   // blocking calls when no task text exists.
-  const selection = await applySemanticSelection(userId, includedAssets, taskText, options, omittedRefs);
+  const selection = await applySemanticSelection(userId, includedAssets, taskText, options, omittedRefs, purpose, input.workspaceId);
   const orderedAssets = selection.assets;
   const assetMatches = selection.assetMatches;
 
@@ -667,7 +672,7 @@ export async function createAutomaticContextProjection(
   }
   if (!eligibleAssets.length) return undefined;
 
-  const selection = await applySemanticSelection(userId, eligibleAssets, taskText, options, [], true);
+  const selection = await applySemanticSelection(userId, eligibleAssets, taskText, options, [], input.taskText, workspaceId);
   const selectedAssets = selection.assets;
   if (!selectedAssets.length) return undefined;
 
@@ -884,6 +889,10 @@ export async function listContextProjections(
         : projection
     ))
     .filter((projection) => query.workspaceId === undefined || projection.workspaceId === query.workspaceId)
+    .filter((projection) => query.taskRunId === undefined || projection.taskRunId === query.taskRunId)
+    .filter((projection) => query.conversationId === undefined
+      || projection.conversationId === query.conversationId
+      || projection.sourceRefs.some((source) => source.kind === 'conversation' && source.id === query.conversationId))
     .filter((projection) => query.status === undefined || projection.status === query.status)
     .filter((projection) => query.includeExpired === true || projection.status !== 'expired')
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))

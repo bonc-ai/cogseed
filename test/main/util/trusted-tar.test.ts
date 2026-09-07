@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { Header, type HeaderData } from 'tar';
+import { FILE_SYMLINKS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 import {
   assertTrustedTarTree,
@@ -56,7 +57,7 @@ function destination(name: string): string {
 }
 
 describe('trusted tar extraction', () => {
-  it('extracts a closed regular-file tree and verifies every extracted byte', () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('extracts a closed regular-file tree and verifies every extracted byte', () => {
     const archive = writeTarGzip('safe.tar.gz', [
       { path: 'python/', type: 'Directory' },
       { path: 'python/bin/', type: 'Directory' },

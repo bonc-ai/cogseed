@@ -9,7 +9,7 @@ import { assertCogSeedAgentId, assertCogSeedConnectorId, assertCogSeedKbSourceId
 import { listCogSeedConnectors } from './connector-store';
 import { cogseedConnectorManager } from './connector-manager';
 import { cogseedKbManager } from './cogseed-kb-store';
-import { createCogSeedTask, listCogSeedSessions, listCogSeedTasks, readCogSeedSession, readCogSeedTask, readCogSeedTaskByRequestId } from './task-store';
+import { createCogSeedTask, listCogSeedSessions, listCogSeedTasks, purgeCogSeedArchivedTasks, readCogSeedSession, readCogSeedTask, readCogSeedTaskByRequestId } from './task-store';
 import { readCogSeedCoordination } from './coordinator';
 import { cogseedCollaborationStore } from './collaboration-store-adapter';
 import { resolveCogSeedSessionIdentity } from './actor-session-facade';
@@ -35,13 +35,15 @@ import {
   type CogSeedRendererAgentRegistryProjection,
 } from './agent-registry-projection';
 import { cogSeedRequestFingerprint } from './request-fingerprint';
+import { safeId } from '../../storage';
+import { spaceWorkspaceDir } from '../../paths';
 
 const MAX_TASK_CHARS = 64_000;
 const MAX_PROFILE_ID_CHARS = 300;
 const MAX_CONTEXT_ITEMS = 100;
 const MAX_ATTACHMENT_ITEMS = 100;
 
-interface CogSeedIpcController extends Pick<CogSeedRuntimeController, 'startCogSeedTask' | 'cancelCogSeedTask' | 'retryCogSeedTask' | 'resumeCogSeedTask' | 'retryCogSeedResultDelivery' | 'runtimeStatus' | 'restartRuntime' | 'recoverOrphanedTasks'> {}
+interface CogSeedIpcController extends Pick<CogSeedRuntimeController, 'startCogSeedTask' | 'startPlannedCogSeedTask' | 'cancelCogSeedTask' | 'retryCogSeedTask' | 'resumeCogSeedTask' | 'retryCogSeedResultDelivery' | 'runtimeStatus' | 'restartRuntime' | 'recoverOrphanedTasks'> {}
 
 async function resolveCogSeedRuntimeController(deps: CogSeedIpcServiceDeps): Promise<CogSeedIpcController> {
   return deps.controller ?? (await import('./runtime-controller')).cogseedRuntimeController;
@@ -59,6 +61,7 @@ export interface CogSeedIpcServiceDeps {
   admitTask?: typeof createCogSeedTask;
   retryTask?: typeof retryCogSeedTask;
   archiveTask?: typeof archiveCogSeedTask;
+  purgeArchivedTasks?: typeof purgeCogSeedArchivedTasks;
   transitionTask?: typeof transitionCogSeedTask;
   readEvents?: typeof readCogSeedTaskEvents;
   subscribeDashboardChanges?: typeof subscribeCogSeedDashboardChanges;
@@ -80,8 +83,15 @@ export interface CogSeedIpcServiceDeps {
     conversationId: string;
     requestId: string;
     task: string;
-    agentId: string;
+    agentId?: string;
+    spaceId?: string;
   }) => Promise<void>;
+  spaceExists?: (userId: string, spaceId: string) => Promise<boolean>;
+  readConversationSpaceBinding?: (userId: string, conversationId: string) => Promise<{
+    exists: boolean;
+    spaceId: string;
+  }>;
+  resolveConversationWorkspace?: (userId: string, conversationId: string) => Promise<string>;
   abortGroupChat?: (userId: string, conversationId: string) => Promise<unknown>;
   retryGroupChat?: (input: { userId: string; cid: string; failedMessageId: string; visibleText: string; requestId: string }) => Promise<{ ok: boolean; error?: string }>;
   worktreeManager?: Pick<typeof cogseedWorktreeManager, 'resolve' | 'list' | 'create' | 'remove'>;
@@ -101,7 +111,7 @@ export interface CogSeedTaskRetryInput {
 }
 
 
-export type CogSeedRendererTaskAction = 'retry' | 'skip' | 'resume' | 'recover-result' | 'abort' | 'archive';
+export type CogSeedRendererTaskAction = 'start' | 'retry' | 'skip' | 'resume' | 'recover-result' | 'abort' | 'archive';
 export type CogSeedRendererCollaborationAction = 'retry-step' | 'skip-step' | 'approve-gate' | 'reject-gate' | 'dismiss-conflict';
 
 export type CogSeedRendererTitleKey =
@@ -115,6 +125,7 @@ export type CogSeedRendererTitleKey =
   | 'run_center.workflow_step';
 
 export interface CogSeedRendererActionSet {
+  start: boolean;
   retry: boolean;
   skip: boolean;
   resume: boolean;
@@ -354,7 +365,17 @@ function optionalProfileId(value: unknown): string | undefined {
   return boundedString(value, 'profileId', MAX_PROFILE_ID_CHARS, false);
 }
 
-function normalizeStartInput(payload: unknown): StartCogSeedTaskInput {
+type NormalizedStartInput = StartCogSeedTaskInput & { spaceId?: string };
+
+const PLANNED_TASK_UNSUPPORTED_FIELDS = [
+  'sessionId',
+  'profileId',
+  'context',
+  'attachments',
+  'conversationId',
+] as const;
+
+function normalizeStartInput(payload: unknown): NormalizedStartInput {
   const raw = asObject(payload);
   rejectHiddenBackendFields(raw);
   if (Object.prototype.hasOwnProperty.call(raw, 'workingDir')) {
@@ -368,6 +389,8 @@ function normalizeStartInput(payload: unknown): StartCogSeedTaskInput {
   const attachments = boundedArray(raw.attachments, 'attachments', MAX_ATTACHMENT_ITEMS);
   const conversationId = boundedString(raw.conversationId, 'conversationId', 160, false);
   const agentId = boundedString(raw.agentId, 'agentId', 160, false);
+  const spaceId = boundedString(raw.spaceId, 'spaceId', 160, false);
+  if (spaceId && !safeId(spaceId)) throw new Error('invalid spaceId');
   return {
     requestId,
     task,
@@ -377,7 +400,19 @@ function normalizeStartInput(payload: unknown): StartCogSeedTaskInput {
     ...(attachments ? { attachments } : {}),
     ...(conversationId ? { conversationId } : {}),
     ...(agentId ? { agentId: assertCogSeedAgentId(agentId) } : {}),
+    ...(spaceId ? { spaceId } : {}),
   };
+}
+
+function normalizePlannedCreateInput(payload: unknown): NormalizedStartInput {
+  const raw = asObject(payload);
+  const unsupportedField = PLANNED_TASK_UNSUPPORTED_FIELDS.find((field) => (
+    Object.prototype.hasOwnProperty.call(raw, field)
+  ));
+  if (unsupportedField) {
+    throw new Error(`E_RUN_CENTER_PLANNED_FIELD_UNSUPPORTED:${unsupportedField}`);
+  }
+  return normalizeStartInput(raw);
 }
 
 function optionalWorktreeName(payload: unknown): string | undefined {
@@ -412,23 +447,54 @@ async function defaultEnsureRunCenterConversation(input: {
   conversationId: string;
   requestId: string;
   task: string;
-  agentId: string;
+  agentId?: string;
+  spaceId?: string;
 }): Promise<void> {
   const chats = await import('../chats');
-  await chats.createConversation(input.userId, {
+  const conversation = await chats.createConversation(input.userId, {
     kind: 'normal',
     conversationId: input.conversationId,
     title: chats.autoTitle(input.task),
-    agentId: input.agentId,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.spaceId ? { spaceId: input.spaceId } : {}),
   });
+  if (String(conversation.space_id || '') !== String(input.spaceId || '')) {
+    throw new Error('CogSeed request ID payload conflict');
+  }
   const { appendProjectedUserTaskMessage } = await import('../group_chat/bus');
   await appendProjectedUserTaskMessage({
     uid: input.userId,
     cid: input.conversationId,
-    agentId: input.agentId,
+    agentId: input.agentId || 'commander',
     requestId: input.requestId,
     text: input.task,
   });
+}
+
+async function defaultReadConversationSpaceBinding(userId: string, conversationId: string): Promise<{
+  exists: boolean;
+  spaceId: string;
+}> {
+  const conversation = await (await import('../chats')).getConversation(userId, conversationId);
+  return conversation
+    ? { exists: true, spaceId: String(conversation.space_id || '') }
+    : { exists: false, spaceId: '' };
+}
+
+async function defaultResolveConversationWorkspace(userId: string, conversationId: string): Promise<string> {
+  return (await import('../group_chat/conv_workspace')).getConversationWorkspacePath(userId, conversationId);
+}
+
+function pathIsWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function assertSpaceWorkspacePath(userId: string, spaceId: string, workingDir: string): string {
+  if (!pathIsWithin(spaceWorkspaceDir(userId, spaceId), workingDir)) {
+    throw new Error('E_RUN_CENTER_SPACE_WORKSPACE_MISMATCH');
+  }
+  return workingDir;
 }
 
 async function defaultCountConversationAgents(userId: string, conversationId: string): Promise<number | null> {
@@ -481,6 +547,7 @@ function normalizeWorktreeRemoveInput(payload: unknown): CogSeedWorktreeRemoveIn
 
 
 const TERMINAL_TASK_STATUSES = new Set<CogSeedTaskStatus>(['completed', 'failed', 'cancelled']);
+const ACTIVE_TASK_STATUSES = new Set<CogSeedTaskStatus>(['created', 'queued', 'running', 'waiting_user']);
 
 function rendererSafeIdentifier(value: unknown, max = 120): string {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -529,11 +596,23 @@ function rendererSessionTitle(
 
 function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 'conversationId' | 'groupChatMessageId' | 'resultDeliveryState' | 'archivedAt'>, hasWorkflowStep = false): CogSeedRendererActionSet {
   const { status } = task;
-  const archive = status === 'failed' && !task.archivedAt
+  const archive = (status === 'planned' || status === 'failed' || status === 'completed') && !task.archivedAt
     && task.resultDeliveryState !== 'pending'
     && task.resultDeliveryState !== 'pending-recovery';
+  if (status === 'planned') {
+    return {
+      start: !task.archivedAt,
+      retry: false,
+      skip: false,
+      resume: false,
+      recoverResult: false,
+      abort: false,
+      archive,
+    };
+  }
   if (task.executionKind === 'group-chat') {
     return {
+      start: false,
       retry: status === 'failed' && !!task.conversationId && !!task.groupChatMessageId,
       skip: false,
       resume: false,
@@ -547,6 +626,7 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
     };
   }
   return {
+    start: false,
     retry: status === 'failed',
     skip: hasWorkflowStep && !TERMINAL_TASK_STATUSES.has(status),
     resume: status === 'recoverable',
@@ -559,7 +639,7 @@ function taskActions(task: Pick<CogSeedTaskRecord, 'status' | 'executionKind' | 
 
 export function cogSeedRendererBoardColumn(status: CogSeedTaskStatus, archivedAt?: string): CogSeedRendererBoardColumn {
   if (archivedAt) return 'archived';
-  if (status === 'created' || status === 'queued') return 'pending';
+  if (status === 'planned' || status === 'created' || status === 'queued') return 'pending';
   if (status === 'running') return 'running';
   if (status === 'waiting_user' || status === 'recoverable' || status === 'failed') return 'attention';
   if (status === 'completed') return 'completed';
@@ -583,7 +663,9 @@ function taskSummary(
         ? 'standard'
         : 'legacy';
   const actions = taskActions(task, hasWorkflowStep);
-  const resultDeliveryState: CogSeedRendererResultDeliveryState = task.resultDeliveryState
+  const resultDeliveryState: CogSeedRendererResultDeliveryState = task.status === 'planned'
+    ? 'not-applicable'
+    : task.resultDeliveryState
     ?? (!task.conversationId || !task.agentId
       ? 'not-applicable'
       : TERMINAL_TASK_STATUSES.has(task.status)
@@ -649,7 +731,7 @@ function sessionSummary(
     createdAt: session.createdAt,
     updatedAt: [session.updatedAt, ...tasks.map((task) => task.updatedAt)].sort().at(-1) ?? session.updatedAt,
     taskCount: tasks.length,
-    activeTaskCount: tasks.filter((task) => !TERMINAL_TASK_STATUSES.has(task.status)).length,
+    activeTaskCount: tasks.filter((task) => ACTIVE_TASK_STATUSES.has(task.status)).length,
     latestStatus: latest?.status ?? 'idle',
     hasRecovery: tasks.some((task) => task.status === 'recoverable'),
     ...(latestSummary?.executionId ? { executionId: latestSummary.executionId } : {}),
@@ -663,6 +745,7 @@ function sessionSummary(
 
 function rendererSafeEventSummary(event: CogSeedTaskEvent): string {
   switch (event.type) {
+    case 'task.planned': return 'Task saved for later.';
     case 'task.created': return 'Task created.';
     case 'task.queued': return 'Task queued.';
     case 'task.started': return 'Task started.';
@@ -712,7 +795,7 @@ function normalizeProjectionInput(payload: unknown): { sessionId?: string; taskI
 function normalizeActionInput(payload: unknown): { action: CogSeedRendererTaskAction; taskId?: string; requestId?: string; reason?: string } {
   const raw = asObject(payload);
   const action = boundedString(raw.action, 'action', 20) as CogSeedRendererTaskAction;
-  if (!['retry', 'skip', 'resume', 'recover-result', 'abort', 'archive'].includes(action)) throw new Error('invalid CogSeed task action');
+  if (!['start', 'retry', 'skip', 'resume', 'recover-result', 'abort', 'archive'].includes(action)) throw new Error('invalid CogSeed task action');
   const taskId = raw.taskId === undefined ? undefined : assertCogSeedTaskId(boundedString(raw.taskId, 'taskId', 120) ?? '');
   const requestId = raw.requestId === undefined ? undefined : assertCogSeedRequestId(boundedString(raw.requestId, 'requestId', 120) ?? '');
   const reason = boundedString(raw.reason, 'reason', 500, false);
@@ -725,6 +808,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
   const admitTask = deps.admitTask ?? createCogSeedTask;
   const retryTask = deps.retryTask ?? retryCogSeedTask;
   const archiveTask = deps.archiveTask ?? archiveCogSeedTask;
+  const purgeArchivedTasks = deps.purgeArchivedTasks ?? purgeCogSeedArchivedTasks;
   const transitionTask = deps.transitionTask ?? transitionCogSeedTask;
   const readEvents = deps.readEvents ?? readCogSeedTaskEvents;
   const listSessions = deps.listSessions ?? listCogSeedSessions;
@@ -744,6 +828,10 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
     ?? (async (userId, conversationId) => !!(await import('../chats')).getConversation(userId, conversationId));
   const countConversationAgents = deps.countConversationAgents ?? defaultCountConversationAgents;
   const ensureRunCenterConversation = deps.ensureRunCenterConversation ?? defaultEnsureRunCenterConversation;
+  const spaceExists = deps.spaceExists
+    ?? (async (userId, spaceId) => (await import('../spaces')).spaceExists(userId, spaceId));
+  const readConversationSpaceBinding = deps.readConversationSpaceBinding ?? defaultReadConversationSpaceBinding;
+  const resolveConversationWorkspace = deps.resolveConversationWorkspace ?? defaultResolveConversationWorkspace;
   const abortGroupChat = deps.abortGroupChat ?? (async (userId, conversationId) => (await import('../group_chat')).abort(userId, conversationId));
   const retryGroupChat = deps.retryGroupChat ?? (async (input) => (await import('../group_chat')).retryFailedTurn(input));
   const worktreeManager = deps.worktreeManager ?? cogseedWorktreeManager;
@@ -797,6 +885,7 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
     const available = new Set(availability.filter(([, exists]) => exists).map(([conversationId]) => conversationId));
     return tasks.filter((task) => (
       !task.conversationId
+      || task.status === 'planned'
       || (task.executionKind !== 'group-chat' && !task.conversationId.startsWith('run-center-'))
       || task.resultDeliveryState === 'pending'
       || task.resultDeliveryState === 'pending-recovery'
@@ -826,38 +915,159 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
     };
   };
 
+  const launchPlannedTask = async (
+    userId: string,
+    task: CogSeedTaskRecord,
+    requestId: string,
+  ): Promise<CogSeedTaskRecord> => {
+    if (task.status !== 'planned') return task;
+    if (task.archivedAt) throw new Error('CogSeed planned task is archived');
+    if (task.spaceId && !(await spaceExists(userId, task.spaceId).catch(() => false))) {
+      throw new Error('E_RUN_CENTER_SPACE_UNAVAILABLE');
+    }
+    let workingDir = task.worktreeName
+      ? await worktreeManager.resolve(userId, task.worktreeName)
+      : undefined;
+    const preparedInput = await prepareAgentStart(userId, {
+      requestId,
+      task: task.task,
+      ...(task.agentId ? { agentId: task.agentId } : {}),
+      ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+    });
+    if (task.conversationId && (task.agentId || task.spaceId)
+      && !(await isConversationAvailable(userId, task.conversationId))) {
+      await ensureRunCenterConversation({
+        userId,
+        conversationId: task.conversationId,
+        requestId: task.requestId,
+        task: task.task,
+        ...(preparedInput.agentId ? { agentId: preparedInput.agentId } : {}),
+        ...(task.spaceId ? { spaceId: task.spaceId } : {}),
+      });
+    }
+    if (task.spaceId && task.conversationId) {
+      const binding = await readConversationSpaceBinding(userId, task.conversationId);
+      if (!binding.exists || binding.spaceId !== task.spaceId) {
+        throw new Error('E_RUN_CENTER_SPACE_MISMATCH');
+      }
+      workingDir = assertSpaceWorkspacePath(
+        userId,
+        task.spaceId,
+        await resolveConversationWorkspace(userId, task.conversationId),
+      );
+    }
+    const controller = await resolveCogSeedRuntimeController(deps);
+    return controller.startPlannedCogSeedTask(userId, task.taskId, {
+      ...preparedInput,
+      ...(workingDir ? { workingDir } : {}),
+    });
+  };
+
   return {
+    async create(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
+      assertCogSeedUserId(userId);
+      const normalized = normalizePlannedCreateInput(payload);
+      const { spaceId, ...normalizedInput } = normalized;
+      const worktreeName = optionalWorktreeName(payload);
+      if (spaceId && worktreeName) throw new Error('E_RUN_CENTER_SPACE_WORKTREE_CONFLICT');
+      const operationFingerprint = cogSeedRequestFingerprint('create', {
+        ipcOperation: 'create-planned', ...normalized, worktreeName,
+      });
+      return singleFlightRequest(userId, normalized.requestId, operationFingerprint, async () => {
+        if (spaceId && !(await spaceExists(userId, spaceId).catch(() => false))) {
+          throw new Error('E_RUN_CENTER_SPACE_UNAVAILABLE');
+        }
+        if (worktreeName) await worktreeManager.resolve(userId, worktreeName);
+        const conversationId = normalizedInput.conversationId
+          || cogSeedRunCenterConversationId(normalized.requestId);
+        const prepared = await prepareAgentStart(userId, {
+          ...normalizedInput,
+          conversationId,
+        });
+        await ensureRunCenterConversation({
+          userId,
+          conversationId,
+          requestId: normalized.requestId,
+          task: normalized.task,
+          ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
+          ...(spaceId ? { spaceId } : {}),
+        });
+        const created = await admitTask(userId, {
+          requestId: normalized.requestId,
+          task: normalized.task,
+          initialStatus: 'planned',
+          ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
+          conversationId,
+          ...(spaceId ? { spaceId } : {}),
+          ...(worktreeName ? { worktreeName } : {}),
+        });
+        return taskSummary(created.task);
+      });
+    },
+
     async start(userId: string, payload: unknown): Promise<CogSeedRendererTaskSummary> {
       assertCogSeedUserId(userId);
       const normalized = normalizeStartInput(payload);
+      const { spaceId, ...normalizedInput } = normalized;
       const worktreeName = optionalWorktreeName(payload);
+      if (spaceId && worktreeName) throw new Error('E_RUN_CENTER_SPACE_WORKTREE_CONFLICT');
       const operationFingerprint = cogSeedRequestFingerprint('create', { ipcOperation: 'start', ...normalized, worktreeName });
       return singleFlightRequest(userId, normalized.requestId, operationFingerprint, async () => {
-        const controller = await resolveCogSeedRuntimeController(deps);
+        const controllerPromise = resolveCogSeedRuntimeController(deps);
+        if (spaceId && !(await spaceExists(userId, spaceId).catch(() => false))) {
+          throw new Error('E_RUN_CENTER_SPACE_UNAVAILABLE');
+        }
         const existing = await readTaskByRequestId(userId, normalized.requestId);
-        const workingDir = worktreeName ? await worktreeManager.resolve(userId, worktreeName) : undefined;
-        const needsConversation = !!normalized.agentId && !normalized.conversationId;
+        let workingDir = worktreeName ? await worktreeManager.resolve(userId, worktreeName) : undefined;
+        const needsConversation = !normalizedInput.conversationId;
         const normalizedWithConversation = needsConversation
-          ? { ...normalized, conversationId: cogSeedRunCenterConversationId(normalized.requestId) }
-          : normalized;
-        const input = await prepareAgentStart(userId, {
+          ? { ...normalizedInput, conversationId: cogSeedRunCenterConversationId(normalized.requestId) }
+          : normalizedInput;
+        const preparedInput = await prepareAgentStart(userId, {
           ...normalizedWithConversation,
           ...(workingDir ? { workingDir } : {}),
         });
+        if (!existing && needsConversation && preparedInput.conversationId) {
+          await ensureRunCenterConversation({
+            userId,
+            conversationId: preparedInput.conversationId,
+            requestId: preparedInput.requestId,
+            task: preparedInput.task,
+            ...(preparedInput.agentId ? { agentId: preparedInput.agentId } : {}),
+            ...(spaceId ? { spaceId } : {}),
+          });
+        }
+        if (spaceId && preparedInput.conversationId) {
+          const binding = await readConversationSpaceBinding(userId, preparedInput.conversationId);
+          if (binding.exists && binding.spaceId !== spaceId) {
+            throw new Error(existing ? 'CogSeed request ID payload conflict' : 'E_RUN_CENTER_SPACE_MISMATCH');
+          }
+          if (!binding.exists) {
+            const existingDirMatches = !!existing?.workingDir
+              && pathIsWithin(spaceWorkspaceDir(userId, spaceId), existing.workingDir);
+            if (!existingDirMatches) {
+              throw new Error(existing ? 'CogSeed request ID payload conflict' : 'E_RUN_CENTER_SPACE_UNAVAILABLE');
+            }
+            workingDir = existing.workingDir;
+          } else {
+            workingDir = assertSpaceWorkspacePath(
+              userId,
+              spaceId,
+              await resolveConversationWorkspace(userId, preparedInput.conversationId),
+            );
+          }
+        }
+        const input: StartCogSeedTaskInput = {
+          ...preparedInput,
+          ...(workingDir ? { workingDir } : {}),
+        };
+        const controller = await controllerPromise;
         if (existing?.status === 'created' && !existing.runtimeWorkerId && input.conversationId
           && !(await isConversationAvailable(userId, input.conversationId))) {
           const admitted = await admitTask(userId, input);
           return taskSummary(await markCogSeedTaskRecoverable(userId, admitted.task.taskId, 'conversation_unavailable'));
         }
-        if (!existing && needsConversation && input.agentId && input.conversationId) {
-          await ensureRunCenterConversation({
-            userId,
-            conversationId: input.conversationId,
-            requestId: input.requestId,
-            task: input.task,
-            agentId: input.agentId,
-          });
-        } else if (!existing && input.agentId && input.conversationId
+        if (!existing && !needsConversation && input.agentId && input.conversationId
           && !(await isConversationAvailable(userId, input.conversationId))) {
           throw new Error('CogSeed conversation is unavailable');
         }
@@ -1024,6 +1234,11 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
 
     async board(userId: string): Promise<CogSeedRendererBoardProjection> {
       return this.boardProjection(userId);
+    },
+
+    async purgeArchived(userId: string) {
+      assertCogSeedUserId(userId);
+      return purgeArchivedTasks(userId);
     },
 
     async agents(userId: string): Promise<CogSeedRendererAgentRegistryProjection> {
@@ -1455,6 +1670,11 @@ export function createCogSeedIpcService(deps: CogSeedIpcServiceDeps = {}) {
       if (!task) throw new Error('CogSeed task not found');
       if (input.action === 'archive') {
         await archiveTask(userId, input.taskId);
+        return this.collaborationSnapshot(userId, { taskId: input.taskId });
+      }
+      if (input.action === 'start') {
+        if (!input.requestId) throw new Error('requestId required');
+        await launchPlannedTask(userId, task, input.requestId);
         return this.collaborationSnapshot(userId, { taskId: input.taskId });
       }
       if (task.executionKind === 'group-chat') {
