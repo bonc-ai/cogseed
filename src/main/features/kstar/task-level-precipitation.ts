@@ -4,7 +4,7 @@ import { lessonLanguageMismatches } from '../../util/language';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
 import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
-import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
@@ -192,6 +192,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
         suggestedType: 'skill_method',
         suggestedScope: scope,
+        ...assetMutationFor(primaryEpisode, strongest),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
         ...(primaryEpisode ? { learningProvenance: provenanceFor(strongest, primaryEpisode) } : {}),
@@ -206,6 +207,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
+        ...assetMutationFor(primaryEpisode, strongest),
         ...ruleBoundary('rule'),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
@@ -232,6 +234,7 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,
+      ...assetMutationFor(gapEpisode, gapReview),
       ...ruleBoundary(gapAssetType),
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),

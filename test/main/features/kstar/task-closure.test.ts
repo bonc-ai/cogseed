@@ -790,6 +790,49 @@ describe('KSTAR direct experience asset line', () => {
     expect(pending[0].status).toBe('confirmed');
   });
 
+  it('updates the explicitly targeted existing asset through the direct KSTAR line', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const originalCandidate = await candidates.saveRecallCandidate('closure-user', {
+      judgment: 'Keep the report verification rule.',
+      value: 'Keep report verification consistent across runs.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'create',
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-original' }],
+    });
+    const original = await candidates.promoteRecallCandidate('closure-user', originalCandidate.id, { actor: 'user' });
+    const seededEpisode = builder.buildRuntimeKstarEpisode({
+      userId: 'closure-user', runId: 'run-direct-update', request, events,
+      createdAt: '2026-08-05T00:00:00.000Z',
+    });
+
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'Update the report verification rule to require an acceptance check.',
+      summary: 'Updated report verification rule',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      targetAssetId: original.asset.id,
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-update' }],
+    }]);
+
+    const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
+    expect(updated).toMatchObject({
+      id: original.asset.id,
+      version: '2',
+      statement: 'Update the report verification rule to require an acceptance check.',
+    });
+    expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-update' }),
+    ]));
+  });
+
   it('carries the conversation space into the asset through the real closure path (space asset tab)', async () => {
     // 真实链路：挂空间会话 → captureGroupKstarClosure（读 conversation.space_id
     // 填 episode.s.workspaceId）→ 任务级沉淀 → 资产带 spaceId。修复前 episode

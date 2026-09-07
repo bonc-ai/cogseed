@@ -1,5 +1,6 @@
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { lessonLanguageMismatches } from '../../util/language';
+import { safeId } from '../../storage';
 import { attributionAllowsReusableLearning } from './secondary-attribution';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
 
@@ -117,6 +118,28 @@ export function learningSignal(review: KstarReviewRecord): KstarCandidateProposa
   };
 }
 
+/**
+ * Turn persisted asset facts into an explicit mutation only when the review
+ * identifies one unique referenced asset. Multiple references are ambiguous;
+ * those proposals remain create candidates and let Recall's semantic dedup
+ * decide without guessing a target.
+ */
+export function assetMutationFor(
+  episode: KstarEpisodeRecord,
+  review: KstarReviewRecord,
+): Pick<KstarCandidateProposal, 'suggestedAction' | 'targetAssetId'> {
+  const targetAssetIds = [...new Set((episode.k.abilityAssetRefs || []).filter((id) => safeId(id)))];
+  if (targetAssetIds.length !== 1) return {};
+  const categories = new Set((review.attributionDetails || []).map((detail) => detail.category));
+  if (categories.has('asset_outdated') || categories.has('asset_conflict')) {
+    return { suggestedAction: 'update', targetAssetId: targetAssetIds[0] };
+  }
+  if (categories.has('asset_not_applicable')) {
+    return { suggestedAction: 'limit_scope', targetAssetId: targetAssetIds[0] };
+  }
+  return {};
+}
+
 export function proposeKstarCandidates(
   episode: KstarEpisodeRecord,
   review: KstarReviewRecord,
@@ -167,6 +190,7 @@ export function proposeKstarCandidates(
         ? (gapType(review) ?? 'rule')
         : 'skill_method',
       suggestedScope: scope,
+      ...assetMutationFor(episode, review),
       ...ruleBoundary(lesson ? (gapType(review) ?? 'rule') : 'skill_method'),
       sourceRefs,
       learningSignal: learningSignal(review),
@@ -187,6 +211,7 @@ export function proposeKstarCandidates(
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: type,
       suggestedScope: scope,
+      ...assetMutationFor(episode, review),
       ...ruleBoundary(type),
       sourceRefs,
       learningSignal: learningSignal(review),
