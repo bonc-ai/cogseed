@@ -3,6 +3,7 @@ import { safeId } from '../../storage';
 import { autoApplyRecallCandidate, saveRecallCandidate } from '../recall/candidate-service';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { recordKstarFailure } from './failure-service';
+import { recallFieldsForKstarProposal } from './candidate-contract';
 import type { KstarCandidateProposal, KstarEpisodeRecord } from './types';
 
 /**
@@ -50,6 +51,7 @@ function proposalToCandidateInput(
   index: number,
 ): import('../recall/candidate-service').SaveRecallCandidateInput {
   const evidenceRefs = normalizeCognitionSourceRefs(proposal.sourceRefs);
+  const action = recallFieldsForKstarProposal(proposal);
   return {
     judgment: String(proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 4_000),
     // value = judgment：与 recall-bridge（drain 路径）一致——两条沉淀路径
@@ -62,7 +64,8 @@ function proposalToCandidateInput(
     ...(proposal.uncertainty ? { uncertainty: String(proposal.uncertainty).slice(0, 1_000) } : {}),
     suggestedType: proposal.suggestedType,
     suggestedScope: String(proposal.suggestedScope || 'general').slice(0, 500),
-    suggestedAction: 'create',
+    suggestedAction: action.suggestedAction,
+    ...(action.targetAssetId ? { targetAssetId: action.targetAssetId } : {}),
     sourceRefs: evidenceRefs,
     evidenceRefs,
     ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),

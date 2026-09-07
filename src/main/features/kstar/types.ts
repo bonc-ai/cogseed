@@ -170,6 +170,9 @@ export interface KstarCandidateProposal {
   summary?: string;
   uncertainty?: string;
   suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
+  /** Existing asset selected from the episode's persisted asset references.
+   * Required for update/limit_scope/pause; absent when the target is ambiguous. */
+  targetAssetId?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。
