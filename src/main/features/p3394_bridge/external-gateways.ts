@@ -17,6 +17,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { app } from 'electron';
 import { createLogger } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
+import { DEFAULT_USER_WORKSPACE } from '../../paths';
 import { P3394PeerRegistry } from './registry';
 import { getP3394BridgeInfo } from './app-wiring';
 import { detectOne } from '../local_agents/registry';
@@ -357,11 +358,13 @@ async function doStartExternalGateway(input: {
     P3394_ADVERTISE_ENDPOINT: 'http://127.0.0.1:' + port,
     P3394_GATEWAY_HOME: gatewayHome,
     // §9.2 workspace allowlist 信任链对齐：主进程派发时下发的会话工作区
-    // （extensions.working_dir）在用户数据树内（userWorkspace / spaces /
-    // projects 的公共祖先 = workspace root）。把该根注入网关允许根，
-    // 网关侧校验语义保持不放松——只扩大到主进程自己的合法值域。
+    // （extensions.working_dir）有两类根——数据树内的空间/项目工作区
+    // （COGSEED_WORKSPACE_ROOT 涵盖）与默认会话工作区树
+    // DEFAULT_USER_WORKSPACE（userWorkSpace/，data/ 的兄弟目录，见
+    // paths.ts 目录文档）。两棵树都注入网关允许根，网关侧校验语义保持
+    // 不放松——只扩大到主进程自己的合法值域。
     ...(process.env.COGSEED_WORKSPACE_ROOT ? {
-      P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, gatewayHome]
+      P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, DEFAULT_USER_WORKSPACE, gatewayHome]
         .filter(Boolean)
         .join(path.delimiter),
     } : {}),
