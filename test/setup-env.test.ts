@@ -35,4 +35,11 @@ describe('vitest workspace-root isolation', () => {
     expect(fs.realpathSync(path.dirname(authDir)).startsWith(fs.realpathSync(os.tmpdir()))).toBe(true);
     expect(authDir).not.toMatch(/\.cogseed[/\\]data[/\\]/);
   });
+
+  it('redirects the process home directory away from the real user profile', () => {
+    const realTmp = fs.realpathSync(os.tmpdir());
+    const isolatedHome = fs.realpathSync(os.homedir());
+    expect(isolatedHome.startsWith(realTmp)).toBe(true);
+    expect(isolatedHome).toBe(fs.realpathSync(WS_ROOT));
+  });
 });

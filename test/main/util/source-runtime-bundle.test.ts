@@ -109,7 +109,7 @@ describe('macOS source runtime bundle contract', () => {
       .toEqual(['cogseed']);
   });
 
-  it('preserves relative framework symlinks when copying the Electron app', () => {
+  it.runIf(process.platform === 'darwin')('preserves relative framework symlinks when copying the Electron app', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-source-copy-'));
     temporaryRoots.push(root);
     const distDir = path.join(root, 'dist');

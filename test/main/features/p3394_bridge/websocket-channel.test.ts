@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { P3394WebSocketChannel } from '../../../../src/main/features/p3394_bridge/websocket-channel';
+import { OPENSSL_EXECUTABLE } from '../../../helpers/tls-capabilities';
 import { buildP3394BridgeManifest } from '../../../../src/main/features/p3394_bridge/manifest';
 
 let counter = 0;
@@ -159,12 +160,12 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
     if (ok.ok) expect(ok.peer_agent_id).toBe('real-node');
   });
 
-  it('wss（TLS）round trip：自签证书 + Bearer 认证', async () => {
+  it.skipIf(!OPENSSL_EXECUTABLE)('wss（TLS）round trip：自签证书 + Bearer 认证', async () => {
     const certDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-ws-tls-'));
     const key = path.join(certDir, 'key.pem');
     const cert = path.join(certDir, 'cert.pem');
     try {
-      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
+      execFileSync(OPENSSL_EXECUTABLE!, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
       const port = nextPort();
       const server = new P3394WebSocketChannel('wss-server', {
         listen: { host: '127.0.0.1', port, tls: { key: fs.readFileSync(key, 'utf8'), cert: fs.readFileSync(cert, 'utf8') } },

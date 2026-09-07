@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FILE_SYMLINKS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 // The IPC router pulls `shell.showItemInFolder` + `dialog` from electron
 // at module load; mock before imports take effect.
@@ -110,7 +111,7 @@ describe('workspace.revealPath › validation', () => {
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 
-  it('rejects a symlink inside the workspace that points outside (symlink-escape)', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('rejects a symlink inside the workspace that points outside (symlink-escape)', async () => {
     // The bug class the isPathAllowed migration closes: a symlink planted
     // inside an allowed root (here, the user's workspace) that resolves to
     // a target OUTSIDE the allowed root. The previous lexical
@@ -135,7 +136,7 @@ describe('workspace.revealPath › validation', () => {
     expect(showItemInFolder).not.toHaveBeenCalled();
   });
 
-  it('accepts a symlink inside the workspace that points to another file inside the workspace', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('accepts a symlink inside the workspace that points to another file inside the workspace', async () => {
     // The companion preservation case: a symlink whose target is also
     // within the allowed root MUST be accepted (otherwise `isPathAllowed`
     // would break legitimate `ln -s` use inside the workspace).

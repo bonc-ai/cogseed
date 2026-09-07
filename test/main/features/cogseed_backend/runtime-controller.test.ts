@@ -5,20 +5,29 @@ import * as path from 'node:path';
 
 import type { CogSeedAgentRuntimeFacade } from '../../../../src/main/features/cogseed_runtime';
 import type { RuntimeEventEnvelope } from '../../../../src/main/features/cogseed_runtime/protocol';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 const USER = 'cogseed-controller-user';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
+let controllers: Array<{ shutdown(): Promise<void> }> = [];
+
+function trackController<T extends { shutdown(): Promise<void> }>(controller: T): T {
+  controllers.push(controller);
+  return controller;
+}
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-controller-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   vi.resetModules();
-
+  controllers = [];
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.allSettled(controllers.map((controller) => controller.shutdown()));
+  await drainMainRuntimeForTest(USER);
   if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -583,7 +592,7 @@ describe('CogSeed Runtime controller', () => {
     });
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent, resultDeliveryStore } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent, resultDeliveryStore } as any));
 
     const started = await controller.startCogSeedTask(USER, {
       requestId: 'req-complete-cancel',
@@ -705,7 +714,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime, localCliAdapter } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime, localCliAdapter } as any));
     await createConversation('cid-cli-controller');
 
     const task = await controller.startCogSeedTask(USER, {
@@ -764,7 +773,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime: runtimeFrom([]), localCliAdapter } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime: runtimeFrom([]), localCliAdapter } as any));
     await createConversation('cid-session-derived');
 
     const task = await controller.startCogSeedTask(USER, {
@@ -898,7 +907,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime: runtimeFrom([]), localCliAdapter } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime: runtimeFrom([]), localCliAdapter } as any));
     await createConversation('cid-wake-context');
 
     const original = await controller.startCogSeedTask(USER, {
@@ -936,7 +945,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'result', request_id: 'req-agent-identity', runtime_session_id: 'mruntime-agent-identity', status: 'completed', text: 'done' },
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
 
     await controller.startCogSeedTask(USER, {
       requestId: 'req-agent-identity',
@@ -1151,7 +1160,7 @@ describe('CogSeed Runtime controller', () => {
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
     const projectTaskEvent = vi.fn(async () => 'projected');
-    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent });
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent }));
     const task = await controller.startCogSeedTask(USER, {
       requestId: 'req-concurrent-cancel',
       task: 'Cancel exactly once.',
@@ -1189,7 +1198,7 @@ describe('CogSeed Runtime controller', () => {
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
 
     const task = await controller.startCogSeedTask(USER, {
       requestId: 'req-runtime-failure-code',
@@ -1715,7 +1724,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
     const conversationId = 'cid-reassign-source-reservation';
     const source = await controller.startCogSeedTask(USER, {
       requestId: 'req-reassign-source-reservation',
@@ -2439,7 +2448,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'result', request_id: 'req-asset', runtime_session_id: 'mruntime-asset', status: 'completed', text: 'done' },
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
 
     await controller.startCogSeedTask(USER, {
       requestId: 'req-asset',
@@ -2461,7 +2470,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'result', request_id: 'req-noasset', runtime_session_id: 'mruntime-noasset', status: 'completed', text: 'done' },
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
 
     await controller.startCogSeedTask(USER, {
       requestId: 'req-noasset',
@@ -2489,7 +2498,7 @@ describe('CogSeed Runtime controller', () => {
       { type: 'result', request_id: 'req-dispatched-asset', runtime_session_id: 'mruntime-dispatched-asset', status: 'completed', text: 'done' },
     ]);
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
 
     await controller.startCogSeedTask(USER, {
       requestId: 'req-dispatched-asset',

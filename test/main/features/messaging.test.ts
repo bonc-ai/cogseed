@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { DeliveryLedgerEntry, MessagingAdapter, MessagingCardAdapter } from '../../../src/main/features/messaging/types';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
 let tmpDir = '';
 let previousRoot: string | undefined;
@@ -31,11 +32,18 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  vi.useRealTimers();
+  try {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    await manager.stopForUser('user-1');
+    await drainMainRuntimeForTest('user-1');
+  } finally {
+    vi.unstubAllGlobals();
+    if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('messaging policy', () => {
@@ -2873,7 +2881,7 @@ describe('messaging burst merge on inbound', () => {
     };
     vi.doMock('../../../src/main/features/messaging/adapters', () => ({ createAdapter: vi.fn(() => adapter) }));
     vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
-    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn() }));
+    vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn(() => () => undefined) }));
     const registry = await import('../../../src/main/features/messaging/registry');
     const manager = await import('../../../src/main/features/messaging/manager');
     const created = await registry.createInstance(uid, {

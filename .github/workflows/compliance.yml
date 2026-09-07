@@ -5,15 +5,22 @@
 #   - builtin:manifest:check  builtin resource inventory consistency
 #   - sbom:check            CycloneDX SBOM freshness (needs network)
 #
-# Manual trigger only (Actions -> Run workflow) — run before each release.
-# Not run on every push: SBOM freshness depends on the committed
-# sbom.cdx.json being regenerated (`npm run sbom:generate`) when deps change,
-# so gate it at release time instead of blocking day-to-day development.
+# The full compliance gate runs on promotion PRs into cicd and again on the
+# resulting cicd push. Release verification accepts only the push run for the
+# exact tagged cicd tip.
 
 name: compliance
 
 on:
-  workflow_dispatch:
+  pull_request:
+    branches:
+      - cicd
+  push:
+    branches:
+      - cicd
+
+permissions:
+  contents: read
 
 jobs:
   compliance:
