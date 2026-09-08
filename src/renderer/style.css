@@ -10579,38 +10579,37 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   box-shadow: none;
 }
 
-/* Keep long conversations visually quiet. The toolbar occupies no vertical
-   space until its message is hovered, focused, or has an open overflow menu. */
+/* Message action toolbar — always visible on every reply (子安 2026-09-08：
+   原 hover-only 设计让历史回复的按钮看起来"消失"，改为常显；行高恒定
+   不跳动，仅透明度做轻量过渡）。 */
 #panel-conversation .chat-message .chat-bubble-actions {
-  max-width: 0;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: max-width 150ms ease, max-height 150ms ease, opacity 120ms ease, transform 150ms ease;
+  max-width: 180px;
+  max-height: 28px;
+  opacity: 1;
+  overflow: visible;
+  pointer-events: auto;
+  transform: none;
+  transition: opacity 120ms ease;
 }
 /* ":has(:not(...))" keeps the collapsed-margin treatment for rows holding
    only the collapsible icon group — the usage meta line (below) also lives
    in this row but is display:none until hover, so it must not count as
    content. */
 #panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
-  margin-top: 0;
+  margin-top: 5px;
   transition: margin-top 150ms ease;
 }
+/* 常显改造后展开态与常态同值，hover 组规则不再需要展开补丁——保留空壳
+   防主题文件按选择器覆盖时悬空。 */
 #panel-conversation .chat-message:hover .chat-bubble-actions,
 #panel-conversation .chat-message:focus-within .chat-bubble-actions,
 #panel-conversation .chat-bubble-actions:has(.bubble-more-btn[aria-expanded="true"]) {
-  max-width: 180px;
-  max-height: 28px;
-  opacity: 1;
-  overflow: visible;
-  pointer-events: auto;
-  transform: translateY(0);
+  /* 常显改造后此规则保留 hover 层级微调（若有主题依赖）——展开态与
+     常态同值，无视觉跳变。 */
 }
 #panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))),
 #panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
-  margin-top: 5px;
+  /* margin 基线已提为 5px，hover 分支同值无需覆盖。 */
 }
 #panel-conversation .chat-message.user > .chat-msg-actions { justify-content: flex-end; }
 

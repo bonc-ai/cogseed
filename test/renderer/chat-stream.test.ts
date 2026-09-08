@@ -201,12 +201,13 @@ describe('chat-stream module', () => {
     const flow = inserts[0].node;
     expect(flow.className).toContain('cs-flow');
     expect(flow.className).toContain('running');
-    // 计时/收起徽章（消息头不存在时落流内首行兜底）：工作中 + 计时 + 停止。
+    // 计时/收起徽章（消息头不存在时落流内首行兜底）：工作中 + 计时。
+    // 就近停止按钮已移除（无实际作用，2026-09-08）。
     const badge = flow.querySelector('.cs-badge')!;
     expect(badge).toBeTruthy();
     expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('工作中');
     expect(badge.querySelector('.cs-badge-elapsed')).toBeTruthy();
-    expect(flow.querySelector('.cs-badge-stop')).toBeTruthy();
+    expect(flow.querySelector('.cs-badge-stop')).toBeNull();
   });
 
   it('徽章点击收起/展开时间线正文', () => {
@@ -240,10 +241,10 @@ describe('chat-stream module', () => {
     g.window.chatStreamHandleEvent('c-1', headerMsg, { type: 'chat.turn.started', turnId: 'H1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = headerMsg.children.find((c) => String(c.className).includes('cs-flow'))!;
     expect(flow).toBeTruthy();
-    // 徽章+停止在头部（不在流子树里），且不再走流内兜底行。
+    // 徽章在头部（不在流子树里），且不再走流内兜底行；停止按钮已移除。
     const badge = header.querySelector('.cs-badge')!;
     expect(badge).toBeTruthy();
-    expect(header.querySelector('.cs-badge-stop')).toBeTruthy();
+    expect(header.querySelector('.cs-badge-stop')).toBeNull();
     expect(flow.querySelector('.cs-badge')).toBeNull();
     expect(flow.querySelector('.cs-badge-row')).toBeNull();
     // 头部徽章点击同样能收起/展开流的正文。
@@ -347,9 +348,9 @@ describe('chat-stream module', () => {
     expect(flow.className).toContain('done');
     expect(flow.className).not.toContain('running');
     expect(flow.isConnected).toBe(true);
-    // 完成后停止按钮撤除；徽章定格为「已工作」（收起开关保留）。
+    // 完成后停止按钮撤除；徽章定格为「已完成」（收起开关保留）。
     expect(flow.querySelector('.cs-badge-stop')).toBeNull();
-    expect(flow.querySelector('.cs-badge')!.querySelector('.cs-badge-label')!.textContent).toBe('已工作');
+    expect(flow.querySelector('.cs-badge')!.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
 
     // finalize 兜底：running 流（断流场景）被收尾为 cancelled。
     handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
@@ -440,9 +441,9 @@ describe('chat-stream module', () => {
     expect(flow.className).toContain('done');
     expect(flow.className).not.toContain('running');
     expect(flow.isConnected).toBe(true);
-    // 完成后停止按钮撤除；徽章定格为「已工作」（收起开关保留）。
+    // 完成后停止按钮撤除；徽章定格为「已完成」（收起开关保留）。
     expect(flow.querySelector('.cs-badge-stop')).toBeNull();
-    expect(flow.querySelector('.cs-badge')!.querySelector('.cs-badge-label')!.textContent).toBe('已工作');
+    expect(flow.querySelector('.cs-badge')!.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
 
     // finalize 兜底：running 流（断流场景）被收尾为 cancelled。
     handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
@@ -651,7 +652,7 @@ describe('chat-stream module', () => {
     const histBadge = flow.querySelector('.cs-badge')!;
     expect(histBadge).toBeTruthy();
     expect(histBadge.querySelector('.cs-badge-elapsed')).toBeNull();
-    expect(histBadge.querySelector('.cs-badge-label')!.textContent).toBe('已工作');
+    expect(histBadge.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
     const body = bodyOf(flow);
     expect(body.style.display).not.toBe('none');
     const rows = body.children.filter((c) => c.className.includes('cs-toolExecution'));
