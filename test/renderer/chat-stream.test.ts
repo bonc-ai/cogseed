@@ -674,4 +674,52 @@ describe('chat-stream module', () => {
     // 空数组/缺父节点返回 false。
     expect(render('c-1', msgDiv, [], {})).toBe(false);
   });
+
+  it('历史重建（新格式）：chatItem/turn 重放含权威计时，正文段与老条目不重复渲染', () => {
+    const render = g.window.chatStreamRenderPersisted as (c: string, m: unknown, i: unknown, o?: unknown) => boolean;
+    const msgDiv = makeEl('div');
+    root.appendChild(msgDiv);
+    const t0 = 1700000000000;
+    const items = [
+      { type: 'chatItem', item: { type: 'chat.turn.started', turnId: 'nt1', cid: 'c-2', actorId: 'a', startedAt: new Date(t0).toISOString() } },
+      // 老格式混排条目应被新格式路径忽略（不是回退渲染，是跳过）。
+      { type: 'progress', text: '老格式混排不渲染' },
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:tool:1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'npm test', output: 'done', timing: { startedAtMs: t0, completedAtMs: t0 + 1500 } } } },
+      // 正文段：历史重建跳过（终稿已在消息体，防重复）。
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:text:1', kind: 'text', status: 'completed', payload: { delta: '正文不应出现在历史流' } } },
+      { type: 'turn', turn: { type: 'chat.turn.completed', turnId: 'nt1', status: 'completed', durationMs: 2600, endedAt: new Date(t0 + 2600).toISOString() } },
+    ];
+    expect(render('c-2', msgDiv, items, { actorName: 'agent' })).toBe(true);
+
+    const flow = msgDiv.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'nt1')!;
+    expect(flow).toBeTruthy();
+    expect(flow.parentNode).toBe(msgDiv);
+    expect(flow.className).toContain('done');
+
+    const body = bodyOf(flow);
+    const rows = body.children.filter((c) => c.className.includes('cs-toolExecution'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].innerHTML).toContain('done');
+    expect(rows[0].innerHTML).toContain('npm test');
+    // 工具行显示权威耗时（1500ms → 「2 秒」取整口径见 _csFmtDur），
+    // 徽章显示总耗时（2600ms → 「3 秒」）与工具数。
+    expect(rows[0].innerHTML).toContain('cs-dur');
+    expect(rows[0].innerHTML).toContain('2 秒');
+    const badge = flow.querySelector('.cs-badge')!;
+    expect(badge).toBeTruthy();
+    const elapsed = badge.querySelector('.cs-badge-elapsed')!;
+    expect(elapsed).toBeTruthy();
+    expect(elapsed.textContent).toContain('3 秒');
+    const tools = badge.querySelector('.cs-badge-tools')!;
+    expect(tools).toBeTruthy();
+    expect(tools.textContent).toContain('1');
+    // 正文与老格式混排不进入历史流。
+    expect(flow.innerHTML).not.toContain('正文不应出现在历史流');
+    expect(flow.innerHTML).not.toContain('老格式混排');
+
+    // 同 turnId 重建幂等。
+    render('c-2', msgDiv, items, { actorName: 'agent' });
+    const flows = msgDiv.children.filter((c) => (c.dataset as Record<string, string>).csTurn === 'nt1');
+    expect(flows).toHaveLength(1);
+  });
 });

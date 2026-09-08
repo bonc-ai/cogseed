@@ -383,6 +383,7 @@
   "bridge.permission.deny": "Negar",
   "bridge.permission.message": "{agent} deseja usar {connector} ({tool}). Permitir que ele atue na sua conta conectada?",
   "bridge.permission.title": "Permitir acesso a um serviço conectado?",
+  "chat_stream.tool_count_unit": "ferramentas",
   "cli_launch_confirm.allow": "Permitir nesta conversa",
   "cli_launch_confirm.denied": "{name} não teve permissão para iniciar nesta conversa. Permita-o no prompt de confirmação para usar este agente externo.",
   "cli_launch_confirm.deny": "Negar",

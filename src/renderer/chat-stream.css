@@ -50,6 +50,9 @@
 .cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; flex: none; }
 .cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
 .cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+.cs-badge-tools { flex: none; opacity: .78; }
+/* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
+.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; padding-left: 6px; }
 .cs-flow.failed .cs-badge { color: rgb(214, 69, 69); }
 .cs-flow.failed .cs-badge:hover { color: rgb(178, 34, 34); }
 .cs-badge-stop {

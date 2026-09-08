@@ -358,6 +358,21 @@ function _csSetFlowState(flow, status, error, endedAtMs) {
       label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
         : status === 'cancelled' ? '已取消' : '已工作';
     }
+    // 收束摘要含工具数（老历史无工具行时不显示该片段）。
+    let tools = badge.querySelector('.cs-badge-tools');
+    if (!tools) {
+      tools = document.createElement('span');
+tools.className = 'cs-badge-tools';
+      badge.appendChild(tools);
+    }
+    let toolCount = 0;
+    const bodyEl = flow.querySelector('.cs-flow-body');
+    if (bodyEl && bodyEl.children) {
+      for (let i = 0; i < bodyEl.children.length; i++) {
+        if (String(bodyEl.children[i].className || '').includes('cs-toolExecution')) toolCount++;
+      }
+    }
+    tools.textContent = toolCount > 0 ? `${toolCount} ${typeof window.t === 'function' ? window.t('chat_stream.tool_count_unit') : '个工具'}` : '';
     // 失败详情被徽章省略号截断时，悬停 title 兜底看全文。
     if (status === 'failed' && error && label) badge.setAttribute('title', label.textContent);
     const elapsed = badge.querySelector('.cs-badge-elapsed');
@@ -456,11 +471,19 @@ function _csRenderToolRow(row, payload, status) {
   const failed = status === 'failed';
   const target = _csTargetHtml(style.targetKind, args, argsSummary);
   const hover = [p.toolName, argsSummary].filter(Boolean).join(' ');
+  // 工具耗时：主进程权威 timing（存储补差后实时/历史同源）；历史重放是瞬时
+  // 到达，墙钟差恒为 0——没有 payload.timing 就不显示（不编造）。
+  let dur = '';
+  if (p.timing && typeof p.timing.startedAtMs === 'number'
+    && typeof p.timing.completedAtMs === 'number') {
+    dur = `<span class="cs-dur">${_csFmtDur(Math.max(0, p.timing.completedAtMs - p.timing.startedAtMs))}</span>`;
+  }
   // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
   const line = [
     `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
     `<span class="cs-verb${failed ? ' failed' : ''}${style.raw ? ' raw' : ''}">${_csEscapeHtml(style.verb)}</span>`,
     target,
+    dur,
   ];
   const blocks = [];
   if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);
@@ -917,14 +940,56 @@ window.chatStreamHasPanel = function chatStreamHasPanel(cid) {
 };
 
 /**
- * 完成/历史态重建：从消息持久化的 process items（老格式 progress/event）
- * 重建活动流，插在消息元素内部（消息头之后、正文之前）。conv-core 统一
- * 过程 UI——_renderPersistedProcess 检测到本函数可用时全部委托过来，老
- * details 折叠卡退役（chat-stream.js 加载失败的极端场景仍走老路径兜底）。
- * 历史流没有运行行：动作行全部可见（与实时完成态一致）。
+ * 完成/历史态重建：从消息持久化的 process items 重建活动流，插在消息元素
+ * 内部（消息头之后、正文之前）。conv-core 统一过程 UI——_renderPersistedProcess
+ * 检测到本函数可用时全部委托过来，老 details 折叠卡退役（chat-stream.js 加载
+ * 失败的极端场景仍走老路径兜底）。历史流没有运行行：动作行全部可见（与实时
+ * 完成态一致）。
+ *
+ * 双格式：process 字段自存储补差起与 chat_events 结构化条目双写——
+ *   {type:'chatItem', item} / {type:'turn', turn}（含权威 timing 与总耗时）
+ * 有新条目时优先走事件重放（复用实时 handleEvent 全部渲染语义，含计时徽章
+ * 与自动收束），重放异常或老消息回退下方老格式路径（无计时不编造）。
  */
 window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDiv, items, opts) {
   if (!Array.isArray(items) || !items.length || !msgDiv || !msgDiv.parentNode) return false;
+  const chatEntries = items.filter(function (it) {
+    return it && (it.type === 'chatItem' || it.type === 'turn');
+  });
+  if (chatEntries.length) {
+    try {
+      let turnId = (opts && opts.turnId) || '';
+      for (const entry of chatEntries) {
+        const ev = entry.type === 'chatItem' ? entry.item : entry.turn;
+        if (ev && typeof ev.turnId === 'string' && ev.turnId) { turnId = ev.turnId; break; }
+      }
+      if (!turnId) turnId = (msgDiv.dataset && msgDiv.dataset.msgId) || ('hist-' + Date.now());
+      // 幂等：清掉同 key 旧流后，由首事件（chat.turn.started）经 _csEnsureFlow
+      // 正规建流（挂载+注册到 _csPanels 都在 ensure；直接 _csCreateFlow 不挂载）。
+      const replayKey = _csPanelKey(cid, turnId);
+      const old = _csPanels.get(replayKey);
+      if (old) _csRemoveFlow(old);
+      let sawTerminal = false;
+      for (const entry of chatEntries) {
+        const ev = entry.type === 'chatItem' ? entry.item : entry.turn;
+        if (!ev || typeof ev !== 'object') continue;
+        if (ev.type === 'chat.item' && ev.kind === 'text') continue; // 正文已在消息体
+        if (ev.type === 'chat.turn.completed') sawTerminal = true;
+        window.chatStreamHandleEvent(cid, msgDiv, ev);
+      }
+      if (!sawTerminal) {
+        // 终态条目缺失（如写入中断）：兜底定格，防流式态残留。
+        const flow = _csPanels.get(replayKey);
+        if (flow) {
+          _csCloseThinkRow(flow.querySelector('.cs-flow-body') || flow);
+          _csSetFlowState(flow, 'completed');
+        }
+      }
+      return true;
+    } catch (err) {
+      _csLog.warn('chat entries replay failed, falling back to legacy items', { error: (err && err.message) || String(err) });
+    }
+  }
   try {
     const turnKey = _csPanelKey(cid, (opts && opts.turnId) || (msgDiv.dataset && msgDiv.dataset.msgId) || `hist-${Date.now()}`);
     // 同一消息重复重建（刷新/回滚重放）幂等：先移除旧流。

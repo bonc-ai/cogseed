@@ -200,7 +200,8 @@ async function finishClosure(
 
 function messageHasSuccessfulToolCall(message: GroupKstarMessageInput): boolean {
   return (message.process || []).some((item) => {
-    const event = item.type === 'event' ? item.event : item.event;
+    // 老格式两形态都可能有 event；chat_events 新条目（chatItem/turn）无此字段。
+    const event = item.type === 'event' || item.type === 'progress' ? item.event : undefined;
     if (!event || event.stream !== 'tool' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
       return false;
     }

@@ -33,6 +33,9 @@ export interface ChatEventProjectorState {
   textItemId: string | null;
   /** 自增序号，保证同 Turn 内 itemId 唯一且顺序稳定。 */
   seq: number;
+  /** 工具 id → 首见（start）epoch ms：end 帧据此回填权威 timing.startedAtMs。
+   *  progress 先于 start 到达等乱序场景以首见时间为准（不编造更早时刻）。 */
+  toolStarts: Map<string, number>;
 }
 
 export function createChatEventProjectorState(input: {
@@ -49,6 +52,7 @@ export function createChatEventProjectorState(input: {
     completedSent: false,
     textItemId: null,
     seq: 0,
+    toolStarts: new Map(),
   };
 }
 
@@ -159,7 +163,11 @@ export function projectUpstreamEvent(
       if (phase === 'start') {
         // 上游工具 id 直接复用为 itemId：同工具的 progress/end 覆盖同一卡片。
         const itemId = `${state.turnId}:tool:${toolId || nextItemId(state, 'tool')}`;
-        const payload: { toolName: string; argsSummary?: string } = { toolName };
+        if (toolId) state.toolStarts.set(toolId, Date.now());
+        const payload: { toolName: string; argsSummary?: string; timing: { startedAtMs: number } } = {
+          toolName,
+          timing: { startedAtMs: toolId ? state.toolStarts.get(toolId)! : Date.now() },
+        };
         const argsSummary = summarizeArgs(data.arguments);
         if (argsSummary) payload.argsSummary = argsSummary;
         out.push({
@@ -172,7 +180,11 @@ export function projectUpstreamEvent(
         });
       } else if (phase === 'progress') {
         const itemId = `${state.turnId}:tool:${toolId}`;
-        const payload: { toolName: string; output?: string } = { toolName };
+        if (toolId && !state.toolStarts.has(toolId)) state.toolStarts.set(toolId, Date.now());
+        const payload: { toolName: string; output?: string; timing: { startedAtMs: number } } = {
+          toolName,
+          timing: { startedAtMs: toolId ? state.toolStarts.get(toolId)! : Date.now() },
+        };
         if (typeof data.message === 'string' && data.message) payload.output = data.message;
         out.push({
           type: 'chat.item',
@@ -185,12 +197,18 @@ export function projectUpstreamEvent(
       } else if (phase === 'end') {
         const itemId = `${state.turnId}:tool:${toolId}`;
         const failed = data.isError === true;
-        const payload: { toolName: string; output?: string; error?: string } = { toolName };
+        if (toolId && !state.toolStarts.has(toolId)) state.toolStarts.set(toolId, Date.now());
+        const startedAtMs = toolId ? state.toolStarts.get(toolId)! : Date.now();
+        const payload: { toolName: string; output?: string; error?: string; timing: { startedAtMs: number; completedAtMs: number } } = {
+          toolName,
+          timing: { startedAtMs, completedAtMs: Math.max(Date.now(), startedAtMs) },
+        };
         const output = typeof data.output === 'string'
           ? data.output
           : typeof data.result_preview === 'string' ? data.result_preview : undefined;
         if (output) payload.output = output.length > 4000 ? `${output.slice(0, 3997)}…` : output;
         if (failed) payload.error = typeof data.errorCode === 'string' ? data.errorCode : 'tool_error';
+        if (toolId) state.toolStarts.delete(toolId);
         out.push({
           type: 'chat.item',
           turnId: state.turnId,

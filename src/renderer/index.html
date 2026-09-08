@@ -673,79 +673,6 @@
         </div>
       </section>
 
-      <!-- Dashboard — 智能体总览（第二期）：内置 / 外接·本机 / 外接·远端 三分区
-           统一管理。数据由 modules/dashboard.js 懒加载渲染。样式复用全局
-           .btn 体系与主题变量，卡片行 + 胶囊徽章对齐 connections 面板设计语言。 -->
-      <section class="panel" id="panel-dashboard">
-        <div class="dash-container">
-          <div class="dash-inner">
-            <header class="dash-header">
-              <div class="dash-header-titles">
-                <h2 data-i18n="dashboard.title">智能体总览</h2>
-                <p class="dash-subtitle" data-i18n="dashboard.subtitle">统一管理内置、本机与远端的智能体</p>
-              </div>
-              <div class="dash-header-actions">
-                <button type="button" class="btn btn-sm" id="dash-refresh-btn" data-i18n="dashboard.refresh">刷新</button>
-              </div>
-            </header>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.control_section">控制中心</h3>
-              </div>
-              <div class="dash-list" id="dash-control-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.builtin_section">内置智能体</h3>
-              </div>
-              <div class="dash-list" id="dash-builtin-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.local_section">外接 · 本机</h3>
-                <button type="button" class="btn btn-sm" data-dash-action="add-local" data-i18n="dashboard.add_local">+ 添加本机 CLI</button>
-              </div>
-              <div class="dash-list" id="dash-local-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.remote_section">外接 · 远端</h3>
-              </div>
-              <div class="dash-list" id="dash-remote-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-              <details class="dash-remote-form">
-                <summary><span data-i18n="dashboard.add_remote">+ 添加远端节点</span></summary>
-                <form class="dash-form" id="dash-remote-form">
-                  <label><span data-i18n="dashboard.form_label">名称</span><input type="text" id="dash-remote-label" placeholder="老王的 Hermes" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_endpoint">地址</span><input type="text" id="dash-remote-endpoint" placeholder="http://192.0.2.10:8444" autocomplete="off" spellcheck="false"></label>
-                  <label><span data-i18n="dashboard.form_token">令牌</span><input type="password" id="dash-remote-token" autocomplete="off"></label>
-                  <label><span data-i18n="dashboard.form_identity">期望身份（可选）</span><input type="text" id="dash-remote-identity" placeholder="agent_id" autocomplete="off" spellcheck="false"></label>
-                  <div class="dash-form-actions">
-                    <button type="submit" class="btn btn-sm btn-primary" id="dash-remote-submit" data-i18n="dashboard.form_submit">测试并添加</button>
-                  </div>
-                  <div class="dash-form-status" id="dash-remote-status" role="status"></div>
-                </form>
-              </details>
-            </div>
-            <div class="dash-section">
-              <div class="dash-section-head">
-                <h3 data-i18n="dashboard.channels_section">通讯渠道</h3>
-              </div>
-              <div class="dash-list" id="dash-channel-list">
-                <div class="dash-loading" data-i18n="dashboard.loading">正在加载…</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <!-- Connections — 连接：Agent / MCP与工具 / 数据源 / 触点 / 模型与额度。
            MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
@@ -1174,6 +1101,12 @@
       <!-- Run Center: private Task/Event projections only, loaded on demand. -->
       <section class="panel" id="panel-run-center">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <!-- 唤醒审批控制中心（conv-core T3）：跨会话 pending wake 请求聚合。
+             无待审批时整条隐藏；有则置顶显示，批准/拒绝/跳会话与聊天内审批卡等效。 -->
+        <div class="wake-approvals-strip" id="wake-approvals-strip" hidden>
+          <h3 class="wake-approvals-title" data-i18n="dashboard.control_section">控制中心</h3>
+          <div class="wake-approvals-list" id="wake-approvals-list"></div>
+        </div>
         <div id="run-center-root"></div>
       </section>
 
@@ -2068,6 +2001,7 @@
   <script src="./modules/ui-button.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/wake-approvals.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
   <script src="./modules/file-operation-policy.js"></script>

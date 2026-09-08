@@ -214,6 +214,11 @@ import {
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
 import { readAbilityAsset } from "../recall/asset-service";
+import {
+  createProcessCollector,
+  type PersistedChatEntry,
+  type ProcessCollector,
+} from "../chat_events/process-persist";
 import type { AssetRuntimeContext } from "../recall/formal-assets/runtime";
 import { recordRecallUsage } from "../recall/usage-service";
 
@@ -3781,6 +3786,15 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  // conv-core 存储补差：同一事件流并行产出 chat_events 结构化条目（含权威
+  // timing 与终态总耗时），随老格式一并持久化到消息 process 字段——历史
+  // 重建由此显示真实计时（老消息无新条目时回退原「无计时不编造」路径）。
+  const chatCollector = createProcessCollector({
+    cid: state.cid,
+    actorId: w.actor.id,
+    turnId: item.turnId,
+    startedAtMs: turnStartedAt,
+  });
   const observedTurn = state.taskRun?.cogseedTaskId
     ? await observedTaskBridge().startTurn({
         userId: state.uid,
@@ -3889,6 +3903,7 @@ async function runActorTurn(
       item,
       turnStartedAt,
       coordinatorContext,
+      chatCollector,
     );
     if (result.kind === "completed") {
       await settle({
@@ -3899,6 +3914,12 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    chatCollector.finish(
+      result.kind === "completed" && result.aborted
+        ? 'cancelled'
+        : result.kind === "completed" ? "completed" : "failed",
+      result.kind === "completed" ? result.errText : undefined,
+    );
     if (observedTurn) {
       await observedTaskBridge().finishTask({
         userId: state.uid,
@@ -3910,7 +3931,7 @@ async function runActorTurn(
           : result.kind === 'early' && result.failureCode
             ? { errorCode: result.failureCode }
             : {}),
-        process: processItems,
+        process: [...processItems, ...chatCollector.entries],
       });
     }
     return result;
@@ -3922,6 +3943,7 @@ async function runActorTurn(
       : "Actor turn failed unexpectedly.";
     const aborted =
       !!w.abortController?.signal.aborted && coordinatorAbort === null;
+    chatCollector.finish(aborted ? 'cancelled' : 'failed', message);
     try {
       await settle({ error: message, ...(aborted ? { aborted: true } : {}) });
     } catch (settleErr) {
@@ -3939,7 +3961,7 @@ async function runActorTurn(
         taskId: observedTurn.taskId,
         status: aborted ? 'cancelled' : 'failed',
         errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
-        process: processItems,
+        process: [...processItems, ...chatCollector.entries],
       });
     }
     if (stepId && !settled) {
@@ -3980,6 +4002,7 @@ async function runActorTurnBody(
   item: QueueItem,
   turnStartedAt: number,
   coordinator: CoordinatorTurnContext,
+  chatCollector: ProcessCollector,
 ): Promise<ActorTurnResult> {
   const { uid, cid, actor } = w;
   const { processItems, lease: coordinatorLease } = coordinator;
@@ -5606,6 +5629,7 @@ async function runActorTurnBody(
                 text,
                 ...(event ? { event } : {}),
               });
+            chatCollector.feed({ type: "progress", text: text || "" });
           } else if (ev.type === "event") {
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
@@ -5613,6 +5637,8 @@ async function runActorTurnBody(
             if (event && event.stream !== "assistant") {
               appendProcessItem(processItems, { type: "event", event });
             }
+            // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
+            if (event) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.
           if (actor.kind !== "worker") {
@@ -6391,7 +6417,9 @@ async function runActorTurnBody(
       ...(persistedRecallCitations.length
         ? { recall_citations: persistedRecallCitations }
         : {}),
-      ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
+      ...((tailProcessItems.length || chatCollector.entries.length)
+        ? { process: [...tailProcessItems, ...chatCollector.entries] }
+        : {}),
       // Unified execution entry: persist what actually ran on this turn.
       ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
       // Final segment index when this turn was split at visible-dispatch

@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 
 import { conversationLayout } from "../../util/project-layout";
+import type { PersistedChatEntry } from "../chat_events/process-persist";
 import { appendJsonlAtomic, readJsonl } from "../../storage";
 import { COMMANDER_ID, USER_ID } from "./state";
 import { createLogger } from "../../logger";
@@ -282,6 +283,9 @@ export interface GroupMessage {
   process?: Array<
     | { type: "progress"; text: string }
     | { type: "event"; event: { stream: string; data?: unknown } }
+    // conv-core 存储补差：chat_events 结构化条目（chatItem 含权威 timing、
+    // turn 含终态总耗时）与老格式并存；渲染层历史重建优先消费新格式。
+    | PersistedChatEntry
   >;
   /** User-deletion tombstone. The stable id/route shell remains so sync can
    * deterministically prefer the deletion revision over an older copy. */

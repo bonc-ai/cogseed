@@ -441,6 +441,7 @@ export interface AgentInterfaceContract {
 // renderer/modules/avatar.js pulls from the same file, so frontend and
 // backend never duplicate it.
 import * as avatars from './avatars';
+import { createProcessCollector } from './chat_events/process-persist';
 
 function _applyMarketplaceInstallMeta(agent: Agent, dir: string): void {
   try {
@@ -3119,6 +3120,13 @@ export async function* streamSendToAgentEditChat(
   let streamingText = '';
   const updated: ExtractedFields = {};
   const processItems: any[] = [];
+  // conv-core 存储补差：同一事件流并行产出 chat_events 条目（含权威 timing
+  // 与终态总耗时），与老格式一并持久化；历史重建优先消费新格式。
+  const chatCollector = createProcessCollector({
+    cid: `agent-edit-${agentId}`,
+    actorId: agentId,
+    turnId: `agent-edit-${agentId}-${Date.now().toString(36)}`,
+  });
 
   try {
     for await (let event of streamChatWithModel({
@@ -3205,6 +3213,7 @@ export async function* streamSendToAgentEditChat(
           }
         }
       }
+      chatCollector.feed(event);
       yield event;
     }
 
@@ -3218,7 +3227,12 @@ export async function* streamSendToAgentEditChat(
     // for-await, which triggers `return()` on this generator — bypassing any
     // append placed after the loop. Keeping it here covers normal finish,
     // caught errors, and abort-driven returns alike.
-    const saved = processItems.length ? processItems : null;
+    chatCollector.finish(
+      opts.abortSignal?.aborted ? 'cancelled' : errMsg ? 'failed' : 'completed',
+      errMsg || undefined,
+    );
+    const allItems = [...processItems, ...chatCollector.entries];
+    const saved = allItems.length ? allItems : null;
     try {
       if (finalText !== null) {
         await _appendAgentChatMessage(userId, agentId,

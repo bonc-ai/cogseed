@@ -53,6 +53,11 @@ export type ToolExecutionPayload = {
   argsSummary?: string;
   output?: string;
   error?: string;
+  /** item 级计时（epoch ms；语义对齐 assistant-ui ToolCallTiming，见 schema 注）。 */
+  timing?: {
+    startedAtMs: number;
+    completedAtMs?: number;
+  };
 };
 export type FileChangePayload = {
   filePath: string;

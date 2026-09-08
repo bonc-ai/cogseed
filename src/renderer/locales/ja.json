@@ -383,6 +383,7 @@
   "bridge.permission.deny": "拒否",
   "bridge.permission.message": "{agent} が {connector}（{tool}）を使おうとしています。接続済みアカウントでの操作を許可しますか？",
   "bridge.permission.title": "接続済みサービスへのアクセスを許可しますか？",
+  "chat_stream.tool_count_unit": "ツール",
   "cli_launch_confirm.allow": "この会話で許可",
   "cli_launch_confirm.denied": "{name} はこの会話での起動が許可されていません。使用するには確認画面で許可してください。",
   "cli_launch_confirm.deny": "拒否",

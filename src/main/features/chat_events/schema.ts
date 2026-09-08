@@ -50,6 +50,16 @@ const toolExecutionPayloadSchema = z.object({
   output: z.string().optional(),
   /** 失败时的错误信息（status=failed 时有意义）。 */
   error: z.string().optional(),
+  /**
+   * item 级计时（conv-core 收编补差）。语义对齐 assistant-ui ToolCallTiming
+   * （packages/assistant-stream/src/core/utils/types.ts）：epoch 毫秒，
+   * completedAtMs 缺省 = 进行中。命名加 Ms 后缀以区分本仓 turn 级 startedAt
+   * 的 ISO 字符串口径。主进程下发即权威值——历史回放不重测（上游文档同义）。
+   */
+  timing: z.object({
+    startedAtMs: z.number().finite(),
+    completedAtMs: z.number().finite().optional(),
+  }).optional(),
 });
 
 const fileChangePayloadSchema = z.object({
