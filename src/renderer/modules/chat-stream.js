@@ -400,7 +400,15 @@ tools.className = 'cs-badge-tools';
     tools.textContent = toolCount > 0 ? `${toolCount} ${typeof window.t === 'function' ? window.t('chat_stream.tool_count_unit') : '个工具'}` : '';
     // 失败详情被徽章省略号截断时，悬停 title 兜底看全文。
     if (status === 'failed' && error && label) badge.setAttribute('title', label.textContent);
-    const elapsed = badge.querySelector('.cs-badge-elapsed');
+    // 终态耗时：csT0 有权威值时补建 elapsed 元素（历史重放的 noStatus 徽章
+    // 天生无此元素——存储补差后有权威 timing，老格式无 csT0 仍不显示）。
+    const t0v = Number(flow.dataset.csT0);
+    let elapsed = badge.querySelector('.cs-badge-elapsed');
+    if (!elapsed && Number.isFinite(t0v) && t0v > 0) {
+      elapsed = document.createElement('span');
+      elapsed.className = 'cs-badge-elapsed';
+      badge.appendChild(elapsed);
+    }
     if (elapsed) {
       const t0 = Number(flow.dataset.csT0);
       const end = Number(endedAtMs) || Date.now();
@@ -560,6 +568,7 @@ function _csRenderUsageRow(row, payload) {
   if (p.inputTokens != null) bits.push(`↑${p.inputTokens.toLocaleString()}`);
   if (p.outputTokens != null) bits.push(`↓${p.outputTokens.toLocaleString()}`);
   if (p.estimatedCost != null) bits.push(`≈$${p.estimatedCost}`);
+  if (p.cacheReadTokens != null) bits.push(`缓读 ${p.cacheReadTokens.toLocaleString()}`);
   if (p.contextWindowRatio != null) {
     const pct = Math.round(p.contextWindowRatio * 100);
     bits.push(`ctx ${pct}%`);
@@ -579,6 +588,12 @@ function _csThinkDurText(row) {
 }
 
 function _csRenderThinkRow(row) {
+  const running = row.dataset.csClosed !== '1';
+  let live = '';
+  if (running && row.dataset.csFull) {
+    const tl = String(row.dataset.csFull).split('\n').filter(Boolean).pop() || '';
+    if (tl) live = `<span class="cs-think-live">${_csEscapeHtml(tl.slice(-90))}</span>`;
+  }
   const full = row.dataset.csFull
     ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
   row.innerHTML = `
@@ -586,6 +601,7 @@ function _csRenderThinkRow(row) {
       <span class="cs-ico">${_csIco('brain-circuit')}</span>
       <span class="cs-verb">思考</span>
       <span class="cs-row-dim cs-think-dur">${_csThinkDurText(row)}</span>
+      ${live}
     </div>
     ${full}`;
 }
@@ -983,33 +999,52 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
   });
   if (chatEntries.length) {
     try {
+      // 幻影回合收编：多回合条目统一重放进一条规范时间线——
+      // turn.started/completed 不再逐回合建流/定格（那会各自发徽章
+      // 且幻影永不终态），消息头只留一枚终态徽章，总耗时取末终态。
       let turnId = (opts && opts.turnId) || '';
-      for (const entry of chatEntries) {
-        const ev = entry.type === 'chatItem' ? entry.item : entry.turn;
-        if (ev && typeof ev.turnId === 'string' && ev.turnId) { turnId = ev.turnId; break; }
-      }
-      if (!turnId) turnId = (msgDiv.dataset && msgDiv.dataset.msgId) || ('hist-' + Date.now());
-      // 幂等：清掉同 key 旧流后，由首事件（chat.turn.started）经 _csEnsureFlow
-      // 正规建流（挂载+注册到 _csPanels 都在 ensure；直接 _csCreateFlow 不挂载）。
-      const replayKey = _csPanelKey(cid, turnId);
-      const old = _csPanels.get(replayKey);
-      if (old) _csRemoveFlow(old);
-      let sawTerminal = false;
+      let startedAtMs = NaN; let endedAtMs = NaN;
+      let lastStatus = 'completed'; let lastError;
+      let lastDurMs = NaN;
       for (const entry of chatEntries) {
         const ev = entry.type === 'chatItem' ? entry.item : entry.turn;
         if (!ev || typeof ev !== 'object') continue;
-        if (ev.type === 'chat.item' && ev.kind === 'text') continue; // 正文已在消息体
-        if (ev.type === 'chat.turn.completed') sawTerminal = true;
-        window.chatStreamHandleEvent(cid, msgDiv, ev);
-      }
-      if (!sawTerminal) {
-        // 终态条目缺失（如写入中断）：兜底定格，防流式态残留。
-        const flow = _csPanels.get(replayKey);
-        if (flow) {
-          _csCloseThinkRow(flow.querySelector('.cs-flow-body') || flow);
-          _csSetFlowState(flow, 'completed');
+        if (!turnId && typeof ev.turnId === 'string' && ev.turnId) turnId = ev.turnId;
+        if (ev.type === 'chat.turn.started') {
+          const t = ev.startedAt ? Date.parse(ev.startedAt) : NaN;
+          if (!Number.isFinite(startedAtMs) && Number.isFinite(t)) startedAtMs = t;
+        } else if (ev.type === 'chat.turn.completed') {
+          lastStatus = ev.status || lastStatus;
+          if (ev.error) lastError = ev.error;
+          const t = ev.endedAt ? Date.parse(ev.endedAt) : NaN;
+          if (Number.isFinite(t)) endedAtMs = Number.isFinite(endedAtMs) ? Math.max(endedAtMs, t) : t;
+          const d = ev.durationMs;
+          if (Number.isFinite(d)) lastDurMs = d;
         }
       }
+      if (!turnId) turnId = (msgDiv.dataset && msgDiv.dataset.msgId) || ('hist-' + Date.now());
+      const replayKey = _csPanelKey(cid, turnId);
+      const old = _csPanels.get(replayKey);
+      if (old) _csRemoveFlow(old);
+      // 规范流：noStatus（无 loading/停止/计时器），ensure 负责挂载+注册。
+      _csEnsureFlow(cid, msgDiv, turnId, { noStatus: true });
+      const flow = _csPanels.get(replayKey);
+      if (!flow) return false;
+      if (Number.isFinite(startedAtMs)) flow.dataset.csT0 = String(startedAtMs);
+      else if (Number.isFinite(endedAtMs) && Number.isFinite(lastDurMs)) flow.dataset.csT0 = String(endedAtMs - lastDurMs);
+      for (const entry of chatEntries) {
+        if (entry.type !== 'chatItem') continue;
+        const ev = entry.item;
+        if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
+        if (ev.kind === 'text') continue; // 正文已在消息体
+        window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
+      }
+      let endMs = endedAtMs;
+      if (!Number.isFinite(endMs) && Number.isFinite(lastDurMs)) {
+        const t0 = Number(flow.dataset.csT0);
+        endMs = Number.isFinite(t0) ? t0 + lastDurMs : Date.now();
+      }
+      _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
       return true;
     } catch (err) {
       _csLog.warn('chat entries replay failed, falling back to legacy items', { error: (err && err.message) || String(err) });

@@ -688,6 +688,10 @@ describe('chat-stream module', () => {
       // 正文段：历史重建跳过（终稿已在消息体，防重复）。
       { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:text:1', kind: 'text', status: 'completed', payload: { delta: '正文不应出现在历史流' } } },
       { type: 'turn', turn: { type: 'chat.turn.completed', turnId: 'nt1', status: 'completed', durationMs: 2600, endedAt: new Date(t0 + 2600).toISOString() } },
+      // 幻影第二回合（修复前写入的脏数据）：重放必须收编进同一时间线。
+      { type: 'chatItem', item: { type: 'chat.turn.started', turnId: 'ph-x', cid: 'c-2', actorId: 'a', startedAt: new Date(t0 + 3000).toISOString() } },
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'ph-x', itemId: 'ph-x:tool:9', kind: 'toolExecution', status: 'completed', payload: { toolName: 'web_search', output: 'ok' } } },
+      { type: 'turn', turn: { type: 'chat.turn.completed', turnId: 'ph-x', status: 'completed', durationMs: 1000, endedAt: new Date(t0 + 4000).toISOString() } },
     ];
     expect(render('c-2', msgDiv, items, { actorName: 'agent' })).toBe(true);
 
@@ -698,21 +702,23 @@ describe('chat-stream module', () => {
 
     const body = bodyOf(flow);
     const rows = body.children.filter((c) => c.className.includes('cs-toolExecution'));
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0].innerHTML).toContain('done');
     expect(rows[0].innerHTML).toContain('npm test');
     // 工具行显示权威耗时（1500ms → 「2 秒」取整口径见 _csFmtDur），
-    // 徽章显示总耗时（2600ms → 「3 秒」）与工具数。
+    // 徽章显示整段总耗时（末终态 4s = 幻影收编后跨度）与工具数 2。
     expect(rows[0].innerHTML).toContain('cs-dur');
     expect(rows[0].innerHTML).toContain('2 秒');
+    expect(rows[1].innerHTML).toContain('搜索');
+    expect(rows[1].innerHTML).toContain('ok');
     const badge = flow.querySelector('.cs-badge')!;
     expect(badge).toBeTruthy();
     const elapsed = badge.querySelector('.cs-badge-elapsed')!;
     expect(elapsed).toBeTruthy();
-    expect(elapsed.textContent).toContain('3 秒');
+    expect(elapsed.textContent).toContain('4 秒');
     const tools = badge.querySelector('.cs-badge-tools')!;
     expect(tools).toBeTruthy();
-    expect(tools.textContent).toContain('1');
+    expect(tools.textContent).toContain('2');
     // 正文与老格式混排不进入历史流。
     expect(flow.innerHTML).not.toContain('正文不应出现在历史流');
     expect(flow.innerHTML).not.toContain('老格式混排');
