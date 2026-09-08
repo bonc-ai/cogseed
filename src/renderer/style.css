@@ -10155,9 +10155,14 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 .chat-message.assistant {
   /* AI 回复区块整体水平居中（子安 2026-09-08）：块级对齐，非逐行文字
-     居中——区块内部文字仍左对齐（align-items: flex-start）。 */
+     居中——区块内部文字仍左对齐（align-items: flex-start）。
+     宽度（子安 2026-09-08 二次修正）：不设 width 时块宽随内容收缩，短回复
+     的头部（图标+名字+模型）跟着内容居中悬浮、长回复才撑满——头部位置
+     随输出量漂移。改为恒定占满内容列（80%），头部固定钉在回复区最左上
+     角，与输出量无关。 */
   align-self: center;
   align-items: flex-start;
+  width: 80%;
 }
 
 /* Inline delete-file confirmation card. The main-side `delete_file` tool
