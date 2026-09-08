@@ -3,14 +3,26 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
+
 let tmp: string;
+let previous: string | undefined;
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-forecast-'));
+  previous = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmp;
   const { activateUser } = await import('../../../../src/main/features/users');
   activateUser('user-a');
 });
-afterAll(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+afterAll(async () => {
+  try {
+    await drainMainRuntimeForTest('user-a');
+  } finally {
+    if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previous;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 async function seedConfirmedRequirement(cid: string): Promise<{ taskId: string; requirementId: string; projectionId: string }> {
   const store = await import('../../../../src/main/features/kstar/requirement-store');
