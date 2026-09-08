@@ -62,11 +62,23 @@ export class GroupEventChatProjector {
       return projectUpstreamEvent(state, streamEvent as never);
     }
     if (ev.type === 'message' && ev.turn_end) {
+      // State 定位三级回退：精确 turn_id → 该 actor 最近已知 Turn（#turnIds
+      // 路由表，与 process 分支同源）→ ~latest 兜底。真机踩坑（2026-09-08）：
+      // 仅查前两者之外的路径时，message 收尾找不到 state 就静默返回 []，
+      // 渲染层永远收不到 turn.completed，面板停在"工作中"+计时器不停。
+      const latestTurnId = this.#turnIds.get(ev.msg.from);
       const turnKey = ev.turn_id ? `${ev.msg.from}:${ev.turn_id}` : null;
       const state = (turnKey && this.#states.get(turnKey))
+        || (latestTurnId ? this.#states.get(`${ev.msg.from}:${latestTurnId}`) : undefined)
         || this.#states.get(`${ev.msg.from}:~latest`);
       if (!state) return [];
-      const out: ChatTurnCompleted[] = completeChatTurn(state, 'completed');
+      // 失败回合终态（真机踩坑 2026-09-08）：模型调用失败后 bus 仍以
+      // outcome=persist 落一条带 failure_kind 的 turn_end 消息。此时徽章
+      // 必须定格为「失败」而不是伪装"已工作"——msg.failure_kind 是主进程
+      // 侧权威失败信号（enqueue 透传 outcome.failureKind）。
+      const msg = ev.msg as { failure_kind?: unknown };
+      const status: ChatTurnCompleted['status'] = msg?.failure_kind ? 'failed' : 'completed';
+      const out: ChatTurnCompleted[] = completeChatTurn(state, status);
       return out;
     }
     return [];
