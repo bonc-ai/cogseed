@@ -349,6 +349,17 @@ export async function* mapCoreAgentEvents(
 
   for await (const ev of events) {
     switch (ev.type) {
+      case 'thinking_delta': {
+        // 模型思考流（子安 2026-09-08 需求：展示思考过程）：pi-ai 的
+        // thinking_delta 此前全链路（provider/runner/mapper）无转发被丢弃。
+        // 转为 progress 事件——渲染层思考行实时滚动展示，投影器落
+        // reasoning 条目持久化（历史重放同款思考行），与工具调用平级交错。
+        const piece = ev.delta || '';
+        if (!piece) break;
+        yield { type: 'progress', text: piece };
+        break;
+      }
+
       case 'text_delta': {
         const piece = ev.text || '';
         if (!piece) break;
