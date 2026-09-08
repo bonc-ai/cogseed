@@ -8,6 +8,16 @@ import {
 } from '../../../../src/main/features/local_agents/which';
 import { invalidateCache } from '../../../../src/main/features/local_agents/registry';
 
+function comparableFilePath(value: string): string {
+  const canonical = process.platform === 'win32'
+    ? fs.realpathSync.native(value)
+    : fs.realpathSync(value);
+  if (process.platform !== 'win32') return canonical;
+  return path.win32.normalize(canonical
+    .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+    .replace(/^\\\\\?\\/i, '')).toLocaleLowerCase();
+}
+
 describe('which: recursive install-root discovery', () => {
   it('scans generic app roots and honors COGSEED_AGENT_SEARCH_ROOTS', () => {
     if (process.platform !== 'win32') return;
@@ -38,7 +48,8 @@ describe('which: recursive install-root discovery', () => {
         env: { LOCALAPPDATA: root, APPDATA: root, PATH: '' },
         home: root,
       });
-      expect(found?.toLowerCase()).toBe(bin.toLowerCase());
+      expect(found).not.toBeNull();
+      expect(comparableFilePath(found!)).toBe(comparableFilePath(bin));
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
