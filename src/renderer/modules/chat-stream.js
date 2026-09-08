@@ -614,6 +614,29 @@ function _csRenderThinkRow(row) {
     ${full}`;
 }
 
+/** 文字段实时 markdown 渲染（子安 2026-09-08：流式期间 # ** 等符号裸露）。
+ *  rAF 节流逐段渲染；renderer 不可用（测试 stub）退化为纯文本。渲染失败
+ *  静默回退 textContent，正文永不丢。 */
+function _csPaintTextSeg(seg) {
+  const raw = seg.dataset.csSeg || '';
+  const paint = () => {
+    if (typeof renderMarkdownFull === 'function') {
+      try {
+        seg.innerHTML = `<div class="markdown-body">${renderMarkdownFull(raw)}</div>`;
+        return;
+      } catch (_) { /* 回退纯文本 */ }
+    }
+    seg.textContent = raw;
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    if (seg._csSegRaf) return;
+    seg._csSegRaf = true;
+    requestAnimationFrame(() => { seg._csSegRaf = false; paint(); });
+  } else {
+    paint();
+  }
+}
+
 /** 追加思考片段：最近一行思考行仍开着就续写，否则新开一行。 */
 function _csAppendReasoning(body, text) {
   let row = null;
@@ -812,10 +835,12 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
           seg = document.createElement('div');
           seg.className = 'cs-text';
           body.appendChild(seg);
-          seg.textContent += lead;
+          seg.dataset.csSeg = lead;
+          _csPaintTextSeg(seg);
           return;
         }
-        seg.textContent += piece;
+        seg.dataset.csSeg = (seg.dataset.csSeg || '') + piece;
+        _csPaintTextSeg(seg);
         return;
       }
       // 非文字 item：关闭当前文字段与思考行（下次各自新开段，保持交错）。
