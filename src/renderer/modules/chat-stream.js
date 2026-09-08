@@ -1143,14 +1143,21 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       }
       // 思考行回填：按锚点窗口逐行写真实 t0/dur（行序 = 建行序 = 条目序）。
       {
+        // 尾锚兜底：条目缺 turn.completed（重试中断等）时，用下方推导的
+        // endMs（metrics.completedAt 链）补——思考行被回合终点截断。
+        const anchors = _anchors.slice();
+        if (Number.isFinite(endedAtMs) && (anchors.length < 2 || anchors[anchors.length - 1] < endedAtMs)) {
+          anchors.push(endedAtMs);
+        }
         const thinkRows = Array.from(flow.querySelectorAll('.cs-row-think'));
-        // 每行对应的「截断锚点」= 其后首个锚点（行按序截断）；起点锚 =
-        // 前一行的截断锚点或首锚。锚点数不足（无任何权威时间）跳过。
-        let prevEnd = _anchors.length ? _anchors[0] : NaN;
+        let prevEnd = anchors.length ? anchors[0] : NaN;
         for (let i = 0; i < thinkRows.length; i++) {
-          const nextAnchor = _anchors[Math.min(i + 1, _anchors.length - 1)];
+          // 该行的截断锚 = 其后首个更大锚点（多行共享同一窗口时后续行
+          // 窗口为 0——真实情况是并行重试叙述，显示 0 优于假时长）。
+          const nextAnchor = anchors.find((a) => a > prevEnd);
           if (!Number.isFinite(prevEnd) || !Number.isFinite(nextAnchor) || nextAnchor < prevEnd) continue;
           const row = thinkRows[i];
+          row.dataset.csClosed = '1';
           row.dataset.csT0 = String(prevEnd);
           row.dataset.csDur = String(Math.max(0, nextAnchor - prevEnd));
           prevEnd = nextAnchor;
