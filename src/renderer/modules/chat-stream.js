@@ -1227,8 +1227,24 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       _csAppendReasoning(body, text);
     }
     if (!body.children.length) { _csRemoveFlow(flow); return false; }
-    // 历史无计时数据：思考行只定稿，不显示时长（不编造）。
+    // 思考行时长（子安 2026-09-08 PRD A1）：legacy progress 落盘无逐条
+    // timing，但多数消息带权威 metrics 窗（msgDiv._msgMetrics.startedAt →
+    // completedAt，由 appendChatMessage 在重放前挂载）。纯思考回合整段
+    // 思考落在一个窗口内；窗口缺失（极老数据）仍只定稿不编造。
     _csCloseThinkRow(body, true);
+    {
+      const mt = msgDiv._msgMetrics || null;
+      const ms = mt && Number(mt.startedAt);
+      const me = mt && Number(mt.completedAt);
+      if (Number.isFinite(ms) && Number.isFinite(me) && me > ms) {
+        for (const row of Array.from(flow.querySelectorAll('.cs-row-think'))) {
+          row.dataset.csClosed = '1';
+          row.dataset.csT0 = String(ms);
+          row.dataset.csDur = String(me - ms);
+          _csRenderThinkRow(row);
+        }
+      }
+    }
     _csSetFlowState(flow, 'completed');
     // 历史重建流同样挂在消息内部（消息头之后、正文容器之前），与
     // 实时路径同位。
