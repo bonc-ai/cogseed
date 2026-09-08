@@ -1041,10 +1041,15 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       const replayKey = _csPanelKey(cid, turnId);
       const old = _csPanels.get(replayKey);
       if (old) _csRemoveFlow(old);
-      // 同消息可能残留旧回合的 disconnected 流（会话切换 DOM 销毁后注册
-      // 表未清）：重放前一并清扫，防止幽灵面板叠加（真机踩坑 2026-09-08）。
+      // 同消息可能残留旧回合的孤儿流（会话切换 container.innerHTML=''
+      // 销毁后注册表未清）：重放前一并清扫，防止幽灵面板叠加（真机踩坑
+      // 2026-09-08 中午）。判定必须加 parentElement——历史加载本身就在
+      // detached fragment 上逐条重放（晚 17:40 踩坑：只判 isConnected 会把
+      // fragment 里前一条消息刚建的合法流当孤儿清掉，最终只有最新一条
+      // 回合保得住面板）。innerHTML='' 销毁的节点 parentElement 为 null，
+      // fragment 内的流挂在各自 msgDiv 下——以此区分孤儿与在树流。
       for (const [k, stale] of Array.from(_csPanels.entries())) {
-        if (k.startsWith(cid + '::') && !stale.isConnected) {
+        if (k.startsWith(cid + '::') && !stale.isConnected && !stale.parentElement) {
           _csPanels.delete(k);
           _csRemoveFlow(stale);
         }
