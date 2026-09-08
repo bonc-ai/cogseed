@@ -22,6 +22,10 @@ const log = createLogger('stt');
 
 const SAMPLE_RATE = 16_000;
 const FEATURE_DIM = 80;
+const ACTIVE_SESSION_IDLE_TTL_MS = 5 * 60_000;
+const ACTIVE_SESSION_MAX = 32;
+const TERMINAL_RESULT_TTL_MS = 60_000;
+const TERMINAL_RESULT_MAX = 32;
 
 // Extracted directory name inside resources/sherpa-onnx/.
 const MODEL_SUBDIR = 'sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23';
@@ -33,6 +37,12 @@ interface SttSession {
   partial: string;
   final: string;
   done: boolean;
+  chunks: number;
+  samples: number;
+  nonzeroSamples: number;
+  sumSquares: number;
+  decodeCalls: number;
+  idleTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface OnlineRecognizerLike {
@@ -50,6 +60,89 @@ interface OnlineStreamLike {
 }
 
 const sessions = new Map<string, SttSession>();
+
+function detachActiveSession(session: SttSession): boolean {
+  if (session.done) return false;
+  session.done = true;
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  session.idleTimer = null;
+  if (sessions.get(session.id) === session) sessions.delete(session.id);
+  return true;
+}
+
+function finalizeDiscardedSession(session: SttSession, stage: 'idle_timeout' | 'capacity_eviction'): void {
+  if (!detachActiveSession(session)) return;
+  try {
+    (session.stream as OnlineStreamLike).inputFinished();
+  } catch {
+    log.warn('stt active session finalization failed', {
+      stage,
+      code: 'E_STT_SESSION_FINALIZATION',
+    });
+  }
+}
+
+function refreshActiveSession(session: SttSession): void {
+  if (session.idleTimer) clearTimeout(session.idleTimer);
+  sessions.delete(session.id);
+  sessions.set(session.id, session);
+  session.idleTimer = setTimeout(() => {
+    if (sessions.get(session.id) === session) finalizeDiscardedSession(session, 'idle_timeout');
+  }, ACTIVE_SESSION_IDLE_TTL_MS);
+  session.idleTimer.unref?.();
+}
+
+function enforceActiveSessionLimit(): void {
+  while (sessions.size > ACTIVE_SESSION_MAX) {
+    const oldestSession = sessions.values().next().value as SttSession | undefined;
+    if (!oldestSession) break;
+    finalizeDiscardedSession(oldestSession, 'capacity_eviction');
+  }
+}
+
+interface TerminalResult {
+  userId: string;
+  text: string;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+const terminalResults = new Map<string, TerminalResult>();
+
+function deleteTerminalResult(sessionId: string): void {
+  const result = terminalResults.get(sessionId);
+  if (result?.timer) clearTimeout(result.timer);
+  terminalResults.delete(sessionId);
+}
+
+function terminalResult(userId: string, sessionId: string): TerminalResult | undefined {
+  const result = terminalResults.get(sessionId);
+  if (!result || result.userId !== userId) return undefined;
+  if (result.expiresAt <= Date.now()) {
+    deleteTerminalResult(sessionId);
+    return undefined;
+  }
+  return result;
+}
+
+function retainTerminalResult(userId: string, sessionId: string, text: string): void {
+  deleteTerminalResult(sessionId);
+  const result: TerminalResult = {
+    userId,
+    text,
+    expiresAt: Date.now() + TERMINAL_RESULT_TTL_MS,
+    timer: null,
+  };
+  terminalResults.set(sessionId, result);
+  while (terminalResults.size > TERMINAL_RESULT_MAX) {
+    const oldestSessionId = terminalResults.keys().next().value as string | undefined;
+    if (!oldestSessionId) break;
+    deleteTerminalResult(oldestSessionId);
+  }
+  result.timer = setTimeout(() => {
+    if (terminalResults.get(sessionId) === result) terminalResults.delete(sessionId);
+  }, TERMINAL_RESULT_TTL_MS);
+  result.timer.unref?.();
+}
 
 let _recognizer: OnlineRecognizerLike | null = null;
 let _recognizerError: string | null = null;
@@ -95,8 +188,16 @@ export function startSession(userId: string): SttSessionHandle {
     partial: '',
     final: '',
     done: false,
+    chunks: 0,
+    samples: 0,
+    nonzeroSamples: 0,
+    sumSquares: 0,
+    decodeCalls: 0,
+    idleTimer: null,
   };
   sessions.set(id, session);
+  refreshActiveSession(session);
+  enforceActiveSessionLimit();
   log.info('stt session started', { sessionId: id });
   return { sessionId: id };
 }
@@ -110,11 +211,21 @@ function getSession(userId: string, sessionId: string): SttSession | undefined {
 export function pushAudio(userId: string, sessionId: string, samples: Float32Array): void {
   const s = getSession(userId, sessionId);
   if (!s || s.done || !_recognizer) return;
+  refreshActiveSession(s);
   const recognizer = _recognizer;
   const stream = s.stream as OnlineStreamLike;
+  s.chunks += 1;
+  s.samples += samples.length;
+  for (const sample of samples) {
+    if (sample !== 0) s.nonzeroSamples += 1;
+    s.sumSquares += sample * sample;
+  }
   stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE });
-  if (recognizer.isReady(stream as never)) {
+  let guard = 0;
+  while (recognizer.isReady(stream as never) && guard < 2000) {
     recognizer.decode(stream as never);
+    guard += 1;
+    s.decodeCalls += 1;
   }
   const result = recognizer.getResult(stream as never);
   s.partial = typeof result.text === 'string' ? result.text : '';
@@ -131,15 +242,20 @@ export function isSessionDone(userId: string, sessionId: string): boolean {
 }
 
 export function currentFinal(userId: string, sessionId: string): string {
-  const s = getSession(userId, sessionId);
-  return s ? s.final : '';
+  const result = terminalResult(userId, sessionId);
+  if (!result) return '';
+  deleteTerminalResult(sessionId);
+  return result.text;
 }
 
 /** End the session and return the final transcript. */
 export function stopSession(userId: string, sessionId: string): { text: string } {
   const s = getSession(userId, sessionId);
-  if (!s) return { text: '' };
-  s.done = true;
+  if (!s) {
+    return { text: terminalResult(userId, sessionId)?.text || '' };
+  }
+  if (s.done) return { text: s.final };
+  detachActiveSession(s);
   if (_recognizer) {
     const recognizer = _recognizer;
     const stream = s.stream as OnlineStreamLike;
@@ -152,13 +268,45 @@ export function stopSession(userId: string, sessionId: string): { text: string }
       while (recognizer.isReady(stream as never) && guard < 2000) {
         recognizer.decode(stream as never);
         guard += 1;
+        s.decodeCalls += 1;
       }
       const result = recognizer.getResult(stream as never);
       s.final = typeof result.text === 'string' ? result.text : '';
-    } catch (err) {
-      log.warn('stt final decode failed', { error: (err as Error)?.message || String(err) });
+    } catch {
+      log.warn('stt final decode failed', { stage: 'final_decode', code: 'E_STT_FINAL_DECODE' });
       s.final = s.partial;
     }
   }
+  log.info('stt session completed', {
+    sessionId,
+    chunks: s.chunks,
+    samples: s.samples,
+    nonzeroSamples: s.nonzeroSamples,
+    nonzeroRatio: s.samples > 0 ? s.nonzeroSamples / s.samples : 0,
+    rms: s.samples > 0 ? Math.sqrt(s.sumSquares / s.samples) : 0,
+    audioMs: (s.samples / SAMPLE_RATE) * 1000,
+    decodeCalls: s.decodeCalls,
+    finalChars: s.final.length,
+  });
+  retainTerminalResult(userId, sessionId, s.final);
   return { text: s.final };
+}
+
+/** Abort a session without retaining a transcript. */
+export function cancelSession(userId: string, sessionId: string): void {
+  const s = getSession(userId, sessionId);
+  if (!s) {
+    if (terminalResult(userId, sessionId)) deleteTerminalResult(sessionId);
+    return;
+  }
+  detachActiveSession(s);
+  try {
+    (s.stream as OnlineStreamLike).inputFinished();
+  } catch {
+    log.warn('stt cancel finalization failed', {
+      stage: 'cancel_finalization',
+      code: 'E_STT_CANCEL_FINALIZATION',
+    });
+  }
+  deleteTerminalResult(sessionId);
 }
