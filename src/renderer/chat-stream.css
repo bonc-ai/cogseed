@@ -50,7 +50,10 @@
 .cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; flex: none; }
 .cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
 .cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
-.cs-badge-tools { flex: none; opacity: .78; }
+/* 工具数与状态拆开展示（子安 2026-09-08）：独立小分段，前置间隔点，
+   与「已完成」文本在徽章内自然分组；无工具行时元素为空不占位。 */
+.cs-badge-tools { flex: none; opacity: .72; }
+.cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
 /* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
 .cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
 /* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
