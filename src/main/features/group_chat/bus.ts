@@ -153,11 +153,7 @@ function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
  * gemini-pro/grok 等全系）。按模型名前缀宽松判定——与
  * model_id_recognition.ts 的规则同源精简；识别不出返回 false（不盲发）。 */
 function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
-  const modelId = String(
-    item.execConfig?.model
-      || ""
-      || "",
-  ).trim().toLowerCase();
+  const modelId = String(item.execConfig?.model || "").trim().toLowerCase();
   if (!modelId) return true; // 无显式模型信息（默认链路）——按能思考处理，让默认档生效
   return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
     || /(thinking|reasoner|qwq)/.test(modelId);

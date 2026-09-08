@@ -254,7 +254,13 @@
   .cs-usage-row { color: #8b93a0; }
   .cs-loading { color: #8b93a0; }
   .cs-think-full { color: #8b93a0; border-left-color: rgba(255, 255, 255, .16); }
-  .cs-row-out pre, .cs-interaction-detail { background: rgba(0, 0, 0, .28); }
+  /* 输出块与浅色模式同构：无底色卡，竖线引导（浅色 2026-09-08 21:10
+     改法同步——此前暗色仍残留 rgba(0,0,0,.28) 深底卡）。 */
+  .cs-row-out pre {
+    background: transparent;
+    border-left-color: rgba(255, 255, 255, .22);
+  }
+  .cs-interaction-detail { background: rgba(0, 0, 0, .28); }
   .cs-card.cs-interaction { background: rgba(255, 255, 255, .04); }
   .cs-btn { background: rgba(255, 255, 255, .06); }
 }
