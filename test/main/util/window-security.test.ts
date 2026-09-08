@@ -4,6 +4,7 @@ import {
   hardenedWebPreferences,
   installDenyAllRemotePermissionGate,
   installExternalNavigationGuard,
+  installMainRendererAudioPermissionGate,
   installWecomQuickCreatePopupGuard,
   isOfficialWecomQuickCreateUrl,
   safeExternalHttpUrl,
@@ -209,5 +210,140 @@ describe('window security baseline', () => {
     Reflect.apply(permissionRequestHandler, undefined, [null, 'clipboard-read', requestCallback, null]);
     expect(requestCallback).toHaveBeenCalledExactlyOnceWith(false);
     expect(Reflect.apply(permissionCheckHandler, undefined, [null, 'clipboard-read', 'https://work.weixin.qq.com', null])).toBe(false);
+  });
+
+  it('allows only the expected media and clipboard permissions from the main local renderer', () => {
+    let requestHandler: (...args: any[]) => void = () => {};
+    let checkHandler: (...args: any[]) => boolean = () => false;
+    const mainWebContents = {};
+    const rendererUrl = 'file:///C:/CogSeed/src/renderer/index.html';
+    const targetSession = {
+      setPermissionRequestHandler(handler: (...args: any[]) => void) { requestHandler = handler; },
+      setPermissionCheckHandler(handler: (...args: any[]) => boolean) { checkHandler = handler; },
+    };
+
+    const observation = installMainRendererAudioPermissionGate(
+      targetSession as never,
+      mainWebContents as never,
+      rendererUrl,
+    );
+    expect(observation).toEqual({ checkCount: 0, requestCount: 0 });
+
+    expect(checkHandler(mainWebContents, 'media', 'file://', {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+      securityOrigin: 'file://',
+      mediaType: 'audio',
+    })).toBe(true);
+    expect(checkHandler(mainWebContents, 'clipboard-read', 'file://', {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+    })).toBe(true);
+    expect(checkHandler(mainWebContents, 'clipboard-sanitized-write', 'file://', {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+    })).toBe(true);
+
+    const mediaCallback = vi.fn();
+    requestHandler(mainWebContents, 'media', mediaCallback, {
+      isMainFrame: true,
+      requestingUrl: rendererUrl,
+      securityOrigin: 'file://',
+      mediaTypes: ['audio'],
+    });
+    expect(mediaCallback).toHaveBeenCalledExactlyOnceWith(true);
+
+    for (const permission of ['clipboard-read', 'clipboard-sanitized-write']) {
+      const callback = vi.fn();
+      requestHandler(mainWebContents, permission, callback, {
+        isMainFrame: true,
+        requestingUrl: rendererUrl,
+      });
+      expect(callback, permission).toHaveBeenCalledExactlyOnceWith(true);
+    }
+    expect(observation).toEqual({ checkCount: 3, requestCount: 3 });
+  });
+
+  it('denies permission checks from inexact origins, URLs, frames, and web contents', () => {
+    let requestHandler: (...args: any[]) => void = () => {};
+    let checkHandler: (...args: any[]) => boolean = () => false;
+    const mainWebContents = {};
+    const otherWebContents = {};
+    const rendererUrl = 'file:///C:/CogSeed/src/renderer/index.html';
+    const targetSession = {
+      setPermissionRequestHandler(handler: (...args: any[]) => void) { requestHandler = handler; },
+      setPermissionCheckHandler(handler: (...args: any[]) => boolean) { checkHandler = handler; },
+    };
+    installMainRendererAudioPermissionGate(targetSession as never, mainWebContents as never, rendererUrl);
+
+    for (const [webContents, permission, requestingOrigin, details] of [
+      [mainWebContents, 'media', 'file://', { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'video' }],
+      [mainWebContents, 'media', 'file:///', { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'audio' }],
+      [mainWebContents, 'media', null, { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'audio' }],
+      [mainWebContents, 'media', 'https://evil.test', { isMainFrame: true, requestingUrl: 'https://evil.test/', mediaType: 'audio' }],
+      [mainWebContents, 'media', 'chat-app://cid', { isMainFrame: true, requestingUrl: 'chat-app://cid/a/index.html', mediaType: 'audio' }],
+      [mainWebContents, 'media', 'file://', { isMainFrame: true, requestingUrl: `${rendererUrl}?forged`, mediaType: 'audio' }],
+      [mainWebContents, 'media', 'file://', { isMainFrame: false, requestingUrl: rendererUrl, mediaType: 'audio' }],
+      [otherWebContents, 'media', 'file://', { isMainFrame: true, requestingUrl: rendererUrl, mediaType: 'audio' }],
+      [mainWebContents, 'geolocation', 'file://', { isMainFrame: true, requestingUrl: rendererUrl }],
+    ] as const) {
+      expect(checkHandler(webContents, permission, requestingOrigin, details), String(details.requestingUrl)).toBe(false);
+    }
+  });
+
+  it('denies media requests without the exact file security origin or audio-only media types', () => {
+    let requestHandler: (...args: any[]) => void = () => {};
+    const mainWebContents = {};
+    const otherWebContents = {};
+    const rendererUrl = 'file:///C:/CogSeed/src/renderer/index.html';
+    const targetSession = {
+      setPermissionRequestHandler(handler: (...args: any[]) => void) { requestHandler = handler; },
+      setPermissionCheckHandler() {},
+    };
+    installMainRendererAudioPermissionGate(targetSession as never, mainWebContents as never, rendererUrl);
+
+    for (const [webContents, permission, details] of [
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: ['video'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: ['audio', 'video'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: [] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file:///', mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: null, mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'https://evil.test', mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'chat-app://cid', mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: 'https://evil.test/', securityOrigin: 'file://', mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: true, requestingUrl: 'chat-app://cid/a/index.html', securityOrigin: 'file://', mediaTypes: ['audio'] }],
+      [mainWebContents, 'media', { isMainFrame: false, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: ['audio'] }],
+      [otherWebContents, 'media', { isMainFrame: true, requestingUrl: rendererUrl, securityOrigin: 'file://', mediaTypes: ['audio'] }],
+      [mainWebContents, 'display-capture', { isMainFrame: true, requestingUrl: rendererUrl }],
+    ] as const) {
+      const callback = vi.fn();
+      requestHandler(webContents, permission, callback, details);
+      expect(callback, String(details.requestingUrl)).toHaveBeenCalledExactlyOnceWith(false);
+    }
+  });
+
+  it('denies clipboard requests outside the exact main renderer frame and URL', () => {
+    let requestHandler: (...args: any[]) => void = () => {};
+    const mainWebContents = {};
+    const otherWebContents = {};
+    const rendererUrl = 'file:///C:/CogSeed/src/renderer/index.html';
+    const targetSession = {
+      setPermissionRequestHandler(handler: (...args: any[]) => void) { requestHandler = handler; },
+      setPermissionCheckHandler() {},
+    };
+    installMainRendererAudioPermissionGate(targetSession as never, mainWebContents as never, rendererUrl);
+
+    for (const [webContents, permission, details] of [
+      [otherWebContents, 'clipboard-read', { isMainFrame: true, requestingUrl: rendererUrl }],
+      [mainWebContents, 'clipboard-read', { isMainFrame: false, requestingUrl: rendererUrl }],
+      [mainWebContents, 'clipboard-read', { isMainFrame: true, requestingUrl: 'https://evil.test/' }],
+      [mainWebContents, 'clipboard-read', { isMainFrame: true, requestingUrl: 'chat-app://cid/a/index.html' }],
+      [mainWebContents, 'clipboard-write', { isMainFrame: true, requestingUrl: rendererUrl }],
+    ] as const) {
+      const callback = vi.fn();
+      requestHandler(webContents, permission, callback, details);
+      expect(callback, permission).toHaveBeenCalledExactlyOnceWith(false);
+    }
   });
 });
