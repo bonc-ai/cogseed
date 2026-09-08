@@ -25,17 +25,19 @@
  */
 
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell, type WebContents } from 'electron';
 import { resolveRuntimeIdentity } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
 import {
   hardenedWebPreferences,
   installDenyAllRemotePermissionGate,
   installExternalNavigationGuard,
+  installMainRendererAudioPermissionGate,
   installWecomQuickCreatePopupGuard,
   isOfficialWecomQuickCreateUrl,
 } from './util/window-security';
@@ -47,14 +49,36 @@ const PACKAGED_LAUNCH_SMOKE_FILE = app.isPackaged
   ? String(process.env.COGSEED_PACKAGED_LAUNCH_SMOKE_FILE || '').trim()
   : '';
 const IS_PACKAGED_LAUNCH_SMOKE = !!PACKAGED_LAUNCH_SMOKE_FILE;
+const PACKAGED_STT_SMOKE_FILE = app.isPackaged && process.platform === 'win32'
+  ? String(process.env.COGSEED_PACKAGED_STT_SMOKE_FILE || '').trim()
+  : '';
+const PACKAGED_STT_SMOKE_WAV = app.isPackaged && process.platform === 'win32'
+  ? String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim()
+  : '';
+if (!!PACKAGED_STT_SMOKE_FILE !== !!PACKAGED_STT_SMOKE_WAV) {
+  throw new Error('packaged STT smoke requires both marker and WAV paths');
+}
+if (PACKAGED_LAUNCH_SMOKE_FILE && PACKAGED_STT_SMOKE_FILE) {
+  throw new Error('packaged launch and STT smoke modes are mutually exclusive');
+}
+const IS_PACKAGED_STT_SMOKE = !!PACKAGED_STT_SMOKE_FILE;
+const IS_PACKAGED_SMOKE = IS_PACKAGED_LAUNCH_SMOKE || IS_PACKAGED_STT_SMOKE;
+if (IS_PACKAGED_STT_SMOKE) {
+  if (!path.isAbsolute(PACKAGED_STT_SMOKE_WAV) || !fs.existsSync(PACKAGED_STT_SMOKE_WAV)) {
+    throw new Error('packaged STT smoke WAV path must name an existing absolute file');
+  }
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-file-for-fake-audio-capture', PACKAGED_STT_SMOKE_WAV);
+}
 const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS = [3_000, 3_000, 3_000] as const;
 
 const RUNTIME_IDENTITY = resolveRuntimeIdentity(app.isPackaged);
 app.setName(RUNTIME_IDENTITY.appName);
-if (IS_PACKAGED_LAUNCH_SMOKE) {
-  app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
+if (IS_PACKAGED_SMOKE) {
+  const marker = PACKAGED_STT_SMOKE_FILE || PACKAGED_LAUNCH_SMOKE_FILE;
+  app.setPath('userData', path.join(path.dirname(marker), 'user-data'));
 } else if (!app.isPackaged) {
   const container = String(process.env.COGSEED_RUNTIME_CONTAINER || '').trim();
   if (!container) throw new Error('COGSEED_RUNTIME_CONTAINER was not initialized');
@@ -208,6 +232,8 @@ import * as windowState from './features/window_state';
 // through the open server bridge.
 
 let windowsTaskBadgeIcon: ReturnType<typeof nativeImage.createFromDataURL> | null = null;
+let mainRendererAudioPermissionObservation = { checkCount: 0, requestCount: 0 };
+let mainRendererWebContents: WebContents | null = null;
 
 function setTaskNotificationBadgeCount(count: number): void {
   const normalized = Math.max(0, Math.trunc(count));
@@ -241,14 +267,16 @@ function createWindow(): BrowserWindow {
     // 悬浮在内容上，窗口拖拽区由渲染层 CSS（.is-macos 各视图顶部条）声明。
     // Windows 保持原生 frame。
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
-    show: !IS_PACKAGED_LAUNCH_SMOKE,
+    show: !IS_PACKAGED_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
     webPreferences: hardenedWebPreferences({
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
-      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : [],
+      additionalArguments: IS_PACKAGED_STT_SMOKE
+        ? ['--cogseed-packaged-stt-smoke']
+        : (IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : []),
       // Enables Chromium's built-in PDF viewer (PDFium) inside iframes.
       // Required for `<iframe src="kb-file:///.../report.pdf">` in the KB
       // viewer. Has no effect on other plugin types since Electron strips
@@ -259,7 +287,14 @@ function createWindow(): BrowserWindow {
   windowState.watchWindowState(win);
   if (restored.isMaximized) win.maximize();
 
-  win.loadFile(path.join(paths.SRC_ROOT, 'renderer', 'index.html'));
+  const rendererFile = path.join(paths.SRC_ROOT, 'renderer', 'index.html');
+  mainRendererWebContents = win.webContents;
+  mainRendererAudioPermissionObservation = installMainRendererAudioPermissionGate(
+    session.defaultSession,
+    win.webContents,
+    pathToFileURL(rendererFile).toString(),
+  );
+  win.loadFile(rendererFile);
 
   // Block HTML <title> from populating the native titlebar — we want a
   // frame-only look (drag works, but no label across the top).
@@ -398,6 +433,55 @@ function registerIpc(): void {
         readyAt: new Date().toISOString(),
       };
       const marker = path.resolve(PACKAGED_LAUNCH_SMOKE_FILE);
+      const temp = `${marker}.${process.pid}.tmp`;
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+      fs.renameSync(temp, marker);
+      recorded = true;
+      setImmediate(() => app.quit());
+      return { ok: true };
+    });
+  }
+
+  if (IS_PACKAGED_STT_SMOKE) {
+    let recorded = false;
+    ipcMain.handle('cogseed.packagedSttSmokeReady', (event, payload) => {
+      if (recorded) return { ok: true };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner || owner.isDestroyed() || event.sender !== mainRendererWebContents) {
+        throw new Error('STT smoke sender is not the active main renderer');
+      }
+      const isNonNegativeInteger = (value: unknown): value is number => (
+        typeof value === 'number' && Number.isInteger(value) && value >= 0
+      );
+      const isNonNegativeNumber = (value: unknown): value is number => (
+        typeof value === 'number' && Number.isFinite(value) && value >= 0
+      );
+      const numericPayloadValid = isNonNegativeInteger(payload?.sampleCount)
+        && isNonNegativeInteger(payload?.nonZeroSampleCount)
+        && isNonNegativeNumber(payload?.rms)
+        && isNonNegativeInteger(payload?.pushAcknowledgements)
+        && isNonNegativeInteger(payload?.finalTextLength)
+        && isNonNegativeInteger(payload?.failureCount);
+      const safeInteger = (value: unknown): number => (isNonNegativeInteger(value) ? value : 0);
+      const safeNumber = (value: unknown): number => (isNonNegativeNumber(value) ? value : 0);
+      const record = {
+        schemaErrorCode: numericPayloadValid ? 0 : 1,
+        appIsPackaged: app.isPackaged,
+        permissionCheckCount: mainRendererAudioPermissionObservation.checkCount,
+        permissionRequestCount: mainRendererAudioPermissionObservation.requestCount,
+        audioTrackLive: payload?.audioTrackLive === true,
+        sampleCount: safeInteger(payload?.sampleCount),
+        nonZeroSampleCount: safeInteger(payload?.nonZeroSampleCount),
+        rms: safeNumber(payload?.rms),
+        pushAcknowledgements: safeInteger(payload?.pushAcknowledgements),
+        sessionCreated: payload?.sessionCreated === true,
+        stopAcknowledged: payload?.stopAcknowledged === true,
+        finalEventObserved: payload?.finalEventObserved === true,
+        finalTextLength: safeInteger(payload?.finalTextLength),
+        failureCount: safeInteger(payload?.failureCount),
+      };
+      const marker = path.resolve(PACKAGED_STT_SMOKE_FILE);
       const temp = `${marker}.${process.pid}.tmp`;
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
@@ -1220,7 +1304,7 @@ function registerPluginProtocol(): void {
 }
 
 // Single-instance lock prevents double-launch from duplicating the backend.
-const gotLock = IS_PACKAGED_LAUNCH_SMOKE  || app.requestSingleInstanceLock();
+const gotLock = IS_PACKAGED_SMOKE || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
@@ -1263,11 +1347,6 @@ if (!gotLock) {
     registerChatMediaProtocol();
     registerChatAppProtocol();
     registerPluginProtocol();
-    // Renderer permission gate. Media capture (microphone) is allowed for voice input;
-    // clipboard permissions are kept for copy/paste flows.
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write' || permission === 'media');
-    });
     registerIpc();
     const stopTaskNotifications = taskNotifications.startTaskNotifications({
       getActiveUserId: () => users.getActiveUserId(),
@@ -1338,7 +1417,7 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
-    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+    if (!IS_PACKAGED_SMOKE) {
       updatesIpc.initAutoUpdateBridge((channel, payload) => {
         ipc.broadcastToRenderer(channel, payload);
       });
@@ -1352,7 +1431,7 @@ if (!gotLock) {
     // inside the feature; a surfaced reminder is broadcast to the renderer.
     // Skipped in the packaged launch smoke so the smoke run never touches the
     // network.
-    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+    if (!IS_PACKAGED_SMOKE) {
       registerDeferred('updater:check', async () => {
         const result = await updaterClient.checkForUpdates(users.getActiveUserId(), { manual: false });
         if (result.reminded && result.info) {
