@@ -226,7 +226,7 @@ function renderMarkdownFull(md) {
   // `:::dashboard` directive; render only high-confidence dashboard-shaped JSON
   // and keep all other fenced code verbatim.
   md = md.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const dashboard = _renderDashboardFromJsonBlock(lang, code, dbDeps);
+    const dashboard = renderDashboardFromJsonFence(lang, code, dbDeps);
     if (dashboard) return protect(dashboard);
     return protect(`<pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`);
   });
@@ -247,16 +247,16 @@ function renderMarkdownFull(md) {
   // falls back to a code-view block so the user sees the raw body instead of
   // a silently-dropped section.
   md = md.replace(/:::dashboard\s*\n([\s\S]*?)\n\s*:::/g, (_, body) => {
-    const placeholder = _protectedDashboardPlaceholder(body, protectedBlocks);
+    const placeholder = _dbProtectedPlaceholder ? _dbProtectedPlaceholder(body, protectedBlocks) : '';
     if (placeholder) return placeholder;
-    const spec = _parseDashboardSpec(body);
-    if (spec !== undefined) return protect(renderDashboard(spec, dbDeps));
+    const spec = parseDashboardSpecOrUndef ? parseDashboardSpecOrUndef(body) : undefined;
+    if (spec !== undefined && _dbRenderDashboard) return protect(_dbRenderDashboard(spec, dbDeps));
     return protect(`<pre class="code-view dashboard-parse-error"><code>${escapeHtml(body.trim())}</code></pre>`);
   });
 
   // Last-chance recovery for final answers that contain a dashboard JSON block
   // directly in prose (no :::dashboard fence, no ```json fence).
-  md = _replaceStandaloneDashboardJsonBlocks(md, protect, dbDeps);
+  md = renderDashboardStandalone(md, protect, dbDeps);
 
   // Math blocks — protect so markdown phase 2 (emphasis, autolinking, html
   // escapes) doesn't mangle LaTeX before MathJax sees it. Order matters:
@@ -543,17 +543,24 @@ const _dashboardImpl = (typeof DashboardRenderer !== 'undefined')
   ? DashboardRenderer
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   : (typeof require === 'function' ? require('./dashboard.js').DashboardRenderer : {});
-const {
-  renderDashboard,
-  _DB_COMPONENT_TYPES,
-  parseDashboardSpec: _parseDashboardSpec,
-  renderDashboardFromJsonBlock: _renderDashboardFromJsonBlock,
-  dashboardStandaloneReplacer: _replaceStandaloneDashboardJsonBlocks,
-  isDashboardJsonFenceLang: _isDashboardJsonFenceLang,
-  dashboardJsonFenceCandidate: _dashboardJsonFenceCandidate,
-  protectedDashboardPlaceholder: _protectedDashboardPlaceholder,
-  unwrapDashboardSpecBody: _unwrapDashboardSpecBody,
-} = _dashboardImpl;
+// 注意：桥接别名不能与 dashboard.js 的全局函数声明同名——classic
+// script 共享全局词法环境，顶层 const 与同全局函数声明重名直接
+// SyntaxError 中止本文件（真机踩坑 2026-09-08：renderDashboard 撞名，
+// utils.js 整体未加载，renderMarkdownFull/sanitizeHtml 全局消失）。
+// 桥接一律用 _db 前缀私有名，公开名走 dashboard.js 全局/导出。
+const _dbImpl = _dashboardImpl;
+const _dbRenderDashboard = _dbImpl && _dbImpl.renderDashboard;
+const _dbParseSpec = _dbImpl && _dbImpl.parseDashboardSpec;
+const _dbRenderFromJsonBlock = _dbImpl && _dbImpl.renderDashboardFromJsonBlock;
+const _dbStandaloneReplacer = _dbImpl && _dbImpl.dashboardStandaloneReplacer;
+const _dbIsFenceLang = _dbImpl && _dbImpl.isDashboardJsonFenceLang;
+const _dbFenceCandidate = _dbImpl && _dbImpl.dashboardJsonFenceCandidate;
+const _dbProtectedPlaceholder = _dbImpl && _dbImpl.protectedDashboardPlaceholder;
+const _dbUnwrapSpecBody = _dbImpl && _dbImpl.unwrapDashboardSpecBody;
+// renderMarkdownFull 内部引用名（与迁移前一致）：
+const renderDashboardFromJsonFence = (lang, code, deps) => (_dbRenderFromJsonBlock ? _dbRenderFromJsonBlock(lang, code, deps) : '');
+const renderDashboardStandalone = (md, protect, deps) => (_dbStandaloneReplacer ? _dbStandaloneReplacer(md, protect, deps) : md);
+const parseDashboardSpecOrUndef = _dbParseSpec;
 
 // Detect playable media src by extension. Dispatches markdown ![](src) /
 // [text](src) to a native player for video/audio instead of a generic link
