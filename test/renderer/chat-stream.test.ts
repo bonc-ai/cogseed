@@ -721,7 +721,8 @@ describe('chat-stream module', () => {
     expect(badge).toBeTruthy();
     const elapsed = badge.querySelector('.cs-badge-elapsed')!;
     expect(elapsed).toBeTruthy();
-    expect(elapsed.textContent).toContain('4 秒');
+    // 新格式保留 1 位小数（任务耗时需求 2026-09-08）。
+    expect(elapsed.textContent).toContain('4.0 秒');
     const tools = badge.querySelector('.cs-badge-tools')!;
     expect(tools).toBeTruthy();
     expect(tools.textContent).toContain('2');

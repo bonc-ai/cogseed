@@ -12410,6 +12410,12 @@ function _makeConvChatController(cid, options = {}) {
         // state shape so legacy code (abortConvStream, sidebar badge,
         // polling recovery) keeps working untouched.
         if (msgEl) msgEl.dataset.cid = id;
+        // 任务耗时本地计时：把 sendInConversation 捕获的「用户点击发送」
+        // 渲染进程墙钟挂到占位消息——chat-stream 面板 ticker 与终态定格
+        // 优先读它（本地发送→本地收尾，全程不依赖模型侧时间数据）。
+        if (msgEl && Number.isFinite(options.sendWallMs)) {
+          msgEl.dataset.localSendMs = String(options.sendWallMs);
+        }
         pendingConvs.set(id, {
           loadingEl: msgEl,
           needsIndicator: false,
@@ -13037,6 +13043,11 @@ async function _cliFallbackGuideUser() {
 async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
+  // 任务耗时本地计时（子安 2026-09-08 需求）：用户点击发送的瞬间（渲染
+  // 进程墙钟）——计时完全本地，不含 IPC/网络往返，不依赖模型侧任何数据
+  // （模型收到消息时间/开始思考时刻/吞吐等）。挂到当前会话 pending 记录，
+  // 由首个流事件转移到面板（chat-stream 的 ticker/终态都读它）。
+  const sendWallMs = Date.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
   const isInternalReplay = !!String(extra?.retry_message_id || extra?.edit_message_id || '').trim();
   let statAgentId = String(sendOptions.agent_id || extra?.recipient_agent_id || '');
@@ -13091,6 +13102,7 @@ async function sendInConversation(cid, content, extra, options = {}) {
   // padding the top instead of the bottom and defeating the pin.
 
   const ctrl = _makeConvChatController(cid, {
+    sendWallMs,
     onStarted() {
       taskStarted = true;
       _taskTurnStart(cid, content, extra, Date.now());

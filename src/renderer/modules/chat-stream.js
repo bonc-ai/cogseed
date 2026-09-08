@@ -147,6 +147,17 @@ function _csFmtDur(ms) {
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
 
+/** 任务总耗时格式（子安 2026-09-08 需求）：「X分X.X秒」——本地发送时刻
+ *  到本地收尾时刻的纯本地差值；分位为 0 时省略分；秒保留 1 位小数。 */
+function _csFmtTaskDur(ms) {
+  const v = Math.max(0, Number(ms) || 0);
+  const sec = v / 1000;
+  if (sec < 60) return `${sec.toFixed(1)} 秒`;
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  return `${m} 分 ${s.toFixed(1)} 秒`;
+}
+
 // ── 活动流骨架（每回合一个，无外框；计时/收起徽章挂消息头） ────────────────
 
 function _csStopTicker(flow) {
@@ -161,13 +172,16 @@ function _csStartTicker(flow, startedAtMs) {
   const badge = flow._csBadge;
   const label = badge && badge.querySelector('.cs-badge-elapsed');
   if (!label) return;
+  // 任务耗时本地计时：startedAtMs 已是发送链路传入的本地发送时刻（或
+  // 事件时间戳兜底）——记到 _csLocalSendMs 供终态定格复用同一起点。
   const t0 = Number(startedAtMs) || Date.now();
   flow.dataset.csT0 = String(t0);
+  flow._csLocalSendMs = t0;
   // 立即先画一次（此刻 badge 尚未插入 DOM，isConnected 检查只放在轮询里）。
-  label.textContent = _csFmtDur(Date.now() - t0);
+  label.textContent = _csFmtTaskDur(Date.now() - t0);
   flow._csTicker = setInterval(() => {
     if (!flow.isConnected) { _csStopTicker(flow); return; }
-    label.textContent = _csFmtDur(Date.now() - t0);
+    label.textContent = _csFmtTaskDur(Date.now() - t0);
   }, 1000);
 }
 
@@ -416,8 +430,13 @@ tools.className = 'cs-badge-tools';
     }
     if (elapsed) {
       const t0 = Number(flow.dataset.csT0);
+      // 终态定格（子安 2026-09-08 任务耗时需求）：t0 优先来自本地发送时刻
+      // （localSendMs 链路），终点用本地墙钟收尾——整段计时纯本地。
+      // 展示格式「X分X.X秒」（分 0 省略，秒保留 1 位小数）。
+      const localAnchor = flow._csLocalSendMs;
+      const effT0 = Number.isFinite(localAnchor) && localAnchor > 0 ? localAnchor : t0;
       const end = Number(endedAtMs) || Date.now();
-      elapsed.textContent = t0 ? _csFmtDur(Math.max(0, end - t0)) : '';
+      elapsed.textContent = effT0 ? _csFmtTaskDur(Math.max(0, end - effT0)) : '';
     }
   }
   if (status !== 'completed') return;
@@ -819,8 +838,15 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
     // 吞掉、面板永久空壳（2026-09-08 点击徽章无反应事故）。断链竞态由
     // _csEnsureFlow 的复用判定（connected 或在本 anchor 树内）吸收。
     if (chatEvent.type === 'chat.turn.started') {
+      // 任务耗时本地计时（子安 2026-09-08）：优先用渲染进程捕获的
+      // 「用户点击发送」墙钟（anchor.dataset.localSendMs，sendInConversation
+      // 在 onAssistantStart 挂载）——本地发送→本地收尾，全程不依赖模型
+      // 侧时间数据（模型收到时刻/开始思考/吞吐）。缺省回退事件时间戳。
+      const localSend = Number(anchor && anchor.dataset && anchor.dataset.localSendMs);
       _csEnsureFlow(cid, anchor, chatEvent.turnId, {
-        startedAtMs: chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now(),
+        startedAtMs: (Number.isFinite(localSend) && localSend > 0)
+          ? localSend
+          : (chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now()),
       });
       return;
     }
