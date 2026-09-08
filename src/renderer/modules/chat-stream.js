@@ -599,6 +599,8 @@ function _csThinkDurText(row) {
   if (!t0 || !row.dataset.csDur) return '';
   return `· 持续了 ${_csFmtDur(Number(row.dataset.csDur))}`;
 }
+// 注：重放推导计时（历史思考行时长）在 chatItem 重放循环里按
+// 「上一锚点→下一锚点」窗口写回 csT0/csDur——见该处的推导注释。
 
 function _csRenderThinkRow(row) {
   const running = row.dataset.csClosed !== '1';
@@ -661,13 +663,18 @@ function _csAppendReasoning(body, text) {
   return row;
 }
 
-/** 收思考行：结算时长（persisted 无计时数据时只定稿不留空时长）。 */
-function _csCloseThinkRow(body, silent) {
+/** 收思考行：结算时长。endAtMs 提供时（重放推导：下一带时间条目/回合
+ *  终点的权威时刻）优先用它——重放行的 csT0 是加载墙钟而非真实起点，
+ *  墙钟差是假时长；真实起点 = 终点 - 推导窗。无任何计时数据只定稿。 */
+function _csCloseThinkRow(body, silent, endAtMs) {
   const kids = body.children;
   const last = kids[kids.length - 1];
   if (!last || !String(last.className || '').includes('cs-row-think') || last.dataset.csClosed === '1') return;
   last.dataset.csClosed = '1';
-  if (!silent && last.dataset.csT0) {
+  if (Number.isFinite(endAtMs)) {
+    // 重放推导：写入真实终点 + 标记起点待回填（csDur 由调用处根据推导窗写）。
+    last.dataset.csTEnd = String(endAtMs);
+  } else if (!silent && last.dataset.csT0) {
     last.dataset.csDur = String(Math.max(0, Date.now() - Number(last.dataset.csT0)));
   }
   _csRenderThinkRow(last);
@@ -1094,6 +1101,28 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       if (!flow) return false;
       if (Number.isFinite(startedAtMs)) flow.dataset.csT0 = String(startedAtMs);
       else if (Number.isFinite(endedAtMs) && Number.isFinite(lastDurMs)) flow.dataset.csT0 = String(endedAtMs - lastDurMs);
+      // 思考行推导计时（子安 2026-09-08 PRD A1：历史思考块旁也显示实测
+      // 耗时）。reasoning 条目无 timing，但相邻条目有权威时间锚：
+      //   锚点序列 = turn.startedAt / 工具 timing.startedAtMs / 回合 endedAtMs
+      // 思考行 i 的时长 = [前一锚点, 后一锚点] 窗口（思考被下一动作截断）。
+      // 重放是瞬时的：先按序喂条目建行（csT0 为加载墙钟，不可信），再按
+      // 锚点窗口回填真实 csT0/csDur。首锚缺失（老数据）不回填——不编造。
+      const _anchors = [];
+      for (const entry of chatEntries) {
+        if (entry.type !== 'chatItem') continue;
+        const ev = entry.item;
+        if (!ev || typeof ev !== 'object') continue;
+        if (ev.type === 'chat.turn.started' && ev.startedAt) {
+          const t = Date.parse(ev.startedAt);
+          if (Number.isFinite(t)) _anchors.push(t);
+        } else if (ev.type === 'chat.item') {
+          const tm = (ev.payload && ev.payload.timing) || {};
+          if (Number.isFinite(tm.startedAtMs)) _anchors.push(tm.startedAtMs);
+        } else if (ev.type === 'chat.turn.completed' && ev.endedAt) {
+          const t = Date.parse(ev.endedAt);
+          if (Number.isFinite(t)) _anchors.push(t);
+        }
+      }
       for (const entry of chatEntries) {
         if (entry.type !== 'chatItem') continue;
         const ev = entry.item;
@@ -1111,6 +1140,22 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
         // 落进旧树里的流（不可见，无害）；规范流仍收尾。
         window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
+      }
+      // 思考行回填：按锚点窗口逐行写真实 t0/dur（行序 = 建行序 = 条目序）。
+      {
+        const thinkRows = Array.from(flow.querySelectorAll('.cs-row-think'));
+        // 每行对应的「截断锚点」= 其后首个锚点（行按序截断）；起点锚 =
+        // 前一行的截断锚点或首锚。锚点数不足（无任何权威时间）跳过。
+        let prevEnd = _anchors.length ? _anchors[0] : NaN;
+        for (let i = 0; i < thinkRows.length; i++) {
+          const nextAnchor = _anchors[Math.min(i + 1, _anchors.length - 1)];
+          if (!Number.isFinite(prevEnd) || !Number.isFinite(nextAnchor) || nextAnchor < prevEnd) continue;
+          const row = thinkRows[i];
+          row.dataset.csT0 = String(prevEnd);
+          row.dataset.csDur = String(Math.max(0, nextAnchor - prevEnd));
+          prevEnd = nextAnchor;
+          _csRenderThinkRow(row);
+        }
       }
       let endMs = endedAtMs;
       if (!Number.isFinite(endMs) && Number.isFinite(lastDurMs)) {
