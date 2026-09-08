@@ -195,4 +195,24 @@ describe('P3394 envelope validation', () => {
     if (bad.ok) throw new Error('expected validation failure');
     expect(bad.error.reason).toBe('invalid_delegation');
   });
+
+  it('validated envelopes are immutable (A5, §16): mutating semantic fields throws', () => {
+    const ok = validateP3394Envelope(validEnvelope({}));
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) throw new Error(ok.error.reason);
+    const env = ok.envelope;
+    // ESM 严格模式下对冻结对象赋值抛 TypeError；变更是非法的，必须重建信封。
+    expect(() => { (env as unknown as { message_id: string }).message_id = 'tampered'; }).toThrow(TypeError);
+    expect(() => { env.payload.parts.push({ type: 'text', text: 'injected' } as never); }).toThrow(TypeError);
+    expect(() => { (env.sender as unknown as { agent_id: string }).agent_id = 'attacker'; }).toThrow(TypeError);
+    expect(() => { (env.recipients[0] as unknown as { agent_id: string }).agent_id = 'attacker'; }).toThrow(TypeError);
+    // 深层 extensions 键保留可变（传输路由信息允许追加）；顶层字段整体
+    // 替换（含 extensions 本身）禁止——语义字段才冻结。
+    const withExt = validateP3394Envelope(validEnvelope({ extensions: { hop: 'a' } }));
+    expect(withExt.ok).toBe(true);
+    if (!withExt.ok) throw new Error(withExt.error.reason);
+    (withExt.envelope.extensions as Record<string, unknown>).routed_at = '2026-08-25';
+    expect(withExt.envelope.extensions?.routed_at).toBe('2026-08-25');
+    expect(() => { (withExt.envelope as unknown as { extensions: unknown }).extensions = {}; }).toThrow(TypeError);
+  });
 });

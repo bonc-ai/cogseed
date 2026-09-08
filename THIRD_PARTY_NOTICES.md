@@ -293,6 +293,19 @@ AI Agent Board
     snapshots and the task-group status counter to its local task model. The
     adapted files retain the upstream copyright and SPDX license declaration.
 
+assistant-ui
+    Copyright (c) assistant-ui contributors
+    Source: https://github.com/assistant-ui/assistant-ui
+    License: MIT
+    CogSeed references the message parts model (packages/core/src/types/
+    message.ts: part kinds, MessageStatus, MessagePartStreamStatus, part-level
+    tool-call timing semantics) and the packages/react-opencode layered event
+    source / projection / permission-approval structure as the protocol and
+    layering reference for its chat_events contract and local-CLI projection.
+    No assistant-ui source is distributed with CogSeed and it is not an npm
+    dependency; only a semantic alignment table was derived from study of the
+    upstream types.
+
 --------------------------------------------------------------------
 10. License text policy
 --------------------------------------------------------------------

@@ -148,6 +148,20 @@ import {
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
   return getThinkingLevel();
 }
+
+/** 思考展示兜底辅助：本轮模型是否被识别为 reasoning 模型（deepseek/o系/
+ * gemini-pro/grok 等全系）。按模型名前缀宽松判定——与
+ * model_id_recognition.ts 的规则同源精简；识别不出返回 false（不盲发）。 */
+function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
+  const modelId = String(
+    item.execConfig?.model
+      || ""
+      || "",
+  ).trim().toLowerCase();
+  if (!modelId) return true; // 无显式模型信息（默认链路）——按能思考处理，让默认档生效
+  return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
+    || /(thinking|reasoner|qwq)/.test(modelId);
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -214,6 +228,11 @@ import {
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
 import { readAbilityAsset } from "../recall/asset-service";
+import {
+  createProcessCollector,
+  type PersistedChatEntry,
+  type ProcessCollector,
+} from "../chat_events/process-persist";
 import type { AssetRuntimeContext } from "../recall/formal-assets/runtime";
 import { recordRecallUsage } from "../recall/usage-service";
 
@@ -650,6 +669,41 @@ type ProcessEvent = { stream: string; data?: unknown };
 type ProcessItem =
   | { type: "progress"; text: string; event?: ProcessEvent }
   | { type: "event"; event: ProcessEvent };
+
+/**
+ * conv-core 存储补差合并：老格式 processItems + chat_events 新条目合成单条
+ * 过程轨迹，总量守住 MAX_PROCESS_ITEMS_PER_TURN（消息过程上限是既有不变量，
+ * 见 bus-integration 饱和测试）。预算分配：turn 终态条目最优先（收束态总耗时
+ * 的唯一来源），工具 chatItem 次之（保持到达序），reasoning 垫底（与老格式
+ * progress 文本语义重复，超额先丢）。老格式已打满上限时新条目全弃——历史
+ * 重建回退老路径，行为与收编前完全一致。
+ */
+function mergeProcessTrail(
+  processItems: ProcessItem[],
+  chatEntries: readonly PersistedChatEntry[],
+): Array<ProcessItem | PersistedChatEntry> {
+  const budget = MAX_PROCESS_ITEMS_PER_TURN - processItems.length;
+  if (budget <= 0) return [...processItems];
+  const turnEntries = chatEntries.filter((e) => e.type === "turn");
+  const nonTurn = chatEntries.filter((e) => e.type !== "turn");
+  const isReasoning = (e: PersistedChatEntry) =>
+    e.type === "chatItem" && (e.item as { kind?: string }).kind === "reasoning";
+  const ordered = [
+    ...nonTurn.filter((e) => !isReasoning(e)),
+    ...nonTurn.filter(isReasoning),
+    ...turnEntries,
+  ];
+  // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
+  if (ordered.length <= budget) return [...processItems, ...ordered];
+  const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
+  const keepRest = budget - keepTurn;
+  return [
+    ...processItems,
+    ...nonTurn.filter((e) => !isReasoning(e)).slice(0, keepRest),
+    ...nonTurn.filter(isReasoning).slice(0, Math.max(0, keepRest)),
+    ...turnEntries.slice(0, keepTurn),
+  ];
+}
 
 function processEventForPersistence(raw: unknown): ProcessEvent | null {
   if (!raw || typeof raw !== "object") return null;
@@ -1817,7 +1871,9 @@ export interface ProjectedGroupProcessInput {
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user'
+    // 过程叙述（载荷 {text}）：与 cogseed_backend 事件类型对齐（见其 types 注）。
+    | 'progress';
   data: Record<string, unknown>;
 }
 
@@ -3781,6 +3837,15 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  // conv-core 存储补差：同一事件流并行产出 chat_events 结构化条目（含权威
+  // timing 与终态总耗时），随老格式一并持久化到消息 process 字段——历史
+  // 重建由此显示真实计时（老消息无新条目时回退原「无计时不编造」路径）。
+  const chatCollector = createProcessCollector({
+    cid: state.cid,
+    actorId: w.actor.id,
+    turnId: item.turnId,
+    startedAtMs: turnStartedAt,
+  });
   const observedTurn = state.taskRun?.cogseedTaskId
     ? await observedTaskBridge().startTurn({
         userId: state.uid,
@@ -3889,6 +3954,7 @@ async function runActorTurn(
       item,
       turnStartedAt,
       coordinatorContext,
+      chatCollector,
     );
     if (result.kind === "completed") {
       await settle({
@@ -3899,6 +3965,12 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    chatCollector.finish(
+      result.kind === "completed" && result.aborted
+        ? 'cancelled'
+        : result.kind === "completed" ? "completed" : "failed",
+      result.kind === "completed" ? result.errText : undefined,
+    );
     if (observedTurn) {
       await observedTaskBridge().finishTask({
         userId: state.uid,
@@ -3910,7 +3982,7 @@ async function runActorTurn(
           : result.kind === 'early' && result.failureCode
             ? { errorCode: result.failureCode }
             : {}),
-        process: processItems,
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     return result;
@@ -3922,6 +3994,7 @@ async function runActorTurn(
       : "Actor turn failed unexpectedly.";
     const aborted =
       !!w.abortController?.signal.aborted && coordinatorAbort === null;
+    chatCollector.finish(aborted ? 'cancelled' : 'failed', message);
     try {
       await settle({ error: message, ...(aborted ? { aborted: true } : {}) });
     } catch (settleErr) {
@@ -3939,7 +4012,7 @@ async function runActorTurn(
         taskId: observedTurn.taskId,
         status: aborted ? 'cancelled' : 'failed',
         errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
-        process: processItems,
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     if (stepId && !settled) {
@@ -3980,6 +4053,7 @@ async function runActorTurnBody(
   item: QueueItem,
   turnStartedAt: number,
   coordinator: CoordinatorTurnContext,
+  chatCollector: ProcessCollector,
 ): Promise<ActorTurnResult> {
   const { uid, cid, actor } = w;
   const { processItems, lease: coordinatorLease } = coordinator;
@@ -4097,9 +4171,12 @@ async function runActorTurnBody(
   // happened with the Commander or another Agent before this turn. Carry a
   // bounded digest of that missed context into the new Agent session; the
   // helper advances a per-Agent watermark so the same history is not repeated.
+  // G-26: covers every dispatch source (user direct, commander dispatch,
+  // agent→agent) so an external gateway agent dispatched a task also receives
+  // the digest — previously only direct user messages triggered it.
   if (
     actor.kind === "agent"
-    && item.fromActorId === USER_ID
+    && item.fromActorId !== actor.id
     && !item.internalControl
     && !item.tap
   ) {
@@ -4789,6 +4866,16 @@ async function runActorTurnBody(
   // discarded and we'd persist a bare "(stopped)" placeholder. Same pattern
   // as `agents.ts::streamSendToAgentEditChat` (skill / agent edit chats).
   let streamingText = "";
+  // 中间正文段累积（conv-core 持久化补差）：delta 不逐条喂收集器（token
+  // 级事件会刷爆 MAX_CHAT_ENTRIES），在首个非 delta 事件到达时把整段合成
+  // 一条 completed text 条目落盘——历史重放按段渲染中间正文；最终段
+  // （=消息正文）不落盘，渲染层凭 status 区分防重复。
+  let segmentText = "";
+  const flushTextSegmentForPersist = (): void => {
+    if (!segmentText) return;
+    chatCollector.feed({ type: "text-segment", text: segmentText });
+    segmentText = "";
+  };
   let errText: string | null = null;
   let aborted = false;
   let turnInfrastructureFailure = false;
@@ -5046,6 +5133,12 @@ async function runActorTurnBody(
           // bubble (token-by-token); other shapes feed the process
           // rail. Renderer dispatch lives in conversation.js process
           // event handler — see `data.type === 'delta'` branch.
+          // conv-core 阶段3：CLI 直连/网关共用漏斗同喂收集器——{stream:'cli'}
+          // 的 LocalEvent（tool-event 双相位）由投影器新分支转 ChatItem（含
+          // 权威 timing）；实时（ipc GroupEventChatProjector）与持久化
+          // （chatCollector）自此同源，本地 codex/opencode 过程可见与内置模型
+          // 同一套渲染语义。
+          chatCollector.feed(data);
           emit(state, {
             type: "process",
             cid,
@@ -5105,6 +5198,18 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
+      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
+      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
+      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
+      let gatewayTurnGoal: string | undefined;
+      try {
+        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+        const lifecycle = await readKstarTaskLifecycle(uid, cid);
+        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
+          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
+        }
+      } catch { /* KStar 不可用时退回默认稳定会话 */ }
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -5133,16 +5238,32 @@ async function runActorTurnBody(
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
+            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
+            //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
+            ...(item.references && item.references.length
+              ? {
+                  references: item.references.slice(0, 20).map((r) => ({
+                    source_cid: r.source_cid,
+                    source_msg_id: r.source_msg_id,
+                    from_actor: r.from_actor,
+                    ...(r.from_name ? { from_name: r.from_name } : {}),
+                    source_ts: r.source_ts,
+                    text: String(r.text || '').slice(0, 500),
+                  })),
+                }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
-            // payload envelope instead. Fall back to unwrapping that so a
-            // dispatched external agent never receives an empty prompt.
+            // payload envelope instead. G-26: keep the `<msg from=… to=…>`
+            // envelope on dispatched turns so the external agent can see who
+            // dispatched the task and who it was routed to (multi-agent
+            // routing context); direct user text stays unwrapped as before.
             prompt: [
               switchedContextDigest,
               _firstNonBlankText(
                 (item as { sourceMessageText?: string }).sourceMessageText,
-                _unwrapLlmTurnPayload(item.llmPayload),
                 item.llmPayload,
               ),
             ].filter(Boolean).join("\n\n"),
@@ -5160,21 +5281,18 @@ async function runActorTurnBody(
             },
             onProcess: forwardProcess,
           })
-        : await _runCliAgentTurn({
-            uid,
-            cid,
-            actor,
-            agent: cliAgent,
-            item,
-            slice,
-            workingDir: cliWorkingDir,
-            ...(turnProjectId ? { projectId: turnProjectId } : {}),
-            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
-            signal: w.abortController.signal,
-            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-            onProcess: forwardProcess,
-          });
+        // G-19（兼容期结束）：legacy `cli` runtime 读回即迁移为 p3394-gateway
+        // （G-05 迁移器），直连执行分支已删除——此处不再有非网关路径。
+        : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
+            return {
+              text: "",
+              produced: [],
+              error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
+              failureKind: "runtime",
+              failureCode: "p3394_gateway_unreachable",
+              infrastructureFailure: true,
+            };
+          })();
       for (const p of cliOut.produced || []) await onFileWritten(p);
       // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
       // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认
@@ -5334,10 +5452,20 @@ async function runActorTurnBody(
       // per-task override (renderer composer) > agent default (agent.json
       // `default_thinking`) > global preference. 'auto' = no override; let
       // the provider default / model decide.
-      const turnThinkingLevel: "auto" | "off" | "low" | "high"
+      let turnThinkingLevel: "auto" | "off" | "low" | "high"
         = item.execConfig?.effort
           ?? turnAgentSpec?.default_thinking
           ?? thinkingLevelForRun();
+      // 思考展示兜底（子安 2026-09-08：思考过程展示需求）：'auto' 时不传
+      // thinkingLevel，pi-ai 对 openai 兼容端点不会带 reasoning_effort，
+      // DeepSeek 中转端点缺该参数时思考模式默认关闭 → 全程无
+      // reasoning_content 流（真机 18:40 轮实测 thinking_level 0 次）。
+      // 用户未显式选 off 时，对已知 reasoning 模型按 'low' 发起——思考流
+      // 可达渲染层；显式 off 仍彻底关闭。模型名识别不出 reasoning 特征
+      // 时不强行注入（避免给不认识的服务盲发参数，保持方案 C 约定）。
+      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)) {
+        turnThinkingLevel = "low";
+      }
       // Effective model override priority: per-task override > agent
       // default (`default_model`). Commander / in-process agents only —
       // CLI turns apply their own model below (runtime.model + override).
@@ -5501,7 +5629,10 @@ async function runActorTurnBody(
           // process emit are kept identical to the prior behaviour so other
           // event consumers don't see any difference.
           const piece = (ev as { text?: string }).text;
-          if (typeof piece === "string") streamingText += piece;
+          if (typeof piece === "string") {
+            streamingText += piece;
+            segmentText += piece;
+          }
           activityEvents += 1;
           void touchActivity(uid, cid);
           // Anonymous workers are the commander's internal hands (silent, handed
@@ -5578,6 +5709,12 @@ async function runActorTurnBody(
                 text,
                 ...(event ? { event } : {}),
               });
+            // 只在思考文本（真正的段落截断）前 flush 中间段；usage/runtime
+            // 等收尾事件跟在最终段后面，flush 会把最终段（=消息正文，
+            // 可能含 :::dashboard 等结构指令）误当中间段落落盘——重放
+            // 面板以纯文本显示源码、与正文重复（真机踩坑 2026-09-08）。
+            if (text) flushTextSegmentForPersist();
+            chatCollector.feed({ type: "progress", text: text || "" });
           } else if (ev.type === "event") {
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
@@ -5585,6 +5722,12 @@ async function runActorTurnBody(
             if (event && event.stream !== "assistant") {
               appendProcessItem(processItems, { type: "event", event });
             }
+            // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
+            // 工具事件（stream==='tool'）截断正文段落——它前面的文本是
+            // 中间段，flush；usage/runtime 等非工具事件不 flush（防最终段
+            // 被误落盘）。
+            if (event && event.stream === "tool") flushTextSegmentForPersist();
+            if (event) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.
           if (actor.kind !== "worker") {
@@ -6363,7 +6506,9 @@ async function runActorTurnBody(
       ...(persistedRecallCitations.length
         ? { recall_citations: persistedRecallCitations }
         : {}),
-      ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
+      ...((tailProcessItems.length || chatCollector.entries.length)
+        ? { process: mergeProcessTrail(tailProcessItems, chatCollector.entries) }
+        : {}),
       // Unified execution entry: persist what actually ran on this turn.
       ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
       // Final segment index when this turn was split at visible-dispatch
@@ -6649,6 +6794,19 @@ async function runActorTurnBody(
           (outcome.kind === "persist" && !!outcome.failureKind)
         ? "failed"
         : "completed";
+  // conv-core 存储补差（真机踩坑 2026-09-08）：主回合路径此前从不调用
+  // chatCollector.finish——历史消息 process 只有 chatItem 条目、没有 turn
+  // 终态条目，历史重放拿不到权威终态/总耗时（面板徽章无耗时、失败回合
+  // 无 failed 依据）。runActorTurn wrapper 的 finish 只覆盖嵌套派发路径。
+  // ChatTurnTerminalStatus 与 TaskTerminalStatus 的 waiting_input 在
+  // chat_events 契约里不存在——等待输入对过程面板而言是暂停而非终态，
+  // 映射为 completed（面板收尾，等待卡片由 interaction 层另管）。
+  chatCollector.finish(
+    terminalStatus === "cancelled" ? "cancelled"
+      : terminalStatus === "failed" ? "failed"
+        : "completed",
+    errText || (outcome.kind === "persist" ? outcome.failureCode : undefined) || undefined,
+  );
   return {
     kind: "completed",
     text: workingText,

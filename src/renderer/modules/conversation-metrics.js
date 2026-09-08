@@ -53,6 +53,13 @@ function messageMetricsLine(metrics) {
     if (num(usage.cacheReadTokens) > 0) titleLines.push(`缓存读 ${formatTokens(usage.cacheReadTokens)} tok`);
     if (num(usage.cacheWriteTokens) > 0) titleLines.push(`缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`);
   }
+  // 缓存命中率（子安 2026-09-08 显示分层）：主显示只露裸输入+输出（真实
+  // 增量，数值小且直观）；命中率显著（≥50%）才显示正向标记「缓存 xx%」
+  // ——大数不吓人，省钱变亮点。分母 input+cacheRead（DSH §101 口径）。
+  const hitDenom = num(usage.inputTokens) + num(usage.cacheReadTokens);
+  const cacheHitText = hasUsage && hitDenom > 0 && num(usage.cacheReadTokens) / hitDenom >= 0.5
+    ? `缓存 ${Math.round((num(usage.cacheReadTokens) / hitDenom) * 100)}%`
+    : null;
   // CLI 自报成本（claude 的 total_cost_usd 等，美元）——比价格表估算准。
   const costUsd = (usage && typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) && usage.costUsd >= 0)
     ? usage.costUsd
@@ -62,8 +69,9 @@ function messageMetricsLine(metrics) {
     durationMs,
     latencyText: ttft === null ? null : formatLatency(ttft),
     rateText,
-    inText: hasUsage ? formatTokens(num(usage.inputTokens) + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) : null,
+    inText: hasUsage ? formatTokens(num(usage.inputTokens)) : null,
     outText: hasUsage ? formatTokens(num(usage.outputTokens)) : null,
+    cacheHitText,
     costText: costUsd !== null
       ? `$${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : null,
@@ -156,7 +164,9 @@ function foldSessionMetrics(metricsList, opts = {}) {
   return {
     turns, steps, llmMs, ttftAvgText, rateText, cacheHitText,
     ctxText, ctxHot,
-    inText: formatTokens(totalIn), outText: formatTokens(output), costText, costReported,
+    // 裸输入口径（与 messageMetricsLine 一致，2026-09-08 显示分层）：聚合
+    // 行同样只露真实增量，缓存明细看 cacheHitText 标记与悬停。
+    inText: formatTokens(input), outText: formatTokens(output), costText, costReported,
   };
 }
 

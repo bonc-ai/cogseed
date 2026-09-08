@@ -29,6 +29,7 @@ plan.md
 /.zcode/
 __pycache__/
 *.py[cod]
+*.tsbuildinfo
 
 # Unrelated project snapshots and inspection material (never commit)
 /.inspect-jiaoyu/

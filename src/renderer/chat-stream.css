@@ -1,0 +1,257 @@
+/* ─── chat-stream 过程活动流（conv-core M1） ─────────────────────────────
+   视觉对齐 CLI 活动时间线：没有外框卡片，每个动作一行轻量条目
+   （线稿图标 + 动词 + 目标 + 增删统计），与正文按真实顺序交错。
+   色板跟随全局浅色基调，暗色用 prefers-color-scheme 兜底。 */
+
+.cs-flow {
+  /* 消息容器是 flex column + align-items:flex-start（收缩适应内容）：
+     不显式占满宽度的话，流宽会被超长的 nowrap 行撑到容器之外
+     （真机：命令横穿整个窗口）。width:100% 让行内省略在消息宽度内生效。 */
+  width: 100%;
+  margin: 2px 0 6px;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  min-width: 0;
+  /* chat-history 是固定高度的滚动 column flex 容器：不设 no-shrink 时流
+     会被 flex 压缩到几像素高（执行中内容撑不住）。 */
+  flex-shrink: 0;
+}
+
+.cs-flow-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* ── 计时/收起徽章：挂在消息头 cogseed 名字右侧，点击开合下方时间线 ── */
+.cs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: #9aa2ad;
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  flex: none;
+  /* 失败结论可能很长：限宽 + 内部省略（悬停 title 看全文），不撑宽消息头 */
+  max-width: 42%;
+  min-width: 0;
+  user-select: none;
+}
+.cs-badge:hover { background: rgba(127, 127, 127, .09); color: #6f7883; }
+.cs-badge-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.cs-badge::after { content: '▾'; font-size: 10px; line-height: 1; flex: none; }
+.cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
+.cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+/* 工具数与状态拆开展示（子安 2026-09-08）：独立小分段，前置间隔点，
+   与「已完成」文本在徽章内自然分组；无工具行时元素为空不占位。 */
+.cs-badge-tools { flex: none; opacity: .72; }
+.cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
+/* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
+.cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
+/* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
+.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; }
+.cs-flow.failed .cs-badge { color: rgb(214, 69, 69); }
+.cs-flow.failed .cs-badge:hover { color: rgb(178, 34, 34); }
+.cs-badge-stop {
+  border: 0; background: transparent; cursor: pointer;
+  color: #b9c0ca; font-size: 12px; padding: 2px 8px; border-radius: 8px;
+  flex: none;
+}
+.cs-badge-stop:hover { color: rgb(185, 28, 28); background: rgba(127, 127, 127, .1); }
+/* 兜底宿主（消息头不存在时，徽章落在流内首行） */
+.cs-badge-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; }
+
+/* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
+.cs-row {
+  padding: 3px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  min-width: 0;
+}
+.cs-row:hover { background: rgba(127, 127, 127, .07); }
+.cs-row-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cs-ico { display: inline-flex; flex: none; color: #a6adb8; }
+.cs-ico .cs-ico-svg { width: 15px; height: 15px; }
+.cs-ico.failed { color: rgb(214, 69, 69); }
+
+.cs-verb { color: #7f8792; flex: none; }
+.cs-verb.failed { color: rgb(214, 69, 69); }
+.cs-verb.raw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+
+.cs-row-dim { color: #bcc2cc; flex: none; }
+
+/* 目标：文件名深一档、目录浅一档；都能截断（长路径不打爆行） */
+.cs-file-ico { display: inline-flex; flex: none; }
+.cs-file-ico .chat-file-kind-icon { width: 15px; height: 15px; }
+.cs-file-name {
+  flex: 0 1 auto; min-width: 0; max-width: 46%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #6f7883;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.cs-file-dir {
+  /* 不占满余量：+N/−N 统计紧跟目录（对齐 CLI）；路径过长时收缩省略 */
+  flex: 0 1 auto; min-width: 0; max-width: 44%;
+  margin-left: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #b9c0ca;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.cs-target {
+  /* 不再 flex:1 撑满——那会把耗时推到行最右（子安 2026-09-08：工具行
+     耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
+     max-width 截断保护。 */
+  flex: 0 1 auto; min-width: 0;
+  /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
+  max-width: 68%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #99a1ac;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+
+/* 行内 diff 统计与展开的 diff 正文 */
+.cs-add { color: rgb(26, 127, 55); flex: none; font-family: ui-monospace, monospace; font-size: 12px; }
+.cs-del { color: rgb(207, 34, 46); flex: none; font-family: ui-monospace, monospace; font-size: 12px; }
+.cs-diff-body {
+  display: none;
+  margin: 4px 0 2px 22px;
+  max-height: 260px; overflow: auto;
+  font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5;
+}
+.cs-row.cs-open .cs-diff-body { display: block; }
+.cs-diff-line { display: block; white-space: pre-wrap; word-break: break-all; }
+.cs-diff-line.add { color: rgb(22, 128, 61); background: rgba(34, 197, 94, .1); }
+.cs-diff-line.del { color: rgb(178, 34, 34); background: rgba(239, 68, 68, .08); }
+.cs-diff-line.ctx { color: #99a1ac; }
+
+/* 失败原因与工具输出（点击行展开） */
+.cs-row-error {
+  color: rgb(214, 69, 69);
+  padding-left: 22px;
+  font-size: 12px;
+}
+.cs-row-out {
+  display: none;
+  padding-left: 22px;
+}
+.cs-row.cs-open .cs-row-out { display: block; }
+.cs-row-out pre {
+  margin: 2px 0 3px; padding: 5px 8px; border-radius: 6px;
+  background: rgba(0, 0, 0, .04); max-height: 200px; overflow: auto;
+  font-size: 11.5px; white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── 思考行： brain 图标 + 思考 + 时长；点开看原文 ── */
+.cs-row-think .cs-think-dur { color: #bcc2cc; }
+.cs-think-full {
+  display: none;
+  margin: 2px 0 2px 22px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid rgba(127, 127, 127, .18);
+  color: #9aa2ad;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.cs-row.cs-open .cs-think-full { display: block; }
+
+/* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
+/* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
+   pre-wrap 会保留源文本换行叠加段落间距，出现「一行内容隔几行空白」
+   （子安 2026-09-08 19:15 真机反馈）。markdown 段内禁 pre-wrap、去
+   行高叠加，段落间距完全交给 markdown-body。 */
+.cs-text { padding: 4px 6px; font-size: 13.5px; color: var(--text, #1f2937); }
+.cs-text:not(:has(.markdown-body)) {
+  /* 未渲染 markdown 的兜底形态（渲染器不可用退回纯文本时）保留原排版。 */
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 用量行 ── */
+.cs-usage-row { padding: 2px 6px; color: #a6adb8; font-size: 12px; }
+.cs-ctx-warn { color: rgb(202, 138, 4); font-weight: 600; }
+
+/* ── 加载中指示：时间线末尾（order 兜底永远最后），终态移除 ── */
+.cs-loading {
+  order: 999;
+  padding: 3px 6px;
+  color: #a6adb8;
+}
+.cs-loading-spinner { display: inline-flex; animation: cs-spin 1s linear infinite; }
+.cs-loading-spinner svg { width: 14px; height: 14px; }
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+
+/* ── 交互卡（审批/提问：有按钮和输入，保留轻边框卡以示可操作） ── */
+.cs-card.cs-interaction {
+  border: 1px solid rgba(127, 127, 127, .22);
+  background: rgba(255, 255, 255, .6);
+  border-radius: 10px;
+  padding: 7px 10px;
+  margin: 3px 0;
+}
+.cs-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.cs-card-ico { display: inline-flex; flex: none; color: rgb(202, 138, 4); }
+.cs-card-ico .cs-ico-svg { width: 15px; height: 15px; }
+.cs-interaction .cs-interaction-prompt { font-weight: 600; }
+.cs-interaction-detail {
+  margin: 5px 0; padding: 6px 8px; border-radius: 6px;
+  background: rgba(0, 0, 0, .05); font-size: 11.5px;
+  white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto;
+}
+.cs-interaction-reasons { color: rgb(202, 138, 4); font-size: 12px; margin-top: 3px; }
+.cs-interaction-actions, .cs-interactions-input-row {
+  display: flex; gap: 6px; margin-top: 6px; align-items: center;
+}
+.cs-btn {
+  border: 1px solid rgba(127, 127, 127, .35); border-radius: 7px;
+  background: #fff; padding: 4px 12px; font-size: 12.5px; cursor: pointer;
+}
+.cs-btn:hover { background: rgba(127, 127, 127, .08); }
+.cs-btn.ok { border-color: rgb(22, 163, 74); color: rgb(22, 128, 61); }
+.cs-btn.danger { border-color: rgb(220, 38, 38); color: rgb(185, 28, 28); }
+.cs-interaction-input {
+  flex: 1; min-width: 0; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid rgba(127, 127, 127, .35); font-size: 12.5px;
+}
+.cs-interaction.closed { opacity: .55; }
+.cs-interaction.closed .cs-interaction-prompt { font-weight: 400; }
+
+@media (prefers-color-scheme: dark) {
+  .cs-flow { color: #c8cdd5; }
+  .cs-badge { color: #8b93a0; }
+  .cs-badge:hover { background: rgba(255, 255, 255, .07); color: #a6adb8; }
+  .cs-badge-stop { color: #79808c; }
+  .cs-row:hover { background: rgba(255, 255, 255, .06); }
+  .cs-ico { color: #8b93a0; }
+  .cs-verb { color: #a6adb8; }
+  .cs-row-dim, .cs-row-think .cs-think-dur { color: #6d7480; }
+  .cs-file-name { color: #a6adb8; }
+  .cs-file-dir { color: #6d7480; }
+  .cs-target { color: #8b93a0; }
+  .cs-text { color: var(--text, #e5e7eb); }
+  .cs-usage-row { color: #8b93a0; }
+  .cs-loading { color: #8b93a0; }
+  .cs-think-full { color: #8b93a0; border-left-color: rgba(255, 255, 255, .16); }
+  .cs-row-out pre, .cs-interaction-detail { background: rgba(0, 0, 0, .28); }
+  .cs-card.cs-interaction { background: rgba(255, 255, 255, .04); }
+  .cs-btn { background: rgba(255, 255, 255, .06); }
+}
