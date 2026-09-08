@@ -344,6 +344,14 @@ async function doStartExternalGateway(input: {
     // DEFAULT_USER_WORKSPACE（userWorkSpace/，data/ 的兄弟目录，见
     // paths.ts 目录文档）。两棵树都注入网关允许根，网关侧校验语义保持
     // 不放松——只扩大到主进程自己的合法值域。
+    //
+    // PR209 评审 M12 说明：此 env 注入的是数据树整根（含各用户
+    // cloud/local），而非逐会话工作区——网关为 **per-CLI 长驻进程**，
+    // 启动时无法预知后续所有会话的工作区；收窄到会话粒度需要网关支持
+    // 动态 allowlist 注册（或 per-会话网关实例），属后续增强。当前实现
+    // 相对基线（空 allowlist = 全放行）方向为收紧，信任链闭合：网关仅
+    // 校验"主进程下发的 working_dir 在允许根内"，自身不主动越权读——
+    // 数据隔离由主进程派发时的 working_dir 选取保证。
     ...(process.env.COGSEED_WORKSPACE_ROOT ? {
       P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, DEFAULT_USER_WORKSPACE, gatewayHome]
         .filter(Boolean)

@@ -19,6 +19,7 @@
  */
 
 import type { InboundEnvelope, MessagingInstance } from './types';
+import { sanitizeFailureText } from './runtime';
 
 export type InboundCommandName = 'permission' | 'forget' | 'agent' | 'status' | 'unbind' | 'pair' | 'mute' | 'unmute';
 
@@ -123,7 +124,9 @@ export async function dispatchInboundCommand(ctx: InboundCommandContext): Promis
   try {
     return await handler(ctx);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // PR209 评审 M13：原生错误可能含本地绝对路径（栈信息/ENOENT 等），
+    // 回渠道前先过 sanitizeFailureText 脱敏（与失败回执同口径）。
+    const message = sanitizeFailureText(err instanceof Error ? err.message : String(err));
     return {
       consumed: true,
       replyText: `命令处理失败：${message}`,

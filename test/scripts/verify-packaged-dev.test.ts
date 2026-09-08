@@ -26,13 +26,19 @@ afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursiv
 describe('packaged-dev verifier', () => {
   it('accepts a bundle containing identity, provider UI, builtin, runtime, OfficeCLI, and engine resources', () => {
     const appPath = fakeBundle();
+    // PR209 M11：wasm 校验升级后，fake 需提供 unpacked 物理文件 + 真实
+    // 可编译字节（不再只查 asar 头条目——自证循环修复）。
+    const wasmEntry = 'node_modules/@jsquash/webp/codec/dec/webp_dec.wasm';
+    const unpackedWasm = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', wasmEntry);
+    fs.mkdirSync(path.dirname(unpackedWasm), { recursive: true });
+    fs.writeFileSync(unpackedWasm, new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
     const result = verifyPackagedDevBundle(appPath, {
       listAsar: () => [
         '/package.json', '/bootstrap.cjs', '/src/main/install-data-root.cjs',
         '/src/main/util/migrate-source-data-root.cjs', '/.build/build-info.json',
         '/src/main/index.ts', '/src/renderer/modules/agents.js',
         '/src/main/util/image-transform.ts',
-        '/node_modules/@jsquash/webp/codec/dec/webp_dec.wasm',
+        `/${wasmEntry}`,
       ],
       readAsarFile: () => Buffer.from(JSON.stringify({ channel: 'packaged-dev', commit: 'abc123', dirty: false })),
       exists: (candidate: string) => candidate.endsWith('app.asar') || fs.existsSync(candidate),

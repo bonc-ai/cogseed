@@ -466,6 +466,19 @@ export class RuntimeInstance {
       // is refreshed on every inbound message. Always send against the latest
       // so replies reference the message they actually answer.
       const currentBinding = this.bindingContexts.get(binding.key) || binding;
+      // PR209 评审 M13：/unbind 后抑制任务产出的出站投递。此前只拦入站
+      // （manager 侧拒绝），长回合的正文/流式卡片仍会投递到已解绑渠道
+      // 直到 /new 换绑。命令即时回声（deliverText 直发路径，不走本
+      // listener）不受影响——/unbind 的确认本身要送达。醒审批卡属
+      // 交互请求，解绑渠道不应再收：一并抑制。
+      if (currentBinding.unboundedAt) {
+        log.info('messaging bus event dropped: binding unbound', {
+          instanceId: this.instanceId,
+          key: currentBinding.key,
+          eventType: event.type,
+        });
+        return;
+      }
       if (event.type === 'wake_request') {
         // A pending agent wake inside this bound conversation surfaces as an
         // interactive approval card in the same Feishu chat.

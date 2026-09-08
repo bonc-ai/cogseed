@@ -2508,9 +2508,11 @@ function handleCancel(envelope) {
     postReply(envelope, '[已取消]');
     return;
   }
+  // PR209 评审 M6：原代码在 || 链外对 sscliRuntime 又 cancel 一次（双发），
+  // 且 shim 侧 cancel 不看 task_id 会误杀排队中另一任务的执行进程。
+  // 修复：单次按序 cancel（短路即停，首个命中的 runtime 负责）。
   const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
   if (killed) cancelledTasks.add(taskId);
-  sscliRuntime.cancel(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
   postReply(envelope, '[已取消]');
 }

@@ -473,8 +473,17 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   // rejected immediately instead of queueing behind the lock.
   const reservation = await ledger.reserveInbound(uid, key, envelope.receivedAt);
   if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
+  // PR209 评审 M4：图片下载/导入在锁外完成（网络 IO 不占 per-chat 锁），
+  // 慢下载不再阻塞同会话后续入站与重投。cid 经 resolveOrCreateBinding
+  // 预解析（幂等，binding 文件锁与 chat 锁独立；锁内会再 resolve 拿到
+  // 同 key 同 cid——飞书 binding 对同 externalChatId 稳定）。
+  let preloaded: string[] = [];
+  if (envelope.imageKeys?.length && instance.platform === 'feishu_lark') {
+    const preBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+    preloaded = await downloadInboundImages(uid, instance, envelope, envelope.imageKeys, preBinding.cid);
+  }
   const lock = getChatLock(uid, instance.id, envelope.externalChatId);
-  return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key));
+  return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key, preloaded));
 }
 
 function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }> {
@@ -624,11 +633,66 @@ function buildInboundImageEnvelope(input: {
   };
 }
 
+/** G-17 字节链（锁外执行，PR209 评审 M4）：飞书入站图片下载字节并导入
+ *  会话附件目录，让派发轮次走与桌面端发图相同的多模态视觉链。
+ *  此前在 per-chat 互斥锁内 await——慢下载串行阻塞同会话后续所有入站
+ *  与重投。现移到 reserve 之后、锁之前完成（网络 IO 不占锁）；导入按
+ *  内容哈希幂等。下载/导入失败仅 warn 不阻塞（占位文本仍保证路由）。 */
+async function downloadInboundImages(
+  uid: string,
+  instance: MessagingInstance,
+  envelope: InboundEnvelope,
+  imageKeys: string[] | undefined,
+  cid: string,
+): Promise<string[]> {
+// G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
+// 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
+// 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
+const attachmentNames: string[] = [];
+if (imageKeys?.length && instance.platform === 'feishu_lark') {
+  const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
+  if (typeof adapter?.downloadMessageImage === 'function') {
+    for (const imageKey of imageKeys) {
+      try {
+        const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
+        const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
+        const tmpPath = path.join(os.tmpdir(), `${envelope.instanceId}-${envelope.externalMessageId}-${name}.inbound`);
+        fs.writeFileSync(tmpPath, bytes);
+        try {
+          const imported = await importAttachmentFromPath(uid, cid, tmpPath, name);
+          if (imported.ok) attachmentNames.push(imported.info.name);
+          else log.warn('messaging inbound image import failed', { instanceId: envelope.instanceId, imageKey, error: (imported as { error: string }).error });
+        } finally {
+          fs.rmSync(tmpPath, { force: true });
+        }
+      } catch (err) {
+        // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
+        // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
+        // 权限/参数问题。
+        const message = err instanceof Error ? err.message : String(err);
+        const codeMatch = message.match(/code=([^ ]+)/);
+        const msgMatch = message.match(/msg=(.*)$/);
+        log.warn('messaging inbound image download failed', {
+          instanceId: envelope.instanceId,
+          imageKey,
+          errorName: err instanceof Error ? err.name : 'Error',
+          feishuCode: codeMatch ? codeMatch[1] : undefined,
+          feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
+          errorDetail: message.slice(0, 240),
+        });
+      }
+    }
+  }
+}
+  return attachmentNames;
+}
+
 async function handleInboundLocked(
   uid: string,
   envelope: InboundEnvelope,
   instance: MessagingInstance,
   key: string,
+  preloadedAttachments: string[],
 ): Promise<MessagingInboundResult> {
   log.info('messaging inbound envelope received', {
     instanceId: envelope.instanceId,
@@ -804,45 +868,8 @@ async function handleInboundLocked(
         imageKeys,
       })
       : undefined;
-    // G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
-    // 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
-    // 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
-    const attachmentNames: string[] = [];
-    if (imageKeys?.length && instance.platform === 'feishu_lark') {
-      const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
-      if (typeof adapter?.downloadMessageImage === 'function') {
-        for (const imageKey of imageKeys) {
-          try {
-            const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
-            const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
-            const tmpPath = path.join(os.tmpdir(), `${name}.inbound`);
-            fs.writeFileSync(tmpPath, bytes);
-            try {
-              const imported = await importAttachmentFromPath(uid, binding.cid, tmpPath, name);
-              if (imported.ok) attachmentNames.push(imported.info.name);
-              else log.warn('messaging inbound image import failed', { instanceId: envelope.instanceId, imageKey, error: (imported as { error: string }).error });
-            } finally {
-              fs.rmSync(tmpPath, { force: true });
-            }
-          } catch (err) {
-            // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
-            // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
-            // 权限/参数问题。
-            const message = err instanceof Error ? err.message : String(err);
-            const codeMatch = message.match(/code=([^ ]+)/);
-            const msgMatch = message.match(/msg=(.*)$/);
-            log.warn('messaging inbound image download failed', {
-              instanceId: envelope.instanceId,
-              imageKey,
-              errorName: err instanceof Error ? err.name : 'Error',
-              feishuCode: codeMatch ? codeMatch[1] : undefined,
-              feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
-              errorDetail: message.slice(0, 240),
-            });
-          }
-        }
-      }
-    }
+    // G-17 附件名由锁外预下载（downloadInboundImages，PR209 M4）。
+    const attachmentNames = preloadedAttachments;
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,

@@ -120,23 +120,23 @@ describe('feishu channel descriptor (Q2)', () => {
 describe('channel peer map (Q3)', () => {
   it('ensures a peer idempotently with a stable readable alias', async () => {
     const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
-    const first = map.ensureChannelPeer('feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
+    const first = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
     expect(first.peerAlias).toBe('user-fs-12345678');
     expect(first.externalUserName).toBe('牛保康');
-    const again = map.ensureChannelPeer('feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
+    const again = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
     expect(again).toEqual(first);
-    expect(map.lookupChannelPeer('feishu_lark', 'inst-g17', 'ou_abcdefgh12345678')).toMatchObject({
+    expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678')).toMatchObject({
       peerAlias: 'user-fs-12345678',
     });
-    expect(map.lookupChannelPeer('feishu_lark', 'inst-g17', 'ou_unknown')).toBeNull();
-    expect(map.listChannelPeers()).toHaveLength(1);
+    expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_unknown')).toBeNull();
+    expect(map.listChannelPeers('u-g17')).toHaveLength(1);
   });
 
   it('updates the display name but never rotates the alias', async () => {
     const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
-    const first = map.ensureChannelPeer('feishu_lark', 'inst-g17', 'ou_abcdefgh12345678');
+    const first = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678');
     expect(first.externalUserName).toBeUndefined();
-    const renamed = map.ensureChannelPeer('feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '子安');
+    const renamed = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '子安');
     expect(renamed.peerAlias).toBe(first.peerAlias);
     expect(renamed.externalUserName).toBe('子安');
   });
@@ -296,7 +296,7 @@ describe('G-17 inbound image projection dispatch', () => {
 
     // Q3 接线：入站即记录 open_id→Peer 映射（variant 目录隔离）。
     const peerMap = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
-    expect(peerMap.lookupChannelPeer('feishu_lark', instanceId, 'ou_abcdefgh12345678')).toMatchObject({
+    expect(peerMap.lookupChannelPeer('user-1', 'feishu_lark', instanceId, 'ou_abcdefgh12345678')).toMatchObject({
       peerAlias: 'user-fs-12345678',
     });
 

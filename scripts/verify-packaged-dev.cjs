@@ -49,6 +49,22 @@ function verifyPackagedDevBundle(appPath, options = {}) {
   for (const required of ASAR_REQUIRED) {
     if (!entries.has(required)) errors.push(`missing app.asar entry: ${required}`);
   }
+  // PR209 评审 M11：wasm 校验升级——asar 头条目存在不等于打包态可加载。
+  // ①校验 asarUnpack 后的物理文件真实存在于 app.asar.unpacked 树；
+  // ②用 new WebAssembly.Module 真编译字节（坏的/被裁剪的 wasm 立刻暴露）。
+  for (const wasmEntry of ASAR_REQUIRED.filter((e) => e.endsWith('.wasm'))) {
+    const unpackedPath = path.join(resources, 'app.asar.unpacked', wasmEntry);
+    if (!exists(unpackedPath)) {
+      errors.push(`missing unpacked wasm file: ${wasmEntry}`);
+      continue;
+    }
+    try {
+      const wasmBytes = (options.readUnpackedFile || ((p) => fs.readFileSync(p)))(unpackedPath);
+      new WebAssembly.Module(wasmBytes);
+    } catch (error) {
+      errors.push(`uncompilable wasm (packaged corrupt?): ${wasmEntry}: ${error.message || error}`);
+    }
+  }
   for (const parts of RESOURCE_REQUIRED) {
     const requiredPath = path.join(resources, ...parts);
     if (!exists(requiredPath)) errors.push(`missing packaged resource: ${parts.join('/')}`);

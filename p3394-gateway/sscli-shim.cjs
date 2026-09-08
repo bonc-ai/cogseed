@@ -332,11 +332,18 @@ process.stdin.on('data', (chunk) => {
         emitEvent({ event: 'failed', request_id: op.request_id, error: message });
       });
     } else if (op.op === 'cancel') {
-      if (activeTurn && activeTurn.child) {
+      // PR209 评审 M6：cancel 必须按 request_id 精确命中——此前不看目标
+      // 直接 kill「当前在跑 turn」，会误杀排队中另一任务的执行进程并产生
+      // 伪 [p3394_gateway_error]。activeTurn.requestId 与 cancel 的
+      // task_id（网关侧即触发 cancel 的原 request_id）一致才 kill。
+      const targetId = String(op.task_id || op.request_id || '');
+      if (activeTurn && activeTurn.child && targetId
+          && String(activeTurn.requestId) === targetId) {
         try { activeTurn.child.kill('SIGTERM'); } catch { /* already gone */ }
       }
       // 在途 deliver 的 runCliOnce 会以非零退出 reject → 上面的 catch 发
       // failed 事件；网关对取消场景已有独立回执，这里不额外应答。
+      // requestId 不匹配（另一任务的 cancel）：不动作，绝不误杀。
     } else if (op.op === 'heartbeat') {
       emit({ ok: true, request_id: op.request_id });
     } else if (op.request_id !== undefined) {
