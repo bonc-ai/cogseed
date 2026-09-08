@@ -154,7 +154,10 @@
 .cs-row.cs-open .cs-row-out { display: block; }
 .cs-row-out pre {
   margin: 2px 0 3px; padding: 5px 8px; border-radius: 6px;
-  background: rgba(0, 0, 0, .04); max-height: 200px; overflow: auto;
+  /* 输出块无卡片感（子安 2026-09-08 21:07）：半透明灰在浅底上仍是可见
+     "卡"；改无背景+左侧竖线引导（ZCode 活动流风格），保住可读性。 */
+  background: transparent; border-left: 2px solid rgba(127, 127, 127, .22);
+  max-height: 200px; overflow: auto;
   font-size: 11.5px; white-space: pre-wrap; word-break: break-all;
 }
 

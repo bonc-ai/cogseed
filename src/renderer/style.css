@@ -11185,9 +11185,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 /* assistant 正文平铺（ZCode 风活动流）：正文直接落在页面上，无气泡卡
    感（conv-core 过程 UI 终态——过程行与正文同一块无框画布）。 */
 .chat-message.assistant .chat-bubble {
-  /* develop token 化（#203）方向：色彩一律走 token 变量——正文平铺的
-     "无气泡"视觉由 --color-surface 与页面同色实现（等价 transparent）。 */
-  background: var(--color-surface);
+  /* develop token 化（#203）方向：色彩一律走 token 变量。但"同色=透明"
+     的前提已破——页面底色是 --color-bg 的浅灰（rgb(248,250,252)），纯白
+     --color-surface 落上去就是一层白卡（真机 2026-09-08 21:07 复发）。
+     无气泡=真透明，不再借"同色"实现。 */
+  background: transparent;
   color: var(--text);
   border: 0;
   border-radius: 0;
