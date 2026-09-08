@@ -36,6 +36,13 @@ export interface ChatEventProjectorState {
   /** 工具 id → 首见（start）epoch ms：end 帧据此回填权威 timing.startedAtMs。
    *  progress 先于 start 到达等乱序场景以首见时间为准（不编造更早时刻）。 */
   toolStarts: Map<string, number>;
+  /** 思考段聚合（子安 2026-09-08 基数修正）：一次连续思考 = 一条
+   *  reasoning 条目（与一次工具调用等价），不逐 token 铸条——否则长思考
+   *  洪泛挤占 process 300 上限，工具记录被顶掉（真机 19:50 事故）。
+   *  openReasoningItemId 非空 = 有未截断的聚合段在攒；被工具/正文/
+   *  终态截断时整段落盘。 */
+  openReasoningText: string;
+  openReasoningItemId: string | null;
 }
 
 export function createChatEventProjectorState(input: {
@@ -53,6 +60,8 @@ export function createChatEventProjectorState(input: {
     textItemId: null,
     seq: 0,
     toolStarts: new Map(),
+    openReasoningText: '',
+    openReasoningItemId: null,
   };
 }
 
@@ -144,6 +153,25 @@ export function projectUpstreamEvent(
   const out: ChatStreamEvent[] = [];
   const etype = event.type;
 
+  // 思考段冲刷（基数修正）：任何非 progress 事件到达 = 当前思考段被
+  // 截断（工具开始/正文输出/终态），聚合段整段落盘为一条 completed
+  // reasoning——一次连续思考在轨迹里只占一条，与一次工具调用等价。
+  const flushOpenReasoning = () => {
+    if (state.openReasoningItemId && state.openReasoningText) {
+      out.push({
+        type: 'chat.item',
+        turnId: state.turnId,
+        itemId: state.openReasoningItemId,
+        kind: 'reasoning',
+        status: 'completed',
+        payload: { text: state.openReasoningText },
+      });
+    }
+    state.openReasoningText = '';
+    state.openReasoningItemId = null;
+  };
+  if (etype !== 'progress') flushOpenReasoning();
+
   if (etype === 'delta' && typeof event.text === 'string' && event.text) {
     if (!state.textItemId) state.textItemId = nextItemId(state, 'text');
     out.push(textItem(state, state.textItemId, 'inProgress', event.text));
@@ -154,14 +182,16 @@ export function projectUpstreamEvent(
     // 重放只渲染 completed 文本段，与正文不重复。
     out.push(textItem(state, nextItemId(state, 'text'), 'completed', event.text));
   } else if (etype === 'progress' && typeof event.text === 'string' && event.text) {
-    out.push({
-      type: 'chat.item',
-      turnId: state.turnId,
-      itemId: nextItemId(state, 'reason'),
-      kind: 'reasoning',
-      status: 'completed',
-      payload: { text: event.text },
-    });
+    // 聚合到当前思考段（连续 progress 续写同一 itemId；分段到达的思考
+    // 流与老一次性叙述同路径）。落盘由截断点统一冲刷（工具/正文/终态）。
+    if (!state.openReasoningItemId) {
+      state.openReasoningItemId = nextItemId(state, 'reason');
+      // 开新段即首产出——turn.started 必须此刻发出（真机复现：失败回合
+      // 仅一条 progress 后接 error，攒段不产出会让 started 缺发，终态
+      // 判定弃权，回合记录丢失）。
+      ensureTurnStarted(state, out);
+    }
+    state.openReasoningText += event.text;
   } else if (etype === 'event' && event.event) {
     const inner = event.event as { stream?: unknown; data?: unknown };
     if (inner.stream === 'tool' && inner.data && typeof inner.data === 'object') {

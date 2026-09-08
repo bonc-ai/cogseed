@@ -123,10 +123,16 @@ describe('projectUpstreamEvent', () => {
     expect(completed.error).toBe('provider 502');
   });
 
-  it('progress 纯文本投影为 reasoning 卡片', () => {
+  it('progress 聚合为单条 reasoning 卡片（一次思考=一条，与一次工具调用等价）', () => {
+    // 基数修正（2026-09-08）：连续 progress 聚合到同一思考段，被后续
+    // 事件截断时整段落盘——不逐条铸卡（长思考洪泛曾挤掉工具记录）。
     const state = newState();
-    const out = projectUpstreamEvent(state, { type: 'progress', text: '正在读取文件…' });
-    expect(out[1]).toMatchObject({ kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
+    const r1 = projectUpstreamEvent(state, { type: 'progress', text: '正在' });
+    expect(r1[1]).toBeUndefined(); // 攒段中，不即时输出
+    projectUpstreamEvent(state, { type: 'progress', text: '读取文件…' });
+    const cut = projectUpstreamEvent(state, { type: 'delta', text: '正文开始' });
+    const reason = cut.find((e) => (e as { kind?: string }).kind === 'reasoning');
+    expect(reason).toMatchObject({ kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
   });
 
   it('usage 事件宽松取键并投影 usage 卡片', () => {
