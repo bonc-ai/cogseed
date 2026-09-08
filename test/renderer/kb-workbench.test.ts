@@ -20,6 +20,7 @@ function fakeClassList() {
 
 function fakeEl(id: string) {
   const listeners: Record<string, any> = {};
+  const selectorNodes = new Map<string, { html: string; nodes: any[] }>();
   const el: any = {
     id,
     innerHTML: '',
@@ -36,7 +37,22 @@ function fakeEl(id: string) {
     append: vi.fn(),
     appendChild: vi.fn(),
     querySelector: vi.fn(() => null),
-    querySelectorAll: vi.fn(() => []),
+    querySelectorAll: vi.fn((selector: string) => {
+      const attrMatch = /^\[data-([a-z-]+)\]$/.exec(selector);
+      if (!attrMatch) return [];
+      const cached = selectorNodes.get(selector);
+      if (cached && cached.html === el.innerHTML) return cached.nodes;
+      const attrName = attrMatch[1];
+      const datasetKey = attrName.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase());
+      const pattern = new RegExp(`data-${attrName}="([^"]+)"`, 'g');
+      const nodes = Array.from(String(el.innerHTML).matchAll(pattern)).map((match) => {
+        const node = fakeEl('');
+        node.dataset[datasetKey] = match[1];
+        return node;
+      });
+      selectorNodes.set(selector, { html: el.innerHTML, nodes });
+      return nodes;
+    }),
     focus: vi.fn(),
     click: vi.fn(),
     remove: vi.fn(),
@@ -71,12 +87,22 @@ const TREE = [
       { name: 'c.docx', path: '挑战资料/c.docx', type: 'file', bytes: 3, mtime: 1 },
     ],
   },
+  {
+    name: 'external', path: 'external', type: 'dir', children: [
+      {
+        name: 'feishu-wiki', path: 'external/feishu-wiki', type: 'dir', children: [
+          { name: 'SM 的交接.md', path: 'external/feishu-wiki/SM 的交接.md', type: 'file', bytes: 10, mtime: 1 },
+        ],
+      },
+    ],
+  },
 ];
 
 const KB_FILES = [
   { path: '班级建设资料/a.pdf', status: 'ready', chunks: 2, kind: 'pdf' },
   { path: '班级建设资料/b.xlsx', status: 'processing', chunks: 0, kind: 'excel' },
   { path: '挑战资料/c.docx', status: 'ready', chunks: 1, kind: 'word' },
+  { path: 'external/feishu-wiki/SM 的交接.md', status: 'ready', chunks: 4, kind: 'word' },
 ];
 
 function loadScript() {
@@ -103,6 +129,13 @@ function loadScript() {
   };
   const windowMock: any = {
     addEventListener: vi.fn(),
+    t: vi.fn((key: string) => ({
+      'kb.workbench.external_feishu': '飞书 Wiki',
+      'kb.workbench.external_source': '外部来源',
+      'kb.workbench.group_external': '外部来源',
+      'kb.workbench.group_personal': '个人知识库',
+      'kb.workbench.group_shared': '共享知识库',
+    } as Record<string, string>)[key] || key),
     uiToast: vi.fn(),
     uiPrompt: vi.fn(() => Promise.resolve(null)),
     cogseed: {
@@ -191,7 +224,29 @@ describe('KB workbench (S1 skeleton)', () => {
     expect(els['kb-wb-tree'].innerHTML).toContain('挑战资料');
     expect(els['kb-wb-tree'].innerHTML).toContain('个人知识库');
     expect(els['kb-wb-tree'].innerHTML).toContain('共享知识库');
+    expect(els['kb-wb-tree'].innerHTML).toContain('外部来源');
+    expect(els['kb-wb-tree'].innerHTML).toContain('飞书 Wiki');
+    expect(els['kb-wb-tree'].innerHTML).not.toContain('data-kb-lib="external"');
     expect(els['kb-wb-tree'].innerHTML).not.toContain('订阅知识库');
+  });
+
+  it('opens Feishu Wiki as a read-only top-level source and renders imported files', async () => {
+    const { windowMock, els } = loadScript();
+    windowMock.renderKbWorkbench();
+    await vi.waitFor(() => {
+      expect(els['kb-wb-tree'].innerHTML).toContain('data-kb-external-source="external/feishu-wiki"');
+    });
+
+    const [sourceRow] = els['kb-wb-tree'].querySelectorAll('[data-kb-external-source]');
+    sourceRow._listeners.click();
+
+    expect(els['kb-wb-files'].innerHTML).toContain('SM 的交接.md');
+    expect(els['kb-wb-lib-name'].textContent).toBe('飞书 Wiki');
+    expect(els['kb-wb-lib-tag'].textContent).toBe('外部来源');
+    expect(els['kb-wb-owner-name'].textContent).toBe('飞书 Wiki');
+    expect(els['kb-wb-share'].style.display).toBe('none');
+    expect(els['kb-wb-more-btn'].style.display).toBe('none');
+    expect(els['kb-wb-import'].style.display).toBe('none');
   });
 
   it('defaults to the first library and renders files with kb status chips', async () => {

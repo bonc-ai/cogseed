@@ -6785,5 +6785,16 @@
   "kb.discover.sources_lead_title": "让团队资料持续进入知识库",
   "kb.discover.sync_scope": "同步范围",
   "kb.discover.unsaved": "已从收藏中移除",
-  "kb.discover.update_library": "更新知识包"
+  "kb.discover.update_library": "更新知识包",
+  "kb.workbench.create_personal": "创建个人知识库",
+  "kb.workbench.create_shared": "创建共享知识库",
+  "kb.workbench.external_description": "通过已授权的外部来源导入，内容由来源同步管理。",
+  "kb.workbench.external_empty": "暂无外部来源",
+  "kb.workbench.external_feishu": "飞书 Wiki",
+  "kb.workbench.external_source": "外部来源",
+  "kb.workbench.group_external": "外部来源",
+  "kb.workbench.group_personal": "个人知识库",
+  "kb.workbench.group_shared": "共享知识库",
+  "kb.workbench.no_matching_sources": "无匹配来源",
+  "kb.workbench.reveal_file": "在文件夹中显示"
 }

@@ -6785,5 +6785,16 @@
   "kb.discover.sources_lead_title": "Keep team knowledge flowing into the library",
   "kb.discover.sync_scope": "Sync scope",
   "kb.discover.unsaved": "Removed from saved items",
-  "kb.discover.update_library": "Update package"
+  "kb.discover.update_library": "Update package",
+  "kb.workbench.create_personal": "Create personal knowledge base",
+  "kb.workbench.create_shared": "Create shared knowledge base",
+  "kb.workbench.external_description": "Imported from an authorized external source and managed through source synchronization.",
+  "kb.workbench.external_empty": "No external sources",
+  "kb.workbench.external_feishu": "Feishu Wiki",
+  "kb.workbench.external_source": "External source",
+  "kb.workbench.group_external": "External sources",
+  "kb.workbench.group_personal": "Personal knowledge bases",
+  "kb.workbench.group_shared": "Shared knowledge bases",
+  "kb.workbench.no_matching_sources": "No matching sources",
+  "kb.workbench.reveal_file": "Show in folder"
 }

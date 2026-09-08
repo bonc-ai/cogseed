@@ -9,6 +9,7 @@
     tree: [],
     kbStatus: new Map(), // relPath -> { status, chunks, kind, error }
     libs: [],
+    externalSources: [],
     currentLib: '',
     dirStack: [], // 相对库根的目录路径段（'' = 库根）
     filter: '',
@@ -49,6 +50,26 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function _tr(key, fallback, vars) {
+    const translated = typeof window.t === 'function' ? window.t(key, vars || {}) : '';
+    return translated && translated !== key ? translated : fallback;
+  }
+
+  function _externalSourceLabel(source) {
+    if (source && source.id === 'feishu-wiki') {
+      return _tr('kb.workbench.external_feishu', '飞书 Wiki');
+    }
+    return (source && source.id) || _tr('kb.workbench.external_source', '外部来源');
+  }
+
+  function _currentExternalSource() {
+    return _state.externalSources.find((source) => source.path === _state.currentLib) || null;
+  }
+
+  function _isExternalSourceSelected() {
+    return !_state.spaceId && !!_currentExternalSource();
   }
 
   // 统一图标：优先 icons.js 的 uiIconHtml（仓库规范），缺的名走内联 SVG。
@@ -108,7 +129,17 @@
   }
 
   function _findLibNode(name) {
-    return _state.tree.find((n) => n.type === 'dir' && n.name === name) || null;
+    const target = String(name || '');
+    const find = (nodes) => {
+      for (const node of nodes || []) {
+        if (!node || node.type !== 'dir') continue;
+        if (node.path === target || node.name === target) return node;
+        const nested = find(node.children || []);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return find(_state.tree);
   }
 
   // 沿 dirStack 下钻到当前目录节点（dirStack 为空 = 库根）
@@ -151,7 +182,15 @@
         window.cogseed.invoke('spaces.list').catch(() => null),
       ]);
       _state.tree = (treeRes && Array.isArray(treeRes.tree)) ? treeRes.tree : [];
-      _state.libs = _state.tree.filter((n) => n.type === 'dir');
+      const externalRoot = _state.tree.find((node) => node && node.type === 'dir' && (node.path === 'external' || node.name === 'external')) || null;
+      _state.libs = _state.tree.filter((node) => node && node.type === 'dir' && node !== externalRoot);
+      _state.externalSources = externalRoot
+        ? (externalRoot.children || []).filter((node) => node && node.type === 'dir').map((node) => ({
+          id: node.name,
+          path: node.path || `external/${node.name}`,
+          node,
+        }))
+        : [];
       _state.spaces = (spacesRes && Array.isArray(spacesRes.spaces)) ? spacesRes.spaces : [];
       _state.kbStatus = new Map();
       const files = (kbRes && Array.isArray(kbRes.files)) ? kbRes.files : [];
@@ -159,8 +198,12 @@
         if (!f || !f.path) continue;
         _state.kbStatus.set(f.path, { status: f.status, chunks: f.chunks, kind: f.kind, error: f.error });
       }
-      if (!_state.libs.some((l) => l.name === _state.currentLib)) {
-        _state.currentLib = _state.libs.length ? _state.libs[0].name : '';
+      const availableLibs = [
+        ..._state.libs.map((lib) => lib.name),
+        ..._state.externalSources.map((source) => source.path),
+      ];
+      if (!availableLibs.includes(_state.currentLib)) {
+        _state.currentLib = availableLibs[0] || '';
         _state.dirStack = [];
       }
       _renderTree();
@@ -178,15 +221,29 @@
   function _renderTree() {
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
+    const personalLabel = _tr('kb.workbench.group_personal', '个人知识库');
+    const sharedLabel = _tr('kb.workbench.group_shared', '共享知识库');
+    const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const externalItems = _state.externalSources
+      .filter((source) => {
+        if (!_state.treeFilter) return true;
+        const query = _state.treeFilter.toLowerCase();
+        return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
+      })
+      .map((source) =>
+        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
+          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
+      ).join('');
     const groups = [
-      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
+      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
           ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
       ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
-      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
+      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="共享知识库">${_icon('users', 'kb-share-ico')}</span></div>`
+          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
       ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
+      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
     ];
     const groupHtml = groups.map((g) => {
       const open = !_state.treeGroups.has(g.key);
@@ -223,6 +280,9 @@
         e.preventDefault(); e.stopPropagation();
         _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
       });
+    });
+    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
+      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -956,6 +1016,7 @@
       el.addEventListener('click', () => _toggleDir(el.dataset.kbDir));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (_isExternalSourceSelected()) return;
         _kbRowMenu(el.dataset.kbDir, true, e.clientX, e.clientY);
       });
     });
@@ -963,12 +1024,14 @@
       el.addEventListener('click', () => _openFile(el.dataset.kbFile));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
       const moreBtn = el.querySelector('.kb-mini-btn[title="更多"]');
       if (moreBtn) moreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
     });
     _renderCount(lib ? _countFiles(lib) : 0);
@@ -1281,27 +1344,47 @@
       }
     }
     const isSpace = !!_state.spaceId;
-    const dispName = isSpace ? _state.spaceName : (_state.currentLib || '知识库');
+    const externalSource = _currentExternalSource();
+    const isExternal = !isSpace && !!externalSource;
+    const dispName = isSpace ? _state.spaceName : (isExternal ? _externalSourceLabel(externalSource) : (_state.currentLib || '知识库'));
     const nameEl = document.getElementById('kb-wb-lib-name');
     if (nameEl) nameEl.textContent = dispName;
     const cover = document.getElementById('kb-wb-lib-cover');
     if (cover) cover.style.background = isSpace
       ? 'linear-gradient(135deg, #BFF0DD, #7FDCB8)'
-      : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
+      : isExternal
+        ? 'linear-gradient(135deg, #DCE8FF, #AFC8FF)'
+        : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
-    if (tagEl) tagEl.textContent = isSpace ? '共享知识库' : '个人知识库';
+    if (tagEl) tagEl.textContent = isSpace
+      ? _tr('kb.workbench.group_shared', '共享知识库')
+      : isExternal
+        ? _tr('kb.workbench.external_source', '外部来源')
+        : _tr('kb.workbench.group_personal', '个人知识库');
     // 创建者（单用户客户端 = 本人）+ 描述（共享库有 description，否则占位提示）
     const ownerEl = document.getElementById('kb-wb-owner-name');
-    if (ownerEl) ownerEl.textContent = '我';
+    if (ownerEl) ownerEl.textContent = isExternal ? _externalSourceLabel(externalSource) : '我';
     const avatarEl = document.getElementById('kb-wb-owner-avatar');
     if (avatarEl) avatarEl.textContent = (dispName || '我').trim().charAt(0);
     const descEl = document.getElementById('kb-wb-lib-desc');
     if (descEl) {
       const sp = isSpace ? _state.spaces.find((x) => x.space_id === _state.spaceId) : null;
-      const desc = sp && sp.description ? String(sp.description) : '';
+      const desc = isExternal
+        ? _tr('kb.workbench.external_description', '通过已授权的外部来源导入，内容由来源同步管理。')
+        : (sp && sp.description ? String(sp.description) : '');
       descEl.textContent = desc || '快来填写描述吧~';
       descEl.classList.toggle('is-empty', !desc);
     }
+    const shareBtn = document.getElementById('kb-wb-share');
+    if (shareBtn) shareBtn.style.display = isExternal ? 'none' : '';
+    const moreBtn = document.getElementById('kb-wb-more-btn');
+    if (moreBtn) moreBtn.style.display = isExternal ? 'none' : '';
+    const moreMenu = document.getElementById('kb-wb-more-menu');
+    if (isExternal && moreMenu) moreMenu.hidden = true;
+    const importBtn = document.getElementById('kb-wb-import');
+    if (importBtn) importBtn.style.display = isExternal ? 'none' : '';
+    const importMenu = document.getElementById('kb-wb-import-menu');
+    if (isExternal && importMenu) importMenu.hidden = true;
     const membersEl = document.getElementById('kb-wb-members');
     if (membersEl) {
       // 成员入口仅共享知识库显示（个人知识库单用户，无成员概念）
@@ -3324,17 +3407,20 @@
     });
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
+      if (_isExternalSourceSelected()) return;
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
     document.getElementById('kb-wb-more-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (moreMenu) moreMenu.hidden = !moreMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-more-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         if (moreMenu) moreMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const act = item.dataset.more;
         if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast('已刷新', { variant: 'info' }); }
         else if (act === 'rename') {
@@ -3362,6 +3448,7 @@
     const importNoteSub = document.getElementById('kb-wb-import-note-sub');
     document.getElementById('kb-wb-import')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (importMenu) importMenu.hidden = !importMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-import-item').forEach((item) => {
@@ -3370,6 +3457,7 @@
         const act = item.dataset.imp;
         if (!act || act === 'note') return;
         if (importMenu) importMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const isSpace = !!_state.spaceId;
         if (act === 'file') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'dir') { if (isSpace) _importSpaceDir(); else _importDir(); }
@@ -3398,6 +3486,7 @@
           e.stopPropagation();
           const act = item.dataset.imp;
           if (importMenu) importMenu.hidden = true;
+          if (_isExternalSourceSelected()) return;
           if (act === 'note-new') _kbNewNote();
           else if (act === 'note-import') { if (_state.spaceId) _importSpaceFiles(); else _importFiles(); }
         });
@@ -3975,6 +4064,12 @@
     ];
     if (!isDir) items.push({ key: 'reveal', label: '📂 在文件夹中显示', fn: () => _kbReveal(path) });
     _kbMenuShow(items, x, y);
+  }
+
+  function _kbExternalFileMenu(path, x, y) {
+    _kbMenuShow([
+      { key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), fn: () => _kbReveal(path) },
+    ], x, y);
   }
 
   // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
@@ -4849,6 +4944,12 @@
       if (typeof uiToast === 'function') uiToast('删除失败：' + ((err && err.message) || String(err)), { variant: 'error' });
     }
   }
+
+  window.addEventListener('i18n-change', () => {
+    if (!_state.rendered) return;
+    _renderTree();
+    _renderRight();
+  });
 
   window.renderKbWorkbench = renderKbWorkbench;
 })();
