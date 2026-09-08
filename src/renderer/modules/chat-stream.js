@@ -256,6 +256,23 @@ function _csConsolidateHeaderBadges(flow, host) {
     oldFlow.dataset.csSuperseded = '1';
   }
 }
+/** 徽章挂进消息头时与「模型名称」芯片换位（子安 2026-09-08 截图要求）：
+ *  徽章（+停止钮）占据 exec-meta 原位置（发送者名后），exec-meta 挪到消息头
+ *  末尾。exec-meta 缺省（或宿主是流内徽章行 fallback）时退化为末尾追加。 */
+function _csMountBadgeInHost(host, badge, stopBtn) {
+  const execMeta = host && host.classList && host.classList.contains('chat-msg-header')
+    ? host.querySelector('.chat-msg-exec-meta')
+    : null;
+  if (!execMeta) {
+    host.appendChild(badge);
+    if (stopBtn) host.appendChild(stopBtn);
+    return;
+  }
+  host.insertBefore(badge, execMeta);
+  if (stopBtn) host.insertBefore(stopBtn, execMeta);
+  host.appendChild(execMeta);
+}
+
 function _csCreateFlow(cid, turnId, opts) {
   const flow = document.createElement('div');
   flow.className = 'cs-flow running';
@@ -276,7 +293,7 @@ function _csCreateFlow(cid, turnId, opts) {
     loading.innerHTML = `<span class="cs-loading-spinner">${_csIco('loader')}</span>`;
     body.appendChild(loading);
 
-    host.appendChild(_csCreateBadge(flow, opts));
+    const badge = _csCreateBadge(flow, opts);
     // 就近停止（矩阵 #6）：仅运行中显示，复用主输入区停止按钮的完整
     // abort 链；主按钮不在 streaming 态（派单后台轮次）时由流自身标记，
     // 由 conversation 的 cancel 管线收尾。
@@ -293,12 +310,12 @@ function _csCreateFlow(cid, turnId, opts) {
       }
       _csSetFlowState(flow, 'cancelled');
     });
-    host.appendChild(stop);
+    _csMountBadgeInHost(host, badge, stop);
     flow._csStopBtn = stop;
     _csStartTicker(flow, opts && opts.startedAtMs);
   } else {
     // 历史/完成态：徽章只做收起开关（无计时数据不编造时长）。
-    host.appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
+    _csMountBadgeInHost(host, _csCreateBadge(flow, { terminalLabel: true, noElapsed: true }), null);
   }
   return flow;
 }
