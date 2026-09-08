@@ -5685,7 +5685,11 @@ async function runActorTurnBody(
                 text,
                 ...(event ? { event } : {}),
               });
-            flushTextSegmentForPersist();
+            // 只在思考文本（真正的段落截断）前 flush 中间段；usage/runtime
+            // 等收尾事件跟在最终段后面，flush 会把最终段（=消息正文，
+            // 可能含 :::dashboard 等结构指令）误当中间段落落盘——重放
+            // 面板以纯文本显示源码、与正文重复（真机踩坑 2026-09-08）。
+            if (text) flushTextSegmentForPersist();
             chatCollector.feed({ type: "progress", text: text || "" });
           } else if (ev.type === "event") {
             const event = processEventForPersistence(
@@ -5695,7 +5699,10 @@ async function runActorTurnBody(
               appendProcessItem(processItems, { type: "event", event });
             }
             // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
-            flushTextSegmentForPersist();
+            // 工具事件（stream==='tool'）截断正文段落——它前面的文本是
+            // 中间段，flush；usage/runtime 等非工具事件不 flush（防最终段
+            // 被误落盘）。
+            if (event && event.stream === "tool") flushTextSegmentForPersist();
             if (event) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.

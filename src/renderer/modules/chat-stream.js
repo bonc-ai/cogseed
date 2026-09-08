@@ -1088,6 +1088,11 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         // 不落面板就永远丢了；inProgress 增量条目（CLI 逐 token 旧格式）
         // 与最终段跳过，防与消息体重复。
         if (ev.kind === 'text' && ev.status !== 'completed') continue;
+        // 兜底（真机踩坑 2026-09-08 16:20）：含 ::: 结构指令（dashboard/
+        // chart-bar 等组件源码）的段落属于最终稿内容——面板以纯文本显示
+        // 就是"源码外露"，且与正文渲染好的可视化面板重复。过程面板只收
+        // 人读中间叙述，结构化成品留给正文管道。
+        if (ev.kind === 'text' && /(^|\n):::/.test(String((ev.payload && ev.payload.delta) || ''))) continue;
         // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
         // 落进旧树里的流（不可见，无害）；规范流仍收尾。
         window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
