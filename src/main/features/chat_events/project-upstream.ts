@@ -130,13 +130,16 @@ function usagePayloadFrom(data: Record<string, unknown>): {
   };
 }
 
+/** 投影器入事件：线上 StreamEvent 加持久化专用合成事件（实时链路永不产生）。 */
+export type ProjectableUpstreamEvent = StreamEvent | { type: 'text-segment'; text: string };
+
 /**
  * 把一条上游事件投影为零或多条 chat.* 事件（顺序即下发顺序）。
  * 状态原地更新（itemId 分配 / startedSent / textItemId）。
  */
 export function projectUpstreamEvent(
   state: ChatEventProjectorState,
-  event: StreamEvent,
+  event: ProjectableUpstreamEvent,
 ): ChatStreamEvent[] {
   const out: ChatStreamEvent[] = [];
   const etype = event.type;
@@ -144,6 +147,12 @@ export function projectUpstreamEvent(
   if (etype === 'delta' && typeof event.text === 'string' && event.text) {
     if (!state.textItemId) state.textItemId = nextItemId(state, 'text');
     out.push(textItem(state, state.textItemId, 'inProgress', event.text));
+  } else if (etype === 'text-segment' && event.text) {
+    // 持久化专用合成事件（bus LLM 主路径 flushTextSegmentForPersist）：
+    // 中间正文段（被后续工具/思考 item 截断的段落）以 completed 终态整段
+    // 落盘。实时链路永不产生此形状；最终段不落盘（=消息正文），渲染层
+    // 重放只渲染 completed 文本段，与正文不重复。
+    out.push(textItem(state, nextItemId(state, 'text'), 'completed', event.text));
   } else if (etype === 'progress' && typeof event.text === 'string' && event.text) {
     out.push({
       type: 'chat.item',

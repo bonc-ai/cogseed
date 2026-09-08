@@ -685,8 +685,11 @@ describe('chat-stream module', () => {
       // 老格式混排条目应被新格式路径忽略（不是回退渲染，是跳过）。
       { type: 'progress', text: '老格式混排不渲染' },
       { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:tool:1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'npm test', output: 'done', timing: { startedAtMs: t0, completedAtMs: t0 + 1500 } } } },
-      // 正文段：历史重建跳过（终稿已在消息体，防重复）。
-      { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:text:1', kind: 'text', status: 'completed', payload: { delta: '正文不应出现在历史流' } } },
+      // 中间正文段（被后续 item 截断的 completed 整段）：消息体只有最终
+      // 段，这些段落必须渲染进历史面板，否则展开永远缺 AI 中间输出。
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:text:0', kind: 'text', status: 'completed', payload: { delta: '中间正文应在历史流' } } },
+      // 最终段/增量条目（inProgress）：历史重建跳过（终稿已在消息体，防重复）。
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'nt1', itemId: 'nt1:text:1', kind: 'text', status: 'inProgress', payload: { delta: '正文不应出现在历史流' } } },
       { type: 'turn', turn: { type: 'chat.turn.completed', turnId: 'nt1', status: 'completed', durationMs: 2600, endedAt: new Date(t0 + 2600).toISOString() } },
       // 幻影第二回合（修复前写入的脏数据）：重放必须收编进同一时间线。
       { type: 'chatItem', item: { type: 'chat.turn.started', turnId: 'ph-x', cid: 'c-2', actorId: 'a', startedAt: new Date(t0 + 3000).toISOString() } },
@@ -719,9 +722,14 @@ describe('chat-stream module', () => {
     const tools = badge.querySelector('.cs-badge-tools')!;
     expect(tools).toBeTruthy();
     expect(tools.textContent).toContain('2');
-    // 正文与老格式混排不进入历史流。
+    // 中间正文段进入历史流（stub 的 innerHTML 非递归，按子元素断言）；
+    // 最终段（inProgress）与老格式混排不进入。
+    const textRows = body.children.filter((c) => c.className.includes('cs-text'));
+    expect(textRows).toHaveLength(1);
+    expect(textRows[0].textContent).toContain('中间正文应在历史流');
     expect(flow.innerHTML).not.toContain('正文不应出现在历史流');
     expect(flow.innerHTML).not.toContain('老格式混排');
+    expect(textRows[0].textContent).not.toContain('正文不应出现在历史流');
 
     // 同 turnId 重建幂等。
     render('c-2', msgDiv, items, { actorName: 'agent' });

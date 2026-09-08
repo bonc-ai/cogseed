@@ -1083,7 +1083,11 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         if (entry.type !== 'chatItem') continue;
         const ev = entry.item;
         if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
-        if (ev.kind === 'text') continue; // 正文已在消息体
+        // 文本段（子安 2026-09-08：展开缺 AI 中间输出）：completed 的整段
+        // 条目是「被后续工具/思考截断的中间正文」——消息体只有最终段，这些
+        // 不落面板就永远丢了；inProgress 增量条目（CLI 逐 token 旧格式）
+        // 与最终段跳过，防与消息体重复。
+        if (ev.kind === 'text' && ev.status !== 'completed') continue;
         // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
         // 落进旧树里的流（不可见，无害）；规范流仍收尾。
         window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));

@@ -4852,6 +4852,16 @@ async function runActorTurnBody(
   // discarded and we'd persist a bare "(stopped)" placeholder. Same pattern
   // as `agents.ts::streamSendToAgentEditChat` (skill / agent edit chats).
   let streamingText = "";
+  // 中间正文段累积（conv-core 持久化补差）：delta 不逐条喂收集器（token
+  // 级事件会刷爆 MAX_CHAT_ENTRIES），在首个非 delta 事件到达时把整段合成
+  // 一条 completed text 条目落盘——历史重放按段渲染中间正文；最终段
+  // （=消息正文）不落盘，渲染层凭 status 区分防重复。
+  let segmentText = "";
+  const flushTextSegmentForPersist = (): void => {
+    if (!segmentText) return;
+    chatCollector.feed({ type: "text-segment", text: segmentText });
+    segmentText = "";
+  };
   let errText: string | null = null;
   let aborted = false;
   let turnInfrastructureFailure = false;
@@ -5595,7 +5605,10 @@ async function runActorTurnBody(
           // process emit are kept identical to the prior behaviour so other
           // event consumers don't see any difference.
           const piece = (ev as { text?: string }).text;
-          if (typeof piece === "string") streamingText += piece;
+          if (typeof piece === "string") {
+            streamingText += piece;
+            segmentText += piece;
+          }
           activityEvents += 1;
           void touchActivity(uid, cid);
           // Anonymous workers are the commander's internal hands (silent, handed
@@ -5672,6 +5685,7 @@ async function runActorTurnBody(
                 text,
                 ...(event ? { event } : {}),
               });
+            flushTextSegmentForPersist();
             chatCollector.feed({ type: "progress", text: text || "" });
           } else if (ev.type === "event") {
             const event = processEventForPersistence(
@@ -5681,6 +5695,7 @@ async function runActorTurnBody(
               appendProcessItem(processItems, { type: "event", event });
             }
             // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
+            flushTextSegmentForPersist();
             if (event) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.

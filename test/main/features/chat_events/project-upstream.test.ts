@@ -47,6 +47,21 @@ describe('projectUpstreamEvent', () => {
     expect(out).toEqual([]);
   });
 
+  it('text-segment 合成事件（持久化专用）：整段 completed 落盘，不占用 delta 的进行中 item', () => {
+    const state = newState();
+    const out = projectUpstreamEvent(state, { type: 'text-segment', text: '中间段正文' });
+    expect(out[0].type).toBe('chat.turn.started');
+    expect(out[1]).toMatchObject({
+      type: 'chat.item', kind: 'text', status: 'completed',
+      payload: { delta: '中间段正文' },
+    });
+    // 后续 delta 另开进行中 item（与段落条目互不覆盖）。
+    const d = projectUpstreamEvent(state, { type: 'delta', text: '尾' });
+    const segItem = out[1] as { itemId?: string };
+    const deltaItem = d[0] as { itemId?: string };
+    expect(deltaItem.itemId).not.toBe(segItem.itemId);
+  });
+
   it('工具三相位投影为同一 itemId 的状态流转', () => {
     const state = newState();
     const start = projectUpstreamEvent(state, toolEvent('start', {
