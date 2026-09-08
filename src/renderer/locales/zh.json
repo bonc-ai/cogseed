@@ -6103,12 +6103,17 @@
   "chat.metrics.ttftK": "首 token",
   "chat.metrics.tokensK": "Token",
   "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.metrics.tokensVCache": "↑{i}（缓存读 {c}·{h}） ↓{o}",
+  "chat.metrics.cacheReadK": "缓存读 {v} tok",
+  "chat.metrics.cacheWriteK": "缓存写 {v} tok",
+  "chat.metrics.cliCostK": "CLI 自报成本 {v}",
   "chat.stats.llmK": "LLM",
   "chat.stats.speedK": "首 token",
   "chat.stats.cacheK": "缓存",
   "chat.stats.ctxK": "上下文",
   "chat.stats.tokK": "Token",
   "chat.stats.tokV": "↑{i} ↓{o}",
+  "chat.stats.tokVCache": "↑{i}（缓存读 {c}·{h}） ↓{o}",
   "hub.account.bound_local": "已绑定本机身份",
   "hub.account.not_bound": "未绑定本机身份",
   "hub.chip.menu.devices": "登录设备",
@@ -6724,5 +6729,7 @@
   "plugins.config_server_hint_legacy": "仅老格式密钥需要手填；新版密钥自带地址。",
   "plugins.new_version": "新版本 v{ver}",
   "plugins.new_version_short": "v{ver}",
-  "plugins.detail_new_version": "新版本"
+  "plugins.detail_new_version": "新版本",
+  "chat.metrics.uncachedInputK": "未缓存输入 {v} tok",
+  "chat.metrics.cacheHitK": "缓存命中 {v}"
 }

@@ -1041,8 +1041,8 @@ export class AgentRunner {
               streamUsage = {
                 inputTokens: ev.usage.inputTokens ?? streamUsage.inputTokens,
                 outputTokens: ev.usage.outputTokens ?? streamUsage.outputTokens,
-                cacheReadTokens: ev.usage.cacheReadTokens,
-                cacheWriteTokens: ev.usage.cacheWriteTokens,
+                cacheReadTokens: ev.usage.cacheReadTokens ?? streamUsage.cacheReadTokens,
+                cacheWriteTokens: ev.usage.cacheWriteTokens ?? streamUsage.cacheWriteTokens,
                 totalTokens: ev.usage.totalTokens ?? streamUsage.totalTokens,
               };
             }
@@ -2583,6 +2583,8 @@ export class AgentRunner {
         usage: {
           inputTokens: usage?.inputTokens ?? 0,
           outputTokens: usage?.outputTokens ?? 0,
+          cacheReadTokens: usage?.cacheReadTokens ?? 0,
+          cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
           totalTokens: usage?.totalTokens ?? 0,
         },
         toolLoops,

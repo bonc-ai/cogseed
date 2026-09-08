@@ -4954,12 +4954,17 @@
   "chat.metrics.ttftK": "初トークン",
   "chat.metrics.tokensK": "Token",
   "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.metrics.tokensVCache": "↑{i}（キャッシュ {c}·{h}） ↓{o}",
+  "chat.metrics.cacheReadK": "キャッシュ読み {v} tok",
+  "chat.metrics.cacheWriteK": "キャッシュ書き {v} tok",
+  "chat.metrics.cliCostK": "CLI 自己申告コスト {v}",
   "chat.stats.llmK": "LLM",
   "chat.stats.speedK": "初トークン",
   "chat.stats.cacheK": "キャッシュ",
   "chat.stats.ctxK": "コンテキスト",
   "chat.stats.tokK": "Token",
   "chat.stats.tokV": "↑{i} ↓{o}",
+  "chat.stats.tokVCache": "↑{i}（キャッシュ {c}·{h}） ↓{o}",
   "hub.account.bound_local": "Local identity bound",
   "hub.account.not_bound": "Local identity not bound",
   "hub.chip.menu.devices": "デバイス",
@@ -5012,5 +5017,7 @@
   "exec_config.cli_models_current_with_effort": "CLI 現在のモデル：{model} · 強度 {effort}",
   "chat.stats.costReportedTitle": "{c}（CLI 自己申告のコスト、推定ではありません）",
   "settings.custom_providers.cap_reasoning": "推論",
-  "settings.custom_providers.cap_vision": "ビジョン"
+  "settings.custom_providers.cap_vision": "ビジョン",
+  "chat.metrics.uncachedInputK": "未キャッシュ入力 {v} tok",
+  "chat.metrics.cacheHitK": "キャッシュヒット {v}"
 }

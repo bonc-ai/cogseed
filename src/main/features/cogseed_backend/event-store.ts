@@ -15,6 +15,7 @@ const COGSEED_TASK_EVENT_TYPES = new Set<string>([
   'task.started',
   'task.waiting_user',
   'model.delta',
+  'progress',
   'tool.started',
   'tool.finished',
   'task.completed',

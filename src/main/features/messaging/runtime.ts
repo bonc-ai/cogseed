@@ -11,6 +11,8 @@ import { createLogger } from '../../logger';
 import { t } from '../../i18n';
 import { subscribe, type GroupEvent } from '../group_chat/bus';
 import type { GroupMessage, WakeRequestSummary } from '../group_chat/visibility';
+import { COMMANDER_ID, USER_ID } from '../group_chat/state';
+import { listAgents } from '../agents';
 import * as ledger from './ledger';
 import type {
   DeliveryLedgerEntry,
@@ -34,6 +36,59 @@ const log = createLogger('messaging:runtime');
 export const OUTBOUND_MAX_ATTEMPTS = 3;
 export const OUTBOUND_RETRY_DELAYS_MS = [1_000, 5_000] as const;
 const MAX_RETRY_TIMER_DELAY_MS = 2_147_000_000;
+
+// ── Actor badge (F1 结果来源标注) ─────────────────────────────────────────
+
+/** agent id → display name cache, per uid, short TTL. Channel replies need
+ *  the executing agent's name on every turn end; reading the agent registry
+ *  each time is a small JSON read, so a 60s cache keeps it cheap while still
+ *  picking up renames reasonably fast. */
+const ACTOR_NAME_TTL_MS = 60_000;
+const actorNameCache = new Map<string, { stamp: number; names: Map<string, string> }>();
+
+async function loadActorNames(uid: string): Promise<Map<string, string>> {
+  const cached = actorNameCache.get(uid);
+  if (cached && Date.now() - cached.stamp < ACTOR_NAME_TTL_MS) return cached.names;
+  const names = new Map<string, string>();
+  try {
+    for (const agent of await listAgents()) {
+      if (agent?.agent_id && typeof agent.name === 'string' && agent.name) {
+        names.set(agent.agent_id, agent.name);
+      }
+    }
+  } catch (error) {
+    log.warn('messaging actor name lookup failed', { uid, error: (error as Error).message });
+  }
+  actorNameCache.set(uid, { stamp: Date.now(), names });
+  return names;
+}
+
+/** Resolve a human-facing badge label for the actor that produced a reply:
+ *  the executing agent's display name, or the localized commander title.
+ *  Returns null when no badge applies (user's own messages, unknown ids) —
+ *  callers skip the prefix rather than leaking a raw actor id. */
+export async function resolveActorLabel(uid: string, actorId: string | undefined): Promise<string | null> {
+  if (!actorId || actorId === USER_ID) return null;
+  if (actorId === COMMANDER_ID) return t('messaging.continuity.badge_commander');
+  const names = await loadActorNames(uid);
+  return names.get(actorId) || null;
+}
+
+/** Prefix a reply with its executor badge. Pure function (exported for tests). */
+export function withActorBadge(text: string, label: string | null): string {
+  if (!label) return text;
+  return `【${label}】 ${text}`;
+}
+
+/** F4 失败回执的错误摘要清洗（纯函数，导出供测试）：剥掉本地绝对路径
+ *  只留文件名——错误串常含 /Users/<name>/… 前缀，渠道回执不该外泄。
+ *  段匹配用排除法（非分隔符非空白）而非枚举 ASCII：中文/带空格的
+ *  用户名目录、Windows 反斜杠路径同样整段剥掉，不泄露任何一段。 */
+export function sanitizeFailureText(error: string): string {
+  return String(error || '')
+    .replace(/(?:\/[^\s/]+){2,}\/([^\s/]+)/g, '$1')
+    .replace(/(?:[A-Za-z]:)?(?:\\[^\s\\]+){2,}\\([^\s\\]+)/g, '$1');
+}
 
 interface CardStreamState {
   messageId?: string;
@@ -74,6 +129,10 @@ export class RuntimeInstance {
   readonly controller = new AbortController();
   started: Promise<void> = Promise.resolve();
   readonly listeners = new Map<string, () => void>();
+  /** 跨渠道接续（G2-1）：每个已挂监听实际订阅的 cid。attachBindingListener
+   *  依此识别"绑定被配对指向了另一任务"（同 key、cid 变了）并自动重挂——
+   *  否则入站路径的幂等检查会让旧任务的订阅一直占着 key。 */
+  private readonly listenerCids = new Map<string, string>();
   readonly outboundDeliveries = new Set<Promise<void>>();
   active = true;
   statusWrite: Promise<void> = Promise.resolve();
@@ -288,6 +347,15 @@ export class RuntimeInstance {
     message: OutboundMessage,
     turnSourceMsgId?: string,
   ): void {
+    // G2-2 静音：本渠道只进不出——台账型出站（回合正文/失败回执）整体抑制。
+    if (binding.mutedAt) {
+      log.info('messaging outbound suppressed (binding muted)', {
+        instanceId: this.instanceId,
+        key: binding.key,
+        messageId: message.id,
+      });
+      return;
+    }
     const delivery = this.deliverGroupMessage(binding, message, turnSourceMsgId);
     this.outboundDeliveries.add(delivery);
     void delivery.then(
@@ -325,6 +393,10 @@ export class RuntimeInstance {
   async deliverText(binding: MessagingBinding, envelope: InboundEnvelope, text: string): Promise<void> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) return;
+    // G2-2 静音说明：本方法承载的是"用户刚敲的命令的即时回声"（命令回执、
+    // 撤权引导），不拦——否则静音渠道里 /status 无响应、/unmute 的解除
+    // 确认也被吞，用户无法自救。静音只抑制任务产出（trackOutboundDelivery
+    // 与流式卡片）。
     const key = ledger.deliveryKey(this.instanceId, envelope.externalMessageId);
     const begun = await ledger.beginDelivery(
       this.uid,
@@ -337,9 +409,17 @@ export class RuntimeInstance {
   // ── Binding bus listener ─────────────────────────────────────────────────
 
   /** Subscribe to the bound conversation's group-chat bus events and route
-   * them into the reply/card machinery. One listener per binding key. */
+   *  them into the reply/card machinery. One listener per binding key;
+   *  re-attaching after the binding was pointed at a different task (G2-1
+   *  /pair) swaps the subscription to the new cid automatically. */
   async attachBindingListener(binding: MessagingBinding): Promise<void> {
-    if (!this.isCurrent() || this.listeners.has(binding.key)) return;
+    if (!this.isCurrent()) return;
+    if (this.listeners.has(binding.key)) {
+      // True idempotency requires the SAME cid; a changed cid means the
+      // binding joined another task — tear the old subscription down first.
+      if (this.listenerCids.get(binding.key) === binding.cid) return;
+      this.detachBindingListener(binding.key);
+    }
     const streamingEnabled = this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter);
     log.info('messaging binding listener attached', { instanceId: this.instanceId, key: binding.key, cid: binding.cid, streamingEnabled });
     const unsubscribe = subscribe(this.uid, binding.cid, (event: GroupEvent) => {
@@ -381,6 +461,17 @@ export class RuntimeInstance {
         // reference so it can never leak into a later delivery.
         if (event.source_msg_id) this.turnSourceRefs.delete(event.source_msg_id);
         if (streamingEnabled) this.handleCardTurnSilent(currentBinding, event);
+        // 渠道任务接续（G0）：意外失败（event.error 非空）给用户一条明确的
+        // 失败回执，而不是渠道侧一片沉默。正常 silent / 用户取消不带 error。
+        if (event.error) {
+          void this.handleTurnFailure(currentBinding, event).catch((error) => {
+            log.warn('messaging turn-failure notice delivery failed', {
+              instanceId: this.instanceId,
+              key: currentBinding.key,
+              error: (error as Error).message,
+            });
+          });
+        }
         return;
       }
       if (!isMessageEvent(event) || event.turn_end !== true) return;
@@ -398,6 +489,43 @@ export class RuntimeInstance {
       });
     });
     this.listeners.set(binding.key, unsubscribe);
+    this.listenerCids.set(binding.key, binding.cid);
+  }
+
+  /** 退订并移除一个绑定的总线监听（attach 重挂与外部清理共用）。 */
+  detachBindingListener(key: string): void {
+    const unsubscribe = this.listeners.get(key);
+    if (unsubscribe) {
+      try {
+        unsubscribe();
+      } catch (error) {
+        log.warn('messaging bus listener unsubscribe failed', {
+          instanceId: this.instanceId,
+          key,
+          error: (error as Error).message,
+        });
+      }
+    }
+    this.listeners.delete(key);
+    this.listenerCids.delete(key);
+  }
+
+  /** 跨渠道接续（G2-1）：向绑定渠道投递一条系统通知（非命令回声、非
+   *  任务回复——用于"任务已被另一渠道翻新，本渠道已跟随"这类跨渠道
+   *  联动提示）。合成唯一 externalMessageId 保证台账幂等。 */
+  async deliverSystemNotice(binding: MessagingBinding, text: string): Promise<void> {
+    const envelope: InboundEnvelope = {
+      platform: this.instance.platform as InboundEnvelope['platform'],
+      instanceId: this.instanceId,
+      externalMessageId: `sys-${binding.key}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      externalChatId: binding.externalChatId,
+      externalUserId: binding.externalUserId,
+      text: '',
+      isGroup: binding.conversationScope === 'group_sender',
+      mentionPresent: false,
+      receivedAt: new Date().toISOString(),
+    };
+    await this.deliverText(binding, envelope, text);
   }
 
   // ── Approval cards ───────────────────────────────────────────────────────
@@ -492,6 +620,8 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'process' }>,
   ): void {
+    // G2-2 静音：流式卡片同样属于出站，静音渠道不创建/更新卡片。
+    if (binding.mutedAt) return;
     const data = event.data && typeof event.data === 'object' ? event.data : {};
     const isDelta = data.type === 'delta' && typeof data.text === 'string';
     if (!isDelta && !toolLinesFromProcessEvent(event).length) return;
@@ -518,6 +648,7 @@ export class RuntimeInstance {
   private async finalizeCardForTurnEnd(
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'message' }>,
+    actorLabel?: string | null,
   ): Promise<boolean> {
     const turnId = cardEventTurnId(event);
     if (!turnId) return false;
@@ -555,9 +686,14 @@ export class RuntimeInstance {
       const adapter = this.adapter;
       if (isCardAdapter(adapter)) {
         try {
+          // F1: the finalized card title carries the executor badge so the
+          // streamed answer is attributed at a glance.
+          const cardTitle = actorLabel
+            ? `${this.instance.displayName} · ${actorLabel}`
+            : this.instance.displayName;
           await adapter.updateCard(
             state.messageId,
-            buildStreamCard(this.instance.displayName, this.toolLinesForTurn(turnId), finalText),
+            buildStreamCard(cardTitle, this.toolLinesForTurn(turnId), withActorBadge(finalText, actorLabel ?? null)),
             this.controller.signal,
           );
           log.info('messaging streaming card finalized ok', {
@@ -588,6 +724,8 @@ export class RuntimeInstance {
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'turn_silent' }>,
   ): void {
+    // G2-2 静音：静音渠道不收尾卡片（没有开过的卡片不需要收）。
+    if (binding.mutedAt) return;
     const turnId = cardEventTurnId(event);
     if (!turnId) return;
     const key = cardStateKey(binding.key, turnId);
@@ -600,6 +738,28 @@ export class RuntimeInstance {
     this.clearToolLinesForTurn(turnId);
   }
 
+  /** F4 失败回执：把意外失败的回合以带执行者标注的文本回执投回渠道。
+   *  幂等键用 `turn-fail-<turn_id|source_msg_id>`（走出站投递台账，
+   *  平台重发同一事件不会重复打扰用户）。 */
+  private async handleTurnFailure(
+    binding: MessagingBinding,
+    event: Extract<GroupEvent, { type: 'turn_silent' }>,
+  ): Promise<void> {
+    if (!this.isCurrent() || !event.error) return;
+    const failKey = event.turn_id || event.source_msg_id;
+    if (!failKey) return;
+    const label = await resolveActorLabel(this.uid, event.actor);
+    const text = t('messaging.continuity.turn_failed', {
+      agent: label || t('messaging.continuity.badge_agent'),
+      error: sanitizeFailureText(event.error),
+    });
+    this.trackOutboundDelivery(
+      binding,
+      { id: `turn-fail-${failKey}`, from: event.actor, text },
+      event.source_msg_id,
+    );
+  }
+
   private async handleTurnEndMessage(
     binding: MessagingBinding,
     event: Extract<GroupEvent, { type: 'message' }>,
@@ -607,6 +767,9 @@ export class RuntimeInstance {
     if (!this.isCurrent()) return;
     const turnId = cardEventTurnId(event);
     const message = messageFromEvent(event);
+    // F1: badge every channel reply with the executor so the user can tell
+    // which agent (or the commander) produced a result.
+    const actorLabel = await resolveActorLabel(this.uid, message.from);
     log.info('messaging turn-end handling', {
       instanceId: this.instanceId,
       key: binding.key,
@@ -616,7 +779,7 @@ export class RuntimeInstance {
       cardStateCount: this.cardStates.size,
     });
     if (this.instance.responseMode === 'streaming_card' && isCardAdapter(this.adapter)) {
-      if (await this.finalizeCardForTurnEnd(binding, event)) return;
+      if (await this.finalizeCardForTurnEnd(binding, event, actorLabel)) return;
       log.info('messaging turn-end card finalize skipped, falling back to text delivery', {
         instanceId: this.instanceId,
         key: binding.key,
@@ -627,6 +790,9 @@ export class RuntimeInstance {
     // trail stays visible without emitting a second message (mirrors Hermes'
     // progress bubbles, folded into the final post).
     const toolLines = turnId ? this.toolLinesForTurn(turnId) : [];
+    if (typeof message.text === 'string' && message.text.trim()) {
+      message.text = withActorBadge(message.text, actorLabel);
+    }
     if (toolLines.length && typeof message.text === 'string') {
       message.text = `${toolLines.map((line) => `\`${line}\``).join('\n')}\n\n---\n\n${message.text}`;
     }

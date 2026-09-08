@@ -150,6 +150,14 @@ export interface MessagingBinding {
    * random id, never the token; both binding and ledger files are
    * machine-private and are never rendered to the renderer. */
   contextTokenRef?: string;
+  /** 渠道任务接续（G0）撤权：非空 ISO 时间 = 该渠道会话已被用户解绑，
+   *  入站消息被明确拒绝并引导 /new；/new 的 forceNew 轮换会丢弃旧
+   *  binding（连同本标记）重新开始。 */
+  unboundedAt?: string;
+  /** 跨渠道接续（G2-2）静音：非空 ISO 时间 = 本渠道只进不出（入站正常
+   *  处理、楼层/上下文照常参与任务），出站正文/卡片/回执全部抑制——
+   *  用于多渠道共享同一任务时按需关闭某一侧的回复，避免双端打扰。 */
+  mutedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,7 +201,8 @@ export interface InboundEnvelope {
   contextTokenRef?: string;
   /** G-17 多模态：渠道入站消息携带的图片引用（飞书 image_key 等）。
    *  引用式记录（不下载字节）；text 为"[图片]"占位保证路由不丢。
-   *  （2026-08-26 理清：仅作渠道消息元数据，不再投影进 P3394 信封。） */
+   *  派发时投影进 P3394 信封 parts.image 格子（uri: feishu-image:<key>），
+   *  并随台账完成记录持久化（InboundLedgerEntry.imageKeys，上限 9）。 */
   imageKeys?: string[];
   receivedAt: string;
   /** Synthetic feedback event (a reaction on one of our messages), not a
@@ -213,6 +222,9 @@ export interface InboundLedgerEntry {
   replyToMessageId?: string;
   threadId?: string;
   replyInThread?: boolean;
+  /** G-17 入站图片引用（飞书 image_key）：台账持久化的渠道消息元数据，
+   *  与派发信封 parts.image 的 feishu-image:<key> 引用互查（上限 9）。 */
+  imageKeys?: string[];
   reason?: string;
   receivedAt: string;
   updatedAt: string;
@@ -326,6 +338,10 @@ export interface MessagingAdapter {
     signal?: AbortSignal,
     context?: MessagingSendContext,
   ): Promise<{ deliveryId?: string }>;
+  /** Download the raw bytes of an inbound message image (G-17 byte path).
+   * Optional: adapters whose platform has no retrievable image store leave it
+   * unset; inbound images then stay reference-only in the envelope. */
+  downloadMessageImage?(messageId: string, fileKey: string): Promise<Buffer>;
 }
 
 export interface MessagingCardAdapter extends MessagingAdapter {

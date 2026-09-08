@@ -14,7 +14,9 @@ import * as crypto from 'node:crypto';
 import { getP3394PeerRegistry } from '../p3394_bridge/app-wiring';
 import { buildP3394BridgeManifest } from '../p3394_bridge/manifest';
 import { p3394ObjectStoreResolve, p3394ObjectsRoot } from '../p3394_bridge/object-store';
+import type { P3394ChannelDescriptor } from '../p3394_bridge/channel-adapter';
 import type { P3394Envelope } from '../p3394_bridge/envelope';
+import { buildFeishuChannelDescriptor, FEISHU_CHANNEL_CAPABILITIES } from '../p3394_bridge/feishu-channel-adapter';
 import type { MessagingInstance } from './types';
 
 export const CHANNEL_BRIDGE_NODE_KIND = 'channel_bridge' as const;
@@ -26,6 +28,25 @@ export function channelBridgeAgentId(instanceId: string): string {
 
 export function instanceIdFromChannelBridgeAgentId(agentId: string): string | null {
   return agentId.startsWith('channel-') ? agentId.slice('channel-'.length) : null;
+}
+
+// ── Channel Adapter descriptor 合约（P3394 §4.3/§13，SDK §5.3）─────────
+// P3394PeerRecord（registry.ts）没有 descriptor 字段且不可扩，所以渠道
+// 适配器 descriptor 由本模块并行维护：注册节点的同时把 descriptor 存进
+// 这个 Map，协商/UI 侧经 getChannelDescriptor / listFeishuChannelDescriptors
+// 查询。生命周期与节点注册严格同步（unregister 即移除）。
+
+/** instanceId → 该实例渠道适配器的 P3394 descriptor。 */
+const channelDescriptors = new Map<string, P3394ChannelDescriptor>();
+
+/** 查询某渠道实例的 adapter descriptor（未注册/非飞书返回 undefined）。 */
+export function getChannelDescriptor(instanceId: string): P3394ChannelDescriptor | undefined {
+  return channelDescriptors.get(instanceId);
+}
+
+/** 列出当前已注册的全部飞书渠道 descriptor（供后续 UI / 能力协商）。 */
+export function listFeishuChannelDescriptors(): P3394ChannelDescriptor[] {
+  return [...channelDescriptors.values()];
 }
 
 function syntheticChannelAgent(instance: MessagingInstance) {
@@ -42,10 +63,18 @@ function syntheticChannelAgent(instance: MessagingInstance) {
   };
 }
 
-/** 注册/刷新渠道节点（实例启用后调用；幂等，重复注册即 touch）。 */
+/** 注册/刷新渠道节点（实例启用后调用；幂等，重复注册即 touch）。
+ *  飞书实例同时挂载 Channel Adapter descriptor（并行合约，不进注册表）。 */
 export function registerChannelBridgeNode(instance: MessagingInstance): { ok: boolean; error?: string } {
   const registry = getP3394PeerRegistry();
   if (!registry) return { ok: false, error: 'p3394_bridge_unavailable' };
+  // descriptor 挂载先于节点注册失败判定：即使桥端注册因冲突失败，本地
+  // 合约视图也与最新实例配置一致（重复注册即覆盖刷新）。
+  if (instance.platform === 'feishu_lark') {
+    channelDescriptors.set(instance.id, buildFeishuChannelDescriptor(instance));
+  } else {
+    channelDescriptors.delete(instance.id);
+  }
   const manifestResult = buildP3394BridgeManifest(syntheticChannelAgent(instance) as never);
   if (!manifestResult.ok) {
     const failure = manifestResult as Extract<typeof manifestResult, { ok: false }>;
@@ -56,7 +85,7 @@ export function registerChannelBridgeNode(instance: MessagingInstance): { ok: bo
     aliases: [instance.displayName],
     manifest: manifestResult.manifest,
     endpoints: [],
-    capabilities: ['messaging.relay', 'messaging.proactive'],
+    capabilities: [...FEISHU_CHANNEL_CAPABILITIES],
     node_kind: 'channel_bridge',
     locality: 'in_process',
   });
@@ -66,6 +95,7 @@ export function registerChannelBridgeNode(instance: MessagingInstance): { ok: bo
 }
 
 export function unregisterChannelBridgeNode(instanceId: string): void {
+  channelDescriptors.delete(instanceId);
   const registry = getP3394PeerRegistry();
   registry?.revoke(channelBridgeAgentId(instanceId));
 }

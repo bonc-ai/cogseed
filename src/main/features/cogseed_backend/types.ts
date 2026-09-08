@@ -181,6 +181,7 @@ export type CogSeedTaskEventType =
   | 'task.started'
   | 'task.waiting_user'
   | 'model.delta'
+  | 'progress'
   | 'tool.started'
   | 'tool.finished'
   | 'task.completed'

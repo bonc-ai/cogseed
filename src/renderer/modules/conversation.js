@@ -8248,19 +8248,21 @@ async function loadConversationHistory(cid, opts = {}) {
       checkAndSuggestAutoTaskTimeAdjustment(cid, convMeta.origin_auto_task_id);
     }
     _serverFloorByCid.set(cid, typeof convMeta.active_recipient === 'string' ? convMeta.active_recipient : '');
-    // History reload: drop ALL per-actor placeholder map entries — the
-    // `container.innerHTML=''` below detaches every placeholder DOM node,
-    // including the ones for this cid. Keeping `${cid}:*` entries leaves
-    // the map pointing at orphan nodes; the next `_consumeActorPlaceholder`
-    // would find an entry whose `parentElement` is null, fall through to
-    // the `appendChatMessage` fallback, and any deltas accumulated on
-    // that orphan during the in-flight stream are lost (the symptom users
-    // see as "the in-flight reply bubble disappears + a duplicate final
-    // appears below"). After clearing, the next `_ensureActorPlaceholder`
-    // re-adopts `state.loadingEl` (re-attached below via the
-    // `isConvPending` branch) for the first actor and mints fresh
-    // placeholders for any additional actors — no orphan window.
-    _groupPlaceholders.clear();
+    // History reload: drop per-actor placeholder map entries — the
+    // `container.innerHTML=''` below detaches every placeholder DOM node.
+    // Exception: LIVE placeholders of THIS conversation (turn still running
+    // server-side) STAY in the map. The send-stream/observer closures keep
+    // pointing at those exact nodes, and recovery ticks call
+    // _ensureActorPlaceholder during this async reload — removing the entry
+    // (even temporarily, to re-admit it later) opens a window in which those
+    // ticks mint a duplicate bubble while the original node's closure
+    // re-attaches it: the "two cards after switching conversations twice"
+    // symptom. Stale entries (turn finished while away) are swept right
+    // after the active-turn metadata is parsed below.
+    for (const [k, ph] of Array.from(_groupPlaceholders.entries())) {
+      if (!k.startsWith(`${cid}:`)) continue;
+      if (!ph || ph.dataset.finalized === '1' || !ph.dataset.fromActor) _groupPlaceholders.delete(k);
+    }
     // Drop internal plan-step dispatch messages (commander → agent
     // hand-off) AND redundant routing-only commander tails (the "second
     // commander bubble" — read agent.json + hand_off_to, no prose). The user
@@ -8366,6 +8368,21 @@ async function loadConversationHistory(cid, opts = {}) {
       : [];
     const hasActiveTurnsField = Array.isArray(convMeta.active_turns);
     const activeTurns = _normaliseActiveTurns(convMeta.active_turns);
+    // Sweep live placeholders whose turn finished while the user was away:
+    // their final message is part of the history rendered above, so keeping
+    // the entry would let a later annex revive it into a duplicate bubble.
+    if (processingFresh || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
+      const runningActorIds = new Set(
+        (hasActiveTurnsField ? activeTurns.map((t) => String(t.actor)) : inFlightActors).filter(Boolean),
+      );
+      for (const [k, ph] of Array.from(_groupPlaceholders.entries())) {
+        if (!k.startsWith(`${cid}:`)) continue;
+        if (ph && ph.dataset.finalized !== '1' && ph.dataset.fromActor
+            && runningActorIds.size > 0 && !runningActorIds.has(String(ph.dataset.fromActor))) {
+          _groupPlaceholders.delete(k);
+        }
+      }
+    }
     const wasPendingBeforeHistoryRecovery = isConvPending(cid);
     if (processingFresh && !wasPendingBeforeHistoryRecovery) {
       setGroupConversationBusy(cid, true);
@@ -8418,6 +8435,10 @@ async function loadConversationHistory(cid, opts = {}) {
         const emptyEl = container.querySelector('.empty');
         if (emptyEl) emptyEl.remove();
         _appendBeforeSpacer(container, state.loadingEl);
+        // Re-attaching a node that was detached by the conversation switch:
+        // its activity ticker self-cleaned on detach — re-arm it or the
+        // elapsed clock stays frozen at the switch-away snapshot.
+        _streamingEnsureActivityTimer(state.loadingEl);
       } else {
         const loadingEl = _createStreamingAssistantMessage(container, { hiddenUntilActor: true });
         state.loadingEl = loadingEl;
@@ -9219,13 +9240,17 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
   }
   if (f.ttftAvgText) {
-    // 速率段 2026-09-03 下线（口径反复修正未达标，见 foldSessionMetrics
-    // 的 rateText——计算与数据采集保留，显示待重做后恢复）。
+    // 速率段继续停显（step 级/时间口径反复不收敛，见 foldSessionMetrics rateText）。
     segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
   if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
-  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  segs.push({
+    k: t('chat.stats.tokK'),
+    v: f.cacheReadText
+      ? t('chat.stats.tokVCache', { i: f.inFreshText, c: f.cacheReadText, h: f.cacheHitText, o: f.outText })
+      : t('chat.stats.tokV', { i: f.inText, o: f.outText }),
+  });
   if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
   box.innerHTML = '';
   box.hidden = false;
@@ -9301,8 +9326,22 @@ function _mountMsgMeta(ph, metrics) {
   const parts = [];
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
-  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
-  if (line.cacheHitText) parts.push({ v: line.cacheHitText });
+  if (line.inText) {
+    // 主读数 = 纯 fresh 输入（2026-09-08 分层定稿，用户确认）：缓存读取
+    // 是前缀复用非新增输入，并入会让数值虚大。无 fresh 时回退对账值
+    // inText（裸输入为 0 但有缓存的极端场景）。
+    parts.push({
+      k: t('chat.metrics.tokensK'),
+      v: t('chat.metrics.tokensV', { i: line.inFreshText || line.inText, o: line.outText }),
+    });
+  }
+  // 缓存命中正向标记（≥50% 才显示）：悬停带缓存读全量——审计明细收在
+  // title，主界面保持小数值。
+  if (line.cacheBadgeText) {
+    const badge = { v: line.cacheBadgeText };
+    if (line.cacheReadText) badge.title = `缓存读 ${line.cacheReadText} tok`;
+    parts.push(badge);
+  }
   if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {
@@ -14232,18 +14271,25 @@ function _streamingUpdateActivity(msg, text) {
   }
   row.style.display = '';
   _streamingPaintActivityMeta(msg);
-  if (!msg._activityTimer) {
-    msg._activityTimer = setInterval(() => {
-      // Self-clean on detach / finalize so a missed stop call can't leak
-      // the interval past the bubble's lifetime.
-      if (!msg.isConnected || msg.dataset.activityDone === '1') {
-        clearInterval(msg._activityTimer);
-        msg._activityTimer = null;
-        return;
-      }
-      _streamingPaintActivityMeta(msg);
-    }, 1000);
-  }
+  _streamingEnsureActivityTimer(msg);
+}
+
+function _streamingEnsureActivityTimer(msg) {
+  if (!msg || msg._activityTimer) return;
+  msg._activityTimer = setInterval(() => {
+    // Self-clean on detach / finalize so a missed stop call can't leak
+    // the interval past the bubble's lifetime. Revival paths must call
+    // _streamingEnsureActivityTimer again — a detached bubble's timer is
+    // gone, and without activity events to re-arm it the elapsed clock
+    // would freeze at the detach snapshot ("timer stops updating after
+    // switching back to the conversation").
+    if (!msg.isConnected || msg.dataset.activityDone === '1') {
+      clearInterval(msg._activityTimer);
+      msg._activityTimer = null;
+      return;
+    }
+    _streamingPaintActivityMeta(msg);
+  }, 1000);
 }
 
 function _activityMonotonicNow() {
@@ -15418,6 +15464,10 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   // 按 dataset.fromActor 判定占位归属。
   for (const [liveK, live] of Array.from(_groupPlaceholders.entries())) {
     if (!liveK.startsWith(`${cid}:`)) continue;
+    // Never revive another conversation's placeholder into the currently
+    // displayed history — the node must wait until its own conversation is
+    // opened again (the history reload of that conversation re-attaches it).
+    if (typeof currentCid !== 'undefined' && cid !== currentCid) continue;
     if (!live || live.dataset.finalized === '1') continue;
     if (live.dataset.fromActor !== actorId) continue;
     if (!live.parentElement) {
@@ -15431,6 +15481,10 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
       const emptyEl = container.querySelector('.empty');
       if (emptyEl) emptyEl.remove();
       _appendBeforeSpacer(container, live);
+      // The activity timer self-cleans on detach; re-arm it so the elapsed
+      // clock keeps ticking after revival instead of freezing at the
+      // detach snapshot.
+      _streamingEnsureActivityTimer(live);
     }
     _groupPlaceholders.delete(liveK);
     if (tid) live.dataset.turnId = tid;

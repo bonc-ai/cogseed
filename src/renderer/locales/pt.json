@@ -4954,12 +4954,17 @@
   "chat.metrics.ttftK": "1º token",
   "chat.metrics.tokensK": "Token",
   "chat.metrics.tokensV": "↑{i} ↓{o}",
+  "chat.metrics.tokensVCache": "↑{i} (cache {c}·{h}) ↓{o}",
+  "chat.metrics.cacheReadK": "Leitura de cache {v} tok",
+  "chat.metrics.cacheWriteK": "Escrita de cache {v} tok",
+  "chat.metrics.cliCostK": "Custo reportado pelo CLI {v}",
   "chat.stats.llmK": "LLM",
   "chat.stats.speedK": "1º token",
   "chat.stats.cacheK": "Cache",
   "chat.stats.ctxK": "Contexto",
   "chat.stats.tokK": "Token",
   "chat.stats.tokV": "↑{i} ↓{o}",
+  "chat.stats.tokVCache": "↑{i} (cache {c}·{h}) ↓{o}",
   "hub.account.bound_local": "Local identity bound",
   "hub.account.not_bound": "Local identity not bound",
   "hub.chip.menu.devices": "Dispositivos",
@@ -5012,5 +5017,7 @@
   "exec_config.cli_models_current_with_effort": "Atual do CLI: {model} · esforço {effort}",
   "chat.stats.costReportedTitle": "{c} (custo reportado pelo CLI, não estimado)",
   "settings.custom_providers.cap_reasoning": "raciocínio",
-  "settings.custom_providers.cap_vision": "visão"
+  "settings.custom_providers.cap_vision": "visão",
+  "chat.metrics.uncachedInputK": "Entrada sem cache {v} tok",
+  "chat.metrics.cacheHitK": "Acerto de cache {v}"
 }

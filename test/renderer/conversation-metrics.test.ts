@@ -44,8 +44,8 @@ describe('messageMetricsLine', () => {
     expect(line.inText).toBe('12.2K');
     expect(line.outText).toBe('940');
   });
-  it('computes rate for tool-free turns', () => {
-    expect(messageMetricsLine(base)?.rateText).toBe('14'); // 940 tok / 66s ≈ 14.2
+  it('rate is disabled (rateText always null)', () => {
+    expect(messageMetricsLine(base)?.rateText).toBeNull();
   });
   it('returns null when nothing recorded', () => {
     expect(messageMetricsLine(null)).toBeNull();
@@ -75,19 +75,39 @@ describe('foldSessionMetrics', () => {
     expect(f.inText).toBe('200'); // 裸输入口径（100+100，缓存读另见 cacheHitText）
     expect(f.outText).toBe('100');
     expect(f.costText).toBeNull();
-    // 上下文占用 = 最近一次 usage 的 input+output（100+50=150，150/4000≈3.75%→4%）
-    expect(f.ctxText).toBe('150/4K·4%');
+    // 上下文占用 = 最近一次 usage 的 prompt 侧压力 input+cacheRead+cacheWrite
+    // （100+500+0=600，600/4000=15%，与 DSH pressureFrom 口径一致）
+    expect(f.ctxText).toBe('600/4K·15%');
     expect(f.ctxHot).toBe(false);
   });
-  it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps bare input', () => {
+  it('cache hit uses billedInput denominator (DSH parity), inText keeps 3-term sum', () => {
     const f = foldSessionMetrics(
       [m({ usage: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 100 } })],
       { contextWindow: null, price: null },
     );
-    // 300/(100+300)=75%，不含 cacheWrite（与 usage_ledger.ts dashboard 口径一致）
-    expect(f.cacheHitText).toBe('75%');
-    // 裸输入口径（2026-09-08 显示分层）：cacheWrite 不并入显示
-    expect(f.inText).toBe('100');
+    // 300/(100+300+100)=60%，含 cacheWrite（与 DSH billedInputTokens 口径一致；
+    // 2026-09-08 合并定稿：cacheHitText 统一 PR198 的 DSH 口径）
+    expect(f.cacheHitText).toBe('60%');
+    // inText 对账口径（PR198）：input+cacheRead+cacheWrite 三项和；
+    // 主显示读数走 inFreshText（2026-09-08 分层定稿）
+    expect(f.inText).toBe('500');
+    // 展示层拆分（4a）：纯 fresh 输入与缓存读单独输出，供主读数拆开标注
+    expect(f.inFreshText).toBe('100');
+    expect(f.cacheReadText).toBe('300');
+  });
+  it('inFreshText/cacheReadText stay null when no fresh input or no cache read', () => {
+    const noCache = foldSessionMetrics(
+      [m({ usage: { inputTokens: 200, outputTokens: 10 } })],
+      { contextWindow: null, price: null },
+    );
+    expect(noCache.inFreshText).toBe('200');
+    expect(noCache.cacheReadText).toBeNull();
+    const onlyCache = foldSessionMetrics(
+      [m({ usage: { cacheReadTokens: 400, outputTokens: 10 } })],
+      { contextWindow: null, price: null },
+    );
+    expect(onlyCache.inFreshText).toBeNull();
+    expect(onlyCache.cacheReadText).toBe('400');
   });
   it('flags ctx >= 80%', () => {
     const f = foldSessionMetrics(

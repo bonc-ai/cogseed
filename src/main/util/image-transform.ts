@@ -61,6 +61,36 @@ function loadJimp(): Promise<any> {
   return _jimpPromise;
 }
 
+/** RIFF....WEBP container header — Jimp cannot decode webp at all (feishu
+ * stores every inbound image as webp), so wasm libwebp decodes to RGBA first
+ * and Jimp takes over from the raw bitmap. */
+function isWebpBuffer(buf: Buffer): boolean {
+  return buf.length >= 12
+    && buf.subarray(0, 4).toString('latin1') === 'RIFF'
+    && buf.subarray(8, 12).toString('latin1') === 'WEBP';
+}
+
+let _webpDecoderPromise: Promise<{ decode(u8: Uint8Array): Promise<{ width: number; height: number; data: Uint8ClampedArray }> }> | null = null;
+async function loadWebpDecoder() {
+  if (!_webpDecoderPromise) {
+    _webpDecoderPromise = (async () => {
+      const { readFile } = await import('node:fs/promises');
+      const { createRequire } = await import('node:module');
+      const req = createRequire(import.meta.url as unknown as string);
+      const mod: any = await import('@jsquash/webp/decode.js' as any);
+      const wasmPath = req.resolve('@jsquash/webp/codec/dec/webp_dec.wasm');
+      const wasmModule = new WebAssembly.Module(await readFile(wasmPath));
+      await mod.init(wasmModule);
+      const decode = mod.default as (u8: Uint8Array) => Promise<{ width: number; height: number; data: Uint8ClampedArray }>;
+      return { decode };
+    })().catch((err) => {
+      _webpDecoderPromise = null; // allow retry on transient load failures
+      throw err;
+    });
+  }
+  return _webpDecoderPromise;
+}
+
 export async function toCompressedGrayJpeg(
   buf: Buffer,
   opts: ImageTransformOpts = {},
@@ -73,7 +103,14 @@ export async function toCompressedGrayJpeg(
   const grayscale = opts.grayscale !== false;
 
   const Jimp: any = await loadJimp();
-  const img: any = await Jimp.read(buf);
+  let img: any;
+  if (isWebpBuffer(buf)) {
+    const decoder = await loadWebpDecoder();
+    const decoded = await decoder.decode(new Uint8Array(buf));
+    img = new Jimp({ width: decoded.width, height: decoded.height, data: decoded.data });
+  } else {
+    img = await Jimp.read(buf);
+  }
 
   // Only downscale if either dim exceeds maxDim. scaleToFit preserves aspect.
   if (img.bitmap.width > maxDim || img.bitmap.height > maxDim) {
