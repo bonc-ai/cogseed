@@ -387,7 +387,8 @@ function _csSetFlowState(flow, status, error, endedAtMs) {
       label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
         : status === 'cancelled' ? '已取消' : '已完成';
     }
-    // 收束摘要含工具数（老历史无工具行时不显示该片段）。
+    // 工具数与状态拆开展示（子安 2026-09-08：「已完成 4个工具」混杂不清，
+    // 拆为独立「N 次工具调用」段，无工具行时整段不显示）。
     let tools = badge.querySelector('.cs-badge-tools');
     if (!tools) {
       tools = document.createElement('span');
@@ -401,7 +402,7 @@ tools.className = 'cs-badge-tools';
         if (String(bodyEl.children[i].className || '').includes('cs-toolExecution')) toolCount++;
       }
     }
-    tools.textContent = toolCount > 0 ? `${toolCount} ${typeof window.t === 'function' ? window.t('chat_stream.tool_count_unit') : '个工具'}` : '';
+    tools.textContent = toolCount > 0 ? `${toolCount} 次工具调用` : '';
     // 失败详情被徽章省略号截断时，悬停 title 兜底看全文。
     if (status === 'failed' && error && label) badge.setAttribute('title', label.textContent);
     // 终态耗时：csT0 有权威值时补建 elapsed 元素（历史重放的 noStatus 徽章
@@ -420,7 +421,10 @@ tools.className = 'cs-badge-tools';
     }
   }
   if (status !== 'completed') return;
-  // 完成即收尾；纯文字回合（无任何动作行）连流壳+徽章一起撤，不留空壳。
+  // 完成即收尾（子安 2026-09-08）：过程区块默认收起——运行中展开跟踪、
+  // 完成后自动折叠成徽章摘要行，点击徽章可再展开回看。
+  if (flow.dataset.csCollapsed !== '1') _csSetCollapsed(flow, true);
+  // 纯文字回合（无任何动作行）连流壳+徽章一起撤，不留空壳。
   const body = flow.querySelector('.cs-flow-body');
   if (!body || !body.children.length) {
     for (const [key, mapped] of Array.from(_csPanels.entries())) {

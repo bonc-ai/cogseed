@@ -648,13 +648,15 @@ describe('chat-stream module', () => {
     // 流在消息内部（msgDiv 的子元素）。
     expect(flow.parentNode).toBe(msgDiv);
     expect(flow.className).toContain('done');
-    // 历史流徽章只做收起开关（无计时数据不显示时长）；动作行全部可见。
+    // 历史流徽章只做收起开关（无计时数据不显示时长）；完成后默认收起
+    // （子安 2026-09-08：过程区块折叠成摘要行，点徽章展开回看）。
     const histBadge = flow.querySelector('.cs-badge')!;
     expect(histBadge).toBeTruthy();
     expect(histBadge.querySelector('.cs-badge-elapsed')).toBeNull();
     expect(histBadge.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
     const body = bodyOf(flow);
-    expect(body.style.display).not.toBe('none');
+    expect(body.style.display).toBe('none');
+    expect(flow.dataset.csCollapsed).toBe('1');
     const rows = body.children.filter((c) => c.className.includes('cs-toolExecution'));
     expect(rows).toHaveLength(1);
     expect(rows[0].innerHTML).toContain('ok');
