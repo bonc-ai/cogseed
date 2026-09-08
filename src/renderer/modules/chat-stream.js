@@ -1084,8 +1084,8 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const ev = entry.item;
         if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
         if (ev.kind === 'text') continue; // 正文已在消息体
-        // 重放期间消息行若被并发 reconcile 重建（anchor 断链），feed 会经
-        // chatStreamHandleEvent 的 isConnected 防护直接跳过；规范流仍收尾。
+        // 重放期间消息行若被并发 reconcile 重建（anchor 换节点），feed 会
+        // 落进旧树里的流（不可见，无害）；规范流仍收尾。
         window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
       }
       let endMs = endedAtMs;
@@ -1093,6 +1093,10 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const t0 = Number(flow.dataset.csT0);
         endMs = Number.isFinite(t0) ? t0 + lastDurMs : Date.now();
       }
+      // 无权威终态时刻（缺 turn.completed 条目）不编造时长：清掉 csT0，
+      // 否则 _csSetFlowState 会拿 Date.now() 当终点，把「回合开始至今」
+      // 算成假耗时（真机踩坑：29 秒的回合显示 47 分钟）。
+      if (!Number.isFinite(endMs)) delete flow.dataset.csT0;
       // 终态兜底（真机踩坑 2026-09-08）：重放目标是历史消息——无论条目里
       // 有没有 turn 终态，面板必须离开 running。detached 重放（历史渲染
       // 先建树后挂文档）同样定格：DOM 操作不依赖 connected，跳过只会留下
