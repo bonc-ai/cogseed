@@ -8495,7 +8495,15 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
   if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
-  if (_processItemsHaveRenderableLine(gm.process) && !el.querySelector('.stream-process')) return false;
+  // conv-core：过程显示已由 chat-stream 面板（.cs-flow）接管，老 details
+  // 折叠卡（.stream-process）退役。两者任一在挂即算已挂载——只认老卡会让
+  // 带过程的消息永远判"缺挂件"，触发 loadConversationHistory 全量重载循环，
+  // 历史消息的过程面板在循环中被反复清除（真机踩坑 2026-09-08：历史回复
+  // 的「已完成」徽章全部丢失，仅最新一条幸存）。
+  const _hasProcessSidecar = Array.isArray(gm?.process) && gm.process.length
+    ? !!(el.querySelector('.stream-process') || el.querySelector('.cs-flow'))
+    : true;
+  if (_processItemsHaveRenderableLine(gm.process) && !_hasProcessSidecar) return false;
   return true;
 }
 
