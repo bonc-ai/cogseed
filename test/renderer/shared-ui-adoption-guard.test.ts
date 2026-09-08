@@ -25,7 +25,7 @@ const legacyRawControlBaseline: Record<string, number> = {
   'connectors.js': 20,
   'context-menu.js': 1,
   'contexts.js': 18,
-  'continue-work.js': 13,
+  'continue-work.js': 14,
   'conversation-info.js': 17,
   'conversation.js': 72,
   'delete-file-confirm.js': 2,

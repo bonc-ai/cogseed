@@ -52,6 +52,8 @@ export interface ClaudeDesktopSessionSummary {
   title: string;
   /** ISO timestamp derived from the epoch-millis `createdAt`. */
   createdAt: string;
+  /** ISO timestamp of the most recent session activity. */
+  lastActivityAt: string;
   /** Model id recorded on the session, e.g. `claude-opus-4-8`. Empty if absent. */
   model: string;
   /** Working directory the session was opened against. */
@@ -147,7 +149,7 @@ export async function listClaudeDesktopSessions(
 
   if (!sawRoot) log.info('no claude desktop session directory found');
 
-  sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   return { ok: true, sessions };
 }
 
@@ -249,6 +251,7 @@ async function _parseDesktopSession(file: string): Promise<ClaudeDesktopSessionS
     sessionId,
     title,
     createdAt: _isoTime(meta.createdAt ?? meta.timestamp ?? meta.lastActivityAt),
+    lastActivityAt: _isoTime(meta.lastActivityAt ?? meta.createdAt ?? meta.timestamp),
     model: _str(meta.model),
     projectPath: _str(meta.cwd) || _str(meta.originCwd),
     initialMessage,
