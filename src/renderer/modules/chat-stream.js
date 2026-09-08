@@ -592,17 +592,30 @@ function _csRenderDiffRow(row, payload) {
 function _csRenderUsageRow(row, payload) {
   const p = payload || {};
   const bits = [];
-  if (p.inputTokens != null) bits.push(`↑${p.inputTokens.toLocaleString()}`);
-  if (p.outputTokens != null) bits.push(`↓${p.outputTokens.toLocaleString()}`);
+  // 输入口径对齐页脚统计行（子安 2026-09-08：两处 Token 数必须一致）——
+  // 页脚 inText = inputTokens + cacheReadTokens + cacheWriteTokens（缓存
+  // 计入输入）；面板此前只显示裸 inputTokens，数值对不上。缓存明细放
+  // 悬停 title，数值本体两处完全一致。
+  const inputTotal = numOr0(p.inputTokens) + numOr0(p.cacheReadTokens) + numOr0(p.cacheWriteTokens);
+  if (inputTotal > 0 || numOr0(p.outputTokens) > 0) bits.push(`↑${inputTotal.toLocaleString()}`);
+  if (numOr0(p.outputTokens) > 0) bits.push(`↓${numOr0(p.outputTokens).toLocaleString()}`);
   if (p.estimatedCost != null) bits.push(`≈$${p.estimatedCost}`);
-  if (p.cacheReadTokens != null) bits.push(`缓读 ${p.cacheReadTokens.toLocaleString()}`);
-  if (p.contextWindowRatio != null) {
+  if (numOr0(p.contextWindowRatio) > 0) {
     const pct = Math.round(p.contextWindowRatio * 100);
     bits.push(`ctx ${pct}%`);
     if (pct >= 85) bits.push('<span class="cs-ctx-warn">上下文接近上限</span>');
   }
   if (!bits.length) return;
-  row.innerHTML = `<div class="cs-usage-row">${bits.join(' · ')}</div>`;
+  const cacheRead = numOr0(p.cacheReadTokens);
+  const cacheWrite = numOr0(p.cacheWriteTokens);
+  const title = (cacheRead > 0 || cacheWrite > 0)
+    ? `输入 ${inputTotal.toLocaleString()} = 裸输入 ${numOr0(p.inputTokens).toLocaleString()} + 缓存读 ${cacheRead.toLocaleString()} + 缓存写 ${cacheWrite.toLocaleString()}`
+    : '';
+  row.innerHTML = `<div class="cs-usage-row"${title ? ` title="${_csEscapeHtml(title)}"` : ''}>${bits.join(' · ')}</div>`;
+}
+
+function numOr0(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0;
 }
 
 // ── 思考行（合并连续片段为一行，收行时结算时长） ──────────────────────────

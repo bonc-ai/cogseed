@@ -57,7 +57,7 @@
 /* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
 .cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
 /* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
-.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; padding-left: 6px; }
+.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; }
 .cs-flow.failed .cs-badge { color: rgb(214, 69, 69); }
 .cs-flow.failed .cs-badge:hover { color: rgb(178, 34, 34); }
 .cs-badge-stop {
@@ -114,7 +114,10 @@
   font-size: 12px;
 }
 .cs-target {
-  flex: 1 1 80px; min-width: 0;
+  /* 不再 flex:1 撑满——那会把耗时推到行最右（子安 2026-09-08：工具行
+     耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
+     max-width 截断保护。 */
+  flex: 0 1 auto; min-width: 0;
   /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
   max-width: 68%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
