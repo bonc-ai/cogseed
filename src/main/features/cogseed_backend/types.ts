@@ -188,7 +188,11 @@ export type CogSeedTaskEventType =
   | 'task.cancelled'
   | 'task.recoverable'
   | 'task.archived'
-  | 'artifact';
+  | 'artifact'
+  // 过程叙述事件（载荷 {text}）。写入端（网关唤起提示等）早于本类型声明产出
+  // 该类型（2026-09-07 共享数据中已存在此类行）；读取端校验集收编它以对齐
+  // 读写——否则含此类行的任务会让冷启动恢复抛 malformed 并阻断应用启动。
+  | 'progress';
 
 export interface CogSeedTaskEvent {
   schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;

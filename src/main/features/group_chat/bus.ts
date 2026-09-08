@@ -1857,7 +1857,9 @@ export interface ProjectedGroupProcessInput {
   turnId: string;
   kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user'
+    // 过程叙述（载荷 {text}）：与 cogseed_backend 事件类型对齐（见其 types 注）。
+    | 'progress';
   data: Record<string, unknown>;
 }
 
