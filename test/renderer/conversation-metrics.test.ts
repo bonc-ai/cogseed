@@ -72,7 +72,7 @@ describe('foldSessionMetrics', () => {
     // steps = Σ toolCalls（0 + 2 = 2），与设计 §98「步 = 该消息内工具调用次数」一致
     expect(f.steps).toBe(2);
     expect(f.cacheHitText).toBe('80%');
-    expect(f.inText).toBe('200'); // 裸输入口径（100+100，缓存读另见 cacheHitText）
+    expect(f.inText).toBe('1K'); // 对账口径三项和（合并定稿）；主读数走 inFreshText
     expect(f.outText).toBe('100');
     expect(f.costText).toBeNull();
     // 上下文占用 = 最近一次 usage 的 prompt 侧压力 input+cacheRead+cacheWrite

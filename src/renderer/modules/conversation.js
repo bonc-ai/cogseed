@@ -9305,6 +9305,8 @@ function _syncStatsWidthToComposer() {
 // （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
 // _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
 function _mountMsgMeta(ph, metrics) {
+  // VCache 模板已标注缓存读时不再叠加命中 badge（信息重复）。
+  const hasCacheReadLabelled = (parts) => parts.some((p) => String(p.v || '').includes('缓存读'));
   const line = window.conversationMetrics
     ? window.conversationMetrics.messageMetricsLine(metrics) : null;
   if (!line) return;
@@ -9327,17 +9329,22 @@ function _mountMsgMeta(ph, metrics) {
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
   if (line.inText) {
-    // 主读数 = 纯 fresh 输入（2026-09-08 分层定稿，用户确认）：缓存读取
-    // 是前缀复用非新增输入，并入会让数值虚大。无 fresh 时回退对账值
-    // inText（裸输入为 0 但有缓存的极端场景）。
+    // 主读数 = 纯 fresh 输入（2026-09-08 分层定稿 + PR198 4a 合并）：
+    // 缓存读取是前缀复用非新增输入，并入会让数值虚大。有缓存读时走
+    // PR198 拆分模板 tokensVCache（fresh 输入 + 括注缓存读全量与命中率
+    // ——一眼可核对，数值仍以 fresh 为主）；无缓存回退 tokensV。
+    const hasCacheRead = !!line.cacheReadText;
     parts.push({
       k: t('chat.metrics.tokensK'),
-      v: t('chat.metrics.tokensV', { i: line.inFreshText || line.inText, o: line.outText }),
+      v: hasCacheRead
+        ? t('chat.metrics.tokensVCache', { i: line.inFreshText || line.inText, c: line.cacheReadText, h: line.cacheHitText || '0%', o: line.outText })
+        : t('chat.metrics.tokensV', { i: line.inFreshText || line.inText, o: line.outText }),
     });
   }
-  // 缓存命中正向标记（≥50% 才显示）：悬停带缓存读全量——审计明细收在
-  // title，主界面保持小数值。
-  if (line.cacheBadgeText) {
+  // 缓存命中正向标记（≥50% 才显示，2026-09-08 分层定稿）：VCache 模板
+  // 已带缓存读全量时 badge 只补命中率达标场景；无 VCache 时 badge 的
+  // title 带缓存读全量——主界面保持小数值，审计明细收在悬停。
+  if (line.cacheBadgeText && !hasCacheReadLabelled(parts)) {
     const badge = { v: line.cacheBadgeText };
     if (line.cacheReadText) badge.title = `缓存读 ${line.cacheReadText} tok`;
     parts.push(badge);
