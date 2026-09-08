@@ -592,13 +592,19 @@ function _csRenderDiffRow(row, payload) {
 function _csRenderUsageRow(row, payload) {
   const p = payload || {};
   const bits = [];
-  // 输入口径对齐页脚统计行（子安 2026-09-08：两处 Token 数必须一致）——
-  // 页脚 inText = inputTokens + cacheReadTokens + cacheWriteTokens（缓存
-  // 计入输入）；面板此前只显示裸 inputTokens，数值对不上。缓存明细放
-  // 悬停 title，数值本体两处完全一致。
-  const inputTotal = numOr0(p.inputTokens) + numOr0(p.cacheReadTokens) + numOr0(p.cacheWriteTokens);
-  if (inputTotal > 0 || numOr0(p.outputTokens) > 0) bits.push(`↑${inputTotal.toLocaleString()}`);
-  if (numOr0(p.outputTokens) > 0) bits.push(`↓${numOr0(p.outputTokens).toLocaleString()}`);
+  // 显示分层（子安 2026-09-08 20:22 确认方案）：主显示只露裸输入+输出
+  // （真实增量，数值小且直观）；缓存命中率 ≥50% 显示正向标记「缓存 xx%」
+  // （大数不吓人，省钱变亮点）；四项全量明细放悬停 title。与页脚
+  // messageMetricsLine 同口径。
+  const bareIn = numOr0(p.inputTokens);
+  const cacheRead = numOr0(p.cacheReadTokens);
+  const out = numOr0(p.outputTokens);
+  if (bareIn > 0 || out > 0) bits.push(`↑${bareIn.toLocaleString()}`);
+  if (out > 0) bits.push(`↓${out.toLocaleString()}`);
+  const hitDenom = bareIn + cacheRead;
+  if (hitDenom > 0 && cacheRead / hitDenom >= 0.5) {
+    bits.push(`缓存 ${Math.round((cacheRead / hitDenom) * 100)}%`);
+  }
   if (p.estimatedCost != null) bits.push(`≈$${p.estimatedCost}`);
   if (numOr0(p.contextWindowRatio) > 0) {
     const pct = Math.round(p.contextWindowRatio * 100);
@@ -606,10 +612,9 @@ function _csRenderUsageRow(row, payload) {
     if (pct >= 85) bits.push('<span class="cs-ctx-warn">上下文接近上限</span>');
   }
   if (!bits.length) return;
-  const cacheRead = numOr0(p.cacheReadTokens);
   const cacheWrite = numOr0(p.cacheWriteTokens);
-  const title = (cacheRead > 0 || cacheWrite > 0)
-    ? `输入 ${inputTotal.toLocaleString()} = 裸输入 ${numOr0(p.inputTokens).toLocaleString()} + 缓存读 ${cacheRead.toLocaleString()} + 缓存写 ${cacheWrite.toLocaleString()}`
+  const title = (bareIn + cacheRead + cacheWrite + out) > 0
+    ? `裸输入 ${bareIn.toLocaleString()} · 缓存读 ${cacheRead.toLocaleString()} · 缓存写 ${cacheWrite.toLocaleString()} · 输出 ${out.toLocaleString()}`
     : '';
   row.innerHTML = `<div class="cs-usage-row"${title ? ` title="${_csEscapeHtml(title)}"` : ''}>${bits.join(' · ')}</div>`;
 }

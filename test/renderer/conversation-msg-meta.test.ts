@@ -147,7 +147,8 @@ describe('conversation message metrics line', () => {
     mount(ph, FULL_METRICS);
     expect(ph.children.length).toBe(1);
     expect(row.children.length).toBe(1);
-    expect((meta.children as Array<Record<string, unknown>>).length).toBe(3);
+    // 缓存命中率段（2026-09-08 显示分层）加入后共 4 段。
+    expect((meta.children as Array<Record<string, unknown>>).length).toBe(4);
   });
 
   it('produces no msg-meta node for messages without metrics', () => {

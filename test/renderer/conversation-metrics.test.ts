@@ -72,22 +72,22 @@ describe('foldSessionMetrics', () => {
     // steps = Σ toolCalls（0 + 2 = 2），与设计 §98「步 = 该消息内工具调用次数」一致
     expect(f.steps).toBe(2);
     expect(f.cacheHitText).toBe('80%');
-    expect(f.inText).toBe('1K');
+    expect(f.inText).toBe('200'); // 裸输入口径（100+100，缓存读另见 cacheHitText）
     expect(f.outText).toBe('100');
     expect(f.costText).toBeNull();
     // 上下文占用 = 最近一次 usage 的 input+output（100+50=150，150/4000≈3.75%→4%）
     expect(f.ctxText).toBe('150/4K·4%');
     expect(f.ctxHot).toBe(false);
   });
-  it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps 3-term sum', () => {
+  it('cache hit uses input+cacheRead denominator (dashboard ledger parity), inText keeps bare input', () => {
     const f = foldSessionMetrics(
       [m({ usage: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 100 } })],
       { contextWindow: null, price: null },
     );
     // 300/(100+300)=75%，不含 cacheWrite（与 usage_ledger.ts dashboard 口径一致）
     expect(f.cacheHitText).toBe('75%');
-    // inText 口径不变：input+cacheRead+cacheWrite 三项和
-    expect(f.inText).toBe('500');
+    // 裸输入口径（2026-09-08 显示分层）：cacheWrite 不并入显示
+    expect(f.inText).toBe('100');
   });
   it('flags ctx >= 80%', () => {
     const f = foldSessionMetrics(

@@ -9302,6 +9302,7 @@ function _mountMsgMeta(ph, metrics) {
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
   if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  if (line.cacheHitText) parts.push({ v: line.cacheHitText });
   if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {

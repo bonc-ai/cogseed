@@ -19,7 +19,8 @@ describe('对话内用量契约（验收标准）', () => {
     ];
     const f = foldSessionMetrics(ms, { contextWindow: null, price: null });
     expect(f.cacheHitText).toBe('83%'); // 750 / (150+750) ≈ 83.3
-    expect(f.inText).toBe('900');
+    // 裸输入口径（2026-09-08 显示分层）：聚合行只露真实增量。
+    expect(f.inText).toBe('150');
   });
 
   it('缓存与费用是聚合段：正文不掺入（纯函数无 DOM 即为证）', () => {
