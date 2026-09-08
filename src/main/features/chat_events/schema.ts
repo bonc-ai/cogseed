@@ -80,6 +80,10 @@ const usagePayloadSchema = z.object({
   /** 输入/输出 token 数（口径沿用 #84 对话内统计）。 */
   inputTokens: z.number().nonnegative().optional(),
   outputTokens: z.number().nonnegative().optional(),
+  /** 缓存读/写 token 数（2026-09-08 补：面板用量行与页脚 meta 口径
+   *  一致——投影器 usagePayloadFrom 已带上，schema 此前会静默剥掉）。 */
+  cacheReadTokens: z.number().nonnegative().optional(),
+  cacheWriteTokens: z.number().nonnegative().optional(),
   /** 按用户默认单价估算的费用（非账单金额）。 */
   estimatedCost: z.number().nonnegative().optional(),
   /** 上下文窗口占用比（0-1），接近 1 触发压缩提示（矩阵 #10）。 */
