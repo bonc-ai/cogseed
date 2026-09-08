@@ -68,6 +68,25 @@ describe('process-persist collector', () => {
     expect(items).toHaveLength(0);
   });
 
+  it('stream:cli（本地 CLI/网关 LocalEvent）tool-event 双相位投影为 toolExecution 含 timing', () => {
+    const c = createProcessCollector({ cid: 'c1', actorId: 'cli-agent', turnId: 't5' });
+    c.feed({ type: 'event', event: { stream: 'cli', data: { type: 'tool-event', tool: 'codex-shell', callId: 'call-9', phase: 'use', input: { command: 'npm run build' } } } });
+    c.feed({ type: 'event', event: { stream: 'cli', data: { type: 'tool-event', tool: 'codex-shell', callId: 'call-9', phase: 'result', output: 'built ok' } } });
+    c.finish('completed');
+    const rows = c.entries.filter(
+      (e) => e.type === 'chatItem' && e.item.type === 'chat.item' && (e.item as unknown as { kind: string }).kind === 'toolExecution',
+    ) as Array<{ type: 'chatItem'; item: { itemId: string; status: string; payload: { toolName: string; argsSummary?: string; output?: string; timing?: { startedAtMs: number; completedAtMs?: number } } } }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].item.itemId).toContain('cli-call-9');
+    expect(rows[0].item.status).toBe('inProgress');
+    expect(rows[0].item.payload.toolName).toBe('codex-shell');
+    expect(rows[0].item.payload.argsSummary).toContain('npm run build');
+    expect(rows[0].item.payload.timing?.completedAtMs).toBeUndefined();
+    expect(rows[1].item.status).toBe('completed');
+    expect(rows[1].item.payload.output).toBe('built ok');
+    expect(rows[1].item.payload.timing?.completedAtMs).toBeGreaterThanOrEqual(rows[1].item.payload.timing!.startedAtMs);
+  });
+
   it('上限保护：超量后停收新条目', () => {
     const c = createProcessCollector({ cid: 'c1', actorId: 'a1', turnId: 't4' });
     for (let i = 0; i < 260; i++) {

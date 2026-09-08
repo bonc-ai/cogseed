@@ -218,6 +218,59 @@ export function projectUpstreamEvent(
           payload,
         });
       }
+    } else if (inner.stream === 'cli' && inner.data && typeof inner.data === 'object') {
+      // 本地 CLI / P3394 网关 LocalEvent（runner.ts 出口，bus forwardProcess
+      // 透传为 {stream:'cli', data}）。阶段 3 投影：只补 tool-event 双相位 →
+      // toolExecution 三态（timing 与 tool 通道同源规则）；thinking/text-delta
+      // 已分别以 progress/delta 形状同轮到达，走各自既有分支，此处不重复。
+      // file-change 只带 paths 无 diff 正文，不满足 fileChange 载荷契约，跳过。
+      const data = inner.data as Record<string, unknown>;
+      if (data.type === 'tool-event') {
+        const toolName = typeof data.tool === 'string' && data.tool ? data.tool : 'tool';
+        const callId = typeof data.callId === 'string' && data.callId ? data.callId : '';
+        const key = 'cli-' + (callId || toolName);
+        if (data.phase === 'use') {
+          const itemId = `${state.turnId}:tool:${key}${callId ? '' : '-' + nextItemId(state, 'tool')}`;
+          if (!state.toolStarts.has(key)) state.toolStarts.set(key, Date.now());
+          const payload: { toolName: string; argsSummary?: string; timing: { startedAtMs: number } } = {
+            toolName,
+            timing: { startedAtMs: state.toolStarts.get(key)! },
+          };
+          const argsSummary = summarizeArgs(data.input);
+          if (argsSummary) payload.argsSummary = argsSummary;
+          out.push({
+            type: 'chat.item',
+            turnId: state.turnId,
+            itemId,
+            kind: 'toolExecution',
+            status: 'inProgress',
+            payload,
+          });
+        } else if (data.phase === 'result') {
+          const itemId = `${state.turnId}:tool:${key}`;
+          if (!state.toolStarts.has(key)) state.toolStarts.set(key, Date.now());
+          const startedAtMs = state.toolStarts.get(key)!;
+          const failed = data.isError === true;
+          const payload: { toolName: string; output?: string; error?: string; timing: { startedAtMs: number; completedAtMs: number } } = {
+            toolName,
+            timing: { startedAtMs, completedAtMs: Math.max(Date.now(), startedAtMs) },
+          };
+          const output = typeof data.output === 'string'
+            ? data.output
+            : typeof data.outputPath === 'string' ? data.outputPath : undefined;
+          if (output) payload.output = output.length > 4000 ? output.slice(0, 3997) + '…' : output;
+          if (failed) payload.error = 'tool_error';
+          state.toolStarts.delete(key);
+          out.push({
+            type: 'chat.item',
+            turnId: state.turnId,
+            itemId,
+            kind: 'toolExecution',
+            status: failed ? 'failed' : 'completed',
+            payload,
+          });
+        }
+      }
     } else if (inner.stream === 'usage' && inner.data && typeof inner.data === 'object') {
       const usage = usagePayloadFrom(inner.data as Record<string, unknown>);
       if (usage.inputTokens !== undefined || usage.outputTokens !== undefined) {

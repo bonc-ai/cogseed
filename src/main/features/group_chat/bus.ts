@@ -656,6 +656,41 @@ type ProcessItem =
   | { type: "progress"; text: string; event?: ProcessEvent }
   | { type: "event"; event: ProcessEvent };
 
+/**
+ * conv-core 存储补差合并：老格式 processItems + chat_events 新条目合成单条
+ * 过程轨迹，总量守住 MAX_PROCESS_ITEMS_PER_TURN（消息过程上限是既有不变量，
+ * 见 bus-integration 饱和测试）。预算分配：turn 终态条目最优先（收束态总耗时
+ * 的唯一来源），工具 chatItem 次之（保持到达序），reasoning 垫底（与老格式
+ * progress 文本语义重复，超额先丢）。老格式已打满上限时新条目全弃——历史
+ * 重建回退老路径，行为与收编前完全一致。
+ */
+function mergeProcessTrail(
+  processItems: ProcessItem[],
+  chatEntries: readonly PersistedChatEntry[],
+): Array<ProcessItem | PersistedChatEntry> {
+  const budget = MAX_PROCESS_ITEMS_PER_TURN - processItems.length;
+  if (budget <= 0) return [...processItems];
+  const turnEntries = chatEntries.filter((e) => e.type === "turn");
+  const nonTurn = chatEntries.filter((e) => e.type !== "turn");
+  const isReasoning = (e: PersistedChatEntry) =>
+    e.type === "chatItem" && (e.item as { kind?: string }).kind === "reasoning";
+  const ordered = [
+    ...nonTurn.filter((e) => !isReasoning(e)),
+    ...nonTurn.filter(isReasoning),
+    ...turnEntries,
+  ];
+  // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
+  if (ordered.length <= budget) return [...processItems, ...ordered];
+  const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
+  const keepRest = budget - keepTurn;
+  return [
+    ...processItems,
+    ...nonTurn.filter((e) => !isReasoning(e)).slice(0, keepRest),
+    ...nonTurn.filter(isReasoning).slice(0, Math.max(0, keepRest)),
+    ...turnEntries.slice(0, keepTurn),
+  ];
+}
+
 function processEventForPersistence(raw: unknown): ProcessEvent | null {
   if (!raw || typeof raw !== "object") return null;
   const event = raw as { stream?: unknown; data?: unknown };
@@ -3931,7 +3966,7 @@ async function runActorTurn(
           : result.kind === 'early' && result.failureCode
             ? { errorCode: result.failureCode }
             : {}),
-        process: [...processItems, ...chatCollector.entries],
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     return result;
@@ -3961,7 +3996,7 @@ async function runActorTurn(
         taskId: observedTurn.taskId,
         status: aborted ? 'cancelled' : 'failed',
         errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
-        process: [...processItems, ...chatCollector.entries],
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     if (stepId && !settled) {
@@ -5072,6 +5107,12 @@ async function runActorTurnBody(
           // bubble (token-by-token); other shapes feed the process
           // rail. Renderer dispatch lives in conversation.js process
           // event handler — see `data.type === 'delta'` branch.
+          // conv-core 阶段3：CLI 直连/网关共用漏斗同喂收集器——{stream:'cli'}
+          // 的 LocalEvent（tool-event 双相位）由投影器新分支转 ChatItem（含
+          // 权威 timing）；实时（ipc GroupEventChatProjector）与持久化
+          // （chatCollector）自此同源，本地 codex/opencode 过程可见与内置模型
+          // 同一套渲染语义。
+          chatCollector.feed(data);
           emit(state, {
             type: "process",
             cid,
@@ -6418,7 +6459,7 @@ async function runActorTurnBody(
         ? { recall_citations: persistedRecallCitations }
         : {}),
       ...((tailProcessItems.length || chatCollector.entries.length)
-        ? { process: [...tailProcessItems, ...chatCollector.entries] }
+        ? { process: mergeProcessTrail(tailProcessItems, chatCollector.entries) }
         : {}),
       // Unified execution entry: persist what actually ran on this turn.
       ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
