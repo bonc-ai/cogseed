@@ -722,4 +722,38 @@ describe('chat-stream module', () => {
     const flows = msgDiv.children.filter((c) => (c.dataset as Record<string, string>).csTurn === 'nt1');
     expect(flows).toHaveLength(1);
   });
+
+  it('同消息头多回合：新徽章收编旧徽章（移入各自流体并折叠），消息头只留一枚', () => {
+    const handle = g.window.chatStreamHandleEvent as (c: string, m: unknown, e: unknown) => void;
+    const msgDiv = makeEl('div');
+    root.appendChild(msgDiv);
+    const header = makeEl('div');
+    header.className = 'chat-msg-header';
+    msgDiv.appendChild(header);
+
+    // 回合 1：started → tool 行（流保持运行态，徽章在消息头）。
+    handle('c-3', msgDiv, { type: 'chat.turn.started', turnId: 'ph1', cid: 'c-3', actorId: 'a', startedAt: '' });
+    handle('c-3', msgDiv, { type: 'chat.item', turnId: 'ph1', itemId: 'ph1:tool:1', kind: 'toolExecution', status: 'inProgress', payload: { toolName: 'bash' } });
+    const flow1 = msgDiv.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'ph1')!;
+    expect(flow1).toBeTruthy();
+    expect(header.querySelectorAll('.cs-badge').length).toBe(1);
+
+    // 回合 2（幻影/后续回合）：同头新建流 → 旧徽章被收编进旧流体，消息头只留新徽章。
+    handle('c-3', msgDiv, { type: 'chat.turn.started', turnId: 'ph2', cid: 'c-3', actorId: 'a', startedAt: '' });
+    const flow2 = msgDiv.children.find((c) => (c.dataset as Record<string, string>).csTurn === 'ph2')!;
+    expect(flow2).toBeTruthy();
+    expect(header.querySelectorAll('.cs-badge').length).toBe(1);
+    expect(flow1.dataset.csSuperseded).toBe('1');
+    // 旧徽章移入旧流体的 cs-badge-row，仍可点击开合。
+    const movedRow = flow1.querySelector('.cs-badge-row')!;
+    expect(movedRow).toBeTruthy();
+    expect(movedRow.querySelector('.cs-badge')).toBeTruthy();
+    // 旧流体被折叠（body 隐藏），过程行保留不丢。
+    expect(flow1.querySelector('.cs-flow-body')!.style.display).toBe('none');
+    // 过程行保留（折叠只是隐藏，不删行）：动词「运行」可查。
+    const keptRows = (flow1.querySelector('.cs-flow-body')!.children as unknown as Array<{ className: string; innerHTML: string }>)
+      .filter((c) => String(c.className).includes('cs-toolExecution'));
+    expect(keptRows).toHaveLength(1);
+    expect(keptRows[0].innerHTML).toContain('运行');
+  });
 });

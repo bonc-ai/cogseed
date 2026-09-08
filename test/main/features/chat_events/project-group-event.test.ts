@@ -57,6 +57,16 @@ describe('GroupEventChatProjector', () => {
     expect(out.some((e) => e.type === 'chat.turn.completed')).toBe(true);
   });
 
+  it('hint 有无混杂不裂 Turn：无 turn_id 事件路由到该 actor 最近已知 Turn', () => {
+    const projector = new GroupEventChatProjector();
+    const hinted = projector.project(processEvent('commander', 'turn-real', { type: 'progress', text: '第一步' }));
+    expect(hinted.some((e) => e.type === 'chat.turn.started')).toBe(true);
+    // 无 turn_id 的事件：复用同 actor 最近已知 Turn，不新开幻影回合。
+    const hintless = projector.project(processEvent('commander', undefined, { type: 'progress', text: '第二步' }));
+    expect(hintless.some((e) => e.type === 'chat.turn.started')).toBe(false);
+    expect(hintless.every((e) => e.turnId === 'turn-real')).toBe(true);
+  });
+
   it('state_changed / agent_run_result / 非 turn_end message 不投影', () => {
     const projector = new GroupEventChatProjector();
     expect(projector.project({ type: 'state_changed', cid: 'c-1', state: {} as never })).toEqual([]);

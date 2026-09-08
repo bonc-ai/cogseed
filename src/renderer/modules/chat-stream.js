@@ -231,6 +231,31 @@ function _csBadgeHost(flow, anchor) {
   return row;
 }
 
+/** 同一消息头只保留一枚徽章：新回合建流时，把同头旧徽章移回各自流体首行
+ *  并折叠收起。多回合（commander+派单链 worker）徽章横向堆满消息头且幻影
+ *  回合永久「工作中」的真机踩坑（收编轮反馈）。旧流过程行保留在体内，
+ *  展开旧徽章仍可回看；计时冻结不编造。 */
+function _csConsolidateHeaderBadges(flow, host) {
+  if (!host) return;
+  for (const [, oldFlow] of _csPanels) {
+    if (oldFlow === flow || !oldFlow._csBadge) continue;
+    if (oldFlow._csBadge.parentNode !== host) continue;
+    let row = oldFlow.querySelector('.cs-badge-row');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'cs-badge-row';
+      oldFlow.insertBefore(row, oldFlow.firstChild);
+    }
+    row.appendChild(oldFlow._csBadge);
+    if (oldFlow._csStopBtn) {
+      oldFlow._csStopBtn.remove();
+      oldFlow._csStopBtn = null;
+    }
+    _csStopTicker(oldFlow);
+    _csSetCollapsed(oldFlow, true);
+    oldFlow.dataset.csSuperseded = '1';
+  }
+}
 function _csCreateFlow(cid, turnId, opts) {
   const flow = document.createElement('div');
   flow.className = 'cs-flow running';
@@ -241,6 +266,8 @@ function _csCreateFlow(cid, turnId, opts) {
   body.className = 'cs-flow-body';
   flow.appendChild(body);
 
+  const host = _csBadgeHost(flow, opts && opts.anchor);
+  _csConsolidateHeaderBadges(flow, host);
   if (!(opts && opts.noStatus)) {
     // 运行中的「加载中」指示：时间线末尾（order 兜底永远最后），让用户
     // 知道过程还在继续；终态时移除。
@@ -249,7 +276,6 @@ function _csCreateFlow(cid, turnId, opts) {
     loading.innerHTML = `<span class="cs-loading-spinner">${_csIco('loader')}</span>`;
     body.appendChild(loading);
 
-    const host = _csBadgeHost(flow, opts && opts.anchor);
     host.appendChild(_csCreateBadge(flow, opts));
     // 就近停止（矩阵 #6）：仅运行中显示，复用主输入区停止按钮的完整
     // abort 链；主按钮不在 streaming 态（派单后台轮次）时由流自身标记，
@@ -272,8 +298,7 @@ function _csCreateFlow(cid, turnId, opts) {
     _csStartTicker(flow, opts && opts.startedAtMs);
   } else {
     // 历史/完成态：徽章只做收起开关（无计时数据不编造时长）。
-    _csBadgeHost(flow, opts && opts.anchor)
-      .appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
+    host.appendChild(_csCreateBadge(flow, { terminalLabel: true, noElapsed: true }));
   }
   return flow;
 }

@@ -27,8 +27,17 @@ export class GroupEventChatProjector {
   readonly #turnIds = new Map<string, string>();
 
   #stateFor(actor: string, turnIdHint: string | undefined, cid: string): ChatEventProjectorState {
-    // process 事件未必都带 turn_id：用最近一条同 actor 的活跃 Turn 兜底，
-    // 避免同一回合因个别事件缺 turn_id 被拆成两个 Turn。
+    // process 事件未必都带 turn_id：无 hint 时优先路由到该 actor 最近一次
+    // 已知 Turn（含带 hint 的真实 Turn）——否则 hint 有无混杂会把同一回合
+    // 裂成「真 Turn + ~latest 幻影 Turn」两个状态，各自懒发 turn.started，
+    // 渲染层随之出现多枚徽章且幻影永不终态（真机踩坑：单回合 7 枚徽章）。
+    if (!turnIdHint) {
+      const latest = this.#turnIds.get(actor);
+      if (latest) {
+        const existing = this.#states.get(`${actor}:${latest}`);
+        if (existing) return existing;
+      }
+    }
     const key = turnIdHint ? `${actor}:${turnIdHint}` : `${actor}:~latest`;
     let state = this.#states.get(key);
     if (!state) {
@@ -38,8 +47,8 @@ export class GroupEventChatProjector {
         actorId: actor,
       });
       this.#states.set(key, state);
-      if (!turnIdHint) this.#turnIds.set(actor, state.turnId);
     }
+    this.#turnIds.set(actor, state.turnId);
     return state;
   }
 
