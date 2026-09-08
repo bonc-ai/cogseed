@@ -72,6 +72,7 @@ jobs:
       - name: P3394 gateway protocol smoke
         run: node p3394-gateway/test/smoke.cjs
       - run: npm run build:win
+      - run: npm run verify:package:stt:win
       - name: Upload Windows test package
         uses: actions/upload-artifact@v4
         with:

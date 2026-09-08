@@ -59,7 +59,8 @@
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
     "build:mac": "electron-builder --mac",
     "prebuild:win": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
-    "build:win": "electron-builder --win --x64 --publish never"
+    "build:win": "electron-builder --win --x64 --publish never",
+    "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -175,7 +176,8 @@
       "node_modules/bindings/**/*",
       "node_modules/file-uri-to-path/**/*",
       "node_modules/sqlite-vec*/**/*",
-      "node_modules/fastembed/**/*"
+      "node_modules/fastembed/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*"
     ],
     "extraResources": [
       {
@@ -190,8 +192,10 @@
         "from": "resources/sherpa-onnx",
         "to": "sherpa-onnx",
         "filter": [
-          "**/*",
-          "!*.tar.bz2"
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/encoder-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/decoder-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/joiner-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/tokens.txt"
         ]
       },
       {
