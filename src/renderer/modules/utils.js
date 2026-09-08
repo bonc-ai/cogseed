@@ -216,11 +216,17 @@ function renderMarkdownFull(md) {
     return `\x00BLOCK${idx}\x00`;
   };
 
+  // Dashboard 渲染 deps：Markdown 组件需要递归回完整 markdown 管线
+  // （表格/列表/内联码/自动链接），同时剥 :::dashboard 防无限递归
+  // （dashboard.js 侧处理）。deps 在 renderMarkdownFull 内闭包取自身，
+  // 保持 classic-script 加载序下的循环依赖安全（运行时才解析）。
+  const dbDeps = { renderMarkdownFull: (text) => renderMarkdownFull(text) };
+
   // Code blocks. Some models wrap a dashboard spec in ```json instead of the
   // `:::dashboard` directive; render only high-confidence dashboard-shaped JSON
   // and keep all other fenced code verbatim.
   md = md.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const dashboard = _renderDashboardFromJsonBlock(lang, code);
+    const dashboard = _renderDashboardFromJsonBlock(lang, code, dbDeps);
     if (dashboard) return protect(dashboard);
     return protect(`<pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`);
   });
@@ -244,13 +250,13 @@ function renderMarkdownFull(md) {
     const placeholder = _protectedDashboardPlaceholder(body, protectedBlocks);
     if (placeholder) return placeholder;
     const spec = _parseDashboardSpec(body);
-    if (spec !== undefined) return protect(renderDashboard(spec));
+    if (spec !== undefined) return protect(renderDashboard(spec, dbDeps));
     return protect(`<pre class="code-view dashboard-parse-error"><code>${escapeHtml(body.trim())}</code></pre>`);
   });
 
   // Last-chance recovery for final answers that contain a dashboard JSON block
   // directly in prose (no :::dashboard fence, no ```json fence).
-  md = _replaceStandaloneDashboardJsonBlocks(md, protect);
+  md = _replaceStandaloneDashboardJsonBlocks(md, protect, dbDeps);
 
   // Math blocks — protect so markdown phase 2 (emphasis, autolinking, html
   // escapes) doesn't mangle LaTeX before MathJax sees it. Order matters:
@@ -437,6 +443,14 @@ function renderMarkdownFull(md) {
   return sanitizeHtml(html);
 }
 
+// dashboard.js 的 Markdown 组件需要递归回本管线；其加载序在先、模块
+// 加载期拿不到这里的函数声明——运行期绑定补上（classic-script 浏览器侧；
+// CommonJS 侧在文件尾导出块里做同款绑定）。
+if (typeof DashboardRenderer !== 'undefined' && DashboardRenderer
+  && typeof DashboardRenderer.bindMarkdownRenderer === 'function') {
+  DashboardRenderer.bindMarkdownRenderer(renderMarkdownFull);
+}
+
 // ── Table builder ──
 function buildTable(rows) {
   // rows[0] = header, rows[1] = separator (---|---), rows[2..] = data
@@ -516,630 +530,28 @@ function renderChartBar(data) {
 // must match that doc — adding a component or a new prop value requires
 // updating both sides in the same patch.
 
-const _DB_GAP = { sm: 'sm', md: 'md', lg: 'lg' };
-const _DB_TONE = { positive: 'positive', negative: 'negative', neutral: 'neutral', warning: 'warning' };
-const _DB_LEVEL = { info: 'info', success: 'success', warning: 'warning', error: 'error' };
-const _DB_CHART_KIND = { line: 'line', bar: 'bar', area: 'area', pie: 'pie' };
-const _DB_COMPONENT_TYPES = {
-  Stack: true, Grid: true, Card: true, Separator: true,
-  Metric: true, Chart: true, Table: true, Alert: true, Timeline: true,
-  Code: true, Markdown: true, Image: true,
-};
-const _DB_JSON_FENCE_LANGS = { '': true, json: true, dashboard: true, jsonc: true };
-
-function _dbEnum(table, val, dflt) {
-  return (val && Object.prototype.hasOwnProperty.call(table, val)) ? table[val] : dflt;
-}
-
-function _tryParseDashboardJson(text) {
-  try { return JSON.parse(text); } catch (_) { return undefined; }
-}
-
-function _dashboardFenceLang(lang) {
-  return String(lang || '').trim().split(/\s+/)[0].toLowerCase();
-}
-
-function _isDashboardJsonFenceLang(lang) {
-  const key = _dashboardFenceLang(lang);
-  return Object.prototype.hasOwnProperty.call(_DB_JSON_FENCE_LANGS, key);
-}
-
-function _dashboardJsonFenceCandidate(lang, code) {
-  const rawLang = String(lang || '');
-  const rawCode = String(code == null ? '' : code);
-  if (_isDashboardJsonFenceLang(rawLang)) return rawCode;
-
-  const info = rawLang.trimStart();
-  const namedInline = info.match(/^(jsonc?|dashboard)\b([\s\S]*)$/i);
-  if (namedInline) {
-    const inline = String(namedInline[2] || '').trimStart();
-    if (inline.startsWith('{') || inline.startsWith('[')) {
-      return inline + (rawCode ? `\n${rawCode}` : '');
-    }
-  }
-  if (info.startsWith('{') || info.startsWith('[')) {
-    return info + (rawCode ? `\n${rawCode}` : '');
-  }
-  return null;
-}
-
-function _unwrapDashboardSpecBody(body) {
-  const text = String(body == null ? '' : body).trim();
-  if (!text) return '';
-  const fenced = text.match(/^(```|~~~)([^\n`]*)\n([\s\S]*?)\n?\1\s*$/);
-  if (fenced && _isDashboardJsonFenceLang(fenced[2])) return fenced[3].trim();
-  return text;
-}
-
-function _isDashboardNode(node) {
-  return !!(
-    node && typeof node === 'object' && !Array.isArray(node)
-    && typeof node.type === 'string'
-    && Object.prototype.hasOwnProperty.call(_DB_COMPONENT_TYPES, node.type)
-  );
-}
-
-function _looksLikeDashboardSpec(spec) {
-  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return false;
-  const hasRoot = Object.prototype.hasOwnProperty.call(spec, 'root');
-  if (!hasRoot) return false;
-  if (spec.root == null) return spec.schema_version != null;
-  return _isDashboardNode(spec.root);
-}
-
-function _renderDashboardFromJsonBlock(lang, code) {
-  const body = _dashboardJsonFenceCandidate(lang, code);
-  if (body == null) return '';
-  const spec = _parseDashboardSpec(body);
-  if (!_looksLikeDashboardSpec(spec)) return '';
-  return renderDashboard(spec);
-}
-
-function _protectedDashboardPlaceholder(body, protectedBlocks) {
-  const m = String(body || '').trim().match(/^\x00BLOCK(\d+)\x00$/);
-  if (!m) return '';
-  const html = protectedBlocks[Number(m[1])] || '';
-  return /^<div class="dashboard"(?:\s|>)/.test(html) ? m[0] : '';
-}
-
-function _findJsonRootEnd(text, start) {
-  let inString = false;
-  let escaped = false;
-  let opened = false;
-  const stack = [];
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') { inString = true; continue; }
-    if (c === '{' || c === '[') { stack.push(c); opened = true; continue; }
-    if (c === '}' || c === ']') {
-      if (!stack.length) return -1;
-      const open = stack.pop();
-      if ((open === '{' && c !== '}') || (open === '[' && c !== ']')) return -1;
-      if (opened && stack.length === 0) return i + 1;
-    }
-  }
-  return -1;
-}
-
-function _replaceStandaloneDashboardJsonBlocks(md, protect) {
-  const text = String(md || '');
-  if (text.indexOf('"root"') < 0 || text.indexOf('{') < 0) return text;
-  const startRe = /(^|\n)([ \t]*)\{/g;
-  let out = '';
-  let cursor = 0;
-  let m;
-  while ((m = startRe.exec(text)) !== null) {
-    const start = m.index + m[1].length + m[2].length;
-    if (start < cursor) continue;
-    const end = _findJsonRootEnd(text, start);
-    if (end < 0) continue;
-    const tail = text.slice(end);
-    if (!/^[ \t]*(?:\r?\n|$)/.test(tail)) {
-      startRe.lastIndex = start + 1;
-      continue;
-    }
-    const candidate = text.slice(start, end);
-    const spec = _parseDashboardSpec(candidate);
-    if (!_looksLikeDashboardSpec(spec)) {
-      startRe.lastIndex = start + 1;
-      continue;
-    }
-    out += text.slice(cursor, start) + protect(renderDashboard(spec));
-    cursor = end;
-    startRe.lastIndex = end;
-  }
-  return out + text.slice(cursor);
-}
-
-function _escapeLikelyUnescapedStringQuotes(text) {
-  let out = '';
-  let inString = false;
-  let escaped = false;
-  let changed = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (!inString) {
-      out += c;
-      if (c === '"') { inString = true; escaped = false; }
-      continue;
-    }
-    if (escaped) {
-      out += c;
-      escaped = false;
-      continue;
-    }
-    if (c === '\\') {
-      out += c;
-      escaped = true;
-      continue;
-    }
-    if (c === '"') {
-      let j = i + 1;
-      while (j < text.length && /\s/.test(text[j])) j++;
-      const next = text[j] || '';
-      if (next === ':' || next === ',' || next === '}' || next === ']' || next === '') {
-        out += c;
-        inString = false;
-      } else {
-        out += '\\"';
-        changed = true;
-      }
-      continue;
-    }
-    out += c;
-  }
-  return changed ? out : text;
-}
-
-function _repairDashboardJsonTail(text) {
-  let inString = false;
-  let escaped = false;
-  let opened = false;
-  let balancedEnd = -1;
-  const stack = [];
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') { inString = true; continue; }
-    if (c === '{' || c === '[') { stack.push(c); opened = true; }
-    else if (c === '}' || c === ']') {
-      if (stack.length) stack.pop();
-      // First time the root value closes: everything after is trailing tail.
-      if (opened && stack.length === 0) { balancedEnd = i + 1; break; }
-    }
-  }
-
-  // Repair 1: a complete root value followed by trailing garbage (extra `}`).
-  if (balancedEnd > 0 && balancedEnd < text.length) {
-    const parsed = _tryParseDashboardJson(text.slice(0, balancedEnd));
-    if (parsed !== undefined) return parsed;
-  }
-  // Repair 2: unclosed tree — append the closers it still needs, innermost first.
-  if (opened && stack.length && !inString) {
-    const closers = stack.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
-    const parsed = _tryParseDashboardJson(text + closers);
-    if (parsed !== undefined) return parsed;
-  }
-  return undefined;
-}
-
-function _repairDashboardJsonMismatchedClosers(text) {
-  let out = '';
-  let inString = false;
-  let escaped = false;
-  let changed = false;
-  const stack = [];
-  const closeFor = (c) => (c === '{' ? '}' : ']');
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      out += c;
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') { out += c; inString = true; continue; }
-    if (c === '{' || c === '[') { out += c; stack.push(closeFor(c)); continue; }
-    if (c === '}' || c === ']') {
-      if (stack[stack.length - 1] === c) {
-        stack.pop();
-        out += c;
-        continue;
-      }
-      const parentIdx = stack.lastIndexOf(c);
-      if (parentIdx >= 0) {
-        while (stack.length - 1 > parentIdx) {
-          out += stack.pop();
-          changed = true;
-        }
-        stack.pop();
-      }
-      out += c;
-      continue;
-    }
-    out += c;
-  }
-  return changed ? out : text;
-}
-
-function _nextNonWhitespaceChar(text, pos) {
-  let i = pos + 1;
-  while (i < text.length && /\s/.test(text[i])) i++;
-  return text[i] || '';
-}
-
-function _repairDashboardJsonExtraClosers(text) {
-  let out = '';
-  let inString = false;
-  let escaped = false;
-  let changed = false;
-  const stack = [];
-  const closeFor = (c) => (c === '{' ? '}' : ']');
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      out += c;
-      if (escaped) escaped = false;
-      else if (c === '\\') escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') { out += c; inString = true; continue; }
-    if (c === '{' || c === '[') { out += c; stack.push(closeFor(c)); continue; }
-    if (c === '}' || c === ']') {
-      if (stack[stack.length - 1] === c) {
-        stack.pop();
-        out += c;
-        continue;
-      }
-      // Common model slip inside children/rows arrays: it closes a sibling
-      // node one brace too far (`] } } }, { "type": ...`). If the next real
-      // token is a comma, the array/object is still continuing, so this closer
-      // is extra rather than a missing-inner-closer case.
-      const next = _nextNonWhitespaceChar(text, i);
-      if (stack.length && (next === ',' || next === stack[stack.length - 1])) {
-        changed = true;
-        continue;
-      }
-      if (!stack.includes(c)) {
-        changed = true;
-        continue;
-      }
-    }
-    out += c;
-  }
-  return changed ? out : text;
-}
-
-function _tryDashboardRepairVariants(text) {
-  const strict = _tryParseDashboardJson(text);
-  if (strict !== undefined) return strict;
-
-  const extraCloserRepaired = _repairDashboardJsonExtraClosers(text);
-  if (extraCloserRepaired !== text) {
-    const parsed = _tryParseDashboardJson(extraCloserRepaired);
-    if (parsed !== undefined) return parsed;
-    const mismatchAfterExtra = _repairDashboardJsonMismatchedClosers(extraCloserRepaired);
-    if (mismatchAfterExtra !== extraCloserRepaired) {
-      const afterMismatch = _tryParseDashboardJson(mismatchAfterExtra);
-      if (afterMismatch !== undefined) return afterMismatch;
-      const tailAfterMismatch = _repairDashboardJsonTail(mismatchAfterExtra);
-      if (tailAfterMismatch !== undefined) return tailAfterMismatch;
-    }
-    const tailAfterExtra = _repairDashboardJsonTail(extraCloserRepaired);
-    if (tailAfterExtra !== undefined) return tailAfterExtra;
-  }
-
-  const mismatchRepaired = _repairDashboardJsonMismatchedClosers(text);
-  if (mismatchRepaired !== text) {
-    const parsed = _tryParseDashboardJson(mismatchRepaired);
-    if (parsed !== undefined) return parsed;
-    const tailAfterMismatch = _repairDashboardJsonTail(mismatchRepaired);
-    if (tailAfterMismatch !== undefined) return tailAfterMismatch;
-  }
-
-  return _repairDashboardJsonTail(text);
-}
-
-// Tolerant parse for a `:::dashboard` JSON body. LLMs (DeepSeek especially,
-// when hand-writing a deeply-nested tree) reliably produce small JSON defects:
-// unescaped double quotes inside string values, a single extra `}` after the
-// root close, trailing prose, a truncated tail with closers missing, or a child
-// object missing its close before the parent array/object closes. Strict
-// `JSON.parse` rejects all of these and the whole dashboard collapses to a raw
-// code-view block. We retry with bounded repairs before giving up:
-//   1. escape likely-unescaped `"` characters inside string values
-//   2. insert missing child closers immediately before a matching parent close
-//   3. drop trailing garbage after the root value's balanced close
-//      (the common "one extra }" / trailing-prose case)
-//   4. append the missing closers for an unclosed (truncated) tree
-// Returns the parsed spec, or `undefined` if nothing parses — the caller then
-// shows the parse-error fallback so the raw body is never silently dropped.
-// The scan is string-aware: brackets inside string values (e.g. an Alert body
-// containing `}`) never shift the depth count, and we never trim leading
-// garbage (over-repair risk) — only the trailing tail is dropped.
-function _parseDashboardSpec(body) {
-  const text = _unwrapDashboardSpecBody(body);
-  if (!text) return undefined;
-  const repaired = _tryDashboardRepairVariants(text);
-  if (repaired !== undefined) return repaired;
-
-  const quoteRepaired = _escapeLikelyUnescapedStringQuotes(text);
-  if (quoteRepaired !== text) {
-    const parsed = _tryDashboardRepairVariants(quoteRepaired);
-    if (parsed !== undefined) return parsed;
-  }
-  return undefined;
-}
-
-function renderDashboard(spec) {
-  if (!spec || typeof spec !== 'object') return '';
-  const theme = spec.theme || {};
-  const themeColor = _dbEnum({ neutral: 'neutral', brand: 'brand', success: 'success', warning: 'warning', danger: 'danger' }, theme.color, 'neutral');
-  const themeStyle = _dbEnum({ minimal: 'minimal', card: 'card' }, theme.style, 'minimal');
-  const inner = _renderDbNode(spec.root);
-  return `<div class="dashboard" data-theme-color="${themeColor}" data-theme-style="${themeStyle}">${inner}</div>`;
-}
-
-function _renderDbNode(node) {
-  if (!node || typeof node !== 'object') return '';
-  // props 双形态兼容：React 风格（{type, props:{...}}）与扁平风格
-  // （{type, label, value, ...}——不少模型把属性直接平铺在节点上）。
-  // children 已有同款双形态兜底（React 式 props.children），props 缺失时
-  // 节点自身就是属性袋——否则整卡渲染成空壳（真机：5 个 Metric 全空白）。
-  const props = (node.props && typeof node.props === 'object') ? node.props : node;
-  // Children belong at the node level (sibling of `props`), but many models
-  // nest them React-style under `props.children`. Without this fallback those
-  // subtrees vanish and the container renders empty — accept either shape.
-  const children = Array.isArray(node.children)
-    ? node.children
-    : (Array.isArray(props.children) ? props.children : []);
-  switch (node.type) {
-    // ── Layout ────────────────────────────────────────────────────────
-    case 'Stack':     return _dbStack(props, children);
-    case 'Grid':      return _dbGrid(props, children);
-    case 'Card':      return _dbCard(props, children);
-    case 'Separator': return '<hr class="db-separator">';
-    // ── Content ───────────────────────────────────────────────────────
-    case 'Metric':    return _dbMetric(props);
-    case 'Chart':     return _dbChart(props);
-    case 'Table':     return _dbTable(props);
-    case 'Alert':     return _dbAlert(props, children);
-    case 'Timeline':  return _dbTimeline(props);
-    case 'Code':      return _dbCode(props);
-    case 'Markdown':  return _dbMarkdown(props);
-    case 'Image':     return _dbImage(props);
-    default:          return `<div class="db-unknown" data-type="${escapeHtml(String(node.type || ''))}"></div>`;
-  }
-}
-
-function _dbChildren(children) {
-  return children.map(_renderDbNode).join('');
-}
-
-// ── Layout primitives ──────────────────────────────────────────────────
-
-function _dbStack(props, children) {
-  const dir = props.direction === 'horizontal' ? 'horizontal' : 'vertical';
-  const gap = _dbEnum(_DB_GAP, props.gap, 'md');
-  return `<div class="db-stack" data-direction="${dir}" data-gap="${gap}">${_dbChildren(children)}</div>`;
-}
-
-function _dbGrid(props, children) {
-  const cols = Math.min(4, Math.max(1, Number(props.columns) || 2));
-  const gap = _dbEnum(_DB_GAP, props.gap, 'md');
-  return `<div class="db-grid" data-columns="${cols}" data-gap="${gap}">${_dbChildren(children)}</div>`;
-}
-
-function _dbCard(props, children) {
-  const tone = _dbEnum(_DB_TONE, props.tone, 'neutral');
-  const title = props.title ? `<div class="db-card-title">${escapeHtml(props.title)}</div>` : '';
-  return `<section class="db-card" data-tone="${tone}">${title}<div class="db-card-body">${_dbChildren(children)}</div></section>`;
-}
-
-// ── Content components ────────────────────────────────────────────────
-
-function _dbMetric(props) {
-  const label = escapeHtml(props.label || '');
-  const value = escapeHtml(String(props.value == null ? '' : props.value));
-  const tone = _dbEnum(_DB_TONE, props.tone, 'neutral');
-  const delta = props.delta != null
-    ? `<div class="db-metric-delta" data-tone="${tone}">${escapeHtml(String(props.delta))}</div>` : '';
-  return `<div class="db-metric" data-tone="${tone}">
-    <div class="db-metric-label">${label}</div>
-    <div class="db-metric-value">${value}</div>
-    ${delta}
-  </div>`;
-}
-
-function _dbAlert(props, children = []) {
-  const level = _dbEnum(_DB_LEVEL, props.level, 'info');
-  const titleRaw = props.title ?? props.heading ?? props.label ?? props.name;
-  const bodyRaw = props.body ?? props.message ?? props.text ?? props.content ?? props.description;
-  const titleText = String(titleRaw == null ? '' : titleRaw);
-  const bodyText = String(bodyRaw == null ? '' : bodyRaw);
-  // Fallback: some models put the alert copy in child nodes (e.g. a nested
-  // Markdown) instead of a text prop. Render those as the body so the alert
-  // is not silently dropped to an empty string.
-  const childHtml = (!titleText && !bodyText && children.length) ? _dbChildren(children) : '';
-  if (!titleText && !bodyText && !childHtml) return '';
-  const content = childHtml
-    ? `<div class="db-alert-body">${childHtml}</div>`
-    : `<div class="db-alert-title">${escapeHtml(titleText || bodyText)}</div>${
-        titleText && bodyText ? `<div class="db-alert-body">${escapeHtml(bodyText)}</div>` : ''}`;
-  return `<div class="db-alert" data-level="${level}" role="status">
-    <span class="db-alert-icon" aria-hidden="true"></span>
-    <div class="db-alert-content">${content}</div>
-  </div>`;
-}
-
-function _dbTable(props) {
-  const cols = Array.isArray(props.columns) ? props.columns : [];
-  const rows = Array.isArray(props.rows) ? props.rows : [];
-  if (!cols.length) return '<div class="db-table-empty"></div>';
-  const head = cols.map(c => {
-    const numeric = c && c.numeric ? ' data-numeric="1"' : '';
-    return `<th${numeric}>${escapeHtml((c && (c.label || c.key)) || '')}</th>`;
-  }).join('');
-  const body = rows.map(r => {
-    const cells = cols.map(c => {
-      const k = c && c.key;
-      const v = (k && r && Object.prototype.hasOwnProperty.call(r, k)) ? r[k] : '';
-      const numeric = c && c.numeric ? ' data-numeric="1"' : '';
-      return `<td${numeric}>${escapeHtml(String(v == null ? '' : v))}</td>`;
-    }).join('');
-    return `<tr>${cells}</tr>`;
-  }).join('');
-  return `<div class="db-table-wrap"><table class="db-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
-}
-
-function _dbTimeline(props) {
-  const items = Array.isArray(props.items) ? props.items : [];
-  if (!items.length) return '<div class="db-timeline-empty"></div>';
-  const lis = items.map(it => {
-    const time = escapeHtml((it && it.time) || '');
-    const label = escapeHtml((it && it.label) || '');
-    const body = it && it.body ? `<div class="db-timeline-body">${escapeHtml(it.body)}</div>` : '';
-    return `<li class="db-timeline-item">
-      <div class="db-timeline-time">${time}</div>
-      <div class="db-timeline-label">${label}</div>
-      ${body}
-    </li>`;
-  }).join('');
-  return `<ol class="db-timeline">${lis}</ol>`;
-}
-
-function _dbCode(props) {
-  const lang = escapeHtml(props.lang || '');
-  const code = escapeHtml(String(props.code == null ? '' : props.code));
-  const langAttr = lang ? ` data-lang="${lang}"` : '';
-  return `<pre class="db-code"${langAttr}><code>${code}</code></pre>`;
-}
-
-function _dbMarkdown(props) {
-  // Accept `text` (schema name) or `content` (common model guess) — without
-  // this alias the model's `{ Markdown: { content: "..." } }` silently
-  // collapses to an empty bubble and the section disappears.
-  const raw = props.text != null ? props.text : props.content;
-  const text = String(raw == null ? '' : raw);
-  // Recursive call back into renderMarkdownFull keeps the same feature set
-  // (tables / lists / inline code / autolinks); strip leading `:::dashboard`
-  // re-entry to prevent an infinite-render loop if the model nests one.
-  const cleaned = text.replace(/:::dashboard[\s\S]*?:::/g, '');
-  return `<div class="db-markdown">${renderMarkdownFull(cleaned)}</div>`;
-}
-
-function _dbImage(props) {
-  const src = String(props.src || '');
-  if (!src) return '';
-  const alt = escapeHtml(props.alt || '');
-  const caption = props.caption
-    ? `<figcaption class="db-image-caption">${escapeHtml(props.caption)}</figcaption>` : '';
-  return `<figure class="db-image"><img src="${escapeHtml(src)}" alt="${alt}" data-monitor-resource="dashboard-image">${caption}</figure>`;
-}
-
-// ── Chart (minimal inline SVG; line/bar/area/pie) ─────────────────────
-
-function _dbChart(props) {
-  const kind = _dbEnum(_DB_CHART_KIND, props.kind, 'bar');
-  const data = Array.isArray(props.data) ? props.data : [];
-  if (!data.length) return '<div class="db-chart-empty"></div>';
-  if (kind === 'pie') return _dbPie(data);
-  return _dbXyChart(kind, data);
-}
-
-function _dbPie(data) {
-  // data: [{label, value}, ...]
-  const items = data.filter(d => d && Number.isFinite(Number(d.value)) && Number(d.value) > 0);
-  const total = items.reduce((a, d) => a + Number(d.value), 0);
-  if (!total) return '<div class="db-chart-empty"></div>';
-  const cx = 50, cy = 50, r = 45;
-  let acc = 0;
-  const segs = items.map((d, i) => {
-    const v = Number(d.value);
-    const startAngle = (acc / total) * Math.PI * 2 - Math.PI / 2;
-    acc += v;
-    const endAngle = (acc / total) * Math.PI * 2 - Math.PI / 2;
-    const large = (v / total) > 0.5 ? 1 : 0;
-    const x1 = cx + r * Math.cos(startAngle), y1 = cy + r * Math.sin(startAngle);
-    const x2 = cx + r * Math.cos(endAngle),   y2 = cy + r * Math.sin(endAngle);
-    return `<path d="M${cx},${cy} L${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)} Z" class="db-chart-slice" data-idx="${i % 6}"></path>`;
-  }).join('');
-  const legend = items.map((d, i) =>
-    `<li data-idx="${i % 6}"><span class="db-chart-swatch"></span>${escapeHtml(d.label || '')} <span class="db-chart-val">${escapeHtml(String(d.value))}</span></li>`
-  ).join('');
-  return `<div class="db-chart" data-kind="pie">
-    <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" class="db-chart-svg">${segs}</svg>
-    <ol class="db-chart-legend">${legend}</ol>
-  </div>`;
-}
-
-function _dbXyChart(kind, data) {
-  // data: [{x, y}, ...] — x is label (string), y is numeric.
-  const points = data.map(d => ({ x: String((d && d.x) ?? ''), y: Number((d && d.y) ?? 0) }))
-    .filter(p => Number.isFinite(p.y));
-  if (!points.length) return '<div class="db-chart-empty"></div>';
-  const W = 320, H = 140, padL = 32, padR = 8, padT = 8, padB = 22;
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const maxY = Math.max(...points.map(p => p.y), 0);
-  const minY = Math.min(...points.map(p => p.y), 0);
-  const span = (maxY - minY) || 1;
-  const xOf = (i) => padL + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
-  const yOf = (y) => padT + innerH - ((y - minY) / span) * innerH;
-  const yTicks = [0, 0.5, 1].map((ratio) => {
-    const y = padT + innerH - ratio * innerH;
-    const val = minY + ratio * span;
-    const label = Math.abs(val) >= 10 ? Math.round(val) : Number(val.toFixed(1));
-    return `<line x1="${padL}" y1="${y.toFixed(2)}" x2="${W - padR}" y2="${y.toFixed(2)}" class="db-chart-gridline"></line>` +
-      `<text x="${(padL - 6).toFixed(2)}" y="${(y + 3).toFixed(2)}" class="db-chart-ylabel" text-anchor="end">${escapeHtml(String(label))}</text>`;
-  }).join('');
-  const axis = `<line x1="${padL}" y1="${padT + innerH}" x2="${W - padR}" y2="${padT + innerH}" class="db-chart-axis"></line>`;
-  let body = '';
-  if (kind === 'bar') {
-    const barW = innerW / points.length * 0.6;
-    body = points.map((p, i) => {
-      const x = xOf(i) - barW / 2;
-      const y = yOf(Math.max(p.y, 0));
-      const h = Math.abs(yOf(p.y) - yOf(0));
-      return `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" rx="3" class="db-chart-bar-rect" data-idx="${i % 6}"></rect>`;
-    }).join('');
-  } else {
-    const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(2)},${yOf(p.y).toFixed(2)}`).join(' ');
-    if (kind === 'area') {
-      const area = `M${xOf(0).toFixed(2)},${yOf(minY).toFixed(2)} ` +
-        points.map((p, i) => `L${xOf(i).toFixed(2)},${yOf(p.y).toFixed(2)}`).join(' ') +
-        ` L${xOf(points.length - 1).toFixed(2)},${yOf(minY).toFixed(2)} Z`;
-      body = `<path d="${area}" class="db-chart-area"></path><path d="${path}" class="db-chart-line"></path>`;
-    } else {
-      body = `<path d="${path}" class="db-chart-line"></path>` +
-        points.map((p, i) => `<circle cx="${xOf(i).toFixed(2)}" cy="${yOf(p.y).toFixed(2)}" r="2.5" class="db-chart-dot" data-idx="${i % 6}"></circle>`).join('');
-    }
-  }
-  const labels = points.map((p, i) => {
-    if (points.length > 8 && i % Math.ceil(points.length / 6) !== 0 && i !== points.length - 1) return '';
-    return `<text x="${xOf(i).toFixed(2)}" y="${(H - 6).toFixed(2)}" class="db-chart-xlabel" text-anchor="middle">${escapeHtml(p.x)}</text>`;
-  }).join('');
-  return `<div class="db-chart" data-kind="${kind}">
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" class="db-chart-svg">
-      ${yTicks}${axis}${body}${labels}
-    </svg>
-  </div>`;
-}
+// ─── Dashboard 域（已迁出至 dashboard.js，2026-09-08 重构） ────────────────
+// 实现见 modules/dashboard.js（组件注册表单源驱动）。此处桥接保持
+// renderMarkdownFull 内部引用名不变，接口零破坏。
+// 环境差异：浏览器（classic script，dashboard.js 先加载）经全局
+// DashboardRenderer 拿到实现；CommonJS（测试）经 require 直接取——
+// 两种通道汇到同一个实现对象。
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const _dashboardImpl = (typeof DashboardRenderer !== 'undefined')
+  ? DashboardRenderer
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  : require('./dashboard.js').DashboardRenderer;
+const {
+  renderDashboard,
+  _DB_COMPONENT_TYPES,
+  parseDashboardSpec: _parseDashboardSpec,
+  renderDashboardFromJsonBlock: _renderDashboardFromJsonBlock,
+  dashboardStandaloneReplacer: _replaceStandaloneDashboardJsonBlocks,
+  isDashboardJsonFenceLang: _isDashboardJsonFenceLang,
+  dashboardJsonFenceCandidate: _dashboardJsonFenceCandidate,
+  protectedDashboardPlaceholder: _protectedDashboardPlaceholder,
+  unwrapDashboardSpecBody: _unwrapDashboardSpecBody,
+} = _dashboardImpl;
 
 // Detect playable media src by extension. Dispatches markdown ![](src) /
 // [text](src) to a native player for video/audio instead of a generic link
@@ -1917,7 +1329,17 @@ function _aiSelectPick(api, value) {
 // `_aiSelectMount`) stays unexported.
 // Matching tests: `utils-autolink.test.ts`, `utils-ai-select.test.ts`.
 if (typeof module !== 'undefined' && typeof module.exports === 'object') {
+  // CommonJS（测试环境）：dashboard 域实现在 dashboard.js 的 module.exports。
+  // 测试桥接保持旧名字不变（renderDashboard/_parseDashboardSpec）。
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const _dashboardMod = require('./dashboard.js');
+  // 注册 markdown 管线（classic-script 加载序/dashboard.js 先行导致其
+  // 模块加载期拿不到本文件的 renderMarkdownFull——运行期绑定补上）。
+  if (_dashboardMod && typeof _dashboardMod.bindMarkdownRenderer === 'function') {
+    _dashboardMod.bindMarkdownRenderer(renderMarkdownFull);
+  }
   module.exports = {
+    ...(_dashboardMod || {}),
     _BARE_URL_RE,
     _BARE_EMAIL_RE,
     _linkifyBareUrls,
@@ -1938,8 +1360,6 @@ if (typeof module !== 'undefined' && typeof module.exports === 'object') {
     _SAFE_URI_RE,
     _SAFE_EXTERNAL_LINK_RE,
     renderMarkdown,
-    renderDashboard,
-    _parseDashboardSpec,
     sanitizeMathExpressionForMathJax,
     _aiSelectNextZIndex,
   };
