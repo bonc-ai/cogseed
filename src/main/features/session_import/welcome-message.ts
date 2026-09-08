@@ -209,6 +209,9 @@ async function buildCarry(
 }
 
 const ACTION_PLAN_TIMEOUT_MS = 30_000;
+/** 总超时必须 ≥ 单次 CLI 上限（PR209 评审 M3 层级矛盾修正：
+ *  旧 10s < 本地预算 15s < 单次 CLI 30s——本地分支必被截断）。 */
+
 /** 单次 welcome 里 local-agent 回退的总预算：多个 CLI 依次试也必须在这个
  *  窗口内收尾（Action Plan 只是一句话建议，不值得拖住整个提取状态）。
  *  G-20 教训：曾有环境无界等待（每 CLI 120s × N 个）把 extraction 状态
@@ -216,7 +219,7 @@ const ACTION_PLAN_TIMEOUT_MS = 30_000;
 const ACTION_PLAN_LOCAL_BUDGET_MS = 15_000;
 /** welcome 整链对 Action Plan 的硬超时：任何未知挂起不得阻塞 commit 的
  *  done 落盘（seed 重写/快照/认知路由早已完成，plan 是锦上添花）。 */
-const ACTION_PLAN_TOTAL_TIMEOUT_MS = 10_000;
+const ACTION_PLAN_TOTAL_TIMEOUT_MS = 40_000;
 
 function actionPlanPrompt(context: string): string {
   return [
@@ -250,6 +253,7 @@ function parseActionPlanReply(text: string): string | null {
 async function generateActionPlanWithLocalAgent(
   userId: string,
   normalizedContext: string,
+  totalSignal?: AbortSignal,
 ): Promise<ActionPlanResult> {
   // 测试/运维开关：local-agent 回退依赖宿主机装了哪些 CLI——行为随机器
   // 变化（G-20 卡点：测试机上真跑 CLI 导致 extraction 卡 pending）。测试
@@ -274,6 +278,9 @@ async function generateActionPlanWithLocalAgent(
       tried.add(chosen.type);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), ACTION_PLAN_TIMEOUT_MS);
+      // 总超时触发同样杀当前 CLI（不留孤儿进程在 tmpdir 里跑）。
+      const onTotalAbort = () => controller.abort();
+      totalSignal?.addEventListener('abort', onTotalAbort, { once: true });
       try {
         const result = await runCliAgent({
           uid: userId,
@@ -304,6 +311,7 @@ async function generateActionPlanWithLocalAgent(
         });
       } finally {
         clearTimeout(timeoutId);
+        totalSignal?.removeEventListener('abort', onTotalAbort);
       }
     }
 
@@ -323,12 +331,12 @@ async function generateActionPlanWithLocalAgent(
 
 /** Dynamic Action Plan via the configured Core Agent, or a detected local CLI
  * Agent when the user has not configured an API model yet. */
-async function generateActionPlan(userId: string, context: string): Promise<ActionPlanResult> {
+async function generateActionPlan(userId: string, context: string, signal?: AbortSignal): Promise<ActionPlanResult> {
   const normalizedContext = context.trim();
   if (!normalizedContext) return { plan: [], failureReason: 'insufficient_context' };
 
   if (!hasConfiguredModel().configured) {
-    return generateActionPlanWithLocalAgent(userId, normalizedContext);
+    return generateActionPlanWithLocalAgent(userId, normalizedContext, signal);
   }
 
   try {
@@ -339,7 +347,7 @@ async function generateActionPlan(userId: string, context: string): Promise<Acti
       sessionId: `reflect-welcome-${tail}`,
       userId,
     });
-    const text = await runner.runReflection(actionPlanPrompt(normalizedContext));
+    const text = await runner.runReflection(actionPlanPrompt(normalizedContext), signal);
     if (!text || !text.trim()) {
       return { plan: [], failureReason: 'empty_model_reply' };
     }
@@ -397,15 +405,24 @@ export async function generateWelcomeMessage(input: GenerateWelcomeMessageInput)
       `快照记录的下一步（仅供参考）：${snapshot.nextStep || '未提供'}`,
     ].join('\n') : '',
   ].filter(Boolean).join('\n\n');
+  // 总超时与本地预算共享 AbortController（PR209 评审 M3）：此前
+  // Promise.race 到期后本地 CLI 无 abort 信号继续真跑（孤儿进程在
+  // tmpdir 里），且 10s 总超时 < 15s 本地预算 < 30s 单次 CLI——层级
+  // 矛盾，11-15s 内本可成功的本地 plan 被丢弃并误报"模型不可用"。
+  // 修正：总超时提高到本地预算之上（覆盖 API 分支与本地回退）；
+  // 到期统一 abort 正在跑的执行，不留孤儿。
+  const totalAbort = new AbortController();
+  const totalTimer = setTimeout(() => totalAbort.abort(), ACTION_PLAN_TOTAL_TIMEOUT_MS);
+  totalTimer.unref?.();
   const actionPlanResult = await Promise.race([
-    generateActionPlan(input.userId, actionPlanContext),
+    generateActionPlan(input.userId, actionPlanContext, totalAbort.signal),
     new Promise<ActionPlanResult>((resolve) => {
-      setTimeout(
-        () => resolve({ plan: [], failureReason: 'model_unavailable' }),
-        ACTION_PLAN_TOTAL_TIMEOUT_MS,
-      ).unref?.();
+      totalAbort.signal.addEventListener('abort', () => {
+        resolve({ plan: [], failureReason: 'model_unavailable' });
+      }, { once: true });
     }),
   ]);
+  clearTimeout(totalTimer);
   const planLines = actionPlanResult.plan;
   const unavailablePlanText = (() => {
     switch (actionPlanResult.failureReason) {

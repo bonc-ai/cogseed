@@ -643,7 +643,7 @@ async function handleInboundLocked(
   // 纯元数据采集——失败仅 warn，绝不阻塞派发主链路。
   if (envelope.platform === 'feishu_lark' && envelope.externalUserId) {
     try {
-      ensureChannelPeer(envelope.platform, envelope.instanceId, envelope.externalUserId, envelope.externalUserName);
+      ensureChannelPeer(uid, envelope.platform, envelope.instanceId, envelope.externalUserId, envelope.externalUserName);
     } catch (error) {
       log.warn('messaging channel peer map update failed', {
         instanceId: envelope.instanceId,

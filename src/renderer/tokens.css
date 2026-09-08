@@ -87,6 +87,50 @@
   --radius-card: var(--radius-3);
   --radius-dialog: var(--radius-3);
 
+
+  /* ── Process-stream palette (chat-stream 活动流；PR209 P0-4 token 化) ── */
+  --color-stream-ink: #1f2937;          /* 正文主色（浅色） */
+  --color-stream-dim: #bcc2cc;          /* 次要说明文字 */
+  --color-stream-chip: #8b93a0;         /* 徽章/暗色次要 */
+  --color-stream-chip-2: #a6adb8;       /* 图标/动词（暗色） */
+  --color-stream-target: #99a1ac;       /* 目标文本 */
+  --color-stream-think: #9aa2ad;        /* 思考正文 */
+  --color-stream-dir: #6d7480;          /* 目录/暗色弱化 */
+  --color-stream-muted: #6f7883;        /* 加载/弱动词 */
+  --color-stream-pale: #b9c0ca;         /* 最弱提示 */
+  --color-stream-fail: #D64545;         /* 失败动词 */
+  --color-stream-fail-2: #B92222;       /* 失败重音 */
+  --color-stream-fail-3: #B22222;       /* 失败边框（旧值 rgb(178,34,34)） */
+  --color-stream-ok: #16803D;           /* 成功（旧值 rgb(22,128,61)） */
+  --color-stream-warn: #CA8A04;         /* 审批/警告（旧值 rgb(202,138,4)） */
+  --color-stream-hover: rgba(127, 127, 127, .07);
+  --color-stream-guide: rgba(127, 127, 127, .22);   /* 输出块竖线 */
+  --color-stream-guide-2: rgba(127, 127, 127, .18); /* 思考全文竖线 */
+  --color-stream-guide-3: rgba(127, 127, 127, .35); /* 展开箭头底 */
+  --color-stream-sel: rgba(34, 197, 94, .1);
+  --color-stream-btn: rgba(255, 255, 255, .6);
+  --color-stream-dark-hover: rgba(255, 255, 255, .06);
+  --color-stream-dark-line: rgba(255, 255, 255, .16);
+  --color-stream-dark-line-2: rgba(255, 255, 255, .22);
+  --color-stream-dark-btn: rgba(255, 255, 255, .06);
+  --color-stream-dark-ink: #c8cdd5;
+  --color-stream-dark-card: rgba(255, 255, 255, .04);
+  --color-stream-dark-deep: rgba(0, 0, 0, .28);
+  --color-stream-danger-line: rgba(220, 38, 38, .32);
+  --color-stream-danger-bg: rgba(220, 38, 38, .06);
+
+  --color-stream-hover-2: rgba(127, 127, 127, .09);
+  --color-stream-hover-3: rgba(127, 127, 127, .1);
+  --color-stream-ok-2: #1A7F37;
+  --color-stream-fail-4: #CF222E;
+  --color-stream-fail-bg: rgba(239, 68, 68, .08);
+  --color-stream-overlay: rgba(0, 0, 0, .05);
+  --color-stream-white: #FFFFFF;
+  --color-stream-ok-3: #16A34A;
+  --color-stream-danger: #DC2626;
+  --color-stream-dark-hover-2: rgba(255, 255, 255, .07);
+  --color-stream-fallback: #E5E7EB;
+
   /* Elevation and focus */
   --shadow-card: 0 1px 2px rgba(20, 71, 55, 0.04), 0 8px 24px rgba(20, 71, 55, 0.06);
   --shadow-card-hover: 0 4px 16px rgba(20, 71, 55, 0.06);

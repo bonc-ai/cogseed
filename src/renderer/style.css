@@ -27546,13 +27546,13 @@ body.is-terminal-resizing {
    带。无待审批时 [hidden] 整条移除；可见时覆盖在 Run Center 顶部（不参与
    #run-center-root 的高度计算，避免面板布局抖动）。 */
 #panel-run-center { position: relative; }
-.wake-approvals-strip { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 48px)); max-height: 42%; overflow: auto; z-index: var(--z-raised); background: var(--bg-raised, var(--bg)); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 10px 14px 12px; }
+.wake-approvals-strip { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 48px)); max-height: 42%; overflow: auto; z-index: var(--z-raised); background: var(--bg-raised, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-3); box-shadow: var(--shadow-dialog); padding: 10px 14px 12px; }
 .wake-approvals-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
 .wake-approvals-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); }
 .wake-approvals-row:first-of-type { border-top: 0; }
 .wake-approvals-row-main { min-width: 0; flex: 1 1 auto; }
 .wake-approvals-row-name { font-weight: 600; font-size: 13px; color: var(--text); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.wake-approvals-badge { font-weight: 500; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft, rgba(59,130,246,.14)); color: var(--accent, #3b82f6); }
+.wake-approvals-badge { font-weight: 500; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft, var(--color-info-soft)); color: var(--accent, var(--color-info)); }
 .wake-approvals-row-sub { margin-top: 2px; font-size: 12px; color: var(--text-muted, var(--text)); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .wake-approvals-row-meta { margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted, var(--text)); opacity: .85; }
 .wake-approvals-row-actions { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }

@@ -89,8 +89,8 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       userId: 'u1',
       sessionId: expect.stringMatching(/^reflect-welcome-/),
     }));
-    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('完善产品方案'));
-    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('只输出一条中文行动计划'));
+    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('完善产品方案'), expect.anything());
+    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('只输出一条中文行动计划'), expect.anything());
     expect(out.text).toContain('我不会在运行中静默改写正式资产');
   });
 

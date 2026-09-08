@@ -54,6 +54,20 @@ describe('messaging continuity commands (pure)', () => {
     expect(sanitizeFailureText('plain provider timeout')).toBe('plain provider timeout');
   });
 
+  it('sanitizeFailureText handles paths with spaces in directory names (PR209 M1)', async () => {
+    const { sanitizeFailureText } = await import('../../../src/main/features/messaging/runtime');
+    // 含空格用户名目录：旧排除式正则会外泄 "alice smith" 前缀。
+    expect(sanitizeFailureText('/Users/alice smith/Desktop/code/main.ts')).toBe('main.ts');
+    expect(sanitizeFailureText('C:\\Users\\bob smith\\code\\main.ts')).toBe('main.ts');
+    expect(sanitizeFailureText('失败: 无法写入 /Users/li ming/文档/报告.docx')).toBe(
+      '失败: 无法写入 报告.docx',
+    );
+    // 多路径同串独立剥离，普通词间斜杠不误伤
+    expect(sanitizeFailureText('先看 /a/b.txt 再看 /c/d.txt 两处')).toBe(
+      '先看 b.txt 再看 d.txt 两处',
+    );
+  });
+
   it('sanitizeFailureText also strips non-ASCII and Windows path segments', async () => {
     const { sanitizeFailureText } = await import('../../../src/main/features/messaging/runtime');
     // 中文用户名目录：枚举 ASCII 的旧正则会漏掉 /Users/牛保康/ 前缀。

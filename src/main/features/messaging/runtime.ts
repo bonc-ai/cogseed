@@ -82,12 +82,42 @@ export function withActorBadge(text: string, label: string | null): string {
 
 /** F4 失败回执的错误摘要清洗（纯函数，导出供测试）：剥掉本地绝对路径
  *  只留文件名——错误串常含 /Users/<name>/… 前缀，渠道回执不该外泄。
- *  段匹配用排除法（非分隔符非空白）而非枚举 ASCII：中文/带空格的
- *  用户名目录、Windows 反斜杠路径同样整段剥掉，不泄露任何一段。 */
+ *  PR209 评审 M1：此前排除式正则遇含空格路径段失效（实测
+ *  "/Users/alice smith/…/main.ts" → "alice smithmain.ts" 用户名前缀外
+ *  泄；"C:\Users\bob smith\…" 原样不剥）。改为 token 状态机：
+ *  1) 按空白切 token，含 / 或 \ 的 token 只留 basename；
+ *  2) 跨空格路径延续拼合——前一 token 已是路径（含分隔符）且本 token
+ *     以词开头但含分隔符（"smith/Desktop/…"）= 含空格目录名的续段，
+ *     无缝并入前一 token（吞掉中间空白），再统一剥 basename。
+ *  对任意用户名（空格/中文/点）稳定；多路径同串各自独立剥离。 */
 export function sanitizeFailureText(error: string): string {
-  return String(error || '')
-    .replace(/(?:\/[^\s/]+){2,}\/([^\s/]+)/g, '$1')
-    .replace(/(?:[A-Za-z]:)?(?:\\[^\s\\]+){2,}\\([^\s\\]+)/g, '$1');
+  const parts = String(error || '').split(/(\s+)/);
+  const out: string[] = [];
+  const lastNonSpaceIdx = (): number => {
+    for (let j = out.length - 1; j >= 0; j -= 1) {
+      if (out[j] !== '' && !/^\s+$/.test(out[j])) return j;
+    }
+    return -1;
+  };
+  for (const t of parts) {
+    if (t === '' || /^\s+$/.test(t)) { out.push(t); continue; }
+    if (!/[/\\]/.test(t)) { out.push(t); continue; }
+    const startsWithSep = /^[/\\]/.test(t);
+    const pi = lastNonSpaceIdx();
+    if (pi >= 0) {
+      const prev = out[pi];
+      if (/[/\\]/.test(prev) && !startsWithSep) {
+        out.length = pi + 1;
+        out[pi] = prev + t;
+        continue;
+      }
+    }
+    out.push(t);
+  }
+  return out.map((t) => {
+    if (!/[/\\]/.test(t)) return t;
+    return t.split(/[/\\]/).filter(Boolean).pop() || '';
+  }).join('');
 }
 
 interface CardStreamState {
