@@ -339,7 +339,14 @@ function _csBubbleLooksEmpty(bubble) {
 function _csEnsureFlow(cid, anchor, turnId, opts) {
   const key = _csPanelKey(cid, turnId);
   let flow = _csPanels.get(key);
-  if (flow && flow.isConnected) return { flow, body: flow.querySelector('.cs-flow-body') };
+  // 复用判定（真机踩坑 2026-09-08 两轮）：仅判 isConnected 不够——历史渲染
+  // 在尚未挂入文档的 msgDiv 上重放，首轮建的流未 connected，后续每条
+  // chatItem 都被判「流不在」而各自新建（12:12 一条消息 14 个幽灵面板事故）。
+  // 「connected 或就在本 anchor 消息树内」都算活着：同一消息树里已注册的流
+  // 就是可复用的那条，与它在不在文档无关。
+  if (flow && (flow.isConnected || !!(anchor && anchor.contains && anchor.contains(flow)))) {
+    return { flow, body: flow.querySelector('.cs-flow-body') };
+  }
   // 注册表残留清理（真机踩坑 2026-09-08）：同 key 的 disconnected 旧流
   // 先从注册表移除，防止 size 膨胀与惰性清理误删活跃流；不调用
   // _csRemoveFlow（旧 DOM 已销毁，重复 remove 无害但多余）。
@@ -792,13 +799,10 @@ window.chatStreamFinalize = function chatStreamFinalize(cid) {
 window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatEvent) {
   if (!chatEvent || typeof chatEvent !== 'object') return;
   try {
-    // 锚点失效防护（真机踩坑 2026-09-08：历史加载竞态）：
-    // 会话切换时 container.innerHTML='' 销毁消息 DOM，_csPanels 注册表
-    // 残留 disconnected 节点；_csEnsureFlow 对同 key 新建后若 anchor 也
-    // 已脱离文档（消息行被后续 reconcile 重建），每条 chatItem 都会
-    // 新建一个 running+loading 面板且永不终态（"永远工作中"）。
-    // 断链的 anchor 不再喂事件——面板宿主不存在，渲染只会产出幽灵 DOM。
-    if (anchor && anchor.isConnected === false) return;
+    // 注意：不要在这里按 anchor.isConnected 拦截——历史渲染在尚未挂入
+    // 文档的 msgDiv 上重放（detached 是合法中间态），拦截会把全部条目
+    // 吞掉、面板永久空壳（2026-09-08 点击徽章无反应事故）。断链竞态由
+    // _csEnsureFlow 的复用判定（connected 或在本 anchor 树内）吸收。
     if (chatEvent.type === 'chat.turn.started') {
       _csEnsureFlow(cid, anchor, chatEvent.turnId, {
         startedAtMs: chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now(),
@@ -1030,7 +1034,13 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       // 幻影回合收编：多回合条目统一重放进一条规范时间线——
       // turn.started/completed 不再逐回合建流/定格（那会各自发徽章
       // 且幻影永不终态），消息头只留一枚终态徽章，总耗时取末终态。
-      let turnId = (opts && opts.turnId) || '';
+      // turnId 选取（真机踩坑 2026-09-08）：条目时间序首个真实 turnId 优先
+      // 于 opts.turnId——历史 API 的消息对象常缺 turn_id，调用方只能传
+      // m:<msgId> 兜底；用兜底 key 建流后，恢复/观察管线按真实 turnId 喂
+      // 事件会另起 live 流，同屏两条（徽章收编一条、行在另一条，点徽章
+      // 收起的永远是空的那条）。多回合条目仍收编进首回合 key（幻影收编
+      // 约定不变）。
+      let turnId = '';
       let startedAtMs = NaN; let endedAtMs = NaN;
       let lastStatus = 'completed'; let lastError;
       let lastDurMs = NaN;
@@ -1050,6 +1060,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
           if (Number.isFinite(d)) lastDurMs = d;
         }
       }
+      if (!turnId) turnId = (opts && opts.turnId) || '';
       if (!turnId) turnId = (msgDiv.dataset && msgDiv.dataset.msgId) || ('hist-' + Date.now());
       const replayKey = _csPanelKey(cid, turnId);
       const old = _csPanels.get(replayKey);
@@ -1083,14 +1094,13 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         endMs = Number.isFinite(t0) ? t0 + lastDurMs : Date.now();
       }
       // 终态兜底（真机踩坑 2026-09-08）：重放目标是历史消息——无论条目里
-      // 有没有 turn 终态，面板必须离开 running。若流已被并发销毁（极端
-      // 竞态），跳过定格（无宿主可写）。
-      if (flow.isConnected) {
-        _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
-        // 重放循环可能经 ensure 新建过中间流（同 key 断链重建），确保注册
-        // 表里最终态就是这个 flow。
-        _csPanels.set(replayKey, flow);
-      }
+      // 有没有 turn 终态，面板必须离开 running。detached 重放（历史渲染
+      // 先建树后挂文档）同样定格：DOM 操作不依赖 connected，跳过只会留下
+      // running 残壳。
+      _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
+      // 重放循环可能经 ensure 新建过中间流（同 key 断链重建），确保注册
+      // 表里最终态就是这个 flow。
+      _csPanels.set(replayKey, flow);
       return true;
     } catch (err) {
       _csLog.warn('chat entries replay failed, falling back to legacy items', { error: (err && err.message) || String(err) });
