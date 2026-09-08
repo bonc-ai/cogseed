@@ -68,6 +68,11 @@ export type TextPayload = { delta: string };
 export type UsagePayload = {
   inputTokens?: number;
   outputTokens?: number;
+  /** 缓存读/写（2026-09-09 PR209 评审 M10：与 usagePayloadSchema 对齐，
+   *  此前手抄版缺这两个字段——与 zod schema 漂移，运行时字段存在但类型
+   *  不可见。schema 仍为事实源，此处保持同步）。 */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   estimatedCost?: number;
   contextWindowRatio?: number;
 };

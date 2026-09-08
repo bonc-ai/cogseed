@@ -151,10 +151,14 @@ function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
 
 /** 思考展示兜底辅助：本轮模型是否被识别为 reasoning 模型（deepseek/o系/
  * gemini-pro/grok 等全系）。按模型名前缀宽松判定——与
- * model_id_recognition.ts 的规则同源精简；识别不出返回 false（不盲发）。 */
+ * model_id_recognition.ts 的规则同源精简。
+ * PR209 评审 M8：无显式模型名（execConfig.model 为空）返回 **false**
+ * ——此前恒 true 会把 low 盲发给未显式指定模型的回合（实际走默认模型，
+ * 可能非推理端点），与「识别不出不盲发」的注释矛盾。默认链路的思考
+ * 兜底交给 pi-ai 模型目录的 defaultReasoning（已策展，更准确）。 */
 function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
   const modelId = String(item.execConfig?.model || "").trim().toLowerCase();
-  if (!modelId) return true; // 无显式模型信息（默认链路）——按能思考处理，让默认档生效
+  if (!modelId) return false;
   return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
     || /(thinking|reasoner|qwq)/.test(modelId);
 }
@@ -664,7 +668,10 @@ const MAX_WORKER_TURNS = 100; // hard ceiling against runaway loops
 type ProcessEvent = { stream: string; data?: unknown };
 type ProcessItem =
   | { type: "progress"; text: string; event?: ProcessEvent }
-  | { type: "event"; event: ProcessEvent };
+  | { type: "event"; event: ProcessEvent }
+  // PR209 评审 M9：思考 progress 的运行时标记（内存态专用，落盘 JSON.stringify
+  // 会带上但读取方忽略未知字段，无契约影响）。
+  | { type: "progress"; text: string; event?: ProcessEvent; _thinking?: boolean };
 
 /**
  * conv-core 存储补差合并：老格式 processItems + chat_events 新条目合成单条
@@ -674,7 +681,7 @@ type ProcessItem =
  * progress 文本语义重复，超额先丢）。老格式已打满上限时新条目全弃——历史
  * 重建回退老路径，行为与收编前完全一致。
  */
-function mergeProcessTrail(
+export function mergeProcessTrail(
   processItems: ProcessItem[],
   chatEntries: readonly PersistedChatEntry[],
 ): Array<ProcessItem | PersistedChatEntry> {
@@ -692,11 +699,20 @@ function mergeProcessTrail(
   // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
   if (ordered.length <= budget) return [...processItems, ...ordered];
   const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
-  const keepRest = budget - keepTurn;
+  // 预算共享（PR209 评审 M7）：非 reasoning 与 reasoning 两组共用
+  // budget - keepTurn 的总额度——此前两组各 slice 同一 keepRest，合并
+  // 总长可达 2×keepRest 突破 300 上限（实测可到 401），与函数头注释
+  // 「守住 MAX_PROCESS_ITEMS_PER_TURN」矛盾。优先级序：非 reasoning
+  // （工具/正文/usage）先取，剩余额度给 reasoning。
+  const restBudget = Math.max(0, budget - keepTurn);
+  const nonReasoning = nonTurn.filter((e) => !isReasoning(e));
+  const reasoning = nonTurn.filter(isReasoning);
+  const keptNonReasoning = nonReasoning.slice(0, restBudget);
+  const keptReasoning = reasoning.slice(0, Math.max(0, restBudget - keptNonReasoning.length));
   return [
     ...processItems,
-    ...nonTurn.filter((e) => !isReasoning(e)).slice(0, keepRest),
-    ...nonTurn.filter(isReasoning).slice(0, Math.max(0, keepRest)),
+    ...keptNonReasoning,
+    ...keptReasoning,
     ...turnEntries.slice(0, keepTurn),
   ];
 }
@@ -5711,12 +5727,33 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            if (text)
-              appendProcessItem(processItems, {
-                type: "progress",
-                text,
-                ...(event ? { event } : {}),
-              });
+            if (text) {
+              // 思考流按段续写（PR209 评审 M9）：origin:'thinking' 的
+              // progress 是 event-mapper 聚合出的思考段——续写到上一条
+              // 思考 progress（同段被多次冲刷的场景），与投影层「一次
+              // 思考一条记录」cardinality 一致；非思考 progress（retry/
+              // compaction/context_status 等）行为不变逐条 append。此前
+              // 逐条 append 时长思考（>~48KB/回合）会占满 300 上限并把
+              // 工具 chatItem 逐出。
+              const isThinking = (ev as { origin?: string }).origin === "thinking";
+              const lastItem = processItems[processItems.length - 1];
+              if (
+                isThinking
+                && lastItem
+                && lastItem.type === "progress"
+                && (lastItem as { _thinking?: boolean })._thinking
+              ) {
+                (lastItem as { text: string }).text += text;
+              } else {
+                const item: ProcessItem & { _thinking?: boolean } = {
+                  type: "progress",
+                  text,
+                  ...(event ? { event } : {}),
+                  ...(isThinking ? { _thinking: true } : {}),
+                };
+                appendProcessItem(processItems, item);
+              }
+            }
             // 只在思考文本（真正的段落截断）前 flush 中间段；usage/runtime
             // 等收尾事件跟在最终段后面，flush 会把最终段（=消息正文，
             // 可能含 :::dashboard 等结构指令）误当中间段落落盘——重放

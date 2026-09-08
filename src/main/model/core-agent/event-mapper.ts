@@ -359,7 +359,9 @@ export async function* mapCoreAgentEvents(
     const chunk = thinkBuf;
     thinkBuf = '';
     thinkBufChars = 0;
-    yield { type: 'progress', text: chunk };
+    // origin:'thinking' 标记（PR209 评审 M9）：bus 旧格式 processItems
+    // 据此把同段思考续写到上一条，不逐条 append。
+    yield { type: 'progress', text: chunk, origin: 'thinking' };
   };
 
   for await (const ev of events) {
