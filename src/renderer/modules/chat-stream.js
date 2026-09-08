@@ -589,7 +589,12 @@ function _csRenderUsageRow(row, payload) {
 // ── 思考行（合并连续片段为一行，收行时结算时长） ──────────────────────────
 
 function _csThinkDurText(row) {
-  if (row.dataset.csClosed !== '1') return '…';
+  // 运行中：实时秒数推进（PRD FR-5「进行中显示 …s」）；结束时定格实测值。
+  // 无 t0（历史重放无计时锚点）运行中只显示省略号——不编造时长。
+  if (row.dataset.csClosed !== '1') {
+    const t0 = Number(row.dataset.csT0);
+    return t0 ? `· ${_csFmtDur(Date.now() - t0)}` : '…';
+  }
   const t0 = Number(row.dataset.csT0);
   if (!t0 || !row.dataset.csDur) return '';
   return `· 持续了 ${_csFmtDur(Number(row.dataset.csDur))}`;
