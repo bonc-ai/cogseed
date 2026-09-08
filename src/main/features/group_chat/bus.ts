@@ -6748,6 +6748,19 @@ async function runActorTurnBody(
           (outcome.kind === "persist" && !!outcome.failureKind)
         ? "failed"
         : "completed";
+  // conv-core 存储补差（真机踩坑 2026-09-08）：主回合路径此前从不调用
+  // chatCollector.finish——历史消息 process 只有 chatItem 条目、没有 turn
+  // 终态条目，历史重放拿不到权威终态/总耗时（面板徽章无耗时、失败回合
+  // 无 failed 依据）。runActorTurn wrapper 的 finish 只覆盖嵌套派发路径。
+  // ChatTurnTerminalStatus 与 TaskTerminalStatus 的 waiting_input 在
+  // chat_events 契约里不存在——等待输入对过程面板而言是暂停而非终态，
+  // 映射为 completed（面板收尾，等待卡片由 interaction 层另管）。
+  chatCollector.finish(
+    terminalStatus === "cancelled" ? "cancelled"
+      : terminalStatus === "failed" ? "failed"
+        : "completed",
+    errText || (outcome.kind === "persist" ? outcome.failureCode : undefined) || undefined,
+  );
   return {
     kind: "completed",
     text: workingText,

@@ -323,6 +323,10 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
   const key = _csPanelKey(cid, turnId);
   let flow = _csPanels.get(key);
   if (flow && flow.isConnected) return { flow, body: flow.querySelector('.cs-flow-body') };
+  // 注册表残留清理（真机踩坑 2026-09-08）：同 key 的 disconnected 旧流
+  // 先从注册表移除，防止 size 膨胀与惰性清理误删活跃流；不调用
+  // _csRemoveFlow（旧 DOM 已销毁，重复 remove 无害但多余）。
+  if (flow) _csPanels.delete(key);
   flow = _csCreateFlow(cid, turnId, { ...opts, anchor });
   // 活动流挂在消息元素内部：消息头（cogseed 图标/名字）之后、正文容器
   // 之前——过程是消息的组成部分（图标下、正文上），执行中与完成态
@@ -771,6 +775,13 @@ window.chatStreamFinalize = function chatStreamFinalize(cid) {
 window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatEvent) {
   if (!chatEvent || typeof chatEvent !== 'object') return;
   try {
+    // 锚点失效防护（真机踩坑 2026-09-08：历史加载竞态）：
+    // 会话切换时 container.innerHTML='' 销毁消息 DOM，_csPanels 注册表
+    // 残留 disconnected 节点；_csEnsureFlow 对同 key 新建后若 anchor 也
+    // 已脱离文档（消息行被后续 reconcile 重建），每条 chatItem 都会
+    // 新建一个 running+loading 面板且永不终态（"永远工作中"）。
+    // 断链的 anchor 不再喂事件——面板宿主不存在，渲染只会产出幽灵 DOM。
+    if (anchor && anchor.isConnected === false) return;
     if (chatEvent.type === 'chat.turn.started') {
       _csEnsureFlow(cid, anchor, chatEvent.turnId, {
         startedAtMs: chatEvent.startedAt ? Date.parse(chatEvent.startedAt) : Date.now(),
@@ -1026,6 +1037,14 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       const replayKey = _csPanelKey(cid, turnId);
       const old = _csPanels.get(replayKey);
       if (old) _csRemoveFlow(old);
+      // 同消息可能残留旧回合的 disconnected 流（会话切换 DOM 销毁后注册
+      // 表未清）：重放前一并清扫，防止幽灵面板叠加（真机踩坑 2026-09-08）。
+      for (const [k, stale] of Array.from(_csPanels.entries())) {
+        if (k.startsWith(cid + '::') && !stale.isConnected) {
+          _csPanels.delete(k);
+          _csRemoveFlow(stale);
+        }
+      }
       // 规范流：noStatus（无 loading/停止/计时器），ensure 负责挂载+注册。
       _csEnsureFlow(cid, msgDiv, turnId, { noStatus: true });
       const flow = _csPanels.get(replayKey);
@@ -1037,6 +1056,8 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const ev = entry.item;
         if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
         if (ev.kind === 'text') continue; // 正文已在消息体
+        // 重放期间消息行若被并发 reconcile 重建（anchor 断链），feed 会经
+        // chatStreamHandleEvent 的 isConnected 防护直接跳过；规范流仍收尾。
         window.chatStreamHandleEvent(cid, msgDiv, Object.assign({}, ev, { turnId }));
       }
       let endMs = endedAtMs;
@@ -1044,7 +1065,15 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         const t0 = Number(flow.dataset.csT0);
         endMs = Number.isFinite(t0) ? t0 + lastDurMs : Date.now();
       }
-      _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
+      // 终态兜底（真机踩坑 2026-09-08）：重放目标是历史消息——无论条目里
+      // 有没有 turn 终态，面板必须离开 running。若流已被并发销毁（极端
+      // 竞态），跳过定格（无宿主可写）。
+      if (flow.isConnected) {
+        _csSetFlowState(flow, lastStatus, lastError, Number.isFinite(endMs) ? endMs : undefined);
+        // 重放循环可能经 ensure 新建过中间流（同 key 断链重建），确保注册
+        // 表里最终态就是这个 flow。
+        _csPanels.set(replayKey, flow);
+      }
       return true;
     } catch (err) {
       _csLog.warn('chat entries replay failed, falling back to legacy items', { error: (err && err.message) || String(err) });
