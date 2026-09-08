@@ -10141,8 +10141,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.user {
+  /* 用户消息右对齐（子安 2026-09-08 补充）：最右缘不贴内容列右缘，而是
+     收到与 AI 回复区块的最右边缘对齐——AI 块居中（max-width 80% 居中于
+     列），右缘 = 列右缘 - 10% 列宽。用 margin-right 抵扣，内容照常
+     flex-end 右对齐。 */
   align-self: flex-end;
   align-items: flex-end;
+  /* AI 居中块半宽 = (80%列) 的一半 = 40% 列宽；用户消息本贴 100% 列右，
+     右移入 10% + AI 半宽超出的部分 = 10%（AI 右缘在 90% - 40% = 50% 处，
+     列右 100%，差 10%）。 */
+  margin-right: 10%;
 }
 
 .chat-message.assistant {
