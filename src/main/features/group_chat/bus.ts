@@ -148,6 +148,20 @@ import {
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
   return getThinkingLevel();
 }
+
+/** 思考展示兜底辅助：本轮模型是否被识别为 reasoning 模型（deepseek/o系/
+ * gemini-pro/grok 等全系）。按模型名前缀宽松判定——与
+ * model_id_recognition.ts 的规则同源精简；识别不出返回 false（不盲发）。 */
+function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
+  const modelId = String(
+    item.execConfig?.model
+      || ""
+      || "",
+  ).trim().toLowerCase();
+  if (!modelId) return true; // 无显式模型信息（默认链路）——按能思考处理，让默认档生效
+  return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
+    || /(thinking|reasoner|qwq)/.test(modelId);
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -5438,10 +5452,20 @@ async function runActorTurnBody(
       // per-task override (renderer composer) > agent default (agent.json
       // `default_thinking`) > global preference. 'auto' = no override; let
       // the provider default / model decide.
-      const turnThinkingLevel: "auto" | "off" | "low" | "high"
+      let turnThinkingLevel: "auto" | "off" | "low" | "high"
         = item.execConfig?.effort
           ?? turnAgentSpec?.default_thinking
           ?? thinkingLevelForRun();
+      // 思考展示兜底（子安 2026-09-08：思考过程展示需求）：'auto' 时不传
+      // thinkingLevel，pi-ai 对 openai 兼容端点不会带 reasoning_effort，
+      // DeepSeek 中转端点缺该参数时思考模式默认关闭 → 全程无
+      // reasoning_content 流（真机 18:40 轮实测 thinking_level 0 次）。
+      // 用户未显式选 off 时，对已知 reasoning 模型按 'low' 发起——思考流
+      // 可达渲染层；显式 off 仍彻底关闭。模型名识别不出 reasoning 特征
+      // 时不强行注入（避免给不认识的服务盲发参数，保持方案 C 约定）。
+      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)) {
+        turnThinkingLevel = "low";
+      }
       // Effective model override priority: per-task override > agent
       // default (`default_model`). Commander / in-process agents only —
       // CLI turns apply their own model below (runtime.model + override).
