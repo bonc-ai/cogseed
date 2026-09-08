@@ -7640,10 +7640,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   bottom: var(--terminal-height, 0px);
   left: 0;
   right: 0;
-  /* Top 20px fades in, bottom 32px is the old gap. The gradient masks any
-     messages that scroll behind the floating input so the bubble "floats"
-     cleanly without leaking conversation text into its backdrop. */
-  padding: 20px 32px 32px;
+  /* 左右 padding 与 .chat-history 的 10% 一致（子安 2026-09-08 布局统一）：
+     输入框与对话内容共用同一水平范围，消除 32px 固定 padding 造成的错位。 */
+  padding: 20px 10% 32px;
   background: linear-gradient(to bottom, transparent 0%, var(--bg) 20%);
   z-index: var(--z-raised);
   pointer-events: none;
@@ -10147,7 +10146,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.assistant {
-  align-self: flex-start;
+  /* AI 回复区块整体水平居中（子安 2026-09-08）：块级对齐，非逐行文字
+     居中——区块内部文字仍左对齐（align-items: flex-start）。 */
+  align-self: center;
   align-items: flex-start;
 }
 
@@ -10321,8 +10322,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.is-message-editing {
+  /* 编辑态居中对齐 AI 内容列（子安 2026-09-08 布局统一）：用户消息编辑时
+     原右对齐换居中，宽度与 AI 区块一致。 */
   width: min(80%, 760px);
   max-width: min(80%, 760px);
+  align-self: center;
+  align-items: stretch;
 }
 .chat-message-edit-composer {
   width: min(620px, 100%);
