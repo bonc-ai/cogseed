@@ -534,13 +534,15 @@ function renderChartBar(data) {
 // 实现见 modules/dashboard.js（组件注册表单源驱动）。此处桥接保持
 // renderMarkdownFull 内部引用名不变，接口零破坏。
 // 环境差异：浏览器（classic script，dashboard.js 先加载）经全局
-// DashboardRenderer 拿到实现；CommonJS（测试）经 require 直接取——
-// 两种通道汇到同一个实现对象。
+// DashboardRenderer 拿到实现；CommonJS（测试）无全局、经 require 取。
+// 注意顺序：必须先测浏览器全局，CommonJS 分支里才安全用 require——
+// 浏览器没有 require，条件写反会让顶层抛 ReferenceError 中止整个
+// script（renderMarkdownFull 之后的全局函数全部消失）。
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const _dashboardImpl = (typeof DashboardRenderer !== 'undefined')
   ? DashboardRenderer
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  : require('./dashboard.js').DashboardRenderer;
+  : (typeof require === 'function' ? require('./dashboard.js').DashboardRenderer : {});
 const {
   renderDashboard,
   _DB_COMPONENT_TYPES,
