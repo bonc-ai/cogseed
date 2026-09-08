@@ -121,6 +121,8 @@ function summarizeArgs(args: unknown): string | undefined {
 function usagePayloadFrom(data: Record<string, unknown>): {
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 } {
   const pick = (...keys: string[]): number | undefined => {
     for (const key of keys) {
@@ -129,6 +131,8 @@ function usagePayloadFrom(data: Record<string, unknown>): {
     }
     return undefined;
   };
+  const cacheRead = pick('cache_read_tokens', 'cacheReadTokens', 'cacheRead', 'prompt_cache_hit_tokens', 'cached_tokens');
+  const cacheWrite = pick('cache_write_tokens', 'cacheWriteTokens', 'cacheWrite', 'cache_creation_input_tokens', 'prompt_cache_miss_tokens');
   return {
     ...(pick('input_tokens', 'inputTokens', 'input', 'prompt_tokens') !== undefined
       ? { inputTokens: pick('input_tokens', 'inputTokens', 'input', 'prompt_tokens') }
@@ -136,6 +140,11 @@ function usagePayloadFrom(data: Record<string, unknown>): {
     ...(pick('output_tokens', 'outputTokens', 'output', 'completion_tokens') !== undefined
       ? { outputTokens: pick('output_tokens', 'outputTokens', 'output', 'completion_tokens') }
       : {}),
+    // 缓存字段（2026-09-08 补）：此前只映射 input/output，面板用量行缓存读
+    // 恒 0——与页脚 meta（走 messageMetrics 全字段）口径不一致。宽松覆盖
+    // pi-ai 驼峰 / DeepSeek 下划线 / Anthropic 命名。
+    ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
   };
 }
 
