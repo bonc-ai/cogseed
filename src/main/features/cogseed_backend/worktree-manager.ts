@@ -90,9 +90,28 @@ interface CogSeedWorktreeManagerDeps {
   inspectProcesses?: (worktreePath: string) => Promise<WorktreeProcessInspection>;
 }
 
+function normalizedWindowsPath(value: string): string {
+  const withoutNamespace = value
+    .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+    .replace(/^\\\\\?\\/i, '');
+  return path.win32.normalize(withoutNamespace).toLowerCase();
+}
+
 function normalizedPath(value: string): string {
   const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLocaleLowerCase() : resolved;
+  if (process.platform !== 'win32') return resolved;
+  return normalizedWindowsPath(fs.realpathSync.native(resolved));
+}
+
+function normalizedCreationPath(value: string): string {
+  try {
+    return normalizedPath(value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    return process.platform === 'win32'
+      ? normalizedWindowsPath(path.resolve(value))
+      : path.resolve(value);
+  }
 }
 
 async function git(cwd: string, args: string[]): Promise<WorktreeProcessResult> {
@@ -191,14 +210,18 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
     }
   }
 
-  function isManagedPath(repo: { root: string; managedParent: string }, candidate: string): boolean {
+  function isManagedPath(
+    repo: { root: string; managedParent: string },
+    candidate: string,
+    allowMissingCandidate = false,
+  ): boolean {
     const resolved = path.resolve(candidate);
     const candidateParent = path.dirname(resolved);
     let comparableParent = candidateParent;
     try { comparableParent = fs.realpathSync(candidateParent); } catch { /* removal fails closed later */ }
     return normalizedPath(comparableParent) === normalizedPath(repo.managedParent)
       && path.basename(resolved).startsWith(MANAGED_PREFIX)
-      && normalizedPath(resolved) !== normalizedPath(repo.root);
+      && (allowMissingCandidate ? normalizedCreationPath(resolved) : normalizedPath(resolved)) !== normalizedPath(repo.root);
   }
 
   async function dirtyState(worktreePath: string): Promise<boolean | null> {
@@ -213,8 +236,13 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
     async resolve(userId: string, rawName: string): Promise<string> {
       const repo = await repositoryContext(userId);
       const name = validateManagedName(rawName);
-      const registered = repo.registered.find((entry) => path.basename(entry.path) === name
-        && isManagedPath(repo, entry.path));
+      let registered: RegisteredWorktree | undefined;
+      try {
+        registered = repo.registered.find((entry) => path.basename(entry.path) === name
+          && isManagedPath(repo, entry.path));
+      } catch {
+        worktreeError('E_WORKTREE_UNVERIFIED');
+      }
       if (!registered) worktreeError('E_WORKTREE_NOT_REGISTERED');
       if (registered.bare || registered.detached || registered.prunable) worktreeError('E_WORKTREE_UNVERIFIED');
 
@@ -234,15 +262,26 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
       } catch {
         worktreeError('E_WORKTREE_UNVERIFIED');
       }
-      if (normalizedPath(worktreeCommon) !== normalizedPath(repo.commonDir)) {
-        worktreeError('E_WORKTREE_REPOSITORY_MISMATCH');
+      try {
+        if (normalizedPath(worktreeCommon) !== normalizedPath(repo.commonDir)) {
+          worktreeError('E_WORKTREE_REPOSITORY_MISMATCH');
+        }
+      } catch (error) {
+        if (error instanceof CogSeedWorktreeError) throw error;
+        worktreeError('E_WORKTREE_UNVERIFIED');
       }
       return worktreePath;
     },
 
     async list(userId: string): Promise<CogSeedWorktreeProjection> {
       const repo = await repositoryContext(userId);
-      const managed = repo.registered.filter((entry) => isManagedPath(repo, entry.path));
+      const managed = repo.registered.filter((entry) => {
+        try {
+          return isManagedPath(repo, entry.path);
+        } catch {
+          return false;
+        }
+      });
       const worktrees = await Promise.all(managed.map(async (entry): Promise<CogSeedManagedWorktree> => {
         const dirty = entry.prunable || entry.bare || entry.detached ? null : await dirtyState(entry.path);
         return {
@@ -277,7 +316,14 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
 
       const slug = branch.toLocaleLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 42) || 'branch';
       const worktreePath = path.join(repo.managedParent, `${MANAGED_PREFIX}${slug}-${suffix()}`);
-      if (!isManagedPath(repo, worktreePath) || fs.existsSync(worktreePath)) worktreeError('E_WORKTREE_PATH_INVALID');
+      try {
+        if (!isManagedPath(repo, worktreePath, true) || fs.existsSync(worktreePath)) {
+          worktreeError('E_WORKTREE_PATH_INVALID');
+        }
+      } catch (error) {
+        if (error instanceof CogSeedWorktreeError) throw error;
+        worktreeError('E_WORKTREE_UNVERIFIED');
+      }
 
       let branchExists = false;
       try {
@@ -303,7 +349,12 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
       }
 
       const projection = await this.list(userId);
-      const created = projection.worktrees.find((item) => normalizedPath(item.path) === normalizedPath(worktreePath));
+      let created: CogSeedManagedWorktree | undefined;
+      try {
+        created = projection.worktrees.find((item) => normalizedPath(item.path) === normalizedPath(worktreePath));
+      } catch {
+        worktreeError('E_WORKTREE_UNVERIFIED');
+      }
       if (!created?.verifiable || created.branch !== branch) worktreeError('E_WORKTREE_UNVERIFIED');
       log.info('managed worktree created', { worktree: logPathRef(worktreePath), branch });
       return created;
@@ -314,14 +365,22 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
       const worktreePath = typeof input?.path === 'string' ? path.resolve(input.path) : '';
       const expectedBranch = validateBranchText(input?.expectedBranch);
       if (!worktreePath) worktreeError('E_WORKTREE_PATH_INVALID');
+      let normalizedWorktreePath = '';
       try {
-        if (normalizedPath(fs.realpathSync(worktreePath)) === normalizedPath(repo.root)) {
+        normalizedWorktreePath = normalizedPath(worktreePath);
+        if (normalizedWorktreePath === normalizedPath(repo.root)) {
           worktreeError('E_WORKTREE_MAIN_REPOSITORY');
         }
       } catch (error) {
         if (error instanceof CogSeedWorktreeError) throw error;
+        worktreeError('E_WORKTREE_UNVERIFIED');
       }
-      if (!isManagedPath(repo, worktreePath)) worktreeError('E_WORKTREE_OUTSIDE_MANAGED_ROOT');
+      try {
+        if (!isManagedPath(repo, worktreePath)) worktreeError('E_WORKTREE_OUTSIDE_MANAGED_ROOT');
+      } catch (error) {
+        if (error instanceof CogSeedWorktreeError) throw error;
+        worktreeError('E_WORKTREE_UNVERIFIED');
+      }
 
       let stat: fs.Stats;
       try {
@@ -332,7 +391,13 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
       if (stat.isSymbolicLink()) worktreeError('E_WORKTREE_SYMLINK');
       if (!stat.isDirectory()) worktreeError('E_WORKTREE_PATH_INVALID');
 
-      const registered = repo.registered.find((entry) => normalizedPath(entry.path) === normalizedPath(worktreePath));
+      const registered = repo.registered.find((entry) => {
+        try {
+          return normalizedPath(entry.path) === normalizedWorktreePath;
+        } catch {
+          return false;
+        }
+      });
       if (!registered) worktreeError('E_WORKTREE_NOT_REGISTERED');
       if (registered.bare || registered.detached || registered.prunable) worktreeError('E_WORKTREE_UNVERIFIED');
       if (registered.branch !== expectedBranch) worktreeError('E_WORKTREE_BRANCH_MISMATCH');
@@ -343,7 +408,14 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
       } catch {
         worktreeError('E_WORKTREE_UNVERIFIED');
       }
-      if (normalizedPath(worktreeCommon) !== normalizedPath(repo.commonDir)) worktreeError('E_WORKTREE_REPOSITORY_MISMATCH');
+      try {
+        if (normalizedPath(worktreeCommon) !== normalizedPath(repo.commonDir)) {
+          worktreeError('E_WORKTREE_REPOSITORY_MISMATCH');
+        }
+      } catch (error) {
+        if (error instanceof CogSeedWorktreeError) throw error;
+        worktreeError('E_WORKTREE_UNVERIFIED');
+      }
 
       const dirty = await dirtyState(worktreePath);
       if (dirty === null) worktreeError('E_WORKTREE_UNVERIFIED');
