@@ -13789,7 +13789,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
   // _handleGroupBusEvent's state_changed branch).
   msg.innerHTML = `
     <div class="chat-msg-header">
-      <span class="chat-msg-avatar-slot" data-role="from-avatar"></span>
+      <span class="chat-msg-avatar-slot" data-role="from-avatar">${opts.hiddenUntilActor ? _renderActorAvatarHtml('commander') : ''}</span>
       <span class="chat-msg-from" data-role="from-chip"></span>
       <span class="chat-msg-exec-meta" data-role="exec-meta" hidden></span>
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
