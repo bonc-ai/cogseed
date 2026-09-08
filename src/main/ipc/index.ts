@@ -958,6 +958,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
+  'stt.cancel': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    stt.cancelSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
   'cogseed.task.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.create(ctx.userId, payload),
   'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
@@ -6373,7 +6378,11 @@ export function register(): void {
         : (typeof rawCode === 'string' && /^\d+$/.test(rawCode.trim())
           ? Number(rawCode.trim())
           : (typeof rawCode === 'string' && rawCode ? rawCode : normalized.code));
-      log.error(`invoke ${channel} failed`, { error: normalized.error, code });
+      if (channel.startsWith('stt.')) {
+        log.error(`invoke ${channel} failed`, { stage: 'invoke', code });
+      } else {
+        log.error(`invoke ${channel} failed`, { error: normalized.error, code });
+      }
       const out: {
         ok: false;
         error: string;
