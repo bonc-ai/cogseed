@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { P3394McpRuntimeAdapter } from '../../../../src/main/features/p3394_bridge/mcp-runtime-adapter';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
 
@@ -70,4 +73,70 @@ describe('P3394 SA-MCP agent runtime adapter (SDK §10.1)', () => {
       await adapter.close();
     }
   });
+
+  it.runIf(process.platform === 'win32')('runs a real .cmd through ComSpec and closes its descendant tree before resolving', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-mcp-runtime-'));
+    const fixtureDir = path.join(root, 'hostile & runtime (测试)');
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    const serverPath = path.join(fixtureDir, 'server.js');
+    const launcherPath = path.join(fixtureDir, 'runtime.cmd');
+    const pidPath = path.join(fixtureDir, 'pids.txt');
+    const markerPath = path.join(fixtureDir, 'cmd-ran.txt');
+    fs.writeFileSync(serverPath, `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const readline = require('node:readline');
+const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+  stdio: 'ignore',
+  windowsHide: true,
+});
+fs.writeFileSync(process.env.COGSEED_MCP_PID_FILE, process.pid + '\\n' + descendant.pid + '\\n');
+const rl = readline.createInterface({ input: process.stdin });
+function reply(message, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+}
+rl.on('line', (raw) => {
+  const message = JSON.parse(raw);
+  if (message.method === 'initialize') {
+    reply(message, { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'cmd-fixture', version: '1' } });
+    return;
+  }
+  reply(message, { content: [{ type: 'text', text: JSON.stringify({ native_session_id: 'cmd-session' }) }] });
+});
+setInterval(() => {}, 1000);
+`);
+    fs.writeFileSync(
+      launcherPath,
+      '@echo off\r\n> "%COGSEED_MCP_CMD_MARKER%" echo cmd-fallback\r\n"%COGSEED_MCP_TEST_NODE%" "%COGSEED_MCP_TEST_SERVER%" %*\r\n',
+    );
+    const adapter = new P3394McpRuntimeAdapter({
+      command: launcherPath,
+      env: {
+        COGSEED_MCP_TEST_NODE: process.execPath,
+        COGSEED_MCP_TEST_SERVER: serverPath,
+        COGSEED_MCP_PID_FILE: pidPath,
+        COGSEED_MCP_CMD_MARKER: markerPath,
+      },
+    });
+
+    try {
+      const binding = await adapter.openSession({ session_id: 'cmd', agent_id: 'agent' });
+      expect(binding.native_session_id).toBe('cmd-session');
+      expect(fs.readFileSync(markerPath, 'utf8')).toContain('cmd-fallback');
+      const pids = fs.readFileSync(pidPath, 'utf8').trim().split(/\r?\n/).map(Number);
+      expect(pids).toHaveLength(2);
+      expect(pids.every((pid) => {
+        try { process.kill(pid, 0); return true; } catch { return false; }
+      })).toBe(true);
+
+      await adapter.close();
+
+      expect(pids.filter((pid) => {
+        try { process.kill(pid, 0); return true; } catch { return false; }
+      })).toEqual([]);
+    } finally {
+      await adapter.close();
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  }, 15_000);
 });

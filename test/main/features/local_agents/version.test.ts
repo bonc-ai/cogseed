@@ -444,14 +444,10 @@ setInterval(() => {}, 1000);
       .split(/\r?\n/)
       .map(Number);
     expect(pids).toHaveLength(2);
-    const deadline = Date.now() + 2_000;
-    const alive = new Set(pids);
-    while (alive.size > 0 && Date.now() < deadline) {
-      for (const pid of alive) {
-        try { process.kill(pid, 0); } catch { alive.delete(pid); }
-      }
-      if (alive.size > 0) await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    expect([...alive]).toEqual([]);
+    // detectVersion must not return while the wrapper or its descendant can
+    // still hold the executable/temp directory open on Windows.
+    expect(pids.filter((pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    })).toEqual([]);
   });
 });
