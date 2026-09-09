@@ -80,8 +80,13 @@ beforeEach(async () => {
 afterEach(async () => {
   _stopClosure?.();
   _stopClosure = undefined;
+  const closure = await import('../../../../src/main/features/kstar/task-closure');
   const groupChat = await import('../../../../src/main/features/group_chat');
-  for (const cid of cids.splice(0)) await groupChat.dropConv('user-a', cid).catch(() => undefined);
+  for (const cid of cids.splice(0)) {
+    await closure.cancelAutoClose('user-a', cid).catch(() => undefined);
+    await groupChat.dropConv('user-a', cid).catch(() => undefined);
+  }
+  closure._setAutoCloseQuietMsForTest(undefined);
   if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevFlag === undefined) delete process.env.COGSEED_COMMANDER_CENTRIC_KSTAR;
@@ -216,6 +221,7 @@ describe('KStar design-v4 chain (candidate pool + semantic dedup + auto-close)',
     const requirementId = await seedRequirementWithLesson(cid, '写一份 500 字资料', 'N 字资料类请求：交付开头注明实际字数');
     const store = await import('../../../../src/main/features/kstar/requirement-store');
     const closure = await import('../../../../src/main/features/kstar/task-closure');
+    closure._setAutoCloseQuietMsForTest(5_000);
 
     // Schedule the quiet window (as the terminal listener would).
     const scheduled = await closure.scheduleAutoClose('user-a', cid);
