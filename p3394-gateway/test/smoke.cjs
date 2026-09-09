@@ -603,6 +603,15 @@ async function main() {
     "    req.on('data', (c) => { body += c; });",
     "    req.on('end', () => {",
     "      const prompt = JSON.parse(body).parts[0].text;",
+    "      if (prompt.includes('CANCEL-OPENCODE')) {",
+    "        if (process.env.FAKE_OC_INFLIGHT) fs.writeFileSync(process.env.FAKE_OC_INFLIGHT, sid);",
+    "        setTimeout(() => {",
+    "          if (res.destroyed) return;",
+    "          res.writeHead(200, { 'content-type': 'application/json' });",
+    "          res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: CANCEL-OPENCODE' }] }));",
+    "        }, 1500);",
+    "        return;",
+    "      }",
     //      reasoning part 先建映射，其 delta 必须被网关丢弃（不进正文气泡）
     "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_r', type: 'reasoning', text: 'thinking' } } });",
     "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_r', field: 'text', delta: 'REASONING-NOISE' } });",
@@ -633,12 +642,13 @@ async function main() {
   const OC_PERSIST_PORT = GATEWAY_PORT + 96;
   const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
   const ocDescendantPidFile = path.join(tmp, 'oc-server-descendant-pids.txt');
+  const ocInflightFile = path.join(tmp, 'oc-server-inflight.txt');
   // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
   // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
   const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
   fs.mkdirSync(ocSharedCwd, { recursive: true });
-  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile };
-  const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile, FAKE_OC_INFLIGHT: ocInflightFile };
+  const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let ocPersistGwLog = '';
   ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
   ocPersistGw.stderr.on('data', (c) => { ocPersistGwLog += c; });
@@ -670,11 +680,28 @@ async function main() {
   let ocPids = [];
   try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
   check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
-  ocPersistGw.kill('SIGTERM');
+  const ocCancelEnv = { message_id: 'ocm-cancel', session_id: 'oc-fs-cancel', task_id: 'oct-cancel', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'CANCEL-OPENCODE' }] }, idempotency_key: 'oc-idem-cancel', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocCancelEnv }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !fs.existsSync(ocInflightFile); i += 1) await sleep(50);
+  check('opencode 常驻：取消前 HTTP turn 确实在途', fs.existsSync(ocInflightFile));
+  const ocCancelCtl = { message_id: 'ocm-cancel-ctl', session_id: 'oc-fs-cancel', task_id: 'oct-cancel', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'oc-idem-cancel-ctl' };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocCancelCtl }, GATEWAY_TOKEN);
+  await sleep(300);
+  check('opencode 常驻：handleCancel 命中并中断在途 HTTP 请求', ocPersistGwLog.includes('cancel task oct-cancel (killed)'));
+  await sleep(1500);
+  check('opencode 常驻：取消后不发送正常终态', !received.some((e) => e.session_id === 'oc-fs-cancel' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY')));
+  ocPersistGw.send({ type: 'p3394-shutdown' });
+  let ocShutdownClosed = false;
   await Promise.race([
-    new Promise((resolve) => ocPersistGw.once('close', resolve)),
-    sleep(5000).then(() => { throw new Error('opencode gateway shutdown timeout'); }),
+    new Promise((resolve) => ocPersistGw.once('close', () => { ocShutdownClosed = true; resolve(); })),
+    sleep(3000),
   ]);
+  check('opencode 常驻：IPC graceful shutdown 关闭 gateway', ocShutdownClosed);
+  check('opencode 常驻：测试确实进入 gateway shutdown handler', ocPersistGwLog.includes('[p3394-gateway] shutting down (IPC)'));
+  if (!ocShutdownClosed) {
+    ocPersistGw.kill('SIGTERM');
+    await new Promise((resolve) => ocPersistGw.once('close', resolve));
+  }
   if (process.platform === 'win32') {
     const ocTreePids = [ocPidFile, ocDescendantPidFile]
       .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));

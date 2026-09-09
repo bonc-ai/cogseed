@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as vm from 'node:vm';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -60,12 +61,94 @@ const CLI_MODEL_REPLY = JSON.stringify({
     + 'Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.',
 });
 
+type RuntimeCloseName = 'oneshot' | 'codex-app-server' | 'sscli' | 'stream-json' | 'claude-persistent' | 'opencode';
+
+function runtimeCloseFixture(name: RuntimeCloseName) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+  const bounds: Record<RuntimeCloseName, [string, string]> = {
+    oneshot: ['const oneshotRuntime = {', 'function clipReply'],
+    'codex-app-server': ['class CodexAppServerRuntime', 'const codexAppServerRuntime'],
+    sscli: ['class SscliRuntime', 'const sscliRuntime'],
+    'stream-json': ['class StreamJsonRuntime', 'const streamJsonRuntime'],
+    'claude-persistent': ['class ClaudePersistentRuntime', '// ── opencode 常驻'],
+    opencode: ['class OpencodeRuntime', 'const claudePersistentRuntime'],
+  };
+  const [startMarker, endMarker] = bounds[name];
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  const chunk = source.slice(start, end);
+  const method = /^  (?:async )?close\(\) \{[\s\S]*?^  \}/m.exec(chunk)?.[0];
+  if (!method) throw new Error(`close method not found for ${name}`);
+
+  const children = [{ pid: 101 }, { pid: 202 }];
+  const resolvers: Array<() => void> = [];
+  const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+  const context: Record<string, unknown> = { killProcessTree, clearTimeout, clearInterval };
+  let receiver: Record<string, unknown>;
+  let hasState: () => boolean;
+  let expectedKills: number;
+
+  if (name === 'oneshot') {
+    const activeTasks = new Map([['a', children[0]], ['b', children[1]]]);
+    context.activeTasks = activeTasks;
+    receiver = {};
+    hasState = () => activeTasks.size === 2;
+    expectedKills = 2;
+  } else if (name === 'codex-app-server') {
+    receiver = { activeTurns: new Map([['task', { threadId: 'thread' }]]), child: children[0] };
+    hasState = () => (receiver.activeTurns as Map<string, unknown>).size === 1 && receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'sscli') {
+    receiver = { closing: false, heartbeatTimer: {}, child: children[0] };
+    hasState = () => receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'stream-json') {
+    receiver = { active: new Map([['a', children[0]], ['b', children[1]]]) };
+    hasState = () => (receiver.active as Map<string, unknown>).size === 2;
+    expectedKills = 2;
+  } else if (name === 'claude-persistent') {
+    receiver = {
+      sessions: new Map([['a', { child: children[0], idleTimer: null, turn: null }], ['b', { child: children[1], idleTimer: null, turn: null }]]),
+      turnKeys: new Map([['task', 'a']]),
+    };
+    hasState = () => (receiver.sessions as Map<string, unknown>).size === 2 && (receiver.turnKeys as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  } else {
+    receiver = {
+      closing: false,
+      servers: new Map([['a', { child: children[0] }], ['b', { child: children[1] }]]),
+      sessions: new Map([['session', { cwd: '/tmp' }]]),
+    };
+    hasState = () => (receiver.servers as Map<string, unknown>).size === 2 && (receiver.sessions as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  }
+
+  const close = vm.runInNewContext(`({${method}}).close`, context) as (this: Record<string, unknown>) => Promise<void>;
+  return { close, receiver, hasState, expectedKills, killProcessTree, resolvers };
+}
+
 describe('gateway runtime shutdown contract', () => {
-  it('awaits OpenCode persistent server process-tree termination before close resolves', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
-    const runtime = /class OpencodeRuntime[\s\S]*?\r?\n}\r?\nconst claudePersistentRuntime/.exec(source)?.[0] || '';
-    expect(runtime).toMatch(/async close\(\)[\s\S]*?await Promise\.all\([\s\S]*?killProcessTree\(entry\.child, 'SIGTERM'\)/);
-  });
+  it.each<RuntimeCloseName>(['oneshot', 'codex-app-server', 'sscli', 'stream-json', 'claude-persistent', 'opencode'])(
+    '%s close awaits all process-tree terminations before clearing runtime state',
+    async (name) => {
+      const fixture = runtimeCloseFixture(name);
+      const completion = fixture.close.call(fixture.receiver);
+      expect(completion && typeof completion.then).toBe('function');
+      expect(fixture.killProcessTree).toHaveBeenCalledTimes(fixture.expectedKills);
+      expect(fixture.hasState()).toBe(true);
+
+      let settled = false;
+      void completion.then(() => { settled = true; });
+      for (const resolve of fixture.resolvers.slice(0, -1)) resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(fixture.hasState()).toBe(true);
+
+      fixture.resolvers.at(-1)?.();
+      await completion;
+      expect(fixture.hasState()).toBe(false);
+    },
+  );
 
   it.each(['gateway.cjs', 'sscli-shim.cjs'])('%s closes the shebang probe handle in finally', (name) => {
     const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');

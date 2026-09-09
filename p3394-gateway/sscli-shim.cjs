@@ -395,7 +395,11 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     // 冷启动可见性：CLI 启动占每轮首字延迟大头（实测 8-12s），spawn 即告知，
     // 超时未见首字再提示一次——无提示时用户面对的是无响应黑盒。
     emitEvent({ event: 'progress', request_id: requestId, text: '正在启动 ' + cliLabel() + '…' });
-    const child = spawnCli(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, args, {
+      cwd: cwd || undefined,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
     // taskId（deliver 帧 task_id，网关 handleCancel 的取消键）与 requestId
     // （网关内部 req-N，仅应答关联用）分属两个命名空间，都要记——cancel
     // 帧带 task_id，老调用方/无 task_id 场景回退 request_id 比对。
@@ -406,6 +410,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     let progressSent = 0;
     let finished = false;
     let terminationError = null;
+    let forceKillTimer = null;
     const slowStartTimer = setTimeout(() => {
       if (activeTurn && activeTurn.child === child && activeTurn.streamedChars === 0) {
         emitEvent({ event: 'progress', request_id: requestId, text: cliLabel() + ' 冷启动较慢，仍在等待首个输出…' });
@@ -413,13 +418,23 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     }, SLOW_START_HINT_MS);
     const timer = setTimeout(() => {
       terminationError = new Error('p3394_agent_timeout');
-      void killProcessTree(child, 'SIGTERM').then(() => finish(terminationError));
+      void killProcessTree(child, 'SIGTERM').then(() => {
+        if (finished) return;
+        if (process.platform === 'win32') {
+          finish(terminationError);
+          return;
+        }
+        forceKillTimer = setTimeout(() => {
+          void killProcessTree(child, 'SIGKILL').then(() => finish(terminationError));
+        }, 3000);
+      });
     }, TIMEOUT_MS);
     function finish(error) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       clearTimeout(slowStartTimer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
       if (activeTurn && activeTurn.child === child) activeTurn = null;
       if (error) reject(error); else resolve(out.trim());
     }
@@ -450,7 +465,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     });
     child.on('error', (error) => { if (!terminationError) finish(error); });
     child.on('close', (code) => {
-      if (terminationError) return;
+      if (terminationError) { finish(terminationError); return; }
       if (code === 0) finish();
       else finish(new Error('agent exited ' + code + (errOut ? ': ' + sanitizeStreamText(errOut.slice(-300)) : '')));
     });

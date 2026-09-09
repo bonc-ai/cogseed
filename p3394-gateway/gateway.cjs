@@ -1192,8 +1192,8 @@ const oneshotRuntime = {
   async inspectModels() {
     return inspectPresetModels('oneshot_no_inspect');
   },
-  close() {
-    for (const child of activeTasks.values()) killProcessTree(child, 'SIGTERM');
+  async close() {
+    await Promise.all(Array.from(activeTasks.values(), (child) => killProcessTree(child, 'SIGTERM')));
     activeTasks.clear();
   },
 };
@@ -1514,9 +1514,11 @@ class CodexAppServerRuntime {
     } catch { /* best effort */ }
     return true;
   }
-  close() {
+  async close() {
+    const child = this.child;
+    if (child) await killProcessTree(child, 'SIGTERM');
     this.activeTurns.clear();
-    if (this.child) { killProcessTree(this.child, 'SIGTERM'); this.child = null; }
+    if (this.child === child) this.child = null;
   }
 }
 const codexAppServerRuntime = new CodexAppServerRuntime();
@@ -1704,10 +1706,12 @@ class SscliRuntime {
   async inspectModels() {
     return inspectPresetModels('sscli_no_inspect');
   }
-  close() {
+  async close() {
     this.closing = true;
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
-    if (this.child) { killProcessTree(this.child, 'SIGTERM'); this.child = null; }
+    const child = this.child;
+    if (child) await killProcessTree(child, 'SIGTERM');
+    if (this.child === child) this.child = null;
   }
 }
 
@@ -1892,8 +1896,8 @@ class StreamJsonRuntime {
     this.active.delete(taskId);
     return true;
   }
-  close() {
-    for (const child of this.active.values()) killProcessTree(child, 'SIGTERM');
+  async close() {
+    await Promise.all(Array.from(this.active.values(), (child) => killProcessTree(child, 'SIGTERM')));
     this.active.clear();
   }
 }
@@ -2190,12 +2194,13 @@ class ClaudePersistentRuntime {
     }
     return probeClaudeModels();
   }
-  close() {
-    for (const entry of this.sessions.values()) {
+  async close() {
+    const entries = Array.from(this.sessions.values());
+    for (const entry of entries) {
       if (entry.idleTimer) { clearTimeout(entry.idleTimer); entry.idleTimer = null; }
-      if (entry.turn) { clearTimeout(entry.turn.timer); entry.turn = null; }
-      killProcessTree(entry.child, 'SIGTERM');
+      if (entry.turn) clearTimeout(entry.turn.timer);
     }
+    await Promise.all(entries.map((entry) => killProcessTree(entry.child, 'SIGTERM')));
     this.sessions.clear();
     this.turnKeys.clear();
   }
@@ -2710,7 +2715,7 @@ function handleCancel(envelope) {
   // PR209 评审 M6：原代码在 || 链外对 sscliRuntime 又 cancel 一次（双发），
   // 且 shim 侧 cancel 不看 task_id 会误杀排队中另一任务的执行进程。
   // 修复：单次按序 cancel（短路即停，首个命中的 runtime 负责）。
-  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
+  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || opencodeRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
   if (killed) cancelledTasks.add(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
   postReply(envelope, '[已取消]');
@@ -3040,25 +3045,31 @@ const server = http.createServer((req, res) => {
 });
 
 let shuttingDown = false;
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log('[p3394-gateway] shutting down (' + signal + ')');
-    // 统一关闭各运行时：回杀运行中的 oneshot CLI 子进程（否则退场后它们继续
-    // 跑成孤儿）、sscli 常驻子进程、codex app-server。
-    await Promise.all([
-      sscliRuntime.close(),
-      codexAppServerRuntime.close(),
-      streamJsonRuntime.close(),
-      claudePersistentRuntime.close(),
-      opencodeRuntime.close(),
-      oneshotRuntime.close(),
-    ]);
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(1), 3000).unref();
-  });
+async function shutdownGateway(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('[p3394-gateway] shutting down (' + reason + ')');
+  // 统一关闭各运行时：回杀运行中的 oneshot CLI 子进程（否则退场后它们继续
+  // 跑成孤儿）、sscli 常驻子进程、codex app-server。
+  await Promise.all([
+    sscliRuntime.close(),
+    codexAppServerRuntime.close(),
+    streamJsonRuntime.close(),
+    claudePersistentRuntime.close(),
+    opencodeRuntime.close(),
+    oneshotRuntime.close(),
+  ]);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 3000).unref();
 }
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => { void shutdownGateway(signal); });
+}
+// Windows does not deliver child.kill('SIGTERM') to Node handlers. A parent
+// with an IPC channel can request the same graceful shutdown path explicitly.
+process.on('message', (message) => {
+  if (message && message.type === 'p3394-shutdown') void shutdownGateway('IPC');
+});
 
 server.listen(PORT, GATEWAY_HOST, () => {
   console.log('[p3394-gateway] ' + AGENT_ID + ' P3394 endpoint on http://' + (isLoopbackHost ? '127.0.0.1' : GATEWAY_HOST) + ':' + PORT + ' · mode: ' + AGENT_MODE);

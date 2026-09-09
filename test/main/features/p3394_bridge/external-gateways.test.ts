@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 import { spawn, spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
@@ -49,6 +50,67 @@ describe('P3394 external-agent gateway host', () => {
     expect(p3394ExternalGatewayIdFor('openclaw')).toBe('openclaw');
     expect(p3394ExternalGatewayIdFor('workbuddy')).toBe('workbuddy');
     expect(p3394ExternalGatewayIdFor('nonsense')).toBeNull();
+  });
+
+  it('starts every managed process-tree termination synchronously and awaits them all', async () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'features', 'p3394_bridge', 'external-gateways.ts'), 'utf8');
+    const declaration = /export async function stopAllExternalGateways\(\): Promise<void> \{[\s\S]*?^}/m.exec(source)?.[0];
+    if (!declaration) throw new Error('stopAllExternalGateways not found');
+    const runnable = declaration.replace(/^export /, '').replace(': Promise<void>', '');
+    const records = [
+      { cli: 'hermes', pid: 101, running: true },
+      { cli: 'claude', pid: 202, running: true },
+      { cli: 'offline', pid: 303, running: false },
+    ];
+    const watched = new Map(records.map((record) => [record.cli, {}]));
+    const detached: string[] = [];
+    const resolvers: Array<() => void> = [];
+    const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+    const stopAll = vm.runInNewContext(`(${runnable})`, {
+      listExternalGateways: () => records,
+      detachWatch: (cli: string) => { detached.push(cli); watched.delete(cli); },
+      killProcessTree,
+      watched,
+      process,
+      Promise,
+    }) as () => Promise<void>;
+
+    const completion = stopAll();
+    expect(completion && typeof completion.then).toBe('function');
+    expect(killProcessTree).toHaveBeenCalledTimes(2);
+    expect(detached).toEqual(['hermes', 'claude']);
+    expect(watched.has('offline')).toBe(true);
+
+    let settled = false;
+    void completion.then(() => { settled = true; });
+    resolvers[0]();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(watched.has('offline')).toBe(true);
+
+    resolvers[1]();
+    await completion;
+    expect(watched.size).toBe(0);
+  });
+
+  it('awaits P3394 bridge and gateway shutdown before the Electron quit resumes', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    expect(source).not.toMatch(/app\.once\('before-quit',[\s\S]{0,400}?void stopP3394Bridge/);
+    expect(source).not.toMatch(/app\.once\('before-quit',[\s\S]{0,500}?void import\('\.\/features\/p3394_bridge\/external-gateways'\)/);
+
+    const handlerStart = source.indexOf("app.on('before-quit', async (e) =>", source.indexOf('let shutdownFlushed = false'));
+    const handlerEnd = source.indexOf("\n  });", handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+    const waitAt = handler.indexOf('await Promise.allSettled([');
+    const bridgeAt = handler.indexOf('stopP3394Bridge()');
+    const gatewaysAt = handler.indexOf('stopAllExternalGateways()');
+    const flushedAt = handler.indexOf('shutdownFlushed = true');
+    const quitAt = handler.indexOf('app.quit()');
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(bridgeAt).toBeGreaterThan(waitAt);
+    expect(gatewaysAt).toBeGreaterThan(waitAt);
+    expect(flushedAt).toBeGreaterThan(gatewaysAt);
+    expect(quitAt).toBeGreaterThan(flushedAt);
   });
 
   it.runIf(process.platform === 'win32')('waits for every managed gateway process tree before stopAll resolves', async () => {
