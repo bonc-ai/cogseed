@@ -201,6 +201,18 @@ export function projectUpstreamEvent(
       ensureTurnStarted(state, out);
     }
     state.openReasoningText += event.text;
+    // 实时流式外发（子安 2026-09-09 需求）：思考进行中就逐段可见，不再
+    // 等截断冲刷的 completed 整段。inProgress 增量只走实时链路——持久
+    // 化收集器按状态过滤（process-persist：inProgress reasoning 不落
+    // 盘），重放仍只消费 completed 整段，无重复。
+    out.push({
+      type: 'chat.item',
+      turnId: state.turnId,
+      itemId: state.openReasoningItemId,
+      kind: 'reasoning',
+      status: 'inProgress',
+      payload: { delta: event.text },
+    });
   } else if (etype === 'event' && event.event) {
     const inner = event.event as { stream?: unknown; data?: unknown };
     if (inner.stream === 'tool' && inner.data && typeof inner.data === 'object') {
