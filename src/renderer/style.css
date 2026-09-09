@@ -27196,7 +27196,7 @@ body.is-terminal-resizing {
 .cw-session-meta{font-size:11px;color:var(--muted,var(--color-muted));overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cw-source-pill{padding:3px 8px;border-radius:5px;color:var(--primary-text,var(--color-brand-hover));background:var(--primary-soft,var(--color-brand-soft));
   font-size: var(--font-size-1);font-weight:700;white-space:nowrap}
-.cw-session-time{color:var(--muted,var(--color-muted));font-size:11.5px;text-align:right;white-space:nowrap}
+.cw-session-time{color:var(--muted,var(--color-muted));font-size:var(--font-size-1);text-align:right;white-space:nowrap}
 
 /* Project-first session picker. */
 .cw-project-group{border-bottom:1px solid var(--border)}

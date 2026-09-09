@@ -104,7 +104,7 @@ if (process.platform === 'win32') {
           // failures.
           const code = (err as NodeJS.ErrnoException).code;
           if (options.force && ['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(String(code))
-            && fs.existsSync(resolved) && containsDirectoriesOnly(resolved)) return;
+            && (!fs.existsSync(resolved) || containsDirectoriesOnly(resolved))) return;
           throw err;
         }
       }
