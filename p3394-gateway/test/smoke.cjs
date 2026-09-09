@@ -584,6 +584,8 @@ async function main() {
     "const http = require('http');",
     "const fs = require('fs');",
     "if (process.env.FAKE_OC_PID) fs.appendFileSync(process.env.FAKE_OC_PID, process.pid + '\\n');",
+    "const descendant = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    "if (process.env.FAKE_OC_DESCENDANT_PID) fs.appendFileSync(process.env.FAKE_OC_DESCENDANT_PID, descendant.pid + '\\n');",
     "let sseClients = [];",
     "let sessionSeq = 0;",
     "const server = http.createServer((req, res) => {",
@@ -630,11 +632,12 @@ async function main() {
   fs.chmodSync(fakeOcServer, 0o755);
   const OC_PERSIST_PORT = GATEWAY_PORT + 96;
   const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
+  const ocDescendantPidFile = path.join(tmp, 'oc-server-descendant-pids.txt');
   // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
   // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
   const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
   fs.mkdirSync(ocSharedCwd, { recursive: true });
-  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile };
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile };
   const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let ocPersistGwLog = '';
   ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
@@ -668,6 +671,18 @@ async function main() {
   try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
   check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
   ocPersistGw.kill('SIGTERM');
+  await Promise.race([
+    new Promise((resolve) => ocPersistGw.once('close', resolve)),
+    sleep(5000).then(() => { throw new Error('opencode gateway shutdown timeout'); }),
+  ]);
+  if (process.platform === 'win32') {
+    const ocTreePids = [ocPidFile, ocDescendantPidFile]
+      .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
+    const survivors = ocTreePids.filter((pid) => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    });
+    check('opencode 常驻：gateway close 前 server 进程树已全部退出', ocTreePids.length === 2 && survivors.length === 0);
+  }
 
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──

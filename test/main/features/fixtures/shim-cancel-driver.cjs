@@ -139,7 +139,8 @@ function finish(result) {
       deliver('rt2', 'tt2');
       await waitFor(() => readTreePids().length === 2, 'CLI + descendant pids', 10000);
       await waitFor((f) => f.event === 'failed' && f.request_id === 'rt2' && String(f.error || '').includes('timeout'), 'tree timeout failed frame', 10000);
-      const tree = await waitTreeGone();
+      const pids = readTreePids();
+      const tree = { pids, gone: pids.length === 2 && pids.every((pid) => !pidAlive(pid)) };
       finish({ ok: tree.gone, killed: true, misfire: false, treeGone: tree.gone, pids: tree.pids, error: tree.gone ? '' : 'timeout left a descendant alive' });
     } else {
       finish({ ok: false, killed: false, misfire: false, error: 'unknown scenario: ' + scenario });

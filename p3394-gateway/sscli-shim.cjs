@@ -128,10 +128,13 @@ function resolveWindowsCommandShim(cli, args) {
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
-    const buf = Buffer.alloc(256);
-    const count = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, count));
+    try {
+      const buf = Buffer.alloc(256);
+      const count = fs.readSync(fd, buf, 0, buf.length, 0);
+      return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, count));
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return false;
   }
@@ -401,17 +404,20 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     let errOut = '';
     let errLineBuf = '';
     let progressSent = 0;
+    let finished = false;
+    let terminationError = null;
     const slowStartTimer = setTimeout(() => {
       if (activeTurn && activeTurn.child === child && activeTurn.streamedChars === 0) {
         emitEvent({ event: 'progress', request_id: requestId, text: cliLabel() + ' 冷启动较慢，仍在等待首个输出…' });
       }
     }, SLOW_START_HINT_MS);
     const timer = setTimeout(() => {
-      killProcessTree(child, 'SIGTERM');
-      setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
-      finish(new Error('p3394_agent_timeout'));
+      terminationError = new Error('p3394_agent_timeout');
+      void killProcessTree(child, 'SIGTERM').then(() => finish(terminationError));
     }, TIMEOUT_MS);
     function finish(error) {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       clearTimeout(slowStartTimer);
       if (activeTurn && activeTurn.child === child) activeTurn = null;
@@ -442,8 +448,9 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
         emitEvent({ event: 'progress', request_id: requestId, text });
       }
     });
-    child.on('error', (error) => finish(error));
+    child.on('error', (error) => { if (!terminationError) finish(error); });
     child.on('close', (code) => {
+      if (terminationError) return;
       if (code === 0) finish();
       else finish(new Error('agent exited ' + code + (errOut ? ': ' + sanitizeStreamText(errOut.slice(-300)) : '')));
     });
