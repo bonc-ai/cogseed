@@ -404,12 +404,10 @@ async function main() {
   }
   const pidCtl = { message_id: 'pc1', session_id: 's-pid', task_id: 'tsk-pid-1', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-pid-ctl' };
   await request(PID_GW_PORT, 'POST', '/p3394/envelope', { envelope: pidCtl }, GATEWAY_TOKEN);
-  // 取消后短时间内进程应已被回收：kill(pid, 0) 报 ESRCH（或进程已退出）。
-  let pidGone = false;
-  for (let i = 0; i < 20 && !pidGone; i += 1) {
-    await sleep(100);
-    try { process.kill(childPid, 0); } catch { pidGone = true; }
-  }
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let pidGone = true;
+  try { process.kill(childPid, 0); pidGone = false; } catch { /* ESRCH */ }
+  check('cancel 回执只在 CLI pid 已回收后发送', received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '') === '[已取消]'));
   check('cancel 真正终止子进程：取消后 CLI pid 已被回收', childPid > 0 && pidGone);
   // 8s 睡眠任务被取消后不应在窗口期回发终态回复。
   check('cancel 后 8s 长任务不再回发终态', !received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: SLEEP-8000')));
@@ -863,7 +861,7 @@ async function main() {
   await sleep(400);
   const psCtl = { message_id: 'ps4', session_id: 's-persistent', task_id: 'pstk3', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-ps-ctl' };
   await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psCtl }, GATEWAY_TOKEN);
-  await sleep(400);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
   check('claude 常驻：取消回执', received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'));
   let psPidGone = true;
   const lastPid = Number(psPids[psPids.length - 1] || 0);
