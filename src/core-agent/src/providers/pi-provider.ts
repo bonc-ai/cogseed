@@ -453,6 +453,12 @@ export function createPiProvider(config: {
             case "start":
               yield { type: "message_start" };
               break;
+            case "thinking_delta":
+              // 模型思考流（子安 2026-09-08：思考过程展示）：pi-ai 的
+              // thinking_delta 原先落 default 被丢弃——转发为内部
+              // thinking_delta，runner/event-mapper 继续向渲染层透传。
+              yield { type: "thinking_delta", delta: event.delta };
+              break;
             case "text_delta":
               yield { type: "text_delta", text: event.delta };
               break;

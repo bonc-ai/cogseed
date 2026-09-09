@@ -175,6 +175,21 @@ describe('CogSeed worktree manager', () => {
     })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
   });
 
+  it.runIf(DIRECTORY_LINKS_SUPPORTED)('recognizes the main repository through a canonical directory alias on non-Windows', async () => {
+    const repositoryAlias = path.join(tempRoot, 'repository-alias');
+    fs.symlinkSync(repository, repositoryAlias, DIRECTORY_LINK_TYPE);
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+
+    try {
+      await expect(manager().remove('worktree-user', {
+        path: repositoryAlias,
+        expectedBranch: 'develop',
+      })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it.runIf(process.platform === 'win32')('fails closed when an existing worktree cannot be canonicalized', async () => {
     const service = manager();
     const created = await service.create('worktree-user', { branch: 'dev/inaccessible' });

@@ -187,6 +187,9 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
             : null;
           const allowlist = (policyLoaded?.instance as { policy?: { channelBridgeSenderAllowlist?: string[] } } | undefined)
             ?.policy?.channelBridgeSenderAllowlist;
+          // T2a 应用中心跨渠道回传：信封里的本地文件（产物/图片）经
+          // sendProactiveFile 发给 owner（飞书 file 消息等）。
+          const { sendProactiveFile } = await import('../../features/messaging/manager');
           const delivered = await deliverToChannelBridge(
             opts.userId,
             resolved.agent_id,
@@ -197,10 +200,29 @@ function createSendTool(opts: P3394ToolsOpts): AgentTool {
               const ownerExternalUserId = (loaded?.instance as { ownerExternalUserId?: string } | undefined)?.ownerExternalUserId;
               return ownerExternalUserId ? { recipientId: ownerExternalUserId } : null;
             },
-            Array.isArray(allowlist) ? { allowedSenders: allowlist } : undefined,
+            {
+              ...(Array.isArray(allowlist) ? { allowedSenders: allowlist } : {}),
+              sendFile: async (uid2, fileInput) => {
+                const name = fileInput.name || fileInput.path.split('/').pop() || 'file';
+                await sendProactiveFile(uid2, {
+                  instanceId: fileInput.instanceId,
+                  recipientId: fileInput.recipientId,
+                  filePath: fileInput.path,
+                  fileName: name,
+                  sourceKey: fileInput.sourceKey,
+                });
+              },
+            },
           );
           if (delivered.ok) {
-            return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: 'channel bridge delivered' }) };
+            // 透传真实回执文本（含 "delivered (N file(s))" 文件数），不再
+            // 硬编码——真机排查时硬编码掩盖了文件投递结果。
+            const receiptText = (delivered.receipt.payload?.parts || [])
+              .filter((p) => p.type === 'text' && typeof p.text === 'string')
+              .map((p) => p.text)
+              .join(' ')
+              .trim();
+            return { content: JSON.stringify({ status: 'ok', peer: resolved.agent_id, reply: receiptText || 'channel bridge delivered' }) };
           }
           const deliverFailure = delivered as Extract<typeof delivered, { ok: false }>;
           return errResult('E_P3394_SEND_FAILED', deliverFailure.error);
