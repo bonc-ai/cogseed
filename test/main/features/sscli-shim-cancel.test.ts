@@ -7,7 +7,11 @@
 // p3394-sscli/1.0 JSONL 协议，假 CLI 为 fixtures/shim-sleep-cli.cjs），
 // 本文件以固定场景调驱动器并断言其 JSON 结果（cwd 为仓库根，与 vitest
 // 其余用例的运行前提一致）。
-import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as vm from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 
 interface DriverResult { ok: boolean; killed: boolean; misfire: boolean; treeGone?: boolean; pids?: number[]; error: string }
@@ -23,7 +27,68 @@ function runDriver(scenario: string): DriverResult {
   return parseResult(result.stdout);
 }
 
+function loadRunCliOnce(context: Record<string, unknown>) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'sscli-shim.cjs'), 'utf8');
+  const method = /function runCliOnce\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!method) throw new Error('runCliOnce not found');
+  return vm.runInNewContext(`(${method})`, context) as (
+    requestId: string,
+    taskId: string,
+    prompt: string,
+    extraArgs: string[],
+    cwd: string | null,
+  ) => Promise<string>;
+}
+
 describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () => {
+  it('POSIX timeout escalates to SIGKILL and waits for that termination before settling', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      let finishSigkill: (() => void) | undefined;
+      const killProcessTree = vi.fn((_child: unknown, signal: string) => {
+        if (signal === 'SIGTERM') return Promise.resolve();
+        return new Promise<void>((resolve) => { finishSigkill = resolve; });
+      });
+      let spawnOptions: Record<string, unknown> | undefined;
+      const runCliOnce = loadRunCliOnce({
+        CLI_ARGS: '{message}', CLI: 'fake-cli', TIMEOUT_MS: 100,
+        SLOW_START_HINT_MS: 8_000, MAX_REPLY_BYTES: 1024,
+        STREAM_CAP_CHARS: 1024, PROGRESS_MAX_LINES: 10,
+        ENVELOPE_CLIS: new Set(), activeTurn: null,
+        spawnCli: (_cli: string, _args: string[], options: Record<string, unknown>) => { spawnOptions = options; return child; },
+        emitEvent: () => {}, cliLabel: () => 'fake-cli',
+        killProcessTree, sanitizeStreamText: String, progressLine: String,
+        setTimeout, clearTimeout, process: { platform: 'linux' },
+      });
+
+      const result = runCliOnce('req-timeout', 'task-timeout', 'hello', [], null);
+      expect(spawnOptions).toMatchObject({ detached: true });
+      let settled = false;
+      void result.catch(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(killProcessTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(killProcessTree).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(killProcessTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(settled).toBe(false);
+
+      finishSigkill?.();
+      await expect(result).rejects.toThrow('p3394_agent_timeout');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('cancel 按 deliver 帧的 task_id 命中在跑任务并真 kill', () => {
     const r = parseResult(execFileSync(process.execPath, ['test/main/features/fixtures/shim-cancel-driver.cjs', 'hit'], { encoding: 'utf8', timeout: 45_000 }));
     expect(r.killed).toBe(true);
