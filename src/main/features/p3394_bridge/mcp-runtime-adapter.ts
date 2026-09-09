@@ -7,11 +7,11 @@
  * listen on stdio with an instance token scoped to the local host.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as readline from 'node:readline';
 import type { P3394Envelope } from './envelope';
 import type { P3394RuntimeAdapter, P3394RuntimeEvent, P3394RuntimeSessionBinding, P3394RuntimeSnapshot } from './runtime-adapter';
-import { killProcessTree } from '../local_agents/backends/base';
+import { killProcessTree, spawnCli } from '../local_agents/backends/base';
 
 export interface P3394McpRuntimeOptions {
   /** Command + args that start the MCP runtime server (stdio). */
@@ -19,6 +19,8 @@ export interface P3394McpRuntimeOptions {
   args?: string[];
   /** Environment additions for the child (no secrets in argv). */
   env?: Record<string, string>;
+  /** Working directory for the runtime process. Defaults to the app cwd. */
+  cwd?: string;
   /** Optional bearer token passed as a header-like arg is FORBIDDEN; use
    *  the env or a token file reference instead (guide §11: no secrets in
    *  command-line arguments). */
@@ -33,6 +35,7 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
   private requestId = 0;
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private started = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(options: P3394McpRuntimeOptions) {
     this.options = options;
@@ -40,10 +43,13 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
 
   private async ensureStarted(): Promise<void> {
     if (this.started) return;
-    this.child = spawn(this.options.command, this.options.args ?? [], {
-      stdio: ['pipe', 'pipe', 'inherit'],
-      ...(this.options.env ? { env: { ...process.env, ...this.options.env } } : {}),
-    });
+    this.child = spawnCli(
+      this.options.command,
+      this.options.args ?? [],
+      this.options.cwd ?? process.cwd(),
+      this.options.env ? { ...process.env, ...this.options.env } : undefined,
+    );
+    this.child.stderr.pipe(process.stderr, { end: false });
     const rl = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
       let message: { id?: number; result?: unknown; error?: { message?: string } } | null = null;
@@ -145,13 +151,17 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
     await this.callTool('p3394.runtime.close_session', { session_id: sessionId });
   }
 
-  /** Best-effort child shutdown. */
+  /** Close only after the runtime process tree has released its resources. */
   async close(): Promise<void> {
-    if (this.child) {
-      this.child.stdin.end();
-      killProcessTree(this.child, 'SIGTERM');
-      this.child = null;
+    if (this.closePromise) return this.closePromise;
+    const child = this.child;
+    if (!child) return;
+    child.stdin.end();
+    this.closePromise = killProcessTree(child, 'SIGTERM').finally(() => {
+      if (this.child === child) this.child = null;
       this.started = false;
-    }
+      this.closePromise = null;
+    });
+    return this.closePromise;
   }
 }
