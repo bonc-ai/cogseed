@@ -156,6 +156,82 @@ describe('OAuth 刷新/健康检查', () => {
     expect(status.needsReauth).toBe(true);
   });
 
+  it('读取可用凭据时，临近过期会自动刷新并持久化新凭据', async () => {
+    const { OAuthManager } = await load();
+    const endpoint = mockEndpoint({
+      async exchangeCode() {
+        return credential({ expiresAt: new Date(Date.now() - 1_000).toISOString() });
+      },
+      async refreshToken(refreshToken: string) {
+        endpoint.calls.refresh.push([refreshToken]);
+        return credential({
+          accessToken: 'at_auto_refreshed',
+          refreshToken: 'rt_rotated',
+          expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        });
+      },
+    });
+    const manager = new OAuthManager(endpoint);
+    const req = await manager.beginAuthorize(UID, PROVIDER, ['calendar:calendar'], authUrl);
+    await manager.completeAuthorize(UID, PROVIDER, 'code_abc', req.state, 'https://app/callback');
+
+    const usable = await manager.getUsableCredential(UID, PROVIDER);
+
+    expect(usable).toMatchObject({ accessToken: 'at_auto_refreshed', refreshToken: 'rt_rotated' });
+    expect(endpoint.calls.refresh).toHaveLength(1);
+    expect(await manager.getCredential(UID, PROVIDER)).toMatchObject({ accessToken: 'at_auto_refreshed', refreshToken: 'rt_rotated' });
+  });
+
+  it('并发请求遇到同一个被拒绝令牌时只刷新一次', async () => {
+    const { OAuthManager } = await load();
+    let releaseRefresh!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const endpoint = mockEndpoint({
+      async refreshToken(refreshToken: string) {
+        endpoint.calls.refresh.push([refreshToken]);
+        await refreshStarted;
+        return credential({ accessToken: 'at_single_flight', expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+      },
+    });
+    const manager = new OAuthManager(endpoint);
+    const req = await manager.beginAuthorize(UID, PROVIDER, [], authUrl);
+    await manager.completeAuthorize(UID, PROVIDER, 'code_abc', req.state, 'https://app/callback');
+
+    const requests = [
+      manager.getUsableCredential(UID, PROVIDER, { rejectedAccessToken: 'at_secret_value_123' }),
+      manager.getUsableCredential(UID, PROVIDER, { rejectedAccessToken: 'at_secret_value_123' }),
+      manager.getUsableCredential(UID, PROVIDER, { rejectedAccessToken: 'at_secret_value_123' }),
+    ];
+    await vi.waitFor(() => expect(endpoint.calls.refresh).toHaveLength(1));
+    releaseRefresh();
+
+    await expect(Promise.all(requests)).resolves.toEqual([
+      expect.objectContaining({ accessToken: 'at_single_flight' }),
+      expect.objectContaining({ accessToken: 'at_single_flight' }),
+      expect.objectContaining({ accessToken: 'at_single_flight' }),
+    ]);
+    expect(endpoint.calls.refresh).toHaveLength(1);
+  });
+
+  it('自动刷新失效后标记为需要重新授权', async () => {
+    const { OAuthManager, TokenEndpointError } = await import('../../../src/main/features/personal_context/oauth-manager');
+    const manager = new OAuthManager(mockEndpoint({
+      async exchangeCode() {
+        return credential({ expiresAt: new Date(Date.now() - 1_000).toISOString() });
+      },
+      async refreshToken() {
+        throw new TokenEndpointError('invalid_grant', 'refresh token 已失效');
+      },
+    }));
+    const req = await manager.beginAuthorize(UID, PROVIDER, [], authUrl);
+    await manager.completeAuthorize(UID, PROVIDER, 'code_abc', req.state, 'https://app/callback');
+
+    await expect(manager.getUsableCredential(UID, PROVIDER)).resolves.toBeNull();
+    await expect(manager.getStatus(UID, PROVIDER)).resolves.toMatchObject({ kind: 'error', needsReauth: true });
+  });
+
   it('健康检查有效 → connected；invalid_grant → error + needsReauth', async () => {
     const { OAuthManager } = await load();
     const manager = new OAuthManager(mockEndpoint({
