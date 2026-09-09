@@ -69,6 +69,91 @@ export interface BeginAuthorizeResult {
   status: OAuthConnectionStatus & { authorizing?: boolean };
 }
 
+export interface FeishuAppCredentials {
+  appId: string;
+  appSecret: string;
+}
+
+/**
+ * 独立业务面（例如知识库发现）使用自己的 providerId 与最小 scope 发起授权。
+ * 凭据仍只留在 main 进程，渲染层不会获得 access token 或 app secret。
+ */
+export async function beginAuthorizeWithCredentials(
+  uid: string,
+  opts: { providerId: string; app: FeishuAppCredentials; scopes: readonly string[] },
+): Promise<BeginAuthorizeResult> {
+  const providerId = opts.providerId;
+  const appId = opts.app.appId.trim();
+  const appSecret = opts.app.appSecret.trim();
+  const scopes = [...opts.scopes];
+  if (!providerId || !appId || !appSecret || scopes.length === 0) throw new Error('飞书授权配置不完整');
+  const existing = flows.get(flowKey(uid, providerId));
+  if (existing) {
+    await existing.handle.close().catch(() => undefined);
+    flows.delete(flowKey(uid, providerId));
+  }
+  let handle: OAuthCallbackServerHandle;
+  try {
+    handle = await startOAuthCallbackServer({ port: FEISHU_OAUTH_CALLBACK_PORT });
+  } catch (error) {
+    throw new Error(`回调端口 ${FEISHU_OAUTH_CALLBACK_PORT} 启动失败：${(error as Error).message}`);
+  }
+  const endpoint = createFeishuTokenEndpoint({ app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT } });
+  const oauth = new OAuthManager(endpoint);
+  try {
+    const request = await oauth.beginAuthorize(uid, providerId, scopes, (state) =>
+      buildFeishuAuthorizeUrl({ appId, appSecret, redirectUri: handle.redirectUri }, state, scopes));
+    flows.set(flowKey(uid, providerId), { providerId, handle });
+    void shell.openExternal(request.authUrl).catch((error) => log.warn('open external feishu authorize url failed', { providerId, error: (error as Error).message }));
+    void handle.wait()
+      .then(async ({ code, state }) => {
+        const result = await oauth.completeAuthorize(uid, providerId, code, state, handle.redirectUri);
+        broadcastAuthorizationStatus(uid, result);
+      })
+      .catch(async (error) => {
+        log.warn('external feishu oauth callback not completed', { providerId, error: (error as Error).message });
+        const status = await oauth.cancelAuthorize(uid, providerId).catch(() => undefined);
+        if (status) broadcastAuthorizationStatus(uid, status);
+      })
+      .finally(() => flows.delete(flowKey(uid, providerId)));
+    return { redirectUri: handle.redirectUri, status: await oauth.getStatus(uid, providerId) };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function getAuthorizeStatusWithCredentials(uid: string, providerId: string, app: FeishuAppCredentials): Promise<OAuthConnectionStatus & { authorizing?: boolean }> {
+  const oauth = createManager(app.appId, app.appSecret);
+  const status = await oauth.getStatus(uid, providerId);
+  return flows.has(flowKey(uid, providerId)) ? { ...status, authorizing: true } : status;
+}
+
+export async function getAuthorizedCredentialWithCredentials(
+  uid: string,
+  providerId: string,
+  app: FeishuAppCredentials,
+  options: { rejectedAccessToken?: string } = {},
+) {
+  const oauth = createManager(app.appId, app.appSecret);
+  return oauth.getUsableCredential(uid, providerId, options);
+}
+
+export async function revokeWithCredentials(
+  uid: string,
+  providerId: string,
+  app: FeishuAppCredentials,
+): Promise<OAuthConnectionStatus> {
+  const activeFlow = flows.get(flowKey(uid, providerId));
+  if (activeFlow) {
+    await activeFlow.handle.close().catch(() => undefined);
+    flows.delete(flowKey(uid, providerId));
+  }
+  const status = await createManager(app.appId, app.appSecret).revoke(uid, providerId);
+  broadcastAuthorizationStatus(uid, status);
+  return status;
+}
+
 function createManager(appId: string, appSecret: string): OAuthManager {
   return new OAuthManager(createFeishuTokenEndpoint({
     app: { appId, appSecret, redirectUri: PLACEHOLDER_REDIRECT },

@@ -58,7 +58,7 @@
     "p3394:call": "tsx scripts/p3394-call.ts",
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
     "build:mac": "electron-builder --mac",
-    "prebuild:win": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
+    "prebuild:win": "node scripts/ensure-sherpa-windows-runtime.cjs && node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
     "build:win": "electron-builder --win --x64 --publish never",
     "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs"
   },
@@ -177,6 +177,7 @@
       "node_modules/file-uri-to-path/**/*",
       "node_modules/sqlite-vec*/**/*",
       "node_modules/fastembed/**/*",
+      "node_modules/sherpa-onnx-node/**/*",
       "node_modules/sherpa-onnx-win-x64/**/*"
     ],
     "extraResources": [
@@ -223,6 +224,14 @@
           "!**/.DS_Store",
           "!**/__pycache__/**",
           "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/discovery-catalog",
+        "to": "discovery-catalog",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store"
         ]
       },
       {

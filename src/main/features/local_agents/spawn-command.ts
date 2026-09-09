@@ -128,13 +128,56 @@ function escapeCmdCommand(value: string): string {
 // through cmd.exe on Windows; passing raw user/model arguments through a shell
 // would make &, |, %, and friends executable shell syntax.
 function escapeCmdArgument(value: string, doubleEscapeMetaChars: boolean): string {
-  let escaped = String(value);
+  // cmd.exe parses CR/LF as command separators even inside the /c payload.
+  // Flatten them before quoting so later prompt/history lines stay in the
+  // same inert argv value instead of being truncated or executed.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
   escaped = `"${escaped}"`;
   escaped = escaped.replace(CMD_META_RE, '^$1');
   if (doubleEscapeMetaChars) escaped = escaped.replace(CMD_META_RE, '^$1');
   return escaped;
+}
+
+function expandWindowsShimPath(value: string, shimDir: string): string | null {
+  const expanded = value.replace(/%~?dp0%?/ig, `${shimDir}\\`);
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(binPath: string, args: string[]): ResolvedCliCommand | null {
+  let source: string;
+  try {
+    source = fs.readFileSync(binPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const shimDir = path.win32.dirname(binPath);
+  const tokens = [...source.matchAll(/"([^"\r\n]+)"/g)].map((match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    if (target) {
+      try {
+        if (fs.statSync(target).isFile()) {
+          return {
+            command: process.execPath,
+            args: [target, ...args],
+            envPatch: { ELECTRON_RUN_AS_NODE: '1' },
+          };
+        }
+      } catch { /* not a standard Node shim */ }
+    }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    if (target) {
+      try { if (fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+    }
+  }
+  return null;
 }
 
 /**
@@ -240,6 +283,8 @@ export function resolveCliCommand(
   }
 
   const normalized = path.win32.normalize(binPath);
+  const directShim = resolveWindowsCommandShim(normalized, args);
+  if (directShim) return directShim;
   // npm-generated shims re-parse their `%*` payload once more. Cover both
   // project-local node_modules/.bin and the standard global npm directory.
   const doubleEscape = /(?:node_modules[\\/]\.bin|AppData[\\/]Roaming[\\/]npm)[\\/][^\\/]+\.cmd$/i
