@@ -61,10 +61,16 @@ const CLI_MODEL_REPLY = JSON.stringify({
 });
 
 describe('gateway runtime shutdown contract', () => {
-  it('routes OpenCode persistent server shutdown through process-tree termination', () => {
+  it('awaits OpenCode persistent server process-tree termination before close resolves', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
     const runtime = /class OpencodeRuntime[\s\S]*?\r?\n}\r?\nconst claudePersistentRuntime/.exec(source)?.[0] || '';
-    expect(runtime).toContain("killProcessTree(entry.child, 'SIGTERM')");
+    expect(runtime).toMatch(/async close\(\)[\s\S]*?await Promise\.all\([\s\S]*?killProcessTree\(entry\.child, 'SIGTERM'\)/);
+  });
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'])('%s closes the shebang probe handle in finally', (name) => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+    const helper = /function isNodeShebangScript\([\s\S]*?\n}/.exec(source)?.[0] || '';
+    expect(helper).toMatch(/try\s*{[\s\S]*?fs\.readSync[\s\S]*?}\s*finally\s*{[\s\S]*?fs\.closeSync/);
   });
 });
 
