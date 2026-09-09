@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { nowIso } from '../../storage';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
+import { retainKstarReuseTurnIds } from './reuse-turn-ids';
 import type { KstarAgentAction, KstarEpisodeRecord, KstarToolCall, KstarTaskStatus } from './types';
 
 const MAX_TEXT = 4_000;
@@ -69,6 +70,10 @@ export interface GroupKstarEpisodeInput extends GroupKstarEpisodeInputRefs {
   wakeRequestId?: string;
   logicalRunId?: string;
   executionId?: string;
+  reuseTurnIds?: string[];
+  reuseTurnIdsTruncated?: true;
+  taskId?: string;
+  requirementId?: string;
   createdAt?: string;
 }
 
@@ -310,6 +315,9 @@ function messagesInRun(input: GroupKstarEpisodeInput): GroupKstarMessageInput[] 
 
 export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpisodeRecord {
   const createdAt = input.createdAt || nowIso();
+  const retainedReuseTurnIds = input.reuseTurnIds === undefined
+    ? undefined
+    : retainKstarReuseTurnIds(input.reuseTurnIds);
   const messages = messagesInRun(input);
   const userMessages = messages.filter((message) => message.from === 'user');
   const actionMessages = messages.filter((message) => message.from !== 'user' && !message.system_kind);
@@ -356,6 +364,12 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
     sessionId: `gconv-${input.conversationId}`,
     sessionKind: 'group_chat',
     taskRunId: input.runId,
+    ...(retainedReuseTurnIds !== undefined ? { reuseTurnIds: retainedReuseTurnIds.reuseTurnIds } : {}),
+    ...(input.reuseTurnIdsTruncated === true || retainedReuseTurnIds?.truncated
+      ? { reuseTurnIdsTruncated: true as const }
+      : {}),
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+    ...(input.requirementId ? { requirementId: input.requirementId } : {}),
     ...(input.logicalRunId ? { logicalRunId: input.logicalRunId } : {}),
     ...(input.executionId ? { executionId: input.executionId } : {}),
     ...(input.projectionId ? { projectionId: input.projectionId } : {}),

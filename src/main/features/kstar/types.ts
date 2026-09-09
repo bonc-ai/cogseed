@@ -37,6 +37,13 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   sessionId: string;
   sessionKind?: string;
   taskRunId?: string;
+  /** Per-turn run ids whose receipts are authoritatively associated with this aggregate run. */
+  reuseTurnIds?: string[];
+  /** True when reuseTurnIds is only the newest retained suffix, not complete ownership. */
+  reuseTurnIdsTruncated?: true;
+  /** Immutable lifecycle identities captured before the aggregate run was released. */
+  taskId?: string;
+  requirementId?: string;
   requestId?: string;
   runtimeSessionId?: string;
   /** Provenance hints for group-chat captures when a terminal event can be tied to a wake request. */

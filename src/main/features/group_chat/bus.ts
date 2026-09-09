@@ -32,6 +32,7 @@ import {
   isPathAllowed,
 } from "../../util/path-sandbox";
 import { appendJsonlAtomic, genId12, nowIso, readJsonl, safeId } from "../../storage";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -214,6 +215,7 @@ import {
   type KStarDecisionRecord,
   type KStarExpectation,
 } from "../kstar/dispatch-decision";
+import { retainKstarReuseTurnIds } from "../kstar/reuse-turn-ids";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -1363,13 +1365,18 @@ interface CidState {
    * conversation bus becomes quiescent. It is intentionally content-free:
    * terminal listeners may feed OS notifications and must never receive
    * prompts, titles, or model output. */
-  taskRun?: {
+  taskRun?: TaskRunState;
+}
+
+interface TaskRunState {
     runId: string;
     startedAtMs: number;
     status: TaskTerminalStatus | null;
     anchorMessageId?: string;
     lastMessageId?: string;
     logicalRunId?: string;
+    taskId?: string;
+    requirementId?: string;
     executionId?: string;
     projectionId?: string;
     forecastId?: string;
@@ -1381,7 +1388,7 @@ interface CidState {
      *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
      *  execution id 推断粘合。 */
     reuseTurnIds?: string[];
-  };
+    reuseTurnIdsTruncated?: true;
 }
 
 export type TaskTerminalStatus =
@@ -1400,12 +1407,16 @@ export interface TaskTerminalEvent {
   finished_message_id?: string;
   /** Optional execution identity used by terminal proof adapters. */
   logical_run_id?: string;
+  task_id?: string;
+  requirement_id?: string;
   execution_id?: string;
   projection_id?: string;
   forecast_id?: string;
   /** 本次运行里落过 ContextReuseReceipt 的轮次 id（回执键为 `turn-<id>`）。
    *  迁移证明凭这份清单找到真实加载凭证，一一对应，不做推断。 */
   reuse_turn_ids?: string[];
+  /** True when reuse_turn_ids is only the newest retained suffix. */
+  reuse_turn_ids_truncated?: true;
   wake_request_id?: string;
 }
 
@@ -1599,15 +1610,95 @@ function _recordTaskRunOutcome(
   if (!run.status || rank[status] >= rank[run.status]) run.status = status;
 }
 
+function _recordTaskRunReuseTurn(state: CidState, turnId: string): void {
+  const run = state.taskRun;
+  if (!run) return;
+  const retained = retainKstarReuseTurnIds([...(run.reuseTurnIds || []), turnId]);
+  run.reuseTurnIds = retained.reuseTurnIds;
+  if (run.reuseTurnIdsTruncated || retained.truncated) run.reuseTurnIdsTruncated = true;
+}
+
+function _recordTaskRunKstarProvenance(
+  state: CidState,
+  provenance: {
+    taskId?: string;
+    requirementId?: string;
+    projectionId?: string;
+    forecastId?: string;
+    wakeRequestId?: string;
+    executionId?: string;
+  },
+  options: { fillIfAbsent?: boolean } = {},
+): void {
+  const run = state.taskRun;
+  if (!run) return;
+  const fillIfAbsent = options.fillIfAbsent === true;
+  // Passive per-message capture (fillIfAbsent) may only populate fields that
+  // are still unset: once a run's identity is resolved (by the first message's
+  // lifecycle or by an authoritative task decision), later messages of the
+  // same aggregate run must never change it. Authoritative call sites omit the
+  // option and keep the overwrite semantics — they represent real task
+  // decisions (dispatch routing / privileged dispatch approval / terminal
+  // provenance on enqueue).
+  //
+  // A passive fill must additionally never pair an already-frozen task with a
+  // DIFFERENT lifecycle. Passive capture always supplies a complete lifecycle
+  // pair, so filling requirement B (from a moved lifecycle) under frozen task
+  // A is exactly the cross-task contamination the freeze must prevent. When
+  // the run's task is still unset, or the incoming lifecycle resolves to the
+  // SAME task, per-field fill continues (a same-task later capture may still
+  // fill still-unset requirement/projection fields).
+  if (fillIfAbsent && provenance.taskId && run.taskId !== undefined && run.taskId !== provenance.taskId) {
+    return;
+  }
+  if (provenance.taskId && (fillIfAbsent ? run.taskId === undefined : true)) {
+    run.taskId = provenance.taskId;
+    run.logicalRunId = provenance.taskId;
+  }
+  if (provenance.requirementId && (fillIfAbsent ? run.requirementId === undefined : true)) {
+    run.requirementId = provenance.requirementId;
+  }
+  if (provenance.projectionId && (fillIfAbsent ? run.projectionId === undefined : true)) {
+    run.projectionId = provenance.projectionId;
+  }
+  if (provenance.forecastId && (fillIfAbsent ? run.forecastId === undefined : true)) {
+    run.forecastId = provenance.forecastId;
+  }
+  if (provenance.wakeRequestId && (fillIfAbsent ? run.wakeRequestId === undefined : true)) {
+    run.wakeRequestId = provenance.wakeRequestId;
+  }
+  if (provenance.executionId && (fillIfAbsent ? run.executionId === undefined : true)) {
+    run.executionId = provenance.executionId;
+  }
+}
+
+async function _captureCurrentTaskRunKstarProvenance(state: CidState): Promise<void> {
+  if (!state.taskRun) return;
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+    if (!lifecycle.task || !lifecycle.requirement) return;
+    _recordTaskRunKstarProvenance(state, {
+      taskId: lifecycle.task.id,
+      requirementId: lifecycle.requirement.id,
+      ...(lifecycle.projection?.id ? { projectionId: lifecycle.projection.id } : {}),
+      ...(lifecycle.requirement.forecastId ? { forecastId: lifecycle.requirement.forecastId } : {}),
+      ...(lifecycle.wakeRequest?.id ? { wakeRequestId: lifecycle.wakeRequest.id } : {}),
+    }, { fillIfAbsent: true });
+  } catch (error) {
+    log.warn('kstar active-run provenance capture degraded', {
+      cid: maskId(state.cid),
+      error: logErrorRef(error),
+    });
+  }
+}
+
 function _emitTaskRunTerminalIfQuiescent(
   state: CidState,
   stateFile?: StateFile,
 ): void {
   const run = state.taskRun;
   if (!run || !isQuiescent(state.uid, state.cid)) return;
-  // Clear synchronously before notifying. Concurrent status reconciliations
-  // can now observe the run as finished and cannot emit it twice.
-  state.taskRun = undefined;
   const waitingForUser =
     stateFile?.orchestration_ledger?.status === "waiting_for_form" ||
     stateFile?.orchestration_ledger?.status === "waiting_for_agent";
@@ -1617,65 +1708,60 @@ function _emitTaskRunTerminalIfQuiescent(
       : waitingForUser
         ? "waiting_input"
         : run.status || "failed";
+  const frozenReuseTurnIds: readonly string[] | undefined = run.reuseTurnIds === undefined
+    ? undefined
+    : Object.freeze([...run.reuseTurnIds]);
+  const terminalSnapshot = Object.freeze({
+    runId: run.runId,
+    startedAtMs: run.startedAtMs,
+    finishedAtMs: Date.now(),
+    status,
+    anchorMessageId: run.anchorMessageId,
+    lastMessageId: run.lastMessageId,
+    logicalRunId: run.logicalRunId,
+    taskId: run.taskId,
+    requirementId: run.requirementId,
+    executionId: run.executionId,
+    projectionId: run.projectionId,
+    forecastId: run.forecastId,
+    wakeRequestId: run.wakeRequestId,
+    cogseedTaskId: run.cogseedTaskId,
+    reuseTurnIds: frozenReuseTurnIds,
+    reuseTurnIdsTruncated: run.reuseTurnIdsTruncated,
+  });
+  // Freeze every terminal-owned fact before release. Later runs may now start,
+  // but background consumers only see this detached immutable snapshot.
+  state.taskRun = undefined;
   const listeners = [..._taskTerminalListeners];
   trackBackgroundWrite(state, (async () => {
-    // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
-    // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
-    // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
-    // gconv-<cid>）且在本 run 开始之后落过的回执，按 turn- 前缀还原清单。
-    if (!run.reuseTurnIds?.length) {
-      try {
-        const { listReceipts } = await import('../p3394/context-reuse-receipt');
-        const receipts = await listReceipts(state.uid).catch(() => [] as Array<{ targetSessionId: string; executionId: string; createdAt: string }>);
-        const restored = receipts
-          .filter((receipt) => receipt.targetSessionId === `gconv-${state.cid}`
-            && Date.parse(receipt.createdAt) >= run.startedAtMs)
-          .map((receipt) => receipt.executionId)
-          .filter((executionId) => executionId.startsWith('turn-'))
-          .map((executionId) => executionId.slice('turn-'.length))
-          .filter(Boolean);
-        if (restored.length) run.reuseTurnIds = [...new Set(restored)];
-      } catch (err) {
-        log.warn(`task terminal receipt restore degraded cid=${state.cid}: ${(err as Error).message}`);
-      }
-    }
-    const event: TaskTerminalEvent = {
-      run_id: run.runId,
+    const event: TaskTerminalEvent = Object.freeze({
+      run_id: terminalSnapshot.runId,
       user_id: state.uid,
       conversation_id: state.cid,
-      status,
-      started_at_ms: run.startedAtMs,
-      finished_at_ms: Date.now(),
-      ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
-      ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
-      ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
-      ...(run.executionId ? { execution_id: run.executionId } : {}),
-      ...(run.projectionId ? { projection_id: run.projectionId } : {}),
-      ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
-      ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
-      ...(run.reuseTurnIds?.length ? { reuse_turn_ids: [...run.reuseTurnIds] } : {}),
-    };
-    if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
-      try {
-        const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
-        const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
-        if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
-        if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
-        if (!event.forecast_id && lifecycle.requirement?.forecastId) event.forecast_id = lifecycle.requirement.forecastId;
-        if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
-      } catch (err) {
-        log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
-      }
-    }
-    if (!event.logical_run_id) event.logical_run_id = run.runId;
-    if (!event.execution_id) event.execution_id = run.runId;
-    if (run.cogseedTaskId) {
+      status: terminalSnapshot.status,
+      started_at_ms: terminalSnapshot.startedAtMs,
+      finished_at_ms: terminalSnapshot.finishedAtMs,
+      ...(terminalSnapshot.anchorMessageId ? { anchor_message_id: terminalSnapshot.anchorMessageId } : {}),
+      ...(terminalSnapshot.lastMessageId ? { finished_message_id: terminalSnapshot.lastMessageId } : {}),
+      logical_run_id: terminalSnapshot.logicalRunId || terminalSnapshot.taskId || terminalSnapshot.runId,
+      execution_id: terminalSnapshot.executionId || terminalSnapshot.runId,
+      ...(terminalSnapshot.taskId ? { task_id: terminalSnapshot.taskId } : {}),
+      ...(terminalSnapshot.requirementId ? { requirement_id: terminalSnapshot.requirementId } : {}),
+      ...(terminalSnapshot.projectionId ? { projection_id: terminalSnapshot.projectionId } : {}),
+      ...(terminalSnapshot.forecastId ? { forecast_id: terminalSnapshot.forecastId } : {}),
+      ...(terminalSnapshot.wakeRequestId ? { wake_request_id: terminalSnapshot.wakeRequestId } : {}),
+      ...(terminalSnapshot.reuseTurnIds !== undefined
+        ? { reuse_turn_ids: terminalSnapshot.reuseTurnIds as string[] }
+        : {}),
+      ...(terminalSnapshot.reuseTurnIdsTruncated ? { reuse_turn_ids_truncated: true as const } : {}),
+    });
+    if (terminalSnapshot.cogseedTaskId) {
       await observedTaskBridge().finishTask({
         userId: state.uid,
-        taskId: run.cogseedTaskId,
-        status,
+        taskId: terminalSnapshot.cogseedTaskId,
+        status: terminalSnapshot.status,
         ...(event.finished_message_id ? { messageId: event.finished_message_id } : {}),
-        ...(status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
+        ...(terminalSnapshot.status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
       });
     }
     for (const listener of listeners) {
@@ -2282,6 +2368,8 @@ export interface EnqueueParams {
   kstarDecision?: KStarDecisionRecord;
   /** Internal KSTAR terminal provenance used to enrich bus terminal events. */
   kstarTerminalProvenance?: {
+    taskId?: string;
+    requirementId?: string;
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
@@ -2325,6 +2413,20 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       runId: genId12(),
       startedAtMs: Date.now(),
       status: null,
+      // reuseTurnIds: [] here is AUTHORITATIVE-EMPTY, not "no receipts were
+      // tracked": downstream consumers treat `reuseTurnIds !== undefined` as a
+      // new-format terminal event and suppress the legacy taskRunId fallback.
+      // This is sound only because the run just opened and records its reuse
+      // turns in-process from here on. Persisted-dispatch recoveries never use
+      // this literal: they re-derive the authoritative list from the durable
+      // receipt via recoverPersistedDispatchReuseTurnIds (mismatch/not-found
+      // both yield []), so [] must not be seeded for runs whose receipt
+      // tracking happens outside this process.
+      reuseTurnIds: [],
+      ...(provenance?.taskId || provenance?.logicalRunId
+        ? { taskId: provenance.taskId || provenance.logicalRunId }
+        : {}),
+      ...(provenance?.requirementId ? { requirementId: provenance.requirementId } : {}),
       ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
@@ -2865,14 +2967,16 @@ async function _enqueueBody(
 
   if (state.taskRun && params.kstarTerminalProvenance) {
     const provenance = params.kstarTerminalProvenance;
-    state.taskRun = {
-      ...state.taskRun,
-      ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+    _recordTaskRunKstarProvenance(state, {
+      ...(provenance.taskId || provenance.logicalRunId
+        ? { taskId: provenance.taskId || provenance.logicalRunId }
+        : {}),
+      ...(provenance.requirementId ? { requirementId: provenance.requirementId } : {}),
       ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
       ...(provenance.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
-    };
+    });
   }
 
   // Persist: main jsonl + each recipient + sender (so sender sees own history
@@ -2900,6 +3004,9 @@ async function _enqueueBody(
         sourceMessageId: msg.id,
       });
       if (observed) state.taskRun.cogseedTaskId = observed.taskId;
+    }
+    if (!params.internalControl && (fromActorId === USER_ID || params.externalInbound === true)) {
+      await _captureCurrentTaskRunKstarProvenance(state);
     }
   }
   // Strip the process trail before writing visibility slices: only the user-
@@ -3128,6 +3235,79 @@ export interface RecoverPersistedUserDispatchResult {
   disposition: PersistedUserDispatchRecoveryDisposition;
 }
 
+function stableRecoveredTaskRunId(input: RecoverPersistedUserDispatchInput): string {
+  return createHash('sha256')
+    .update(['persisted-dispatch', input.cid, input.messageId, input.actionRequestId].join('\0'))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+async function recoverPersistedDispatchReuseTurnIds(
+  userId: string,
+  cid: string,
+  actor: Actor,
+  turnId: string,
+): Promise<string[] | undefined> {
+  try {
+    const { readReceipt } = await import('../p3394/context-reuse-receipt');
+    const receipt = await readReceipt(userId, `turn-${turnId}`);
+    if (receipt.targetSessionId !== actorSessionId(cid, actor)) {
+      // A receipt that belongs to another actor's session is unusable for
+      // THIS run. Treat it as authoritative-empty ([]) with a distinct warn,
+      // NOT undefined: undefined would fall back to the legacy taskRunId
+      // path and silently lose the per-turn evidence marker.
+      log.warn('persisted dispatch receipt target mismatch', {
+        cid: maskId(cid),
+        turnId: maskId(turnId),
+      });
+      return [];
+    }
+    return [turnId];
+  } catch (error) {
+    if ((error as Error).message === 'context reuse receipt not found') return [];
+    log.warn('persisted dispatch receipt recovery degraded', {
+      cid: maskId(cid),
+      turnId: maskId(turnId),
+      error: logErrorRef(error),
+    });
+    return undefined;
+  }
+}
+
+async function recoverPersistedDispatchKstarProvenance(
+  userId: string,
+  cid: string,
+  messageId: string,
+): Promise<Pick<TaskRunState, 'taskId' | 'requirementId' | 'logicalRunId' | 'projectionId' | 'forecastId' | 'wakeRequestId'>> {
+  try {
+    const store = await import('../kstar/requirement-store');
+    const tasks = await store.listKstarTasksForConversation(userId, cid);
+    const matches: Array<{ task: Awaited<ReturnType<typeof store.readKstarTask>>; requirement: Awaited<ReturnType<typeof store.readKstarRequirement>> }> = [];
+    for (const task of tasks) {
+      const requirements = await store.listKstarRequirementsForTask(userId, task.id);
+      for (const requirement of requirements) {
+        if (requirement.userMessageIds.includes(messageId)) matches.push({ task, requirement });
+      }
+    }
+    if (matches.length !== 1 || !matches[0].task || !matches[0].requirement) return {};
+    const { task, requirement } = matches[0];
+    return {
+      taskId: task.id,
+      logicalRunId: task.id,
+      requirementId: requirement.id,
+      ...(requirement.projectionId ? { projectionId: requirement.projectionId } : {}),
+      ...(requirement.forecastId ? { forecastId: requirement.forecastId } : {}),
+      ...(requirement.wakeRequestId ? { wakeRequestId: requirement.wakeRequestId } : {}),
+    };
+  } catch (error) {
+    log.warn('persisted dispatch KSTAR provenance recovery degraded', {
+      cid: maskId(cid),
+      error: logErrorRef(error),
+    });
+    return {};
+  }
+}
+
 /** Repair the narrow crash window where a host-owned user message reached the
  * main JSONL but its QueueItem did not reach the in-memory runtime. The caller
  * supplies identities derived from a durable retry claim; this function never
@@ -3211,12 +3391,21 @@ export async function recoverPersistedUserDispatch(
     }
 
     if (!state.taskRun) {
+      const persistedStartedAtMs = Date.parse(msg.ts);
+      const [reuseTurnIds, kstarProvenance] = await Promise.all([
+        recoverPersistedDispatchReuseTurnIds(input.uid, input.cid, actor, input.turnId),
+        recoverPersistedDispatchKstarProvenance(input.uid, input.cid, msg.id),
+      ]);
       state.taskRun = {
-        runId: genId12(),
-        startedAtMs: Date.now(),
+        runId: stableRecoveredTaskRunId(input),
+        startedAtMs: Number.isFinite(persistedStartedAtMs)
+          ? persistedStartedAtMs
+          : Date.now(),
         status: null,
         anchorMessageId: msg.id,
         lastMessageId: msg.id,
+        ...(reuseTurnIds !== undefined ? { reuseTurnIds } : {}),
+        ...kstarProvenance,
       };
     }
     const runtime = ensureRuntime(state);
@@ -4427,6 +4616,27 @@ async function runActorTurnBody(
       // tracked state when it is true.
       hostOpenedTaskThisTurn = routing.openedTask;
       hostOpenedRequirementId = routing.requirementId;
+      if (routing.requirementId) {
+        try {
+          const store = await import('../kstar/requirement-store');
+          const requirement = await store.readKstarRequirement(uid, routing.requirementId);
+          const task = requirement ? await store.readKstarTask(uid, requirement.taskId) : null;
+          if (requirement && task) {
+            _recordTaskRunKstarProvenance(state, {
+              taskId: task.id,
+              requirementId: requirement.id,
+              ...(requirement.projectionId ? { projectionId: requirement.projectionId } : {}),
+              ...(requirement.forecastId ? { forecastId: requirement.forecastId } : {}),
+              ...(requirement.wakeRequestId ? { wakeRequestId: requirement.wakeRequestId } : {}),
+            });
+          }
+        } catch (error) {
+          log.warn('kstar run provenance capture degraded', {
+            cid: maskId(cid),
+            error: logErrorRef(error),
+          });
+        }
+      }
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -4652,10 +4862,9 @@ async function runActorTurnBody(
               },
               { sessionId: `gconv-${cid}` },
             ).catch(() => undefined);
-            if (prepared) turnReuseReceiptPrepared = true;
-            if (state.taskRun) {
-              const turns = state.taskRun.reuseTurnIds || [];
-              if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            if (prepared) {
+              turnReuseReceiptPrepared = true;
+              _recordTaskRunReuseTurn(state, item.turnId);
             }
           } catch {
             // receipt 落库失败不阻断回合——只是这次不产生迁移凭证。
@@ -4719,10 +4928,9 @@ async function runActorTurnBody(
                 },
                 { sessionId: `gmember-${cid}-${actor.id}` },
               ).catch(() => undefined);
-              if (prepared) turnReuseReceiptPrepared = true;
-              if (state.taskRun) {
-                const turns = state.taskRun.reuseTurnIds || [];
-                if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+              if (prepared) {
+                turnReuseReceiptPrepared = true;
+                _recordTaskRunReuseTurn(state, item.turnId);
               }
             } catch {
               // receipt 落库失败不阻断回合。
@@ -4763,12 +4971,6 @@ async function runActorTurnBody(
           );
           // 回执落成即登记到本次运行：终态事件靠这份清单把迁移证明关联到
           // 真实加载凭证。登记发生在注入的同一处，与回执用同一份事实。
-          if (state.taskRun) {
-            const turns = state.taskRun.reuseTurnIds || [];
-            if (!turns.includes(item.turnId)) {
-              state.taskRun.reuseTurnIds = [...turns, item.turnId];
-            }
-          }
           const inheritedReceipt = await recordInheritedCognitionReuse(
             uid,
             cid,
@@ -4780,7 +4982,10 @@ async function runActorTurnBody(
               truncatedByBudget(selection.selected, rendered),
             ),
           );
-          if (inheritedReceipt) turnReuseReceiptPrepared = true;
+          if (inheritedReceipt) {
+            turnReuseReceiptPrepared = true;
+            _recordTaskRunReuseTurn(state, item.turnId);
+          }
         }
       } catch (error) {
         // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
@@ -7681,7 +7886,7 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
 async function guardKstarPrivilegedDispatch(
   state: CidState,
   options: { allowHostAutoTracked?: boolean } = {},
-): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
+): Promise<{ content: string; isError: true } | { provenance: { taskId?: string; requirementId?: string; logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
   const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
   const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
   if (!lifecycle.requirement?.projectionId) return { provenance: {} };
@@ -7704,14 +7909,13 @@ async function guardKstarPrivilegedDispatch(
     return { provenance: {} };
   }
   const provenance = {
-    ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
+    ...(lifecycle.task?.id ? { taskId: lifecycle.task.id, logicalRunId: lifecycle.task.id } : {}),
+    requirementId: lifecycle.requirement.id,
     projectionId: lifecycle.projection.id,
     forecastId: lifecycle.requirement.forecastId,
   };
   if (state.taskRun) {
-    if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
-    state.taskRun.projectionId = provenance.projectionId;
-    state.taskRun.forecastId = provenance.forecastId;
+    _recordTaskRunKstarProvenance(state, provenance);
     // Keep the durable CogSeed task aligned with the in-memory run provenance
     // so either side can be used as the audit entry point after a restart.
     if (lifecycle.task?.cogseedTaskId) {
