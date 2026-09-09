@@ -540,7 +540,7 @@ describe('CogSeed Runtime controller', () => {
     const projectTaskEvent = vi.fn(async () => 'projected');
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent, resultDeliveryStore } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent, resultDeliveryStore } as any));
 
     const task = await controller.startCogSeedTask(USER, {
       requestId: 'req-cleanup-order',
@@ -1597,7 +1597,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
     const task = await controller.startCogSeedTask(USER, { requestId: 'req-concurrent-resume-original', task: 'Resume once.' });
     await eventually(async () => expect(await tasks.readCogSeedTask(USER, task.taskId)).toMatchObject({ status: 'recoverable' }));
 
@@ -1834,7 +1834,7 @@ describe('CogSeed Runtime controller', () => {
     };
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-    const controller = createCogSeedRuntimeController({ runtime });
+    const controller = trackController(createCogSeedRuntimeController({ runtime }));
     const conversationId = 'cid-resume-first-reservation';
     const source = await controller.startCogSeedTask(USER, {
       requestId: 'req-resume-first-source',
@@ -1917,7 +1917,7 @@ describe('CogSeed Runtime controller', () => {
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const deliveries = await import('../../../../src/main/features/cogseed_backend/result-delivery-store');
-    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent });
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent }));
     const task = await controller.startCogSeedTask(USER, {
       requestId: 'req-stale-terminal-fence',
       task: 'Fence the old attempt before recovery.',
