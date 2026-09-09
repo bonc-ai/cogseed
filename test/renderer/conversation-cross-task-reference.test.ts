@@ -29,7 +29,8 @@ describe('conversation cross-task message reference UI', () => {
     expect(styleSource).toContain('.chat-bubble-menu-item');
     expect(conversationSource).not.toContain("'bubble-action-icon'");
     expect(styleSource).toContain('#panel-conversation .chat-message:hover .chat-bubble-actions');
-    expect(styleSource).toContain('max-height: 0;');
+    // 常显改造（2026-09-08）：操作行不再 hover 才展开，基线即 28px 可见。
+    expect(styleSource).toContain('max-height: 28px;');
     expect(styleSource).toContain('height: 28px;');
   });
 

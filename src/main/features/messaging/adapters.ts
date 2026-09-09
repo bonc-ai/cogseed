@@ -443,7 +443,18 @@ function normalizeFeishuEvent(
   const createTime = Number.isFinite(rawCreateTime)
     ? new Date((rawCreateTime > 10_000_000_000 ? rawCreateTime : rawCreateTime * 1000))
     : new Date();
+  // G-17 多模态：图片消息提取 image_key（引用式，不下载字节）——投影为
+  // P3394 信封 parts.image 格子；text 保持"[图片]"占位保证路由不丢。
+  let imageKeys: string[] | undefined;
+  if (messageType === 'image') {
+    try {
+      const parsed = JSON.parse(message.content || '{}');
+      const key = parsed && typeof parsed.image_key === 'string' ? parsed.image_key.trim() : '';
+      if (key) imageKeys = [key];
+    } catch { /* malformed image content — 占位文本仍可路由 */ }
+  }
   return {
+    ...(imageKeys ? { imageKeys } : {}),
     platform: 'feishu_lark',
     instanceId: instance.id,
     externalMessageId: message.message_id,
@@ -453,7 +464,10 @@ function normalizeFeishuEvent(
     isGroup,
     mentionPresent: botMentionTokens.length > 0 || mentionsAll,
     ...(botMentionTokens.length ? { botMentionTokens } : {}),
-    replyToMessageId: message.message_id,
+    // 被回复消息 = 飞书 parent_id（回复事件才带）；此前误填 message_id
+    // （自己的 id），导致每条消息都被投影成"回复"（metadata.reply_to_
+    // message_id 恒等于 external_message_id，下游误判）。
+    ...(message.parent_id?.trim() ? { replyToMessageId: message.parent_id.trim() } : {}),
     ...(message.thread_id?.trim() || message.root_id?.trim() ? { replyInThread: true } : {}),
     receivedAt: Number.isNaN(createTime.getTime()) ? new Date().toISOString() : createTime.toISOString(),
   };
@@ -1328,6 +1342,93 @@ export class FeishuAdapter implements MessagingCardAdapter {
     const messageId = response.data?.message_id;
     return typeof messageId === 'string' && messageId ? { deliveryId: messageId } : {};
   }
+
+  /** G-17 byte path: fetch the raw bytes behind an inbound message image.
+   * Uses the per-message resource endpoint (im/v1/messages/:message_id/
+   * resources/:file_key?ty=image) — the bare im/v1/images/:image_key endpoint
+   * 400s for peer-sent images without the im:resource receive mode. The SDK
+   * returns a binary stream; both the response object and a .data wrapper are
+   * handled. */
+  async downloadMessageImage(messageId: string, fileKey: string): Promise<Buffer> {
+    const safeMessageId = messageId?.trim() || '';
+    if (!/^om_[A-Za-z0-9]{1,128}$/.test(safeMessageId)) {
+      throw new Error('Feishu image download failed: invalid message_id');
+    }
+    if (!fileKey || !/^[A-Za-z0-9_\/.-]{1,256}$/.test(fileKey)) {
+      throw new Error('Feishu image download failed: invalid file_key');
+    }
+    let response: unknown;
+    try {
+      response = await this.client.im.v1.messageResource.get({
+        path: { message_id: safeMessageId, file_key: fileKey },
+        params: { type: 'image' },
+      }) as unknown;
+    } catch (err) {
+      // Surface the feishu error code/msg from the axios body — the generic
+      // axios message alone ("status code 400") is not diagnosable.
+      const body = (err as { response?: { data?: unknown } })?.response?.data;
+      const detail = body && typeof body === 'object'
+        ? `code=${String((body as { code?: unknown }).code)} msg=${String((body as { msg?: unknown }).msg)}`
+        : (err as Error)?.message || String(err);
+      throw new Error(`Feishu image download failed: ${detail}`);
+    }
+    // The SDK wraps binary endpoints inconsistently across versions: the
+    // payload may be a Readable stream, an axios response whose .data is a
+    // Buffer/base64 string, or the raw Buffer itself. Handle all shapes.
+    const bytes = await extractBinaryBytes(response);
+    if (!bytes || bytes.length === 0) {
+      const shape = response === null || response === undefined
+        ? String(response)
+        : `${typeof response}${typeof response === 'object' ? ` keys=[${Object.keys(response as Record<string, unknown>).slice(0, 8).join(',')}]` : ''}`;
+      throw new Error(`Feishu image download failed: no bytes in response (shape: ${shape})`);
+    }
+    return bytes;
+  }
+}
+
+/** Best-effort binary extraction across SDK response shapes. */
+async function extractBinaryBytes(response: unknown): Promise<Buffer | null> {
+  const asRecord = (value: unknown): Record<string, unknown> | null =>
+    (value && typeof value === 'object' ? value as Record<string, unknown> : null);
+  const collectStream = async (stream: unknown): Promise<Buffer | null> => {
+    if (!stream || typeof (stream as { on?: unknown }).on !== 'function') return null;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<unknown>) {
+      if (!chunk) continue;
+      if (Buffer.isBuffer(chunk)) chunks.push(chunk);
+      else if (typeof chunk === 'string') chunks.push(Buffer.from(chunk, 'utf8'));
+      else chunks.push(Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks);
+  };
+  // Shape 1: the payload itself is the stream.
+  const direct = await collectStream(response);
+  if (direct && direct.length > 0) return direct;
+  const record = asRecord(response);
+  if (record) {
+    // Shape 0: SDK file wrapper { writeFile, getReadableStream, headers } —
+    // lark node-sdk returns this for binary endpoints in recent versions.
+    if (typeof record.getReadableStream === 'function') {
+      const viaSdkStream = await collectStream((record.getReadableStream as () => unknown)());
+      if (viaSdkStream && viaSdkStream.length > 0) return viaSdkStream;
+    }
+    // Shape 2: axios-style { data } wrapper — stream, Buffer, or base64.
+    const collected = await collectStream(record.data);
+    if (collected && collected.length > 0) return collected;
+    const data = record.data;
+    if (Buffer.isBuffer(data) && data.length > 0) return data;
+    if (typeof data === 'string' && data.length > 0) return Buffer.from(data, 'base64');
+    // Shape 3: nested { data: { data } } (some SDK versions double-wrap).
+    const inner = asRecord(data);
+    if (inner) {
+      const innerCollected = await collectStream(inner.data);
+      if (innerCollected && innerCollected.length > 0) return innerCollected;
+      if (Buffer.isBuffer(inner.data) && inner.data.length > 0) return inner.data;
+    }
+  }
+  if (Buffer.isBuffer(response) && response.length > 0) return response;
+  if (typeof response === 'string' && response.length > 0) return Buffer.from(response, 'base64');
+  return null;
 }
 
 const wecomSdkLogger = {

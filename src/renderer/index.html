@@ -13,9 +13,9 @@
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
-  <link rel="stylesheet" href="./onboarding.css" />
   <link rel="stylesheet" href="./ui-components.css" />
   <link rel="stylesheet" href="./plugins.css" />
+  <link rel="stylesheet" href="./chat-stream.css" />
   <script>
     // macOS 无边框窗口（main/index.ts: titleBarStyle hiddenInset）：红绿灯
     // 悬浮在内容上，CSS 据此声明红绿灯让位与各视图顶部条的窗口拖拽区。
@@ -185,6 +185,12 @@
             <button type="button" class="new-chat-scenario-chip" data-scenario="rnd">
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
+            </button>
+            <!-- T4 目标模式：描述目标 → commander 拆解子任务计划 → 用户
+                 确认 → 逐项派发（KStar 目标追踪 + plan rail + wake 审批）。 -->
+            <button type="button" class="new-chat-scenario-chip" data-scenario="goal">
+              <span data-ui-icon="target" data-ui-icon-class="new-chat-scenario-icon"></span>
+              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.goal">Goal mode</span>
             </button>
             </div>
           </div>
@@ -1095,6 +1101,12 @@
       <!-- Run Center: private Task/Event projections only, loaded on demand. -->
       <section class="panel" id="panel-run-center">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <!-- 唤醒审批控制中心（conv-core T3）：跨会话 pending wake 请求聚合。
+             无待审批时整条隐藏；有则置顶显示，批准/拒绝/跳会话与聊天内审批卡等效。 -->
+        <div class="wake-approvals-strip" id="wake-approvals-strip" hidden>
+          <h3 class="wake-approvals-title" data-i18n="dashboard.control_section">控制中心</h3>
+          <div class="wake-approvals-list" id="wake-approvals-list"></div>
+        </div>
         <div id="run-center-root"></div>
       </section>
 
@@ -1979,7 +1991,6 @@
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
   <script src="./modules/interactive-tour.js"></script>
-  <script src="./modules/onboarding.js"></script>
   <script src="./modules/continue-work.js"></script>
   <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
@@ -1990,6 +2001,7 @@
   <script src="./modules/ui-button.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/wake-approvals.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
@@ -2029,6 +2041,7 @@
   <script src="./modules/bash_permission.js"></script>
   <script src="./modules/action-approval.js"></script>
   <script src="./modules/interactive-cli.js"></script>
+  <script src="./modules/chat-stream.js"></script>
   <!-- xterm.js (vendored, classic UMD) must load before terminal-panel.js. -->
   <script src="./vendor/xterm/xterm.js"></script>
   <script src="./vendor/xterm/addon-fit.js"></script>
@@ -2046,6 +2059,8 @@
   <script src="./modules/expense-agent-cards.js"></script>
   <script src="./modules/auto-title.js"></script>
   <script src="./modules/auto-events.js"></script>
+  <!-- Dashboard 卡片渲染器先于 utils.js 加载：utils 桥接 window.DashboardRenderer。 -->
+  <script src="./modules/dashboard.js"></script>
   <script src="./modules/utils.js"></script>
   <script src="./modules/validation-report-view.js"></script>
   <script src="./modules/oss.js"></script>
