@@ -460,10 +460,13 @@ function resolveWindowsCommandShim(cli, args) {
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
-    const buf = Buffer.alloc(256);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, n));
+    try {
+      const buf = Buffer.alloc(256);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, n));
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return false;
   }
@@ -2362,11 +2365,11 @@ class OpencodeRuntime {
     }
     return hit;
   }
-  close() {
+  async close() {
     this.closing = true;
-    for (const [, entry] of this.servers) {
-      if (entry.child) killProcessTree(entry.child, 'SIGTERM');
-    }
+    await Promise.all(Array.from(this.servers.values(), (entry) => (
+      entry.child ? killProcessTree(entry.child, 'SIGTERM') : Promise.resolve()
+    )));
     this.servers.clear();
     this.sessions.clear();
   }
@@ -2950,17 +2953,22 @@ const server = http.createServer((req, res) => {
   json(res, 404, { ok: false, error: 'not_found' });
 });
 
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
+  process.on(signal, async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('[p3394-gateway] shutting down (' + signal + ')');
     // 统一关闭各运行时：回杀运行中的 oneshot CLI 子进程（否则退场后它们继续
     // 跑成孤儿）、sscli 常驻子进程、codex app-server。
-    sscliRuntime.close();
-    codexAppServerRuntime.close();
-    streamJsonRuntime.close();
-    claudePersistentRuntime.close();
-    opencodeRuntime.close();
-    oneshotRuntime.close();
+    await Promise.all([
+      sscliRuntime.close(),
+      codexAppServerRuntime.close(),
+      streamJsonRuntime.close(),
+      claudePersistentRuntime.close(),
+      opencodeRuntime.close(),
+      oneshotRuntime.close(),
+    ]);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 3000).unref();
   });
