@@ -96,7 +96,11 @@ function finish(result) {
   try { child.stdin.end(); } catch { /* already gone */ }
   try { child.kill('SIGTERM'); } catch { /* already gone */ }
   cleanupTree();
-  try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ }
+  try {
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  } catch (error) {
+    result = { ...result, ok: false, error: 'cleanup failed: ' + ((error && error.message) || String(error)) };
+  }
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.ok ? 0 : 1);
 }
@@ -109,17 +113,20 @@ function finish(result) {
     if (scenario === 'hit') {
       deliver('r1', 't-target');
       await waitFor((f) => f.event === 'progress' && f.request_id === 'r1', '启动 progress', 10000);
-      send({ op: 'cancel', task_id: 't-target' });
+      send({ op: 'cancel', request_id: 'c1', task_id: 't-target' });
+      await waitFor((f) => f.ok === true && f.request_id === 'c1' && f.killed === true, 'cancel ack', 10000);
       const failed = await waitFor((f) => f.event === 'failed' && f.request_id === 'r1', 'cancelled failed', 10000);
       const errText = String((failed && failed.error) || '');
       finish({ ok: !errText.includes('timeout'), killed: true, misfire: false, error: errText });
     } else if (scenario === 'no-kill') {
       deliver('r2', 't-real');
       await waitFor((f) => f.event === 'progress' && f.request_id === 'r2', '启动 progress', 10000);
-      send({ op: 'cancel', task_id: 't-other' });
+      send({ op: 'cancel', request_id: 'c2-miss', task_id: 't-other' });
+      await waitFor((f) => f.ok === true && f.request_id === 'c2-miss' && f.killed === false, 'miss cancel ack', 10000);
       const untouched = await waitSilence((f) => f.event === 'failed' || f.event === 'completed', 1500);
       if (!untouched) { finish({ ok: false, killed: false, misfire: true, error: 'cancel 未命中却杀掉了在跑任务' }); return; }
-      send({ op: 'cancel', task_id: 't-real' });
+      send({ op: 'cancel', request_id: 'c2-hit', task_id: 't-real' });
+      await waitFor((f) => f.ok === true && f.request_id === 'c2-hit' && f.killed === true, 'hit cancel ack', 10000);
       await waitFor((f) => f.event === 'failed' && f.request_id === 'r2', 'cancelled failed', 10000);
       finish({ ok: true, killed: true, misfire: false, error: '' });
     } else if (scenario === 'request-id') {
@@ -131,9 +138,10 @@ function finish(result) {
     } else if (scenario === 'tree-cancel') {
       deliver('rt1', 'tt1');
       await waitFor(() => readTreePids().length === 2, 'CLI + descendant pids', 10000);
-      send({ op: 'cancel', task_id: 'tt1' });
-      await waitFor((f) => f.event === 'failed' && f.request_id === 'rt1', 'tree cancel failed frame', 10000);
-      const tree = await waitTreeGone();
+      send({ op: 'cancel', request_id: 'ct1', task_id: 'tt1' });
+      await waitFor((f) => f.ok === true && f.request_id === 'ct1' && f.killed === true, 'tree cancel ack', 10000);
+      const pids = readTreePids();
+      const tree = { pids, gone: pids.length === 2 && pids.every((pid) => !pidAlive(pid)) };
       finish({ ok: tree.gone, killed: true, misfire: false, treeGone: tree.gone, pids: tree.pids, error: tree.gone ? '' : 'cancel left a descendant alive' });
     } else if (scenario === 'tree-timeout') {
       deliver('rt2', 'tt2');

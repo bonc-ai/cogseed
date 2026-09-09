@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as vm from 'node:vm';
+import { EventEmitter } from 'node:events';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -127,6 +128,13 @@ function runtimeCloseFixture(name: RuntimeCloseName) {
   return { close, receiver, hasState, expectedKills, killProcessTree, resolvers };
 }
 
+function loadGatewayTreeKiller(name: 'gateway.cjs' | 'sscli-shim.cjs', context: Record<string, unknown>) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+  const fn = /function killProcessTree\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!fn) throw new Error(`killProcessTree not found in ${name}`);
+  return vm.runInNewContext(`(${fn})`, context) as (child: EventEmitter & { pid: number; kill: (signal: string) => boolean }, signal: string) => Promise<void>;
+}
+
 describe('gateway runtime shutdown contract', () => {
   it.each<RuntimeCloseName>(['oneshot', 'codex-app-server', 'sscli', 'stream-json', 'claude-persistent', 'opencode'])(
     '%s close awaits all process-tree terminations before clearing runtime state',
@@ -154,6 +162,56 @@ describe('gateway runtime shutdown contract', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
     const helper = /function isNodeShebangScript\([\s\S]*?\n}/.exec(source)?.[0] || '';
     expect(helper).toMatch(/try\s*{[\s\S]*?fs\.readSync[\s\S]*?}\s*finally\s*{[\s\S]*?fs\.closeSync/);
+  });
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'] as const)(
+    '%s taskkill fallback waits for the target child close before resolving',
+    async (name) => {
+      const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+      const child = Object.assign(new EventEmitter(), { pid: 2468, kill: vi.fn(() => true) });
+      const killProcessTree = loadGatewayTreeKiller(name, {
+        spawn: vi.fn(() => killer),
+        windowsSystem32Tool: (tool: string) => tool,
+        process: { platform: 'win32', kill: vi.fn() },
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+      });
+      let settled = false;
+      const completion = killProcessTree(child, 'SIGTERM').then(() => { settled = true; });
+
+      killer.emit('error', new Error('taskkill failed'));
+      killer.emit('exit', 1, null);
+      killer.emit('close', 1, null);
+      await Promise.resolve();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+
+      child.emit('close', null, 'SIGTERM');
+      await completion;
+      expect(settled).toBe(true);
+    },
+  );
+
+  it('awaits every cancellation backend before sending the cancel reply', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    const handler = /async function handleCancel\([\s\S]*?^}/m.exec(source)?.[0] || '';
+    expect(handler).toContain('cancelledTasks.add(taskId)');
+    expect(handler).toMatch(/for \(const cancel of cancellers\)/);
+    expect(handler).toMatch(/await cancel\(taskId\)/);
+    expect(handler.indexOf('await cancel(taskId)')).toBeLessThan(handler.lastIndexOf("postReply(envelope, '[已取消]')"));
+    expect(handler).not.toMatch(/\.cancel\(taskId\)\s*\|\|/);
+    expect(source).toMatch(/async cancel\(taskId\) \{ return cancelTask\(taskId\); \}/);
+    expect(source).toMatch(/async function cancelTask\(taskId\)/);
+    expect(source).toMatch(/const ack = await this\._request\(\{ op: 'cancel', task_id: taskId \}/);
+    expect(source).toMatch(/async cancel\(taskId\)[\s\S]*?turn\.req\.once\('close'/);
+  });
+
+  it('waits for Claude model replacement and timeout termination before dropping state', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    expect(source).toMatch(/if \(entry && \(entry\.maxThinkingTokens[\s\S]*?await this\._terminateSession\(sessionId, entry\)/);
+    expect(source).toMatch(/timer: setTimeout\(\(\) => \{[\s\S]*?void this\._terminateSession\(sessionId, entry\)\.then\(\(\) => \{[\s\S]*?reject\(new Error\('p3394_claude_timeout'\)\)/);
   });
 });
 
@@ -435,6 +493,42 @@ describe('gateway probeInspectCommand — declared parsers (universal enumeratio
     releaseKill();
     const result = await resultPromise;
     expect(result).toMatchObject({ status: 'unavailable', reason: 'timeout' });
+  });
+
+  it('escalates a stuck probe and waits for SIGKILL completion plus child close', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild({ neverClose: true });
+    const completions = new Map<string, () => void>();
+    const killTreeFn = vi.fn((_child: unknown, signal: string) => new Promise<void>((resolve) => {
+      completions.set(signal, resolve);
+    }));
+    let settled = false;
+    try {
+      const resultPromise = probeInspectCommand({
+        cli: 'codebuddy', args: ['--help'], parser: 'help-model-list',
+        spawnFn: () => child, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '10' },
+      });
+      void resultPromise.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(killTreeFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL']);
+
+      completions.get('SIGTERM')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      completions.get('SIGKILL')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.emitClose();
+      await expect(resultPromise).resolves.toMatchObject({ status: 'unavailable', reason: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
