@@ -20,10 +20,20 @@ import * as bindings from './bindings';
 import * as ledger from './ledger';
 import { evaluateInboundPolicy, stripBotMention } from './policy';
 import { registerChannelBridgeNode, unregisterChannelBridgeNode } from './channel-bridge';
+import { channelPeerAlias, ensureChannelPeer } from '../p3394_bridge/channel-peer-map';
+import { P3394_ENVELOPE_VERSION, type P3394Envelope } from '../p3394_bridge/envelope';
 import { matchInboundCommand, dispatchInboundCommand } from './commands';
+// 副作用导入：确保 /agent 等接续命令的 handler 在 boot deferred 阶段注册
+// （安装幂等，与 personal-context 的注册互不干扰）。
+import './continuity_commands';
 import { isValidFeishuOpenId } from './types';
 import { createAdapter } from './adapters';
+import { normalizeInboundImageKeys } from './ledger';
 import { RuntimeInstance } from './runtime';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { importAttachmentFromPath, imageExtForBytes } from '../chat_attachments';
 import type {
   AdapterCallbacks,
   CardActionEnvelope,
@@ -463,8 +473,24 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   // rejected immediately instead of queueing behind the lock.
   const reservation = await ledger.reserveInbound(uid, key, envelope.receivedAt);
   if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
-  const lock = getChatLock(uid, instance.id, envelope.externalChatId);
-  return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key));
+  // PR209 评审 M4（复核返工）：锁外只下载字节到 tmp（网络 IO 不占
+  // per-chat 锁）；导入推迟到锁内过了策略/解绑检查、拿到轮换后最新
+  // binding 之后——被拒消息的图片不再落盘、/new 并发下附件不再跨会话
+  // 错位（见 downloadInboundImagesToTmp 头注释）。
+  let stagedImages: InboundImageStaged[] = [];
+  if (envelope.imageKeys?.length && instance.platform === 'feishu_lark') {
+    stagedImages = await downloadInboundImagesToTmp(uid, instance, envelope, normalizeInboundImageKeys(envelope.imageKeys));
+  }
+  try {
+    const lock = getChatLock(uid, instance.id, envelope.externalChatId);
+    return await lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key, stagedImages));
+  } finally {
+    // 拒绝/异常路径（导入未发生）也要清 tmp——导入段自身逐文件清理，
+    // 这里兜底未触达的残留。
+    for (const { tmpPath } of stagedImages) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
 }
 
 function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }> {
@@ -512,11 +538,17 @@ async function flushBurstBatch(uid: string, batch: BurstBatch<{ envelope: Inboun
     for (const item of batch.payloads) {
       if (item.envelope.contextTokenRef) lastTokenRef = item.envelope.contextTokenRef;
     }
+    // G-17：聚合批次内全部图片引用（去重保序、上限 9）——合并后的文本只剩
+    // 占位符时，图片本身不能跟着批次的文本折叠一起丢掉。
+    const batchImageKeys = normalizeInboundImageKeys(
+      batch.payloads.flatMap((item) => item.envelope.imageKeys || []),
+    );
     const envelope: InboundEnvelope = {
       ...first,
       externalMessageId: batch.ids[0],
       text: batch.text,
       ...(lastTokenRef !== undefined ? { contextTokenRef: lastTokenRef } : {}),
+      ...(batchImageKeys ? { imageKeys: batchImageKeys } : {}),
     };
     const result = await handleInbound(uid, envelope);
     firstResolve(result);
@@ -568,11 +600,130 @@ export async function enqueueInbound(uid: string, envelope: InboundEnvelope): Pr
   });
 }
 
+/** G-17 入站图片投影：构造随派发消息携带的最小 P3394 信封。它是渠道
+ *  事件的投影元数据（不进协议边界、不做完整信封校验），字段形态对齐
+ *  P3394Envelope：文本 part 保路由，image part 用引用式 uri。 */
+function buildInboundImageEnvelope(input: {
+  key: string;
+  cid: string;
+  platform: MessagingPlatform;
+  instanceId: string;
+  externalMessageId: string;
+  senderAlias: string;
+  text: string;
+  imageKeys: string[];
+}): P3394Envelope {
+  return {
+    spec_version: P3394_ENVELOPE_VERSION,
+    message_id: `inbound:${input.key}`,
+    session_id: input.cid,
+    kind: 'message',
+    performative: 'inform',
+    sender: { agent_id: input.senderAlias, channel_instance_id: input.instanceId },
+    recipients: [{ agent_id: 'commander' }],
+    payload: {
+      parts: [
+        { type: 'text', text: input.text },
+        ...input.imageKeys.map((imageKey) => ({
+          type: 'image' as const,
+          uri: `feishu-image:${imageKey}`,
+          name: imageKey,
+        })),
+      ],
+      metadata: {
+        platform: input.platform,
+        instance_id: input.instanceId,
+        external_message_id: input.externalMessageId,
+      },
+    },
+    idempotency_key: `inbound:${input.key}`,
+  };
+}
+
+/** G-17 字节链（锁外执行，PR209 评审 M4）：飞书入站图片下载字节并导入
+ *  会话附件目录，让派发轮次走与桌面端发图相同的多模态视觉链。
+ *  此前在 per-chat 互斥锁内 await——慢下载串行阻塞同会话后续所有入站
+ *  与重投。现移到 reserve 之后、锁之前完成（网络 IO 不占锁）；导入按
+ *  内容哈希幂等。下载/导入失败仅 warn 不阻塞（占位文本仍保证路由）。 */
+// G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
+// 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
+// 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
+//
+// PR209 M4 复核返工：拆成两段——锁外只做「下载字节到 tmp」（网络 IO
+// 不占 per-chat 锁），锁内过了策略/解绑检查、且拿到轮换后最新 binding
+// 之后再导入。修复两个竞态：①被拒消息（allowlist 拒绝/空文本/已解绑/
+// slash 命令）的图片不再落盘到绑定会话的附件目录（磁盘副作用）；②锁外
+// 下载期间 /new 轮换 cid 时，附件不再跨会话错位——导入与 cid 解析同在
+// 锁内，顺序有保证。
+function imageTmpPath(instanceId: string, externalMessageId: string, name: string): string {
+  return path.join(os.tmpdir(), `${instanceId}-${externalMessageId}-${name}.inbound`);
+}
+
+/** 已下载待导入的入站图片：tmp 物理路径 + 干净的附件显示名。 */
+interface InboundImageStaged {
+  tmpPath: string;
+  name: string;
+}
+
+async function downloadInboundImagesToTmp(
+  uid: string,
+  instance: MessagingInstance,
+  envelope: InboundEnvelope,
+  imageKeys: string[],
+): Promise<InboundImageStaged[]> {
+  const staged: InboundImageStaged[] = [];
+  const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
+  if (typeof adapter?.downloadMessageImage !== 'function') return staged;
+  for (const imageKey of imageKeys) {
+    try {
+      const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
+      const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
+      staged.push({ tmpPath: imageTmpPath(envelope.instanceId, envelope.externalMessageId, name), name });
+      fs.writeFileSync(staged[staged.length - 1].tmpPath, bytes);
+    } catch (err) {
+      // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
+      // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
+      // 权限/参数问题。
+      const message = err instanceof Error ? err.message : String(err);
+      const codeMatch = message.match(/code=([^ ]+)/);
+      const msgMatch = message.match(/msg=(.*)$/);
+      log.warn('messaging inbound image download failed', {
+        instanceId: envelope.instanceId,
+        imageKey,
+        errorName: err instanceof Error ? err.name : 'Error',
+        feishuCode: codeMatch ? codeMatch[1] : undefined,
+        feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
+        errorDetail: message.slice(0, 240),
+      });
+    }
+  }
+  return staged;
+}
+
+/** 锁内导入已下载的 tmp 图片到指定会话（本地 IO，快），逐文件清理 tmp。
+ *  导入失败仅 warn 跳过——与下载段同纪律。 */
+async function importInboundImagesFromTmp(uid: string, cid: string, staged: InboundImageStaged[]): Promise<string[]> {
+  const attachmentNames: string[] = [];
+  for (const { tmpPath, name } of staged) {
+    try {
+      const imported = await importAttachmentFromPath(uid, cid, tmpPath, name);
+      if (imported.ok) attachmentNames.push(imported.info.name);
+      else log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: (imported as { error: string }).error });
+    } catch (err) {
+      log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
+  return attachmentNames;
+}
+
 async function handleInboundLocked(
   uid: string,
   envelope: InboundEnvelope,
   instance: MessagingInstance,
   key: string,
+  stagedImages: InboundImageStaged[],
 ): Promise<MessagingInboundResult> {
   log.info('messaging inbound envelope received', {
     instanceId: envelope.instanceId,
@@ -581,9 +732,24 @@ async function handleInboundLocked(
     isGroup: envelope.isGroup,
     textLen: typeof envelope.text === 'string' ? envelope.text.length : 0,
     mentionPresent: envelope.mentionPresent,
+    imageCount: envelope.imageKeys?.length ?? 0,
   });
+  // Q3 open_id→Peer 映射：飞书入站即记录（幂等；无变化时零写盘）。
+  // 纯元数据采集——失败仅 warn，绝不阻塞派发主链路。
+  if (envelope.platform === 'feishu_lark' && envelope.externalUserId) {
+    try {
+      ensureChannelPeer(uid, envelope.platform, envelope.instanceId, envelope.externalUserId, envelope.externalUserName);
+    } catch (error) {
+      log.warn('messaging channel peer map update failed', {
+        instanceId: envelope.instanceId,
+        error: logErrorSummary(error),
+      });
+    }
+  }
+  // G-17：规整入站图片引用（去空/去重/上限 9），台账完成记录与派发信封共用。
+  const imageKeys = normalizeInboundImageKeys(envelope.imageKeys);
   const completeLedger = (patch: Parameters<typeof ledger.completeInbound>[2]) =>
-    ledger.completeInbound(uid, key, patch);
+    ledger.completeInbound(uid, key, imageKeys ? { ...patch, imageKeys } : patch);
   // A freshly configured bot can claim its owner from the first direct message
   // (before policy — the default allowlist still denies everyone).
   await tryAutoBindOwner(uid, envelope, instance.id, instance.platform);
@@ -602,14 +768,43 @@ async function handleInboundLocked(
   // (mirrors Hermes' `/new` session reset).
   if (isNewSessionCommand(text)) {
     try {
+      // 先取旧任务 cid（forceNew 会轮换），配对的其他渠道要跟着搬家。
+      const previous = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+      const oldCid = previous.cid;
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope, { forceNew: true });
       const runtime = runtimes.get(uid)?.get(instance.id);
-      if (runtime) {
-        const oldListener = runtime.listeners.get(binding.key);
-        if (oldListener) {
-          oldListener();
-          runtime.listeners.delete(binding.key);
+      // 跨渠道接续（G2）：/new 不许重新制造信息孤岛——与旧任务配对的渠道
+      // 一并指向新任务并重挂监听，各自收到一条跟随通知。
+      if (binding.cid !== oldCid) {
+        const peers = await bindings.listBindingsForTask(uid, oldCid);
+        for (const peer of peers) {
+          if (peer.key === binding.key) continue;
+          const moved = await bindings.pointBindingToTask(uid, peer.key, binding.cid);
+          if (!moved) continue;
+          const peerRuntime = runtimes.get(uid)?.get(peer.instanceId);
+          if (peerRuntime) {
+            peerRuntime.bindingContexts.set(peer.key, moved);
+            await peerRuntime.attachBindingListener(moved);
+            void peerRuntime
+              .deliverSystemNotice(moved, t('messaging.continuity.pair_task_rotated'))
+              .catch((error) => {
+                log.warn('messaging pair-rotation notice failed', {
+                  instanceId: peer.instanceId,
+                  key: peer.key,
+                  error: (error as Error).message,
+                });
+              });
+          }
+          log.info('continuity peer followed task rotation', {
+            uid,
+            instanceId: peer.instanceId,
+            fromCid: oldCid,
+            toCid: binding.cid,
+          });
         }
+      }
+      if (runtime) {
+        runtime.detachBindingListener(binding.key);
         runtime.bindingContexts.set(binding.key, binding);
         await runtime.attachBindingListener(binding);
         await runtime.deliverConfirmationMessage(binding, envelope);
@@ -626,6 +821,22 @@ async function handleInboundLocked(
       throw new Error(`messaging new-session dispatch failed: ${message}`);
     }
   }
+  // 渠道任务接续（G0）撤权：已解绑的渠道会话只放行 /new（上面的分支已
+  // 处理并 return），其余消息——含一切 slash 命令——一律明确拒绝并引导，
+  // 绝不静默吞掉，也绝不无提示地重建绑定。
+  // （读 binding 与拒绝之间的窗口与本 handler 的处理锁并不同锁，理论上
+  // 存在瞬态 TOCTOU；但 /unbind 与 /new 都经 bindings 文件锁串行落盘，
+  // 最坏结果是并发消息读到旧状态、晚一轮才被拒——单条消息的可接受
+  // 延迟，不构成越权。）
+  const currentBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
+  if (currentBinding.unboundedAt) {
+    await completeLedger({ status: 'rejected', reason: 'binding_unbound' });
+    const runtime = runtimes.get(uid)?.get(instance.id);
+    if (runtime) {
+      await runtime.deliverText(currentBinding, envelope, t('messaging.continuity.unbound_reply'));
+    }
+    return { accepted: false, duplicate: false, reason: 'binding_unbound' };
+  }
   // Personal-context slash commands（/权限 /遗忘）：consumed by registered
   // handlers; the reply goes through the same ledger-backed delivery as the
   // session-reset confirmation and never consumes an agent turn.
@@ -635,6 +846,13 @@ async function handleInboundLocked(
     if (outcome.consumed) {
       const binding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
       const runtime = runtimes.get(uid)?.get(instance.id);
+      if (runtime) {
+        // 与下方常规入站路径同款刷新：命令可能改变绑定状态（G2 /mute
+        // /pair 落盘 mutedAt / 新 cid），出站快照必须跟上，否则静音拦不住、
+        // 监听重挂不触发。
+        runtime.bindingContexts.set(binding.key, binding);
+        await runtime.attachBindingListener(binding);
+      }
       if (outcome.replyText && runtime) {
         await runtime.deliverText(binding, envelope, outcome.replyText);
       } else if (outcome.replyText) {
@@ -663,10 +881,33 @@ async function handleInboundLocked(
       runtime.bindingContexts.set(binding.key, binding);
       await runtime.attachBindingListener(binding);
     }
+    // G-17：图片入站投影为最小 P3394 信封（派发元数据，字段形态对齐
+    // P3394Envelope 但不强求通过 validateP3394Envelope 完整校验——它不进
+    // 协议边界，只随消息贯穿派发链）：parts[0] 文本占位保证路由不退化，
+    // 其后每个 image_key 一个引用式格子 {type:'image', uri:'feishu-image:
+    // <key>'}（不内联字节，下载/物化由消费方决定）。message_id 带台账
+    // key 可互查；sender 用 Q3 渠道 peer 别名（同一 open_id 恒定）。
+    const p3394Envelope = imageKeys
+      ? buildInboundImageEnvelope({
+        key,
+        cid: binding.cid,
+        platform: envelope.platform,
+        instanceId: envelope.instanceId,
+        externalMessageId: envelope.externalMessageId,
+        senderAlias: channelPeerAlias(envelope.platform, envelope.externalUserId),
+        text,
+        imageKeys,
+      })
+      : undefined;
+    // G-17 附件导入（PR209 M4 复核返工）：锁内、策略/解绑检查之后、且
+    // binding.cid 为轮换后最新值——导入目标会话与派发会话恒一致。
+    const attachmentNames = await importInboundImagesFromTmp(uid, binding.cid, stagedImages);
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,
       text,
+      ...(attachmentNames.length ? { attachments: attachmentNames } : {}),
+      ...(p3394Envelope ? { p3394_envelope: p3394Envelope } : {}),
     });
     if (!result.ok) throw new Error(result.error || 'group chat enqueue failed');
     // Capture the inbound's context token reference keyed by the user message
