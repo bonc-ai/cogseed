@@ -36,6 +36,89 @@ const TRANSCRIPT_BYTES = 16 * 1024;
 const MAX_REPLY_BYTES = 100 * 1024;
 const STREAM_CAP_CHARS = 256 * 1024;
 
+// Windows cannot execute npm .cmd/.bat shims or extensionless Node shebang
+// scripts through CreateProcess directly. Keep this aligned with gateway.cjs'
+// oneshot launcher so the sscli shim has the same CLI resolution contract.
+const WINDOWS_CMD_SCRIPT_RE = /\.(?:cmd|bat)$/i;
+const WINDOWS_NATIVE_EXT_RE = /\.(?:exe|com)$/i;
+const CMD_META_RE = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(value) {
+  return String(value).replace(CMD_META_RE, '^$1');
+}
+
+function escapeCmdArgument(value, doubleEscapeMetaChars) {
+  let escaped = String(value);
+  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
+  escaped = '"' + escaped + '"';
+  escaped = escaped.replace(CMD_META_RE, '^$1');
+  if (doubleEscapeMetaChars) escaped = escaped.replace(CMD_META_RE, '^$1');
+  return escaped;
+}
+
+function windowsLookPath(cli) {
+  if (!cli) return null;
+  if (path.isAbsolute(cli) || cli.includes('\\') || cli.includes('/')) {
+    const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+    const candidates = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+    for (const candidate of candidates) {
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+    return null;
+  }
+  const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+  const pathValue = process.env.PATH || process.env.Path || '';
+  const dirs = pathValue.split(';').map((value) => value.trim()).filter(Boolean);
+  const names = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+function buildWindowsCmdInvocation(cli, args) {
+  const normalized = path.win32.normalize(cli);
+  const doubleEscape = /(?:node_modules[\\/]\.bin|AppData[\\/]Roaming[\\/]npm)[\\/][^\\/]+\.cmd$/i
+    .test(normalized);
+  const shellCommand = [
+    escapeCmdCommand(normalized),
+    ...args.map((arg) => escapeCmdArgument(arg, doubleEscape)),
+  ].join(' ');
+  return {
+    command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', '"' + shellCommand + '"'],
+  };
+}
+
+function isNodeShebangScript(cli) {
+  try {
+    const fd = fs.openSync(cli, 'r');
+    const buf = Buffer.alloc(256);
+    const count = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, count));
+  } catch {
+    return false;
+  }
+}
+
+function spawnCli(cli, args, options) {
+  if (process.platform !== 'win32') return spawn(cli, args, options);
+  const resolved = windowsLookPath(cli) || cli;
+  if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const invocation = buildWindowsCmdInvocation(resolved, args);
+    return spawn(invocation.command, invocation.args, { ...options, windowsVerbatimArguments: true });
+  }
+  if (!WINDOWS_NATIVE_EXT_RE.test(resolved) && isNodeShebangScript(resolved)) {
+    return spawn(process.execPath, [resolved, ...args], options);
+  }
+  return spawn(resolved, args, options);
+}
+
 // ── 启动参数解析 ──
 function parseArgv(argv) {
   const out = {};
@@ -208,7 +291,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     // 冷启动可见性：CLI 启动占每轮首字延迟大头（实测 8-12s），spawn 即告知，
     // 超时未见首字再提示一次——无提示时用户面对的是无响应黑盒。
     emitEvent({ event: 'progress', request_id: requestId, text: '正在启动 ' + cliLabel() + '…' });
-    const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     // taskId（deliver 帧 task_id，网关 handleCancel 的取消键）与 requestId
     // （网关内部 req-N，仅应答关联用）分属两个命名空间，都要记——cancel
     // 帧带 task_id，老调用方/无 task_id 场景回退 request_id 比对。

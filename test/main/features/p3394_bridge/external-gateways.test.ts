@@ -194,6 +194,7 @@ describe('P3394 external-agent gateway host', () => {
     const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
       if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        if (envelope.kind === 'event') return;
         replyResolve?.(envelope);
         return;
       }
