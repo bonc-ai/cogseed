@@ -3,6 +3,17 @@
  * JSON-RPC 2.0 protocol. Modelled after multica's `codex.go`, distilled
  * to what we need for one-shot agent dispatch:
  *
+ * PERSISTENT-RUNTIME STATUS (phase-0 probe, 2026-09-03): NO adapter
+ * registered — the codex CLI is not installed on the probe machine,
+ * so a resident adapter could not be live-verified and the
+ * no-unverified-implementations rule applies. The protocol itself is
+ * resident-shaped (this file already speaks it: one app-server
+ * process multiplexes threads; `thread/resume` restores a known
+ * conversation), so the future adapter is: acquire = spawn
+ * app-server + initialize (per cwd), send = turn/start on the bound
+ * threadId, reusing this file's notification parsing verbatim.
+ *
+ *
  *  1. Spawn `codex app-server --listen stdio://`.
  *  2. RPC `initialize` (clientInfo + experimentalApi capability).
  *  3. Notify `initialized`.
