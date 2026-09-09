@@ -7640,10 +7640,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   bottom: var(--terminal-height, 0px);
   left: 0;
   right: 0;
-  /* Top 20px fades in, bottom 32px is the old gap. The gradient masks any
-     messages that scroll behind the floating input so the bubble "floats"
-     cleanly without leaking conversation text into its backdrop. */
-  padding: 20px 32px 32px;
+  /* 左右 padding 与 .chat-history 的 10% 一致（子安 2026-09-08 布局统一）：
+     输入框与对话内容共用同一水平范围，消除 32px 固定 padding 造成的错位。 */
+  padding: 20px 10% 32px;
   background: linear-gradient(to bottom, transparent 0%, var(--bg) 20%);
   z-index: var(--z-raised);
   pointer-events: none;
@@ -10142,13 +10141,28 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.user {
+  /* 用户消息右对齐（子安 2026-09-08 补充）：最右缘不贴内容列右缘，而是
+     收到与 AI 回复区块的最右边缘对齐——AI 块居中（max-width 80% 居中于
+     列），右缘 = 列右缘 - 10% 列宽。用 margin-right 抵扣，内容照常
+     flex-end 右对齐。 */
   align-self: flex-end;
   align-items: flex-end;
+  /* AI 居中块半宽 = (80%列) 的一半 = 40% 列宽；用户消息本贴 100% 列右，
+     右移入 10% + AI 半宽超出的部分 = 10%（AI 右缘在 90% - 40% = 50% 处，
+     列右 100%，差 10%）。 */
+  margin-right: 10%;
 }
 
 .chat-message.assistant {
-  align-self: flex-start;
+  /* AI 回复区块整体水平居中（子安 2026-09-08）：块级对齐，非逐行文字
+     居中——区块内部文字仍左对齐（align-items: flex-start）。
+     宽度（子安 2026-09-08 二次修正）：不设 width 时块宽随内容收缩，短回复
+     的头部（图标+名字+模型）跟着内容居中悬浮、长回复才撑满——头部位置
+     随输出量漂移。改为恒定占满内容列（80%），头部固定钉在回复区最左上
+     角，与输出量无关。 */
+  align-self: center;
   align-items: flex-start;
+  width: 80%;
 }
 
 /* Inline delete-file confirmation card. The main-side `delete_file` tool
@@ -10321,8 +10335,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.is-message-editing {
+  /* 编辑态居中对齐 AI 内容列（子安 2026-09-08 布局统一）：用户消息编辑时
+     原右对齐换居中，宽度与 AI 区块一致。 */
   width: min(80%, 760px);
   max-width: min(80%, 760px);
+  align-self: center;
+  align-items: stretch;
 }
 .chat-message-edit-composer {
   width: min(620px, 100%);
@@ -10579,38 +10597,37 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   box-shadow: none;
 }
 
-/* Keep long conversations visually quiet. The toolbar occupies no vertical
-   space until its message is hovered, focused, or has an open overflow menu. */
+/* Message action toolbar — always visible on every reply (子安 2026-09-08：
+   原 hover-only 设计让历史回复的按钮看起来"消失"，改为常显；行高恒定
+   不跳动，仅透明度做轻量过渡）。 */
 #panel-conversation .chat-message .chat-bubble-actions {
-  max-width: 0;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: max-width 150ms ease, max-height 150ms ease, opacity 120ms ease, transform 150ms ease;
+  max-width: 180px;
+  max-height: 28px;
+  opacity: 1;
+  overflow: visible;
+  pointer-events: auto;
+  transform: none;
+  transition: opacity 120ms ease;
 }
 /* ":has(:not(...))" keeps the collapsed-margin treatment for rows holding
    only the collapsible icon group — the usage meta line (below) also lives
    in this row but is display:none until hover, so it must not count as
    content. */
 #panel-conversation .chat-message > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
-  margin-top: 0;
+  margin-top: 5px;
   transition: margin-top 150ms ease;
 }
+/* 常显改造后展开态与常态同值，hover 组规则不再需要展开补丁——保留空壳
+   防主题文件按选择器覆盖时悬空。 */
 #panel-conversation .chat-message:hover .chat-bubble-actions,
 #panel-conversation .chat-message:focus-within .chat-bubble-actions,
 #panel-conversation .chat-bubble-actions:has(.bubble-more-btn[aria-expanded="true"]) {
-  max-width: 180px;
-  max-height: 28px;
-  opacity: 1;
-  overflow: visible;
-  pointer-events: auto;
-  transform: translateY(0);
+  /* 常显改造后此规则保留 hover 层级微调（若有主题依赖）——展开态与
+     常态同值，无视觉跳变。 */
 }
 #panel-conversation .chat-message:hover > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))),
 #panel-conversation .chat-message:focus-within > .chat-msg-actions:has(> .chat-bubble-actions):not(:has(> :not(.chat-bubble-actions, .chat-msg-meta))) {
-  margin-top: 5px;
+  /* margin 基线已提为 5px，hover 分支同值无需覆盖。 */
 }
 #panel-conversation .chat-message.user > .chat-msg-actions { justify-content: flex-end; }
 
@@ -11165,11 +11182,19 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   box-shadow: 0 0 0 2px rgba(14, 159, 110, 0.09);
 }
 
+/* assistant 正文平铺（ZCode 风活动流）：正文直接落在页面上，无气泡卡
+   感（conv-core 过程 UI 终态——过程行与正文同一块无框画布）。 */
 .chat-message.assistant .chat-bubble {
-  background: var(--color-surface);
+  /* develop token 化（#203）方向：色彩一律走 token 变量。但"同色=透明"
+     的前提已破——页面底色是 --color-bg 的浅灰（rgb(248,250,252)），纯白
+     --color-surface 落上去就是一层白卡（真机 2026-09-08 21:07 复发）。
+     无气泡=真透明，不再借"同色"实现。 */
+  background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-bottom-left-radius: 4px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
 }
 .chat-message.assistant[data-placeholder="1"] .chat-bubble {
   transition: none;
@@ -27517,6 +27542,20 @@ body.is-terminal-resizing {
 
 /* Unified Agent Operations Center. */
 #panel-run-center { min-height: 0; overflow: hidden; }
+/* 唤醒审批控制中心（conv-core T3 · Run Center 形态）：跨会话 pending 聚合
+   带。无待审批时 [hidden] 整条移除；可见时覆盖在 Run Center 顶部（不参与
+   #run-center-root 的高度计算，避免面板布局抖动）。 */
+#panel-run-center { position: relative; }
+.wake-approvals-strip { position: absolute; top: 34px; left: 50%; transform: translateX(-50%); width: min(720px, calc(100% - 48px)); max-height: 42%; overflow: auto; z-index: var(--z-raised); background: var(--bg-raised, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius-3); box-shadow: var(--shadow-dialog); padding: 10px 14px 12px; }
+.wake-approvals-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.wake-approvals-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); }
+.wake-approvals-row:first-of-type { border-top: 0; }
+.wake-approvals-row-main { min-width: 0; flex: 1 1 auto; }
+.wake-approvals-row-name { font-weight: 600; font-size: 13px; color: var(--text); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wake-approvals-badge { font-weight: 500; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft, var(--color-info-soft)); color: var(--accent, var(--color-info)); }
+.wake-approvals-row-sub { margin-top: 2px; font-size: 12px; color: var(--text-muted, var(--text)); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.wake-approvals-row-meta { margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted, var(--text)); opacity: .85; }
+.wake-approvals-row-actions { display: flex; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
 #run-center-root { container: run-center / inline-size; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; }
 .run-center-shell { display: flex; flex: 1 1 0; flex-direction: column; height: auto; min-height: 0; overflow: hidden; padding: 22px 26px; gap: 16px; box-sizing: border-box; }
 .run-center-header, .dashboard-board-column > header { display: flex; align-items: center; }

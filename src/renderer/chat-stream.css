@@ -1,0 +1,266 @@
+/* ─── chat-stream 过程活动流（conv-core M1） ─────────────────────────────
+   视觉对齐 CLI 活动时间线：没有外框卡片，每个动作一行轻量条目
+   （线稿图标 + 动词 + 目标 + 增删统计），与正文按真实顺序交错。
+   色板跟随全局浅色基调，暗色用 prefers-color-scheme 兜底。 */
+
+.cs-flow {
+  /* 消息容器是 flex column + align-items:flex-start（收缩适应内容）：
+     不显式占满宽度的话，流宽会被超长的 nowrap 行撑到容器之外
+     （真机：命令横穿整个窗口）。width:100% 让行内省略在消息宽度内生效。 */
+  width: 100%;
+  margin: 2px 0 6px;
+  display: flex;
+  flex-direction: column;
+  font-size: var(--font-size-3);
+  min-width: 0;
+  /* chat-history 是固定高度的滚动 column flex 容器：不设 no-shrink 时流
+     会被 flex 压缩到几像素高（执行中内容撑不住）。 */
+  flex-shrink: 0;
+}
+
+.cs-flow-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* ── 计时/收起徽章：挂在消息头 cogseed 名字右侧，点击开合下方时间线 ── */
+.cs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-stream-think);
+  font-size: var(--font-size-2);
+  padding: 2px 9px;
+  border-radius: var(--radius-2);
+  flex: none;
+  /* 失败结论可能很长：限宽 + 内部省略（悬停 title 看全文），不撑宽消息头 */
+  max-width: 42%;
+  min-width: 0;
+  user-select: none;
+}
+.cs-badge:hover { background: var(--color-stream-hover-2); color: var(--color-stream-muted); }
+.cs-badge-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.cs-badge::after { content: '▾'; font-size: var(--font-size-1); line-height: 1; flex: none; }
+.cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
+.cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
+/* 工具数与状态拆开展示（子安 2026-09-08）：独立小分段，前置间隔点，
+   与「已完成」文本在徽章内自然分组；无工具行时元素为空不占位。 */
+.cs-badge-tools { flex: none; opacity: .72; }
+.cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
+/* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
+.cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
+/* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
+.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; }
+.cs-flow.failed .cs-badge { color: var(--color-stream-fail); }
+.cs-flow.failed .cs-badge:hover { color: var(--color-stream-fail-3); }
+.cs-badge-stop {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-stream-pale); font-size: var(--font-size-2); padding: 2px 8px; border-radius: 8px;
+  flex: none;
+}
+.cs-badge-stop:hover { color: var(--color-stream-fail-2); background: var(--color-stream-hover-3); }
+/* 兜底宿主（消息头不存在时，徽章落在流内首行） */
+.cs-badge-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; }
+
+/* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
+.cs-row {
+  padding: 3px 6px;
+  border-radius: var(--radius-1);
+  cursor: pointer;
+  min-width: 0;
+}
+.cs-row:hover { background: var(--color-stream-hover); }
+.cs-row-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cs-ico { display: inline-flex; flex: none; color: var(--color-stream-chip-2); }
+.cs-ico .cs-ico-svg { width: 15px; height: 15px; }
+.cs-ico.failed { color: var(--color-stream-fail); }
+
+.cs-verb { color: var(--color-stream-target); flex: none; }
+.cs-verb.failed { color: var(--color-stream-fail); }
+.cs-verb.raw { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-size-2); }
+
+.cs-row-dim { color: var(--color-stream-dim); flex: none; }
+
+/* 目标：文件名深一档、目录浅一档；都能截断（长路径不打爆行） */
+.cs-file-ico { display: inline-flex; flex: none; }
+.cs-file-ico .chat-file-kind-icon { width: 15px; height: 15px; }
+.cs-file-name {
+  flex: 0 1 auto; min-width: 0; max-width: 46%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-stream-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-2);
+}
+.cs-file-dir {
+  /* 不占满余量：+N/−N 统计紧跟目录（对齐 CLI）；路径过长时收缩省略 */
+  flex: 0 1 auto; min-width: 0; max-width: 44%;
+  margin-left: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-stream-pale);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-2);
+}
+.cs-target {
+  /* 不再 flex:1 撑满——那会把耗时推到行最右（子安 2026-09-08：工具行
+     耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
+     max-width 截断保护。 */
+  flex: 0 1 auto; min-width: 0;
+  /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
+  max-width: 68%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--color-stream-target);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--font-size-2);
+}
+
+/* 行内 diff 统计与展开的 diff 正文 */
+.cs-add { color: var(--color-stream-ok-2); flex: none; font-family: ui-monospace, monospace; font-size: var(--font-size-2); }
+.cs-del { color: var(--color-stream-fail-4); flex: none; font-family: ui-monospace, monospace; font-size: var(--font-size-2); }
+.cs-diff-body {
+  display: none;
+  margin: 4px 0 2px 22px;
+  max-height: 260px; overflow: auto;
+  font-family: ui-monospace, monospace; font-size: var(--font-size-1); line-height: 1.5;
+}
+.cs-row.cs-open .cs-diff-body { display: block; }
+.cs-diff-line { display: block; white-space: pre-wrap; word-break: break-all; }
+.cs-diff-line.add { color: var(--color-stream-ok); background: var(--color-stream-sel); }
+.cs-diff-line.del { color: var(--color-stream-fail-3); background: var(--color-stream-fail-bg); }
+.cs-diff-line.ctx { color: var(--color-stream-target); }
+
+/* 失败原因与工具输出（点击行展开） */
+.cs-row-error {
+  color: var(--color-stream-fail);
+  padding-left: 22px;
+  font-size: var(--font-size-2);
+}
+.cs-row-out {
+  display: none;
+  padding-left: 22px;
+}
+.cs-row.cs-open .cs-row-out { display: block; }
+.cs-row-out pre {
+  margin: 2px 0 3px; padding: 5px 8px; border-radius: var(--radius-1);
+  /* 输出块无卡片感（子安 2026-09-08 21:07）：半透明灰在浅底上仍是可见
+     "卡"；改无背景+左侧竖线引导（ZCode 活动流风格），保住可读性。 */
+  background: transparent; border-left: 2px solid var(--color-stream-guide);
+  max-height: 200px; overflow: auto;
+  font-size: var(--font-size-1); white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── 思考行： brain 图标 + 思考 + 时长；点开看原文 ── */
+.cs-row-think .cs-think-dur { color: var(--color-stream-dim); }
+.cs-think-full {
+  display: none;
+  margin: 2px 0 2px 22px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--color-stream-guide-2);
+  color: var(--color-stream-think);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--font-size-2);
+  line-height: 1.55;
+}
+.cs-row.cs-open .cs-think-full { display: block; }
+
+/* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
+/* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
+   pre-wrap 会保留源文本换行叠加段落间距，出现「一行内容隔几行空白」
+   （子安 2026-09-08 19:15 真机反馈）。markdown 段内禁 pre-wrap、去
+   行高叠加，段落间距完全交给 markdown-body。 */
+.cs-text { padding: 4px 6px; font-size: var(--font-size-3); color: var(--text, var(--color-stream-ink)); }
+.cs-text:not(:has(.markdown-body)) {
+  /* 未渲染 markdown 的兜底形态（渲染器不可用退回纯文本时）保留原排版。 */
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 用量行 ── */
+.cs-usage-row { padding: 2px 6px; color: var(--color-stream-chip-2); font-size: var(--font-size-2); }
+.cs-ctx-warn { color: var(--color-stream-warn); font-weight: 600; }
+
+/* ── 加载中指示：时间线末尾（order 兜底永远最后），终态移除 ── */
+.cs-loading {
+  order: 999;
+  padding: 3px 6px;
+  color: var(--color-stream-chip-2);
+}
+.cs-loading-spinner { display: inline-flex; animation: cs-spin 1s linear infinite; }
+.cs-loading-spinner svg { width: 14px; height: 14px; }
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+
+/* ── 交互卡（审批/提问：有按钮和输入，保留轻边框卡以示可操作） ── */
+.cs-card.cs-interaction {
+  border: 1px solid var(--color-stream-guide);
+  background: var(--color-stream-btn);
+  border-radius: var(--radius-3);
+  padding: 7px 10px;
+  margin: 3px 0;
+}
+.cs-card-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.cs-card-ico { display: inline-flex; flex: none; color: var(--color-stream-warn); }
+.cs-card-ico .cs-ico-svg { width: 15px; height: 15px; }
+.cs-interaction .cs-interaction-prompt { font-weight: 600; }
+.cs-interaction-detail {
+  margin: 5px 0; padding: 6px 8px; border-radius: var(--radius-1);
+  background: var(--color-stream-overlay); font-size: var(--font-size-1);
+  white-space: pre-wrap; word-break: break-all; max-height: 140px; overflow: auto;
+}
+.cs-interaction-reasons { color: var(--color-stream-warn); font-size: var(--font-size-2); margin-top: 3px; }
+.cs-interaction-actions, .cs-interactions-input-row {
+  display: flex; gap: 6px; margin-top: 6px; align-items: center;
+}
+.cs-btn {
+  border: 1px solid var(--color-stream-guide-3); border-radius: var(--radius-1);
+  background: var(--color-stream-white); padding: 4px 12px; font-size: var(--font-size-2); cursor: pointer;
+}
+.cs-btn:hover { background: var(--color-stream-hover); }
+.cs-btn.ok { border-color: var(--color-stream-ok-3); color: var(--color-stream-ok); }
+.cs-btn.danger { border-color: var(--color-stream-danger); color: var(--color-stream-fail-2); }
+.cs-interaction-input {
+  flex: 1; min-width: 0; padding: 5px 9px; border-radius: var(--radius-1);
+  border: 1px solid var(--color-stream-guide-3); font-size: var(--font-size-2);
+}
+.cs-interaction.closed { opacity: .55; }
+.cs-interaction.closed .cs-interaction-prompt { font-weight: 400; }
+
+@media (prefers-color-scheme: dark) {
+  .cs-flow { color: var(--color-stream-dark-ink); }
+  .cs-badge { color: var(--color-stream-chip); }
+  .cs-badge:hover { background: var(--color-stream-dark-hover-2); color: var(--color-stream-chip-2); }
+  .cs-badge-stop { color: var(--color-stream-dir); }
+  .cs-row:hover { background: var(--color-stream-dark-hover); }
+  .cs-ico { color: var(--color-stream-chip); }
+  .cs-verb { color: var(--color-stream-chip-2); }
+  .cs-row-dim, .cs-row-think .cs-think-dur { color: var(--color-stream-dir); }
+  .cs-file-name { color: var(--color-stream-chip-2); }
+  .cs-file-dir { color: var(--color-stream-dir); }
+  .cs-target { color: var(--color-stream-chip); }
+  .cs-text { color: var(--text, var(--color-stream-fallback)); }
+  .cs-usage-row { color: var(--color-stream-chip); }
+  .cs-loading { color: var(--color-stream-chip); }
+  .cs-think-full { color: var(--color-stream-chip); border-left-color: var(--color-stream-dark-line); }
+  /* 输出块与浅色模式同构：无底色卡，竖线引导（浅色 2026-09-08 21:10
+     改法同步——此前暗色仍残留 rgba(0,0,0,.28) 深底卡）。 */
+  .cs-row-out pre {
+    background: transparent;
+    border-left-color: var(--color-stream-dark-line-2);
+  }
+  .cs-interaction-detail { background: var(--color-stream-dark-deep); }
+  .cs-card.cs-interaction { background: var(--color-stream-dark-card); }
+  .cs-btn { background: var(--color-stream-dark-hover); }
+}
