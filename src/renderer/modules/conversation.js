@@ -12463,6 +12463,18 @@ function _makeConvChatController(cid, options = {}) {
         if (msgEl && Number.isFinite(options.sendWallMs)) {
           msgEl.dataset.localSendMs = String(options.sendWallMs);
         }
+        // 发送即起计（子安 2026-09-09）：面板与计时器在发送这一刻创建
+        // 并开始走秒，不等模型首事件（首 token 前的数秒空窗里用户就有
+        // 「已发出、正在跑」的反馈）。预热失败不阻塞发送链路。
+        if (msgEl && typeof window.chatStreamPrewarm === 'function') {
+          try {
+            window.chatStreamPrewarm(
+              id,
+              msgEl,
+              Number.isFinite(options.sendWallMs) ? options.sendWallMs : Date.now(),
+            );
+          } catch (_) { /* prewarm best-effort */ }
+        }
         pendingConvs.set(id, {
           loadingEl: msgEl,
           needsIndicator: false,
