@@ -107,6 +107,46 @@ describe('anchor_resolver', () => {
     expect(res.charStart).toBe('intro\n\nbeta four five six\noutro'.indexOf('beta four'));
   });
 
+  it('returns a document-reader payload even when no matching chunk exists', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = 'document heading\n\nfull source body';
+    await stageLibraryFile('notes/reader.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/reader.md',
+      chunkIdx: 99,
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.textStart).toBe(0);
+    expect(res.text).toBe(content);
+    expect(res.totalChars).toBe(content.length);
+    expect(res.truncated).toBe(false);
+  });
+
+  it('includes context before the highlighted citation range', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = `${'context '.repeat(60)}alpha one two three\nsuffix text`;
+    await stageLibraryFile('notes/context.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/context.md',
+      chunkIdx: 1,
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.textStart).toBeGreaterThan(0);
+    expect(res.text).toContain('alpha one two three');
+    expect(res.charStart).toBeGreaterThan(res.textStart || 0);
+  });
+
   it('rejects an out-of-scope path', async () => {
     const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
     await stageLibraryFile('notes/a.md', 'alpha one two three');

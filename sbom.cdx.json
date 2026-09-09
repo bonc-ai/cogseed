@@ -11343,6 +11343,51 @@
     },
     {
       "type": "library",
+      "name": "sherpa-onnx-win-x64",
+      "version": "1.13.6",
+      "bom-ref": "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6",
+      "author": "The next-gen Kaldi team",
+      "description": "Speech-to-text, text-to-speech, speaker diarization, and speech enhancement using Next-gen Kaldi without internet connection",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/sherpa-onnx-win-x64@1.13.6",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/csukuangfj/sherpa-onnx.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/sherpa-onnx-win-x64/-/sherpa-onnx-win-x64-1.13.6.tgz",
+          "type": "distribution",
+          "comment": "as detected from npm-ls property \"resolved\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/sherpa-onnx-win-x64"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "agent-base",
       "version": "7.1.4",
       "bom-ref": "cogseed@0.9.0|agent-base@7.1.4",
@@ -39219,7 +39264,8 @@
     {
       "ref": "cogseed@0.9.0|sherpa-onnx-node@1.13.6",
       "dependsOn": [
-        "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6"
+        "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6",
+        "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6"
       ]
     },
     {
@@ -40391,6 +40437,9 @@
     },
     {
       "ref": "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6"
+    },
+    {
+      "ref": "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6"
     },
     {
       "ref": "cogseed@0.9.0|agent-base@7.1.4"

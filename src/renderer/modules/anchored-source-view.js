@@ -1,178 +1,232 @@
 /**
- * Anchored source viewer (知识库问答 ② P3).
+ * Shared source viewer for knowledge-base files and citation anchors.
  *
- * Opens a modal showing the resolved source location for a citation anchor:
- * display path, PDF page (when known), and the located text window with the
- * exact [charStart, charEnd) range highlighted. Reads the location via the
- * `cogseed.anchor.resolve` IPC channel (P1).
- *
- * Exposes `window.__openAnchorViewer(anchor)` so both the chat citation
- * chips (chat-citation.js) and future artifact payloads (P4, via the
- * artifact postMessage contract) can open the same viewer.
- *
- * Safety: the located text comes from user documents — it is rendered with
- * textContent / DOM building only, never innerHTML.
+ * The compact view resolves and highlights a cited chunk. The reader view
+ * lazily asks the same read-only resolver for a bounded document payload, so
+ * opening a file never writes data or triggers rich-document extraction.
  */
-(function () {
+(function initAnchoredSourceView(root) {
   'use strict';
 
-  const VIEWER_ID = 'anchored-source-view';
-  let _overlay = null;
+  const log = typeof createLogger === 'function' ? createLogger('anchored-source-view') : null;
+  let activeModal = null;
+  let activeAnchor = null;
+  let activeView = 'anchor';
+  let activeResult = null;
+  let requestSequence = 0;
 
-  function _ensureOverlay() {
-    if (_overlay && document.getElementById(VIEWER_ID)) return _overlay;
+  function formatFallback(text, vars) {
+    return String(text || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => String(vars?.[key] ?? ''));
+  }
 
-    const overlay = document.createElement('div');
-    overlay.id = VIEWER_ID;
-    overlay.className = 'anchored-source-overlay';
+  function t(key, fallback, vars) {
+    try {
+      const value = typeof root.t === 'function' ? root.t(key, vars || {}) : '';
+      return value && value !== key ? value : formatFallback(fallback, vars);
+    } catch (_) {
+      return formatFallback(fallback, vars);
+    }
+  }
 
-    const dialog = document.createElement('section');
-    dialog.className = 'anchored-source-dialog';
+  function viewerBodyHtml() {
+    return [
+      '<div class="anchored-source-viewer">',
+      '<div class="anchored-source-toolbar">',
+      '<div class="anchored-source-meta" data-anchor-view-meta></div>',
+      '<div class="anchored-source-actions" data-anchor-view-actions></div>',
+      '</div>',
+      '<div class="anchored-source-body">',
+      '<div class="anchored-source-status" data-anchor-view-status></div>',
+      '<pre class="anchored-source-text" data-anchor-view-text></pre>',
+      '<div class="anchored-source-note" data-anchor-view-note hidden></div>',
+      '</div>',
+      '</div>',
+    ].join('');
+  }
 
-    const header = document.createElement('header');
-    header.className = 'anchored-source-header';
-    const title = document.createElement('span');
-    title.className = 'anchored-source-title';
-    title.textContent = '原文位置';
-    const jump = document.createElement('button');
-    jump.type = 'button';
-    jump.className = 'anchored-source-jump';
-    jump.textContent = '在阅读器打开';
-    jump.setAttribute('aria-label', '在阅读器打开');
-    jump.addEventListener('click', () => {
-      const isReader = dialog.classList.toggle('anchored-source-dialog--reader');
-      jump.textContent = isReader ? '返回定位' : '在阅读器打开';
-      meta.hidden = isReader;
+  function modalIsOpen() {
+    return Boolean(activeModal?.overlay && document.body.contains(activeModal.overlay));
+  }
+
+  function ensureModal() {
+    if (modalIsOpen()) return activeModal;
+    if (typeof root.uiModal !== 'function' || typeof root.uiButton !== 'function') return null;
+
+    const modal = root.uiModal({
+      title: t('kb.viewer.title', '原文查看器'),
+      description: t('kb.viewer.description', '查看知识库原文，并定位到引用片段。'),
+      closeLabel: t('common.close', '关闭'),
+      size: 'lg',
+      bodyHtml: viewerBodyHtml(),
     });
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'anchored-source-close';
-    close.textContent = '×';
-    close.setAttribute('aria-label', '关闭');
-    close.addEventListener('click', () => overlay.hidden = true);
-    header.append(title, jump, close);
-
-    const meta = document.createElement('div');
-    meta.className = 'anchored-source-meta';
-
-    const body = document.createElement('div');
-    body.className = 'anchored-source-body';
-    const pre = document.createElement('pre');
-    pre.className = 'anchored-source-text';
-    body.appendChild(pre);
-
-    dialog.append(header, meta, body);
-    overlay.appendChild(dialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
-    document.body.appendChild(overlay);
-    _overlay = overlay;
-    return overlay;
+    modal.dialog.classList.add('anchored-source-modal');
+    modal.then(() => {
+      if (activeModal === modal) activeModal = null;
+    });
+    activeModal = modal;
+    return modal;
   }
 
-  function _setMeta(text) {
-    _ensureOverlay().querySelector('.anchored-source-meta').textContent = text;
+  function element(selector) {
+    return activeModal?.dialog?.querySelector(selector) || null;
   }
 
-  function _renderBody(loc) {
-    const pre = _ensureOverlay().querySelector('.anchored-source-text');
-    pre.textContent = '';
-    if (!loc.resolved) {
-      const msg = document.createElement('span');
-      msg.className = 'anchored-source-unresolved';
-      msg.textContent = loc.reason === 'no_cache'
-        ? '该文件尚未提取文本（可能仍在索引中），暂时无法定位到具体位置。'
-        : loc.reason === 'out_of_scope'
-          ? '该文件不在当前资料边界内，无法打开。'
-          : loc.reason === 'not_found'
-            ? '未能在原文中定位到该引用片段。'
-            : '无法定位该引用。';
-      pre.appendChild(msg);
+  function setMeta(text) {
+    const meta = element('[data-anchor-view-meta]');
+    if (meta) meta.textContent = text;
+  }
+
+  function setStatus(text, tone) {
+    const status = element('[data-anchor-view-status]');
+    if (!status) return;
+    status.textContent = text || '';
+    status.hidden = !text;
+    status.dataset.tone = tone || '';
+  }
+
+  function renderActions() {
+    const host = element('[data-anchor-view-actions]');
+    if (!host) return;
+    const canReturnToAnchor = activeView === 'document'
+      && activeAnchor
+      && (Number.isFinite(Number(activeAnchor.chunkIdx)) || String(activeAnchor.quote || '').trim());
+    const label = activeView === 'anchor'
+      ? t('kb.viewer.read_full', '阅读全文')
+      : canReturnToAnchor
+        ? t('kb.viewer.back_to_anchor', '返回引用位置')
+        : '';
+    if (!label) {
+      host.textContent = '';
       return;
     }
-    const text = loc.text || '';
-    // `loc.text` starts at charStart, so the cited range is [0, markLen).
-    const markLen = Math.max(0, Math.min((loc.charEnd ?? loc.charStart ?? 0) - (loc.charStart ?? 0), text.length));
-    const mark = document.createElement('mark');
-    mark.textContent = text.slice(0, markLen);
-    pre.appendChild(mark);
-    pre.appendChild(document.createTextNode(text.slice(markLen)));
+    host.innerHTML = root.uiButton({
+      label,
+      icon: activeView === 'anchor' ? 'book-open' : 'quote',
+      role: 'secondary',
+      size: 'sm',
+      attrs: { 'data-anchor-view-toggle': 'true' },
+    });
+    host.querySelector('[data-anchor-view-toggle]')?.addEventListener('click', () => {
+      void loadView(activeView === 'anchor' ? 'document' : 'anchor');
+    });
   }
 
-  async function openAnchorViewer(anchor) {
-    // 整篇原文优先：library 源且 KB 工作台已提供整篇查看器桥 → 打开整篇并高亮/翻页
-    if (anchor && anchor.source !== 'attachment' && typeof window.__openKbSourceDocument === 'function') {
-      try {
-        const ok = await window.__openKbSourceDocument(anchor);
-        if (ok) return;
-      } catch (_) { /* 打开失败回落片段查看器 */ }
+  function reasonText(reason) {
+    if (reason === 'no_cache') return t('kb.viewer.no_cache', '该文件仍在索引中，暂时无法读取原文。');
+    if (reason === 'out_of_scope') return t('kb.viewer.out_of_scope', '该文件不在当前资料边界内，无法打开。');
+    if (reason === 'not_found') return t('kb.viewer.not_found', '已打开文件，但未找到对应的引用片段。');
+    return t('kb.viewer.unavailable', '暂时无法读取该文件的原文。');
+  }
+
+  function renderText(result) {
+    const pre = element('[data-anchor-view-text]');
+    const note = element('[data-anchor-view-note]');
+    if (!pre || !note) return;
+    pre.textContent = '';
+    note.hidden = true;
+    note.textContent = '';
+
+    if (!result?.resolved) {
+      setStatus(reasonText(result?.reason), 'warning');
+      return;
     }
-    const overlay = _ensureOverlay();
-    overlay.hidden = false;
-    _setMeta('定位中…');
-    _renderBody({ resolved: false, reason: 'no_text' });
+
+    setStatus('', '');
+    const text = String(result.text || '');
+    const textStart = Number.isFinite(Number(result.textStart)) ? Number(result.textStart) : 0;
+    const absoluteStart = Number(result.charStart);
+    const absoluteEnd = Number(result.charEnd);
+    const markStart = Number.isFinite(absoluteStart) ? Math.max(0, Math.min(text.length, absoluteStart - textStart)) : 0;
+    const markEnd = Number.isFinite(absoluteEnd) ? Math.max(markStart, Math.min(text.length, absoluteEnd - textStart)) : markStart;
+
+    pre.appendChild(document.createTextNode(text.slice(0, markStart)));
+    if (markEnd > markStart) {
+      const mark = document.createElement('mark');
+      mark.textContent = text.slice(markStart, markEnd);
+      pre.appendChild(mark);
+    }
+    pre.appendChild(document.createTextNode(text.slice(markEnd)));
+
+    if (result.truncated) {
+      note.hidden = false;
+      note.textContent = t('kb.viewer.truncated', '文档较长，当前显示包含引用位置的部分内容。');
+    }
+    requestAnimationFrame(() => pre.querySelector('mark')?.scrollIntoView({ block: 'center' }));
+  }
+
+  function renderMeta(result) {
+    const bits = [String(result?.displayPath || activeAnchor?.path || '')].filter(Boolean);
+    if (result?.page) bits.push(t('kb.viewer.page', '第 {page} 页', { page: result.page }));
+    if (Number.isFinite(Number(result?.charStart)) && Number.isFinite(Number(result?.charEnd))) {
+      bits.push(t('kb.viewer.characters', '字符 {start}–{end}', { start: result.charStart, end: result.charEnd }));
+    }
+    if (Number.isFinite(Number(result?.totalChars))) {
+      bits.push(t('kb.viewer.total_chars', '共 {count} 字符', { count: result.totalChars }));
+    }
+    setMeta(bits.join(' · '));
+  }
+
+  function renderResult(result) {
+    activeResult = result;
+    activeModal?.dialog?.classList.toggle('anchored-source-modal--reader', activeView === 'document');
+    renderMeta(result);
+    renderText(result);
+    renderActions();
+  }
+
+  function renderLoading() {
+    activeResult = null;
+    activeModal?.dialog?.classList.toggle('anchored-source-modal--reader', activeView === 'document');
+    setMeta(String(activeAnchor?.path || ''));
+    setStatus(activeView === 'document'
+      ? t('kb.viewer.loading_document', '正在读取原文…')
+      : t('kb.viewer.locating', '正在定位引用…'), 'loading');
+    const pre = element('[data-anchor-view-text]');
+    if (pre) pre.textContent = '';
+    renderActions();
+  }
+
+  async function loadView(view) {
+    if (!activeAnchor || !ensureModal()) return;
+    activeView = view === 'document' ? 'document' : 'anchor';
+    const sequence = ++requestSequence;
+    renderLoading();
     try {
-      const loc = await window.cogseed.invoke('cogseed.anchor.resolve', anchor);
-      const metaBits = [String(anchor.path || '')];
-      if (loc.page) metaBits.push(`第 ${loc.page} 页`);
-      if (loc.resolved) metaBits.push(`字符 ${loc.charStart}–${loc.charEnd}`);
-      if (!loc.resolved && loc.reason) metaBits.push(`（${loc.reason}）`);
-      _setMeta(metaBits.join(' · '));
-      _renderBody(loc);
-    } catch (err) {
-      _setMeta('定位失败');
-      _renderBody({ resolved: false, reason: 'no_text' });
+      const result = await root.cogseed.invoke('cogseed.anchor.resolve', { ...activeAnchor, view: activeView });
+      if (sequence !== requestSequence || !modalIsOpen()) return;
+      if (result?.ok === false) throw new Error(result.error || 'anchor resolve failed');
+      renderResult(result || { resolved: false, reason: 'no_text' });
+    } catch (error) {
+      if (sequence !== requestSequence || !modalIsOpen()) return;
+      log?.warn('source viewer load failed', { error: error?.message || String(error) });
+      renderResult({ resolved: false, reason: 'no_text' });
     }
   }
 
-  window.__openAnchorViewer = openAnchorViewer;
+  function openAnchorViewer(anchor) {
+    const path = String(anchor?.path || '').trim();
+    if (!path) return Promise.resolve();
+    if (!ensureModal()) {
+      if (typeof root.uiToast === 'function') {
+        root.uiToast(t('kb.viewer.ui_unavailable', '原文查看器暂时不可用'), { variant: 'warning' });
+      }
+      return Promise.resolve();
+    }
+    activeAnchor = { ...anchor, path };
+    return loadView(anchor?.view === 'document' ? 'document' : 'anchor');
+  }
 
-  // Self-contained styles (reviewers may move to style.css).
-  const style = document.createElement('style');
-  style.textContent = `
-    .anchored-source-overlay {
-      position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.45);
-      display: flex; align-items: center; justify-content: center;
-    }
-    .anchored-source-overlay[hidden] { display: none; }
-    .anchored-source-dialog {
-      background: var(--surface, #fff); color: var(--text, #222);
-      width: min(720px, 92vw); max-height: 80vh; border-radius: 10px;
-      display: flex; flex-direction: column; box-shadow: 0 8px 40px rgba(0,0,0,.25);
-    }
-    .anchored-source-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 16px; border-bottom: 1px solid rgba(128,128,128,.3);
-    }
-    .anchored-source-title { font-weight: 600; }
-    .anchored-source-jump {
-      margin-left: auto; margin-right: 10px; border: 1px solid rgba(128,128,128,.4);
-      background: transparent; color: inherit; font-size: 12px; padding: 3px 10px;
-      border-radius: 6px; cursor: pointer;
-    }
-    .anchored-source-jump:hover { background: rgba(128,128,128,.12); }
-    .anchored-source-dialog--reader {
-      width: min(1100px, 96vw); max-height: 92vh;
-    }
-    .anchored-source-dialog--reader .anchored-source-body { padding: 28px 44px; }
-    .anchored-source-dialog--reader .anchored-source-text {
-      font-family: inherit; font-size: 15px; line-height: 2; color: inherit;
-    }
-    .anchored-source-close {
-      border: 0; background: transparent; font-size: 20px; cursor: pointer; line-height: 1;
-    }
-    .anchored-source-meta {
-      padding: 8px 16px; font-size: 12px; opacity: .75;
-      border-bottom: 1px solid rgba(128,128,128,.2);
-    }
-    .anchored-source-body { overflow: auto; padding: 12px 16px; }
-    .anchored-source-text {
-      white-space: pre-wrap; word-break: break-word; margin: 0;
-      font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 13px; line-height: 1.6;
-    }
-    .anchored-source-text mark {
-      background: var(--accent, #ffe08a); padding: 0 1px; border-radius: 2px;
-    }
-    .anchored-source-unresolved { color: var(--danger, #c0392b); }
-  `;
-  document.head.appendChild(style);
-})();
+  root.addEventListener?.('i18n-change', () => {
+    if (!modalIsOpen()) return;
+    const title = activeModal.dialog.querySelector('.ui-modal__title');
+    const description = activeModal.dialog.querySelector('.ui-modal__description');
+    if (title) title.textContent = t('kb.viewer.title', '原文查看器');
+    if (description) description.textContent = t('kb.viewer.description', '查看知识库原文，并定位到引用片段。');
+    if (activeResult) renderResult(activeResult);
+    else renderLoading();
+  });
+
+  root.__openAnchorViewer = openAnchorViewer;
+
+  if (typeof module !== 'undefined' && module.exports) module.exports = { formatFallback };
+})(typeof window !== 'undefined' ? window : globalThis);

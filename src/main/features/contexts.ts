@@ -529,8 +529,12 @@ export function writeContextFileForUser(uid: string, relpath: string, content: s
  * touch the root `_INDEX.md` (auto-generated).
  */
 export function updateContextFile(relpath: string, content: string): Result<{ path: string }> {
+  return updateContextFileForUser(getActiveUserId(), relpath, content);
+}
+
+export function updateContextFileForUser(uid: string, relpath: string, content: string): Result<{ path: string }> {
   let p: string;
-  try { p = resolvePath(relpath, { mustExist: true }); }
+  try { p = resolvePathForRoot(contextsRootForUser(uid), relpath, { mustExist: true }); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
   if (!fs.statSync(p).isFile()) return { ok: false, error: 'not a file' };
   const ext = extOf(p);
@@ -547,8 +551,7 @@ export function updateContextFile(relpath: string, content: string): Result<{ pa
   }
   try { fs.writeFileSync(p, body, 'utf8'); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
-  invalidateIndex();
-  const uid = getActiveUserId();
+  if (uid === getActiveUserId()) invalidateIndex();
   search.upsertContext(uid, relpath);
   kbIndexer.enqueue(uid, relpath, 'upsert');
   notifyDirtyContext(relpath);
@@ -681,11 +684,15 @@ export async function importContextFileFromPath(
 
 /** User-facing delete — files or dirs (recursive), refuses to touch the root index. */
 export function deleteContextTarget(relpath: string): Result<{ deletedPaths: string[] }> {
+  return deleteContextTargetForUser(getActiveUserId(), relpath);
+}
+
+export function deleteContextTargetForUser(uid: string, relpath: string): Result<{ deletedPaths: string[] }> {
   if (!relpath.trim()) {
     return { ok: false, error: 'contexts root cannot be deleted', code: 'E_CONTEXTS_ROOT' };
   }
   let p: string;
-  try { p = resolvePath(relpath, { mustExist: true }); }
+  try { p = resolvePathForRoot(contextsRootForUser(uid), relpath, { mustExist: true }); }
   catch (err) { return { ok: false, error: (err as Error).message }; }
   if (path.basename(p) === CONTEXTS_INDEX_FILENAME) {
     return { ok: false, error: t('errors.cant_delete_index') };
@@ -696,8 +703,7 @@ export function deleteContextTarget(relpath: string): Result<{ deletedPaths: str
     if (st.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
     else fs.unlinkSync(p);
   } catch (err) { return { ok: false, error: (err as Error).message }; }
-  invalidateIndex();
-  const uid = getActiveUserId();
+  if (uid === getActiveUserId()) invalidateIndex();
   for (const r of droppedRels) {
     search.dropContext(uid, r);
     kbIndexer.enqueue(uid, r, 'delete');
