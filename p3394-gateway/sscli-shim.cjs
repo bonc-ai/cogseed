@@ -48,7 +48,10 @@ function escapeCmdCommand(value) {
 }
 
 function escapeCmdArgument(value, doubleEscapeMetaChars) {
-  let escaped = String(value);
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Preserve every prompt segment as one inert argv
+  // value instead of silently dropping everything after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
   escaped = '"' + escaped + '"';
@@ -94,6 +97,34 @@ function buildWindowsCmdInvocation(cli, args) {
   };
 }
 
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
@@ -110,6 +141,13 @@ function spawnCli(cli, args, options) {
   if (process.platform !== 'win32') return spawn(cli, args, options);
   const resolved = windowsLookPath(cli) || cli;
   if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...options,
+        env: { ...(options.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
     const invocation = buildWindowsCmdInvocation(resolved, args);
     return spawn(invocation.command, invocation.args, { ...options, windowsVerbatimArguments: true });
   }
@@ -117,6 +155,69 @@ function spawnCli(cli, args, options) {
     return spawn(process.execPath, [resolved, ...args], options);
   }
   return spawn(resolved, args, options);
+}
+
+function windowsSystem32Tool(name) {
+  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  return path.win32.join(root, 'System32', name);
+}
+
+/** Terminate the CLI and its descendants; child.kill() only kills cmd.exe on Windows. */
+function killProcessTree(child, signal = 'SIGTERM') {
+  const pid = child && child.pid;
+  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
+  if (pid && process.platform === 'win32') {
+    let killer;
+    try {
+      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+      const onClose = (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch {
+        fallbackOnce();
+        finish();
+      }
+    });
+  }
+  if (pid && process.platform !== 'win32') {
+    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
+  }
+  fallback();
+  return Promise.resolve();
 }
 
 // ── 启动参数解析 ──
@@ -306,8 +407,8 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
       }
     }, SLOW_START_HINT_MS);
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+      killProcessTree(child, 'SIGTERM');
+      setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
       finish(new Error('p3394_agent_timeout'));
     }, TIMEOUT_MS);
     function finish(error) {
@@ -426,7 +527,7 @@ process.stdin.on('data', (chunk) => {
       const targetId = String(op.task_id || op.request_id || '');
       if (activeTurn && activeTurn.child && targetId
           && (String(activeTurn.taskId) === targetId || String(activeTurn.requestId) === targetId)) {
-        try { activeTurn.child.kill('SIGTERM'); } catch { /* already gone */ }
+        killProcessTree(activeTurn.child, 'SIGTERM');
       }
       // 在途 deliver 的 runCliOnce 会以非零退出 reject → 上面的 catch 发
       // failed 事件；网关对取消场景已有独立回执，这里不额外应答。
@@ -439,7 +540,16 @@ process.stdin.on('data', (chunk) => {
   }
 });
 process.stdin.on('end', () => process.exit(0));
+let terminating = false;
 process.on('SIGTERM', () => {
-  if (activeTurn && activeTurn.child) { try { activeTurn.child.kill('SIGTERM'); } catch {} }
-  process.exit(0);
+  if (terminating) return;
+  terminating = true;
+  const deadline = setTimeout(() => process.exit(0), 2000);
+  const completion = activeTurn && activeTurn.child
+    ? killProcessTree(activeTurn.child, 'SIGTERM')
+    : Promise.resolve();
+  void completion.finally(() => {
+    clearTimeout(deadline);
+    process.exit(0);
+  });
 });

@@ -9,6 +9,7 @@
     tree: [],
     kbStatus: new Map(), // relPath -> { status, chunks, kind, error }
     libs: [],
+    externalSources: [],
     currentLib: '',
     dirStack: [], // 相对库根的目录路径段（'' = 库根）
     filter: '',
@@ -49,6 +50,26 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function _tr(key, fallback, vars) {
+    const translated = typeof window.t === 'function' ? window.t(key, vars || {}) : '';
+    return translated && translated !== key ? translated : fallback;
+  }
+
+  function _externalSourceLabel(source) {
+    if (source && source.id === 'feishu-wiki') {
+      return _tr('kb.workbench.external_feishu', '飞书 Wiki');
+    }
+    return (source && source.id) || _tr('kb.workbench.external_source', '外部来源');
+  }
+
+  function _currentExternalSource() {
+    return _state.externalSources.find((source) => source.path === _state.currentLib) || null;
+  }
+
+  function _isExternalSourceSelected() {
+    return !_state.spaceId && !!_currentExternalSource();
   }
 
   // 统一图标：优先 icons.js 的 uiIconHtml（仓库规范），缺的名走内联 SVG。
@@ -108,7 +129,17 @@
   }
 
   function _findLibNode(name) {
-    return _state.tree.find((n) => n.type === 'dir' && n.name === name) || null;
+    const target = String(name || '');
+    const find = (nodes) => {
+      for (const node of nodes || []) {
+        if (!node || node.type !== 'dir') continue;
+        if (node.path === target || node.name === target) return node;
+        const nested = find(node.children || []);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return find(_state.tree);
   }
 
   // 沿 dirStack 下钻到当前目录节点（dirStack 为空 = 库根）
@@ -151,7 +182,15 @@
         window.cogseed.invoke('spaces.list').catch(() => null),
       ]);
       _state.tree = (treeRes && Array.isArray(treeRes.tree)) ? treeRes.tree : [];
-      _state.libs = _state.tree.filter((n) => n.type === 'dir');
+      const externalRoot = _state.tree.find((node) => node && node.type === 'dir' && (node.path === 'external' || node.name === 'external')) || null;
+      _state.libs = _state.tree.filter((node) => node && node.type === 'dir' && node !== externalRoot);
+      _state.externalSources = externalRoot
+        ? (externalRoot.children || []).filter((node) => node && node.type === 'dir').map((node) => ({
+          id: node.name,
+          path: node.path || `external/${node.name}`,
+          node,
+        }))
+        : [];
       _state.spaces = (spacesRes && Array.isArray(spacesRes.spaces)) ? spacesRes.spaces : [];
       _state.kbStatus = new Map();
       const files = (kbRes && Array.isArray(kbRes.files)) ? kbRes.files : [];
@@ -159,8 +198,12 @@
         if (!f || !f.path) continue;
         _state.kbStatus.set(f.path, { status: f.status, chunks: f.chunks, kind: f.kind, error: f.error });
       }
-      if (!_state.libs.some((l) => l.name === _state.currentLib)) {
-        _state.currentLib = _state.libs.length ? _state.libs[0].name : '';
+      const availableLibs = [
+        ..._state.libs.map((lib) => lib.name),
+        ..._state.externalSources.map((source) => source.path),
+      ];
+      if (!availableLibs.includes(_state.currentLib)) {
+        _state.currentLib = availableLibs[0] || '';
         _state.dirStack = [];
       }
       _renderTree();
@@ -178,15 +221,29 @@
   function _renderTree() {
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
+    const personalLabel = _tr('kb.workbench.group_personal', '个人知识库');
+    const sharedLabel = _tr('kb.workbench.group_shared', '共享知识库');
+    const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const externalItems = _state.externalSources
+      .filter((source) => {
+        if (!_state.treeFilter) return true;
+        const query = _state.treeFilter.toLowerCase();
+        return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
+      })
+      .map((source) =>
+        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
+          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
+      ).join('');
     const groups = [
-      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
+      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
           ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
       ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
-      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
+      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="共享知识库">${_icon('users', 'kb-share-ico')}</span></div>`
+          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
       ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
+      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
     ];
     const groupHtml = groups.map((g) => {
       const open = !_state.treeGroups.has(g.key);
@@ -223,6 +280,9 @@
         e.preventDefault(); e.stopPropagation();
         _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
       });
+    });
+    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
+      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -956,6 +1016,7 @@
       el.addEventListener('click', () => _toggleDir(el.dataset.kbDir));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (_isExternalSourceSelected()) return;
         _kbRowMenu(el.dataset.kbDir, true, e.clientX, e.clientY);
       });
     });
@@ -963,12 +1024,14 @@
       el.addEventListener('click', () => _openFile(el.dataset.kbFile));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
       const moreBtn = el.querySelector('.kb-mini-btn[title="更多"]');
       if (moreBtn) moreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
     });
     _renderCount(lib ? _countFiles(lib) : 0);
@@ -1115,7 +1178,7 @@
     _bindEmptyActions();
     list.querySelectorAll('[data-kb-space-file]').forEach((el) => {
       el.addEventListener('click', () => {
-        _openFileViewer({ spaceId: _state.spaceId, path: el.dataset.kbSpaceFile }, _state.spaceName || '');
+        _openFile(el.dataset.kbSpaceFile);
       });
       // 共享库文件右键：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除（对齐 ima）
       el.addEventListener('contextmenu', (e) => {
@@ -1192,592 +1255,21 @@
 
   // ── 文件查看（点击文件行 → 打开原文查看器）──
   function _openFile(relPath) {
-    _openFileViewer({ path: relPath }, _state.currentLib || '');
-  }
-
-  // 打开原文查看 overlay：个人库传 {path}；共享空间库传 {spaceId, path}。
-  // opts?: { page?, quote? } —— 来自引用的定位信息：pdf 跳到 page、文本类按 quote 高亮。
-  async function _openFileViewer(payload, scopeName, opts) {
-    const scope = scopeName || (payload && payload.spaceId ? payload.spaceId : '');
-    const hl = (opts && typeof opts === 'object') ? opts : null;
-    let overlay = _ensureFileViewerOverlay();
-    // 打开时恢复上次的窗口尺寸/位置（无记忆则 flex 居中）
-    const dialog = overlay.querySelector('.kb-fv-dialog');
-    if (dialog) _fvApplyWindowRect(dialog);
-    overlay.hidden = false;
-    _fvResetZoom(dialog);
-    _setFileViewerState(overlay, { loading: true, title: (payload && payload.path || '').split('/').pop() || '原文查看', scope });
-    try {
-      const res = await window.cogseed.invoke('kb.openFile', payload);
-      if (!res || !res.ok) {
-        const errMsg = (res && res.error) || '打开失败';
-        const friendly = errMsg === 'too_large'
-          ? `文件超过 2MB 预览上限（${res && res.size ? Math.round(res.size / 1024 / 1024) : ''}MB），暂不支持在线预览`
-          : errMsg === 'file not found' ? '文件不存在或已被移动'
-            : /暂不支持预览/.test(errMsg) ? errMsg : errMsg;
-        _setFileViewerState(overlay, {
-          error: friendly,
-          title: (payload && payload.path || '').split('/').pop() || '原文查看',
-          scope,
-        });
-        if (typeof uiToast === 'function') uiToast('无法预览该文件', { variant: 'warning' });
-        return;
-      }
-      _setFileViewerState(overlay, { content: res, title: res.name || (payload && payload.path || '').split('/').pop(), scope }, hl);
-    } catch (err) {
-      _setFileViewerState(overlay, {
-        error: (err && err.message) || String(err),
-        title: (payload && payload.path || '').split('/').pop() || '原文查看',
-        scope,
+    if (typeof window.__openAnchorViewer === 'function') {
+      window.__openAnchorViewer({
+        source: 'library',
+        scope: _state.spaceId ? 'space' : 'global',
+        path: relPath,
+        chunkIdx: 1,
+        ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
+        view: 'document',
       });
-      if (typeof uiToast === 'function') uiToast('打开文件失败', { variant: 'error' });
-    }
-  }
-
-  // 惰性构建查看 overlay（body 级，复用一次；样式自包含，风格对齐 anchored-source-view）
-  // 全 DOM 构建（createElement），不引入 raw-control 字面量（shared-ui guard 冻结计数）。
-  let _fileViewerOverlay = null;
-  let _fvOfficeBlobUrl = null; // office HTML 预览 blob URL（下次打开前 revoke）
-  function _ensureFileViewerOverlay() {
-    if (_fileViewerOverlay && document.getElementById('kb-file-viewer')) return _fileViewerOverlay;
-    const el = (tag, cls, text) => {
-      const n = document.createElement(tag);
-      if (cls) n.className = cls;
-      if (text != null) n.textContent = text;
-      return n;
-    };
-    const overlay = el('div', 'kb-fv-overlay');
-    overlay.id = 'kb-file-viewer';
-    overlay.hidden = true;
-
-    const dialog = el('section', 'kb-fv-dialog');
-    dialog.setAttribute('role', 'dialog');
-    dialog.setAttribute('aria-modal', 'true');
-    const head = el('header', 'kb-fv-head');
-    const headMain = el('div', 'kb-fv-head-main');
-    const title = el('span', 'kb-fv-title', '原文查看');
-    title.id = 'kb-fv-title';
-    const scope = el('span', 'kb-fv-scope');
-    scope.id = 'kb-fv-scope';
-    headMain.append(title, scope);
-    const headActions = el('div', 'kb-fv-head-actions');
-    // 缩放控件：− / 百分比(可点重置) / ＋
-    const zoomOutBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '−');
-    zoomOutBtn.type = 'button';
-    zoomOutBtn.title = '缩小';
-    const zoomLabel = el('button', 'kb-fv-zoom-label', '100%');
-    zoomLabel.type = 'button';
-    zoomLabel.title = '重置缩放（点击回到 100%）';
-    const zoomInBtn = el('button', 'kb-fv-btn kb-fv-zoom-btn', '＋');
-    zoomInBtn.type = 'button';
-    zoomInBtn.title = '放大';
-    const readerBtn = el('button', 'kb-fv-btn', '⇱ 阅读模式');
-    readerBtn.type = 'button';
-    readerBtn.id = 'kb-fv-reader';
-    readerBtn.title = '切换阅读宽度';
-    const closeBtn = el('button', 'kb-fv-close', '✕');
-    closeBtn.type = 'button';
-    closeBtn.id = 'kb-fv-close';
-    closeBtn.title = '关闭（Esc）';
-    headActions.append(zoomOutBtn, zoomLabel, zoomInBtn, readerBtn, closeBtn);
-    head.append(headMain, headActions);
-
-    const body = el('div', 'kb-fv-body');
-    const loading = el('div', 'kb-fv-loading', '正在读取文件…');
-    loading.id = 'kb-fv-loading';
-    loading.hidden = true;
-    const errorEl = el('div', 'kb-fv-error');
-    errorEl.id = 'kb-fv-error';
-    errorEl.hidden = true;
-    const textEl = el('pre', 'kb-fv-text');
-    textEl.id = 'kb-fv-text';
-    textEl.hidden = true;
-    const mdEl = el('div', 'kb-fv-md');
-    mdEl.id = 'kb-fv-md';
-    mdEl.hidden = true;
-    body.append(loading, errorEl, textEl, mdEl);
-
-    const resizeHandle = el('div', 'kb-fv-resize');
-    resizeHandle.title = '拖动调整窗口大小';
-
-    dialog.append(head, body, resizeHandle);
-    overlay.appendChild(dialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.hidden = true; });
-    document.body.appendChild(overlay);
-    closeBtn.addEventListener('click', () => { overlay.hidden = true; });
-    readerBtn.addEventListener('click', () => {
-      const isReader = dialog.classList.toggle('kb-fv-dialog--reader');
-      readerBtn.textContent = isReader ? '⇱ 返回' : '⇱ 阅读模式';
-      _fvSaveWindowRect();
-    });
-    // Esc 关闭
-    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.hidden = true; });
-    overlay.tabIndex = -1;
-    zoomOutBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom - 0.1)));
-    zoomInBtn.addEventListener('click', () => _fvSetZoom(dialog, (_fvZoom + 0.1)));
-    zoomLabel.addEventListener('click', () => _fvSetZoom(dialog, 1));
-    // Ctrl/Cmd + 滚轮 缩放内容（pdf 内部滚轮由 PDFium 自行处理，不劫持）
-    body.addEventListener('wheel', (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      _fvSetZoom(dialog, _fvZoom + (e.deltaY < 0 ? 0.1 : -0.1));
-    }, { passive: false });
-    _fvBindTitleDrag(dialog, head);
-    _fvBindResize(dialog, resizeHandle);
-    _fileViewerOverlay = overlay;
-    _injectFileViewerStyle();
-    return overlay;
-  }
-
-  // ── 预览窗交互：标题拖拽移动 / 右下角调整大小（尺寸与位置记忆） ──
-  const _FV_RECT_KEY = 'cogseed.kb-file-viewer.rect';
-  function _fvClampRect(dialog) {
-    const vw = window.innerWidth; const vh = window.innerHeight;
-    const w = Math.min(Math.max(dialog.offsetWidth, 420), vw - 24);
-    const h = Math.min(Math.max(dialog.offsetHeight, 280), vh - 24);
-    dialog.style.width = w + 'px';
-    dialog.style.height = h + 'px';
-    const r = dialog.getBoundingClientRect();
-    dialog.style.left = Math.max(0, Math.min(r.left, vw - w)) + 'px';
-    dialog.style.top = Math.max(0, Math.min(r.top, vh - h)) + 'px';
-  }
-  function _fvAbsolute(dialog) {
-    // 脱离 flex 居中流，改为 overlay 内的绝对定位（记忆 x/y 时用）
-    if (dialog.style.position === 'absolute') return;
-    const r = dialog.getBoundingClientRect();
-    dialog.style.position = 'absolute';
-    dialog.style.margin = '0';
-    dialog.style.left = Math.max(0, r.left) + 'px';
-    dialog.style.top = Math.max(0, r.top) + 'px';
-  }
-  function _fvApplyWindowRect(dialog) {
-    try {
-      const saved = JSON.parse(localStorage.getItem(_FV_RECT_KEY) || 'null');
-      if (!saved || !(saved.w && saved.h)) return; // 无记忆 → flex 居中默认
-      dialog.style.position = 'absolute';
-      dialog.style.margin = '0';
-      dialog.style.width = Math.min(Math.max(Number(saved.w), 420), window.innerWidth - 24) + 'px';
-      dialog.style.height = Math.min(Math.max(Number(saved.h), 280), window.innerHeight - 24) + 'px';
-      if (typeof saved.x === 'number' && typeof saved.y === 'number') {
-        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
-        dialog.style.left = Math.max(0, Math.min(saved.x, window.innerWidth - w)) + 'px';
-        dialog.style.top = Math.max(0, Math.min(saved.y, window.innerHeight - h)) + 'px';
-      } else {
-        dialog.style.left = Math.round((window.innerWidth - dialog.offsetWidth) / 2) + 'px';
-        dialog.style.top = Math.round((window.innerHeight - dialog.offsetHeight) / 2) + 'px';
-      }
-    } catch { /* localStorage 不可用：保持居中 */ }
-  }
-  function _fvSaveWindowRect() {
-    const overlay = document.getElementById('kb-file-viewer');
-    if (!overlay || overlay.hidden) return;
-    const dialog = overlay.querySelector('.kb-fv-dialog');
-    if (!dialog) return;
-    try {
-      const r = dialog.getBoundingClientRect();
-      localStorage.setItem(_FV_RECT_KEY, JSON.stringify({
-        w: Math.round(r.width), h: Math.round(r.height),
-        x: Math.round(r.left), y: Math.round(r.top),
-      }));
-    } catch { /* ignore */ }
-  }
-  function _fvBindTitleDrag(dialog, bar) {
-    if (bar.dataset.fvDragBound) return;
-    bar.dataset.fvDragBound = '1';
-    let sx = 0; let sy = 0; let ox = 0; let oy = 0;
-    bar.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button,input,select,textarea')) return;
-      e.preventDefault();
-      _fvAbsolute(dialog);
-      sx = e.clientX; sy = e.clientY;
-      const r = dialog.getBoundingClientRect();
-      ox = r.left; oy = r.top;
-      const onMove = (ev) => {
-        const w = dialog.offsetWidth; const h = dialog.offsetHeight;
-        dialog.style.left = Math.max(0, Math.min(window.innerWidth - w, ox + (ev.clientX - sx))) + 'px';
-        dialog.style.top = Math.max(0, Math.min(window.innerHeight - h, oy + (ev.clientY - sy))) + 'px';
-      };
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        _fvSaveWindowRect();
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
-  }
-  function _fvBindResize(dialog, handle) {
-    if (handle.dataset.fvResizeBound) return;
-    handle.dataset.fvResizeBound = '1';
-    let sx = 0; let sy = 0; let sw = 0; let sh = 0;
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      _fvAbsolute(dialog);
-      sx = e.clientX; sy = e.clientY;
-      sw = dialog.offsetWidth; sh = dialog.offsetHeight;
-      document.body.classList.add('kb-fv-resizing');
-      const onMove = (ev) => {
-        const w = Math.min(Math.max(sw + (ev.clientX - sx), 420), window.innerWidth - 24);
-        const h = Math.min(Math.max(sh + (ev.clientY - sy), 280), window.innerHeight - 24);
-        dialog.style.width = w + 'px';
-        dialog.style.height = h + 'px';
-      };
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        document.body.classList.remove('kb-fv-resizing');
-        _fvSaveWindowRect();
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
-  }
-
-  // ── 内容缩放（md/text 走容器 zoom；office 走 iframe 文档 zoom；pdf 走 URL zoom 重载） ──
-  let _fvZoom = 1;
-  let _fvCur = null; // { mode: 'md'|'text'|'office'|'pdf', el?, src? }
-  function _fvResetZoom(dialog) {
-    _fvZoom = 1;
-    _fvRenderZoom(dialog);
-  }
-  function _fvSetZoom(dialog, z) {
-    _fvZoom = Math.min(2.5, Math.max(0.6, Math.round((z || 1) * 10) / 10));
-    _fvRenderZoom(dialog);
-  }
-  function _fvRenderZoom(dialog) {
-    const label = dialog.querySelector('.kb-fv-zoom-label');
-    if (label) label.textContent = Math.round(_fvZoom * 100) + '%';
-    const cur = _fvCur;
-    if (!cur) return;
-    if (cur.mode === 'office' && cur.el && cur.el.contentDocument && cur.el.contentDocument.documentElement) {
-      // office blob iframe 已开 allow-same-origin：直接缩放其内部文档
-      cur.el.contentDocument.documentElement.style.zoom = String(_fvZoom);
-    } else if (cur.mode === 'pdf' && cur.el) {
-      // PDFium 无外部 zoom API：仅缩放值变化时重载 iframe src 带 zoom 参数
-      const pct = Math.round(_fvZoom * 100);
-      if (cur.lastZoom === pct) return;
-      cur.lastZoom = pct;
-      const base = String(cur.src || '').split('#')[0];
-      const pagePart = cur.page ? `&page=${cur.page}` : '';
-      cur.el.src = `${base}#toolbar=1&navpanes=0${pagePart}&zoom=${pct}`;
-    } else if (cur.el) {
-      cur.el.style.zoom = String(_fvZoom);
-    }
-  }
-
-  // ── 整篇查看器高亮：在渲染文档里定位引用文本并包 <mark>（兼容 md 渲染差异）──
-  function _fvTextNodeList(root) {
-    const doc = (root && root.ownerDocument) || root;
-    if (!doc || !doc.createTreeWalker) return [];
-    const walker = doc.createTreeWalker(root, 4 /* SHOW_TEXT */);
-    const out = [];
-    let n;
-    while ((n = walker.nextNode())) out.push(n);
-    return out;
-  }
-  function _fvNormSpace(s) {
-    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
-  }
-  function _fvWrapRaw(node, start, len) {
-    if (!node || !node.nodeValue) return null;
-    const end = Math.min(node.nodeValue.length, start + Math.max(len, 1));
-    if (start >= end) return null;
-    const doc = node.ownerDocument;
-    const range = doc.createRange();
-    range.setStart(node, start);
-    range.setEnd(node, end);
-    const mark = doc.createElement('mark');
-    mark.className = 'kb-fv-mark';
-    try { range.surroundContents(mark); } catch (_) { return null; }
-    return mark;
-  }
-  // 归一化后的索引 → 原始文本近似偏移（空白折叠为单个空格）
-  function _fvApproxRawStart(raw, normIdx) {
-    let p = 0;
-    let inWS = false;
-    for (let i = 0; i < raw.length; i++) {
-      const ws = /\s/.test(raw[i]);
-      if (ws) {
-        if (!inWS) { if (p === normIdx) return i; p++; inWS = true; }
-      } else {
-        inWS = false;
-        if (p === normIdx) return i;
-        p++;
-      }
-    }
-    return Math.max(0, raw.length - 1);
-  }
-  // 去掉行首 md 标记（标题/引用/无序与有序列表编号），便于与渲染后 DOM 比对
-  function _fvStripMdMarks(s) {
-    return String(s || '').split('\n').map((ln) => ln
-      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
-      .join(' ');
-  }
-  // 高亮前最终清洗：行首标记 + 行内强调符 + 空白归一（与高亮实际使用一致）
-  function _fvCleanQuote(q) {
-    return _fvNormSpace(_fvStripMdMarks(q).replace(/\*\*|__|`/g, ''));
-  }
-  function _fvSignificantTokens(s) {
-    const seen = new Set();
-    const out = [];
-    String(s || '').split(/[^\p{L}\p{N}]+/u).forEach((t) => {
-      const c = (t || '').replace(/[^\p{L}\p{N}_-]/gu, '');
-      if (c && c.length >= 3 && !seen.has(c)) { seen.add(c); out.push(c); }
-    });
-    return out;
-  }
-  function _fvHighlightContainer(container, quote) {
-    if (!container || !quote) return false;
-    // 渲染后正文不含 ** ` 与列表序号/标题标记，先清洗再比对
-    const cleaned = _fvCleanQuote(quote);
-    if (!cleaned) return false;
-    const needles = [];
-    const push = (s) => {
-      const c = _fvNormSpace(s);
-      if (c && c.length >= 3 && !needles.includes(c)) needles.push(c);
-    };
-    push(cleaned.slice(0, 140));
-    if (cleaned.length > 140) push(cleaned.slice(0, 80));
-    const headSentence = (cleaned.match(/^[^\n。！？!?；;，,]{0,60}/) || [''])[0];
-    push(headSentence);
-    const root = container.nodeType === 9 ? container.body : container;
-    const nodes = _fvTextNodeList(root);
-    for (const needle of needles) {
-      const needleNorm = _fvNormSpace(needle);
-      for (const node of nodes) {
-        const raw = node.nodeValue || '';
-        if (!raw.trim()) continue;
-        const rawNorm = _fvNormSpace(raw);
-        const idx = rawNorm.indexOf(needleNorm);
-        let rawStart = -1;
-        if (idx >= 0) {
-          rawStart = _fvApproxRawStart(raw, idx);
-        } else {
-          const word = (needleNorm.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/u) || [])[0];
-          if (!word) continue;
-          const w = raw.indexOf(word);
-          if (w < 0) continue;
-          rawStart = w;
-        }
-        if (rawStart < 0) continue;
-        const mark = _fvWrapRaw(node, rawStart, Math.min(needleNorm.length * 2 + 8, 200));
-        if (mark) {
-          try { mark.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
-          return true;
-        }
-      }
-    }
-    // 单节点匹配失败（列表/加粗把一句话拆到多个节点）→ 块级兜底：高亮整段
-    const blocks = root.querySelectorAll ? Array.from(root.querySelectorAll('p,li,blockquote,h1,h2,h3,h4,h5,h6,pre,td,dd,dt,summary')) : [];
-    if (blocks.length) {
-      const tokens = _fvSignificantTokens(cleaned);
-      let best = null;
-      let bestScore = 0;
-      for (const b of blocks) {
-        const bn = _fvNormSpace(b.textContent || '');
-        if (!bn) continue;
-        let score = 0;
-        for (const t of tokens) if (bn.includes(t)) score++;
-        if (score > bestScore) { bestScore = score; best = b; }
-      }
-      if (best && bestScore >= 1) {
-        best.classList.add('kb-fv-block-mark');
-        try { best.scrollIntoView({ block: 'center' }); } catch (_) { /* ignore */ }
-        return true;
-      }
-    }
-    return false;
-  }
-  function _fvHighlightFrame(frame, quote) {
-    try {
-      const doc = frame.contentDocument;
-      if (doc && doc.body && quote) return _fvHighlightContainer(doc.body, quote);
-    } catch (_) { /* 跨域/未就绪 */ }
-    return false;
-  }
-
-  function _setFileViewerState(overlay, st, hl) {
-    const loading = overlay.querySelector('#kb-fv-loading');
-    const errorEl = overlay.querySelector('#kb-fv-error');
-    const textEl = overlay.querySelector('#kb-fv-text');
-    const mdEl = overlay.querySelector('#kb-fv-md');
-    const body = overlay.querySelector('.kb-fv-body');
-    // 清理上一个文件的嵌入 iframe（pdf / office html），释放 blob URL
-    body.querySelectorAll('.kb-fv-frame').forEach((f) => f.remove());
-    body.classList.remove('kb-fv-body--frame');
-    if (_fvOfficeBlobUrl) {
-      try { URL.revokeObjectURL(_fvOfficeBlobUrl); } catch (_) { /* ignore */ }
-      _fvOfficeBlobUrl = null;
-    }
-    _fvCur = null; // 内容视图变化：失效上一文件的缩放目标（error/loading 也走这里）
-    loading.hidden = !st.loading;
-    errorEl.hidden = true; errorEl.textContent = '';
-    textEl.hidden = true; textEl.textContent = '';
-    mdEl.hidden = true; mdEl.innerHTML = '';
-    if (st.title) overlay.querySelector('#kb-fv-title').textContent = st.title;
-    const scopeEl = overlay.querySelector('#kb-fv-scope');
-    scopeEl.textContent = st.scope ? `来自「${st.scope}」` : '';
-    scopeEl.hidden = !st.scope;
-    overlay.querySelector('#kb-fv-reader').textContent = '⇱ 阅读模式';
-    overlay.querySelector('.kb-fv-dialog')?.classList.remove('kb-fv-dialog--reader');
-    if (st.error) {
-      errorEl.hidden = false;
-      errorEl.textContent = String(st.error);
       return;
     }
-    const c = st.content;
-    if (!c || !c.kind) {
-      errorEl.hidden = false;
-      errorEl.textContent = '文件内容为空';
-      return;
+    if (typeof uiToast === 'function') {
+      const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
+      uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
     }
-    if (c.kind === 'markdown') {
-      mdEl.hidden = false;
-      const bodyMd = String(c.content || '');
-      mdEl.innerHTML = `<div class="markdown-body kb-fv-markdown">${typeof renderMarkdown === 'function' ? renderMarkdown(bodyMd) : _esc(bodyMd)}</div>`;
-      _fvCur = { mode: 'md', el: mdEl };
-      if (hl && hl.quote) setTimeout(() => {
-        if (!_fvHighlightContainer(mdEl, hl.quote)) {
-          console.warn('[kb] highlight-miss', { kind: 'markdown', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
-        }
-      }, 60);
-    } else if (c.kind === 'text') {
-      textEl.hidden = false;
-      textEl.textContent = String(c.content || '');
-      _fvCur = { mode: 'text', el: textEl };
-      if (hl && hl.quote) setTimeout(() => {
-        if (!_fvHighlightContainer(textEl, hl.quote)) {
-          console.warn('[kb] highlight-miss', { kind: 'text', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
-        }
-      }, 60);
-    } else if (c.kind === 'pdf') {
-      // 原生 PDFium iframe（排版 100% 保持）：个人库 kb-file://kb/<rel>；
-      // 空间库 kb-file://space/<spaceId>/<rel>（主进程已注册空间路由）
-      const rel = String(c.path || '');
-      const sid = c.spaceId ? String(c.spaceId) : '';
-      const enc = (s) => String(s).split('/').map(encodeURIComponent).join('/');
-      const src = sid
-        ? `kb-file://space/${encodeURIComponent(sid)}/${enc(rel)}`
-        : `kb-file://kb/${enc(rel)}`;
-      const pagePart = hl && typeof hl.page === 'number' && hl.page > 0 ? `&page=${Math.floor(hl.page)}` : '';
-      const frame = document.createElement('iframe');
-      frame.className = 'kb-fv-frame kb-fv-frame--pdf';
-      frame.src = `${src}#toolbar=1&navpanes=0${pagePart}`;
-      frame.title = String(c.name || rel);
-      body.appendChild(frame);
-      body.classList.add('kb-fv-body--frame');
-      _fvCur = { mode: 'pdf', el: frame, src, page: (hl && hl.page) || null, lastZoom: 100 };
-    } else if (c.kind === 'office') {
-      // docx/xlsx/pptx → 排版化 HTML 预览（主进程已包裹样式）。
-      // sandbox 保持无脚本；allow-same-origin 让父页可对内部文档做 CSS zoom 缩放
-      const officeHtml = String(c.html || '');
-      _fvOfficeBlobUrl = URL.createObjectURL(new Blob([officeHtml], { type: 'text/html;charset=utf-8' }));
-      const frame = document.createElement('iframe');
-      frame.className = 'kb-fv-frame kb-fv-frame--office';
-      frame.setAttribute('sandbox', 'allow-same-origin');
-      frame.src = _fvOfficeBlobUrl;
-      frame.title = String(c.name || c.path || '');
-      body.appendChild(frame);
-      body.classList.add('kb-fv-body--frame');
-      _fvCur = { mode: 'office', el: frame, src: _fvOfficeBlobUrl };
-      // iframe 就绪后：应用缩放 + 尽力高亮引用段落（失败可见）
-      frame.addEventListener('load', () => {
-        if (hl && hl.quote) setTimeout(() => {
-          if (!_fvHighlightFrame(frame, hl.quote)) {
-            console.warn('[kb] highlight-miss', { kind: 'office', path: String(c.path || ''), quote: String(hl.quote).slice(0, 40) });
-          }
-        }, 80);
-        if (_fvCur && _fvCur.el === frame && _fvZoom !== 1) {
-          try { frame.contentDocument.documentElement.style.zoom = String(_fvZoom); } catch (_) { /* ignore */ }
-        }
-      });
-    } else {
-      errorEl.hidden = false;
-      errorEl.textContent = '暂不支持预览该文件';
-      return;
-    }
-    overlay.focus();
-  }
-
-  let _fvStyleInjected = false;
-  function _injectFileViewerStyle() {
-    if (_fvStyleInjected || document.getElementById('kb-file-viewer-style')) return;
-    _fvStyleInjected = true;
-    const style = document.createElement('style');
-    style.id = 'kb-file-viewer-style';
-    style.textContent = `
-      .kb-fv-overlay {
-        position: fixed; inset: 0; z-index: 10002; background: rgba(15, 23, 42, .5);
-        display: flex; align-items: center; justify-content: center; padding: 24px;
-      }
-      .kb-fv-overlay[hidden] { display: none; }
-      .kb-fv-dialog {
-        background: var(--surface, #fff); color: var(--text, #1f2329);
-        width: min(860px, 96vw); max-height: 88vh; border-radius: 12px;
-        display: flex; flex-direction: column; overflow: hidden;
-        box-shadow: 0 16px 48px rgba(0,0,0,.28); outline: none;
-        min-width: 420px; min-height: 280px;
-      }
-      .kb-fv-dialog--reader { width: min(1160px, 98vw); max-height: 94vh; }
-      .kb-fv-head {
-        display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        padding: 10px 14px; border-bottom: 1px solid rgba(128,128,128,.22);
-        background: linear-gradient(180deg, rgba(14,159,110,.05), transparent);
-        cursor: move; user-select: none;
-      }
-      .kb-fv-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-      .kb-fv-title { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .kb-fv-scope { font-size: 12px; color: #0E9F6E; opacity: .85; white-space: nowrap; }
-      .kb-fv-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
-      .kb-fv-btn, .kb-fv-close {
-        border: 1px solid rgba(14,159,110,.35); background: transparent; color: #0E9F6E;
-        font-size: 12px; padding: 3px 10px; border-radius: 8px; cursor: pointer;
-      }
-      .kb-fv-btn:hover { background: #E2F5EC; }
-      .kb-fv-zoom-btn { padding: 3px 8px; font-size: 13px; }
-      .kb-fv-zoom-label { min-width: 54px; text-align: center; }
-      .kb-fv-close { border-color: transparent; font-size: 16px; padding: 1px 7px; color: #888; }
-      .kb-fv-close:hover { background: rgba(128,128,128,.14); color: inherit; }
-      .kb-fv-resize {
-        position: absolute; right: 0; bottom: 0;
-        width: 18px; height: 18px; cursor: nwse-resize; z-index: 30;
-      }
-      .kb-fv-resize::after {
-        content: ''; position: absolute; right: 5px; bottom: 5px;
-        width: 7px; height: 7px;
-        border-right: 2px solid rgba(128,128,128,.55);
-        border-bottom: 2px solid rgba(128,128,128,.55);
-      }
-      .kb-fv-resize:hover::after { border-color: #0E9F6E; }
-      body.kb-fv-resizing, body.kb-fv-resizing * { cursor: nwse-resize !important; user-select: none; }
-      .kb-fv-body { overflow: auto; padding: 20px 24px; flex: 1; min-height: 120px; }
-      .kb-fv-loading { color: #0E9F6E; font-size: 13px; }
-      .kb-fv-error { color: #c0392b; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
-      .kb-fv-text {
-        white-space: pre-wrap; word-break: break-word; margin: 0;
-        font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-        font-size: 13px; line-height: 1.7; color: inherit;
-      }
-      .kb-fv-markdown { font-size: 14px; line-height: 1.8; }
-      .kb-fv-dialog--reader .kb-fv-body { padding: 32px 56px; }
-      .kb-fv-dialog--reader .kb-fv-markdown { font-size: 16px; }
-      .kb-fv-dialog--reader .kb-fv-text { font-size: 15px; font-family: inherit; }
-      /* pdf / office 嵌入 iframe：占满正文区，独立滚动，正文区本身不滚 */
-      .kb-fv-body--frame { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-      .kb-fv-body--frame .kb-fv-frame {
-        flex: 1; width: 100%; border: 0; min-height: 0;
-        background: #fff; border-radius: 0 0 12px 12px;
-      }
-      .kb-fv-dialog--reader .kb-fv-body--frame { padding: 0; }
-      .kb-fv-frame--office { background: #eef2f7; }
-      .kb-fv-mark { background: #ffe58a; color: inherit; padding: 0 1px; border-radius: 2px; scroll-margin-top: 64px; }
-      .kb-fv-block-mark {
-        background: rgba(255, 229, 138, .4); box-shadow: inset 3px 0 0 rgba(240, 173, 0, .75);
-        border-radius: 2px; scroll-margin-top: 64px;
-      }
-    `;
-    document.head.appendChild(style);
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -1852,27 +1344,47 @@
       }
     }
     const isSpace = !!_state.spaceId;
-    const dispName = isSpace ? _state.spaceName : (_state.currentLib || '知识库');
+    const externalSource = _currentExternalSource();
+    const isExternal = !isSpace && !!externalSource;
+    const dispName = isSpace ? _state.spaceName : (isExternal ? _externalSourceLabel(externalSource) : (_state.currentLib || '知识库'));
     const nameEl = document.getElementById('kb-wb-lib-name');
     if (nameEl) nameEl.textContent = dispName;
     const cover = document.getElementById('kb-wb-lib-cover');
     if (cover) cover.style.background = isSpace
       ? 'linear-gradient(135deg, #BFF0DD, #7FDCB8)'
-      : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
+      : isExternal
+        ? 'linear-gradient(135deg, #DCE8FF, #AFC8FF)'
+        : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
-    if (tagEl) tagEl.textContent = isSpace ? '共享知识库' : '个人知识库';
+    if (tagEl) tagEl.textContent = isSpace
+      ? _tr('kb.workbench.group_shared', '共享知识库')
+      : isExternal
+        ? _tr('kb.workbench.external_source', '外部来源')
+        : _tr('kb.workbench.group_personal', '个人知识库');
     // 创建者（单用户客户端 = 本人）+ 描述（共享库有 description，否则占位提示）
     const ownerEl = document.getElementById('kb-wb-owner-name');
-    if (ownerEl) ownerEl.textContent = '我';
+    if (ownerEl) ownerEl.textContent = isExternal ? _externalSourceLabel(externalSource) : '我';
     const avatarEl = document.getElementById('kb-wb-owner-avatar');
     if (avatarEl) avatarEl.textContent = (dispName || '我').trim().charAt(0);
     const descEl = document.getElementById('kb-wb-lib-desc');
     if (descEl) {
       const sp = isSpace ? _state.spaces.find((x) => x.space_id === _state.spaceId) : null;
-      const desc = sp && sp.description ? String(sp.description) : '';
+      const desc = isExternal
+        ? _tr('kb.workbench.external_description', '通过已授权的外部来源导入，内容由来源同步管理。')
+        : (sp && sp.description ? String(sp.description) : '');
       descEl.textContent = desc || '快来填写描述吧~';
       descEl.classList.toggle('is-empty', !desc);
     }
+    const shareBtn = document.getElementById('kb-wb-share');
+    if (shareBtn) shareBtn.style.display = isExternal ? 'none' : '';
+    const moreBtn = document.getElementById('kb-wb-more-btn');
+    if (moreBtn) moreBtn.style.display = isExternal ? 'none' : '';
+    const moreMenu = document.getElementById('kb-wb-more-menu');
+    if (isExternal && moreMenu) moreMenu.hidden = true;
+    const importBtn = document.getElementById('kb-wb-import');
+    if (importBtn) importBtn.style.display = isExternal ? 'none' : '';
+    const importMenu = document.getElementById('kb-wb-import-menu');
+    if (isExternal && importMenu) importMenu.hidden = true;
     const membersEl = document.getElementById('kb-wb-members');
     if (membersEl) {
       // 成员入口仅共享知识库显示（个人知识库单用户，无成员概念）
@@ -2956,19 +2468,24 @@
   function _mmOpenSource(source, idx) {
     const name = String(source || '');
     if (!name) return;
-    const candidates = [];
-    for (const f of (_state.spaceFiles || [])) if (f && f.path) candidates.push(String(f.path));
-    const walk = (n) => {
-      if (n && n.path) candidates.push(String(n.path));
-      for (const c of (n && n.children) || []) walk(c);
-    };
-    walk({ children: _state.tree });
-    const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
-    if (hit) {
-      if (_state.spaceId) {
-        _openFileViewerForAnchor({ source: 'space', scope: 'space', spaceId: _state.spaceId, path: hit, chunkIdx: 0 });
-      } else {
-        _openFileViewerForAnchor({ source: 'library', scope: 'global', path: hit, chunkIdx: 0 });
+    if (typeof window.__openAnchorViewer === 'function') {
+      const candidates = [];
+      for (const f of (_state.spaceFiles || [])) if (f && f.path) candidates.push(String(f.path));
+      const walk = (n) => {
+        if (n && n.path) candidates.push(String(n.path));
+        for (const c of (n && n.children) || []) walk(c);
+      };
+      walk({ children: _state.tree });
+      const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
+      if (hit) {
+        window.__openAnchorViewer({
+          source: 'library',
+          scope: _state.spaceId ? 'space' : 'global',
+          path: hit,
+          chunkIdx: 0,
+          ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
+        });
+        return;
       }
       return;
     }
@@ -3698,8 +3215,7 @@
     }
   }
 
-  // 引用 → 整篇原文（与“在文件夹/列表中打开”同一查看器）：
-  // 先尝试 anchor.resolve 拿 page/quote 用于跳页/高亮；失败也照常打开整篇。
+  // 引用 → 统一原文查看器的整篇模式。
   async function _openFileViewerForAnchor(anchor) {
     if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return false;
     const isSpace = anchor.source === 'space' || anchor.scope === 'space';
@@ -3708,33 +3224,17 @@
       if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
       return false;
     }
-    let hl = null;
-    try {
-      if (window.cogseed && typeof window.cogseed.invoke === 'function') {
-        const loc = await window.cogseed.invoke('cogseed.anchor.resolve', {
-          source: isSpace ? 'space' : 'library',
-          scope: isSpace ? 'space' : 'global',
-          path: anchor.path,
-          chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
-          ...(isSpace ? { spaceId } : {}),
-          ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
-        });
-        if (loc && loc.resolved) {
-          hl = {};
-          if (typeof loc.page === 'number' && loc.page > 0) hl.page = loc.page;
-          const quote = String(loc.text || '').slice(0, 220).trim();
-          if (quote) hl.quote = quote;
-        }
-      }
-    } catch (_) { /* 定位失败不阻断打开整篇 */ }
-    const payload = isSpace ? { spaceId, path: anchor.path } : { path: anchor.path };
-    try {
-      await _openFileViewer(payload, isSpace ? spaceId : '', hl);
-      return true;
-    } catch (_) {
-      if (typeof uiToast === 'function') uiToast('打开原文失败', { variant: 'error' });
-      return false;
-    }
+    if (typeof window.__openAnchorViewer !== 'function') return false;
+    await window.__openAnchorViewer({
+      source: 'library',
+      scope: isSpace ? 'space' : 'global',
+      path: anchor.path,
+      chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+      ...(isSpace ? { spaceId } : {}),
+      ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
+      view: 'document',
+    });
+    return true;
   }
 
   function _openAnchor(ref) {
@@ -3749,6 +3249,9 @@
         scope: ref.scope || 'global',
         path: ref.path,
         chunkIdx: ref.chunkIdx,
+        ...(ref.quote ? { quote: ref.quote } : {}),
+        ...(ref.cid ? { cid: ref.cid } : {}),
+        ...(ref.spaceId ? { spaceId: ref.spaceId } : {}),
       });
       return;
     }
@@ -3760,14 +3263,17 @@
     if (_state.streamHandle) return;
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
     try {
-      _state.streamHandle = window.cogseed.stream('kb.events', {}, (ev) => {
+      const handle = window.cogseed.stream('kb.events', {}, (ev) => {
         const inner = ev && ev.event;
         if (!inner || !inner.relPath) return;
         if (inner.status === 'deleted') _state.kbStatus.delete(inner.relPath);
         else _state.kbStatus.set(inner.relPath, { status: inner.status, chunks: inner.chunks, kind: inner.kind, error: inner.error });
         _renderFiles();
       });
-      _state.streamHandle.promise.catch(() => { /* ignore */ });
+      _state.streamHandle = handle;
+      handle.promise.catch(() => { /* ignore */ }).finally(() => {
+        if (_state.streamHandle === handle) _state.streamHandle = null;
+      });
     } catch (err) {
       _log.warn('subscribe kb.events failed', err);
     }
@@ -4121,17 +3627,20 @@
     });
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
+      if (_isExternalSourceSelected()) return;
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
     document.getElementById('kb-wb-more-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (moreMenu) moreMenu.hidden = !moreMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-more-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         if (moreMenu) moreMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const act = item.dataset.more;
         if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast('已刷新', { variant: 'info' }); }
         else if (act === 'rename') {
@@ -4159,6 +3668,7 @@
     const importNoteSub = document.getElementById('kb-wb-import-note-sub');
     document.getElementById('kb-wb-import')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (importMenu) importMenu.hidden = !importMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-import-item').forEach((item) => {
@@ -4167,6 +3677,7 @@
         const act = item.dataset.imp;
         if (!act || act === 'note') return;
         if (importMenu) importMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const isSpace = !!_state.spaceId;
         if (act === 'file') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'dir') { if (isSpace) _importSpaceDir(); else _importDir(); }
@@ -4195,6 +3706,7 @@
           e.stopPropagation();
           const act = item.dataset.imp;
           if (importMenu) importMenu.hidden = true;
+          if (_isExternalSourceSelected()) return;
           if (act === 'note-new') _kbNewNote();
           else if (act === 'note-import') { if (_state.spaceId) _importSpaceFiles(); else _importFiles(); }
         });
@@ -4772,6 +4284,12 @@
     ];
     if (!isDir) items.push({ key: 'reveal', label: '📂 在文件夹中显示', fn: () => _kbReveal(path) });
     _kbMenuShow(items, x, y);
+  }
+
+  function _kbExternalFileMenu(path, x, y) {
+    _kbMenuShow([
+      { key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), fn: () => _kbReveal(path) },
+    ], x, y);
   }
 
   // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
@@ -5647,7 +5165,40 @@
     }
   }
 
+  window.addEventListener('i18n-change', () => {
+    if (!_state.rendered) return;
+    _renderTree();
+    _renderRight();
+  });
+
   window.renderKbWorkbench = renderKbWorkbench;
+
+  function _fvNormSpace(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function _fvStripMdMarks(value) {
+    return String(value || '').split('\n').map((line) => line
+      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
+      .join(' ');
+  }
+
+  function _fvCleanQuote(value) {
+    return _fvNormSpace(_fvStripMdMarks(value).replace(/\*\*|__|`/g, ''));
+  }
+
+  function _fvSignificantTokens(value) {
+    const seen = new Set();
+    const tokens = [];
+    String(value || '').split(/[^\p{L}\p{N}]+/u).forEach((token) => {
+      const cleaned = (token || '').replace(/[^\p{L}\p{N}_-]/gu, '');
+      if (cleaned && cleaned.length >= 3 && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        tokens.push(cleaned);
+      }
+    });
+    return tokens;
+  }
 
   // 高亮纯函数（供渲染层回归测试锁定清洗/分词逻辑）
   window.__kbFvUtils = {

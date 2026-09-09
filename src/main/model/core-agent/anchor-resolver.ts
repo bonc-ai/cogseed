@@ -46,6 +46,8 @@ export interface AnchorTarget {
   /** Required for attachments. */
   cid?: string;
   spaceId?: string;
+  /** Compact citation location or a bounded document-reader payload. */
+  view?: 'anchor' | 'document';
 }
 
 export type AnchorFailure = 'no_cache' | 'not_found' | 'out_of_scope' | 'no_text' | 'bad_input';
@@ -61,9 +63,16 @@ export interface AnchorLocation {
   charEnd?: number;
   page?: number;
   totalChars?: number;
-  /** The located text range (preview for highlighting). */
+  /** Absolute character offset represented by text[0]. */
+  textStart?: number;
+  /** Located context or a bounded document-reader payload. */
   text?: string;
+  truncated?: boolean;
 }
+
+const ANCHOR_CONTEXT_BEFORE = 240;
+const ANCHOR_CONTEXT_AFTER = 760;
+const DOCUMENT_VIEW_MAX_CHARS = 500_000;
 
 /** Collapse all whitespace runs to single spaces (for fuzzy locating). */
 function normalize(s: string): string {
@@ -138,6 +147,7 @@ function pdfPageFromChunkTitle(title: string | null | undefined): number | undef
 export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocation> {
   const { userId, source, scope } = target;
   const displayPath = target.path;
+  const view = target.view === 'document' ? 'document' : 'anchor';
 
   // ── Resolve abs path + read the chunk text ─────────────────────────────
   let absPath: string;
@@ -215,16 +225,38 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
   if (!text) return { resolved: false, reason: 'no_text', absPath, displayPath };
 
   const needle = target.quote?.trim() || chunkText;
-  if (!needle) return { resolved: false, reason: 'not_found', absPath, displayPath };
+  const located = needle ? locateInText(text, needle) : null;
 
-  const located = locateInText(text, needle);
-  if (!located) {
+  if (view === 'document') {
+    const totalChars = text.length;
+    const textStart = totalChars <= DOCUMENT_VIEW_MAX_CHARS
+      ? 0
+      : located
+        ? Math.max(0, Math.min(located.start - ANCHOR_CONTEXT_BEFORE, totalChars - DOCUMENT_VIEW_MAX_CHARS))
+        : 0;
+    const textEnd = Math.min(totalChars, textStart + DOCUMENT_VIEW_MAX_CHARS);
+    const page = located ? pageForText(text, located.start) : undefined;
+    return {
+      resolved: true,
+      absPath,
+      displayPath,
+      ...(located ? { charStart: located.start, charEnd: located.end, page } : {}),
+      totalChars,
+      textStart,
+      text: text.slice(textStart, textEnd),
+      truncated: textStart > 0 || textEnd < totalChars,
+    };
+  }
+
+  if (!needle || !located) {
     return { resolved: false, reason: 'not_found', absPath, displayPath, totalChars: text.length };
   }
 
   // 页优先取 file-indexer 文本里的 `--- page N ---`；拿不到再用向量库 pdf chunk
   // title（p.N / p.N-M）兜底——不依赖 file-indexer 缓存是否已生成。
   const isPdf = /\.pdf$/i.test(displayPath);
+  const textStart = Math.max(0, located.start - ANCHOR_CONTEXT_BEFORE);
+  const textEnd = Math.min(text.length, located.end + ANCHOR_CONTEXT_AFTER);
   const page = pageForText(text, located.start) ?? (isPdf ? pdfPageFromChunkTitle(chunkTitle) : undefined);
   return {
     resolved: true,
@@ -234,6 +266,7 @@ export async function resolveAnchor(target: AnchorTarget): Promise<AnchorLocatio
     charEnd: located.end,
     page,
     totalChars: text.length,
-    text: text.slice(located.start, Math.min(located.end, located.start + 400)),
+    textStart,
+    text: text.slice(textStart, textEnd),
   };
 }
