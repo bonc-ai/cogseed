@@ -27,7 +27,7 @@ describe('ensure-node-pty-electron-abi', () => {
     };
 
     expect(packageJson.scripts?.['prebuild:win']).toBe(
-      'node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs',
+      'node scripts/ensure-sherpa-windows-runtime.cjs && node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs',
     );
   });
 

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "id": "product-discovery",
+      "version": "1.0.0",
+      "title": "产品发现与问题定义",
+      "description": "将用户问题、证据、机会点和决策假设收敛为可复用的产品研究基线。",
+      "publisher": "CogSeed 官方知识库",
+      "category": "产品",
+      "tags": ["产品", "研究", "用户洞察"],
+      "updatedAt": "2026-09-02T00:00:00Z",
+      "files": [
+        "product-discovery/problem-framing.md",
+        "product-discovery/interview-synthesis.md"
+      ]
+    },
+    {
+      "id": "team-knowledge-operations",
+      "version": "1.0.0",
+      "title": "团队知识沉淀与复用",
+      "description": "建立来源、结论、复盘和更新责任的团队知识工作方式。",
+      "publisher": "CogSeed 官方知识库",
+      "category": "团队",
+      "tags": ["团队", "知识管理", "协作"],
+      "updatedAt": "2026-09-02T00:00:00Z",
+      "files": [
+        "team-knowledge-operations/source-governance.md",
+        "team-knowledge-operations/after-action-review.md"
+      ]
+    },
+    {
+      "id": "ai-workflow-evaluation",
+      "version": "1.0.0",
+      "title": "AI 工作流评估基础",
+      "description": "以任务、证据、权限和人工复核为边界评估 AI 工作流是否真正有效。",
+      "publisher": "CogSeed 官方知识库",
+      "category": "研究",
+      "tags": ["AI", "工作流", "评估"],
+      "updatedAt": "2026-09-02T00:00:00Z",
+      "files": [
+        "ai-workflow-evaluation/evaluation-design.md",
+        "ai-workflow-evaluation/approval-boundaries.md"
+      ]
+    }
+  ]
+}
