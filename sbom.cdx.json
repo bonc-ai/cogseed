@@ -3,9 +3,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
   "version": 1,
-  "serialNumber": "urn:uuid:0c5c80fa-d827-4d07-b74d-16620bb249c3",
+  "serialNumber": "urn:uuid:a081a9b2-bf33-4f85-a989-b0279a5a03ca",
   "metadata": {
-    "timestamp": "2026-09-03T02:26:20.719Z",
+    "timestamp": "2026-09-09T06:14:30.481Z",
     "tools": {
       "components": [
         {
@@ -373,6 +373,58 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/@eslint/js"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "webp",
+      "group": "@jsquash",
+      "version": "1.5.0",
+      "bom-ref": "cogseed@0.9.0|@jsquash/webp@1.5.0",
+      "author": "Jamie Sinclair",
+      "description": "Wasm webp encoder and decoder supporting the browser. Repackaged from Squoosh App.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40jsquash/webp@1.5.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/jamsinclair/jSquash.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/jamsinclair/jSquash#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/jamsinclair/jSquash/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@jsquash/webp/-/webp-1.5.0.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "2a080ba23d8c9d149f22a4de29ed4499b9634d7dafb95ee687bf64f3d3c22f5a72aa20d42dc3ccd4be3bb70c57b748646faf05ef46d788bdf5331b2ea19b4a17"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@jsquash/webp"
         }
       ]
     },
@@ -1267,6 +1319,49 @@
     },
     {
       "type": "library",
+      "name": "esbuild",
+      "version": "0.27.7",
+      "bom-ref": "cogseed@0.9.0|esbuild@0.27.7",
+      "description": "An extremely fast JavaScript and CSS bundler and minifier.",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/esbuild@0.27.7",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/evanw/esbuild.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/evanw/esbuild#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/evanw/esbuild/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:constraint:engine:node",
+          "value": ">=18"
+        },
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/esbuild"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "eslint",
       "version": "10.9.0",
       "bom-ref": "cogseed@0.9.0|eslint@10.9.0",
@@ -1489,6 +1584,46 @@
     },
     {
       "type": "library",
+      "name": "get-tsconfig",
+      "version": "4.14.0",
+      "bom-ref": "cogseed@0.9.0|get-tsconfig@4.14.0",
+      "author": "Hiroki Osame",
+      "description": "Find and parse the tsconfig.json file from a directory path",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/get-tsconfig@4.14.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/privatenumber/get-tsconfig.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/privatenumber/get-tsconfig#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/privatenumber/get-tsconfig/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/get-tsconfig"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "jimp",
       "version": "1.6.1",
       "bom-ref": "cogseed@0.9.0|jimp@1.6.1",
@@ -1699,6 +1834,46 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/pdfjs-dist"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "resolve-pkg-maps",
+      "version": "1.0.0",
+      "bom-ref": "cogseed@0.9.0|resolve-pkg-maps@1.0.0",
+      "author": "Hiroki Osame",
+      "description": "Resolve package.json exports & imports maps",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/resolve-pkg-maps@1.0.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/privatenumber/resolve-pkg-maps.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/privatenumber/resolve-pkg-maps#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/privatenumber/resolve-pkg-maps/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/resolve-pkg-maps"
         }
       ]
     },
@@ -3515,6 +3690,57 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/read-binary-file-arch"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "wasm-feature-detect",
+      "version": "1.9.0",
+      "bom-ref": "cogseed@0.9.0|wasm-feature-detect@1.9.0",
+      "author": "Surma",
+      "description": "A small library to detect which features of WebAssembly are supported in your current browser.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/wasm-feature-detect@1.9.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/GoogleChromeLabs/wasm-feature-detect.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/GoogleChromeLabs/wasm-feature-detect#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/GoogleChromeLabs/wasm-feature-detect/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/wasm-feature-detect/-/wasm-feature-detect-1.9.0.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "ce89c4fb1948218b713f2fbe2f6e28c348400fc08809be3e1603f244e7776eec9722ab09bd410390181f082a1739dd47bb70d4af418e7e73c875c195f98a4d68"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/wasm-feature-detect"
         }
       ]
     },
@@ -6814,6 +7040,62 @@
               "value": "node_modules/@electron/get/node_modules/env-paths"
             }
           ]
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "darwin-arm64",
+      "group": "@esbuild",
+      "version": "0.27.7",
+      "bom-ref": "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7",
+      "description": "The macOS ARM 64-bit binary for esbuild, a JavaScript bundler.",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40esbuild/darwin-arm64@0.27.7",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/evanw/esbuild.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/evanw/esbuild#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/evanw/esbuild/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.27.7.tgz",
+          "type": "distribution",
+          "hashes": [
+            {
+              "alg": "SHA-512",
+              "content": "e6572476a7ae04f94a530be80972202360fdfc00663eadd1769ec87cbef4dfddd881a012b7bb5b8eedc073e78f562dca0c7e8dd91a9e3df1e75e4683b58f5f93"
+            }
+          ],
+          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:constraint:engine:node",
+          "value": ">=18"
+        },
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@esbuild/darwin-arm64"
         }
       ]
     },
@@ -11448,49 +11730,6 @@
     },
     {
       "type": "library",
-      "name": "esbuild",
-      "version": "0.27.7",
-      "bom-ref": "cogseed@0.9.0|esbuild@0.27.7",
-      "description": "An extremely fast JavaScript and CSS bundler and minifier.",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT",
-            "acknowledgement": "declared"
-          }
-        }
-      ],
-      "purl": "pkg:npm/esbuild@0.27.7",
-      "externalReferences": [
-        {
-          "url": "git+https://github.com/evanw/esbuild.git",
-          "type": "vcs",
-          "comment": "as detected from PackageJson property \"repository.url\""
-        },
-        {
-          "url": "https://github.com/evanw/esbuild#readme",
-          "type": "website",
-          "comment": "as detected from PackageJson property \"homepage\""
-        },
-        {
-          "url": "https://github.com/evanw/esbuild/issues",
-          "type": "issue-tracker",
-          "comment": "as detected from PackageJson property \"bugs.url\""
-        }
-      ],
-      "properties": [
-        {
-          "name": "cdx:npm:package:constraint:engine:node",
-          "value": ">=18"
-        },
-        {
-          "name": "cdx:npm:package:path",
-          "value": "node_modules/esbuild"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "name": "fsevents",
       "version": "2.3.3",
       "bom-ref": "cogseed@0.9.0|fsevents@2.3.3",
@@ -11530,46 +11769,6 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/fsevents"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "get-tsconfig",
-      "version": "4.14.0",
-      "bom-ref": "cogseed@0.9.0|get-tsconfig@4.14.0",
-      "author": "Hiroki Osame",
-      "description": "Find and parse the tsconfig.json file from a directory path",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT",
-            "acknowledgement": "declared"
-          }
-        }
-      ],
-      "purl": "pkg:npm/get-tsconfig@4.14.0",
-      "externalReferences": [
-        {
-          "url": "git+https://github.com/privatenumber/get-tsconfig.git",
-          "type": "vcs",
-          "comment": "as detected from PackageJson property \"repository.url\""
-        },
-        {
-          "url": "https://github.com/privatenumber/get-tsconfig#readme",
-          "type": "website",
-          "comment": "as detected from PackageJson property \"homepage\""
-        },
-        {
-          "url": "https://github.com/privatenumber/get-tsconfig/issues",
-          "type": "issue-tracker",
-          "comment": "as detected from PackageJson property \"bugs.url\""
-        }
-      ],
-      "properties": [
-        {
-          "name": "cdx:npm:package:path",
-          "value": "node_modules/get-tsconfig"
         }
       ]
     },
@@ -24770,102 +24969,6 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/smart-buffer"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "darwin-arm64",
-      "group": "@esbuild",
-      "version": "0.27.7",
-      "bom-ref": "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7",
-      "description": "The macOS ARM 64-bit binary for esbuild, a JavaScript bundler.",
-      "scope": "optional",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT",
-            "acknowledgement": "declared"
-          }
-        }
-      ],
-      "purl": "pkg:npm/%40esbuild/darwin-arm64@0.27.7",
-      "externalReferences": [
-        {
-          "url": "git+https://github.com/evanw/esbuild.git",
-          "type": "vcs",
-          "comment": "as detected from PackageJson property \"repository.url\""
-        },
-        {
-          "url": "https://github.com/evanw/esbuild#readme",
-          "type": "website",
-          "comment": "as detected from PackageJson property \"homepage\""
-        },
-        {
-          "url": "https://github.com/evanw/esbuild/issues",
-          "type": "issue-tracker",
-          "comment": "as detected from PackageJson property \"bugs.url\""
-        },
-        {
-          "url": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.27.7.tgz",
-          "type": "distribution",
-          "hashes": [
-            {
-              "alg": "SHA-512",
-              "content": "e6572476a7ae04f94a530be80972202360fdfc00663eadd1769ec87cbef4dfddd881a012b7bb5b8eedc073e78f562dca0c7e8dd91a9e3df1e75e4683b58f5f93"
-            }
-          ],
-          "comment": "as detected from npm-ls property \"resolved\" and property \"integrity\""
-        }
-      ],
-      "properties": [
-        {
-          "name": "cdx:npm:package:constraint:engine:node",
-          "value": ">=18"
-        },
-        {
-          "name": "cdx:npm:package:path",
-          "value": "node_modules/@esbuild/darwin-arm64"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "resolve-pkg-maps",
-      "version": "1.0.0",
-      "bom-ref": "cogseed@0.9.0|resolve-pkg-maps@1.0.0",
-      "author": "Hiroki Osame",
-      "description": "Resolve package.json exports & imports maps",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT",
-            "acknowledgement": "declared"
-          }
-        }
-      ],
-      "purl": "pkg:npm/resolve-pkg-maps@1.0.0",
-      "externalReferences": [
-        {
-          "url": "git+https://github.com/privatenumber/resolve-pkg-maps.git",
-          "type": "vcs",
-          "comment": "as detected from PackageJson property \"repository.url\""
-        },
-        {
-          "url": "https://github.com/privatenumber/resolve-pkg-maps#readme",
-          "type": "website",
-          "comment": "as detected from PackageJson property \"homepage\""
-        },
-        {
-          "url": "https://github.com/privatenumber/resolve-pkg-maps/issues",
-          "type": "issue-tracker",
-          "comment": "as detected from PackageJson property \"bugs.url\""
-        }
-      ],
-      "properties": [
-        {
-          "name": "cdx:npm:package:path",
-          "value": "node_modules/resolve-pkg-maps"
         }
       ]
     },
@@ -38766,6 +38869,7 @@
         "cogseed@0.9.0|@earendil-works/pi-ai@0.79.10",
         "cogseed@0.9.0|@electron/rebuild@4.2.0",
         "cogseed@0.9.0|@eslint/js@10.0.1",
+        "cogseed@0.9.0|@jsquash/webp@1.5.0",
         "cogseed@0.9.0|@larksuiteoapi/node-sdk@1.73.0",
         "cogseed@0.9.0|@modelcontextprotocol/sdk@1.29.0",
         "cogseed@0.9.0|@types/adm-zip@0.5.8",
@@ -38779,12 +38883,15 @@
         "cogseed@0.9.0|electron-builder@26.15.7",
         "cogseed@0.9.0|electron-log@5.4.4",
         "cogseed@0.9.0|electron@41.10.6",
+        "cogseed@0.9.0|esbuild@0.27.7",
         "cogseed@0.9.0|eslint@10.9.0",
         "cogseed@0.9.0|fastembed@2.1.0",
+        "cogseed@0.9.0|get-tsconfig@4.14.0",
         "cogseed@0.9.0|jimp@1.6.1",
         "cogseed@0.9.0|mammoth@1.12.1",
         "cogseed@0.9.0|node-pty@1.1.0",
         "cogseed@0.9.0|pdfjs-dist@6.2.108",
+        "cogseed@0.9.0|resolve-pkg-maps@1.0.0",
         "cogseed@0.9.0|sherpa-onnx-node@1.13.6",
         "cogseed@0.9.0|socks-proxy-agent@8.0.5",
         "cogseed@0.9.0|sqlite-vec@0.1.9",
@@ -38836,6 +38943,12 @@
       "ref": "cogseed@0.9.0|@eslint/js@10.0.1",
       "dependsOn": [
         "cogseed@0.9.0|eslint@10.9.0"
+      ]
+    },
+    {
+      "ref": "cogseed@0.9.0|@jsquash/webp@1.5.0",
+      "dependsOn": [
+        "cogseed@0.9.0|wasm-feature-detect@1.9.0"
       ]
     },
     {
@@ -38972,6 +39085,12 @@
       ]
     },
     {
+      "ref": "cogseed@0.9.0|esbuild@0.27.7",
+      "dependsOn": [
+        "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7"
+      ]
+    },
+    {
       "ref": "cogseed@0.9.0|eslint@10.9.0",
       "dependsOn": [
         "cogseed@0.9.0|@eslint-community/eslint-utils@4.10.1",
@@ -39027,6 +39146,12 @@
         "cogseed@0.9.0|onnxruntime-node@1.21.0",
         "cogseed@0.9.0|progress@2.0.3",
         "cogseed@0.9.0|tar@7.5.20"
+      ]
+    },
+    {
+      "ref": "cogseed@0.9.0|get-tsconfig@4.14.0",
+      "dependsOn": [
+        "cogseed@0.9.0|resolve-pkg-maps@1.0.0"
       ]
     },
     {
@@ -39087,6 +39212,9 @@
       "dependsOn": [
         "cogseed@0.9.0|@napi-rs/canvas@1.0.7"
       ]
+    },
+    {
+      "ref": "cogseed@0.9.0|resolve-pkg-maps@1.0.0"
     },
     {
       "ref": "cogseed@0.9.0|sherpa-onnx-node@1.13.6",
@@ -39323,6 +39451,9 @@
       "dependsOn": [
         "cogseed@0.9.0|debug@4.4.3"
       ]
+    },
+    {
+      "ref": "cogseed@0.9.0|wasm-feature-detect@1.9.0"
     },
     {
       "ref": "cogseed@0.9.0|axios@1.19.0",
@@ -39763,6 +39894,9 @@
     },
     {
       "ref": "cogseed@0.9.0|@electron/get@5.1.0|env-paths@3.0.0"
+    },
+    {
+      "ref": "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7"
     },
     {
       "ref": "cogseed@0.9.0|@eslint-community/eslint-utils@4.10.1",
@@ -40290,19 +40424,7 @@
       "ref": "cogseed@0.9.0|yallist@5.0.0"
     },
     {
-      "ref": "cogseed@0.9.0|esbuild@0.27.7",
-      "dependsOn": [
-        "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7"
-      ]
-    },
-    {
       "ref": "cogseed@0.9.0|fsevents@2.3.3"
-    },
-    {
-      "ref": "cogseed@0.9.0|get-tsconfig@4.14.0",
-      "dependsOn": [
-        "cogseed@0.9.0|resolve-pkg-maps@1.0.0"
-      ]
     },
     {
       "ref": "cogseed@0.9.0|@typescript-eslint/eslint-plugin@8.67.0",
@@ -41633,12 +41755,6 @@
     },
     {
       "ref": "cogseed@0.9.0|smart-buffer@4.2.0"
-    },
-    {
-      "ref": "cogseed@0.9.0|@esbuild/darwin-arm64@0.27.7"
-    },
-    {
-      "ref": "cogseed@0.9.0|resolve-pkg-maps@1.0.0"
     },
     {
       "ref": "cogseed@0.9.0|@typescript-eslint/scope-manager@8.67.0",
