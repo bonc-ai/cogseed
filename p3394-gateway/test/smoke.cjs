@@ -843,7 +843,7 @@ async function main() {
   // fully exited; retry instead of failing a green protocol run on cleanup.
   await sleep(500);
   try {
-    const cleanupPids = [persistentPidFile, persistentDescendantPidFile]
+    const cleanupPids = [ocPidFile, persistentPidFile, persistentDescendantPidFile]
       .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
     for (const pid of cleanupPids) { try { process.kill(pid, 'SIGKILL'); } catch {} }
     await sleep(200);

@@ -8,13 +8,19 @@
 // 本文件以固定场景调驱动器并断言其 JSON 结果（cwd 为仓库根，与 vitest
 // 其余用例的运行前提一致）。
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
-interface DriverResult { ok: boolean; killed: boolean; misfire: boolean; error: string }
+interface DriverResult { ok: boolean; killed: boolean; misfire: boolean; treeGone?: boolean; pids?: number[]; error: string }
 
 function parseResult(stdout: string): DriverResult {
   const line = stdout.trim().split('\n').pop() || '{}';
   return JSON.parse(line) as DriverResult;
+}
+
+function runDriver(scenario: string): DriverResult {
+  const result = spawnSync(process.execPath, ['test/main/features/fixtures/shim-cancel-driver.cjs', scenario], { encoding: 'utf8', timeout: 45_000 });
+  if (!result.stdout.trim()) throw new Error(result.stderr || result.error?.message || `driver ${scenario} produced no output`);
+  return parseResult(result.stdout);
 }
 
 describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () => {
@@ -36,5 +42,18 @@ describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () 
     const r = parseResult(execFileSync(process.execPath, ['test/main/features/fixtures/shim-cancel-driver.cjs', 'request-id'], { encoding: 'utf8', timeout: 45_000 }));
     expect(r.killed).toBe(true);
   }, 60_000);
+
+  it.runIf(process.platform === 'win32')('cancel terminates the targeted CLI process tree', () => {
+    const r = runDriver('tree-cancel');
+    expect(r.pids).toHaveLength(2);
+    expect(r.treeGone, r.error).toBe(true);
+  }, 60_000);
+
+  it.runIf(process.platform === 'win32')('timeout terminates the CLI process tree', () => {
+    const r = runDriver('tree-timeout');
+    expect(r.pids).toHaveLength(2);
+    expect(r.treeGone, r.error).toBe(true);
+  }, 60_000);
+
 });
 

@@ -9,7 +9,7 @@
 // shim-sleep-cli.cjs（跨平台挂起 30s、SIGTERM 可终结）。结果以单行 JSON
 // 打到 stdout：{ ok, killed, misfire, error }，退出码 0/1 供测试断言。
 'use strict';
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -18,8 +18,17 @@ const SHIM = path.join(__dirname, '..', '..', '..', '..', 'p3394-gateway', 'sscl
 const SLEEP_CLI = path.join(__dirname, 'shim-sleep-cli.cjs');
 const scenario = String(process.argv[2] || '');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shim-cancel-driver-'));
+const treePidFile = path.join(home, 'tree-pids.txt');
+const treeScenario = scenario.startsWith('tree-');
 
-const child = spawn(process.execPath, [SHIM, '--exec', process.execPath, '--args', SLEEP_CLI, '--home', home], { stdio: ['pipe', 'pipe', 'pipe'] });
+const child = spawn(process.execPath, [SHIM, '--exec', process.execPath, '--args', SLEEP_CLI, '--home', home], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    ...(treeScenario ? { SHIM_TREE_PID_FILE: treePidFile } : {}),
+    ...(scenario === 'tree-timeout' ? { P3394_AGENT_TIMEOUT_MS: '500' } : {}),
+  },
+});
 
 let lineBuf = '';
 const frames = [];
@@ -58,9 +67,35 @@ async function waitSilence(pred, withinMs) {
   await new Promise((r) => setTimeout(r, withinMs));
   return !frames.slice(before).some(pred);
 }
+function readTreePids() {
+  try {
+    return fs.readFileSync(treePidFile, 'utf8').split(/\r?\n/).filter(Boolean).map(Number).filter((pid) => pid > 0);
+  } catch { return []; }
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+async function waitTreeGone(timeoutMs = 8000) {
+  const pids = readTreePids();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && pids.some(pidAlive)) await new Promise((resolve) => setTimeout(resolve, 100));
+  return { pids, gone: pids.length === 2 && pids.every((pid) => !pidAlive(pid)) };
+}
+function cleanupTree() {
+  for (const pid of readTreePids()) {
+    if (!pidAlive(pid)) continue;
+    if (process.platform === 'win32') {
+      const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+      spawnSync(path.win32.join(root, 'System32', 'taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+    } else {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  }
+}
 function finish(result) {
   try { child.stdin.end(); } catch { /* already gone */ }
   try { child.kill('SIGTERM'); } catch { /* already gone */ }
+  cleanupTree();
   try { fs.rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ }
   process.stdout.write(JSON.stringify(result) + '\n');
   process.exit(result.ok ? 0 : 1);
@@ -93,6 +128,19 @@ function finish(result) {
       send({ op: 'cancel', request_id: 'r3' });
       await waitFor((f) => f.event === 'failed' && f.request_id === 'r3', 'cancelled failed', 10000);
       finish({ ok: true, killed: true, misfire: false, error: '' });
+    } else if (scenario === 'tree-cancel') {
+      deliver('rt1', 'tt1');
+      await waitFor(() => readTreePids().length === 2, 'CLI + descendant pids', 10000);
+      send({ op: 'cancel', task_id: 'tt1' });
+      await waitFor((f) => f.event === 'failed' && f.request_id === 'rt1', 'tree cancel failed frame', 10000);
+      const tree = await waitTreeGone();
+      finish({ ok: tree.gone, killed: true, misfire: false, treeGone: tree.gone, pids: tree.pids, error: tree.gone ? '' : 'cancel left a descendant alive' });
+    } else if (scenario === 'tree-timeout') {
+      deliver('rt2', 'tt2');
+      await waitFor(() => readTreePids().length === 2, 'CLI + descendant pids', 10000);
+      await waitFor((f) => f.event === 'failed' && f.request_id === 'rt2' && String(f.error || '').includes('timeout'), 'tree timeout failed frame', 10000);
+      const tree = await waitTreeGone();
+      finish({ ok: tree.gone, killed: true, misfire: false, treeGone: tree.gone, pids: tree.pids, error: tree.gone ? '' : 'timeout left a descendant alive' });
     } else {
       finish({ ok: false, killed: false, misfire: false, error: 'unknown scenario: ' + scenario });
     }

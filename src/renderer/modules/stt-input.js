@@ -6,6 +6,30 @@
 // 只允许一路录音：点另一面板的麦克风会先停掉当前这路。
 
 (function () {
+  function sttMicrophonePermissionMessage(platform) {
+    const value = String(platform || '').toLowerCase();
+    if (value.startsWith('win')) {
+      return {
+        key: 'chat.stt.error_permission_windows',
+        fallback: '无法访问麦克风：请在「设置 → 隐私和安全性 → 麦克风」中允许桌面应用使用麦克风。',
+      };
+    }
+    if (value.startsWith('mac')) {
+      return {
+        key: 'chat.stt.error_permission_macos',
+        fallback: '无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许 CogSeed 使用麦克风。',
+      };
+    }
+    return {
+      key: 'chat.stt.error_permission_generic',
+      fallback: '无法访问麦克风：请在系统隐私设置中允许 CogSeed 使用麦克风。',
+    };
+  }
+
+  if (typeof module !== 'undefined' && typeof module.exports === 'object') {
+    module.exports = { sttMicrophonePermissionMessage };
+  }
+
   if (typeof window === 'undefined') return;
 
   const _log = (typeof createLogger === 'function')
@@ -293,7 +317,11 @@
     const denied = /denied|notallowed|permission/i.test(rawMessage);
     const notFound = /notfound|not found|nodevice|no audio|noinput/i.test(rawMessage);
     let text;
-    if (denied) text = _label('chat.stt.error_permission', '无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许 CogSeed 使用麦克风。');
+    if (denied) {
+      const platform = navigator.userAgentData?.platform || navigator.platform;
+      const permissionMessage = sttMicrophonePermissionMessage(platform);
+      text = _label(permissionMessage.key, permissionMessage.fallback);
+    }
     else if (notFound) text = _label('chat.stt.error_no_mic', '未检测到麦克风设备，请检查麦克风是否连接。');
     else text = _label('chat.stt.error_generic', '语音输入启动失败') + (rawMessage ? '：' + rawMessage : '');
     if (typeof uiAlert === 'function') void uiAlert(text);
