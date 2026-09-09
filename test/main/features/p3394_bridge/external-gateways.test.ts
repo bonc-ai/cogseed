@@ -113,6 +113,28 @@ describe('P3394 external-agent gateway host', () => {
     expect(quitAt).toBeGreaterThan(flushedAt);
   });
 
+  it('guards before-quit cleanup with a promise assigned before cleanup can reenter', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    const stateStart = source.indexOf('let shutdownFlushed = false');
+    const handlerStart = source.indexOf("app.on('before-quit', async (e) =>", stateStart);
+    const handlerEnd = source.indexOf('\n  });', handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+
+    expect(source.slice(stateStart, handlerStart)).toContain('let shutdownPromise');
+    const completedGuardAt = handler.indexOf('if (shutdownFlushed) return');
+    const preventAt = handler.indexOf('e.preventDefault()');
+    const inFlightGuardAt = handler.indexOf('if (shutdownPromise)');
+    const assignAt = handler.indexOf('shutdownPromise = Promise.resolve().then(async () =>');
+    const cleanupAt = handler.indexOf('searchFeature.flushAll()');
+    const awaitAt = handler.lastIndexOf('await shutdownPromise');
+    expect(completedGuardAt).toBeGreaterThan(-1);
+    expect(preventAt).toBeGreaterThan(completedGuardAt);
+    expect(inFlightGuardAt).toBeGreaterThan(preventAt);
+    expect(assignAt).toBeGreaterThan(inFlightGuardAt);
+    expect(cleanupAt).toBeGreaterThan(assignAt);
+    expect(awaitAt).toBeGreaterThan(cleanupAt);
+  });
+
   it.runIf(process.platform === 'win32')('waits for every managed gateway process tree before stopAll resolves', async () => {
     const stateFile = p3394StateFile('p3394-external-gateways.json');
     const pidFile = path.join(os.tmpdir(), `p3394-stop-all-pids-${process.pid}-${Date.now()}.txt`);

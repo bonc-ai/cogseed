@@ -289,7 +289,11 @@ export function killProcessTree(
       usedFallback = true;
       directKill(signal);
     };
-    const onKillerError = () => fallbackOnce();
+    const onKillerError = () => {
+      fallbackOnce();
+      signalAttemptDone = true;
+      maybeFinish();
+    };
     const onKillerExit = (code: number | null, exitSignal: NodeJS.Signals | null) => {
       if (code !== 0 || exitSignal) fallbackOnce();
     };

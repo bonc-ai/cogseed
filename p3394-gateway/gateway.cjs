@@ -343,59 +343,86 @@ function windowsSystem32Tool(name) {
 /** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
-  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
-  if (pid && process.platform === 'win32') {
-    let killer;
-    try {
-      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } catch {
-      fallback();
-      return Promise.resolve();
+  return new Promise((resolve) => {
+    let signalDone = process.platform !== 'win32' || !pid;
+    let targetDone = !pid || child.exitCode != null || child.signalCode != null;
+    let killer = null;
+    let hardKillTimer = null;
+    let pidPoll = null;
+    const onTargetClose = () => { targetDone = true; maybeFinish(); };
+    const cleanup = () => {
+      if (killer) {
+        killer.off('error', onKillerError);
+        killer.off('exit', onKillerExit);
+        killer.off('close', onKillerClose);
+      }
+      if (child && typeof child.off === 'function') child.off('close', onTargetClose);
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (pidPoll) clearInterval(pidPoll);
+    };
+    const maybeFinish = () => {
+      if (!signalDone || !targetDone) return;
+      cleanup();
+      resolve();
+    };
+    const directKill = (nextSignal) => { try { child.kill(nextSignal); } catch { /* already gone */ } };
+    let usedFallback = false;
+    const fallbackOnce = () => {
+      if (usedFallback) return;
+      usedFallback = true;
+      directKill(signal);
+    };
+    const onKillerError = () => { fallbackOnce(); signalDone = true; maybeFinish(); };
+    const onKillerExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+    const onKillerClose = (code, closeSignal) => {
+      if (code !== 0 || closeSignal) fallbackOnce();
+      signalDone = true;
+      maybeFinish();
+    };
+    if (!targetDone && typeof child.once === 'function') child.once('close', onTargetClose);
+    if (!targetDone && pid) {
+      pidPoll = setInterval(() => {
+        try { process.kill(pid, 0); } catch (error) {
+          if (!error || error.code !== 'ESRCH') return;
+          targetDone = true;
+          maybeFinish();
+        }
+      }, 25);
+      pidPoll.unref?.();
     }
-    return new Promise((resolve) => {
-      let settled = false;
-      let usedFallback = false;
-      const cleanup = () => {
-        killer.off('error', onError);
-        killer.off('exit', onExit);
-        killer.off('close', onClose);
-      };
-      const fallbackOnce = () => {
-        if (usedFallback) return;
-        usedFallback = true;
-        fallback();
-      };
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-      const onError = () => fallbackOnce();
-      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
-      const onClose = (code, closeSignal) => {
-        if (code !== 0 || closeSignal) fallbackOnce();
-        finish();
-      };
+    if (!targetDone && signal !== 'SIGKILL') {
+      hardKillTimer = setTimeout(() => {
+        hardKillTimer = null;
+        if (targetDone) return;
+        if (pid && process.platform !== 'win32') {
+          try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
+        } else {
+          directKill('SIGKILL');
+        }
+      }, 3000);
+      hardKillTimer.unref?.();
+    }
+    if (pid && process.platform === 'win32') {
       try {
-        killer.once('error', onError);
-        killer.once('exit', onExit);
-        killer.once('close', onClose);
-        if (typeof killer.unref === 'function') killer.unref();
+        killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        killer.once('error', onKillerError);
+        killer.once('exit', onKillerExit);
+        killer.once('close', onKillerClose);
+        killer.unref?.();
       } catch {
         fallbackOnce();
-        finish();
+        signalDone = true;
+        maybeFinish();
       }
-    });
-  }
-  if (pid && process.platform !== 'win32') {
-    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
-  }
-  fallback();
-  return Promise.resolve();
+      return;
+    }
+    if (pid && process.platform !== 'win32') {
+      try { process.kill(-pid, signal); } catch { fallbackOnce(); }
+    } else {
+      fallbackOnce();
+    }
+    maybeFinish();
+  });
 }
 
 /** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
@@ -1044,6 +1071,7 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraAr
     if (taskId) activeTasks.set(taskId, child);
     let out = '';
     let errOut = '';
+    let timingOut = false;
     let streamedChars = 0;
     // 增量回发上限：防止 CLI 疯狂刷屏把每条 chunk 都堆进增量帧（合并器本身
     // ~80ms/512 字符限速，这里再加一个总量保护；收取 out 不受影响）。
@@ -1079,10 +1107,11 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraAr
       onProgress(visible);
     };
     const timer = setTimeout(() => {
-      killProcessTree(child, 'SIGTERM');
-      setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
-      if (taskId) activeTasks.delete(taskId);
-      reject(new Error('p3394_agent_timeout'));
+      timingOut = true;
+      void killProcessTree(child, 'SIGTERM').then(() => {
+        if (taskId && activeTasks.get(taskId) === child) activeTasks.delete(taskId);
+        reject(new Error('p3394_agent_timeout'));
+      });
     }, TIMEOUT_MS);
     child.stdout.on('data', (chunk) => { if (out.length < MAX_REPLY_BYTES * 4) out += chunk; if (ONESHOT_STREAM_CHILD) forwardStream(chunk.toString('utf8')); });
     child.stderr.on('data', (chunk) => {
@@ -1096,9 +1125,10 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraAr
         forwardStream(chunk.toString('utf8'));
       }
     });
-    child.on('error', (error) => { clearTimeout(timer); if (taskId) activeTasks.delete(taskId); reject(error); });
+    child.on('error', (error) => { if (timingOut) return; clearTimeout(timer); if (taskId) activeTasks.delete(taskId); reject(error); });
     child.on('close', (code) => {
       clearTimeout(timer);
+      if (timingOut) return;
       if (taskId) activeTasks.delete(taskId);
       if (code === 0) resolve(extractReplyText(out, PRESET_NAME));
       else reject(new Error('agent exited ' + code + (errOut ? ': ' + sanitizeStreamText(errOut.slice(-300)) : '')));
@@ -1126,12 +1156,11 @@ function extractReplyText(out, preset) {
   return text;
 }
 
-function cancelTask(taskId) {
+async function cancelTask(taskId) {
   const child = activeTasks.get(taskId);
   if (!child) return false;
-  cancelledTasks.add(taskId);
-  killProcessTree(child, 'SIGTERM');
-  activeTasks.delete(taskId);
+  await killProcessTree(child, 'SIGTERM');
+  if (activeTasks.get(taskId) === child) activeTasks.delete(taskId);
   return true;
 }
 
@@ -1186,7 +1215,7 @@ const oneshotRuntime = {
     appendTranscript(sessionId, 'out', reply);
     return reply;
   },
-  cancel(taskId) { return cancelTask(taskId); },
+  async cancel(taskId) { return cancelTask(taskId); },
   /** 模型发现：与 sscli 通道共用 inspectPresetModels（Hermes 模型枚举
    *  修复 2026-09-09：探测与消息通道无关，见该函数头注释）。 */
   async inspectModels() {
@@ -1497,7 +1526,7 @@ class CodexAppServerRuntime {
   }
   /** 终止在途 turn（app-server v2 协议 turn/interrupt）。不 kill 共享的
    *  app-server 进程——进程保持可复用，只中断目标线程的在途 turn。 */
-  cancel(taskId) {
+  async cancel(taskId) {
     const entry = this.activeTurns.get(taskId);
     if (!entry) return false;
     this.activeTurns.delete(taskId);
@@ -1553,9 +1582,23 @@ class SscliRuntime {
         deltas: [],
         onDelta,
         onProgress,
+        terminating: false,
         timer: setTimeout(() => {
-          this.pending.delete(requestId);
-          reject(new Error('p3394_sscli_timeout'));
+          if (entry.terminating) return;
+          entry.terminating = true;
+          void (async () => {
+            const child = this.child;
+            let acknowledged = false;
+            if (op.op === 'deliver' && entry.taskId && child) {
+              try {
+                const ack = await this._request({ op: 'cancel', task_id: entry.taskId }, SSCLI_HANDSHAKE_MS);
+                acknowledged = ack.killed !== false;
+              } catch { /* fall back to terminating the shim runtime */ }
+            }
+            if (!acknowledged && child) await killProcessTree(child, 'SIGTERM');
+            if (this.pending.get(requestId) === entry) this.pending.delete(requestId);
+            reject(new Error('p3394_sscli_timeout'));
+          })();
         }, timeoutMs),
       };
       this.pending.set(requestId, entry);
@@ -1568,6 +1611,7 @@ class SscliRuntime {
     if (parsed.event && parsed.request_id) {
       const entry = this.pending.get(parsed.request_id);
       if (!entry) return;
+      if (entry.terminating) return;
       if (parsed.event === 'delta' && typeof parsed.text === 'string') {
         entry.deltas.push(parsed.text);
         entry.onDelta?.(parsed.text);
@@ -1601,11 +1645,12 @@ class SscliRuntime {
     }
   }
   _failAll(error) {
-    for (const [, entry] of this.pending) {
+    for (const [requestId, entry] of this.pending) {
+      if (entry.terminating) continue;
       clearTimeout(entry.timer);
+      this.pending.delete(requestId);
       entry.reject(error);
     }
-    this.pending.clear();
   }
   async start() {
     if (this.child) return;
@@ -1684,7 +1729,7 @@ class SscliRuntime {
       message: { message_id: messageId, payload: { parts: [{ type: 'text', text: text + note + hint }] } },
     }, TIMEOUT_MS, onDelta, onProgress);
   }
-  cancel(taskId) {
+  async cancel(taskId) {
     if (!this.child || !taskId) return false;
     // 只对在途任务发 cancel 并如实上报命中：目标不在 pending（已完结或
     // 从未运行）时返回 false，避免 handleCancel 误记 killed 后吞掉真实
@@ -1694,8 +1739,8 @@ class SscliRuntime {
       if (entry.taskId === String(taskId) || entry.requestId === String(taskId)) { hit = true; break; }
     }
     if (!hit) return false;
-    this._send({ op: 'cancel', task_id: taskId });
-    return true;
+    const ack = await this._request({ op: 'cancel', task_id: taskId }, SSCLI_HANDSHAKE_MS);
+    return ack.killed !== false;
   }
   /** 模型发现（Hermes 模型枚举修复 2026-09-09）：不再因「协议无枚举 op」
    *  直接 unavailable——网关与 CLI 同机，预设级探测（子命令/init 帧/
@@ -1776,17 +1821,17 @@ class StreamJsonRuntime {
         let lineBuf = '';
         let accumulated = '';
         let finished = false;
+        let timingOut = false;
         let stderrLog = '';
         const finish = (error) => {
           if (finished) return;
           finished = true;
-          this.active.delete(cancelKey);
+          if (this.active.get(cancelKey) === child) this.active.delete(cancelKey);
           if (error) reject(error); else resolve(accumulated.trim());
         };
         const timer = setTimeout(() => {
-          killProcessTree(child, 'SIGTERM');
-          setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
-          finish(new Error('p3394_stream_json_timeout'));
+          timingOut = true;
+          void killProcessTree(child, 'SIGTERM').then(() => finish(new Error('p3394_stream_json_timeout')));
         }, STREAM_JSON_TIMEOUT_MS);
         child.stdout.on('data', (chunk) => {
           lineBuf += chunk.toString('utf8');
@@ -1809,9 +1854,10 @@ class StreamJsonRuntime {
         const visible = sanitizeStreamText(chunk.toString('utf8'));
         if (visible) onDelta && onDelta(visible); // 进度/stderr 也实时可见
       });
-      child.on('error', (error) => { clearTimeout(timer); finish(error); });
+      child.on('error', (error) => { if (timingOut) return; clearTimeout(timer); finish(error); });
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (timingOut) return;
         if (!finished) {
           if (code !== 0) finish(new Error('agent exited ' + code + (stderrLog ? ': ' + sanitizeStreamText(stderrLog.slice(-300)) : '')));
           else finish(); // 进程正常退出，无显式终帧 → 以累积文本收尾
@@ -1889,11 +1935,11 @@ class StreamJsonRuntime {
     }
     return probeClaudeModels();
   }
-  cancel(taskId) {
+  async cancel(taskId) {
     const child = this.active.get(taskId);
     if (!child) return false;
-    killProcessTree(child, 'SIGTERM');
-    this.active.delete(taskId);
+    await killProcessTree(child, 'SIGTERM');
+    if (this.active.get(taskId) === child) this.active.delete(taskId);
     return true;
   }
   async close() {
@@ -1935,7 +1981,7 @@ class ClaudePersistentRuntime {
   }
 
   _spawn(sessionId, cwd, maxThinkingTokens, model) {
-    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, maxThinkingTokens: maxThinkingTokens || null, model: model || null };
+    const entry = { sessionId, cwd, child: null, buf: '', turn: null, idleTimer: null, closing: null, maxThinkingTokens: maxThinkingTokens || null, model: model || null };
     // CogSeed 扩展：单轮偏好随进程固化（MAX_THINKING_TOKENS 是进程级 env；
     // --model 是进程级参数——两者的变更由 deliver 的 drop/respawn 对齐）。
     const childEnv = maxThinkingTokens ? Object.assign({}, process.env, { MAX_THINKING_TOKENS: maxThinkingTokens }) : undefined;
@@ -2071,11 +2117,19 @@ class ClaudePersistentRuntime {
       entry.idleTimer = null;
       // 空闲回收：无在途轮次且超时 → 关进程释放内存（下次 deliver 重建）。
       if (!entry.turn) {
-        killProcessTree(entry.child, 'SIGTERM');
-        this._dropSession(sessionId);
+        void this._terminateSession(sessionId, entry);
       }
     }, CLAUDE_IDLE_RECLAIM_MS);
     entry.idleTimer.unref();
+  }
+
+  async _terminateSession(sessionId, entry) {
+    if (!entry.closing) {
+      entry.closing = killProcessTree(entry.child, 'SIGTERM').then(() => {
+        this._dropSession(sessionId, entry);
+      });
+    }
+    await entry.closing;
   }
 
   _dropSession(sessionId, expectedEntry) {
@@ -2114,9 +2168,12 @@ class ClaudePersistentRuntime {
     const wantThinking = (opts && opts.execPrefs) ? opts.execPrefs.maxThinkingTokens : null;
     const wantModel = (opts && opts.execPrefs) ? opts.execPrefs.model : null;
     let entry = this.sessions.get(sessionId);
+    if (entry && entry.closing) {
+      await entry.closing;
+      entry = this.sessions.get(sessionId);
+    }
     if (entry && (entry.maxThinkingTokens !== (wantThinking || null) || entry.model !== (wantModel || null)) && !entry.turn) {
-      killProcessTree(entry.child, 'SIGTERM');
-      this._dropSession(sessionId);
+      await this._terminateSession(sessionId, entry);
       entry = null;
     }
     const fresh = !entry || entry.child.exitCode !== null || !entry.child.stdin.writable;
@@ -2142,9 +2199,9 @@ class ClaudePersistentRuntime {
           const turn = entry.turn;
           entry.turn = null;
           this.turnKeys.delete(cancelKey);
-          killProcessTree(entry.child, 'SIGTERM');
-          this._dropSession(sessionId);
-          reject(new Error('p3394_claude_timeout'));
+          void this._terminateSession(sessionId, entry).then(() => {
+            reject(new Error('p3394_claude_timeout'));
+          });
         }, STREAM_JSON_TIMEOUT_MS),
         accumulated: '',
         lastAssistantText: '',
@@ -2164,7 +2221,7 @@ class ClaudePersistentRuntime {
       }
     });
   }
-  cancel(taskId) {
+  async cancel(taskId) {
     const sessionId = this.turnKeys.get(taskId);
     if (!sessionId) return false;
     const entry = this.sessions.get(sessionId);
@@ -2173,16 +2230,15 @@ class ClaudePersistentRuntime {
     // 必须 reject 挂起的 turn：否则 handleEnvelope 的 deliver promise 永不
     // settle，gateway 的串行队列（enqueue）会被这个挂起任务永久卡死，后续
     // 所有消息都不再执行。错误回信由 handleCancel 的 cancelledTasks 抑制。
-    if (entry.turn) {
+    const turn = entry.turn;
+    if (turn) {
       clearTimeout(entry.turn.timer);
-      const turn = entry.turn;
       entry.turn = null;
-      turn.reject(new Error('p3394_claude_cancelled'));
     }
     // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
     // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
-    killProcessTree(entry.child, 'SIGTERM');
-    this._dropSession(sessionId);
+    await this._terminateSession(sessionId, entry);
+    if (turn) turn.reject(new Error('p3394_claude_cancelled'));
     return true;
   }
   /** 模型发现：常驻会话的 init 帧缓存优先（正在运行的进程自己披露的最新
@@ -2441,20 +2497,24 @@ class OpencodeRuntime {
       setTimeout(() => { if (this.turns.get(entry.ocSessionId) === turn) this.turns.delete(entry.ocSessionId); }, 250).unref();
     }
   }
-  cancel(taskId) {
+  async cancel(taskId) {
     // PR209 评审 M6：按 taskId 命中在途 turn 并中断其 HTTP 请求——客户端
     // 不再收终态（deliver reject→failed，回执被 handleCancel 的
     // cancelledTasks 抑制，用户只见 [已取消]）。服务端 turn 是否随连接
     // 断开而中止取决于 opencode serve 行为，此处只保证客户端语义。
     if (!taskId) return false;
-    let hit = false;
+    const closes = [];
     for (const [, turn] of this.turns) {
-      if (turn.taskId === String(taskId) && turn.req) {
-        try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { /* already gone */ }
-        hit = true;
+      if (turn.taskId === String(taskId) && turn.req && !turn.req.destroyed) {
+        closes.push(new Promise((resolve) => {
+          turn.req.once('close', resolve);
+          try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { resolve(); }
+        }));
       }
     }
-    return hit;
+    if (!closes.length) return false;
+    await Promise.all(closes);
+    return true;
   }
   async close() {
     this.closing = true;
@@ -2706,7 +2766,7 @@ function enqueue(task) {
  *  命中即记入 cancelledTasks——被 kill 的子进程/turn 之后的非零退出/拒绝会在
  *  handleEnvelope 里被抑制，不再补发错误回信（否则用户会同时看到取消回执与
  *  一条 [p3394_gateway_error] 或半截回复）。 */
-function handleCancel(envelope) {
+async function handleCancel(envelope) {
   const taskId = envelope.task_id;
   if (!taskId) {
     postReply(envelope, '[已取消]');
@@ -2715,8 +2775,20 @@ function handleCancel(envelope) {
   // PR209 评审 M6：原代码在 || 链外对 sscliRuntime 又 cancel 一次（双发），
   // 且 shim 侧 cancel 不看 task_id 会误杀排队中另一任务的执行进程。
   // 修复：单次按序 cancel（短路即停，首个命中的 runtime 负责）。
-  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || opencodeRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
-  if (killed) cancelledTasks.add(taskId);
+  cancelledTasks.add(taskId);
+  let killed = false;
+  const cancellers = [
+    (id) => cancelTask(id),
+    (id) => streamJsonRuntime.cancel(id),
+    (id) => codexAppServerRuntime.cancel(id),
+    (id) => claudePersistentRuntime.cancel(id),
+    (id) => opencodeRuntime.cancel(id),
+    (id) => sscliRuntime.cancel(id),
+  ];
+  for (const cancel of cancellers) {
+    if (await cancel(taskId)) { killed = true; break; }
+  }
+  if (!killed) cancelledTasks.delete(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
   postReply(envelope, '[已取消]');
 }
@@ -3026,7 +3098,9 @@ const server = http.createServer((req, res) => {
       }
       // cancel 控制帧必须绕过串行队列立即处理，否则会被正在运行的长任务阻塞。
       if (envelope.kind === 'control' && envelope.performative === 'cancel') {
-        handleCancel(envelope);
+        void handleCancel(envelope).catch((error) => {
+          console.error('[p3394-gateway] cancel failed: ' + (error && error.message ? error.message : String(error)));
+        });
         return;
       }
       // oneshot 模式并发执行（每条消息独立 CLI 进程，不排队）；sscli/codex

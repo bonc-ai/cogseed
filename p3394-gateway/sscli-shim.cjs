@@ -168,59 +168,86 @@ function windowsSystem32Tool(name) {
 /** Terminate the CLI and its descendants; child.kill() only kills cmd.exe on Windows. */
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
-  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
-  if (pid && process.platform === 'win32') {
-    let killer;
-    try {
-      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } catch {
-      fallback();
-      return Promise.resolve();
+  return new Promise((resolve) => {
+    let signalDone = process.platform !== 'win32' || !pid;
+    let targetDone = !pid || child.exitCode != null || child.signalCode != null;
+    let killer = null;
+    let hardKillTimer = null;
+    let pidPoll = null;
+    const onTargetClose = () => { targetDone = true; maybeFinish(); };
+    const cleanup = () => {
+      if (killer) {
+        killer.off('error', onKillerError);
+        killer.off('exit', onKillerExit);
+        killer.off('close', onKillerClose);
+      }
+      if (child && typeof child.off === 'function') child.off('close', onTargetClose);
+      if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (pidPoll) clearInterval(pidPoll);
+    };
+    const maybeFinish = () => {
+      if (!signalDone || !targetDone) return;
+      cleanup();
+      resolve();
+    };
+    const directKill = (nextSignal) => { try { child.kill(nextSignal); } catch { /* already gone */ } };
+    let usedFallback = false;
+    const fallbackOnce = () => {
+      if (usedFallback) return;
+      usedFallback = true;
+      directKill(signal);
+    };
+    const onKillerError = () => { fallbackOnce(); signalDone = true; maybeFinish(); };
+    const onKillerExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+    const onKillerClose = (code, closeSignal) => {
+      if (code !== 0 || closeSignal) fallbackOnce();
+      signalDone = true;
+      maybeFinish();
+    };
+    if (!targetDone && typeof child.once === 'function') child.once('close', onTargetClose);
+    if (!targetDone && pid) {
+      pidPoll = setInterval(() => {
+        try { process.kill(pid, 0); } catch (error) {
+          if (!error || error.code !== 'ESRCH') return;
+          targetDone = true;
+          maybeFinish();
+        }
+      }, 25);
+      pidPoll.unref?.();
     }
-    return new Promise((resolve) => {
-      let settled = false;
-      let usedFallback = false;
-      const cleanup = () => {
-        killer.off('error', onError);
-        killer.off('exit', onExit);
-        killer.off('close', onClose);
-      };
-      const fallbackOnce = () => {
-        if (usedFallback) return;
-        usedFallback = true;
-        fallback();
-      };
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-      const onError = () => fallbackOnce();
-      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
-      const onClose = (code, closeSignal) => {
-        if (code !== 0 || closeSignal) fallbackOnce();
-        finish();
-      };
+    if (!targetDone && signal !== 'SIGKILL') {
+      hardKillTimer = setTimeout(() => {
+        hardKillTimer = null;
+        if (targetDone) return;
+        if (pid && process.platform !== 'win32') {
+          try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
+        } else {
+          directKill('SIGKILL');
+        }
+      }, 3000);
+      hardKillTimer.unref?.();
+    }
+    if (pid && process.platform === 'win32') {
       try {
-        killer.once('error', onError);
-        killer.once('exit', onExit);
-        killer.once('close', onClose);
-        if (typeof killer.unref === 'function') killer.unref();
+        killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+        killer.once('error', onKillerError);
+        killer.once('exit', onKillerExit);
+        killer.once('close', onKillerClose);
+        killer.unref?.();
       } catch {
         fallbackOnce();
-        finish();
+        signalDone = true;
+        maybeFinish();
       }
-    });
-  }
-  if (pid && process.platform !== 'win32') {
-    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
-  }
-  fallback();
-  return Promise.resolve();
+      return;
+    }
+    if (pid && process.platform !== 'win32') {
+      try { process.kill(-pid, signal); } catch { fallbackOnce(); }
+    } else {
+      fallbackOnce();
+    }
+    maybeFinish();
+  });
 }
 
 // ── 启动参数解析 ──
@@ -420,13 +447,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
       terminationError = new Error('p3394_agent_timeout');
       void killProcessTree(child, 'SIGTERM').then(() => {
         if (finished) return;
-        if (process.platform === 'win32') {
-          finish(terminationError);
-          return;
-        }
-        forceKillTimer = setTimeout(() => {
-          void killProcessTree(child, 'SIGKILL').then(() => finish(terminationError));
-        }, 3000);
+        finish(terminationError);
       });
     }, TIMEOUT_MS);
     function finish(error) {
@@ -519,6 +540,14 @@ async function handleDeliver(op) {
 let lineBuf = '';
 process.stdout.write(''); // warm the stream
 process.stdin.setEncoding('utf8');
+async function handleCancel(op) {
+  const targetId = String(op.task_id || op.request_id || '');
+  const turn = activeTurn;
+  const hit = Boolean(turn && turn.child && targetId
+    && (String(turn.taskId) === targetId || String(turn.requestId) === targetId));
+  if (hit) await killProcessTree(turn.child, 'SIGTERM');
+  emit({ ok: true, request_id: op.request_id, killed: hit });
+}
 process.stdin.on('data', (chunk) => {
   lineBuf += chunk;
   const lines = lineBuf.split('\n');
@@ -546,14 +575,9 @@ process.stdin.on('data', (chunk) => {
       // 首版「精确命中」实为永不命中（假取消）。deliver 帧现带 task_id
       // （runCliOnce 记入 activeTurn.taskId），此处优先比对 task_id，
       // 无 task_id 的调用方回退 request_id。命中才 kill，绝不误杀排队任务。
-      const targetId = String(op.task_id || op.request_id || '');
-      if (activeTurn && activeTurn.child && targetId
-          && (String(activeTurn.taskId) === targetId || String(activeTurn.requestId) === targetId)) {
-        killProcessTree(activeTurn.child, 'SIGTERM');
-      }
-      // 在途 deliver 的 runCliOnce 会以非零退出 reject → 上面的 catch 发
-      // failed 事件；网关对取消场景已有独立回执，这里不额外应答。
-      // requestId 不匹配（另一任务的 cancel）：不动作，绝不误杀。
+      void handleCancel(op).catch((error) => {
+        emit({ ok: false, request_id: op.request_id, error: (error && error.message) || String(error) });
+      });
     } else if (op.op === 'heartbeat') {
       emit({ ok: true, request_id: op.request_id });
     } else if (op.request_id !== undefined) {

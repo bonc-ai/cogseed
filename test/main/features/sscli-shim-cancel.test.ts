@@ -41,18 +41,15 @@ function loadRunCliOnce(context: Record<string, unknown>) {
 }
 
 describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () => {
-  it('POSIX timeout escalates to SIGKILL and waits for that termination before settling', async () => {
+  it('POSIX timeout waits for the tree-termination barrier before settling', async () => {
     vi.useFakeTimers();
     try {
       const child = Object.assign(new EventEmitter(), {
         stdout: new EventEmitter(),
         stderr: new EventEmitter(),
       });
-      let finishSigkill: (() => void) | undefined;
-      const killProcessTree = vi.fn((_child: unknown, signal: string) => {
-        if (signal === 'SIGTERM') return Promise.resolve();
-        return new Promise<void>((resolve) => { finishSigkill = resolve; });
-      });
+      let finishTermination: (() => void) | undefined;
+      const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { finishTermination = resolve; }));
       let spawnOptions: Record<string, unknown> | undefined;
       const runCliOnce = loadRunCliOnce({
         CLI_ARGS: '{message}', CLI: 'fake-cli', TIMEOUT_MS: 100,
@@ -74,15 +71,11 @@ describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () 
       expect(killProcessTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(2_999);
+      await vi.advanceTimersByTimeAsync(3_000);
       expect(killProcessTree).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1);
-      expect(killProcessTree.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL']);
-      expect(settled).toBe(false);
-
-      finishSigkill?.();
+      finishTermination?.();
       await expect(result).rejects.toThrow('p3394_agent_timeout');
     } finally {
       vi.useRealTimers();
