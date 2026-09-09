@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -24,10 +25,12 @@ import {
 } from '../../../../p3394-gateway/models-probe.cjs';
 
 /** fake 子进程：脚本化 stdout/stderr 推送 + close 触发，不需要真 CLI。 */
-function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number; failSpawn?: Error }) {
+function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number; failSpawn?: Error; neverClose?: boolean }) {
   const listeners: Record<string, Array<(v: unknown) => void>> = {};
   return {
     on(event: string, cb: (v: unknown) => void) { (listeners[event] ??= []).push(cb); return this; },
+    once(event: string, cb: (v: unknown) => void) { (listeners[event] ??= []).push(cb); return this; },
+    off(event: string, cb: (v: unknown) => void) { listeners[event] = (listeners[event] ?? []).filter((listener) => listener !== cb); return this; },
     kill() { return true; },
     stdout: { on(event: string, cb: (v: unknown) => void) { (listeners['stdout:' + event] ??= []).push(cb); return this; } },
     stderr: { on(event: string, cb: (v: unknown) => void) { (listeners['stderr:' + event] ??= []).push(cb); return this; } },
@@ -39,8 +42,9 @@ function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number;
         for (const cb of listeners.error ?? []) cb(script.failSpawn);
         return;
       }
-      for (const cb of listeners.close ?? []) cb(script.closeWith ?? 0);
+      if (!script.neverClose) this.emitClose();
     },
+    emitClose() { for (const cb of listeners.close ?? []) cb(script.closeWith ?? 0); },
   };
 }
 
@@ -54,6 +58,14 @@ const SPAWN_FN = (script: Parameters<typeof fakeChild>[0]) => () => {
 const CLI_MODEL_REPLY = JSON.stringify({
   result: 'Current model: Sonnet 5 (effort: xhigh)\nUsage: /model <name>. '
     + 'Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.',
+});
+
+describe('gateway runtime shutdown contract', () => {
+  it('routes OpenCode persistent server shutdown through process-tree termination', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    const runtime = /class OpencodeRuntime[\s\S]*?\r?\n}\r?\nconst claudePersistentRuntime/.exec(source)?.[0] || '';
+    expect(runtime).toContain("killProcessTree(entry.child, 'SIGTERM')");
+  });
 });
 
 describe('gateway executionPrefsFor — model + effort passthrough', () => {  const run = (ext: unknown) => executionPrefsFor({ extensions: ext });
@@ -315,6 +327,26 @@ describe('gateway probeInspectCommand — declared parsers (universal enumeratio
     expect(result.status).toBe('unavailable');
     expect(result.reason).toBe('no_inspect_declared');
   });
+
+  it('terminates the whole probe process tree on timeout', async () => {
+    const child = fakeChild({ neverClose: true });
+    let releaseKill!: () => void;
+    const killTreeFn = vi.fn(() => new Promise<void>((resolve) => { releaseKill = resolve; }));
+    let settled = false;
+    const resultPromise = probeInspectCommand({
+      cli: 'codebuddy', args: ['--help'], parser: 'help-model-list',
+      spawnFn: () => child, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '5' },
+    }) as Promise<{ status: string; reason: string }>;
+    void resultPromise.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(killTreeFn).toHaveBeenCalledWith(child, 'SIGTERM');
+    child.emitClose();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseKill();
+    const result = await resultPromise;
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'timeout' });
+  });
 });
 
 describe('gateway probeStreamJsonInitModel — claude-compatible init-frame current model', () => {
@@ -338,12 +370,13 @@ describe('gateway probeStreamJsonInitModel — claude-compatible init-frame curr
       });
       return child;
     };
+    const killTreeFn = vi.fn();
     const result = await probeStreamJsonInitModel({
-      cli: 'codebuddy', args: ['-p'], spawnFn, env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
+      cli: 'codebuddy', args: ['-p'], spawnFn, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
     }) as { current: string | null; models: Array<unknown> | null };
     expect(result?.current).toBe('auto');
     expect(result?.models).toBeNull(); // codebuddy init 不披露清单（实测）
-    expect(child.killed).toBe(true);   // init 一到即杀（零模型调用）
+    expect(killTreeFn).toHaveBeenCalledWith(child, 'SIGTERM'); // init 一到即整树杀（零模型调用）
     expect(child.stdinWrites).toHaveLength(1); // 触发 init 的 user 消息
   });
 

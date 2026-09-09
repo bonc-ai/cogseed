@@ -53,8 +53,8 @@ let _connectionsMcpPrimed = false;
 let _connectionsSkillsPrimed = false;
 
 function _connectionsOpenTarget(target) {
-  if (target === 'agents' || target === 'touchpoints') {
-    _connectionsOpenConfiguration(target === 'agents' ? 'agents' : 'gateways');
+  if (target === 'touchpoints') {
+    _connectionsOpenConfiguration('gateways');
     return;
   }
   if (target === 'models' && typeof setView === 'function') {
@@ -74,7 +74,7 @@ function _connectionsOpenConfiguration(anchor) {
 function activateConnectionsTab(name) {
   const tabs = Array.from(document.querySelectorAll('.connections-tab'));
   if (!tabs.length) return;
-  if (name === 'agents' || name === 'touchpoints') {
+  if (name === 'touchpoints') {
     _connectionsOpenTarget(name);
     return;
   }
@@ -151,7 +151,12 @@ function activateConnectionsTab(name) {
       });
   }
 
-  // 数据源 tab 内嵌资料库；Agent 与触点已归入设置—配置。
+  // Agent tab 内嵌了 AI 团队：进入时加载完整列表，升级 boot 的摘要缓存。
+  if (target === 'agents' && typeof loadAgents === 'function') {
+    Promise.resolve(loadAgents(false)).catch(() => {});
+  }
+
+  // 数据源 tab 内嵌资料库；触点已归入设置—配置。
   if (target === 'sources') {
     // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化
     // tab 壳，不会加载 contexts.js。这里先加载模块再渲染，否则面板永远

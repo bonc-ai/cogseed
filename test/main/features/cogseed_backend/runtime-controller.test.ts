@@ -113,7 +113,7 @@ describe('CogSeed Runtime controller', () => {
     const runtime = runtimeFrom([]);
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const { createCogSeedRuntimeController } = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
-    const controller = createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => undefined) } as any);
+    const controller = trackController(createCogSeedRuntimeController({ runtime, projectTaskEvent: vi.fn(async () => undefined) } as any));
     const created = await tasks.createCogSeedTask(USER, {
       requestId: 'req-save-planned-controller',
       task: 'Run this saved task once.',

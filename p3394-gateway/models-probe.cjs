@@ -161,6 +161,7 @@ function probeClaudeModels(deps = {}) {
     args: ['-p', '/model', '--output-format', 'json'],
     parser: 'claude-model-list',
     spawnFn: deps.spawnFn,
+    killTreeFn: deps.killTreeFn,
     env: deps.env,
   }).then((result) => {
     if (result.status === 'ready') {
@@ -289,28 +290,66 @@ const INSPECT_PARSERS = {
   },
 };
 
+function waitForProbeTermination(child, killTreeFn, signal, deadlineMs = 2000) {
+  return new Promise((resolve) => {
+    let killDone = false;
+    let childClosed = typeof child.once !== 'function';
+    let finished = false;
+    const onClose = () => {
+      childClosed = true;
+      maybeFinish();
+    };
+    const cleanup = () => {
+      clearTimeout(deadline);
+      try { if (typeof child.off === 'function') child.off('close', onClose); } catch { /* best effort */ }
+    };
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve();
+    };
+    const maybeFinish = () => {
+      if (killDone && childClosed) finish();
+    };
+    if (!childClosed) child.once('close', onClose);
+    const deadline = setTimeout(finish, deadlineMs);
+    if (typeof deadline.unref === 'function') deadline.unref();
+    let killCompletion;
+    try { killCompletion = killTreeFn(child, signal); } catch { killCompletion = undefined; }
+    void Promise.resolve(killCompletion).then(
+      () => { killDone = true; maybeFinish(); },
+      () => { killDone = true; maybeFinish(); },
+    );
+  });
+}
+
 /** 通用枚举探测：spawn cli + 声明的 args，按声明的 parser 解析 stdout。
- *  deps: { cli, args, parser, spawnFn, env, keepCurrentFrom }。 */
+ *  deps: { cli, args, parser, spawnFn, killTreeFn, env, keepCurrentFrom }。 */
 function probeInspectCommand(deps = {}) {
   const cli = deps.cli || '';
   const args = Array.isArray(deps.args) ? deps.args : [];
   const parser = INSPECT_PARSERS[deps.parser];
   const spawnFn = deps.spawnFn || defaultSpawn;
+  const killTreeFn = deps.killTreeFn || ((child, signal) => child.kill(signal));
   if (!cli || !parser) return Promise.resolve({ status: 'unavailable', reason: 'no_inspect_declared' });
   return new Promise((resolve) => {
     let out = '';
     let stderrTail = '';
     let settled = false;
     const child = spawnFn(cli, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const finish = (value) => {
+    const finish = (value, terminate = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { child.kill('SIGTERM'); } catch { /* already gone */ }
-      resolve(value);
+      if (!terminate) {
+        resolve(value);
+        return;
+      }
+      void waitForProbeTermination(child, killTreeFn, 'SIGTERM').then(() => resolve(value));
     };
     const timer = setTimeout(() => {
-      finish({ status: 'unavailable', reason: 'timeout', stderrTail: stderrTail.slice(-300) });
+      finish({ status: 'unavailable', reason: 'timeout', stderrTail: stderrTail.slice(-300) }, true);
     }, inspectTimeoutMs(deps.env));
     child.stdout.on('data', (chunk) => { if (out.length < 256 * 1024) out += chunk; });
     child.stderr.on('data', (chunk) => { if (stderrTail.length < 2048) stderrTail += chunk; });
@@ -336,38 +375,42 @@ function probeInspectCommand(deps = {}) {
 }
 
 /** 子命令枚举探测（兼容旧签名：cli/presetName/subcommands 注入）。
- *  deps: { cli, presetName, subcommands, spawnFn, env }。 */
+ *  deps: { cli, presetName, subcommands, spawnFn, killTreeFn, env }。 */
 function probeSubcommandModels(deps = {}) {
   const cli = deps.cli || '';
   const presetName = deps.presetName || '';
   const spawnFn = deps.spawnFn || defaultSpawn;
   const sub = (deps.subcommands || INSPECT_SUBCOMMANDS)[presetName];
   if (!sub) return Promise.resolve({ status: 'unavailable', reason: 'no_inspect_command' });
-  return probeInspectCommand({ cli, args: [sub], parser: 'lines', spawnFn, env: deps.env });
+  return probeInspectCommand({ cli, args: [sub], parser: 'lines', spawnFn, killTreeFn: deps.killTreeFn, env: deps.env });
 }
 
 /** claude 兼容 CLI（codebuddy 等）的当前模型探测：双工 stream-json 起进程、
  *  写一条 user 消息触发 init 帧、抓 model 字段即杀（模型调用不会发生）。
- *  deps: { cli, args, spawnFn, env }。CodexHost 对标：effectiveModel 的
+ *  deps: { cli, args, spawnFn, killTreeFn, env }。CodexHost 对标：effectiveModel 的
  *  本地事实源之一。 */
 function probeStreamJsonInitModel(deps = {}) {
   const cli = deps.cli || '';
   const baseArgs = Array.isArray(deps.args) ? deps.args : [];
   const spawnFn = deps.spawnFn || defaultSpawn;
+  const killTreeFn = deps.killTreeFn || ((child, signal) => child.kill(signal));
   if (!cli) return Promise.resolve(null);
   return new Promise((resolve) => {
     const args = [...baseArgs, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];
     let lineBuf = '';
     let settled = false;
     const child = spawnFn(cli, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-    const finish = (value) => {
+    const finish = (value, terminate = false) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      try { child.kill('SIGTERM'); } catch { /* already gone */ }
-      resolve(value);
+      if (!terminate) {
+        resolve(value);
+        return;
+      }
+      void waitForProbeTermination(child, killTreeFn, 'SIGTERM').then(() => resolve(value));
     };
-    const timer = setTimeout(() => finish(null), inspectTimeoutMs(deps.env));
+    const timer = setTimeout(() => finish(null, true), inspectTimeoutMs(deps.env));
     child.stdout.on('data', (chunk) => {
       lineBuf += chunk.toString('utf8');
       const lines = lineBuf.split('\n');
@@ -381,7 +424,7 @@ function probeStreamJsonInitModel(deps = {}) {
             finish({
               current: (typeof ev.model === 'string' && ev.model) ? ev.model.trim() : null,
               models: normalizeClaudeInit(ev) ? normalizeClaudeInit(ev).models : null,
-            });
+            }, true);
             return;
           }
         } catch { /* non-JSON line */ }
@@ -391,7 +434,7 @@ function probeStreamJsonInitModel(deps = {}) {
     child.on('close', () => finish(null));
     try {
       child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } }) + '\n');
-    } catch { finish(null); }
+    } catch { finish(null, true); }
   });
 }
 
