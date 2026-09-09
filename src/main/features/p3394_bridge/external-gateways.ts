@@ -605,11 +605,13 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
  * still removes the matching record.
  */
 export async function stopAllExternalGateways(): Promise<void> {
+  const terminations = [];
   for (const record of listExternalGateways()) {
     if (!record.running) continue;
     detachWatch(record.cli);
-    await killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+    terminations.push(killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM'));
   }
+  await Promise.all(terminations);
   // 清空守护表（连同没有存活记录的 cli）。
   for (const cli of [...watched.keys()]) detachWatch(cli);
 }
