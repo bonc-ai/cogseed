@@ -99,8 +99,10 @@ function normalizedWindowsPath(value: string): string {
 
 function normalizedPath(value: string): string {
   const resolved = path.resolve(value);
-  if (process.platform !== 'win32') return resolved;
-  return normalizedWindowsPath(fs.realpathSync.native(resolved));
+  const canonical = process.platform === 'win32'
+    ? fs.realpathSync.native(resolved)
+    : fs.realpathSync(resolved);
+  return process.platform === 'win32' ? normalizedWindowsPath(canonical) : canonical;
 }
 
 function normalizedCreationPath(value: string): string {
