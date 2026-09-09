@@ -1436,6 +1436,10 @@ class SscliRuntime {
       op.request_id = requestId;
       const entry = {
         resolve, reject,
+        // cancel 精确命中用：task_id 为网关外部取消键（handleCancel 按
+        // task_id 匹配），requestId 为本 runtime 内部应答关联键。
+        requestId,
+        taskId: (op.task_id !== undefined && op.task_id !== null) ? String(op.task_id) : null,
         deltas: [],
         onDelta,
         onProgress,
@@ -1562,11 +1566,24 @@ class SscliRuntime {
     return this._request({
       op: 'deliver',
       session_id: sessionId,
+      // PR209 评审 M6 复核返工：deliver 帧透传外部 task_id——shim 据此把
+      // 取消键对齐到 cancel 帧的 task_id（此前帧里只有内部 req-N，cancel
+      // 比对永不命中=假取消）。task_id 语义与 oneshot/stream-json 的
+      // 可取消键一致（见 handleDeliver 调用点注释）。
+      task_id: (opts && opts.taskId) || undefined,
       message: { message_id: messageId, payload: { parts: [{ type: 'text', text: text + note + hint }] } },
     }, TIMEOUT_MS, onDelta, onProgress);
   }
   cancel(taskId) {
-    if (!this.child) return false;
+    if (!this.child || !taskId) return false;
+    // 只对在途任务发 cancel 并如实上报命中：目标不在 pending（已完结或
+    // 从未运行）时返回 false，避免 handleCancel 误记 killed 后吞掉真实
+    // 错误回执（首版「只要有子进程就 return true」掩盖过假取消）。
+    let hit = false;
+    for (const [, entry] of this.pending) {
+      if (entry.taskId === String(taskId) || entry.requestId === String(taskId)) { hit = true; break; }
+    }
+    if (!hit) return false;
     this._send({ op: 'cancel', task_id: taskId });
     return true;
   }
@@ -2221,7 +2238,11 @@ class OpencodeRuntime {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error('p3394_opencode_no_session');
     const server = await this._serverFor(entry.cwd);
-    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '' };
+    // PR209 评审 M6：turn 记 taskId 并保留在途 http 句柄——cancel(taskId)
+    // 据此中断在途请求（此前恒 return false，用户看到「已取消 + 后又来一
+    // 条回复」）。同会话并发 turn 会覆盖 turns 表（既有单轮语义），覆盖后
+    // 老 turn 失去 cancel 句柄属已知限制。
+    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null };
     this.turns.set(entry.ocSessionId, turn);
     try {
       const msg = await new Promise((resolve, reject) => {
@@ -2235,6 +2256,7 @@ class OpencodeRuntime {
           });
         });
         req.on('error', reject);
+        turn.req = req;
         turn.timer = setTimeout(() => { req.destroy(); reject(new Error('p3394_opencode_timeout')); }, STREAM_JSON_TIMEOUT_MS);
         turn.timer.unref();
         req.write(data);
@@ -2251,7 +2273,21 @@ class OpencodeRuntime {
       setTimeout(() => { if (this.turns.get(entry.ocSessionId) === turn) this.turns.delete(entry.ocSessionId); }, 250).unref();
     }
   }
-  cancel() { return false; } // 细粒度 abort 端点未登记；超时兜底，后续按需补
+  cancel(taskId) {
+    // PR209 评审 M6：按 taskId 命中在途 turn 并中断其 HTTP 请求——客户端
+    // 不再收终态（deliver reject→failed，回执被 handleCancel 的
+    // cancelledTasks 抑制，用户只见 [已取消]）。服务端 turn 是否随连接
+    // 断开而中止取决于 opencode serve 行为，此处只保证客户端语义。
+    if (!taskId) return false;
+    let hit = false;
+    for (const [, turn] of this.turns) {
+      if (turn.taskId === String(taskId) && turn.req) {
+        try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { /* already gone */ }
+        hit = true;
+      }
+    }
+    return hit;
+  }
   close() {
     this.closing = true;
     for (const [, entry] of this.servers) {

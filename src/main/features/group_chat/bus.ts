@@ -156,7 +156,8 @@ function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
  * ——此前恒 true 会把 low 盲发给未显式指定模型的回合（实际走默认模型，
  * 可能非推理端点），与「识别不出不盲发」的注释矛盾。默认链路的思考
  * 兜底交给 pi-ai 模型目录的 defaultReasoning（已策展，更准确）。 */
-function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
+// 导出供回归测试（空模型名 → false 的收紧是 M8 的核心行为）。
+export function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
   const modelId = String(item.execConfig?.model || "").trim().toLowerCase();
   if (!modelId) return false;
   return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)

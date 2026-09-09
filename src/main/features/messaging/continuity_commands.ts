@@ -218,6 +218,16 @@ async function handleUnbind(ctx: InboundCommandContext): Promise<InboundCommandO
     instanceId: instance.id,
     unboundedAt: updated?.unboundedAt || '',
   });
+  // PR209 评审 M2 复核补齐：解绑即清理该渠道实例收集的 peer 映射
+  // （open_id + 显示名为私有数据，绑定解除即失效；重建走 ensure，别名
+  // 纯函数生成保持稳定）。尽力而为，不阻塞解绑回执。
+  try {
+    const { removeChannelPeersForInstance } = await import('../p3394_bridge/channel-peer-map');
+    const removed = removeChannelPeersForInstance(uid, instance.platform, instance.id);
+    if (removed > 0) log.info('continuity unbind swept channel peers', { uid, instanceId: instance.id, removed });
+  } catch (error) {
+    log.warn('continuity unbind peer sweep failed', { error: error instanceof Error ? error.message : String(error) });
+  }
   return { consumed: true, replyText: t('messaging.continuity.unbind_done') };
 }
 

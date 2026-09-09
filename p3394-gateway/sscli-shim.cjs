@@ -202,14 +202,17 @@ function extractReplyText(out) {
   return text;
 }
 
-function runCliOnce(requestId, prompt, extraArgs, cwd) {
+function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
   return new Promise((resolve, reject) => {
     const args = CLI_ARGS.split(' ').map((p) => p.replace('{message}', prompt)).concat(Array.isArray(extraArgs) ? extraArgs : []);
     // 冷启动可见性：CLI 启动占每轮首字延迟大头（实测 8-12s），spawn 即告知，
     // 超时未见首字再提示一次——无提示时用户面对的是无响应黑盒。
     emitEvent({ event: 'progress', request_id: requestId, text: '正在启动 ' + cliLabel() + '…' });
     const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
-    activeTurn = { child, requestId, streamedChars: 0 };
+    // taskId（deliver 帧 task_id，网关 handleCancel 的取消键）与 requestId
+    // （网关内部 req-N，仅应答关联用）分属两个命名空间，都要记——cancel
+    // 帧带 task_id，老调用方/无 task_id 场景回退 request_id 比对。
+    activeTurn = { child, requestId, taskId: taskId || null, streamedChars: 0 };
     let out = '';
     let errOut = '';
     let errLineBuf = '';
@@ -280,7 +283,7 @@ async function handleDeliver(op) {
     const cliSessionId = currentOrGeneratedCliSessionId(sid);
     if (cliSessionId) {
       try {
-        const raw = await runCliOnce(op.request_id, text, buildResumeArgs(cliSessionId), cwd);
+        const raw = await runCliOnce(op.request_id, op.task_id, text, buildResumeArgs(cliSessionId), cwd);
         const nextId = extractCliSessionId(raw);
         if (nextId && nextId !== cliSessionId) writeCliSession(sid, nextId);
         const out = extractReplyText(raw);
@@ -297,7 +300,7 @@ async function handleDeliver(op) {
   }
   const transcript = readTranscriptTail(sid);
   const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text;
-  const raw = await runCliOnce(op.request_id, prompt, [], cwd);
+  const raw = await runCliOnce(op.request_id, op.task_id, prompt, [], cwd);
   const nextId = extractCliSessionId(raw);
   if (nextId) writeCliSession(sid, nextId);
   const out = extractReplyText(raw);
@@ -332,13 +335,14 @@ process.stdin.on('data', (chunk) => {
         emitEvent({ event: 'failed', request_id: op.request_id, error: message });
       });
     } else if (op.op === 'cancel') {
-      // PR209 评审 M6：cancel 必须按 request_id 精确命中——此前不看目标
-      // 直接 kill「当前在跑 turn」，会误杀排队中另一任务的执行进程并产生
-      // 伪 [p3394_gateway_error]。activeTurn.requestId 与 cancel 的
-      // task_id（网关侧即触发 cancel 的原 request_id）一致才 kill。
+      // PR209 评审 M6（复核返工）：cancel 帧带的是网关外部 task_id，而
+      // activeTurn.requestId 是网关内部 req-N——两个命名空间永不相等，
+      // 首版「精确命中」实为永不命中（假取消）。deliver 帧现带 task_id
+      // （runCliOnce 记入 activeTurn.taskId），此处优先比对 task_id，
+      // 无 task_id 的调用方回退 request_id。命中才 kill，绝不误杀排队任务。
       const targetId = String(op.task_id || op.request_id || '');
       if (activeTurn && activeTurn.child && targetId
-          && String(activeTurn.requestId) === targetId) {
+          && (String(activeTurn.taskId) === targetId || String(activeTurn.requestId) === targetId)) {
         try { activeTurn.child.kill('SIGTERM'); } catch { /* already gone */ }
       }
       // 在途 deliver 的 runCliOnce 会以非零退出 reject → 上面的 catch 发

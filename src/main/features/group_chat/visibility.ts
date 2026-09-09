@@ -281,7 +281,7 @@ export interface GroupMessage {
    * it vanishes on refresh). Intentionally stripped from visibility slices
    * (agent worker LLM replays don't need it). */
   process?: Array<
-    | { type: "progress"; text: string }
+    | { type: "progress"; text: string; _thinking?: boolean }
     | { type: "event"; event: { stream: string; data?: unknown } }
     // conv-core 存储补差：chat_events 结构化条目（chatItem 含权威 timing、
     // turn 含终态总耗时）与老格式并存；渲染层历史重建优先消费新格式。

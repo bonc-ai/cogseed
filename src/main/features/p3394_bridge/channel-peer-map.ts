@@ -78,6 +78,7 @@ function peerKey(platform: MessagingPlatform, instanceId: string, externalUserId
 /** Always reads the file（低频写入、每文件读一次）：文件是唯一事实源，
  *  测试也因此天然隔离。损坏/缺省返回空表。 */
 function readPeers(userId: string): Map<string, ChannelPeerRecord> {
+  sweepLegacyGlobalFile();
   const out = new Map<string, ChannelPeerRecord>();
   try {
     const parsed = JSON.parse(fs.readFileSync(peerMapFile(userId), 'utf8')) as Partial<ChannelPeerMapFile>;
@@ -176,4 +177,43 @@ export function lookupChannelPeer(
 /** 列出全部渠道 peer 映射（快照副本）。 */
 export function listChannelPeers(userId: string): ChannelPeerRecord[] {
   return [...readPeers(userId).values()];
+}
+
+/** 解绑清理（PR209 评审 M2 复核补齐）：渠道实例解绑时删除该实例下全部
+ *  peer 记录——open_id + 显示名是绑定期间收集的私有数据，绑定解除即
+ *  失效（数据最小化）。peerAlias 为纯函数生成，重新绑定后 ensure 重建
+ *  且别名不变，清理无功能损失。失败仅 warn，不阻塞解绑回执。 */
+export function removeChannelPeersForInstance(
+  userId: string,
+  platform: MessagingPlatform,
+  instanceId: string,
+): number {
+  const instance = String(instanceId || '').trim();
+  if (!MESSAGING_PLATFORMS.includes(platform) || !instance) return 0;
+  const map = readPeers(userId);
+  const prefix = `${platform}:${instance}:`;
+  let removed = 0;
+  for (const key of map.keys()) {
+    if (key.startsWith(prefix)) { map.delete(key); removed += 1; }
+  }
+  if (removed > 0) persistPeers(userId, map);
+  return removed;
+}
+
+// 旧机器级全局文件（PR209 M2 修复前的存放位置）混有所有账号的联系人，
+// 无法按 uid 拆分归属——不迁移、一次性整体删除；peerAlias 纯函数生成，
+// 重建后别名不变。惰性清理：本模块首次触达即删，进程内只试一次。
+let legacySwept = false;
+function sweepLegacyGlobalFile(): void {
+  if (legacySwept) return;
+  legacySwept = true;
+  try {
+    const legacy = p3394StateFile('channel-peer-map.json');
+    if (fs.existsSync(legacy)) {
+      fs.rmSync(legacy, { force: true });
+      log.info('legacy machine-global channel peer map removed (migrated to per-uid local)', { file: path.basename(legacy) });
+    }
+  } catch (error) {
+    log.warn('legacy channel peer map sweep failed', { error: error instanceof Error ? error.message : String(error) });
+  }
 }

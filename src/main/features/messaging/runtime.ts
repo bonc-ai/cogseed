@@ -89,10 +89,40 @@ export function withActorBadge(text: string, label: string | null): string {
  *  2) 跨空格路径延续拼合——前一 token 已是路径（含分隔符）且本 token
  *     以词开头但含分隔符（"smith/Desktop/…"）= 含空格目录名的续段，
  *     无缝并入前一 token（吞掉中间空白），再统一剥 basename。
- *  对任意用户名（空格/中文/点）稳定；多路径同串各自独立剥离。 */
+ *  对任意用户名（空格/中文/点）稳定；多路径同串各自独立剥离。
+ *  M1 复核收窄（引号段 + 家目录一级占位）：状态机对「路径以含空格段
+ *  结尾」仍有盲区（basename 本身=用户名，剥了也泄）。两规则堵高频形态：
+ *  a) 引号包裹的含分隔符串整段处理——basename 含空白 → 输出 [路径]；
+ *  b) 家目录一级（/Users/x、/home/x、C:\Users\x，恰一段）的紧邻无
+ *     分隔符 token 视为含空格用户名续段并入，整段同样占位（家目录
+ *     basename 即用户名，是泄漏风险最高的形态；代价是误吞该位置一个
+ *     普通词——信息损失，不泄漏）。 */
+const HOME_ONE_LEVEL_RE = /^(?:\/Users|\/home|[A-Za-z]:\/Users)\/[^/]+$/;
+
+function isHomeOneLevel(token: string): boolean {
+  return HOME_ONE_LEVEL_RE.test(token.replace(/\\/g, '/'));
+}
+
+/** 家目录一级尾段是否为纯可打印 ASCII：ASCII 用户名（alice）可能带空格
+ *  续段（"alice smith"），需并入一次；非 ASCII 用户名（牛保康）不含
+ *  空格、本身即完整段——直接占位，不吞其后的普通词。 */
+function homeDirTailIsAscii(token: string): boolean {
+  const tail = token.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  return /^[\x20-\x7E]+$/.test(tail);
+}
+
 export function sanitizeFailureText(error: string): string {
-  const parts = String(error || '').split(/(\s+)/);
+  // 规则 a：引号段整段处理（配对的单/双引号；inner 含分隔符才算路径）。
+  const unquoted = String(error || '').replace(/(['"])([^'"\n]*)\1/g, (quoted, _q, inner) => {
+    if (!/[/\\]/.test(inner)) return quoted as string;
+    const base = String(inner).split(/[/\\]/).filter(Boolean).pop() || '';
+    return /\s/.test(base) ? '[路径]' : (base as string);
+  });
+  const parts = unquoted.split(/(\s+)/);
   const out: string[] = [];
+  // 规则 b 的并入只做一次（按 out 下标记）：并入产物本身仍匹配家目录
+  // 一级形态，不设限会把后续普通词全部连拼进来。
+  const homeMergedAt = new Set<number>();
   const lastNonSpaceIdx = (): number => {
     for (let j = out.length - 1; j >= 0; j -= 1) {
       if (out[j] !== '' && !/^\s+$/.test(out[j])) return j;
@@ -101,7 +131,19 @@ export function sanitizeFailureText(error: string): string {
   };
   for (const t of parts) {
     if (t === '' || /^\s+$/.test(t)) { out.push(t); continue; }
-    if (!/[/\\]/.test(t)) { out.push(t); continue; }
+    if (!/[/\\]/.test(t)) {
+      // 规则 b：家目录一级的紧邻词 = 含空格用户名续段（如
+      // "open /Users/alice smith failed" 的 "smith"），并入后整段占位。
+      // 仅限 ASCII 尾段（非 ASCII 用户名无空格，不吞其后的词）。
+      const pi0 = lastNonSpaceIdx();
+      if (pi0 >= 0 && !homeMergedAt.has(pi0) && isHomeOneLevel(out[pi0]) && homeDirTailIsAscii(out[pi0])) {
+        out.length = pi0 + 1;
+        out[pi0] = `${out[pi0]} ${t}`;
+        homeMergedAt.add(pi0);
+        continue;
+      }
+      out.push(t); continue;
+    }
     const startsWithSep = /^[/\\]/.test(t);
     const pi = lastNonSpaceIdx();
     if (pi >= 0) {
@@ -116,6 +158,7 @@ export function sanitizeFailureText(error: string): string {
   }
   return out.map((t) => {
     if (!/[/\\]/.test(t)) return t;
+    if (isHomeOneLevel(t)) return '[路径]';
     return t.split(/[/\\]/).filter(Boolean).pop() || '';
   }).join('');
 }
@@ -607,6 +650,21 @@ export class RuntimeInstance {
     state: CardStreamState,
   ): Promise<void> {
     if (state.flushing) return;
+    // PR209 评审 M13（复核补齐）：debounce 定时器与尾随 flush 不经过 bus
+    // listener 头部的 unboundedAt 检查（闭包捕获的是 attach/分发时的旧
+    // 快照）——流式中途 /unbind 后仍可能再推一帧。这里用 bindingContexts
+    // 的 live 版本复查（manager 在 unbind 后刷新该表），解绑即停推并清
+    // 掉该 turn 的卡片状态。
+    const liveBinding = this.bindingContexts.get(binding.key) || binding;
+    if (liveBinding.unboundedAt) {
+      this.clearCardTimer(state);
+      this.cardStates.delete(key);
+      log.info('messaging streaming card dropped: binding unbound', {
+        instanceId: this.instanceId,
+        key: liveBinding.key,
+      });
+      return;
+    }
     const turnId = key.split('\u0000')[1] || '';
     const flushedToolCount = this.toolLinesForTurn(turnId).length;
     if (!this.isCurrent() || (!state.accumulated && flushedToolCount === 0)) return;
@@ -620,7 +678,7 @@ export class RuntimeInstance {
       if (state.messageId) {
         await adapter.updateCard(state.messageId, card, this.controller.signal);
       } else {
-        const receipt = await adapter.sendCard(binding.externalChatId, card, this.controller.signal, deliveryContext(binding));
+        const receipt = await adapter.sendCard(liveBinding.externalChatId, card, this.controller.signal, deliveryContext(liveBinding));
         state.messageId = receipt.deliveryId;
         log.info('messaging streaming card created', {
           instanceId: this.instanceId,

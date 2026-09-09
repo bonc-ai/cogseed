@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeProcessTrail } from '../../../../src/main/features/group_chat/bus';
+import { mergeProcessTrail, _modelSupportsThinkingByDefault } from '../../../../src/main/features/group_chat/bus';
 import type { PersistedChatEntry } from '../../../../src/main/features/chat_events/process-persist';
 
 /** PR209 评审 M7：mergeProcessTrail 两组 slice 各自取同额度导致合并总长
@@ -68,5 +68,26 @@ describe('mergeProcessTrail 饱和（PR209 评审 M7）', () => {
     expect(flood.length).toBeLessThanOrEqual(MAX);
     const last = flood[flood.length - 1] as { type: string };
     expect(last.type).toBe('turn'); // 终态最优先保全
+  });
+});
+
+describe('_modelSupportsThinkingByDefault 收紧（PR209 评审 M8）', () => {
+  const queueItem = (model?: string) => ({ execConfig: { model } }) as never;
+
+  it('无显式模型名返回 false（不再盲发 low）', () => {
+    // 修复前恒 true：未显式指定模型的回合（可能非推理端点）也被注入 low。
+    expect(_modelSupportsThinkingByDefault(queueItem(undefined))).toBe(false);
+    expect(_modelSupportsThinkingByDefault(queueItem(''))).toBe(false);
+    expect(_modelSupportsThinkingByDefault(queueItem('   '))).toBe(false);
+    expect(_modelSupportsThinkingByDefault({} as never)).toBe(false);
+  });
+
+  it('显式 reasoning 模型仍识别为 true，非 reasoning 模型为 false', () => {
+    expect(_modelSupportsThinkingByDefault(queueItem('deepseek-v4'))).toBe(true);
+    expect(_modelSupportsThinkingByDefault(queueItem('o3-mini'))).toBe(true);
+    expect(_modelSupportsThinkingByDefault(queueItem('grok-4'))).toBe(true);
+    expect(_modelSupportsThinkingByDefault(queueItem('QwQ-32B'))).toBe(true);
+    expect(_modelSupportsThinkingByDefault(queueItem('gpt-4o'))).toBe(false);
+    expect(_modelSupportsThinkingByDefault(queueItem('claude-sonnet-4'))).toBe(false);
   });
 });

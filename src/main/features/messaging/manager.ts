@@ -473,17 +473,24 @@ async function handleInbound(uid: string, envelope: InboundEnvelope): Promise<Me
   // rejected immediately instead of queueing behind the lock.
   const reservation = await ledger.reserveInbound(uid, key, envelope.receivedAt);
   if (reservation.duplicate) return { accepted: false, duplicate: true, cid: reservation.entry.cid };
-  // PR209 评审 M4：图片下载/导入在锁外完成（网络 IO 不占 per-chat 锁），
-  // 慢下载不再阻塞同会话后续入站与重投。cid 经 resolveOrCreateBinding
-  // 预解析（幂等，binding 文件锁与 chat 锁独立；锁内会再 resolve 拿到
-  // 同 key 同 cid——飞书 binding 对同 externalChatId 稳定）。
-  let preloaded: string[] = [];
+  // PR209 评审 M4（复核返工）：锁外只下载字节到 tmp（网络 IO 不占
+  // per-chat 锁）；导入推迟到锁内过了策略/解绑检查、拿到轮换后最新
+  // binding 之后——被拒消息的图片不再落盘、/new 并发下附件不再跨会话
+  // 错位（见 downloadInboundImagesToTmp 头注释）。
+  let stagedImages: InboundImageStaged[] = [];
   if (envelope.imageKeys?.length && instance.platform === 'feishu_lark') {
-    const preBinding = await bindings.resolveOrCreateBinding(uid, instance, envelope);
-    preloaded = await downloadInboundImages(uid, instance, envelope, envelope.imageKeys, preBinding.cid);
+    stagedImages = await downloadInboundImagesToTmp(uid, instance, envelope, normalizeInboundImageKeys(envelope.imageKeys));
   }
-  const lock = getChatLock(uid, instance.id, envelope.externalChatId);
-  return lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key, preloaded));
+  try {
+    const lock = getChatLock(uid, instance.id, envelope.externalChatId);
+    return await lock.runExclusive(() => handleInboundLocked(uid, envelope, instance, key, stagedImages));
+  } finally {
+    // 拒绝/异常路径（导入未发生）也要清 tmp——导入段自身逐文件清理，
+    // 这里兜底未触达的残留。
+    for (const { tmpPath } of stagedImages) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
 }
 
 function mergerFor(uid: string): BurstMerger<{ envelope: InboundEnvelope; resolve: (result: MessagingInboundResult) => void }> {
@@ -638,52 +645,76 @@ function buildInboundImageEnvelope(input: {
  *  此前在 per-chat 互斥锁内 await——慢下载串行阻塞同会话后续所有入站
  *  与重投。现移到 reserve 之后、锁之前完成（网络 IO 不占锁）；导入按
  *  内容哈希幂等。下载/导入失败仅 warn 不阻塞（占位文本仍保证路由）。 */
-async function downloadInboundImages(
-  uid: string,
-  instance: MessagingInstance,
-  envelope: InboundEnvelope,
-  imageKeys: string[] | undefined,
-  cid: string,
-): Promise<string[]> {
 // G-17 字节链：飞书入站图片下载字节并导入会话附件目录，让派发轮次
 // 走与桌面端发图相同的多模态视觉链（attachments 引用名）。下载/导入
 // 失败仅 warn 不阻塞——占位文本仍保证路由（与投影链同纪律）。
-const attachmentNames: string[] = [];
-if (imageKeys?.length && instance.platform === 'feishu_lark') {
+//
+// PR209 M4 复核返工：拆成两段——锁外只做「下载字节到 tmp」（网络 IO
+// 不占 per-chat 锁），锁内过了策略/解绑检查、且拿到轮换后最新 binding
+// 之后再导入。修复两个竞态：①被拒消息（allowlist 拒绝/空文本/已解绑/
+// slash 命令）的图片不再落盘到绑定会话的附件目录（磁盘副作用）；②锁外
+// 下载期间 /new 轮换 cid 时，附件不再跨会话错位——导入与 cid 解析同在
+// 锁内，顺序有保证。
+function imageTmpPath(instanceId: string, externalMessageId: string, name: string): string {
+  return path.join(os.tmpdir(), `${instanceId}-${externalMessageId}-${name}.inbound`);
+}
+
+/** 已下载待导入的入站图片：tmp 物理路径 + 干净的附件显示名。 */
+interface InboundImageStaged {
+  tmpPath: string;
+  name: string;
+}
+
+async function downloadInboundImagesToTmp(
+  uid: string,
+  instance: MessagingInstance,
+  envelope: InboundEnvelope,
+  imageKeys: string[],
+): Promise<InboundImageStaged[]> {
+  const staged: InboundImageStaged[] = [];
   const adapter = runtimes.get(uid)?.get(instance.id)?.adapter;
-  if (typeof adapter?.downloadMessageImage === 'function') {
-    for (const imageKey of imageKeys) {
-      try {
-        const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
-        const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
-        const tmpPath = path.join(os.tmpdir(), `${envelope.instanceId}-${envelope.externalMessageId}-${name}.inbound`);
-        fs.writeFileSync(tmpPath, bytes);
-        try {
-          const imported = await importAttachmentFromPath(uid, cid, tmpPath, name);
-          if (imported.ok) attachmentNames.push(imported.info.name);
-          else log.warn('messaging inbound image import failed', { instanceId: envelope.instanceId, imageKey, error: (imported as { error: string }).error });
-        } finally {
-          fs.rmSync(tmpPath, { force: true });
-        }
-      } catch (err) {
-        // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
-        // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
-        // 权限/参数问题。
-        const message = err instanceof Error ? err.message : String(err);
-        const codeMatch = message.match(/code=([^ ]+)/);
-        const msgMatch = message.match(/msg=(.*)$/);
-        log.warn('messaging inbound image download failed', {
-          instanceId: envelope.instanceId,
-          imageKey,
-          errorName: err instanceof Error ? err.name : 'Error',
-          feishuCode: codeMatch ? codeMatch[1] : undefined,
-          feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
-          errorDetail: message.slice(0, 240),
-        });
-      }
+  if (typeof adapter?.downloadMessageImage !== 'function') return staged;
+  for (const imageKey of imageKeys) {
+    try {
+      const bytes = await adapter.downloadMessageImage(envelope.externalMessageId, imageKey);
+      const name = `feishu-${imageKey.replace(/[^A-Za-z0-9_-]/g, '')}.${imageExtForBytes(bytes)}`;
+      staged.push({ tmpPath: imageTmpPath(envelope.instanceId, envelope.externalMessageId, name), name });
+      fs.writeFileSync(staged[staged.length - 1].tmpPath, bytes);
+    } catch (err) {
+      // 错误详情按字段拆开透出（code/msg 无 secret 形态，可读）——
+      // logErrorSummary 会把 message 整体 hash，无法据此诊断飞书侧
+      // 权限/参数问题。
+      const message = err instanceof Error ? err.message : String(err);
+      const codeMatch = message.match(/code=([^ ]+)/);
+      const msgMatch = message.match(/msg=(.*)$/);
+      log.warn('messaging inbound image download failed', {
+        instanceId: envelope.instanceId,
+        imageKey,
+        errorName: err instanceof Error ? err.name : 'Error',
+        feishuCode: codeMatch ? codeMatch[1] : undefined,
+        feishuMsg: msgMatch ? msgMatch[1].slice(0, 200) : undefined,
+        errorDetail: message.slice(0, 240),
+      });
     }
   }
+  return staged;
 }
+
+/** 锁内导入已下载的 tmp 图片到指定会话（本地 IO，快），逐文件清理 tmp。
+ *  导入失败仅 warn 跳过——与下载段同纪律。 */
+async function importInboundImagesFromTmp(uid: string, cid: string, staged: InboundImageStaged[]): Promise<string[]> {
+  const attachmentNames: string[] = [];
+  for (const { tmpPath, name } of staged) {
+    try {
+      const imported = await importAttachmentFromPath(uid, cid, tmpPath, name);
+      if (imported.ok) attachmentNames.push(imported.info.name);
+      else log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: (imported as { error: string }).error });
+    } catch (err) {
+      log.warn('messaging inbound image import failed', { cid, file: path.basename(tmpPath), error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      try { fs.rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+    }
+  }
   return attachmentNames;
 }
 
@@ -692,7 +723,7 @@ async function handleInboundLocked(
   envelope: InboundEnvelope,
   instance: MessagingInstance,
   key: string,
-  preloadedAttachments: string[],
+  stagedImages: InboundImageStaged[],
 ): Promise<MessagingInboundResult> {
   log.info('messaging inbound envelope received', {
     instanceId: envelope.instanceId,
@@ -868,8 +899,9 @@ async function handleInboundLocked(
         imageKeys,
       })
       : undefined;
-    // G-17 附件名由锁外预下载（downloadInboundImages，PR209 M4）。
-    const attachmentNames = preloadedAttachments;
+    // G-17 附件导入（PR209 M4 复核返工）：锁内、策略/解绑检查之后、且
+    // binding.cid 为轮换后最新值——导入目标会话与派发会话恒一致。
+    const attachmentNames = await importInboundImagesFromTmp(uid, binding.cid, stagedImages);
     const result = await groupChat.send({
       userId: uid,
       cid: binding.cid,

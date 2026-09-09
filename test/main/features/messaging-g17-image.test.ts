@@ -141,6 +141,39 @@ describe('channel peer map (Q3)', () => {
     expect(renamed.externalUserName).toBe('子安');
   });
 
+  it('removeChannelPeersForInstance sweeps only the unbound instance (M2 复核补齐)', async () => {
+    const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
+    map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_aaa11112222', '甲');
+    map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_bbb33334444', '乙');
+    map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-other', 'ou_aaa11112222', '甲');
+    const removed = map.removeChannelPeersForInstance('u-g17', 'feishu_lark', 'inst-g17');
+    expect(removed).toBe(2);
+    expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_aaa11112222')).toBeNull();
+    expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_bbb33334444')).toBeNull();
+    // 其他实例与无效参数不受影响/无操作。
+    expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-other', 'ou_aaa11112222')).not.toBeNull();
+    expect(map.removeChannelPeersForInstance('u-g17', 'feishu_lark', '')).toBe(0);
+    // 重新 ensure 重建且别名不变（peerAlias 纯函数生成）。
+    const rebuilt = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_aaa11112222', '甲');
+    expect(rebuilt.peerAlias).toBe('user-fs-11112222');
+  });
+
+  it('sweeps the legacy machine-global peer map file on first touch (M2 复核补齐)', async () => {
+    // 旧位置（PR209 M2 修复前的机器级全局文件）混有所有账号联系人，
+    // 无法按 uid 拆分——首次触达即整体删除。
+    const { p3394StateFile } = await import('../../../src/main/features/p3394_bridge/runtime-paths');
+    const legacyFile = p3394StateFile('channel-peer-map.json');
+    fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+    fs.writeFileSync(legacyFile, JSON.stringify({ schema_version: 1, peers: { 'leak:legacy:ou_x': {
+      platform: 'feishu_lark', instanceId: 'leak', externalUserId: 'ou_x', peerAlias: 'user-fs-x',
+    } } }));
+    const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
+    map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_new55556666');
+    expect(fs.existsSync(legacyFile)).toBe(false);
+    // 全局文件被删后不污染 per-uid 表。
+    expect(map.listChannelPeers('u-g17')).toHaveLength(1);
+  });
+
   it('aliases are pure and platform-scoped', async () => {
     const { channelPeerAlias } = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
     expect(channelPeerAlias('feishu_lark', 'ou_abcdefgh12345678')).toBe('user-fs-12345678');
