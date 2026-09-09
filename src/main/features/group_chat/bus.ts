@@ -5647,7 +5647,16 @@ async function runActorTurnBody(
         }
         // Stream events → process channel.
         if (ev.type === "final") {
-          finalText = ev.text || "";
+          // 消息正文只承载「最终段」（实机反馈 2026-09-09：展开执行过程
+          // 只见工具调用，AI 的中间叙述无处可见）。中间段已在被工具/
+          // 思考截断时经 flushTextSegmentForPersist 落盘为 completed text
+          // 条目、进过程轨迹（时间序交错展示）；此前正文=全文聚合，中间
+          // 段在过程区又被收尾清理，等于彻底不可见。final 段不触发 flush，
+          // 此刻 segmentText 恰为最终段；纯文本轮（无截断）segmentText=
+          // 全文、行为不变；中间有叙述但收尾无文本的轮次回退全文（保全
+          // 旧语义）。abort salvage（下方 streamingText 兜底）仍取全文。
+          const finalSeg = segmentText;
+          finalText = finalSeg.trim() ? finalSeg : (ev.text || "");
         } else if (ev.type === "delta") {
           // Pulled out of the generic branch below so we can mirror the text
           // into `streamingText` for abort-time salvage. The activity++ +
@@ -5765,7 +5774,12 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            if (event && event.stream !== "assistant") {
+            // CLI 回合剥除 usage（子安 2026-09-09：外接 CLI 的 token 输入/
+            // 输出/缓存命中先不显示——CLI 自报口径不可靠，计费输出≠可见
+            // 输出、可见输出无真值，缓存命中更是无从核对）。时间线 usage
+            // 行与持久化条目一并不产；时长/首 token（本地墙钟）不受影响。
+            const suppressCliUsage = !!cliAgent && event?.stream === "usage";
+            if (event && event.stream !== "assistant" && !suppressCliUsage) {
               appendProcessItem(processItems, { type: "event", event });
             }
             // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
@@ -5773,7 +5787,7 @@ async function runActorTurnBody(
             // 中间段，flush；usage/runtime 等非工具事件不 flush（防最终段
             // 被误落盘）。
             if (event && event.stream === "tool") flushTextSegmentForPersist();
-            if (event) chatCollector.feed({ type: "event", event });
+            if (event && !suppressCliUsage) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.
           if (actor.kind !== "worker") {
@@ -6459,7 +6473,12 @@ async function runActorTurnBody(
     // didn't report are omitted, never fabricated.
     let replyMetrics: GroupMessageMetrics | undefined;
     if (cliTurnMetrics) {
-      replyMetrics = cliTurnMetrics;
+      // CLI 回合同上剥 usage：消息 metrics 只保留本地计时（时长/首
+      // token/模型名），token 与缓存字段不落——消息头小字与页脚会话
+      // 统计据此不再显示 CLI 回合的 token/缓存读数（历史消息不受
+      // 影响，如实保留当时记录）。
+      const { usage: _cliUsage, ...timingOnly } = cliTurnMetrics;
+      replyMetrics = timingOnly as GroupMessageMetrics;
     } else if (agentRunTimingData) {
       const durationMs = Number(agentRunTimingData.duration_ms);
       const completedAt = agentRunResultAt ?? Date.now();

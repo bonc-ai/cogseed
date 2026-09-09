@@ -58,6 +58,11 @@ export function createProcessCollector(input: {
       try {
         for (const chatEvent of projectUpstreamEvent(state, event as never)) {
           if (entries.length >= MAX_CHAT_ENTRIES) break;
+          // 实时流式专用形状不落盘（子安 2026-09-09 思考实时外发）：
+          // inProgress reasoning 增量逐 delta 产出，落盘会刷爆条目上限
+          // 并与截断冲刷的 completed 整段重复——重放只消费 completed。
+          const shape = chatEvent as { kind?: string; status?: string };
+          if (shape.kind === 'reasoning' && shape.status === 'inProgress') continue;
           entries.push({ type: 'chatItem', item: chatEvent });
         }
       } catch {
