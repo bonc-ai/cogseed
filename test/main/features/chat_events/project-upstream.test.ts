@@ -126,10 +126,14 @@ describe('projectUpstreamEvent', () => {
   it('progress 聚合为单条 reasoning 卡片（一次思考=一条，与一次工具调用等价）', () => {
     // 基数修正（2026-09-08）：连续 progress 聚合到同一思考段，被后续
     // 事件截断时整段落盘——不逐条铸卡（长思考洪泛曾挤掉工具记录）。
+    // 实时流式（2026-09-09）：每段 progress 额外产出 inProgress 增量
+    // （实时链路逐步可见）；持久化侧由收集器过滤，重放只消费 completed。
     const state = newState();
     const r1 = projectUpstreamEvent(state, { type: 'progress', text: '正在' });
-    expect(r1[1]).toBeUndefined(); // 攒段中，不即时输出
-    projectUpstreamEvent(state, { type: 'progress', text: '读取文件…' });
+    expect(r1[1]).toMatchObject({ kind: 'reasoning', status: 'inProgress', payload: { delta: '正在' } });
+    const r2 = projectUpstreamEvent(state, { type: 'progress', text: '读取文件…' });
+    // 续段不再重发 turn.started（仅首段 unshift），inProgress 就是 out[0]。
+    expect(r2[0]).toMatchObject({ kind: 'reasoning', status: 'inProgress', payload: { delta: '读取文件…' } });
     const cut = projectUpstreamEvent(state, { type: 'delta', text: '正文开始' });
     const reason = cut.find((e) => (e as { kind?: string }).kind === 'reasoning');
     expect(reason).toMatchObject({ kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });

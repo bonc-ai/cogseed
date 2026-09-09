@@ -136,6 +136,17 @@ function makeEl(tag: string): StubEl {
       };
       return walk(el);
     },
+    contains(node) {
+      // DOM contains 语义（含自身）：prewarm 迁移判定依赖它。
+      if (node === el) return true;
+      const walk = (n: StubEl): boolean => {
+        for (const child of n.children) {
+          if (child === node || walk(child)) return true;
+        }
+        return false;
+      };
+      return walk(el);
+    },
     remove() {
       el.connected = false;
       if (el.parentNode && Array.isArray(el.parentNode.children)) {
@@ -324,6 +335,49 @@ describe('chat-stream module', () => {
     expect(thinks[0].innerHTML).toContain('持续了');
   });
 
+  it('思考实时流式（2026-09-09）：inProgress 增量逐段落入且行自动展开，completed 前缀去重不重复', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '正在' } });
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '读取文件…' } });
+    const body = bodyOf(flow);
+    let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks).toHaveLength(1);
+    // 进行中：增量聚合完整可见，且行自动展开（同步看到推理进度）。
+    expect(thinks[0].dataset.csFull).toBe('正在读取文件…');
+    expect(String(thinks[0].className)).toContain('cs-open');
+    // completed 整段（=已画前缀，无尾部差额）：不重复落入。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
+    thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks).toHaveLength(1);
+    expect(thinks[0].dataset.csFull).toBe('正在读取文件…');
+    // completed 带尾部差额（实时流只画到一半的补齐场景）：只补差额。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'r2', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…还有后续' } });
+    expect(thinks[0].dataset.csFull).toBe('正在读取文件…还有后续');
+  });
+
+  it('prewarm 发送即起计（2026-09-09）：面板与计时立即存在，真 turnId 首事件迁移接管', () => {
+    const prewarm = g.window.chatStreamPrewarm as (c: string, m: unknown, t: number) => void;
+    expect(typeof prewarm).toBe('function');
+    prewarm('c-1', anchor, Date.now() - 2500);
+    // 发送瞬间：pending 流已建（徽章+计时走秒），不等模型首事件。
+    let flow = inserts[inserts.length - 1].node;
+    expect(String(flow.className)).toContain('cs-flow');
+    expect(flow.dataset.csPending).toBe('1');
+    const badge = flow._csBadge as StubEl;
+    const elapsed = badge && badge.querySelector('.cs-badge-elapsed');
+    expect(elapsed && String(elapsed.textContent)).toContain('2 秒');
+    // 首 turn.started（真 turnId）到达：pending 迁移接管为同一流，计时起点保留。
+    handle({ type: 'chat.turn.started', turnId: 'real-1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow2 = g.window.chatStreamHasPanel('c-1');
+    expect(flow2).toBe(true);
+    const taken = inserts[inserts.length - 1].node;
+    expect(taken).toBe(flow); // 同一流被复用（未新建）
+    expect(flow.dataset.csPending).toBe('');
+    expect(flow.dataset.csTurn).toBe('real-1');
+    expect(Number(flow.dataset.csT0)).toBeLessThanOrEqual(Date.now() - 2500);
+  });
+
   it('时间线接管正文：text 段交错、完成交回清空、思考行随之收行', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '我先查一下：' } });
@@ -338,13 +392,17 @@ describe('chat-stream module', () => {
     expect(segs).toHaveLength(2);
     expect(segs[0].textContent).toBe('我先查一下：');
     expect(segs[1].textContent).toBe('查完了。');
-    expect(flow.dataset.csText).toBe('我先查一下：查完了。');
+    // 中间段被工具行关闭（cs-closed），最终段保持开放。
+    expect(segs[0].dataset.csClosed).toBe('1');
+    expect(segs[1].dataset.csClosed).toBeUndefined();
 
-    // turn.completed：交回（_streamingAppendFinalDelta 不在测试环境，走
-    // finalEl fallback 亦无），段移除、聚合清空；有动作行 → 流保留为 done。
+    // turn.completed：交回只针对开放段（最终正文'查完了。'，交回在测试
+    // 环境无 _streamingAppendFinalDelta/finalEl 落点，观测时间线侧）——
+    // 已关闭的中间段保留在时间线按原时序展示，开放段移除。
     handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
-    expect(flow.querySelectorAll('.cs-text')).toHaveLength(0);
-    expect(flow.dataset.csText).toBeUndefined();
+    const restSegs = flow.querySelectorAll('.cs-text');
+    expect(restSegs).toHaveLength(1);
+    expect(restSegs[0].textContent).toBe('我先查一下：');
     expect(flow.className).toContain('done');
     expect(flow.className).not.toContain('running');
     expect(flow.isConnected).toBe(true);
@@ -431,13 +489,17 @@ describe('chat-stream module', () => {
     expect(segs).toHaveLength(2);
     expect(segs[0].textContent).toBe('我先查一下：');
     expect(segs[1].textContent).toBe('查完了。');
-    expect(flow.dataset.csText).toBe('我先查一下：查完了。');
+    // 中间段被工具行关闭（cs-closed），最终段保持开放。
+    expect(segs[0].dataset.csClosed).toBe('1');
+    expect(segs[1].dataset.csClosed).toBeUndefined();
 
-    // turn.completed：交回（_streamingAppendFinalDelta 不在测试环境，走
-    // finalEl fallback 亦无），段移除、聚合清空；有动作行 → 流保留为 done。
+    // turn.completed：交回只针对开放段（最终正文'查完了。'，交回在测试
+    // 环境无 _streamingAppendFinalDelta/finalEl 落点，观测时间线侧）——
+    // 已关闭的中间段保留在时间线按原时序展示，开放段移除。
     handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
-    expect(flow.querySelectorAll('.cs-text')).toHaveLength(0);
-    expect(flow.dataset.csText).toBeUndefined();
+    const restSegs = flow.querySelectorAll('.cs-text');
+    expect(restSegs).toHaveLength(1);
+    expect(restSegs[0].textContent).toBe('我先查一下：');
     expect(flow.className).toContain('done');
     expect(flow.className).not.toContain('running');
     expect(flow.isConnected).toBe(true);
@@ -465,9 +527,11 @@ describe('chat-stream module', () => {
     const body = bodyOf(flow);
     const segs = body.children.filter((c) => String(c.className).includes('cs-text'));
     expect(segs).toHaveLength(1);
-    // 段首空白被剥掉（时间线显示），聚合文本保留（markdown 分段需要）。
+    // 段首空白被剥掉（时间线显示）；段文本经 dataset.csSeg 聚合（收尾
+    // 只交回开放段，不再做全文 csText 聚合）。
     expect(segs[0].textContent).toBe('正文第一段。');
-    expect(flow.dataset.csText).toBe('\n\n正文第一段。');
+    expect(segs[0].dataset.csSeg).toBe('正文第一段。');
+    expect(flow.dataset.csText).toBeUndefined();
   });
 
   it('usage 行渲染并含上下文告警，diff 行渲染增删统计与着色行', () => {
@@ -711,18 +775,19 @@ describe('chat-stream module', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].innerHTML).toContain('done');
     expect(rows[0].innerHTML).toContain('npm test');
-    // 工具行显示权威耗时（1500ms → 「2 秒」取整口径见 _csFmtDur），
-    // 徽章显示整段总耗时（末终态 4s = 幻影收编后跨度）与工具数 2。
+    // 工具行显示权威耗时（1500ms → 「1 秒」，floor 整秒口径见
+    // _csFmtDur，子安 2026-09-09 去小数需求），徽章显示整段总耗时
+    // （末终态 4s = 幻影收编后跨度）与工具数 2。
     expect(rows[0].innerHTML).toContain('cs-dur');
-    expect(rows[0].innerHTML).toContain('2 秒');
+    expect(rows[0].innerHTML).toContain('1 秒');
     expect(rows[1].innerHTML).toContain('搜索');
     expect(rows[1].innerHTML).toContain('ok');
     const badge = flow.querySelector('.cs-badge')!;
     expect(badge).toBeTruthy();
     const elapsed = badge.querySelector('.cs-badge-elapsed')!;
     expect(elapsed).toBeTruthy();
-    // 新格式保留 1 位小数（任务耗时需求 2026-09-08）。
-    expect(elapsed.textContent).toContain('4.0 秒');
+    // 整秒计数（任务耗时 2026-09-09 修订：去小数位）。
+    expect(elapsed.textContent).toContain('4 秒');
     const tools = badge.querySelector('.cs-badge-tools')!;
     expect(tools).toBeTruthy();
     expect(tools.textContent).toContain('2');
