@@ -500,6 +500,101 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     expect(result.current).toBe('example-model-2.5-flash');
   });
 
+  it('claude config enumeration reads settings.json env slots, dedupes, strips ctx suffixes (2026-09-09 实机)', () => {
+    // 自定义模型网关部署：全家模型映射进槽位变量，init/列表探测只披露
+    // current——完整清单以 settings.json 为事实源。样例只含模型变量
+    //（真实配置的鉴权字段与枚举无关，不进测试）。
+    const CLAUDE_SETTINGS = JSON.stringify({
+      env: {
+        ANTHROPIC_MODEL: 'deepseek-v4-pro',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: 'deepseek-v4-flash-vision-exp',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: 'deepseek-v4-flash-vision-exp',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+      },
+    });
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-claude-home');
+    const result = probeConfigModels({
+      configModels: 'claude',
+      env: { HOME: fakeHome },
+      readFileSync: (p: string) => {
+        if (p === path.join(fakeHome, '.claude', 'settings.json')) return CLAUDE_SETTINGS;
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 三槽位同模型去重 + [1M] 上下文后缀剥除 + 默认槽位最前。
+    expect(result.models.map((m) => m.id)).toEqual([
+      'deepseek-v4-pro',
+      'deepseek-v4-flash-vision-exp',
+      'deepseek-v4-flash',
+    ]);
+    expect(result.current).toBe('deepseek-v4-pro');
+  });
+
+  it('claude config enumeration degrades honestly without model slots', () => {
+    const EMPTY_SETTINGS = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://example.invalid' } });
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-claude-empty');
+    const result = probeConfigModels({
+      configModels: 'claude',
+      env: { HOME: fakeHome },
+      readFileSync: () => EMPTY_SETTINGS,
+    }) as { status: string; reason: string };
+    expect(result.status).toBe('unavailable');
+    expect(result.reason).toBe('config_no_models');
+  });
+
+  it('gemini config enumeration: current from settings.json + official series deduped (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'gemini',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith(path.join('.gemini', 'settings.json'))) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 配置里的当前模型置顶，官方常规模型去重补底。
+    expect(result.models.map((m) => m.id)).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash-lite',
+    ]);
+    expect(result.current).toBe('gemini-2.5-flash');
+  });
+
+  it('aider config enumeration: model.settings.yml entries + conf current first (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'aider',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith('.aider.model.settings.yml')) return '- name: deepseek-chat\n  extra: x\n- name: gpt-5\n';
+        if (p.endsWith('.aider.conf.yml')) return 'model: deepseek-chat\n';
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    expect(result.models.map((m) => m.id)).toEqual(['deepseek-chat', 'gpt-5']);
+    expect(result.current).toBe('deepseek-chat');
+  });
+
+  it('codex config enumeration: top-level model current + profiles bindings (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'codex',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith('config.toml')) return 'model = "gpt-5-codex"\nmodel_provider = "openai"\n\n[profiles.fast]\nmodel = "gpt-5-mini"\n\n[profiles.think]\nmodel = "gpt-5"\n';
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 顶层默认置顶（current），[profiles.*] 绑定枚举成清单。
+    expect(result.models.map((m) => m.id)).toEqual(['gpt-5-codex', 'gpt-5-mini', 'gpt-5']);
+    expect(result.current).toBe('gpt-5-codex');
+  });
+
   it('returns no_config_probe for unknown config keys', () => {
     const unknown = probeConfigModels({ configModels: 'nope', env: {}, readFileSync: () => '' }) as { status: string; reason: string };
     expect(unknown.status).toBe('unavailable');
