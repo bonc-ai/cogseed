@@ -37,8 +37,8 @@ describe('custom provider IPC contract', () => {
   });
 
   it('validates and forwards the unavailable-entry view option', () => {
-    expect(source).toMatch(/'auth\.listEntries':\s*async\s*\(\{\s*includeUnavailable\s*\}\s*=\s*\{\}\)\s*=>\s*\{/);
+    expect(source).toMatch(/'auth\.listEntries':\s*async\s*\(\{\s*includeUnavailable\s*\}\s*=\s*\{\}\s*,\s*ctx\)\s*=>\s*\{/);
     expect(source).toContain("typeof includeUnavailable !== 'boolean'");
-    expect(source).toMatch(/auth\.listEntries\(\{\s*includeUnavailable:\s*includeUnavailable\s*===\s*true\s*\}\)/);
+    expect(source).toMatch(/auth\.listEntriesForUser\(ctx\.userId,\s*\{\s*includeUnavailable:\s*includeUnavailable\s*===\s*true\s*\}\)/);
   });
 });

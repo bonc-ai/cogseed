@@ -148,6 +148,7 @@ import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
 import { invokeHandlers as updatesHandlers } from './updates';
+import { invokeHandlers as creatorHandlers } from './creator';
 import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
 import {
@@ -951,6 +952,7 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  ...creatorHandlers,
   // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
   // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
   'chat.interaction.reply': async (payload, _ctx) => {
@@ -1426,10 +1428,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // Reference-only catalog for the workspace picker. Runtime skill loading has
   // its own trust gate; this route must not block first paint on deep rescans.
-  'spaces.resources.catalog': async () => {
+  'spaces.resources.catalog': async (_args, ctx) => {
     const [skillRows, agentRows] = await Promise.all([
-      skills.listSkillCatalog(),
-      agents.listAgents(),
+      skills.listSkillCatalogForUser(ctx.userId),
+      agents.listAgentsForUser(ctx.userId),
     ]);
 
     // 引导未完成时，过滤掉所有 CLI Agent
@@ -1552,8 +1554,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'spaces.resources.pruneInvalid': async ({ spaceId } = {}, ctx) => {
     if (!safeId(spaceId)) throw new Error('invalid spaceId');
     const [sAgents, sSkills] = await Promise.all([
-      agents.listAgents().catch(() => []),
-      skills.listSkillCatalog().catch(() => []),
+      agents.listAgentsForUser(ctx.userId).catch(() => []),
+      skills.listSkillCatalogForUser(ctx.userId).catch(() => []),
     ]);
 
     // 引导未完成时，过滤掉所有 CLI Agent
@@ -2506,15 +2508,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.captures.settings.get': async (_input, ctx) => {
     const [settings, model] = await Promise.all([
       recallCaptureSettings.readRecallCaptureSettings(ctx.userId),
-      auth.getConfig(),
+      auth.getConfigForUser(ctx.userId),
     ]);
     return {
       ok: true,
       settings,
       model: {
         ...model,
-        configured: auth.hasConfiguredModel().configured,
-        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessage()),
+        configured: auth.hasConfiguredModelForUser(ctx.userId).configured,
+        authorizationRequired: Boolean(auth.getConfiguredModelOAuthExpiredMessageForUser(ctx.userId)),
       },
     };
   },
@@ -3254,7 +3256,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return chatArtifacts.inspectArtifactIndex(ctx.userId, String(cid), String(artifactId || ''));
   },
   // ── Agents ──
-  'agents.list': async ({ summary } = {}) => {
+  'agents.list': async ({ summary } = {}, ctx) => {
     // P3394 local peers and AI team Agents share one directory. Reconcile
     // online peers before every directory read so a live external node cannot
     // remain invisible merely because its projection callback was missed.
@@ -3270,8 +3272,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // marketplace reconcile and sync already invalidate the main cache at
     // their write boundary.
     let agentList = summary === true || summary === '1'
-      ? await agents.listAgentSummaries()
-      : await agents.listAgents();
+      ? await agents.listAgentSummariesForUser(ctx.userId)
+      : await agents.listAgentsForUser(ctx.userId);
 
     // 引导未完成时，过滤掉所有 CLI Agent（claude/codex/opencode/workbuddy）
     // 只有用户在引导中主动"连接"后，这些 Agent 才可见可用
@@ -3289,9 +3291,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { agents: agentList };
   },
 
-  'agents.get': async ({ agent_id }) => {
+  'agents.get': async ({ agent_id }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    const agent = await agents.getAgent(agent_id);
+    const agent = await agents.getAgentForUser(ctx.userId, agent_id);
     if (!agent) throw new Error('agent not found');
     return { agent };
   },
@@ -3304,14 +3306,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true, inheritance: await readAgentInheritance(ctx.userId, agent_id) };
   },
 
-  'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}) => {
-    return { agent: await agents.createCustomAgent({ name, description, description_zh, description_en, workflow, icon, color, runtime, category, output_format }) };
+  'agents.create': async ({ name = '', description = '', description_zh, description_en, workflow = '', icon, color, runtime, category, output_format } = {}, ctx) => {
+    return { agent: await agents.createCustomAgentForUser(ctx.userId, { name, description, description_zh, description_en, workflow, icon, color, runtime, category, output_format }) };
   },
 
 
-  'agents.update': async ({ agent_id, updates }) => {
+  'agents.update': async ({ agent_id, updates }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    const data = await agents.updateCustomAgent(agent_id, updates || {});
+    const data = await agents.updateCustomAgentForUser(ctx.userId, agent_id, updates || {});
     if (!data) throw new Error('agent not found or read-only');
     return { agent: data };
   },
@@ -3325,10 +3327,10 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // 同 CLI 允许多个外接 agent 共享同一个受管网关：只有该 CLI 不再被任何
     // 剩余 agent 引用时才允许停进程与投影抑制，否则删一个会连累另一个。
     try {
-      const target = await agents.getAgent(agent_id);
+      const target = await agents.getAgentForUser(ctx.userId, agent_id);
       const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
       if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
-        const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+        const remaining = await agents.countP3394GatewayAgentsByCliForUser(ctx.userId, rt.cli, { excludeAgentId: agent_id });
         if (remaining === 0) {
           const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
           await stopExternalGateway(rt.cli);
@@ -3346,7 +3348,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       log.warn('P3394 gateway stop on agent delete failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
     }
     await recycleBin.createAppRecycleBatchForAgent(ctx.userId, agent_id);
-    const deleted = await agents.deleteCustomAgent(agent_id);
+    const deleted = await agents.deleteCustomAgentForUser(ctx.userId, agent_id);
     return { ok: true, deleted };
   },
 
@@ -3354,7 +3356,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // builtin and custom agents are toggleable (it's a personal preference,
   // not a spec mutation). Returns the resolved state for the renderer to
   // confirm the new value.
-  'agents.setEnabled': async ({ agent_id, enabled }) => {
+  'agents.setEnabled': async ({ agent_id, enabled }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
     // P3394 外接智能体停用联动：禁用即停托管网关（否则网关心跳继续、
@@ -3362,13 +3364,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     // （下一次 turn 的 runP3394GatewayTurn 会自动拉起）。
     if (!enabled) {
       try {
-        const target = await agents.getAgent(agent_id);
+        const target = await agents.getAgentForUser(ctx.userId, agent_id);
         const rt = target?.runtime as { kind?: string; cli?: string } | undefined;
         if (rt && rt.kind === 'p3394-gateway' && rt.cli) {
           // 同 CLI 允许多个外接 agent 共享网关：停用其中一个时，只有该
           // CLI 不再被任何剩余 agent 引用才停进程（否则禁用一个会把仍在
           // 使用的共享网关一并关掉）。
-          const remaining = await agents.countP3394GatewayAgentsByCli(rt.cli, { excludeAgentId: agent_id });
+          const remaining = await agents.countP3394GatewayAgentsByCliForUser(ctx.userId, rt.cli, { excludeAgentId: agent_id });
           if (remaining === 0) {
             const { stopExternalGateway } = await import('../features/p3394_bridge/external-gateways');
             await stopExternalGateway(rt.cli);
@@ -3378,7 +3380,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
         log.warn('P3394 gateway stop on agent disable failed', { agent_id, error: error instanceof Error ? error.message : String(error) });
       }
     }
-    agents.setAgentEnabledForActiveUser(agent_id, enabled);
+    agents.setAgentEnabledForUser(ctx.userId, agent_id, enabled);
     return { ok: true, enabled };
   },
 
@@ -3399,7 +3401,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   'agents.chat.history': async ({ agent_id, limit = 500 }, ctx) => {
     if (!agents.isValidAgentId(agent_id)) throw new Error('invalid agent_id');
-    if (!(await agents.getAgent(agent_id))) throw new Error('agent not found');
+    if (!(await agents.getAgentForUser(ctx.userId, agent_id))) throw new Error('agent not found');
     return { messages: await agents.getAgentChatMessages(ctx.userId, agent_id, limit) };
   },
 
@@ -3542,12 +3544,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   //  零逻辑变更；功能等同 renderer 期望语义）。──
   'agents.builtin.delete': async ({ agent_id }, ctx) => {
     if (!agent_id || typeof agent_id !== 'string') throw new Error('missing agent_id');
-    return marketplace.uninstallMarketplaceAgent(agent_id);
+    return marketplace.uninstallMarketplaceAgentForUser(ctx.userId, agent_id);
   },
 
   'skills.builtin.delete': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('missing id');
-    return marketplace.uninstallMarketplaceSkill(id);
+    return marketplace.uninstallMarketplaceSkillForUser(ctx.userId, id);
   },
 
   'spaces.files.officeHtml': async ({ spaceId, name }, ctx) => {
@@ -3572,20 +3574,20 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { ok: true };
   },
 
-  'skills.list': async ({ force } = {}) => {
-    if (force === true || force === '1') skills.clearSkillListCache();
-    return { skills: await skills.listSkills() };
+  'skills.list': async ({ force } = {}, ctx) => {
+    if (force === true || force === '1') skills.clearSkillListCacheForUser(ctx.userId);
+    return { skills: await skills.listSkillsForUser(ctx.userId) };
   },
 
-  'skills.read': async ({ source, id, file = 'SKILL.md' }) => {
+  'skills.read': async ({ source, id, file = 'SKILL.md' }, ctx) => {
     if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return skills.readSkillFile(source, id, file);
+    return skills.readSkillFileForUser(ctx.userId, source, id, file);
   },
 
   'skills.checkDeclaration': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const found = await skills.getSkillForEdit(id);
+    const found = await skills.getSkillForEditForUser(ctx.userId, id);
     if (!found || found.source !== 'custom') throw new Error('only custom skills can be pre-checked');
     const declarationCheck = await skillReverify.checkDeclaration(found.dir, id);
     return { declarationCheck };
@@ -3629,24 +3631,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { status: guardrailStatus() };
   },
 
-  'skills.writeFile': async ({ id, file, content }) => {
+  'skills.writeFile': async ({ id, file, content }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (!file) throw new Error('missing file');
     // Routes to custom in normal mode; in dev, built-in writes are accepted
     // and dual-write (src + data) via the dev module.
-    const ok = await skills.writeSkillFileForEdit(id, file, content || '');
+    const ok = await skills.writeSkillFileForEditForUser(ctx.userId, id, file, content || '');
     if (!ok) throw new Error(t('errors.skill_write_failed'));
     return { written: true };
   },
 
-  'skills.tree': async ({ source, id }) => {
+  'skills.tree': async ({ source, id }, ctx) => {
     if (source !== 'marketplace' && source !== 'builtin' && source !== 'custom') throw new Error('invalid source');
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return skills.listSkillTree(source, id);
+    return skills.listSkillTreeForUser(ctx.userId, source, id);
   },
 
-  'skills.create': async ({ name, description, category }) => {
-    return { skill: await skills.createCustomSkill(name, description || '', category || '') };
+  'skills.create': async ({ name, description, category }, ctx) => {
+    return { skill: await skills.createCustomSkillForUser(ctx.userId, name, description || '', category || '') };
   },
 
   'skills.pickImportDir': async () => {
@@ -3664,14 +3666,14 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return { cancelled: false, path: res.filePaths[0] };
   },
 
-  'skills.createFromUrl': async ({ name, description, url }) => {
-    const r = await skills.createFromUrl(name ?? null, description ?? null, String(url || ''));
+  'skills.createFromUrl': async ({ name, description, url }, ctx) => {
+    const r = await skills.createFromUrlForUser(ctx.userId, name ?? null, description ?? null, String(url || ''));
     if (!r.ok) return r;
     return { skill: r.skill, skills: r.skills, seedModelText: r.seedModelText, seedMessage: r.seedMessage };
   },
 
-  'skills.createFromDir': async ({ name, description, srcDir, force }) => {
-    const r = await skills.createFromDir(name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
+  'skills.createFromDir': async ({ name, description, srcDir, force }, ctx) => {
+    const r = await skills.createFromDirForUser(ctx.userId, name ?? null, description ?? null, String(srcDir || ''), { force: force === true });
     if (!r.ok) return r;
     // Forward the scan evidence on success too: the unified import-check
     // popup shows the verdict for folder imports, and a pass with no visible
@@ -3685,21 +3687,21 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  'skills.discardImportDraft': async ({ id }) => {
+  'skills.discardImportDraft': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    return { discarded: await skills.discardImportDraftIfPristine(id) };
+    return { discarded: await skills.discardImportDraftIfPristineForUser(ctx.userId, id) };
   },
 
-  'skills.update': async ({ id, updates, skipRename }) => {
+  'skills.update': async ({ id, updates, skipRename }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const data = await skills.updateCustomSkill(id, updates || {}, { skipRename: !!skipRename });
+    const data = await skills.updateCustomSkillForUser(ctx.userId, id, updates || {}, { skipRename: !!skipRename });
     if (!data) throw new Error('skill not found');
     return { skill: data };
   },
 
-  'skills.updateForEdit': async ({ id, updates }) => {
+  'skills.updateForEdit': async ({ id, updates }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const data = await skills.applySkillMetadataForEdit(id, updates || {});
+    const data = await skills.applySkillMetadataForEditForUser(ctx.userId, id, updates || {});
     if (!data.ok) {
       return {
         ok: false,
@@ -3717,30 +3719,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'skills.delete': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     await recycleBin.createAppRecycleBatchForSkill(ctx.userId, id);
-    return { deleted: await skills.deleteCustomSkill(id) };
+    return { deleted: await skills.deleteCustomSkillForUser(ctx.userId, id) };
   },
 
   // Per-user enable/disable toggle. Builtin and custom both toggleable (it's
   // a personal preference, not a spec mutation). Wrapper handles the
   // _invalidateSkillListCache + invalidateCoreAgentSkills chain so the next
   // runner build re-renders the skills system-prompt block.
-  'skills.setEnabled': async ({ id, enabled }) => {
+  'skills.setEnabled': async ({ id, enabled }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
     if (typeof enabled !== 'boolean') throw new Error('enabled must be boolean');
-    skills.setSkillEnabledForActiveUser(id, enabled);
+    skills.setSkillEnabledForUser(ctx.userId, id, enabled);
     return { ok: true, enabled };
   },
 
-  'skills.get': async ({ id }) => {
+  'skills.get': async ({ id }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    const skill = await skills.getCustomSkill(id);
+    const skill = await skills.getCustomSkillForUser(ctx.userId, id);
     if (!skill) throw new Error('skill not found');
     return { skill };
   },
 
   'skills.chat.history': async ({ id, limit = 500 }, ctx) => {
     if (!skills.isValidSkillId(id)) throw new Error('invalid skill id');
-    if (!(await skills.getSkillForEdit(id))) throw new Error('skill not found');
+    if (!(await skills.getSkillForEditForUser(ctx.userId, id))) throw new Error('skill not found');
     return { messages: await skills.getSkillChatMessages(ctx.userId, id, limit) };
   },
 
@@ -3781,12 +3783,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Detail endpoints (cache-first) — used by the marketplace panel's detail view to render
   // full content. Caller passes the list-row's (version, freshness timestamp) so we can short-circuit
   // on a hot cache. Sweep is invoked once per openMarketplace at the entry point.
-  'marketplace.detailAgent': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+  'marketplace.detailAgent': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.getAgentDetail(id, {
+    return marketplace.getAgentDetailForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -3798,12 +3800,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'marketplace.detailSkill': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }) => {
+  'marketplace.detailSkill': async ({ id, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.getSkillDetail(id, {
+    return marketplace.getSkillDetailForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -3815,12 +3817,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     });
   },
 
-  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
+  'marketplace.installAgent': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.installMarketplaceAgent(id, {
+    return marketplace.installMarketplaceAgentForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -3832,12 +3834,12 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }, { force: force === true, name: typeof name === 'string' ? name : undefined, acceptSecurityRisk: acceptSecurityRisk === true });
   },
 
-  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }) => {
+  'marketplace.installSkill': async ({ id, name, version, published_at, updated_at, min_app_version, minAppVersion, min_version, minVersion, min_pc_version, minPcVersion, force, acceptSecurityRisk }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (typeof version !== 'string' || typeof published_at !== 'number') {
       throw new Error('version + published_at required');
     }
-    return marketplace.installMarketplaceSkill(id, {
+    return marketplace.installMarketplaceSkillForUser(ctx.userId, id, {
       version, published_at,
       ...(typeof updated_at === 'number' ? { updated_at } : {}),
       ...(typeof min_app_version === 'string' ? { min_app_version } : {}),
@@ -3851,19 +3853,19 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 
   // Uninstall is non-dev: wipes the local install copy + manifest entry. Does NOT touch the
   // server row (`marketplace_dev.deleteMarketplace*` does that, dev-only).
-  'marketplace.uninstallAgent': async ({ id }) => {
+  'marketplace.uninstallAgent': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return marketplace.uninstallMarketplaceAgent(id);
+    return marketplace.uninstallMarketplaceAgentForUser(ctx.userId, id);
   },
 
-  'marketplace.uninstallSkill': async ({ id }) => {
+  'marketplace.uninstallSkill': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return marketplace.uninstallMarketplaceSkill(id);
+    return marketplace.uninstallMarketplaceSkillForUser(ctx.userId, id);
   },
 
   // Entry-point housekeeping for the marketplace panel: sweep stale + over-sized cache entries.
   // Cheap (O(N entries) stat), so it's safe to call once per openMarketplace from the renderer.
-  'marketplace.sweepCache': async () => ({ bytes_freed: await marketplaceCache.sweepIfNeeded() }),
+  'marketplace.sweepCache': async (_args, ctx) => ({ bytes_freed: await marketplaceCache.sweepIfNeededForUser(ctx.userId) }),
 
   // Renderer queries this once at startup to learn the current reconcile state, then subscribes
   // to push-events `marketplace:reconcile-status` for in-flight progress. See main/index.ts
@@ -3873,30 +3875,30 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Persistent listing-grid cache so cold starts don't show a blank panel. Renderer hydrates
   // from this on `openMarketplace` and writes back after every fresh /list response. See
   // `marketplace_cache.ts::{getListingsCache,setListingsCache}`.
-  'marketplace.getListingsCache': async () => marketplaceCache.getListingsCache(),
+  'marketplace.getListingsCache': async (_args, ctx) => marketplaceCache.getListingsCacheForUser(ctx.userId),
 
-  'marketplace.setListingsCache': async ({ entries }) => {
+  'marketplace.setListingsCache': async ({ entries }, ctx) => {
     if (!entries || typeof entries !== 'object') throw new Error('entries required');
-    await marketplaceCache.setListingsCache(entries);
+    await marketplaceCache.setListingsCacheForUser(ctx.userId, entries);
     return { ok: true as const };
   },
 
-  'marketplace.mergeListingsCache': async ({ entries }) => {
+  'marketplace.mergeListingsCache': async ({ entries }, ctx) => {
     if (!entries || typeof entries !== 'object') throw new Error('entries required');
-    await marketplaceCache.mergeListingsCache(entries);
+    await marketplaceCache.mergeListingsCacheForUser(ctx.userId, entries);
     return { ok: true as const };
   },
 
   // Detail-page file viewer (skill kind only — agent payload is fully in the detail response).
-  'marketplace.cacheSkillFiles': async ({ id }) => {
+  'marketplace.cacheSkillFiles': async ({ id }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
-    return { list: await marketplaceCache.listSkillCacheFiles(id) };
+    return { list: await marketplaceCache.listSkillCacheFilesForUser(ctx.userId, id) };
   },
 
-  'marketplace.cacheSkillRead': async ({ id, file }) => {
+  'marketplace.cacheSkillRead': async ({ id, file }, ctx) => {
     if (!id || typeof id !== 'string') throw new Error('id required');
     if (!file || typeof file !== 'string') throw new Error('file required');
-    const content = await marketplaceCache.readSkillCacheFile(id, file);
+    const content = await marketplaceCache.readSkillCacheFileForUser(ctx.userId, id, file);
     return { content: content || '' };
   },
 
@@ -4671,7 +4673,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // Whether ANY usable API-key model is configured (sync, cheap). The
   // renderer uses this before every commander send to decide whether to
   // fall back to the signed-in CLI agent.
-  'model.hasConfigured': async () => auth.hasConfiguredModel(),
+  'model.hasConfigured': async (_args, ctx) => auth.hasConfiguredModelForUser(ctx.userId),
   'chat.executionCapability': async () => chatExecutionCapability.getChatExecutionCapability(),
 
   // ── Cognition extraction from sessions (onboarding) ──
@@ -4695,46 +4697,46 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   // ── Auth / model config (settings page) ──
-  'auth.listProviders': async () => auth.listProviders(),
-  'auth.listModels': async ({ provider }) => auth.listModels(provider),
-  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.addApiKey(provider, apiKey, label, {
+  'auth.listProviders': async (_args, ctx) => auth.listProvidersForUser(ctx.userId),
+  'auth.listModels': async ({ provider }, ctx) => auth.listModelsForUser(ctx.userId, provider),
+  'auth.addApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }, ctx) => auth.addApiKeyForUser(ctx.userId, provider, apiKey, label, {
     ...(baseUrl ? { baseUrl } : {}),
     ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
   }),
   // Legacy alias; renderer migrated to auth.addApiKey.
-  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }) => auth.saveApiKey(provider, apiKey, label, {
+  'auth.saveApiKey': async ({ provider, apiKey, label, baseUrl, maxOutputTokens }, ctx) => auth.addApiKeyForUser(ctx.userId, provider, apiKey, label, {
     ...(baseUrl ? { baseUrl } : {}),
     ...(maxOutputTokens !== undefined && maxOutputTokens !== null ? { maxOutputTokens } : {}),
   }),
-  'auth.renameProfile': async ({ profileId, label }) => auth.renameProfile(profileId, label),
-  'auth.removeCredential': async ({ profileId }) => auth.removeCredential(profileId),
-  'auth.testConnection': async ({ provider, model, profileId }) => auth.testConnection(provider, model, profileId),
-  'auth.getConfig': async () => auth.getConfig(),
-  'auth.hasConfiguredModel': async () => auth.hasConfiguredModel(),
-  'auth.getProfilesStoreStatus': async () => auth.getProfilesStoreStatus(),
-  'auth.resetProfilesStoreAfterDecryptFailure': async () => auth.resetProfilesStoreAfterDecryptFailure(),
+  'auth.renameProfile': async ({ profileId, label }, ctx) => auth.renameProfileForUser(ctx.userId, profileId, label),
+  'auth.removeCredential': async ({ profileId }, ctx) => auth.removeCredentialForUser(ctx.userId, profileId),
+  'auth.testConnection': async ({ provider, model, profileId }, ctx) => auth.testConnectionForUser(ctx.userId, provider, model, profileId),
+  'auth.getConfig': async (_args, ctx) => auth.getConfigForUser(ctx.userId),
+  'auth.hasConfiguredModel': async (_args, ctx) => auth.hasConfiguredModelForUser(ctx.userId),
+  'auth.getProfilesStoreStatus': async (_args, ctx) => auth.getProfilesStoreStatusForUser(ctx.userId),
+  'auth.resetProfilesStoreAfterDecryptFailure': async (_args, ctx) => auth.resetProfilesStoreAfterDecryptFailureForUser(ctx.userId),
   // OAuth flow — startOAuth kicks off a background login; renderer polls
   // via pollOAuthFlow, feeds prompt answers via submitOAuthInput.
-  'auth.startOAuth':       async ({ provider, label }) => auth.startOAuth(provider, label),
-  'auth.pollOAuthFlow':    async ({ flowId }) => auth.pollOAuthFlow(flowId),
-  'auth.submitOAuthInput': async ({ flowId, value }) => auth.submitOAuthInput(flowId, value),
-  'auth.cancelOAuthFlow':  async ({ flowId }) => auth.cancelOAuthFlow(flowId),
+  'auth.startOAuth':       async ({ provider, label }, ctx) => auth.startOAuth(ctx.userId, provider, label),
+  'auth.pollOAuthFlow':    async ({ flowId }, ctx) => auth.pollOAuthFlow(ctx.userId, flowId),
+  'auth.submitOAuthInput': async ({ flowId, value }, ctx) => auth.submitOAuthInput(ctx.userId, flowId, value),
+  'auth.cancelOAuthFlow':  async ({ flowId }, ctx) => auth.cancelOAuthFlow(ctx.userId, flowId),
   // Open a URL in the user's default browser (OAuth flow uses this so the
   // consent page renders where the user is already logged in).
   'auth.openExternal':     async ({ url }) => auth.openExternalUrl(url),
   // Priority list (entries) — ordered (provider, model, profile) tuples.
-  'auth.listEntries':     async ({ includeUnavailable } = {}) => {
+  'auth.listEntries':     async ({ includeUnavailable } = {}, ctx) => {
     if (includeUnavailable !== undefined && typeof includeUnavailable !== 'boolean') {
       throw new Error('includeUnavailable must be boolean');
     }
-    return auth.listEntries({ includeUnavailable: includeUnavailable === true });
+    return auth.listEntriesForUser(ctx.userId, { includeUnavailable: includeUnavailable === true });
   },
-  'auth.addEntry':        async ({ provider, model, profileId }) => auth.addEntry({ provider, model, profileId }),
-  'auth.removeEntry':     async ({ entryId }) => auth.removeEntry(entryId),
-  'auth.reorderEntries':  async ({ orderedIds }) => auth.reorderEntries(orderedIds || []),
-  'auth.updateEntryModel':async ({ entryId, model }) => auth.updateEntryModel(entryId, model),
-  'auth.revealApiKey':   async ({ profileId }) => auth.revealApiKey(profileId),
-  'auth.updateApiKey':   async ({ profileId, apiKey }) => auth.updateApiKey(profileId, apiKey),
+  'auth.addEntry':        async ({ provider, model, profileId }, ctx) => auth.addEntryForUser(ctx.userId, { provider, model, profileId }),
+  'auth.removeEntry':     async ({ entryId }, ctx) => auth.removeEntryForUser(ctx.userId, entryId),
+  'auth.reorderEntries':  async ({ orderedIds }, ctx) => auth.reorderEntriesForUser(ctx.userId, orderedIds || []),
+  'auth.updateEntryModel':async ({ entryId, model }, ctx) => auth.updateEntryModelForUser(ctx.userId, entryId, model),
+  'auth.revealApiKey':   async ({ profileId }, ctx) => auth.revealApiKeyForUser(ctx.userId, profileId),
+  'auth.updateApiKey':   async ({ profileId, apiKey }, ctx) => auth.updateApiKeyForUser(ctx.userId, profileId, apiKey),
 
   // ── Unified model authorization workflow ──
   'modelAuthorizations.list': async (_args, ctx) =>
@@ -5822,7 +5824,7 @@ const streamHandlers: Record<string, StreamHandler> = {
         projectHint: conv.project_id ?? null,
         boundAgentId: conv.agent_id || null,
       }, {
-        getAgent: (id: string) => agents.getAgent(id) as any,
+        getAgent: (id: string) => agents.getAgentForUser(ctx.userId, id) as any,
         isAgentEnabled: (id: string) => isAgentEnabled(ctx.userId, id),
         stream: (opts) => modelClient.streamChatWithModel({
           userId: opts.userId,

@@ -661,6 +661,9 @@ export class AgentRunner {
     /** Disable builtin, caller-supplied, and evolution tools for a strictly
      * text-only utility call such as an independent benchmark judge. */
     disableTools?: boolean;
+    /** Final runtime allowlist. When present it filters builtins, execution
+     * plan, caller tools, and evolution tools before registration. */
+    toolAllowlist?: readonly string[];
     /** Restrict learned-skill index to this subset (undefined = all). */
     skillAllowlist?: string[];
     /** Fires after skill_manage(create) with the new skill id — CogSeed
@@ -716,8 +719,9 @@ export class AgentRunner {
     if (this.skillStore && !opts.disableTools) {
       allTools.push(createSkillManageTool(this.skillStore, opts.onSkillCreated));
     }
+    const allowedTools = opts.toolAllowlist ? new Set(opts.toolAllowlist) : null;
     for (const tool of allTools) {
-      this.tools.set(tool.name, tool);
+      if (!allowedTools || allowedTools.has(tool.name)) this.tools.set(tool.name, tool);
     }
   }
 

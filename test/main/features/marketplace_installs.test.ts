@@ -20,6 +20,25 @@ afterEach(() => {
 });
 
 describe('marketplace install manifest', () => {
+  it('uninstalls the requested user marketplace skill after an active-user switch', async () => {
+    const users = await import('../../../src/main/features/users');
+    const marketplace = await import('../../../src/main/features/marketplace');
+    const installs = await import('../../../src/main/features/marketplace_installs');
+    const skillDir = path.join(tmpDir, 'u2', 'local', 'marketplace', 'skills', 'scoped-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: scoped-skill\n---\nbody');
+    await installs.addSkillInstall('u2', {
+      id: 'scoped-skill', version: '1.0.0', published_at: 1, bundle_url: 'https://cdn.test/s.zip',
+    });
+    users.activateUser('u1');
+
+    await marketplace.uninstallMarketplaceSkillForUser('u2', 'scoped-skill');
+
+    expect(fs.existsSync(skillDir)).toBe(false);
+    expect((await installs.readInstalls('u1')).skills).toHaveLength(1);
+    expect((await installs.readInstalls('u2')).skills).toEqual([]);
+  });
+
   it('records uninstall tombstones and clears them on reinstall', async () => {
     const installs = await import('../../../src/main/features/marketplace_installs');
 

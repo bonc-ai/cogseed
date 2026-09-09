@@ -11259,6 +11259,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.stream-activity.is-terminal .stream-activity-pulse {
+  animation: none;
+  opacity: 0.7;
+}
+.stream-activity.is-failed { color: var(--danger); }
+.stream-activity.is-cancelled { color: var(--muted); }
 
 .stream-process {
   margin-bottom: 8px;

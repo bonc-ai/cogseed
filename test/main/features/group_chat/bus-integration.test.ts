@@ -1863,12 +1863,15 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    const groups = await import("../../../../src/main/features/personal_ontology_groups");
     // This assertion covers both sides of the boundary: the Commander must
     // receive host-owned Recall context, while the delegated Agent receives
     // only the explicit dispatch grant. Enable the host routing path so the
     // test creates the confirmed projection that supplies that context.
     process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
 
+    const ontologyGroup = await groups.createGroup(TEST_UID, "audit flow");
+    expect(ontologyGroup.ok).toBe(true);
     const candidate = await candidates.saveRecallCandidate(TEST_UID, {
       judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
       summary: "Commander-gated asset grant rule",
@@ -1876,7 +1879,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
       suggestedScope: "review",
       sourceRefs: [{ kind: "execution", id: "exec-gate" }],
     });
-    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, {
+      actor: "user",
+      ontologyRefs: [{ groupId: ontologyGroup.group!.group_id }],
+    })).asset;
     // 自动投影按 PRD 3.6 只接纳 Transfer Verified 及以上。本用例考的是
     // "资产只经 Commander 分发、不由宿主注入 Agent"的契约，不是成熟度闸门，
     // 所以先把资产抬到够格的档位。
@@ -5571,7 +5577,10 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
     const path = await import("node:path");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
     const projections = await import("../../../../src/main/features/recall/context-projection");
+    const groups = await import("../../../../src/main/features/personal_ontology_groups");
 
+    const ontologyGroup = await groups.createGroup(TEST_UID, "OAuth login audit");
+    expect(ontologyGroup.ok).toBe(true);
     const candidate = await candidates.saveRecallCandidate(TEST_UID, {
       judgment: "Keep OAuth state checks before token exchange.",
       summary: "OAuth state check rule",
@@ -5579,7 +5588,10 @@ describe("group_chat bus integration › Recall asset usage receipt", () => {
       suggestedScope: "review",
       sourceRefs: [{ kind: "execution", id: "exec-receipt" }],
     });
-    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, { actor: "user" })).asset;
+    const asset = (await candidates.promoteRecallCandidate(TEST_UID, candidate.id, {
+      actor: "user",
+      ontologyRefs: [{ groupId: ontologyGroup.group!.group_id }],
+    })).asset;
     const preview = await projections.previewContextProjection(TEST_UID, {
       taskRunId: "task-receipt",
       purpose: "review",

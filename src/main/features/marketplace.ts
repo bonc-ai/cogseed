@@ -170,8 +170,9 @@ import { requireCogSeedApiBase } from './api_base';
 import { getLanguage } from './config';
 import { invalidateSkills as invalidateCoreAgentSkills } from '../model/core-agent/skill-registry';
 import {
-  getSkillCacheDir, isCacheFresh, readAgentCache, touchCacheEntry,
-  writeAgentCache, writeSkillCache,
+  getSkillCacheDir, getSkillCacheDirForUser, isCacheFresh, isCacheFreshForUser,
+  readAgentCache, readAgentCacheForUser, touchCacheEntry, touchCacheEntryForUser,
+  writeAgentCache, writeAgentCacheForUser, writeSkillCache, writeSkillCacheForUser,
 } from './marketplace_cache';
 import {
   addAgentInstall, addSkillInstall, readInstalls, removeAgentInstall, removeSkillInstall,
@@ -766,11 +767,17 @@ function _assertApprovedDependencySkill(
 export async function getAgentDetail(
   agentId: string, expect: MarketplaceFreshness,
 ): Promise<AgentDetail> {
+  return getAgentDetailForUser(getActiveUserId(), agentId, expect);
+}
+
+export async function getAgentDetailForUser(
+  userId: string, agentId: string, expect: MarketplaceFreshness,
+): Promise<AgentDetail> {
   if (!agentId) throw new Error('agentId required');
-  if (await isCacheFresh('agent', agentId, expect)) {
-    const cached = await readAgentCache(agentId);
+  if (await isCacheFreshForUser(userId, 'agent', agentId, expect)) {
+    const cached = await readAgentCacheForUser(userId, agentId);
     if (cached) {
-      await touchCacheEntry('agent', agentId);
+      await touchCacheEntryForUser(userId, 'agent', agentId);
       // Cache hit path: agent_json_url / create_uid are unknown (not stored in cache meta).
       // Install path re-fetches via /detail to get them; detail render doesn't need them.
       return {
@@ -785,7 +792,7 @@ export async function getAgentDetail(
   const data = await postJson<{ agent_json: Record<string, unknown>; version: string; category: string; published_at: number; updated_at?: number; agent_json_url: string; agent_skills_bundle_url?: string; create_uid: string; default_install?: boolean; is_open_source?: boolean; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
     '/marketplace/agents/detail', { id: agentId },
   );
-  await writeAgentCache(agentId, data.agent_json, {
+  await writeAgentCacheForUser(userId, agentId, data.agent_json, {
     version: data.version, published_at: data.published_at, updated_at: data.updated_at,
   });
   const minAppVersion = _normalizeMarketplaceMinAppVersion(data, data.agent_json);
@@ -803,13 +810,19 @@ export async function getAgentDetail(
 export async function getSkillDetail(
   skillId: string, expect: MarketplaceFreshness,
 ): Promise<SkillDetail> {
+  return getSkillDetailForUser(getActiveUserId(), skillId, expect);
+}
+
+export async function getSkillDetailForUser(
+  userId: string, skillId: string, expect: MarketplaceFreshness,
+): Promise<SkillDetail> {
   if (!skillId) throw new Error('skillId required');
-  if (await isCacheFresh('skill', skillId, expect)) {
-    await touchCacheEntry('skill', skillId);
+  if (await isCacheFreshForUser(userId, 'skill', skillId, expect)) {
+    await touchCacheEntryForUser(userId, 'skill', skillId);
     return {
       id: skillId, version: expect.version, category: '',
       published_at: expect.published_at, updated_at: expect.updated_at,
-      cache_dir: getSkillCacheDir(skillId), bundle_url: '', create_uid: '',
+      cache_dir: getSkillCacheDirForUser(userId, skillId), bundle_url: '', create_uid: '',
       ...(_normalizeMarketplaceMinAppVersion(expect) ? { min_app_version: _normalizeMarketplaceMinAppVersion(expect) } : {}),
     };
   }
@@ -817,12 +830,12 @@ export async function getSkillDetail(
   const meta = await postJson<{ bundle_url: string; version: string; category: string; published_at: number; updated_at?: number; create_uid: string; default_install?: boolean; is_open_source?: boolean; name?: string; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
     '/marketplace/skills/bundle', { id: skillId },
   );
-  await _fetchAndCacheSkill(skillId, meta);
+  await _fetchAndCacheSkill(userId, skillId, meta);
   const minAppVersion = _normalizeMarketplaceMinAppVersion(meta);
   return {
     id: skillId, name: meta.name || '', version: meta.version, category: meta.category,
     published_at: meta.published_at, updated_at: meta.updated_at,
-    cache_dir: getSkillCacheDir(skillId), bundle_url: meta.bundle_url,
+    cache_dir: getSkillCacheDirForUser(userId, skillId), bundle_url: meta.bundle_url,
     create_uid: meta.create_uid || '', default_install: meta.default_install === true,
     is_open_source: meta.is_open_source === true, status: meta.status || meta.state || '',
     ...(minAppVersion ? { min_app_version: minAppVersion } : {}),
@@ -831,7 +844,7 @@ export async function getSkillDetail(
 
 /** Fetch a skill .zip from COS and extract into the local cache (idempotent: wipe-and-replace). */
 async function _fetchAndCacheSkill(
-  skillId: string, meta: { bundle_url: string; version: string; published_at: number; updated_at?: number },
+  userId: string, skillId: string, meta: { bundle_url: string; version: string; published_at: number; updated_at?: number },
 ): Promise<void> {
   let res: Response;
   let zipBuf: Buffer | null;
@@ -845,7 +858,7 @@ async function _fetchAndCacheSkill(
   if (!res.ok) throw new Error(`download bundle failed from ${_bundleHost(meta.bundle_url)} (${res.status})`);
   if (!zipBuf) throw new Error(`download bundle failed from ${_bundleHost(meta.bundle_url)} (empty response)`);
   const zip = parseMarketplaceBundle(zipBuf);
-  await writeSkillCache(skillId, async (dir) => {
+  await writeSkillCacheForUser(userId, skillId, async (dir) => {
     extractBundleSafely(zip, dir);
   }, { version: meta.version, published_at: meta.published_at, updated_at: meta.updated_at });
 }
@@ -878,23 +891,29 @@ function _bundleHost(bundleUrl: string): string {
 export async function installMarketplaceAgent(
   agentId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
 ): Promise<{ ok: true; id: string }> {
+  return installMarketplaceAgentForUser(getActiveUserId(), agentId, expect, opts);
+}
+
+export async function installMarketplaceAgentForUser(
+  userId: string, agentId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
+): Promise<{ ok: true; id: string }> {
   if (!agentId) throw new Error('agentId required');
   return withMarketplaceInstallLock(
-    getActiveUserId(),
+    userId,
     'agent',
     agentId,
-    () => _installMarketplaceAgentLocked(agentId, expect, opts),
+    () => _installMarketplaceAgentLocked(userId, agentId, expect, opts),
   );
 }
 
 async function _installMarketplaceAgentLocked(
-  agentId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
+  uid: string, agentId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
 ): Promise<{ ok: true; id: string }> {
   if (!agentId) throw new Error('agentId required');
   let agentName = opts.name || '';
   try {
     // Ensure cache is hot (and pick up agent_json_url for the manifest).
-    let detail = await getAgentDetail(agentId, expect);
+    let detail = await getAgentDetailForUser(uid, agentId, expect);
     agentName = agentName || _agentJsonName(detail.agent_json);
     if (!detail.agent_json_url) {
       // Cache-hit path returns url='' (and create_uid=''); re-fetch via detail endpoint to
@@ -935,7 +954,7 @@ async function _installMarketplaceAgentLocked(
       : [];
     const depSkillNames = _agentSkillDependencyDisplayNames(detail.agent_json, skillList);
     const missingSkillIds = skillList.filter(
-      (sid) => !privateSkillIds.has(sid) && !_skillAlreadyOnDisk(sid),
+      (sid) => !privateSkillIds.has(sid) && !_skillAlreadyOnDiskForUser(uid, sid),
     );
     if (missingSkillIds.length > 0) {
       await Promise.all(missingSkillIds.map(async (sid) => {
@@ -948,7 +967,7 @@ async function _installMarketplaceAgentLocked(
           );
           depSkillName = meta.name || depSkillName;
           _assertApprovedDependencySkill(sid, depSkillName, meta);
-          await installMarketplaceSkill(sid, {
+          await installMarketplaceSkillForUser(uid, sid, {
             version: meta.version,
             published_at: meta.published_at,
             updated_at: meta.updated_at,
@@ -973,7 +992,7 @@ async function _installMarketplaceAgentLocked(
       enforceSkillRunner: false,
     });
     await persistQualityReport({
-      uid: getActiveUserId(), kind: 'agent', id: agentId, report: preReport,
+      uid, kind: 'agent', id: agentId, report: preReport,
     });
     // `report.ok === false` means an EXTREME violation, and EXTREME is not
     // user-overridable (see `quality/README.md`) — `force` must not reach it.
@@ -983,13 +1002,13 @@ async function _installMarketplaceAgentLocked(
     //    `_install.json` is a version pin read by `marketplace_reconcile.ts::_agentNeedsPull`
     //    on other devices to skip a re-pull when their local copy already matches the manifest's
     //    (version, freshness timestamp).
-    const target = userMarketplaceAgentDir(getActiveUserId(), agentId);
+    const target = userMarketplaceAgentDir(uid, agentId);
     await fsp.rm(target, { recursive: true, force: true });
     await fsp.mkdir(target, { recursive: true });
     const agentJsonFile = path.join(target, 'agent.json');
     await fsp.writeFile(agentJsonFile, JSON.stringify(detail.agent_json, null, 2), 'utf8');
     if (privateSkillsZip) {
-      const privateSkillsDir = userMarketplaceAgentSkillsDir(getActiveUserId(), agentId);
+      const privateSkillsDir = userMarketplaceAgentSkillsDir(uid, agentId);
       await fsp.mkdir(privateSkillsDir, { recursive: true });
       extractBundleSafely(privateSkillsZip, privateSkillsDir);
     }
@@ -1006,7 +1025,7 @@ async function _installMarketplaceAgentLocked(
     //     load-gate work — writing standard-keyed receipts now would verify the
     //     wrong bytes later.
     if (privateSkillsZip) {
-      const privateSkillsDir = userMarketplaceAgentSkillsDir(getActiveUserId(), agentId);
+      const privateSkillsDir = userMarketplaceAgentSkillsDir(uid, agentId);
       const sourceTier: SkillSource = String(detail.create_uid || '') === '0'
         ? 'official'
         : 'community';
@@ -1029,7 +1048,7 @@ async function _installMarketplaceAgentLocked(
           const privateReport = validateSkillDir(skillDir, { enforceSkillRunner: false });
           const top = topViolationOf(privateReport.violations);
           writeInstallReceipt(
-            getActiveUserId(), entry.name, privateTreeHash, scan,
+            uid, entry.name, privateTreeHash, scan,
             {
               violationCount: privateReport.violations.length,
               ...(top?.rule ? { topRule: top.rule } : {}),
@@ -1067,10 +1086,10 @@ async function _installMarketplaceAgentLocked(
         ...(installContentSha ? { content_sha: installContentSha } : {}),
         ...(installTreeHash ? { content_tree_hash: installTreeHash } : {}),
       }, null, 2), 'utf8');
-    await touchCacheEntry('agent', agentId);
+    await touchCacheEntryForUser(uid, 'agent', agentId);
 
     // 4. Record in the cloud-synced manifest so other devices reconcile this install.
-    await addAgentInstall(getActiveUserId(), {
+    await addAgentInstall(uid, {
       id: agentId, version: detail.version, published_at: detail.published_at,
       ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
       agent_json_url: detail.agent_json_url, create_uid: detail.create_uid || '',
@@ -1092,22 +1111,28 @@ async function _installMarketplaceAgentLocked(
 export async function installMarketplaceSkill(
   skillId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
 ): Promise<{ ok: true; id: string }> {
+  return installMarketplaceSkillForUser(getActiveUserId(), skillId, expect, opts);
+}
+
+export async function installMarketplaceSkillForUser(
+  userId: string, skillId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
+): Promise<{ ok: true; id: string }> {
   if (!skillId) throw new Error('skillId required');
   return withMarketplaceInstallLock(
-    getActiveUserId(),
+    userId,
     'skill',
     skillId,
-    () => _installMarketplaceSkillLocked(skillId, expect, opts),
+    () => _installMarketplaceSkillLocked(userId, skillId, expect, opts),
   );
 }
 
 async function _installMarketplaceSkillLocked(
-  skillId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
+  uid: string, skillId: string, expect: MarketplaceFreshness, opts: MarketplaceInstallOpts = {},
 ): Promise<{ ok: true; id: string; securityScan?: SentryScanResult }> {
   if (!skillId) throw new Error('skillId required');
   let skillName = opts.name || '';
   try {
-    let detail = await getSkillDetail(skillId, expect);
+    let detail = await getSkillDetailForUser(uid, skillId, expect);
     skillName = skillName || detail.name || '';
     if (!detail.bundle_url) {
       const fresh = await postJson<{ bundle_url: string; version: string; category: string; published_at: number; updated_at?: number; create_uid: string; default_install?: boolean; is_open_source?: boolean; name?: string; status?: string; state?: string; min_app_version?: string; minAppVersion?: string }>(
@@ -1130,8 +1155,7 @@ async function _installMarketplaceSkillLocked(
     }
     _assertMarketplaceAppCompatible('skill', skillId, skillName, detail.min_app_version || '');
 
-    const cacheDir = getSkillCacheDir(skillId);
-    const uid = getActiveUserId();
+    const cacheDir = getSkillCacheDirForUser(uid, skillId);
     const target = userMarketplaceSkillDir(uid, skillId);
     // Quarantine (W2): materialize into a dot-prefixed staging dir beside the
     // final location, gate it there, and only `rename` it into place on pass.
@@ -1164,7 +1188,7 @@ async function _installMarketplaceSkillLocked(
         enforceSkillRunner: false,
       });
       await persistQualityReport({
-        uid: getActiveUserId(), kind: 'skill', id: skillId, report: skillReport,
+        uid, kind: 'skill', id: skillId, report: skillReport,
       });
       if (!skillReport.ok) {
         await fsp.rm(staging, { recursive: true, force: true });
@@ -1234,7 +1258,7 @@ async function _installMarketplaceSkillLocked(
         // its own failures, since a receipt is an audit aid and not part of the
         // gate the install already passed.
         writeInstallReceipt(
-          getActiveUserId(), skillId, skillTreeHash,
+          uid, skillId, skillTreeHash,
           // The override rides on the scan so the receipt records what was waived,
           // not merely that something was.
           overridden
@@ -1264,7 +1288,7 @@ async function _installMarketplaceSkillLocked(
           ...(skillContentSha ? { content_sha: skillContentSha } : {}),
           ...(skillTreeHash ? { content_tree_hash: skillTreeHash } : {}),
         }, null, 2), 'utf8');
-      await touchCacheEntry('skill', skillId);
+      await touchCacheEntryForUser(uid, 'skill', skillId);
       invalidateCoreAgentSkills();
     } catch (err) {
       // Safety net: a refusal, an engine crash, or a killed process between
@@ -1275,7 +1299,7 @@ async function _installMarketplaceSkillLocked(
       throw err;
     }
 
-    await addSkillInstall(getActiveUserId(), {
+    await addSkillInstall(uid, {
       id: skillId, version: detail.version, published_at: detail.published_at,
       ...(typeof detail.updated_at === 'number' ? { updated_at: detail.updated_at } : {}),
       bundle_url: detail.bundle_url, create_uid: detail.create_uid || '',
@@ -1298,12 +1322,17 @@ async function _installMarketplaceSkillLocked(
  *  `<uid>/cloud/skills/<id>/` OR a marketplace install under `<uid>/local/marketplace/skills/<id>/`.
  *  Both are valid; cascade install only triggers when missing. */
 function _skillAlreadyOnDisk(skillId: string): boolean {
+  try { return _skillAlreadyOnDiskForUser(getActiveUserId(), skillId); }
+  catch { return false; }
+}
+
+function _skillAlreadyOnDiskForUser(uid: string, skillId: string): boolean {
   try {
-    const customRoot = userSkillsDir(getActiveUserId());
+    const customRoot = userSkillsDir(uid);
     if (fs.existsSync(path.join(customRoot, skillId, 'SKILL.md'))) return true;
-    const installedDir = userMarketplaceSkillDir(getActiveUserId(), skillId);
+    const installedDir = userMarketplaceSkillDir(uid, skillId);
     if (fs.existsSync(path.join(installedDir, 'SKILL.md'))) return true;
-  } catch { /* getActiveUserId throws when no active uid */ }
+  } catch { /* malformed or unavailable user root */ }
   return false;
 }
 
@@ -1683,28 +1712,34 @@ export async function ensureDefaultInstalls(
 // Dependent skills (for an agent) are **not** cascade-uninstalled — other agents may share them.
 
 export async function uninstallMarketplaceAgent(agentId: string): Promise<{ ok: true; id: string }> {
+  return uninstallMarketplaceAgentForUser(getActiveUserId(), agentId);
+}
+
+export async function uninstallMarketplaceAgentForUser(userId: string, agentId: string): Promise<{ ok: true; id: string }> {
   if (!agentId) throw new Error('agentId required');
-  const uid = getActiveUserId();
-  return withMarketplaceInstallLock(uid, 'agent', agentId, async () => {
-    await fsp.rm(userMarketplaceAgentDir(uid, agentId), { recursive: true, force: true });
-    await withMarketplaceCacheLock(uid, 'agent', agentId, async () => {
-      await fsp.rm(marketplaceCacheAgentDir(uid, agentId), { recursive: true, force: true });
+  return withMarketplaceInstallLock(userId, 'agent', agentId, async () => {
+    await fsp.rm(userMarketplaceAgentDir(userId, agentId), { recursive: true, force: true });
+    await withMarketplaceCacheLock(userId, 'agent', agentId, async () => {
+      await fsp.rm(marketplaceCacheAgentDir(userId, agentId), { recursive: true, force: true });
     });
-    await removeAgentInstall(uid, agentId);
+    await removeAgentInstall(userId, agentId);
     log.info(`uninstalled marketplace agent ${agentId} (local + cache + manifest)`);
     return { ok: true, id: agentId };
   });
 }
 
 export async function uninstallMarketplaceSkill(skillId: string): Promise<{ ok: true; id: string }> {
+  return uninstallMarketplaceSkillForUser(getActiveUserId(), skillId);
+}
+
+export async function uninstallMarketplaceSkillForUser(userId: string, skillId: string): Promise<{ ok: true; id: string }> {
   if (!skillId) throw new Error('skillId required');
-  const uid = getActiveUserId();
-  return withMarketplaceInstallLock(uid, 'skill', skillId, async () => {
-    await fsp.rm(userMarketplaceSkillDir(uid, skillId), { recursive: true, force: true });
-    await withMarketplaceCacheLock(uid, 'skill', skillId, async () => {
-      await fsp.rm(marketplaceCacheSkillDir(uid, skillId), { recursive: true, force: true });
+  return withMarketplaceInstallLock(userId, 'skill', skillId, async () => {
+    await fsp.rm(userMarketplaceSkillDir(userId, skillId), { recursive: true, force: true });
+    await withMarketplaceCacheLock(userId, 'skill', skillId, async () => {
+      await fsp.rm(marketplaceCacheSkillDir(userId, skillId), { recursive: true, force: true });
     });
-    await removeSkillInstall(uid, skillId);
+    await removeSkillInstall(userId, skillId);
     invalidateCoreAgentSkills();
     log.info(`uninstalled marketplace skill ${skillId} (local + cache + manifest)`);
     return { ok: true, id: skillId };

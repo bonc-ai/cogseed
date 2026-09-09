@@ -33,6 +33,10 @@ interface CooldownEntry {
 
 const state = new Map<string, CooldownEntry>();
 
+function scopedKey(userId: string, profileId: string): string {
+  return `${userId}\u0000${profileId}`;
+}
+
 function cooldownReasonKindForLog(reason: string): string {
   const text = String(reason || '').toLowerCase();
   if (/401|unauthori[sz]ed|invalid\s+(api\s+)?key|authentication|auth/.test(text)) return 'auth';
@@ -83,6 +87,18 @@ export function markCooldown(
   });
 }
 
+export function markCooldownForUser(
+  userId: string,
+  profileId: string,
+  kind: KeyFailureKind,
+  reason: string,
+  durationMs?: number,
+): void {
+  if (!userId || !profileId || kind === 'network') return;
+  const ms = durationMs ?? DEFAULT_COOLDOWN_MS;
+  state.set(scopedKey(userId, profileId), { cooledUntil: Date.now() + Math.max(0, ms), kind, reason });
+}
+
 /**
  * True if the profile is currently cooled down. Expired entries are
  * lazily swept on read, so long-lived processes don't leak entries.
@@ -98,6 +114,15 @@ export function isCooledDown(profileId: string): boolean {
   return true;
 }
 
+export function isCooledDownForUser(userId: string, profileId: string): boolean {
+  if (!userId || !profileId) return false;
+  const key = scopedKey(userId, profileId);
+  const entry = state.get(key);
+  if (!entry) return false;
+  if (Date.now() >= entry.cooledUntil) { state.delete(key); return false; }
+  return true;
+}
+
 /** Inspect the current cooldown entry (or undefined). Used by diagnostics. */
 export function getCooldown(profileId: string): Readonly<CooldownEntry> | undefined {
   const entry = state.get(profileId);
@@ -106,6 +131,15 @@ export function getCooldown(profileId: string): Readonly<CooldownEntry> | undefi
     state.delete(profileId);
     return undefined;
   }
+  return entry;
+}
+
+export function getCooldownForUser(userId: string, profileId: string): Readonly<CooldownEntry> | undefined {
+  if (!userId || !profileId) return undefined;
+  const key = scopedKey(userId, profileId);
+  const entry = state.get(key);
+  if (!entry) return undefined;
+  if (Date.now() >= entry.cooledUntil) { state.delete(key); return undefined; }
   return entry;
 }
 
@@ -119,6 +153,10 @@ export function clearCooldown(profileId: string): void {
   if (state.delete(profileId)) {
     log.info('profile cooldown cleared', { profile_id: maskId(profileId) });
   }
+}
+
+export function clearCooldownForUser(userId: string, profileId: string): void {
+  if (userId && profileId) state.delete(scopedKey(userId, profileId));
 }
 
 /** List cooled-down profile ids + metadata (sorted by cooledUntil asc). */

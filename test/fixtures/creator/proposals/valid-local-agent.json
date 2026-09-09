@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "presetId": "local-research",
+  "version": "1",
+  "displayName": "Local research agent",
+  "description": "Read-only research using the CogSeed runtime.",
+  "presetType": "cogseed-agent",
+  "model": {
+    "providerId": "provider-main",
+    "modelId": "deepseek-chat",
+    "reasoningProfile": "balanced"
+  },
+  "capabilities": [
+    {
+      "capabilityId": "tool.search",
+      "version": "1"
+    }
+  ],
+  "prompt": {
+    "systemSections": [
+      "research",
+      "citations"
+    ],
+    "locale": "en"
+  },
+  "runtime": {
+    "sessionPolicy": "new-per-run",
+    "memoryPolicy": "read-only",
+    "loopPolicy": "single-agent",
+    "sandboxProfile": "creator-read-only-v1",
+    "timeoutMs": 60000,
+    "budget": {
+      "maxCost": 2,
+      "maxTokens": 8000
+    }
+  },
+  "permissions": {
+    "tools": [
+      "tool.search"
+    ],
+    "files": [
+      "workspace.readonly"
+    ],
+    "sideEffects": [],
+    "approvalMode": "always"
+  },
+  "provenance": {
+    "createdBy": "creator-agent",
+    "sourceSessionId": "source-session",
+    "sourceAssetRefs": []
+  }
+}

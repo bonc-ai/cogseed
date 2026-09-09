@@ -380,6 +380,31 @@ describe('file-tools › read_file scope guards', () => {
     } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
   });
 
+  it('creator workspace-only guard rejects outside paths even in all_files_approval mode', async () => {
+    const perm = await import('../../../../src/main/features/permissions');
+    const ws = await import('../../../../src/main/features/user_workspace');
+    const mod = await import('../../../../src/main/model/core-agent/file-tools');
+    const wsDir = path.join(tmpDir, 'creator-ws');
+    fs.mkdirSync(wsDir, { recursive: true });
+    const r0 = ws.setWorkspacePath(UID, wsDir);
+    if (!r0.ok) throw new Error(`setWorkspacePath failed: ${r0.error}`);
+    perm.setLocalExecMode('all_files_approval');
+    const inside = path.join(wsDir, 'creator-note.md');
+    fs.writeFileSync(inside, 'creator workspace content');
+    const outside = path.join(tmpDir, '..', 'creator-outside', 'secret.md');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, 'must stay private');
+    const tools = mod.createFileTools({ userId: UID, workspaceOnly: true });
+    try {
+      const insideResult = await run(getTool(tools, 'read_file'), { path: inside });
+      expect(insideResult.isError).toBeFalsy();
+      expect(insideResult.content).toContain('creator workspace content');
+      const r = await run(getTool(tools, 'read_file'), { path: outside });
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain('E_PATH_OUT_OF_SCOPE');
+    } finally { fs.rmSync(path.dirname(outside), { recursive: true, force: true }); }
+  });
+
   it('prompts and blocks sensitive outside paths in all_files_approval mode when denied', async () => {
     const perm = await import('../../../../src/main/features/permissions');
     const bashPerms = await import('../../../../src/main/model/core-agent/bash-permissions');

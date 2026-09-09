@@ -2038,7 +2038,7 @@ async function guardUntrustedSkillBash(opts: LocalToolsOpts, command: string): P
     // `listSkillSpecsForAgentMetadata` is deliberately not trust-filtered (it
     // backs spec writes), which makes it the right source here: we need the
     // full id/name map to resolve what the command names, then ask about trust.
-    blocked = await registry.blockedSkillIds(specs.map((s) => s.id));
+    blocked = await registry.blockedSkillIdsForUser(uid, specs.map((s) => s.id));
   } catch {
     return null;
   }

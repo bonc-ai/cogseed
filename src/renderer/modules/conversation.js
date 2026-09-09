@@ -13899,6 +13899,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
   // to where it belongs once we know the message's true timestamp).
   msg.dataset.ts = String(Date.now());
   _appendBeforeSpacer(container, msg);
+  _streamingUpdateActivity(msg, t('chat.activity_receiving'));
   return msg;
 }
 
@@ -14085,7 +14086,7 @@ function _eventProcessKind(evt, text) {
   if (stream === 'error') return 'err';
   if (stream === 'cli') {
     const type = String(data.type || '').toLowerCase();
-    if (type === 'tool-event') return 'tool';
+    if (type === 'tool-event') return data.isError === true || data.error ? 'err' : 'tool';
     if (type === 'process-info') return 'bound';
     if (type === 'stderr-line' || type === 'idle') return 'warn';
     if (type === 'permission-request') return 'info';
@@ -14278,7 +14279,10 @@ function _streamingUpdateActivity(msg, text) {
     );
   }
   const textEl = row.querySelector('[data-role="activity-text"]');
+  const meta = row.querySelector('[data-role="activity-meta"]');
   const label = String(text || '').replace(/\s+/g, ' ').trim();
+  row.classList.remove('is-terminal', 'is-completed', 'is-failed', 'is-cancelled');
+  row.dataset.activityState = 'running';
   if (textEl) {
     if (label) {
       textEl.textContent = label.length > 88 ? label.slice(0, 88) + '…' : label;
@@ -14288,6 +14292,7 @@ function _streamingUpdateActivity(msg, text) {
       textEl.textContent = t('chat.activity_working');
     }
   }
+  if (meta) meta.hidden = false;
   row.style.display = '';
   _streamingPaintActivityMeta(msg);
   _streamingEnsureActivityTimer(msg);
@@ -14309,6 +14314,26 @@ function _streamingEnsureActivityTimer(msg) {
     }
     _streamingPaintActivityMeta(msg);
   }, 1000);
+}
+
+function _streamingFinishActivity(msg, text, state) {
+  if (!msg) return;
+  msg.dataset.activityDone = '1';
+  if (msg._activityTimer) {
+    clearInterval(msg._activityTimer);
+    msg._activityTimer = null;
+  }
+  const row = msg.querySelector('[data-role="activity"]');
+  if (!row) return;
+  const textEl = row.querySelector('[data-role="activity-text"]');
+  if (textEl) textEl.textContent = String(text || '').replace(/\s+/g, ' ').trim();
+  row.classList.remove('is-terminal', 'is-completed', 'is-failed', 'is-cancelled');
+  row.classList.add('is-terminal', `is-${state || 'completed'}`);
+  row.dataset.activityState = state || 'completed';
+  row.style.display = '';
+  _streamingPaintActivityMeta(msg);
+  const meta = row.querySelector('[data-role="activity-meta"]');
+  if (meta) meta.hidden = true;
 }
 
 function _activityMonotonicNow() {
@@ -14340,37 +14365,206 @@ function _streamingPaintActivityMeta(msg) {
   meta.textContent = `${mm}:${ss}`;
 }
 
-function _streamingStopActivity(msg) {
-  if (!msg) return;
-  msg.dataset.activityDone = '1';
-  if (msg._activityTimer) {
-    clearInterval(msg._activityTimer);
-    msg._activityTimer = null;
-  }
-  const row = msg.querySelector('[data-role="activity"]');
-  if (row) row.style.display = 'none';
+function _activityToolAction(toolName) {
+  const name = String(toolName || '').toLowerCase();
+  if (/^(read|read_file|stat_file|list_dir|search_files|find_files|glob|grep|web_search|websearch|web_fetch|webfetch)$/.test(name)) return 'read';
+  if (/^(write|edit|multiedit|notebookedit|write_file|edit_file|create_file|delete_file|move_file|copy_file|apply_patch|patch_apply)$/.test(name)) return 'write';
+  if (/^(exec_command|run_command|bash|shell|run_worker)$/.test(name)) return 'run';
+  return 'use';
 }
 
-// Map one structured live event onto the concise activity strip. Retry is a
-// reliable explicit phase; every other process event stays at generic working
-// so incomplete event streams cannot overstate the exact current action.
-function _streamingUpdateActivityFromEvent(msg, evt) {
-  const data = (evt && evt.data) || {};
-  const stream = (evt && evt.stream) || '';
-  const cliType = stream === 'cli' ? String(data.type || '').toLowerCase() : '';
+function _activityDurationMs(msg) {
+  const elapsed = Number(msg && msg._activityClock && msg._activityClock.elapsedMs);
+  if (Number.isFinite(elapsed) && elapsed >= 0) return elapsed;
+  const started = Number(msg && msg.dataset && msg.dataset.activityStart);
+  return Number.isFinite(started) && started > 0 ? Math.max(0, Date.now() - started) : 0;
+}
+
+function _activityTerminalText(msg, state, errorDetail = '') {
+  const summary = msg && msg._activitySummary && typeof msg._activitySummary === 'object'
+    ? msg._activitySummary
+    : null;
+  const duration = _formatProcessDuration(_activityDurationMs(msg));
+  const target = summary && summary.detail ? summary.detail : '';
+  const tool = summary && summary.toolName ? summary.toolName : '';
+  const action = summary && summary.action ? summary.action : 'use';
+  if (state === 'completed') {
+    if (action === 'read' && target) return t('chat.activity_read_done', { target, duration });
+    if (action === 'write' && target) return t('chat.activity_write_done', { target, duration });
+    if (action === 'run' && target) return t('chat.activity_run_done', { target, duration });
+    if (tool) return t('chat.activity_tool_done', { tool, target: target ? ` · ${target}` : '', duration });
+    return t('chat.activity_reply_done', { duration });
+  }
+  if (state === 'cancelled') {
+    if (action === 'read' && target) return t('chat.activity_read_stopped', { target });
+    if (action === 'write' && target) return t('chat.activity_write_stopped', { target });
+    if (action === 'run' && target) return t('chat.activity_run_stopped', { target });
+    if (tool) return t('chat.activity_tool_stopped', { tool, target: target ? ` · ${target}` : '' });
+    return t('chat.activity_reply_stopped');
+  }
+  if (action === 'read' && target) return t('chat.activity_read_failed', { target, duration });
+  if (action === 'write' && target) return t('chat.activity_write_failed', { target, duration });
+  if (action === 'run' && target) return t('chat.activity_run_failed', { target, duration });
+  if (tool) return t('chat.activity_tool_failed', {
+    tool,
+    target: target ? ` · ${target}` : '',
+    duration,
+  });
+  return t('chat.activity_reply_failed', {
+    detail: errorDetail ? ` · ${errorDetail}` : '',
+    duration,
+  });
+}
+
+// Project one structured live event onto the concise activity strip. Main
+// remains the source of truth; the renderer exposes only safe execution phases.
+function _activityStatusFromEvent(evt) {
+  const data = evt && evt.data && typeof evt.data === 'object' ? evt.data : {};
+  const stream = String(evt && evt.stream || '').toLowerCase();
   const phase = String(data.phase || data.status || '').toLowerCase();
+  const compact = (value, limit = 120) => String(value == null ? '' : value)
+    .replace(/\s+/g, ' ').trim().slice(0, limit);
+  const sensitiveDetail = (value) => /(?:\bBearer\b|\bBasic\b|\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|authorization)\b|\b(?:sk|rk)-[A-Za-z0-9_-]{8,})/i
+    .test(String(value || ''));
+  const compactDetail = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string') return sensitiveDetail(value) ? '' : compact(value);
+    if (typeof value === 'object') {
+      const preferred = value.path || value.file || value.command || value.url;
+      if (preferred != null) return sensitiveDetail(preferred) ? '' : compact(preferred);
+      return '';
+    }
+    return compact(value);
+  };
+  const toolDetail = () => {
+    if (phase === 'progress' && data.message) return compact(data.message);
+    const args = data.arguments || data.args || data.input;
+    return compactDetail(args || data.path || data.file || data.command || '');
+  };
+  const toolName = compact(data.name || data.toolName || data.tool || 'tool', 80);
+  const action = _activityToolAction(toolName);
+  const decision = phase || String(data.decision || data.result || '').toLowerCase();
+
+  if (stream === 'assistant' && (data.text || data.delta)) return { key: 'generating' };
   if (stream === 'runtime' && phase === 'retrying') {
-    const attempt = Math.max(1, Math.round(Number(data.attempt) || 1));
-    _streamingUpdateActivity(msg, attempt > 1
-      ? t('model.retrying_n', { attempt })
-      : t('model.retrying'));
-    return;
+    return { key: 'retrying', attempt: Math.max(1, Math.round(Number(data.attempt) || 1)) };
   }
-  if (cliType === 'status' && phase === 'usage') {
-    _streamingUpdateActivity(msg, t('chat.activity_working'));
-    return;
+  if (stream === 'plan') return { key: 'planning' };
+  if (stream === 'approval') {
+    if (/^(approved|allowed|granted|allow)$/.test(decision)) return { key: 'permission_granted' };
+    if (/^(rejected|denied|deny|cancelled|canceled)$/.test(decision)) return { key: 'permission_denied' };
+    return { key: 'waiting_permission' };
   }
-  _streamingUpdateActivity(msg, t('chat.activity_working'));
+  if (stream === 'tool') {
+    if (/^(start|running|request|call|begin|progress)$/.test(phase)) {
+      return { key: 'tool_calling', toolName, detail: toolDetail(), action };
+    }
+    if (/^(error|failed)$/.test(phase) || data.isError === true) {
+      return {
+        key: 'failed',
+        toolName,
+        detail: compact(data.error || data.message || data.result_preview || ''),
+        action,
+      };
+    }
+    if (/^(end|result|success|completed|done)$/.test(phase)) {
+      return {
+        key: 'tool_completed',
+        toolName,
+        detail: toolDetail(),
+        action,
+        impact: action === 'read' ? 'unchanged' : action === 'write' ? 'modified' : 'unknown',
+        ...(Number.isFinite(Number(data.duration_ms)) ? { durationMs: Number(data.duration_ms) } : {}),
+      };
+    }
+    return { key: 'working' };
+  }
+  if (stream === 'cli') {
+    const cliType = String(data.type || '').toLowerCase();
+    if (cliType === 'permission-request') {
+      if (data.autoDecided === 'allow') return { key: 'permission_granted', toolName };
+      if (data.autoDecided === 'deny') return { key: 'permission_denied', toolName };
+      return { key: 'waiting_permission', toolName };
+    }
+    if (cliType === 'tool-event') {
+      const cliPhase = String(data.phase || '').toLowerCase();
+      if (cliPhase === 'result' && (data.isError === true || data.error)) {
+        return { key: 'failed', toolName, detail: compactDetail(data.error || data.output), action };
+      }
+      if (cliPhase === 'use') {
+        return { key: 'tool_calling', toolName, detail: compactDetail(data.input), action };
+      }
+      if (cliPhase === 'result') {
+        return {
+          key: 'tool_completed',
+          toolName,
+          detail: compactDetail(data.input),
+          action,
+          impact: action === 'read' ? 'unchanged' : action === 'write' ? 'modified' : 'unknown',
+        };
+      }
+      return { key: 'working' };
+    }
+    if (cliType === 'idle') return { key: 'waiting_output' };
+    if (cliType === 'status' && /^(error|failed|timeout)$/.test(phase)) {
+      return { key: 'failed', detail: compact(data.message || data.error || '') };
+    }
+  }
+  if (stream === 'error') return { key: 'failed', detail: compact(data.message || data.text || '') };
+  return { key: 'working' };
+}
+
+function _activityTextFromStatus(status) {
+  const item = status && typeof status === 'object' ? status : { key: 'working' };
+  switch (item.key) {
+    case 'tool_calling':
+      return t({
+        read: 'chat.activity_reading',
+        write: 'chat.activity_modifying',
+        run: 'chat.activity_running_command',
+      }[item.action] || 'chat.activity_calling_tool', {
+        tool: item.toolName || 'tool',
+        target: item.detail || item.toolName || 'tool',
+        detail: item.detail ? ` · ${item.detail}` : '',
+      });
+    case 'planning': return t('chat.activity_planning');
+    case 'waiting_permission': return t('chat.activity_waiting_permission');
+    case 'permission_granted': return t('chat.activity_permission_granted');
+    case 'permission_denied': return t('chat.activity_permission_denied', {
+      tool: item.toolName ? ` · ${item.toolName}` : '',
+    });
+    case 'generating': return t('chat.activity_writing');
+    case 'retrying':
+      return item.attempt > 1
+        ? t('model.retrying_n', { attempt: item.attempt })
+        : t('model.retrying');
+    case 'waiting_output': return t('chat.activity_waiting_output');
+    case 'failed': return t('chat.activity_failed', { detail: item.detail ? ` · ${item.detail}` : '' });
+    case 'tool_completed': return t('chat.activity_tool_result', {
+      tool: item.toolName || 'tool',
+      target: item.detail ? ` · ${item.detail}` : '',
+    });
+    default: return t('chat.activity_working');
+  }
+}
+
+function _streamingUpdateActivityFromEvent(msg, evt) {
+  const status = _activityStatusFromEvent(evt);
+  const previous = msg && msg._activitySummary;
+  if (msg && status && status.key === 'tool_calling') {
+    msg._activitySummary = { ...status };
+  } else if (msg && status && status.key === 'tool_completed') {
+    const sameTool = previous && previous.toolName === status.toolName;
+    const merged = { ...(sameTool ? previous : {}), ...status };
+    if (sameTool && !status.detail && previous.detail) merged.detail = previous.detail;
+    msg._activitySummary = merged;
+  } else if (msg && status && status.key === 'failed' && (status.toolName || previous?.toolName)) {
+    const sameTool = previous && (!status.toolName || previous.toolName === status.toolName);
+    const merged = { ...(sameTool ? previous : {}), ...status };
+    if (sameTool && previous.detail) merged.detail = previous.detail;
+    msg._activitySummary = merged;
+  }
+  _streamingUpdateActivity(msg, _activityTextFromStatus(status));
 }
 
 // Cancel any rAF queued by `_streamingAppendFinalDelta`. Callers that are
@@ -14396,7 +14590,7 @@ function _cancelPendingStreamRaf(msg) {
 // agent edit chats skip it by design).
 function _streamingSetFinal(msg, text, { archive = false } = {}) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  _streamingFinishActivity(msg, _activityTerminalText(msg, 'completed'), 'completed');
   const finalEl = msg.querySelector('[data-role="final"]');
   if (!finalEl) return;
   _cancelPendingStreamRaf(msg);
@@ -14458,7 +14652,7 @@ function _streamingSetFinal(msg, text, { archive = false } = {}) {
 
 function _streamingSetError(msg, text) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  _streamingFinishActivity(msg, _activityTerminalText(msg, 'failed', text), 'failed');
   _cancelPendingStreamRaf(msg);
   msg.dataset.failed = '1';
   // Freeze the live preview line so it stops looking like it's still streaming.
@@ -14476,7 +14670,10 @@ function _streamingSetError(msg, text) {
   if (details) {
     const body = details.querySelector('.stream-process-body');
     const hasProcess = !!body && body.children.length > 0;
-    if (hasProcess) details.style.display = '';
+    if (hasProcess) {
+      details.removeAttribute('open');
+      details.style.display = '';
+    }
   }
   const finalEl = msg.querySelector('[data-role="final"]');
   if (!finalEl) return;
@@ -14505,7 +14702,7 @@ function _streamingSetError(msg, text) {
 // content streamed into the process pane; just stamps a "stopped" note.
 function _streamingMarkAborted(msg) {
   _hideThinking(msg);
-  _streamingStopActivity(msg);
+  _streamingFinishActivity(msg, _activityTerminalText(msg, 'cancelled'), 'cancelled');
   // Freeze any live preview line so it's not misread as still generating.
   const live = msg.querySelector('.stream-process-live');
   if (live) {
@@ -14520,7 +14717,10 @@ function _streamingMarkAborted(msg) {
     bubble.appendChild(note);
   }
   const details = msg.querySelector('.stream-process');
-  if (details) details.style.display = '';
+  if (details) {
+    details.removeAttribute('open');
+    details.style.display = '';
+  }
 }
 
 /**

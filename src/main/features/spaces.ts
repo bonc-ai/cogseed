@@ -515,7 +515,7 @@ function baseAgentToAgentId(agents: ReadonlyArray<{ agent_id?: string; runtime?:
 }
 
 /** 空间列表 + 派生展示元数据（模板名/资源数/失效数）。坏文件跳过。
- *  失效数用真实有效集合（listSkillCatalog/listAgents，均有磁盘缓存）：一次构造、
+ *  失效数用真实有效集合（listSkillCatalogForUser/listAgentsForUser，均有磁盘缓存）：一次构造、
  *  全部空间复用，避免空集合导致「所有引用全失效」的假阳性。 */
 export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   const startedAt = Date.now();
@@ -531,8 +531,8 @@ export async function listSpaces(uid: string): Promise<SpaceWithMeta[]> {
   }
   const ids = await _listSpaceIds(uid);
   const [agents, skills] = await Promise.all([
-    import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
+    import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []),
   ]);
   const valid = {
     skills: new Set(skills.map((s) => s.id)),
@@ -787,7 +787,7 @@ export async function createSpaceFromDraft(
   }
   // 3. 主技能（id 精确 → 名字模糊；找不到/禁用 → 忽略 + correction）
   let mainSkillRef: SpaceAssetRef | undefined;
-  const skillsList = await import('./skills').then((m) => m.listSkillCatalog()).catch(() => []);
+  const skillsList = await import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []);
   if (draft.main_skill_ref && draft.main_skill_ref.asset_id) {
     const rawId = draft.main_skill_ref.asset_id;
     const resolvedId = resolveDraftResourceId(skillsList, rawId);
@@ -815,7 +815,7 @@ export async function createSpaceFromDraft(
     extraSkills.push(resolvedId);
   }
   // 5. extra 智能体：存在 + 去重（内部 + 模板内置——模板内置属冗余，自动剔除不算错误）
-  const agentsList = await import('./agents').then((m) => m.listAgents()).catch(() => []);
+  const agentsList = await import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []);
   const extraAgents: string[] = [];
   const seenAgents = new Set<string>();
   for (const id of draft.extra_agent_ids || []) {
@@ -1132,12 +1132,12 @@ export async function pruneInvalidSpaceResources(
   return { ok: true, removed };
 }
 
-/** 用户级派生：内部用 listAgents/listSkillCatalog 构造有效集合（均有磁盘缓存），
+/** 用户级派生：内部用 listAgentsForUser/listSkillCatalogForUser 构造有效集合（均有磁盘缓存），
  *  再走纯函数。仅绑空间的项目在 runTurn 热路径上调用；未绑空间零开销。 */
 export async function resolveSpaceResourcesForUser(uid: string, space: Space): Promise<SpaceResources> {
   const [agents, skills] = await Promise.all([
-    import('./agents').then((m) => m.listAgents()).catch(() => []),
-    import('./skills').then((m) => m.listSkillCatalog()).catch(() => []),
+    import('./agents').then((m) => m.listAgentsForUser(uid)).catch(() => []),
+    import('./skills').then((m) => m.listSkillCatalogForUser(uid)).catch(() => []),
   ]);
   return resolveSpaceResources(space, {
     skills: new Set(skills.map((s) => s.id)),
