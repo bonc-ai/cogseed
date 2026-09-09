@@ -31,6 +31,7 @@ async-mutex 0.5.0                     MIT      https://github.com/DirtyHairy/asy
 better-sqlite3 12.10.0                MIT      https://github.com/WiseLibs/better-sqlite3
 electron-log 5.4.3                    MIT      https://github.com/megahertz/electron-log
 fastembed 2.1.0                       MIT      https://github.com/Anush008/fastembed-js
+@jsquash/webp 1.5.0                   Apache-2.0  https://github.com/jamsinclair/jSquash
 jimp 1.6.1                            MIT      https://github.com/jimp-dev/jimp
 mammoth 1.12.0                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
 node-pty 1.0.0                        MIT      https://github.com/microsoft/node-pty
@@ -41,9 +42,16 @@ sqlite-vec 0.1.9                      MIT OR Apache-2.0  https://github.com/asg0
 tar 7.5.20                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
 tsx 4.21.0                            MIT      https://github.com/privatenumber/tsx
 undici 7.29.0                         MIT      https://github.com/nodejs/undici
+wasm-feature-detect 1.9.0             Apache-2.0  https://github.com/GoogleChromeLabs/wasm-feature-detect
 ws 8.21.3                             MIT      https://github.com/websockets/ws
 yaml 2.9.0                            ISC      https://github.com/eemeli/yaml
 zod 3.25.76                           MIT      https://github.com/colinhacks/zod
+
+@jsquash/webp (webp image decoding for inbound feishu images) and its
+    transitive dependency wasm-feature-detect are Apache-2.0. The webp
+    wasm/dec codec bundled with @jsquash/webp is derived from Squoosh
+    (libwebp) and ships in the package as .wasm binaries — distributed
+    with CogSeed's packaged resources.
 
 --------------------------------------------------------------------
 2. Downloaded offline speech-recognition model
@@ -292,6 +300,19 @@ AI Agent Board
     CogSeed adapts the canonical JSON ordering used for orchestration request
     snapshots and the task-group status counter to its local task model. The
     adapted files retain the upstream copyright and SPDX license declaration.
+
+assistant-ui
+    Copyright (c) assistant-ui contributors
+    Source: https://github.com/assistant-ui/assistant-ui
+    License: MIT
+    CogSeed references the message parts model (packages/core/src/types/
+    message.ts: part kinds, MessageStatus, MessagePartStreamStatus, part-level
+    tool-call timing semantics) and the packages/react-opencode layered event
+    source / projection / permission-approval structure as the protocol and
+    layering reference for its chat_events contract and local-CLI projection.
+    No assistant-ui source is distributed with CogSeed and it is not an npm
+    dependency; only a semantic alignment table was derived from study of the
+    upstream types.
 
 --------------------------------------------------------------------
 10. License text policy

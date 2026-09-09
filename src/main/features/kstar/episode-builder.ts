@@ -44,6 +44,9 @@ export interface GroupKstarMessageInput {
   process?: Array<
     | { type: 'progress'; text: string; event?: { stream: string; data?: unknown } }
     | { type: 'event'; event: { stream: string; data?: unknown } }
+    // conv-core 存储补差：消息 process 可含 chat_events 结构化条目（chatItem/
+    // turn）。episode 构建只消费 progress/event 老形状（processEvent 窄化）。
+    | { type: 'chatItem' | 'turn'; item?: unknown; turn?: unknown }
   >;
   recall_citations?: Array<{
     asset_id: string;
@@ -218,7 +221,8 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
 }
 
 function processEvent(item: NonNullable<GroupKstarMessageInput['process']>[number]): { stream: string; data?: unknown } | undefined {
-  return item.type === 'event' ? item.event : item.event;
+  // 老格式两形态都可能有 event；chat_events 新条目（chatItem/turn）无此字段。
+  return item.type === 'event' || item.type === 'progress' ? item.event : undefined;
 }
 
 function argumentKeySummary(value: unknown): string | undefined {

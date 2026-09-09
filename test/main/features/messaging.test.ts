@@ -3132,3 +3132,4 @@ describe('iLink URL trust split (API base vs scan URL)', () => {
     expect(isTrustedIlinkBaseUrl('https://ilinkai.weixin.qq.com')).toBe(true);
   });
 });
+
