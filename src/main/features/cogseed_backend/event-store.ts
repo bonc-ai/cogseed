@@ -15,6 +15,7 @@ const COGSEED_TASK_EVENT_TYPES = new Set<string>([
   'task.started',
   'task.waiting_user',
   'model.delta',
+  'progress',
   'tool.started',
   'tool.finished',
   'task.completed',
@@ -23,6 +24,8 @@ const COGSEED_TASK_EVENT_TYPES = new Set<string>([
   'task.recoverable',
   'task.archived',
   'artifact',
+  // 与写入端既成事实对齐（见 types.ts CogSeedTaskEventType 注）。
+  'progress',
 ]);
 const log = createLogger('cogseed-backend:event-store');
 

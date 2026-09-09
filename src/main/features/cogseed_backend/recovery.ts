@@ -1,9 +1,13 @@
 import { nowIso, writeJson } from '../../storage';
+import { createLogger } from '../../logger';
+import { maskId } from '../../util/log-redact';
 import { isCogSeedTaskActiveStatus, markCogSeedTaskRecoverable } from './lifecycle';
 import { assertCogSeedUserId, cogseedRecoveryStateFile } from './paths';
 import { listCogSeedTasks, readCogSeedTask } from './task-store';
 import type { CogSeedGroupChatProjectionInput } from './group-chat-projection';
 import type { CogSeedTaskRecord } from './types';
+
+const recoveryLog = createLogger('cogseed-backend:recovery');
 
 export interface CogSeedRecoveryReport {
   recoveredCount: number;
@@ -87,10 +91,22 @@ async function runCogSeedTaskRecovery(
   const taskIds: string[] = [];
   for (const task of candidates) {
     if (activeTaskIds.has(task.taskId) || await options.isTaskActive?.(task)) continue;
-    const updated = await recoverCogSeedTask(userId, task.taskId, {
-      errorCode: 'worker_restart',
-      projectTaskEvent,
-    });
+    let updated;
+    try {
+      updated = await recoverCogSeedTask(userId, task.taskId, {
+        errorCode: 'worker_restart',
+        projectTaskEvent,
+      });
+    } catch (error) {
+      // 单任务恢复失败只隔离该任务（warn + 跳过）：冷启动恢复是每个 Outbox
+      // 条目独立的恢复单元，一条历史脏数据不能阻断整个应用启动（真机踩坑：
+      // 2026-09-07 共享数据中的 progress 事件行曾让启动直接失败）。
+      recoveryLog.warn('CogSeed boot task recovery isolated one failure', {
+        task_id: maskId(task.taskId),
+        error: (error as Error).message || String(error),
+      });
+      continue;
+    }
     if (!updated) continue;
     taskIds.push(updated.taskId);
   }
