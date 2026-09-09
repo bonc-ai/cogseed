@@ -378,6 +378,52 @@
     },
     {
       "type": "library",
+      "name": "webp",
+      "group": "@jsquash",
+      "version": "1.5.0",
+      "bom-ref": "cogseed@0.9.0|@jsquash/webp@1.5.0",
+      "author": "Jamie Sinclair",
+      "description": "Wasm webp encoder and decoder supporting the browser. Repackaged from Squoosh App.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/%40jsquash/webp@1.5.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/jamsinclair/jSquash.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/jamsinclair/jSquash#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/jamsinclair/jSquash/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/@jsquash/webp/-/webp-1.5.0.tgz",
+          "type": "distribution",
+          "comment": "as detected from npm-ls property \"resolved\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/@jsquash/webp"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "node-sdk",
       "group": "@larksuiteoapi",
       "version": "1.73.0",
@@ -3515,6 +3561,51 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/read-binary-file-arch"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "wasm-feature-detect",
+      "version": "1.9.0",
+      "bom-ref": "cogseed@0.9.0|wasm-feature-detect@1.9.0",
+      "author": "Surma",
+      "description": "A small library to detect which features of WebAssembly are supported in your current browser.",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/wasm-feature-detect@1.9.0",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/GoogleChromeLabs/wasm-feature-detect.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/GoogleChromeLabs/wasm-feature-detect#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/GoogleChromeLabs/wasm-feature-detect/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/wasm-feature-detect/-/wasm-feature-detect-1.9.0.tgz",
+          "type": "distribution",
+          "comment": "as detected from npm-ls property \"resolved\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/wasm-feature-detect"
         }
       ]
     },
@@ -11056,6 +11147,51 @@
         {
           "name": "cdx:npm:package:path",
           "value": "node_modules/sherpa-onnx-darwin-arm64"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "sherpa-onnx-win-x64",
+      "version": "1.13.6",
+      "bom-ref": "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6",
+      "author": "The next-gen Kaldi team",
+      "description": "Speech-to-text, text-to-speech, speaker diarization, and speech enhancement using Next-gen Kaldi without internet connection",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "acknowledgement": "declared"
+          }
+        }
+      ],
+      "purl": "pkg:npm/sherpa-onnx-win-x64@1.13.6",
+      "externalReferences": [
+        {
+          "url": "git+https://github.com/csukuangfj/sherpa-onnx.git",
+          "type": "vcs",
+          "comment": "as detected from PackageJson property \"repository.url\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx#readme",
+          "type": "website",
+          "comment": "as detected from PackageJson property \"homepage\""
+        },
+        {
+          "url": "https://github.com/csukuangfj/sherpa-onnx/issues",
+          "type": "issue-tracker",
+          "comment": "as detected from PackageJson property \"bugs.url\""
+        },
+        {
+          "url": "https://registry.npmjs.org/sherpa-onnx-win-x64/-/sherpa-onnx-win-x64-1.13.6.tgz",
+          "type": "distribution",
+          "comment": "as detected from npm-ls property \"resolved\""
+        }
+      ],
+      "properties": [
+        {
+          "name": "cdx:npm:package:path",
+          "value": "node_modules/sherpa-onnx-win-x64"
         }
       ]
     },
@@ -38796,7 +38932,8 @@
         "cogseed@0.9.0|vitest@4.1.11",
         "cogseed@0.9.0|ws@8.21.3",
         "cogseed@0.9.0|yaml@2.9.0",
-        "cogseed@0.9.0|zod@3.25.76"
+        "cogseed@0.9.0|zod@3.25.76",
+        "cogseed@0.9.0|@jsquash/webp@1.5.0"
       ]
     },
     {
@@ -38836,6 +38973,12 @@
       "ref": "cogseed@0.9.0|@eslint/js@10.0.1",
       "dependsOn": [
         "cogseed@0.9.0|eslint@10.9.0"
+      ]
+    },
+    {
+      "ref": "cogseed@0.9.0|@jsquash/webp@1.5.0",
+      "dependsOn": [
+        "cogseed@0.9.0|wasm-feature-detect@1.9.0"
       ]
     },
     {
@@ -39091,7 +39234,8 @@
     {
       "ref": "cogseed@0.9.0|sherpa-onnx-node@1.13.6",
       "dependsOn": [
-        "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6"
+        "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6",
+        "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6"
       ]
     },
     {
@@ -39323,6 +39467,9 @@
       "dependsOn": [
         "cogseed@0.9.0|debug@4.4.3"
       ]
+    },
+    {
+      "ref": "cogseed@0.9.0|wasm-feature-detect@1.9.0"
     },
     {
       "ref": "cogseed@0.9.0|axios@1.19.0",
@@ -40257,6 +40404,9 @@
     },
     {
       "ref": "cogseed@0.9.0|sherpa-onnx-darwin-arm64@1.13.6"
+    },
+    {
+      "ref": "cogseed@0.9.0|sherpa-onnx-win-x64@1.13.6"
     },
     {
       "ref": "cogseed@0.9.0|agent-base@7.1.4"
