@@ -119,6 +119,37 @@ export const userRoot       = (uid: string) => path.join(WS_ROOT, uid);
 export const userCloudRoot  = (uid: string) => path.join(userRoot(uid), 'cloud');
 export const userLocalRoot  = (uid: string) => path.join(userRoot(uid), 'local');
 
+// Creator Mode control-plane data. Cloud stores user-authored drafts, immutable
+// versions, state pointers, and audit history; local is reserved for machine-
+// private simulation/verification artifacts. Keep every path construction here.
+export const userCreatorCloudDir = (uid: string) => path.join(userCloudRoot(assertCreatorPathSegment(uid, 'user id')), 'creator');
+export const userCreatorLocalDir = (uid: string) => path.join(userLocalRoot(assertCreatorPathSegment(uid, 'user id')), 'creator');
+export const userCreatorDraftsDir = (uid: string) => path.join(userCreatorCloudDir(uid), 'drafts');
+export const userCreatorPresetsDir = (uid: string) => path.join(userCreatorCloudDir(uid), 'presets');
+export const userCreatorAuditFile = (uid: string) => path.join(userCreatorCloudDir(uid), 'audit.jsonl');
+export const userCreatorOperationJournalFile = (uid: string) => path.join(userCreatorCloudDir(uid), 'operations.jsonl');
+export const userCreatorAgentBindingsDir = (uid: string) => path.join(userCreatorLocalDir(uid), 'agent-bindings');
+
+function assertCreatorPathSegment(value: string, label: string): string {
+  if (!value || value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('\0')) {
+    throw new Error(`invalid creator ${label}`);
+  }
+  return value;
+}
+
+export const userCreatorDraftFile = (uid: string, draftId: string) =>
+  path.join(userCreatorDraftsDir(uid), `${assertCreatorPathSegment(draftId, 'draft id')}.json`);
+export const userCreatorPresetDir = (uid: string, presetId: string) =>
+  path.join(userCreatorPresetsDir(uid), assertCreatorPathSegment(presetId, 'preset id'));
+export const userCreatorPresetVersionsDir = (uid: string, presetId: string) =>
+  path.join(userCreatorPresetDir(uid, presetId), 'versions');
+export const userCreatorPresetVersionFile = (uid: string, presetId: string, version: string) =>
+  path.join(userCreatorPresetVersionsDir(uid, presetId), `${assertCreatorPathSegment(version, 'preset version')}.json`);
+export const userCreatorPresetStateFile = (uid: string, presetId: string) =>
+  path.join(userCreatorPresetDir(uid, presetId), 'state.json');
+export const userCreatorAgentBindingFile = (uid: string, presetId: string) =>
+  path.join(userCreatorAgentBindingsDir(uid), `${assertCreatorPathSegment(presetId, 'preset id')}.json`);
+
 // ── Cloud-synced per-user ────────────────────────────────────────────────
 export const cogseedAgentCloudRoot    = (uid: string) => path.join(userCloudRoot(uid), 'cogseed');
 export const cogseedAgentTasksDir     = (uid: string) => path.join(cogseedAgentCloudRoot(uid), 'tasks');
@@ -149,6 +180,7 @@ export const groupChatDir            = (uid: string, cid: string) => path.join(u
 export const groupChatMembersFile    = (uid: string, cid: string) => path.join(groupChatDir(uid, cid), 'members.json');
 export const groupChatStateFile      = (uid: string, cid: string) => path.join(groupChatDir(uid, cid), 'state.json');
 export const groupChatPlanFile       = (uid: string, cid: string) => path.join(groupChatDir(uid, cid), 'plan.json');
+export const groupChatBuilderFlowFile = (uid: string, cid: string) => path.join(groupChatDir(uid, cid), 'builder-flow.json');
 export const groupChatVisibilityDir  = (uid: string, cid: string) => path.join(groupChatDir(uid, cid), 'visibility');
 export const groupChatVisibilityFile = (uid: string, cid: string, actorId: string) =>
   path.join(groupChatVisibilityDir(uid, cid), `${actorId}.jsonl`);
@@ -998,6 +1030,8 @@ export function ensureUserLayout(uid: string): void {
     userKbDir(uid),
     userMemoryDir(uid),
     userCognitionDir(uid),
+    userCreatorCloudDir(uid),
+    userCreatorLocalDir(uid),
     userAgentsDir(uid),
     userSkillsDir(uid),
     userProjectsDir(uid),

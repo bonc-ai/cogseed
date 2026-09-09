@@ -315,6 +315,58 @@ describe('agents › ordinary dispatch policy', () => {
   });
 });
 
+describe('agents › explicit user scope', () => {
+  it('records runtime stats for the queued user when the active user differs', async () => {
+    const agents = await loadAgents();
+    const secondUid = 'u2';
+    const agentId = 'same-agent-id';
+    const secondAgentDir = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(secondAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(secondAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Second user agent', description: 'Second user agent', workflow: '',
+    }));
+    const result = await (agents.recordAgentRuntimeStats as any)(secondUid, agentId, {
+      duration_ms: 17, status: 'completed', aborted: false, errored: false,
+    });
+    expect(result.ok).toBe(true);
+    const statsPath = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId, 'runtime_stats.json');
+    expect(fs.existsSync(statsPath)).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'agents', agentId, 'runtime_stats.json'))).toBe(false);
+  });
+
+  it('uses the requested user for project-directory and Agent chat operations', async () => {
+    const agents = await loadAgents();
+    const secondUid = 'u2';
+    const agentId = 'same-agent-id';
+    const secondAgentDir = path.join(tmpDir, secondUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(secondAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(secondAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Second coding agent', description: 'Second coding agent', workflow: '',
+      runtime: { kind: 'cli', cli: 'codex', model: 'default' },
+    }));
+    const projectDir = path.join(tmpDir, 'second-project');
+    fs.mkdirSync(projectDir, { recursive: true });
+    expect((await agents.getAgentCliProjectDirInfo(secondUid, agentId))?.agent_id).toBe(agentId);
+    await agents.setAgentCliProjectDir(secondUid, agentId, projectDir);
+    expect((await agents.getAgentCliProjectDirInfo(secondUid, agentId))?.custom_path).toBe(projectDir);
+
+    const chatDir = path.join(tmpDir, secondUid, 'cloud', 'chats', 'agent', agentId);
+    fs.mkdirSync(chatDir, { recursive: true });
+    fs.writeFileSync(path.join(chatDir, 'chat.jsonl'), `${JSON.stringify({ role: 'user', content: 'private' })}\n`);
+    streamImpl.current = async function* () {
+      yield { type: 'final', text: '<agent><description_en>updated</description_en></agent>' };
+    };
+    const editEvents: any[] = [];
+    for await (const event of agents.streamSendToAgentEditChat(secondUid, agentId, 'edit this')) {
+      editEvents.push(event);
+    }
+    expect(editEvents.at(-1)).toMatchObject({ type: 'final' });
+    expect((await agents.getAgentChatMessages(secondUid, agentId)).length).toBeGreaterThan(0);
+    expect(await agents.clearAgentChat(secondUid, agentId)).toBe(true);
+    expect(fs.existsSync(path.join(chatDir, 'chat.jsonl'))).toBe(false);
+  });
+});
+
 describe('agents › normalizeAgent', () => {
   it('returns null for missing agent_id', async () => {
     const a = await loadAgents();
@@ -1328,14 +1380,14 @@ describe('agents › countP3394GatewayAgentsByCli (shared-gateway refcount)', ()
 describe('agents › createAgentFromBlocks', () => {
   it('backfills the default category when model-authored creates omit it', async () => {
     const a = await loadAgents();
-    const missing = await a.createAgentFromBlocks({
+    const missing = await a.createAgentFromBlocks(TEST_UID, {
       name: 'NoCategory',
       description_en: 'desc',
       workflow: 'Do the work.',
     });
     expect(missing?.category).toBe('general');
 
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'DataAgent',
       description_en: 'desc',
       workflow: 'Analyze the data.',
@@ -1348,11 +1400,11 @@ describe('agents › createAgentFromBlocks', () => {
 
   it('rejects creates missing mandatory name or workflow', async () => {
     const a = await loadAgents();
-    await expect(a.createAgentFromBlocks({
+    await expect(a.createAgentFromBlocks(TEST_UID, {
       name: 'NoWorkflow',
       description_en: 'desc',
     })).resolves.toBeNull();
-    await expect(a.createAgentFromBlocks({
+    await expect(a.createAgentFromBlocks(TEST_UID, {
       workflow: 'Do the work.',
       description_en: 'desc',
     })).resolves.toBeNull();
@@ -1361,7 +1413,7 @@ describe('agents › createAgentFromBlocks', () => {
   it('persists optional skill allowlist, input schema and interactive flag', async () => {
     writeSkillOnDisk('known-skill');
     const a = await loadAgents();
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'InteractiveHelper',
       description_en: 'desc',
       workflow: 'Ask for a topic, then use the selected skill.',
@@ -1386,7 +1438,7 @@ describe('agents › createAgentFromBlocks', () => {
 
   it('persists knowhow and standards as top-level agent fields', async () => {
     const a = await loadAgents();
-    const created = await a.createAgentFromBlocks({
+    const created = await a.createAgentFromBlocks(TEST_UID, {
       name: 'ProfiledHelper',
       description_en: 'desc',
       workflow: 'Read the task, then deliver.',
@@ -1403,9 +1455,63 @@ describe('agents › createAgentFromBlocks', () => {
     expect(raw.standards).toEqual(['Traceable output']);
     expect('profile' in raw).toBe(false);
   });
+
+  it('uses the explicit user id even when the active user changes', async () => {
+    const a = await loadAgents();
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('other-user');
+
+    const created = await a.createAgentFromBlocks(TEST_UID, {
+      name: 'ExplicitUserAgent',
+      description_en: 'desc',
+      workflow: 'Use the explicit user scope.',
+    });
+
+    expect(created).not.toBeNull();
+    expect(fs.existsSync(path.join(tmpDir, TEST_UID, 'cloud', 'agents', created?.agent_id || '', 'agent.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'other-user', 'cloud', 'agents', created?.agent_id || '', 'agent.json'))).toBe(false);
+  });
 });
 
 describe('agents › listAgents', () => {
+  it('invalidates the requested user cache after an explicit-user mutation', async () => {
+    const a = await loadAgents();
+    const users = await import('../../../src/main/features/users');
+    const otherUid = 'u2';
+    const agentId = 'cached-agent';
+    const agentDir = path.join(tmpDir, otherUid, 'cloud', 'agents', agentId);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'agent.json'), JSON.stringify({
+      agent_id: agentId, name: 'Before', description: '', workflow: '',
+    }));
+
+    const before = await a.listAgentsForUser(otherUid);
+    expect(before.find((agent) => agent.agent_id === agentId)?.name).toBe('Before');
+    users.activateUser(TEST_UID);
+    await a.updateAgentSpecForUser(otherUid, agentId, { name: 'After' });
+
+    const after = await a.listAgentsForUser(otherUid);
+    expect(after.find((agent) => agent.agent_id === agentId)?.name).toBe('After');
+  });
+
+  it('lists explicit user summaries without using the active user', async () => {
+    writeCustomAgent('requested-agent', { name: 'Requested Agent' });
+    const otherUid = 'other-user';
+    const otherDir = path.join(tmpDir, otherUid, 'cloud', 'agents', 'active-agent');
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.writeFileSync(path.join(otherDir, 'agent.json'), JSON.stringify({
+      agent_id: 'active-agent', name: 'Active Agent', created_at: 't', updated_at: 't',
+    }));
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+    const a = await loadAgents();
+
+    const summaries = await a.listAgentSummariesForUser(TEST_UID);
+
+    expect(summaries.map((agent) => agent.agent_id)).toContain('requested-agent');
+    expect(summaries.map((agent) => agent.agent_id)).not.toContain('active-agent');
+  });
+
   it('returns empty when both dirs are missing', async () => {
     const a = await loadAgents();
     expect(await a.listAgents()).toEqual([]);
@@ -1864,7 +1970,7 @@ describe('agents › appendAgentSkill', () => {
     // appendAgentSkill must NOT drop it the way updateCustomAgent would.
     writeCustomAgent('abc', { name: 'N', skill_list: ['existing'] });
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'learned-via-reflection');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'learned-via-reflection');
     expect(ok).toBe(true);
     const reread = await a.getAgent('abc');
     expect(reread?.skill_list).toEqual(['existing', 'learned-via-reflection']);
@@ -1873,7 +1979,7 @@ describe('agents › appendAgentSkill', () => {
   it('is a no-op when skill_list metadata is undefined', async () => {
     writeCustomAgent('abc', { name: 'N' }); // no skill_list
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'new-skill');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'new-skill');
     expect(ok).toBe(false);
     const reread = await a.getAgent('abc');
     expect(reread?.skill_list).toBeUndefined();
@@ -1882,20 +1988,39 @@ describe('agents › appendAgentSkill', () => {
   it('is a no-op when skill id is already present', async () => {
     writeCustomAgent('abc', { name: 'N', skill_list: ['dup'] });
     const a = await loadAgents();
-    const ok = await a.appendAgentSkill('abc', 'dup');
+    const ok = await a.appendAgentSkill(TEST_UID, 'abc', 'dup');
     expect(ok).toBe(false);
   });
 
   it('rejects invalid skill ids', async () => {
     writeCustomAgent('abc', { name: 'N', skill_list: [] });
     const a = await loadAgents();
-    expect(await a.appendAgentSkill('abc', '../escape')).toBe(false);
-    expect(await a.appendAgentSkill('abc', '')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', '../escape')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', '')).toBe(false);
   });
 
   it('returns false for missing agent', async () => {
     const a = await loadAgents();
-    expect(await a.appendAgentSkill('ghost', 'x')).toBe(false);
+    expect(await a.appendAgentSkill(TEST_UID, 'ghost', 'x')).toBe(false);
+  });
+
+  it('uses the explicit user scope even when the active user changes', async () => {
+    writeCustomAgent('abc', { name: 'User one', skill_list: ['existing'] });
+    const otherAgentDir = path.join(tmpDir, 'u2', 'cloud', 'agents', 'abc');
+    fs.mkdirSync(otherAgentDir, { recursive: true });
+    fs.writeFileSync(path.join(otherAgentDir, 'agent.json'), JSON.stringify({
+      agent_id: 'abc', name: 'User two', description: 'Test agent', category: 'general', workflow: '',
+      skill_list: ['existing'], created_at: '2026-04-18T10:00:00', updated_at: '2026-04-18T10:00:00',
+    }));
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('u2');
+    const a = await loadAgents();
+
+    expect(await a.appendAgentSkill(TEST_UID, 'abc', 'learned-via-reflection')).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(customAgentsDir(), 'abc', 'agent.json'), 'utf8')).skill_list)
+      .toEqual(['existing', 'learned-via-reflection']);
+    expect(JSON.parse(fs.readFileSync(path.join(otherAgentDir, 'agent.json'), 'utf8')).skill_list)
+      .toEqual(['existing']);
   });
 });
 

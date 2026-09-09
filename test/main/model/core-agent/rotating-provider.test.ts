@@ -626,8 +626,8 @@ describe('rotating-provider › 全部候选失败的耗尽错误带永久 code�
   });
 });
 
-describe('rotating-provider › 候选自己的输出上限(maxOutputTokens)', () => {
-  it('fallback 候选带 maxOutputTokens → params.maxTokens 被替换成候选自己的值', async () => {
+describe('rotating-provider › Creator 输出上限(maxOutputTokens)', () => {
+  it('fallback 候选 cap 高于 Creator ceiling → 实际 provider 请求取 min', async () => {
     const received: Array<{ model?: string; maxTokens?: number }> = [];
     const makeProvider = (id: string, b: FakeBehavior): LLMProvider => ({
       id,
@@ -643,6 +643,7 @@ describe('rotating-provider › 候选自己的输出上限(maxOutputTokens)', (
     const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
     const p = createRotatingProvider({
       providerId: 'openai',
+      maxOutputTokensCeiling: 8192,
       candidates: [
         {
           profileId: 'o1', providerId: 'openai', modelId: 'gpt-5.4', maxOutputTokens: 32000,
@@ -656,9 +657,8 @@ describe('rotating-provider › 候选自己的输出上限(maxOutputTokens)', (
     });
     const events = await collect(p.stream({ ...PARAMS, model: 'gpt-5.4', maxTokens: 32000 }));
     expect(events.filter((ev) => ev.type === 'provider_fallback')).toHaveLength(1);
-    expect(received[0]).toEqual({ model: 'gpt-5.4', maxTokens: 32000 });
-    // fallback：换成它自己的 cap，而不是继续带 primary 的 32000
-    expect(received[1]).toEqual({ model: 'deepseek-v4-flash', maxTokens: 16384 });
+    expect(received[0]).toEqual({ model: 'gpt-5.4', maxTokens: 8192 });
+    expect(received[1]).toEqual({ model: 'deepseek-v4-flash', maxTokens: 8192 });
   });
 
   it('候选未声明 maxOutputTokens → 透传调用方原值', async () => {
@@ -682,5 +682,47 @@ describe('rotating-provider › 候选自己的输出上限(maxOutputTokens)', (
     });
     await collect(p.stream({ ...PARAMS, maxTokens: 8192 }));
     expect(received).toEqual([{ model: 'm', maxTokens: 8192 }]);
+  });
+
+  it('complete fallback also takes the minimum of Creator ceiling, candidate cap, and caller cap', async () => {
+    const received: Array<{ model?: string; maxTokens?: number }> = [];
+    const authErr = Object.assign(new Error('Unauthorized'), { status: 401 });
+    const p = createRotatingProvider({
+      providerId: 'openai',
+      maxOutputTokensCeiling: 8192,
+      candidates: [
+        {
+          profileId: 'o1', providerId: 'openai', modelId: 'gpt-5.4', maxOutputTokens: 32000,
+          build: async () => ({
+            id: 'openai', name: 'openai',
+            async *stream() { yield { type: 'text_delta', text: 'unused' } as any; },
+            async complete(params) {
+              received.push({ model: params.model, maxTokens: params.maxTokens });
+              throw authErr;
+            },
+            async validateAuth() { return true; },
+          }),
+        },
+        {
+          profileId: 'd1', providerId: 'deepseek', modelId: 'deepseek-v4-flash', maxOutputTokens: 16384,
+          build: async () => ({
+            id: 'deepseek', name: 'deepseek',
+            async *stream() { yield { type: 'text_delta', text: 'unused' } as any; },
+            async complete(params) {
+              received.push({ model: params.model, maxTokens: params.maxTokens });
+              return {} as any;
+            },
+            async validateAuth() { return true; },
+          }),
+        },
+      ],
+    });
+
+    await p.complete({ ...PARAMS, model: 'gpt-5.4', maxTokens: 4096 });
+
+    expect(received).toEqual([
+      { model: 'gpt-5.4', maxTokens: 4096 },
+      { model: 'deepseek-v4-flash', maxTokens: 4096 },
+    ]);
   });
 });

@@ -74,6 +74,20 @@ async function buildBlock(uid: string): Promise<string> {
 }
 
 describe('agents_index block — header + per-entry shape', () => {
+  it('uses the requested uid when the active user is different', async () => {
+    writeAgent(customAgentsDir(), 'requested-agent', { name: 'RequestedAgent', description_en: 'Requested' });
+    const otherUid = 'u-agents-active';
+    const otherRoot = path.join(tmpDir, otherUid, 'cloud', 'agents');
+    writeAgent(otherRoot, 'active-agent', { name: 'ActiveAgent', description_en: 'Active' });
+    const users = await import('../../../../src/main/features/users');
+    users.activateUser(otherUid);
+
+    const text = await buildBlock(TEST_UID);
+
+    expect(text).toContain('RequestedAgent');
+    expect(text).not.toContain('ActiveAgent');
+  });
+
   it('header carries Read pattern, resolved ROOT values, and anti-prior warning', async () => {
     writeAgent(customAgentsDir(), 'a1b2c3d4', { name: 'Alpha', description_zh: 'A', description_en: 'A' });
     writeAgent(builtinAgentsDir(), 'e5f6a7b8', { name: 'Beta', description_zh: 'B', description_en: 'B' });

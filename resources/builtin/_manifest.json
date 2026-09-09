@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "content_tree_sha256": "3f12dbf2eb30976ce4f618516e8afd5eb437a01d7f400bd277359e1e0f0cef83",
+  "content_tree_sha256": "7e407effa73f5d0a49055c31604346312318afaf8f47a85a68dac75271072b06",
   "files": [
     {
       "path": "marketplace/agents/0fdb4da8a080/agent.json",
@@ -11,6 +11,11 @@
       "path": "marketplace/agents/1ce66a5d9875/agent.json",
       "bytes": 1184,
       "sha256": "336eff8a5d8b1769f94f326cdd9be2c0c3891d9617453f5d8cf12a4b15218c7a"
+    },
+    {
+      "path": "marketplace/agents/287ce6012204/agent.json",
+      "bytes": 6091,
+      "sha256": "c0986dfa61a3daf92d476ad9d082cc4a27d9d7c05d39adfb5424db52029c8e86"
     },
     {
       "path": "marketplace/agents/2a2d007ec7e2/agent.json",
@@ -6503,6 +6508,16 @@
           "79943922f937",
           "a5c864d6b267"
         ],
+        "embedded_skills": []
+      },
+      {
+        "id": "287ce6012204",
+        "name": "Agent 创建师",
+        "version": "1.0.0",
+        "icon": "sparkle",
+        "color": "violet",
+        "updated_at": "2026-09-04T00:00:00",
+        "skill_list": [],
         "embedded_skills": []
       },
       {
