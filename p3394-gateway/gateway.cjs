@@ -316,7 +316,10 @@ function escapeCmdCommand(value) {
 }
 
 function escapeCmdArgument(value, doubleEscapeMetaChars) {
-  let escaped = String(value);
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Keep every prompt segment in the same inert argv
+  // value instead of dropping or executing text after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
   escaped = '"' + escaped + '"';
@@ -333,23 +336,59 @@ function windowsSystem32Tool(name) {
 /** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
+  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
   if (pid && process.platform === 'win32') {
+    let killer;
     try {
-      const killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
       });
-      const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
-      killer.once('error', fallback);
-      killer.once('exit', (code) => { if (code !== 0) fallback(); });
-      if (typeof killer.unref === 'function') killer.unref();
-      return;
-    } catch { /* fall through to direct kill */ }
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+      const onClose = (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch {
+        fallbackOnce();
+        finish();
+      }
+    });
   }
   if (pid && process.platform !== 'win32') {
-    try { process.kill(-pid, signal); return; } catch { /* fall through */ }
+    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
   }
-  try { child.kill(signal); } catch { /* already gone */ }
+  fallback();
+  return Promise.resolve();
 }
 
 /** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
@@ -390,6 +429,34 @@ function buildWindowsCmdInvocation(cli, args) {
   };
 }
 
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
@@ -408,6 +475,13 @@ function spawnCli(cli, args, optsArg) {
   if (process.platform !== 'win32') return spawn(cli, args, opts);
   const resolved = windowsLookPath(cli) || cli;
   if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...opts,
+        env: { ...(opts.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
     const inv = buildWindowsCmdInvocation(resolved, args);
     return spawn(inv.command, inv.args, Object.assign({}, opts, { windowsVerbatimArguments: true }));
   }
@@ -866,12 +940,12 @@ const {
 
 // 薄包装：把网关进程级常量（CLI 命令、spawn）注入探测实现。
 function probeClaudeModels() {
-  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawn });
+  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawnCli, killTreeFn: killProcessTree });
 }
 // 通用枚举探测：按预设表的 inspect 声明（args+parser）spawn 解析。
 function probePresetInspect() {
   if (!preset || !preset.inspect) return null;
-  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawn });
+  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawnCli, killTreeFn: killProcessTree });
 }
 // 本网关的模型参数模板（env 覆盖 > 预设声明；null=无通道，信封 model 被忽略）。
 function modelArgTemplate() {
@@ -1061,7 +1135,7 @@ const oneshotRuntime = {
       ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
       : null;
     const viaInit = (preset && preset.initProbeArgs)
-      ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawn })
+      ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawnCli, killTreeFn: killProcessTree })
       : null;
     const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
     if (listResult && listResult.status === 'ready') {
@@ -2125,7 +2199,7 @@ class OpencodeRuntime {
       if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
         serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
       }
-      const child = spawn(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
+      const child = spawnCli(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
       entry.child = child;
       let errLog = '';
       child.stderr.on('data', (c) => { if (errLog.length < 8 * 1024) errLog += c; });
@@ -2291,7 +2365,7 @@ class OpencodeRuntime {
   close() {
     this.closing = true;
     for (const [, entry] of this.servers) {
-      try { if (entry.child) entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      if (entry.child) killProcessTree(entry.child, 'SIGTERM');
     }
     this.servers.clear();
     this.sessions.clear();
