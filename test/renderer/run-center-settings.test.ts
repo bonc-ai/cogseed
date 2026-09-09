@@ -286,17 +286,23 @@ function createHarness() {
 }
 
 describe('Run Center settings boundary', () => {
-  it('declares one canonical configuration surface with four independent regions', () => {
+  it('keeps the configuration pane model-first (no embedded execution regions)', () => {
     const html = read('src/renderer/index.html');
     const lazyFeatures = read('src/renderer/modules/lazy-features.js');
     const settings = read('src/renderer/modules/settings_tabs.js');
 
     expect(html).toContain('data-settings-tab="configuration"');
     expect(html).toContain('data-settings-pane="configuration"');
+    // 配置页从「模型配置」开始（2026-09-09 子安指令）：设置页不再内嵌
+    // 执行与协作区——Agents 面板归连接页（#216 语义），管理面留在
+    // run-center。run-center-settings 模块保留（host 缺失时 no-op），
+    // run-center 菜单的 worktrees/diagnostics 锚点跳转静默降级。
     for (const id of [
       'settings-execution-agents', 'settings-execution-gateways',
       'settings-execution-worktrees', 'settings-execution-diagnostics',
-    ]) expect(html).toContain(`id="${id}"`);
+      'settings-execution-collaboration',
+    ]) expect(html).not.toContain(`id="${id}"`);
+    expect(html).toContain('id="settings-model-authorizations"');
     expect(html.match(/id="panel-agents"/g)).toHaveLength(1);
     expect(html.match(/class="touchpoint-settings-shell/g)).toHaveLength(1);
     expect(settings).toContain("name === 'credentials' ? 'configuration' : name");
