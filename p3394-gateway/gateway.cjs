@@ -509,7 +509,9 @@ function isNodeShebangScript(cli) {
 /** Windows 感知的 CLI spawn：解析 shim 并选择正确的执行方式。 */
 function spawnCli(cli, args, optsArg) {
   const opts = optsArg || {};
-  if (process.platform !== 'win32') return spawn(cli, args, opts);
+  // killProcessTree signals -pid on POSIX, which only targets the CLI tree
+  // when the spawned CLI is the leader of its own process group.
+  if (process.platform !== 'win32') return spawn(cli, args, { ...opts, detached: true });
   const resolved = windowsLookPath(cli) || cli;
   if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
     const directShim = resolveWindowsCommandShim(resolved, args);
