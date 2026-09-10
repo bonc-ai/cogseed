@@ -26,6 +26,24 @@ const MAX_DELIVERY_CARD_JSON_LENGTH = 16_000;
 /** Local file path/name caps for file deliveries. */
 const MAX_DELIVERY_FILE_PATH_LENGTH = 1024;
 const MAX_DELIVERY_FILE_NAME_LENGTH = 240;
+/** G-17 入站图片引用上限（与入站信封投影格数一致；飞书单条消息当前
+ *  只有一图，上限为多图渠道留余量）。 */
+export const MAX_INBOUND_IMAGE_KEYS = 9;
+const MAX_INBOUND_IMAGE_KEY_LENGTH = 256;
+
+/** G-17：规整入站图片引用数组——只留非空字符串、去重保序、截断上限。
+ *  返回 undefined 表示"无图"，避免持久化空数组污染旧台账记录。 */
+export function normalizeInboundImageKeys(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const key = item.trim().slice(0, MAX_INBOUND_IMAGE_KEY_LENGTH);
+    if (!key || out.includes(key) || out.length >= MAX_INBOUND_IMAGE_KEYS) continue;
+    out.push(key);
+  }
+  return out.length ? out : undefined;
+}
 
 /** Validated card payload kept for restart recovery; invalid or oversized
  * cards are dropped so a corrupt entry can never wedge a delivery. */
@@ -128,6 +146,7 @@ function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingIn
   for (const [key, value] of Object.entries(raw.entries)) {
     const candidate = value as InboundLedgerEntry;
     if (!candidate || typeof candidate.updatedAt !== 'string' || !['pending', 'accepted', 'rejected', 'duplicate', 'failed'].includes(candidate.status)) continue;
+    const imageKeys = normalizeInboundImageKeys(candidate.imageKeys);
     entries[key] = {
       key,
       status: candidate.status,
@@ -142,6 +161,7 @@ function normalizeInbound(raw: Partial<MessagingInboundLedgerFile>): MessagingIn
         ? { threadId: candidate.threadId.trim().slice(0, 512) }
         : {}),
       ...(candidate.replyInThread === true ? { replyInThread: true } : {}),
+      ...(imageKeys ? { imageKeys } : {}),
       ...(typeof candidate.reason === 'string' ? { reason: candidate.reason.slice(0, 300) } : {}),
       receivedAt: typeof candidate.receivedAt === 'string' ? candidate.receivedAt : candidate.updatedAt,
       updatedAt: candidate.updatedAt,
@@ -265,13 +285,14 @@ export async function reserveInbound(uid: string, key: string, receivedAt = nowI
 export async function completeInbound(
   uid: string,
   key: string,
-  patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'internalMessageId' | 'replyToMessageId' | 'threadId' | 'replyInThread' | 'reason'>>,
+  patch: Pick<InboundLedgerEntry, 'status'> & Partial<Pick<InboundLedgerEntry, 'cid' | 'internalMessageId' | 'replyToMessageId' | 'threadId' | 'replyInThread' | 'imageKeys' | 'reason'>>,
 ): Promise<InboundLedgerEntry> {
   assertUserId(uid);
   boundedKey(key, 'inbound key');
   return getLock(inboundLocks, uid).runExclusive(async () => {
     const data = normalizeInbound(await readJson<Partial<MessagingInboundLedgerFile>>(userMessagingInboundLedgerFile(uid)));
     const current = data.entries[key] || { key, status: 'failed' as const, receivedAt: nowIso(), updatedAt: nowIso() };
+    const imageKeys = normalizeInboundImageKeys(patch.imageKeys);
     const next: InboundLedgerEntry = {
       ...current,
       status: patch.status,
@@ -280,6 +301,7 @@ export async function completeInbound(
       ...(patch.replyToMessageId ? { replyToMessageId: patch.replyToMessageId.slice(0, 512) } : {}),
       ...(patch.threadId ? { threadId: patch.threadId.slice(0, 512) } : {}),
       ...(patch.replyInThread === true ? { replyInThread: true } : {}),
+      ...(imageKeys ? { imageKeys } : {}),
       ...(patch.reason ? { reason: patch.reason.slice(0, 300) } : {}),
       updatedAt: nowIso(),
     };

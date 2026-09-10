@@ -22,6 +22,7 @@ import * as conversationAside from '../features/conversation_aside';
 import * as kbQa from '../features/kb_qa';
 import * as kbSummary from '../features/kb_summary';
 import * as kbMindmap from '../features/kb_mindmap';
+import * as kbDiscovery from '../features/kb_discovery';
 import * as shareFeishu from '../features/share/feishu-share';
 import * as shareCogseed from '../features/share/cogseed-publish';
 import * as personalContextManager from '../features/personal_context/manager';
@@ -33,6 +34,15 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
+import {
+  createChatEventProjectorState,
+  projectUpstreamEvent,
+} from '../features/chat_events/project-upstream';
+import {
+  respondInteraction,
+  setInteractionBroadcast,
+} from '../features/chat_events/interaction-hub';
 import * as companionRepro from '../features/companion_repro';
 import * as p3394 from '../features/p3394';
 import { P3394IpcChannel } from '../features/p3394_bridge/ipc-channel';
@@ -54,6 +64,8 @@ import * as kstarProjectionDecision from '../features/kstar/projection-decision-
 import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
+import * as kstarTrace from '../features/kstar/trace';
+import * as kstarFailures from '../features/kstar/failure-service';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -939,6 +951,18 @@ async function ensureKstarWakeProjectionConfirmed(
 }
 
 const invokeHandlers: Record<string, InvokeHandler> = {
+  // conv-core M2：双向交互（审批/提问）的渲染层回复入口。晚到/未知 id
+  // 由 hub 幂等吞掉（返回 handled:false，不抛错）。
+  'chat.interaction.reply': async (payload, _ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    const interactionId = typeof raw.interaction_id === 'string' ? raw.interaction_id : '';
+    if (!interactionId) return { ok: false, handled: false };
+    const handled = respondInteraction(interactionId, {
+      decision: raw.decision,
+      answer: raw.answer,
+    });
+    return { ok: true, handled };
+  },
   'stt.start': async (_payload, ctx) => stt.startSession(ctx.userId),
   'stt.pushAudio': async (payload, ctx) => {
     const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
@@ -956,7 +980,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
     return stt.stopSession(ctx.userId, raw.sessionId);
   },
+  'stt.cancel': async (payload, ctx) => {
+    const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+    if (typeof raw.sessionId !== 'string' || !safeId(raw.sessionId)) throw new Error('invalid session id');
+    stt.cancelSession(ctx.userId, raw.sessionId);
+  },
   'cogseed.task.start': async (payload, ctx) => cogseedBackend.cogseedIpcService.start(ctx.userId, payload),
+  'cogseed.task.create': async (payload, ctx) => cogseedBackend.cogseedIpcService.create(ctx.userId, payload),
   'cogseed.task.reassign': async (payload, ctx) => cogseedBackend.cogseedIpcService.reassign(ctx.userId, payload),
   'cogseed.task.read': async (payload, ctx) => cogseedBackend.cogseedIpcService.read(ctx.userId, payload),
   'cogseed.task.cancel': async (payload, ctx) => cogseedBackend.cogseedIpcService.cancel(ctx.userId, payload),
@@ -964,6 +994,7 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'cogseed.task.retry': async (payload, ctx) => cogseedBackend.cogseedIpcService.retry(ctx.userId, payload),
   'cogseed.task.resume': async (payload, ctx) => cogseedBackend.cogseedIpcService.resume(ctx.userId, payload),
   'cogseed.task.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.action(ctx.userId, payload),
+  'cogseed.task.archived.purge': async (_payload, ctx) => cogseedBackend.cogseedIpcService.purgeArchived(ctx.userId),
   'cogseed.collaboration.action': async (payload, ctx) => cogseedBackend.cogseedIpcService.collaborationAction(ctx.userId, payload),
   'cogseed.task.events': async (payload, ctx) => cogseedBackend.cogseedIpcService.events(ctx.userId, payload),
   'cogseed.task.list': async (_payload, ctx) => cogseedBackend.cogseedIpcService.board(ctx.userId),
@@ -2254,7 +2285,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   },
 
   'p3394.listWakeRequests': async ({ cid }, ctx) => {
-    if (!safeId(cid)) throw new Error('invalid cid');
+    // 控制中心（T3）：cid 可选——不传返回全量（跨会话待审批聚合），
+    // 传了按会话过滤（会话内审批卡原行为）。
+    if (cid !== undefined && !safeId(cid)) throw new Error('invalid cid');
     return { ok: true, requests: await p3394.listWakeRequests(ctx.userId, cid) };
   },
 
@@ -2673,7 +2706,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   'recall.workspaceRefs.remove': async ({ id } = {}, ctx) => { if (!safeId(id)) throw new Error('invalid workspace reference id'); await recallWorkspaceRefs.removeWorkspaceAssetReference(ctx.userId, id); return { ok: true }; },
 
   'recall.projections.preview': async ({ taskRunId, workspaceId, purpose, taskText, authorization, expiresAt } = {}, ctx) => { if (!safeId(taskRunId) || (workspaceId !== undefined && !safeId(workspaceId)) || typeof purpose !== 'string' || (taskText !== undefined && (typeof taskText !== 'string' || taskText.length > 2_000)) || (authorization !== undefined && authorization !== 'user_confirmed' && authorization !== 'workspace_policy' && authorization !== 'not_required') || (expiresAt !== undefined && typeof expiresAt !== 'string')) throw new Error('invalid recall projection'); return { ok: true, projection: await recallProjection.previewContextProjection(ctx.userId, { taskRunId, ...(workspaceId !== undefined ? { workspaceId } : {}), purpose, ...(taskText !== undefined ? { taskText } : {}), ...(authorization !== undefined ? { authorization } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) }) }; },
-  'recall.projections.list': async ({ workspaceId, status, includeExpired, limit } = {}, ctx) => {
+  'recall.projections.list': async ({ taskRunId, conversationId, workspaceId, status, includeExpired, limit } = {}, ctx) => {
+    if (taskRunId !== undefined && !safeId(taskRunId)) throw new Error('invalid task run id');
+    if (conversationId !== undefined && !safeId(conversationId)) throw new Error('invalid conversation id');
     if (workspaceId !== undefined && !safeId(workspaceId)) throw new Error('invalid workspace id');
     if (status !== undefined && !['preview', 'confirmed', 'deferred', 'rejected', 'expired', 'revoked'].includes(status)) throw new Error('invalid projection status');
     if (includeExpired !== undefined && typeof includeExpired !== 'boolean') throw new Error('invalid include expired');
@@ -2681,6 +2716,8 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return {
       ok: true,
       projections: await recallProjection.listContextProjections(ctx.userId, {
+        ...(taskRunId !== undefined ? { taskRunId } : {}),
+        ...(conversationId !== undefined ? { conversationId } : {}),
         ...(workspaceId !== undefined ? { workspaceId } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(includeExpired !== undefined ? { includeExpired } : {}),
@@ -2711,6 +2748,24 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     try {
       const review = await kstarReviewService.readKstarReview(ctx.userId, episodeId);
       return { ok: true, review: review ? { reviewState: review.reviewState } : null };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.trace.read': async ({ conversationId, taskId } = {}, ctx) => {
+    if ((conversationId === undefined && taskId === undefined)
+      || (conversationId !== undefined && !safeId(conversationId))
+      || (taskId !== undefined && !safeId(taskId))) return { ok: false, error: 'invalid kstar trace input' };
+    try {
+      return { ok: true, trace: await kstarTrace.readKstarTrace(ctx.userId, { ...(conversationId !== undefined ? { conversationId } : {}), ...(taskId !== undefined ? { taskId } : {}) }) };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.failures.list': async ({ conversationId } = {}, ctx) => {
+    if (conversationId !== undefined && !safeId(conversationId)) return { ok: false, error: 'invalid kstar failure conversation id' };
+    try {
+      return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId !== undefined ? { conversationId } : {}) };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
@@ -4059,6 +4114,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（见 kb_summary 头注）。
+          ephemeralSession: true,
+          // kb_summary 超时到点会先 abort：透传信号真正中止上游请求、释放模型 turn 锁。
+          ...(opts.signal ? { abortSignal: opts.signal } : {}),
           skillList: [],
           disableTools: true,
         });
@@ -4083,6 +4143,9 @@ const invokeHandlers: Record<string, InvokeHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单发无状态整理：不写/不复用持久 aside 会话——固定会话会累积历史，
+          // 失败重试后下一次要先跑 ~30s 上下文压缩再请求（kb.summary/kb.mindmap 同款）。
+          ephemeralSession: true,
           skillList: [],
           disableTools: true,
         });
@@ -4277,6 +4340,89 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     return shareCogseed.reviewCogseedMember(ctx.userId, spaceId, memberId as number, verdict === 'reject' ? 'reject' : 'approve');
   },
 
+  // 打开知识库文件内容（点击文件查看）：个人库 relPath 或 空间库 spaceId+path。
+  // 文本直读（md 渲染为 Markdown）；docx/xlsx/pptx 转排版化 HTML 预览；
+  // pdf 走 kb-file:// 原生 PDFium iframe（排版不失真），此处只校验返回路径。
+  'kb.openFile': async ({ spaceId, path: relPath } = {}, ctx) => {
+    const p = typeof relPath === 'string' ? relPath.trim() : '';
+    if (!p) return { ok: false, error: 'missing path' };
+    try {
+      let abs: string;
+      let display = p;
+      let spaceRoot: string | null = null;
+      if (typeof spaceId === 'string' && spaceId) {
+        // 空间库：路径在空间 contexts 目录下（防穿越）
+        if (!safeId(spaceId)) return { ok: false, error: 'invalid spaceId' };
+        const { spaceContextsDir } = await import('../paths');
+        const root = path.resolve(spaceContextsDir(ctx.userId, spaceId));
+        spaceRoot = root;
+        abs = path.resolve(root, p);
+        if (abs !== root && !abs.startsWith(root + path.sep)) {
+          return { ok: false, error: 'invalid path' };
+        }
+      } else {
+        // 个人库：relPath（含库前缀）经 contexts 安全解析（越界/不存在会 throw）
+        abs = contexts.resolveContextFileAbsPath(p);
+      }
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+        return { ok: false, error: 'file not found' };
+      }
+      const ext = path.extname(abs).toLowerCase();
+      const name = path.basename(abs);
+      const TEXT_EXTS = ['.md', '.markdown', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm', '.log', '.py', '.ts', '.js', '.tsx', '.jsx', '.css', '.sql', '.sh', '.xml', '.toml', '.ini', '.conf', '.go', '.rs', '.java', '.c', '.cpp', '.rb', '.kt'];
+      if (TEXT_EXTS.includes(ext)) {
+        const MAX = 2 * 1024 * 1024;
+        const st = fs.statSync(abs);
+        if (st.size > MAX) return { ok: false, error: 'too_large', size: st.size };
+        let text = fs.readFileSync(abs, 'utf8');
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        // .md/.markdown 渲染为 Markdown（阅读视图），其余文本纯文本展示
+        const kind = (ext === '.md' || ext === '.markdown') ? 'markdown' : 'text';
+        return { ok: true, kind, name, path: display, content: text };
+      }
+      const officeKind = _officePreviewKindForExt(ext);
+      if (officeKind) {
+        // docx / xlsx / pptx → 排版化 HTML 预览（与 produced.officePreviewHtml 同链）
+        const st = fs.statSync(abs);
+        const MAX_OFFICE = 50 * 1024 * 1024;
+        if (st.size > MAX_OFFICE) return { ok: false, error: 'too_large', size: st.size };
+        const cacheKey = `${abs}:${st.size}:${st.mtimeMs}:kb`;
+        const cached = _officePreviewCacheGet(cacheKey);
+        if (cached) return { ok: true, kind: 'office', officeKind: cached.kind, name, path: display, html: cached.html };
+        try {
+          const buf = fs.readFileSync(abs);
+          let fragment = '';
+          if (officeKind === 'word') {
+            const { docxBufferToHtml } = await import('../util/extract-docx');
+            fragment = await docxBufferToHtml(buf);
+          } else if (officeKind === 'spreadsheet') {
+            const { xlsxBufferToHtml } = await import('../util/extract-office');
+            fragment = xlsxBufferToHtml(buf);
+          } else {
+            const { pptxBufferToHtml } = await import('../util/extract-office');
+            fragment = pptxBufferToHtml(buf);
+          }
+          const html = _wrapOfficePreviewHtml(officeKind, name, fragment || '<p class="office-muted">（暂无可见内容）</p>');
+          _officePreviewCachePut(cacheKey, html, officeKind);
+          return { ok: true, kind: 'office', officeKind, name, path: display, html };
+        } catch (err) {
+          return { ok: false, error: String((err as Error).message || 'preview failed'), name };
+        }
+      }
+      if (ext === '.pdf') {
+        // 原生 PDFium iframe 渲染（排版 100% 保持）；渲染层用 kb-file:// 构造 src
+        return { ok: true, kind: 'pdf', name, path: display, spaceId: spaceRoot ? (typeof spaceId === 'string' ? spaceId : undefined) : undefined };
+      }
+      return { ok: false, error: `暂不支持预览 ${ext} 格式`, kind: 'unsupported', name };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      // contexts.resolveContextFileAbsPath 对缺失文件抛 "not found: <rel>"（ENOENT）
+      const error = code === 'ENOENT' || msg.includes('not found:') ? 'file not found' : msg;
+      return { ok: false, error };
+    }
+  },
+
   // 网页链接抓取导入：fetch URL → 提取标题+正文 → 存为 Markdown 到当前库（个人/共享）。
   'kb.importWebUrl': async ({ dir, spaceId, url } = {}, ctx) => {
     const u = String(url || '').trim();
@@ -4363,6 +4509,44 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     }));
     return { summary, files };
   },
+
+  // ── Knowledge Base Discover (catalog + subscriptions + source overview) ──
+  'kb.discover.list': async (_payload, ctx) => kbDiscovery.listDiscoverView(ctx.userId),
+  'kb.discover.subscription.set': async ({ itemId, saved } = {}, ctx) => {
+    if (typeof itemId !== 'string' || typeof saved !== 'boolean') {
+      return { ok: false, error: 'invalid discovery subscription request' };
+    }
+    return kbDiscovery.setDiscoverSubscription(ctx.userId, itemId, saved);
+  },
+  'kb.discover.package.import': async ({ packageId } = {}, ctx) => {
+    if (typeof packageId !== 'string') return { ok: false, imported: 0, updated: 0, skipped: 0, error: 'invalid package id' };
+    return kbDiscovery.importOfficialPackage(ctx.userId, packageId);
+  },
+  'kb.discover.feishu.config.set': async ({ appId, appSecret } = {}, ctx) => {
+    await (await import('../features/kb_discovery_feishu')).setFeishuDiscoverApp(ctx.userId, { appId, appSecret });
+    return { ok: true };
+  },
+  'kb.discover.feishu.authorize': async (_payload, ctx) => {
+    const result = await (await import('../features/kb_discovery_feishu')).beginFeishuDiscoverAuthorize(ctx.userId);
+    return { ok: true, redirectUri: result.redirectUri, status: result.status };
+  },
+  'kb.discover.feishu.documents.list': async (_payload, ctx) => {
+    const items = await (await import('../features/kb_discovery_feishu')).listFeishuWikiDocuments(ctx.userId);
+    return { ok: true, items };
+  },
+  'kb.discover.feishu.documents.import': async ({ documentIds } = {}, ctx) => {
+    if (!Array.isArray(documentIds) || documentIds.some((id) => typeof id !== 'string')) return { ok: false, imported: 0, skipped: 0, alreadyImported: 0, empty: 0, items: [], error: 'invalid document selection' };
+    return (await import('../features/kb_discovery_feishu')).importFeishuWikiDocuments(ctx.userId, documentIds);
+  },
+  'kb.discover.feishu.documents.sync': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).syncImportedFeishuWikiDocuments(ctx.userId)
+  ),
+  'kb.discover.feishu.disconnect': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).disconnectFeishuDiscover(ctx.userId)
+  ),
+  'kb.discover.feishu.remove': async (_payload, ctx) => (
+    (await import('../features/kb_discovery_feishu')).removeFeishuDiscoverSource(ctx.userId)
+  ),
 
   // Force a disk-vs-db reconcile pass. Useful after users drop files into
   // contexts/ via Finder, or when vector.db is swapped out by sync and the
@@ -5583,6 +5767,15 @@ const invokeHandlers: Record<string, InvokeHandler> = {
 // The runtime ensures a terminal `{ type: 'done' }` is always sent, even on
 // unexpected throws.
 
+// conv-core M2：活跃会话流注册表。interaction-hub 的广播按 `${uid}:${cid}`
+// 找到当前活跃的 sendStream，把交互事件塞进它的队列（同会话并发流以后到
+// 者为准——会话串行，正常只有一条活跃流）。
+const _activeChatInteractionStreams = new Map<string, (event: unknown) => void>();
+setInteractionBroadcast((uid, event) => {
+  const push = _activeChatInteractionStreams.get(`${uid}:${(event as { cid?: string }).cid}`);
+  if (push) push(event);
+});
+
 const streamHandlers: Record<string, StreamHandler> = {
   'stt.results': async function* ({ sessionId }, ctx, signal) {
     if (typeof sessionId !== 'string' || !safeId(sessionId)) {
@@ -5656,15 +5849,26 @@ const streamHandlers: Record<string, StreamHandler> = {
 
   // KB grounded Q&A (知识库模块 S2)：ask_materials 证据边界内流式回答。
   // 只读管线：不进主对话/群聊 bus，不写 chats；无资料时明说（no_material）。
-  'kbqa.askStream': async function* ({ space_id, question, k, attach_paths, history }, ctx, signal) {
+  'kbqa.askStream': async function* ({ space_id, dir, question, k, attach_paths, history, model }, ctx, signal) {
     const q = String(question ?? '').trim();
     if (!q) {
       yield { type: 'error', text: 'empty question' };
       return;
     }
+    // 渲染层传入当前所在个人库目录：空 = 整库检索；非空 = 只在该目录内检索。
+    const dirScoped = typeof dir === 'string' && dir.trim() ? dir.trim().replace(/^\/+|\/+$/g, '') || null : null;
+    // 用户在问答框模型配置里选的模型（provider+model）；未传则走默认优先级组
+    const mo = (model && typeof model === 'object' &&
+      typeof (model as { provider?: unknown }).provider === 'string' &&
+      (model as { provider?: unknown }).provider &&
+      typeof (model as { model?: unknown }).model === 'string' &&
+      (model as { model?: unknown }).model)
+      ? { provider: (model as { provider: string }).provider, model: (model as { model: string }).model }
+      : undefined;
     try {
       const events = kbQa.kbAskStream(ctx.userId, {
         spaceId: space_id ? String(space_id) : null,
+        dir: dirScoped,
         question: q,
         k: typeof k === 'number' ? k : undefined,
         attachPaths: Array.isArray(attach_paths) ? attach_paths.filter((p: unknown) => typeof p === 'string') : undefined,
@@ -5675,9 +5879,15 @@ const streamHandlers: Record<string, StreamHandler> = {
           message: opts.message,
           systemPrompt: opts.systemPrompt,
           sessionId: opts.sessionId,
+          // 单问无状态：kb-qa 的证据边界随目录/空间变化，持久 aside 会话会把
+          // 之前其它范围的检索内容"记忆"进来，导致回答引用越界内容（如本次
+          // 引用上轮别处检索到的 AST.pdf#chunk 61）。多轮上下文已由渲染层通过
+          // history 文本参数显式提供，不需要模型侧会话记忆。
+          ephemeralSession: true,
           // 只回答问题：不给工具、不进技能（disableTools 才是真正强制项）。
           skillList: [],
           disableTools: true,
+          ...(mo ? { modelOverride: mo } : {}),
           abortSignal: signal,
         }) as AsyncIterable<{ type: string; text?: string }>,
       });
@@ -5744,6 +5954,18 @@ const streamHandlers: Record<string, StreamHandler> = {
     // state, since on-disk state.json briefly shows 'idle' in the gap
     // between an actor finishing and the next one's wake.
     const buf: GroupEvent[] = [];
+    // chat.* 结构化事件（conv-core 事件契约）：与老 stream:'group' 并行下发，
+    // 渲染层 chat-stream 组件群消费；老消费方不受影响。
+    const chatProjector = new GroupEventChatProjector();
+    // 双向交互（M2）：interaction-hub 的 requested/closed 事件经活跃流
+    // 注册表路由进本会话流（uid+cid 匹配），与投影事件同通道下发。
+    const interactionBuf: unknown[] = [];
+    const interactionStreamKey = `${ctx.userId}:${cid}`;
+    const pushInteraction = (event: unknown) => {
+      interactionBuf.push(event);
+      notify();
+    };
+    _activeChatInteractionStreams.set(interactionStreamKey, pushInteraction);
     let wake: (() => void) | null = null;
     let cancelled = signal.aborted;
     const notify = () => {
@@ -5808,6 +6030,9 @@ const streamHandlers: Record<string, StreamHandler> = {
     void sendPromise;
     try {
       drainLoop: while (!cancelled) {
+        while (interactionBuf.length) {
+          yield { type: 'event', event: { stream: 'chat', data: interactionBuf.shift() } };
+        }
         while (buf.length) {
           const ev = buf.shift()!;
           relayCount += 1;
@@ -5817,6 +6042,9 @@ const streamHandlers: Record<string, StreamHandler> = {
               firstProcessLogged = true;
               log.info(`sendStream first process cid=${cid} actor=${(ev as any).actor || ''} kind=${(ev as any).data?.type || ''}`);
             }
+          }
+          for (const chatEvent of chatProjector.project(ev)) {
+            yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
           }
           yield { type: 'event', event: { stream: 'group', data: ev } };
         }
@@ -5837,6 +6065,7 @@ const streamHandlers: Record<string, StreamHandler> = {
       }
     } finally {
       log.info(`sendStream closed cid=${cid} relayed=${relayCount} process=${processCount} sendDone=${sendDone} cancelled=${cancelled}`);
+      _activeChatInteractionStreams.delete(interactionStreamKey);
       try { unsub(); } catch { /* ignore */ }
       try { signal.removeEventListener?.('abort', onAbort); } catch { /* ignore */ }
     }
@@ -6029,11 +6258,19 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    yield* skills.streamSendToSkillChat(ctx.userId, id, text, {
+    // conv-core M3.4：skills 聊天流并行下发 chat.* 结构化事件（与主会话
+    // 同契约），渲染层 chat-stream 面板统一消费。
+    const projector = createChatEventProjectorState({ turnId: `skill-${id}-${Date.now()}`, cid: id, actorId: id });
+    for await (const ev of skills.streamSendToSkillChat(ctx.userId, id, text, {
       abortSignal: signal,
       ...(atts.length ? { attachments: atts } : {}),
       ...(modelText ? { modelText } : {}),
-    });
+    })) {
+      for (const chatEvent of projectUpstreamEvent(projector, ev)) {
+        yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
+      }
+      yield ev;
+    }
   },
 
   'agents.chat.sendStream': async function* ({ id, content, model_text, attachments }, ctx, signal) {
@@ -6048,11 +6285,18 @@ const streamHandlers: Record<string, StreamHandler> = {
     }
     const modelText = typeof model_text === 'string' ? model_text.trim() : '';
     const atts = Array.isArray(attachments) ? attachments.filter((n: any) => typeof n === 'string' && n) : [];
-    yield* agents.streamSendToAgentEditChat(ctx.userId, id, text, {
+    // conv-core M3.4：agents 聊天流同上。
+    const projector = createChatEventProjectorState({ turnId: `agent-${id}-${Date.now()}`, cid: id, actorId: id });
+    for await (const ev of agents.streamSendToAgentEditChat(ctx.userId, id, text, {
       abortSignal: signal,
       ...(atts.length ? { attachments: atts } : {}),
       ...(modelText ? { modelText } : {}),
-    });
+    })) {
+      for (const chatEvent of projectUpstreamEvent(projector, ev)) {
+        yield { type: 'event', event: { stream: 'chat', data: chatEvent } };
+      }
+      yield ev;
+    }
   },
 
   'space.kb.events': async function* ({ spaceId }, ctx, signal) {
@@ -6239,7 +6483,11 @@ export function register(): void {
         : (typeof rawCode === 'string' && /^\d+$/.test(rawCode.trim())
           ? Number(rawCode.trim())
           : (typeof rawCode === 'string' && rawCode ? rawCode : normalized.code));
-      log.error(`invoke ${channel} failed`, { error: normalized.error, code });
+      if (channel.startsWith('stt.')) {
+        log.error(`invoke ${channel} failed`, { stage: 'invoke', code });
+      } else {
+        log.error(`invoke ${channel} failed`, { error: normalized.error, code });
+      }
       const out: {
         ok: false;
         error: string;

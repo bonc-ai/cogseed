@@ -11,7 +11,6 @@ on:
   push:
     branches:
       - cicd
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -66,10 +65,14 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:resources:setup
+      - run: npm run lint
+      - run: node scripts/run-tests.mjs run --maxWorkers=1
+      - run: npm run test:resources
       - run: npm run test:platform-native
       - name: P3394 gateway protocol smoke
         run: node p3394-gateway/test/smoke.cjs
       - run: npm run build:win
+      - run: npm run verify:package:stt:win
       - name: Upload Windows test package
         uses: actions/upload-artifact@v4
         with:

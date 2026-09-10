@@ -22,6 +22,7 @@ export interface CogSeedSessionLineage {
 }
 
 export type CogSeedTaskStatus =
+  | 'planned'
   | 'created'
   | 'queued'
   | 'running'
@@ -68,6 +69,11 @@ export interface CogSeedTaskRecord {
   ownerId: string;
   status: CogSeedTaskStatus;
   task: string;
+  /** A saved Run Center task has no executor until the user starts it. */
+  plannedAt?: string;
+  /** Trusted deferred execution choices. Neither field is projected verbatim. */
+  spaceId?: string;
+  worktreeName?: string;
   conversationId?: string;
   agentId?: string;
   executionKind?: CogSeedTaskExecutionKind;
@@ -108,6 +114,11 @@ export interface CogSeedTaskRecord {
    * dashboard lists without rewriting its lifecycle status or history. */
   archivedAt?: string;
   errorCode?: string;
+  /** Optional durable bridge to the governed KSTAR records. */
+  kstarTaskId?: string;
+  kstarRequirementId?: string;
+  kstarProjectionId?: string;
+  kstarForecastId?: string;
 }
 
 export interface CogSeedSessionRecord {
@@ -164,11 +175,13 @@ export interface CogSeedRequestClaim {
 }
 
 export type CogSeedTaskEventType =
+  | 'task.planned'
   | 'task.created'
   | 'task.queued'
   | 'task.started'
   | 'task.waiting_user'
   | 'model.delta'
+  | 'progress'
   | 'tool.started'
   | 'tool.finished'
   | 'task.completed'
@@ -176,7 +189,11 @@ export type CogSeedTaskEventType =
   | 'task.cancelled'
   | 'task.recoverable'
   | 'task.archived'
-  | 'artifact';
+  | 'artifact'
+  // 过程叙述事件（载荷 {text}）。写入端（网关唤起提示等）早于本类型声明产出
+  // 该类型（2026-09-07 共享数据中已存在此类行）；读取端校验集收编它以对齐
+  // 读写——否则含此类行的任务会让冷启动恢复抛 malformed 并阻断应用启动。
+  | 'progress';
 
 export interface CogSeedTaskEvent {
   schemaVersion: typeof COGSEED_AGENT_BACKEND_SCHEMA_VERSION;

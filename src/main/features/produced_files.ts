@@ -114,6 +114,13 @@ function producedFileKind(input: string): ProducedFileKind {
  * validation answers whether each selected deliverable is actually usable.
  */
 function producerToolForPath(input: string, processItems: readonly unknown[]): string | undefined {
+  const referencesPath = (value: unknown, seen = new WeakSet<object>()): boolean => {
+    if (typeof value === 'string') return value === input;
+    if (!value || typeof value !== 'object' || seen.has(value)) return false;
+    seen.add(value);
+    return Object.values(value as Record<string, unknown>)
+      .some((child) => referencesPath(child, seen));
+  };
   for (let index = processItems.length - 1; index >= 0; index -= 1) {
     const item = processItems[index] as Record<string, unknown> | undefined;
     if (!item || typeof item !== 'object') continue;
@@ -124,9 +131,7 @@ function producerToolForPath(input: string, processItems: readonly unknown[]): s
     const data = (event.data && typeof event.data === 'object'
       ? event.data
       : {}) as Record<string, unknown>;
-    let serialized = '';
-    try { serialized = JSON.stringify(data); } catch { /* ignore malformed event */ }
-    if (!serialized.includes(input)) continue;
+    if (!referencesPath(data)) continue;
     const rawTool = data.name || data.toolName || data.tool;
     const tool = typeof rawTool === 'string' ? rawTool.trim().slice(0, 120) : '';
     if (tool) return tool;

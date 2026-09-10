@@ -47,6 +47,13 @@ export interface FeishuDriveFile {
 
 export type FeishuWikiObjType = 'docx' | 'sheet' | 'bitable' | 'file' | 'mindnote' | string;
 
+/** 飞书知识库空间；空间下的节点通过 Wiki Nodes API 分页列出。 */
+export interface FeishuWikiSpace {
+  space_id: string;
+  name?: string;
+  description?: string;
+}
+
 export interface FeishuWikiNode {
   node_token: string;
   obj_token: string;

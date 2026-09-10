@@ -58,8 +58,9 @@
     "p3394:call": "tsx scripts/p3394-call.ts",
     "audit:identity": "node scripts/check-cogseed-only-identifiers.mjs",
     "build:mac": "electron-builder --mac",
-    "prebuild:win": "node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
-    "build:win": "electron-builder --win --x64 --publish never"
+    "prebuild:win": "node scripts/ensure-sherpa-windows-runtime.cjs && node scripts/ensure-sqlite-electron-abi.mjs && node scripts/ensure-node-pty-electron-abi.mjs",
+    "build:win": "electron-builder --win --x64 --publish never",
+    "verify:package:stt:win": "node scripts/verify-packaged-stt-win.cjs"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
@@ -77,6 +78,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.79.9",
+    "@jsquash/webp": "1.5.0",
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@wecom/aibot-node-sdk": "1.0.7",
@@ -84,23 +86,26 @@
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^12.10.0",
     "electron-log": "^5.4.4",
+    "esbuild": "~0.28.2",
     "fastembed": "^2.1.0",
+    "get-tsconfig": "^4.7.5",
     "jimp": "^1.6.1",
     "mammoth": "^1.12.1",
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^6.2.108",
+    "resolve-pkg-maps": "^1.0.0",
     "sherpa-onnx-node": "^1.13.6",
     "socks-proxy-agent": "^8.0.5",
     "sqlite-vec": "^0.1.9",
-    "tar": "7.5.20",
-    "tsx": "^4.21.0",
+    "tar": "7.5.22",
+    "tsx": "^4.23.13",
     "undici": "^7.28.0",
     "ws": "^8.21.3",
     "yaml": "^2.6.1",
     "zod": "^3.24.0"
   },
   "overrides": {
-    "tar": "7.5.20"
+    "tar": "7.5.22"
   },
   "build": {
     "appId": "com.cogseed.desktop",
@@ -165,12 +170,15 @@
       "node_modules/resolve-pkg-maps/**/*",
       "node_modules/esbuild/**/*",
       "node_modules/@esbuild/**/*",
+      "node_modules/@jsquash/**/*",
       "node_modules/better-sqlite3/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/bindings/**/*",
       "node_modules/file-uri-to-path/**/*",
       "node_modules/sqlite-vec*/**/*",
-      "node_modules/fastembed/**/*"
+      "node_modules/fastembed/**/*",
+      "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*"
     ],
     "extraResources": [
       {
@@ -185,8 +193,10 @@
         "from": "resources/sherpa-onnx",
         "to": "sherpa-onnx",
         "filter": [
-          "**/*",
-          "!*.tar.bz2"
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/encoder-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/decoder-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/joiner-epoch-99-avg-1.onnx",
+          "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23/tokens.txt"
         ]
       },
       {
@@ -214,6 +224,14 @@
           "!**/.DS_Store",
           "!**/__pycache__/**",
           "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "resources/discovery-catalog",
+        "to": "discovery-catalog",
+        "filter": [
+          "**/*",
+          "!**/.DS_Store"
         ]
       },
       {

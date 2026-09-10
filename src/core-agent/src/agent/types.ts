@@ -128,6 +128,7 @@ export type AgentRunMeta = {
 /** Events emitted during an agent run for streaming. */
 export type AgentRunEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; delta: string }
   | { type: "tool_delta"; name?: string; id: string; inputDelta: string; inputBytes?: number }
   | { type: "tool_start"; name: string; id: string; input: unknown }
   | { type: "tool_progress"; name: string; id: string; phase?: string; message: string; data?: Record<string, unknown> }

@@ -2,6 +2,8 @@ import { createLogger } from '../../logger';
 import { safeId } from '../../storage';
 import { autoApplyRecallCandidate, saveRecallCandidate } from '../recall/candidate-service';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
+import { recordKstarFailure } from './failure-service';
+import { recallFieldsForKstarProposal } from './candidate-contract';
 import type { KstarCandidateProposal, KstarEpisodeRecord } from './types';
 
 /**
@@ -16,7 +18,9 @@ import type { KstarCandidateProposal, KstarEpisodeRecord } from './types';
  * line share one dedup domain (no duplicate assets, no content duplication).
  *
  * The candidate record carries learningProvenance (projectionId/forecastId/
- * episodeId/attribution) marking the KStar source.
+ * episodeId/attribution) marking the KStar source. forecastId is omitted only
+ * when advisory Forecast generation degraded; the ExtractionRun records that
+ * condition explicitly instead of fabricating an id.
  */
 
 const log = createLogger('kstar.direct-experience-assets');
@@ -28,11 +32,15 @@ export interface PrecipitateDirectExperienceResult {
   mergedIntoIds: string[];
   /** Candidates that became update proposals (quality-fusion, need user). */
   updateCandidateIds: string[];
+  /** Persistent failure ids for proposals that could not be written. */
+  failureIds: string[];
 }
 
 /** Lightweight source reference for requirement-level precipitation. */
 export interface DirectExperienceSource {
   id: string;
+  conversationId?: string;
+  requirementId?: string;
   workspaceId?: string;
 }
 
@@ -43,6 +51,7 @@ function proposalToCandidateInput(
   index: number,
 ): import('../recall/candidate-service').SaveRecallCandidateInput {
   const evidenceRefs = normalizeCognitionSourceRefs(proposal.sourceRefs);
+  const action = recallFieldsForKstarProposal(proposal);
   return {
     judgment: String(proposal.judgment || '').replace(/\s+/g, ' ').trim().slice(0, 4_000),
     // value = judgment：与 recall-bridge（drain 路径）一致——两条沉淀路径
@@ -55,7 +64,8 @@ function proposalToCandidateInput(
     ...(proposal.uncertainty ? { uncertainty: String(proposal.uncertainty).slice(0, 1_000) } : {}),
     suggestedType: proposal.suggestedType,
     suggestedScope: String(proposal.suggestedScope || 'general').slice(0, 500),
-    suggestedAction: 'create',
+    suggestedAction: action.suggestedAction,
+    ...(action.targetAssetId ? { targetAssetId: action.targetAssetId } : {}),
     sourceRefs: evidenceRefs,
     evidenceRefs,
     ...(proposal.applicableWhen ? { applicableWhen: proposal.applicableWhen } : {}),
@@ -92,6 +102,7 @@ export async function precipitateDirectExperienceFromSource(
     candidateIds: [],
     mergedIntoIds: [],
     updateCandidateIds: [],
+    failureIds: [],
   };
   for (const [index, proposal] of proposals.slice(0, 3).entries()) {
     try {
@@ -138,6 +149,14 @@ export async function precipitateDirectExperienceFromSource(
         sourceId: source.id,
         error: (error as Error).message,
       });
+      const failure = await recordKstarFailure(userId, {
+        stage: 'precipitation', errorCode: 'asset_write_failed',
+        errorMessage: (error as Error).message, operationKey: `precipitation-${source.id}-${index}`,
+        ...(source.conversationId ? { conversationId: source.conversationId } : {}),
+        ...(source.requirementId ? { requirementId: source.requirementId } : {}),
+        episodeId: source.id.startsWith('kse-') ? source.id : undefined,
+      }).catch(() => null);
+      if (failure) result.failureIds.push(failure.id);
     }
   }
   return result;

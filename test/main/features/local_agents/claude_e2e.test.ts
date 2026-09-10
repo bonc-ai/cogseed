@@ -4,6 +4,13 @@
  * that emits valid stream-json on stdout and then exits, then exercise
  * `claudeBackend.run` against it. On Windows the fixture is launched via
  * a .cmd shim, matching the npm-global CLI mechanism used in production.
+ *
+ * These fixtures pin the ONE-SHOT backend's behavior (message wording,
+ * exit-code mapping, cancel semantics), so they run with the persistent
+ * runtime switched off — that locked parity is itself the acceptance
+ * evidence for the COGSEED_PERSISTENT=0 fallback. The persistent duplex
+ * path has its own real-machine evidence suite
+ * (claude_persistent_e2e.test.ts).
  */
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
@@ -12,6 +19,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { claudeBackend } from '../../../../src/main/features/local_agents/backends/claude';
+
+process.env.COGSEED_PERSISTENT = '0';
 
 const isWindows = process.platform === 'win32';
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;

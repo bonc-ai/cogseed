@@ -104,7 +104,7 @@ if (process.platform === 'win32') {
           // failures.
           const code = (err as NodeJS.ErrnoException).code;
           if (options.force && ['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(String(code))
-            && fs.existsSync(resolved) && containsDirectoriesOnly(resolved)) return;
+            && (!fs.existsSync(resolved) || containsDirectoriesOnly(resolved))) return;
           throw err;
         }
       }
@@ -124,6 +124,13 @@ if (process.platform === 'win32') {
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-vitest-'));
 process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 
+// `os.homedir()` reads USERPROFILE on Windows and HOME on POSIX. Redirect both
+// before test modules load so global skill/session discovery cannot read from
+// or write fixtures into the developer's real ~/.claude and ~/.codex trees.
+// Tests for real home-resolution precedence explicitly unset or replace these.
+process.env.HOME = tmpRoot;
+process.env.USERPROFILE = tmpRoot;
+
 // Same inheritance, sharper edge: `users.activateUser()` pins
 // `CORE_AGENT_AUTH_DIR` to the active user's `<uid>/local/config/`, and the
 // app exports it to children. `src/core-agent/test/auth.test.ts` deletes the
@@ -132,3 +139,9 @@ process.env.COGSEED_WORKSPACE_ROOT = tmpRoot;
 // which a crash mid-test would take with it. Tests that need the real
 // resolution order unset this themselves.
 process.env.CORE_AGENT_AUTH_DIR = path.join(tmpRoot, 'core-agent-auth');
+
+// G-20 教训：session-import 的 welcome Action Plan 在「未配置 API 模型」时
+// 会回退真实调用宿主机 CLI（pickBestCliForFallback → spawn）。测试行为随
+// 机器装的 CLI 变化——开发机装了 hermes/openclaw 后该用例真跑 CLI，extraction
+// 状态卡 pending 数分钟超时。统一关闭：测试不依赖宿主机状态。
+process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK = '1';

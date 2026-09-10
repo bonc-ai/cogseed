@@ -1639,6 +1639,13 @@ const _SCENARIO_CONFIGS = {
     agentId: 'a316881746f9',
     agentNames: ['ProductDeveloper'],
   },
+  // T4 目标模式：不绑智能体（_scenarioApplyAgent 落 commander 收件人）。
+  // 模板激活"目标→拆解→审核→派发"链：KStar 自动追踪 goalText、
+  // commander 出子任务计划（manage_execution_plan → plan rail 展示）、
+  // 每次派发的智能体唤醒经用户审批（wake gate）。
+  goal: {
+    templateKey: 'new_chat.quick.tmpl.goal',
+  },
 };
 // English fallback templates — used when the i18n table doesn't yet carry
 // the scenario template key (Step 9 backfills the full set). Each template
@@ -1649,6 +1656,7 @@ const _SCENARIO_TEMPLATES_FALLBACK_EN = {
   seo_geo: 'Analyze SEO and GEO for [website/page URL]: crawl the page, diagnose technical/content/schema issues, find opportunities, and produce an action plan.',
   office: 'Organize [document/materials]: turn it into a polished document, table, presentation, or PDF-ready deliverable.',
   rnd: 'Build [software/app/feature]: clarify requirements, design the implementation plan, write the code, test it, and verify completion.',
+  goal: 'Goal: [describe what you want to achieve]. First break this goal into a sub-task plan (milestones and steps) and show it to me for confirmation; after I confirm, dispatch each step to the right agents. Every agent wake-up goes through my approval.',
 };
 
 function _pickGreetingKey(date) {
@@ -8240,19 +8248,21 @@ async function loadConversationHistory(cid, opts = {}) {
       checkAndSuggestAutoTaskTimeAdjustment(cid, convMeta.origin_auto_task_id);
     }
     _serverFloorByCid.set(cid, typeof convMeta.active_recipient === 'string' ? convMeta.active_recipient : '');
-    // History reload: drop ALL per-actor placeholder map entries — the
-    // `container.innerHTML=''` below detaches every placeholder DOM node,
-    // including the ones for this cid. Keeping `${cid}:*` entries leaves
-    // the map pointing at orphan nodes; the next `_consumeActorPlaceholder`
-    // would find an entry whose `parentElement` is null, fall through to
-    // the `appendChatMessage` fallback, and any deltas accumulated on
-    // that orphan during the in-flight stream are lost (the symptom users
-    // see as "the in-flight reply bubble disappears + a duplicate final
-    // appears below"). After clearing, the next `_ensureActorPlaceholder`
-    // re-adopts `state.loadingEl` (re-attached below via the
-    // `isConvPending` branch) for the first actor and mints fresh
-    // placeholders for any additional actors — no orphan window.
-    _groupPlaceholders.clear();
+    // History reload: drop per-actor placeholder map entries — the
+    // `container.innerHTML=''` below detaches every placeholder DOM node.
+    // Exception: LIVE placeholders of THIS conversation (turn still running
+    // server-side) STAY in the map. The send-stream/observer closures keep
+    // pointing at those exact nodes, and recovery ticks call
+    // _ensureActorPlaceholder during this async reload — removing the entry
+    // (even temporarily, to re-admit it later) opens a window in which those
+    // ticks mint a duplicate bubble while the original node's closure
+    // re-attaches it: the "two cards after switching conversations twice"
+    // symptom. Stale entries (turn finished while away) are swept right
+    // after the active-turn metadata is parsed below.
+    for (const [k, ph] of Array.from(_groupPlaceholders.entries())) {
+      if (!k.startsWith(`${cid}:`)) continue;
+      if (!ph || ph.dataset.finalized === '1' || !ph.dataset.fromActor) _groupPlaceholders.delete(k);
+    }
     // Drop internal plan-step dispatch messages (commander → agent
     // hand-off) AND redundant routing-only commander tails (the "second
     // commander bubble" — read agent.json + hand_off_to, no prose). The user
@@ -8358,6 +8368,21 @@ async function loadConversationHistory(cid, opts = {}) {
       : [];
     const hasActiveTurnsField = Array.isArray(convMeta.active_turns);
     const activeTurns = _normaliseActiveTurns(convMeta.active_turns);
+    // Sweep live placeholders whose turn finished while the user was away:
+    // their final message is part of the history rendered above, so keeping
+    // the entry would let a later annex revive it into a duplicate bubble.
+    if (processingFresh || Array.isArray(convMeta.active_turns) || Array.isArray(convMeta.in_flight)) {
+      const runningActorIds = new Set(
+        (hasActiveTurnsField ? activeTurns.map((t) => String(t.actor)) : inFlightActors).filter(Boolean),
+      );
+      for (const [k, ph] of Array.from(_groupPlaceholders.entries())) {
+        if (!k.startsWith(`${cid}:`)) continue;
+        if (ph && ph.dataset.finalized !== '1' && ph.dataset.fromActor
+            && runningActorIds.size > 0 && !runningActorIds.has(String(ph.dataset.fromActor))) {
+          _groupPlaceholders.delete(k);
+        }
+      }
+    }
     const wasPendingBeforeHistoryRecovery = isConvPending(cid);
     if (processingFresh && !wasPendingBeforeHistoryRecovery) {
       setGroupConversationBusy(cid, true);
@@ -8410,6 +8435,10 @@ async function loadConversationHistory(cid, opts = {}) {
         const emptyEl = container.querySelector('.empty');
         if (emptyEl) emptyEl.remove();
         _appendBeforeSpacer(container, state.loadingEl);
+        // Re-attaching a node that was detached by the conversation switch:
+        // its activity ticker self-cleaned on detach — re-arm it or the
+        // elapsed clock stays frozen at the switch-away snapshot.
+        _streamingEnsureActivityTimer(state.loadingEl);
       } else {
         const loadingEl = _createStreamingAssistantMessage(container, { hiddenUntilActor: true });
         state.loadingEl = loadingEl;
@@ -8487,7 +8516,15 @@ function _messageRecordHasMountedSidecars(gm, el, opts = {}) {
   if (Array.isArray(gm.marketplace_requests) && gm.marketplace_requests.length && !el.querySelector('.chat-marketplace-request')) return false;
   if (gm.kstar_review_card && !el.querySelector('.chat-kstar-result-review')) return false;
   if (gm.recall_projection_card && !el.querySelector('.chat-recall-projection-card')) return false;
-  if (_processItemsHaveRenderableLine(gm.process) && !el.querySelector('.stream-process')) return false;
+  // conv-core：过程显示已由 chat-stream 面板（.cs-flow）接管，老 details
+  // 折叠卡（.stream-process）退役。两者任一在挂即算已挂载——只认老卡会让
+  // 带过程的消息永远判"缺挂件"，触发 loadConversationHistory 全量重载循环，
+  // 历史消息的过程面板在循环中被反复清除（真机踩坑 2026-09-08：历史回复
+  // 的「已完成」徽章全部丢失，仅最新一条幸存）。
+  const _hasProcessSidecar = Array.isArray(gm?.process) && gm.process.length
+    ? !!(el.querySelector('.stream-process') || el.querySelector('.cs-flow'))
+    : true;
+  if (_processItemsHaveRenderableLine(gm.process) && !_hasProcessSidecar) return false;
   return true;
 }
 
@@ -9203,13 +9240,17 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.llmK'), v: window.conversationMetrics.formatDuration(f.llmMs) });
   }
   if (f.ttftAvgText) {
-    // 速率段 2026-09-03 下线（口径反复修正未达标，见 foldSessionMetrics
-    // 的 rateText——计算与数据采集保留，显示待重做后恢复）。
+    // 速率段继续停显（step 级/时间口径反复不收敛，见 foldSessionMetrics rateText）。
     segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
   if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
-  segs.push({ k: t('chat.stats.tokK'), v: t('chat.stats.tokV', { i: f.inText, o: f.outText }) });
+  segs.push({
+    k: t('chat.stats.tokK'),
+    v: f.cacheReadText
+      ? t('chat.stats.tokVCache', { i: f.inFreshText, c: f.cacheReadText, h: f.cacheHitText, o: f.outText })
+      : t('chat.stats.tokV', { i: f.inText, o: f.outText }),
+  });
   if (f.costText) segs.push({ v: t('chat.stats.cost', { c: f.costText }) });
   box.innerHTML = '';
   box.hidden = false;
@@ -9264,6 +9305,8 @@ function _syncStatsWidthToComposer() {
 // （2026-08-27 反馈：独立成行位置不对）。行不存在就懒创建，与
 // _attachBubbleActions 共用同一行；flex order 保证图标永远在左。
 function _mountMsgMeta(ph, metrics) {
+  // VCache 模板已标注缓存读时不再叠加命中 badge（信息重复）。
+  const hasCacheReadLabelled = (parts) => parts.some((p) => String(p.v || '').includes('缓存读'));
   const line = window.conversationMetrics
     ? window.conversationMetrics.messageMetricsLine(metrics) : null;
   if (!line) return;
@@ -9285,7 +9328,27 @@ function _mountMsgMeta(ph, metrics) {
   const parts = [];
   parts.push({ k: t('chat.metrics.durationK'), v: window.conversationMetrics.formatDuration(line.durationMs) });
   if (line.latencyText) parts.push({ k: t('chat.metrics.ttftK'), v: `${line.latencyText}s` });
-  if (line.inText) parts.push({ k: t('chat.metrics.tokensK'), v: t('chat.metrics.tokensV', { i: line.inText, o: line.outText }) });
+  if (line.inText) {
+    // 主读数 = 纯 fresh 输入（2026-09-08 分层定稿 + PR198 4a 合并）：
+    // 缓存读取是前缀复用非新增输入，并入会让数值虚大。有缓存读时走
+    // PR198 拆分模板 tokensVCache（fresh 输入 + 括注缓存读全量与命中率
+    // ——一眼可核对，数值仍以 fresh 为主）；无缓存回退 tokensV。
+    const hasCacheRead = !!line.cacheReadText;
+    parts.push({
+      k: t('chat.metrics.tokensK'),
+      v: hasCacheRead
+        ? t('chat.metrics.tokensVCache', { i: line.inFreshText || line.inText, c: line.cacheReadText, h: line.cacheHitText || '0%', o: line.outText })
+        : t('chat.metrics.tokensV', { i: line.inFreshText || line.inText, o: line.outText }),
+    });
+  }
+  // 缓存命中正向标记（≥50% 才显示，2026-09-08 分层定稿）：VCache 模板
+  // 已带缓存读全量时 badge 只补命中率达标场景；无 VCache 时 badge 的
+  // title 带缓存读全量——主界面保持小数值，审计明细收在悬停。
+  if (line.cacheBadgeText && !hasCacheReadLabelled(parts)) {
+    const badge = { v: line.cacheBadgeText };
+    if (line.cacheReadText) badge.title = `缓存读 ${line.cacheReadText} tok`;
+    parts.push(badge);
+  }
   if (line.costText) parts.push({ v: line.costText });
   meta.textContent = '';
   parts.forEach((s) => {
@@ -9648,7 +9711,19 @@ function appendChatMessage(message, autoScroll = true, opts = {}) {
     // '(stopped)' in en, '（已中断）' in zh).
     const isAbortStub = bodyText === '（已中断）' || bodyText === '(stopped)' || bodyText === '';
     const expanded = isAbortStub || isHtmlSnippet;
-    _renderPersistedProcess(msgDiv, message.process, { expanded });
+    // conv-core：chat-stream 面板接管完成态过程显示（统一过程 UI，老
+    // details 折叠卡退役）；面板函数不可用时走老路径兜底。面板默认收起
+    // （摘要行，点开看全程），仅空正文异常回合 expanded:true 展开。
+    if (typeof window.chatStreamRenderPersisted === 'function'
+        && window.chatStreamRenderPersisted(currentCid, msgDiv, message.process, {
+          actorName: String(message.from || message._from || message.actor || ''),
+          turnId: message.turn_id || (message._msg_id ? `m:${message._msg_id}` : undefined),
+          expanded,
+        })) {
+      // 面板已重建，跳过老 details 渲染。
+    } else {
+      _renderPersistedProcess(msgDiv, message.process, { expanded });
+    }
   }
 
   if (autoScroll) {
@@ -12382,6 +12457,24 @@ function _makeConvChatController(cid, options = {}) {
         // state shape so legacy code (abortConvStream, sidebar badge,
         // polling recovery) keeps working untouched.
         if (msgEl) msgEl.dataset.cid = id;
+        // 任务耗时本地计时：把 sendInConversation 捕获的「用户点击发送」
+        // 渲染进程墙钟挂到占位消息——chat-stream 面板 ticker 与终态定格
+        // 优先读它（本地发送→本地收尾，全程不依赖模型侧时间数据）。
+        if (msgEl && Number.isFinite(options.sendWallMs)) {
+          msgEl.dataset.localSendMs = String(options.sendWallMs);
+        }
+        // 发送即起计（交互设计 2026-09-09）：面板与计时器在发送这一刻创建
+        // 并开始走秒，不等模型首事件（首 token 前的数秒空窗里用户就有
+        // 「已发出、正在跑」的反馈）。预热失败不阻塞发送链路。
+        if (msgEl && typeof window.chatStreamPrewarm === 'function') {
+          try {
+            window.chatStreamPrewarm(
+              id,
+              msgEl,
+              Number.isFinite(options.sendWallMs) ? options.sendWallMs : Date.now(),
+            );
+          } catch (_) { /* prewarm best-effort */ }
+        }
         pendingConvs.set(id, {
           loadingEl: msgEl,
           needsIndicator: false,
@@ -13009,6 +13102,11 @@ async function _cliFallbackGuideUser() {
 async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
+  // 任务耗时本地计时（交互设计 2026-09-08 需求）：用户点击发送的瞬间（渲染
+  // 进程墙钟）——计时完全本地，不含 IPC/网络往返，不依赖模型侧任何数据
+  // （模型收到消息时间/开始思考时刻/吞吐等）。挂到当前会话 pending 记录，
+  // 由首个流事件转移到面板（chat-stream 的 ticker/终态都读它）。
+  const sendWallMs = Date.now();
   const sendOptions = options && typeof options === 'object' ? options : {};
   const isInternalReplay = !!String(extra?.retry_message_id || extra?.edit_message_id || '').trim();
   let statAgentId = String(sendOptions.agent_id || extra?.recipient_agent_id || '');
@@ -13063,6 +13161,7 @@ async function sendInConversation(cid, content, extra, options = {}) {
   // padding the top instead of the bottom and defeating the pin.
 
   const ctrl = _makeConvChatController(cid, {
+    sendWallMs,
     onStarted() {
       taskStarted = true;
       _taskTurnStart(cid, content, extra, Date.now());
@@ -13761,7 +13860,7 @@ function _createStreamingAssistantMessage(container, opts = {}) {
   // _handleGroupBusEvent's state_changed branch).
   msg.innerHTML = `
     <div class="chat-msg-header">
-      <span class="chat-msg-avatar-slot" data-role="from-avatar"></span>
+      <span class="chat-msg-avatar-slot" data-role="from-avatar">${opts.hiddenUntilActor ? _renderActorAvatarHtml('commander') : ''}</span>
       <span class="chat-msg-from" data-role="from-chip"></span>
       <span class="chat-msg-exec-meta" data-role="exec-meta" hidden></span>
       <span class="chat-msg-time">${formatTime(new Date().toISOString())}</span>
@@ -14159,6 +14258,9 @@ function _streamingAppendProgress(msg, text, kindHint, eventName) {
 // reconnects and suppressed worker events can make those incomplete.
 function _streamingUpdateActivity(msg, text) {
   if (!msg || msg.dataset.activityDone === '1') return;
+  // conv-core 活动流的头部徽章（工作中/已工作 + 计时 + 收起开关）已完整
+  // 承接气泡内活性指示，这条老 liveness strip 不再重复显示。
+  if (msg.querySelector('.cs-flow')) return;
   const row = msg.querySelector('[data-role="activity"]');
   if (!row) return;
   if (!msg.dataset.activityStart) {
@@ -14188,18 +14290,25 @@ function _streamingUpdateActivity(msg, text) {
   }
   row.style.display = '';
   _streamingPaintActivityMeta(msg);
-  if (!msg._activityTimer) {
-    msg._activityTimer = setInterval(() => {
-      // Self-clean on detach / finalize so a missed stop call can't leak
-      // the interval past the bubble's lifetime.
-      if (!msg.isConnected || msg.dataset.activityDone === '1') {
-        clearInterval(msg._activityTimer);
-        msg._activityTimer = null;
-        return;
-      }
-      _streamingPaintActivityMeta(msg);
-    }, 1000);
-  }
+  _streamingEnsureActivityTimer(msg);
+}
+
+function _streamingEnsureActivityTimer(msg) {
+  if (!msg || msg._activityTimer) return;
+  msg._activityTimer = setInterval(() => {
+    // Self-clean on detach / finalize so a missed stop call can't leak
+    // the interval past the bubble's lifetime. Revival paths must call
+    // _streamingEnsureActivityTimer again — a detached bubble's timer is
+    // gone, and without activity events to re-arm it the elapsed clock
+    // would freeze at the detach snapshot ("timer stops updating after
+    // switching back to the conversation").
+    if (!msg.isConnected || msg.dataset.activityDone === '1') {
+      clearInterval(msg._activityTimer);
+      msg._activityTimer = null;
+      return;
+    }
+    _streamingPaintActivityMeta(msg);
+  }, 1000);
 }
 
 function _activityMonotonicNow() {
@@ -15066,6 +15175,11 @@ function createChatController(config) {
     } finally {
       const wasAborted = pending?.aborted;
       const wasErrored = pending?.errored;
+      // conv-core 兜底：断流/中止时时间线面板里未交回的正文也要落回
+      // 气泡（正常完成路径 turn.completed 已交回，此处幂等跳过）。
+      if (typeof window.chatStreamFinalize === 'function') {
+        try { window.chatStreamFinalize(id); } catch (_) { /* 面板兜底失败不阻塞收尾 */ }
+      }
       terminalResult = { started: true, aborted: !!wasAborted, errored: !!wasErrored };
       pending = null;
       _updateSendUI();
@@ -15179,6 +15293,12 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
     // streaming bubble" model entirely. Process events go on the rail of
     // the streaming placeholder bubble (msg) until the first `message`
     // arrives, then on the most-recent rendered bubble for that actor.
+    if (inner.stream === 'chat' && inner.data && typeof window.chatStreamHandleEvent === 'function') {
+      // conv-core 结构化事件：chat-stream 过程面板（工具卡/思考/Diff/用量），
+      // 与下方 group 老协议并行渲染。
+      window.chatStreamHandleEvent(cid, msg, inner.data);
+      return;
+    }
     if (inner.stream === 'group' && inner.data) {
       _handleGroupBusEvent(cid, msg, inner.data, { archive });
       return;
@@ -15189,7 +15309,10 @@ function _handleStreamEvent(cid, msg, ev, { archive = false } = {}) {
     }
     _renderAgentEvent(msg, ev.event);
   } else if (ev.type === 'delta') {
-    _streamingAppendFinalDelta(msg, ev.text || '');
+    // conv-core：时间线接管时正文不重复写（同上 group 分支）。
+    const _csTL = typeof window.chatStreamHasPanel === 'function'
+      && window.chatStreamHasPanel(cid);
+    if (!_csTL) _streamingAppendFinalDelta(msg, ev.text || '');
   } else if (ev.type === 'final') {
     _streamingSetFinal(msg, ev.text, { archive });
     // Attach input-form widget if the final event carries one. Main
@@ -15360,6 +15483,10 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
   // 按 dataset.fromActor 判定占位归属。
   for (const [liveK, live] of Array.from(_groupPlaceholders.entries())) {
     if (!liveK.startsWith(`${cid}:`)) continue;
+    // Never revive another conversation's placeholder into the currently
+    // displayed history — the node must wait until its own conversation is
+    // opened again (the history reload of that conversation re-attaches it).
+    if (typeof currentCid !== 'undefined' && cid !== currentCid) continue;
     if (!live || live.dataset.finalized === '1') continue;
     if (live.dataset.fromActor !== actorId) continue;
     if (!live.parentElement) {
@@ -15373,6 +15500,10 @@ function _ensureActorPlaceholder(cid, actorId, fallbackPh, turnId, triggerMsgId,
       const emptyEl = container.querySelector('.empty');
       if (emptyEl) emptyEl.remove();
       _appendBeforeSpacer(container, live);
+      // The activity timer self-cleans on detach; re-arm it so the elapsed
+      // clock keeps ticking after revival instead of freezing at the
+      // detach snapshot.
+      _streamingEnsureActivityTimer(live);
     }
     _groupPlaceholders.delete(liveK);
     if (tid) live.dataset.turnId = tid;
@@ -15944,18 +16075,28 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
       if (data.type === 'delta' && typeof data.text === 'string') {
         // 首条输出已到达 → 取消该外接智能体的「慢响应」检测。
         _clearSlowSwitch(cid, actor);
-        // Token-by-token streaming → write into the placeholder's final
-        // body so the user sees the reply form character-by-character.
-        _streamingAppendFinalDelta(target, data.text);
+        // conv-core：chat-stream 时间线接管正文渲染（文字段与工具行真实
+        // 交错），回合收尾由面板把全文交回本管道（_streamingAppendFinalDelta）。
+        const _csTimelineOwns = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_csTimelineOwns) {
+          _streamingAppendFinalDelta(target, data.text);
+        }
         _streamingUpdateActivity(target, t('chat.activity_writing'));
       } else if (data.type === 'progress' && data.text) {
         // 外接智能体有 process 活动但尚无首条输出 → 开始慢检测（阈值见
         // _EXT_SLOW_SWITCH_MS）；有实际文本输出后由 delta 分支取消。
         _armSlowSwitch(cid, actor, turnId, _knownGroupActorLabel(cid, actor) || actor);
         const evt = data.event && data.event.stream ? data.event : null;
-        const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
         if (evt) _setProcessSummaryRuntimeFromEvent(target, evt);
-        _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);
+        // conv-core：chat-stream 过程面板接管该会话的过程显示后，老 rail
+        // 不再重复画行（面板卡片是唯一过程 UI；activity/慢检测逻辑保留）。
+        const _chatPanelOwns = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_chatPanelOwns) {
+          const line = evt ? (_formatEventLine(evt) || String(data.text)) : String(data.text);
+          _streamingAppendProgress(target, line, evt ? _eventProcessKind(evt, line) : undefined);
+        }
         if (evt) _streamingUpdateActivityFromEvent(target, evt);
         else _streamingUpdateActivity(target, t('chat.activity_working'));
       } else if (data.type === 'event') {
@@ -15969,7 +16110,9 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
           return;
         }
         const before = _processLineCount(target);
-        _renderAgentEvent(target, data.event);
+        const _chatPanelOwnsEvt = typeof window.chatStreamHasPanel === 'function'
+          && window.chatStreamHasPanel(cid);
+        if (!_chatPanelOwnsEvt) _renderAgentEvent(target, data.event);
         const evt = data.event || {};
         // 9.1 会话区域统一框架：把 plan 事件实时转发给顶部执行计划轨道
         // （plan-rail.js）。消息流内的 plan-announce 标签保持不变。
@@ -15977,9 +16120,11 @@ function _handleGroupBusEvent(cid, streamingMsg, evData, { archive = false } = {
             && typeof window.planRail.onPlanEvent === 'function') {
           window.planRail.onPlanEvent(cid, evt);
         }
-        const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
-        if (line && _processLineCount(target) <= before) {
-          _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));
+        if (!_chatPanelOwnsEvt) {
+          const line = evt.stream === 'tool' ? _formatEventLine(evt) : null;
+          if (line && _processLineCount(target) <= before) {
+            _streamingAppendProgress(target, line, _eventProcessKind(evt, line), _processEventName(evt));
+          }
         }
         _streamingUpdateActivityFromEvent(target, evt);
       }
