@@ -60,7 +60,6 @@ function run({
   const jobsByRun: Record<string, unknown[]> = {
     '20/attempts/1': [
       { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 },
-      { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
     ],
     '21/attempts/1': [
       { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
@@ -188,7 +187,6 @@ describe('release gate verification', () => {
         '20/attempts/1': [],
         '20/attempts/2': [
           { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 2 },
-          { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 2 },
         ],
       },
       requestedUrls,
@@ -214,8 +212,8 @@ describe('release gate verification', () => {
   });
 
   it('rejects missing and duplicate required jobs', async () => {
-    await expect(run({ jobs: { '20/attempts/1': [{ name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 }] } }))
-      .rejects.toThrow(/verify-windows/i);
+    await expect(run({ jobs: { '20/attempts/1': [] } }))
+      .rejects.toThrow(/missing required.*verify/i);
     await expect(run({ jobs: { '21/attempts/1': [
       { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
       { name: 'compliance', status: 'completed', conclusion: 'success', run_attempt: 1 },
@@ -242,7 +240,6 @@ describe('release gate verification', () => {
       jobs: {
         '20/attempts/0': [
           { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 0 },
-          { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 0 },
         ],
       },
     })).rejects.toThrow(/run attempt.*positive integer/i);

@@ -34,18 +34,19 @@ describe('release workflow contract', () => {
     });
   });
 
-  it('keeps the CI job names exact and makes the Windows gate complete', () => {
+  it('keeps the CI job names exact and makes the macOS gate complete', () => {
     const workflow = load('ci.yml');
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['verify', 'verify-windows']);
-    const windows = commands(workflow.jobs['verify-windows']);
+    expect(Object.keys(workflow.jobs).sort()).toEqual(['verify']);
+    const verify = commands(workflow.jobs.verify);
     for (const expected of [
+      'npm run typecheck',
       'npm run lint',
-      'node scripts/run-tests.mjs run --maxWorkers=1',
+      'node scripts/run-tests.mjs run --maxWorkers=2',
       'npm run test:resources',
-      'npm run test:platform-native',
-      'node p3394-gateway/test/smoke.cjs',
-      'npm run build:win',
-    ]) expect(windows).toContain(expected);
+      'npm run readme:check',
+      'npm run tokens:check',
+      'npm run builtin:manifest:check',
+    ]) expect(verify).toContain(expected);
   });
 
   it('keeps compliance to its one required job', () => {
