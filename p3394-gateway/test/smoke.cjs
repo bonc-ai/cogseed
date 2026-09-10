@@ -790,12 +790,21 @@ async function main() {
     await new Promise((resolve) => ocPersistGw.once('close', resolve));
   }
   if (process.platform === 'win32') {
+    // The abort-unavailable fallback restarts the managed server, so the PID
+    // files now hold both generations: 2 servers + 2 descendants. Windows can
+    // also take a moment to reap a taskkill tree after the gateway closes, so
+    // allow a bounded settle window before treating a surviving PID as a leak.
     const ocTreePids = [ocPidFile, ocDescendantPidFile]
       .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
-    const survivors = ocTreePids.filter((pid) => {
-      try { process.kill(pid, 0); return true; } catch { return false; }
-    });
-    check('opencode 常驻：gateway close 前 server 进程树已全部退出', ocTreePids.length === 2 && survivors.length === 0);
+    const alive = new Set(ocTreePids);
+    const settleDeadline = Date.now() + 5_000;
+    while (alive.size > 0 && Date.now() < settleDeadline) {
+      for (const pid of alive) {
+        try { process.kill(pid, 0); } catch { alive.delete(pid); }
+      }
+      if (alive.size > 0) await sleep(100);
+    }
+    check('opencode 常驻：gateway close 后 server 进程树在宽限期内全部退出', ocTreePids.length === 4 && alive.size === 0);
   }
 
   // shutdown deadline 必须在 runtime.close() 之前生效；第二次 shutdown
