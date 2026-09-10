@@ -172,12 +172,13 @@ function validateBaseRefText(value: unknown): string {
   return baseRef;
 }
 
-function validateManagedName(value: unknown): string {
+function validateManagedName(value: unknown, platform: NodeJS.Platform): string {
   const name = typeof value === 'string' ? value.trim() : '';
+  const comparableName = platform === 'win32' ? name.toLowerCase() : name;
   if (!name
     || name.length > 180
     || path.basename(name) !== name
-    || !name.startsWith(MANAGED_PREFIX)
+    || !comparableName.startsWith(MANAGED_PREFIX)
     || !/^[A-Za-z0-9._-]+$/.test(name)) {
     worktreeError('E_WORKTREE_PATH_INVALID');
   }
@@ -222,7 +223,9 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
     let comparableParent = candidateParent;
     try { comparableParent = fs.realpathSync(candidateParent); } catch { /* removal fails closed later */ }
     return normalizedPath(comparableParent) === normalizedPath(repo.managedParent)
-      && path.basename(resolved).startsWith(MANAGED_PREFIX)
+      && (platform === 'win32'
+        ? path.basename(resolved).toLowerCase().startsWith(MANAGED_PREFIX)
+        : path.basename(resolved).startsWith(MANAGED_PREFIX))
       && (allowMissingCandidate ? normalizedCreationPath(resolved) : normalizedPath(resolved)) !== normalizedPath(repo.root);
   }
 
@@ -237,10 +240,12 @@ export function createCogSeedWorktreeManager(deps: CogSeedWorktreeManagerDeps = 
   return {
     async resolve(userId: string, rawName: string): Promise<string> {
       const repo = await repositoryContext(userId);
-      const name = validateManagedName(rawName);
+      const name = validateManagedName(rawName, platform);
       let registered: RegisteredWorktree | undefined;
       try {
-        registered = repo.registered.find((entry) => path.basename(entry.path) === name
+        registered = repo.registered.find((entry) => (platform === 'win32'
+          ? path.basename(entry.path).toLowerCase() === name.toLowerCase()
+          : path.basename(entry.path) === name)
           && isManagedPath(repo, entry.path));
       } catch {
         worktreeError('E_WORKTREE_UNVERIFIED');

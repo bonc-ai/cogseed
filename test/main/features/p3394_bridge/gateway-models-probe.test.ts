@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as vm from 'node:vm';
+import { EventEmitter } from 'node:events';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -60,11 +62,156 @@ const CLI_MODEL_REPLY = JSON.stringify({
     + 'Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.',
 });
 
+type RuntimeCloseName = 'oneshot' | 'codex-app-server' | 'sscli' | 'stream-json' | 'claude-persistent' | 'opencode';
+
+function runtimeCloseFixture(name: RuntimeCloseName) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+  const bounds: Record<RuntimeCloseName, [string, string]> = {
+    oneshot: ['const oneshotRuntime = {', 'function clipReply'],
+    'codex-app-server': ['class CodexAppServerRuntime', 'const codexAppServerRuntime'],
+    sscli: ['class SscliRuntime', 'const sscliRuntime'],
+    'stream-json': ['class StreamJsonRuntime', 'const streamJsonRuntime'],
+    'claude-persistent': ['class ClaudePersistentRuntime', '// ── opencode 常驻'],
+    opencode: ['class OpencodeRuntime', 'const claudePersistentRuntime'],
+  };
+  const [startMarker, endMarker] = bounds[name];
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  const chunk = source.slice(start, end);
+  const method = /^  (?:async )?close\(\) \{[\s\S]*?^  \}/m.exec(chunk)?.[0];
+  if (!method) throw new Error(`close method not found for ${name}`);
+
+  const children = [{ pid: 101 }, { pid: 202 }];
+  const resolvers: Array<() => void> = [];
+  const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+  const context: Record<string, unknown> = { killProcessTree, clearTimeout, clearInterval };
+  let receiver: Record<string, unknown>;
+  let hasState: () => boolean;
+  let expectedKills: number;
+
+  if (name === 'oneshot') {
+    const activeTasks = new Map([['a', children[0]], ['b', children[1]]]);
+    context.activeTasks = activeTasks;
+    receiver = {};
+    hasState = () => activeTasks.size === 2;
+    expectedKills = 2;
+  } else if (name === 'codex-app-server') {
+    receiver = { activeTurns: new Map([['task', { threadId: 'thread' }]]), child: children[0] };
+    hasState = () => (receiver.activeTurns as Map<string, unknown>).size === 1 && receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'sscli') {
+    receiver = { closing: false, heartbeatTimer: {}, child: children[0] };
+    hasState = () => receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'stream-json') {
+    receiver = { active: new Map([['a', children[0]], ['b', children[1]]]) };
+    hasState = () => (receiver.active as Map<string, unknown>).size === 2;
+    expectedKills = 2;
+  } else if (name === 'claude-persistent') {
+    receiver = {
+      sessions: new Map([['a', { child: children[0], idleTimer: null, turn: null }], ['b', { child: children[1], idleTimer: null, turn: null }]]),
+      turnKeys: new Map([['task', 'a']]),
+    };
+    hasState = () => (receiver.sessions as Map<string, unknown>).size === 2 && (receiver.turnKeys as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  } else {
+    receiver = {
+      closing: false,
+      servers: new Map([['a', { child: children[0] }], ['b', { child: children[1] }]]),
+      sessions: new Map([['session', { cwd: '/tmp' }]]),
+    };
+    hasState = () => (receiver.servers as Map<string, unknown>).size === 2 && (receiver.sessions as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  }
+
+  const close = vm.runInNewContext(`({${method}}).close`, context) as (this: Record<string, unknown>) => Promise<void>;
+  return { close, receiver, hasState, expectedKills, killProcessTree, resolvers };
+}
+
+function loadGatewayTreeKiller(name: 'gateway.cjs' | 'sscli-shim.cjs', context: Record<string, unknown>) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+  const fn = /function killProcessTree\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!fn) throw new Error(`killProcessTree not found in ${name}`);
+  return vm.runInNewContext(`(${fn})`, context) as (child: EventEmitter & { pid: number; kill: (signal: string) => boolean }, signal: string) => Promise<void>;
+}
+
 describe('gateway runtime shutdown contract', () => {
-  it('routes OpenCode persistent server shutdown through process-tree termination', () => {
+  it.each<RuntimeCloseName>(['oneshot', 'codex-app-server', 'sscli', 'stream-json', 'claude-persistent', 'opencode'])(
+    '%s close awaits all process-tree terminations before clearing runtime state',
+    async (name) => {
+      const fixture = runtimeCloseFixture(name);
+      const completion = fixture.close.call(fixture.receiver);
+      expect(completion && typeof completion.then).toBe('function');
+      expect(fixture.killProcessTree).toHaveBeenCalledTimes(fixture.expectedKills);
+      expect(fixture.hasState()).toBe(true);
+
+      let settled = false;
+      void completion.then(() => { settled = true; });
+      for (const resolve of fixture.resolvers.slice(0, -1)) resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(fixture.hasState()).toBe(true);
+
+      fixture.resolvers.at(-1)?.();
+      await completion;
+      expect(fixture.hasState()).toBe(false);
+    },
+  );
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'])('%s closes the shebang probe handle in finally', (name) => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+    const helper = /function isNodeShebangScript\([\s\S]*?\n}/.exec(source)?.[0] || '';
+    expect(helper).toMatch(/try\s*{[\s\S]*?fs\.readSync[\s\S]*?}\s*finally\s*{[\s\S]*?fs\.closeSync/);
+  });
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'] as const)(
+    '%s taskkill fallback waits for the target child close before resolving',
+    async (name) => {
+      const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+      const child = Object.assign(new EventEmitter(), { pid: 2468, kill: vi.fn(() => true) });
+      const killProcessTree = loadGatewayTreeKiller(name, {
+        spawn: vi.fn(() => killer),
+        windowsSystem32Tool: (tool: string) => tool,
+        process: { platform: 'win32', kill: vi.fn() },
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+      });
+      let settled = false;
+      const completion = killProcessTree(child, 'SIGTERM').then(() => { settled = true; });
+
+      killer.emit('error', new Error('taskkill failed'));
+      killer.emit('exit', 1, null);
+      killer.emit('close', 1, null);
+      await Promise.resolve();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+
+      child.emit('close', null, 'SIGTERM');
+      await completion;
+      expect(settled).toBe(true);
+    },
+  );
+
+  it('awaits every cancellation backend before sending the cancel reply', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
-    const runtime = /class OpencodeRuntime[\s\S]*?\r?\n}\r?\nconst claudePersistentRuntime/.exec(source)?.[0] || '';
-    expect(runtime).toContain("killProcessTree(entry.child, 'SIGTERM')");
+    const handler = /async function handleCancel\([\s\S]*?^}/m.exec(source)?.[0] || '';
+    expect(handler).toContain('cancelledTasks.add(taskId)');
+    expect(handler).toMatch(/for \(const cancel of cancellers\)/);
+    expect(handler).toMatch(/await cancel\(taskId\)/);
+    expect(handler.indexOf('await cancel(taskId)')).toBeLessThan(handler.lastIndexOf("postReply(envelope, '[已取消]')"));
+    expect(handler).not.toMatch(/\.cancel\(taskId\)\s*\|\|/);
+    expect(source).toMatch(/async cancel\(taskId\) \{ return cancelTask\(taskId\); \}/);
+    expect(source).toMatch(/async function cancelTask\(taskId\)/);
+    expect(source).toMatch(/const ack = await this\._request\(\{ op: 'cancel', task_id: taskId \}/);
+    expect(source).toMatch(/async cancel\(taskId\)[\s\S]*?turn\.req\.once\('close'/);
+  });
+
+  it('waits for Claude model replacement and timeout termination before dropping state', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    expect(source).toMatch(/if \(entry && \(entry\.maxThinkingTokens[\s\S]*?await this\._terminateSession\(sessionId, entry\)/);
+    expect(source).toMatch(/timer: setTimeout\(\(\) => \{[\s\S]*?void this\._terminateSession\(sessionId, entry\)\.then\(\(\) => \{[\s\S]*?reject\(new Error\('p3394_claude_timeout'\)\)/);
   });
 });
 
@@ -347,6 +494,42 @@ describe('gateway probeInspectCommand — declared parsers (universal enumeratio
     const result = await resultPromise;
     expect(result).toMatchObject({ status: 'unavailable', reason: 'timeout' });
   });
+
+  it('escalates a stuck probe and waits for SIGKILL completion plus child close', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild({ neverClose: true });
+    const completions = new Map<string, () => void>();
+    const killTreeFn = vi.fn((_child: unknown, signal: string) => new Promise<void>((resolve) => {
+      completions.set(signal, resolve);
+    }));
+    let settled = false;
+    try {
+      const resultPromise = probeInspectCommand({
+        cli: 'codebuddy', args: ['--help'], parser: 'help-model-list',
+        spawnFn: () => child, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '10' },
+      });
+      void resultPromise.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(killTreeFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL']);
+
+      completions.get('SIGTERM')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      completions.get('SIGKILL')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.emitClose();
+      await expect(resultPromise).resolves.toMatchObject({ status: 'unavailable', reason: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('gateway probeStreamJsonInitModel — claude-compatible init-frame current model', () => {
@@ -545,7 +728,7 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
       configModels: 'gemini',
       env: { HOME: '/tmp/nope' },
       readFileSync: (p: string) => {
-        if (p.endsWith('.gemini/settings.json')) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
+        if (p.endsWith(path.join('.gemini', 'settings.json'))) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
         throw new Error('ENOENT: ' + p);
       },
     }) as { status: string; current: string; models: Array<{ id: string }> };
