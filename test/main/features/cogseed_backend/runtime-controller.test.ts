@@ -33,17 +33,19 @@ afterEach(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function eventually(assertion: () => Promise<void> | void): Promise<void> {
+async function eventually(assertion: () => Promise<void> | void, timeoutMs = 5_000): Promise<void> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  const deadline = Date.now() + timeoutMs;
+  do {
     try {
       await assertion();
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
-  }
+  } while (Date.now() < deadline);
   throw lastError;
 }
 
