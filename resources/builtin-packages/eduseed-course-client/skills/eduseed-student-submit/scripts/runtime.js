@@ -15048,7 +15048,9 @@ async function getDashboard(client) {
     ]);
     const submissions = Array.isArray(subsResp.submissions) ? subsResp.submissions : [];
     const completed = submissions.filter((s) => s.status === "accepted" || s.task_state === "COMPLETED").length;
-    const pendingReview = submissions.filter((s) => s.status === "submitted" || (s.status ?? "").includes("review")).length;
+    const pendingReview = submissions.filter(
+      (s) => s.status === "submitted" || s.status === "checked" || (s.status ?? "").includes("review")
+    ).length;
     return {
       ok: true,
       stats: {
@@ -15314,6 +15316,34 @@ var PlatformClient = class {
   /** GET JSON（平台 REST API） */
   async get(path7) {
     return this.request(path7, { method: "GET" });
+  }
+  /** GET 二进制（材料下载，G4 2026-09-07）：返回原始字节；失败返回 null。 */
+  async download(path7) {
+    if (this.mock) return null;
+    const headers = {
+      Accept: "application/octet-stream, application/json",
+      "x-api-key": this.apiKey
+    };
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const resp = await fetch(`${this.base}${path7}`, { method: "GET", headers });
+        if (resp.ok) {
+          const buf = await resp.arrayBuffer();
+          return new Uint8Array(buf);
+        }
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+          await sleep(RETRY_BACKOFF_MS[attempt] ?? 1e3);
+          continue;
+        }
+        return null;
+      } catch {
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_BACKOFF_MS[attempt] ?? 1e3);
+          continue;
+        }
+      }
+    }
+    return null;
   }
   /** POST JSON（平台 REST API） */
   async post(path7, body) {
@@ -15784,6 +15814,93 @@ async function listMySubmissions(client) {
     return { ...failRead(err), submissions: [] };
   }
 }
+async function listMaterials(client, challengeId) {
+  try {
+    const resp = await client.get(
+      `/api/challenges/materials?challengeId=${encodeURIComponent(challengeId)}`
+    );
+    if (!resp.ok || !Array.isArray(resp.materials)) {
+      return { ok: false, materials: [], error: { code: "FETCH_FAILED", message: resp.error ?? "\u6750\u6599\u6E05\u5355\u83B7\u53D6\u5931\u8D25" } };
+    }
+    // macOS AppleDouble 垃圾文件（._*）过滤（2026-09-08）：平台 staging 曾混入，
+    // 运行时默认不下发、不回传；仅在 junk_skipped 中报告数量，便于平台侧清理。
+    const real = resp.materials.filter((m) => typeof m.name === "string" && !m.name.startsWith("._"));
+    const junkCount = resp.materials.length - real.length;
+    return {
+      ok: true,
+      materials: real.map((m) => ({ name: m.name, size: m.size, mtime: m.mtime })),
+      ...(junkCount > 0 ? { junk_skipped: junkCount } : {})
+    };
+  } catch (err) {
+    return { ok: false, materials: [], error: { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+async function downloadMaterial(client, challengeId, fileName) {
+  try {
+    const data = await client.download(
+      `/api/challenges/materials?challengeId=${encodeURIComponent(challengeId)}&file=${encodeURIComponent(fileName)}`
+    );
+    if (!data || data.length === 0) {
+      return { ok: false, data: null, error: { code: "FETCH_FAILED", message: "\u6750\u6599\u4E0B\u8F7D\u5931\u8D25" } };
+    }
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, data: null, error: { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+// G3 正文全文（2026-09-08）：平台 /api/challenges/content —— CHALLENGE.md / challenge.yaml / rubric.json
+async function getChallengeContent(client, challengeId) {
+  try {
+    const resp = await client.get(
+      `/api/challenges/content?challengeId=${encodeURIComponent(challengeId)}`
+    );
+    if (!resp.ok || !resp.content) {
+      return { ok: false, content: null, error: { code: "FETCH_FAILED", message: resp.error ?? "\u6311\u6218\u6B63\u6587\u672A\u5165\u5E93\uFF08\u5E73\u53F0\u672A\u5F00\u653E G3 \u6216\u8BE5\u6311\u6218\u672A\u767B\u8BB0\u5185\u5BB9\u6E90\uFF09" } };
+    }
+    return {
+      ok: true,
+      content: {
+        markdown: resp.content.markdown ?? "",
+        yaml: resp.content.yaml ?? "",
+        rubric: resp.content.rubric ?? ""
+      }
+    };
+  } catch (err) {
+    return { ok: false, content: null, error: { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+function sha256Hex(input) {
+  try {
+    return require("node:crypto").createHash("sha256").update(input).digest("hex");
+  } catch {
+    return "";
+  }
+}
+// 课程级公共资料（P3，2026-09-08）：平台 /api/courses/materials —— 体系文档/先修课/群公告与参考资料
+async function listCourseMaterials(client, scope) {
+  try {
+    const resp = await client.get(`/api/courses/materials?scope=${encodeURIComponent(scope)}`);
+    if (!resp.ok || !Array.isArray(resp.materials)) {
+      return { ok: false, materials: [], error: { code: "FETCH_FAILED", message: resp.error ?? "\u516C\u5171\u8D44\u6599\u6E05\u5355\u83B7\u53D6\u5931\u8D25" } };
+    }
+    return { ok: true, materials: resp.materials.map((m) => ({ name: m.name, size: m.size, mtime: m.mtime })) };
+  } catch (err) {
+    return { ok: false, materials: [], error: { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) } };
+  }
+}
+async function downloadCourseMaterial(client, scope, fileName) {
+  try {
+    const data = await client.download(
+      `/api/courses/materials?scope=${encodeURIComponent(scope)}&file=${encodeURIComponent(fileName)}`
+    );
+    if (!data || data.length === 0) {
+      return { ok: false, data: null, error: { code: "FETCH_FAILED", message: "\u516C\u5171\u8D44\u6599\u4E0B\u8F7D\u5931\u8D25" } };
+    }
+    return { ok: true, data };
+  } catch (err) {
+    return { ok: false, data: null, error: { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) } };
+  }
+}
 function failRead(err) {
   const msg = err instanceof Error ? err.message : String(err);
   const code = err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "INTERNAL";
@@ -15821,7 +15938,7 @@ async function submitProject(client, args, challengeRequiredDeliverables) {
         localIssues,
         error: {
           code: "INPUT_MISSING",
-          // 领域错误码：模板分类
+          // 领域错误码：Richard 模板 taxonomy
           message: `\u7F3A\u5C11\u4EA4\u4ED8\u7269: ${check2.missing.join("\u3001")}\u3002\u8BF7\u8865\u5145\u540E\u91CD\u65B0\u63D0\u4EA4\u3002`,
           ...check2.missing.length === 1 ? { field: check2.missing[0] } : {}
         }
@@ -15842,6 +15959,8 @@ async function submitProject(client, args, challengeRequiredDeliverables) {
     });
     return {
       ok: true,
+      // A2-2（2026-09-07）：结果带提交身份，供 SKILL 摘要/确认卡片明示"将以谁的身份提交"
+      ...args.studentId ? { studentId: args.studentId } : {},
       ...resp.task_id ? { task_id: resp.task_id } : {},
       status: "pending",
       ...localIssues ? { localIssues } : {}
@@ -16374,6 +16493,8 @@ async function submitAndTrack(client, args) {
   }
   return {
     ok: taskResult?.status === "completed",
+    // A2-2（2026-09-07）：提交身份明示
+    studentId: args.studentId,
     ...teacherNotified ? { teacher_notified: true } : {},
     ...result?.submissionId ? { submission_record_id: result.submissionId } : {},
     submission_status: status,
@@ -17087,6 +17208,214 @@ async function dispatch(client, config2, command, p) {
       const result = await getChallenge(client, id);
       return { ...base, ...result };
     }
+    // ---- G3 正文全文（2026-09-08）----
+    case "get-challenge-content": {
+      const id = str(p.challengeId) ?? str(p.value);
+      if (!id) return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "challengeId \u5FC5\u586B" } };
+      const result = await getChallengeContent(client, id);
+      const workdir = str(p.workdir);
+      if (result.ok && workdir) {
+        try {
+          const dir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u6B63\u6587`);
+          (0, import_node_fs3.mkdirSync)(dir, { recursive: true });
+          (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "CHALLENGE.md"), result.content.markdown, "utf8");
+          (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "challenge.yaml"), result.content.yaml, "utf8");
+          (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(dir, "rubric.json"), result.content.rubric, "utf8");
+          return { ...base, ...result, dir, files: ["CHALLENGE.md", "challenge.yaml", "rubric.json"] };
+        } catch (err) {
+          return { ...base, ok: false, error: { code: "WRITE_FAILED", message: err instanceof Error ? err.message : String(err) } };
+        }
+      }
+      return { ...base, ...result };
+    }
+    // ---- 一键完整资料包（2026-09-08）：任务卡 + G3 正文 + G4 材料，SHA-256 可复核 ----
+    case "export-challenge-pack": {
+      const id = str(p.challengeId) ?? str(p.value);
+      const workdir = str(p.workdir);
+      if (!id || !workdir) {
+        return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "challengeId \u4E0E workdir \u5FC5\u586B" } };
+      }
+      const [card, content, mats] = await Promise.all([
+        getChallenge(client, id),
+        getChallengeContent(client, id),
+        listMaterials(client, id)
+      ]);
+      if (!card.ok) return { ...base, ...card };
+      const targetDir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u5B8C\u6574\u8D44\u6599`);
+      (0, import_node_fs3.mkdirSync)(targetDir, { recursive: true });
+      const files = [];
+      const add = (rel, data) => {
+        const full = (0, import_node_path3.join)(targetDir, rel);
+        (0, import_node_fs3.mkdirSync)((0, import_node_path3.dirname)(full), { recursive: true });
+        (0, import_node_fs3.writeFileSync)(full, data);
+        files.push({ file: rel, bytes: data.length, sha256: sha256Hex(data) });
+      };
+      add("challenge.json", Buffer.from(JSON.stringify(card.challenge ?? {}, null, 2), "utf8"));
+      if (content.ok && content.content) {
+        if (content.content.markdown) add("CHALLENGE.md", Buffer.from(content.content.markdown, "utf8"));
+        if (content.content.yaml) add("challenge.yaml", Buffer.from(content.content.yaml, "utf8"));
+        if (content.content.rubric) add("rubric.json", Buffer.from(content.content.rubric, "utf8"));
+      }
+      const downloaded = [];
+      const failed = [];
+      if (mats.ok) {
+        for (const m of mats.materials) {
+          const r = await downloadMaterial(client, id, m.name);
+          if (r.ok && r.data) {
+            add((0, import_node_path3.join)("materials", m.name), r.data);
+            downloaded.push({ name: m.name, bytes: r.data.length });
+          } else {
+            failed.push(m.name);
+          }
+        }
+      }
+      const mdLines = [
+        `# ${card.challenge?.title ?? id} \u5B8C\u6574\u8D44\u6599\u5305`,
+        "",
+        `> \u6311\u6218 ID\uFF1A${id} \uFF5C \u72B6\u6001\uFF1A${card.challenge?.status ?? "?"} \uFF5C \u622A\u6B62\uFF1A${card.challenge?.deadline ?? "?"}`,
+        "",
+        "\u672C\u5305\u7531\u63D2\u4EF6\u547D\u4EE4 export-challenge-pack \u751F\u6210\uFF08\u6570\u636E\u6E90\uFF1AEduSeed \u5E73\u53F0 G3/G4 \u63A5\u53E3\uFF09\u3002",
+        "",
+        "## \u6587\u4EF6\u6E05\u5355\uFF08SHA-256 \u53EF\u590D\u6838\uFF09",
+        "",
+        "| \u6587\u4EF6 | \u5B57\u8282 | SHA-256 |",
+        "|---|---|---|",
+        ...files.map((f2) => `| ${f2.file} | ${f2.bytes} | ${f2.sha256.slice(0, 16)}\u2026 |`)
+      ];
+      add("README.md", Buffer.from(mdLines.join("\n"), "utf8"));
+      return {
+        ...base,
+        ok: true,
+        dir: targetDir,
+        files,
+        content_ok: content.ok,
+        materials_ok: mats.ok,
+        downloaded,
+        ...failed.length > 0 ? { failed } : {},
+        junk_skipped: mats.junk_skipped ?? 0
+      };
+    }
+    // ---- G4 材料通道（2026-09-07）----
+    case "list-challenge-materials": {
+      const id = str(p.challengeId) ?? str(p.value);
+      if (!id) return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "challengeId \u5FC5\u586B" } };
+      const result = await listMaterials(client, id);
+      return { ...base, ...result };
+    }
+    case "download-challenge-materials": {
+      const id = str(p.challengeId) ?? str(p.value);
+      const workdir = str(p.workdir);
+      const only = str(p.file);
+      if (!id || !workdir) {
+        return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "challengeId \u4E0E workdir \u5FC5\u586B" } };
+      }
+      const targetDir = (0, import_node_path3.join)(workdir, `\u6311\u6218${id}_\u6750\u6599`);
+      try {
+        const names = [];
+        let junkSkipped = 0;
+        if (only) {
+          names.push(only);
+        } else {
+          const list = await listMaterials(client, id);
+          if (!list.ok) return { ...base, ...list };
+          names.push(...list.materials.map((m) => m.name));
+          junkSkipped = list.junk_skipped ?? 0;
+        }
+        if (names.length === 0) {
+          return { ...base, ok: false, error: { code: "NO_MATERIALS", message: "\u8BE5\u6311\u6218\u6682\u65E0\u6750\u6599" } };
+        }
+        (0, import_node_fs3.mkdirSync)(targetDir, { recursive: true });
+        const downloaded = [];
+        const failed = [];
+        for (const name of names) {
+          const r = await downloadMaterial(client, id, name);
+          if (r.ok && r.data) {
+            (0, import_node_fs3.writeFileSync)((0, import_node_path3.join)(targetDir, name), r.data);
+            downloaded.push({ name, bytes: r.data.length });
+          } else {
+            failed.push(name);
+          }
+        }
+        if (downloaded.length === 0) {
+          return { ...base, ok: false, error: { code: "DOWNLOAD_FAILED", message: "\u6750\u6599\u4E0B\u8F7D\u5931\u8D25" } };
+        }
+        return {
+          ...base,
+          ok: true,
+          dir: targetDir,
+          downloaded,
+          ...failed.length > 0 ? { failed } : {},
+          ...(junkSkipped > 0 ? { junk_skipped: junkSkipped } : {}),
+          hint: "\u6750\u6599\u5DF2\u843D\u76D8\u5230\u672C\u5730\u5DE5\u4F5C\u533A\uFF1B\u6309\u9700\u6253\u5F00\u5177\u4F53\u6587\u4EF6\uFF0C\u4E0D\u8981\u6574\u8BFB\u5165\u4E0A\u4E0B\u6587"
+        };
+      } catch (err) {
+        return { ...base, ok: false, error: { code: "WRITE_FAILED", message: err instanceof Error ? err.message : String(err) } };
+      }
+    }
+    // ---- 课程级公共资料（P3，2026-09-08）：体系文档/先修课/群公告与参考资料 ----
+    case "list-course-materials": {
+      const scope = str(p.scope);
+      if (!scope) {
+        return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "scope \u5FC5\u586B\uFF08system-docs | prereq | reference\uFF09" } };
+      }
+      const result = await listCourseMaterials(client, scope);
+      return { ...base, ...result };
+    }
+    case "download-course-materials": {
+      const scope = str(p.scope);
+      const workdir = str(p.workdir);
+      const only = str(p.file);
+      if (!scope || !workdir) {
+        return { ...base, ok: false, error: { code: "INPUT_MISSING", message: "scope \u4E0E workdir \u5FC5\u586B" } };
+      }
+      const targetDir = (0, import_node_path3.join)(workdir, `\u8BFE\u7A0B\u516C\u5171\u8D44\u6599_${scope}`);
+      try {
+        const names = [];
+        if (only) {
+          names.push(only);
+        } else {
+          const list = await listCourseMaterials(client, scope);
+          if (!list.ok) return { ...base, ...list };
+          names.push(...list.materials.map((m) => m.name));
+        }
+        if (names.length === 0) {
+          return { ...base, ok: false, error: { code: "NO_MATERIALS", message: "\u8BE5\u7C7B\u76EE\u6682\u65E0\u516C\u5171\u8D44\u6599\uFF08\u7B49\u5E73\u53F0\u62C9\u53D6\u5165\u5E93\u540E\u518D\u8BD5\uFF09" } };
+        }
+        (0, import_node_fs3.mkdirSync)(targetDir, { recursive: true });
+        const downloaded = [];
+        const failed = [];
+        for (const name of names) {
+          // 安全：相对路径逐段校验（平台已白名单，双保险防穿越）
+          const segs = name.split("/");
+          if (segs.some((s2) => !s2 || s2 === "." || s2 === ".." || s2.includes("..") || s2.includes("\\") || s2.startsWith("._"))) {
+            failed.push(name);
+            continue;
+          }
+          const r = await downloadCourseMaterial(client, scope, name);
+          if (r.ok && r.data) {
+            const full = (0, import_node_path3.join)(targetDir, ...segs);
+            (0, import_node_fs3.mkdirSync)((0, import_node_path3.dirname)(full), { recursive: true });
+            (0, import_node_fs3.writeFileSync)(full, r.data);
+            downloaded.push({ name, bytes: r.data.length });
+          } else {
+            failed.push(name);
+          }
+        }
+        if (downloaded.length === 0) {
+          return { ...base, ok: false, error: { code: "DOWNLOAD_FAILED", message: "\u516C\u5171\u8D44\u6599\u4E0B\u8F7D\u5931\u8D25" } };
+        }
+        return {
+          ...base,
+          ok: true,
+          dir: targetDir,
+          downloaded,
+          ...failed.length > 0 ? { failed } : {},
+          hint: "\u516C\u5171\u8D44\u6599\u5DF2\u843D\u76D8\u5230\u672C\u5730\u5DE5\u4F5C\u533A\uFF1B\u6309\u9700\u6253\u5F00\u5177\u4F53\u6587\u4EF6\uFF0C\u4E0D\u8981\u6574\u8BFB\u5165\u4E0A\u4E0B\u6587"
+        };
+      } catch (err) {
+        return { ...base, ok: false, error: { code: "WRITE_FAILED", message: err instanceof Error ? err.message : String(err) } };
+      }
+    }
     case "list-my-submissions": {
       const result = await listMySubmissions(client);
       return { ...base, ...result };
@@ -17109,6 +17438,21 @@ async function dispatch(client, config2, command, p) {
     case "get-dashboard": {
       const result = await getDashboard(client);
       return { ...base, ...result };
+    }
+    // ---- GitHub 绑定预检（2026-09-09）：平台已启用"未绑定拒收"硬门，提交前先查，避免白提交 ----
+    case "get-my-binding": {
+      const resp = await client.get("/api/students/me");
+      if (!resp.ok || !resp.student) {
+        return { ...base, ok: false, error: { code: "FETCH_FAILED", message: resp.error ?? "\u83B7\u53D6\u7ED1\u5B9A\u72B6\u6001\u5931\u8D25" } };
+      }
+      const gh = String(resp.student.github_username ?? "").trim();
+      return {
+        ...base,
+        ok: true,
+        github_username: gh,
+        bound: gh !== "",
+        ...(gh === "" ? { hint: "\u672A\u7ED1\u5B9A GitHub\uFF1A\u8BF7\u5148\u5230\u5B66\u751F\u7AEF\u3010\u8BBE\u7F6E \u2192 GitHub \u7ED1\u5B9A\u3011\u586B\u5199\u7528\u6237\u540D\u540E\u518D\u63D0\u4EA4\uFF08\u5E73\u53F0\u4F1A\u62D2\u6536\u672A\u7ED1\u5B9A\u63D0\u4EA4\uFF09" } : {})
+      };
     }
     case "health": {
       const result = await checkHealth(client);
@@ -17354,11 +17698,16 @@ var COMMANDS = [
   { command: "prepare-submission", role: "both", desc: "\u63D0\u4EA4\u9884\u68C0\u62A5\u544A + \u884C\u52A8\u9879 + \u63D0\u4EA4\u8349\u7A3F\uFF08\u79BB\u7EBF\uFF09" },
   { command: "list-challenges", role: "both", desc: "\u5DF2\u53D1\u5E03\u6311\u6218\u5217\u8868" },
   { command: "get-challenge", role: "both", desc: "\u6311\u6218\u8BE6\u60C5\uFF08\u4EA4\u4ED8\u7269/rubric/\u622A\u6B62\uFF09" },
+  { command: "get-challenge-content", role: "both", desc: "\u6311\u6218\u6B63\u6587\u5168\u6587\uFF08G3\uFF1ACHALLENGE.md/challenge.yaml/rubric.json\uFF09" },
+  { command: "export-challenge-pack", role: "both", desc: "\u4E00\u952E\u5BFC\u51FA\u6311\u6218\u5B8C\u6574\u8D44\u6599\u5305\uFF08\u4EFB\u52A1\u5361+\u6B63\u6587+\u6750\u6599\uFF0CSHA-256\u53EF\u590D\u6838\uFF09" },
+  { command: "list-course-materials", role: "both", desc: "\u8BFE\u7A0B\u7EA7\u516C\u5171\u8D44\u6599\u6E05\u5355\uFF08P3\uFF1Asystem-docs/prereq/reference\uFF09" },
+  { command: "download-course-materials", role: "both", desc: "\u4E0B\u8F7D\u8BFE\u7A0B\u7EA7\u516C\u5171\u8D44\u6599\u5230\u672C\u5730\u5DE5\u4F5C\u533A\uFF08P3\uFF09" },
   { command: "list-my-submissions", role: "both", desc: "\u6211\u7684\u63D0\u4EA4\u8BB0\u5F55" },
   { command: "get-task", role: "both", desc: "\u5F02\u6B65\u4EFB\u52A1\u72B6\u6001\u8F6E\u8BE2" },
   { command: "get-evaluation", role: "both", desc: "\u8BC4\u5BA1\u8BE6\u60C5\uFF08AI \u521D\u8BC4/\u6559\u5E08\u7EC8\u5BA1/\u540C\u4F34\uFF09" },
   { command: "get-dashboard", role: "both", desc: "\u8FDB\u5EA6\u4EEA\u8868\u76D8\u7EDF\u8BA1" },
   { command: "health", role: "both", desc: "\u5E73\u53F0\u8FDE\u63A5\u68C0\u67E5" },
+  { command: "get-my-binding", role: "student", desc: "\u67E5\u672C\u4EBA GitHub \u7ED1\u5B9A\u72B6\u6001\uFF08\u63D0\u4EA4\u524D\u9884\u68C0\uFF0C\u5E73\u53F0\u5BF9\u672A\u7ED1\u5B9A\u63D0\u4EA4\u76F4\u63A5\u62D2\u6536\uFF09" },
   { command: "submit-project", role: "student", desc: "\u63D0\u4EA4\u9879\u76EE\uFF08\u9884\u68C0\u2192Envelope\u2192task_id\uFF09" },
   { command: "submit-and-track", role: "student", desc: "\u63D0\u4EA4\u5E76\u8DDF\u8E2A\u5B8C\u6574\u95ED\u73AF\uFF08output contract\uFF09" },
   { command: "submit-review", role: "both", desc: "\u63D0\u4EA4\u8BC4\u5BA1\uFF08peer \u540C\u4F34 / teacher \u6559\u5E08\u7EC8\u5BA1\uFF09" },
@@ -17372,7 +17721,7 @@ var COMMANDS = [
   { command: "agent-inbox", role: "both", desc: "P3394 \u6536\u4EF6\u7BB1" },
   { command: "agent-contacts", role: "both", desc: "P3394 \u901A\u8BAF\u5F55" }
 ];
-var CURRENT_PLUGIN_VERSION = true ? "0.4.2" : "0.0.0";
+var CURRENT_PLUGIN_VERSION = true ? "0.5.3" : "0.0.0";
 var LICENSE_EXEMPT = /* @__PURE__ */ new Set(["help", "license-check", "health", "plugin-version", "check-deliverables", "prepare-submission"]);
 function compareVersions(a, b) {
   const pa = String(a).trim().replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
@@ -17476,7 +17825,7 @@ async function runRuntime(input) {
     if (!config2.mock) {
       void maybeSilentUpdate({
         currentVersion: CURRENT_PLUGIN_VERSION,
-        pkgName: process.env.EDUSEED_PKG_NAME?.trim() || "aix-course-elite20",
+        pkgName: process.env.EDUSEED_PKG_NAME?.trim() || "eduseed-course-client",
         serverUrl: config2.serverUrl,
         apiKey: config2.apiKey,
         ...input.skillDir ? { pkgRoot: (0, import_node_path3.resolve)((0, import_node_path3.dirname)((0, import_node_path3.dirname)(input.skillDir))) } : {}

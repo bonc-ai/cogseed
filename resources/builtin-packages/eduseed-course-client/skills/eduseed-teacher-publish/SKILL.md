@@ -22,6 +22,10 @@ run_skill 工具等价形式：`{skill_id:"eduseed-teacher-publish", script:"run
 |---|---|---|
 | `publish-challenge` | **发布挑战（唯一写入命令）** | `{"title","deadline","deliverables","rubric","brief?","objective?","requiredDeliverables?","rubricDimensions?"}` |
 | `list-challenges` / `get-challenge` | 查已有挑战（避免重复） | `{"challengeId":...}` |
+| `get-challenge-content` | 挑战正文全文（G3） | `{"challengeId":...}` 可选 `workdir` |
+| `export-challenge-pack` | 一键导出挑战完整资料包（任务卡+正文+材料） | `{"challengeId":...,"workdir":"/abs/path"}` |
+| `list-challenge-materials` / `download-challenge-materials` | 挑战材料清单/下载（G4，自动过滤 `._*` 垃圾件） | `{"challengeId":...,"workdir":"/abs/path"}` |
+| `list-course-materials` / `download-course-materials` | 课程级公共资料清单/下载（P3：system-docs/prereq/reference） | `{"scope":"system-docs","workdir":"/abs/path"}` |
 | `get-dashboard` | 班级统计（学生进度/提交） | — |
 | `submit-review` | 教师终审（accept/return） | `{"evaluatorType":"teacher","submissionId","score","feedback","action","submissionRecordId?"}` |
 | `notify` | 飞书通知（class_group/student_dm/teacher_dm） | `{"target":"class_group","text":...}` |
@@ -133,7 +137,7 @@ run_skill 工具等价形式：`{skill_id:"eduseed-teacher-publish", script:"run
 ## 版本检查（skill 自动更新，硬性）
 
 - 每次开始课程任务前，先执行 `plugin-version`：
-  - `update_required: true` → **立即停止**，告知必须升级（随 CogSeed 发版自动升级（内置版），或联系学校管理员）；
+  - `update_required: true` → **立即停止**，告知必须升级（`cogseed-pkg update aix-course-elite20`，用 PLUGIN_TOKEN）；
   - `update_available: true` → 提示可升级，不阻塞当前任务；
   - 已是最新 → 继续。
 
