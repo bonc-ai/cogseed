@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as path from 'node:path';
 
 import {
   cogSeedRunCenterConversationId,
   createCogSeedIpcService,
 } from '../../../../src/main/features/cogseed_backend/ipc-service';
+import { spaceWorkspaceDir } from '../../../../src/main/paths';
 
 describe('CogSeed IPC service', () => {
   it('delegates the user-scoped Agent Registry projection unchanged', async () => {
@@ -94,6 +96,164 @@ describe('CogSeed IPC service', () => {
     });
   });
 
+  it('saves a planned task without launching Runtime and keeps deferred execution fields out of the DTO', async () => {
+    const planned = {
+      schemaVersion: 1,
+      taskId: 'cogseed-task-planned-ipc',
+      sessionId: 'cogseed-session-planned-ipc',
+      runtimeSessionId: 'mruntime-planned-ipc',
+      requestId: 'req-planned-ipc',
+      conversationId: cogSeedRunCenterConversationId('req-planned-ipc'),
+      ownerId: 'ipc-user',
+      status: 'planned',
+      task: 'Private deferred task body.',
+      plannedAt: '2026-09-02T00:00:00.000Z',
+      spaceId: 'sp_private',
+      worktreeName: 'cogseed-worktree-private',
+      resultDeliveryState: 'not-applicable',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    } as any;
+    const admitTask = vi.fn(async () => ({ task: planned, created: true }));
+    const ensureRunCenterConversation = vi.fn(async () => undefined);
+    const controller = {
+      startCogSeedTask: vi.fn(),
+      startPlannedCogSeedTask: vi.fn(),
+    } as any;
+    const service = createCogSeedIpcService({
+      admitTask,
+      controller,
+      spaceExists: vi.fn(async () => true),
+      ensureRunCenterConversation,
+    });
+
+    const dto = await service.create('ipc-user', {
+      requestId: planned.requestId,
+      task: planned.task,
+      spaceId: planned.spaceId,
+    });
+
+    expect(admitTask).toHaveBeenCalledWith('ipc-user', expect.objectContaining({
+      requestId: planned.requestId,
+      initialStatus: 'planned',
+      spaceId: planned.spaceId,
+    }));
+    expect(controller.startCogSeedTask).not.toHaveBeenCalled();
+    expect(controller.startPlannedCogSeedTask).not.toHaveBeenCalled();
+    expect(ensureRunCenterConversation).toHaveBeenCalledWith({
+      userId: 'ipc-user',
+      conversationId: planned.conversationId,
+      requestId: planned.requestId,
+      task: planned.task,
+      spaceId: planned.spaceId,
+    });
+    expect(admitTask).toHaveBeenCalledWith('ipc-user', expect.objectContaining({
+      conversationId: planned.conversationId,
+    }));
+    expect(dto).toMatchObject({
+      taskId: planned.taskId,
+      conversationId: planned.conversationId,
+      status: 'planned',
+      actions: expect.objectContaining({ start: true, archive: true }),
+    });
+    expect(dto).not.toHaveProperty('task');
+    expect(dto).not.toHaveProperty('plannedAt');
+    expect(dto).not.toHaveProperty('spaceId');
+    expect(dto).not.toHaveProperty('worktreeName');
+  });
+
+  it('rejects execution-only input instead of silently dropping it when saving a planned task', async () => {
+    const admitTask = vi.fn();
+    const service = createCogSeedIpcService({ admitTask });
+    const unsupportedFields = {
+      sessionId: 'cogseed-session-planned-input',
+      profileId: 'profile-planned-input',
+      context: [],
+      attachments: [],
+      conversationId: 'conversation-planned-input',
+    };
+
+    for (const [field, value] of Object.entries(unsupportedFields)) {
+      await expect(service.create('ipc-user', {
+        requestId: `req-planned-${field}`,
+        task: 'Save only supported task settings.',
+        [field]: value,
+      })).rejects.toThrow(`E_RUN_CENTER_PLANNED_FIELD_UNSUPPORTED:${field}`);
+    }
+
+    expect(admitTask).not.toHaveBeenCalled();
+  });
+
+  it('revalidates a planned task before start and leaves it planned when its workspace is gone', async () => {
+    const planned = {
+      schemaVersion: 1,
+      taskId: 'cogseed-task-stale-space',
+      sessionId: 'cogseed-session-stale-space',
+      runtimeSessionId: 'mruntime-stale-space',
+      requestId: 'req-stale-space',
+      ownerId: 'ipc-user',
+      status: 'planned',
+      task: 'Run only in the selected workspace.',
+      plannedAt: '2026-09-02T00:00:00.000Z',
+      spaceId: 'sp_deleted',
+      resultDeliveryState: 'not-applicable',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    } as any;
+    const controller = {
+      startCogSeedTask: vi.fn(),
+      startPlannedCogSeedTask: vi.fn(),
+    } as any;
+    const service = createCogSeedIpcService({
+      controller,
+      readTask: vi.fn(async () => planned),
+      spaceExists: vi.fn(async () => false),
+    });
+
+    await expect(service.action('ipc-user', {
+      taskId: planned.taskId,
+      action: 'start',
+      requestId: 'req-start-stale-space',
+    })).rejects.toThrow('E_RUN_CENTER_SPACE_UNAVAILABLE');
+    expect(planned.status).toBe('planned');
+    expect(controller.startPlannedCogSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects a planned task whose resolved workspace escapes its selected space', async () => {
+    const planned = {
+      schemaVersion: 1,
+      taskId: 'cogseed-task-planned-outside-space',
+      sessionId: 'cogseed-session-planned-outside-space',
+      runtimeSessionId: 'mruntime-planned-outside-space',
+      requestId: 'req-planned-outside-space',
+      ownerId: 'ipc-user',
+      status: 'planned',
+      task: 'Stay within the selected workspace.',
+      spaceId: 'sp_project',
+      conversationId: 'run-center-planned-outside-space',
+      createdAt: '2026-09-02T00:00:00.000Z',
+      updatedAt: '2026-09-02T00:00:00.000Z',
+    } as any;
+    const controller = {
+      startPlannedCogSeedTask: vi.fn(),
+    } as any;
+    const service = createCogSeedIpcService({
+      controller,
+      readTask: vi.fn(async () => planned),
+      spaceExists: vi.fn(async () => true),
+      isConversationAvailable: vi.fn(async () => true),
+      readConversationSpaceBinding: vi.fn(async () => ({ exists: true, spaceId: planned.spaceId })),
+      resolveConversationWorkspace: vi.fn(async () => path.join(spaceWorkspaceDir('ipc-user', 'sp_other'), 'run-center-task')),
+    });
+
+    await expect(service.action('ipc-user', {
+      taskId: planned.taskId,
+      action: 'start',
+      requestId: 'req-start-planned-outside-space',
+    })).rejects.toThrow('E_RUN_CENTER_SPACE_WORKSPACE_MISMATCH');
+    expect(controller.startPlannedCogSeedTask).not.toHaveBeenCalled();
+  });
+
   it('delegates validated user-scoped task operations without exposing backend selection or fallback fields', async () => {
     const controller = {
       startCogSeedTask: vi.fn(async (_userId: string, input: { requestId: string; task: string }) => ({ taskId: 'cogseed-task-ipc', status: 'running', ...input })),
@@ -103,8 +263,11 @@ describe('CogSeed IPC service', () => {
       resolve: vi.fn(async (_userId: string, name: string) => `/safe/${name}`),
       list: vi.fn(), create: vi.fn(), remove: vi.fn(),
     };
+    const ensureRunCenterConversation = vi.fn(async () => undefined);
     const service = createCogSeedIpcService({
       controller,
+      readTaskByRequestId: vi.fn(async () => null),
+      ensureRunCenterConversation,
       readTask: vi.fn(async () => ({ taskId: 'cogseed-task-ipc', status: 'running' })),
       retryTask: vi.fn(async () => ({ taskId: 'cogseed-task-retry', status: 'created' })),
       readEvents: vi.fn(async () => []),
@@ -118,11 +281,138 @@ describe('CogSeed IPC service', () => {
     });
     await expect(service.start('ipc-user', { requestId: 'req-path', task: 'Unsafe work.', workingDir: '/private/path' })).rejects.toThrow(/worktreeName/);
     await expect(service.cancel('ipc-user', 'cogseed-task-ipc')).resolves.toMatchObject({ status: 'cancelled' });
-    expect(controller.startCogSeedTask).toHaveBeenNthCalledWith(1, 'ipc-user', { requestId: 'req-ipc', task: 'Do work.' });
+    expect(controller.startCogSeedTask).toHaveBeenNthCalledWith(1, 'ipc-user', {
+      requestId: 'req-ipc', task: 'Do work.',
+      conversationId: cogSeedRunCenterConversationId('req-ipc'),
+    });
     expect(controller.startCogSeedTask).toHaveBeenNthCalledWith(2, 'ipc-user', {
       requestId: 'req-worktree', task: 'Isolated work.', workingDir: '/safe/cogseed-worktree-dev-user',
+      conversationId: cogSeedRunCenterConversationId('req-worktree'),
     });
+    expect(ensureRunCenterConversation).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      userId: 'ipc-user', requestId: 'req-ipc', conversationId: cogSeedRunCenterConversationId('req-ipc'),
+    }));
+    expect(ensureRunCenterConversation).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      userId: 'ipc-user', requestId: 'req-worktree', conversationId: cogSeedRunCenterConversationId('req-worktree'),
+    }));
     expect(worktreeManager.resolve).toHaveBeenCalledWith('ipc-user', 'cogseed-worktree-dev-user');
+  });
+
+  it('binds a selected CogSeed workspace before resolving its trusted execution directory', async () => {
+    const order: string[] = [];
+    let binding = { exists: false, spaceId: '' };
+    const workspace = path.join(spaceWorkspaceDir('ipc-user', 'sp_project'), 'run-center-task');
+    const controller = {
+      startCogSeedTask: vi.fn(async (_userId: string, input: any) => {
+        order.push('runtime');
+        return {
+          taskId: 'cogseed-task-space', sessionId: 'cogseed-session-space', runtimeSessionId: 'mruntime-space',
+          executionId: 'cogseed-exec-space', ownerId: 'ipc-user', status: 'running',
+          createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+          ...input,
+        };
+      }),
+    } as any;
+    const spaceExists = vi.fn(async () => {
+      order.push('space');
+      return true;
+    });
+    const ensureRunCenterConversation = vi.fn(async (input: any) => {
+      order.push('conversation');
+      binding = { exists: true, spaceId: input.spaceId };
+    });
+    const resolveConversationWorkspace = vi.fn(async () => {
+      order.push('workspace');
+      return workspace;
+    });
+    const service = createCogSeedIpcService({
+      controller,
+      readTaskByRequestId: vi.fn(async () => null),
+      spaceExists,
+      ensureRunCenterConversation,
+      readConversationSpaceBinding: vi.fn(async () => binding),
+      resolveConversationWorkspace,
+    });
+
+    await expect(service.start('ipc-user', {
+      requestId: 'req-space-start', task: 'Run in the selected workspace.', spaceId: 'sp_project',
+    })).resolves.toMatchObject({ taskId: 'cogseed-task-space', conversationId: cogSeedRunCenterConversationId('req-space-start') });
+
+    expect(order).toEqual(['space', 'conversation', 'workspace', 'runtime']);
+    expect(spaceExists).toHaveBeenCalledWith('ipc-user', 'sp_project');
+    expect(ensureRunCenterConversation).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'ipc-user', conversationId: cogSeedRunCenterConversationId('req-space-start'),
+      requestId: 'req-space-start', task: 'Run in the selected workspace.', spaceId: 'sp_project',
+    }));
+    expect(ensureRunCenterConversation.mock.calls[0]?.[0]).not.toHaveProperty('agentId');
+    expect(resolveConversationWorkspace).toHaveBeenCalledWith('ipc-user', cogSeedRunCenterConversationId('req-space-start'));
+    expect(controller.startCogSeedTask).toHaveBeenCalledWith('ipc-user', expect.objectContaining({
+      conversationId: cogSeedRunCenterConversationId('req-space-start'),
+      workingDir: workspace,
+    }));
+    expect(controller.startCogSeedTask.mock.calls[0]?.[1]).not.toHaveProperty('spaceId');
+  });
+
+  it('rejects an immediate task whose resolved workspace escapes its selected space', async () => {
+    const controller = { startCogSeedTask: vi.fn() } as any;
+    const service = createCogSeedIpcService({
+      controller,
+      readTaskByRequestId: vi.fn(async () => null),
+      spaceExists: vi.fn(async () => true),
+      ensureRunCenterConversation: vi.fn(async () => undefined),
+      readConversationSpaceBinding: vi.fn(async () => ({ exists: true, spaceId: 'sp_project' })),
+      resolveConversationWorkspace: vi.fn(async () => path.join(spaceWorkspaceDir('ipc-user', 'sp_other'), 'run-center-task')),
+    });
+
+    await expect(service.start('ipc-user', {
+      requestId: 'req-immediate-outside-space',
+      task: 'Do not leave the selected space.',
+      spaceId: 'sp_project',
+    })).rejects.toThrow('E_RUN_CENTER_SPACE_WORKSPACE_MISMATCH');
+    expect(controller.startCogSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale, unsafe, cross-space, and Worktree-conflicting workspace starts before launch', async () => {
+    const existing = {
+      taskId: 'cogseed-task-existing-space', sessionId: 'cogseed-session-existing-space',
+      runtimeSessionId: 'mruntime-existing-space', executionId: 'cogseed-exec-existing-space',
+      requestId: 'req-existing-space', ownerId: 'ipc-user', status: 'completed', task: 'Historical task.',
+      conversationId: cogSeedRunCenterConversationId('req-existing-space'),
+      workingDir: '/safe/sp_alpha/workspace/historical-task',
+      createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:01:00.000Z',
+    } as any;
+    const controller = { startCogSeedTask: vi.fn(async () => existing) } as any;
+    const ensureRunCenterConversation = vi.fn(async () => undefined);
+    const worktreeManager = {
+      resolve: vi.fn(async () => '/safe/worktree'), list: vi.fn(), create: vi.fn(), remove: vi.fn(),
+    };
+    const service = createCogSeedIpcService({
+      controller,
+      readTaskByRequestId: vi.fn(async (_userId, requestId) => requestId === existing.requestId ? existing : null),
+      spaceExists: vi.fn(async (_userId, spaceId) => spaceId !== 'sp_deleted'),
+      ensureRunCenterConversation,
+      readConversationSpaceBinding: vi.fn(async () => ({ exists: true, spaceId: 'sp_alpha' })),
+      resolveConversationWorkspace: vi.fn(async () => existing.workingDir),
+      worktreeManager,
+    });
+
+    await expect(service.start('ipc-user', {
+      requestId: 'req-unsafe-space', task: 'Unsafe.', spaceId: '../private',
+    })).rejects.toThrow(/invalid spaceId/);
+    await expect(service.start('ipc-user', {
+      requestId: 'req-deleted-space', task: 'Deleted.', spaceId: 'sp_deleted',
+    })).rejects.toThrow(/E_RUN_CENTER_SPACE_UNAVAILABLE/);
+    await expect(service.start('ipc-user', {
+      requestId: 'req-space-worktree', task: 'Conflicting.', spaceId: 'sp_alpha',
+      worktreeName: 'cogseed-worktree-feature',
+    })).rejects.toThrow(/E_RUN_CENTER_SPACE_WORKTREE_CONFLICT/);
+    await expect(service.start('ipc-user', {
+      requestId: existing.requestId, task: existing.task, spaceId: 'sp_beta',
+    })).rejects.toThrow(/payload conflict/i);
+
+    expect(controller.startCogSeedTask).not.toHaveBeenCalled();
+    expect(ensureRunCenterConversation).not.toHaveBeenCalled();
+    expect(worktreeManager.resolve).not.toHaveBeenCalled();
   });
 
   it('routes recover-result actions to the Runtime controller without requiring a new request ID', async () => {
@@ -189,7 +479,7 @@ describe('CogSeed IPC service', () => {
     expect(controller.resumeCogSeedTask).not.toHaveBeenCalled();
   });
 
-  it('archives failed runs through the existing task action and preserves their failed status', async () => {
+  it('archives completed runs through the existing task action and preserves their completed status', async () => {
     let task = {
       schemaVersion: 1,
       taskId: 'cogseed-task-archive',
@@ -198,9 +488,8 @@ describe('CogSeed IPC service', () => {
       executionId: 'cogseed-exec-archive',
       requestId: 'req-archive',
       ownerId: 'ipc-user',
-      status: 'failed',
-      task: 'Private failed task body.',
-      errorCode: 'provider_error',
+      status: 'completed',
+      task: 'Private completed task body.',
       resultDeliveryState: 'delivered',
       createdAt: '2026-08-27T00:00:00.000Z',
       updatedAt: '2026-08-27T00:01:00.000Z',
@@ -233,8 +522,8 @@ describe('CogSeed IPC service', () => {
     await expect(service.board('ipc-user')).resolves.toMatchObject({
       tasks: [expect.objectContaining({
         taskId: task.taskId,
-        status: 'failed',
-        column: 'attention',
+        status: 'completed',
+        column: 'completed',
         actions: expect.objectContaining({ archive: true }),
       })],
     });
@@ -242,18 +531,34 @@ describe('CogSeed IPC service', () => {
       action: 'archive',
       taskId: task.taskId,
     })).resolves.toMatchObject({
-      task: expect.objectContaining({ taskId: task.taskId, status: 'failed' }),
+      task: expect.objectContaining({ taskId: task.taskId, status: 'completed' }),
     });
     await expect(service.board('ipc-user')).resolves.toMatchObject({
       tasks: [expect.objectContaining({
         taskId: task.taskId,
-        status: 'failed',
+        status: 'completed',
         column: 'archived',
         actions: expect.objectContaining({ archive: false }),
       })],
-      counts: expect.objectContaining({ attention: 0, archived: 1 }),
+      counts: expect.objectContaining({ completed: 0, archived: 1 }),
     });
     expect(archiveTask).toHaveBeenCalledWith('ipc-user', task.taskId);
+  });
+
+  it('purges archived records through a user-scoped store operation', async () => {
+    const purgeArchivedTasks = vi.fn(async () => ({
+      purgedTaskIds: ['cogseed-task-archived'],
+      retainedTaskIds: ['cogseed-task-result-pending'],
+      failedTaskIds: [],
+    }));
+    const service = createCogSeedIpcService({ purgeArchivedTasks });
+
+    await expect(service.purgeArchived('ipc-user')).resolves.toEqual({
+      purgedTaskIds: ['cogseed-task-archived'],
+      retainedTaskIds: ['cogseed-task-result-pending'],
+      failedTaskIds: [],
+    });
+    expect(purgeArchivedTasks).toHaveBeenCalledWith('ipc-user');
   });
 
   it('resolves Agent execution on the main side and creates linked reassignment tasks', async () => {
@@ -414,6 +719,7 @@ describe('CogSeed IPC service', () => {
     let conflict: ReturnType<Service['start']> | undefined;
     const deps: NonNullable<Parameters<typeof createCogSeedIpcService>[0]> = {
       readTaskByRequestId: vi.fn(async () => null),
+      ensureRunCenterConversation: vi.fn(async () => undefined),
     };
     Object.defineProperty(deps, 'controller', {
       get() {

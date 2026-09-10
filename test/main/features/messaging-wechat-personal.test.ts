@@ -181,6 +181,11 @@ describe('wechat personal adapter wire contract', () => {
 
   it('backs off exponentially on consecutive failures (2s, 4s, 8s) and resets after a successful poll', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.doMock('../../../src/main/features/messaging/wechat-state-store', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/messaging/wechat-state-store')>(),
+      loadWechatState: vi.fn(async () => null),
+      saveWechatCursor: vi.fn(async () => undefined),
+    }));
     const { WechatPersonalAdapter } = await import('../../../src/main/features/messaging/wechat-personal');
     const delays: number[] = [];
     const realSetTimeout = globalThis.setTimeout;
@@ -188,11 +193,12 @@ describe('wechat personal adapter wire contract', () => {
       if (typeof ms === 'number' && ms >= 1_000) delays.push(ms);
       return realSetTimeout(fn, ms, ...args);
     });
-    let fail = true;
-    const fetchMock = vi.fn().mockImplementation(async () => {
-      if (fail) throw new Error('socket hang up');
-      return makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] });
-    });
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockRejectedValueOnce(new Error('socket hang up'))
+      .mockResolvedValueOnce(makeResponse({ ret: 0, get_updates_buf: 'c1', msgs: [] }))
+      .mockRejectedValue(new Error('socket hang up'));
     vi.stubGlobal('fetch', fetchMock);
     const onStatus = vi.fn().mockResolvedValue(undefined);
     const adapter = new WechatPersonalAdapter(instance, secret, 'uid-1');
@@ -206,25 +212,15 @@ describe('wechat personal adapter wire contract', () => {
         expect(delays[i]).toBe(expected[i]);
         await vi.advanceTimersByTimeAsync(expected[i]);
       }
-      // A successful poll resets the counter: the next failure must wait the
-      // base 2s again. Failures may already have queued further waits while
-      // the fake clock advanced (real I/O can settle inside an advance), so
-      // fire every pending backoff wait until a poll succeeds.
-      fail = false;
-      let sawConnected = false;
-      for (let i = 0; i < 8 && !sawConnected; i++) {
-        await vi.advanceTimersByTimeAsync(60_000);
-        await pumpUntil(() => onStatus.mock.calls.some(([s]) => s.kind === 'connected'));
-        sawConnected = onStatus.mock.calls.some(([s]) => s.kind === 'connected');
-      }
-      expect(sawConnected).toBe(true);
-      fail = true;
-      const waitsBefore = delays.length;
-      await pumpUntil(() => delays.length > waitsBefore);
-      expect(delays[waitsBefore]).toBe(2_000);
+      // The fixed request sequence now returns one success followed by a
+      // failure. The success resets the counter, so the next wait is 2s.
+      await pumpUntil(() => delays.length >= 4);
+      expect(onStatus.mock.calls.some(([s]) => s.kind === 'connected')).toBe(true);
+      expect(delays.slice(0, 4)).toEqual([2_000, 4_000, 8_000, 2_000]);
     } finally {
       controller.abort();
       await startPromise;
+      vi.doUnmock('../../../src/main/features/messaging/wechat-state-store');
       vi.useRealTimers();
     }
   });

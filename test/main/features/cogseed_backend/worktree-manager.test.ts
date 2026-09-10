@@ -6,12 +6,40 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCogSeedWorktreeManager } from '../../../../src/main/features/cogseed_backend/worktree-manager';
+import {
+  DIRECTORY_LINKS_SUPPORTED,
+  DIRECTORY_LINK_TYPE,
+} from '../../../helpers/fs-capabilities';
+import { removeGitFixture } from '../../../helpers/remove-git-fixture';
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+function comparableFilePath(value: string): string {
+  const canonical = process.platform === 'win32'
+    ? fs.realpathSync.native(value)
+    : fs.realpathSync(value);
+  if (process.platform !== 'win32') return canonical;
+  return path.win32.normalize(canonical
+    .replace(/^\\\\\?\\UNC\\/i, '\\\\')
+    .replace(/^\\\\\?\\/i, '')).toLocaleLowerCase();
+}
+
+function windowsShortPath(value: string): string {
+  return execFileSync('cmd.exe', [
+    '/d',
+    '/s',
+    '/c',
+    `for %I in ("${value}") do @echo %~sI`,
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsVerbatimArguments: true,
+  }).trim();
 }
 
 describe('CogSeed worktree manager', () => {
@@ -33,7 +61,7 @@ describe('CogSeed worktree manager', () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    removeGitFixture(tempRoot);
   });
 
   function manager(overrides: Parameters<typeof createCogSeedWorktreeManager>[0] = {}) {
@@ -55,10 +83,12 @@ describe('CogSeed worktree manager', () => {
     await expect(service.resolve('worktree-user', path.basename(created.path))).resolves.toBe(created.path);
     await expect(service.resolve('worktree-user', 'cogseed-worktree-missing')).rejects.toMatchObject({ code: 'E_WORKTREE_NOT_REGISTERED' });
     await expect(service.resolve('worktree-user', '../repository')).rejects.toMatchObject({ code: 'E_WORKTREE_PATH_INVALID' });
-    await expect(service.list('worktree-user')).resolves.toMatchObject({
-      repository: { path: fs.realpathSync(repository), branch: 'develop' },
-      worktrees: [expect.objectContaining({ path: created.path, branch: 'dev/tester' })],
-    });
+    const projection = await service.list('worktree-user');
+    expect(projection.repository.branch).toBe('develop');
+    expect(comparableFilePath(projection.repository.path)).toBe(comparableFilePath(repository));
+    expect(projection.worktrees).toEqual([
+      expect.objectContaining({ path: created.path, branch: 'dev/tester' }),
+    ]);
 
     await expect(service.remove('worktree-user', {
       path: created.path,
@@ -111,16 +141,125 @@ describe('CogSeed worktree manager', () => {
       expectedBranch: 'dev/occupied',
     })).rejects.toMatchObject({ code: 'E_WORKTREE_OUTSIDE_MANAGED_ROOT' });
 
-    const link = path.join(tempRoot, 'cogseed-worktree-link');
-    fs.symlinkSync(created.path, link, 'dir');
-    await expect(service.remove('worktree-user', {
-      path: link,
-      expectedBranch: 'dev/occupied',
-    })).rejects.toMatchObject({ code: 'E_WORKTREE_SYMLINK' });
+    if (DIRECTORY_LINKS_SUPPORTED) {
+      const link = path.join(tempRoot, 'cogseed-worktree-link');
+      fs.symlinkSync(created.path, link, DIRECTORY_LINK_TYPE);
+      await expect(service.remove('worktree-user', {
+        path: link,
+        expectedBranch: 'dev/occupied',
+      })).rejects.toMatchObject({ code: 'E_WORKTREE_SYMLINK' });
+    }
     await expect(service.remove('worktree-user', {
       path: created.path,
       expectedBranch: 'dev/occupied',
     })).rejects.toMatchObject({ code: 'E_WORKTREE_PROCESS_ACTIVE' });
+  });
+
+  it.runIf(process.platform === 'win32')('recognizes the main repository through its Windows 8.3 alias', async (context) => {
+    const repositoryAlias = windowsShortPath(repository);
+    if (path.win32.normalize(repositoryAlias).toLocaleLowerCase()
+      === path.win32.normalize(repository).toLocaleLowerCase()) return context.skip();
+
+    expect(comparableFilePath(repositoryAlias)).toBe(comparableFilePath(repository));
+    await expect(manager().remove('worktree-user', {
+      path: repositoryAlias,
+      expectedBranch: 'develop',
+    })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
+  });
+
+  it.runIf(process.platform === 'win32')('recognizes a namespaced path as the main repository', async () => {
+    const namespacedRepository = `\\\\?\\${repository}`;
+    await expect(manager().remove('worktree-user', {
+      path: namespacedRepository,
+      expectedBranch: 'develop',
+    })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
+  });
+
+  it.runIf(DIRECTORY_LINKS_SUPPORTED && process.platform !== 'win32')('recognizes the main repository through a canonical directory alias on non-Windows', async () => {
+    const repositoryAlias = path.join(tempRoot, 'repository-alias');
+    fs.symlinkSync(repository, repositoryAlias, DIRECTORY_LINK_TYPE);
+    const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+
+    try {
+      await expect(manager().remove('worktree-user', {
+        path: repositoryAlias,
+        expectedBranch: 'develop',
+      })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('fails closed when an existing worktree cannot be canonicalized', async () => {
+    const service = manager();
+    const created = await service.create('worktree-user', { branch: 'dev/inaccessible' });
+    const nativeRealpath = fs.realpathSync.native;
+    const realpathSpy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((value: fs.PathLike) => {
+      if (path.resolve(String(value)).toLowerCase() === path.resolve(created.path).toLowerCase()) {
+        throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      }
+      return nativeRealpath(value);
+    }) as typeof fs.realpathSync.native);
+
+    try {
+      await expect(service.remove('worktree-user', {
+        path: created.path,
+        expectedBranch: created.branch,
+      })).rejects.toMatchObject({ code: 'E_WORKTREE_UNVERIFIED' });
+      expect(fs.existsSync(created.path)).toBe(true);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('omits missing and inaccessible registered worktrees from list projections', async () => {
+    const service = manager();
+    const missing = await service.create('worktree-user', { branch: 'dev/missing' });
+    const inaccessible = await service.create('worktree-user', { branch: 'dev/inaccessible-list' });
+    fs.rmSync(missing.path, { recursive: true, force: true });
+
+    const nativeRealpath = fs.realpathSync.native;
+    const realpathSpy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((value: fs.PathLike) => {
+      if (path.resolve(String(value)).toLowerCase() === path.resolve(inaccessible.path).toLowerCase()) {
+        throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      }
+      return nativeRealpath(value);
+    }) as typeof fs.realpathSync.native);
+
+    try {
+      const projection = await service.list('worktree-user');
+      expect(projection.worktrees).toEqual([]);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('returns a domain error when the requested worktree cannot be canonicalized', async () => {
+    const service = manager();
+    const inaccessible = await service.create('worktree-user', { branch: 'dev/inaccessible-resolve' });
+    const nativeRealpath = fs.realpathSync.native;
+    const realpathSpy = vi.spyOn(fs.realpathSync, 'native').mockImplementation(((value: fs.PathLike) => {
+      if (path.resolve(String(value)).toLowerCase() === path.resolve(inaccessible.path).toLowerCase()) {
+        throw Object.assign(new Error('access denied'), { code: 'EACCES' });
+      }
+      return nativeRealpath(value);
+    }) as typeof fs.realpathSync.native);
+
+    try {
+      await expect(service.resolve('worktree-user', path.basename(inaccessible.path)))
+        .rejects.toMatchObject({ code: 'E_WORKTREE_UNVERIFIED' });
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('creates a worktree when another registered worktree is stale', async () => {
+    const service = manager();
+    const stale = await service.create('worktree-user', { branch: 'dev/stale' });
+    fs.rmSync(stale.path, { recursive: true, force: true });
+
+    await expect(service.create('worktree-user', { branch: 'dev/after-stale' }))
+      .resolves.toMatchObject({ branch: 'dev/after-stale', verifiable: true });
   });
 
   it('fails closed when the repository, base, or process state cannot be verified', async () => {

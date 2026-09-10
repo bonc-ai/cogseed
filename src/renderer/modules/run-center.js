@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 // Task and event surfaces render only privacy-filtered CogSeed projections.
-// Explicit Worktree management is the sole surface that receives managed paths.
+// Managed Worktree paths are never rendered here; administration lives in Settings.
 (function initCogSeedRunCenter(rootWindow) {
   'use strict';
 
+  const board = rootWindow.CogSeedRunCenterBoard;
+  const { buildAttemptModels, reconcileAttemptSelection } = board;
+
   const VIEW_DEFINITIONS = Object.freeze([
-    ['overview', 'run_center.view_overview'],
-    ['runs', 'run_center.view_board'],
-    ['history', 'run_center.view_runs'],
+    ['tasks', 'run_center.view_tasks'],
     ['agents', 'run_center.view_agents'],
     ['collaboration', 'run_center.view_collaboration'],
   ]);
@@ -19,7 +20,7 @@
   // links and styles. The task/session vocabulary is accepted as a boundary
   // alias and never becomes renderer state.
   const VIEW_ALIASES = Object.freeze({
-    overview: 'overview',
+    overview: 'runs',
     runs: 'runs',
     history: 'history',
     agents: 'agents',
@@ -30,13 +31,34 @@
     execution: 'history',
   });
 
+  const DEFAULT_RUN_QUERY = Object.freeze({
+    search: '',
+    filter: 'all',
+    sourceFilter: 'all',
+    runAgentFilter: 'all',
+    runTimeFilter: 'all',
+    showArchived: false,
+    conversationId: '',
+  });
+  const RUN_MODE_STORAGE_KEY = 'cogseed.run-center.run-mode.v1';
+
+  function readPreferredRunMode() {
+    try { return rootWindow.localStorage?.getItem(RUN_MODE_STORAGE_KEY) === 'queue' ? 'queue' : 'board'; }
+    catch { return 'board'; }
+  }
+  function writePreferredRunMode(mode) {
+    try { rootWindow.localStorage?.setItem(RUN_MODE_STORAGE_KEY, mode); }
+    catch { /* A blocked machine-local preference must not break Run Center. */ }
+  }
+  let preferredRunMode = readPreferredRunMode();
+
   function normalizeView(view) {
     return VIEW_ALIASES[String(view || '').trim()] || '';
   }
 
   const state = {
-    view: 'overview',
-    runMode: 'queue',
+    view: 'runs',
+    runMode: preferredRunMode,
     detailTab: 'summary',
     filter: 'all',
     sourceFilter: 'all',
@@ -44,6 +66,7 @@
     runTimeFilter: 'all',
     search: '',
     showArchived: false,
+    conversationIdFilter: '',
     board: null,
     detail: null,
     selectedTaskId: '',
@@ -55,8 +78,14 @@
     detailOpen: false,
     restoreDetailAfterCreate: false,
     loading: false,
+    refreshing: false,
+    stale: false,
+    staleError: '',
+    dataState: 'idle',
     error: '',
+    detailError: '',
     busyAction: '',
+    busyTaskId: '',
     bound: false,
     watch: null,
     refreshTimer: null,
@@ -64,44 +93,52 @@
     refreshQueued: false,
     agentRegistry: null,
     agentRegistryError: '',
+    agentRegistryRequestRevision: 0,
     agentSearch: '',
     agentFilter: 'all',
-    busyAgentGateway: '',
-    agentGatewayError: '',
     agents: [],
     agentsLoaded: false,
+    agentsLoading: false,
+    spaces: [],
+    spacesLoading: false,
+    spacesError: '',
+    spacesNotice: '',
+    spacesRequestRevision: 0,
     createMode: '',
     createTask: '',
+    createSpaceId: '',
     createAgentId: '',
     createWorktreeName: '',
     createBusy: false,
+    createBusyMode: '',
     createError: '',
-    createAdvancedOpen: false,
     createAdvancedError: '',
     createReturnFocus: '',
     toolsOpen: false,
     busyCollaborationAction: '',
-    diagnosticsOpen: false,
-    diagnostics: null,
-    diagnosticsLoading: false,
-    diagnosticsError: '',
-    diagnosticsRequestRevision: 0,
-    worktreesOpen: false,
     worktrees: null,
     worktreesLoading: false,
     worktreesError: '',
     worktreesRequestRevision: 0,
     worktreesRequestOwner: '',
-    worktreeBranch: '',
-    worktreeBaseRef: 'HEAD',
-    worktreeBusy: '',
-    worktreeNotice: '',
     detailReturnFocus: '',
     actionNotice: '',
     actionError: '',
-    overviewAnalysisOpen: true,
     selectionRevision: 0,
+    pendingRestoreContext: null,
   };
+  let derivedProjection = null;
+  let derivedRuns = [];
+  let derivedSequence = new Map();
+  let renderTransaction = 0;
+  let filteredRunTransaction = -1;
+  let filteredRunProjection = null;
+  let filteredRunSignature = '';
+  let filteredRunAgentRegistry = null;
+  let filteredRunAgents = null;
+  let filteredActiveRuns = [];
+  let filteredArchivedRuns = [];
+  let filteredVisibleRuns = [];
 
   function panel() { return document.getElementById('run-center-root'); }
   function focusLater(selector) {
@@ -135,6 +172,41 @@
       selectionDirection: active.selectionDirection,
     };
   }
+  function captureReturnContext() {
+    return {
+      sourceView: state.view === 'agents' ? 'agents' : state.view === 'collaboration' ? 'collaboration' : 'tasks',
+      taskScope: state.view === 'history' ? 'history' : 'current',
+      runMode: state.runMode,
+      filters: {
+        search: state.search,
+        filter: state.filter,
+        sourceFilter: state.sourceFilter,
+        runAgentFilter: state.runAgentFilter,
+        runTimeFilter: state.runTimeFilter,
+        showArchived: state.showArchived,
+      },
+      selectedRunKey: state.selectedRunKey,
+      selectedAttemptKey: state.selectedAttemptKey,
+      selectedTaskId: state.selectedTaskId,
+      selectedSessionId: state.selectedSessionId,
+      conversationIdFilter: state.conversationIdFilter,
+      scrollPositions: captureScroll(),
+      focusTarget: captureFocus(),
+    };
+  }
+  function openConversationFromRunCenter(conversationId) {
+    const cid = String(conversationId || '').trim();
+    if (!cid) {
+      if (typeof rootWindow.uiToast === 'function') rootWindow.uiToast(text('run_center.task_unavailable'), { variant: 'warning' });
+      return false;
+    }
+    rootWindow.setView?.('conversation', cid, {
+      entryPoint: 'run-center',
+      openRunContext: 'proof',
+      runCenterReturn: captureReturnContext(),
+    });
+    return true;
+  }
   function restoreFocus(snapshot, fallbackSelector = '') {
     if (!snapshot) return false;
     const target = panel();
@@ -152,17 +224,26 @@
     }
     return true;
   }
-  function captureScroll() {
+  const RUN_SELECTION_DETAIL_SCROLL_KEYS = Object.freeze(['detail', 'collaboration-detail']);
+  function scrollContainers() {
     const target = panel();
-    return ['.run-center-queue-scroll', '.dashboard-board-scroll', '.run-center-detail-content']
-      .map((selector) => {
-        const element = target?.querySelector?.(selector);
-        return element ? { selector, top: Number(element.scrollTop || 0), left: Number(element.scrollLeft || 0) } : null;
-      }).filter(Boolean);
+    return target?.querySelectorAll
+      ? Array.from(target.querySelectorAll('[data-run-center-scroll-key]')) : [];
+  }
+  function captureScroll(excludedKeys = []) {
+    const excluded = new Set(excludedKeys);
+    return scrollContainers().map((element) => ({
+      key: String(element.dataset?.runCenterScrollKey || ''),
+      top: Number(element.scrollTop || 0),
+      left: Number(element.scrollLeft || 0),
+    })).filter((item) => item.key && !excluded.has(item.key));
   }
   function restoreScroll(snapshot) {
+    const elements = new Map(scrollContainers().map((element) => [
+      String(element.dataset?.runCenterScrollKey || ''), element,
+    ]));
     for (const item of snapshot || []) {
-      const element = panel()?.querySelector?.(item.selector);
+      const element = elements.get(item.key);
       if (!element) continue;
       element.scrollTop = item.top;
       element.scrollLeft = item.left;
@@ -170,36 +251,27 @@
   }
   function renderPreservingFocus(fallbackSelector = '') {
     const focusSnapshot = captureFocus();
-    const scrollSnapshot = captureScroll();
     render();
-    restoreScroll(scrollSnapshot);
     if (focusSnapshot) restoreFocus(focusSnapshot, fallbackSelector);
     else focusLater(fallbackSelector);
   }
-  function focusableElements(container) {
-    if (!container?.querySelectorAll) return [];
-    return Array.from(container.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
-      .filter((element) => typeof element.getClientRects !== 'function' || element.getClientRects().length > 0);
+  function renderForRunSelection() {
+    render({ excludeScrollKeys: RUN_SELECTION_DETAIL_SCROLL_KEYS });
   }
-  function trapFocus(event, selector) {
-    if (event.key !== 'Tab') return false;
-    const container = panel()?.querySelector(selector);
-    const focusable = focusableElements(container);
-    if (!container || !focusable.length) return false;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (!active || !container.contains(active) || (event.shiftKey && active === first) || (!event.shiftKey && active === last)) {
-      event.preventDefault();
-      (event.shiftKey ? last : first).focus();
-      return true;
-    }
-    return false;
+  function showRenderedDialog(target) {
+    const dialog = target.querySelector?.('[data-run-center-create-dialog]');
+    if (dialog && !dialog.open && typeof dialog.showModal === 'function') dialog.showModal();
   }
   function text(key, vars) { return typeof t === 'function' ? t(key, vars) : key; }
   function esc(value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function sharedButton(options) {
+    return typeof rootWindow.uiButton === 'function' ? rootWindow.uiButton(options) : '';
+  }
+  function sharedEmptyState(options) {
+    return typeof rootWindow.uiEmptyState === 'function' ? rootWindow.uiEmptyState(options) : '';
   }
   function formatDate(value) {
     const date = new Date(String(value || ''));
@@ -222,8 +294,7 @@
     return String(conversation?.title || '').trim();
   }
   function displayRun(run, context) {
-    const board = rootWindow.CogSeedRunCenterBoard;
-    if (!run || typeof board?.displayRun !== 'function') return null;
+    if (!run) return null;
     return board.displayRun(run, {
       text,
       formatDate,
@@ -242,86 +313,39 @@
     return label && label !== key ? label : text(fallbackKey);
   }
   function stateView(key, detail) {
-    return `<div class="run-center-empty">${esc(text(key))}${detail ? `<small>${esc(detail)}</small>` : ''}</div>`;
-  }
-  function retryStateHtml(message, retryAttribute) {
-    return `<div class="run-center-retry-state" role="alert"><span>${esc(message)}</span><button type="button" class="btn btn-sm" ${retryAttribute}>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>`;
+    const content = sharedEmptyState({
+      kind: detail ? 'explained' : 'quiet',
+      title: text(key),
+      hint: detail || '',
+      icon: detail ? 'warning' : '',
+    });
+    return content
+      ? `<div class="run-center-empty"${detail ? ' role="alert"' : ' role="status"'}>${content}</div>`
+      : `<div class="run-center-empty"${detail ? ' role="alert"' : ' role="status"'}>${esc(text(key))}${detail ? `<small>${esc(detail)}</small>` : ''}</div>`;
   }
   function selectedTask() {
     return (state.board?.tasks || []).find((task) => task.taskId === state.selectedTaskId) || null;
   }
-  function selectedRunModel() {
-    if (!state.board || !rootWindow.CogSeedRunCenterBoard) return null;
-    const board = rootWindow.CogSeedRunCenterBoard;
-    if (state.selectedRunKey && typeof board.buildRunModels === 'function') {
-      const match = board.buildRunModels(state.board).find((run) => run.key === state.selectedRunKey);
-      if (match) return match;
+  function derivedRunData() {
+    if (derivedProjection !== state.board) {
+      derivedProjection = state.board;
+      derivedRuns = state.board ? board.buildRunModels(state.board) : [];
+      derivedSequence = board.buildRunSequence(derivedRuns);
     }
-    return typeof board.runForTask === 'function' ? board.runForTask(state.board, state.selectedTaskId) : null;
+    return { runs: derivedRuns, sequence: derivedSequence };
+  }
+  function runForSelection(runKey, taskId) {
+    const runs = allRunModels();
+    const run = runKey ? runs.find((item) => item.key === runKey) : null;
+    return run || runs.find((item) => item.members.some((task) => task.taskId === taskId)) || null;
+  }
+  function selectedRunModel() {
+    if (!state.board) return null;
+    return runForSelection(state.selectedRunKey, state.selectedTaskId);
   }
   function safeTime(value) {
     const time = new Date(String(value || '')).getTime();
     return Number.isFinite(time) ? time : 0;
-  }
-  function attemptKeyForTask(task, fallbackIndex) {
-    const executionId = String(task?.executionId || '').trim();
-    const taskId = String(task?.taskId || '').trim();
-    return executionId ? `execution:${executionId}` : `task:${taskId || fallbackIndex}`;
-  }
-  function attemptStateTask(members) {
-    const priority = ['failed', 'recoverable', 'waiting_user', 'needs_review', 'blocked', 'running', 'queued', 'pending', 'completed', 'cancelled', 'skipped', 'created'];
-    return priority.map((status) => members
-      .filter((task) => task.status === status)
-      .sort((left, right) => safeTime(right.updatedAt) - safeTime(left.updatedAt))[0])
-      .find(Boolean) || members[0];
-  }
-  function attemptTargetTask(members, parentTaskIds) {
-    return [...members].sort((left, right) => {
-      const leftParent = parentTaskIds.has(left.taskId) || !left.parentTaskId;
-      const rightParent = parentTaskIds.has(right.taskId) || !right.parentTaskId;
-      return Number(rightParent) - Number(leftParent)
-        || safeTime(right.updatedAt) - safeTime(left.updatedAt)
-        || String(left.taskId || '').localeCompare(String(right.taskId || ''));
-    })[0] || null;
-  }
-  function buildAttemptModels(run) {
-    const members = Array.isArray(run?.members) && run.members.length
-      ? run.members
-      : (Array.isArray(run?.attempts) ? run.attempts.flatMap((attempt) => attempt.members || attempt.representative || []) : []);
-    const parentTaskIds = new Set(members.map((task) => task.parentTaskId).filter(Boolean));
-    const grouped = new Map();
-    members.forEach((task, index) => {
-      const key = attemptKeyForTask(task, index);
-      const attemptMembers = grouped.get(key) || [];
-      attemptMembers.push(task);
-      grouped.set(key, attemptMembers);
-    });
-    return Array.from(grouped.entries()).map(([key, attemptMembers]) => {
-      const orderedMembers = [...attemptMembers].sort((left, right) =>
-        safeTime(right.updatedAt) - safeTime(left.updatedAt)
-        || String(left.taskId || '').localeCompare(String(right.taskId || '')));
-      const target = attemptTargetTask(orderedMembers, parentTaskIds);
-      const stateTask = attemptStateTask(orderedMembers) || target;
-      const createdTimes = orderedMembers.map((task) => safeTime(task.createdAt)).filter(Boolean);
-      const updatedTimes = orderedMembers.map((task) => safeTime(task.updatedAt)).filter(Boolean);
-      return {
-        key,
-        members: orderedMembers,
-        representative: target,
-        status: stateTask?.status || target?.status || 'created',
-        createdAt: createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : '',
-        updatedAt: updatedTimes.length ? new Date(Math.max(...updatedTimes)).toISOString() : '',
-      };
-    }).sort((left, right) => safeTime(right.updatedAt) - safeTime(left.updatedAt)
-      || safeTime(right.createdAt) - safeTime(left.createdAt)
-      || left.key.localeCompare(right.key));
-  }
-  function reconcileAttemptSelection(run, preferredKey, preferredTaskId) {
-    const attempts = buildAttemptModels(run);
-    const selected = attempts.find((attempt) => attempt.key === preferredKey)
-      || attempts.find((attempt) => attempt.members.some((task) => task.taskId === preferredTaskId))
-      || attempts[0] || null;
-    return { attempts, selected, index: selected ? attempts.indexOf(selected) : -1, task: selected?.representative || null };
   }
   function agentDisplayName(agentId) {
     if (!agentId) return '';
@@ -357,22 +381,50 @@
     return Array.isArray(state.agentRegistry?.agents) || state.agentsLoaded;
   }
   function visibleBoardRuns() {
-    if (!rootWindow.CogSeedRunCenterBoard || !state.board) return [];
-    const board = rootWindow.CogSeedRunCenterBoard;
-    if (typeof board.filterRuns === 'function' && typeof board.buildRunModels === 'function') {
-      return board.filterRuns(board.buildRunModels(state.board), {
-        search: state.search,
-        filter: state.filter,
-        includeArchived: state.showArchived,
-        sourceFilter: state.sourceFilter,
-        agentFilter: state.runAgentFilter,
-        timeFilter: state.runTimeFilter,
-        agentName: agentDisplayName,
-      });
+    const signature = JSON.stringify([
+      state.search, state.filter, state.showArchived, state.sourceFilter,
+      state.runAgentFilter, state.runTimeFilter, state.conversationIdFilter,
+    ]);
+    if (filteredRunTransaction === renderTransaction
+      && filteredRunProjection === state.board
+      && filteredRunSignature === signature
+      && filteredRunAgentRegistry === state.agentRegistry
+      && filteredRunAgents === state.agents) return filteredVisibleRuns;
+    if (!state.board) {
+      filteredRunTransaction = renderTransaction;
+      filteredRunProjection = state.board;
+      filteredRunSignature = signature;
+      filteredRunAgentRegistry = state.agentRegistry;
+      filteredRunAgents = state.agents;
+      filteredActiveRuns = [];
+      filteredArchivedRuns = [];
+      filteredVisibleRuns = [];
+      return filteredVisibleRuns;
     }
-    return board.filteredLogicalTasks(
-      state.board, state.search, state.filter, state.showArchived, state.sourceFilter, agentDisplayName,
-    ).map((task) => ({ key: board.logicalRunKey(task), representative: task, aggregateTask: task, members: [task], attempts: [] }));
+    const filterOptions = {
+      search: state.search,
+      filter: state.filter,
+      sourceFilter: state.sourceFilter,
+      agentFilter: state.runAgentFilter,
+      timeFilter: state.runTimeFilter,
+      agentName: agentDisplayName,
+    };
+    const conversationId = String(state.conversationIdFilter || '').trim();
+    const matchesConversation = (run) => !conversationId
+      || run.members?.some((task) => String(task.conversationId || '') === conversationId);
+    // Evaluate text/time/source filters once, then partition without changing
+    // archived-run semantics or the ordering used by board and queue.
+    const matchingRuns = board.filterRuns(allRunModels(), { ...filterOptions, includeArchived: true })
+      .filter(matchesConversation);
+    filteredActiveRuns = matchingRuns.filter((run) => run.aggregateTask?.column !== 'archived');
+    filteredArchivedRuns = matchingRuns.filter((run) => run.aggregateTask?.column === 'archived');
+    filteredVisibleRuns = [...filteredActiveRuns, ...(state.showArchived ? filteredArchivedRuns : [])];
+    filteredRunTransaction = renderTransaction;
+    filteredRunProjection = state.board;
+    filteredRunSignature = signature;
+    filteredRunAgentRegistry = state.agentRegistry;
+    filteredRunAgents = state.agents;
+    return filteredVisibleRuns;
   }
   function runTask(run) {
     return run?.aggregateTask || run?.representative || null;
@@ -386,34 +438,7 @@
     });
   }
   function runSequenceByKey() {
-    const board = rootWindow.CogSeedRunCenterBoard;
-    const allRuns = state.board && typeof board?.buildRunModels === 'function'
-      ? board.buildRunModels(state.board)
-      : orderedVisibleRuns();
-    if (typeof board?.buildRunSequence === 'function') return board.buildRunSequence(allRuns);
-    const bySession = new Map();
-    for (const run of allRuns) {
-      const task = runTask(run);
-      const sessionKey = String(task?.sessionId || run.key || '');
-      const runs = bySession.get(sessionKey) || [];
-      runs.push(run);
-      bySession.set(sessionKey, runs);
-    }
-    const sequence = new Map();
-    for (const runs of bySession.values()) {
-      runs.sort((left, right) => {
-        const leftTask = runTask(left);
-        const rightTask = runTask(right);
-        const leftCreated = (left.members || []).map((task) => safeTime(task.createdAt)).filter(Boolean);
-        const rightCreated = (right.members || []).map((task) => safeTime(task.createdAt)).filter(Boolean);
-        const leftStartedAt = leftCreated.length ? Math.min(...leftCreated) : safeTime(leftTask?.createdAt) || safeTime(leftTask?.updatedAt);
-        const rightStartedAt = rightCreated.length ? Math.min(...rightCreated) : safeTime(rightTask?.createdAt) || safeTime(rightTask?.updatedAt);
-        return leftStartedAt - rightStartedAt
-          || String(left.key || '').localeCompare(String(right.key || ''));
-      });
-      runs.forEach((run, index) => sequence.set(run.key, { index: index + 1, count: runs.length }));
-    }
-    return sequence;
+    return derivedRunData().sequence;
   }
   function invoke(channel, payload) {
     if (!rootWindow.cogseed?.invoke) return Promise.reject(new Error(text('run_center.ipc_unavailable')));
@@ -430,303 +455,65 @@
     return typeof rootWindow.uiIconHtml === 'function' ? rootWindow.uiIconHtml(name, className) : '';
   }
   function boardHtml() {
-    if (!rootWindow.CogSeedRunCenterBoard) return stateView('run_center.loading');
-    return rootWindow.CogSeedRunCenterBoard.render(state.board, {
+    const derived = derivedRunData();
+    visibleBoardRuns();
+    return board.render(state.board, {
       text, esc, icon, statusKey, statusClass: (value) => statusClass(value), formatDate, stateView,
       loading: state.loading, error: state.error, search: state.search, filter: state.filter,
       sourceFilter: state.sourceFilter, agentFilter: state.runAgentFilter,
       timeFilter: state.runTimeFilter, agentName: agentDisplayName,
       conversationTitle: conversationCacheTitle,
+      conversationId: state.conversationIdFilter,
       selectedTaskId: state.selectedTaskId, selectedRunKey: state.selectedRunKey,
       focusedRunKey: state.boardFocusRunKey, showArchived: state.showArchived,
+      busyAction: state.busyAction, busyTaskId: state.busyTaskId,
+      runModels: derived.runs, sequenceByKey: derived.sequence,
+      filteredRuns: filteredActiveRuns, archivedRuns: filteredArchivedRuns,
     });
   }
   function allRunModels() {
-    const board = rootWindow.CogSeedRunCenterBoard;
-    return state.board && typeof board?.buildRunModels === 'function' ? board.buildRunModels(state.board) : [];
+    return derivedRunData().runs;
   }
   function queueHtml() {
-    const board = rootWindow.CogSeedRunCenterBoard;
-    if (!board?.renderQueue) return stateView('run_center.loading');
     const runs = orderedVisibleRuns();
-    const filtered = state.search.trim() || state.sourceFilter !== 'all' || state.filter !== 'all';
+    const filtered = state.search.trim() || state.sourceFilter !== 'all' || state.filter !== 'all'
+      || state.runAgentFilter !== 'all' || state.runTimeFilter !== 'all' || state.showArchived;
     return board.renderQueue(runs, {
       text, esc, icon, formatDate, stateView,
       loading: state.loading, error: state.error, filtered,
       allRuns: allRunModels(), selectedRunKey: state.selectedRunKey,
+      sequenceByKey: runSequenceByKey(),
       focusedRunKey: state.boardFocusRunKey,
       agentName: agentDisplayName, conversationTitle: conversationCacheTitle,
-    });
-  }
-  function formatDay(value) {
-    const date = value instanceof Date ? value : new Date(String(value || ''));
-    if (!Number.isFinite(date.getTime())) return text('run_center.unknown_time');
-    return new Intl.DateTimeFormat(typeof getLang === 'function' ? getLang() : undefined, { weekday: 'short' }).format(date);
-  }
-  function overviewHtml() {
-    if (!rootWindow.CogSeedRunCenterOverview) return stateView('run_center.overview_loading');
-    return rootWindow.CogSeedRunCenterOverview.render(state.board, state.agentRegistry?.agents || state.agents, {
-      text, esc, icon, statusKey, formatDate, formatDay, stateView,
-      loading: state.loading, error: state.error, agentName: agentDisplayName,
-      conversationTitle: conversationCacheTitle,
-      analysisOpen: state.overviewAnalysisOpen,
+      busyAction: state.busyAction, busyTaskId: state.busyTaskId,
     });
   }
   function agentsHtml() {
-    if (!rootWindow.CogSeedRunCenterAgents) return stateView('run_center.agents_loading');
     return rootWindow.CogSeedRunCenterAgents.render(state.agentRegistry, {
       text, esc, icon, formatDate, stateView, dynamicLabel,
       loading: state.loading, error: state.agentRegistryError,
       search: state.agentSearch, filter: state.agentFilter,
-      busyGateway: state.busyAgentGateway, gatewayError: state.agentGatewayError,
     });
   }
-  function timelineHtml(events, tasks) {
-    if (!Array.isArray(events) || !events.length) return stateView('run_center.timeline_empty');
-    const taskById = new Map((Array.isArray(tasks) ? tasks : []).map((task) => [task.taskId, task]));
-    const groups = [];
-    for (const event of events) {
-      const time = formatDate(event.createdAt);
-      const key = [time, event.type, event.toolName || '', event.errorCode || ''].join(':');
-      const previous = groups.at(-1);
-      const taskId = String(event.taskId || '');
-      const previousTaskIds = new Set(previous?.events.map((item) => String(item.taskId || '')).filter(Boolean));
-      if (taskId && previous?.key === key && !previousTaskIds.has(taskId)) previous.events.push(event);
-      else groups.push({ key, time, event, events: [event] });
-    }
-    const failureIndex = groups.findIndex((group) => group.events.some((event) => event.errorCode
-      || String(event.type || '').includes('failed')
-      || String(event.type || '').includes('recoverable')));
-    return `<div class="run-center-timeline-shell">
-      ${failureIndex >= 0 ? `<div class="run-center-timeline-tools"><button type="button" class="btn btn-sm" data-run-center-timeline-jump>${icon('warning')}<span>${esc(text('run_center.timeline_jump_failure'))}</span></button></div>` : ''}
-      <ol class="run-center-timeline is-compact">${groups.map((group, index) => {
-      const event = group.event;
-      const taskIds = Array.from(new Set(group.events.map((item) => item.taskId).filter(Boolean)));
-      const task = taskById.get(taskIds[0] || event.taskId);
-      const context = taskIds.length > 1
-        ? text('run_center.timeline_related_tasks', { count: taskIds.length })
-        : task ? localizedTitle(task, text('run_center.task_kind_cogseed')) : '';
-      const failure = index === failureIndex;
-      return `<li${failure ? ' class="is-failure" data-run-center-timeline-failure tabindex="-1"' : ''}>
-      <time datetime="${esc(event.createdAt)}">${esc(group.time)}</time><div class="run-center-timeline-content"><span class="run-center-timeline-title">${esc(dynamicLabel('run_center.event_', event.type, 'run_center.event_unknown'))}${context ? `<small>${esc(context)}</small>` : ''}</span>
-      ${event.toolName ? `<span class="run-center-timeline-meta"><code>${esc(event.toolName)}</code></span>` : ''}</div>
-    </li>`; }).join('')}</ol></div>`;
+  const detailView = rootWindow.CogSeedRunCenterDetail.createRenderer({
+    state, board, text, esc, icon, formatDate, statusKey, statusClass,
+    localizedTitle, dynamicLabel, stateView, selectedTask, selectedRunModel,
+    agentDisplayName, conversationTitle: conversationCacheTitle, displayRunTitle, runSequenceByKey,
+  });
+  function createSpaceDisplayName(space) {
+    if (typeof localizedSpaceName === 'function') return localizedSpaceName(space, text);
+    return String(space?.name || space?.space_id || '');
   }
-  function collaborationHtml() {
-    if (state.error) return stateView('run_center.load_failed', state.error);
-    const detail = state.detail?.collaboration;
-    if (!detail) return stateView(state.loading || state.selectedRunKey ? 'run_center.loading_detail' : 'run_center.select_collaboration');
-    const workflow = detail.workflow || {};
-    const actors = Array.isArray(detail.actors) ? detail.actors : [];
-    const steps = Array.isArray(workflow.steps) ? workflow.steps : [];
-    const activity = Array.isArray(detail.activity) ? detail.activity : [];
-    const reviews = Array.isArray(detail.reviews) ? detail.reviews : [];
-    const conflicts = Array.isArray(detail.conflicts) ? detail.conflicts : [];
-    const nativeWorkflow = detail.task?.executionKind !== 'group-chat';
-    const busy = state.busyCollaborationAction;
-    const actorNameById = new Map(actors.map((actor) => [actor.actorId, actor.displayName || agentDisplayName(actor.actorId)]));
-    const hasCoordinationRecords = steps.length || reviews.length || conflicts.length || activity.length;
-    const participantCount = Number(detail.task?.participantCount || detail.session?.participantCount || 0);
-    const displayedParticipantCount = Math.max(participantCount, actors.length);
-    const isMultiAgent = displayedParticipantCount >= 2 || hasCoordinationRecords;
-    const actionButton = (action, targetId, label, danger = false) => `<button type="button" class="btn btn-sm${danger ? ' btn-danger' : ''}" data-run-center-collaboration-action="${action}" data-run-center-collaboration-target="${esc(targetId)}" ${busy ? 'disabled' : ''}>${esc(text(busy === `${action}:${targetId}` ? 'run_center.action_working' : label))}</button>`;
-    if (!isMultiAgent) {
-      const task = detail.task || selectedTask();
-      const agent = agentDisplayName(task?.agentId) || text('run_center.commander');
-      const delivery = dynamicLabel('run_center.delivery_', task?.resultDeliveryState, 'run_center.delivery_unknown');
-      return `<section class="run-center-single-agent" aria-labelledby="run-center-single-agent-title">
-        <header><span>${icon('user')}</span><div><h2 id="run-center-single-agent-title">${esc(text('run_center.single_agent_title'))}</h2><p>${esc(text('run_center.single_agent_detail'))}</p></div></header>
-        <ol class="run-center-execution-path" aria-label="${esc(text('run_center.execution_path'))}">
-          <li><span>${icon('clipboard-list')}</span><div><small>${esc(text('run_center.execution_path_task'))}</small><strong>${esc(text(statusKey(task?.status)))}</strong></div></li>
-          <li><span>${icon('user')}</span><div><small>${esc(text('run_center.execution_path_agent'))}</small><strong>${esc(agent)}</strong></div></li>
-          <li><span>${icon('send')}</span><div><small>${esc(text('run_center.execution_path_delivery'))}</small><strong>${esc(delivery)}</strong></div></li>
-        </ol>
-      </section>`;
-    }
-    return `<div class="run-center-collaboration">
-      <div class="run-center-collaboration-summary" aria-label="${esc(text('run_center.collaboration_summary'))}">
-        <span><b>${esc(displayedParticipantCount)}</b>${esc(text('run_center.summary_agents'))}</span><span><b>${esc(steps.length)}</b>${esc(text('run_center.summary_steps'))}</span><span><b>${esc(reviews.length)}</b>${esc(text('run_center.summary_gates'))}</span><span><b>${esc(conflicts.length)}</b>${esc(text('run_center.summary_conflicts'))}</span>
-      </div>
-      <section class="is-team"><h2>${esc(text('run_center.team'))}</h2>${actors.length ? `<ul class="run-center-actors">${actors.map((actor) => `<li><strong>${esc(actorNameById.get(actor.actorId))}</strong><span>${esc(text(`run_center.actor_${actor.role}`))}</span><span class="${statusClass(actor.status)}">${esc(text(statusKey(actor.status)))}</span></li>`).join('')}</ul>` : `<div class="run-center-compact-empty">${esc(text('run_center.agents_empty'))}</div>`}</section>
-      ${steps.length ? `<section class="is-workflow"><h2>${esc(text('run_center.workflow'))}</h2><ol class="run-center-steps">${steps.map((step) => `<li><div><strong>${esc(localizedTitle(step, text('run_center.workflow_step')))}</strong><span class="${statusClass(step.status)}">${esc(text(statusKey(step.status)))}</span></div><small>${esc(text('run_center.attempt_count', { count: step.attemptCount || 0 }))}</small>${step.dependsOn?.length ? `<small>${esc(text('run_center.dependencies_count', { count: step.dependsOn.length }))}</small>` : ''}${nativeWorkflow && (step.status === 'failed' || step.status === 'skipped') ? `<div class="run-center-inline-actions">${actionButton('retry-step', step.stepId, 'run_center.retry_step')}</div>` : ''}${nativeWorkflow && ['pending', 'blocked', 'failed'].includes(step.status) ? `<div class="run-center-inline-actions">${actionButton('skip-step', step.stepId, 'run_center.skip_step', true)}</div>` : ''}</li>`).join('')}</ol></section>` : ''}
-      ${reviews.length ? `<section class="is-controls"><h2>${esc(text('run_center.review_gates'))}</h2><ul class="run-center-control-list">${reviews.map((review) => { const open = review.status === 'needs_review' || review.status === 'failed'; return `<li><div><strong>${esc(text('run_center.review_gate'))}</strong><span class="${statusClass(review.status)}">${esc(text(statusKey(review.status)))}</span></div>${review.reviewDecision ? `<small>${esc(text('run_center.reviewed'))}: ${esc(dynamicLabel('run_center.review_decision_', review.reviewDecision, 'run_center.review_decision_unknown'))}</small>` : ''}${open ? `<div class="run-center-inline-actions">${actionButton('approve-gate', review.gateId, 'run_center.approve_gate')}${actionButton('reject-gate', review.gateId, 'run_center.reject_gate', true)}</div>` : ''}</li>`; }).join('')}</ul></section>` : ''}
-      ${conflicts.length ? `<section class="is-controls"><h2>${esc(text('run_center.conflicts'))}</h2><ul class="run-center-control-list">${conflicts.map((conflict) => { const active = conflict.status !== 'resolved' && conflict.status !== 'dismissed'; return `<li><div><strong>${esc(dynamicLabel('run_center.conflict_type_', conflict.type, 'run_center.conflict'))}</strong><span class="${statusClass(conflict.status)}">${esc(dynamicLabel('run_center.conflict_status_', conflict.status, 'run_center.conflict_active'))}</span></div>${conflict.affectedStepIds?.length ? `<small>${esc(text('run_center.affected_steps_count', { count: conflict.affectedStepIds.length }))}</small>` : ''}${active ? `<div class="run-center-inline-actions">${actionButton('dismiss-conflict', conflict.conflictId, 'run_center.dismiss_conflict', true)}</div>` : ''}</li>`; }).join('')}</ul></section>` : ''}
-      ${activity.length ? `<section class="is-activity"><h2>${esc(text('run_center.collaboration_activity'))}</h2><ol class="run-center-timeline">${activity.map((event) => `<li><time>${esc(formatDate(event.createdAt))}</time><div class="run-center-timeline-content"><span class="run-center-timeline-title">${esc(dynamicLabel('run_center.activity_', event.type, 'run_center.activity_unknown'))}${event.actorId && actorNameById.has(event.actorId) ? `<small>${esc(actorNameById.get(event.actorId))}</small>` : ''}</span></div></li>`).join('')}</ol></section>` : ''}
-      ${hasCoordinationRecords ? '' : `<div class="run-center-collaboration-empty">${icon('check-circle')}<div><strong>${esc(text('run_center.collaboration_empty_title'))}</strong><span>${esc(text('run_center.collaboration_empty_detail'))}</span></div></div>`}
-    </div>`;
+  function sortedCreateSpaces() {
+    const locale = typeof getLang === 'function' && getLang() === 'en' ? 'en' : 'zh';
+    return [...(Array.isArray(state.spaces) ? state.spaces : [])]
+      .filter((space) => space && typeof space.space_id === 'string' && space.space_id)
+      .sort((left, right) => String(right.last_conversation_at || right.updated_at || '')
+        .localeCompare(String(left.last_conversation_at || left.updated_at || ''))
+        || createSpaceDisplayName(left).localeCompare(createSpaceDisplayName(right), locale)
+        || left.space_id.localeCompare(right.space_id));
   }
-  function errorHelpKey(errorCode) {
-    if (errorCode === 'model_preflight') return 'run_center.error_help_model_preflight';
-    if (errorCode === 'provider_error') return 'run_center.error_help_provider_error';
-    if (errorCode === 'group_chat_run_failed') return 'run_center.error_help_group_chat_run_failed';
-    return 'run_center.error_help_default';
-  }
-  function attemptIsFailed(attempt) {
-    return ['failed', 'recoverable', 'blocked'].includes(attempt?.status)
-      || attempt?.members?.some((task) => !!task.errorCode);
-  }
-  function attemptIsRunning(attempt) {
-    return ['created', 'queued', 'pending', 'running', 'waiting_user', 'needs_review'].includes(attempt?.status);
-  }
-  function attemptIsRecovered(attempts, index) {
-    const attempt = attempts[index];
-    const deliveryRecovered = attempt?.members?.some((task) => ['recovered', 'delivered_after_recovery'].includes(task.resultDeliveryState));
-    return !!deliveryRecovered || attempt?.status === 'completed' && attempts.slice(index + 1).some(attemptIsFailed);
-  }
-  function failureCategory(errorCode) {
-    if (!errorCode) return 'none';
-    if (errorCode === 'model_preflight') return 'model';
-    if (errorCode === 'provider_error') return 'provider';
-    if (errorCode === 'group_chat_run_failed') return 'collaboration';
-    return 'other';
-  }
-  function detailModel() {
-    const collaboration = state.detail?.collaboration;
-    const run = selectedRunModel();
-    const selection = reconcileAttemptSelection(
-      run || { members: [selectedTask()].filter(Boolean) },
-      state.selectedAttemptKey,
-      state.selectedTaskId,
-    );
-    const projectedTask = selection.task || selectedTask() || run?.representative;
-    const task = collaboration?.task && collaboration.task.taskId === projectedTask?.taskId
-      ? collaboration.task : projectedTask;
-    const aggregateTask = run?.aggregateTask || task;
-    const actions = collaboration?.task && collaboration.task.taskId === task?.taskId
-      ? collaboration?.actions || task?.actions || {} : task?.actions || {};
-    return { collaboration, run, selection, task, aggregateTask, actions };
-  }
-  function collaborationAvailable(collaboration, task) {
-    const workflow = collaboration?.workflow || {};
-    const participantCount = Math.max(
-      Number(task?.participantCount || collaboration?.session?.participantCount || 0),
-      Array.isArray(collaboration?.actors) ? collaboration.actors.length : 0,
-    );
-    return participantCount >= 2
-      || ['steps', 'reviews', 'conflicts'].some((key) => Array.isArray(key === 'steps' ? workflow.steps : collaboration?.[key])
-        && (key === 'steps' ? workflow.steps : collaboration[key]).length > 0);
-  }
-  function resultDestination(task) {
-    if (!task?.conversationId || task.resultDeliveryState === 'not-applicable') {
-      return text('run_center.destination_run_center');
-    }
-    const title = conversationCacheTitle(task.conversationId);
-    return title ? text('run_center.destination_named_conversation', { title })
-      : text('run_center.destination_conversation');
-  }
-  function actionEffectKey(action) {
-    return `run_center.action_effect_${String(action || 'none').replace(/-/g, '_')}`;
-  }
-  function recommendedActionHtml(model, userState, hasCollaboration) {
-    const { task, actions } = model;
-    const busy = state.busyAction;
-    const action = userState.action;
-    if (action === 'configure-model') {
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-configure-model>${icon('settings')}<span>${esc(text(userState.actionKey))}</span></button>`;
-    }
-    if (action === 'open-task' && task?.conversationId) {
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
-    }
-    if (action === 'open-handling') {
-      if (hasCollaboration) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-detail-tab="collaboration">${icon('users')}<span>${esc(text(userState.actionKey))}</span></button>`;
-      if (task?.conversationId) return `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text(userState.actionKey))}</span></button>`;
-    }
-    // Same gate the queue applies, so the two surfaces cannot promise
-    // different things about one card.
-    const allowed = rootWindow.CogSeedRunCenterBoard?.recommendedActionAvailable?.(
-      actions, userState, { conversationId: task?.conversationId, hasCollaboration },
-    ) ?? false;
-    if (allowed) {
-      const iconName = action === 'resume' ? 'play-triangle' : 'refresh';
-      return `<button type="button" class="btn btn-sm btn-primary" data-run-center-action="${esc(action)}" ${busy ? 'disabled' : ''}>${busy === action ? icon('loader', 'ui-icon is-spinning') : icon(iconName)}<span>${esc(text(busy === action ? 'run_center.action_working' : userState.actionKey))}</span></button>`;
-    }
-    return '';
-  }
-  function summaryTabHtml(model) {
-    const { collaboration, run, task, aggregateTask, actions } = model;
-    if (!task || !aggregateTask) return stateView('run_center.select_item');
-    const workflow = collaboration?.workflow || {};
-    const hasReview = Array.isArray(collaboration?.reviews) && collaboration.reviews.some((item) => !['approved', 'rejected'].includes(item.status));
-    const hasConflict = Array.isArray(collaboration?.conflicts) && collaboration.conflicts.some((item) => !['resolved', 'dismissed'].includes(item.status));
-    const userState = rootWindow.CogSeedRunCenterBoard?.userStateForTask?.({
-      ...aggregateTask,
-      resultDeliveryState: task.resultDeliveryState || aggregateTask.resultDeliveryState,
-      errorCode: task.errorCode || aggregateTask.errorCode,
-    }, { hasReview, hasConflict }) || { stateKey: statusKey(aggregateTask.status), reasonKey: '', action: '', actionKey: '' };
-    const hasCollaboration = collaborationAvailable(collaboration, task);
-    const destination = resultDestination(task);
-    const worktree = task.worktreeName || text('run_center.current_workspace_short');
-    const effect = text(actionEffectKey(userState.action), { worktree, destination });
-    const primaryAction = recommendedActionHtml(model, userState, hasCollaboration);
-    const impact = task.errorCode ? text(errorHelpKey(task.errorCode)) : text(userState.reasonKey);
-    const progress = run?.progress;
-    const completion = progress?.total ? Math.round((Number(progress.completed || 0) / Number(progress.total)) * 100) : 0;
-    const secondary = [
-      actions.abort ? `<button type="button" class="btn btn-sm btn-danger" data-run-center-action="abort" ${state.busyAction ? 'disabled' : ''}>${icon('stop')}<span>${esc(text('run_center.abort'))}</span></button>` : '',
-      actions.archive ? `<button type="button" class="btn btn-sm" data-run-center-action="archive" ${state.busyAction ? 'disabled' : ''}>${state.busyAction === 'archive' ? icon('loader', 'ui-icon is-spinning') : icon('archive')}<span>${esc(text(state.busyAction === 'archive' ? 'run_center.action_working' : 'run_center.remove_from_list'))}</span></button>` : '',
-      `<button type="button" class="btn btn-sm" data-run-center-reassign>${icon('refresh')}<span>${esc(text('run_center.run_with_agent'))}</span></button>`,
-      task.conversationId && userState.action !== 'open-task' ? `<button type="button" class="btn btn-sm" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button>` : '',
-    ].filter(Boolean).join('');
-    return `<div class="run-center-summary-flow">
-      ${state.actionNotice ? `<div class="run-center-action-feedback is-success" role="status">${icon('check-circle')}<span>${esc(text(state.actionNotice))}</span></div>` : ''}
-      ${state.actionError ? `<div class="run-center-action-feedback is-error" role="alert">${icon('warning')}<span>${esc(state.actionError)}</span></div>` : ''}
-      <section class="run-center-summary-row is-event"><span class="run-center-summary-row-icon">${icon(userState.attention ? 'warning' : userState.kind === 'running' ? 'activity' : 'check-circle')}</span><div><small>${esc(text('run_center.summary_what_happened'))}</small><h3>${esc(text(userState.stateKey))}</h3><p>${esc(text(userState.reasonKey))}</p></div></section>
-      <section class="run-center-summary-row"><span class="run-center-summary-row-icon">${icon('activity')}</span><div><small>${esc(text('run_center.summary_impact'))}</small><h3>${esc(userState.attention ? text('run_center.summary_attention_impact') : text('run_center.summary_no_blocking_impact'))}</h3><p>${esc(impact)}</p>${progress?.total ? `<div class="run-center-inspector-progress"><span><b>${esc(text('run_center.group_progress'))}</b><strong>${esc(progress.completed)}/${esc(progress.total)}</strong></span><div><i style="width:${completion}%"></i></div></div>` : ''}</div></section>
-      <section class="run-center-summary-row is-action"><span class="run-center-summary-row-icon">${icon('play-triangle')}</span><div><small>${esc(text('run_center.summary_next_action'))}</small><h3>${esc(primaryAction ? text(userState.actionKey) : text('run_center.no_action_required'))}</h3><p>${esc(effect)}</p><div class="run-center-summary-actions">${primaryAction}${secondary}</div></div></section>
-      <section class="run-center-summary-row"><span class="run-center-summary-row-icon">${icon('send')}</span><div><small>${esc(text('run_center.summary_destination'))}</small><h3>${esc(destination)}</h3><p>${esc(text('run_center.summary_destination_detail'))}</p></div></section>
-      <dl class="run-center-summary-context"><div><dt>${esc(text('run_center.label_agent'))}</dt><dd>${esc(agentDisplayName(task.agentId) || text('run_center.commander'))}</dd></div><div><dt>${esc(text('run_center.label_execution_source'))}</dt><dd>${esc(text(`run_center.source_${task.sourceKind || 'cogseed'}`))}</dd></div><div><dt>${esc(text('run_center.label_worktree'))}</dt><dd>${esc(worktree)}</dd></div><div><dt>${esc(text('run_center.label_updated'))}</dt><dd>${esc(formatDate(task.updatedAt))}</dd></div>${workflow.phase ? `<div><dt>${esc(text('run_center.label_phase'))}</dt><dd>${esc(workflow.phase)}</dd></div>` : ''}</dl>
-    </div>`;
-  }
-  function historyTabHtml(model) {
-    const { collaboration, selection } = model;
-    const attempts = selection.attempts;
-    const selectedAttempt = selection.selected;
-    const focusKey = attempts.some((attempt) => attempt.key === state.attemptFocusKey)
-      ? state.attemptFocusKey : selectedAttempt?.key;
-    const rows = attempts.map((attempt, index) => {
-      const task = attempt.representative || attempt;
-      const selected = attempt.key === selectedAttempt?.key;
-      const ordinal = text('run_center.inspector_attempt_index', { count: attempts.length - index });
-      const badges = [
-        index === 0 ? ['latest', 'run_center.attempt_badge_latest'] : null,
-        attemptIsRunning(attempt) ? ['running', 'run_center.attempt_badge_running'] : null,
-        attemptIsFailed(attempt) ? ['failed', 'run_center.attempt_badge_failed'] : null,
-        attemptIsRecovered(attempts, index) ? ['recovered', 'run_center.attempt_badge_recovered'] : null,
-      ].filter(Boolean).map(([kind, key]) => `<span class="is-${kind}">${esc(text(key))}</span>`).join('');
-      return `<li role="presentation"><button type="button" role="tab" aria-selected="${String(selected)}" class="run-center-attempt${selected ? ' is-selected' : ''}" data-run-center-attempt-index="${index}" tabindex="${attempt.key === focusKey ? '0' : '-1'}"><span class="run-center-attempt-main"><span class="run-center-attempt-index">${esc(ordinal)}</span><span class="${statusClass(attempt.status)}">${esc(text(statusKey(attempt.status)))}</span></span><span class="run-center-attempt-badges">${badges}</span><span class="run-center-attempt-meta"><time datetime="${esc(attempt.updatedAt)}">${esc(formatDate(attempt.updatedAt))}</time><small>${icon('terminal')}${esc(agentDisplayName(task.agentId) || text('run_center.commander'))}</small></span></button></li>`;
-    }).join('');
-    const timeline = Array.isArray(collaboration?.timeline) ? collaboration.timeline : [];
-    const tasks = Array.isArray(collaboration?.tasks) ? collaboration.tasks : [];
-    return `<div class="run-center-history">
-      <section><header><div><h3>${esc(text('run_center.history_runs'))}</h3><p>${esc(text('run_center.history_runs_detail'))}</p></div><span>${esc(attempts.length)}</span></header>${attempts.length ? `<ol class="run-center-attempt-list" role="tablist" aria-label="${esc(text('run_center.inspector_attempts'))}">${rows}</ol>` : stateView('run_center.tasks_empty')}</section>
-      <section><header><div><h3>${esc(text('run_center.timeline'))}</h3><p>${esc(text('run_center.history_timeline_detail'))}</p></div><span>${esc(timeline.length)}</span></header>${timelineHtml(timeline, tasks)}</section>
-    </div>`;
-  }
-  function detailsHtml() {
-    const model = detailModel();
-    const { collaboration, run, task, aggregateTask, selection } = model;
-    if (!aggregateTask) return stateView(state.loading ? 'run_center.loading_detail' : 'run_center.select_item');
-    const hasCollaboration = collaborationAvailable(collaboration, task);
-    const activeTab = state.detailTab === 'collaboration' && !hasCollaboration ? 'summary' : state.detailTab;
-    const sequence = runSequenceByKey().get(run?.key);
-    const sequenceLabel = text('run_center.run_sequence', sequence || { index: 1, count: selection.attempts.length || 1 });
-    const tabs = [
-      ['summary', 'run_center.detail_summary'],
-      ['history', 'run_center.detail_history'],
-      hasCollaboration ? ['collaboration', 'run_center.detail_collaboration'] : null,
-    ].filter(Boolean);
-    const content = !state.detail && state.selectedSessionId
-      ? stateView('run_center.loading_detail')
-      : activeTab === 'history' ? historyTabHtml(model)
-        : activeTab === 'collaboration' ? collaborationHtml()
-          : summaryTabHtml(model);
-    return `<div class="run-center-run-detail" aria-live="polite" aria-busy="${String(!state.detail && !!state.selectedSessionId)}">
-      <header class="run-center-run-detail-header"><button type="button" class="run-center-detail-back" data-run-center-detail-back aria-label="${esc(text('run_center.back_to_runs'))}">${icon('chevron-left')}</button><div><span class="${statusClass(aggregateTask.status)}">${esc(text(statusKey(aggregateTask.status)))}</span><h2>${esc(displayRunTitle(run, aggregateTask))}</h2><p>${esc(sequenceLabel)} · ${esc(agentDisplayName(task?.agentId) || text('run_center.commander'))} · ${esc(formatDate(aggregateTask.updatedAt))}</p></div><span class="run-center-detail-actions">${task?.conversationId ? `<button type="button" class="run-center-icon-btn" data-run-center-open="${esc(task.conversationId)}" title="${esc(text('run_center.open_task'))}" aria-label="${esc(text('run_center.open_task'))}">${icon('message-square')}</button>` : ''}${state.runMode === 'board' ? `<button type="button" class="run-center-icon-btn run-center-detail-close" data-run-center-detail-close title="${esc(text('common.close'))}" aria-label="${esc(text('common.close'))}">${icon('x')}</button>` : ''}</span></header>
-      <div class="run-center-detail-tabs" role="tablist" aria-label="${esc(text('run_center.run_detail'))}">${tabs.map(([tab, key]) => `<button type="button" role="tab" aria-selected="${String(activeTab === tab)}" class="${activeTab === tab ? 'is-active' : ''}" data-run-center-detail-tab="${tab}">${esc(text(key))}</button>`).join('')}</div>
-      <div class="run-center-detail-content" role="tabpanel">${content}</div>
-    </div>`;
-  }
-  function createModalHtml() {
+  function createModalHtml(advancedOpen) {
     if (!state.createMode) return '';
     const selected = selectedTask() || state.detail?.collaboration?.task;
     const agentDataReady = agentOptionsReady();
@@ -737,47 +524,27 @@
     const managedWorktrees = (Array.isArray(state.worktrees?.worktrees) ? state.worktrees.worktrees : [])
       .filter((item) => item.verifiable && !item.dirty);
     const worktreeOptions = managedWorktrees.map((item) => `<option value="${esc(item.name)}"${item.name === state.createWorktreeName ? ' selected' : ''}>${esc(item.branch || item.name)} · ${esc(item.name)}</option>`).join('');
-    return `<div class="run-center-create-overlay" data-run-center-create-overlay>
-      <section class="run-center-create-dialog" role="dialog" aria-modal="true" aria-labelledby="run-center-create-title" data-run-center-create-dialog>
+    const spaceOptions = sortedCreateSpaces().map((space) => `<option value="${esc(space.space_id)}"${space.space_id === state.createSpaceId ? ' selected' : ''}>${esc(createSpaceDisplayName(space))}</option>`).join('');
+    const customSpaceSelected = !!state.createSpaceId;
+    return `<dialog class="run-center-create-dialog" aria-labelledby="run-center-create-title" data-run-center-create-dialog data-run-center-scroll-key="create-dialog">
         <header><div><h2 id="run-center-create-title">${esc(text(isReassign ? 'run_center.reassign_title' : 'run_center.create_title'))}</h2><p>${esc(text(isReassign ? 'run_center.reassign_subtitle' : 'run_center.create_subtitle'))}</p></div><button type="button" class="run-center-icon-btn" data-run-center-create-close aria-label="${esc(text('common.close'))}">${icon('x')}</button></header>
         <div class="run-center-create-body">
           ${isReassign ? `<div class="run-center-create-private">${icon('shield')}<span>${esc(text('run_center.reassign_private'))}</span></div>` : `<label><span>${esc(text('run_center.create_task_label'))}</span><textarea data-run-center-create-task rows="6" maxlength="64000" placeholder="${esc(text('run_center.create_task_placeholder'))}">${esc(state.createTask)}</textarea></label>`}
           ${isReassign ? `<label><span>${esc(text('run_center.create_agent_label'))}</span><select data-run-center-create-agent ${state.createBusy || !agentDataReady ? 'disabled' : ''}><option value="">${esc(text('run_center.choose_agent'))}</option>${options}</select></label>
             ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.loading_agents'))}</small>` : ''}
-            ${selected?.worktreeName ? `<div class="run-center-create-private">${icon('git-branch')}<span>${esc(text('run_center.reassign_worktree_inherited', { name: selected.worktreeName }))}</span></div>` : ''}` : `<button type="button" class="run-center-create-advanced-toggle" data-run-center-create-advanced aria-expanded="${String(state.createAdvancedOpen)}" aria-controls="run-center-create-advanced-panel"><span>${icon('settings')}<span><strong>${esc(text('run_center.advanced_options'))}</strong><small>${esc(text('run_center.advanced_defaults'))}</small></span></span>${icon(state.createAdvancedOpen ? 'chevron-up' : 'chevron-down')}</button>
-            ${state.createAdvancedOpen ? `<div id="run-center-create-advanced-panel" class="run-center-create-advanced-panel">
+            ${selected?.worktreeName ? `<div class="run-center-create-private">${icon('git-branch')}<span>${esc(text('run_center.reassign_worktree_inherited', { name: selected.worktreeName }))}</span></div>` : ''}` : `<label><span>${esc(text('run_center.create_space_label'))}</span><select data-run-center-create-space ${state.createBusy || state.spacesLoading || !!state.spacesError ? 'disabled' : ''}><option value="">${esc(text('workspace.default_space'))}</option>${spaceOptions}</select></label>
+            ${state.spacesLoading ? `<small class="run-center-create-note" role="status">${esc(text('run_center.create_space_loading'))}</small>` : state.spacesError ? `<div class="run-center-create-space-status"><small class="run-center-create-note is-error" role="status">${esc(state.spacesError)}</small><button type="button" class="btn btn-sm" data-run-center-create-spaces-retry>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>` : state.spacesNotice ? `<small class="run-center-create-note" role="status">${esc(state.spacesNotice)}</small>` : `<small class="run-center-create-note">${esc(text('run_center.create_space_note'))}</small>`}
+            <details class="run-center-create-advanced" data-run-center-create-advanced${advancedOpen ? ' open' : ''}><summary class="run-center-create-advanced-toggle" data-run-center-create-advanced-summary><span>${icon('settings')}<span><strong>${esc(text('run_center.advanced_options'))}</strong><small>${esc(text('run_center.advanced_defaults'))}</small></span></span>${icon('chevron-down', 'run-center-create-advanced-chevron')}</summary><div class="run-center-create-advanced-panel">
               <label><span>${esc(text('run_center.create_agent_label'))}</span><select data-run-center-create-agent ${state.createBusy || !agentDataReady ? 'disabled' : ''}><option value="">${esc(text('run_center.default_agent'))}</option>${options}</select></label>
               ${!agentDataReady ? `<small class="run-center-create-note">${esc(text('run_center.create_agent_unavailable'))}</small>` : ''}
-              <label><span>${esc(text('run_center.create_isolation_label'))}</span><select data-run-center-create-worktree ${state.createBusy || state.worktreesLoading ? 'disabled' : ''}><option value="">${esc(text('run_center.current_workspace'))}</option>${worktreeOptions}</select></label>
-              ${state.worktreesLoading ? `<small class="run-center-create-note" role="status">${esc(text('run_center.worktrees_loading'))}</small>` : state.worktreesError ? `<div class="run-center-create-worktree-retry"><small class="run-center-create-note">${esc(text('run_center.create_worktree_unavailable'))}</small><button type="button" class="btn btn-sm" data-run-center-create-worktrees-retry>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>` : !managedWorktrees.length ? `<small class="run-center-create-note">${esc(text('run_center.create_worktree_empty'))}</small>` : `<small class="run-center-create-note">${esc(text('run_center.create_worktree_note'))}</small>`}
-              ${state.createAdvancedError ? `<small class="run-center-create-note is-error" role="status">${esc(state.createAdvancedError)}</small>` : ''}
-            </div>` : ''}`}
+              <label><span>${esc(text('run_center.create_isolation_label'))}</span><select data-run-center-create-worktree ${state.createBusy || state.worktreesLoading || customSpaceSelected ? 'disabled' : ''}><option value="">${esc(text('run_center.current_workspace'))}</option>${customSpaceSelected ? '' : worktreeOptions}</select></label>
+              ${customSpaceSelected ? `<small class="run-center-create-note">${esc(text('run_center.create_space_isolation_unavailable'))}</small>` : state.worktreesLoading ? `<small class="run-center-create-note" role="status">${esc(text('run_center.worktrees_loading'))}</small>` : state.worktreesError ? `<div class="run-center-create-worktree-retry"><small class="run-center-create-note">${esc(text('run_center.create_worktree_unavailable'))}</small><button type="button" class="btn btn-sm" data-run-center-create-worktrees-retry>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>` : !managedWorktrees.length ? `<small class="run-center-create-note">${esc(text('run_center.create_worktree_empty'))}</small>` : `<small class="run-center-create-note">${esc(text('run_center.create_worktree_note'))}</small>`}
+              ${state.createAdvancedError ? `<div class="run-center-create-worktree-retry"><small class="run-center-create-note is-error" role="status">${esc(state.createAdvancedError)}</small><button type="button" class="btn btn-sm" data-run-center-create-agents-retry>${icon('refresh')}<span>${esc(text('run_center.retry_load'))}</span></button></div>` : ''}
+            </div></details>`}
           ${state.createError ? `<div class="run-center-create-error" role="alert">${esc(state.createError)}</div>` : ''}
         </div>
-        <footer><button type="button" class="btn btn-sm" data-run-center-create-close ${state.createBusy ? 'disabled' : ''}>${esc(text('common.cancel'))}</button><button type="button" class="btn btn-sm btn-primary" data-run-center-create-submit ${state.createBusy ? 'disabled' : ''}>${state.createBusy ? icon('loader', 'ui-icon is-spinning') : icon('play-triangle')}<span>${esc(text(state.createBusy ? 'run_center.creating' : isReassign ? 'run_center.reassign_submit' : 'run_center.create_submit'))}</span></button></footer>
-      </section>
-    </div>`;
-  }
-  function diagnosticsHtml() {
-    if (!state.diagnosticsOpen) return '';
-    const data = state.diagnostics;
-    const metric = (label, value) => `<div><span>${esc(text(label))}</span><strong>${esc(value == null ? '—' : value)}</strong></div>`;
-    const sources = data ? Object.entries(data.sourceCounts || {}).filter(([, count]) => count > 0) : [];
-    const statuses = data ? Object.entries(data.statusCounts || {}).filter(([, count]) => count > 0) : [];
-    return `<div class="run-center-create-overlay">
-      <section class="run-center-create-dialog run-center-diagnostics-dialog" role="dialog" aria-modal="true" aria-labelledby="run-center-diagnostics-title" data-run-center-diagnostics-dialog>
-        <header><div><h2 id="run-center-diagnostics-title">${esc(text('run_center.diagnostics_title'))}</h2><p>${esc(text('run_center.diagnostics_subtitle'))}</p></div><button type="button" class="run-center-icon-btn" data-run-center-diagnostics-close aria-label="${esc(text('common.close'))}">${icon('x')}</button></header>
-        <div class="run-center-create-body">
-          ${state.diagnosticsLoading ? stateView('run_center.diagnostics_loading') : state.diagnosticsError ? retryStateHtml(state.diagnosticsError, 'data-run-center-diagnostics-retry') : data ? `<div class="run-center-diagnostic-metrics">${metric('run_center.diagnostic_tasks', data.taskCount)}${metric('run_center.diagnostic_sessions', data.sessionCount)}${metric('run_center.diagnostic_active', data.activeTaskCount)}${metric('run_center.diagnostic_attention', data.attentionTaskCount)}</div>
-          <section class="run-center-diagnostic-section"><h3>${esc(text('run_center.diagnostic_sources'))}</h3><div class="run-center-diagnostic-tags">${sources.map(([source, count]) => `<span>${esc(text(`run_center.source_${source}`))}<b>${esc(count)}</b></span>`).join('') || esc(text('run_center.none'))}</div></section>
-          <section class="run-center-diagnostic-section"><h3>${esc(text('run_center.diagnostic_statuses'))}</h3><div class="run-center-diagnostic-tags">${statuses.map(([status, count]) => `<span>${esc(text(statusKey(status)))}<b>${esc(count)}</b></span>`).join('') || esc(text('run_center.none'))}</div></section>
-          <section class="run-center-diagnostic-section"><h3>${esc(text('run_center.diagnostic_runtime'))}</h3><div class="run-center-diagnostic-runtime"><span>${esc(text('run_center.diagnostic_runtime_active', { count: data.runtime?.activeTaskCount || 0 }))}</span><span class="${data.runtime?.stateMatchesProjection ? 'is-ok' : 'is-warning'}">${esc(text(data.runtime?.stateMatchesProjection ? 'run_center.diagnostic_consistent' : 'run_center.diagnostic_inconsistent'))}</span></div></section>
-          <section class="run-center-diagnostic-section"><h3>${esc(text('run_center.diagnostic_error_codes'))}</h3>${data.errorCodes?.length ? `<ul>${data.errorCodes.map((item) => `<li><code>${esc(item.code)}</code><b>${esc(item.count)}</b></li>`).join('')}</ul>` : `<p>${esc(text('run_center.diagnostic_no_errors'))}</p>`}</section>
-          <div class="run-center-create-private">${icon('shield')}<span>${esc(text('run_center.diagnostics_privacy'))}</span></div>` : ''}
-        </div>
-        <footer><button type="button" class="btn btn-sm" data-run-center-diagnostics-close>${esc(text('common.close'))}</button><button type="button" class="btn btn-sm btn-primary" data-run-center-diagnostics-export ${!data || state.diagnosticsLoading ? 'disabled' : ''}>${icon('download')}<span>${esc(text('run_center.diagnostics_export'))}</span></button></footer>
-      </section>
-    </div>`;
+        <footer class="run-center-create-footer"><button type="button" class="btn btn-sm" data-run-center-create-close ${state.createBusy ? 'disabled' : ''}>${esc(text('common.cancel'))}</button>${isReassign ? '' : `<button type="button" class="btn btn-sm" data-run-center-create-save ${state.createBusy ? 'disabled' : ''}>${state.createBusyMode === 'save' ? icon('loader', 'ui-icon is-spinning') : icon('archive')}<span>${esc(text(state.createBusyMode === 'save' ? 'run_center.saving_planned' : 'run_center.save_planned'))}</span></button>`}<button type="button" class="btn btn-sm btn-primary" data-run-center-create-submit ${state.createBusy ? 'disabled' : ''}>${state.createBusyMode === 'start' || isReassign && state.createBusy ? icon('loader', 'ui-icon is-spinning') : icon('play-triangle')}<span>${esc(text(state.createBusyMode === 'start' || isReassign && state.createBusy ? 'run_center.creating' : isReassign ? 'run_center.reassign_submit' : 'run_center.create_submit'))}</span></button></footer>
+      </dialog>`;
   }
   function worktreeErrorMessage(error) {
     const code = String(error?.code || error?.message || '');
@@ -788,33 +555,6 @@
       if (localized && localized !== key) return localized;
     }
     return text('run_center.worktree_error_unknown');
-  }
-  function worktreesHtml() {
-    if (!state.worktreesOpen) return '';
-    const projection = state.worktrees;
-    const items = Array.isArray(projection?.worktrees) ? projection.worktrees : [];
-    const busy = state.worktreeBusy;
-    const status = (item) => item.verifiable
-      ? text(item.dirty ? 'run_center.worktree_dirty' : 'run_center.worktree_clean')
-      : text('run_center.worktree_unverified');
-    const list = items.length ? `<ul class="run-center-worktree-list">${items.map((item) => `<li>
-      <div class="run-center-worktree-item-heading"><div>${icon('git-branch')}<strong>${esc(item.branch || item.name)}</strong></div><span class="${item.verifiable && !item.dirty ? 'is-clean' : 'is-blocked'}">${esc(status(item))}</span></div>
-      <code>${esc(item.path)}</code><small>${esc(item.name)}${item.head ? ` · ${esc(String(item.head).slice(0, 12))}` : ''}</small>
-      <div class="run-center-inline-actions"><button type="button" class="btn btn-sm btn-danger" data-run-center-worktree-remove data-worktree-path="${esc(item.path)}" data-worktree-branch="${esc(item.branch)}" ${busy || !item.verifiable || item.dirty ? 'disabled' : ''}>${busy === item.path ? icon('loader', 'ui-icon is-spinning') : icon('trash')}<span>${esc(text(busy === item.path ? 'run_center.worktree_removing' : 'run_center.worktree_remove'))}</span></button></div>
-    </li>`).join('')}</ul>` : `<div class="run-center-worktree-empty">${esc(text('run_center.worktree_empty'))}</div>`;
-    return `<div class="run-center-create-overlay">
-      <section class="run-center-create-dialog run-center-worktree-dialog" role="dialog" aria-modal="true" aria-labelledby="run-center-worktree-title" data-run-center-worktrees-dialog>
-        <header><div><h2 id="run-center-worktree-title">${esc(text('run_center.worktrees_title'))}</h2><p>${esc(text('run_center.worktrees_subtitle'))}</p></div><button type="button" class="run-center-icon-btn" data-run-center-worktrees-close aria-label="${esc(text('common.close'))}">${icon('x')}</button></header>
-        <div class="run-center-create-body">
-          ${state.worktreesLoading && !projection ? stateView('run_center.worktrees_loading') : state.worktreesError && !projection ? retryStateHtml(state.worktreesError, 'data-run-center-worktrees-retry') : projection ? `${state.worktreesLoading ? `<small class="run-center-create-note" role="status">${esc(text('run_center.worktrees_loading'))}</small>` : ''}<section class="run-center-worktree-repository"><div><span>${esc(text('run_center.worktree_repository'))}</span><strong>${esc(projection.repository?.branch || text('run_center.worktree_detached'))}</strong></div><code>${esc(projection.repository?.path || '')}</code></section>
-          <section class="run-center-worktree-create"><h3>${esc(text('run_center.worktree_create_title'))}</h3><div><label><span>${esc(text('run_center.worktree_branch'))}</span><input type="text" maxlength="200" data-run-center-worktree-branch value="${esc(state.worktreeBranch)}" placeholder="${esc(text('run_center.worktree_branch_placeholder'))}" ${busy ? 'disabled' : ''}></label><label><span>${esc(text('run_center.worktree_base'))}</span><input type="text" maxlength="300" data-run-center-worktree-base value="${esc(state.worktreeBaseRef)}" placeholder="HEAD" ${busy ? 'disabled' : ''}></label></div><button type="button" class="btn btn-sm btn-primary" data-run-center-worktree-create ${busy ? 'disabled' : ''}>${busy === 'create' ? icon('loader', 'ui-icon is-spinning') : icon('plus')}<span>${esc(text(busy === 'create' ? 'run_center.worktree_creating' : 'run_center.worktree_create'))}</span></button></section>
-          <section class="run-center-worktree-managed"><h3>${esc(text('run_center.worktree_managed'))}</h3>${list}</section>
-          ${state.worktreesError ? retryStateHtml(state.worktreesError, 'data-run-center-worktrees-retry') : ''}${state.worktreeNotice ? `<div class="run-center-worktree-success" role="status">${esc(state.worktreeNotice)}</div>` : ''}
-          <div class="run-center-create-private">${icon('shield')}<span>${esc(text('run_center.worktree_safety'))}</span></div>` : ''}
-        </div>
-        <footer><button type="button" class="btn btn-sm" data-run-center-worktrees-close ${busy ? 'disabled' : ''}>${esc(text('common.close'))}</button></footer>
-      </section>
-    </div>`;
   }
   function collaborationSelectedHtml(run, sequence) {
     if (!run) return '';
@@ -833,12 +573,18 @@
     const sequenceLabel = text('run_center.run_sequence', { index: sequence?.index || 1, count: sequence?.count || 1 });
     return `<section class="run-center-collaboration-selected" aria-labelledby="run-center-collaboration-selected-title">
       <header><div class="run-center-collaboration-selected-heading"><span>${esc(text('run_center.selected_run'))}${sequenceLabel ? ` · ${esc(sequenceLabel)}` : ''}</span><div><h2 id="run-center-collaboration-selected-title">${esc(displayRunTitle(run, task))}</h2><span class="${statusClass(task.status)}">${esc(text(statusKey(task.status)))}</span></div></div>
-      <div class="run-center-collaboration-selected-actions">${task.conversationId ? `<button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId)}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button>` : ''}<button type="button" class="btn btn-sm" data-run-center-detail-open>${icon('panel-right')}<span>${esc(text('run_center.details'))}</span></button></div></header>
+      <div class="run-center-collaboration-selected-actions"><button type="button" class="btn btn-sm btn-primary" data-run-center-open="${esc(task.conversationId || '')}">${icon('message-square')}<span>${esc(text('run_center.open_task'))}</span></button><button type="button" class="btn btn-sm" data-run-center-detail-open>${icon('panel-right')}<span>${esc(text('run_center.details'))}</span></button></div></header>
       <dl><div><dt>${esc(executorLabel)}</dt><dd>${esc(executor)}</dd></div><div><dt>${esc(text('run_center.label_updated'))}</dt><dd>${esc(formatDate(task.updatedAt))}</dd></div><div><dt>${esc(text('run_center.label_delivery'))}</dt><dd>${esc(delivery)}</dd></div></dl>
     </section>`;
   }
+  function runHasCollaborationSignal(run) {
+    const task = runTask(run);
+    return !!(task && (Number(task.participantCount || 0) >= 2
+      || task.executionKind === 'group-chat'
+      || task.conversationMode === 'group'));
+  }
   function collaborationWorkspaceHtml() {
-    const runs = orderedVisibleRuns();
+    const runs = orderedVisibleRuns().filter(runHasCollaborationSignal);
     const filtered = state.search.trim() || state.sourceFilter !== 'all' || state.filter !== 'all'
       || state.runAgentFilter !== 'all' || state.runTimeFilter !== 'all' || state.showArchived;
     const sequences = runSequenceByKey();
@@ -863,114 +609,139 @@
     }).join('');
     const emptyMessage = state.error
       ? stateView('run_center.load_failed', state.error)
-      : stateView(state.loading ? 'run_center.loading' : filtered ? 'run_center.no_matches' : 'run_center.empty');
+      : stateView(state.loading ? 'run_center.loading' : filtered ? 'run_center.no_matches' : 'run_center.collaboration_empty');
     const listContent = runButtons || `<div class="run-center-collaboration-run-list-empty" role="status">${emptyMessage}</div>`;
-    const detailBusy = state.loading || (!!selectedRun && !state.detail && !state.error);
+    const detailBusy = state.loading || (!!selectedRun && !state.detail && !state.detailError);
     const detailContent = selectedRun
-      ? `${collaborationSelectedHtml(selectedRun, sequences.get(selectedRun.key))}${collaborationHtml()}`
+      ? `${collaborationSelectedHtml(selectedRun, sequences.get(selectedRun.key))}${detailView.renderCollaboration()}`
       : emptyMessage;
-    return `<aside class="run-center-collaboration-runs" aria-labelledby="run-center-collaboration-runs-title"><header><h2 id="run-center-collaboration-runs-title">${esc(text('run_center.collaboration_runs'))}</h2><span>${esc(text('run_center.query_result_count', { count: runs.length }))}</span></header><div class="run-center-collaboration-run-list" role="tablist" aria-labelledby="run-center-collaboration-runs-title">${listContent}</div></aside>
-      <main class="run-center-main${selectedRun ? '' : ' is-empty'}" id="run-center-collaboration-detail" role="tabpanel"${selectedTabId ? ` aria-labelledby="${selectedTabId}"` : ''} aria-live="polite" aria-busy="${String(detailBusy)}"><div class="run-center-collaboration-detail">${detailContent}</div></main>`;
+    return `<aside class="run-center-collaboration-runs" aria-labelledby="run-center-collaboration-runs-title"><header><h2 id="run-center-collaboration-runs-title">${esc(text('run_center.collaboration_runs'))}</h2><span>${esc(text('run_center.query_result_count', { count: runs.length }))}</span></header><div class="run-center-collaboration-run-list" role="tablist" aria-labelledby="run-center-collaboration-runs-title" data-run-center-scroll-key="collaboration-runs">${listContent}</div></aside>
+      <main class="run-center-main${selectedRun ? '' : ' is-empty'}" id="run-center-collaboration-detail" role="tabpanel"${selectedTabId ? ` aria-labelledby="${selectedTabId}"` : ''} aria-live="polite" aria-busy="${String(detailBusy)}" data-run-center-scroll-key="collaboration-detail"><div class="run-center-collaboration-detail">${detailContent}</div></main>`;
   }
   function navigationHtml() {
-    return `<div class="run-center-view-tabs" role="tablist" aria-orientation="horizontal" aria-label="${esc(text('run_center.title'))}">${VIEW_DEFINITIONS.map(([view, label]) => `<button type="button" id="run-center-tab-${view}" role="tab" aria-controls="run-center-panel-${view}" aria-selected="${String(state.view === view)}" tabindex="${state.view === view ? '0' : '-1'}" class="run-center-tab${state.view === view ? ' is-active' : ''}" data-run-center-view="${view}">${esc(text(label))}</button>`).join('')}</div>`;
+    const activeView = state.view === 'runs' || state.view === 'history' ? 'tasks' : state.view;
+    return `<div class="run-center-view-tabs" role="tablist" aria-orientation="horizontal" aria-label="${esc(text('run_center.title'))}" data-run-center-scroll-key="view-tabs">${VIEW_DEFINITIONS.map(([view, label]) => `<button type="button" id="run-center-tab-${view}" role="tab" aria-controls="run-center-panel-${view}" aria-selected="${String(activeView === view)}" tabindex="${activeView === view ? '0' : '-1'}" class="run-center-tab${activeView === view ? ' is-active' : ''}" data-run-center-view="${view}">${esc(text(label))}</button>`).join('')}</div>`;
+  }
+  function taskScopeHtml() {
+    if (state.view !== 'runs' && state.view !== 'history') return '';
+    const scope = state.view === 'history' ? 'history' : 'current';
+    return `<div class="run-center-task-scopes" role="tablist" aria-orientation="horizontal" aria-label="${esc(text('run_center.task_scope'))}">${[['current', 'run_center.scope_current'], ['history', 'run_center.scope_history']].map(([value, key]) => `<button type="button" id="run-center-task-scope-${value}" role="tab" class="${scope === value ? 'is-active' : ''}" data-run-center-task-scope="${value}" aria-controls="run-center-panel-tasks" aria-selected="${String(scope === value)}" tabindex="${scope === value ? '0' : '-1'}">${esc(text(key))}</button>`).join('')}</div>`;
+  }
+  function taskSummaryHtml() {
+    if (state.view !== 'runs' || !state.board) return '';
+    const runs = allRunModels();
+    const count = (column) => runs.filter((run) => board.displayColumnForTask(run.aggregateTask) === column).length;
+    return `<div class="run-center-task-summary" aria-label="${esc(text('run_center.current_summary'))}">${[['attention', 'run_center.global_attention'], ['running', 'run_center.global_running'], ['completed', 'run_center.global_recent_completed']].map(([filter, key]) => `<button type="button" class="is-${filter}" data-run-center-summary-filter="${filter}"><span>${esc(text(key))}</span><strong>${esc(count(filter))}</strong></button>`).join('')}</div>`;
   }
   function queryBarHtml(options = {}) {
     const includeModeSwitch = options.modeSwitch !== false;
     const count = visibleBoardRuns().length;
+    const filtersActive = !!(state.search.trim() || state.filter !== 'all' || state.sourceFilter !== 'all'
+      || state.runAgentFilter !== 'all' || state.runTimeFilter !== 'all' || state.showArchived
+      || state.conversationIdFilter);
     const tasks = (state.board?.tasks || []);
+    const archivedCount = Math.max(0, Number(state.board?.counts?.archived)
+      || tasks.filter((task) => task.column === 'archived').length);
+    const purgeBusy = state.busyAction === 'purge-archived';
     const agentIds = Array.from(new Set(tasks.map((task) => String(task.agentId || 'commander')))).sort((left, right) =>
       agentDisplayName(left).localeCompare(agentDisplayName(right)));
+    const statusFilters = ['all', 'pending', 'running', 'attention', 'completed'];
     return `<div class="run-center-query-bar">
       <label class="run-center-query-search">${icon('search')}<input type="search" value="${esc(state.search)}" data-run-center-search placeholder="${esc(text('run_center.search_placeholder'))}" aria-label="${esc(text('run_center.search_placeholder'))}"></label>
       <select class="run-center-source-filter" data-run-center-source-filter aria-label="${esc(text('run_center.source_filter'))}">${['all', 'cogseed', 'agent', 'local-cli', 'p3394-gateway', 'agent-conversation', 'group-chat'].map((source) => `<option value="${source}"${state.sourceFilter === source ? ' selected' : ''}>${esc(source === 'all' ? text('run_center.source_all') : text(`run_center.source_${source}`))}</option>`).join('')}</select>
       <select class="run-center-agent-filter" data-run-center-run-agent-filter aria-label="${esc(text('run_center.run_agent_filter'))}"><option value="all">${esc(text('run_center.run_agent_all'))}</option>${agentIds.map((agentId) => `<option value="${esc(agentId)}"${state.runAgentFilter === agentId ? ' selected' : ''}>${esc(agentId === 'commander' ? text('run_center.commander') : agentDisplayName(agentId))}</option>`).join('')}</select>
       <select class="run-center-time-filter" data-run-center-time-filter aria-label="${esc(text('run_center.time_filter'))}">${['all', 'today', '7d', '30d'].map((value) => `<option value="${value}"${state.runTimeFilter === value ? ' selected' : ''}>${esc(text(`run_center.time_${value}`))}</option>`).join('')}</select>
-      <div class="run-center-filters" aria-label="${esc(text('run_center.status_filter'))}">${['all', 'pending', 'running', 'attention', 'completed'].map((filter) => `<button type="button" aria-pressed="${String(state.filter === filter)}" class="run-center-filter${state.filter === filter ? ' is-active' : ''}" data-run-center-filter="${filter}">${esc(text(`run_center.filter_${filter}`))}</button>`).join('')}</div>
+      <div class="run-center-filters" aria-label="${esc(text('run_center.status_filter'))}" data-run-center-scroll-key="status-filters">${statusFilters.map((filter) => `<button type="button" aria-pressed="${String(state.filter === filter)}" class="run-center-filter${state.filter === filter ? ' is-active' : ''}" data-run-center-filter="${filter}">${esc(text(`run_center.filter_${filter}`))}</button>`).join('')}</div>
       ${includeModeSwitch ? `<div class="run-center-mode-switch" role="group" aria-label="${esc(text('run_center.display_mode'))}">${[['queue', 'list', 'run_center.mode_queue'], ['board', 'layout-grid', 'run_center.mode_board']].map(([mode, iconName, key]) => `<button type="button" class="${state.runMode === mode ? 'is-active' : ''}" data-run-center-mode="${mode}" aria-pressed="${String(state.runMode === mode)}" title="${esc(text(key))}">${icon(iconName)}<span>${esc(text(key))}</span></button>`).join('')}</div>` : ''}
-      <button type="button" class="run-center-archive-scope${state.showArchived ? ' is-active' : ''}" data-run-center-archive-scope aria-pressed="${String(state.showArchived)}" aria-label="${esc(text('run_center.include_archived'))}" title="${esc(text('run_center.include_archived'))}">${icon('archive')}<span>${esc(text('run_center.include_archived'))}</span></button>
+      <div class="run-center-archive-actions"><button type="button" class="run-center-archive-scope${state.showArchived ? ' is-active' : ''}" data-run-center-archive-scope aria-pressed="${String(state.showArchived)}" aria-label="${esc(text('run_center.include_archived'))}" title="${esc(text('run_center.include_archived'))}">${icon('archive')}<span>${esc(text('run_center.include_archived'))}</span></button>${archivedCount > 0 ? `<button type="button" class="run-center-purge-archived" data-run-center-purge-archived aria-label="${esc(text('run_center.purge_archived'))}" title="${esc(text('run_center.purge_archived'))}" ${state.busyAction ? 'disabled' : ''}>${purgeBusy ? icon('loader', 'ui-icon is-spinning') : icon('trash-2')}<span>${esc(text('run_center.purge_archived'))}</span></button>` : ''}</div>
       <span class="run-center-query-count" data-run-center-query-count role="status" aria-live="polite">${esc(text('run_center.query_result_count', { count }))}</span>
-      ${state.search.trim() ? `<button type="button" class="run-center-query-clear" data-run-center-query-clear>${icon('x')}<span>${esc(text('run_center.clear_search'))}</span></button>` : ''}
+      ${filtersActive ? sharedButton({
+        label: text('run_center.clear_filters'),
+        role: 'ghost',
+        size: 'sm',
+        icon: 'x',
+        className: 'run-center-query-clear',
+        attrs: { 'data-run-center-query-clear': true },
+      }) : ''}
     </div>`;
   }
-  function render() {
+  function refreshStatusHtml() {
+    const hidden = !state.refreshing && !state.stale;
+    const message = state.refreshing
+      ? text('run_center.refreshing')
+      : state.stale ? text('run_center.data_stale', { error: state.staleError }) : '';
+    const retry = state.stale ? sharedButton({
+      label: text('run_center.retry_load'),
+      role: 'secondary',
+      size: 'sm',
+      icon: 'refresh',
+      attrs: { 'data-run-center-stale-retry': true },
+    }) : '';
+    return `<div class="run-center-refresh-status${state.stale ? ' is-stale' : ''}" data-run-center-refresh-status role="status" aria-live="polite"${hidden ? ' hidden' : ''}><span>${esc(message)}</span>${retry}</div>`;
+  }
+  function syncRefreshPresentation() {
+    const target = panel();
+    target?.querySelector?.('.run-center-shell')?.setAttribute?.('aria-busy', String(state.loading || state.refreshing));
+    const current = target?.querySelector?.('[data-run-center-refresh-status]');
+    if (!current) return;
+    const temporary = document.createElement?.('div');
+    if (!temporary) return;
+    temporary.innerHTML = refreshStatusHtml();
+    const next = temporary.firstElementChild;
+    if (next && typeof current.replaceWith === 'function') current.replaceWith(next);
+  }
+  function render(options = {}) {
     const target = panel();
     if (!target) return;
-    rootWindow.CogSeedRunCenterOverview?.destroy?.();
-    const viewHtml = state.view === 'overview' ? overviewHtml()
-      : state.view === 'agents' ? agentsHtml()
+    renderTransaction += 1;
+    const createAdvancedOpen = target.querySelector?.('[data-run-center-create-advanced]')?.open === true;
+    const scrollSnapshot = options.resetScroll ? null
+      : Array.isArray(options.scrollSnapshot) ? options.scrollSnapshot
+        : captureScroll(options.excludeScrollKeys);
+    const viewHtml = state.view === 'agents' ? agentsHtml()
         : state.view === 'collaboration' ? collaborationWorkspaceHtml() : '';
-    const overview = state.view === 'overview';
-    const standalone = overview || state.view === 'agents';
+    const standalone = state.view === 'agents';
     const collaboration = state.view === 'collaboration';
     const runHistory = state.view === 'history';
     const filterable = ['runs', 'history', 'collaboration'].includes(state.view);
-    const panelAttributes = `id="run-center-panel-${esc(state.view)}" role="tabpanel" aria-labelledby="run-center-tab-${esc(state.view)}"`;
-    const inactivePanels = VIEW_DEFINITIONS.filter(([view]) => view !== state.view)
+    const activeNavView = state.view === 'runs' || state.view === 'history' ? 'tasks' : state.view;
+    const scopeLabel = activeNavView === 'tasks'
+      ? ` run-center-task-scope-${state.view === 'history' ? 'history' : 'current'}` : '';
+    const panelAttributes = `id="run-center-panel-${esc(activeNavView)}" role="tabpanel" aria-labelledby="run-center-tab-${esc(activeNavView)}${scopeLabel}"`;
+    const inactivePanels = VIEW_DEFINITIONS.filter(([view]) => view !== activeNavView)
       .map(([view]) => `<div id="run-center-panel-${view}" role="tabpanel" aria-labelledby="run-center-tab-${view}" hidden></div>`).join('');
     // Keep `is-runs` as the shared structural class for both run-oriented tabs.
     const runLayoutClass = state.view === 'runs' || state.view === 'history'
       ? `is-runs${runHistory ? ' is-history' : ''}` : '';
     const layout = collaboration
-      ? `<div class="run-center-layout is-collaboration" ${panelAttributes}>${viewHtml}</div>`
+      ? `<div class="run-center-layout is-collaboration" ${panelAttributes} data-run-center-scroll-key="layout:collaboration">${viewHtml}</div>`
       : standalone
-      ? `<div class="run-center-layout is-${esc(state.view)}" ${panelAttributes}><main class="run-center-main">${viewHtml}</main></div>`
-      : `<div class="run-center-layout ${runLayoutClass} is-${esc(state.runMode)}-mode${state.detailOpen ? ' is-detail-open' : ''}" ${panelAttributes}>
+      ? `<div class="run-center-layout is-${esc(state.view)}" ${panelAttributes} data-run-center-scroll-key="layout:${esc(state.view)}"><main class="run-center-main" data-run-center-scroll-key="main:${esc(state.view)}">${viewHtml}</main></div>`
+      : `<div class="run-center-layout ${runLayoutClass} is-${esc(state.runMode)}-mode${state.detailOpen ? ' is-detail-open' : ''}" ${panelAttributes} data-run-center-scroll-key="layout:${esc(state.view)}:${esc(state.runMode)}">
           <aside class="run-center-run-list-pane${state.runMode === 'board' ? ' is-board' : ''}" aria-label="${esc(text(state.runMode === 'board' ? 'run_center.mode_board' : 'run_center.mode_queue'))}">${state.runMode === 'board' ? boardHtml() : queueHtml()}</aside>
-          <main class="run-center-run-detail-pane">${detailsHtml()}</main>
+          <main class="run-center-run-detail-pane">${detailView.renderDetails()}</main>
         </div>`;
-    const modalOpen = !!state.createMode || state.diagnosticsOpen || state.worktreesOpen;
-    target.innerHTML = `<div class="run-center-shell"${modalOpen ? ' inert aria-hidden="true"' : ''}>
-      <header class="run-center-header"><div><h1>${esc(text('run_center.title'))}</h1><p>${esc(text('run_center.subtitle'))}</p></div><div class="run-center-header-actions"><button type="button" class="btn btn-sm btn-primary" data-run-center-create-open title="${esc(text('run_center.create_task'))}" aria-label="${esc(text('run_center.create_task'))}">${icon('plus')}<span>${esc(text('run_center.create_task'))}</span></button><button type="button" class="run-center-icon-btn" data-run-center-refresh title="${esc(text('run_center.refresh'))}" aria-label="${esc(text('run_center.refresh'))}">${icon('refresh')}</button><div class="run-center-more-menu"><button type="button" class="run-center-icon-btn" data-run-center-tools-toggle title="${esc(text('run_center.more_tools'))}" aria-label="${esc(text('run_center.more_tools'))}" aria-haspopup="menu" aria-controls="run-center-tools-menu" aria-expanded="${String(state.toolsOpen)}">${icon('more-horizontal')}</button>${state.toolsOpen ? `<div id="run-center-tools-menu" role="menu" data-run-center-tools-menu><button type="button" role="menuitem" tabindex="0" data-run-center-worktrees-open>${icon('git-branch')}<span>${esc(text('run_center.worktrees'))}</span></button><button type="button" role="menuitem" tabindex="-1" data-run-center-diagnostics-open>${icon('activity')}<span>${esc(text('run_center.diagnostics'))}</span></button></div>` : ''}</div></div></header>
-      <nav class="run-center-navigation">${navigationHtml()}</nav>
-      ${filterable ? queryBarHtml({ modeSwitch: state.view === 'runs' }) : ''}
+    target.innerHTML = `<div class="run-center-shell" data-run-center-scroll-key="shell" data-run-center-state="${esc(state.dataState)}" aria-busy="${String(state.loading || state.refreshing)}">
+      <header class="run-center-header is-compact"><h1 class="ui-visually-hidden">${esc(text('run_center.title'))}</h1><nav class="run-center-navigation">${navigationHtml()}${taskScopeHtml()}</nav><div class="run-center-header-actions"><button type="button" class="btn btn-sm btn-primary" data-run-center-create-open title="${esc(text('run_center.create_task'))}" aria-label="${esc(text('run_center.create_task'))}">${icon('plus')}<span>${esc(text('run_center.create_task'))}</span></button><button type="button" class="run-center-icon-btn" data-run-center-refresh title="${esc(text('run_center.refresh'))}" aria-label="${esc(text('run_center.refresh'))}">${icon('refresh')}</button><div class="run-center-more-menu"><button type="button" class="run-center-icon-btn" data-run-center-tools-toggle title="${esc(text('run_center.more_tools'))}" aria-label="${esc(text('run_center.more_tools'))}" aria-haspopup="menu" aria-controls="run-center-tools-menu" aria-expanded="${String(state.toolsOpen)}">${icon('more-horizontal')}</button>${state.toolsOpen ? `<div id="run-center-tools-menu" role="menu" data-run-center-tools-menu><button type="button" role="menuitem" tabindex="0" data-run-center-settings-anchor="worktrees">${icon('git-branch')}<span>${esc(text('run_center.worktrees'))}</span></button><button type="button" role="menuitem" tabindex="-1" data-run-center-settings-anchor="diagnostics">${icon('activity')}<span>${esc(text('run_center.diagnostics'))}</span></button></div>` : ''}</div></div></header>
+      ${refreshStatusHtml()}
+      ${taskSummaryHtml()}
+      ${filterable ? queryBarHtml({ modeSwitch: state.view === 'runs' || state.view === 'history' }) : ''}
       ${layout}${inactivePanels}
-    </div>${createModalHtml()}${diagnosticsHtml()}${worktreesHtml()}`;
-    if (overview && state.overviewAnalysisOpen) rootWindow.CogSeedRunCenterOverview?.mount?.(target);
-  }
-  async function loadDiagnostics() {
-    const revision = ++state.diagnosticsRequestRevision;
-    state.diagnosticsLoading = true;
-    state.diagnosticsError = '';
-    renderPreservingFocus(state.diagnosticsOpen ? '[data-run-center-diagnostics-close]' : '');
-    try {
-      const diagnostics = await invoke('cogseed.dashboard.diagnostics');
-      if (revision !== state.diagnosticsRequestRevision) return;
-      state.diagnostics = diagnostics;
-      state.diagnosticsError = '';
-    } catch {
-      if (revision !== state.diagnosticsRequestRevision) return;
-      state.diagnosticsError = text('run_center.diagnostics_load_failed');
+    </div>${createModalHtml(createAdvancedOpen)}`;
+    showRenderedDialog(target);
+    let restoredPendingContext = false;
+    if (state.pendingRestoreContext && state.board && !state.loading) {
+      const restore = state.pendingRestoreContext;
+      state.pendingRestoreContext = null;
+      restoredPendingContext = true;
+      restoreScroll(restore.scrollPositions || []);
+      rootWindow.setTimeout(() => restoreFocus(restore.focusTarget, state.selectedRunKey
+        ? state.runMode === 'board'
+          ? `[data-dashboard-board-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+          : `[data-run-center-queue-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+        : ''), 0);
     }
-    finally {
-      if (revision === state.diagnosticsRequestRevision) {
-        state.diagnosticsLoading = false;
-        renderPreservingFocus(state.diagnosticsOpen ? '[data-run-center-diagnostics-close]' : '');
-      }
-    }
-  }
-  function openDiagnostics() {
-    state.toolsOpen = false;
-    state.diagnosticsOpen = true;
-    loadDiagnostics();
-    focusLater('[data-run-center-diagnostics-close]');
-  }
-  function closeDiagnostics() {
-    state.diagnosticsRequestRevision += 1;
-    state.diagnosticsLoading = false;
-    state.diagnosticsOpen = false;
-    render();
-    focusLater('[data-run-center-tools-toggle]');
-  }
-  function exportDiagnostics() {
-    if (!state.diagnostics) return;
-    const payload = JSON.stringify({ format: 'cogseed-run-center-diagnostics', ...state.diagnostics }, null, 2);
-    const url = URL.createObjectURL(new Blob([`${payload}\n`], { type: 'application/json' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `cogseed-run-center-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
-    anchor.click();
-    rootWindow.setTimeout(() => URL.revokeObjectURL(url), 0);
+    if (!restoredPendingContext) restoreScroll(scrollSnapshot);
   }
   function worktreesRequestIsCurrent(revision, owner) {
     return revision === state.worktreesRequestRevision && owner === state.worktreesRequestOwner;
@@ -982,13 +753,19 @@
     state.worktreesLoading = false;
   }
   async function loadWorktrees(owner) {
+    if (owner === 'create' && state.createSpaceId) {
+      invalidateWorktreesRequest('create');
+      state.createWorktreeName = '';
+      state.worktreesError = '';
+      renderPreservingFocus('[data-run-center-create-space], [data-run-center-create-task]');
+      return;
+    }
     const revision = ++state.worktreesRequestRevision;
     state.worktreesRequestOwner = owner;
     state.worktreesLoading = true;
     state.worktreesError = '';
-    const fallbackSelector = owner === 'manager' && state.worktreesOpen
-      ? '[data-run-center-worktrees-close]'
-      : owner === 'create' && state.createMode ? '[data-run-center-create-task], [data-run-center-create-agent]' : '';
+    const fallbackSelector = owner === 'create' && state.createMode
+      ? '[data-run-center-create-task], [data-run-center-create-agent]' : '';
     renderPreservingFocus(fallbackSelector);
     try {
       const worktrees = await invoke('cogseed.worktree.list');
@@ -1006,66 +783,11 @@
       }
     }
   }
-  function openWorktrees() {
-    state.toolsOpen = false;
-    state.worktreesOpen = true;
-    state.worktreesError = '';
-    state.worktreeNotice = '';
-    loadWorktrees('manager');
-    focusLater('[data-run-center-worktrees-close]');
-  }
-  function closeWorktrees() {
-    if (state.worktreeBusy) return;
-    invalidateWorktreesRequest('manager');
-    state.worktreesOpen = false;
-    state.worktreesError = '';
-    state.worktreeNotice = '';
-    render();
-    focusLater('[data-run-center-tools-toggle]');
-  }
-  async function createWorktree() {
-    if (state.worktreeBusy) return;
-    if (!state.worktreeBranch.trim()) {
-      state.worktreesError = text('run_center.worktree_branch_required');
-      render();
-      return;
-    }
-    state.worktreeBusy = 'create';
-    state.worktreesError = '';
-    state.worktreeNotice = '';
-    renderPreservingFocus('[data-run-center-worktrees-close]');
-    try {
-      await invoke('cogseed.worktree.create', { branch: state.worktreeBranch.trim(), baseRef: state.worktreeBaseRef.trim() || 'HEAD' });
-      state.worktreeBranch = '';
-      state.worktreeNotice = text('run_center.worktree_created');
-      await loadWorktrees('manager');
-    } catch (error) {
-      state.worktreesError = worktreeErrorMessage(error);
-    } finally {
-      state.worktreeBusy = '';
-      renderPreservingFocus(state.worktreesOpen ? '[data-run-center-worktrees-close]' : '');
-    }
-  }
-  async function removeWorktree(worktreePath, branch) {
-    if (state.worktreeBusy || !worktreePath || !branch) return;
-    if (!rootWindow.confirm(text('run_center.worktree_remove_confirm', { branch }))) return;
-    state.worktreeBusy = worktreePath;
-    state.worktreesError = '';
-    state.worktreeNotice = '';
-    renderPreservingFocus('[data-run-center-worktrees-close]');
-    try {
-      await invoke('cogseed.worktree.remove', { path: worktreePath, expectedBranch: branch });
-      state.worktreeNotice = text('run_center.worktree_removed');
-      await loadWorktrees('manager');
-    } catch (error) {
-      state.worktreesError = worktreeErrorMessage(error);
-    } finally {
-      state.worktreeBusy = '';
-      renderPreservingFocus(state.worktreesOpen ? '[data-run-center-worktrees-close]' : '');
-    }
-  }
   async function loadAgents() {
-    if (state.agentsLoaded) return;
+    if (state.agentsLoaded || state.agentsLoading) return;
+    state.agentsLoading = true;
+    state.createAdvancedError = '';
+    renderPreservingFocus(state.createMode ? '[data-run-center-create-task], [data-run-center-create-agent]' : '');
     try {
       const result = await invoke('agents.list', { summary: true });
       state.agents = Array.isArray(result?.agents) ? result.agents : [];
@@ -1080,16 +802,65 @@
         state.agentRegistryError = error?.message || String(error);
       }
     } catch (error) {
-      state.agentsLoaded = true;
+      state.agentsLoaded = false;
       state.createAdvancedError = error?.message || String(error);
+    } finally {
+      state.agentsLoading = false;
     }
     renderPreservingFocus(state.createMode ? '[data-run-center-create-task], [data-run-center-create-agent]' : '');
+  }
+  function invalidateSpacesRequest() {
+    state.spacesRequestRevision += 1;
+    state.spacesLoading = false;
+  }
+  function ensureCreateWorktreesLoaded() {
+    const advancedOpen = panel()?.querySelector?.('[data-run-center-create-advanced]')?.open === true;
+    if (advancedOpen && !state.createSpaceId && state.worktreesRequestOwner !== 'create') {
+      loadWorktrees('create');
+    }
+  }
+  async function loadSpaces() {
+    if (state.createMode !== 'create') return;
+    const revision = ++state.spacesRequestRevision;
+    state.spacesLoading = true;
+    state.spacesError = '';
+    state.spacesNotice = '';
+    renderPreservingFocus('[data-run-center-create-task], [data-run-center-create-space]');
+    try {
+      const result = await invoke('spaces.list', {});
+      if (revision !== state.spacesRequestRevision || state.createMode !== 'create') return;
+      state.spaces = Array.isArray(result?.spaces) ? result.spaces : [];
+      if (state.createSpaceId && !state.spaces.some((space) => space?.space_id === state.createSpaceId)) {
+        state.createSpaceId = '';
+        state.createWorktreeName = '';
+        state.spacesNotice = text('run_center.create_space_reset');
+      }
+    } catch (_error) {
+      if (revision !== state.spacesRequestRevision || state.createMode !== 'create') return;
+      state.spaces = [];
+      state.createSpaceId = '';
+      state.createWorktreeName = '';
+      state.spacesError = text('run_center.create_space_unavailable');
+    } finally {
+      if (revision === state.spacesRequestRevision && state.createMode === 'create') {
+        state.spacesLoading = false;
+        renderPreservingFocus('[data-run-center-create-task], [data-run-center-create-space]');
+        ensureCreateWorktreesLoaded();
+      }
+    }
   }
   function focusCreateControl() {
     focusLater('[data-run-center-create-task], [data-run-center-create-agent]');
   }
   function createFailureMessage(error) {
     const message = error?.message || String(error);
+    if (message.includes('E_RUN_CENTER_SPACE_UNAVAILABLE') || message.includes('E_RUN_CENTER_SPACE_MISMATCH')
+      || message.includes('E_RUN_CENTER_SPACE_WORKSPACE_MISMATCH')) {
+      return text('run_center.create_space_stale');
+    }
+    if (message.includes('E_RUN_CENTER_SPACE_WORKTREE_CONFLICT')) {
+      return text('run_center.create_space_isolation_unavailable');
+    }
     if (message.includes('CogSeed Agent is unavailable')) return text('run_center.selected_agent_unavailable');
     if (message.includes('CogSeed Agent runtime is not executable')) return text('run_center.selected_agent_runtime_unavailable');
     return message;
@@ -1099,56 +870,49 @@
     state.createError = '';
     renderPreservingFocus(focusSelector);
   }
-  function toggleCreateAdvanced() {
-    if (state.createMode !== 'create' || state.createBusy) return;
-    state.createAdvancedOpen = !state.createAdvancedOpen;
-    state.createAdvancedError = '';
-    renderPreservingFocus('[data-run-center-create-advanced]');
-    if (state.createAdvancedOpen) {
-      loadAgents();
-      loadWorktrees('create');
-    }
+  function resetCreateForm(mode = '', returnFocus = '') {
+    Object.assign(state, {
+      createMode: mode,
+      createTask: '',
+      createSpaceId: mode === 'create' ? String(rootWindow.getNewChatSpaceId?.() || '') : '',
+      createAgentId: '',
+      createWorktreeName: '',
+      createError: '',
+      createAdvancedError: '',
+      createReturnFocus: returnFocus,
+      spacesError: '',
+      spacesNotice: '',
+    });
   }
   function openCreate(mode) {
     const suspendingDetail = mode === 'reassign' && state.detailOpen;
     state.restoreDetailAfterCreate = suspendingDetail;
     if (suspendingDetail) state.detailOpen = false;
-    state.createMode = mode;
     const returnFocus = mode === 'reassign' ? '[data-run-center-reassign]' : '[data-run-center-create-open]';
-    state.createReturnFocus = returnFocus;
-    state.createTask = '';
-    state.createAgentId = '';
-    state.createWorktreeName = '';
-    state.createError = '';
-    state.createAdvancedError = '';
-    state.createAdvancedOpen = mode === 'reassign';
+    resetCreateForm(mode, returnFocus);
     render();
     focusCreateControl();
     if (mode === 'reassign') loadAgents();
+    else loadSpaces();
   }
   function closeCreate() {
     if (state.createBusy) return;
     const returnFocus = state.createReturnFocus;
     const restoreDetail = state.restoreDetailAfterCreate;
+    invalidateSpacesRequest();
     invalidateWorktreesRequest('create');
-    state.createMode = '';
-    state.createError = '';
-    state.createAdvancedError = '';
-    state.createAdvancedOpen = false;
-    state.createReturnFocus = '';
+    resetCreateForm();
     state.restoreDetailAfterCreate = false;
     state.detailOpen = restoreDetail;
     render();
+    if (restoreDetail && state.selectedSessionId && !state.detail) refreshSelectedDetail();
     focusLater(restoreDetail ? '[data-run-center-reassign]' : returnFocus);
   }
   function setSelectedTask(sessionId, taskId, options) {
     state.selectionRevision += 1;
     state.selectedSessionId = String(sessionId || '');
     state.selectedTaskId = String(taskId || '');
-    const board = rootWindow.CogSeedRunCenterBoard;
-    const run = options?.runKey && typeof board?.buildRunModels === 'function'
-      ? board.buildRunModels(state.board).find((item) => item.key === options.runKey)
-      : board?.runForTask?.(state.board, state.selectedTaskId);
+    const run = runForSelection(options?.runKey, state.selectedTaskId);
     state.selectedRunKey = run?.key || '';
     state.selectedAttemptKey = String(options?.attemptKey || '');
     if (!state.selectedTaskId) state.attemptFocusKey = '';
@@ -1160,7 +924,31 @@
       && state.selectedSessionId === sessionId
       && state.selectedTaskId === taskId;
   }
-  async function submitCreate() {
+  function refreshSelectedDetail() {
+    const sessionId = String(state.selectedSessionId || '');
+    const taskId = String(state.selectedTaskId || '');
+    const revision = state.selectionRevision;
+    if (!sessionId) return;
+    void invoke('cogseed.session.read', { sessionId, taskId: taskId || undefined })
+      .then((detail) => {
+        if (!selectionIsCurrent(revision, sessionId, taskId)) return;
+        state.detail = detail;
+        state.detailError = '';
+        const focusSnapshot = captureFocus();
+        const scrollSnapshot = captureScroll();
+        render({ scrollSnapshot });
+        if (focusSnapshot) restoreFocus(focusSnapshot);
+      })
+      .catch((error) => {
+        if (!selectionIsCurrent(revision, sessionId, taskId)) return;
+        state.detailError = error?.message || String(error);
+        const focusSnapshot = captureFocus();
+        const scrollSnapshot = captureScroll();
+        render({ scrollSnapshot });
+        if (focusSnapshot) restoreFocus(focusSnapshot);
+      });
+  }
+  async function submitCreate(mode = 'start') {
     if (state.createBusy) return;
     const isReassign = state.createMode === 'reassign';
     const source = state.detail?.collaboration?.task || selectedTask();
@@ -1174,20 +962,23 @@
     }
     if (isReassign && !source) return;
     state.createBusy = true;
+    state.createBusyMode = isReassign ? 'start' : mode;
     state.createError = '';
     render();
     try {
       const requestId = `req-run-center-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const created = await invoke(isReassign ? 'cogseed.task.reassign' : 'cogseed.task.start', isReassign
+      const channel = isReassign ? 'cogseed.task.reassign'
+        : mode === 'save' ? 'cogseed.task.create' : 'cogseed.task.start';
+      const created = await invoke(channel, isReassign
         ? { taskId: source.taskId, requestId, agentId: state.createAgentId }
-        : { requestId, task: state.createTask.trim(), ...(state.createAgentId ? { agentId: state.createAgentId } : {}), ...(state.createWorktreeName ? { worktreeName: state.createWorktreeName } : {}) });
+        : { requestId, task: state.createTask.trim(), ...(state.createSpaceId ? { spaceId: state.createSpaceId } : {}), ...(state.createAgentId ? { agentId: state.createAgentId } : {}), ...(!state.createSpaceId && state.createWorktreeName ? { worktreeName: state.createWorktreeName } : {}) });
       state.createMode = '';
       state.restoreDetailAfterCreate = false;
       state.view = 'runs';
-      state.runMode = 'queue';
       state.detailTab = 'summary';
       state.detailOpen = true;
-      state.actionNotice = isReassign ? 'run_center.reassign_success' : 'run_center.create_success';
+      state.actionNotice = isReassign ? 'run_center.reassign_success'
+        : mode === 'save' ? 'run_center.save_planned_success' : 'run_center.create_success';
       state.actionError = '';
       state.createReturnFocus = '[data-run-center-detail-tab="summary"]';
       await refresh({ background: true });
@@ -1196,6 +987,7 @@
       state.createError = createFailureMessage(error);
     } finally {
       state.createBusy = false;
+      state.createBusyMode = '';
       render();
       if (!state.createMode) {
         focusLater(state.createReturnFocus);
@@ -1206,10 +998,7 @@
   async function select(sessionId, taskId, options) {
     let nextSessionId = String(sessionId || '');
     let nextTaskId = String(taskId || '');
-    const board = rootWindow.CogSeedRunCenterBoard;
-    const run = options?.runKey && typeof board?.buildRunModels === 'function'
-      ? board.buildRunModels(state.board).find((item) => item.key === options.runKey)
-      : board?.runForTask?.(state.board, nextTaskId);
+    const run = runForSelection(options?.runKey, nextTaskId);
     const attemptSelection = reconcileAttemptSelection(
       run,
       options?.attemptKey || '',
@@ -1225,8 +1014,8 @@
     });
     if (options?.focusAttempt && attempt?.key) state.attemptFocusKey = attempt.key;
     state.detail = null;
-    state.error = '';
-    render();
+    state.detailError = '';
+    renderForRunSelection();
     if (options?.focusDetail) focusDetailDrawer();
     if (options?.focusAttempt) focusAttemptByKey(attempt?.key);
     if (options?.focusCollaborationRun) focusCollaborationRunByKey(run?.key);
@@ -1238,12 +1027,12 @@
       state.detail = detail;
     } catch (error) {
       if (!selectionIsCurrent(revision, nextSessionId, nextTaskId)) return;
-      state.error = error?.message || String(error);
+      state.detailError = error?.message || String(error);
     }
     if (revision !== state.selectionRevision) return;
     if (options?.focusDetail && !state.detailOpen) return;
     const focusSnapshot = options?.preserveFocus ? captureFocus() : null;
-    render();
+    renderForRunSelection();
     if (focusSnapshot) restoreFocus(focusSnapshot);
     if (options?.focusDetail) focusDetailDrawer();
     if (options?.focusAttempt) focusAttemptByKey(attempt?.key);
@@ -1298,33 +1087,44 @@
     state.attemptFocusKey = attempt.key;
     select(task.sessionId, task.taskId, { runKey: run.key, attemptKey: attempt.key, focusAttempt });
   }
-  function activateView(view, focusTab) {
+  function setViewState(view, forceMode = false) {
     const nextView = normalizeView(view);
-    if (!nextView) return false;
+    if (!nextView) return null;
     const previousView = state.view;
-    if (nextView === 'collaboration') {
-      state.view = 'collaboration';
-    } else {
-      state.view = nextView;
-    }
-    state.detailOpen = false;
+    state.view = nextView;
     state.restoreDetailAfterCreate = false;
-    state.detailReturnFocus = '';
-    if (nextView === 'runs' && previousView !== 'runs') {
-      state.runMode = 'queue';
-      state.detailTab = 'summary';
+    if (forceMode || previousView !== nextView) {
+      state.detailOpen = false;
+      state.detailReturnFocus = '';
+      if (nextView === 'runs') {
+        const requestedView = String(view || '').trim();
+        state.runMode = forceMode && requestedView === 'board'
+          ? 'board'
+          : preferredRunMode;
+        state.detailTab = 'summary';
+      } else if (nextView === 'history') {
+        state.runMode = 'queue';
+        state.detailTab = 'history';
+      } else if (nextView === 'collaboration') {
+        state.runMode = 'queue';
+        state.detailTab = 'collaboration';
+      }
     }
-    if (nextView === 'history' && previousView !== 'history') {
-      state.runMode = 'queue';
-      state.detailTab = 'history';
-    }
-    if (nextView === 'collaboration' && previousView !== 'collaboration') {
-      state.runMode = 'queue';
-      state.detailTab = 'collaboration';
-    }
-    render();
-    if (focusTab) panel()?.querySelector(`[data-run-center-view="${nextView}"]`)?.focus();
+    return { nextView, previousView };
+  }
+  function activateView(view, focusTab) {
+    const transition = setViewState(view);
+    if (!transition) return false;
+    const { nextView, previousView } = transition;
+    render({ resetScroll: previousView !== nextView });
+    if (focusTab) panel()?.querySelector(`[data-run-center-view="${nextView === 'runs' || nextView === 'history' ? 'tasks' : nextView}"]`)?.focus();
     return true;
+  }
+  function enterRunQueue(query = {}) {
+    Object.assign(state, DEFAULT_RUN_QUERY, query, {
+      view: 'runs', runMode: 'queue', detailTab: 'summary',
+    });
+    state.conversationIdFilter = String(query.conversationId || '');
   }
   function openDetails(returnFocus) {
     state.detailOpen = true;
@@ -1358,36 +1158,61 @@
   async function refresh(options) {
     const background = options?.background === true;
     if (state.refreshInFlight) {
-      if (background) state.refreshQueued = true;
+      state.refreshQueued = true;
       return state.refreshInFlight;
     }
+    const refreshScrollSnapshot = captureScroll();
+    const refreshView = state.view;
+    const refreshRunMode = state.runMode;
+    const refreshSelectionRevision = state.selectionRevision;
+    const hadExplicitSelection = !!state.selectedRunKey || !!state.selectedTaskId;
+    const hadProjection = !!state.board;
     state.refreshInFlight = (async () => {
-      if (!background) {
+      if (!background && !hadProjection) {
         state.loading = true;
+        state.dataState = 'loading';
         state.error = '';
-        render();
+        render({ scrollSnapshot: refreshScrollSnapshot });
+      } else {
+        state.refreshing = true;
+        state.dataState = 'refreshing';
+        state.error = '';
+        syncRefreshPresentation();
       }
       try {
-        const [board, registryResult] = await Promise.all([
-          invoke('cogseed.task.list'),
-          invoke('cogseed.agent.list')
-            .then((value) => ({ value }))
-            .catch((error) => ({ error })),
-        ]);
+        const registryRevision = (state.agentRegistryRequestRevision || 0) + 1;
+        state.agentRegistryRequestRevision = registryRevision;
+        const registryPromise = invoke('cogseed.agent.list')
+          .then((value) => {
+            if (registryRevision !== state.agentRegistryRequestRevision) return;
+            state.agentRegistry = value;
+            state.agentRegistryError = '';
+            renderPreservingFocus();
+          })
+          .catch((error) => {
+            if (registryRevision !== state.agentRegistryRequestRevision) return;
+            state.agentRegistryError = error?.message || String(error);
+            renderPreservingFocus();
+          });
+        const board = await invoke('cogseed.task.list');
         state.board = board;
         state.error = '';
-        if (registryResult.value) {
-          state.agentRegistry = registryResult.value;
-          state.agentRegistryError = '';
-        } else if (registryResult.error) {
-          state.agentRegistryError = registryResult.error?.message || String(registryResult.error);
+        state.stale = false;
+        state.staleError = '';
+        state.dataState = Array.isArray(board?.tasks) && board.tasks.length ? 'ready' : 'empty';
+        if (!background && !hadProjection) {
+          state.loading = false;
+          render({ scrollSnapshot: refreshScrollSnapshot });
         }
         const visibleRuns = visibleBoardRuns();
+        const selectionChangedDuringRefresh = state.selectionRevision !== refreshSelectionRevision;
         const run = visibleRuns.find((item) => item.key === state.selectedRunKey)
           || visibleRuns.find((item) => item.members?.some((member) => member.taskId === state.selectedTaskId))
-          || visibleRuns[0];
+          || (!hadExplicitSelection && !selectionChangedDuringRefresh ? visibleRuns[0] : null);
         const retainedSelection = run?.key === state.selectedRunKey
           || run?.members?.some((member) => member.taskId === state.selectedTaskId);
+        const selectedAttemptMissing = !!(retainedSelection && state.selectedAttemptKey)
+          && !buildAttemptModels(run).some((attempt) => attempt.key === state.selectedAttemptKey);
         const preferredTaskId = retainedSelection ? state.selectedTaskId : runTask(run)?.taskId;
         const attemptSelection = reconcileAttemptSelection(
           run,
@@ -1396,56 +1221,63 @@
         );
         const attempt = attemptSelection.selected;
         const task = attempt?.representative || run?.aggregateTask || run?.representative;
-        if (!task) {
+        const mayAdjustSelection = !background || !selectionChangedDuringRefresh;
+        if (background && selectionChangedDuringRefresh && run?.key && state.selectedTaskId
+          && task?.taskId === state.selectedTaskId && !state.selectedRunKey) {
+          state.selectedRunKey = run.key;
+          state.boardFocusRunKey = run.key;
+        }
+        if (mayAdjustSelection && (selectedAttemptMissing || !task)) {
           setSelectedTask('', '');
           state.detail = null;
-        } else if (run.key !== state.selectedRunKey
+          state.detailOpen = false;
+        } else if (mayAdjustSelection && run && (run.key !== state.selectedRunKey
           || attempt?.key !== state.selectedAttemptKey
           || task.taskId !== state.selectedTaskId
           || task.sessionId !== state.selectedSessionId
-          || !selectedTask()) {
+          || !selectedTask())) {
           if (background) {
             const nextSessionId = String(task.sessionId || '');
             const nextTaskId = String(task.taskId || '');
-            const revision = setSelectedTask(nextSessionId, nextTaskId, {
+            setSelectedTask(nextSessionId, nextTaskId, {
               runKey: run.key, attemptKey: attempt?.key || '',
             });
-            try {
-              const detail = nextSessionId
-                ? await invoke('cogseed.session.read', { sessionId: nextSessionId, taskId: nextTaskId || undefined })
-                : null;
-              if (selectionIsCurrent(revision, nextSessionId, nextTaskId)) {
-                state.detail = detail;
-              }
-            } catch (error) {
-              if (selectionIsCurrent(revision, nextSessionId, nextTaskId)) throw error;
-            }
-          } else await select(task.sessionId, task.taskId, {
+            state.detail = null;
+            state.detailError = '';
+            renderForRunSelection();
+            refreshSelectedDetail();
+          } else select(task.sessionId, task.taskId, {
             runKey: run.key, attemptKey: attempt?.key || '',
           });
         } else if (background && state.selectedSessionId) {
-          const revision = state.selectionRevision;
-          const selectedSessionId = state.selectedSessionId;
-          const selectedTaskId = state.selectedTaskId;
-          try {
-            const detail = await invoke('cogseed.session.read', {
-              sessionId: selectedSessionId,
-              taskId: selectedTaskId || undefined,
-            });
-            if (selectionIsCurrent(revision, selectedSessionId, selectedTaskId)) state.detail = detail;
-          } catch (error) {
-            if (selectionIsCurrent(revision, selectedSessionId, selectedTaskId)) throw error;
-          }
+          refreshSelectedDetail();
         }
+        void registryPromise;
       } catch (error) {
-        state.error = error?.message || String(error);
+        const message = error?.message || String(error);
+        if (state.board) {
+          state.stale = true;
+          state.staleError = message;
+          state.dataState = 'stale';
+          state.error = '';
+        } else {
+          state.error = message;
+          state.stale = false;
+          state.staleError = '';
+          state.dataState = 'error';
+        }
       } finally {
-        if (!background) state.loading = false;
-        const focusSnapshot = background ? captureFocus() : null;
-        const scrollSnapshot = background ? captureScroll() : null;
-        render();
-        if (background) {
-          restoreScroll(scrollSnapshot);
+        state.loading = false;
+        state.refreshing = false;
+        const preserveInteraction = background || hadProjection;
+        const focusSnapshot = preserveInteraction ? captureFocus() : null;
+        const sameWorkspace = state.view === refreshView && state.runMode === refreshRunMode;
+        const currentScrollSnapshot = captureScroll();
+        const finalScrollSnapshot = state.selectionRevision === refreshSelectionRevision
+          ? currentScrollSnapshot
+          : currentScrollSnapshot.filter((item) => !RUN_SELECTION_DETAIL_SCROLL_KEYS.includes(item.key));
+        render(sameWorkspace ? { scrollSnapshot: finalScrollSnapshot } : {});
+        if (preserveInteraction) {
           const fallbackSelector = state.view === 'runs' && state.selectedRunKey
             ? state.runMode === 'board'
               ? `[data-dashboard-board-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
@@ -1487,47 +1319,69 @@
     watch.promise.catch((error) => {
       if (state.watch !== watch) return;
       state.watch = null;
-      if (error?.name !== 'AbortError') state.error = error?.message || String(error);
+      if (error?.name !== 'AbortError') {
+        const message = error?.message || String(error);
+        if (state.board) {
+          state.stale = true;
+          state.staleError = message;
+          state.dataState = 'stale';
+          state.error = '';
+        } else {
+          state.error = message;
+          state.dataState = 'error';
+        }
+      }
       render();
     });
   }
-  async function action(action) {
-    const task = state.detail?.collaboration?.task || selectedTask();
+  async function action(action, targetTaskId = '') {
+    if (state.busyAction) return;
+    const explicitTaskId = String(targetTaskId || '').trim();
+    const task = explicitTaskId
+      ? (state.board?.tasks || []).find((item) => item.taskId === explicitTaskId)
+      : state.detail?.collaboration?.task || selectedTask();
     if (!task) return;
     if (action === 'abort' && !rootWindow.confirm(text('run_center.abort_confirm'))) return;
-    if (action === 'archive' && !rootWindow.confirm(text('run_center.archive_confirm'))) return;
-    const visibleBefore = action === 'archive' ? orderedVisibleRuns() : [];
-    const archivedIndex = visibleBefore.findIndex((run) => run.members?.some((member) => member.taskId === task.taskId));
-    const adjacentRunKey = archivedIndex >= 0
-      ? visibleBefore[archivedIndex + 1]?.key || visibleBefore[archivedIndex - 1]?.key || ''
-      : '';
+    const archivedRun = action === 'archive'
+      ? allRunModels().find((run) => run.members?.some((member) => member.taskId === task.taskId))
+      : null;
+    const archiveTaskIds = action === 'archive'
+      ? archivedRun
+        ? Array.isArray(archivedRun.archiveTaskIds) ? [...archivedRun.archiveTaskIds] : []
+        : task.actions?.archive ? [task.taskId] : []
+      : [];
+    if (action === 'archive' && !archiveTaskIds.length) return;
+    const archivingSelectedRun = !!archivedRun && archivedRun.key === state.selectedRunKey;
     const archiveScrollSnapshot = action === 'archive' ? captureScroll() : null;
     const previousRunKeys = new Set(allRunModels().map((run) => run.key));
     const sourceConversationId = task.conversationId;
     const sourceSessionId = task.sessionId;
     state.busyAction = action;
+    state.busyTaskId = task.taskId;
     state.actionNotice = '';
     state.actionError = '';
     renderPreservingFocus();
     try {
-      const payload = { taskId: task.taskId, action };
-      if (action === 'retry' || action === 'resume') payload.requestId = `req-run-center-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      await invoke('cogseed.task.action', payload);
       if (action === 'archive') {
+        // Children are archived before the representative so a failed batch
+        // always leaves the logical run visible with a recoverable action.
+        for (const taskId of archiveTaskIds) {
+          await invoke('cogseed.task.action', { taskId, action });
+        }
+      } else {
+        const payload = { taskId: task.taskId, action };
+        if (action === 'start' || action === 'retry' || action === 'resume') payload.requestId = `req-run-center-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        await invoke('cogseed.task.action', payload);
+      }
+      if (action === 'archive' && archivingSelectedRun) {
         state.detailOpen = false;
         state.detailReturnFocus = '';
       }
       await refresh({ background: true });
       if (action === 'archive') {
-        const visibleRuns = orderedVisibleRuns();
-        const targetRun = visibleRuns.find((run) => run.key === adjacentRunKey) || visibleRuns[0] || null;
-        const targetTask = runTask(targetRun);
         state.actionNotice = '';
-        if (targetRun && targetTask) await select(targetTask.sessionId, targetTask.taskId, { runKey: targetRun.key });
-        else {
-          setSelectedTask('', '');
-          state.detail = null;
-        }
+        // The refresh owns invalid-selection cleanup. Avoid changing a newer
+        // user selection when this archive request settles late.
         if (typeof rootWindow.uiToast === 'function') {
           rootWindow.uiToast(text('run_center.action_success_archive'), { variant: 'success' });
         }
@@ -1548,71 +1402,108 @@
         runKey: targetRun.key,
       });
     } catch (error) {
+      if (action === 'archive') await refresh({ background: true }).catch(() => undefined);
       state.actionError = error?.message || String(error);
+      if (explicitTaskId && typeof rootWindow.uiToast === 'function') {
+        rootWindow.uiToast(state.actionError, { variant: 'error' });
+      }
     } finally {
       state.busyAction = '';
-      const fallbackSelector = action === 'archive' && state.selectedRunKey
-        ? state.runMode === 'board'
-          ? `[data-dashboard-board-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
-          : `[data-run-center-queue-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
-        : '[data-run-center-detail-tab="summary"]';
+      state.busyTaskId = '';
+      const fallbackSelector = action === 'archive' && (state.view === 'runs' || state.view === 'history')
+        ? `[data-run-center-view="tasks"]`
+        : action === 'archive' && state.selectedRunKey
+          ? state.runMode === 'board'
+            ? `[data-dashboard-board-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+            : `[data-run-center-queue-run-key="${escapedAttributeValue(state.selectedRunKey)}"]`
+          : '[data-run-center-detail-tab="summary"]';
       renderPreservingFocus(fallbackSelector);
       if (archiveScrollSnapshot) restoreScroll(archiveScrollSnapshot);
     }
   }
-  async function toggleAgentGateway(cli, nextEnabled) {
-    const safeCli = String(cli || '').trim();
-    if (!safeCli || state.busyAgentGateway) return;
-    const runtime = state.agentRegistry?.runtimes?.find((item) => item.sourceKind === 'local-cli'
-      && item.runtimeKind === safeCli && item.gatewayControllable === true);
-    const hasActiveTask = state.agentRegistry?.agents?.some((item) => {
-      const runtimeCli = String(item.runtimeKind || '').match(/^(?:cli|p3394-gateway):([a-z0-9_-]+)$/i)?.[1];
-      return runtimeCli === safeCli && Number(item.stats?.active || 0) > 0;
-    });
-    if (!runtime || hasActiveTask) return;
-    const actionName = nextEnabled ? 'start' : 'stop';
-    state.busyAgentGateway = `${safeCli}:${actionName}`;
-    state.agentGatewayError = '';
-    render();
+  async function purgeArchived() {
+    if (state.busyAction) return;
+    state.busyAction = 'purge-archived';
+    state.busyTaskId = '';
+    renderPreservingFocus('[data-run-center-purge-archived]');
     try {
-      await invoke(nextEnabled ? 'p3394.external.start' : 'p3394.external.stop', { cli: safeCli });
-      state.agentRegistry = await invoke('cogseed.agent.list');
-      state.agentRegistryError = '';
-    } catch {
-      state.agentGatewayError = safeCli;
+      const report = await invoke('cogseed.task.archived.purge');
+      await refresh({ background: true });
+      const purged = Array.isArray(report?.purgedTaskIds) ? report.purgedTaskIds.length : 0;
+      const retained = Array.isArray(report?.retainedTaskIds) ? report.retainedTaskIds.length : 0;
+      const failed = Array.isArray(report?.failedTaskIds) ? report.failedTaskIds.length : 0;
+      if (typeof rootWindow.uiToast === 'function') {
+        rootWindow.uiToast(text(retained + failed > 0
+          ? 'run_center.purge_archived_partial'
+          : 'run_center.purge_archived_success', { count: purged, remaining: retained + failed }), {
+          variant: retained + failed > 0 ? 'warning' : 'success',
+        });
+      }
+    } catch (error) {
+      if (typeof rootWindow.uiToast === 'function') {
+        rootWindow.uiToast(text('run_center.purge_archived_failed', {
+          reason: error?.message || String(error),
+        }), { variant: 'error' });
+      }
     } finally {
-      state.busyAgentGateway = '';
-      render();
+      state.busyAction = '';
+      renderPreservingFocus('[data-run-center-archive-scope]');
     }
+  }
+  function collaborationTargetExists(targetId) {
+    const detail = state.detail?.collaboration;
+    if (!detail || !targetId) return false;
+    const workflow = detail.workflow || {};
+    return [
+      ...(Array.isArray(workflow.steps) ? workflow.steps.map((item) => item.stepId) : []),
+      ...(Array.isArray(detail.reviews) ? detail.reviews.map((item) => item.gateId) : []),
+      ...(Array.isArray(detail.conflicts) ? detail.conflicts.map((item) => item.conflictId) : []),
+    ].includes(targetId);
+  }
+  function collaborationActionIsCurrent(snapshot, requireTarget = false) {
+    const task = state.detail?.collaboration?.task || selectedTask();
+    return snapshot.revision === state.selectionRevision
+      && snapshot.runKey === state.selectedRunKey
+      && snapshot.taskId === task?.taskId
+      && (!requireTarget || collaborationTargetExists(snapshot.targetId));
   }
   async function collaborationAction(actionName, targetId) {
     const task = state.detail?.collaboration?.task || selectedTask();
-    if (!task || !targetId || state.busyCollaborationAction) return;
+    if (!task || !targetId || state.busyCollaborationAction || !collaborationTargetExists(targetId)) return;
     if (['skip-step', 'reject-gate', 'dismiss-conflict'].includes(actionName)
       && !rootWindow.confirm(text(`run_center.${actionName.replace(/-/g, '_')}_confirm`))) return;
     state.busyCollaborationAction = `${actionName}:${targetId}`;
+    state.actionError = '';
     const actionSelection = {
       revision: state.selectionRevision,
       runKey: state.selectedRunKey,
       attemptKey: state.selectedAttemptKey,
       sessionId: state.selectedSessionId,
-      taskId: state.selectedTaskId,
+      taskId: task.taskId,
+      targetId,
     };
+    if (!collaborationActionIsCurrent(actionSelection, true)) {
+      state.busyCollaborationAction = '';
+      return;
+    }
     render();
     try {
       await invoke('cogseed.collaboration.action', { taskId: task.taskId, action: actionName, targetId });
       await refresh({ background: true });
-      if (selectionIsCurrent(actionSelection.revision, actionSelection.sessionId, actionSelection.taskId)
-        && state.selectedRunKey === actionSelection.runKey) {
+      if (collaborationActionIsCurrent(actionSelection)) {
         await select(actionSelection.sessionId, actionSelection.taskId, {
           runKey: actionSelection.runKey, attemptKey: actionSelection.attemptKey,
         });
       }
     } catch (error) {
-      state.error = error?.message || String(error);
+      if (collaborationActionIsCurrent(actionSelection)) {
+        state.actionError = error?.message || String(error);
+      }
     } finally {
-      state.busyCollaborationAction = '';
-      renderPreservingFocus();
+      if (state.busyCollaborationAction === `${actionName}:${targetId}`) {
+        state.busyCollaborationAction = '';
+        renderPreservingFocus();
+      }
     }
   }
   function focusToolsMenuItem(position) {
@@ -1715,6 +1606,41 @@
     next.scrollIntoView?.({ block: 'nearest' });
     return true;
   }
+  function adjacentTab(items, control, key) {
+    const current = Math.max(0, items.indexOf(control));
+    if (key === 'Home') return items[0] || control;
+    if (key === 'End') return items.at(-1) || control;
+    const step = key === 'ArrowRight' || key === 'ArrowDown' ? 1 : -1;
+    return items[(current + step + items.length) % items.length] || control;
+  }
+  function handleTaskScopeKeydown(event) {
+    const control = event.target?.closest?.('[data-run-center-task-scope]');
+    if (!control || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return false;
+    const items = Array.from(panel()?.querySelectorAll?.('[data-run-center-task-scope]') || []);
+    if (!items.length) return false;
+    const next = adjacentTab(items, control, event.key);
+    const scope = next.dataset.runCenterTaskScope === 'history' ? 'history' : 'current';
+    event.preventDefault();
+    activateView(scope === 'history' ? 'history' : 'tasks', false);
+    panel()?.querySelector?.(`[data-run-center-task-scope="${scope}"]`)?.focus?.();
+    return true;
+  }
+  function handleDetailTabKeydown(event) {
+    const control = event.target?.closest?.('[data-run-center-detail-tab]');
+    if (!control || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return false;
+    const items = Array.from(panel()?.querySelectorAll?.('.run-center-detail-tabs [data-run-center-detail-tab]') || []);
+    if (!items.length) return false;
+    const next = adjacentTab(items, control, event.key);
+    const tab = next.dataset.runCenterDetailTab || 'summary';
+    event.preventDefault();
+    state.detailTab = tab;
+    state.actionNotice = '';
+    state.actionError = '';
+    const selector = `[data-run-center-detail-tab="${escapedAttributeValue(tab)}"]`;
+    renderPreservingFocus(selector);
+    panel()?.querySelector?.(selector)?.focus?.();
+    return true;
+  }
   function handleAttemptKeydown(event) {
     const control = event.target?.closest?.('[data-run-center-attempt-index]');
     if (!control || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return false;
@@ -1752,6 +1678,21 @@
     });
     return true;
   }
+  function updateSearch(event, stateKey, selector, rerender) {
+    state[stateKey] = event.target.value || '';
+    if (event.isComposing) return;
+    const { selectionStart, selectionEnd, selectionDirection } = event.target;
+    rerender();
+    const nextSearch = panel()?.querySelector(selector);
+    nextSearch?.focus();
+    if (Number.isInteger(selectionStart) && typeof nextSearch?.setSelectionRange === 'function') {
+      nextSearch.setSelectionRange(
+        selectionStart,
+        Number.isInteger(selectionEnd) ? selectionEnd : selectionStart,
+        selectionDirection || 'none',
+      );
+    }
+  }
   function bind() {
     const target = panel();
     if (!target || state.bound) return;
@@ -1769,39 +1710,65 @@
       if (button.dataset.runCenterRefresh !== undefined) { refresh(); return; }
       if (button.dataset.runCenterCreateOpen !== undefined) { openCreate('create'); return; }
       if (button.dataset.runCenterConfigureModel !== undefined) {
-        rootWindow.setView?.('settings');
-        rootWindow.activateSettingsTab?.('credentials');
+        rootWindow.setView?.('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+        rootWindow.activateSettingsTab?.('configuration', { anchor: 'models' });
         return;
       }
-      if (button.dataset.runCenterCreateAdvanced !== undefined) { toggleCreateAdvanced(); return; }
+      if (button.dataset.runCenterAgentSettings !== undefined) {
+        rootWindow.setView?.('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'agents' });
+        rootWindow.activateSettingsTab?.('configuration', { anchor: 'agents' });
+        return;
+      }
+      if (button.dataset.runCenterSettingsAnchor) {
+        const anchor = button.dataset.runCenterSettingsAnchor;
+        state.toolsOpen = false;
+        rootWindow.setView?.('settings', undefined, { settingsTab: 'configuration', settingsAnchor: anchor });
+        rootWindow.activateSettingsTab?.('configuration', { anchor });
+        return;
+      }
       if (button.dataset.runCenterReassign !== undefined) { openCreate('reassign'); return; }
       if (button.dataset.runCenterCreateClose !== undefined) { closeCreate(); return; }
+      if (button.dataset.runCenterCreateSave !== undefined) { submitCreate('save'); return; }
       if (button.dataset.runCenterCreateSubmit !== undefined) { submitCreate(); return; }
+      if (button.dataset.runCenterCreateSpacesRetry !== undefined) { loadSpaces(); return; }
+      if (button.dataset.runCenterCreateAgentsRetry !== undefined) { loadAgents(); return; }
       if (button.dataset.runCenterCreateWorktreesRetry !== undefined) { loadWorktrees('create'); return; }
-      if (button.dataset.runCenterDiagnosticsOpen !== undefined) { openDiagnostics(); return; }
-      if (button.dataset.runCenterDiagnosticsRetry !== undefined) { loadDiagnostics(); return; }
-      if (button.dataset.runCenterDiagnosticsClose !== undefined) { closeDiagnostics(); return; }
-      if (button.dataset.runCenterDiagnosticsExport !== undefined) { exportDiagnostics(); return; }
-      if (button.dataset.runCenterWorktreesOpen !== undefined) { openWorktrees(); return; }
-      if (button.dataset.runCenterWorktreesRetry !== undefined) { loadWorktrees('manager'); return; }
-      if (button.dataset.runCenterWorktreesClose !== undefined) { closeWorktrees(); return; }
-      if (button.dataset.runCenterWorktreeCreate !== undefined) { createWorktree(); return; }
-      if (button.dataset.runCenterWorktreeRemove !== undefined) { removeWorktree(button.dataset.worktreePath, button.dataset.worktreeBranch); return; }
+      if (button.dataset.runCenterStaleRetry !== undefined) { refresh({ background: true }); return; }
       if (button.dataset.runCenterQueryClear !== undefined) {
         state.search = '';
-        renderAfterFilterChange(false);
+        state.filter = 'all';
+        state.sourceFilter = 'all';
+        state.runAgentFilter = 'all';
+        state.runTimeFilter = 'all';
+        state.showArchived = false;
+        state.conversationIdFilter = '';
+        renderAfterFilterChange(true);
         focusLater('[data-run-center-search]');
         return;
       }
       if (button.dataset.runCenterMode) {
         state.runMode = button.dataset.runCenterMode === 'board' ? 'board' : 'queue';
+        if (state.view === 'runs') {
+          preferredRunMode = state.runMode;
+          writePreferredRunMode(preferredRunMode);
+        }
         state.detailOpen = false;
         renderPreservingFocus(`[data-run-center-mode="${state.runMode}"]`);
+        return;
+      }
+      if (button.dataset.runCenterTaskScope) {
+        const next = button.dataset.runCenterTaskScope === 'history' ? 'history' : 'tasks';
+        activateView(next, false);
+        panel()?.querySelector(`[data-run-center-task-scope="${button.dataset.runCenterTaskScope}"]`)?.focus();
         return;
       }
       if (button.dataset.runCenterArchiveScope !== undefined) {
         state.showArchived = !state.showArchived;
         renderAfterFilterChange(true);
+        return;
+      }
+      if (button.dataset.runCenterPurgeArchived !== undefined) {
+        purgeArchived();
         return;
       }
       if (button.dataset.runCenterTimelineJump !== undefined) {
@@ -1810,63 +1777,28 @@
         failure?.focus?.();
         return;
       }
-      if (button.dataset.runCenterOverviewFilter) {
-        const filter = button.dataset.runCenterOverviewFilter;
-        state.search = '';
-        state.sourceFilter = 'all';
-        state.runAgentFilter = 'all';
-        state.runTimeFilter = 'all';
-        state.view = 'runs';
-        state.runMode = 'queue';
-        state.detailTab = 'summary';
-        if (filter === 'archived') {
-          state.filter = 'all';
-          state.showArchived = true;
-          render();
-          focusLater('[data-run-center-archive-scope]');
-        } else {
-          state.filter = filter;
-          state.showArchived = false;
-          renderAfterFilterChange(true);
-        }
+      if (button.dataset.runCenterQuickArchive) {
+        action('archive', button.dataset.runCenterQuickArchive);
         return;
       }
-      if (button.dataset.runCenterOverviewSource) { state.search = ''; state.sourceFilter = button.dataset.runCenterOverviewSource; state.filter = 'all'; state.runAgentFilter = 'all'; state.runTimeFilter = 'all'; state.showArchived = false; state.view = 'runs'; state.runMode = 'queue'; state.detailTab = 'summary'; renderAfterFilterChange(true); return; }
-      if (button.dataset.runCenterOverviewAgent) { state.search = ''; state.filter = 'all'; state.sourceFilter = 'all'; state.runAgentFilter = button.dataset.runCenterOverviewAgent; state.runTimeFilter = 'all'; state.showArchived = false; state.view = 'runs'; state.runMode = 'queue'; state.detailTab = 'summary'; renderAfterFilterChange(true); return; }
-      if (button.dataset.runCenterOverviewTask) {
-        state.search = '';
-        state.filter = 'all';
-        state.sourceFilter = 'all';
-        state.showArchived = false;
-        state.runAgentFilter = 'all';
-        state.runTimeFilter = 'all';
-        state.view = 'runs';
-        state.runMode = 'queue';
-        state.detailTab = 'summary';
-        state.detailOpen = true;
-        state.detailReturnFocus = '.dashboard-board-card.is-selected';
-        select(button.dataset.runCenterOverviewSession, button.dataset.runCenterOverviewTask, { focusDetail: true });
+      if (button.dataset.runCenterSummaryFilter) {
+        enterRunQueue({ filter: button.dataset.runCenterSummaryFilter });
+        renderAfterFilterChange(true);
         return;
       }
       if (button.dataset.runCenterAgentTask) {
         const task = (state.board?.tasks || []).find((item) => item.taskId === button.dataset.runCenterAgentTask);
-        if (task) {
-          state.search = '';
-          state.filter = 'all';
-          state.sourceFilter = 'all';
-          state.runAgentFilter = 'all';
-          state.runTimeFilter = 'all';
-          state.view = 'runs';
-          state.runMode = 'queue';
-          state.detailTab = 'summary';
-          state.detailOpen = true;
-          state.detailReturnFocus = '.dashboard-board-card.is-selected';
-          select(task.sessionId, task.taskId, { focusDetail: true });
-        }
+        openConversationFromRunCenter(task?.conversationId);
         return;
       }
-      if (button.dataset.runCenterAgentConversation) { rootWindow.setView?.('conversation', button.dataset.runCenterAgentConversation); return; }
-      if (button.dataset.runCenterView) { activateView(button.dataset.runCenterView, true); return; }
+      if (button.dataset.runCenterAgentConversation !== undefined) { openConversationFromRunCenter(button.dataset.runCenterAgentConversation); return; }
+      if (button.dataset.runCenterView) {
+        const requestedView = normalizeView(button.dataset.runCenterView);
+        if (requestedView === state.view) {
+          panel()?.querySelector(`[data-run-center-view="${requestedView === 'runs' || requestedView === 'history' ? 'tasks' : requestedView}"]`)?.focus();
+        } else activateView(button.dataset.runCenterView, true);
+        return;
+      }
       if (button.dataset.runCenterDetailTab) {
         state.detailTab = button.dataset.runCenterDetailTab;
         state.actionNotice = '';
@@ -1928,45 +1860,39 @@
       }
       if (button.dataset.runCenterAction) { action(button.dataset.runCenterAction); return; }
       if (button.dataset.runCenterCollaborationAction) { collaborationAction(button.dataset.runCenterCollaborationAction, button.dataset.runCenterCollaborationTarget); return; }
-      if (button.dataset.runCenterOpen) { rootWindow.setView?.('conversation', button.dataset.runCenterOpen); }
+      if (button.dataset.runCenterOpen !== undefined) { openConversationFromRunCenter(button.dataset.runCenterOpen); }
     });
     target.addEventListener('input', (event) => {
       if (event.target.matches('[data-run-center-search]')) {
-        state.search = event.target.value || '';
-        if (event.isComposing) return;
-        const selectionStart = event.target.selectionStart;
-        renderAfterFilterChange(false);
-        const nextSearch = target.querySelector('[data-run-center-search]');
-        nextSearch?.focus();
-        if (Number.isInteger(selectionStart)) nextSearch?.setSelectionRange(selectionStart, selectionStart);
+        updateSearch(event, 'search', '[data-run-center-search]', () => renderAfterFilterChange(false));
       }
       if (event.target.matches('[data-run-center-agent-search]')) {
-        state.agentSearch = event.target.value || '';
-        if (event.isComposing) return;
-        const selectionStart = event.target.selectionStart;
-        render();
-        const nextSearch = target.querySelector('[data-run-center-agent-search]');
-        nextSearch?.focus();
-        if (Number.isInteger(selectionStart)) nextSearch?.setSelectionRange(selectionStart, selectionStart);
+        updateSearch(event, 'agentSearch', '[data-run-center-agent-search]', render);
       }
       if (event.target.matches('[data-run-center-create-task]')) {
         state.createTask = event.target.value || '';
         clearCreateErrorAfterEdit('[data-run-center-create-task]');
       }
-      if (event.target.matches('[data-run-center-worktree-branch]')) state.worktreeBranch = event.target.value || '';
-      if (event.target.matches('[data-run-center-worktree-base]')) state.worktreeBaseRef = event.target.value || '';
     });
     target.addEventListener('change', (event) => {
-      if (event.target.matches('[data-run-center-agent-gateway]')) {
-        toggleAgentGateway(event.target.dataset.runCenterAgentGateway, event.target.checked === true);
-        return;
-      }
       if (event.target.matches('[data-run-center-create-agent]')) {
         state.createAgentId = event.target.value || '';
         clearCreateErrorAfterEdit('[data-run-center-create-agent]');
       }
+      if (event.target.matches('[data-run-center-create-space]')) {
+        const nextSpaceId = event.target.value || '';
+        if (nextSpaceId !== state.createSpaceId) {
+          state.createSpaceId = nextSpaceId;
+          state.createWorktreeName = '';
+          state.spacesNotice = '';
+          if (nextSpaceId) invalidateWorktreesRequest('create');
+          if (state.createError) state.createError = '';
+          renderPreservingFocus('[data-run-center-create-space]');
+          ensureCreateWorktreesLoaded();
+        }
+      }
       if (event.target.matches('[data-run-center-create-worktree]')) {
-        state.createWorktreeName = event.target.value || '';
+        state.createWorktreeName = state.createSpaceId ? '' : event.target.value || '';
         clearCreateErrorAfterEdit('[data-run-center-create-worktree]');
       }
       if (event.target.matches('[data-run-center-source-filter]')) { state.sourceFilter = event.target.value || 'all'; renderAfterFilterChange(true); }
@@ -1974,11 +1900,21 @@
       if (event.target.matches('[data-run-center-time-filter]')) { state.runTimeFilter = event.target.value || 'all'; renderAfterFilterChange(true); }
     });
     target.addEventListener('toggle', (event) => {
-      const analysis = event.target?.closest?.('.run-center-overview-analysis');
-      if (!analysis || event.target !== analysis) return;
-      state.overviewAnalysisOpen = analysis.open === true;
-      if (state.overviewAnalysisOpen) rootWindow.CogSeedRunCenterOverview?.mount?.(target);
-      else rootWindow.CogSeedRunCenterOverview?.destroy?.();
+      if (event.target?.dataset?.runCenterCreateAdvanced !== undefined) {
+        if (event.target.open && state.createMode === 'create' && !state.createBusy) {
+          state.createAdvancedError = '';
+          loadAgents();
+          ensureCreateWorktreesLoaded();
+        }
+        return;
+      }
+    }, true);
+    target.addEventListener('cancel', (event) => {
+      const dataset = event.target?.dataset || {};
+      const nativeDialog = dataset.runCenterCreateDialog !== undefined;
+      if (!nativeDialog) return;
+      event.preventDefault();
+      closeCreate();
     }, true);
     document.addEventListener('click', (event) => {
       const clickedToolsMenu = event.composedPath?.().some((item) => item.classList?.contains('run-center-more-menu'));
@@ -1990,9 +1926,8 @@
       if (!panel()?.closest('.panel')?.classList.contains('active')) return;
       if (event.isComposing || event.keyCode === 229) return;
       if (handleToolsMenuKeydown(event)) return;
-      if (state.createMode && event.key === 'Tab') { trapFocus(event, '[data-run-center-create-dialog]'); return; }
-      if (state.worktreesOpen && event.key === 'Tab') { trapFocus(event, '[data-run-center-worktrees-dialog]'); return; }
-      if (state.diagnosticsOpen && event.key === 'Tab') { trapFocus(event, '[data-run-center-diagnostics-dialog]'); return; }
+      if (handleTaskScopeKeydown(event)) return;
+      if (handleDetailTabKeydown(event)) return;
       if (handleCollaborationRunKeydown(event)) return;
       if (handleAttemptKeydown(event)) return;
       if (focusQueueItem(event)) return;
@@ -2009,10 +1944,8 @@
         activateView(views[nextIndex], true);
         return;
       }
-      if (event.key === 'Escape' && state.createMode) closeCreate();
-      else if (event.key === 'Escape' && state.worktreesOpen) closeWorktrees();
-      else if (event.key === 'Escape' && state.diagnosticsOpen) closeDiagnostics();
-      else if (event.key === 'Escape' && state.toolsOpen) closeToolsMenu(true);
+      if (event.key === 'Escape' && state.createMode) return;
+      if (event.key === 'Escape' && state.toolsOpen) closeToolsMenu(true);
       else if (event.key === 'Escape' && state.detailOpen) closeDetails();
     });
     rootWindow.addEventListener('i18n-change', () => render());
@@ -2021,39 +1954,53 @@
       else if (panel()?.closest('.panel')?.classList.contains('active')) { startWatch(); scheduleRefresh(); }
     });
   }
-  rootWindow.CogSeedRunCenterAttempts = Object.freeze({
-    buildAttemptModels,
-    reconcileAttemptSelection,
-    failureCategory,
-  });
   function applyRequestedView(view) {
-    const nextView = normalizeView(view);
-    if (!nextView) return false;
-    state.view = nextView;
-    state.detailOpen = false;
-    state.detailReturnFocus = '';
-    state.restoreDetailAfterCreate = false;
-    if (nextView === 'runs') {
-      state.runMode = String(view || '').trim() === 'board' ? 'board' : 'queue';
-      state.detailTab = 'summary';
-    } else if (nextView === 'history') {
-      state.runMode = 'queue';
-      state.detailTab = 'history';
-    } else if (nextView === 'collaboration') {
-      state.runMode = 'queue';
-      state.detailTab = 'collaboration';
-    }
-    return true;
+    return !!setViewState(view, true);
+  }
+  function restoreContext(context) {
+    if (!context || typeof context !== 'object') return;
+    const sourceView = context.sourceView === 'agents' ? 'agents' : context.sourceView === 'collaboration' ? 'collaboration' : 'tasks';
+    const scope = context.taskScope === 'history' ? 'history' : 'current';
+    state.view = sourceView === 'tasks' ? (scope === 'history' ? 'history' : 'runs') : sourceView;
+    state.runMode = context.runMode === 'board' ? 'board' : 'queue';
+    const filters = context.filters || {};
+    state.search = String(filters.search || '');
+    state.filter = String(filters.filter || 'all');
+    state.sourceFilter = String(filters.sourceFilter || 'all');
+    state.runAgentFilter = String(filters.runAgentFilter || 'all');
+    state.runTimeFilter = String(filters.runTimeFilter || 'all');
+    state.showArchived = filters.showArchived === true;
+    state.selectedRunKey = String(context.selectedRunKey || '');
+    state.selectedAttemptKey = String(context.selectedAttemptKey || '');
+    state.selectedTaskId = String(context.selectedTaskId || '');
+    state.selectedSessionId = String(context.selectedSessionId || '');
+    state.conversationIdFilter = String(context.conversationIdFilter || '');
+    state.detailTab = state.view === 'history' ? 'history' : state.view === 'collaboration' ? 'collaboration' : 'summary';
+    state.detailOpen = !!state.selectedRunKey;
+    state.pendingRestoreContext = {
+      ...context,
+      scrollPositions: Array.isArray(context.scrollPositions) ? context.scrollPositions : [],
+    };
   }
   rootWindow.openRunCenterView = function openRunCenterView(view) {
     if (!applyRequestedView(view)) return;
-    render();
+    render({ resetScroll: true });
   };
-  rootWindow.renderRunCenter = function renderRunCenter(initialView) {
+  rootWindow.renderRunCenter = function renderRunCenter(initialView, options = {}) {
     bind();
-    if (initialView) applyRequestedView(initialView);
+    if (options.restore) restoreContext(options.restore);
+    else if (initialView) applyRequestedView(initialView);
+    else if (state.view === 'runs') state.runMode = preferredRunMode;
+    if (options.query) {
+      Object.assign(state, DEFAULT_RUN_QUERY, options.query);
+      state.conversationIdFilter = String(options.query.conversationId || '');
+    }
     startWatch();
-    refresh();
+    refresh().then(() => {
+      if (options.openCreate && state.createMode === '') openCreate('create');
+    });
   };
+  rootWindow.openRunCenterTaskConversation = openConversationFromRunCenter;
+  rootWindow.captureRunCenterReturnContext = captureReturnContext;
   rootWindow.stopRunCenterWatch = stopWatch;
 })(window);

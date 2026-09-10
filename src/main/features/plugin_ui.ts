@@ -624,21 +624,16 @@ export async function invokePluginRuntime(
 
   const env = buildPackageCommandEnv(uid, pcDir);
   // Platform credentials injected from main only (renderer/iframe never see
-  // the key). Both EDUSEED_* and legacy NSEAP_* names are exported so either
-  // generation of the plugin runtime reads them.
+  // the key). EDUSEED_* names are exported for the plugin runtime to read.
   const injected: Record<string, string> = {
     EDUSEED_SERVER_URL: config.server_url || 'http://localhost:3000',
     EDUSEED_API_KEY: config.api_key,
-    NSEAP_SERVER_URL: config.server_url || 'http://localhost:3000',
-    NSEAP_API_KEY: config.api_key,
   };
   if (config.student_id) {
     injected.EDUSEED_STUDENT_ID = config.student_id;
-    injected.NSEAP_STUDENT_ID = config.student_id;
   }
   if (config.role) {
     injected.EDUSEED_ROLE = config.role;
-    injected.NSEAP_ROLE = config.role;
   }
   if (config.cohort) injected.EDUSEED_COHORT = config.cohort;
   if (config.course_id) injected.EDUSEED_COURSE_ID = config.course_id;

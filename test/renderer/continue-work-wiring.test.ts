@@ -15,6 +15,13 @@ describe('renderer continue-work wizard wiring', () => {
     expect(wizard).toContain("window.cogseed.invoke('localAgents.list')");
     expect(wizard).toContain("window.cogseed.invoke('localAgents.listClaudeSessions')");
     expect(wizard).toContain("window.cogseed.invoke('sessionImport.listCodexSessions')");
+    expect(wizard).toContain('s.lastActivityAt || s.createdAt');
+    expect(wizard).toContain('s.lastActivityAt || s.timestamp');
+    expect(wizard).toContain('s.timeUpdated ? new Date(s.timeUpdated).toISOString()');
+    expect(wizard).toContain('data-cw-project-toggle');
+    expect(wizard).toContain('data-cw-project-check');
+    expect(wizard).toContain("timeRange: '7d'");
+    expect(wizard).toContain('function _cwVisibleSessions()');
     expect(wizard).toContain("window.cogseed.invoke('sessionImport.importClaudeSession'");
     expect(wizard).toContain("window.cogseed.invoke('sessionImport.importCodexSession'");
     expect(wizard).toContain('window._markConversationListLocallyChanged');

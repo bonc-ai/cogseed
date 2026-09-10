@@ -1,5 +1,5 @@
 /**
- * anchor-resolver (COGSEED-39 ② P1) — citation anchor → char-level position.
+ * anchor-resolver (知识库问答 ② P1) — citation anchor → char-level position.
  *
  * Hermetic tests with a temp workspace root: insert a Library text file,
  * then resolve an anchor and assert exact char ranges, fuzzy locating,
@@ -107,6 +107,46 @@ describe('anchor_resolver', () => {
     expect(res.charStart).toBe('intro\n\nbeta four five six\noutro'.indexOf('beta four'));
   });
 
+  it('returns a document-reader payload even when no matching chunk exists', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = 'document heading\n\nfull source body';
+    await stageLibraryFile('notes/reader.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/reader.md',
+      chunkIdx: 99,
+      view: 'document',
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.textStart).toBe(0);
+    expect(res.text).toBe(content);
+    expect(res.totalChars).toBe(content.length);
+    expect(res.truncated).toBe(false);
+  });
+
+  it('includes context before the highlighted citation range', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const content = `${'context '.repeat(60)}alpha one two three\nsuffix text`;
+    await stageLibraryFile('notes/context.md', content);
+
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'notes/context.md',
+      chunkIdx: 1,
+    });
+
+    expect(res.resolved).toBe(true);
+    expect(res.textStart).toBeGreaterThan(0);
+    expect(res.text).toContain('alpha one two three');
+    expect(res.charStart).toBeGreaterThan(res.textStart || 0);
+  });
+
   it('rejects an out-of-scope path', async () => {
     const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
     await stageLibraryFile('notes/a.md', 'alpha one two three');
@@ -140,6 +180,37 @@ describe('anchor_resolver', () => {
     });
     expect(res.resolved).toBe(false);
     expect(res.reason).toBe('no_cache');
+  });
+
+  it('falls back to kb-joined text when a rich doc lacks file-indexer cache', async () => {
+    const mod = await import('../../../../src/main/model/core-agent/anchor-resolver');
+    const { userContextsDir } = await import('../../../../src/main/paths');
+    const dir = userContextsDir(TEST_UID);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'doc.pdf'), '%PDF-1.4 not really a pdf');
+    // 该 pdf 已进 kb 向量索引（有 chunk 文本），但没进 file-indexer 缓存 →
+    // 解析器应从向量库按 chunk 拼接降级定位，而不是直接报 no_cache。
+    const kb = await import('../../../../src/main/features/kb_vector');
+    await kb.upsertFile(TEST_UID, {
+      relPath: 'doc.pdf',
+      kind: 'pdf',
+      bytes: 24,
+      mtime: 1,
+      sha1: 'doc.pdf',
+      chunks: [{ title: 'p.5', content: 'alpha one two three', embedding: new Array(512).fill(0) }],
+    });
+    const res = await mod.resolveAnchor({
+      userId: TEST_UID,
+      source: 'library',
+      scope: 'global',
+      path: 'doc.pdf',
+      chunkIdx: 1, // kb_chunks 的 chunk_idx 从 1 开始（upsertFile 用 i+1），title 'p.5' 存于此行
+      quote: 'alpha one two three',
+    });
+    expect(res.resolved).toBe(true);
+    expect(res.text).toContain('alpha one two three');
+    // file-indexer 缓存缺失时，页码从向量库 pdf chunk title（p.5）兜底取得
+    expect(res.page).toBe(5);
   });
 
   it('returns bad_input for an attachment without a cid', async () => {

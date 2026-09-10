@@ -238,45 +238,86 @@ function windowsSystem32Tool(name: string): string {
  *  signaling only the direct child leaves them orphaned and the run's
  *  `close` hangs for their full lifetime (see `spawnCli`). Windows uses
  *  taskkill's tree mode for the same reason. Both paths fall back to a
- *  direct child kill when the platform mechanism cannot start or fails. */
+ *  direct child kill when the platform mechanism cannot start or fails.
+ *  The returned promise never rejects and only observes completion of the
+ *  best-effort signal attempt (including the taskkill helper's `close` on
+ *  Windows); callers must still observe the target child's `close` event
+ *  when they need proof that its resources were released. */
 export function killProcessTree(
   child: KillableChild,
   signal: NodeJS.Signals,
   opts: { platform?: NodeJS.Platform; spawnFn?: SpawnFn } = {},
-): void {
+): Promise<void> {
   const pid = child.pid;
   const platform = opts.platform ?? process.platform;
+  const fallback = () => {
+    try { child.kill(signal); } catch { /* already gone */ }
+  };
   if (pid && platform === 'win32') {
+    let killer: ReturnType<SpawnFn>;
     try {
-      const killer = (opts.spawnFn ?? spawn)(
+      killer = (opts.spawnFn ?? spawn)(
         windowsSystem32Tool('taskkill.exe'),
         ['/pid', String(pid), '/t', '/f'],
         { stdio: 'ignore', windowsHide: true },
       );
-      const fallback = () => {
-        try { child.kill(signal); } catch { /* already gone */ }
-      };
-      killer.once('error', fallback);
-      killer.once('exit', (code) => {
-        if (code !== 0) fallback();
-      });
-      if (typeof killer.unref === 'function') killer.unref();
-      return;
     } catch {
-      // Fall through to a best-effort direct child kill.
+      fallback();
+      return Promise.resolve();
     }
+    return new Promise(resolve => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code: number | null, exitSignal: NodeJS.Signals | null) => {
+        if (code !== 0 || exitSignal) fallbackOnce();
+      };
+      const onClose = (code: number | null, closeSignal: NodeJS.Signals | null) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+      } catch {
+        fallbackOnce();
+        finish();
+        return;
+      }
+      try {
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch { /* best effort */ }
+    });
   }
   if (pid && platform !== 'win32') {
     try {
       process.kill(-pid, signal);
-      return;
+      return Promise.resolve();
     } catch {
       // The child may have been spawned without `detached`, so no process
       // group with pgid=pid exists (ESRCH). Fall through to the direct child;
       // calling kill on an already-exited child is harmless.
     }
   }
-  try { child.kill(signal); } catch { /* already gone */ }
+  fallback();
+  return Promise.resolve();
 }
 
 /**
@@ -349,10 +390,22 @@ export function armKillWatchdog(
     : 0;
   let firedKind: 'wall' | 'idle' | null = null;
   let firedIdleMs = 0;
+  let hardKill: NodeJS.Timeout | null = null;
+
+  const onClose = () => {
+    clearInterval(ticker);
+    if (hardKill) {
+      clearTimeout(hardKill);
+      hardKill = null;
+    }
+  };
 
   const kill = () => {
     killProcessTree(child, 'SIGTERM');
-    const hardKill = setTimeout(() => killProcessTree(child, 'SIGKILL'), 10_000);
+    hardKill = setTimeout(() => {
+      hardKill = null;
+      killProcessTree(child, 'SIGKILL');
+    }, 10_000);
     if (typeof hardKill.unref === 'function') hardKill.unref();
   };
 
@@ -378,6 +431,7 @@ export function armKillWatchdog(
     }
   }, tickMs);
   if (typeof ticker.unref === 'function') ticker.unref();
+  child.once('close', onClose);
 
   return {
     fired: () => firedKind,
@@ -386,7 +440,12 @@ export function armKillWatchdog(
         ? `timed out: no activity for ${firedIdleMs}ms (idle cap ${idleKillMs}ms)`
         : `timed out: exceeded ${opts.timeoutMs}ms wall-clock cap`
     ),
-    disarm: () => clearInterval(ticker),
+    disarm: () => {
+      clearInterval(ticker);
+      if (!firedKind) {
+        child.removeListener('close', onClose);
+      }
+    },
   };
 }
 

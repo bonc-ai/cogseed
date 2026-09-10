@@ -25,6 +25,7 @@ const log = createLogger('personal-context:oauth');
 const SECRET_NAMESPACE = 'personal-context.oauth';
 const CONFIG_VERSION = 1;
 const CONFIG_DIR = 'personal-context';
+const ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000;
 
 // ── 凭据与端点接口 ────────────────────────────────────────────────────────
 export interface OAuthCredential {
@@ -87,6 +88,11 @@ export interface OAuthConnectionStatus extends ConnectorStatus {
   connectedAt?: string;
   /** 授权账号的展示名（user_info.name） */
   identityLabel?: string;
+}
+
+export interface GetUsableCredentialOptions {
+  /** API 明确拒绝的 access token；仅当它仍是当前凭据时才强制刷新。 */
+  rejectedAccessToken?: string;
 }
 
 // ── 路径与锁 ──────────────────────────────────────────────────────────────
@@ -371,6 +377,55 @@ export class OAuthManager {
     return this.decryptCredential(uid, store);
   }
 
+  /**
+   * 返回可用于 API 请求的凭据。临近过期时自动刷新；API 拒绝某个 access token 后，
+   * 仅当它仍是当前凭据时强制刷新，避免并发请求重复刷新同一份令牌。
+   */
+  async getUsableCredential(
+    uid: string,
+    providerId: string,
+    options: GetUsableCredentialOptions = {},
+  ): Promise<OAuthCredential | null> {
+    const release = await lockFor(uid, providerId).acquire();
+    try {
+      const store = await readStore(uid, providerId);
+      const credential = this.decryptCredential(uid, store);
+      if (!credential || store.lastErrorCode === 'invalid_grant') return null;
+
+      const rejectedCurrentToken = Boolean(
+        options.rejectedAccessToken
+        && options.rejectedAccessToken === credential.accessToken,
+      );
+      if (!rejectedCurrentToken && !credentialExpiresSoon(credential)) return credential;
+
+      if (!credential.refreshToken) {
+        store.status = status('error', '飞书授权已过期，请重新授权');
+        store.lastErrorCode = 'invalid_grant';
+        await writeStore(uid, providerId, store);
+        return null;
+      }
+
+      try {
+        const next = await this.endpoint.refreshToken(credential.refreshToken, store.scopes);
+        store.secretsEnc = encryptCredential(uid, providerId, next);
+        store.status = status('connected');
+        store.connectedAt = nowIso();
+        store.lastErrorCode = undefined;
+        await writeStore(uid, providerId, store);
+        log.info('oauth credential refreshed before api request', { providerId });
+        return next;
+      } catch (err) {
+        store.status = status('error', errorMessage(err));
+        store.lastErrorCode = errorCode(err);
+        await writeStore(uid, providerId, store);
+        log.error('oauth credential refresh before api request failed', { providerId, code: errorCode(err) });
+        return null;
+      }
+    } finally {
+      release();
+    }
+  }
+
   private decryptCredential(uid: string, store: OAuthStoreFile): OAuthCredential | null {
     if (!store.secretsEnc) return null;
     try {
@@ -386,6 +441,12 @@ export class OAuthManager {
 // ── 内部工具 ──────────────────────────────────────────────────────────────
 function encryptCredential(uid: string, providerId: string, credential: OAuthCredential): string {
   return localSecrets.encryptLocalSecret(secretContext(uid, providerId), JSON.stringify(credential));
+}
+
+function credentialExpiresSoon(credential: OAuthCredential): boolean {
+  if (!credential.expiresAt) return false;
+  const expiresAt = Date.parse(credential.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS;
 }
 
 async function writeStore(uid: string, providerId: string, store: OAuthStoreFile): Promise<void> {

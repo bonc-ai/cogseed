@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { createLogger } from '../../logger';
+import { evaluatePromotionPolicy } from './promotion-policy';
 import { resolveAssetLifecycle } from './formal-assets/policy';
 import { describePromotionBlock, validatePromotionByAssetType, type PromotionBlockReason } from './formal-assets/promotion';
 import { genId12, safeId } from '../../storage';
@@ -122,6 +123,12 @@ export interface RecallCandidateRecord extends RecallJsonRecord {
   failureCode?: 'asset_write_failed' | 'source_unavailable' | 'candidate_expired' | 'evidence_insufficient';
   failureMessage?: string;
   failedAt?: string;
+  /** Cross-task effectiveness evidence. Missing fields are legacy records. */
+  validationCount?: number;
+  lastValidatedAt?: string;
+  consecutiveFailures?: number;
+  /** Validation record ids already applied to this candidate. */
+  appliedValidationIds?: string[];
   userModifiedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -177,6 +184,11 @@ export interface RecallAbilityAssetRecord extends RecallJsonRecord {
   spaceId?: string;
   /** Provenance for assets learned from conversation sources. */
   sourceSessionIds?: string[];
+  /** Independent cross-task effectiveness evidence. Legacy assets may omit these. */
+  validationCount?: number;
+  lastValidatedAt?: string;
+  consecutiveFailures?: number;
+  appliedValidationIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -318,6 +330,14 @@ export class SemanticDedupUnavailableError extends Error {
   }
 }
 
+export class PromotionPausedError extends Error {
+  readonly code = 'promotion_paused';
+  constructor(readonly reason: string) {
+    super(`automatic promotion paused: ${reason}`);
+    this.name = 'PromotionPausedError';
+  }
+}
+
 const MAX_SOURCE_SESSION_IDS = 50;
 
 /**
@@ -456,7 +476,7 @@ function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDe
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance result delta');
   const record = value as Record<string, unknown>;
-  if (!['completed', 'failed', 'cancelled', 'waiting_input'].includes(String(record.terminalStatus))) {
+  if (!['completed', 'failed', 'cancelled', 'timed_out', 'waiting_input'].includes(String(record.terminalStatus))) {
     throw new Error('malformed candidate learning provenance result delta');
   }
   if (!Array.isArray(record.acceptanceSignals) || record.acceptanceSignals.length > 100) {
@@ -474,7 +494,7 @@ function normalizeResultDelta(value: unknown): KstarLearningProvenance['resultDe
     acceptanceSignals,
     missingPredictedFiles: normalizedStringArray(record.missingPredictedFiles, 'missing predicted files'),
     unexpectedProducedFiles: normalizedStringArray(record.unexpectedProducedFiles, 'unexpected produced files'),
-    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'waiting_input',
+    terminalStatus: record.terminalStatus as 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input',
   };
 }
 
@@ -482,7 +502,11 @@ function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | 
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('malformed candidate learning provenance');
   const record = value as Record<string, unknown>;
-  if (!safeId(record.projectionId) || !safeId(record.forecastId) || !safeId(record.episodeId)) {
+  if (
+    !safeId(record.projectionId)
+    || (record.forecastId !== undefined && !safeId(record.forecastId))
+    || !safeId(record.episodeId)
+  ) {
     throw new Error('malformed candidate learning provenance ids');
   }
   if (!KSTAR_ATTRIBUTIONS.has(record.attribution as KstarLearningProvenance['attribution'])) {
@@ -494,7 +518,7 @@ function normalizeLearningProvenance(value: unknown): KstarLearningProvenance | 
   const resultDelta = normalizeResultDelta(record.resultDelta);
   return {
     projectionId: record.projectionId as string,
-    forecastId: record.forecastId as string,
+    ...(record.forecastId ? { forecastId: record.forecastId as string } : {}),
     episodeId: record.episodeId as string,
     ruleRefs,
     attribution: record.attribution as KstarLearningProvenance['attribution'],
@@ -1046,6 +1070,35 @@ export async function updateRecallCandidate(userId: string, candidateId: string,
   return asCandidate(updated);
 }
 
+/** Record an independent execution outcome without changing the candidate's
+ * lifecycle. Promotion and asset governance remain responsible for status;
+ * this counter is only the evidence ledger used to decide maturity or pause. */
+export async function recordRecallCandidateValidation(
+  userId: string,
+  candidateId: string,
+  outcome: 'success' | 'failure',
+  validationId?: string,
+): Promise<RecallCandidateRecord> {
+  if (!safeId(candidateId)) throw new Error('invalid candidate id');
+  const updated = await updateRecallJsonRecord(userId, 'candidates', candidateId, (current) => {
+    if (!current) throw new Error('recall candidate not found');
+    const candidate = asCandidate(current);
+    const appliedValidationIds = Array.isArray(candidate.appliedValidationIds)
+      ? candidate.appliedValidationIds
+      : [];
+    if (validationId && appliedValidationIds.includes(validationId)) return candidate;
+    const now = new Date().toISOString();
+    return {
+      ...candidate,
+      validationCount: (candidate.validationCount || 0) + (outcome === 'success' ? 1 : 0),
+      ...(outcome === 'success' ? { lastValidatedAt: now, consecutiveFailures: 0 } : { consecutiveFailures: (candidate.consecutiveFailures || 0) + 1 }),
+      ...(validationId ? { appliedValidationIds: [...new Set([...appliedValidationIds, validationId])] } : {}),
+      updatedAt: now,
+    };
+  });
+  return asCandidate(updated);
+}
+
 export function deferRecallCandidate(userId: string, candidateId: string, note?: string): Promise<RecallCandidateRecord> {
   return decideWithoutAsset(userId, candidateId, 'defer', 'deferred', note);
 }
@@ -1141,6 +1194,8 @@ export async function autoApplyRecallCandidate(
   // 自进化沉淀会被记成会话自动抽取。缺省按 capture 线处理。
   const provenance: RecallPromotionProvenance = opts.provenance || 'capture';
   const candidate = await readRecallCandidate(userId, candidateId);
+  const policy = evaluatePromotionPolicy(candidate);
+  if (policy.action === 'pause') throw new PromotionPausedError(policy.reason);
   if (candidate.status === 'confirmed') {
     try {
       const promoted = await promoteRecallCandidate(userId, candidate.id, { actor: 'system', provenance });

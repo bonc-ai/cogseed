@@ -168,6 +168,14 @@ export async function findSemanticDuplicate(
   userId: string,
   input: FindSemanticDuplicateInput,
 ): Promise<SemanticDuplicateOutcome> {
+  const comparableCandidates = input.candidateTexts.filter((item) => !input.excludeIds?.has(item.id));
+  const comparableAssets = input.assetTexts.filter((item) => !input.excludeIds?.has(item.id));
+  // An empty comparison set is a complete check, not an embedding failure.
+  // This also lets a user's first automatically captured asset be promoted
+  // when the optional embedding runtime is unavailable.
+  if (comparableCandidates.length === 0 && comparableAssets.length === 0) {
+    return { status: 'no_match' };
+  }
   const query = await embedForDedup(userId, input.text);
   if (!query) return { status: 'degraded', reason: 'embedding_unavailable' };
   let best: SemanticDuplicateMatch | null = null;
@@ -183,12 +191,10 @@ export async function findSemanticDuplicate(
       best = { kind, id, score };
     }
   };
-  for (const c of input.candidateTexts) {
-    if (input.excludeIds?.has(c.id)) continue;
+  for (const c of comparableCandidates) {
     consider('candidate', c.id, await embedForDedup(userId, c.text));
   }
-  for (const a of input.assetTexts) {
-    if (input.excludeIds?.has(a.id)) continue;
+  for (const a of comparableAssets) {
     consider('asset', a.id, await embedForDedup(userId, a.text));
   }
   if (best) return { status: 'match', match: best };

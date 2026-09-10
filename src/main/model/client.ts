@@ -29,6 +29,12 @@ export interface StreamEvent {
   text?: string;
   event?: Record<string, unknown>;
   aborted?: boolean;
+  /** PR209 评审 M9：progress 的来源标记——'thinking' = 模型思考流聚合段
+   *  （event-mapper flushThink 产出）。bus 旧格式 processItems 据此把
+   *  同段思考续写到上一条（一次思考一条记录，与投影层 cardinality 一致），
+   *  而非逐条 append 洪泛挤占 300 上限。其它 progress（retry/compaction/
+   *  context_status 等）不带此标记，行为不变。 */
+  origin?: 'thinking';
   /** Structured source for terminal failures. */
   failureKind?: 'model' | 'config';
   /** Stable low-cardinality reason paired with `failureKind`. */

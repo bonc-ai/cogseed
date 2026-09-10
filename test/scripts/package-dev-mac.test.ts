@@ -46,12 +46,13 @@ describe('isolated mac development packaging', () => {
   });
 
   it('uses a cached Electron zip and rejects a renamed source bundle', () => {
+    const expectedZip = path.posix.join('/cache', 'hash', 'electron-v41.7.1-darwin-arm64.zip');
     expect(resolveLocalElectronDist({
       electronVersion: '41.7.1',
       cacheRoot: '/cache',
-      exists: (candidate: string) => candidate === '/cache' || candidate === '/cache/hash/electron-v41.7.1-darwin-arm64.zip',
+      exists: (candidate: string) => candidate === '/cache' || candidate === expectedZip,
       listDirs: () => ['hash'],
-    })).toBe('/cache/hash/electron-v41.7.1-darwin-arm64.zip');
+    })).toBe(expectedZip);
     expect(resolveLocalElectronDist({ electronVersion: '41.7.1', cacheRoot: '/cache', exists: () => false, listDirs: () => [] })).toBe('');
   });
 });

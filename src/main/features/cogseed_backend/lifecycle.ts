@@ -10,6 +10,7 @@ import {
 import type { CogSeedTaskRecord, CogSeedTaskStatus } from './types';
 
 const TRANSITIONS: Readonly<Record<CogSeedTaskStatus, readonly CogSeedTaskStatus[]>> = {
+  planned: ['queued', 'cancelled'],
   created: ['queued', 'cancelled', 'recoverable'],
   queued: ['running', 'cancelled', 'recoverable'],
   running: ['waiting_user', 'completed', 'failed', 'cancelled', 'recoverable'],
@@ -43,7 +44,9 @@ export async function archiveCogSeedTask(userId: string, taskId: string): Promis
   assertCogSeedTaskId(taskId);
   return updateCogSeedTaskWithEvent(userId, taskId, (task) => {
     if (task.archivedAt) return task;
-    if (task.status !== 'failed') throw new Error('Only failed CogSeed tasks can be archived');
+    if (task.status !== 'planned' && task.status !== 'failed' && task.status !== 'completed') {
+      throw new Error('Only planned, completed, or failed CogSeed tasks can be archived');
+    }
     if (task.resultDeliveryState === 'pending' || task.resultDeliveryState === 'pending-recovery') {
       throw new Error('CogSeed task result must be recovered before archiving');
     }

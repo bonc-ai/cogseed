@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FILE_SYMLINKS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 // Plugin-provided UI contract tests: manifest `ui` resolution, served-path
 // validation (traversal / extension / symlink guards), the bridge invoke
@@ -108,7 +109,7 @@ describe('plugin_ui › resolvePluginUiFile', () => {
     expect(resolvePluginUiFile(TEST_UID, 'withui', '__cogseed/plugin-bridge.js').ok).toBe(false);
   });
 
-  it('rejects symlinks escaping the ui root', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('rejects symlinks escaping the ui root', async () => {
     const { resolvePluginUiFile } = await loadPluginUi();
     installPkg('withui', { ui: { 'ui/index.html': '<html></html>' } });
     const outside = path.join(tmpDir, 'outside.txt');
@@ -208,7 +209,7 @@ describe('plugin_ui › runtime config store', () => {
     installPkg('withui');
     const origin = 'https://edu.example.com';
     const b64 = Buffer.from(origin, 'utf8').toString('base64url');
-    const v2key = `eduseed1.${b64}.nseap-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
+    const v2key = `eduseed1.${b64}.course-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
       JSON.stringify({ ok: true, agent_id: 'student-companion-S-3', role: 'student', person_id: 'S-3' }),
       { status: 200, headers: { 'content-type': 'application/json' } },

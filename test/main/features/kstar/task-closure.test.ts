@@ -42,6 +42,23 @@ const events: RuntimeEventEnvelope[] = [
   { type: 'result', request_id: request.request_id, runtime_session_id: request.runtime_session_id, status: 'completed', text: 'Report created.' },
 ];
 
+const conservativeInference = async (_userId: string, episode: any) => ({
+  review: {
+    expectedResult: episode.t.userGoal,
+    actualResult: episode.r.finalText || `Terminal status: ${episode.r.status}.`,
+    deltaR: 'unknown' as const,
+    deltaA: 'unknown' as const,
+    outcome: 'unclear' as const,
+    attribution: 'unclear' as const,
+    reason: 'No reusable conclusion.',
+    confidence: 0,
+    evidenceRefs: episode.evidenceRefs,
+  },
+  reviewState: 'unknown' as const,
+  inferenceMethod: 'deterministic' as const,
+  needsConfirmation: false,
+});
+
 
 async function seedLearningReview(
   userId: string,
@@ -114,6 +131,191 @@ describe('KSTAR completion evidence merge', () => {
 });
 
 describe('KSTAR task closure', () => {
+
+  it('records applied only for a real injected citation with completed Host-observable evidence', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-applied', projectionId: 'proj-usage-applied',
+      assetId: 'asset-usage-applied', assetVersion: '1', messageId: 'msg-usage-applied',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-applied', conversationId: 'cid-usage-applied',
+      projectionId: 'proj-usage-applied', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-usage-user', from: 'user', text: 'Apply the projected asset.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-applied', from: 'agent-a', text: 'Verified result.', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-applied', version: '1', projection_id: 'proj-usage-applied' }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'tool-usage-a', name: 'read_file', arguments: { path: '/private/value' } } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: 'tool-usage-a', name: 'read_file', output: 'private result' } } },
+          ],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    expect(result.episode.r.status).toBe('completed');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user', 'turn-usage-applied')).resolves.toEqual([
+      expect.objectContaining({
+        status: 'applied', evidenceKind: 'tool_call', assetId: 'asset-usage-applied',
+        evidenceRefs: [expect.objectContaining({ id: 'kse-run-usage-applied' })],
+      }),
+    ]);
+    expect(JSON.stringify(await usage.listAssetUsageReceipts('closure-user'))).not.toContain('/private/value');
+    expect(JSON.stringify(await usage.listAssetUsageReceipts('closure-user'))).not.toContain('private result');
+  });
+
+  it('records usage_unknown when a real citation has no Host-observable execution evidence', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-unknown', projectionId: 'proj-usage-unknown',
+      assetId: 'asset-usage-unknown', assetVersion: '1', messageId: 'msg-usage-unknown',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-unknown', conversationId: 'cid-usage-unknown',
+      projectionId: 'proj-usage-unknown', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-unknown-user', from: 'user', text: 'Consider the projected asset.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-unknown', from: 'agent-a', text: '', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-unknown', version: '1', projection_id: 'proj-usage-unknown' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user', 'turn-usage-unknown')).resolves.toEqual([
+      expect.objectContaining({ status: 'usage_unknown', evidenceKind: 'none', evidenceRefs: [] }),
+    ]);
+  });
+
+  it('does not apply one injected asset merely because another cited asset has a successful tool call', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-a', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-a', assetVersion: '1', messageId: 'msg-usage-specific-a',
+      boundary: 'real', status: 'injected',
+    });
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-b', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-b', assetVersion: '1', messageId: 'msg-usage-specific-b',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-specific', conversationId: 'cid-usage-specific',
+      projectionId: 'proj-usage-specific', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-usage-specific-user', from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-specific-a', from: 'agent-a', text: 'Used the first asset.', ts: '2026-09-04T00:00:20.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-a', version: '1', projection_id: 'proj-usage-specific' }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'tool-specific-a', name: 'read_file' } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: 'tool-specific-a', name: 'read_file' } } },
+          ],
+        },
+        {
+          id: 'msg-usage-specific-b', from: 'agent-a', text: '', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-b', version: '1', projection_id: 'proj-usage-specific' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user')).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: 'asset-usage-specific-a', status: 'applied', evidenceKind: 'tool_call' }),
+      expect.objectContaining({ assetId: 'asset-usage-specific-b', status: 'usage_unknown', evidenceKind: 'none' }),
+    ]));
+  });
+
+  it.each(['failed', 'cancelled', 'timed_out'] as const)(
+    'never infers applied for a %s run even when successful action evidence exists',
+    async (status) => {
+      const suffix = status.replace('_', '-');
+      const injections = await import('../../../../src/main/features/recall/injection-receipt');
+      await injections.recordInjectionReceipt('closure-user', {
+        taskRunId: `turn-usage-${suffix}`, projectionId: `proj-usage-${suffix}`,
+        assetId: `asset-usage-${suffix}`, assetVersion: '1', messageId: `msg-usage-${suffix}`,
+        boundary: 'real', status: 'injected',
+      });
+      const closure = await import('../../../../src/main/features/kstar/task-closure');
+      await closure.captureGroupKstarClosure({
+        userId: 'closure-user', runId: `run-usage-${suffix}`, conversationId: `cid-usage-${suffix}`,
+        projectionId: `proj-usage-${suffix}`, status,
+        startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+        finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+        messages: [
+          { id: `msg-user-${suffix}`, from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+          {
+            id: `msg-usage-${suffix}`, from: 'agent-a', text: 'A partial action happened.', ts: '2026-09-04T00:00:30.000Z',
+            recall_citations: [{ asset_id: `asset-usage-${suffix}`, version: '1', projection_id: `proj-usage-${suffix}` }],
+            process: [
+              { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: `tool-${suffix}`, name: 'read_file' } } },
+              { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: `tool-${suffix}`, name: 'read_file' } } },
+            ],
+          },
+        ],
+        inferReview: conservativeInference,
+      });
+
+      const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+      await expect(usage.listAssetUsageReceipts('closure-user', `turn-usage-${suffix}`)).resolves.toEqual([
+        expect.objectContaining({ status: 'usage_unknown', evidenceKind: 'none', evidenceRefs: [] }),
+      ]);
+    },
+  );
+
+  it('audits usage persistence degradation without changing the terminal closure result', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-degraded', projectionId: 'proj-usage-degraded',
+      assetId: 'asset-usage-degraded', assetVersion: '1', messageId: 'msg-usage-degraded',
+      boundary: 'real', status: 'injected',
+    });
+    const usagePath = path.join(tmpDir, 'closure-user', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
+    fs.mkdirSync(path.dirname(usagePath), { recursive: true });
+    fs.writeFileSync(usagePath, '{malformed}\n', 'utf8');
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-degraded', conversationId: 'cid-usage-degraded',
+      projectionId: 'proj-usage-degraded', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-user-degraded', from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-degraded', from: 'agent-a', text: 'Done.', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-degraded', version: '1', projection_id: 'proj-usage-degraded' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    expect(result.episode.r.status).toBe('completed');
+    const failures = await import('../../../../src/main/features/kstar/failure-service');
+    await expect(failures.listKstarFailures('closure-user')).resolves.toEqual([
+      expect.objectContaining({ stage: 'capture', errorCode: 'asset_usage_persistence_failed', episodeId: result.episode.id }),
+    ]);
+  });
 
 
   it('attaches group terminal episodes to the open requirement without completing the task', async () => {
@@ -586,6 +788,49 @@ describe('KSTAR direct experience asset line', () => {
     const pending = await candidates.listRecallCandidates('closure-user');
     expect(pending).toHaveLength(1);
     expect(pending[0].status).toBe('confirmed');
+  });
+
+  it('updates the explicitly targeted existing asset through the direct KSTAR line', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const originalCandidate = await candidates.saveRecallCandidate('closure-user', {
+      judgment: 'Keep the report verification rule.',
+      value: 'Keep report verification consistent across runs.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'create',
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-original' }],
+    });
+    const original = await candidates.promoteRecallCandidate('closure-user', originalCandidate.id, { actor: 'user' });
+    const seededEpisode = builder.buildRuntimeKstarEpisode({
+      userId: 'closure-user', runId: 'run-direct-update', request, events,
+      createdAt: '2026-08-05T00:00:00.000Z',
+    });
+
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'Update the report verification rule to require an acceptance check.',
+      summary: 'Updated report verification rule',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      targetAssetId: original.asset.id,
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-update' }],
+    }]);
+
+    const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
+    expect(updated).toMatchObject({
+      id: original.asset.id,
+      version: '2',
+      statement: 'Update the report verification rule to require an acceptance check.',
+    });
+    expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-update' }),
+    ]));
   });
 
   it('carries the conversation space into the asset through the real closure path (space asset tab)', async () => {
