@@ -4,6 +4,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { PassThrough } from 'node:stream';
+import * as childProcess from 'node:child_process';
+import * as backendBase from '../../../../src/main/features/local_agents/backends/base';
 import {
   parseSemver,
   compareSemver,
@@ -12,6 +14,15 @@ import {
   MIN_VERSIONS,
   __versionTestHooks,
 } from '../../../../src/main/features/local_agents/version';
+
+// Copy native ESM exports into mockable namespaces; unmodified members still
+// call their real implementations for the subprocess integration cases.
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+}));
+vi.mock('../../../../src/main/features/local_agents/backends/base', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../../src/main/features/local_agents/backends/base')>(),
+}));
 
 const isWindows = process.platform === 'win32';
 const TEST_NODE = process.env.COGSEED_TEST_NODE || process.execPath;
@@ -123,6 +134,8 @@ describe('local_agents/version › detectVersion', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
@@ -183,24 +196,41 @@ describe('local_agents/version › detectVersion', () => {
     expect(performance.now() - startedAt).toBeLessThan(5_000);
   });
 
-  it('retries once when a probe times out silently (zero output)', async () => {
-    const script = path.join(tmpDir, 'silent-hang.js');
-    const attemptsFile = path.join(tmpDir, 'silent-hang-attempts.txt');
-    fs.writeFileSync(script, `
-const fs = require('node:fs');
-fs.appendFileSync(${JSON.stringify(attemptsFile)}, 'attempt\\n');
-setInterval(() => {}, 1000);
-`);
-    const launcher = path.join(tmpDir, isWindows ? 'silent-hang.cmd' : 'silent-hang');
-    if (isWindows) {
-      fs.writeFileSync(launcher, `@echo off\r\n"${TEST_NODE}" "${script}"\r\n`);
-    } else {
-      fs.writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(TEST_NODE)} ${JSON.stringify(script)}\n`);
-      fs.chmodSync(launcher, 0o755);
+  it.each(['silent', 'version'] as const)('retries a silent timeout exactly once (retry: %s)', async (retryResult) => {
+    // Exercise the public retry policy without making Node cold-start time part
+    // of a 200ms assertion. Other cases in this suite still launch real CLIs.
+    vi.useFakeTimers();
+    const children = [fakeProbeChild(), fakeProbeChild()];
+    let nextChild = 0;
+    const spawn = vi.spyOn(childProcess, 'spawn').mockImplementation(() => {
+      const child = children[nextChild++];
+      if (!child) throw new Error('unexpected third version probe');
+      return child as unknown as ReturnType<typeof childProcess.spawn>;
+    });
+    const kill = vi.spyOn(backendBase, 'killProcessTree').mockImplementation(async (child, signal) => {
+      if (signal === 'SIGTERM') queueMicrotask(() => children.find((entry) => entry === child)?.emit('close', null));
+    });
+    try {
+      const pending = detectVersion(TEST_NODE, 200);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      if (retryResult === 'version') {
+        children[1].stdout.write('v1.2.3\n');
+        children[1].emit('close', 0);
+      } else {
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      expect(await pending).toBe(retryResult === 'version' ? '1.2.3' : null);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(spawn).toHaveBeenCalledTimes(2);
+    } finally {
+      spawn.mockRestore();
+      kill.mockRestore();
+      vi.useRealTimers();
     }
-    expect(await detectVersion(launcher, 200)).toBeNull();
-    const attempts = fs.readFileSync(attemptsFile, 'utf8').trim().split(/\r?\n/);
-    expect(attempts).toEqual(['attempt', 'attempt']);
   });
 
   it('does not let a kill error bypass the child close barrier', async () => {

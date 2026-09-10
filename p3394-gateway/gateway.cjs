@@ -2772,7 +2772,7 @@ async function handleEnvelope(envelope) {
     await runtime.openSession(sessionId, goal, runtimeDir);
     // PEER_CALL_HINT 每会话只注一次（首轮）：hint 信息（端口/用法）会话内
     // 恒定，resume 的 CLI 自会记住，重复注入浪费上下文还会被 CLI 当正文
-    // 回应（子安 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
+    // 回应（交互设计 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
     // 目录 marker 防重（网关重启不重注；transcript 回放路径 hint 已在历史
     // 里）；marker 在 deliver 成功后才写——首轮失败下轮补注，不丢入口。
     let peerHintThisTurn = '';
