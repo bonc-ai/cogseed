@@ -999,7 +999,7 @@ export class AgentRunner {
             // Forward to callers so UI can render incrementally.
             yield { type: "text_delta", text: ev.text };
           } else if (ev.type === "thinking_delta") {
-            // 思考流透传（子安 2026-09-08：思考过程展示链路补全）。
+            // 思考流透传（交互设计 2026-09-08：思考过程展示链路补全）。
             if (ev.delta) yield { type: "thinking_delta", delta: ev.delta };
           } else if (ev.type === "tool_use_start") {
             const id = ev.id || `stream_tool_${++streamingToolSeq}`;

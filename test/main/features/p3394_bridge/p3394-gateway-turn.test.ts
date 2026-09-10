@@ -279,7 +279,7 @@ describe('P3394 gateway turn runner', () => {
     // T1 引用信封化：quote/@ 的引用快照透传给信封构造（落
     // payload.metadata.references），对端网关可程序化消费。
     const references = [
-      { source_cid: 'cid-src', source_msg_id: 'm-9', from_actor: 'user', from_name: '子安', source_ts: 't1', text: '被引用的历史消息' },
+      { source_cid: 'cid-src', source_msg_id: 'm-9', from_actor: 'user', from_name: '测试用户乙', source_ts: 't1', text: '被引用的历史消息' },
     ];
     await runP3394GatewayTurn({ ...baseInput, references });
     const [, , , opts] = mocks.buildP3394OutboundEnvelope.mock.calls[0] as unknown as [string, string, string, { references?: unknown[] }];

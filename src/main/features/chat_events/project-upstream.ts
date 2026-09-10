@@ -36,7 +36,7 @@ export interface ChatEventProjectorState {
   /** 工具 id → 首见（start）epoch ms：end 帧据此回填权威 timing.startedAtMs。
    *  progress 先于 start 到达等乱序场景以首见时间为准（不编造更早时刻）。 */
   toolStarts: Map<string, number>;
-  /** 思考段聚合（子安 2026-09-08 基数修正）：一次连续思考 = 一条
+  /** 思考段聚合（交互设计 2026-09-08 基数修正）：一次连续思考 = 一条
    *  reasoning 条目（与一次工具调用等价），不逐 token 铸条——否则长思考
    *  洪泛挤占 process 300 上限，工具记录被顶掉（真机 19:50 事故）。
    *  openReasoningItemId 非空 = 有未截断的聚合段在攒；被工具/正文/
@@ -201,7 +201,7 @@ export function projectUpstreamEvent(
       ensureTurnStarted(state, out);
     }
     state.openReasoningText += event.text;
-    // 实时流式外发（子安 2026-09-09 需求）：思考进行中就逐段可见，不再
+    // 实时流式外发（交互设计 2026-09-09 需求）：思考进行中就逐段可见，不再
     // 等截断冲刷的 completed 整段。inProgress 增量只走实时链路——持久
     // 化收集器按状态过滤（process-persist：inProgress reasoning 不落
     // 盘），重放仍只消费 completed 整段，无重复。
