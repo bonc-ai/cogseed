@@ -9,8 +9,8 @@
  * 路径 {API_BASE}/updates/feed/mac-<arch>（当前只有 mac-arm64 提供 zip）。
  *
  * 约束：
- *  - 仅在打包后的应用可用（electron autoUpdater 需要签名与安装副本；
- *    开发模式下状态为 disabled，回落到 v1 手动检查/下载流程）；
+ *  - 仅在打包后的 macOS 应用可用（electron autoUpdater 需要签名与安装副本；
+ *    开发模式或不支持的平台状态为 disabled，回落到 v1 手动检查/下载流程）；
  *  - 与 v1 提醒通道（updates/latest + dmg）并存：老客户端走提醒，
  *    新版本走自动更新；两条通道由平台同一发布动作驱动。
  */
@@ -32,6 +32,11 @@ export type AutoUpdateStatus =
 
 export type AutoUpdateListener = (status: AutoUpdateStatus) => void;
 
+export type AutoUpdateRuntime = Readonly<{
+  isPackaged: boolean;
+  platform: NodeJS.Platform;
+}>;
+
 let _status: AutoUpdateStatus = { state: 'idle' };
 let _listener: AutoUpdateListener | null = null;
 let _initialized = false;
@@ -50,6 +55,18 @@ function _setStatus(status: AutoUpdateStatus): void {
 
 export function getAutoUpdateStatus(): AutoUpdateStatus {
   return _status;
+}
+
+function _runtime(): AutoUpdateRuntime {
+  return { isPackaged: app.isPackaged, platform: process.platform };
+}
+
+function _disabledStatus(runtime: AutoUpdateRuntime): AutoUpdateStatus | null {
+  if (!runtime.isPackaged) return { state: 'disabled', reason: 'dev_mode' };
+  if (runtime.platform !== 'darwin') {
+    return { state: 'disabled', reason: 'unsupported_platform' };
+  }
+  return null;
 }
 
 function _feedUrl(): string {
@@ -89,16 +106,21 @@ function _wireEvents(): void {
 }
 
 /**
- * 初始化自动更新：打包应用内设置 feed 并静默检查；开发模式返回 disabled。
+ * 初始化自动更新：打包后的 macOS 应用设置 feed 并静默检查；
+ * 开发模式和不支持的平台返回 disabled。
  * 幂等：重复调用不会重复注册事件或触发多次检查。
  */
-export function initAutoUpdate(listener?: AutoUpdateListener): AutoUpdateStatus {
+export function initAutoUpdate(
+  listener?: AutoUpdateListener,
+  runtime: AutoUpdateRuntime = _runtime(),
+): AutoUpdateStatus {
   if (listener) _listener = listener;
   if (_initialized) return _status;
   _initialized = true;
 
-  if (!app.isPackaged) {
-    _setStatus({ state: 'disabled', reason: 'dev_mode' });
+  const disabled = _disabledStatus(runtime);
+  if (disabled) {
+    _setStatus(disabled);
     return _status;
   }
 
@@ -118,10 +140,11 @@ export function initAutoUpdate(listener?: AutoUpdateListener): AutoUpdateStatus 
   return _status;
 }
 
-/** 设置页「立即检查」：手动触发一次检查（开发模式为 no-op）。 */
-export function checkAutoUpdate(): AutoUpdateStatus {
-  if (!app.isPackaged) {
-    _setStatus({ state: 'disabled', reason: 'dev_mode' });
+/** 设置页「立即检查」：手动触发一次检查（开发模式和不支持的平台为 no-op）。 */
+export function checkAutoUpdate(runtime: AutoUpdateRuntime = _runtime()): AutoUpdateStatus {
+  const disabled = _disabledStatus(runtime);
+  if (disabled) {
+    _setStatus(disabled);
     return _status;
   }
   try {
