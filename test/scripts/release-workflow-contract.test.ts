@@ -62,17 +62,17 @@ describe('release workflow contract', () => {
     });
   });
 
-  it('uses gate -> two builds -> one publisher and checks out the peeled SHA', () => {
+  it('uses gate -> mac build -> one publisher and checks out the peeled SHA', () => {
     const workflow = load('release.yml');
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['build-macos', 'build-windows', 'gate', 'publish']);
+    expect(Object.keys(workflow.jobs).sort()).toEqual(['build-macos', 'gate', 'publish']);
     expect(workflow.jobs.gate.outputs['peeled-sha']).toContain('steps.verify.outputs.peeled-sha');
-    for (const name of ['build-macos', 'build-windows']) {
+    for (const name of ['build-macos']) {
       expect(workflow.jobs[name].needs).toBe('gate');
       const checkout = steps(workflow.jobs[name]).find((step) => step.uses === 'actions/checkout@v4');
       expect(checkout?.with?.ref).toBe('${{ needs.gate.outputs.peeled-sha }}');
       expect(steps(workflow.jobs[name]).some((step) => step.uses === 'actions/upload-artifact@v4')).toBe(true);
     }
-    expect(workflow.jobs.publish.needs).toEqual(['gate', 'build-macos', 'build-windows']);
+    expect(workflow.jobs.publish.needs).toEqual(['gate', 'build-macos']);
   });
 
   it('grants contents: write only to the sole publisher and has one Release action repository-wide', () => {
@@ -109,13 +109,14 @@ describe('release workflow contract', () => {
     expect(source).toContain('softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2');
   });
 
-  it('makes the publisher validate exactly four mac files and one win-x64 exe before publishing the draft', () => {
+  it('makes the publisher validate exactly four mac files before publishing the draft', () => {
     const publish = load('release.yml').jobs.publish;
     const script = commands(publish);
     expect(script).toContain('expected_files');
-    for (const suffix of ['mac-arm64.dmg', 'mac-arm64.zip', 'mac-x64.dmg', 'mac-x64.zip', 'win-x64.exe']) {
+    for (const suffix of ['mac-arm64.dmg', 'mac-arm64.zip', 'mac-x64.dmg', 'mac-x64.zip']) {
       expect(script).toContain(suffix);
     }
+    expect(script).not.toContain('win-x64.exe');
     const action = steps(publish).find((step) => String(step.uses ?? '').startsWith('softprops/action-gh-release@'));
     expect(action.with.draft).toBe(true);
     expect(script).toContain('draft=false');
