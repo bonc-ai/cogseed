@@ -293,7 +293,7 @@ describe('Run Center settings boundary', () => {
 
     expect(html).toContain('data-settings-tab="configuration"');
     expect(html).toContain('data-settings-pane="configuration"');
-    // 配置页从「模型配置」开始（2026-09-09 子安指令）：设置页不再内嵌
+    // 配置页从「模型配置」开始（2026-09-09 交互设计指令）：设置页不再内嵌
     // 执行与协作区——Agents 面板归连接页（#216 语义），管理面留在
     // run-center。run-center-settings 模块保留（host 缺失时 no-op），
     // run-center 菜单的 worktrees/diagnostics 锚点跳转静默降级。

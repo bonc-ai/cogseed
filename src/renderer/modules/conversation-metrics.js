@@ -109,7 +109,7 @@ function messageMetricsLine(metrics) {
     }
     if (num(usage.cacheWriteTokens) > 0) titleLines.push(tt('chat.metrics.cacheWriteK', { v: formatTokens(usage.cacheWriteTokens) }, `缓存写 ${formatTokens(usage.cacheWriteTokens)} tok`));
   }
-  // 缓存命中分层（子安 2026-09-08 合并定稿）：
+  // 缓存命中分层（交互设计 2026-09-08 合并定稿）：
   // - cacheHitText：DSH billedInput 口径的命中率（PR198 语义，供模板/
   //   悬停/对账，总可计算）；
   // - cacheBadgeText：主显示正向标记，命中率 ≥50% 才显示「缓存 xx%」

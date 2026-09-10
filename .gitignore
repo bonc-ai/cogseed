@@ -65,6 +65,14 @@ build-info.json
 # WorkBuddy workspace memory (本地记忆/工作日志，不入库)
 /.workbuddy/
 
+# Private handoffs and implementation notes are kept outside the public tree.
+/PROJECT_HANDOFF.md
+/docs/plans/
+/docs/changes/
+/docs/design/
+/docs/superpowers/
+/design-qa/
+
 # updates-server installer artifacts (large binaries; published via
 # updates-server/publish.cjs which copies them here)
 /updates-server/downloads/

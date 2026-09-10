@@ -5481,7 +5481,7 @@ async function runActorTurnBody(
         = item.execConfig?.effort
           ?? turnAgentSpec?.default_thinking
           ?? thinkingLevelForRun();
-      // 思考展示兜底（子安 2026-09-08：思考过程展示需求）：'auto' 时不传
+      // 思考展示兜底（交互设计 2026-09-08：思考过程展示需求）：'auto' 时不传
       // thinkingLevel，pi-ai 对 openai 兼容端点不会带 reasoning_effort，
       // DeepSeek 中转端点缺该参数时思考模式默认关闭 → 全程无
       // reasoning_content 流（真机 18:40 轮实测 thinking_level 0 次）。
@@ -5774,7 +5774,7 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            // CLI 回合剥除 usage（子安 2026-09-09：外接 CLI 的 token 输入/
+            // CLI 回合剥除 usage（交互设计 2026-09-09：外接 CLI 的 token 输入/
             // 输出/缓存命中先不显示——CLI 自报口径不可靠，计费输出≠可见
             // 输出、可见输出无真值，缓存命中更是无从核对）。时间线 usage
             // 行与持久化条目一并不产；时长/首 token（本地墙钟）不受影响。
