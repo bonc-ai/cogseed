@@ -165,22 +165,44 @@ export async function readKstarRunEvidence(
   // Authoritative Requirements are read directly per id (stable, deduplicated)
   // so a corrupt referenced record propagates instead of being silently skipped
   // by the degraded-record listing path.
+  const requirementRefs = capped([...new Set(task.requirementIds)].sort());
+  let traversalTruncated = requirementRefs.truncated;
   const requirements: KstarRequirementRecord[] = [];
   const seenRequirementIds = new Set<string>();
-  for (const requirementId of task.requirementIds) {
+  for (const requirementId of requirementRefs.records) {
     if (seenRequirementIds.has(requirementId)) continue;
     seenRequirementIds.add(requirementId);
     const requirement = await readKstarRequirement(userId, requirementId);
-    if (requirement) requirements.push(requirement);
+    if (!requirement) continue;
+    if (requirement.taskId !== task.id || requirement.conversationId !== task.conversationId) {
+      throw new Error('kstar requirement does not belong to task');
+    }
+    requirements.push(requirement);
   }
   const matchingRequirementIds: string[] = [];
   const matchingEpisodes: KstarEpisodeRecord[] = [];
   const linkedProjectionIds = new Set<string>();
+  let remainingEpisodeRefs = EVIDENCE_COLLECTION_CAP;
 
   for (const requirement of requirements) {
-    const episodes = (
-      await Promise.all(requirement.episodeIds.map((episodeId) => readKstarEpisode(userId, episodeId)))
-    ).filter((episode): episode is KstarEpisodeRecord => episode?.taskRunId === input.taskRunId);
+    const episodeIds = [...new Set(requirement.episodeIds)].sort();
+    const retainedEpisodeIds = episodeIds.slice(0, remainingEpisodeRefs);
+    if (retainedEpisodeIds.length < episodeIds.length) traversalTruncated = true;
+    remainingEpisodeRefs -= retainedEpisodeIds.length;
+    const loadedEpisodes = await Promise.all(
+      retainedEpisodeIds.map((episodeId) => readKstarEpisode(userId, episodeId)),
+    );
+    const episodes: KstarEpisodeRecord[] = [];
+    for (const episode of loadedEpisodes) {
+      if (!episode) continue;
+      if (
+        (episode.taskId !== undefined && episode.taskId !== task.id)
+        || (episode.requirementId !== undefined && episode.requirementId !== requirement.id)
+      ) {
+        throw new Error('kstar episode does not belong to requirement');
+      }
+      if (episode.taskRunId === input.taskRunId) episodes.push(episode);
+    }
     if (!episodes.length) continue;
 
     matchingRequirementIds.push(requirement.id);
@@ -408,7 +430,7 @@ export async function readKstarRunEvidence(
   const keptTransferProofs = capped(transferProofs);
   const keptEffectivenessProofs = capped(effectivenessProofs);
   const keptValidations = capped(validations);
-  let truncated = [
+  let truncated = traversalTruncated || [
     keptEpisodes,
     keptProjections,
     keptInjectionReceipts,
