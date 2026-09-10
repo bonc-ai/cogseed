@@ -240,6 +240,46 @@ describe('local_agents/backends/base', () => {
     }
   });
 
+  it('settles as termination-unverified when close never arrives after SIGKILL', async () => {
+    vi.useFakeTimers();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 8642,
+      kill: vi.fn(() => true),
+      stdin: { destroy: vi.fn() },
+      stdout: { destroy: vi.fn() },
+      stderr: { destroy: vi.fn() },
+      unref: vi.fn(),
+    });
+    let settled = false;
+    let outcome: unknown;
+    try {
+      const completion = killProcessTree(child as any, 'SIGTERM', { platform: 'linux' })
+        .then((result) => {
+          settled = true;
+          outcome = result;
+        });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(processKill).toHaveBeenLastCalledWith(-8642, 'SIGKILL');
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(settled).toBe(true);
+      await completion;
+      expect(outcome).toEqual({ status: 'termination-unverified' });
+      expect(child.stdin.destroy).toHaveBeenCalledOnce();
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+      expect(child.stderr.destroy).toHaveBeenCalledOnce();
+      expect(child.unref).toHaveBeenCalledOnce();
+      expect(child.listenerCount('close')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      processKill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('waits for confirmed PID absence when given a lightweight child handle', async () => {
     vi.useFakeTimers();
     let alive = true;
@@ -290,7 +330,7 @@ describe('local_agents/backends/base', () => {
     expect(settled).toBe(false);
 
     child.emit('close', null, 'SIGTERM');
-    await expect(completion).resolves.toBeUndefined();
+    await expect(completion).resolves.toEqual({ status: 'terminated' });
     processKill.mockRestore();
   });
 });

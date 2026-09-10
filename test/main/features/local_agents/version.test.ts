@@ -198,7 +198,11 @@ setInterval(() => {}, 1000);
       fs.writeFileSync(launcher, `#!/bin/sh\nexec ${JSON.stringify(TEST_NODE)} ${JSON.stringify(script)}\n`);
       fs.chmodSync(launcher, 0o755);
     }
-    expect(await detectVersion(launcher, 200)).toBeNull();
+    // The launcher must have time to start Node and record its attempt before
+    // this probe's silent-timeout path fires. 200ms was enough on an idle
+    // machine but starves under full-suite load and on cold Node starts; the
+    // assertion is about the retry, not about how fast Node boots.
+    expect(await detectVersion(launcher, 1_500)).toBeNull();
     const attempts = fs.readFileSync(attemptsFile, 'utf8').trim().split(/\r?\n/);
     expect(attempts).toEqual(['attempt', 'attempt']);
   });
