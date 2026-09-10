@@ -27,7 +27,7 @@ function collectCogSeedVersions(value: unknown, versions = new Set<string>()): S
 }
 
 describe('release version consistency', () => {
-  it('keeps package, publiccode, SBOM, and changelog on 0.9.0', () => {
+  it('keeps package, publiccode, SBOM, and changelog on 1.0.2', () => {
     const packageJson = readJson('package.json');
     const packageLock = readJson('package-lock.json');
     const sbom = readJson('sbom.cdx.json');
