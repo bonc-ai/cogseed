@@ -43,3 +43,23 @@ This policy covers the CogSeed desktop application and its official
 repositories on GitHub. Third-party dependencies are handled through their
 respective projects' disclosure processes; please also notify us so we can
 track upstream advisories.
+
+## Source Scanning
+
+Scan a clean source snapshot (before installing dependencies) with Gitleaks
+8.30.1 or later:
+
+```sh
+gitleaks dir . --config .gitleaks.toml --redact
+```
+
+The configuration retains the default detection rules. Reviewed exceptions
+require the matching rule, exact file path, and exact synthetic test value;
+one exception covers an export expression in the unmodified xterm library.
+Other values in those same files remain subject to detection. Credential
+detection and redaction tests intentionally retain realistic token shapes.
+
+Keep private handoffs, implementation plans, scan output, and local runtime
+data outside public source distributions. Official repository URLs, service
+domains, security contacts, and third-party copyright notices are public
+project metadata and must retain their functional and attribution roles.

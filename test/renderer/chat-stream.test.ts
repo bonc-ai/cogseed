@@ -713,7 +713,7 @@ describe('chat-stream module', () => {
     expect(flow.parentNode).toBe(msgDiv);
     expect(flow.className).toContain('done');
     // 历史流徽章只做收起开关（无计时数据不显示时长）；完成后默认收起
-    // （子安 2026-09-08：过程区块折叠成摘要行，点徽章展开回看）。
+    // （交互设计 2026-09-08：过程区块折叠成摘要行，点徽章展开回看）。
     const histBadge = flow.querySelector('.cs-badge')!;
     expect(histBadge).toBeTruthy();
     expect(histBadge.querySelector('.cs-badge-elapsed')).toBeNull();
@@ -776,7 +776,7 @@ describe('chat-stream module', () => {
     expect(rows[0].innerHTML).toContain('done');
     expect(rows[0].innerHTML).toContain('npm test');
     // 工具行显示权威耗时（1500ms → 「1 秒」，floor 整秒口径见
-    // _csFmtDur，子安 2026-09-09 去小数需求），徽章显示整段总耗时
+    // _csFmtDur，交互设计 2026-09-09 去小数需求），徽章显示整段总耗时
     // （末终态 4s = 幻影收编后跨度）与工具数 2。
     expect(rows[0].innerHTML).toContain('cs-dur');
     expect(rows[0].innerHTML).toContain('1 秒');
