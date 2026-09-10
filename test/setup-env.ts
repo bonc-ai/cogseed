@@ -34,6 +34,7 @@ import * as fs from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { vi } from 'vitest';
 
 // Register tsx/cjs so that any `require('./group_chat/bus')`-style CJS lookups
 // (used inside features/chats.ts to break the bus ↔ chats import cycle without
@@ -42,6 +43,23 @@ import * as path from 'node:path';
 // require with `Cannot find module './group_chat/bus'` and chats.deleteConversation
 // silently skips purgeGroupDir, breaking the delete-cascade tests.
 import 'tsx/cjs';
+
+// Windows CI schedules async callbacks far more slowly than a local POSIX run.
+// Keep Vitest's 1s default locally, but give every `vi.waitFor` call a bounded
+// 5s default on Windows so per-test polling does not flake under maxWorkers=1.
+const waitForDefaultMarker = Symbol.for('cogseed.test.wait-for-default');
+const waitForUtils = vi as unknown as {
+  waitFor: <T>(assertion: () => T | Promise<T>, options?: { timeout?: number; interval?: number }) => Promise<T>;
+} & Record<PropertyKey, unknown>;
+if (!waitForUtils[waitForDefaultMarker]) {
+  const originalWaitFor = waitForUtils.waitFor.bind(vi);
+  waitForUtils.waitFor = (assertion, options) => originalWaitFor(assertion, {
+    timeout: process.platform === 'win32' ? 5_000 : 1_000,
+    interval: 50,
+    ...(options ?? {}),
+  });
+  waitForUtils[waitForDefaultMarker] = true;
+}
 
 // Windows can keep just-closed SQLite databases, command shims, and watched
 // files non-deletable for a short interval. Most tests remove an OS-temp tree
