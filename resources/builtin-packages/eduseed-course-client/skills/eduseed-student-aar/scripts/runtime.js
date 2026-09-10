@@ -15509,8 +15509,8 @@ function mockResponse(path7, method = "GET") {
       ok: true,
       total: 2,
       contacts: [
-        { agent_id: "teacher-companion-t001", name: "\u738B\u8001\u5E08", kind: "teacher", relation: "teacher", feishu_bound: false, online: true },
-        { agent_id: "student-companion-20230001", name: "\u674E\u540C\u5B66", kind: "student", relation: "classmate", feishu_bound: true, online: false, class_id: "C-1" }
+        { agent_id: "teacher-companion-t001", name: "\u793A\u4F8B\u6559\u5E08", kind: "teacher", relation: "teacher", feishu_bound: false, online: true },
+        { agent_id: "student-companion-20230001", name: "\u793A\u4F8B\u5B66\u751F", kind: "student", relation: "classmate", feishu_bound: true, online: false, class_id: "C-1" }
       ]
     });
   }
@@ -15938,7 +15938,7 @@ async function submitProject(client, args, challengeRequiredDeliverables) {
         localIssues,
         error: {
           code: "INPUT_MISSING",
-          // 领域错误码：Richard 模板 taxonomy
+          // 领域错误码：课程模板 taxonomy
           message: `\u7F3A\u5C11\u4EA4\u4ED8\u7269: ${check2.missing.join("\u3001")}\u3002\u8BF7\u8865\u5145\u540E\u91CD\u65B0\u63D0\u4EA4\u3002`,
           ...check2.missing.length === 1 ? { field: check2.missing[0] } : {}
         }

@@ -104,7 +104,7 @@ function isHomeOneLevel(token: string): boolean {
 }
 
 /** 家目录一级尾段是否为纯可打印 ASCII：ASCII 用户名（alice）可能带空格
- *  续段（"alice smith"），需并入一次；非 ASCII 用户名（牛保康）不含
+ *  续段（"alice smith"），需并入一次；非 ASCII 用户名（测试用户甲）不含
  *  空格、本身即完整段——直接占位，不吞其后的普通词。 */
 function homeDirTailIsAscii(token: string): boolean {
   const tail = token.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';

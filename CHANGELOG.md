@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Remove private development records and personal identifiers from source,
+  test fixtures, and bundled course examples.
+- Update vulnerable XML, URI, YAML, query-string, archive, and build-tool
+  dependencies; refresh the dependency inventory and third-party notices.
+- Scope secret-scanner exceptions to reviewed synthetic fixtures and an
+  exact vendored expression while retaining the default detection rules.
+
 ## [0.9.0] - 2026-09-07
 
 ### Added

@@ -120,10 +120,10 @@ describe('feishu channel descriptor (Q2)', () => {
 describe('channel peer map (Q3)', () => {
   it('ensures a peer idempotently with a stable readable alias', async () => {
     const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
-    const first = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
+    const first = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '测试用户甲');
     expect(first.peerAlias).toBe('user-fs-12345678');
-    expect(first.externalUserName).toBe('牛保康');
-    const again = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '牛保康');
+    expect(first.externalUserName).toBe('测试用户甲');
+    const again = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '测试用户甲');
     expect(again).toEqual(first);
     expect(map.lookupChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678')).toMatchObject({
       peerAlias: 'user-fs-12345678',
@@ -136,9 +136,9 @@ describe('channel peer map (Q3)', () => {
     const map = await import('../../../src/main/features/p3394_bridge/channel-peer-map');
     const first = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678');
     expect(first.externalUserName).toBeUndefined();
-    const renamed = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '子安');
+    const renamed = map.ensureChannelPeer('u-g17', 'feishu_lark', 'inst-g17', 'ou_abcdefgh12345678', '测试用户乙');
     expect(renamed.peerAlias).toBe(first.peerAlias);
-    expect(renamed.externalUserName).toBe('子安');
+    expect(renamed.externalUserName).toBe('测试用户乙');
   });
 
   it('removeChannelPeersForInstance sweeps only the unbound instance (M2 复核补齐)', async () => {

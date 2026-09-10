@@ -34,12 +34,12 @@ describe('buildP3394OutboundEnvelope › metadata.references (T1)', () => {
       scopeKey: 'conv-ref-1',
       goal: 'req:r1',
       references: [
-        { source_cid: 'c1', source_msg_id: 'm1', from_actor: 'user', from_name: '子安', source_ts: 't1', text: '原始需求' },
+        { source_cid: 'c1', source_msg_id: 'm1', from_actor: 'user', from_name: '测试用户乙', source_ts: 't1', text: '原始需求' },
       ],
     });
     const refs = (env.payload.metadata as { references?: Array<Record<string, unknown>> }).references;
     expect(refs).toHaveLength(1);
-    expect(refs![0]).toMatchObject({ source_cid: 'c1', source_msg_id: 'm1', from_actor: 'user', from_name: '子安', text: '原始需求' });
+    expect(refs![0]).toMatchObject({ source_cid: 'c1', source_msg_id: 'm1', from_actor: 'user', from_name: '测试用户乙', text: '原始需求' });
     expect((env.payload.metadata as { goal?: string }).goal).toBe('req:r1');
   });
 

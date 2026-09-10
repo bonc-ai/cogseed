@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import AdmZip from 'adm-zip';
 
 import {
   downloadMarketplaceBundle,
+  extractBundleSafely,
   inspectMarketplaceBundle,
   MAX_MARKETPLACE_BUNDLE_ENTRIES,
   MAX_MARKETPLACE_BUNDLE_UNCOMPRESSED_BYTES,
@@ -11,6 +15,7 @@ import {
   readMarketplaceBundleBody,
   safeRelPath,
 } from '../../../src/main/features/marketplace_bundle';
+import { DIRECTORY_LINKS_SUPPORTED, DIRECTORY_LINK_TYPE, FILE_SYMLINKS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -112,5 +117,73 @@ describe('marketplace bundle inspection', () => {
     expect(safeRelPath('../file')).toBeNull();
     expect(safeRelPath('bad\0file')).toBeNull();
     expect(safeRelPath('nested/file')).toBe('nested/file');
+  });
+});
+
+describe('marketplace bundle extraction destinations', () => {
+  let root: string;
+  let destination: string;
+  let outside: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bundle-destination-'));
+    destination = path.join(root, 'destination');
+    outside = path.join(root, 'outside');
+    fs.mkdirSync(destination);
+    fs.mkdirSync(outside);
+  });
+
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  function archive(name: string, data = Buffer.from('replacement')): AdmZip {
+    const zip = new AdmZip();
+    zip.addFile(name, data);
+    return parseMarketplaceBundle(zip.toBuffer());
+  }
+
+  it('preserves nested binary content and regular-file replacement without native extraction APIs', () => {
+    const data = Buffer.from([0, 255, 128, 10, 34, 56, 98, 76]);
+    const zip = archive('nested/data.bin', data);
+    const nativeExtract = vi.spyOn(zip, 'extractAllTo').mockImplementation(() => {
+      throw new Error('native filesystem extraction must not run');
+    });
+    extractBundleSafely(zip, destination);
+    const target = path.join(destination, 'nested/data.bin');
+    expect(fs.readFileSync(target)).toEqual(data);
+    extractBundleSafely(archive('nested/data.bin', Buffer.from('short')), destination);
+    expect(fs.readFileSync(target, 'utf8')).toBe('short');
+    expect(nativeExtract).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(!DIRECTORY_LINKS_SUPPORTED)('rejects a linked extraction root without writing to its target', () => {
+    fs.rmdirSync(destination);
+    fs.symlinkSync(outside, destination, DIRECTORY_LINK_TYPE);
+    expect(() => extractBundleSafely(archive('payload.txt'), destination)).toThrow('direct directory');
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it.skipIf(!DIRECTORY_LINKS_SUPPORTED)('rejects a directory link in an entry path without overwriting outside files', () => {
+    const target = path.join(outside, 'payload.txt');
+    fs.writeFileSync(target, 'original');
+    fs.symlinkSync(outside, path.join(destination, 'nested'), DIRECTORY_LINK_TYPE);
+    expect(() => extractBundleSafely(archive('nested/payload.txt'), destination)).toThrow('symbolic links');
+    expect(fs.readFileSync(target, 'utf8')).toBe('original');
+  });
+
+  it.skipIf(!FILE_SYMLINKS_SUPPORTED).each([false, true])('rejects a file symlink (dangling: %s)', (dangling) => {
+    const target = path.join(outside, 'payload.txt');
+    if (!dangling) fs.writeFileSync(target, 'original');
+    fs.symlinkSync(target, path.join(destination, 'payload.txt'), 'file');
+    expect(() => extractBundleSafely(archive('payload.txt'), destination)).toThrow('linked or non-regular file');
+    if (dangling) expect(fs.existsSync(target)).toBe(false);
+    else expect(fs.readFileSync(target, 'utf8')).toBe('original');
+  });
+
+  it('rejects a hard-linked file before truncation', () => {
+    const target = path.join(outside, 'payload.txt');
+    fs.writeFileSync(target, 'original');
+    fs.linkSync(target, path.join(destination, 'payload.txt'));
+    expect(() => extractBundleSafely(archive('payload.txt'), destination)).toThrow('linked or non-regular file');
+    expect(fs.readFileSync(target, 'utf8')).toBe('original');
   });
 });
