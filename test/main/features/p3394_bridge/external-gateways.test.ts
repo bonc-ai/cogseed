@@ -52,7 +52,7 @@ describe('P3394 external-agent gateway host', () => {
     expect(p3394ExternalGatewayIdFor('nonsense')).toBeNull();
   });
 
-  it('starts every managed process-tree termination synchronously and awaits them all', async () => {
+  it('requests graceful shutdown for connected gateways and directly terminates recovered processes', async () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'features', 'p3394_bridge', 'external-gateways.ts'), 'utf8');
     const declaration = /export async function stopAllExternalGateways\(\): Promise<void> \{[\s\S]*?^}/m.exec(source)?.[0];
     if (!declaration) throw new Error('stopAllExternalGateways not found');
@@ -60,15 +60,25 @@ describe('P3394 external-agent gateway host', () => {
     const records = [
       { cli: 'hermes', pid: 101, running: true },
       { cli: 'claude', pid: 202, running: true },
-      { cli: 'offline', pid: 303, running: false },
+      { cli: 'recovered', pid: 303, running: true },
+      { cli: 'offline', pid: 404, running: false },
     ];
-    const watched = new Map(records.map((record) => [record.cli, {}]));
+    const hermesChild = { connected: true };
+    const claudeChild = { connected: true };
+    const watched = new Map<string, object>([
+      ['hermes', hermesChild],
+      ['claude', claudeChild],
+      ['offline', {}],
+    ]);
     const detached: string[] = [];
-    const resolvers: Array<() => void> = [];
-    const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+    const gracefulResolvers: Array<(closed: boolean) => void> = [];
+    const requestGatewayShutdown = vi.fn(() => new Promise<boolean>((resolve) => { gracefulResolvers.push(resolve); }));
+    const killResolvers: Array<() => void> = [];
+    const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { killResolvers.push(resolve); }));
     const stopAll = vm.runInNewContext(`(${runnable})`, {
       listExternalGateways: () => records,
       detachWatch: (cli: string) => { detached.push(cli); watched.delete(cli); },
+      requestGatewayShutdown,
       killProcessTree,
       watched,
       process,
@@ -77,21 +87,79 @@ describe('P3394 external-agent gateway host', () => {
 
     const completion = stopAll();
     expect(completion && typeof completion.then).toBe('function');
-    expect(killProcessTree).toHaveBeenCalledTimes(2);
-    expect(detached).toEqual(['hermes', 'claude']);
+    expect(requestGatewayShutdown).toHaveBeenCalledTimes(2);
+    expect(requestGatewayShutdown).toHaveBeenNthCalledWith(1, hermesChild);
+    expect(requestGatewayShutdown).toHaveBeenNthCalledWith(2, claudeChild);
+    // No watched ChildProcess exists after app recovery, so this PID must
+    // enter the established cross-platform tree-kill path without IPC grace.
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(detached).toEqual(['hermes', 'claude', 'recovered']);
     expect(watched.has('offline')).toBe(true);
 
     let settled = false;
     void completion.then(() => { settled = true; });
-    resolvers[0]();
+    gracefulResolvers[0](true);
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(watched.has('offline')).toBe(true);
 
-    resolvers[1]();
+    gracefulResolvers[1](false);
+    await Promise.resolve();
+    expect(killProcessTree).toHaveBeenCalledTimes(2);
+    killResolvers[0]();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    killResolvers[1]();
     await completion;
     expect(watched.size).toBe(0);
   });
+
+  it('delivers p3394-shutdown over IPC to a managed gateway before using signal fallback', async () => {
+    const previousPcDir = process.env.COGSEED_PC_DIR;
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-ipc-gateway-'));
+    const fixtureDir = path.join(fixtureRoot, 'p3394-gateway');
+    const fixtureScript = path.join(fixtureDir, 'gateway.cjs');
+    const gatewayHome = path.join(path.dirname(p3394StateFile('p3394-external-gateways.json')), 'external-gateways', 'hermes');
+    const ipcMarker = path.join(gatewayHome, 'ipc-shutdown.json');
+    const signalMarker = path.join(gatewayHome, 'signal-shutdown.txt');
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(fixtureScript, [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const path = require('node:path');",
+      "const home = process.env.P3394_GATEWAY_HOME;",
+      "const runtimeRoot = path.resolve(home, '..', '..');",
+      "const endpoint = process.env.P3394_ADVERTISE_ENDPOINT;",
+      "fs.mkdirSync(home, { recursive: true });",
+      "fs.writeFileSync(path.join(runtimeRoot, 'p3394-peers.json'), JSON.stringify({ schemaVersion: 1, peers: [{ identity: { agent_id: process.env.P3394_AGENT_ID, display_name: 'fixture' }, aliases: [], manifest: {}, endpoints: [endpoint], updated_at: new Date().toISOString() }] }));",
+      "const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });",
+      "server.listen(Number(process.env.P3394_GATEWAY_PORT), process.env.P3394_GATEWAY_HOST);",
+      "process.once('message', (message) => { fs.writeFileSync(path.join(home, 'ipc-shutdown.json'), JSON.stringify(message)); server.close(() => process.exit(0)); });",
+      "process.once('SIGTERM', () => { fs.writeFileSync(path.join(home, 'signal-shutdown.txt'), 'SIGTERM'); process.exit(0); });",
+      '',
+    ].join('\n'));
+
+    try {
+      await stopExternalGateway('hermes');
+      process.env.COGSEED_PC_DIR = fixtureRoot;
+      const started = await startExternalGateway({
+        cli: 'hermes',
+        binPath: '/bin/echo',
+        bridgeInfo: { endpoint: 'http://127.0.0.1:1', token: 'fixture' },
+      });
+      expect(started.ok, 'fixture gateway failed to start: ' + (started.ok === false ? started.error : '')).toBe(true);
+
+      await stopExternalGateway('hermes');
+
+      expect(JSON.parse(fs.readFileSync(ipcMarker, 'utf8'))).toEqual({ type: 'p3394-shutdown' });
+      expect(fs.existsSync(signalMarker)).toBe(false);
+    } finally {
+      await stopExternalGateway('hermes').catch(() => {});
+      if (previousPcDir === undefined) delete process.env.COGSEED_PC_DIR;
+      else process.env.COGSEED_PC_DIR = previousPcDir;
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it('awaits P3394 bridge and gateway shutdown before the Electron quit resumes', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');

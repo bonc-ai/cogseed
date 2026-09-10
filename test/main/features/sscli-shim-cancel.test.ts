@@ -40,7 +40,94 @@ function loadRunCliOnce(context: Record<string, unknown>) {
   ) => Promise<string>;
 }
 
+function loadFunction<T>(file: string, name: string, context: Record<string, unknown>): T {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', file), 'utf8');
+  const method = new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?^}`, 'm').exec(source)?.[0];
+  if (!method) throw new Error(`${name} not found in ${file}`);
+  return vm.runInNewContext(`(${method})`, context) as T;
+}
+
 describe('sscli-shim cancel 精确命中（PR209 评审 M6 返工回归）', () => {
+  it.each(['gateway.cjs', 'sscli-shim.cjs'])('%s bounds ambiguous cleanup after SIGKILL and reports it as unverified', async (file) => {
+    vi.useFakeTimers();
+    const processKill = vi.fn(() => true);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 8642,
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(() => true),
+      stdin: { destroy: vi.fn() },
+      stdout: { destroy: vi.fn() },
+      stderr: { destroy: vi.fn() },
+      unref: vi.fn(),
+    });
+    try {
+      const killProcessTree = loadFunction<(
+        target: typeof child,
+        signal: string,
+      ) => Promise<{ status: string }>>(file, 'killProcessTree', {
+        process: { platform: 'linux', kill: processKill },
+        setTimeout, clearTimeout, setInterval, clearInterval,
+      });
+      let settled = false;
+      const completion = killProcessTree(child, 'SIGTERM').then((outcome) => {
+        settled = true;
+        return outcome;
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(processKill).toHaveBeenCalledWith(-8642, 'SIGKILL');
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(settled).toBe(true);
+      await expect(completion).resolves.toEqual({ status: 'termination-unverified' });
+      expect(child.stdin.destroy).toHaveBeenCalledOnce();
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+      expect(child.stderr.destroy).toHaveBeenCalledOnce();
+      expect(child.unref).toHaveBeenCalledOnce();
+      expect(child.listenerCount('close')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports an unverified shim cancellation instead of claiming the child was killed', async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const child = new EventEmitter();
+    const handleCancel = loadFunction<(
+      op: Record<string, unknown>,
+    ) => Promise<void>>('sscli-shim.cjs', 'handleCancel', {
+      activeTurn: { child, requestId: 'req-running', taskId: 'task-running' },
+      killProcessTree: vi.fn(async () => ({ status: 'termination-unverified' })),
+      emit: (value: Record<string, unknown>) => emitted.push(value),
+    });
+
+    await handleCancel({ request_id: 'req-cancel', task_id: 'task-running' });
+
+    expect(emitted).toEqual([{
+      ok: true,
+      request_id: 'req-cancel',
+      killed: false,
+      termination_status: 'termination-unverified',
+    }]);
+  });
+
+  it('does not report an unverified gateway oneshot cancellation as killed', async () => {
+    const child = new EventEmitter();
+    const activeTasks = new Map([['task-running', child]]);
+    const cancelTask = loadFunction<(
+      taskId: string,
+    ) => Promise<boolean>>('gateway.cjs', 'cancelTask', {
+      activeTasks,
+      killProcessTree: vi.fn(async () => ({ status: 'termination-unverified' })),
+    });
+
+    await expect(cancelTask('task-running')).resolves.toBe(false);
+    expect(activeTasks.has('task-running')).toBe(false);
+  });
+
   it('POSIX timeout waits for the tree-termination barrier before settling', async () => {
     vi.useFakeTimers();
     try {

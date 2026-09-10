@@ -29,12 +29,19 @@ export interface P3394McpRuntimeOptions {
 
 interface McpRpcResult { content?: Array<{ type: string; text?: string }> }
 
+interface PendingMcpRequest {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
 export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
   private readonly options: P3394McpRuntimeOptions;
   private child: ChildProcessWithoutNullStreams | null = null;
   private requestId = 0;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private readonly pending = new Map<number, PendingMcpRequest>();
   private started = false;
+  private startPromise: Promise<void> | null = null;
   private closePromise: Promise<void> | null = null;
 
   constructor(options: P3394McpRuntimeOptions) {
@@ -42,15 +49,29 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
   }
 
   private async ensureStarted(): Promise<void> {
-    if (this.started) return;
-    this.child = spawnCli(
+    if (this.closePromise) await this.closePromise;
+    if (this.started && this.child) return;
+    if (this.startPromise) return this.startPromise;
+
+    const startPromise = this.startChild();
+    this.startPromise = startPromise;
+    try {
+      await startPromise;
+    } finally {
+      if (this.startPromise === startPromise) this.startPromise = null;
+    }
+  }
+
+  private async startChild(): Promise<void> {
+    const child = spawnCli(
       this.options.command,
       this.options.args ?? [],
       this.options.cwd ?? process.cwd(),
       this.options.env ? { ...process.env, ...this.options.env } : undefined,
     );
-    this.child.stderr.pipe(process.stderr, { end: false });
-    const rl = readline.createInterface({ input: this.child.stdout, crlfDelay: Infinity });
+    this.child = child;
+    child.stderr.pipe(process.stderr, { end: false });
+    const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rl.on('line', (line) => {
       let message: { id?: number; result?: unknown; error?: { message?: string } } | null = null;
       try { message = JSON.parse(line); } catch { return; }
@@ -58,26 +79,71 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
       const waiter = this.pending.get(message.id);
       if (!waiter) return;
       this.pending.delete(message.id);
+      clearTimeout(waiter.timer);
       if (message.error) waiter.reject(new Error(message.error.message ?? 'mcp_runtime_error'));
       else waiter.resolve(message.result);
     });
-    await this.request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'cogseed-p3394-bridge', version: '1.0.0' } });
-    this.started = true;
+    child.once('error', (error) => {
+      this.resetChild(child, error instanceof Error ? error : new Error(String(error)));
+    });
+    child.once('close', (code, signal) => {
+      this.resetChild(
+        child,
+        new Error(`p3394_mcp_runtime_closed code=${code ?? ''} signal=${signal ?? ''}`.trim()),
+      );
+    });
+
+    try {
+      await this.request('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'cogseed-p3394-bridge', version: '1.0.0' } });
+      if (this.child !== child) throw new Error('p3394_mcp_runtime_not_running');
+      this.started = true;
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (this.child === child) await this.terminateChild(child, failure);
+      throw failure;
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    const waiters = [...this.pending.values()];
+    this.pending.clear();
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+  }
+
+  private resetChild(child: ChildProcessWithoutNullStreams, error: Error): boolean {
+    if (this.child !== child) return false;
+    this.child = null;
+    this.started = false;
+    this.rejectPending(error);
+    return true;
+  }
+
+  private async terminateChild(child: ChildProcessWithoutNullStreams, error: Error): Promise<void> {
+    if (!this.resetChild(child, error)) return;
+    child.stdin.end();
+    await killProcessTree(child, 'SIGTERM');
   }
 
   private request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    if (!this.child || !this.child.stdin.writable) return Promise.reject(new Error('p3394_mcp_runtime_not_running'));
+    const child = this.child;
+    if (!child || !child.stdin.writable) return Promise.reject(new Error('p3394_mcp_runtime_not_running'));
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('p3394_mcp_runtime_timeout'));
       }, this.options.requestTimeoutMs ?? 30_000);
-      this.pending.set(id, {
-        resolve: (value) => { clearTimeout(timer); resolve(value); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
-      });
-      this.child!.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      } catch (error) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -154,14 +220,19 @@ export class P3394McpRuntimeAdapter implements P3394RuntimeAdapter {
   /** Close only after the runtime process tree has released its resources. */
   async close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
-    const child = this.child;
-    if (!child) return;
-    child.stdin.end();
-    this.closePromise = killProcessTree(child, 'SIGTERM').finally(() => {
-      if (this.child === child) this.child = null;
-      this.started = false;
-      this.closePromise = null;
+    if (!this.child && !this.startPromise) return;
+
+    const closePromise = this.closeCurrent().finally(() => {
+      if (this.closePromise === closePromise) this.closePromise = null;
     });
-    return this.closePromise;
+    this.closePromise = closePromise;
+    return closePromise;
+  }
+
+  private async closeCurrent(): Promise<void> {
+    const child = this.child;
+    const startPromise = this.startPromise;
+    if (child) await this.terminateChild(child, new Error('p3394_mcp_runtime_closed'));
+    if (startPromise) await startPromise.catch(() => {});
   }
 }

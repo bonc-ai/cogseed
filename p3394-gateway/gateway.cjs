@@ -344,10 +344,12 @@ function windowsSystem32Tool(name) {
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
   return new Promise((resolve) => {
+    let settled = false;
     let signalDone = process.platform !== 'win32' || !pid;
     let targetDone = !pid || child.exitCode != null || child.signalCode != null;
     let killer = null;
     let hardKillTimer = null;
+    let terminationDeadlineTimer = null;
     let pidPoll = null;
     const onTargetClose = () => { targetDone = true; maybeFinish(); };
     const cleanup = () => {
@@ -358,14 +360,36 @@ function killProcessTree(child, signal = 'SIGTERM') {
       }
       if (child && typeof child.off === 'function') child.off('close', onTargetClose);
       if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (terminationDeadlineTimer) clearTimeout(terminationDeadlineTimer);
       if (pidPoll) clearInterval(pidPoll);
+      hardKillTimer = null;
+      terminationDeadlineTimer = null;
+      pidPoll = null;
+    };
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
     };
     const maybeFinish = () => {
       if (!signalDone || !targetDone) return;
-      cleanup();
-      resolve();
+      finish({ status: 'terminated' });
     };
     const directKill = (nextSignal) => { try { child.kill(nextSignal); } catch { /* already gone */ } };
+    const armTerminationDeadline = () => {
+      if (settled || targetDone || terminationDeadlineTimer) return;
+      terminationDeadlineTimer = setTimeout(() => {
+        terminationDeadlineTimer = null;
+        if (settled) return;
+        for (const stream of [child && child.stdin, child && child.stdout, child && child.stderr]) {
+          try { stream?.destroy(); } catch { /* best effort */ }
+        }
+        try { child?.unref?.(); } catch { /* best effort */ }
+        finish({ status: 'termination-unverified' });
+      }, 3000);
+      terminationDeadlineTimer.unref?.();
+    };
     let usedFallback = false;
     const fallbackOnce = () => {
       if (usedFallback) return;
@@ -379,21 +403,25 @@ function killProcessTree(child, signal = 'SIGTERM') {
       signalDone = true;
       maybeFinish();
     };
-    if (!targetDone && typeof child.once === 'function') child.once('close', onTargetClose);
-    if (!targetDone && pid) {
-      pidPoll = setInterval(() => {
+    if (!targetDone && typeof child.once === 'function') {
+      child.once('close', onTargetClose);
+    } else if (!targetDone && pid) {
+      const checkPid = () => {
         try { process.kill(pid, 0); } catch (error) {
           if (!error || error.code !== 'ESRCH') return;
           targetDone = true;
           maybeFinish();
         }
-      }, 25);
+      };
+      pidPoll = setInterval(checkPid, 25);
       pidPoll.unref?.();
+      checkPid();
     }
     if (!targetDone && signal !== 'SIGKILL') {
       hardKillTimer = setTimeout(() => {
         hardKillTimer = null;
         if (targetDone) return;
+        armTerminationDeadline();
         if (pid && process.platform !== 'win32') {
           try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
         } else {
@@ -401,6 +429,8 @@ function killProcessTree(child, signal = 'SIGTERM') {
         }
       }, 3000);
       hardKillTimer.unref?.();
+    } else if (!targetDone) {
+      armTerminationDeadline();
     }
     if (pid && process.platform === 'win32') {
       try {
@@ -1161,8 +1191,12 @@ function extractReplyText(out, preset) {
 async function cancelTask(taskId) {
   const child = activeTasks.get(taskId);
   if (!child) return false;
-  await killProcessTree(child, 'SIGTERM');
+  const termination = await killProcessTree(child, 'SIGTERM');
   if (activeTasks.get(taskId) === child) activeTasks.delete(taskId);
+  if (termination.status === 'termination-unverified') {
+    console.warn('[p3394-gateway] oneshot cancellation termination unverified for task ' + taskId);
+    return false;
+  }
   return true;
 }
 
@@ -1742,6 +1776,9 @@ class SscliRuntime {
     }
     if (!hit) return false;
     const ack = await this._request({ op: 'cancel', task_id: taskId }, SSCLI_HANDSHAKE_MS);
+    if (ack.termination_status === 'termination-unverified') {
+      console.warn('[p3394-gateway] sscli cancellation termination unverified for task ' + taskId);
+    }
     return ack.killed !== false;
   }
   /** 模型发现（Hermes 模型枚举修复 2026-09-09）：不再因「协议无枚举 op」
@@ -1940,8 +1977,12 @@ class StreamJsonRuntime {
   async cancel(taskId) {
     const child = this.active.get(taskId);
     if (!child) return false;
-    await killProcessTree(child, 'SIGTERM');
+    const termination = await killProcessTree(child, 'SIGTERM');
     if (this.active.get(taskId) === child) this.active.delete(taskId);
+    if (termination.status === 'termination-unverified') {
+      console.warn('[p3394-gateway] stream-json cancellation termination unverified for task ' + taskId);
+      return false;
+    }
     return true;
   }
   async close() {
@@ -2127,11 +2168,12 @@ class ClaudePersistentRuntime {
 
   async _terminateSession(sessionId, entry) {
     if (!entry.closing) {
-      entry.closing = killProcessTree(entry.child, 'SIGTERM').then(() => {
+      entry.closing = killProcessTree(entry.child, 'SIGTERM').then((termination) => {
         this._dropSession(sessionId, entry);
+        return termination;
       });
     }
-    await entry.closing;
+    return entry.closing;
   }
 
   _dropSession(sessionId, expectedEntry) {
@@ -2239,8 +2281,12 @@ class ClaudePersistentRuntime {
     }
     // 取消 = 终止该 session 的常驻进程：claude stream-json 无 interrupt
     // 输入，kill 最可靠；下一轮 deliver 重新 spawn（首轮带 transcript）。
-    await this._terminateSession(sessionId, entry);
+    const termination = await this._terminateSession(sessionId, entry);
     if (turn) turn.reject(new Error('p3394_claude_cancelled'));
+    if (termination.status === 'termination-unverified') {
+      console.warn('[p3394-gateway] claude cancellation termination unverified for task ' + taskId);
+      return false;
+    }
     return true;
   }
   /** 模型发现：常驻会话的 init 帧缓存优先（正在运行的进程自己披露的最新
@@ -2293,7 +2339,7 @@ class OpencodeRuntime {
     const key = cwd || process.cwd();
     const hit = this.servers.get(key);
     if (hit) return hit.ready;
-    const entry = { child: null, base: '', port: 0, ready: null };
+    const entry = { key, child: null, base: '', port: 0, ready: null };
     this.servers.set(key, entry);
     entry.ready = (async () => {
       const serveEnv = { ...process.env };
@@ -2315,7 +2361,7 @@ class OpencodeRuntime {
           if (m) { clearTimeout(timer); resolve(Number(m[1])); }
         });
       });
-      child.on('close', () => { this.servers.delete(key); });
+      child.on('close', () => { if (this.servers.get(key) === entry) this.servers.delete(key); });
       entry.port = port;
       entry.base = 'http://127.0.0.1:' + port;
       this._subscribeEvents(entry);
@@ -2327,7 +2373,7 @@ class OpencodeRuntime {
   }
   _subscribeEvents(entry) {
     const connect = () => {
-      if (this.closing || !entry.child || entry.child.exitCode !== null) return;
+      if (this.closing || this.servers.get(entry.key) !== entry || !entry.child || entry.child.exitCode !== null || entry.child.signalCode !== null) return;
       const req = http.get(entry.base + '/event', (res) => {
         let buf = '';
         res.on('data', (c) => {
@@ -2420,6 +2466,37 @@ class OpencodeRuntime {
       req.on('error', reject);
     });
   }
+  _abortSession(server, sessionId) {
+    return new Promise((resolve, reject) => {
+      const req = http.request(server.base + '/session/' + encodeURIComponent(sessionId) + '/abort', { method: 'POST' }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          clearTimeout(timer);
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) { reject(new Error('p3394_opencode_abort_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          resolve();
+        });
+      });
+      const timer = setTimeout(() => req.destroy(new Error('p3394_opencode_abort_timeout')), OUTBOUND_HTTP_TIMEOUT_MS);
+      timer.unref();
+      req.on('error', (error) => { clearTimeout(timer); reject(error); });
+      req.end();
+    });
+  }
+  _destroyTurnRequest(turn) {
+    if (!turn.req || turn.req.destroyed) return Promise.resolve();
+    return new Promise((resolve) => {
+      turn.req.once('close', resolve);
+      try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { resolve(); }
+    });
+  }
+  async _restartServer(server) {
+    const termination = server.child ? await killProcessTree(server.child, 'SIGTERM') : { status: 'terminated' };
+    if (this.servers.get(server.key) === server) this.servers.delete(server.key);
+    if (termination.status === 'termination-unverified') return false;
+    if (!this.closing) await this._serverFor(server.key);
+    return true;
+  }
   /** 模型发现（2026-09-09 全量补全）：常驻 serve 的 GET /api/model 是权威
    *  事实源（进程已在跑、零 spawn、天然含自定义 provider——实机实测
    *  {location, data:[{id, providerID, name}]}）。清单 id 拼 providerID/id
@@ -2468,7 +2545,7 @@ class OpencodeRuntime {
     // 据此中断在途请求（此前恒 return false，用户看到「已取消 + 后又来一
     // 条回复」）。同会话并发 turn 会覆盖 turns 表（既有单轮语义），覆盖后
     // 老 turn 失去 cancel 句柄属已知限制。
-    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null };
+    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null, server, ocSessionId: entry.ocSessionId, cancelled: false };
     this.turns.set(entry.ocSessionId, turn);
     try {
       const msg = await new Promise((resolve, reject) => {
@@ -2488,6 +2565,7 @@ class OpencodeRuntime {
         req.write(data);
         req.end();
       });
+      if (turn.cancelled) throw new Error('p3394_opencode_cancelled');
       const out = (msg.parts || []).filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
       return (out.trim() || (turn.lastText || '').trim());
     } finally {
@@ -2500,23 +2578,37 @@ class OpencodeRuntime {
     }
   }
   async cancel(taskId) {
-    // PR209 评审 M6：按 taskId 命中在途 turn 并中断其 HTTP 请求——客户端
-    // 不再收终态（deliver reject→failed，回执被 handleCancel 的
-    // cancelledTasks 抑制，用户只见 [已取消]）。服务端 turn 是否随连接
-    // 断开而中止取决于 opencode serve 行为，此处只保证客户端语义。
+    // OpenCode 的 /message 连接断开不代表服务端 turn 已停止。必须先等待
+    // 权威 /abort 端点确认；旧版本/异常 server 无法确认时，回收并重启整个
+    // 托管 server，确保任务不再运行后才能让 handleCancel 发回执。
     if (!taskId) return false;
-    const closes = [];
+    const matches = [];
     for (const [, turn] of this.turns) {
       if (turn.taskId === String(taskId) && turn.req && !turn.req.destroyed) {
-        closes.push(new Promise((resolve) => {
-          turn.req.once('close', resolve);
-          try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { resolve(); }
-        }));
+        turn.cancelled = true;
+        matches.push(turn);
       }
     }
-    if (!closes.length) return false;
-    await Promise.all(closes);
-    return true;
+    if (!matches.length) return false;
+    let verified = true;
+    for (const turn of matches) {
+      try {
+        await this._abortSession(turn.server, turn.ocSessionId);
+      } catch (error) {
+        console.warn('[p3394-gateway] opencode abort unavailable; restarting managed server: ' + (error && error.message ? error.message : String(error)));
+        try {
+          if (!await this._restartServer(turn.server)) {
+            verified = false;
+            console.warn('[p3394-gateway] opencode cancellation termination unverified for task ' + taskId);
+          }
+        } catch (restartError) {
+          verified = false;
+          console.warn('[p3394-gateway] opencode server restart failed after abort fallback: ' + (restartError && restartError.message ? restartError.message : String(restartError)));
+        }
+      }
+      await this._destroyTurnRequest(turn);
+    }
+    return verified;
   }
   async close() {
     this.closing = true;
@@ -3122,21 +3214,33 @@ const server = http.createServer((req, res) => {
 
 let shuttingDown = false;
 async function shutdownGateway(reason) {
-  if (shuttingDown) return;
+  if (shuttingDown) {
+    process.exit(1);
+    return;
+  }
   shuttingDown = true;
   console.log('[p3394-gateway] shutting down (' + reason + ')');
+  // Deadline 必须覆盖 runtime.close() 本身；如果某个 close 永不 settle，不能
+  // 等到它之后才设 failsafe。第二个 shutdown 请求走上面的立即退出分支。
+  const deadline = setTimeout(() => process.exit(1), 3000);
+  deadline.unref();
   // 统一关闭各运行时：回杀运行中的 oneshot CLI 子进程（否则退场后它们继续
   // 跑成孤儿）、sscli 常驻子进程、codex app-server。
-  await Promise.all([
-    sscliRuntime.close(),
-    codexAppServerRuntime.close(),
-    streamJsonRuntime.close(),
-    claudePersistentRuntime.close(),
-    opencodeRuntime.close(),
-    oneshotRuntime.close(),
-  ]);
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 3000).unref();
+  try {
+    await Promise.allSettled([
+      sscliRuntime.close(),
+      codexAppServerRuntime.close(),
+      streamJsonRuntime.close(),
+      claudePersistentRuntime.close(),
+      opencodeRuntime.close(),
+      oneshotRuntime.close(),
+    ]);
+  } finally {
+    server.close(() => {
+      clearTimeout(deadline);
+      process.exit(0);
+    });
+  }
 }
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => { void shutdownGateway(signal); });

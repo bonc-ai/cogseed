@@ -13,6 +13,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
+const { EventEmitter } = require('events');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-gw-test-'));
 const GATEWAY_PORT = 19001;
@@ -91,6 +93,53 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function sha256(content) { return crypto.createHash('sha256').update(content).digest('hex'); }
 
+async function verifyBoundedGatewayProcessCleanup(check) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'gateway.cjs'), 'utf8');
+  const method = /function killProcessTree\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!method) throw new Error('killProcessTree not found');
+  const timeouts = [];
+  const intervals = [];
+  const fakeTimer = (bucket) => (callback, delay) => {
+    const timer = { callback, delay, active: true, unref() {} };
+    bucket.push(timer);
+    return timer;
+  };
+  const clearTimer = (timer) => { if (timer) timer.active = false; };
+  const processKillCalls = [];
+  const killProcessTree = vm.runInNewContext(`(${method})`, {
+    process: { platform: 'linux', kill: (...args) => { processKillCalls.push(args); return true; } },
+    setTimeout: fakeTimer(timeouts),
+    clearTimeout: clearTimer,
+    setInterval: fakeTimer(intervals),
+    clearInterval: clearTimer,
+  });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 8642,
+    exitCode: null,
+    signalCode: null,
+    kill() { return true; },
+    stdin: { destroyed: false, destroy() { this.destroyed = true; } },
+    stdout: { destroyed: false, destroy() { this.destroyed = true; } },
+    stderr: { destroyed: false, destroy() { this.destroyed = true; } },
+    unrefCalled: false,
+    unref() { this.unrefCalled = true; },
+  });
+  let outcome = null;
+  void killProcessTree(child, 'SIGTERM').then((value) => { outcome = value; });
+  const grace = timeouts.find((timer) => timer.active && timer.delay === 3000);
+  if (grace) grace.callback();
+  await Promise.resolve();
+  const deadline = timeouts.find((timer) => timer.active && timer !== grace && timer.delay === 3000);
+  if (deadline) deadline.callback();
+  await Promise.resolve();
+  check('进程树清理：SIGKILL 后最终 deadline 返回 termination-unverified',
+    processKillCalls.some(([pid, signal]) => pid === -8642 && signal === 'SIGKILL')
+      && outcome && outcome.status === 'termination-unverified');
+  check('进程树清理：无法验证退出时销毁句柄并 unref',
+    child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed && child.unrefCalled
+      && child.listenerCount('close') === 0 && intervals.every((timer) => !timer.active));
+}
+
 async function main() {
   await new Promise((resolve) => cogseedServer.listen(COGSEED_PORT, '127.0.0.1', resolve));
   const env = {
@@ -116,6 +165,8 @@ async function main() {
   const check = (name, cond) => { if (!cond) failures.push(name); else console.log('  ✓ ' + name); };
 
   console.log('p3394-gateway smoke:');
+
+  await verifyBoundedGatewayProcessCleanup(check);
 
   // health + manifest
   const health = await request(GATEWAY_PORT, 'GET', '/p3394/health');
@@ -586,6 +637,8 @@ async function main() {
     "if (process.env.FAKE_OC_DESCENDANT_PID) fs.appendFileSync(process.env.FAKE_OC_DESCENDANT_PID, descendant.pid + '\\n');",
     "let sseClients = [];",
     "let sessionSeq = 0;",
+    "const inflight = new Map();",
+    "const abortUnavailable = new Set();",
     "const server = http.createServer((req, res) => {",
     "  const send = (obj) => { for (const r of sseClients) r.write('data: ' + JSON.stringify(obj) + '\\n\\n'); };",
     "  if (req.method === 'POST' && req.url === '/session') {",
@@ -603,11 +656,8 @@ async function main() {
     "      const prompt = JSON.parse(body).parts[0].text;",
     "      if (prompt.includes('CANCEL-OPENCODE')) {",
     "        if (process.env.FAKE_OC_INFLIGHT) fs.writeFileSync(process.env.FAKE_OC_INFLIGHT, sid);",
-    "        setTimeout(() => {",
-    "          if (res.destroyed) return;",
-    "          res.writeHead(200, { 'content-type': 'application/json' });",
-    "          res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: CANCEL-OPENCODE' }] }));",
-    "        }, 1500);",
+    "        inflight.set(sid, res);",
+    "        if (prompt.includes('ABORT-UNAVAILABLE')) abortUnavailable.add(sid);",
     "        return;",
     "      }",
     //      reasoning part 先建映射，其 delta 必须被网关丢弃（不进正文气泡）
@@ -621,6 +671,24 @@ async function main() {
     "      res.writeHead(200, { 'content-type': 'application/json' });",
     "      res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: ' + prompt.slice(0, 20) }] }));",
     "    });",
+    "    return;",
+    "  }",
+    "  const mAbort = req.url.match(/^\\/session\\/([^/]+)\\/abort$/);",
+    "  if (req.method === 'POST' && mAbort) {",
+    "    const sid = decodeURIComponent(mAbort[1]);",
+    "    if (process.env.FAKE_OC_ABORT_LOG) fs.appendFileSync(process.env.FAKE_OC_ABORT_LOG, 'request ' + sid + '\\n');",
+    "    if (abortUnavailable.has(sid)) { res.writeHead(404); res.end('{}'); return; }",
+    "    const active = inflight.get(sid);",
+    "    if (active && !active.destroyed) {",
+    "      active.writeHead(200, { 'content-type': 'application/json' });",
+    "      active.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: CANCEL-OPENCODE' }] }));",
+    "      inflight.delete(sid);",
+    "    }",
+    "    setTimeout(() => {",
+    "      if (process.env.FAKE_OC_ABORT_LOG) fs.appendFileSync(process.env.FAKE_OC_ABORT_LOG, 'ack ' + sid + '\\n');",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ ok: true }));",
+    "    }, 500);",
     "    return;",
     "  }",
     "  if (req.method === 'GET' && req.url === '/event') {",
@@ -641,11 +709,12 @@ async function main() {
   const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
   const ocDescendantPidFile = path.join(tmp, 'oc-server-descendant-pids.txt');
   const ocInflightFile = path.join(tmp, 'oc-server-inflight.txt');
+  const ocAbortLog = path.join(tmp, 'oc-server-abort.log');
   // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
   // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
   const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
   fs.mkdirSync(ocSharedCwd, { recursive: true });
-  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile, FAKE_OC_INFLIGHT: ocInflightFile };
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile, FAKE_OC_INFLIGHT: ocInflightFile, FAKE_OC_ABORT_LOG: ocAbortLog };
   const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let ocPersistGwLog = '';
   ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
@@ -684,10 +753,30 @@ async function main() {
   check('opencode 常驻：取消前 HTTP turn 确实在途', fs.existsSync(ocInflightFile));
   const ocCancelCtl = { message_id: 'ocm-cancel-ctl', session_id: 'oc-fs-cancel', task_id: 'oct-cancel', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'oc-idem-cancel-ctl' };
   await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocCancelCtl }, GATEWAY_TOKEN);
-  await sleep(300);
+  await sleep(200);
+  check('opencode 常驻：abort 确认前不发送取消回执', !received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'));
+  for (let i = 0; i < 30 && !received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let ocAbortEntries = [];
+  try { ocAbortEntries = fs.readFileSync(ocAbortLog, 'utf8').split('\n').filter(Boolean); } catch {}
+  check('opencode 常驻：取消调用权威 /session/:id/abort 端点', ocAbortEntries.some((line) => line.startsWith('request ')));
+  check('opencode 常驻：仅在 abort 确认后发送取消回执', ocAbortEntries.some((line) => line.startsWith('ack ')) && received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'));
   check('opencode 常驻：handleCancel 命中并中断在途 HTTP 请求', ocPersistGwLog.includes('cancel task oct-cancel (killed)'));
-  await sleep(1500);
+  await sleep(300);
   check('opencode 常驻：取消后不发送正常终态', !received.some((e) => e.session_id === 'oc-fs-cancel' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY')));
+
+  fs.rmSync(ocInflightFile, { force: true });
+  const ocFallbackEnv = { message_id: 'ocm-cancel-fallback', session_id: 'oc-fs-cancel-fallback', task_id: 'oct-cancel-fallback', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'CANCEL-OPENCODE ABORT-UNAVAILABLE' }] }, idempotency_key: 'oc-idem-cancel-fallback', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocFallbackEnv }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !fs.existsSync(ocInflightFile); i += 1) await sleep(50);
+  const ocFallbackCtl = { message_id: 'ocm-cancel-fallback-ctl', session_id: 'oc-fs-cancel-fallback', task_id: 'oct-cancel-fallback', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'oc-idem-cancel-fallback-ctl' };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocFallbackCtl }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'oc-fs-cancel-fallback' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let ocRestartPids = [];
+  try { ocRestartPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean).map(Number); } catch {}
+  check('opencode 常驻：abort 不可用时重启托管 server 后才回执', ocRestartPids.length === 2 && received.some((e) => e.session_id === 'oc-fs-cancel-fallback' && (e.payload.parts[0].text || '') === '[已取消]'));
+  let ocOldServerGone = ocRestartPids.length > 0;
+  if (ocRestartPids.length > 0) { try { process.kill(ocRestartPids[0], 0); ocOldServerGone = false; } catch {} }
+  check('opencode 常驻：abort 不可用时旧 server 已终止', ocOldServerGone);
   ocPersistGw.send({ type: 'p3394-shutdown' });
   let ocShutdownClosed = false;
   await Promise.race([
@@ -708,6 +797,58 @@ async function main() {
     });
     check('opencode 常驻：gateway close 前 server 进程树已全部退出', ocTreePids.length === 2 && survivors.length === 0);
   }
+
+  // shutdown deadline 必须在 runtime.close() 之前生效；第二次 shutdown
+  // 请求必须立即退出。预加载器让 oneshot child 永不 close，稳定模拟挂死的
+  // runtime.close()，且不依赖 POSIX 信号语义。
+  const shutdownHangPreload = path.join(tmp, 'fake-hanging-spawn.cjs');
+  fs.writeFileSync(shutdownHangPreload, [
+    "'use strict';",
+    "const { EventEmitter } = require('events');",
+    "require('child_process').spawn = function () {",
+    "  const child = new EventEmitter();",
+    "  child.pid = 987654; child.exitCode = null; child.signalCode = null;",
+    "  child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();",
+    "  child.kill = () => true; child.unref = () => {};",
+    "  return child;",
+    "};",
+    "process.kill = () => true;",
+  ].join('\n'));
+  const startHangingGateway = async (port, suffix) => {
+    const hangEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require=' + shutdownHangPreload].filter(Boolean).join(' '), P3394_GATEWAY_PORT: String(port), P3394_GATEWAY_HOME: path.join(tmp, 'shutdown-' + suffix), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'oneshot', P3394_AGENT_CLI: 'fake-hang', P3394_HEARTBEAT_MS: '0' };
+    const child = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: hangEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    let log = '';
+    child.stdout.on('data', (c) => { log += c; });
+    child.stderr.on('data', (c) => { log += c; });
+    for (let i = 0; i < 30 && !log.includes('P3394 endpoint'); i += 1) await sleep(50);
+    const envelope = { message_id: 'shutdown-' + suffix, session_id: 'shutdown-' + suffix, task_id: 'shutdown-' + suffix, kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'hang' }] }, idempotency_key: 'shutdown-' + suffix };
+    await request(port, 'POST', '/p3394/envelope', { envelope });
+    await sleep(100);
+    return { child, getLog: () => log };
+  };
+  const waitForChildClose = (child, timeoutMs) => new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) { resolve(true); return; }
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once('close', () => { clearTimeout(timer); resolve(true); });
+  });
+
+  const deadlineGw = await startHangingGateway(GATEWAY_PORT + 98, 'deadline');
+  deadlineGw.child.send({ type: 'p3394-shutdown' });
+  const deadlineClosed = await waitForChildClose(deadlineGw.child, 4000);
+  check('shutdown：runtime.close 挂死时仍受预先启动的 3s deadline 约束', deadlineClosed);
+  if (!deadlineClosed) { deadlineGw.child.kill('SIGKILL'); await waitForChildClose(deadlineGw.child, 1000); }
+
+  const secondSignalGw = await startHangingGateway(GATEWAY_PORT + 99, 'second-signal');
+  const signalHangingGateway = () => {
+    if (process.platform === 'win32') secondSignalGw.child.send({ type: 'p3394-shutdown' });
+    else secondSignalGw.child.kill('SIGTERM');
+  };
+  signalHangingGateway();
+  for (let i = 0; i < 20 && !secondSignalGw.getLog().includes('shutting down'); i += 1) await sleep(25);
+  signalHangingGateway();
+  const secondSignalClosed = await waitForChildClose(secondSignalGw.child, 750);
+  check('shutdown：第二次信号在清理挂起时强制立即退出', secondSignalClosed);
+  if (!secondSignalClosed) { secondSignalGw.child.kill('SIGKILL'); await waitForChildClose(secondSignalGw.child, 1000); }
 
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
