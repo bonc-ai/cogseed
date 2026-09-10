@@ -545,7 +545,7 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
       configModels: 'gemini',
       env: { HOME: '/tmp/nope' },
       readFileSync: (p: string) => {
-        if (p.replace(/\\\\/g, '/').endsWith('.gemini/settings.json')) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
+        if (p.replace(/\\/g, '/').endsWith('.gemini/settings.json')) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
         throw new Error('ENOENT: ' + p);
       },
     }) as { status: string; current: string; models: Array<{ id: string }> };
