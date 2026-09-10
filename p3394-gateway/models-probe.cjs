@@ -292,9 +292,10 @@ const INSPECT_PARSERS = {
 
 function waitForProbeTermination(child, killTreeFn, signal, deadlineMs = 2000) {
   return new Promise((resolve) => {
-    let killDone = false;
+    let requiredKillDone = false;
     let childClosed = typeof child.once !== 'function';
     let finished = false;
+    let forceStarted = signal === 'SIGKILL';
     const onClose = () => {
       childClosed = true;
       maybeFinish();
@@ -310,17 +311,31 @@ function waitForProbeTermination(child, killTreeFn, signal, deadlineMs = 2000) {
       resolve();
     };
     const maybeFinish = () => {
-      if (killDone && childClosed) finish();
+      if (requiredKillDone && childClosed) finish();
     };
     if (!childClosed) child.once('close', onClose);
-    const deadline = setTimeout(finish, deadlineMs);
+    const invokeKill = (nextSignal) => {
+      let killCompletion;
+      try { killCompletion = killTreeFn(child, nextSignal); } catch { killCompletion = undefined; }
+      void Promise.resolve(killCompletion).then(
+        () => {
+          if (nextSignal === 'SIGKILL' || !forceStarted) requiredKillDone = true;
+          maybeFinish();
+        },
+        () => {
+          if (nextSignal === 'SIGKILL' || !forceStarted) requiredKillDone = true;
+          maybeFinish();
+        },
+      );
+    };
+    const deadline = setTimeout(() => {
+      if (finished || forceStarted) return;
+      forceStarted = true;
+      requiredKillDone = false;
+      invokeKill('SIGKILL');
+    }, deadlineMs);
     if (typeof deadline.unref === 'function') deadline.unref();
-    let killCompletion;
-    try { killCompletion = killTreeFn(child, signal); } catch { killCompletion = undefined; }
-    void Promise.resolve(killCompletion).then(
-      () => { killDone = true; maybeFinish(); },
-      () => { killDone = true; maybeFinish(); },
-    );
+    invokeKill(signal);
   });
 }
 

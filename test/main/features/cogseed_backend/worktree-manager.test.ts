@@ -175,6 +175,13 @@ describe('CogSeed worktree manager', () => {
     })).rejects.toMatchObject({ code: 'E_WORKTREE_MAIN_REPOSITORY' });
   });
 
+  it.runIf(process.platform === 'win32')('resolves a registered managed worktree with different path casing', async () => {
+    const service = manager();
+    const created = await service.create('worktree-user', { branch: 'dev/case-alias' });
+    const casedName = path.basename(created.path).toUpperCase();
+    await expect(service.resolve('worktree-user', casedName)).resolves.toBe(created.path);
+  });
+
   it.runIf(DIRECTORY_LINKS_SUPPORTED && process.platform !== 'win32')('recognizes the main repository through a canonical directory alias on non-Windows', async () => {
     const repositoryAlias = path.join(tempRoot, 'repository-alias');
     fs.symlinkSync(repository, repositoryAlias, DIRECTORY_LINK_TYPE);
