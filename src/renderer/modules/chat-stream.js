@@ -142,20 +142,19 @@ function _csFirstArg(args, keys) {
 }
 
 function _csFmtDur(ms) {
-  const total = Math.max(1, Math.round((Number(ms) || 0) / 1000));
+  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
   if (total < 60) return `${total} 秒`;
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
 
-/** 任务总耗时格式（子安 2026-09-08 需求）：「X分X.X秒」——本地发送时刻
- *  到本地收尾时刻的纯本地差值；分位为 0 时省略分；秒保留 1 位小数。 */
+/** 任务总耗时格式（交互设计 2026-09-09 修订）：整秒计数（「1 秒」「2 秒」，
+ *  不带小数位）——本地发送时刻到本地收尾时刻的纯本地差值；分位为 0 时
+ *  省略分。发送瞬间即显示「0 秒」起跳。 */
 function _csFmtTaskDur(ms) {
   const v = Math.max(0, Number(ms) || 0);
-  const sec = v / 1000;
-  if (sec < 60) return `${sec.toFixed(1)} 秒`;
-  const m = Math.floor(sec / 60);
-  const s = sec - m * 60;
-  return `${m} 分 ${s.toFixed(1)} 秒`;
+  const sec = Math.floor(v / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  return `${Math.floor(sec / 60)} 分 ${sec % 60} 秒`;
 }
 
 // ── 活动流骨架（每回合一个，无外框；计时/收起徽章挂消息头） ────────────────
@@ -266,7 +265,7 @@ function _csConsolidateHeaderBadges(flow, host) {
     oldFlow.dataset.csSuperseded = '1';
   }
 }
-/** 徽章挂进消息头时与「模型名称」芯片换位（子安 2026-09-08 截图要求）：
+/** 徽章挂进消息头时与「模型名称」芯片换位（交互设计 2026-09-08 截图要求）：
  *  徽章（+停止钮）占据 exec-meta 原位置（发送者名后），exec-meta 挪到消息头
  *  末尾。exec-meta 缺省（或宿主是流内徽章行 fallback）时退化为末尾追加。 */
 function _csMountBadgeInHost(host, badge, stopBtn) {
@@ -304,7 +303,7 @@ function _csCreateFlow(cid, turnId, opts) {
     body.appendChild(loading);
 
     const badge = _csCreateBadge(flow, opts);
-    // 就近停止按钮已移除（子安 2026-09-08：该按钮无实际作用——主输入区
+    // 就近停止按钮已移除（交互设计 2026-09-08：该按钮无实际作用——主输入区
     // 停止按钮已覆盖完整 abort 链，此副本平时不可达）；徽章单独挂载。
     _csMountBadgeInHost(host, badge, null);
     _csStartTicker(flow, opts && opts.startedAtMs);
@@ -341,8 +340,22 @@ function _csEnsureFlow(cid, anchor, turnId, opts) {
   if (flow && (flow.isConnected || !!(anchor && anchor.contains && anchor.contains(flow)))) {
     return { flow, body: flow.querySelector('.cs-flow-body') };
   }
+  // 发送即起计的 pending 流接管（交互设计 2026-09-09 需求：计时器在发送
+  // 那一刻出现，不等模型首事件）：prewarm 建的流挂在同一 anchor 消息树
+  // 内、以占位 turnId 注册——真 turnId 的首条事件到达时迁移 key 并转正。
+  if (!flow && anchor) {
+    for (const [pendingKey, pendingFlow] of _csPanels.entries()) {
+      if (pendingFlow.dataset.csPending !== '1') continue;
+      if (!(anchor.contains && anchor.contains(pendingFlow))) continue;
+      _csPanels.delete(pendingKey);
+      pendingFlow.dataset.csPending = '';
+      pendingFlow.dataset.csTurn = turnId;
+      _csPanels.set(key, pendingFlow);
+      return { flow: pendingFlow, body: pendingFlow.querySelector('.cs-flow-body') };
+    }
+  }
   // 注册表残留清理（真机踩坑 2026-09-08）：同 key 的 disconnected 旧流
-  // 先从注册表移除，防止 size 膨胀与惰性清理误删活跃流；不调用
+  // 先从注册表移除，防止 size 膀胀与惰性清理误删活跃流；不调用
   // _csRemoveFlow（旧 DOM 已销毁，重复 remove 无害但多余）。
   if (flow) _csPanels.delete(key);
   flow = _csCreateFlow(cid, turnId, { ...opts, anchor });
@@ -401,7 +414,7 @@ function _csSetFlowState(flow, status, error, endedAtMs) {
       label.textContent = status === 'failed' ? `失败${error ? `：${error}` : ''}`
         : status === 'cancelled' ? '已取消' : '已完成';
     }
-    // 工具数与状态拆开展示（子安 2026-09-08：「已完成 4个工具」混杂不清，
+    // 工具数与状态拆开展示（交互设计 2026-09-08：「已完成 4个工具」混杂不清，
     // 拆为独立「N 次工具调用」段，无工具行时整段不显示）。
     let tools = badge.querySelector('.cs-badge-tools');
     if (!tools) {
@@ -430,7 +443,7 @@ tools.className = 'cs-badge-tools';
     }
     if (elapsed) {
       const t0 = Number(flow.dataset.csT0);
-      // 终态定格（子安 2026-09-08 任务耗时需求）：t0 优先来自本地发送时刻
+      // 终态定格（交互设计 2026-09-08 任务耗时需求）：t0 优先来自本地发送时刻
       // （localSendMs 链路），终点用本地墙钟收尾——整段计时纯本地。
       // 展示格式「X分X.X秒」（分 0 省略，秒保留 1 位小数）。
       const localAnchor = flow._csLocalSendMs;
@@ -440,7 +453,7 @@ tools.className = 'cs-badge-tools';
     }
   }
   if (status !== 'completed') return;
-  // 完成即收尾（子安 2026-09-08）：过程区块默认收起——运行中展开跟踪、
+  // 完成即收尾（交互设计 2026-09-08）：过程区块默认收起——运行中展开跟踪、
   // 完成后自动折叠成徽章摘要行，点击徽章可再展开回看。
   if (flow.dataset.csCollapsed !== '1') _csSetCollapsed(flow, true);
   // 纯文字回合（无任何动作行）连流壳+徽章一起撤，不留空壳。
@@ -592,7 +605,7 @@ function _csRenderDiffRow(row, payload) {
 function _csRenderUsageRow(row, payload) {
   const p = payload || {};
   const bits = [];
-  // 显示分层（子安 2026-09-08 20:22 确认方案）：主显示只露裸输入+输出
+  // 显示分层（交互设计 2026-09-08 20:22 确认方案）：主显示只露裸输入+输出
   // （真实增量，数值小且直观）；缓存命中率 ≥50% 显示正向标记「缓存 xx%」
   // （大数不吓人，省钱变亮点）；四项全量明细放悬停 title。与页脚
   // messageMetricsLine 同口径。
@@ -658,7 +671,7 @@ function _csRenderThinkRow(row) {
     ${full}`;
 }
 
-/** 文字段实时 markdown 渲染（子安 2026-09-08：流式期间 # ** 等符号裸露）。
+/** 文字段实时 markdown 渲染（交互设计 2026-09-08：流式期间 # ** 等符号裸露）。
  *  rAF 节流逐段渲染；renderer 不可用（测试 stub）退化为纯文本。渲染失败
  *  静默回退 textContent，正文永不丢。 */
 function _csPaintTextSeg(seg) {
@@ -805,25 +818,48 @@ function _csRenderInteractionCard(body, ev) {
   return card;
 }
 
-/** 回合收尾：时间线正文交回 conversation 原管道（markdown/结构块保留），
- *  流内文字段移除，正文回到消息气泡位。流宿主=消息元素。 */
+/** 回合收尾：时间线「开放段」（最终正文）交回 conversation 原管道
+ *  （markdown/结构块保留），流内文字段只移除开放段——已关闭段
+ *  （cs-closed=被工具/思考截断的中间叙述）保留在时间线里按原时序
+ *  展示（实机反馈 2026-09-09：展开执行过程只见工具调用，AI 的中间
+ *  叙述无处可见）。流宿主=消息元素。 */
 function _csFinalizePanelText(flow) {
-  const txt = flow.dataset.csText || '';
+  // 开放段（无 cs-closed 标记）= 回合收尾时仍未被截断的最后一段 =
+  // 最终正文；已关闭段是中间叙述，留在过程时间线。
+  const openSegs = [];
+  let openText = '';
+  for (const seg of Array.from(flow.querySelectorAll('.cs-text'))) {
+    if (seg.dataset.csClosed === '1') continue;
+    openText += String(seg.dataset.csSeg || '');
+    openSegs.push(seg);
+  }
   const anchor = flow.parentNode;
-  if (txt && anchor) {
+  // 收尾无开放段（最后动作是工具/思考、无最终叙述）时，对齐 bus 的
+  // 回退语义（final 分支：segmentText 空则正文取全文）——交回全部文字
+  // 段聚合并清空：实时与重放一致、正文与过程区不重复（否则实时气泡
+  // 空占位、重放却按 GroupMessage.text 显示全文，刷新即跳变）。
+  let handBack = openText;
+  let removeSegs = openSegs;
+  if (!openText) {
+    const all = Array.from(flow.querySelectorAll('.cs-text'));
+    if (all.length) {
+      handBack = all.map((s) => String(s.dataset.csSeg || '')).join('');
+      removeSegs = all;
+    }
+  }
+  if (handBack && anchor) {
     try {
       if (typeof _streamingAppendFinalDelta === 'function') {
-        _streamingAppendFinalDelta(anchor, txt);
+        _streamingAppendFinalDelta(anchor, handBack);
       } else {
         const finalEl = anchor.querySelector('[data-role="final"]');
-        if (finalEl) finalEl.textContent = txt;
+        if (finalEl) finalEl.textContent = handBack;
       }
     } catch (err) {
       _csLog.warn('timeline text hand-back failed', { error: String(err && err.message || err) });
     }
   }
-  for (const seg of Array.from(flow.querySelectorAll('.cs-text'))) seg.remove();
-  delete flow.dataset.csText;
+  for (const seg of removeSegs) seg.remove();
   // 恢复运行时隐藏的空气泡（正文已交回，气泡重新有内容）。
   if (flow.dataset.csBubbleHidden === '1') {
     const bubble = anchor && anchor.querySelector
@@ -856,7 +892,7 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
     // 吞掉、面板永久空壳（2026-09-08 点击徽章无反应事故）。断链竞态由
     // _csEnsureFlow 的复用判定（connected 或在本 anchor 树内）吸收。
     if (chatEvent.type === 'chat.turn.started') {
-      // 任务耗时本地计时（子安 2026-09-08）：优先用渲染进程捕获的
+      // 任务耗时本地计时（交互设计 2026-09-08）：优先用渲染进程捕获的
       // 「用户点击发送」墙钟（anchor.dataset.localSendMs，sendInConversation
       // 在 onAssistantStart 挂载）——本地发送→本地收尾，全程不依赖模型
       // 侧时间数据（模型收到时刻/开始思考/吞吐）。缺省回退事件时间戳。
@@ -873,19 +909,18 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
       const { flow, body } = _csEnsureFlow(cid, anchor, turnId);
       if (kind === 'text') {
         // 时间线接管正文（边思考边说边执行的真实交错）：delta 追加到当前
-        // 文字段，遇其它 item 关段；全文聚合在 flow.dataset.csText，回合
-        // 收尾交回 conversation 原管道渲染（markdown/结构块不损失）。
+        // 文字段，遇其它 item 关段；回合收尾只把「开放段」（最终正文）
+        // 交回 conversation 原管道渲染（markdown/结构块不损失），已关闭
+        // 段（中间叙述）留在时间线按原时序展示。
         _csCloseThinkRow(body);
         const piece = String((payload && payload.delta) || '');
-        flow.dataset.csText = (flow.dataset.csText || '') + piece;
         const kids = body.children;
         const last = kids[kids.length - 1];
         let seg = (last && last.className && String(last.className).includes('cs-text')
           && last.dataset.csClosed !== '1') ? last : null;
         if (!seg) {
           // 投影器在工具行后会补发 '\n\n' 分隔 delta（供 markdown 段落分隔）；
-          // 时间线段剥掉段首空白（行间距已分隔），否则渲染出一块空行。聚合
-          // 文本（flow.dataset.csText）不受影响，交回后 markdown 仍需要它。
+          // 时间线段剥掉段首空白（行间距已分隔），否则渲染出一块空行。
           const lead = piece.replace(/^[ \t\r\n]+/, '');
           if (!lead && !piece.trim()) return;
           seg = document.createElement('div');
@@ -900,11 +935,38 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         return;
       }
       // 非文字 item：关闭当前文字段与思考行（下次各自新开段，保持交错）。
+      // 例外：usage 等收尾行不截断正文——与 bus flushTextSegmentForPersist
+      // 的截断语义对齐（只有工具/思考 flush；usage 后的叙述仍是最终段的
+      // 一部分）。否则最终段被 usage 关掉后收尾交不回气泡、正文困在过程区。
+      const cutsText = kind !== 'usage';
       const kids2 = body.children;
       const openSeg = kids2[kids2.length - 1];
-      if (openSeg && String(openSeg.className || '').includes('cs-text')) openSeg.dataset.csClosed = '1';
+      if (cutsText && openSeg && String(openSeg.className || '').includes('cs-text')) openSeg.dataset.csClosed = '1';
       if (kind === 'reasoning') {
-        _csAppendReasoning(body, String((payload && payload.text) || ''));
+        const rDelta = String((payload && payload.delta) || '');
+        const rFull = String((payload && payload.text) || '');
+        if (status === 'inProgress') {
+          // 思考实时流式（交互设计 2026-09-09 需求）：增量逐段落入思考行，
+          // 行自动展开——进行中就能看到推理进度，不等完成态折叠块。
+          if (rDelta) {
+            const row = _csAppendReasoning(body, rDelta);
+            row.classList.add('cs-open');
+          }
+          return;
+        }
+        // completed：与思考行已画内容做前缀去重——实时流此前已按 delta
+        // 画过（整段=已画前缀+尾部差额），只补差额防重复；重放无前置
+        // 增量，整段落入新行（历史 completed 条目无 inProgress 落盘）。
+        const kids3 = body.children;
+        const openThink = kids3[kids3.length - 1];
+        const liveThink = openThink && String(openThink.className || '').includes('cs-row-think')
+          && openThink.dataset.csClosed !== '1' ? openThink : null;
+        if (liveThink && rFull && rFull.startsWith(String(liveThink.dataset.csFull || ''))) {
+          const tail = rFull.slice(String(liveThink.dataset.csFull || '').length);
+          if (tail) _csAppendReasoning(body, tail);
+        } else {
+          _csAppendReasoning(body, rFull);
+        }
         return;
       }
       _csCloseThinkRow(body);
@@ -1073,6 +1135,20 @@ window.chatStreamHasPanel = function chatStreamHasPanel(cid) {
   return false;
 };
 
+/** 发送即起计（交互设计 2026-09-09 需求：计时器在用户点击发送那一刻立即
+ *  出现，不等模型首事件——首 token 前有数秒空窗）。以占位 turnId 建
+ *  pending 流（徽章+计时+loading 全套挂载），真 turnId 的首条事件到达
+ *  时由 _csEnsureFlow 迁移接管；发送失败无事件时 chatStreamFinalize
+ *  的 cid 兜底把它收尾为 cancelled，不泄漏。 */
+window.chatStreamPrewarm = function chatStreamPrewarm(cid, anchor, startedAtMs) {
+  if (!anchor) return;
+  const pendingTurnId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const { flow } = _csEnsureFlow(cid, anchor, pendingTurnId, {
+    startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : Date.now(),
+  });
+  if (flow) flow.dataset.csPending = '1';
+};
+
 /**
  * 完成/历史态重建：从消息持久化的 process items 重建活动流，插在消息元素
  * 内部（消息头之后、正文之前）。conv-core 统一过程 UI——_renderPersistedProcess
@@ -1145,7 +1221,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       if (!flow) return false;
       if (Number.isFinite(startedAtMs)) flow.dataset.csT0 = String(startedAtMs);
       else if (Number.isFinite(endedAtMs) && Number.isFinite(lastDurMs)) flow.dataset.csT0 = String(endedAtMs - lastDurMs);
-      // 思考行推导计时（子安 2026-09-08 PRD A1：历史思考块旁也显示实测
+      // 思考行推导计时（交互设计 2026-09-08 PRD A1：历史思考块旁也显示实测
       // 耗时）。reasoning 条目无 timing，但相邻条目有权威时间锚：
       //   锚点序列 = turn.startedAt / 工具 timing.startedAtMs / 回合 endedAtMs
       // 思考行 i 的时长 = [前一锚点, 后一锚点] 窗口（思考被下一动作截断）。
@@ -1171,7 +1247,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
         if (entry.type !== 'chatItem') continue;
         const ev = entry.item;
         if (!ev || typeof ev !== 'object' || ev.type !== 'chat.item') continue;
-        // 文本段（子安 2026-09-08：展开缺 AI 中间输出）：completed 的整段
+        // 文本段（交互设计 2026-09-08：展开缺 AI 中间输出）：completed 的整段
         // 条目是「被后续工具/思考截断的中间正文」——消息体只有最终段，这些
         // 不落面板就永远丢了；inProgress 增量条目（CLI 逐 token 旧格式）
         // 与最终段跳过，防与消息体重复。
@@ -1271,7 +1347,7 @@ window.chatStreamRenderPersisted = function chatStreamRenderPersisted(cid, msgDi
       _csAppendReasoning(body, text);
     }
     if (!body.children.length) { _csRemoveFlow(flow); return false; }
-    // 思考行时长（子安 2026-09-08 PRD A1）：legacy progress 落盘无逐条
+    // 思考行时长（交互设计 2026-09-08 PRD A1）：legacy progress 落盘无逐条
     // timing，但多数消息带权威 metrics 窗（msgDiv._msgMetrics.startedAt →
     // completedAt，由 appendChatMessage 在重放前挂载）。纯思考回合整段
     // 思考落在一个窗口内；窗口缺失（极老数据）仍只定稿不编造。

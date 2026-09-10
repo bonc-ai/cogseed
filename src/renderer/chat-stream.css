@@ -50,7 +50,7 @@
 .cs-badge::after { content: '▾'; font-size: var(--font-size-1); line-height: 1; flex: none; }
 .cs-badge[data-cs-collapsed="1"]::after { content: '▸'; }
 .cs-badge-elapsed { flex: none; font-variant-numeric: tabular-nums; }
-/* 工具数与状态拆开展示（子安 2026-09-08）：独立小分段，前置间隔点，
+/* 工具数与状态拆开展示（交互设计 2026-09-08）：独立小分段，前置间隔点，
    与「已完成」文本在徽章内自然分组；无工具行时元素为空不占位。 */
 .cs-badge-tools { flex: none; opacity: .72; }
 .cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
@@ -114,7 +114,7 @@
   font-size: var(--font-size-2);
 }
 .cs-target {
-  /* 不再 flex:1 撑满——那会把耗时推到行最右（子安 2026-09-08：工具行
+  /* 不再 flex:1 撑满——那会把耗时推到行最右（交互设计 2026-09-08：工具行
      耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
      max-width 截断保护。 */
   flex: 0 1 auto; min-width: 0;
@@ -154,7 +154,7 @@
 .cs-row.cs-open .cs-row-out { display: block; }
 .cs-row-out pre {
   margin: 2px 0 3px; padding: 5px 8px; border-radius: var(--radius-1);
-  /* 输出块无卡片感（子安 2026-09-08 21:07）：半透明灰在浅底上仍是可见
+  /* 输出块无卡片感（交互设计 2026-09-08 21:07）：半透明灰在浅底上仍是可见
      "卡"；改无背景+左侧竖线引导（ZCode 活动流风格），保住可读性。 */
   background: transparent; border-left: 2px solid var(--color-stream-guide);
   max-height: 200px; overflow: auto;
@@ -179,7 +179,7 @@
 /* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
 /* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
    pre-wrap 会保留源文本换行叠加段落间距，出现「一行内容隔几行空白」
-   （子安 2026-09-08 19:15 真机反馈）。markdown 段内禁 pre-wrap、去
+   （交互设计 2026-09-08 19:15 真机反馈）。markdown 段内禁 pre-wrap、去
    行高叠加，段落间距完全交给 markdown-body。 */
 .cs-text { padding: 4px 6px; font-size: var(--font-size-3); color: var(--text, var(--color-stream-ink)); }
 .cs-text:not(:has(.markdown-body)) {

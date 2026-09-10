@@ -36,6 +36,190 @@ const TRANSCRIPT_BYTES = 16 * 1024;
 const MAX_REPLY_BYTES = 100 * 1024;
 const STREAM_CAP_CHARS = 256 * 1024;
 
+// Windows cannot execute npm .cmd/.bat shims or extensionless Node shebang
+// scripts through CreateProcess directly. Keep this aligned with gateway.cjs'
+// oneshot launcher so the sscli shim has the same CLI resolution contract.
+const WINDOWS_CMD_SCRIPT_RE = /\.(?:cmd|bat)$/i;
+const WINDOWS_NATIVE_EXT_RE = /\.(?:exe|com)$/i;
+const CMD_META_RE = /([()\][%!^"`<>&|;, *?])/g;
+
+function escapeCmdCommand(value) {
+  return String(value).replace(CMD_META_RE, '^$1');
+}
+
+function escapeCmdArgument(value, doubleEscapeMetaChars) {
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Preserve every prompt segment as one inert argv
+  // value instead of silently dropping everything after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
+  escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+  escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
+  escaped = '"' + escaped + '"';
+  escaped = escaped.replace(CMD_META_RE, '^$1');
+  if (doubleEscapeMetaChars) escaped = escaped.replace(CMD_META_RE, '^$1');
+  return escaped;
+}
+
+function windowsLookPath(cli) {
+  if (!cli) return null;
+  if (path.isAbsolute(cli) || cli.includes('\\') || cli.includes('/')) {
+    const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+    const candidates = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+    for (const candidate of candidates) {
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+    return null;
+  }
+  const hasExt = /\.(?:cmd|bat|exe|com)$/i.test(cli);
+  const pathValue = process.env.PATH || process.env.Path || '';
+  const dirs = pathValue.split(';').map((value) => value.trim()).filter(Boolean);
+  const names = hasExt ? [cli] : [cli + '.cmd', cli + '.bat', cli + '.exe', cli + '.com', cli];
+  for (const dir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* keep looking */ }
+    }
+  }
+  return null;
+}
+
+function buildWindowsCmdInvocation(cli, args) {
+  const normalized = path.win32.normalize(cli);
+  const doubleEscape = /(?:node_modules[\\/]\.bin|AppData[\\/]Roaming[\\/]npm)[\\/][^\\/]+\.cmd$/i
+    .test(normalized);
+  const shellCommand = [
+    escapeCmdCommand(normalized),
+    ...args.map((arg) => escapeCmdArgument(arg, doubleEscape)),
+  ].join(' ');
+  return {
+    command: process.env.ComSpec || process.env.COMSPEC || 'cmd.exe',
+    args: ['/d', '/s', '/c', '"' + shellCommand + '"'],
+  };
+}
+
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
+function isNodeShebangScript(cli) {
+  try {
+    const fd = fs.openSync(cli, 'r');
+    const buf = Buffer.alloc(256);
+    const count = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    return /^#!.*\bnode\b/.test(buf.toString('utf8', 0, count));
+  } catch {
+    return false;
+  }
+}
+
+function spawnCli(cli, args, options) {
+  if (process.platform !== 'win32') return spawn(cli, args, options);
+  const resolved = windowsLookPath(cli) || cli;
+  if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...options,
+        env: { ...(options.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
+    const invocation = buildWindowsCmdInvocation(resolved, args);
+    return spawn(invocation.command, invocation.args, { ...options, windowsVerbatimArguments: true });
+  }
+  if (!WINDOWS_NATIVE_EXT_RE.test(resolved) && isNodeShebangScript(resolved)) {
+    return spawn(process.execPath, [resolved, ...args], options);
+  }
+  return spawn(resolved, args, options);
+}
+
+function windowsSystem32Tool(name) {
+  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  return path.win32.join(root, 'System32', name);
+}
+
+/** Terminate the CLI and its descendants; child.kill() only kills cmd.exe on Windows. */
+function killProcessTree(child, signal = 'SIGTERM') {
+  const pid = child && child.pid;
+  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
+  if (pid && process.platform === 'win32') {
+    let killer;
+    try {
+      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+      const onClose = (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch {
+        fallbackOnce();
+        finish();
+      }
+    });
+  }
+  if (pid && process.platform !== 'win32') {
+    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
+  }
+  fallback();
+  return Promise.resolve();
+}
+
 // ── 启动参数解析 ──
 function parseArgv(argv) {
   const out = {};
@@ -208,7 +392,7 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
     // 冷启动可见性：CLI 启动占每轮首字延迟大头（实测 8-12s），spawn 即告知，
     // 超时未见首字再提示一次——无提示时用户面对的是无响应黑盒。
     emitEvent({ event: 'progress', request_id: requestId, text: '正在启动 ' + cliLabel() + '…' });
-    const child = spawn(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnCli(CLI, args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] });
     // taskId（deliver 帧 task_id，网关 handleCancel 的取消键）与 requestId
     // （网关内部 req-N，仅应答关联用）分属两个命名空间，都要记——cancel
     // 帧带 task_id，老调用方/无 task_id 场景回退 request_id 比对。
@@ -223,8 +407,8 @@ function runCliOnce(requestId, taskId, prompt, extraArgs, cwd) {
       }
     }, SLOW_START_HINT_MS);
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+      killProcessTree(child, 'SIGTERM');
+      setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
       finish(new Error('p3394_agent_timeout'));
     }, TIMEOUT_MS);
     function finish(error) {
@@ -343,7 +527,7 @@ process.stdin.on('data', (chunk) => {
       const targetId = String(op.task_id || op.request_id || '');
       if (activeTurn && activeTurn.child && targetId
           && (String(activeTurn.taskId) === targetId || String(activeTurn.requestId) === targetId)) {
-        try { activeTurn.child.kill('SIGTERM'); } catch { /* already gone */ }
+        killProcessTree(activeTurn.child, 'SIGTERM');
       }
       // 在途 deliver 的 runCliOnce 会以非零退出 reject → 上面的 catch 发
       // failed 事件；网关对取消场景已有独立回执，这里不额外应答。
@@ -356,7 +540,16 @@ process.stdin.on('data', (chunk) => {
   }
 });
 process.stdin.on('end', () => process.exit(0));
+let terminating = false;
 process.on('SIGTERM', () => {
-  if (activeTurn && activeTurn.child) { try { activeTurn.child.kill('SIGTERM'); } catch {} }
-  process.exit(0);
+  if (terminating) return;
+  terminating = true;
+  const deadline = setTimeout(() => process.exit(0), 2000);
+  const completion = activeTurn && activeTurn.child
+    ? killProcessTree(activeTurn.child, 'SIGTERM')
+    : Promise.resolve();
+  void completion.finally(() => {
+    clearTimeout(deadline);
+    process.exit(0);
+  });
 });

@@ -372,7 +372,7 @@ export async function* mapCoreAgentEvents(
     }
     switch (ev.type) {
       case 'thinking_delta': {
-        // 模型思考流（子安 2026-09-08 需求：展示思考过程）：pi-ai 的
+        // 模型思考流（交互设计 2026-09-08 需求：展示思考过程）：pi-ai 的
         // thinking_delta 此前全链路（provider/runner/mapper）无转发被丢弃。
         // 转为 progress 事件（聚合节流后），渲染层思考行滚动展示，投影器
         // 落 reasoning 条目持久化，与工具调用平级交错。

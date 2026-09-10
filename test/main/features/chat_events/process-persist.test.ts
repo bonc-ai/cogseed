@@ -94,4 +94,26 @@ describe('process-persist collector', () => {
     }
     expect(c.entries.length).toBeLessThanOrEqual(201); // 200 上限 + 终态余量
   });
+
+  it('思考实时 inProgress 不落盘（重放只消费 completed 整段）', () => {
+    // 投影器 progress 分支逐段外发 inProgress reasoning（实时流式，
+    // 2026-09-09）——收集器必须过滤该形状：落盘会刷爆条目上限并与截断
+    // 冲刷的 completed 整段重复。
+    const c = createProcessCollector({ cid: 'c1', actorId: 'a1', turnId: 't6' });
+    c.feed({ type: 'progress', text: '正在' });
+    c.feed({ type: 'progress', text: '读取文件…' });
+    c.feed({ type: 'progress', text: '继续分析…' });
+    const inProgress = c.entries.filter(
+      (e) => e.type === 'chatItem' && (e.item as { kind?: string; status?: string }).kind === 'reasoning',
+    );
+    expect(inProgress).toHaveLength(0);
+    // 截断冲刷（工具事件）后 completed 整段落盘一次。
+    c.feed(toolEvent('start', 'tool-z', {}));
+    const completed = c.entries.filter(
+      (e) => e.type === 'chatItem' && (e.item as { kind?: string; status?: string }).kind === 'reasoning',
+    );
+    expect(completed).toHaveLength(1);
+    expect((completed[0].item as { status?: string }).status).toBe('completed');
+    expect((completed[0].item as { payload?: { text?: string } }).payload?.text).toBe('正在读取文件…继续分析…');
+  });
 });

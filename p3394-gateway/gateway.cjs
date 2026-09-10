@@ -252,6 +252,9 @@ const PRESETS = {
   codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex',
               // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
               modelControllable: true,
+              // 清单：常驻通道探 app-server 枚举 RPC，失败回落 config.toml
+              // profiles（configModels 声明，2026-09-09 全量补全）。
+              configModels: 'codex',
               // 强度专有通道：low/high → thread/start 的
               // model_reasoning_effort config（失败降级重试）。
               effortChannel: 'model-reasoning-effort' },
@@ -264,9 +267,13 @@ const PRESETS = {
               effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' },
               resumeArgs: '--session {cli_session_id}', sessionIdPattern: '"sessionID"\\s*:\\s*"([^"]+)"' },
   gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini',
-              modelArgs: '-m {model}' },
+              // 模型清单读 ~/.gemini/settings.json（当前）+ 官方常规系
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '-m {model}', configModels: 'gemini' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
-              modelArgs: '--model {model}' },
+              // 模型清单读 ~/.aider.model.settings.yml 条目 + conf 的当前
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '--model {model}', configModels: 'aider' },
   openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
               // --model 单次覆盖（agent --help 实测）；模型绑定在配置的
               // agents/models 段——configModels 声明式枚举读取。
@@ -316,7 +323,10 @@ function escapeCmdCommand(value) {
 }
 
 function escapeCmdArgument(value, doubleEscapeMetaChars) {
-  let escaped = String(value);
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Keep every prompt segment in the same inert argv
+  // value instead of dropping or executing text after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
   escaped = '"' + escaped + '"';
@@ -333,23 +343,59 @@ function windowsSystem32Tool(name) {
 /** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
+  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
   if (pid && process.platform === 'win32') {
+    let killer;
     try {
-      const killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
       });
-      const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
-      killer.once('error', fallback);
-      killer.once('exit', (code) => { if (code !== 0) fallback(); });
-      if (typeof killer.unref === 'function') killer.unref();
-      return;
-    } catch { /* fall through to direct kill */ }
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+      const onClose = (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch {
+        fallbackOnce();
+        finish();
+      }
+    });
   }
   if (pid && process.platform !== 'win32') {
-    try { process.kill(-pid, signal); return; } catch { /* fall through */ }
+    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
   }
-  try { child.kill(signal); } catch { /* already gone */ }
+  fallback();
+  return Promise.resolve();
 }
 
 /** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
@@ -390,6 +436,34 @@ function buildWindowsCmdInvocation(cli, args) {
   };
 }
 
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
@@ -408,6 +482,13 @@ function spawnCli(cli, args, optsArg) {
   if (process.platform !== 'win32') return spawn(cli, args, opts);
   const resolved = windowsLookPath(cli) || cli;
   if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...opts,
+        env: { ...(opts.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
     const inv = buildWindowsCmdInvocation(resolved, args);
     return spawn(inv.command, inv.args, Object.assign({}, opts, { windowsVerbatimArguments: true }));
   }
@@ -866,12 +947,65 @@ const {
 
 // 薄包装：把网关进程级常量（CLI 命令、spawn）注入探测实现。
 function probeClaudeModels() {
-  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawn });
+  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawnCli, killTreeFn: killProcessTree });
 }
 // 通用枚举探测：按预设表的 inspect 声明（args+parser）spawn 解析。
 function probePresetInspect() {
   if (!preset || !preset.inspect) return null;
-  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawn });
+  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawnCli, killTreeFn: killProcessTree });
+}
+
+/** 预设级模型发现（oneshot 与 sscli 通道共用，Hermes 模型枚举修复
+ *  2026-09-09）：网关与 CLI 同机，探测与消息通道无关——预设表声明了
+ *  枚举通道（inspect）就走通用探测；声明了 initProbeArgs（claude 兼容
+ *  CLI）再并行抓 init 帧的当前模型；claude 落 oneshot 时保留专用探测，
+ *  其列表探测拿不到清单（自定义模型网关只披露 current）时回落读
+ *  ~/.claude/settings.json 槽位变量取完整清单；声明 configModels
+ *  （hermes/openclaw/gemini/aider/codex）读 CLI 自身配置文件枚举；其余
+ *  明确 unavailable，宿主回落静态目录+手输。 */
+async function inspectPresetModels(fallbackReason) {
+  if (PRESET_NAME === 'claude') {
+    const probed = await probeClaudeModels();
+    if (probed.status === 'ready' && Array.isArray(probed.models) && probed.models.length) {
+      return probed;
+    }
+    // claude 自定义模型网关（DeepSeek 等的 anthropic 兼容端点）下列表
+    // 探测/init 帧只披露 current 一个——回落读 ~/.claude/settings.json
+    // env 段的槽位变量取完整清单（2026-09-09 实机：/model 五条目只扫
+    // 出默认一条）。专用探测的 current（CLI 运行态事实）优先于配置。
+    const viaCfg = probeConfigModels({ configModels: 'claude', env: process.env, readFileSync: fs.readFileSync });
+    if (viaCfg.status === 'ready') {
+      return { ...viaCfg, ...(probed.current ? { current: probed.current } : {}) };
+    }
+    return probed;
+  }
+  const viaPreset = probePresetInspect();
+  const viaConfig = (preset && preset.configModels)
+    ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
+    : null;
+  const viaInit = (preset && preset.initProbeArgs)
+    ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawnCli, killTreeFn: killProcessTree })
+    : null;
+  const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
+  if (listResult && listResult.status === 'ready') {
+    return {
+      ...listResult,
+      ...(initResult && initResult.current ? { current: initResult.current } : {}),
+    };
+  }
+  // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
+  if (initResult && initResult.models && initResult.models.length) {
+    return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
+  }
+  if (initResult && initResult.current) {
+    // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
+    return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
+  }
+  // 配置声明式枚举（hermes/openclaw/gemini/aider/codex）：子命令探测缺失/
+  // 失败时接管——读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
+  if (viaConfig && viaConfig.status === 'ready') return viaConfig;
+  if (listResult) return listResult;
+  return { status: 'unavailable', reason: fallbackReason || 'preset_no_inspect' };
 }
 // 本网关的模型参数模板（env 覆盖 > 预设声明；null=无通道，信封 model 被忽略）。
 function modelArgTemplate() {
@@ -1050,39 +1184,10 @@ const oneshotRuntime = {
     return reply;
   },
   cancel(taskId) { return cancelTask(taskId); },
-  /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；声明了
-   *  initProbeArgs（claude 兼容 CLI）再并行抓 init 帧的当前模型；claude
-   *  落 oneshot 时保留专用探测；声明 configModels（hermes/openclaw）读
-   *  CLI 自身配置文件枚举；其余明确 unavailable。 */
+  /** 模型发现：与 sscli 通道共用 inspectPresetModels（Hermes 模型枚举
+   *  修复 2026-09-09：探测与消息通道无关，见该函数头注释）。 */
   async inspectModels() {
-    if (PRESET_NAME === 'claude') return probeClaudeModels();
-    const viaPreset = probePresetInspect();
-    const viaConfig = (preset && preset.configModels)
-      ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
-      : null;
-    const viaInit = (preset && preset.initProbeArgs)
-      ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawn })
-      : null;
-    const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
-    if (listResult && listResult.status === 'ready') {
-      return {
-        ...listResult,
-        ...(initResult && initResult.current ? { current: initResult.current } : {}),
-      };
-    }
-    // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
-    if (initResult && initResult.models && initResult.models.length) {
-      return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
-    }
-    if (initResult && initResult.current) {
-      // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
-      return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
-    }
-    // 配置声明式枚举（hermes/openclaw）：子命令探测缺失/失败时接管——
-    // 读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
-    if (viaConfig && viaConfig.status === 'ready') return viaConfig;
-    if (listResult) return listResult;
-    return { status: 'unavailable', reason: 'oneshot_no_inspect' };
+    return inspectPresetModels('oneshot_no_inspect');
   },
   close() {
     for (const child of activeTasks.values()) killProcessTree(child, 'SIGTERM');
@@ -1587,10 +1692,14 @@ class SscliRuntime {
     this._send({ op: 'cancel', task_id: taskId });
     return true;
   }
-  /** 模型发现：p3394-sscli/1.0 协议尚无模型枚举操作（hermes 侧 ACP 广播是
-   *  后续增强）——明确 unavailable，宿主回落静态目录+手输。 */
+  /** 模型发现（Hermes 模型枚举修复 2026-09-09）：不再因「协议无枚举 op」
+   *  直接 unavailable——网关与 CLI 同机，预设级探测（子命令/init 帧/
+   *  配置文件声明式枚举，hermes 走 ~/.hermes 配置）与消息通道无关，
+   *  sscli 通道与 oneshot 共用 inspectPresetModels。shim 的 p3394-sscli
+   *  协议侧无需新 op；探测失败的兜底语义不变（unavailable，宿主回落
+   *  静态目录+手输）。 */
   async inspectModels() {
-    return { status: 'unavailable', reason: 'sscli_no_inspect_op' };
+    return inspectPresetModels('sscli_no_inspect');
   }
   close() {
     this.closing = true;
@@ -2125,7 +2234,7 @@ class OpencodeRuntime {
       if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
         serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
       }
-      const child = spawn(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
+      const child = spawnCli(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
       entry.child = child;
       let errLog = '';
       child.stderr.on('data', (c) => { if (errLog.length < 8 * 1024) errLog += c; });
@@ -2232,6 +2341,57 @@ class OpencodeRuntime {
       req.end();
     });
   }
+  _getJson(base, pathName) {
+    return new Promise((resolve, reject) => {
+      const req = http.get(base + pathName, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+    });
+  }
+  /** 模型发现（2026-09-09 全量补全）：常驻 serve 的 GET /api/model 是权威
+   *  事实源（进程已在跑、零 spawn、天然含自定义 provider——实机实测
+   *  {location, data:[{id, providerID, name}]}）。清单 id 拼 providerID/id
+   *  （与 --model 传参同口径，子命令输出同格式）；端点不披露 current，
+   *  留空（UI 选中态由宿主处理）。无活跃 server 时按默认 cwd 起一个
+   *  （首查需等 serve 冷启动，之后复用）；端点失败回落 models 子命令
+   *  探测。此前本 runtime 无 inspectModels，端点一律 runtime_no_inspect
+   *  → 界面扫描不到模型。 */
+  async inspectModels() {
+    try {
+      let entry = null;
+      for (const [, hitEntry] of this.servers) { entry = hitEntry; break; }
+      if (!entry) entry = await this._serverFor(process.cwd());
+      else await entry.ready;
+      const body = await this._getJson(entry.base, '/api/model');
+      const rawModels = body && Array.isArray(body.data)
+        ? body.data
+        : (body && Array.isArray(body.models) ? body.models : null);
+      const models = [];
+      const seen = new Set();
+      if (rawModels) {
+        for (const m of rawModels) {
+          if (!m || typeof m !== 'object') continue;
+          const bareId = String(m.id || m.modelID || '').trim();
+          if (!bareId) continue;
+          const provider = String(m.providerID || '').trim();
+          const id = provider ? `${provider}/${bareId}` : bareId;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          models.push({ id, label: String(m.name || m.displayName || id).trim() || id });
+        }
+      }
+      if (models.length) return { status: 'ready', models };
+    } catch (error) {
+      console.log('[p3394-gateway] opencode /api/model inspect failed: ' + (error && error.message ? error.message : String(error)));
+    }
+    return inspectPresetModels('opencode_no_inspect');
+  }
   async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
@@ -2291,7 +2451,7 @@ class OpencodeRuntime {
   close() {
     this.closing = true;
     for (const [, entry] of this.servers) {
-      try { if (entry.child) entry.child.kill('SIGTERM'); } catch { /* already gone */ }
+      if (entry.child) killProcessTree(entry.child, 'SIGTERM');
     }
     this.servers.clear();
     this.sessions.clear();
@@ -2612,7 +2772,7 @@ async function handleEnvelope(envelope) {
     await runtime.openSession(sessionId, goal, runtimeDir);
     // PEER_CALL_HINT 每会话只注一次（首轮）：hint 信息（端口/用法）会话内
     // 恒定，resume 的 CLI 自会记住，重复注入浪费上下文还会被 CLI 当正文
-    // 回应（子安 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
+    // 回应（交互设计 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
     // 目录 marker 防重（网关重启不重注；transcript 回放路径 hint 已在历史
     // 里）；marker 在 deliver 成功后才写——首轮失败下轮补注，不丢入口。
     let peerHintThisTurn = '';

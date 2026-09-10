@@ -105,7 +105,7 @@ function rendererViolations(file: string, module: 'expense' | 'cognition'): stri
   const visit = (node: ts.Node): void => {
     if (module === 'expense' && isWindowCogSeed(node)) {
       const parent = node.parent;
-      const entersExpenseApi = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
+      const usesWorkbenchApi = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
         && parent.expression === node
         && propertyName(parent) === 'expenseWorkbench';
       // The workbench also talks through the shared invoke channel, exactly
@@ -114,7 +114,7 @@ function rendererViolations(file: string, module: 'expense' | 'cognition'): stri
       const entersSharedInvoke = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent))
         && parent.expression === node
         && propertyName(parent) === 'invoke';
-      if (!entersExpenseApi && !entersSharedInvoke) violations.push(`${repoPath(file)}: window.cogseed outside expenseWorkbench`);
+      if (!usesWorkbenchApi && !entersSharedInvoke) violations.push(`${repoPath(file)}: window.cogseed outside expenseWorkbench`);
     }
     if (module === 'expense' && ts.isIdentifier(node)
         && new Set(['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon']).has(node.text)) {
