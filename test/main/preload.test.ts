@@ -506,6 +506,42 @@ describe('preload bridge', () => {
     );
   });
 
+  it('starts the packaged STT smoke when the renderer is already ready', async () => {
+    const preload = loadPreload(null, {
+      argv: ['--cogseed-packaged-stt-smoke'],
+      env: {
+        COGSEED_PACKAGED_STT_SMOKE_FILE: 'C:\\smoke\\result.json',
+        COGSEED_PACKAGED_STT_SMOKE_WAV: 'C:\\smoke\\fake.wav',
+      },
+      navigator: { mediaDevices: { getUserMedia: vi.fn(async () => { throw new Error('no microphone'); }) } },
+      platform: 'win32',
+      resourcesPath: 'C:\\repo\\dist\\win-unpacked\\resources',
+    });
+
+    await vi.waitFor(() => {
+      expect(preload.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'cogseed.packagedSttSmokeReady',
+        expect.objectContaining({ failureCount: 1 }),
+      );
+    });
+  });
+
+  it('starts the packaged launch smoke when the renderer is already ready', async () => {
+    const preload = loadPreload(null, {
+      argv: ['--cogseed-packaged-launch-smoke'],
+    });
+
+    await vi.waitFor(() => {
+      expect(preload.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'cogseed.packagedLaunchSmokeReady',
+        expect.objectContaining({
+          preloadLoaded: true,
+          rendererReadyState: 'complete',
+        }),
+      );
+    });
+  });
+
   it('drives the packaged STT smoke through media capture and the canonical bridge', async () => {
     let processor: { onaudioprocess: null | ((event: unknown) => void) } | null = null;
     const track = { readyState: 'live', stop: vi.fn() };
