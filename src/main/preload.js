@@ -464,6 +464,14 @@ const cogseedApi = {
 };
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
 
+function runAfterDomReady(callback) {
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', callback, { once: true });
+    return;
+  }
+  callback();
+}
+
 // Windows final-package microphone smoke. This runs only when the packaged
 // verifier supplies the private renderer argument. It intentionally exercises
 // the same contextBridge invoke/stream functions as the UI and records only
@@ -476,7 +484,7 @@ const _isPackagedSttSmoke = process.platform === 'win32'
   && String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim().length > 0
   && process.argv.includes('--cogseed-packaged-stt-smoke');
 if (_isPackagedSttSmoke) {
-  window.addEventListener('DOMContentLoaded', () => {
+  runAfterDomReady(() => {
     const metrics = {
       audioTrackLive: false,
       sampleCount: 0,
@@ -595,7 +603,7 @@ if (_isPackagedSttSmoke) {
     void run().catch((error) => {
       console.error('[packaged-stt-smoke] failed to record result', error);
     });
-  }, { once: true });
+  });
 }
 
 // Final-package launch smoke. The main process adds this private renderer
@@ -603,7 +611,7 @@ if (_isPackagedSttSmoke) {
 // A successful ping proves the preload bridge and main IPC handler both ran;
 // DOMContentLoaded proves the packaged renderer was read and initialized.
 if (process.argv.includes('--cogseed-packaged-launch-smoke')) {
-  window.addEventListener('DOMContentLoaded', () => {
+  runAfterDomReady(() => {
     ipcRenderer.invoke('cogseed.ping')
       .then((ping) => ipcRenderer.invoke('cogseed.packagedLaunchSmokeReady', {
         preloadLoaded: true,
@@ -613,5 +621,5 @@ if (process.argv.includes('--cogseed-packaged-launch-smoke')) {
       .catch((error) => {
         console.error('[packaged-launch-smoke] preload/renderer readiness failed', error);
       });
-  }, { once: true });
+  });
 }

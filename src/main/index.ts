@@ -1386,11 +1386,6 @@ if (!gotLock) {
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
     const stopTaskAutoArchive = startTaskAutoArchiveOrchestrator();
     app.once('before-quit', stopTaskAutoArchive);
-    app.once('before-quit', () => {
-      void stopP3394Bridge().catch(() => {});
-      // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
-      void import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()).catch(() => {});
-    });
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1595,16 +1590,27 @@ if (!gotLock) {
 
   // Flush pending search-index writes + close KB vector DBs before exit.
   let shutdownFlushed = false;
+  let shutdownPromise: Promise<void> | null = null;
   app.on('before-quit', async (e) => {
     if (shutdownFlushed) return;
     e.preventDefault();
-    try { await searchFeature.flushAll(); }
-    catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
-    try {
-      const kb = await import('./features/kb_vector');
-      kb.closeAllKb();
-    } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
-    shutdownFlushed = true;
-    app.quit();
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = Promise.resolve().then(async () => {
+      try { await searchFeature.flushAll(); }
+      catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
+      try {
+        const kb = await import('./features/kb_vector');
+        kb.closeAllKb();
+      } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
+      // Keep Electron alive until the bridge and every managed external gateway
+      // process tree have completed their graceful shutdown.
+      await Promise.allSettled([
+        stopP3394Bridge(),
+        import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()),
+      ]);
+      shutdownFlushed = true;
+      app.quit();
+    });
+    await shutdownPromise;
   });
 }

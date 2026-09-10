@@ -127,6 +127,36 @@ describe('Recall terminal transfer proof handler', () => {
     expect((await proofs.listTransferProofs('user-a')).some((p) => p.receiptId)).toBe(true);
   });
 
+  it('does not promote from a truncated receipt-id ownership snapshot', async () => {
+    const { asset, projection } = await confirmedProjection('run-truncated-receipts');
+    const { terminalProof, assets } = await modules();
+    const receipts = await import('../../../../src/main/features/p3394/context-reuse-receipt');
+    await receipts.prepareReceipt('user-a', {
+      executionId: 'turn-newest-retained',
+      targetSessionId: 'gconv-cid-truncated',
+      reusedRefs: [asset.id],
+      omittedRefs: [],
+      permissionMode: 'read-only',
+      allowedScopes: ['cognition:projection'],
+      boundary: 'real',
+    }, { sessionId: 'gconv-cid-truncated' });
+
+    await terminalProof.handleRecallTaskTerminal({
+      run_id: 'run-truncated-receipts',
+      user_id: 'user-a',
+      conversation_id: 'cid-truncated',
+      status: 'completed',
+      projection_id: projection.id,
+      reuse_turn_ids: ['newest-retained'],
+      reuse_turn_ids_truncated: true,
+      started_at_ms: 1,
+      finished_at_ms: 2,
+    });
+
+    const unchanged = (await assets.listAbilityAssets('user-a')).find((candidate) => candidate.id === asset.id);
+    expect(unchanged?.maturity).not.toBe('transfer_validated');
+  });
+
   /**
    * 回合收尾会把回执从 prepared 收成终态（bus.ts 的 completeReceipt）。
    * 这条钉住终态回执仍然构成升档证据——否则"让回执真正闭合"这件事本身会

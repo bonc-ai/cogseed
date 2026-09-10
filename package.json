@@ -29,6 +29,7 @@
     "test:local-agents:live": "tsx scripts/test-local-agents-live.ts",
     "test:local-agents:prepare": "tsx scripts/test-local-agents-live.ts --install-only",
     "test:platform-native": "node scripts/run-platform-native-tests.mjs",
+    "test:p3394:windows": "node scripts/run-p3394-windows-tests.mjs",
     "runtime:ensure": "node bin/ensure-runtime.cjs --root resources/runtime",
     "officecli:fetch": "node scripts/fetch-officecli.cjs",
     "vc:fetch": "node scripts/fetch-win-vc-runtime.cjs --platform win32 --arch x64",

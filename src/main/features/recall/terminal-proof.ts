@@ -21,6 +21,8 @@ export interface RecallTaskTerminalEvent {
    *  这是"资产被真实加载"的唯一凭证入口——PRD 3.6 的 Transfer Verified 要求
    *  真实加载 + 生成 Receipt，没有这份清单就只证明了任务跑完。 */
   reuse_turn_ids?: string[];
+  /** Retained ids are incomplete and therefore cannot authorize promotion. */
+  reuse_turn_ids_truncated?: true;
   started_at_ms: number;
   finished_at_ms: number;
 }
@@ -143,7 +145,9 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
     return { handled: false, reason: 'no_confirmed_projection' };
   }
 
-  const { existing, receipts } = await loadedExistingAssets(event.user_id, event.reuse_turn_ids || []);
+  const { existing, receipts } = event.reuse_turn_ids_truncated
+    ? { existing: [], receipts: [] }
+    : await loadedExistingAssets(event.user_id, event.reuse_turn_ids || []);
 
   let proof = await findTransferProof(event.user_id, projection.id, executionId);
   if (!proof) {
