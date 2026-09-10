@@ -23,24 +23,27 @@ otherwise noted, they are used unmodified and are the property of their
 respective copyright holders.
 
 @earendil-works/pi-ai 0.79.10          MIT      https://github.com/earendil-works/pi
-@larksuiteoapi/node-sdk 1.72.0        MIT      https://github.com/larksuite/node-sdk
+@larksuiteoapi/node-sdk 1.73.0        MIT      https://github.com/larksuite/node-sdk
 @modelcontextprotocol/sdk 1.29.0      MIT      https://modelcontextprotocol.io
 @wecom/aibot-node-sdk 1.0.7           MIT      https://github.com/WecomTeam/aibot-node-sdk
 adm-zip 0.6.0                         MIT      https://github.com/cthackers/adm-zip
 async-mutex 0.5.0                     MIT      https://github.com/DirtyHairy/async-mutex
 better-sqlite3 12.10.0                MIT      https://github.com/WiseLibs/better-sqlite3
-electron-log 5.4.3                    MIT      https://github.com/megahertz/electron-log
+electron-log 5.4.4                    MIT      https://github.com/megahertz/electron-log
+esbuild 0.28.2                       MIT      https://github.com/evanw/esbuild
+get-tsconfig 4.14.0                   MIT      https://github.com/privatenumber/get-tsconfig
+resolve-pkg-maps 1.0.0                MIT      https://github.com/privatenumber/resolve-pkg-maps
 fastembed 2.1.0                       MIT      https://github.com/Anush008/fastembed-js
 @jsquash/webp 1.5.0                   Apache-2.0  https://github.com/jamsinclair/jSquash
 jimp 1.6.1                            MIT      https://github.com/jimp-dev/jimp
-mammoth 1.12.0                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
-node-pty 1.0.0                        MIT      https://github.com/microsoft/node-pty
+mammoth 1.12.1                        BSD-2-Clause  https://github.com/mwilliamson/mammoth.js
+node-pty 1.1.0                        MIT      https://github.com/microsoft/node-pty
 pdfjs-dist 6.2.108                    Apache-2.0  https://mozilla.github.io/pdf.js/
 sherpa-onnx-node 1.13.6               Apache-2.0  https://github.com/k2-fsa/sherpa-onnx
 socks-proxy-agent 8.0.5               MIT      https://github.com/TooTallNate/proxy-agents
 sqlite-vec 0.1.9                      MIT OR Apache-2.0  https://github.com/asg017/sqlite-vec
-tar 7.5.20                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
-tsx 4.21.0                            MIT      https://github.com/privatenumber/tsx
+tar 7.5.22                            BlueOak-1.0.0  https://github.com/isaacs/node-tar
+tsx 4.23.13                            MIT      https://github.com/privatenumber/tsx
 undici 7.29.0                         MIT      https://github.com/nodejs/undici
 wasm-feature-detect 1.9.0             Apache-2.0  https://github.com/GoogleChromeLabs/wasm-feature-detect
 ws 8.21.3                             MIT      https://github.com/websockets/ws
@@ -154,6 +157,24 @@ Exif Parser 0.1.12
     Package integrity: sha512-c2bQfLNbMzLPmzQuOr8fy0csy84WmwnER81W88DzTp9CYNPJ6yzOj2EZAh9pywYpqHnshVLHQJ8WzldAyfY+Iw==
     Upstream evidence: https://github.com/bwindels/exif-parser/blob/072126586f21e973f15c9da5d12db207a0fb6b10/LICENSE.md
     License SHA-256: 3c58bdcad5b1313456b7cf639574708a84a80ee6bddf1a26f0c5fc4d7ab1830b
+
+esbuild 0.28.2
+    License: MIT
+    Copyright: retained verbatim in the license text below.
+    License text: third_party_licenses/esbuild/LICENSE.md
+    Source: https://github.com/evanw/esbuild
+
+get-tsconfig 4.14.0
+    License: MIT
+    Copyright: retained verbatim in the license text below.
+    License text: third_party_licenses/get-tsconfig/LICENSE
+    Source: https://github.com/privatenumber/get-tsconfig
+
+resolve-pkg-maps 1.0.0
+    License: MIT
+    Copyright: retained verbatim in the license text below.
+    License text: third_party_licenses/resolve-pkg-maps/LICENSE
+    Source: https://github.com/privatenumber/resolve-pkg-maps
 
 Mammoth 1.12.0
     (c) 2013 Michael Williamson
