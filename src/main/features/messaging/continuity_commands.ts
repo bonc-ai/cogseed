@@ -1,7 +1,7 @@
 /**
  * 渠道任务接续命令（/agent …）——同一渠道内切换执行智能体，任务不断线。
  *
- * 一手需求（2026-08-26 Richard）："我一开始用 Claude Code，换成 Codex，
+ * 使用场景："我一开始用 Claude Code，换成 Codex，
  * 然后我在 Codex 上跟微信可以接着说话"。微信/Telegram 单聊没有 @ 提及，
  * 靠本命令切换；飞书群聊的 @ 提及路由（router.resolveRecipients）同样
  * 落在 active_recipient 楼层上，两条入口共用同一状态。
