@@ -7,6 +7,7 @@ import {
 } from '../recall/source-service';
 import type { AssetUsageReceipt } from '../recall/asset-usage-receipt';
 import type { InjectionReceipt } from '../recall/injection-receipt';
+import { usageMatchesInjection } from './receipt-relationship';
 import type { KstarAttributionDetail, KstarEpisodeRecord } from './types';
 
 export const KSTAR_SECONDARY_ATTRIBUTIONS = [
@@ -170,18 +171,24 @@ function matchesEnvironment(value: string): boolean {
 
 function scopedInjections(context: DeterministicAttributionContext): InjectionReceipt[] {
   const { episode } = context;
+  const runIds = new Set(episode.reuseTurnIds !== undefined
+    ? episode.reuseTurnIds
+    : episode.taskRunId ? [episode.taskRunId] : []);
   return (context.injectionReceipts || []).filter((receipt) => (
-    (!episode.taskRunId || receipt.taskRunId === episode.taskRunId)
+    runIds.has(receipt.taskRunId)
     && (!episode.projectionId || receipt.projectionId === episode.projectionId)
   ));
 }
 
-function scopedUsage(context: DeterministicAttributionContext): AssetUsageReceipt[] {
-  const { episode } = context;
-  return (context.usageReceipts || []).filter((receipt) => (
-    (!episode.taskRunId || receipt.taskRunId === episode.taskRunId)
-    && (!episode.projectionId || receipt.projectionId === episode.projectionId)
-  ));
+function scopedUsage(
+  context: DeterministicAttributionContext,
+  injections: readonly InjectionReceipt[],
+): AssetUsageReceipt[] {
+  const injectionsById = new Map(injections.map((receipt) => [receipt.id, receipt]));
+  return (context.usageReceipts || []).filter((receipt) => {
+    const injection = injectionsById.get(receipt.injectionReceiptId);
+    return injection !== undefined && usageMatchesInjection(receipt, injection);
+  });
 }
 
 /** Derive one highest-priority secondary cause from persisted facts. This is
@@ -193,7 +200,7 @@ export function deriveDeterministicAttributionDetails(
   const { episode } = context;
   const metadata = metadataText(episode);
   const injections = scopedInjections(context);
-  const usage = scopedUsage(context);
+  const usage = scopedUsage(context, injections);
   const assetIds = new Set(episode.k.abilityAssetRefs.filter((id) => safeId(id)));
 
   if (context.userGoalChanged) return detail(episode, 'user_goal_changed', 0.98);

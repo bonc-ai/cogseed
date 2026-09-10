@@ -128,6 +128,123 @@ describe('KSTAR secondary attribution', () => {
     });
   });
 
+  it('scopes deterministic receipt facts to authoritative reuse turn ids', async () => {
+    const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
+    const current = episode({
+      taskRunId: 'aggregate-secondary-a',
+      reuseTurnIds: ['turn-secondary-a'],
+    });
+    const detail = attribution.deriveDeterministicAttributionDetails({
+      episode: current,
+      injectionReceipts: [{
+        schemaVersion: 1,
+        ownerId: current.ownerId,
+        id: 'injection-secondary-a',
+        taskRunId: 'turn-secondary-a',
+        projectionId: current.projectionId,
+        assetId: 'asset-a',
+        assetVersion: '1',
+        boundary: 'real',
+        status: 'injected',
+        createdAt: current.createdAt,
+      }],
+      usageReceipts: [{
+        schemaVersion: 1,
+        ownerId: current.ownerId,
+        id: 'usage-secondary-a',
+        taskRunId: 'turn-secondary-a',
+        projectionId: current.projectionId!,
+        assetId: 'asset-a',
+        assetVersion: '1',
+        injectionReceiptId: 'injection-secondary-a',
+        status: 'contradicted',
+        evidenceRefs: current.evidenceRefs,
+        evidenceKind: 'agent_action',
+        boundary: 'real',
+        createdAt: current.createdAt,
+      }],
+    });
+
+    expect(detail?.category).toBe('asset_conflict');
+  });
+
+  it('requires every Usage relationship field to match an owned Injection', async () => {
+    const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
+    const current = episode({
+      taskRunId: 'aggregate-secondary-relationship',
+      reuseTurnIds: ['turn-secondary-relationship'],
+    });
+    const injection = {
+      schemaVersion: 1 as const,
+      ownerId: current.ownerId,
+      id: 'injection-secondary-relationship',
+      taskRunId: 'turn-secondary-relationship',
+      projectionId: current.projectionId,
+      assetId: 'asset-a',
+      assetVersion: '1',
+      boundary: 'real' as const,
+      status: 'injected' as const,
+      createdAt: current.createdAt,
+    };
+    const usage = {
+      schemaVersion: 1 as const,
+      ownerId: current.ownerId,
+      id: 'usage-secondary-relationship',
+      taskRunId: injection.taskRunId,
+      projectionId: injection.projectionId!,
+      assetId: injection.assetId,
+      assetVersion: injection.assetVersion,
+      injectionReceiptId: injection.id,
+      status: 'contradicted' as const,
+      evidenceRefs: current.evidenceRefs,
+      evidenceKind: 'agent_action' as const,
+      boundary: injection.boundary,
+      createdAt: current.createdAt,
+    };
+
+    expect(attribution.deriveDeterministicAttributionDetails({
+      episode: current,
+      injectionReceipts: [injection],
+      usageReceipts: [usage],
+    })?.category).toBe('asset_conflict');
+
+    for (const override of [
+      { injectionReceiptId: 'injection-other' },
+      { taskRunId: 'turn-other' },
+      { projectionId: 'projection-other' },
+      { assetId: 'asset-other' },
+      { assetVersion: '2' },
+      { boundary: 'degraded' as const },
+    ]) {
+      expect(attribution.deriveDeterministicAttributionDetails({
+        episode: current,
+        injectionReceipts: [injection],
+        usageReceipts: [{ ...usage, ...override }],
+      })?.category, JSON.stringify(override)).not.toBe('asset_conflict');
+    }
+  });
+
+  it('does not fall back to the aggregate run id when an authoritative reuse turn list is present but empty', async () => {
+    const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
+    const current = episode({ taskRunId: 'aggregate-empty', reuseTurnIds: [] });
+
+    expect(attribution.deriveDeterministicAttributionDetails({
+      episode: current,
+      injectionReceipts: [{
+        schemaVersion: 1,
+        ownerId: current.ownerId,
+        id: 'injection-aggregate-empty',
+        taskRunId: 'aggregate-empty',
+        projectionId: current.projectionId,
+        assetId: 'asset-a',
+        assetVersion: '1',
+        boundary: 'real',
+        status: 'injected',
+        createdAt: current.createdAt,
+      }],
+    })?.category).toBe('injection_failure');
+  });
+
   it('classifies a terminal timeout as execution_error, not environment_failure', async () => {
     const attribution = await import('../../../../src/main/features/kstar/secondary-attribution');
     const current = episode({

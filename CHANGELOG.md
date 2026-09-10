@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-10
+
 ### Security
 
 - Remove private development records and personal identifiers from source,

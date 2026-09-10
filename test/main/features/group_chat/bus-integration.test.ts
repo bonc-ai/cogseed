@@ -5986,6 +5986,274 @@ describe("group_chat bus integration › task terminal boundary", () => {
     unsubscribe();
   }, 10_000);
 
+  it("freezes terminal provenance before releasing the active run", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: `@${AGENT_NAME} freeze this run` });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const active = bus._cidStateForTest(TEST_UID, cid) as any;
+    Object.assign(active.taskRun, {
+      taskId: "task-frozen",
+      requirementId: "requirement-frozen",
+      projectionId: "projection-frozen",
+      reuseTurnIds: ["receipt-turn-frozen"],
+    });
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(bus._cidStateForTest(TEST_UID, cid)?.taskRun).toBeUndefined();
+    expect(terminals[0]).toMatchObject({
+      task_id: "task-frozen",
+      requirement_id: "requirement-frozen",
+      projection_id: "projection-frozen",
+      reuse_turn_ids: ["receipt-turn-frozen"],
+    });
+    expect(Object.isFrozen(terminals[0])).toBe(true);
+    expect(Object.isFrozen(terminals[0].reuse_turn_ids)).toBe(true);
+    unsubscribe();
+  }, 10_000);
+
+  it("keeps the first resolved KSTAR run identity across later user messages (passive capture only fills absent fields)", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    // Task A + requirement A are the conversation lifecycle when the aggregate
+    // run opens; the first user message's passive capture resolves A.
+    const taskA = store.createKstarTaskRecord(TEST_UID, { conversationId: cid, title: "First task" });
+    const reqA = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: taskA.id,
+      conversationId: cid,
+      userMessageIds: ["msg-fix1-a"],
+      title: "First requirement",
+      goalText: "Produce A",
+    });
+    await store.replaceKstarTask(TEST_UID, { ...taskA, requirementIds: [reqA.id], currentRequirementId: reqA.id });
+    await store.replaceKstarRequirement(TEST_UID, reqA);
+    await store.writeConversationTaskState(TEST_UID, {
+      ...store.createInitialConversationTaskState(TEST_UID, cid),
+      currentTaskId: taskA.id,
+      currentRequirementId: reqA.id,
+      taskComplete: false,
+    });
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+      { type: "__wait_for_abort__" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} first message of the run`,
+    });
+    let active = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(active.taskRun).toBeTruthy();
+    expect(active.taskRun.taskId).toBe(taskA.id);
+    expect(active.taskRun.requirementId).toBe(reqA.id);
+
+    // Before the SECOND user message of the same aggregate run, the
+    // conversation moves to task B + requirement B. Passive per-message
+    // provenance capture must NOT overwrite the identity already resolved for
+    // this run (authoritative task decisions are the only overwrite source).
+    const taskB = store.createKstarTaskRecord(TEST_UID, { conversationId: cid, title: "Second task" });
+    const reqB = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: taskB.id,
+      conversationId: cid,
+      userMessageIds: ["msg-fix1-b"],
+      title: "Second requirement",
+      goalText: "Produce B",
+    });
+    await store.replaceKstarTask(TEST_UID, { ...taskB, requirementIds: [reqB.id], currentRequirementId: reqB.id });
+    await store.replaceKstarRequirement(TEST_UID, reqB);
+    const movedState = await store.readConversationTaskState(TEST_UID, cid);
+    await store.replaceConversationTaskState(TEST_UID, {
+      ...movedState!,
+      currentTaskId: taskB.id,
+      currentRequirementId: reqB.id,
+      taskComplete: false,
+    });
+
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} second message of the run`,
+    });
+    active = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(active.taskRun.runId).toBeTruthy();
+    expect(active.taskRun.taskId).toBe(taskA.id);
+    expect(active.taskRun.requirementId).toBe(reqA.id);
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(await waitUntil(() => terminals.length >= 1)).toBe(true);
+
+    expect(terminals[0]).toMatchObject({
+      task_id: taskA.id,
+      requirement_id: reqA.id,
+    });
+    expect(terminals[0].task_id).not.toBe(taskB.id);
+    unsubscribe();
+  }, 15_000);
+
+  it("never pairs an authoritatively frozen task with a later requirement from a moved lifecycle (passive fill skips cross-task provenance)", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const store = await import("../../../../src/main/features/kstar/requirement-store");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    // Task A + requirement A records exist (the frozen run's task), but the
+    // conversation lifecycle ALREADY resolves to a different task B +
+    // requirement B when the aggregate run opens.
+    const taskA = store.createKstarTaskRecord(TEST_UID, { conversationId: cid, title: "Frozen task" });
+    const reqA = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: taskA.id,
+      conversationId: cid,
+      userMessageIds: ["msg-frozen-a"],
+      title: "Frozen requirement",
+      goalText: "Produce A",
+    });
+    await store.replaceKstarTask(TEST_UID, { ...taskA, requirementIds: [reqA.id], currentRequirementId: reqA.id });
+    await store.replaceKstarRequirement(TEST_UID, reqA);
+    const taskB = store.createKstarTaskRecord(TEST_UID, { conversationId: cid, title: "Moved lifecycle task" });
+    const reqB = store.createKstarRequirementRecord(TEST_UID, {
+      taskId: taskB.id,
+      conversationId: cid,
+      userMessageIds: ["msg-moved-b"],
+      title: "Moved requirement",
+      goalText: "Produce B",
+    });
+    await store.replaceKstarTask(TEST_UID, { ...taskB, requirementIds: [reqB.id], currentRequirementId: reqB.id });
+    await store.replaceKstarRequirement(TEST_UID, reqB);
+    await store.writeConversationTaskState(TEST_UID, {
+      ...store.createInitialConversationTaskState(TEST_UID, cid),
+      currentTaskId: taskB.id,
+      currentRequirementId: reqB.id,
+      taskComplete: false,
+    });
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+      { type: "__wait_for_abort__" },
+    ]);
+    // The run opens behind an AUTHORITATIVE task decision for task A while
+    // requirementId is not yet known (enqueue seed before the requirement is
+    // resolved). The passive per-message capture on the same enqueue sees the
+    // moved lifecycle (B/requirement B) and must not pair frozen task A with
+    // requirement B.
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} first message of the run`,
+      kstarTerminalProvenance: { taskId: taskA.id },
+    });
+    let active = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(active.taskRun).toBeTruthy();
+    expect(active.taskRun.taskId).toBe(taskA.id);
+
+    // The SECOND user message of the same aggregate run runs the passive fill
+    // capture again while the lifecycle still resolves to task B. The frozen
+    // task A must not gain requirement B (or any requirement from another
+    // task's lifecycle).
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} second message of the run`,
+    });
+    active = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(active.taskRun.runId).toBeTruthy();
+    expect(active.taskRun.taskId).toBe(taskA.id);
+    expect(active.taskRun.requirementId).toBeUndefined();
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 4000);
+    expect(await waitUntil(() => terminals.length >= 1)).toBe(true);
+
+    expect(terminals[0]).toMatchObject({ task_id: taskA.id });
+    expect(terminals[0].task_id).not.toBe(taskB.id);
+    expect(terminals[0].requirement_id).toBeUndefined();
+    expect(terminals[0].requirement_id).not.toBe(reqB.id);
+    unsubscribe();
+  }, 15_000);
+
+  it("propagates reuse-turn truncation through a real aborted terminal cycle", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const {
+      KSTAR_MAX_REUSE_TURN_IDS,
+      retainKstarReuseTurnIds,
+    } = await import("../../../../src/main/features/kstar/reuse-turn-ids");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    // A run that records more than KSTAR_MAX_REUSE_TURN_IDS distinct receipts
+    // leaves the taskRun in exactly this shape: the newest
+    // KSTAR_MAX_REUSE_TURN_IDS ids retained by retainKstarReuseTurnIds plus
+    // the truncated marker. Re-derive that state with the production helper so
+    // the seeded list is the canonical post-recording suffix (the terminal
+    // emitter mirrors the taskRun list as-is; real recording never stores more
+    // than KSTAR_MAX_REUSE_TURN_IDS entries).
+    const overLimitTurns = Array.from(
+      { length: KSTAR_MAX_REUSE_TURN_IDS + 1 },
+      (_, index) => `turn-trunc-${String(index).padStart(3, "0")}`,
+    );
+    const retained = retainKstarReuseTurnIds(overLimitTurns);
+    expect(retained.truncated).toBe(true);
+    expect(retained.reuseTurnIds).toHaveLength(KSTAR_MAX_REUSE_TURN_IDS);
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} run that truncates reuse turns`,
+    });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const active = bus._cidStateForTest(TEST_UID, cid) as any;
+    Object.assign(active.taskRun, {
+      reuseTurnIds: retained.reuseTurnIds,
+      reuseTurnIdsTruncated: true,
+    });
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0].reuse_turn_ids_truncated).toBe(true);
+    expect(terminals[0].reuse_turn_ids).toEqual(retained.reuseTurnIds);
+    expect(terminals[0].reuse_turn_ids.length).toBeLessThanOrEqual(
+      KSTAR_MAX_REUSE_TURN_IDS,
+    );
+    expect(Object.isFrozen(terminals[0].reuse_turn_ids)).toBe(true);
+    unsubscribe();
+  }, 10_000);
+
   it("classifies model errors as failed", async () => {
     const cid = newCid();
     const state =
@@ -6103,6 +6371,394 @@ describe("group_chat bus integration › task terminal boundary", () => {
     expect(await waitUntil(() => terminals.length === 1)).toBe(true);
 
     expect(terminals[0].status).toBe("cancelled");
+    unsubscribe();
+  }, 10_000);
+
+  it("restores persisted reuse turns when recovering a persisted user dispatch", async () => {
+    const cid = newCid();
+    const messageId = "msg-recovered-dispatch";
+    const actionRequestId = "request-recovered-dispatch";
+    const turnId = "recovered-dispatch-turn";
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const receipts = await import(
+      "../../../../src/main/features/p3394/context-reuse-receipt"
+    );
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    const persistedMessageTs = new Date().toISOString();
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: messageId,
+      ts: persistedMessageTs,
+      from: "user",
+      to: [AGENT_ID],
+      text: "resume the persisted task",
+      action_request_id: actionRequestId,
+    });
+    expect(
+      await waitUntil(() => Date.now() > Date.parse(persistedMessageTs)),
+    ).toBe(true);
+    const recoveredTargetSessionId = state.buildGmemberSessionId(cid, AGENT_ID);
+    const receipt = await receipts.prepareReceipt(
+      TEST_UID,
+      {
+        executionId: `turn-${turnId}`,
+        targetSessionId: recoveredTargetSessionId,
+        reusedRefs: ["asset:recovered@v1"],
+        omittedRefs: [],
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:projection"],
+        boundary: "real",
+      },
+      { sessionId: recoveredTargetSessionId },
+    );
+    expect(Date.parse(receipt.createdAt)).toBeGreaterThan(
+      Date.parse(persistedMessageTs),
+    );
+    expect(
+      await waitUntil(() => Date.now() > Date.parse(receipt.createdAt)),
+    ).toBe(true);
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "recovered task completed" },
+    ]);
+
+    await expect(bus.recoverPersistedUserDispatch({
+      uid: TEST_UID,
+      cid,
+      messageId,
+      actionRequestId,
+      recipientId: AGENT_ID,
+      turnId,
+    })).resolves.toMatchObject({ disposition: "redispatched" });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0].reuse_turn_ids).toEqual([turnId]);
+    expect(terminals[0].started_at_ms).toBe(Date.parse(persistedMessageTs));
+    unsubscribe();
+  }, 10_000);
+
+  it("emits an authoritative empty reuse turn list when a recovered dispatch has no receipt", async () => {
+    const cid = newCid();
+    const messageId = "msg-recovered-dispatch-no-receipt";
+    const actionRequestId = "request-recovered-dispatch-no-receipt";
+    const turnId = "recovered-dispatch-no-receipt-turn";
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: messageId,
+      ts: new Date().toISOString(),
+      from: "user",
+      to: [AGENT_ID],
+      text: "resume the persisted task without any reuse receipt",
+      action_request_id: actionRequestId,
+    });
+    // Deliberately no prepareReceipt for `turn-<turnId>`: recovery must then
+    // resolve the reuse-turn list authoritatively to [] (receipt "not found")
+    // instead of omitting the property from the terminal event.
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "recovered task completed" },
+    ]);
+
+    await expect(bus.recoverPersistedUserDispatch({
+      uid: TEST_UID,
+      cid,
+      messageId,
+      actionRequestId,
+      recipientId: AGENT_ID,
+      turnId,
+    })).resolves.toMatchObject({ disposition: "redispatched" });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0]).toHaveProperty("reuse_turn_ids");
+    expect(terminals[0].reuse_turn_ids).toEqual([]);
+    unsubscribe();
+  }, 10_000);
+
+  it("emits an authoritative empty reuse turn list when the recovered dispatch receipt targets a different session", async () => {
+    const cid = newCid();
+    const messageId = "msg-recovered-dispatch-mismatch";
+    const actionRequestId = "request-recovered-dispatch-mismatch";
+    const turnId = "recovered-dispatch-mismatch-turn";
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const receipts = await import(
+      "../../../../src/main/features/p3394/context-reuse-receipt"
+    );
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    await storage.appendJsonlAtomic(messageFile, {
+      id: messageId,
+      ts: new Date().toISOString(),
+      from: "user",
+      to: [AGENT_ID],
+      text: "resume the persisted task with a mismatched receipt",
+      action_request_id: actionRequestId,
+    });
+    // A receipt EXISTS for `turn-<turnId>` but targets the commander/gconv
+    // session — NOT the recovered agent's member session. Such a receipt is
+    // unusable for this run: recovery must treat it as authoritative-empty []
+    // (never undefined → legacy taskRunId fallback with no marker).
+    await receipts.prepareReceipt(
+      TEST_UID,
+      {
+        executionId: `turn-${turnId}`,
+        targetSessionId: `gconv-${cid}`,
+        reusedRefs: ["asset:mismatched@v1"],
+        omittedRefs: [],
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:projection"],
+        boundary: "real",
+      },
+      { sessionId: `gconv-${cid}` },
+    );
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "recovered task completed despite mismatch" },
+    ]);
+
+    await expect(bus.recoverPersistedUserDispatch({
+      uid: TEST_UID,
+      cid,
+      messageId,
+      actionRequestId,
+      recipientId: AGENT_ID,
+      turnId,
+    })).resolves.toMatchObject({ disposition: "redispatched" });
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0]).toHaveProperty("reuse_turn_ids");
+    expect(terminals[0].reuse_turn_ids).toEqual([]);
+    unsubscribe();
+  }, 10_000);
+
+  it("reuses the same aggregate run id when the same persisted dispatch is recovered again", async () => {
+    const cid = newCid();
+    const messageId = "msg-stable-recovery";
+    const actionRequestId = "request-stable-recovery";
+    const turnId = "stable-recovery-turn";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const layout = await import("../../../../src/main/util/project-layout");
+    const storage = await import("../../../../src/main/storage");
+    const messageFile = layout.conversationMessageFile(TEST_UID, cid);
+    fs.mkdirSync(path.dirname(messageFile), { recursive: true });
+    const sourceMessage = {
+      id: messageId,
+      ts: "2026-09-10T00:00:00.000Z",
+      from: "user",
+      to: [AGENT_ID],
+      text: "recover this exact dispatch",
+      action_request_id: actionRequestId,
+    };
+    await storage.appendJsonlAtomic(messageFile, sourceMessage);
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    await bus.recoverPersistedUserDispatch({ uid: TEST_UID, cid, messageId, actionRequestId, recipientId: AGENT_ID, turnId });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const firstRunId = bus._cidStateForTest(TEST_UID, cid)?.taskRun?.runId;
+    expect(firstRunId).toEqual(expect.any(String));
+
+    await bus.dropConv(TEST_UID, cid);
+    fs.writeFileSync(messageFile, `${JSON.stringify(sourceMessage)}\n`, "utf8");
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    await bus.recoverPersistedUserDispatch({ uid: TEST_UID, cid, messageId, actionRequestId, recipientId: AGENT_ID, turnId });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const secondRunId = bus._cidStateForTest(TEST_UID, cid)?.taskRun?.runId;
+
+    expect(secondRunId).toBe(firstRunId);
+  }, 10_000);
+
+  it("does not assign a later run's receipt to a legacy unknown run by time-window scanning", async () => {
+    const cid = newCid();
+    const futureTurnId = "adjacent-future-turn";
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const receipts = await import("../../../../src/main/features/p3394/context-reuse-receipt");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) => terminals.push(event));
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [{ type: "__wait_for_abort__" }]);
+    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: `@${AGENT_NAME} legacy unknown run` });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const first = bus._cidStateForTest(TEST_UID, cid) as any;
+    first.taskRun.reuseTurnIds = undefined;
+    await receipts.prepareReceipt(TEST_UID, {
+      executionId: `turn-${futureTurnId}`,
+      targetSessionId: `gconv-${cid}`,
+      reusedRefs: ["asset:future@v1"],
+      omittedRefs: [],
+      permissionMode: "read-only",
+      allowedScopes: ["cognition:projection"],
+      boundary: "real",
+    }, { sessionId: `gconv-${cid}` });
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0]).not.toHaveProperty("reuse_turn_ids");
+    unsubscribe();
+  }, 10_000);
+
+  it("keeps a released run's frozen terminal snapshot isolated from a later run's receipts", async () => {
+    const cid = newCid();
+    const state = await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const terminals: any[] = [];
+    let releaseRun1Delivery: () => void = () => {};
+    // The listener captures each terminal event synchronously, but keeps run
+    // 1's delivery promise pending (the bus never awaits listener return
+    // values) so run 2 can start and finish while run 1's delivery is still
+    // held open. This is an explicit barrier, not a sleep. The race window
+    // covered: run 2 records its receipts and emits its own terminal while run
+    // 1's terminal delivery is still in the hands of a blocked listener. The
+    // window NOT covered (deliberately excluded by the barrier): run 1's
+    // dispatch itself happening after run 2 starts — we wait for run 1's
+    // capture before starting run 2, and production dispatches synchronously
+    // once the run is quiescent.
+    const run1DeliveryHeld = new Promise<void>((resolve) => {
+      releaseRun1Delivery = resolve;
+    });
+    const unsubscribe = bus.subscribeTaskTerminals((event) => {
+      terminals.push(event);
+      return terminals.length === 1 ? run1DeliveryHeld : undefined;
+    });
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} first isolated run`,
+    });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const run1 = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(run1.taskRun).toBeTruthy();
+    const run1Id = run1.taskRun.runId;
+    Object.assign(run1.taskRun, { reuseTurnIds: ["turn-first-isolated-run"] });
+
+    // Run 1 aborts and its terminal event is captured while its delivery stays
+    // held open below; wait for the capture so run 2 cannot overtake run 1.
+    await bus.abort(TEST_UID, cid);
+    expect(await waitUntil(() => terminals.length === 1, 10_000)).toBe(true);
+
+    // Run 2 records its own receipt on a brand-new taskRun and aborts while
+    // run 1's terminal delivery is still blocked.
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} second isolated run`,
+    });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const run2 = bus._cidStateForTest(TEST_UID, cid) as any;
+    expect(run2.taskRun).toBeTruthy();
+    expect(run2.taskRun.runId).not.toBe(run1Id);
+    Object.assign(run2.taskRun, { reuseTurnIds: ["turn-second-isolated-run"] });
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 2, 10_000)).toBe(true);
+
+    // Release run 1's delivery only after run 2 has fully aborted.
+    releaseRun1Delivery();
+    await run1DeliveryHeld;
+
+    // The frozen snapshot handed to run 1's listener carries ONLY run 1's
+    // receipt id; run 2's receipt id, recorded while that delivery was still
+    // held open, must never leak into it.
+    expect(terminals[0].reuse_turn_ids).toEqual(["turn-first-isolated-run"]);
+    expect(terminals[0].reuse_turn_ids).not.toContain(
+      "turn-second-isolated-run",
+    );
+    expect(terminals[1].reuse_turn_ids).toEqual(["turn-second-isolated-run"]);
+    expect(terminals[1].reuse_turn_ids).not.toContain(
+      "turn-first-isolated-run",
+    );
+    expect(terminals[1].run_id).not.toBe(terminals[0].run_id);
+    expect(Object.isFrozen(terminals[0])).toBe(true);
+    unsubscribe();
+  }, 10_000);
+
+  it("preserves an explicitly empty reuse turn list on the terminal event", async () => {
+    const cid = newCid();
+    const state =
+      await import("../../../../src/main/features/group_chat/state");
+    const bus = await import("../../../../src/main/features/group_chat/bus");
+    const terminals: any[] = [];
+    const unsubscribe = bus.subscribeTaskTerminals((event) =>
+      terminals.push(event),
+    );
+
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "__wait_for_abort__" },
+    ]);
+    await bus.enqueue({
+      uid: TEST_UID,
+      cid,
+      fromActorId: "user",
+      text: `@${AGENT_NAME} wait without loading reusable context`,
+    });
+    expect(await waitUntil(() => !bus.isQuiescent(TEST_UID, cid))).toBe(true);
+    const active = bus._cidStateForTest(TEST_UID, cid);
+    expect(active?.taskRun).toBeTruthy();
+    const { prepareReceipt } = await import(
+      "../../../../src/main/features/p3394/context-reuse-receipt"
+    );
+    await prepareReceipt(
+      TEST_UID,
+      {
+        executionId: "turn-legacy-recoverable",
+        targetSessionId: `gconv-${cid}`,
+        reusedRefs: ["asset:legacy@v1"],
+        omittedRefs: [],
+        permissionMode: "read-only",
+        allowedScopes: ["cognition:projection"],
+        boundary: "real",
+      },
+      { sessionId: `gconv-${cid}` },
+    );
+
+    await bus.abort(TEST_UID, cid);
+    await waitForQuiescent(TEST_UID, cid, 3000);
+    expect(await waitUntil(() => terminals.length === 1)).toBe(true);
+
+    expect(terminals[0]).toHaveProperty("reuse_turn_ids");
+    expect(terminals[0].reuse_turn_ids).toEqual([]);
     unsubscribe();
   }, 10_000);
 });
@@ -8581,4 +9237,3 @@ describe("group_chat bus › desktop message broadcaster", () => {
     // is the pre-fix steady state for external inbound paths.
   });
 });
-

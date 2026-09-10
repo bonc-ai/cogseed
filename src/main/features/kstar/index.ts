@@ -23,3 +23,4 @@ export * from './projection-decision-service';
 export * from './trace-types';
 export * from './trace';
 export * from './failure-service';
+export * from './run-evidence';
