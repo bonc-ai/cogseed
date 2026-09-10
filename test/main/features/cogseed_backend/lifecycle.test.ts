@@ -20,12 +20,31 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-async function createTask() {
+async function createTask(requestId = 'req-lifecycle') {
   const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
-  return tasks.createCogSeedTask(USER, { requestId: 'req-lifecycle', task: 'Run lifecycle.' });
+  return tasks.createCogSeedTask(USER, { requestId, task: 'Run lifecycle.' });
 }
 
 describe('CogSeed task lifecycle', () => {
+  it('keeps planned tasks inactive and allows direct archive without changing lifecycle status', async () => {
+    const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    const events = await import('../../../../src/main/features/cogseed_backend/event-store');
+    const planned = (await tasks.createCogSeedTask(USER, {
+      requestId: 'req-lifecycle-planned',
+      task: 'Start this later.',
+      initialStatus: 'planned',
+    })).task;
+
+    expect(lifecycle.isCogSeedTaskActiveStatus(planned.status)).toBe(false);
+    const archived = await lifecycle.archiveCogSeedTask(USER, planned.taskId);
+    expect(archived).toMatchObject({ status: 'planned', archivedAt: expect.any(String) });
+    await expect(events.readCogSeedTaskEvents(USER, planned.taskId, 0, 10)).resolves.toEqual([
+      expect.objectContaining({ type: 'task.planned', sequence: 1 }),
+      expect.objectContaining({ type: 'task.archived', sequence: 2 }),
+    ]);
+  });
+
   it('allows only legal state transitions and appends matching lifecycle events', async () => {
     const created = (await createTask()).task;
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
@@ -80,13 +99,13 @@ describe('CogSeed task lifecycle', () => {
     await expect(lifecycle.transitionCogSeedTask(USER, retried.taskId, 'queued')).rejects.toThrow(/terminal|transition/i);
   });
 
-  it('archives only eligible failed tasks without rewriting their failure lifecycle', async () => {
+  it('archives only eligible planned, completed, or failed tasks without rewriting their lifecycle', async () => {
     const created = (await createTask()).task;
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const events = await import('../../../../src/main/features/cogseed_backend/event-store');
 
-    await expect(lifecycle.archiveCogSeedTask(USER, created.taskId)).rejects.toThrow(/only failed/i);
+    await expect(lifecycle.archiveCogSeedTask(USER, created.taskId)).rejects.toThrow(/only planned, completed, or failed/i);
     await lifecycle.transitionCogSeedTask(USER, created.taskId, 'queued');
     await lifecycle.transitionCogSeedTask(USER, created.taskId, 'running');
     await lifecycle.transitionCogSeedTask(USER, created.taskId, 'failed', { errorCode: 'provider_error' });
@@ -111,6 +130,14 @@ describe('CogSeed task lifecycle', () => {
       'task.failed',
       'task.archived',
     ]);
+
+    const completed = (await createTask('req-lifecycle-completed-archive')).task;
+    await lifecycle.transitionCogSeedTask(USER, completed.taskId, 'queued');
+    await lifecycle.transitionCogSeedTask(USER, completed.taskId, 'running');
+    await lifecycle.transitionCogSeedTask(USER, completed.taskId, 'completed');
+    await expect(lifecycle.archiveCogSeedTask(USER, completed.taskId)).resolves.toMatchObject({
+      status: 'completed', archivedAt: expect.any(String),
+    });
   });
 
   it('allows a recovered execution to be explicitly cancelled', async () => {

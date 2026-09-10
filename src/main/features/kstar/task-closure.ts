@@ -1,6 +1,12 @@
 import { createLogger } from '../../logger';
 import { safeId, nowIso } from '../../storage';
 import { normalizeCognitionSourceRefs, type CognitionSourceRef } from '../recall/source-service';
+import { listInjectionReceipts, type InjectionReceipt } from '../recall/injection-receipt';
+import {
+  recordAssetUsageReceipt,
+  listAssetUsageReceipts,
+  type AssetUsageEvidenceKind,
+} from '../recall/asset-usage-receipt';
 import { subscribeTaskTerminals, type TaskTerminalEvent, type TaskTerminalListener } from '../group_chat/bus';
 import type { RuntimeEventEnvelope, RuntimeRunRequest } from '../cogseed_runtime/protocol';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
@@ -19,6 +25,7 @@ import { postKstarReviewCard } from './review-card';
 import type { KstarEpisodeRecord, KstarExtractionRunRecord, KstarReviewRecord } from './types';
 import type { WorldModelForecast } from '../recall/world-model-types';
 import { readConversationTaskState, readKstarRequirement } from './requirement-store';
+import { recordKstarFailure } from './failure-service';
 
 const log = createLogger('kstar.task-closure');
 const closureLocks = new Map<string, Promise<KstarClosureResult>>();
@@ -56,7 +63,12 @@ function validExtractionRun(userId: string, episodeId: string, reviewId: string,
   if (
     raw.ownerId !== userId || raw.id !== runId || raw.episodeId !== episodeId || raw.reviewId !== reviewId ||
     !Array.isArray(raw.candidateIds) || raw.candidateIds.some((id) => typeof id !== 'string') ||
-    !['created', 'partial', 'failed'].includes(String(raw.status)) ||
+    !['created', 'partial', 'degraded', 'failed'].includes(String(raw.status)) ||
+    (raw.createdAssetIds !== undefined && (!Array.isArray(raw.createdAssetIds) || raw.createdAssetIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.mergedIntoIds !== undefined && (!Array.isArray(raw.mergedIntoIds) || raw.mergedIntoIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.updateCandidateIds !== undefined && (!Array.isArray(raw.updateCandidateIds) || raw.updateCandidateIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.failureIds !== undefined && (!Array.isArray(raw.failureIds) || raw.failureIds.some((id) => typeof id !== 'string' || !safeId(id)))) ||
+    (raw.completedAt !== undefined && typeof raw.completedAt !== 'string') ||
     typeof raw.createdAt !== 'string' || typeof raw.updatedAt !== 'string' ||
     (raw.error !== undefined && typeof raw.error !== 'string')
   ) throw new Error('malformed kstar extraction run');
@@ -119,9 +131,35 @@ async function finishClosure(
   episode: KstarEpisodeRecord,
   bridge: KstarCandidateBridge = saveKstarCandidateProposals,
   inferReview: KstarReviewInfer = inferKstarReview,
-  options: { forecast?: WorldModelForecast | null; messages?: Array<{ from: string; text: string; ts?: string }> } = {},
+  options: {
+    forecast?: WorldModelForecast | null;
+    forecastStatus?: string;
+    messages?: Array<{ from: string; text: string; ts?: string }>;
+    groupMessages?: GroupKstarMessageInput[];
+    conversationId?: string;
+  } = {},
 ): Promise<KstarClosureResult> {
   await writeKstarEpisode(userId, episode);
+  await persistAssetUsageTruth(userId, episode, options.groupMessages, options.conversationId);
+  let attributionReceipts: { injectionReceipts: InjectionReceipt[]; usageReceipts: Awaited<ReturnType<typeof listAssetUsageReceipts>> } = {
+    injectionReceipts: [],
+    usageReceipts: [],
+  };
+  if (episode.taskRunId) {
+    try {
+      const [injectionReceipts, usageReceipts] = await Promise.all([
+        listInjectionReceipts(userId, episode.taskRunId),
+        listAssetUsageReceipts(userId, episode.taskRunId),
+      ]);
+      attributionReceipts = { injectionReceipts, usageReceipts };
+    } catch (error) {
+      log.warn('kstar attribution receipt read degraded', {
+        userId,
+        episodeId: episode.id,
+        error: (error as Error).message,
+      });
+    }
+  }
   let storedReview: KstarReviewRecord | null = null;
   try {
     storedReview = await readKstarReview(userId, episode.id);
@@ -137,7 +175,10 @@ async function finishClosure(
       // （中途变更/失败/临时决策），质量与 Commander review 相当。
       const inferred = await inferReview(userId, episode, {
         ...(options.forecast ? { forecast: options.forecast } : {}),
+        ...(options.forecastStatus ? { forecastStatus: options.forecastStatus } : {}),
         ...(options.messages?.length ? { messages: options.messages } : {}),
+        injectionReceipts: attributionReceipts.injectionReceipts,
+        usageReceipts: attributionReceipts.usageReceipts,
       });
       review = await saveKstarReview(userId, episode, {
         ...inferred.review,
@@ -146,10 +187,146 @@ async function finishClosure(
         needsConfirmation: inferred.needsConfirmation,
       });
     } catch {
+      await recordKstarFailure(userId, {
+        stage: 'review_inference', errorCode: 'review_inference_failed',
+        errorMessage: 'KSTAR review inference failed; a conservative review was stored.',
+        operationKey: `review-${episode.id}`, episodeId: episode.id,
+      }).catch(() => undefined);
       review = await saveKstarReviewRecord(userId, createInitialKstarReview(episode));
     }
   }
   return reconcileKstarExtraction(userId, episode, review);
+}
+
+function messageHasSuccessfulToolCall(message: GroupKstarMessageInput): boolean {
+  return (message.process || []).some((item) => {
+    // 老格式两形态都可能有 event；chat_events 新条目（chatItem/turn）无此字段。
+    const event = item.type === 'event' || item.type === 'progress' ? item.event : undefined;
+    if (!event || event.stream !== 'tool' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
+      return false;
+    }
+    const data = event.data as Record<string, unknown>;
+    const phase = typeof data.phase === 'string' ? data.phase.toLowerCase() : '';
+    return (phase === 'end' || phase === 'complete' || phase === 'completed') && data.isError !== true;
+  });
+}
+
+function hostObservableUsageEvidence(episode: KstarEpisodeRecord, message?: GroupKstarMessageInput): {
+  evidenceKind: AssetUsageEvidenceKind;
+  evidenceRefs: CognitionSourceRef[];
+} | undefined {
+  if (episode.r.status !== 'completed') return undefined;
+  const executionRef = normalizeCognitionSourceRefs([{
+    kind: 'execution_evaluation',
+    id: episode.id,
+    subtype: 'execution',
+    title: 'Persisted KSTAR episode',
+  }]);
+  // The evidence must be tied to the exact persisted message that carried the
+  // citation. A successful call elsewhere in the episode proves that the run
+  // did work, but not that this particular asset was adopted.
+  if (!message) return undefined;
+  if (messageHasSuccessfulToolCall(message)) {
+    return { evidenceKind: 'tool_call', evidenceRefs: executionRef };
+  }
+  const artifactRefs = normalizeCognitionSourceRefs([
+    ...(message.produced || []).map((file) => ({ kind: 'artifact_file' as const, id: `artifact-${file}` })),
+    ...(message.artifacts || []).map((artifact) => ({ kind: 'artifact_file' as const, id: artifact.id, title: artifact.title })),
+  ]);
+  if (artifactRefs.length) {
+    return { evidenceKind: 'artifact', evidenceRefs: artifactRefs };
+  }
+  return undefined;
+}
+
+interface InjectedCitationForEpisode {
+  injection: InjectionReceipt;
+  message: GroupKstarMessageInput;
+  ambiguous: boolean;
+}
+
+function injectedCitationsForEpisode(
+  episode: KstarEpisodeRecord,
+  messages: GroupKstarMessageInput[] | undefined,
+  receipts: InjectionReceipt[],
+): InjectedCitationForEpisode[] {
+  if (!episode.projectionId || !messages?.length || !episode.k.abilityAssetRefs.length) return [];
+  const evidenceMessageIds = new Set(episode.evidenceRefs
+    .filter((ref) => ref.kind === 'conversation' || ref.kind === 'message')
+    .map((ref) => ref.id));
+  const citedByMessage = new Map<string, Set<string>>();
+  for (const message of messages) {
+    if (!evidenceMessageIds.has(message.id)) continue;
+    for (const citation of message.recall_citations || []) {
+      if (
+        citation.projection_id === episode.projectionId
+        && episode.k.abilityAssetRefs.includes(citation.asset_id)
+      ) {
+        const cited = citedByMessage.get(message.id) || new Set<string>();
+        cited.add(`${citation.asset_id}:${citation.version}`);
+        citedByMessage.set(message.id, cited);
+      }
+    }
+  }
+  return receipts.flatMap((injection) => {
+    if (
+      injection.boundary !== 'real'
+      || (injection.status !== 'injected' && injection.status !== 'dispatched')
+      || injection.projectionId !== episode.projectionId
+      || !injection.messageId
+    ) return [];
+    const message = messages.find((candidate) => candidate.id === injection.messageId);
+    const cited = message ? citedByMessage.get(message.id) : undefined;
+    if (!message || !cited?.has(`${injection.assetId}:${injection.assetVersion}`)) return [];
+    return [{ injection, message, ambiguous: cited.size > 1 }];
+  });
+}
+
+async function persistAssetUsageTruth(
+  userId: string,
+  episode: KstarEpisodeRecord,
+  messages?: GroupKstarMessageInput[],
+  conversationId?: string,
+): Promise<void> {
+  try {
+    const injections = injectedCitationsForEpisode(
+      episode,
+      messages,
+      await listInjectionReceipts(userId),
+    );
+    if (!injections.length) return;
+    const writes = await Promise.allSettled(injections.map(({ injection, message, ambiguous }) => {
+      const observable = ambiguous ? undefined : hostObservableUsageEvidence(episode, message);
+      return recordAssetUsageReceipt(userId, {
+        taskRunId: injection.taskRunId,
+        projectionId: injection.projectionId!,
+        assetId: injection.assetId,
+        assetVersion: injection.assetVersion,
+        injectionReceiptId: injection.id,
+        status: observable ? 'applied' : 'usage_unknown',
+        evidenceKind: observable?.evidenceKind || 'none',
+        evidenceRefs: observable?.evidenceRefs || [],
+        boundary: 'real',
+      });
+    }));
+    if (writes.some((result) => result.status === 'rejected')) {
+      throw new Error('one or more asset usage receipts failed');
+    }
+  } catch (error) {
+    log.warn('kstar asset usage persistence degraded', {
+      userId,
+      episodeId: episode.id,
+      error: (error as Error).message,
+    });
+    await recordKstarFailure(userId, {
+      stage: 'capture',
+      errorCode: 'asset_usage_persistence_failed',
+      errorMessage: 'KSTAR asset usage persistence degraded; terminal result was preserved.',
+      operationKey: `usage-${episode.id}`,
+      ...(conversationId ? { conversationId } : {}),
+      episodeId: episode.id,
+    }).catch(() => undefined);
+  }
 }
 
 export type KstarReviewVerdict = 'met' | 'partial' | 'not_met' | 'skip';
@@ -157,6 +334,7 @@ export interface ConfirmKstarReviewInput {
   verdict: KstarReviewVerdict;
   actualResult?: string;
   reason?: string;
+  attributionDetails?: unknown;
 }
 
 function confirmationReviewInput(
@@ -181,6 +359,11 @@ function confirmationReviewInput(
     ...(current.expectedResult ? { expectedResult: current.expectedResult } : {}),
     ...(actualResult ? { actualResult } : {}),
     evidenceRefs: current.evidenceRefs.length ? current.evidenceRefs : episode.evidenceRefs,
+    ...(input.attributionDetails !== undefined
+      ? { attributionDetails: input.attributionDetails }
+      : current.attributionDetails
+        ? { attributionDetails: current.attributionDetails }
+        : {}),
     inferenceMethod: 'user' as const,
     confirmedAt,
   };
@@ -336,7 +519,10 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
       // readWorldModelForecast returns the RECORD (forecast nested under
       // `record.forecast`); inferKstarReview expects the flat WorldModelForecast.
       ...(forecast ? { forecast: forecast.forecast } : {}),
+      ...(input.forecastId ? { forecastStatus: forecast ? 'committed' : 'failed' } : {}),
       ...(input.messages?.length ? { messages: input.messages } : {}),
+      ...(input.messages?.length ? { groupMessages: input.messages } : {}),
+      conversationId: input.conversationId,
     });
   });
   try {
@@ -488,6 +674,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           conversationId: event.conversation_id,
           errorCode: 'group_capture_failed',
         });
+        void recordKstarFailure(event.user_id, {
+          stage: 'capture', errorCode: 'group_capture_failed',
+          errorMessage: 'KSTAR group terminal capture failed after retry.', conversationId: event.conversation_id,
+          operationKey: `capture-${event.run_id}`, episodeId: `kse-${event.run_id}`,
+        }).catch(() => undefined);
       }
     };
     void runCapture(0);

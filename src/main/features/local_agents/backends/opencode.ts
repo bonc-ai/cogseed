@@ -30,10 +30,21 @@ import {
   LineSplitter,
   FileChangeFallbackTracker,
 } from './base.js';
+import { wrapPersistentBackend, registerPersistentAdapter } from '../persistent/index.js';
+import { createOpencodeAdapter } from './opencode_persistent.js';
 
 const log = createLogger('local-agents:opencode');
 
-export const opencodeBackend: LocalBackend = {
+// Persistent wiring: register the serve-based adapter (acquire +
+// event translation live in opencode_persistent.ts; the translation
+// reuses mapOpencodeEvent below for stream parity), then expose the
+// backend through the persistent wrapper. runner.ts and the bus are
+// untouched — the wrapper is an ordinary LocalBackend.
+registerPersistentAdapter(createOpencodeAdapter({
+  mapEvent: mapOpencodeEvent,
+}));
+
+const opencodeOneShotBackend: LocalBackend = {
   async run(opts: BackendRunOptions): Promise<void> {
     const args = buildOpencodeArgs(opts);
     const child = spawnCli(opts.binPath, args, opts.cwd);
@@ -296,3 +307,16 @@ function numOrUndef(...vals: any[]): number | undefined {
   }
   return undefined;
 }
+
+// Exported backend: persistent path by default. Dispatches carrying
+// customArgs fall back to the one-shot spawn — user-supplied CLI
+// flags can't be applied per-turn to an already-running server.
+const wrapped = wrapPersistentBackend('opencode', opencodeOneShotBackend);
+export const opencodeBackend: LocalBackend = {
+  async run(opts: BackendRunOptions): Promise<void> {
+    if (opts.customArgs && opts.customArgs.length) {
+      return opencodeOneShotBackend.run(opts);
+    }
+    return wrapped.run(opts);
+  },
+};

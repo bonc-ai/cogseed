@@ -53,16 +53,31 @@ let _connectionsMcpPrimed = false;
 let _connectionsSkillsPrimed = false;
 
 function _connectionsOpenTarget(target) {
-  // Agent / 数据源 / 触点 已内嵌；仅模型与额度保留入口卡。
+  if (target === 'touchpoints') {
+    _connectionsOpenConfiguration('gateways');
+    return;
+  }
   if (target === 'models' && typeof setView === 'function') {
-    setView('settings');
-    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    _connectionsOpenConfiguration('models');
+  }
+}
+
+function _connectionsOpenConfiguration(anchor) {
+  if (typeof setView === 'function') {
+    setView('settings', undefined, { settingsTab: 'configuration', settingsAnchor: anchor });
+  }
+  if (typeof window.activateSettingsTab === 'function') {
+    window.activateSettingsTab('configuration', { anchor });
   }
 }
 
 function activateConnectionsTab(name) {
   const tabs = Array.from(document.querySelectorAll('.connections-tab'));
   if (!tabs.length) return;
+  if (name === 'touchpoints') {
+    _connectionsOpenTarget(name);
+    return;
+  }
   const existing = tabs.find((btn) => btn.dataset.connectionsTab === name);
   const target = existing ? name : tabs[0].dataset.connectionsTab;
   _connectionsLastTab = target;
@@ -136,12 +151,12 @@ function activateConnectionsTab(name) {
       });
   }
 
-  // Agent / 数据源 tab 内嵌了 AI 团队与资料库：切到该 tab 时按需加载。
+  // Agent tab 内嵌了 AI 团队：进入时加载完整列表，升级 boot 的摘要缓存。
   if (target === 'agents' && typeof loadAgents === 'function') {
-    // boot 只加载了 summary 列表（无描述）。这里始终走一次完整加载以升级缓存，
-    // 避免「介绍未填写」。_agentsCacheIsSummary 由 loadAgents 内部维护。
     Promise.resolve(loadAgents(false)).catch(() => {});
   }
+
+  // 数据源 tab 内嵌资料库；触点已归入设置—配置。
   if (target === 'sources') {
     // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化
     // tab 壳，不会加载 contexts.js。这里先加载模块再渲染，否则面板永远
@@ -159,18 +174,6 @@ function activateConnectionsTab(name) {
     }
   }
 
-  // 触点 tab 内嵌了飞书/消息平台：首次进入时初始化（依赖 settings bundle 已加载）。
-  if (target === 'touchpoints') {
-    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-    if (typeof loader === 'function') {
-      Promise.resolve(loader('settings'))
-        .then(() => {
-          if (typeof window.initTouchpointSettings === 'function') return window.initTouchpointSettings();
-          return undefined;
-        })
-        .catch(() => {});
-    }
-  }
 }
 
 window.initConnections = initConnections;

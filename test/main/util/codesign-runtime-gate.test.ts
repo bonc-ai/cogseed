@@ -11,6 +11,7 @@ const afterPack = require('../../../scripts/codesign-adhoc.cjs') as ((context: a
     pruneBetterSqlite3BuildArtifacts(nodeModules: string): void;
   };
 };
+const configuredAfterPack = require('../../../scripts/after-pack.js').default as (context: any) => Promise<void>;
 
 let tmpDir: string;
 
@@ -50,14 +51,13 @@ const RUNTIME_SIZES: Record<'python' | 'uv' | 'node', number> = {
   node: 303,
 };
 
-function writeEntrypointPayload(): string {
+function writeEntrypointPayload(pcRoot = path.join(tmpDir, 'entrypoint-fixture')): string {
   const require = createRequire(import.meta.url);
   const gate = require('../../../bin/packaged-entrypoint-gate.cjs') as {
     PACKAGED_BIN_ENTRYPOINTS: readonly string[];
     PACKAGED_BIN_HELPERS: readonly string[];
     PACKAGED_JS_LOADER_FILES: readonly { packageName: string; entry: string }[];
   };
-  const pcRoot = path.join(tmpDir, 'entrypoint-fixture');
   const binRoot = path.join(pcRoot, 'bin');
   fs.mkdirSync(binRoot, { recursive: true });
   for (const name of gate.PACKAGED_BIN_ENTRYPOINTS) {
@@ -227,6 +227,29 @@ function writeEmbeddingModel(): void {
 }
 
 describe('codesign-adhoc runtime gate', () => {
+  it('rejects a Windows package with a missing TypeScript loader through the configured afterPack hook', async () => {
+    const pcRoot = writeEntrypointPayload(path.join(tmpDir, 'resources', 'app.asar.unpacked'));
+    fs.rmSync(path.join(pcRoot, 'node_modules', 'esbuild', 'lib', 'main.js'));
+
+    await expect(configuredAfterPack({
+      electronPlatformName: 'win32',
+      appOutDir: tmpDir,
+      packager: { appInfo: { productName: 'CogSeed' } },
+    })).rejects.toThrow(/missing esbuild loader lib\/main\.js/);
+  });
+
+  it('rejects a macOS package with a missing TypeScript loader through the configured afterPack hook', async () => {
+    const resources = path.join(tmpDir, 'CogSeed.app', 'Contents', 'Resources');
+    const pcRoot = writeEntrypointPayload(path.join(resources, 'app.asar.unpacked'));
+    fs.rmSync(path.join(pcRoot, 'node_modules', 'esbuild', 'lib', 'main.js'));
+
+    await expect(configuredAfterPack({
+      electronPlatformName: 'darwin',
+      appOutDir: tmpDir,
+      packager: { appInfo: { productName: 'CogSeed' } },
+    })).rejects.toThrow(/missing esbuild loader lib\/main\.js/);
+  });
+
   it('removes the better-sqlite3 rebuild-only test extension before closed-world validation', () => {
     const releaseDir = path.join(tmpDir, 'node_modules', 'better-sqlite3', 'build', 'Release');
     fs.mkdirSync(releaseDir, { recursive: true });

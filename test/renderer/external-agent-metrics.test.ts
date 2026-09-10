@@ -77,7 +77,8 @@ describe('foldSessionMetrics — per-model context window denominator', () => {
     const f = foldSessionMetrics([turn({ model: 'mystery-model' })], {
       resolveWindowForModel: () => null,
     }) as { ctxText: string };
-    expect(f.ctxText).toBe('1.2K');
+    // used = prompt 侧压力 input+cacheRead+cacheWrite = 1000（不含 output=200）
+    expect(f.ctxText).toBe('1K');
     expect(f.ctxText).not.toContain('/');
   });
 });

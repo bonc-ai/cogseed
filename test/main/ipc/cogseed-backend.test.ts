@@ -39,6 +39,7 @@ const taskSummary = (status = 'running') => ({
 });
 
 const cogseedService = {
+  create: vi.fn(async () => taskSummary('planned')),
   start: vi.fn(async () => taskSummary()),
   reassign: vi.fn(async () => ({ ...taskSummary(), taskId: 'cogseed-task-linked', requestId: 'req-ipc-linked' })),
   read: vi.fn(async () => taskSummary()),
@@ -47,6 +48,7 @@ const cogseedService = {
   retry: vi.fn(async () => ({ ...taskSummary('created'), taskId: 'cogseed-task-retry', requestId: 'req-ipc-retry' })),
   resume: vi.fn(async () => taskSummary('recoverable')),
   action: vi.fn(async () => ({ schemaVersion: 1, sessionId: 'cogseed-session-ipc', updatedAt: '2026-08-05T00:00:04.000Z', session: { sessionId: 'cogseed-session-ipc' }, task: taskSummary('running'), actors: [], tasks: [], workflow: { childTaskIds: [], steps: [] }, recovery: { recoverable: false, taskIds: [] }, timeline: [], actions: taskSummary('running').actions })),
+  purgeArchived: vi.fn(async () => ({ purgedTaskIds: ['cogseed-task-archived'], retainedTaskIds: [], failedTaskIds: [] })),
   collaborationAction: vi.fn(async () => ({ schemaVersion: 1, sessionId: 'cogseed-session-ipc', updatedAt: '2026-08-05T00:00:04.000Z', session: { sessionId: 'cogseed-session-ipc' }, task: taskSummary('running'), actors: [], tasks: [], workflow: { childTaskIds: [], steps: [] }, reviews: [], conflicts: [], activity: [], recovery: { recoverable: false, taskIds: [] }, timeline: [], actions: taskSummary('running').actions })),
   events: vi.fn(async () => ({ events: [{ eventId: 'cogseed-event-1', taskId: 'cogseed-task-ipc', sessionId: 'cogseed-session-ipc', sequence: 1, type: 'task.started', createdAt: '2026-08-05T00:00:00.000Z', payload: { summary: 'started' } }], afterSequence: 0 })),
   streamEvents: vi.fn(async function* () {
@@ -104,6 +106,7 @@ async function stream(channel: string, payload: unknown = {}) {
 
 describe('Mate Agent backend IPC channels', () => {
   it('routes task invoke operations through the active user scoped Mate service', async () => {
+    await expect(call('cogseed.task.create', { requestId: 'req-ipc-planned', task: 'Do later.', uid: 'attacker' })).resolves.toMatchObject({ ok: true, status: 'planned' });
     await expect(call('cogseed.task.start', { requestId: 'req-ipc', task: 'Do work.', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', requestId: 'req-ipc' });
     await expect(call('cogseed.task.reassign', { taskId: 'cogseed-task-ipc', requestId: 'req-ipc-linked', agentId: 'review-agent', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-linked' });
     await expect(call('cogseed.task.read', { taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, taskId: 'cogseed-task-ipc', status: 'running' });
@@ -118,8 +121,10 @@ describe('Mate Agent backend IPC channels', () => {
     await expect(call('cogseed.worktree.create', { branch: 'dev/test', baseRef: 'develop', uid: 'attacker' })).resolves.toMatchObject({ ok: true, branch: 'dev/test', verifiable: true });
     await expect(call('cogseed.worktree.remove', { path: '/safe/cogseed-worktree-dev-test', expectedBranch: 'dev/test', uid: 'attacker' })).resolves.toMatchObject({ ok: true, removed: true, branch: 'dev/test' });
     await expect(call('cogseed.task.action', { action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' })).resolves.toMatchObject({ ok: true, sessionId: 'cogseed-session-ipc', workflow: expect.objectContaining({ childTaskIds: [] }) });
+    await expect(call('cogseed.task.archived.purge', { uid: 'attacker' })).resolves.toMatchObject({ ok: true, purgedTaskIds: ['cogseed-task-archived'] });
     await expect(call('cogseed.collaboration.action', { action: 'approve-gate', taskId: 'cogseed-task-ipc', targetId: 'gate-1', uid: 'attacker' })).resolves.toMatchObject({ ok: true, sessionId: 'cogseed-session-ipc' });
 
+    expect(cogseedService.create).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc-planned', task: 'Do later.', uid: 'attacker' }));
     expect(cogseedService.start).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc', task: 'Do work.', uid: 'attacker' }));
     expect(cogseedService.reassign).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ requestId: 'req-ipc-linked', agentId: 'review-agent', uid: 'attacker' }));
     expect(cogseedService.read).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ taskId: 'cogseed-task-ipc', uid: 'attacker' }));
@@ -134,6 +139,7 @@ describe('Mate Agent backend IPC channels', () => {
     expect(cogseedService.createWorktree).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ branch: 'dev/test', uid: 'attacker' }));
     expect(cogseedService.removeWorktree).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ expectedBranch: 'dev/test', uid: 'attacker' }));
     expect(cogseedService.action).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ action: 'abort', taskId: 'cogseed-task-ipc', uid: 'attacker' }));
+    expect(cogseedService.purgeArchived).toHaveBeenCalledWith(TEST_UID);
     expect(cogseedService.collaborationAction).toHaveBeenCalledWith(TEST_UID, expect.objectContaining({ action: 'approve-gate', targetId: 'gate-1', uid: 'attacker' }));
   });
 

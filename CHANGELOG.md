@@ -9,63 +9,39 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 (未发布内容待积累)
 
-## [0.9.0] - 2026-09-04
-
-### Fixed
-
-- **语音按钮错位** — 首次启动未配置模型时，输入框语音按钮停留在左侧；现与发送按钮一起固定在右侧（模型 chip 隐藏时的布局兜底）。
-- **群聊长回合后消息卡"待发送"** — 回合结束后消息队列不再卡死：关流前合成最终空闲快照，渲染层另有状态自愈兜底。
-- **课程提交等待过久** — 学生提交按任务终态收尾：平台受理即完成，AI 初评异步回填（1-5 分钟），不再无限等待评分。
-
-### Changed
-
-- **内置课程客户端升级 0.4.2** — 提交流程终态化；移除硬编码默认平台地址（平台地址随 API Key 自带）；自动更新保持默认关闭。
-
-### Security & Maintenance
-
-- 公开仓库清理：内部标识残留、过期内部文档与构建产物残留清零；离线语音识别模型补齐 Apache-2.0 授权声明。
-- 发布流水线 tag 来源校验统一为 cicd 发布路径，与发布门禁口径一致。
-
-## [0.8.0] - 2026-09-03
+## [1.0.2] - 2026-09-10
 
 ### Added
 
-- **Windows 平台统一支持** — 同一套源码同时支持 macOS 与 Windows：纳入
-  Windows CLI 发现与 `.cmd/.bat` 启动、Node shebang 解析、进程树回收、P3394
-  网关、诊断脚本与弹窗关闭能力；平台差异由运行时判断、CI 构建矩阵和分别命名
-  的产物表达，不再维护独立 Windows 业务分支。
-- **共享知识库分享到飞书** — 空间内容一键发布为飞书公网文档：权限三档
-  （互联网可读 / 组织内可读 / 关闭链接）、分享管理面板（复制链接 / 知识码 /
-  更新内容 / 撤销）、独立分享应用配置（不依赖消息机器人绑定）。
-- **问答会话分享（客户端联动）** — CogSeed 问答分享客户端联动方案，附带修复
-  飞书租户域名识别。
-- **外接智能体执行控制** — @外接智能体的统一模型与推理强度（effort）控制、
-  真实 CLI 本地执行与状态回读、用量与费用指标（usage metrics）展示。
-- **统一界面控件与操作审批** — 统一页面控件与页面框架（page chrome）；文件、
-  Shell、Skill 等内核工具执行前接入操作审批（action approval）链。
-- **安全 Skill 体系（guardrail）** — 新增 skill-declaration-core 声明核与
-  skill-sentry 引擎（内置 vendor 形态），为 Skill 装载与执行提供声明与守门
-  能力。
-- **内置课程客户端种子机制** — 内置课程客户端新增种子（seed）机制，附插件
-  面板授权状态修复。
-
-### Fixed
-
-- **运行中心（Run Center）** — 修复重启后死卡片、会话残留与重复扫描问题。
-- **知识库问答** — 脑图生成超时自动降级、会话历史快照。
-- **内置课程客户端加固** — 自动更新默认关闭、用户手册内置化、隐私匿名化。
+- **Windows 支持统一** — Windows 平台能力与 develop 对齐：本地智能体生命周期加固、
+  CLI 常驻运行时、发布门禁稳定化，Windows 安装包（NSIS x64）纳入 CI 打包验证。
+- **知识库问答增强** — 跨库引导、元问题识别、全库概览路由与流式 IPC；文件预览
+  查看器与 PDF 引用页码定位；任务终态自动归档进知识库。
+- **继续任务按项目分组** — continue-work 会话按项目目录聚合。
+- **内置包升级** — eduseed-course-client 0.5.3（防串作业绑定预检 + 确认卡片黑屏
+  修复），平台内置包统一 0.4.2。
 
 ### Changed
 
-- **下线对话内生成速率显示** — 生成速率显示暂时下线待重做；统计计算与数据
-  采集保留。
+- **对话核心 v2 交互重构** — 会话与任务交互重构，渠道接续（conv-core v2）。
+- **CLI 用量统计下线** — 外接智能体模型枚举支持；过程 UI 修复。
+
+### Fixed
+
+- **语音输入加固** — STT 音频输入与打包路径加固。
+- **设置页渲染修复** — 配置页顶部多余执行区块移除，恢复从模型配置开始渲染。
+- **连接页 Agent 标签保留**；macOS 仓库别名路径规范化。
 
 ### Security
 
-- **开源发布安全收口** — 清理内部工单号与私有网段测试地址、删除硬编码默认
-  平台地址；SBOM 依赖清单门禁同步（626 组件）。
+- Remove private development records and personal identifiers from source,
+  test fixtures, and bundled course examples.
+- Update vulnerable XML, URI, YAML, query-string, archive, and build-tool
+  dependencies; refresh the dependency inventory and third-party notices.
+- Scope secret-scanner exceptions to reviewed synthetic fixtures and an
+  exact vendored expression while retaining the default detection rules.
 
-## [0.7.6] - 2026-08-31
+## [0.9.0] - 2026-09-07
 
 ### Added
 

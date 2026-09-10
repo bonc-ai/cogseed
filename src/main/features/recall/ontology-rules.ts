@@ -71,7 +71,10 @@ function ruleId(groupId: string, field: string, subject: string, object: string)
 }
 
 /** Load the ontology R-Box: relation-field values across all groups. */
-export async function loadOntologyRules(userId: string): Promise<OntologyRulesResult> {
+export async function loadOntologyRules(
+  userId: string,
+  context: { workspaceId?: string } = {},
+): Promise<OntologyRulesResult> {
   if (!safeId(userId)) return { rules: [] };
   const groups = readGroups(userId).slice(0, MAX_GROUPS);
   const rules: OntologyRule[] = [];
@@ -85,6 +88,7 @@ export async function loadOntologyRules(userId: string): Promise<OntologyRulesRe
     if (!fields.ok || !fields.fields) continue;
     for (const field of fields.fields) {
       for (const value of field.values) {
+        if (value.project && value.project !== context.workspaceId) continue;
         const parsed = parseRelationValue(value.value);
         if (!parsed) continue;
         rules.push({

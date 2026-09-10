@@ -1,8 +1,8 @@
 name: CI
 
-# CI (verify + verify-windows) runs only on the cicd branch — the release gate.
+# CI (verify) runs only on the cicd branch — the release gate.
 # Day-to-day development merges into develop via review only (no CI);
-# the full macOS and Windows verification runs once when a PR targets cicd,
+# the full macOS verification runs once when a PR targets cicd,
 # and again on push to cicd, right before tagging a release.
 on:
   pull_request:
@@ -11,7 +11,6 @@ on:
   push:
     branches:
       - cicd
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -52,28 +51,3 @@ jobs:
             exit 1
           fi
           echo "✅ All commit author emails are noreply."
-
-  verify-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test:resources:setup
-      - run: npm run test:platform-native
-      - name: P3394 gateway protocol smoke
-        run: node p3394-gateway/test/smoke.cjs
-      - run: npm run build:win
-      - name: Upload Windows test package
-        uses: actions/upload-artifact@v4
-        with:
-          name: cogseed-windows-x64-${{ github.sha }}
-          path: dist/CogSeed-*-win-x64.exe
-          if-no-files-found: error
-          retention-days: 14

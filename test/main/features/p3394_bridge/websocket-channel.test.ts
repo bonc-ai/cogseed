@@ -11,17 +11,42 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import * as http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { P3394WebSocketChannel } from '../../../../src/main/features/p3394_bridge/websocket-channel';
+import { OPENSSL_EXECUTABLE } from '../../../helpers/tls-capabilities';
 import { buildP3394BridgeManifest } from '../../../../src/main/features/p3394_bridge/manifest';
 
-let counter = 0;
 const openChannels: P3394WebSocketChannel[] = [];
+const openRejectingServers: http.Server[] = [];
 
-function nextPort(): number {
-  counter += 1;
-  return 47_000 + counter;
+function listeningPort(channel: P3394WebSocketChannel): number {
+  const httpChannel = (channel as unknown as { httpChannel: { server: http.Server } }).httpChannel;
+  const address = httpChannel.server.address();
+  if (!address || typeof address === 'string') throw new Error('websocket_listener_address_unavailable');
+  return address.port;
+}
+
+async function listenOnEphemeralPort(channel: P3394WebSocketChannel): Promise<number> {
+  await channel.listen();
+  openChannels.push(channel);
+  return listeningPort(channel);
+}
+
+async function startRejectingEndpoint(): Promise<number> {
+  const server = http.createServer((_request, response) => {
+    response.writeHead(503);
+    response.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  openRejectingServers.push(server);
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('rejecting_endpoint_address_unavailable');
+  return address.port;
 }
 
 function manifest(agentId: string) {
@@ -64,17 +89,18 @@ function waitFor(probe: () => boolean, timeoutMs = 8000): Promise<void> {
 
 afterEach(async () => {
   for (const channel of openChannels.splice(0)) await channel.close().catch(() => {});
+  for (const server of openRejectingServers.splice(0)) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 describe('P3394WebSocketChannel real transport (C-05)', () => {
   it('listener + dialer 双向闭环：B 发 task → A 收到并回发 → B 收到', async () => {
-    const port = nextPort();
-    const server = new P3394WebSocketChannel('ws-server', { listen: { host: '127.0.0.1', port }, authToken: 'ws-token' });
+    const server = new P3394WebSocketChannel('ws-server', { listen: { host: '127.0.0.1', port: 0 }, authToken: 'ws-token' });
     server.setLocalManifest(manifest('node-b'));
     const received: string[] = [];
     server.subscribe((incoming) => { received.push(incoming.message_id); });
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
     const client = new P3394WebSocketChannel('ws-client', {
       dial: { endpoints: [`ws://127.0.0.1:${port}`], bearerToken: 'ws-token', expected_identity: 'node-b' },
@@ -110,16 +136,14 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
   });
 
   it('错误 token 握手被拒（401 语义 + 审计），合法 token 连接成功', async () => {
-    const port = nextPort();
     const audit: Array<Record<string, unknown>> = [];
     const server = new P3394WebSocketChannel('ws-auth', {
-      listen: { host: '127.0.0.1', port },
+      listen: { host: '127.0.0.1', port: 0 },
       authToken: 'correct',
       audit: (record) => { audit.push(record as unknown as Record<string, unknown>); },
     });
     server.setLocalManifest(manifest('node-b'));
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
     // 错误 token：握手失败。
     await expect(new Promise<void>((resolve, reject) => {
@@ -138,11 +162,9 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
   });
 
   it('expected_identity 不匹配 fail-closed，匹配时绑定成功', async () => {
-    const port = nextPort();
-    const server = new P3394WebSocketChannel('ws-id', { listen: { host: '127.0.0.1', port }, authToken: 't' });
+    const server = new P3394WebSocketChannel('ws-id', { listen: { host: '127.0.0.1', port: 0 }, authToken: 't' });
     server.setLocalManifest(manifest('real-node'));
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
     const mismatched = new P3394WebSocketChannel('ws-id-bad', { dial: { endpoints: [`ws://127.0.0.1:${port}`], bearerToken: 't', expected_identity: 'other-node' } });
     openChannels.push(mismatched);
@@ -159,22 +181,20 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
     if (ok.ok) expect(ok.peer_agent_id).toBe('real-node');
   });
 
-  it('wss（TLS）round trip：自签证书 + Bearer 认证', async () => {
+  it.skipIf(!OPENSSL_EXECUTABLE)('wss（TLS）round trip：自签证书 + Bearer 认证', async () => {
     const certDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-ws-tls-'));
     const key = path.join(certDir, 'key.pem');
     const cert = path.join(certDir, 'cert.pem');
     try {
-      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
-      const port = nextPort();
+      execFileSync(OPENSSL_EXECUTABLE!, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
       const server = new P3394WebSocketChannel('wss-server', {
-        listen: { host: '127.0.0.1', port, tls: { key: fs.readFileSync(key, 'utf8'), cert: fs.readFileSync(cert, 'utf8') } },
+        listen: { host: '127.0.0.1', port: 0, tls: { key: fs.readFileSync(key, 'utf8'), cert: fs.readFileSync(cert, 'utf8') } },
         authToken: 'tls-token',
       });
       server.setLocalManifest(manifest('node-b'));
       const received: string[] = [];
       server.subscribe((incoming) => { received.push(incoming.message_id); });
-      await server.listen();
-      openChannels.push(server);
+      const port = await listenOnEphemeralPort(server);
 
       const client = new P3394WebSocketChannel('wss-client', {
         dial: { endpoints: [`wss://127.0.0.1:${port}`], bearerToken: 'tls-token', tls: { rejectUnauthorized: false }, expected_identity: 'node-b' },
@@ -190,15 +210,13 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
   });
 
   it('failover：端点不可达时切换到可达端点并绑定其身份', async () => {
-    const port = nextPort();
-    const server = new P3394WebSocketChannel('ws-failover', { listen: { host: '127.0.0.1', port }, authToken: 't' });
+    const server = new P3394WebSocketChannel('ws-failover', { listen: { host: '127.0.0.1', port: 0 }, authToken: 't' });
     server.setLocalManifest(manifest('node-b'));
     const received: string[] = [];
     server.subscribe((incoming) => { received.push(incoming.message_id); });
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
-    const deadPort = nextPort();
+    const deadPort = await startRejectingEndpoint();
     const client = new P3394WebSocketChannel('ws-failover-client', {
       dial: { endpoints: [`ws://127.0.0.1:${deadPort}`, `ws://127.0.0.1:${port}`], bearerToken: 't', expected_identity: 'node-b' },
     });
@@ -210,15 +228,13 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
   });
 
   it('统一速率限制：超限消息 rate_limited（S-06）', async () => {
-    const port = nextPort();
     const server = new P3394WebSocketChannel('ws-rate', {
-      listen: { host: '127.0.0.1', port },
+      listen: { host: '127.0.0.1', port: 0 },
       authToken: 't',
       maxInboundRequestsPerMinute: 2,
     });
     server.setLocalManifest(manifest('node-b'));
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
     const client = new P3394WebSocketChannel('ws-rate-client', { dial: { endpoints: [`ws://127.0.0.1:${port}`], bearerToken: 't', expected_identity: 'node-b' } });
     openChannels.push(client);
@@ -229,15 +245,13 @@ describe('P3394WebSocketChannel real transport (C-05)', () => {
   });
 
   it('统一并发限制：连接数超限拒绝 upgrade（503 语义，S-06）', async () => {
-    const port = nextPort();
     const server = new P3394WebSocketChannel('ws-conc', {
-      listen: { host: '127.0.0.1', port },
+      listen: { host: '127.0.0.1', port: 0 },
       authToken: 't',
       maxConcurrentRequests: 1,
     });
     server.setLocalManifest(manifest('node-b'));
-    await server.listen();
-    openChannels.push(server);
+    const port = await listenOnEphemeralPort(server);
 
     const first = new P3394WebSocketChannel('ws-conc-1', { dial: { endpoints: [`ws://127.0.0.1:${port}`], bearerToken: 't', expected_identity: 'node-b' } });
     openChannels.push(first);

@@ -23,6 +23,7 @@ import * as fsp from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { isNodeShebangScript } from './spawn-command.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -277,8 +278,9 @@ function winExtCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
  *
  * On POSIX we additionally require the executable bit; on Windows the
  * extension match is enough (NTFS doesn't carry a unix-style x bit and
- * fs.stat's `mode` is synthesized) — except that a bare (extension-less)
- * Unix shebang script is not something `spawn` can run, so we skip it.
+ * fs.stat's `mode` is synthesized). Bare shell shebang shims are skipped so
+ * their Windows command-script sibling can win. Bare Node shebangs remain
+ * valid because resolveCliCommand runs them through Electron's Node runtime.
  */
 async function isExecutableFile(p: string): Promise<boolean> {
   try {
@@ -286,9 +288,12 @@ async function isExecutableFile(p: string): Promise<boolean> {
     if (!st.isFile()) return false;
     if (isWindows) {
       // npm generates a `<name>` bash shim (`#!/bin/sh`) alongside every
-      // `<name>.cmd`/`<name>.ps1`. The bare shim is a Unix script Windows
-      // cannot spawn; skip it so whichBin falls through to the real `.cmd`.
-      if (path.extname(p) === '' && await isShebangScript(p)) return false;
+      // `<name>.cmd`/`<name>.ps1`. Skip that shim so whichBin reaches the real
+      // `.cmd`, but accept Node shebangs such as WorkBuddy's bundled
+      // extension-less `codebuddy`; resolveCliCommand can launch those.
+      if (path.extname(p) === '' && await isShebangScript(p)) {
+        return isNodeShebangScript(p);
+      }
       return true;
     }
     // 0o111 = any of user/group/other execute.

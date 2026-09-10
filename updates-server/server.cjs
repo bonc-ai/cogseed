@@ -93,7 +93,7 @@ function handleLatest(req, res) {
  * (`<AppName>/<version> CFNetwork/...`). Electron treats any 200 JSON feed
  * as "update available" and 204 as "update not available", so when the
  * caller is already on the newest zip version we answer 204 (parity with the
- * production hub behaviour; see docs/design/auto-update-local-verify.md).
+ * production hub behaviour; see updates-server/README.md).
  * Requests without a parseable version (curl, older clients) get the feed.
  */
 function handleFeed(req, res, arch) {

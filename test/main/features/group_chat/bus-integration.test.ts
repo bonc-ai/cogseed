@@ -346,6 +346,146 @@ function newCid(): string {
   return cid;
 }
 
+type DelegatedAssetSurface = "dispatch_to" | "hand_off_to" | "run_worker_anonymous" | "run_worker_named";
+
+async function createDelegatedAbilityAsset(
+  label: string,
+  scopePolicy?: { purposeTags?: string[] },
+) {
+  const candidates = await import("../../../../src/main/features/recall/candidate-service");
+  const promoted = await candidates.saveRecallCandidate(TEST_UID, {
+    judgment: `Use the confirmed delegated asset for ${label}.`,
+    summary: `Delegated asset ${label}`,
+    suggestedType: "rule",
+    suggestedScope: "review",
+    sourceRefs: [{ kind: "execution", id: `exec-${label}` }],
+  });
+  const asset = (await candidates.promoteRecallCandidate(TEST_UID, promoted.id, {
+    actor: "user",
+    ...(scopePolicy ? { scopePolicy } : {}),
+  })).asset;
+  // Explicit grants are an active runtime path, so the fixture must be above
+  // the existing maturity gate. This is not the Projection authorization under
+  // test; it keeps the positive and rejection cases focused on that boundary.
+  return (await (await import("../../../../src/main/features/recall/asset-service"))
+    .setAbilityAssetMaturity(TEST_UID, asset.id, "transfer_validated"));
+}
+
+async function seedDelegatedProjection(
+  cid: string,
+  asset: Awaited<ReturnType<typeof createDelegatedAbilityAsset>>,
+  status: "preview" | "confirmed" = "confirmed",
+) {
+  const store = await import("../../../../src/main/features/kstar/requirement-store");
+  const projections = await import("../../../../src/main/features/recall/context-projection");
+  const task = store.createKstarTaskRecord(TEST_UID, {
+    conversationId: cid,
+    title: "Delegated asset task",
+  });
+  const preview = await projections.previewContextProjection(TEST_UID, {
+    taskRunId: task.id,
+    purpose: "review",
+  });
+  if (!preview.assetIds.includes(asset.id)) {
+    throw new Error("test fixture failed to place the asset in the Projection");
+  }
+  const projection = status === "confirmed"
+    ? await projections.confirmContextProjection(TEST_UID, preview.id)
+    : preview;
+  const requirement = store.createKstarRequirementRecord(TEST_UID, {
+    taskId: task.id,
+    conversationId: cid,
+    userMessageIds: ["msg-delegated-asset"],
+    title: "Delegated asset requirement",
+    goalText: "Review the delegated task",
+  });
+  requirement.projectionId = projection.id;
+  requirement.projectionIds = [projection.id];
+  task.requirementIds = [requirement.id];
+  task.currentRequirementId = requirement.id;
+  await store.replaceKstarTask(TEST_UID, task);
+  await store.replaceKstarRequirement(TEST_UID, requirement);
+  await store.writeConversationTaskState(TEST_UID, {
+    ...store.createInitialConversationTaskState(TEST_UID, cid),
+    currentTaskId: task.id,
+    currentRequirementId: requirement.id,
+    taskComplete: false,
+  });
+  return { asset, task, requirement, projection };
+}
+
+function delegatedToolInput(
+  surface: DelegatedAssetSurface,
+  assetIds: string[] | undefined,
+  task = "review the delegated task",
+): { name: string; input: Record<string, unknown>; targetSessionKey: string } {
+  const grant = assetIds === undefined ? {} : { ability_assets: assetIds };
+  if (surface === "dispatch_to") {
+    return {
+      name: "dispatch_to",
+      input: { to: AGENT_NAME, message: task, ...grant },
+      targetSessionKey: "agent",
+    };
+  }
+  if (surface === "hand_off_to") {
+    return {
+      name: "hand_off_to",
+      input: { to: AGENT_NAME, message: task, ...grant },
+      targetSessionKey: "agent",
+    };
+  }
+  if (surface === "run_worker_named") {
+    return {
+      name: "run_worker",
+      input: { to: AGENT_NAME, task, ...grant },
+      targetSessionKey: "agent",
+    };
+  }
+  return {
+    name: "run_worker",
+    input: { task, ...grant },
+    targetSessionKey: "anonymous",
+  };
+}
+
+async function runDelegatedSurface(
+  cid: string,
+  surface: DelegatedAssetSurface,
+  assetIds: string[] | undefined,
+  task = "review the delegated task",
+) {
+  const state = await import("../../../../src/main/features/group_chat/state");
+  const bus = await import("../../../../src/main/features/group_chat/bus");
+  const tool = delegatedToolInput(surface, assetIds, task);
+  _setScript(state.buildGconvSessionId(cid), [
+    { type: "__call_tool__", name: tool.name, input: tool.input },
+    { type: "final", text: "commander follow-up" },
+  ]);
+  if (tool.targetSessionKey === "agent") {
+    _setScript(state.buildGmemberSessionId(cid, AGENT_ID), [
+      { type: "final", text: "delegated agent result" },
+    ]);
+  } else {
+    _setScript("gworker-*", [{ type: "final", text: "delegated worker result" }]);
+  }
+  await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: task });
+  await waitForQuiescent(TEST_UID, cid, 6_000);
+  const results = _recordedToolResults.filter((result) => result.name === tool.name);
+  return {
+    result: results[results.length - 1],
+    targetSessionId: tool.targetSessionKey === "agent"
+      ? state.buildGmemberSessionId(cid, AGENT_ID)
+      : undefined,
+  };
+}
+
+const delegatedAssetSurfaces: DelegatedAssetSurface[] = [
+  "dispatch_to",
+  "hand_off_to",
+  "run_worker_anonymous",
+  "run_worker_named",
+];
+
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cogseed-int-"));
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
@@ -1723,6 +1863,11 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
     const candidates = await import("../../../../src/main/features/recall/candidate-service");
+    // This assertion covers both sides of the boundary: the Commander must
+    // receive host-owned Recall context, while the delegated Agent receives
+    // only the explicit dispatch grant. Enable the host routing path so the
+    // test creates the confirmed projection that supplies that context.
+    process.env.COGSEED_KSTAR_HOST_ROUTING = "1";
 
     const candidate = await candidates.saveRecallCandidate(TEST_UID, {
       judgment: "Never leak asset context into delegated turns unless the Commander grants it.",
@@ -1761,7 +1906,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     // ...and NEVER the host-side confirmed-assets block.
     expect(agentCall!.systemPrompt).not.toContain("<confirmed-ability-assets>");
     // The Commander itself still gets automatic Recall injection.
-    const commanderCall = _recordedCalls.find((c) => c.sid === state.buildGconvSessionId(cid));
+    const commanderCall = [..._recordedCalls].reverse().find((c) => c.sid === state.buildGconvSessionId(cid));
     expect(commanderCall).toBeTruthy();
     expect(commanderCall!.systemPrompt).toContain("<confirmed-ability-assets>");
 
@@ -1777,7 +1922,7 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
     });
   }, 10_000);
 
-  it("rejects dispatch with an unknown or inactive ability asset id", async () => {
+  it("rejects dispatch with an explicit ability asset when no confirmed Projection exists", async () => {
     const cid = newCid();
     const state = await import("../../../../src/main/features/group_chat/state");
     const bus = await import("../../../../src/main/features/group_chat/bus");
@@ -1799,7 +1944,10 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
 
     const toolResult = _recordedToolResults.find((r) => r.name === "dispatch_to");
     expect(toolResult?.isError).toBe(true);
-    expect(JSON.parse(toolResult!.content).error).toMatch(/unknown ability asset/);
+    expect(JSON.parse(toolResult!.content).error).toBe(
+      "Ability assets require a current confirmed Projection.",
+    );
+    expect(toolResult!.content).not.toContain("aa-does-not-exist");
     // The agent never started.
     expect(_recordedCalls.filter((c) => c.sid === state.buildGmemberSessionId(cid, AGENT_ID))).toHaveLength(0);
   }, 10_000);
@@ -2669,195 +2817,18 @@ describe("group_chat bus integration › G8d in-process dispatch (run_worker / d
   });
 
 
-  // 第二期通道收口（2026-08-24）：直连 `cli` 通道不再是默认执行路径，
-  // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
-  // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
-  // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
-  it.skip("passes the existing CLI resume session id to the same Agent retry", async () => {
-    const cid = newCid();
-    const state = await import("../../../../src/main/features/group_chat/state");
-    const bus = await import("../../../../src/main/features/group_chat/bus");
-    const cliSessions =
-      await import("../../../../src/main/features/local_agents/sessions");
-    await makeSeedAgentCli();
-    await cliSessions.setSessionId(TEST_UID, cid, AGENT_ID, "hermes", "resume-existing-42");
-    installFirstAttemptCoordinatorAbort(bus);
-    localRunnerScripts.push([]);
-    localRunnerScripts.push([
-      { type: "done", output: "cli recovered", sessionId: "resume-existing-42", status: "completed" },
-      { type: "__return__", status: "completed", output: "cli recovered" },
-    ]);
-    _setScript(state.buildGconvSessionId(cid), [
-      {
-        type: "__call_tool__",
-        name: "run_worker",
-        input: { to: AGENT_NAME, task: "repair the CLI project" },
-      },
-      { type: "final", text: "done" },
-    ]);
-
-    bus.subscribe(TEST_UID, cid, () => {});
-    await bus.enqueue({ uid: TEST_UID, cid, fromActorId: "user", text: "repair it" });
-    await waitForQuiescent(TEST_UID, cid, 4000);
-
-    expect(localRunnerCalls).toHaveLength(2);
-    expect(localRunnerCalls[1].resumeSessionId).toBe("resume-existing-42");
-  });
+  // G-18/G-19（2026-08-25）：直连执行路径已删除，直连专属的 resume/
+  // 会话持久化语义钉子随之移除——网关模式下会话连续性由 P3394 session
+  // 与网关侧 cli-session（G-27 resume）承担；PID 数据源已由网关
+  // hello/manifest 自报（extensions.pid / manifest.pid）。
 
 
 
-  // 第二期通道收口（2026-08-24）：直连 `cli` 通道不再是默认执行路径，
-  // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
-  // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
-  // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
-  it.skip("awaits the newest CLI session write before a same-Agent retry starts", async () => {
-    const cid = newCid();
-    const cliSessions =
-      await import("../../../../src/main/features/local_agents/sessions");
-    const state = await import("../../../../src/main/features/group_chat/state");
-    const bus = await import("../../../../src/main/features/group_chat/bus");
-    await makeSeedAgentCli();
-    installFirstAttemptCoordinatorAbort(bus);
-    let releaseWrite!: () => void;
-    const writeGate = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let writeStarted = false;
-    let writeResolved = false;
-    const actualSetSessionId = cliSessions.setSessionId;
-    const setSessionSpy = vi
-      .spyOn(cliSessions, "setSessionId")
-      .mockImplementation(async (...args) => {
-        writeStarted = true;
-        await writeGate;
-        await actualSetSessionId(...args);
-        writeResolved = true;
-      });
-    localRunnerScripts.push([
-      {
-        type: "done",
-        output: "first failed attempt",
-        sessionId: "fresh-session-from-attempt-one",
-        status: "failed",
-      },
-      {
-        type: "__return__",
-        status: "failed",
-        output: "first failed attempt",
-      },
-    ]);
-    localRunnerScripts.push([
-      {
-        type: "done",
-        output: "cli retry recovered",
-        sessionId: "fresh-session-from-attempt-one",
-        status: "completed",
-      },
-      {
-        type: "__return__",
-        status: "completed",
-        output: "cli retry recovered",
-      },
-    ]);
-    _setScript(state.buildGconvSessionId(cid), [
-      {
-        type: "__call_tool__",
-        name: "run_worker",
-        input: { to: AGENT_NAME, task: "resume newest CLI session" },
-      },
-      { type: "final", text: "done" },
-    ]);
-
-    try {
-      bus.subscribe(TEST_UID, cid, () => {});
-      await bus.enqueue({
-        uid: TEST_UID,
-        cid,
-        fromActorId: "user",
-        text: "resume safely",
-      });
-      expect(await waitUntil(() => writeStarted, 2000)).toBe(true);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(writeResolved).toBe(false);
-      expect(localRunnerCalls).toHaveLength(1);
-      releaseWrite();
-      await waitForQuiescent(TEST_UID, cid, 5000);
-
-      expect(writeResolved).toBe(true);
-      expect(localRunnerCalls).toHaveLength(2);
-      expect(localRunnerCalls[1].resumeSessionId).toBe(
-        "fresh-session-from-attempt-one",
-      );
-    } finally {
-      releaseWrite();
-      setSessionSpy.mockRestore();
-    }
-  });
+  // G-18/G-19（2026-08-25）：直连会话写入顺序钉子随直连路径移除（网关
+  // 模式会话连续性由 P3394 session 承担，见上方总注释）。
 
 
-  // 第二期通道收口（2026-08-24）：直连 `cli` 通道不再是默认执行路径，
-  // 本用例钉住的 PID 探活 / CLI 会话持久化语义是直连专属；网关模式下
-  // 会话连续性由 P3394 session 承担。网关侧 PID 数据源与探活语义列入
-  // 后续增强（见 docs/design 设计文档第 5 节），补齐后恢复本用例。
-  it.skip("stops safely when the newest CLI session id cannot be persisted", async () => {
-    const cid = newCid();
-    const cliSessions =
-      await import("../../../../src/main/features/local_agents/sessions");
-    const state = await import("../../../../src/main/features/group_chat/state");
-    const bus = await import("../../../../src/main/features/group_chat/bus");
-    const collaboration =
-      await import("../../../../src/main/features/group_chat/collaboration");
-    await makeSeedAgentCli();
-    const setSessionSpy = vi
-      .spyOn(cliSessions, "setSessionId")
-      .mockImplementation(async () => {});
-    localRunnerScripts.push([
-      {
-        type: "done",
-        output: "failed with a fresh session",
-        sessionId: "unpersisted-session-id",
-        status: "failed",
-      },
-      {
-        type: "__return__",
-        status: "failed",
-        output: "failed with a fresh session",
-      },
-    ]);
-    _setScript(state.buildGconvSessionId(cid), [
-      {
-        type: "__call_tool__",
-        name: "run_worker",
-        input: { to: AGENT_NAME, task: "persist newest CLI session" },
-      },
-      { type: "final", text: "handled infrastructure failure" },
-    ]);
-
-    try {
-      bus.subscribe(TEST_UID, cid, () => {});
-      await bus.enqueue({
-        uid: TEST_UID,
-        cid,
-        fromActorId: "user",
-        text: "persist safely",
-      });
-      await waitForQuiescent(TEST_UID, cid, 5000);
-
-      expect(localRunnerCalls).toHaveLength(1);
-      const run = await collaboration.readActiveWorkflowRun(TEST_UID, cid);
-      expect(run?.steps[0]?.attempts).toHaveLength(1);
-      expect(run?.steps[0]?.attempts?.[0].status).toBe("failed");
-      const toolResult = _recordedToolResults.find(
-        (result) => result.name === "run_worker",
-      );
-      expect(toolResult?.content).toContain(
-        'failure_code="cli_session_persistence_failed"',
-      );
-      expect(toolResult?.content).not.toContain("unpersisted-session-id");
-    } finally {
-      setSessionSpy.mockRestore();
-    }
-  });
+  // G-18/G-19（2026-08-25）：直连会话持久化失败钉子随直连路径移除（见上）。
 
   it("uses the highest-scoring idle member, then one anonymous worker, and returns coordinator_exhausted", async () => {
     const cid = newCid();
@@ -5815,6 +5786,167 @@ describe("group_chat bus integration › KStar privileged dispatch approval", ()
   }, 10_000);
 });
 
+describe("group_chat bus integration › delegated ability asset Projection subset", () => {
+  function genericAuthorizationError(result: { content: string; isError?: boolean } | undefined, forbiddenValues: string[]) {
+    expect(result?.isError).toBe(true);
+    const payload = JSON.parse(result!.content) as { ok: boolean; error: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toBeTruthy();
+    for (const value of forbiddenValues) expect(payload.error).not.toContain(value);
+    return payload.error;
+  }
+
+  it.each(delegatedAssetSurfaces)(
+    "%s allows a grant for an asset in the current confirmed Projection",
+    async (surface) => {
+      const cid = newCid();
+      const seeded = await seedDelegatedProjection(
+        cid,
+        await createDelegatedAbilityAsset(`member-${surface}`),
+      );
+      const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
+
+      expect(run.result?.isError).not.toBe(true);
+      if (run.targetSessionId) {
+        const targetCall = _recordedCalls.find((call) => call.sid === run.targetSessionId);
+        expect(targetCall?.systemPrompt).toContain("<commander-dispatched-assets>");
+        expect(targetCall?.systemPrompt).toContain(seeded.asset.title);
+      } else {
+        const workerCall = _recordedCalls.find((call) => call.sid.startsWith("gworker-"));
+        expect(workerCall?.systemPrompt).toContain("<commander-dispatched-assets>");
+        expect(workerCall?.systemPrompt).toContain(seeded.asset.title);
+      }
+    },
+  );
+
+  it.each(delegatedAssetSurfaces)(
+    "%s rejects an active asset outside the current confirmed Projection without revealing the asset set",
+    async (surface) => {
+      const cid = newCid();
+      const seeded = await seedDelegatedProjection(
+        cid,
+        await createDelegatedAbilityAsset(`member-external-${surface}`),
+      );
+      const external = await createDelegatedAbilityAsset(`external-${surface}`);
+      const run = await runDelegatedSurface(cid, surface, [external.id]);
+
+      genericAuthorizationError(run.result, [
+        external.id,
+        external.title,
+        seeded.asset.id,
+        seeded.asset.title,
+        seeded.projection.id,
+      ]);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+    },
+  );
+
+  it.each(delegatedAssetSurfaces)(
+    "%s rejects an explicit grant when the current Projection is not confirmed",
+    async (surface) => {
+      const cid = newCid();
+      const seeded = await seedDelegatedProjection(
+        cid,
+        await createDelegatedAbilityAsset(`preview-${surface}`),
+        "preview",
+      );
+      const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
+
+      genericAuthorizationError(run.result, [
+        seeded.asset.id,
+        seeded.asset.title,
+        seeded.projection.id,
+        "assetIds",
+      ]);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+    },
+  );
+
+  it.each(delegatedAssetSurfaces)(
+    "%s rejects an explicit grant when the frozen Projection version has drifted",
+    async (surface) => {
+      const cid = newCid();
+      const seeded = await seedDelegatedProjection(
+        cid,
+        await createDelegatedAbilityAsset(`drift-${surface}`),
+      );
+      const assetService = await import("../../../../src/main/features/recall/asset-service");
+      const drifted = await assetService.updateAbilityAsset(TEST_UID, seeded.asset.id, {
+        statement: `${seeded.asset.statement} changed after confirmation`,
+        reason: "test version drift",
+        actor: "user",
+      });
+      const run = await runDelegatedSurface(cid, surface, [seeded.asset.id]);
+
+      genericAuthorizationError(run.result, [
+        drifted.id,
+        drifted.title,
+        seeded.projection.id,
+        "assetVersions",
+      ]);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+    },
+  );
+
+  it.each(delegatedAssetSurfaces)(
+    "%s rejects an explicit grant when no current Requirement exists",
+    async (surface) => {
+      const cid = newCid();
+      const asset = await createDelegatedAbilityAsset(`without-requirement-${surface}`);
+      const run = await runDelegatedSurface(cid, surface, [asset.id]);
+
+      genericAuthorizationError(run.result, [asset.id, asset.title, "assetIds", "projectionId"]);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+    },
+  );
+
+  it.each(delegatedAssetSurfaces.flatMap((surface) => [
+    [surface, undefined] as const,
+    [surface, []] as const,
+  ]))(
+    "%s permits a delegated call when ability_assets is %s",
+    async (surface, grant) => {
+      const cid = newCid();
+      const run = await runDelegatedSurface(cid, surface, grant);
+
+      expect(run.result?.isError).not.toBe(true);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(true);
+    },
+  );
+
+  it.each(delegatedAssetSurfaces)(
+    "%s keeps the existing runtime scope gate after Projection authorization",
+    async (surface) => {
+      const cid = newCid();
+      const seeded = await seedDelegatedProjection(
+        cid,
+        await createDelegatedAbilityAsset(`scope-${surface}`, { purposeTags: ["review"] }),
+      );
+      const run = await runDelegatedSurface(cid, surface, [seeded.asset.id], "migration task");
+
+      genericAuthorizationError(run.result, [
+        seeded.asset.id,
+        seeded.asset.title,
+        seeded.projection.id,
+        "purposeTags",
+      ]);
+      expect(run.targetSessionId
+        ? _recordedCalls.some((call) => call.sid === run.targetSessionId)
+        : _recordedCalls.some((call) => call.sid.startsWith("gworker-"))).toBe(false);
+    },
+  );
+});
+
 describe("group_chat bus integration › task terminal boundary", () => {
   it("emits one completed event only after the whole user-triggered run is quiescent", async () => {
     const cid = newCid();
@@ -8449,3 +8581,4 @@ describe("group_chat bus › desktop message broadcaster", () => {
     // is the pre-fix steady state for external inbound paths.
   });
 });
+

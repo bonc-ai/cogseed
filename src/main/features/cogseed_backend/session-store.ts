@@ -6,6 +6,7 @@ import {
   assertCogSeedAgentId,
   assertCogSeedConversationId,
   assertCogSeedSessionId,
+  assertCogSeedTaskId,
   assertCogSeedUserId,
   cogseedAgentSessionMappingFile,
   cogseedSessionFile,
@@ -350,6 +351,27 @@ export async function setCogSeedSessionActiveTask(
 ): Promise<CogSeedSessionRecord> {
   if (!taskId.startsWith('cogseed-task-')) throw new Error('invalid CogSeed task id');
   return updateCogSeedSession(userId, sessionId, (current) => ({ ...current, activeTaskId: taskId }));
+}
+
+/** Clear a stale task pointer without overwriting a newer task selected by a
+ * concurrent launch. Missing sessions are tolerated because task cleanup must
+ * not delete or recreate the shared session record. */
+export async function clearCogSeedSessionActiveTask(
+  userId: string,
+  sessionId: string,
+  taskId: string,
+): Promise<CogSeedSessionRecord | null> {
+  assertCogSeedUserId(userId);
+  const safeTaskId = assertCogSeedTaskId(taskId);
+  const canonicalSessionId = normalizeSessionId(sessionId);
+  const file = cogseedSessionFile(userId, canonicalSessionId);
+  return fileEditLock(file).runExclusive(async () => {
+    const current = await readCogSeedSession(userId, canonicalSessionId);
+    if (!current || current.activeTaskId !== safeTaskId) return current;
+    const next: CogSeedSessionRecord = { ...current, updatedAt: nowIso() };
+    delete next.activeTaskId;
+    return writeSession(userId, validateSession(userId, next, canonicalSessionId));
+  });
 }
 
 export async function setCogSeedSessionDisplayName(

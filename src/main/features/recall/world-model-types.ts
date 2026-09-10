@@ -43,6 +43,18 @@ export interface WorldModelCausalRuleRef {
   rule: CausalRule;
 }
 
+/** Bounded Personal Ontology A-Box fact exposed to the host Forecast model.
+ *  Values are intentionally flattened and capped by projection-knowledge;
+ *  file paths and raw storage metadata never cross this boundary. */
+export interface WorldModelOntologyFact {
+  id: string;
+  groupTitle: string;
+  field: string;
+  value: string;
+  source: 'personal_ontology' | 'user_profile' | 'shared_memory';
+  projectId?: string;
+}
+
 export interface CausalRule {
   /** The triggering condition or situation (human-readable). */
   cause: string;
@@ -73,7 +85,7 @@ export type WorldModelPredicateKey =
 export interface WorldModelEnvironmentState {
   workspace: { ok: boolean; path?: string };
   model: { configured: boolean; profile?: string };
-  tools: { fileSystem: boolean; bash: boolean };
+  tools: { fileSystem: boolean | 'unknown'; bash: boolean | 'unknown' };
 }
 
 export interface WorldModelCoreState {
@@ -167,6 +179,10 @@ export interface WorldModelForecast {
   selectedCandidateId?: string;
   causalLinks?: WorldModelCausalLink[];
   assumptions?: string[];
+  forecastConfidence?: number;
+  riskLevel?: CausalRuleSeverity;
+  contextFreshness?: { projectionConfirmedAt: string; projectedAt: string; ageMs: number };
+  forecastCreatedAt?: string;
 }
 
 export interface WorldModelKnowledge {
@@ -185,6 +201,8 @@ export interface WorldModelKnowledge {
    * unconditionally so the world model reasons over the user's identity.
    */
   ontologyAssets?: WorldModelAbilityAsset[];
+  /** Concrete, bounded Personal Ontology A-Box values for this Forecast. */
+  ontologyFacts?: WorldModelOntologyFact[];
   /**
    * R-Box (ontology) — the user's durable business rules / mappings derived
    * from relation fields (isRelation: true, `A → B` values) across the
@@ -244,8 +262,8 @@ export interface WorldModelSituation {
   environment?: {
     workspaceAvailable: boolean;
     modelConfigured: boolean;
-    fileSystemAvailable: boolean;
-    shellAvailable: boolean;
+    fileSystemAvailable: boolean | 'unknown';
+    shellAvailable: boolean | 'unknown';
   };
   execution?: {
     groupChatStatus: 'idle' | 'running' | 'aborted';
@@ -299,7 +317,7 @@ export interface ResultDeltaDetail {
   acceptanceSignals: AcceptanceSignalResult[];
   missingPredictedFiles: string[];
   unexpectedProducedFiles: string[];
-  terminalStatus: 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+  terminalStatus: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input';
 }
 
 export interface WorldModelReconciliation {

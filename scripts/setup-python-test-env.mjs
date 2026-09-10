@@ -33,7 +33,7 @@ if (!existsSync(venvPython)) {
   if (create.status !== 0) process.exit(create.status ?? 1);
 }
 console.log(`[setup-python-test-env] installing pytest + requests with: ${venvPython}`);
-const install = spawnSync(venvPython, ['-m', 'pip', 'install', 'pytest==9.1.1', 'requests==2.34.2'], {
+const install = spawnSync(venvPython, ['-m', 'pip', 'install', 'pytest==8.4.2', 'requests==2.32.5'], {
   cwd: appRoot,
   stdio: 'inherit',
 });

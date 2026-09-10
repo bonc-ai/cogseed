@@ -58,7 +58,9 @@ function loadScript() {
       invoke: vi.fn(async (ch: string, payload: any) => {
         invokeCalls.push({ ch, payload });
         if (ch === 'contexts.tree') return TREE_WITH_NOTES;
-        if (ch === 'contexts.read') return { ok: true, content: '# 周记\n内容' };
+        if (ch === 'contexts.read') {
+          return { ok: true, content: payload.path === 'notes/周记.md' ? '# 周记\n内容' : '# 复盘\n内容' };
+        }
         if (ch === 'contexts.mkdir') return { ok: true };
         if (ch === 'contexts.write') return { ok: true };
         if (ch === 'contexts.delete') return { ok: true };
@@ -112,9 +114,9 @@ describe('KB notes panel (S4)', () => {
     });
     // 第一个列表项（周记）触发 open：直接调用其 click 监听器
     const items = els['kb-notes-items'].appendChild.mock.calls.map((c: any[]) => c[0]);
-    const first = items.find((el: any) => el._listeners && el._listeners.click);
-    expect(first).toBeDefined();
-    first._listeners.click();
+    const weekly = items.find((el: any) => el.innerHTML.includes('周记') && el._listeners?.click);
+    expect(weekly).toBeDefined();
+    weekly._listeners.click();
     await vi.waitFor(() => {
       expect(els['kb-notes-edit'].innerHTML).toContain('周记');
     });

@@ -67,6 +67,58 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// ── 命令行参数（G-35 统一包快速接入）：环境变量之外的便捷入口——
+//   node gateway.cjs --agent <名> [--exec <命令>] [--args '<参数模板>']
+//                   [--port <端口>] [--home <目录>] [--native]
+//   参数优先于环境变量；--native 即 P3394_SSCLI_NATIVE=1（CLI 原生讲
+//   p3394-sscli 协议时直连，不经垫片）。这让"任意智能体装包即用"成为
+//   一条命令的事，不再要求手配 env。
+function _parseArgv() {
+  const out = {};
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--agent') out.agent = argv[i + 1];
+    else if (a === '--exec') out.exec = argv[i + 1];
+    else if (a === '--args') out.args = argv[i + 1];
+    else if (a === '--port') out.port = argv[i + 1];
+    else if (a === '--home') out.home = argv[i + 1];
+    else if (a === '--native') out.native = '1';
+    else if (a === '--help' || a === '-h') {
+      console.log([
+        'p3394-gateway — 任意智能体的 P3394 接入包（装包即成一个 P3394 节点）',
+        '',
+        '用法：node gateway.cjs --agent <智能体名> [选项]',
+        '  --agent <名>    智能体身份名（内置预设名用其模板；任意名=同名命令）',
+        '  --exec <命令>   实际执行的命令（默认：预设命令或与 --agent 同名）',
+        '  --args <模板>   参数模板，{message} 为消息占位（默认预设模板或 {message}）',
+        '  --port <端口>   本端监听端口（默认 9000；也可 P3394_GATEWAY_PORT）',
+        '  --home <目录>   会话/工作区根（默认 ~/.p3394-gateway）',
+        '  --native        该智能体原生讲 p3394-sscli/1.0 协议，直连不经垫片',
+        '',
+        '运行模式：默认经 sscli-shim 通用垫片走 p3394-sscli/1.0（任意一次性',
+        '命令行智能体零改造接入）；原生协议智能体加 --native。',
+        '完整变量说明见 README.md「配置（环境变量）」。',
+      ].join('\n'));
+      process.exit(0);
+    }
+  }
+  return out;
+}
+const _ARGV = _parseArgv();
+if (_ARGV.agent) {
+  process.env.P3394_AGENT = _ARGV.agent;
+  // 快速接入路径（--agent）默认走 sscli（经通用垫片，任意智能体零改造
+  // 即协议化）——这是"统一包"的承诺；显式 P3394_AGENT_MODE 优先。
+  // 纯 env 启动维持 oneshot 默认（存量兼容）。
+  if (!process.env.P3394_AGENT_MODE) process.env.P3394_AGENT_MODE = 'sscli';
+}
+if (_ARGV.exec) process.env.P3394_AGENT_CLI = _ARGV.exec;
+if (_ARGV.args) process.env.P3394_AGENT_CLI_ARGS = _ARGV.args;
+if (_ARGV.port) process.env.P3394_GATEWAY_PORT = _ARGV.port;
+if (_ARGV.home) process.env.P3394_GATEWAY_HOME = _ARGV.home;
+if (_ARGV.native) process.env.P3394_SSCLI_NATIVE = _ARGV.native;
+
 const PORT = Number(process.env.P3394_GATEWAY_PORT || 9000);
 // 跨机器：可绑定局域网地址（默认回环，安全优先）。
 const GATEWAY_HOST = (process.env.P3394_GATEWAY_HOST || '127.0.0.1').trim();
@@ -188,15 +240,21 @@ const PRESETS = {
   // --verbose --output-format stream-json --include-partial-messages 才真正
   // 逐 token 出 content_block_delta 帧（缺 --include-partial-messages 时 claude
   // 只在结束前整段收口，包装器无增量可流）。短答也可能只有 assistant 帧。
+  // G-27 resume 登记：--resume 让降级模式（每轮 spawn）也带会话号续聊，
+  // G-27 resume 登记：opencode run 的输出含 sessionID，--session 续聊；
   claude:   { cli: 'claude',  args: '-p {message}',             id: 'claude', streamJson: true, streamJsonArgs: '--verbose --output-format stream-json --include-partial-messages',
               modelArgs: '--model {model}', inspect: { args: ['-p', '/model', '--output-format', 'json'], parser: 'claude-model-list' },
               // 强度专有通道：reasoningEffort → MAX_THINKING_TOKENS env（无
               // --effort 类参数）——effortChannel 声明让 /models 的
               // effort_controllable 如实披露（模板通道之外的第二类通道）。
-              effortChannel: 'max-thinking-tokens' },
+              effortChannel: 'max-thinking-tokens',
+              resumeArgs: '--resume {cli_session_id}', sessionIdPattern: '"session_id"\\s*:\\s*"([^"]+)"' },
   codex:    { cli: 'codex',   args: 'exec {message}',           id: 'codex',
               // 模型经 app-server thread/start 的 model 参数下发（专有通道）。
               modelControllable: true,
+              // 清单：常驻通道探 app-server 枚举 RPC，失败回落 config.toml
+              // profiles（configModels 声明，2026-09-09 全量补全）。
+              configModels: 'codex',
               // 强度专有通道：low/high → thread/start 的
               // model_reasoning_effort config（失败降级重试）。
               effortChannel: 'model-reasoning-effort' },
@@ -206,18 +264,24 @@ const PRESETS = {
               // (provider-specific reasoning effort, e.g., high, max, minimal)"）。
               // 无真"关"档（minimal 是最低不是关闭）→ off 映射 minimal，
               // 能力表 effortOff=false（UI 置灰 off，防语义欺骗）。
-              effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' } },
+              effortArgs: '--variant {effort}', effortLevels: { off: 'minimal' },
+              resumeArgs: '--session {cli_session_id}', sessionIdPattern: '"sessionID"\\s*:\\s*"([^"]+)"' },
   gemini:   { cli: 'gemini',  args: '-p {message}',             id: 'gemini',
-              modelArgs: '-m {model}' },
+              // 模型清单读 ~/.gemini/settings.json（当前）+ 官方常规系
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '-m {model}', configModels: 'gemini' },
   aider:    { cli: 'aider',   args: '--message {message} --yes', id: 'aider',
-              modelArgs: '--model {model}' },
+              // 模型清单读 ~/.aider.model.settings.yml 条目 + conf 的当前
+              //（configModels 声明式枚举，2026-09-09 全量补全）。
+              modelArgs: '--model {model}', configModels: 'aider' },
   openclaw: { cli: 'openclaw', args: 'agent --local --json --agent main --message {message}', id: 'openclaw',
               // --model 单次覆盖（agent --help 实测）；模型绑定在配置的
               // agents/models 段——configModels 声明式枚举读取。
               // --thinking off|minimal|low|medium|high——off/low/high 与
               // CogSeed 档位同名，零映射声明。
               modelArgs: '--model {model}', configModels: 'openclaw',
-              effortArgs: '--thinking {effort}' },
+              effortArgs: '--thinking {effort}',
+              resumeArgs: '--session-id {cli_session_id}', sessionGenerate: true },
   workbuddy: { cli: 'codebuddy', args: '-p {message}',          id: 'workbuddy',
               modelArgs: '--model {model}', inspect: { args: ['--help'], parser: 'help-model-list' },
               // 当前模型经 stream-json init 帧（codebuddy 兼容 claude 双工流式，
@@ -259,7 +323,10 @@ function escapeCmdCommand(value) {
 }
 
 function escapeCmdArgument(value, doubleEscapeMetaChars) {
-  let escaped = String(value);
+  // cmd.exe treats CR/LF as command separators even inside the quoted
+  // command passed to /c. Keep every prompt segment in the same inert argv
+  // value instead of dropping or executing text after the first line.
+  let escaped = String(value).replace(/\r\n?|\n/g, ' ');
   escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
   escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
   escaped = '"' + escaped + '"';
@@ -276,23 +343,59 @@ function windowsSystem32Tool(name) {
 /** 终止 CLI 及其全部后代；Windows 的 child.kill() 只会杀直接子进程。 */
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
+  const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
   if (pid && process.platform === 'win32') {
+    let killer;
     try {
-      const killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
+      killer = spawn(windowsSystem32Tool('taskkill.exe'), ['/pid', String(pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
       });
-      const fallback = () => { try { child.kill(signal); } catch { /* already gone */ } };
-      killer.once('error', fallback);
-      killer.once('exit', (code) => { if (code !== 0) fallback(); });
-      if (typeof killer.unref === 'function') killer.unref();
-      return;
-    } catch { /* fall through to direct kill */ }
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const cleanup = () => {
+        killer.off('error', onError);
+        killer.off('exit', onExit);
+        killer.off('close', onClose);
+      };
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = () => fallbackOnce();
+      const onExit = (code, exitSignal) => { if (code !== 0 || exitSignal) fallbackOnce(); };
+      const onClose = (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
+      };
+      try {
+        killer.once('error', onError);
+        killer.once('exit', onExit);
+        killer.once('close', onClose);
+        if (typeof killer.unref === 'function') killer.unref();
+      } catch {
+        fallbackOnce();
+        finish();
+      }
+    });
   }
   if (pid && process.platform !== 'win32') {
-    try { process.kill(-pid, signal); return; } catch { /* fall through */ }
+    try { process.kill(-pid, signal); return Promise.resolve(); } catch { /* fall through */ }
   }
-  try { child.kill(signal); } catch { /* already gone */ }
+  fallback();
+  return Promise.resolve();
 }
 
 /** PATH + PATHEXT 查找；绝对路径也尝试同名 Windows shim。 */
@@ -333,6 +436,34 @@ function buildWindowsCmdInvocation(cli, args) {
   };
 }
 
+function expandWindowsShimPath(value, shimDir) {
+  const expanded = value.replace(/%~?dp0%?/ig, shimDir + '\\');
+  if (/%[^%]+%/.test(expanded)) return null;
+  return path.win32.normalize(expanded);
+}
+
+function resolveWindowsCommandShim(cli, args) {
+  let source;
+  try { source = fs.readFileSync(cli, 'utf8'); } catch { return null; }
+  const shimDir = path.win32.dirname(cli);
+  const tokens = Array.from(source.matchAll(/"([^"\r\n]+)"/g), (match) => match[1]);
+  const scriptToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:cjs|mjs|js)$/i.test(token));
+  if (scriptToken) {
+    const target = expandWindowsShimPath(scriptToken, shimDir);
+    try {
+      if (target && fs.statSync(target).isFile()) {
+        return { command: process.execPath, args: [target, ...args], envPatch: { ELECTRON_RUN_AS_NODE: '1' } };
+      }
+    } catch { /* not a standard Node shim */ }
+  }
+  const executableToken = tokens.slice().reverse().find((token) => /%~?dp0/i.test(token) && /\.(?:exe|com)$/i.test(token));
+  if (executableToken) {
+    const target = expandWindowsShimPath(executableToken, shimDir);
+    try { if (target && fs.statSync(target).isFile()) return { command: target, args: args.slice() }; } catch { /* keep fallback */ }
+  }
+  return null;
+}
+
 function isNodeShebangScript(cli) {
   try {
     const fd = fs.openSync(cli, 'r');
@@ -351,6 +482,13 @@ function spawnCli(cli, args, optsArg) {
   if (process.platform !== 'win32') return spawn(cli, args, opts);
   const resolved = windowsLookPath(cli) || cli;
   if (WINDOWS_CMD_SCRIPT_RE.test(resolved)) {
+    const directShim = resolveWindowsCommandShim(resolved, args);
+    if (directShim) {
+      return spawn(directShim.command, directShim.args, {
+        ...opts,
+        env: { ...(opts.env || process.env), ...(directShim.envPatch || {}) },
+      });
+    }
     const inv = buildWindowsCmdInvocation(resolved, args);
     return spawn(inv.command, inv.args, Object.assign({}, opts, { windowsVerbatimArguments: true }));
   }
@@ -384,6 +522,8 @@ const MANIFEST = {
   spec_version: 'p3394/1.0',
   identity: { agent_id: AGENT_ID, display_name: AGENT_ALIAS || AGENT_ID },
   runtime: { kind: 'in_process' },
+  // G-18：manifest 自报网关进程 pid（探活数据源；正整数，读取侧同校验）。
+  pid: process.pid,
   capability_profile: {
     agent_id: AGENT_ID,
     runtime_kind: 'cogseed-native',
@@ -565,6 +705,85 @@ function appendTranscript(sessionId, role, text) {
   } catch { /* best effort */ }
 }
 
+// ── G-27 CLI 原生会话恢复（resume）──
+// 有原生会话恢复能力的 CLI（--resume / --session 类参数）按会话目录存一份
+// CLI 自己的会话号：首轮调用后从输出提取（sessionIdPattern）或由网关生成
+// （sessionGenerate，CLI 接受任意 id 新建），下轮 spawn 追加恢复参数，CLI
+// 自己恢复完整上下文。resume 生效时不回放 [会话历史]（避免双份上下文）；
+// transcript 回放退为未登记 CLI 的兜底与 resume 被拒后的重试路径。
+// 语义对齐 CogSeed 直连路径的 cli-sessions（存 CLI 名防换绑失效、被拒清
+// 绑定重跑一次），G-19 删直连后此机制独立存活。
+function cliSessionFile(sessionId) {
+  return path.join(sessionDir(sessionId), 'cli-session.json');
+}
+function readCliSession(sessionId) {
+  try {
+    const data = JSON.parse(fs.readFileSync(cliSessionFile(sessionId), 'utf8'));
+    if (!data || typeof data.sessionId !== 'string' || !data.sessionId) return null;
+    // CLI 名不一致（同会话目录换了 CLI）视为失效，按全新会话处理。
+    if (data.cli !== AGENT_ID) return null;
+    return data;
+  } catch { return null; }
+}
+function writeCliSession(sessionId, cliSessionIdValue) {
+  if (!cliSessionIdValue) return;
+  try {
+    fs.mkdirSync(sessionDir(sessionId), { recursive: true });
+    fs.writeFileSync(cliSessionFile(sessionId), JSON.stringify({
+      cli: AGENT_ID, sessionId: cliSessionIdValue, updatedAt: new Date().toISOString(),
+    }));
+  } catch (err) {
+    console.error('[p3394-gateway] cli-session write failed:', err && err.message);
+  }
+}
+function clearCliSession(sessionId) {
+  try { fs.unlinkSync(cliSessionFile(sessionId)); } catch { /* absent ok */ }
+}
+// 从 CLI 输出提取会话号：登记了 sessionIdPattern 的预设按正则取第一捕获组。
+function extractCliSessionId(output) {
+  if (!preset || typeof preset.sessionIdPattern !== 'string' || !output) return null;
+  try {
+    const m = new RegExp(preset.sessionIdPattern).exec(String(output));
+    if (m && m[1]) return m[1].trim();
+  } catch { /* bad pattern — ignore */ }
+  return null;
+}
+// 会话被拒的 stderr/错误特征（模式列表沿用 CogSeed 直连路径成熟经验，
+// 含 claude 专属的 "No conversation found with session ID"）。
+const RESUME_REJECTED_PATTERNS = [
+  /session\s+(?:not\s+found|expired|invalid|does\s+not\s+exist)/i,
+  /unknown\s+(?:session|conversation|thread)/i,
+  /cannot\s+resume/i,
+  /failed\s+to\s+resume/i,
+  /No\s+conversation\s+found\s+with\s+session\s+ID/i,
+];
+function resumeRejectedByText(...texts) {
+  return texts.some((t) => typeof t === 'string' && t
+    && RESUME_REJECTED_PATTERNS.some((re) => re.test(t)));
+}
+// 本预设是否具备 resume 能力（登记了 resumeArgs 或自生成会话号）。
+function resumeCapable() {
+  return !!(preset && (typeof preset.resumeArgs === 'string' || preset.sessionGenerate === true));
+}
+// 取当前会话号：有绑定用绑定；无绑定且是 sessionGenerate 形态则生成新
+// UUID 并立即落盘（openclaw 直连语义：同会话号跨轮稳定，CLI 接受任意 id）。
+function currentOrGeneratedCliSessionId(sessionId) {
+  const existing = readCliSession(sessionId);
+  if (existing) return existing.sessionId;
+  if (preset && preset.sessionGenerate === true) {
+    const id = 'p3394-' + crypto.randomUUID();
+    writeCliSession(sessionId, id);
+    return id;
+  }
+  return null;
+}
+// 生成 resume 追加参数；{cli_session_id} 占位符在调用时替换。
+function buildResumeArgs(cliSessionIdValue) {
+  if (!preset || typeof preset.resumeArgs !== 'string' || !cliSessionIdValue) return [];
+  return preset.resumeArgs.split(' ').filter(Boolean)
+    .map((part) => part.replace('{cli_session_id}', cliSessionIdValue));
+}
+
 // ── p3394-object 拉取（入站，§12 resource endpoint） ──
 // 信封里的 resource part 若是 p3394-object URI（内容寻址引用），从发送方
 // 的资源端点拉取原始字节并验证 digest。失败不阻塞消息处理。
@@ -728,12 +947,65 @@ const {
 
 // 薄包装：把网关进程级常量（CLI 命令、spawn）注入探测实现。
 function probeClaudeModels() {
-  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawn });
+  return probeClaudeModelsImpl({ cli: CLI, spawnFn: spawnCli, killTreeFn: killProcessTree });
 }
 // 通用枚举探测：按预设表的 inspect 声明（args+parser）spawn 解析。
 function probePresetInspect() {
   if (!preset || !preset.inspect) return null;
-  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawn });
+  return probeInspectCommand({ cli: CLI, args: preset.inspect.args, parser: preset.inspect.parser, spawnFn: spawnCli, killTreeFn: killProcessTree });
+}
+
+/** 预设级模型发现（oneshot 与 sscli 通道共用，Hermes 模型枚举修复
+ *  2026-09-09）：网关与 CLI 同机，探测与消息通道无关——预设表声明了
+ *  枚举通道（inspect）就走通用探测；声明了 initProbeArgs（claude 兼容
+ *  CLI）再并行抓 init 帧的当前模型；claude 落 oneshot 时保留专用探测，
+ *  其列表探测拿不到清单（自定义模型网关只披露 current）时回落读
+ *  ~/.claude/settings.json 槽位变量取完整清单；声明 configModels
+ *  （hermes/openclaw/gemini/aider/codex）读 CLI 自身配置文件枚举；其余
+ *  明确 unavailable，宿主回落静态目录+手输。 */
+async function inspectPresetModels(fallbackReason) {
+  if (PRESET_NAME === 'claude') {
+    const probed = await probeClaudeModels();
+    if (probed.status === 'ready' && Array.isArray(probed.models) && probed.models.length) {
+      return probed;
+    }
+    // claude 自定义模型网关（DeepSeek 等的 anthropic 兼容端点）下列表
+    // 探测/init 帧只披露 current 一个——回落读 ~/.claude/settings.json
+    // env 段的槽位变量取完整清单（2026-09-09 实机：/model 五条目只扫
+    // 出默认一条）。专用探测的 current（CLI 运行态事实）优先于配置。
+    const viaCfg = probeConfigModels({ configModels: 'claude', env: process.env, readFileSync: fs.readFileSync });
+    if (viaCfg.status === 'ready') {
+      return { ...viaCfg, ...(probed.current ? { current: probed.current } : {}) };
+    }
+    return probed;
+  }
+  const viaPreset = probePresetInspect();
+  const viaConfig = (preset && preset.configModels)
+    ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
+    : null;
+  const viaInit = (preset && preset.initProbeArgs)
+    ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawnCli, killTreeFn: killProcessTree })
+    : null;
+  const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
+  if (listResult && listResult.status === 'ready') {
+    return {
+      ...listResult,
+      ...(initResult && initResult.current ? { current: initResult.current } : {}),
+    };
+  }
+  // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
+  if (initResult && initResult.models && initResult.models.length) {
+    return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
+  }
+  if (initResult && initResult.current) {
+    // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
+    return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
+  }
+  // 配置声明式枚举（hermes/openclaw/gemini/aider/codex）：子命令探测缺失/
+  // 失败时接管——读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
+  if (viaConfig && viaConfig.status === 'ready') return viaConfig;
+  if (listResult) return listResult;
+  return { status: 'unavailable', reason: fallbackReason || 'preset_no_inspect' };
 }
 // 本网关的模型参数模板（env 覆盖 > 预设声明；null=无通道，信封 model 被忽略）。
 function modelArgTemplate() {
@@ -745,7 +1017,7 @@ function modelControllable() {
 
 const activeTasks = new Map(); // task_id → child
 const cancelledTasks = new Set(); // task_id → 已被 cancel 控制帧终止
-function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs) {
+function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs, extraArgs) {
   return new Promise((resolve, reject) => {
     const args = splitArgs(CLI_ARGS).map((part) => part.replace('{message}', message));
     // CogSeed 扩展（通用）：单轮模型选择按「模型参数模板」注入（预设声明
@@ -759,6 +1031,9 @@ function runAgent(message, taskId, cwd, onStream, onProgress, execPrefs) {
     const effortTemplate = effortArgsFor(preset, process.env);
     const effortLevel = prefs.reasoningEffort ? effortLevelFor(preset, prefs.reasoningEffort) : null;
     if (effortLevel && effortTemplate) args.push(...splitModelArgs(effortTemplate, effortLevel));
+    // G-27: extraArgs 追加在模板参数之后（resume 类参数），与 {message}
+    // 模板互不干扰。
+    if (Array.isArray(extraArgs)) args.push(...extraArgs);
     const claudeEnv = (PRESET_NAME === 'claude' && prefs.maxThinkingTokens)
       ? { MAX_THINKING_TOKENS: prefs.maxThinkingTokens }
       : null;
@@ -862,61 +1137,68 @@ function cancelTask(taskId) {
 // 在与 sscli 统一的后端接口下，这是"无协议 agent"的默认落点。
 const oneshotRuntime = {
   name: 'oneshot',
-  async openSession() { /* transcript 负责连续性，无需握手 */ },
+  async openSession() { /* transcript / cli-session 负责连续性，无需握手 */ },
   async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
-    const transcript = readTranscriptTail(sessionId);
-    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     // 注册可取消键用 task_id（cancel 控制帧按 task_id 匹配）；无 task_id 时
     // 回退到 message_id，保证单消息用例仍可取消。
     const cancelKey = (opts && opts.taskId) || messageId;
+
+    // G-27 降级链：有 resume 能力且有会话号 → 带 resume 参数、只发本轮新
+    // 内容（CLI 自己恢复完整上下文，不回放 [会话历史]，避免双份）；被拒
+    // （会话号过期/不存在等）→ 清绑定，落回 transcript 回放重试一次。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const rawReply = await runAgent(
+            text + note + hint, cancelKey, opts && opts.cwd, onDelta, onProgress,
+            opts && opts.execPrefs, buildResumeArgs(cliSessionId),
+          );
+          const reply = clipReply(rawReply);
+          const nextId = extractCliSessionId(rawReply);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', reply);
+          return reply;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected, retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径（首轮 / 未登记 resume / 被拒重试）：回放 transcript + 当前
+    // 消息；登记了 sessionIdPattern 的 CLI 顺手提取会话号写回（下轮生效）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
     const rawReply = await runAgent(prompt, cancelKey, opts && opts.cwd, onDelta, onProgress, opts && opts.execPrefs);
-    const reply = rawReply.length > MAX_REPLY_BYTES ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]' : rawReply;
+    const reply = clipReply(rawReply);
+    const nextId = extractCliSessionId(rawReply);
+    if (nextId) writeCliSession(sessionId, nextId);
     appendTranscript(sessionId, 'in', text);
     appendTranscript(sessionId, 'out', reply);
     return reply;
   },
   cancel(taskId) { return cancelTask(taskId); },
-  /** 模型发现：预设表声明了枚举通道（inspect）就走通用探测；声明了
-   *  initProbeArgs（claude 兼容 CLI）再并行抓 init 帧的当前模型；claude
-   *  落 oneshot 时保留专用探测；声明 configModels（hermes/openclaw）读
-   *  CLI 自身配置文件枚举；其余明确 unavailable。 */
+  /** 模型发现：与 sscli 通道共用 inspectPresetModels（Hermes 模型枚举
+   *  修复 2026-09-09：探测与消息通道无关，见该函数头注释）。 */
   async inspectModels() {
-    if (PRESET_NAME === 'claude') return probeClaudeModels();
-    const viaPreset = probePresetInspect();
-    const viaConfig = (preset && preset.configModels)
-      ? probeConfigModels({ configModels: preset.configModels, env: process.env, readFileSync: fs.readFileSync })
-      : null;
-    const viaInit = (preset && preset.initProbeArgs)
-      ? probeStreamJsonInitModel({ cli: CLI, args: preset.initProbeArgs, spawnFn: spawn })
-      : null;
-    const [listResult, initResult] = await Promise.all([viaPreset || Promise.resolve(null), viaInit || Promise.resolve(null)]);
-    if (listResult && listResult.status === 'ready') {
-      return {
-        ...listResult,
-        ...(initResult && initResult.current ? { current: initResult.current } : {}),
-      };
-    }
-    // 清单没拿到但 init 帧披露了清单（未来 claude 版本恢复 models 数组）。
-    if (initResult && initResult.models && initResult.models.length) {
-      return { status: 'ready', models: initResult.models, ...(initResult.current ? { current: initResult.current } : {}) };
-    }
-    if (initResult && initResult.current) {
-      // 只有当前模型、无清单——unavailable 附 current（宿主静态目录兜底清单）。
-      return { status: 'unavailable', reason: 'no_model_list', current: initResult.current };
-    }
-    // 配置声明式枚举（hermes/openclaw）：子命令探测缺失/失败时接管——
-    // 读 CLI 自身配置的模型绑定，永远比"无枚举命令"多一步。
-    if (viaConfig && viaConfig.status === 'ready') return viaConfig;
-    if (listResult) return listResult;
-    return { status: 'unavailable', reason: 'oneshot_no_inspect' };
+    return inspectPresetModels('oneshot_no_inspect');
   },
   close() {
     for (const child of activeTasks.values()) killProcessTree(child, 'SIGTERM');
     activeTasks.clear();
   },
 };
+function clipReply(rawReply) {
+  return rawReply.length > MAX_REPLY_BYTES
+    ? rawReply.slice(0, MAX_REPLY_BYTES) + '\n[输出过长已截断]'
+    : rawReply;
+}
 
 
 /** 引号感知的 argv 切分（sscli 模式的 CLI 参数可能含带空格的路径）。 */
@@ -1253,14 +1535,19 @@ class SscliRuntime {
   get name() { return 'sscli'; }
   _nextReq() { this.reqSeq += 1; return 'req-' + this.reqSeq; }
   _send(op) { if (this.child && this.child.stdin.writable) this.child.stdin.write(JSON.stringify(op) + '\n'); }
-  _request(op, timeoutMs, onDelta) {
+  _request(op, timeoutMs, onDelta, onProgress) {
     return new Promise((resolve, reject) => {
       const requestId = op.request_id || this._nextReq();
       op.request_id = requestId;
       const entry = {
         resolve, reject,
+        // cancel 精确命中用：task_id 为网关外部取消键（handleCancel 按
+        // task_id 匹配），requestId 为本 runtime 内部应答关联键。
+        requestId,
+        taskId: (op.task_id !== undefined && op.task_id !== null) ? String(op.task_id) : null,
         deltas: [],
         onDelta,
+        onProgress,
         timer: setTimeout(() => {
           this.pending.delete(requestId);
           reject(new Error('p3394_sscli_timeout'));
@@ -1279,11 +1566,19 @@ class SscliRuntime {
       if (parsed.event === 'delta' && typeof parsed.text === 'string') {
         entry.deltas.push(parsed.text);
         entry.onDelta?.(parsed.text);
+      } else if (parsed.event === 'progress' && typeof parsed.text === 'string') {
+        // 工具过程/冷启动提示（shim stderr 识别、native CLI 自报）→ process rail。
+        entry.onProgress?.(parsed.text);
       }
       if (parsed.event === 'completed') {
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
-        entry.resolve(entry.deltas.join(''));
+        // completed 带 text（shim 已提取的终态全文，含信封型 CLI 的
+        // extractReplyText）优先；无 text（native CLI 等）退 delta 拼接。
+        const finalText = typeof parsed.text === 'string' && parsed.text.trim()
+          ? parsed.text
+          : entry.deltas.join('');
+        entry.resolve(finalText);
       } else if (parsed.event === 'failed') {
         this.pending.delete(parsed.request_id);
         clearTimeout(entry.timer);
@@ -1309,7 +1604,30 @@ class SscliRuntime {
   }
   async start() {
     if (this.child) return;
-    this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    // sscli 主导落地（过渡桥）：CLI 原生讲 p3394-sscli 协议时直连
+    // （P3394_SSCLI_NATIVE=1，测试用 fake-sscli-agent / 将来原生支持的
+    // CLI）；否则经 sscli-shim 通用垫片包装——shim 对本 runtime 讲协议、
+    // 内部每轮 spawn 真实 CLI（resume/transcript 语义与 oneshot 一致）。
+    // 标准推广、CLI 原生化后撤垫片即可，上层零改动。
+    if (String(process.env.P3394_SSCLI_NATIVE || '').trim() === '1') {
+      this.child = spawnCli(CLI, sscliArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+    } else {
+      const resumeCfg = preset ? {
+        ...(typeof preset.resumeArgs === 'string' ? { resumeArgs: preset.resumeArgs } : {}),
+        ...(typeof preset.sessionIdPattern === 'string' ? { sessionIdPattern: preset.sessionIdPattern } : {}),
+        ...(preset.sessionGenerate === true ? { sessionGenerate: true } : {}),
+      } : {};
+      this.child = spawn(process.execPath, [
+        path.join(__dirname, 'sscli-shim.cjs'),
+        '--exec', CLI,
+        '--args', CLI_ARGS,
+        '--home', GATEWAY_HOME,
+        '--preset', PRESET_NAME,
+        ...(Object.keys(resumeCfg).length
+          ? ['--resume-config', Buffer.from(JSON.stringify(resumeCfg), 'utf8').toString('base64')]
+          : []),
+      ], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, P3394_AGENT_TIMEOUT_MS: String(TIMEOUT_MS) } });
+    }
     this.lineBuf = '';
     let errLog = '';
     this.child.stdout.on('data', (chunk) => {
@@ -1346,24 +1664,42 @@ class SscliRuntime {
     }, SSCLI_HANDSHAKE_MS);
     this.sessions.add(sessionId);
   }
-  async deliver(sessionId, messageId, text, opts, onDelta) {
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
     await this.start();
     return this._request({
       op: 'deliver',
       session_id: sessionId,
+      // PR209 评审 M6 复核返工：deliver 帧透传外部 task_id——shim 据此把
+      // 取消键对齐到 cancel 帧的 task_id（此前帧里只有内部 req-N，cancel
+      // 比对永不命中=假取消）。task_id 语义与 oneshot/stream-json 的
+      // 可取消键一致（见 handleDeliver 调用点注释）。
+      task_id: (opts && opts.taskId) || undefined,
       message: { message_id: messageId, payload: { parts: [{ type: 'text', text: text + note + hint }] } },
-    }, TIMEOUT_MS, onDelta);
+    }, TIMEOUT_MS, onDelta, onProgress);
   }
   cancel(taskId) {
-    if (!this.child) return;
+    if (!this.child || !taskId) return false;
+    // 只对在途任务发 cancel 并如实上报命中：目标不在 pending（已完结或
+    // 从未运行）时返回 false，避免 handleCancel 误记 killed 后吞掉真实
+    // 错误回执（首版「只要有子进程就 return true」掩盖过假取消）。
+    let hit = false;
+    for (const [, entry] of this.pending) {
+      if (entry.taskId === String(taskId) || entry.requestId === String(taskId)) { hit = true; break; }
+    }
+    if (!hit) return false;
     this._send({ op: 'cancel', task_id: taskId });
+    return true;
   }
-  /** 模型发现：p3394-sscli/1.0 协议尚无模型枚举操作（hermes 侧 ACP 广播是
-   *  后续增强）——明确 unavailable，宿主回落静态目录+手输。 */
+  /** 模型发现（Hermes 模型枚举修复 2026-09-09）：不再因「协议无枚举 op」
+   *  直接 unavailable——网关与 CLI 同机，预设级探测（子命令/init 帧/
+   *  配置文件声明式枚举，hermes 走 ~/.hermes 配置）与消息通道无关，
+   *  sscli 通道与 oneshot 共用 inspectPresetModels。shim 的 p3394-sscli
+   *  协议侧无需新 op；探测失败的兜底语义不变（unavailable，宿主回落
+   *  静态目录+手输）。 */
   async inspectModels() {
-    return { status: 'unavailable', reason: 'sscli_no_inspect_op' };
+    return inspectPresetModels('sscli_no_inspect');
   }
   close() {
     this.closing = true;
@@ -1403,10 +1739,9 @@ class StreamJsonRuntime {
     };
     const note = (opts && opts.artifactNote) || '';
     const hint = (opts && opts.peerCallHint) || '';
-    // 与 oneshot 一致：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
-    // 不带 [会话历史] 会让 claude 每轮失忆）。
-    const transcript = readTranscriptTail(sessionId);
-    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
+    const cancelKey = (opts && opts.taskId) || messageId;
+
     // CogSeed 扩展：单轮推理强度 → MAX_THINKING_TOKENS env（claude）；单轮
     // 模型 → 通用「模型参数模板」注入（每轮独立 spawn，天然 per-turn）；
     // 强度参数模板通道（hermes/openclaw）与模型同构注入。
@@ -1419,36 +1754,37 @@ class StreamJsonRuntime {
     const effortTemplate = effortArgsFor(preset, process.env);
     const effortLevel = (execPrefs && execPrefs.reasoningEffort) ? effortLevelFor(preset, execPrefs.reasoningEffort) : null;
     const effortArgv = (effortLevel && effortTemplate) ? splitModelArgs(effortTemplate, effortLevel) : [];
-    const args = [...splitArgs(CLI_ARGS).map((part) => (part === '{message}' ? prompt : part)), ...((preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : []), ...modelArgv, ...effortArgv];
-    // 可取消键用 task_id（handleCancel 按 task_id 匹配）；无 task_id 回退 message_id。
-    const cancelKey = (opts && opts.taskId) || messageId;
-    return new Promise((resolve, reject) => {
-      const child = spawnCli(CLI, args, { cwd: (opts && opts.cwd) || undefined, env: thinkingEnv ? Object.assign({}, process.env, thinkingEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
-      this.active.set(cancelKey, child);
-      let lineBuf = '';
-      let accumulated = '';
-      let finished = false;
-      let stderrLog = '';
-      const finish = (error) => {
-        if (finished) return;
-        finished = true;
-        this.active.delete(cancelKey);
-        if (error) reject(error); else {
-          // 落盘 transcript（与 oneshot 同构），供跨轮回放。
-          appendTranscript(sessionId, 'in', text);
-          appendTranscript(sessionId, 'out', accumulated.trim());
-          resolve(accumulated.trim());
-        }
-      };
-      const timer = setTimeout(() => {
-        killProcessTree(child, 'SIGTERM');
-        setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
-        finish(new Error('p3394_stream_json_timeout'));
-      }, STREAM_JSON_TIMEOUT_MS);
-      child.stdout.on('data', (chunk) => {
-        lineBuf += chunk.toString('utf8');
-        const lines = lineBuf.split('\n');
-        lineBuf = lines.pop();
+
+    // 单次 spawn 尝试：prompt 全文替换 {message}，模型/强度参数与 extraArgs
+    // （G-27 resume 参数）依次追加在模板参数之后。返回累积的助手输出文本；
+    // transcript 落盘统一由调用侧编排（resume 快路径/兜底各一次），此处不写。
+    const runOnce = (prompt, extraArgs) => {
+      const args = [...splitArgs(CLI_ARGS).map((part) => (part === '{message}' ? prompt : part)),
+        ...((preset && preset.streamJsonArgs) ? splitArgs(preset.streamJsonArgs) : []),
+        ...modelArgv, ...effortArgv,
+        ...(Array.isArray(extraArgs) ? extraArgs : [])];
+      return new Promise((resolve, reject) => {
+        const child = spawnCli(CLI, args, { cwd: (opts && opts.cwd) || undefined, env: thinkingEnv ? Object.assign({}, process.env, thinkingEnv) : undefined, stdio: ['ignore', 'pipe', 'pipe'] });
+        this.active.set(cancelKey, child);
+        let lineBuf = '';
+        let accumulated = '';
+        let finished = false;
+        let stderrLog = '';
+        const finish = (error) => {
+          if (finished) return;
+          finished = true;
+          this.active.delete(cancelKey);
+          if (error) reject(error); else resolve(accumulated.trim());
+        };
+        const timer = setTimeout(() => {
+          killProcessTree(child, 'SIGTERM');
+          setTimeout(() => killProcessTree(child, 'SIGKILL'), 3000).unref();
+          finish(new Error('p3394_stream_json_timeout'));
+        }, STREAM_JSON_TIMEOUT_MS);
+        child.stdout.on('data', (chunk) => {
+          lineBuf += chunk.toString('utf8');
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
           const structured = classifyStreamEvent(line);
@@ -1474,7 +1810,42 @@ class StreamJsonRuntime {
           else finish(); // 进程正常退出，无显式终帧 → 以累积文本收尾
         }
       });
-    });
+      });
+    };
+
+    // G-27 降级链（与 oneshot 同构）：有 resume 能力且有会话号 → 只发本轮
+    // 新内容 + --resume（CLI 自己恢复上下文，不回放 [会话历史]）；被拒 →
+    // 清绑定，带回放重试一次。stream-json 每轮 spawn 的失忆问题由此根治。
+    if (resumeCapable()) {
+      const cliSessionId = currentOrGeneratedCliSessionId(sessionId);
+      if (cliSessionId) {
+        try {
+          const out = await runOnce(text + note + hint, buildResumeArgs(cliSessionId));
+          const nextId = extractCliSessionId(out);
+          if (nextId && nextId !== cliSessionId) writeCliSession(sessionId, nextId);
+          appendTranscript(sessionId, 'in', text);
+          appendTranscript(sessionId, 'out', out);
+          return out;
+        } catch (err) {
+          if (!resumeRejectedByText(err && err.message)) throw err;
+          console.warn('[p3394-gateway] cli resume rejected (stream-json), retrying with transcript replay:', err && err.message);
+          clearCliSession(sessionId);
+          // fall through — 带 [会话历史] 回放重跑一次（同消息）。
+        }
+      }
+    }
+
+    // 兜底路径：回放会话历史，保证跨轮上下文（-p 每次调用是独立的，
+    // 不带 [会话历史] 会让 claude 每轮失忆）。
+    const transcript = readTranscriptTail(sessionId);
+    const prompt = (transcript ? '[会话历史]\n' + transcript + '\n\n' : '') + text + note + hint;
+    const out = await runOnce(prompt, []);
+    const nextId = extractCliSessionId(out);
+    if (nextId) writeCliSession(sessionId, nextId);
+    // 落盘 transcript（与 oneshot 同构），供跨轮回放。
+    appendTranscript(sessionId, 'in', text);
+    appendTranscript(sessionId, 'out', out);
+    return out;
   }
   /** 解析一行 stream-json 事件：text_delta → 逐 token 增量；assistant 完整帧
    *  作为终态（仅在无 delta 累积时以其全文本收尾，避免与已累积的 delta 重复）。
@@ -1611,14 +1982,60 @@ class ClaudePersistentRuntime {
     }
     if (!entry.turn) return; // 无在途轮次的事件（如并发残留）一律忽略
     const turn = entry.turn;
+    // 工具过程帧：总量封顶（失控的多工具循环不爆 process rail）。
+    const note = (t) => {
+      turn.progressCount = (turn.progressCount || 0) + 1;
+      if (turn.progressCount > 100) return;
+      turn.onProgress && turn.onProgress(t);
+    };
+    // 结构化事件优先投影（chat_events 消费）；过程帧走 note() 老通道。
     const structured = turn.classifyStreamEvent ? turn.classifyStreamEvent(ev) : null;
     if (structured) turn.emitStructured(structured);
-    if (ev && ev.type === 'stream_event' && ev.event && ev.event.type === 'content_block_delta'
-      && ev.event.delta && typeof ev.event.delta.text === 'string') {
-      const t = ev.event.delta.text;
-      if (t) {
-        turn.accumulated += t;
-        turn.onDelta && turn.onDelta(t);
+    if (ev && ev.type === 'stream_event' && ev.event) {
+      const se = ev.event;
+      // 工具调用可见性：content_block_start 报工具名；参数经 input_json_delta
+      // 流式拼接，content_block_stop 时解析出最有信息量的字段（file_path/
+      // command 等）作摘要——过程栏能看到"在跑什么"而不只是"在调工具"。
+      if (se.type === 'content_block_start' && se.content_block && se.content_block.type === 'tool_use'
+        && typeof se.content_block.name === 'string') {
+        turn.toolJson = { name: se.content_block.name, buf: '' };
+        note('🔧 ' + se.content_block.name + '…');
+        return;
+      }
+      if (se.type === 'content_block_delta' && se.delta && se.delta.type === 'input_json_delta'
+        && typeof se.delta.partial_json === 'string' && turn.toolJson) {
+        turn.toolJson.buf += se.delta.partial_json;
+        return;
+      }
+      if (se.type === 'content_block_stop' && turn.toolJson) {
+        const tj = turn.toolJson;
+        turn.toolJson = null;
+        let brief = '';
+        try {
+          const input = JSON.parse(tj.buf || '{}');
+          const v = input.file_path || input.command || input.pattern || input.path
+            || input.url || input.query || input.keyword || input.description;
+          if (v) brief = ' ' + String(v).slice(0, 120);
+        } catch { /* 参数流不完整时只报工具名 */ }
+        note(brief ? '└ ' + tj.name + ' ' + brief : '└ ' + tj.name);
+        return;
+      }
+      if (se.type === 'content_block_delta'
+        && se.delta && typeof se.delta.text === 'string') {
+        const t = se.delta.text;
+        if (t) {
+          turn.accumulated += t;
+          turn.onDelta && turn.onDelta(t);
+        }
+        return;
+      }
+      return;
+    }
+    if (ev && ev.type === 'user' && ev.message && Array.isArray(ev.message.content)) {
+      // 此模式的 user 帧只承载 tool_result（工具执行结果回给模型）：
+      // 一帧 = 上一组工具调用完成，轻提示收尾。
+      if (ev.message.content.some((c) => c && c.type === 'tool_result')) {
+        note('✅ 工具执行完成');
       }
       return;
     }
@@ -1728,6 +2145,7 @@ class ClaudePersistentRuntime {
         onProgress,
         classifyStreamEvent,
         emitStructured,
+        toolJson: null, // 当前 tool_use 块的参数累积（input_json_delta 流式拼接）
       };
       try {
         entry.child.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } }) + '\n');
@@ -1779,7 +2197,268 @@ class ClaudePersistentRuntime {
     this.turnKeys.clear();
   }
 }
+// ── opencode 常驻（server 模式）────────────────────────────────────────────
+// 实测对比（2026-08-25，同任务同模型）：每轮 spawn `opencode run` ≈66s，
+// 常驻 server 同步 HTTP ≈15s——差值即 CLI 冷启动（配置/插件/客户端重建），
+// 续轮还吃到会话 prompt cache。API（v1.18 实测）：
+//   POST /session → {id}；POST /session/:id/message（挂起至整轮完成）
+//   → {info, parts:[step-start|reasoning|text|tool|step-finish]}
+//   GET /event（SSE）→ message.part.delta{field:'text',delta} /
+//   message.part.updated{part:{type:'tool',tool,state:{status,input}}}
+// server 按工作目录复用（同项目多会话共享），会话连续性由 opencode 服务端
+// 自管。reasoning 与正文的 delta 都是 field:'text'，按 partID→type 映射
+// 区分，思考流不混进气泡。COGSEED_P3394_OPENCODE_PERSISTENT=0 回退 sscli。
+const OPENCODE_PERSISTENT_ENABLED = String(process.env.COGSEED_P3394_OPENCODE_PERSISTENT ?? '1').trim() !== '0';
+// 无人值守放行：opencode server 的 bash/edit 默认 permission.asked 等人工
+// 批准，headless 无人应答会永久挂起。垫片/oneshot 模式下同一 CLI 本就是
+// 全权限直跑，常驻模式收紧反而倒退——经 OPENCODE_CONFIG_CONTENT 注入
+// allow 规则（不落盘、不污染用户项目/全局配置）。置 0 恢复 opencode
+// 自身权限策略（需人工在 web UI 批准）。
+const OPENCODE_AUTO_APPROVE = String(process.env.COGSEED_P3394_OPENCODE_AUTO_APPROVE ?? '1').trim() !== '0';
+class OpencodeRuntime {
+  constructor() {
+    this.servers = new Map(); // cwd → {child, base, port, ready}
+    this.sessions = new Map(); // p3394 session_id → {cwd, ocSessionId}
+    this.turns = new Map(); // opencode sessionID → {onDelta, onProgress, partTypes, timer, progressCount}
+    this.closing = false;
+  }
+  get name() { return 'opencode-persistent'; }
+  async _serverFor(cwd) {
+    const key = cwd || process.cwd();
+    const hit = this.servers.get(key);
+    if (hit) return hit.ready;
+    const entry = { child: null, base: '', port: 0, ready: null };
+    this.servers.set(key, entry);
+    entry.ready = (async () => {
+      const serveEnv = { ...process.env };
+      if (OPENCODE_AUTO_APPROVE && !serveEnv.OPENCODE_CONFIG_CONTENT) {
+        serveEnv.OPENCODE_CONFIG_CONTENT = '{"permission":{"bash":"allow","edit":"allow","webfetch":"allow","websearch":"allow"}}';
+      }
+      const child = spawnCli(CLI, ['serve', '--port', '0', '--hostname', '127.0.0.1'], { cwd: key, stdio: ['ignore', 'pipe', 'pipe'], env: serveEnv });
+      entry.child = child;
+      let errLog = '';
+      child.stderr.on('data', (c) => { if (errLog.length < 8 * 1024) errLog += c; });
+      const port = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('p3394_opencode_serve_timeout' + (errLog ? ': ' + errLog.slice(-200) : ''))), 30_000);
+        timer.unref();
+        child.on('error', (error) => { clearTimeout(timer); reject(new Error('p3394_opencode_spawn_failed: ' + error.message)); });
+        let buf = '';
+        child.stdout.on('data', (c) => {
+          buf += c;
+          const m = buf.match(/listening on http:\/\/127\.0\.0\.1:(\d+)/);
+          if (m) { clearTimeout(timer); resolve(Number(m[1])); }
+        });
+      });
+      child.on('close', () => { this.servers.delete(key); });
+      entry.port = port;
+      entry.base = 'http://127.0.0.1:' + port;
+      this._subscribeEvents(entry);
+      return entry;
+    })();
+    // serve 启动失败要摘掉占位，否则该 cwd 永久卡死在 rejected promise。
+    entry.ready.catch(() => { if (this.servers.get(key) === entry) this.servers.delete(key); });
+    return entry.ready;
+  }
+  _subscribeEvents(entry) {
+    const connect = () => {
+      if (this.closing || !entry.child || entry.child.exitCode !== null) return;
+      const req = http.get(entry.base + '/event', (res) => {
+        let buf = '';
+        res.on('data', (c) => {
+          buf += c;
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line.startsWith('data:')) continue;
+            try { this._onEvent(JSON.parse(line.slice(5).trim())); } catch { /* 非 JSON 行忽略 */ }
+          }
+        });
+        // SSE 断线重连：在途轮的终态由同步 HTTP 兜底，事件流只影响实时性。
+        res.on('end', () => { setTimeout(connect, 2000).unref(); });
+      });
+      req.on('error', () => { setTimeout(connect, 2000).unref(); });
+    };
+    connect();
+  }
+  _onEvent(ev) {
+    const p = ev && ev.properties;
+    if (!p || typeof p.sessionID !== 'string') return;
+    const turn = this.turns.get(p.sessionID);
+    if (!turn) return;
+    if (ev.type === 'message.part.updated' && p.part && typeof p.part.id === 'string') {
+      const part = p.part;
+      turn.partTypes.set(part.id, part.type);
+      if (part.type === 'text' && typeof part.text === 'string') {
+        turn.lastText = part.text; // 无 delta 流时的终态文本兜底
+      } else if (part.type === 'tool' && part.state) {
+        const note = (t) => {
+          turn.progressCount = (turn.progressCount || 0) + 1;
+          if (turn.progressCount > 100 || !turn.onProgress) return;
+          turn.onProgress(t);
+        };
+        const st = part.state.status;
+        if (st === 'running') {
+          const input = part.state.input || {};
+          const brief = input.command || input.filePath || input.pattern || input.path || input.url;
+          note(brief ? '🔧 ' + part.tool + ' ' + String(brief).slice(0, 120) : '🔧 ' + part.tool + '…');
+        } else if (st === 'completed') {
+          note('✅ ' + part.tool + ' 完成');
+        }
+      }
+      return;
+    }
+    if (ev.type === 'message.part.delta' && p.field === 'text' && typeof p.delta === 'string' && p.delta) {
+      // reasoning part 的增量也是 field:'text'：按 partID 查映射，只透传正文。
+      if (turn.partTypes.get(p.partID) === 'text') turn.onDelta && turn.onDelta(p.delta);
+    }
+  }
+  async openSession(sessionId, goal, workspace) {
+    const cwd = workspace || process.cwd();
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      if (existing.cwd !== cwd) throw new Error('p3394_session_cwd_conflict');
+      return;
+    }
+    const server = await this._serverFor(cwd);
+    const created = await this._postJson(server.base, '/session', {});
+    if (!created || typeof created.id !== 'string') throw new Error('p3394_opencode_session_failed');
+    this.sessions.set(sessionId, { cwd, ocSessionId: created.id });
+  }
+  _postJson(base, pathName, body) {
+    return new Promise((resolve, reject) => {
+      const data = JSON.stringify(body);
+      const req = http.request(base + pathName, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+  _getJson(base, pathName) {
+    return new Promise((resolve, reject) => {
+      const req = http.get(base + pathName, (res) => {
+        let buf = '';
+        res.on('data', (c) => { buf += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+          try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({ raw: buf }); }
+        });
+      });
+      req.on('error', reject);
+    });
+  }
+  /** 模型发现（2026-09-09 全量补全）：常驻 serve 的 GET /api/model 是权威
+   *  事实源（进程已在跑、零 spawn、天然含自定义 provider——实机实测
+   *  {location, data:[{id, providerID, name}]}）。清单 id 拼 providerID/id
+   *  （与 --model 传参同口径，子命令输出同格式）；端点不披露 current，
+   *  留空（UI 选中态由宿主处理）。无活跃 server 时按默认 cwd 起一个
+   *  （首查需等 serve 冷启动，之后复用）；端点失败回落 models 子命令
+   *  探测。此前本 runtime 无 inspectModels，端点一律 runtime_no_inspect
+   *  → 界面扫描不到模型。 */
+  async inspectModels() {
+    try {
+      let entry = null;
+      for (const [, hitEntry] of this.servers) { entry = hitEntry; break; }
+      if (!entry) entry = await this._serverFor(process.cwd());
+      else await entry.ready;
+      const body = await this._getJson(entry.base, '/api/model');
+      const rawModels = body && Array.isArray(body.data)
+        ? body.data
+        : (body && Array.isArray(body.models) ? body.models : null);
+      const models = [];
+      const seen = new Set();
+      if (rawModels) {
+        for (const m of rawModels) {
+          if (!m || typeof m !== 'object') continue;
+          const bareId = String(m.id || m.modelID || '').trim();
+          if (!bareId) continue;
+          const provider = String(m.providerID || '').trim();
+          const id = provider ? `${provider}/${bareId}` : bareId;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          models.push({ id, label: String(m.name || m.displayName || id).trim() || id });
+        }
+      }
+      if (models.length) return { status: 'ready', models };
+    } catch (error) {
+      console.log('[p3394-gateway] opencode /api/model inspect failed: ' + (error && error.message ? error.message : String(error)));
+    }
+    return inspectPresetModels('opencode_no_inspect');
+  }
+  async deliver(sessionId, messageId, text, opts, onDelta, onProgress) {
+    const note = (opts && opts.artifactNote) || '';
+    const hint = (opts && opts.peerCallHint) || '';
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error('p3394_opencode_no_session');
+    const server = await this._serverFor(entry.cwd);
+    // PR209 评审 M6：turn 记 taskId 并保留在途 http 句柄——cancel(taskId)
+    // 据此中断在途请求（此前恒 return false，用户看到「已取消 + 后又来一
+    // 条回复」）。同会话并发 turn 会覆盖 turns 表（既有单轮语义），覆盖后
+    // 老 turn 失去 cancel 句柄属已知限制。
+    const turn = { onDelta, onProgress, partTypes: new Map(), timer: null, progressCount: 0, lastText: '', taskId: (opts && opts.taskId) || null, req: null };
+    this.turns.set(entry.ocSessionId, turn);
+    try {
+      const msg = await new Promise((resolve, reject) => {
+        const data = JSON.stringify({ parts: [{ type: 'text', text: text + note + hint }] });
+        const req = http.request(server.base + '/session/' + encodeURIComponent(entry.ocSessionId) + '/message', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } }, (res) => {
+          let buf = '';
+          res.on('data', (c) => { buf += c; });
+          res.on('end', () => {
+            if (res.statusCode >= 400) { reject(new Error('p3394_opencode_http_' + res.statusCode + ': ' + buf.slice(0, 200))); return; }
+            try { resolve(JSON.parse(buf)); } catch { resolve({ parts: [] }); }
+          });
+        });
+        req.on('error', reject);
+        turn.req = req;
+        turn.timer = setTimeout(() => { req.destroy(); reject(new Error('p3394_opencode_timeout')); }, STREAM_JSON_TIMEOUT_MS);
+        turn.timer.unref();
+        req.write(data);
+        req.end();
+      });
+      const out = (msg.parts || []).filter((p) => p && p.type === 'text' && typeof p.text === 'string').map((p) => p.text).join('');
+      return (out.trim() || (turn.lastText || '').trim());
+    } finally {
+      if (turn.timer) clearTimeout(turn.timer);
+      // 宽限删除：SSE 帧与同步 HTTP 终态分属两个连接、无到达顺序保证——
+      // 终态先到时立刻删 turn 会把紧随其后的过程/增量帧全部丢弃（终态文本
+      // 以 HTTP parts 为准，晚帧只影响实时流完整性）。短窗口后删；若同
+      // 会话下一轮已覆盖 turn 则不动（比对实例）。
+      setTimeout(() => { if (this.turns.get(entry.ocSessionId) === turn) this.turns.delete(entry.ocSessionId); }, 250).unref();
+    }
+  }
+  cancel(taskId) {
+    // PR209 评审 M6：按 taskId 命中在途 turn 并中断其 HTTP 请求——客户端
+    // 不再收终态（deliver reject→failed，回执被 handleCancel 的
+    // cancelledTasks 抑制，用户只见 [已取消]）。服务端 turn 是否随连接
+    // 断开而中止取决于 opencode serve 行为，此处只保证客户端语义。
+    if (!taskId) return false;
+    let hit = false;
+    for (const [, turn] of this.turns) {
+      if (turn.taskId === String(taskId) && turn.req) {
+        try { turn.req.destroy(new Error('p3394_opencode_cancelled')); } catch { /* already gone */ }
+        hit = true;
+      }
+    }
+    return hit;
+  }
+  close() {
+    this.closing = true;
+    for (const [, entry] of this.servers) {
+      if (entry.child) killProcessTree(entry.child, 'SIGTERM');
+    }
+    this.servers.clear();
+    this.sessions.clear();
+  }
+}
 const claudePersistentRuntime = new ClaudePersistentRuntime();
+const opencodeRuntime = new OpencodeRuntime();
 
 /** 运行时后端选择 —— sscli 主导：显式声明 sscli 的 agent 优先走
  *  p3394-sscli/1.0 常驻协议（原生 delta 流式）；声明了 stream-json 输出且
@@ -1795,6 +2474,9 @@ function runtimeFor() {
       if (PRESET_NAME === 'claude' && CLAUDE_PERSISTENT_ENABLED) return claudePersistentRuntime;
       return streamJsonRuntime;
     }
+    // opencode 常驻 server（默认开；COGSEED_P3394_OPENCODE_PERSISTENT=0
+    // 回退到 sscli 垫片每轮 spawn——冷启动差值见 OpencodeRuntime 头注）。
+    if (PRESET_NAME === 'opencode' && OPENCODE_PERSISTENT_ENABLED) return opencodeRuntime;
     return sscliRuntime;
   }
   if (PRESET_NAME === 'codex') return codexAppServerRuntime;
@@ -2022,9 +2704,11 @@ function handleCancel(envelope) {
     postReply(envelope, '[已取消]');
     return;
   }
-  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId);
+  // PR209 评审 M6：原代码在 || 链外对 sscliRuntime 又 cancel 一次（双发），
+  // 且 shim 侧 cancel 不看 task_id 会误杀排队中另一任务的执行进程。
+  // 修复：单次按序 cancel（短路即停，首个命中的 runtime 负责）。
+  const killed = cancelTask(taskId) || streamJsonRuntime.cancel(taskId) || codexAppServerRuntime.cancel(taskId) || claudePersistentRuntime.cancel(taskId) || sscliRuntime.cancel(taskId);
   if (killed) cancelledTasks.add(taskId);
-  sscliRuntime.cancel(taskId);
   console.log('[p3394-gateway] cancel task ' + taskId + (killed ? ' (killed)' : ' (nothing running)'));
   postReply(envelope, '[已取消]');
 }
@@ -2086,10 +2770,25 @@ async function handleEnvelope(envelope) {
       ? envelope.payload.metadata.goal
       : '';
     await runtime.openSession(sessionId, goal, runtimeDir);
+    // PEER_CALL_HINT 每会话只注一次（首轮）：hint 信息（端口/用法）会话内
+    // 恒定，resume 的 CLI 自会记住，重复注入浪费上下文还会被 CLI 当正文
+    // 回应（交互设计 2026-08-25 实证 OpenClaw 困惑于"系统注入的说明"）。会话
+    // 目录 marker 防重（网关重启不重注；transcript 回放路径 hint 已在历史
+    // 里）；marker 在 deliver 成功后才写——首轮失败下轮补注，不丢入口。
+    let peerHintThisTurn = '';
+    let hintMark = '';
+    if (PEER_CALL_HINT && dir) {
+      hintMark = path.join(dir, 'peer-hint.sent');
+      if (!fs.existsSync(hintMark)) peerHintThisTurn = PEER_CALL_HINT;
+    }
     // taskId 随 opts 传给运行时：oneshot / stream-json 子进程按 task_id 注册
     // 可取消键，使 cancel 控制帧（按 task_id 匹配）能真正终止运行中的 CLI。
-    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）。
-    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: PEER_CALL_HINT, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    // execPrefs：CogSeed 扩展的单轮执行偏好（见 executionPrefsFor）；peer-call
+    // hint 每会话只注一次（peerHintThisTurn 由 marker 防重，首轮失败下轮补注）。
+    const rawReply = await runtime.deliver(sessionId, envelope.message_id, text, { cwd: runtimeDir, taskId: envelope.task_id, artifactNote, peerCallHint: peerHintThisTurn, execPrefs: executionPrefsFor(envelope) }, (delta) => stream.push(delta), (line) => stream.pushProgress(line));
+    if (peerHintThisTurn && hintMark) {
+      try { fs.writeFileSync(hintMark, String(Date.now())); } catch { /* best effort：下轮重注无害 */ }
+    }
     await stream.finish();
     // deliver 契约：string（无用量）或 { text, usage? }（带本轮 CLI 自报
     // 用量——claude persistent 的 result 帧；其余 runtime 一期不带）。
@@ -2346,6 +3045,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     codexAppServerRuntime.close();
     streamJsonRuntime.close();
     claudePersistentRuntime.close();
+    opencodeRuntime.close();
     oneshotRuntime.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 3000).unref();
@@ -2486,6 +3186,9 @@ function registerWithCogseed() {
       locality: 'same_host',
       node_kind: NODE_KIND,
       supported_profiles: PROFILES,
+      // G-18：自报网关进程 pid——CogSeed 侧内存协调器的探活数据源
+      //（正整数才被采纳，与 bus 边界同一校验）。
+      pid: process.pid,
     },
     idempotency_key: 'idem-hello-' + nonce,
   };
