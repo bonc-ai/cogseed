@@ -39,6 +39,12 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 |---|---|---|
 | `list-challenges` | 已发布挑战列表 | — |
 | `get-challenge` | 挑战详情（交付物/rubric/截止） | `{"challengeId":"C03"}` |
+| `get-challenge-content` | 挑战正文全文（G3：CHALLENGE.md/challenge.yaml/rubric.json） | `{"challengeId":"C03"}` 可选 `workdir` 落盘 |
+| `export-challenge-pack` | 一键导出完整资料包（任务卡+正文+材料，SHA-256 可复核） | `{"challengeId":"C03","workdir":"/abs/path"}` |
+| `list-challenge-materials` | 挑战材料清单（G4，已自动过滤平台 `._*` 垃圾件） | `{"challengeId":"C03"}` |
+| `download-challenge-materials` | 下载材料到本地工作区（G4，已自动过滤平台 `._*` 垃圾件） | `{"challengeId":"C03","workdir":"/abs/path"}` 可选 `file` |
+| `list-course-materials` | 课程级公共资料清单（P3：体系文档/先修课/群公告与参考资料） | `{"scope":"system-docs"}`（prereq / reference） |
+| `download-course-materials` | 下载课程级公共资料到本地工作区（P3） | `{"scope":"system-docs","workdir":"/abs/path"}` 可选 `file` |
 | `check-deliverables` | 本地交付物检查（离线，非权威） | `{"workdir":"/abs/path","requiredDeliverables":"README.md, src/**"}` |
 | `prepare-submission` | 预检报告 + 行动项 + 提交草稿（离线） | 同上 + `githubRepoUrl`,`projectTitle` |
 | `submit-project` | 提交（预检→Envelope→task_id） | 见下 |
@@ -51,6 +57,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 | `list-episodes` / `get-episode` / `get-replay-suggestions` | KSTAR 学习记忆 | `{"episodeId":...}` 等 |
 | `agent-send` / `agent-inbox` / `agent-contacts` | P3394 师生互通 | `{"toAgentId":...,"text":...}` |
 | `health` | 平台连接检查 | — |
+| `get-my-binding` | 查询本人 GitHub 绑定状态（提交前预检，未绑定会被平台拒收） | — |
 
 ## 九步工作流（继承课程提交技能模板，不可跳过）
 
@@ -58,14 +65,16 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 1. **validate_submission_inputs** — 必填项存在性/URL 形状；AAR ≠ 自评链接。失败：`INPUT_MISSING` / `INPUT_MALFORMED`
 2. **resolve_student_record** — `health` 确认连接；身份由平台从 x-api-key 解析（不可伪造）。失败：`AUTH_FAILED`
-3. **resolve_challenge_record** — `get-challenge` 查挑战；确认 deadline/status 开放。失败：`CHALLENGE_NOT_FOUND` / `CHALLENGE_CLOSED`
-4. **validate_artifact_links** — `check-deliverables` + `prepare-submission` 本地通配符检查 + GitHub 指针；完整报告每个检查项。失败（软）：`REPO_PATTERN_MISMATCH` / `README_MISSING`
+3. **resolve_github_binding**（2026-09-09，防串作业硬门）— `get-my-binding` 查本人 GitHub 绑定状态：**未绑定 → 立即停止，明确告知学生先去学生端【设置 → GitHub 绑定】填写用户名后再提交，绝不发起 submit-project**（平台对未绑定提交会直接拒收）；已绑定 → 记录绑定的用户名，进入下一步。教师已代填/挑战豁免时同样以 `get-my-binding` 返回为准放行。
+4. **resolve_challenge_record** — `get-challenge` 查挑战；确认 deadline/status 开放。失败：`CHALLENGE_NOT_FOUND` / `CHALLENGE_CLOSED`
+5. **stage_challenge_materials**（G3+G4，2026-09-08）— 若学生要做题且该挑战有材料：`download-challenge-materials` 把材料落到 `<workdir>/挑战<id>_材料/`；需查看挑战正文全文时用 `get-challenge-content`（可选 `workdir` 落到 `<workdir>/挑战<id>_正文/`）。**只落盘、只回报文件清单与路径，绝不把材料内容整读进上下文**；缺材料则跳过（`NO_MATERIALS` 不是失败）。失败：`DOWNLOAD_FAILED`（可让学生稍后重试，不阻塞提交）。平台材料目录混有的 macOS `._*` 垃圾文件已由运行时自动过滤（结果含 `junk_skipped` 计数）。
+6. **validate_artifact_links** — `check-deliverables` + `prepare-submission` 本地通配符检查 + GitHub 指针；完整报告每个检查项。失败（软）：`REPO_PATTERN_MISMATCH` / `README_MISSING`
 
 ### 步骤 4.5 — 提交摘要人工确认（MVP User Story，硬性）
 
 在调用 `submit-project` / `submit-and-track` 之前，必须：
-1. 向学生展示**提交摘要**：挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
-2. 明确提问："确认提交吗？（回复'确认'后才会写平台）"；
+1. 向学生展示**提交摘要**：**提交身份（学号，取自运行时 submit 结果的 studentId，A2-2 硬性）**、挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
+2. 明确提问："将以 <学号> 身份提交，确认吗？（回复'确认'后才会写平台）"；
 3. **只在学生明确确认后**执行写入。学生未确认/要求修改 → 停止并列出待改项。
 失败行为：`never_submit_without_user_confirm`
 
@@ -76,7 +85,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 1. 创建 artifact（title=「待确认：提交项目」），含两个文件：
    - `index.html`：确认卡片宿主模板（附录 A，**原样使用**，不要增删改动）
-   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`
+   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`（A2-2 硬性：payload 必须包含 `提交身份` 字段 = 运行时 submit 结果的 studentId）
 2. 对话中会渲染出插件确认面板（载荷摘要 + 确认/取消按钮）；
 3. 等待用户操作：
    - 收到 `{"action":"plugin-confirm","op":"submit-project","payload":…}` → 用该 payload 执行第 5 步 `submit-project`；
@@ -147,7 +156,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 ### Phase B — 写入阶段（步骤 5-9）
 
 5. **create_or_update_submission_record** — `submit-project`（载荷：challengeId/githubRepoUrl/projectTitle/aarText(≥10字)/selfEvaluationText(≥10字)/isPublic/reviewMode；可选 workdir+requiredDeliverables 触发预检）。返回 task_id
-6. **generate_submission_summary** — `get-task` 轮询**至任务终态**（见下方终态规则）；按终态组装教授向 `summary_markdown`
+6. **generate_submission_summary** — `get-task` 轮询**至任务终态**（见下方终态规则）；组装教授向 `summary_markdown`
 > **任务终态规则（硬性）**：`submit-project` 返回 task_id 后，用 `get-task` 轮询
 > **到任务终态为止**（pending → processing → completed / failed），终态后分叉：
 > - `completed`（result 含 submissionId；pendingReview=true 表示 AI 初评异步回填中）→
@@ -160,8 +169,6 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 > - 轮询间隔 2-5 秒，单次提交最多轮询约 2 分钟；仍未到终态 → 按最后一次看到的
 >   状态如实说明并结束（pending / processing 表示平台还在处理，**不是失败**，
 >   不要误报失败）。
-> - 平台有消息级幂等 + 业务级防重，**同一任务不要重复提交**；修复后重交是新任务。
-
 7. **trigger_self_evaluation** — 平台自动触发 AI 初评；`get-evaluation` 查分项/优缺点/建议
 8. **update_portfolio_index** — 平台自动生成作品集条目
 9. **notify_professor_or_course_owner** — 平台飞书通知（学生 + 班级群）
@@ -177,7 +184,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 - 每次开始课程任务前，先执行 `plugin-version`：
   - `update_required: true` → **立即停止课程操作**，告诉学生"插件版本过低，必须升级"，
-    并按《排障手册》升级步骤执行（随 CogSeed 发版自动升级（内置版），或联系学校管理员）；
+    并按《排障手册》升级步骤执行（`cogseed-pkg update aix-course-elite20`，用 PLUGIN_TOKEN）；
   - `update_available: true` → 提示学生"有新版本，建议说「升级课程插件」"，不阻塞当前任务；
   - 已是最新 → 继续。
 - 升级完成后再继续原任务；不得用旧版本强行执行被平台要求升级的功能。
@@ -205,7 +212,7 @@ outputs:
 
 ## 停止规则
 
-用户停止；缺交付物且不补充；平台 401/503；挑战已关闭；**学生未确认提交摘要**；任务到达终态后按终态收尾（completed → 结束报成功、不再等待评分；failed → 按平台错误文案修复重交）。
+用户停止；缺交付物且不补充；平台 401/503；挑战已关闭；**学生未确认提交摘要**。
 
 ## 失败行为
 

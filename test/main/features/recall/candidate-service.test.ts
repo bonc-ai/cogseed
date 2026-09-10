@@ -3,10 +3,12 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 // 语义查重不依赖真实 embedding 模型（测试环境无关性）：按文本哈希生成
 // 确定性 512 维向量——不同文本向量不同 → 查重走 no_match 正常晋升。
 vi.mock('../../../../src/main/features/kb_embed', () => ({
+  closeEmbedder: vi.fn(),
   embedQuery: async (text: string) => {
     const digest = createHash('sha256').update(text).digest();
     return Array.from({ length: 512 }, (_, i) => (digest[i % 32] / 255 - 0.5) * 0.2);
@@ -23,10 +25,14 @@ beforeEach(() => {
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
 });
 
-afterEach(() => {
-  if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest('user-a', 'user-b');
+  } finally {
+    if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 async function service() {

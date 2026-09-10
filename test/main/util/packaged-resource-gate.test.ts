@@ -10,12 +10,17 @@ const {
   parseAppleStrings,
   verifyEmbeddingModelRoot,
   verifyExtraResourcesConfig,
+  verifyMacHardenedRuntimeEntitlements,
   verifyMacLocalizedMetadataRoot,
   verifyResourceContract,
 } = require('../../../bin/packaged-resource-gate.cjs') as {
   parseAppleStrings: (text: string, label?: string) => Record<string, string>;
   verifyEmbeddingModelRoot: (root: string) => string;
   verifyExtraResourcesConfig: (entries: unknown) => string[];
+  verifyMacHardenedRuntimeEntitlements: (
+    buildConfig: unknown,
+    projectRoot: string,
+  ) => string;
   verifyMacLocalizedMetadataRoot: (root: string, options?: { allowElectronResources?: boolean }) => string;
   verifyResourceContract: (root: string, contract: Record<string, unknown>) => string;
 };
@@ -80,6 +85,50 @@ describe('packaged-resource-gate', () => {
     expect(verifyMacLocalizedMetadataRoot(root)).toBe('resource:mac-locales:v1');
   });
 
+  it('requires audio-input on both production hardened-runtime signing targets', () => {
+    const projectRoot = process.cwd();
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
+    const entitlementFiles = [pkg.build.mac.entitlements, pkg.build.mac.entitlementsInherit];
+
+    for (const relativeFile of entitlementFiles) {
+      const text = fs.readFileSync(path.join(projectRoot, relativeFile), 'utf8');
+      expect(text, relativeFile).toMatch(
+        /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\s*\/>/,
+      );
+    }
+    expect(verifyMacHardenedRuntimeEntitlements(pkg.build, projectRoot))
+      .toBe('signing:mac-hardened-runtime:audio-input');
+  });
+
+  it('rejects a hardened-runtime config whose main or inherited entitlement omits audio input', () => {
+    const root = path.join(tmpDir, 'project');
+    const main = path.join(root, 'main.plist');
+    const inherit = path.join(root, 'inherit.plist');
+    const allowed = '<?xml version="1.0"?><plist><dict>'
+      + '<key>com.apple.security.device.audio-input</key><true/>'
+      + '</dict></plist>';
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(main, allowed);
+    fs.writeFileSync(inherit, allowed);
+    const build = {
+      mac: {
+        hardenedRuntime: true,
+        entitlements: 'main.plist',
+        entitlementsInherit: 'inherit.plist',
+      },
+    };
+
+    expect(verifyMacHardenedRuntimeEntitlements(build, root))
+      .toBe('signing:mac-hardened-runtime:audio-input');
+    for (const [label, file] of [['main', main], ['inherited', inherit]] as const) {
+      fs.writeFileSync(main, allowed);
+      fs.writeFileSync(inherit, allowed);
+      fs.writeFileSync(file, '<?xml version="1.0"?><plist><dict></dict></plist>');
+      expect(() => verifyMacHardenedRuntimeEntitlements(build, root))
+        .toThrow(new RegExp(`${label}.*com\\.apple\\.security\\.device\\.audio-input`, 'i'));
+    }
+  });
+
   it('parses comments and escaped values in Apple strings syntax', () => {
     expect(parseAppleStrings('/* locale */\n"key" = "line\\nvalue"; // done\n')).toEqual({
       key: 'line\nvalue',
@@ -118,7 +167,7 @@ describe('packaged-resource-gate', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
     expect(verifyExtraResourcesConfig(pkg.build.extraResources)).toEqual([
       'embedding-model', 'sherpa-onnx', 'runtime', 'builtin', 'builtin-packages',
-      'officecli', 'guardrail', '.',
+      'discovery-catalog', 'officecli', 'guardrail', '.',
     ]);
   });
 

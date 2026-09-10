@@ -5,11 +5,11 @@ import * as path from 'node:path';
 const rendererSource = fs.readFileSync(
   path.join(__dirname, '../../src/renderer/modules/conversation.js'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 const ipcSource = fs.readFileSync(
   path.join(__dirname, '../../src/main/ipc/index.ts'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('conversation detail first-paint boundary', () => {
   it('keeps the first history page at 10 rows', () => {

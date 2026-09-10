@@ -210,6 +210,7 @@ export const actionApprovalAuditFile         = (uid: string) => path.join(userAc
 // Curated knowledge base (the "organized" region of the historical
 // two-region contexts design).
 export const userContextsDir        = (uid: string) => path.join(userCloudRoot(uid), 'contexts');
+export const userKbDiscoverFeishuConfigFile = (uid: string) => path.join(userLocalConfigDir(uid), 'kb-discover', 'feishu.json');
 // "本体" memory-group storage — a hidden sub-dir of contexts/ so its .md files
 // physically live under the Library tree (and therefore get picked up by
 // kb_search/kb_read like any other Library file — this is intentional, see
@@ -523,6 +524,11 @@ export const packagedBuiltinMarketplaceSkillsDir = () => path.join(packagedBuilt
  * marketplace content-tree manifest/hash never covers these trees.
  */
 export const packagedBuiltinPackagesDir = () => packagedResourceDir('builtin-packages');
+
+// Official, read-only Knowledge Base packages surfaced by Discover. These are
+// product content rather than marketplace installs and are imported into a
+// user's contexts directory only after an explicit user action.
+export const packagedDiscoverCatalogDir = () => packagedResourceDir('discovery-catalog');
 
 // Hidden system skills (product protocols, not user skills). Source files ship
 // with the app under `resources/builtin/system/skills/`; startup mirrors them

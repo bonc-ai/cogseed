@@ -63,6 +63,7 @@ vi.mock('../../../../src/main/features/recall/context-projection', () => ({
 vi.mock('../../../../src/main/features/p3394', () => ({
   listExperienceCandidates: vi.fn(async () => []),
   listPatchCandidates: vi.fn(async () => []),
+  listReceipts: vi.fn(async () => []),
   readReceipt: vi.fn(async () => undefined),
   decideExperienceCandidate: vi.fn(),
   reviewPatchCandidate: vi.fn(),

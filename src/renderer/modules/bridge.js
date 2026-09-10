@@ -33,6 +33,10 @@ async function _showBridgePermissionDialog(info) {
       allow,
       always: choice === 'allow_always',
     });
+    // conv-core M2.2：弹窗路径已答复，撤掉过程面板里的镜像卡（若存在）。
+    if (typeof window.chatStreamDismissBashPermission === 'function') {
+      try { window.chatStreamDismissBashPermission(info.request_id); } catch (_e) { /* ignore */ }
+    }
   } catch (err) {
     _bridgeLog.warn('permission response failed', { error: err && err.message });
   }
@@ -56,6 +60,19 @@ if (window.cogseed && typeof window.cogseed.onPushEvent === 'function') {
     window.cogseed.onPushEvent('bridge:permission', (info) => {
       if (!info || typeof info.request_id !== 'string') return;
       _bridgePermissionQueue.push(info);
+      // conv-core M2.2：外部服务调用审批镜像到会话过程面板（同 bash 桥接
+      // 模式；弹窗照常，面板卡回复走同一 bridge.permission_response 通道，
+      // 主进程幂等先到者生效）。
+      if (typeof window.chatStreamBridgeBashPermission === 'function') {
+        try {
+          window.chatStreamBridgeBashPermission({
+            request_id: info.request_id,
+            agent_name: info.agent_name || info.agent_id || '',
+            operation: info.tool_name ? `外部服务调用 ${info.tool_name}` : '外部服务调用',
+            subject: info.connector_name || info.connector_id || '',
+          }, { source: 'bridge' });
+        } catch (_err) { /* 镜像失败不影响弹窗 */ }
+      }
       _drainBridgePermissionQueue();
     });
   } catch (_err) { /* push channel unavailable; bridge calls deny on timeout */ }

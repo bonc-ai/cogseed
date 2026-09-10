@@ -23,6 +23,7 @@ import { checkMinVersion, detectVersion, parseSemver, MIN_VERSIONS } from './ver
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 const log = createLogger('local-agents');
 
@@ -75,6 +76,8 @@ const VERSION_PROBES: Record<LocalCliType, readonly (readonly string[])[]> = {
   gemini: [['--version']],
   aider: [['--version']],
 };
+const VERSION_PROBE_TIMEOUT_MS = 2_000;
+const VERSION_DISCOVERY_BUDGET_MS = 5_000;
 
 export function localCliSearchDirs(
   type: LocalCliType,
@@ -427,15 +430,19 @@ export async function detectOne(type: LocalCliType): Promise<LocalCliEntry> {
     : type === 'claude'
       ? await detectClaudePackageVersion(resolved)
       : null;
+  const versionProbeDeadline = performance.now() + VERSION_DISCOVERY_BUDGET_MS;
   for (const versionArgs of versionProbes) {
     if (version) break;
+    const remainingBudgetMs = Math.floor(versionProbeDeadline - performance.now());
+    if (remainingBudgetMs <= 0) break;
     // Short per-probe timeout: a healthy CLI answers --version in <100ms;
     // 2s covers slow cold starts without letting a hung binary (hermes
-    // without TTY, GUI-launched codex) stall the workspace view. Zero-output
-    // timeouts are retried once inside detectVersion (spawn starvation under
-    // load), keeping the worst case at ~4s per probe — still under the 5s
-    // budget that motivated this limit.
-    version = await detectVersion(resolved, 2_000, versionArgs);
+    // without TTY, GUI-launched codex) stall the workspace view. The remaining
+    // total budget spans a possible starvation retry and every alternate
+    // argument form, so one stuck syntax cannot multiply the UI delay.
+    version = await detectVersion(resolved, VERSION_PROBE_TIMEOUT_MS, versionArgs, {
+      totalBudgetMs: remainingBudgetMs,
+    });
   }
   if (!version && type === 'hermes') {
     version = await detectHermesInstallVersion(resolved);

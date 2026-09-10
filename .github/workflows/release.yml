@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      peeled-sha: ${{ steps.verify.outputs.peeled-sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify exact cicd tip and required workflow attempts
+        id: verify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-release-gates.mjs
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.verify.outputs.peeled-sha }}
+      - name: Verify source version matches tag
+        run: node -e "const p=require('./package.json'); if ('v'+p.version !== process.env.GITHUB_REF_NAME) throw new Error('package.json version does not match release tag')"
+
+  build-macos:
+    needs: gate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.peeled-sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Create temporary keychain
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm certificate.p12
+      - run: node scripts/write-build-info.cjs --channel=release
+      - name: Build, sign, and notarize
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: true
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npx json -I -f package.json -e 'this.build.mac.notarize = true'
+          npx json -I -f package.json -e 'this.build.asarUnpack = this.build.asarUnpack || []'
+          npx json -I -f package.json -e 'this.build.files.push("!**/archive/**")'
+          npx json -I -f package.json -e 'this.build.files.push("!**/*.tar.gz")'
+          npx electron-builder --mac --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CogSeed-macOS-${{ needs.gate.outputs.peeled-sha }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain build.keychain || true
+
+  publish:
+    needs: [gate, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.peeled-sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: CogSeed-*-${{ needs.gate.outputs.peeled-sha }}
+          path: artifacts
+          merge-multiple: true
+      - name: Validate release artifact set
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files = fs.readdirSync('artifacts').sort();
+          const version = process.env.GITHUB_REF_NAME.slice(1);
+          const expected_files = [
+            `CogSeed-${version}-mac-arm64.dmg`,
+            `CogSeed-${version}-mac-arm64.zip`,
+            `CogSeed-${version}-mac-x64.dmg`,
+            `CogSeed-${version}-mac-x64.zip`,
+          ].sort();
+          if (JSON.stringify(files) !== JSON.stringify(expected_files)) {
+            throw new Error(`Release artifact set mismatch. Expected ${expected_files.join(', ')}; got ${files.join(', ')}`);
+          }
+          NODE
+      - name: Revalidate tag and existing Release
+        env:
+          EXPECTED_SHA: ${{ needs.gate.outputs.peeled-sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/verify-release-gates.mjs --publish-target
+      - name: Upload draft GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          draft: true
+          generate_release_notes: false
+          files: artifacts/*
+          body: CogSeed ${{ github.ref_name }} signed release artifacts.
+      - name: Verify uploaded assets and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          const json = execFileSync('gh', ['release', 'view', process.env.GITHUB_REF_NAME, '--json', 'assets,isDraft'], { encoding: 'utf8' });
+          const release = JSON.parse(json);
+          const names = release.assets.map((asset) => asset.name).sort();
+          const version = process.env.GITHUB_REF_NAME.slice(1);
+          const expected_files = [
+            `CogSeed-${version}-mac-arm64.dmg`,
+            `CogSeed-${version}-mac-arm64.zip`,
+            `CogSeed-${version}-mac-x64.dmg`,
+            `CogSeed-${version}-mac-x64.zip`,
+          ].sort();
+          if (!release.isDraft || JSON.stringify(names) !== JSON.stringify(expected_files)) {
+            throw new Error(`Draft asset verification failed. Expected ${expected_files.join(', ')}; got ${names.join(', ')}`);
+          }
+          NODE
+          gh release edit "$GITHUB_REF_NAME" --draft=false

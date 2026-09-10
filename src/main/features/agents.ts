@@ -441,6 +441,7 @@ export interface AgentInterfaceContract {
 // renderer/modules/avatar.js pulls from the same file, so frontend and
 // backend never duplicate it.
 import * as avatars from './avatars';
+import { createProcessCollector } from './chat_events/process-persist';
 
 function _applyMarketplaceInstallMeta(agent: Agent, dir: string): void {
   try {
@@ -1102,9 +1103,11 @@ export function cliIsCodingAgent(cli: string | undefined): boolean {
 /** True when this agent runs via a local CLI rather than in-process
  *  core-agent. Single source of truth — group_chat / chats / renderer
  *  all import this rather than re-checking `runtime?.kind` directly.
- *  第二期收口：直连 `cli` 已升级为网关型，两者都算"本机 CLI 智能体"。 */
+ *  G-19（兼容期结束）：legacy `cli` 直连已删除（读回即迁移为
+ *  p3394-gateway，见 _migrateLegacyRuntime），本判定与
+ *  isP3394GatewayAgent 等价，保留为语义别名。 */
 export function isCliAgent(agent: Pick<Agent, 'runtime'> | null | undefined): boolean {
-  return !!agent && (agent.runtime?.kind === 'cli' || agent.runtime?.kind === 'p3394-gateway');
+  return !!agent && agent.runtime?.kind === 'p3394-gateway';
 }
 
 /** True when this agent is a P3394-managed external agent (dispatch goes
@@ -3117,6 +3120,13 @@ export async function* streamSendToAgentEditChat(
   let streamingText = '';
   const updated: ExtractedFields = {};
   const processItems: any[] = [];
+  // conv-core 存储补差：同一事件流并行产出 chat_events 条目（含权威 timing
+  // 与终态总耗时），与老格式一并持久化；历史重建优先消费新格式。
+  const chatCollector = createProcessCollector({
+    cid: `agent-edit-${agentId}`,
+    actorId: agentId,
+    turnId: `agent-edit-${agentId}-${Date.now().toString(36)}`,
+  });
 
   try {
     for await (let event of streamChatWithModel({
@@ -3203,6 +3213,7 @@ export async function* streamSendToAgentEditChat(
           }
         }
       }
+      chatCollector.feed(event);
       yield event;
     }
 
@@ -3216,7 +3227,12 @@ export async function* streamSendToAgentEditChat(
     // for-await, which triggers `return()` on this generator — bypassing any
     // append placed after the loop. Keeping it here covers normal finish,
     // caught errors, and abort-driven returns alike.
-    const saved = processItems.length ? processItems : null;
+    chatCollector.finish(
+      opts.abortSignal?.aborted ? 'cancelled' : errMsg ? 'failed' : 'completed',
+      errMsg || undefined,
+    );
+    const allItems = [...processItems, ...chatCollector.entries];
+    const saved = allItems.length ? allItems : null;
     try {
       if (finalText !== null) {
         await _appendAgentChatMessage(userId, agentId,

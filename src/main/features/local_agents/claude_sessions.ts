@@ -47,6 +47,8 @@ export interface ClaudeSessionSummary {
   firstMessage: string;
   /** ISO timestamp of the first user message. */
   timestamp: string;
+  /** ISO timestamp of the most recent valid transcript event. */
+  lastActivityAt: string;
   /** Full path to the jsonl file. */
   filePath: string;
 }
@@ -62,8 +64,8 @@ interface JsonlLine {
 
 /** Scan `~/.claude/projects/` and return a list of session summaries.
  *  Best-effort: directories/files that fail to read are logged and skipped. */
-export async function listClaudeSessions(): Promise<ClaudeSessionSummary[]> {
-  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
+export async function listClaudeSessions(home = os.homedir()): Promise<ClaudeSessionSummary[]> {
+  const projectsRoot = path.join(home, '.claude', 'projects');
   let projectDirs: string[] = [];
 
   try {
@@ -98,7 +100,7 @@ export async function listClaudeSessions(): Promise<ClaudeSessionSummary[]> {
   }
 
   // Sort newest first.
-  sessions.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   return sessions;
 }
 
@@ -109,6 +111,7 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
   let projectPath = '';
   let firstMessage = '';
   let timestamp = '';
+  let lastActivityAt = '';
 
   try {
     const content = await fsp.readFile(file, 'utf8');
@@ -119,7 +122,12 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
       try { obj = JSON.parse(line); }
       catch { continue; }
 
-      if (obj.type === 'user' && obj.message?.role === 'user') {
+      const activityAt = normalizeTimestamp(obj.timestamp);
+      if (activityAt && (!lastActivityAt || activityAt > lastActivityAt)) {
+        lastActivityAt = activityAt;
+      }
+
+      if (!firstMessage && obj.type === 'user' && obj.message?.role === 'user') {
         let text: string | undefined;
         const content = obj.message.content;
 
@@ -134,9 +142,8 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
 
         if (text) {
           firstMessage = text.slice(0, 100);
-          timestamp = obj.timestamp || '';
+          timestamp = activityAt;
           projectPath = obj.cwd || '';
-          break;
         }
       }
     }
@@ -147,7 +154,13 @@ async function _parseSessionSummary(file: string): Promise<ClaudeSessionSummary 
 
   if (!firstMessage || !timestamp) return null;
 
-  return { sessionId, projectPath, firstMessage, timestamp, filePath: file };
+  return { sessionId, projectPath, firstMessage, timestamp, lastActivityAt: lastActivityAt || timestamp, filePath: file };
+}
+
+function normalizeTimestamp(timestamp: unknown): string {
+  if (typeof timestamp !== 'string' || !timestamp) return '';
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
 /**

@@ -71,6 +71,34 @@ describe('KSTAR review and Recall bridge', () => {
     expect(proposals).toEqual([]);
   });
 
+  it('does not precipitate a review whose only secondary cause is non-reusable', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = episode([
+      { name: 'read_file', status: 'ok' },
+      { name: 'write_file', status: 'ok' },
+    ]);
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: -0.8,
+      deltaA: -0.3,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The user denied access to the requested operation.',
+      confidence: 1,
+      lesson: 'Do not retry a denied operation without a new authorization decision.',
+      attributionDetails: [{
+        category: 'permission_blocked',
+        confidence: 1,
+        evidenceRefs: current.evidenceRefs,
+        source: 'deterministic',
+      }],
+      evidenceRefs: current.evidenceRefs,
+    });
+    expect(proposeKstarCandidates(current, review)).toEqual([]);
+  });
+
   it('precipitates a reasoned process-experience lesson even when attribution is unclear', async () => {
     const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
       import('../../../../src/main/features/kstar/review-service'),
@@ -279,6 +307,152 @@ describe('KSTAR review and Recall bridge', () => {
       confidence: 0.9,
       source: 'review',
     });
+  });
+
+  it('binds an outdated referenced asset to an explicit KSTAR update proposal', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = {
+      ...episode([
+        { name: 'read_file', status: 'ok' },
+        { name: 'write_file', status: 'ok' },
+      ]),
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-kstar-outdated'] },
+    };
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: -0.5,
+      deltaA: -0.2,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The referenced rule is outdated and needs a corrected statement.',
+      confidence: 0.95,
+      lesson: 'Update the rule with the current verification requirement.',
+      attributionDetails: [{
+        category: 'asset_outdated',
+        confidence: 0.95,
+        evidenceRefs: current.evidenceRefs,
+        source: 'deterministic',
+      }],
+      evidenceRefs: current.evidenceRefs,
+    });
+
+    expect(proposeKstarCandidates(current, review)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        suggestedAction: 'update',
+        targetAssetId: 'asset-kstar-outdated',
+      }),
+    ]));
+  });
+
+  it('does not bind a mutation when multiple referenced assets make the target ambiguous', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = {
+      ...episode([
+        { name: 'read_file', status: 'ok' },
+        { name: 'write_file', status: 'ok' },
+      ]),
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-kstar-a', 'asset-kstar-b'] },
+    };
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: -0.5,
+      deltaA: -0.2,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The referenced rule is outdated.',
+      confidence: 0.95,
+      lesson: 'Update the rule with the current verification requirement.',
+      attributionDetails: [{
+        category: 'asset_outdated',
+        confidence: 0.95,
+        evidenceRefs: current.evidenceRefs,
+        source: 'deterministic',
+      }],
+      evidenceRefs: current.evidenceRefs,
+    });
+
+    expect(proposeKstarCandidates(current, review).every((proposal) => proposal.suggestedAction !== 'update'))
+      .toBe(true);
+  });
+
+  it('persists an explicit KSTAR mutation action and target in the unified candidate pool', async () => {
+    const { saveKstarCandidateProposals } = await import('../../../../src/main/features/kstar/recall-bridge');
+    const candidates = await saveKstarCandidateProposals('review-user', [{
+      judgment: 'Update the report verification rule with the current acceptance check.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      targetAssetId: 'asset-kstar-existing',
+      sourceRefs: [{ kind: 'execution', id: 'exec-kstar-explicit-update' }],
+    }]);
+
+    expect(candidates[0]).toMatchObject({
+      suggestedAction: 'update',
+      targetAssetId: 'asset-kstar-existing',
+      status: 'pending_review',
+    });
+  });
+
+  it('maps an explicitly non-applicable referenced asset to a scope-limiting proposal', async () => {
+    const [{ saveKstarReview }, { proposeKstarCandidates }] = await Promise.all([
+      import('../../../../src/main/features/kstar/review-service'),
+      import('../../../../src/main/features/kstar/extraction-service'),
+    ]);
+    const current = {
+      ...episode([
+        { name: 'read_file', status: 'ok' },
+        { name: 'write_file', status: 'ok' },
+      ]),
+      k: { memoryRefs: [], contextRefs: [], abilityAssetRefs: ['asset-kstar-scope'] },
+    };
+    const review = await saveKstarReview('review-user', current, {
+      deltaR: -0.5,
+      deltaA: -0.2,
+      outcome: 'worse_than_expected',
+      attribution: 'execution_gap',
+      reason: 'The referenced rule does not apply to this task scope.',
+      confidence: 0.95,
+      lesson: 'Restrict the rule to the report tasks where it was verified.',
+      attributionDetails: [{
+        category: 'asset_not_applicable',
+        confidence: 0.9,
+        evidenceRefs: current.evidenceRefs,
+        source: 'deterministic',
+      }],
+      evidenceRefs: current.evidenceRefs,
+    });
+
+    expect(proposeKstarCandidates(current, review)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ suggestedAction: 'limit_scope', targetAssetId: 'asset-kstar-scope' }),
+    ]));
+  });
+
+  it('allows an explicit pause proposal only when it names a target asset', async () => {
+    const { saveKstarCandidateProposals } = await import('../../../../src/main/features/kstar/recall-bridge');
+    await expect(saveKstarCandidateProposals('review-user', [{
+      judgment: 'Pause the obsolete report verification rule pending revalidation.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'pause',
+      targetAssetId: 'asset-kstar-pause',
+      sourceRefs: [{ kind: 'execution', id: 'exec-kstar-pause' }],
+    }])).resolves.toMatchObject([{ suggestedAction: 'pause', targetAssetId: 'asset-kstar-pause' }]);
+  });
+
+  it('rejects an explicit KSTAR mutation without a target before writing a candidate', async () => {
+    const { saveKstarCandidateProposals } = await import('../../../../src/main/features/kstar/recall-bridge');
+
+    await expect(saveKstarCandidateProposals('review-user', [{
+      judgment: 'Update the report verification rule with the current acceptance check.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      sourceRefs: [{ kind: 'execution', id: 'exec-kstar-invalid-update' }],
+    }])).rejects.toThrow(/target asset/i);
   });
   it('maps CJK task goals to short scope tags (scopeForTask)', async () => {
     const { scopeForTask } = await import('../../../../src/main/features/kstar/extraction-service');
