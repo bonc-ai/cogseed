@@ -88,29 +88,8 @@ jobs:
         if: always()
         run: security delete-keychain build.keychain || true
 
-  build-windows:
-    needs: gate
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.gate.outputs.peeled-sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: node scripts/write-build-info.cjs --channel=release
-      - run: npm run build:win
-      - uses: actions/upload-artifact@v4
-        with:
-          name: CogSeed-windows-x64-${{ needs.gate.outputs.peeled-sha }}
-          path: dist/CogSeed-*-win-x64.exe
-          if-no-files-found: error
-          retention-days: 14
-
   publish:
-    needs: [gate, build-macos, build-windows]
+    needs: [gate, build-macos]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -135,7 +114,6 @@ jobs:
             `CogSeed-${version}-mac-arm64.zip`,
             `CogSeed-${version}-mac-x64.dmg`,
             `CogSeed-${version}-mac-x64.zip`,
-            `CogSeed-${version}-win-x64.exe`,
           ].sort();
           if (JSON.stringify(files) !== JSON.stringify(expected_files)) {
             throw new Error(`Release artifact set mismatch. Expected ${expected_files.join(', ')}; got ${files.join(', ')}`);
@@ -168,7 +146,6 @@ jobs:
             `CogSeed-${version}-mac-arm64.zip`,
             `CogSeed-${version}-mac-x64.dmg`,
             `CogSeed-${version}-mac-x64.zip`,
-            `CogSeed-${version}-win-x64.exe`,
           ].sort();
           if (!release.isDraft || JSON.stringify(names) !== JSON.stringify(expected_files)) {
             throw new Error(`Draft asset verification failed. Expected ${expected_files.join(', ')}; got ${names.join(', ')}`);
