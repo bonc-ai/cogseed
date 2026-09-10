@@ -117,6 +117,8 @@ export interface CodexSessionSummary {
   title: string;
   /** ISO timestamp */
   createdAt: string;
+  /** ISO timestamp of the most recent file modification. */
+  lastActivityAt: string;
   /** Working directory */
   cwd?: string;
 }
@@ -128,6 +130,7 @@ export interface CodexSessionSummary {
 export async function listCodexSessions(home = os.homedir()): Promise<CodexSessionSummary[]> {
   const sessionsRoot = path.join(codexDir(home), 'sessions');
   const sessions: CodexSessionSummary[] = [];
+  const candidates: Array<{ filePath: string; sessionId: string; lastActivityAt: string }> = [];
 
   try {
     // Walk sessions/YYYY/MM/DD/*.jsonl
@@ -158,21 +161,23 @@ export async function listCodexSessions(home = os.homedir()): Promise<CodexSessi
             const match = file.match(/rollout-(.+?)\.jsonl$/);
             const sessionId = match ? match[1] : file.replace('.jsonl', '');
 
-            // Read first few lines to extract metadata
-            const { title, cwd, createdAt } = await extractSessionMeta(filePath);
-
-            sessions.push({ filePath, sessionId, title, createdAt, cwd });
-
-            if (sessions.length >= 100) break; // Cap at 100 sessions
+            const stat = await fsp.stat(filePath).catch(() => null);
+            if (!stat?.isFile()) continue;
+            candidates.push({ filePath, sessionId, lastActivityAt: stat.mtime.toISOString() });
           }
-          if (sessions.length >= 100) break;
         }
-        if (sessions.length >= 100) break;
       }
-      if (sessions.length >= 100) break;
     }
   } catch (err) {
     log.warn('failed to list Codex sessions', { error: String(err) });
+  }
+
+  // A resumed session may live in an older date directory, so rank candidates
+  // by their last write before applying the picker cap.
+  candidates.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  for (const candidate of candidates.slice(0, 100)) {
+    const { title, cwd, createdAt } = await extractSessionMeta(candidate.filePath);
+    sessions.push({ ...candidate, title, createdAt, cwd });
   }
 
   return sessions;
@@ -259,7 +264,7 @@ async function extractSessionMeta(
     return { title: title || 'Untitled', cwd, createdAt };
   } catch (err) {
     log.warn('failed to extract Codex session meta', { filePath, error: String(err) });
-    return { title: 'Untitled', createdAt: new Date().toISOString() };
+    return { title: 'Untitled', createdAt: '' };
   }
 }
 

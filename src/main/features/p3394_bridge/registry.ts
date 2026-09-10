@@ -53,6 +53,9 @@ export interface P3394PeerRecord {
   dial_token?: string;
   /** 最近一次观察到该节点活动的时间（hello/心跳/任意入站信封刷新）——在线状态。 */
   last_seen_at?: string;
+  /** G-18：对端网关进程自报 pid（hello/manifest 数据源）——内存协调器
+   *  探活用；正整数，非正数在 hello 接收侧丢弃。 */
+  gateway_pid?: number;
   disabled?: boolean;
   updated_at: string;
 }

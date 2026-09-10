@@ -2,9 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 let tmp: string; let previous: string | undefined;
 beforeEach(() => { vi.resetModules(); tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-recall-projection-')); previous = process.env.COGSEED_WORKSPACE_ROOT; process.env.COGSEED_WORKSPACE_ROOT = tmp; });
-afterEach(() => { if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT; else process.env.COGSEED_WORKSPACE_ROOT = previous; fs.rmSync(tmp, { recursive: true, force: true }); });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest('user-a');
+  } finally {
+    if (previous === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previous;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 // 自动投影是"静默默认注入"，按 PRD 3.6 只接纳 Transfer Verified 及以上。
 // 这些用例考的是相关性 / 提示词结构 / 引用对齐，不是成熟度闸门，所以先把资产
 // 抬到够格的档位；闸门本身由 formal-asset-runtime.test.ts 覆盖。
@@ -457,6 +466,31 @@ describe('RecallView and ContextProjection', () => {
     ]);
     await expect(projection.listContextProjections('user-a', { workspaceId: 'workspace-a' })).resolves.toHaveLength(1);
   });
+
+  it('filters projections by taskRunId and conversationId', async () => {
+    const { projection } = await modules();
+    const recallStore = await import('../../../../src/main/features/recall/store');
+    const first = await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-filter-a', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-filter-a', taskRunId: 'task-filter-a', conversationId: 'cid-filter-a',
+      purpose: 'trace', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [], status: 'preview',
+      createdAt: '2026-09-03T00:00:00.000Z',
+    });
+    const second = await recallStore.writeRecallJsonRecord('user-a', 'projections', 'proj-filter-b', {
+      schemaVersion: 2, ownerId: 'user-a', id: 'proj-filter-b', taskRunId: 'task-filter-b', conversationId: 'cid-filter-b',
+      purpose: 'trace', authorization: 'user_confirmed', assetIds: [], sourceRefs: [], omittedRefs: [], status: 'preview',
+      createdAt: '2026-09-03T00:00:01.000Z',
+    });
+
+    await expect(projection.listContextProjections('user-a', { taskRunId: 'task-filter-a' })).resolves.toEqual([
+      expect.objectContaining({ id: first.id, taskRunId: 'task-filter-a' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { taskRunId: 'task-filter-b' })).resolves.toEqual([
+      expect.objectContaining({ id: second.id, taskRunId: 'task-filter-b' }),
+    ]);
+    await expect(projection.listContextProjections('user-a', { conversationId: 'cid-filter-a' })).resolves.toEqual([
+      expect.objectContaining({ id: first.id }),
+    ]);
+  });
 });
 
 describe('Recall projection auto-confirm and semantic Top-N', () => {
@@ -676,7 +710,99 @@ describe('Recall retrieval quality regression', () => {
     });
 
     expect(preview.selectionDegraded).toBe(true);
-    expect(preview.assetMatches?.[0]).toMatchObject({ matchMethod: 'recency_fallback', matchScore: 0 });
+    expect(preview.assetIds).toEqual([]);
+    expect(preview.assetMatches).toEqual([]);
+  });
+});
+
+describe('Recall ontology-assisted hybrid retrieval', () => {
+  async function createOntologyAsset(input: {
+    groupId: string;
+    field: string;
+    judgment: string;
+    sourceId: string;
+  }) {
+    const { candidates } = await modules();
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: input.judgment,
+      summary: input.judgment,
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: input.sourceId }],
+    });
+    const promoted = await candidates.promoteRecallCandidate('user-a', candidate.id, {
+      actor: 'user',
+      ontologyRefs: [{ groupId: input.groupId, field: input.field }],
+    });
+    await elevateToTransferVerified(promoted.asset.id);
+    return promoted.asset;
+  }
+
+  it('selects an ontology-only candidate and deduplicates one asset into one match', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const { projection } = await modules();
+    const group = await groups.createGroup('user-a', 'OAuth 回调安全');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '回调验证', 'OAuth → callback', '手动');
+    const asset = await createOntologyAsset({
+      groupId: group.group!.group_id,
+      field: '回调验证',
+      judgment: '验证回调目标后再交换令牌。',
+      sourceId: 'exec-ontology-only',
+    });
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-ontology-only',
+      purpose: 'review',
+      taskText: '验证 OAuth 回调安全',
+    }, {
+      embedTexts: async () => { throw new Error('embedding unavailable'); },
+    });
+
+    expect(preview.assetIds).toEqual([asset.id]);
+    expect(preview.assetMatches).toEqual([
+      expect.objectContaining({ assetId: asset.id, matchMethod: 'ontology' }),
+    ]);
+    expect(preview.assetMatches).toHaveLength(1);
+    expect(preview.selectionDegraded).toBe(true);
+  });
+
+  it('prioritizes dual-route evidence as semantic_ontology over semantic-only matches', async () => {
+    const groups = await import('../../../../src/main/features/personal_ontology_groups');
+    const { projection } = await modules();
+    const group = await groups.createGroup('user-a', 'OAuth 回调安全');
+    await groups.appendFieldValue('user-a', group.group!.group_id, '回调验证', 'OAuth → callback', '手动');
+    const dual = await createOntologyAsset({
+      groupId: group.group!.group_id,
+      field: '回调验证',
+      judgment: '验证 OAuth 回调目标。',
+      sourceId: 'exec-dual',
+    });
+    const semanticOnly = await (await modules()).candidates.saveRecallCandidate('user-a', {
+      judgment: '验证 OAuth token exchange。',
+      summary: 'OAuth token exchange',
+      suggestedType: 'rule',
+      suggestedScope: 'review',
+      sourceRefs: [{ kind: 'execution', id: 'exec-semantic-only' }],
+    });
+    const promoted = await (await modules()).candidates.promoteRecallCandidate('user-a', semanticOnly.id, { actor: 'user' });
+    await elevateToTransferVerified(promoted.asset.id);
+
+    const preview = await projection.previewContextProjection('user-a', {
+      taskRunId: 'task-dual',
+      purpose: 'review',
+      taskText: 'Verify OAuth callback handling',
+    }, {
+      embedTexts: async (texts: string[]) => texts.map((text) => (
+        text.toLocaleLowerCase().includes('oauth') ? [1, 0] : [0, 1]
+      )),
+    });
+
+    expect(preview.assetIds).toEqual([dual.id, promoted.asset.id]);
+    expect(preview.assetMatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: dual.id, matchMethod: 'semantic_ontology' }),
+      expect.objectContaining({ assetId: promoted.asset.id, matchMethod: 'semantic' }),
+    ]));
+    expect(preview.assetMatches).toHaveLength(2);
   });
 });
 

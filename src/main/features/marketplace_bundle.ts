@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { createLogger } from '../logger';
+import { ensurePrivateDirectoryWithin } from '../util/private-directory';
 import { fetchAndReadWithRetry } from '../util/retry';
 
 const log = createLogger('marketplace_bundle');
@@ -230,6 +231,11 @@ export function inspectMarketplaceBundle(zip: AdmZip): ValidatedZipEntry[] {
 
 /** Extract only inspected in-root entries; callers provide a fresh destination directory. */
 export function extractBundleSafely(zip: AdmZip, dst: string): void {
+  const rootStat = fs.lstatSync(dst);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('unsafe marketplace bundle destination: expected a direct directory');
+  }
+  const root = fs.realpathSync(dst);
   let skipped = 0;
   for (const { entry, relPath } of inspectMarketplaceBundle(zip)) {
     if (entry.isDirectory) continue;
@@ -237,9 +243,31 @@ export function extractBundleSafely(zip: AdmZip, dst: string): void {
       skipped += 1;
       continue;
     }
-    const out = path.join(dst, relPath);
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, entry.getData());
+    const out = path.join(root, relPath);
+    const parent = path.dirname(out);
+    if (parent !== root) {
+      ensurePrivateDirectoryWithin(root, parent, 'unsafe marketplace bundle destination');
+    }
+    const data = entry.getData();
+    const existing = fs.lstatSync(out, { throwIfNoEntry: false });
+    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink > 1)) {
+      throw new Error('unsafe marketplace bundle destination: linked or non-regular file');
+    }
+    // Do not truncate until the opened file itself has been checked. O_NOFOLLOW
+    // also rejects a leaf symlink planted after lstat on platforms supporting it.
+    // Directory validation uses the same persistent-link threat model as other
+    // private storage paths; callers continue to own fresh extraction directories.
+    const fd = fs.openSync(out, fs.constants.O_WRONLY | fs.constants.O_CREAT | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile() || opened.nlink > 1) {
+        throw new Error('unsafe marketplace bundle destination: linked or non-regular file');
+      }
+      fs.ftruncateSync(fd, 0);
+      fs.writeFileSync(fd, data);
+    } finally {
+      fs.closeSync(fd);
+    }
   }
   if (skipped) log.warn('skipped unsafe marketplace bundle entries', { count: skipped });
 }

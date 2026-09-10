@@ -12,6 +12,7 @@ import {
   outboxRecordSubmitted,
 } from '../../../../src/main/features/p3394_bridge/outbound-outbox';
 import type { P3394Envelope } from '../../../../src/main/features/p3394_bridge/envelope';
+import { FILE_MODE_BITS_SUPPORTED } from '../../../helpers/fs-capabilities';
 
 const SCRATCH_VARIANT = 'p3394-outbox-test-' + Math.random().toString(36).slice(2, 8);
 process.env.COGSEED_RUNTIME_VARIANT = SCRATCH_VARIANT;
@@ -115,7 +116,7 @@ describe('p3394 transactional outbox', () => {
     expect(outcome.after).toBeLessThan(outcome.before);
     // 原子替换后文件仍是合法 JSONL、权限保持 0600、无残留临时文件。
     expect(outboxListForReplay()).toHaveLength(2);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (FILE_MODE_BITS_SUPPORTED) expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     const dir = path.dirname(file);
     expect(fs.readdirSync(dir).filter((name) => name.includes('compact.tmp'))).toHaveLength(0);
     // 幂等：再次 compact 不改变重放集（文件未被截断/损坏）。

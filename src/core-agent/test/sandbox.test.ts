@@ -238,6 +238,36 @@ describe("SandboxExecutor", () => {
 });
 
 describe("killProcessTree", () => {
+  it("waits for Windows taskkill to close before resolving", async () => {
+    const callbacks = new Map<string, (...args: any[]) => void>();
+    const killer = {
+      once: vi.fn((event: string, cb: (...args: any[]) => void) => {
+        callbacks.set(event, cb);
+        return killer;
+      }),
+      unref: vi.fn(),
+    };
+    const spawnFn = vi.fn(() => killer);
+    const child = { pid: 1234, kill: vi.fn() };
+
+    let settled = false;
+    const completion = killProcessTree(child as any, "SIGTERM", {
+      platform: "win32",
+      spawnFn: spawnFn as any,
+    }).then(() => { settled = true; });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    callbacks.get("exit")?.(0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    callbacks.get("close")?.(0, null);
+    await completion;
+    expect(settled).toBe(true);
+  });
+
   it("uses taskkill to terminate Windows child process trees", () => {
     const callbacks = new Map<string, (...args: any[]) => void>();
     const killer = {

@@ -75,8 +75,9 @@ describe('CogSeed renderer-safe projections', () => {
       expect.objectContaining({
         sessionId: session.sessionId,
         taskCount: 1,
-        activeTaskCount: 1,
+        activeTaskCount: 0,
         latestStatus: 'recoverable',
+        hasRecovery: true,
       }),
     ]);
 

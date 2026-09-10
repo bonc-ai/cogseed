@@ -21,7 +21,7 @@ const PROMPTS_DIR = path.join(PROJECT_ROOT, 'src/main/prompts');
 const SRC_DIR = path.join(PROJECT_ROOT, 'src/main');
 
 function readFile(relPath: string): string {
-  return fs.readFileSync(path.join(PROJECT_ROOT, relPath), 'utf-8');
+  return fs.readFileSync(path.join(PROJECT_ROOT, relPath), 'utf-8').replace(/\r\n/g, '\n');
 }
 
 describe('prompts ↔ code contract', () => {
@@ -530,7 +530,7 @@ describe('prompts ↔ code contract', () => {
     const runner = readFile('src/main/model/core-agent/runner.ts');
     const agents = readFile('src/main/features/agents.ts');
     const skills = readFile('src/main/features/skills.ts');
-    const cliPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_cli_agent.md'), 'utf-8');
+    const cliPrompt = fs.readFileSync(path.join(PROMPTS_DIR, 'chat_cli_agent.md'), 'utf-8').replace(/\r\n/g, '\n');
 
     expect(bus).toMatch(/const marker = ["']## Runtime injection["'];/);
     expect(bus).toMatch(/prompt\.slice\(0, idx\)[\s\S]+\$\{language\}[\s\S]+prompt\.slice\(idx\)/);

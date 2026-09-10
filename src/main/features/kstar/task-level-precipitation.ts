@@ -3,8 +3,9 @@ import { safeId } from '../../storage';
 import { lessonLanguageMismatches } from '../../util/language';
 import { normalizeCognitionSourceRefs } from '../recall/source-service';
 import { precipitateDirectExperienceFromSource } from './direct-experience-assets';
-import { readKstarEpisode } from './episode-store';
-import { clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import { readKstarEpisode, readKstarJsonRecord, replaceKstarJsonRecord } from './episode-store';
+import { assetMutationFor, clearsPrecipitationGate, gapType, learningSignal, lessonTitleCore, scopeForTask } from './extraction-service';
+import { attributionAllowsReusableLearning } from './secondary-attribution';
 import { readKstarReview } from './review-service';
 import type { KstarRequirementRecord } from './requirement-types';
 import type { KstarCandidateProposal, KstarEpisodeRecord, KstarReviewRecord } from './types';
@@ -70,6 +71,8 @@ export interface AggregateRequirementProposalsInput {
   requirement: KstarRequirementRecord;
   episodes: KstarEpisodeRecord[];
   reviews: KstarReviewRecord[];
+  /** Rule ids read from owner-validated persisted Forecast records. */
+  forecastRuleRefsById?: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface RequirementLevelPrecipitationResult {
@@ -78,10 +81,51 @@ export interface RequirementLevelPrecipitationResult {
   candidateIds: string[];
   mergedIntoIds: string[];
   updateCandidateIds: string[];
+  failureIds: string[];
+}
+
+async function updateExtractionRuns(
+  userId: string,
+  requirement: KstarRequirementRecord,
+  episodes: KstarEpisodeRecord[],
+  result: RequirementLevelPrecipitationResult,
+): Promise<void> {
+  const completedAt = new Date().toISOString();
+  const provenanceDegraded = result.proposals.some((proposal) => (
+    proposal.learningSignal
+    && (!proposal.learningProvenance?.projectionId || !proposal.learningProvenance.forecastId)
+  ));
+  await Promise.all(episodes.map(async (episode) => {
+    const review = await readKstarReview(userId, episode.id);
+    const id = `ksx-${episode.id}`;
+    const existing = await readKstarJsonRecord(userId, 'extraction-runs', id);
+    const record = {
+      schemaVersion: 1 as const, ownerId: userId, id, episodeId: episode.id,
+      reviewId: review?.id || `ksr-${episode.id}`, candidateIds: result.candidateIds,
+      createdAssetIds: result.createdAssetIds, mergedIntoIds: result.mergedIntoIds,
+      updateCandidateIds: result.updateCandidateIds, failureIds: result.failureIds,
+      status: result.failureIds.length && !result.candidateIds.length
+        ? 'failed' as const
+        : provenanceDegraded
+          ? 'degraded' as const
+          : result.candidateIds.length
+            ? 'partial' as const
+            : 'created' as const,
+      ...(provenanceDegraded
+        ? { error: 'Forecast provenance is unavailable; candidate evidence is incomplete.' }
+        : result.failureIds.length
+          ? { error: 'One or more precipitation operations failed.' }
+          : {}),
+      createdAt: existing && typeof existing.createdAt === 'string' ? existing.createdAt : episode.createdAt,
+      updatedAt: completedAt, completedAt,
+    };
+    await replaceKstarJsonRecord(userId, 'extraction-runs', record);
+  }));
+  void requirement;
 }
 
 export function aggregateRequirementProposals(input: AggregateRequirementProposalsInput): KstarCandidateProposal[] {
-  const { requirement, episodes, reviews } = input;
+  const { requirement, episodes, reviews, forecastRuleRefsById } = input;
   if (episodes.length === 0) return [];
 
   // Merged tool chain across every episode, preserving first-seen order.
@@ -111,6 +155,25 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
     .filter((review) => clearsPrecipitationGate(review))
     .sort((a, b) => b.confidence - a.confidence)[0];
 
+  const provenanceFor = (review: KstarReviewRecord, episode: KstarEpisodeRecord): KstarCandidateProposal['learningProvenance'] | undefined => {
+    const projectionId = episode.projectionId || requirement.projectionId;
+    const forecastIdCandidate = episode.forecastId || requirement.forecastId;
+    const forecastId = forecastIdCandidate && forecastRuleRefsById?.has(forecastIdCandidate)
+      ? forecastIdCandidate
+      : undefined;
+    if (!projectionId || !safeId(projectionId)) return undefined;
+    return {
+      projectionId,
+      ...(forecastId && safeId(forecastId) ? { forecastId } : {}),
+      episodeId: episode.id,
+      ruleRefs: forecastId ? [...(forecastRuleRefsById?.get(forecastId) || [])] : [],
+      attribution: review.attribution,
+      ...(review.actionDelta ? { actionDelta: review.actionDelta } : {}),
+      ...(review.resultDelta ? { resultDelta: review.resultDelta } : {}),
+    };
+  };
+  const primaryEpisode = episodes.find((episode) => episode.id === strongest?.episodeId) || episodes[0];
+
   const proposals: KstarCandidateProposal[] = [];
   const goal = requirement.goalText || requirement.title;
   const scope = scopeForTask(goal);
@@ -129,8 +192,10 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         uncertainty: '基于已闭环任务的执行经验生成，使用前可复核。',
         suggestedType: 'skill_method',
         suggestedScope: scope,
+        ...assetMutationFor(primaryEpisode, strongest),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
+        ...(primaryEpisode ? { learningProvenance: provenanceFor(strongest, primaryEpisode) } : {}),
       });
     } else if (strongestLesson) {
       // Process-experience lesson (even on met_expected tasks): the reasoned
@@ -142,9 +207,11 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
         uncertainty: '基于任务执行经验提炼，使用前可复核。',
         suggestedType: 'rule',
         suggestedScope: scope,
+        ...assetMutationFor(primaryEpisode, strongest),
         ...ruleBoundary('rule'),
         sourceRefs: mergedRefs,
         learningSignal: learningSignal(strongest),
+        ...(primaryEpisode ? { learningProvenance: provenanceFor(strongest, primaryEpisode) } : {}),
       });
     }
   }
@@ -152,20 +219,26 @@ export function aggregateRequirementProposals(input: AggregateRequirementProposa
   // Highest-confidence gap across all episodes, only when evidence-gated.
   // 同上：缺口候选必须有推理出的 lesson，不拿 review.reason 的诊断文本充数。
   const gapReview = [...reviews]
-    .filter((review) => review.confidence >= 0.7 && lessonUsable(goal, review.lesson))
+    .filter((review) => attributionAllowsReusableLearning(review)
+      && review.confidence >= 0.7
+      && lessonUsable(goal, review.lesson))
     .sort((a, b) => b.confidence - a.confidence)[0];
   const gapAssetType = gapReview ? gapType(gapReview) : null;
   if (gapAssetType && gapReview) {
     const gapLesson = lessonUsable(goal, gapReview.lesson)!;
+    const gapEpisode = episodes.find((episode) => episode.id === gapReview.episodeId) || episodes[0];
+    const gapProvenance = provenanceFor(gapReview, gapEpisode);
     proposals.push({
       judgment: gapLesson,
       summary: userFacingSummary('gap', scope, gapLesson),
       uncertainty: '基于明确复盘结论生成，使用前可复核。',
       suggestedType: gapAssetType,
       suggestedScope: scope,
+      ...assetMutationFor(gapEpisode, gapReview),
       ...ruleBoundary(gapAssetType),
       sourceRefs: mergedRefs,
       learningSignal: learningSignal(gapReview),
+      ...(gapProvenance ? { learningProvenance: gapProvenance } : {}),
     });
   }
 
@@ -183,6 +256,7 @@ export async function precipitateRequirementLevel(
   requirement: KstarRequirementRecord,
 ): Promise<RequirementLevelPrecipitationResult> {
   if (!safeId(userId) || !safeId(requirement.id)) throw new Error('invalid requirement precipitation reference');
+  if (requirement.ownerId !== userId) throw new Error('requirement precipitation owner mismatch');
   const episodes = (
     await Promise.all(requirement.episodeIds.map((episodeId) => readKstarEpisode(userId, episodeId)))
   ).filter((episode): episode is KstarEpisodeRecord => Boolean(episode));
@@ -190,48 +264,50 @@ export async function precipitateRequirementLevel(
     await Promise.all(episodes.map((episode) => readKstarReview(userId, episode.id)))
   ).filter((review): review is KstarReviewRecord => Boolean(review));
 
-  const proposals = aggregateRequirementProposals({ requirement, episodes, reviews });
+  const forecastRuleRefsById = new Map<string, readonly string[]>();
+  const forecastIds = [...new Set([
+    ...(requirement.forecastId ? [requirement.forecastId] : []),
+    ...episodes.flatMap((episode) => episode.forecastId ? [episode.forecastId] : []),
+  ])];
+  if (forecastIds.length) {
+    const { readWorldModelForecast } = await import('../recall/world-model');
+    for (const forecastId of forecastIds) {
+      try {
+        const forecast = await readWorldModelForecast(userId, forecastId);
+        if (
+          !forecast
+          || forecast.ownerId !== userId
+          || forecast.requirementId !== requirement.id
+          || !requirement.projectionId
+          || forecast.projectionId !== requirement.projectionId
+          || forecast.provenanceComplete !== true
+        ) continue;
+        forecastRuleRefsById.set(forecastId, (forecast.ruleRefs || [])
+          .filter((ref) => typeof ref === 'string' && /^[A-Za-z0-9:_-]+$/.test(ref))
+          .slice(0, 100));
+      } catch (error) {
+        log.warn('requirement precipitation forecast provenance degraded', {
+          userId,
+          requirementId: requirement.id,
+          forecastId,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  const proposals = aggregateRequirementProposals({ requirement, episodes, reviews, forecastRuleRefsById });
   // 「关于我」独立资产（方案 C 2026-08-17）：确定性扫描会话用户消息的长期
   // 偏好陈述，产 personal 候选。与 lesson 候选合并沉淀（可能两者都无）。
   const personalProposals = await buildPersonalProposals(userId, requirement, episodes);
-  // N-17 桥接：外部智能体（P3394 网关节点）的协作样本——主 KStar 沉淀链
-  // 读 p3394-kstar/ 落盘的 episode，把 proposed_updates（Learn-What 候选，
-  // 只建议不写回）作为附加证据注入本任务的提案。窗口取任务最近一次闭合
-  // 之前 24h 内完成的 P3394 会话；失败静默降级（不影响既有沉淀）。
-  let allProposals = [...proposals, ...personalProposals];
-  try {
-    const { collectP3394ProposedUpdates } = await import('../p3394_bridge/kstar-episodes');
-    const p3394Updates = await collectP3394ProposedUpdates(Date.now() - 24 * 60 * 60 * 1_000);
-    if (p3394Updates.length && allProposals.length) {
-      const { normalizeCognitionSourceRefs } = await import('../recall/source-service');
-      const p3394Refs = normalizeCognitionSourceRefs(p3394Updates.slice(0, 20).map((update, index) => ({
-        kind: 'authorized_external_system',
-        subtype: 'connector_record',
-        scope: 'external',
-        id: `p3394-proposal-${Date.now().toString(36)}-${index}`,
-        ...(update && typeof update === 'object' && typeof (update as { goal?: unknown }).goal === 'string'
-          ? { title: String((update as { goal: unknown }).goal).slice(0, 160) }
-          : {}),
-      })));
-      allProposals = allProposals.map((proposal) => ({
-        ...proposal,
-        sourceRefs: [...(proposal.sourceRefs || []), ...p3394Refs],
-      }));
-      log.info('requirement precipitation bridged p3394 proposed updates', {
-        userId,
-        requirementId: requirement.id,
-        updateCount: p3394Updates.length,
-      });
-    }
-  } catch (error) {
-    log.warn('requirement precipitation p3394 bridge degraded', {
-      userId,
-      requirementId: requirement.id,
-      error: (error as Error).message,
-    });
-  }
+  // P3394 episodes are intentionally not read here: their legacy persistence
+  // is global and does not carry a trustworthy user owner. KSTAR precipitation
+  // must remain scoped to this user's own episode and Recall stores.
+  const allProposals = [...proposals, ...personalProposals];
   if (allProposals.length === 0) {
-    return { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [] };
+    const empty: RequirementLevelPrecipitationResult = { proposals: [], createdAssetIds: [], candidateIds: [], mergedIntoIds: [], updateCandidateIds: [], failureIds: [] };
+    await updateExtractionRuns(userId, requirement, episodes, empty);
+    return empty;
   }
 
   const workspaceId = episodes.map((episode) => episode.s?.workspaceId).find((id) => id && safeId(id));
@@ -240,15 +316,19 @@ export async function precipitateRequirementLevel(
   let candidateIds: string[] = [];
   let mergedIntoIds: string[] = [];
   let updateCandidateIds: string[] = [];
+  let failureIds: string[] = [];
   try {
     const direct = await precipitateDirectExperienceFromSource(userId, {
       id: requirement.id,
+      conversationId: requirement.conversationId,
+      requirementId: requirement.id,
       ...(workspaceId ? { workspaceId } : {}),
     }, allProposals);
     createdAssetIds = direct.createdAssetIds;
     candidateIds = direct.candidateIds;
     mergedIntoIds = direct.mergedIntoIds;
     updateCandidateIds = direct.updateCandidateIds;
+    failureIds = direct.failureIds;
   } catch (error) {
     // Best-effort: never break task closure.
     log.warn('requirement-level direct precipitation degraded', {
@@ -257,7 +337,9 @@ export async function precipitateRequirementLevel(
       error: (error as Error).message,
     });
   }
-  return { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds };
+  const result = { proposals: allProposals, createdAssetIds, candidateIds, mergedIntoIds, updateCandidateIds, failureIds };
+  await updateExtractionRuns(userId, requirement, episodes, result);
+  return result;
 }
 
 /** 读会话用户消息 → 确定性检测长期偏好 → 产 personal 候选。失败静默降级

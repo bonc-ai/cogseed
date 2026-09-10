@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 const root = path.join(__dirname, '../..');
 const html = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
@@ -67,6 +68,39 @@ describe('macOS top drag regions', () => {
     expect(css).toMatch(/\.model-chip-menu-arrow\s*{[^}]*position:\s*absolute;[^}]*border:\s*none;/);
     expect(css).toMatch(/\.model-chip-menu-back\s*{[^}]*border:\s*none;/);
     expect(css).toMatch(/\.model-chip-menu-loading\s*{[^}]*color:\s*var\(--muted\);/);
+  });
+
+  it('cancels a deferred outside-click listener when the model menu closes immediately', () => {
+    let deferredListener: (() => void) | null = null;
+    const listeners: string[] = [];
+    const menu: any = { contains: () => false, remove: () => { activeMenu = null; } };
+    const anchor = { contains: () => false };
+    let activeMenu: any = menu;
+    const context: any = {
+      window: {
+        innerWidth: 1024, innerHeight: 768,
+        addEventListener: () => {}, removeEventListener: () => {},
+      },
+      document: {
+        getElementById: () => activeMenu,
+        addEventListener: (type: string) => listeners.push(type),
+        removeEventListener: () => {},
+        querySelectorAll: () => [],
+      },
+      createLogger: () => ({ warn: () => {} }),
+      setTimeout: (callback: () => void) => { deferredListener = callback; return 17; },
+      clearTimeout: (timer: number) => { if (timer === 17) deferredListener = null; },
+      Map, Set, Object, String, Array, Math, Promise,
+      menu, anchor,
+    };
+    context.window.window = context.window;
+    vm.createContext(context);
+    vm.runInContext(modelChip, context);
+    vm.runInContext('_bindModelMenuDismiss(menu, anchor); _closeModelMenu();', context);
+    deferredListener?.();
+
+    expect(listeners).not.toContain('mousedown');
+    expect(menu._onDocDownTimer).toBeNull();
   });
 
   it('ends a sidebar resize when the pointer leaves the window', () => {

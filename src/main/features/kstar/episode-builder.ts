@@ -44,6 +44,9 @@ export interface GroupKstarMessageInput {
   process?: Array<
     | { type: 'progress'; text: string; event?: { stream: string; data?: unknown } }
     | { type: 'event'; event: { stream: string; data?: unknown } }
+    // conv-core 存储补差：消息 process 可含 chat_events 结构化条目（chatItem/
+    // turn）。episode 构建只消费 progress/event 老形状（processEvent 窄化）。
+    | { type: 'chatItem' | 'turn'; item?: unknown; turn?: unknown }
   >;
   recall_citations?: Array<{
     asset_id: string;
@@ -93,13 +96,30 @@ function terminalRuntimeStatus(events: RuntimeEventEnvelope[]): {
     return { status: 'completed', ...(compactText(terminal.text) ? { finalText: compactText(terminal.text) } : {}) };
   }
   const metadata = terminal.metadata ?? {};
+  const failureKind = typeof metadata.failure_kind === 'string' ? metadata.failure_kind : undefined;
+  const failureCode = typeof metadata.code === 'string' ? metadata.code : undefined;
+  if (failureKind?.toLowerCase().includes('timeout') || failureCode?.toLowerCase().includes('timeout')) {
+    return { status: 'timed_out', failureKind: failureKind || 'timeout', ...(failureCode ? { failureCode } : {}) };
+  }
   if (terminal.status === 'cancelled') {
-    return { status: 'cancelled', failureKind: 'cancelled', ...(typeof metadata.code === 'string' ? { failureCode: metadata.code } : {}) };
+    return { status: 'cancelled', failureKind: 'cancelled', ...(failureCode ? { failureCode } : {}) };
   }
   return {
     status: 'failed',
-    ...(typeof metadata.failure_kind === 'string' ? { failureKind: metadata.failure_kind } : { failureKind: 'runtime' }),
-    ...(typeof metadata.code === 'string' ? { failureCode: metadata.code } : {}),
+    ...(failureKind ? { failureKind } : { failureKind: 'runtime' }),
+    ...(failureCode ? { failureCode } : {}),
+  };
+}
+
+function runtimeMeasurements(events: RuntimeEventEnvelope[]): Pick<KstarEpisodeRecord['r'], 'durationMs' | 'toolCallCount' | 'failedToolCount' | 'networkAccess'> {
+  const starts = events.map((event) => event.metadata?.started_at_ms).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const finishes = events.map((event) => event.metadata?.finished_at_ms).filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const calls = toolCallsFromRuntimeEvents(events);
+  return {
+    ...(starts.length && finishes.length ? { durationMs: Math.max(0, Math.max(...finishes) - Math.min(...starts)) } : {}),
+    toolCallCount: calls.length,
+    failedToolCount: calls.filter((call) => call.status === 'error').length,
+    ...(events.some((event) => event.metadata?.network_access === true) ? { networkAccess: true } : {}),
   };
 }
 
@@ -192,6 +212,7 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
       producedFiles: uniqueProducedFiles,
       ...(outcome.failureKind ? { failureKind: outcome.failureKind } : {}),
       ...(outcome.failureCode ? { failureCode: outcome.failureCode } : {}),
+      ...runtimeMeasurements(input.events),
     },
     evidenceRefs: runtimeEvidenceRefs(input.request, input.runId),
     createdAt,
@@ -200,7 +221,8 @@ export function buildRuntimeKstarEpisode(input: RuntimeKstarEpisodeInput): Kstar
 }
 
 function processEvent(item: NonNullable<GroupKstarMessageInput['process']>[number]): { stream: string; data?: unknown } | undefined {
-  return item.type === 'event' ? item.event : item.event;
+  // 老格式两形态都可能有 event；chat_events 新条目（chatItem/turn）无此字段。
+  return item.type === 'event' || item.type === 'progress' ? item.event : undefined;
 }
 
 function argumentKeySummary(value: unknown): string | undefined {
@@ -365,6 +387,14 @@ export function buildGroupKstarEpisode(input: GroupKstarEpisodeInput): KstarEpis
       producedFiles,
       ...(finalMessage?.failure_kind ? { failureKind: finalMessage.failure_kind } : {}),
       ...(finalMessage?.failure_code ? { failureCode: finalMessage.failure_code } : {}),
+      durationMs: Math.max(0, input.finishedAtMs - input.startedAtMs),
+      toolCallCount: toolCalls.length,
+      failedToolCount: toolCalls.filter((call) => call.status === 'error').length,
+      ...(actionMessages.some((message) => message.process?.some((item) => {
+        const event = processEvent(item);
+        return Boolean(event?.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          && (event.data as Record<string, unknown>).network_access === true);
+      })) ? { networkAccess: true } : {}),
     },
     evidenceRefs,
     createdAt,

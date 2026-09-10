@@ -7,6 +7,10 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const root = path.join(__dirname, '../..');
+const buttonSource = fs.readFileSync(path.join(root, 'src/renderer/modules/ui-button.js'), 'utf8');
+const modelSource = fs.readFileSync(path.join(root, 'src/renderer/modules/run-center-model.js'), 'utf8');
+const boardSource = fs.readFileSync(path.join(root, 'src/renderer/modules/run-center-board.js'), 'utf8');
+const detailSource = fs.readFileSync(path.join(root, 'src/renderer/modules/run-center-detail.js'), 'utf8');
 const source = fs.readFileSync(path.join(root, 'src/renderer/modules/run-center.js'), 'utf8');
 
 type Deferred<T> = {
@@ -49,23 +53,22 @@ function agentListing() {
   return { agents: [{ agent_id: 'review-agent', name: 'Reviewer', enabled: true }] };
 }
 
-function diagnostics(taskCount: number) {
-  return {
-    taskCount, sessionCount: taskCount, activeTaskCount: 0, attentionTaskCount: 0,
-    sourceCounts: {}, statusCounts: {}, runtime: { activeTaskCount: 0, stateMatchesProjection: true }, errorCodes: [],
-  };
+function spaceListing(...spaces: Array<{ space_id: string; name: string; updated_at?: string }>) {
+  return { spaces };
 }
 
 function createHarness(options: {
   registryFailure?: boolean;
   includeRuntimePeer?: boolean;
   startFailure?: Error;
+  initialSpaceId?: string;
 } = {}) {
   const panelListeners = new Map<string, (event: any) => void>();
   const documentListeners = new Map<string, (event: any) => void>();
   const diagnosticsRequests: Deferred<any>[] = [];
   const agentRequests: Deferred<any>[] = [];
   const worktreeRequests: Deferred<any>[] = [];
+  const spacesRequests: Deferred<any>[] = [];
   const calls: Array<{ channel: string; payload: any }> = [];
   const documentState: any = { hidden: false, activeElement: null };
   let html = '';
@@ -76,7 +79,7 @@ function createHarness(options: {
 
   const rebuildControls = (markup: string) => {
     const nextControls: any[] = [];
-    const tagPattern = /<(button|input|textarea|select)\b([^>]*)>/g;
+    const tagPattern = /<(button|input|textarea|select|dialog|details)\b([^>]*)>/g;
     let match: RegExpExecArray | null;
     while ((match = tagPattern.exec(markup))) {
       const [opening, tag, rawAttributes] = match;
@@ -107,7 +110,8 @@ function createHarness(options: {
       }
       const element: any = {
         tagName: tag.toUpperCase(), attributes, dataset, value,
-        disabled: attributeMap.has('disabled'), selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
+        disabled: attributeMap.has('disabled'), open: attributeMap.has('open'),
+        selectionStart: 0, selectionEnd: 0, selectionDirection: 'none',
         getClientRects: () => [{}],
         matches: (selector: string) => {
           const parsed = selector.match(/^\[([^\]=]+)(?:="([^"]*)")?\]$/);
@@ -121,6 +125,7 @@ function createHarness(options: {
           element.selectionDirection = direction;
         },
       };
+      if (tag === 'dialog') element.showModal = () => { element.open = true; };
       nextControls.push(element);
     }
     controls = nextControls;
@@ -156,6 +161,11 @@ function createHarness(options: {
       worktreeRequests.push(request);
       return request.promise;
     }
+    if (channel === 'spaces.list') {
+      const request = deferred<any>();
+      spacesRequests.push(request);
+      return request.promise;
+    }
     if (channel === 'cogseed.task.list') return Promise.resolve({ tasks: [], groups: [], counts: {} });
     if (channel === 'cogseed.session.list') return Promise.resolve({ sessions: [] });
     if (channel === 'cogseed.agent.list' && options.registryFailure) return Promise.reject(new Error('registry unavailable'));
@@ -181,6 +191,7 @@ function createHarness(options: {
       agentRequests.push(request);
       return request.promise;
     }
+    if (channel === 'cogseed.task.create') return Promise.resolve({});
     if (channel === 'cogseed.task.start') {
       if (startFailure) {
         const error = startFailure;
@@ -198,11 +209,8 @@ function createHarness(options: {
         stream: () => ({ cancel: vi.fn(), promise: new Promise(() => {}) }),
       },
       addEventListener: vi.fn(), setTimeout, clearTimeout, confirm: vi.fn(() => true),
+      getNewChatSpaceId: vi.fn(() => options.initialSpaceId || ''),
       uiIconHtml: (name: string) => `<i>${name}</i>`,
-      CogSeedRunCenterBoard: {
-        filteredLogicalTasks: () => [], taskForSession: () => null, logicalRunKey: () => '', render: () => '',
-      },
-      CogSeedRunCenterOverview: { render: () => '' },
       CogSeedRunCenterAgents: { render: () => '' },
     },
     document: Object.assign(documentState, {
@@ -214,6 +222,10 @@ function createHarness(options: {
   };
   context.window.window = context.window;
   vm.createContext(context);
+  vm.runInContext(buttonSource, context);
+  vm.runInContext(modelSource, context);
+  vm.runInContext(boardSource, context);
+  vm.runInContext(detailSource, context);
   vm.runInContext(source, context);
   context.window.renderRunCenter();
 
@@ -245,200 +257,170 @@ function createHarness(options: {
     panelListeners.get('change')?.({ target });
     return target;
   };
+  const toggleAdvanced = (open = true) => {
+    const target = panel.querySelector('[data-run-center-create-advanced]');
+    if (!target) throw new Error('missing advanced options');
+    target.open = open;
+    panelListeners.get('toggle')?.({ target });
+  };
 
   return {
-    calls, diagnosticsRequests, agentRequests, worktreeRequests, documentState, panel, click, input, change, flush, waitFor,
+    calls, diagnosticsRequests, agentRequests, worktreeRequests, spacesRequests, documentState, panel, click, input, change,
+    toggleAdvanced, flush, waitFor,
     html: () => html, renderCount: () => renderCount,
   };
 }
 
 describe('Run Center asynchronous tool resilience', () => {
-  it('keeps the latest Diagnostics request across reopen, stale rejection, and close', async () => {
-    const harness = createHarness();
-    await harness.flush();
-
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 1);
-    harness.click({ runCenterDiagnosticsClose: '' });
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 2);
-
-    harness.diagnosticsRequests[1].resolve(diagnostics(22));
-    await harness.waitFor(() => harness.html().includes('>22<'));
-    harness.diagnosticsRequests[0].resolve(diagnostics(11));
-    await harness.flush();
-    expect(harness.html()).toContain('>22<');
-    expect(harness.html()).not.toContain('>11<');
-    expect(harness.html()).not.toContain('run_center.diagnostics_load_failed');
-
-    harness.click({ runCenterDiagnosticsClose: '' });
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 3);
-    harness.click({ runCenterDiagnosticsClose: '' });
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 4);
-    harness.diagnosticsRequests[2].resolve(diagnostics(33));
-    await harness.flush();
-    expect(harness.html()).toContain('run_center.diagnostics_loading');
-    expect(harness.html()).not.toContain('>33<');
-    harness.click({ runCenterDiagnosticsClose: '' });
-    harness.diagnosticsRequests[3].reject(new Error('late diagnostics failure'));
-    await harness.flush();
-    expect(harness.html()).not.toContain('data-run-center-diagnostics-dialog');
-    expect(harness.html()).not.toContain('late diagnostics failure');
-
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 5);
-    harness.click({ runCenterDiagnosticsClose: '' });
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 6);
-    harness.diagnosticsRequests[5].resolve(diagnostics(44));
-    await harness.waitFor(() => harness.html().includes('>44<'));
-    harness.diagnosticsRequests[4].reject(new Error('stale diagnostics rejection'));
-    await harness.flush();
-    expect(harness.html()).toContain('>44<');
-    expect(harness.html()).not.toContain('run_center.diagnostics_load_failed');
-  });
-
-  it('retries Diagnostics in place and clears the prior localized error on success', async () => {
-    const harness = createHarness();
-    await harness.flush();
-    harness.click({ runCenterDiagnosticsOpen: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 1);
-
-    harness.diagnosticsRequests[0].reject(new Error('private diagnostics detail'));
-    await harness.waitFor(() => harness.html().includes('data-run-center-diagnostics-retry'));
-    expect(harness.html()).toContain('run_center.diagnostics_load_failed');
-    expect(harness.html()).not.toContain('private diagnostics detail');
-
-    harness.click({ runCenterDiagnosticsRetry: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 2);
-    harness.diagnosticsRequests[1].reject(new Error('second private detail'));
-    await harness.waitFor(() => harness.html().includes('data-run-center-diagnostics-retry'));
-    harness.click({ runCenterDiagnosticsRetry: '' });
-    await harness.waitFor(() => harness.diagnosticsRequests.length === 3);
-    harness.diagnosticsRequests[2].resolve(diagnostics(33));
-    await harness.waitFor(() => harness.html().includes('>33<'));
-
-    expect(harness.html()).not.toContain('run_center.diagnostics_load_failed');
-    expect(harness.html()).not.toContain('data-run-center-diagnostics-retry');
-  });
-
-  it('gives Worktree manager and task creation one latest-wins shared projection', async () => {
-    const harness = createHarness();
-    await harness.flush();
-
-    const initialAgentCalls = harness.calls.filter((call) => call.channel === 'agents.list').length;
-    const initialAgentRequests = harness.agentRequests.length;
-    const initialWorktreeRequests = harness.worktreeRequests.length;
-    harness.click({ runCenterCreateOpen: '' });
-    await harness.flush();
-    expect(harness.calls.filter((call) => call.channel === 'agents.list')).toHaveLength(initialAgentCalls);
-    expect(harness.worktreeRequests).toHaveLength(initialWorktreeRequests);
-    expect(harness.html()).not.toContain('id="run-center-create-advanced-panel"');
-
-    harness.click({ runCenterCreateAdvanced: '' });
-    await harness.waitFor(() => harness.agentRequests.length === initialAgentRequests + 1
-      && harness.worktreeRequests.length === initialWorktreeRequests + 1);
-    const createAgentRequest = harness.agentRequests[initialAgentRequests];
-    const staleCreateWorktreeRequest = harness.worktreeRequests[initialWorktreeRequests];
-    createAgentRequest.resolve(agentListing());
-    await harness.flush();
-    harness.click({ runCenterCreateClose: '' });
-    harness.click({ runCenterWorktreesOpen: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === initialWorktreeRequests + 2);
-
-    staleCreateWorktreeRequest.resolve(projection('stale-create'));
-    await harness.flush();
-    expect(harness.html()).toContain('run_center.worktrees_loading');
-    expect(harness.html()).not.toContain('stale-create-branch');
-
-    harness.worktreeRequests[initialWorktreeRequests + 1].resolve(projection('manager-new'));
-    await harness.waitFor(() => harness.html().includes('manager-new-branch'));
-    expect(harness.html()).not.toContain('stale-create-branch');
-
-    harness.click({ runCenterWorktreesClose: '' });
-    harness.click({ runCenterCreateOpen: '' });
-    const agentCallsBeforeSecondOpen = harness.calls.filter((call) => call.channel === 'agents.list').length;
-    const worktreesBeforeSecondOpen = harness.worktreeRequests.length;
-    await harness.flush();
-    expect(harness.calls.filter((call) => call.channel === 'agents.list')).toHaveLength(agentCallsBeforeSecondOpen);
-    expect(harness.worktreeRequests).toHaveLength(worktreesBeforeSecondOpen);
-    harness.click({ runCenterCreateAdvanced: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === worktreesBeforeSecondOpen + 1);
-    harness.click({ runCenterCreateClose: '' });
-    harness.click({ runCenterWorktreesOpen: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === worktreesBeforeSecondOpen + 2);
-    harness.worktreeRequests[worktreesBeforeSecondOpen + 1].resolve(projection('manager-fast'));
-    await harness.waitFor(() => harness.html().includes('manager-fast-branch'));
-    harness.worktreeRequests[worktreesBeforeSecondOpen].reject(new Error('E_WORKTREE_REPOSITORY_UNAVAILABLE'));
-    await harness.flush();
-    expect(harness.html()).toContain('manager-fast-branch');
-    expect(harness.html()).not.toContain('run_center.worktree_error_repository_unavailable');
-
-    harness.click({ runCenterWorktreesClose: '' });
-    harness.click({ runCenterWorktreesOpen: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === worktreesBeforeSecondOpen + 3);
-    harness.click({ runCenterWorktreesClose: '' });
-    harness.worktreeRequests[worktreesBeforeSecondOpen + 2].resolve(projection('closed-late'));
-    await harness.flush();
-    expect(harness.html()).not.toContain('data-run-center-worktrees-dialog');
-    expect(harness.html()).not.toContain('closed-late-branch');
-  });
-
-  it('retries Worktree manager reads without losing branch/base focus or selection', async () => {
+  it('saves a persistent to-do through the dedicated create channel without starting it', async () => {
     const harness = createHarness();
     await harness.flush();
     harness.click({ runCenterCreateOpen: '' });
-    expect(harness.worktreeRequests).toHaveLength(0);
-    expect(harness.calls.filter((call) => call.channel === 'agents.list')).toHaveLength(0);
-    harness.click({ runCenterCreateAdvanced: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.spacesRequests[0].resolve(spaceListing());
+    await harness.waitFor(() => harness.html().includes('data-run-center-create-save'));
+
+    harness.input('[data-run-center-create-task]', 'Review the release notes later');
+    harness.click({ runCenterCreateSave: '' });
+    await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.create'));
+
+    expect(harness.calls.find((call) => call.channel === 'cogseed.task.create')?.payload).toMatchObject({
+      task: 'Review the release notes later',
+    });
+    expect(harness.calls.filter((call) => call.channel === 'cogseed.task.start')).toHaveLength(0);
+  });
+
+  it('inherits the new-chat workspace without changing it and submits only the safe space id', async () => {
+    const harness = createHarness({ initialSpaceId: 'sp_alpha' });
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.spacesRequests[0].resolve(spaceListing(
+      { space_id: 'sp_beta', name: 'Beta', updated_at: '2026-08-31T00:00:00.000Z' },
+      { space_id: 'sp_alpha', name: 'Alpha', updated_at: '2026-09-01T00:00:00.000Z' },
+    ));
+    await harness.waitFor(() => harness.panel.querySelector('[data-run-center-create-space]')?.value === 'sp_alpha');
+
+    harness.input('[data-run-center-create-task]', 'Run in the inherited workspace');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
+
+    const start = harness.calls.find((call) => call.channel === 'cogseed.task.start');
+    expect(start?.payload).toMatchObject({ task: 'Run in the inherited workspace', spaceId: 'sp_alpha' });
+    expect(start?.payload).not.toHaveProperty('workingDir');
+    expect(start?.payload).not.toHaveProperty('worktreeName');
+  });
+
+  it('clears and disables Worktree isolation when a CogSeed workspace is selected', async () => {
+    const harness = createHarness();
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.spacesRequests[0].resolve(spaceListing({ space_id: 'sp_project', name: 'Project' }));
+    await harness.waitFor(() => harness.html().includes('value="sp_project"'));
+    harness.input('[data-run-center-create-task]', 'Run without cross-space isolation');
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
     harness.agentRequests[0].resolve(agentListing());
+    harness.worktreeRequests[0].resolve(projection('space-isolation'));
+    await harness.waitFor(() => harness.html().includes('space-isolation-branch'));
+    harness.change('[data-run-center-create-worktree]', 'space-isolation-worktree');
+    harness.change('[data-run-center-create-space]', 'sp_project');
+
+    await harness.waitFor(() => harness.panel.querySelector('[data-run-center-create-worktree]')?.disabled === true);
+    expect(harness.panel.querySelector('[data-run-center-create-worktree]').value).toBe('');
+    expect(harness.html()).toContain('run_center.create_space_isolation_unavailable');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
+    const start = harness.calls.find((call) => call.channel === 'cogseed.task.start');
+    expect(start?.payload).toMatchObject({ spaceId: 'sp_project' });
+    expect(start?.payload).not.toHaveProperty('worktreeName');
+  });
+
+  it('reloads Worktree isolation after returning to the default workspace', async () => {
+    const harness = createHarness();
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.spacesRequests[0].resolve(spaceListing({ space_id: 'sp_project', name: 'Project' }));
+    await harness.waitFor(() => harness.html().includes('value="sp_project"'));
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.worktreeRequests.length === 1);
-    harness.worktreeRequests[0].resolve(projection('cached'));
-    await harness.waitFor(() => harness.html().includes('cached-branch'));
-    harness.click({ runCenterCreateClose: '' });
-    harness.click({ runCenterWorktreesOpen: '' });
+    harness.worktreeRequests[0].resolve(projection('default-before-switch'));
+    await harness.waitFor(() => harness.html().includes('default-before-switch-branch'));
+
+    harness.change('[data-run-center-create-space]', 'sp_project');
+    await harness.waitFor(() => harness.panel.querySelector('[data-run-center-create-worktree]')?.disabled === true);
+    harness.change('[data-run-center-create-space]', '');
     await harness.waitFor(() => harness.worktreeRequests.length === 2);
-    harness.worktreeRequests[1].reject(new Error('E_WORKTREE_REPOSITORY_UNAVAILABLE'));
-    await harness.waitFor(() => harness.html().includes('data-run-center-worktrees-retry'));
+    harness.worktreeRequests[1].resolve(projection('default-after-switch'));
+    await harness.waitFor(() => harness.html().includes('default-after-switch-branch'));
 
-    const branchBeforeRetry = harness.input('[data-run-center-worktree-branch]', 'feature/resilient-panel');
-    harness.input('[data-run-center-worktree-base]', 'origin/develop');
-    branchBeforeRetry.selectionStart = 8;
-    branchBeforeRetry.selectionEnd = 17;
-    branchBeforeRetry.selectionDirection = 'forward';
-    branchBeforeRetry.focus();
-    const rendersBeforeRetry = harness.renderCount();
-    harness.click({ runCenterWorktreesRetry: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === 3);
+    expect(harness.panel.querySelector('[data-run-center-create-worktree]')?.disabled).toBe(false);
+  });
 
-    const branchWhileLoading = harness.panel.querySelector('[data-run-center-worktree-branch]');
-    expect(harness.renderCount()).toBeGreaterThan(rendersBeforeRetry);
-    expect(branchWhileLoading).not.toBe(branchBeforeRetry);
-    expect(branchWhileLoading.value).toBe('feature/resilient-panel');
-    expect(harness.panel.querySelector('[data-run-center-worktree-base]').value).toBe('origin/develop');
-    expect(harness.documentState.activeElement).toBe(branchWhileLoading);
-    expect([branchWhileLoading.selectionStart, branchWhileLoading.selectionEnd, branchWhileLoading.selectionDirection])
-      .toEqual([8, 17, 'forward']);
+  it('submits in the default workspace when the workspace list cannot be read', async () => {
+    const harness = createHarness({ initialSpaceId: 'sp_unavailable' });
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.spacesRequests[0].reject(new Error('private workspace failure'));
+    await harness.waitFor(() => harness.html().includes('data-run-center-create-spaces-retry'));
 
-    harness.worktreeRequests[2].reject(new Error('E_WORKTREE_REPOSITORY_UNAVAILABLE'));
-    await harness.waitFor(() => harness.html().includes('data-run-center-worktrees-retry'));
-    const branchBeforeSecondRetry = harness.panel.querySelector('[data-run-center-worktree-branch]');
-    branchBeforeSecondRetry.focus();
-    harness.click({ runCenterWorktreesRetry: '' });
-    await harness.waitFor(() => harness.worktreeRequests.length === 4);
-    harness.worktreeRequests[3].resolve(projection('recovered'));
-    await harness.waitFor(() => harness.html().includes('recovered-branch'));
+    harness.input('[data-run-center-create-task]', 'Run in the fallback workspace');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
 
-    expect(harness.html()).not.toContain('run_center.worktree_error_repository_unavailable');
-    const branchAfterSuccess = harness.panel.querySelector('[data-run-center-worktree-branch]');
-    expect(branchAfterSuccess.value).toBe('feature/resilient-panel');
-    expect(harness.panel.querySelector('[data-run-center-worktree-base]').value).toBe('origin/develop');
-    expect(harness.documentState.activeElement).toBe(branchAfterSuccess);
-    expect([branchAfterSuccess.selectionStart, branchAfterSuccess.selectionEnd, branchAfterSuccess.selectionDirection])
-      .toEqual([8, 17, 'forward']);
+    const start = harness.calls.find((call) => call.channel === 'cogseed.task.start');
+    expect(start?.payload).toMatchObject({ task: 'Run in the fallback workspace' });
+    expect(start?.payload).not.toHaveProperty('spaceId');
+    expect(start?.payload).not.toHaveProperty('workingDir');
+  });
+
+  it('does not reload Worktrees when the workspace list settles after advanced options', async () => {
+    const harness = createHarness();
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.toggleAdvanced();
+    await harness.waitFor(() => harness.worktreeRequests.length === 1);
+    harness.worktreeRequests[0].resolve(projection('single-load'));
+    await harness.waitFor(() => harness.html().includes('single-load-branch'));
+
+    harness.spacesRequests[0].resolve(spaceListing());
+    await harness.flush();
+
+    expect(harness.worktreeRequests).toHaveLength(1);
+  });
+
+  it('keeps the latest workspace request across reopen and recovers a failed read in place', async () => {
+    const harness = createHarness({ initialSpaceId: 'sp_stale' });
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 1);
+    harness.click({ runCenterCreateClose: '' });
+    harness.click({ runCenterCreateOpen: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 2);
+
+    harness.spacesRequests[1].reject(new Error('private workspace failure'));
+    await harness.waitFor(() => harness.html().includes('data-run-center-create-spaces-retry'));
+    expect(harness.html()).toContain('run_center.create_space_unavailable');
+    expect(harness.html()).not.toContain('private workspace failure');
+    harness.click({ runCenterCreateSpacesRetry: '' });
+    await harness.waitFor(() => harness.spacesRequests.length === 3);
+    harness.spacesRequests[2].resolve(spaceListing({ space_id: 'sp_current', name: 'Current' }));
+    await harness.waitFor(() => harness.html().includes('value="sp_current"'));
+    harness.spacesRequests[0].resolve(spaceListing({ space_id: 'sp_stale', name: 'Stale' }));
+    await harness.flush();
+
+    expect(harness.html()).toContain('value="sp_current"');
+    expect(harness.html()).not.toContain('value="sp_stale"');
+    harness.input('[data-run-center-create-task]', 'Use the recovered workspace list');
+    harness.change('[data-run-center-create-space]', 'sp_current');
+    harness.click({ runCenterCreateSubmit: '' });
+    await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
+    expect(harness.calls.find((call) => call.channel === 'cogseed.task.start')?.payload)
+      .toMatchObject({ task: 'Use the recovered workspace list', spaceId: 'sp_current' });
   });
 
   it('retries task Worktrees without losing task, Agent, focus, or current-workspace submission', async () => {
@@ -447,7 +429,7 @@ describe('Run Center asynchronous tool resilience', () => {
     harness.click({ runCenterCreateOpen: '' });
     expect(harness.worktreeRequests).toHaveLength(0);
     expect(harness.calls.filter((call) => call.channel === 'agents.list')).toHaveLength(0);
-    harness.click({ runCenterCreateAdvanced: '' });
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
     harness.agentRequests[0].resolve(agentListing());
     await harness.waitFor(() => harness.worktreeRequests.length === 1);
@@ -505,7 +487,7 @@ describe('Run Center asynchronous tool resilience', () => {
     expect(harness.worktreeRequests).toHaveLength(0);
     harness.click({ runCenterCreateOpen: '' });
     harness.input('[data-run-center-create-task]', 'Create this with the defaults');
-    harness.click({ runCenterCreateAdvanced: '' });
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
 
     harness.agentRequests[0].reject(new Error('private agent catalog failure'));
@@ -513,8 +495,8 @@ describe('Run Center asynchronous tool resilience', () => {
     await harness.waitFor(() => harness.html().includes('run_center.create_worktree_unavailable'));
     expect(harness.panel.querySelector('[data-run-center-create-submit]')?.disabled).toBe(false);
 
-    harness.click({ runCenterCreateAdvanced: '' });
-    expect(harness.html()).not.toContain('id="run-center-create-advanced-panel"');
+    harness.toggleAdvanced(false);
+    expect(harness.panel.querySelector('[data-run-center-create-advanced]')?.open).toBe(false);
     harness.click({ runCenterCreateSubmit: '' });
     await harness.waitFor(() => harness.calls.some((call) => call.channel === 'cogseed.task.start'));
 
@@ -524,13 +506,36 @@ describe('Run Center asynchronous tool resilience', () => {
     expect(start?.payload).not.toHaveProperty('worktreeName');
   });
 
+  it('retries the Agent catalog after a transient advanced-options failure', async () => {
+    const harness = createHarness({ registryFailure: true });
+    await harness.flush();
+    harness.click({ runCenterCreateOpen: '' });
+    harness.input('[data-run-center-create-task]', 'Retry the local Agent catalog');
+    harness.toggleAdvanced();
+    await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
+
+    harness.agentRequests[0].reject(new Error('temporary Agent catalog failure'));
+    harness.worktreeRequests[0].resolve(projection('agent-catalog-retry'));
+    await harness.waitFor(() => harness.html().includes('data-run-center-create-agents-retry'));
+    expect(harness.html()).toContain('temporary Agent catalog failure');
+
+    harness.click({ runCenterCreateAgentsRetry: '' });
+    await harness.waitFor(() => harness.agentRequests.length === 2);
+    harness.agentRequests[1].resolve(agentListing());
+    await harness.waitFor(() => harness.html().includes('value="review-agent"'));
+
+    expect(harness.html()).not.toContain('data-run-center-create-agents-retry');
+    expect(harness.panel.querySelector('[data-run-center-create-task]').value)
+      .toBe('Retry the local Agent catalog');
+  });
+
   it('uses the lightweight Agent listing when the registry projection is unavailable', async () => {
     const harness = createHarness({ registryFailure: true });
     await harness.flush();
 
     harness.click({ runCenterCreateOpen: '' });
     harness.input('[data-run-center-create-task]', 'Use the fallback Agent listing');
-    harness.click({ runCenterCreateAdvanced: '' });
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
 
     harness.agentRequests[0].resolve(agentListing());
@@ -555,7 +560,7 @@ describe('Run Center asynchronous tool resilience', () => {
 
     harness.click({ runCenterCreateOpen: '' });
     harness.input('[data-run-center-create-task]', 'Create a daily report');
-    harness.click({ runCenterCreateAdvanced: '' });
+    harness.toggleAdvanced();
     await harness.waitFor(() => harness.agentRequests.length === 1 && harness.worktreeRequests.length === 1);
 
     expect(harness.html()).toContain('value="review-agent"');

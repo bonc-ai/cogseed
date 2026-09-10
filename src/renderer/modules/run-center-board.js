@@ -4,14 +4,9 @@
   'use strict';
 
   const COLUMN_KEYS = ['pending', 'running', 'attention', 'completed'];
-  const LOGICAL_ACTIVE_STATE_PRIORITY = ['attention', 'running', 'pending'];
-  const ATTENTION_STATE_PRIORITY = Object.freeze({
-    waiting_user: 0,
-    review: 1,
-    recoverable: 2,
-    failed: 3,
-    pending_recovery: 4,
-  });
+  // The resident model is loaded before this lazy bundle. Keep a single
+  // implementation of run identity, aggregation, sequence and user state.
+  const { logicalRunKey, safeTime, buildRunSequence, userStateForTask, buildRunModels } = root.CogSeedRunCenterModel;
 
   function matchesFilter(task, filter) {
     const column = displayColumnForTask(task);
@@ -20,20 +15,6 @@
     if (filter === 'attention') return column === 'attention';
     if (filter === 'completed') return column === 'completed';
     return column !== 'archived';
-  }
-
-  function filteredTasks(projection, search, filter, includeArchived = false, sourceFilter = 'all', agentName) {
-    const query = String(search || '').trim().toLocaleLowerCase();
-    return (Array.isArray(projection && projection.tasks) ? projection.tasks : []).filter((task) => {
-      if (task.column === 'archived' && !includeArchived) return false;
-      if (task.column !== 'archived' && !matchesFilter(task, filter)) return false;
-      if (sourceFilter !== 'all' && task.sourceKind !== sourceFilter) return false;
-      if (!query) return true;
-      return [task.title, task.taskId, task.sessionTitle, task.sessionId, task.agentId, task.worktreeName,
-        typeof agentName === 'function' ? agentName(task.agentId) : '', task.coordinationId, task.groupId]
-        .filter(Boolean)
-        .some((value) => String(value).toLocaleLowerCase().includes(query));
-    });
   }
 
   function shouldShowSessionTitle(taskTitle, sessionTitle) {
@@ -52,49 +33,77 @@
     });
   }
 
-  function logicalRunKey(task) {
-    const identifiers = [
-      ['group', task?.groupId],
-      ['coordination', task?.coordinationId],
-      ['execution', task?.executionId],
-      ['session', task?.sessionId],
-      ['conversation', task?.conversationId],
-      ['task', task?.taskId],
-    ];
-    const identifier = identifiers.find(([, value]) => String(value || '').trim());
-    return identifier ? `${identifier[0]}:${String(identifier[1])}` : '';
+  function attemptKeyForTask(task, fallbackIndex) {
+    const executionId = String(task?.executionId || '').trim();
+    const taskId = String(task?.taskId || '').trim();
+    return executionId ? `execution:${executionId}` : `task:${taskId || fallbackIndex}`;
   }
 
-  function safeTime(value) {
-    const time = new Date(String(value || '')).getTime();
-    return Number.isFinite(time) ? time : 0;
+  function attemptStateTask(members) {
+    const priority = ['failed', 'recoverable', 'waiting_user', 'needs_review', 'blocked', 'running', 'queued', 'pending', 'completed', 'cancelled', 'skipped', 'created'];
+    return priority.map((status) => members
+      .filter((task) => task.status === status)
+      .sort((left, right) => safeTime(right.updatedAt) - safeTime(left.updatedAt))[0])
+      .find(Boolean) || members[0];
   }
 
-  function runStartedAt(run) {
-    const memberTimes = (Array.isArray(run?.members) ? run.members : [])
-      .map((task) => safeTime(task?.createdAt))
-      .filter(Boolean);
-    if (memberTimes.length) return Math.min(...memberTimes);
-    return safeTime(run?.aggregateTask?.createdAt) || safeTime(run?.representative?.createdAt)
-      || safeTime(run?.aggregateTask?.updatedAt) || safeTime(run?.representative?.updatedAt);
+  function attemptTargetTask(members, parentTaskIds) {
+    return [...members].sort((left, right) => {
+      const leftParent = parentTaskIds.has(left.taskId) || !left.parentTaskId;
+      const rightParent = parentTaskIds.has(right.taskId) || !right.parentTaskId;
+      return Number(rightParent) - Number(leftParent)
+        || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+        || String(left.taskId || '').localeCompare(String(right.taskId || ''));
+    })[0] || null;
   }
 
-  function buildRunSequence(runs) {
-    const bySession = new Map();
-    for (const run of Array.isArray(runs) ? runs : []) {
-      const task = run?.aggregateTask || run?.representative;
-      const sessionKey = String(task?.sessionId || run?.key || '');
-      const sessionRuns = bySession.get(sessionKey) || [];
-      sessionRuns.push(run);
-      bySession.set(sessionKey, sessionRuns);
-    }
-    const sequence = new Map();
-    for (const sessionRuns of bySession.values()) {
-      sessionRuns.sort((left, right) => runStartedAt(left) - runStartedAt(right)
-        || String(left?.key || '').localeCompare(String(right?.key || '')));
-      sessionRuns.forEach((run, index) => sequence.set(run.key, { index: index + 1, count: sessionRuns.length }));
-    }
-    return sequence;
+  function buildAttemptModels(run) {
+    const members = Array.isArray(run?.members) && run.members.length
+      ? run.members
+      : (Array.isArray(run?.attempts) ? run.attempts.flatMap((attempt) => attempt.members || attempt.representative || []) : []);
+    const parentTaskIds = new Set(members.map((task) => task.parentTaskId).filter(Boolean));
+    const grouped = new Map();
+    members.forEach((task, index) => {
+      const key = attemptKeyForTask(task, index);
+      const attemptMembers = grouped.get(key) || [];
+      attemptMembers.push(task);
+      grouped.set(key, attemptMembers);
+    });
+    return Array.from(grouped.entries()).map(([key, attemptMembers]) => {
+      const orderedMembers = [...attemptMembers].sort((left, right) =>
+        safeTime(right.updatedAt) - safeTime(left.updatedAt)
+        || String(left.taskId || '').localeCompare(String(right.taskId || '')));
+      const target = attemptTargetTask(orderedMembers, parentTaskIds);
+      const stateTask = attemptStateTask(orderedMembers) || target;
+      const createdTimes = orderedMembers.map((task) => safeTime(task.createdAt)).filter(Boolean);
+      const updatedTimes = orderedMembers.map((task) => safeTime(task.updatedAt)).filter(Boolean);
+      return {
+        key,
+        members: orderedMembers,
+        representative: target,
+        status: stateTask?.status || target?.status || 'created',
+        createdAt: createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : '',
+        updatedAt: updatedTimes.length ? new Date(Math.max(...updatedTimes)).toISOString() : '',
+      };
+    }).sort((left, right) => safeTime(right.updatedAt) - safeTime(left.updatedAt)
+      || safeTime(right.createdAt) - safeTime(left.createdAt)
+      || left.key.localeCompare(right.key));
+  }
+
+  function reconcileAttemptSelection(run, preferredKey, preferredTaskId) {
+    const attempts = buildAttemptModels(run);
+    const selected = attempts.find((attempt) => attempt.key === preferredKey)
+      || attempts.find((attempt) => attempt.members.some((task) => task.taskId === preferredTaskId))
+      || attempts[0] || null;
+    return { attempts, selected, index: selected ? attempts.indexOf(selected) : -1, task: selected?.representative || null };
+  }
+
+  function failureCategory(errorCode) {
+    if (!errorCode) return 'none';
+    if (errorCode === 'model_preflight') return 'model';
+    if (errorCode === 'provider_error') return 'provider';
+    if (errorCode === 'group_chat_run_failed') return 'collaboration';
+    return 'other';
   }
 
   function shortRunId(run) {
@@ -104,76 +113,6 @@
       .trim();
     if (!value) return '';
     return `#${value.length > 8 ? value.slice(-8) : value}`;
-  }
-
-  function userStateForTask(task, context = {}) {
-    const status = String(task?.status || 'created');
-    const resultDeliveryState = String(task?.resultDeliveryState || '');
-    if (task?.column === 'archived') {
-      return {
-        kind: 'archived', attention: false,
-        stateKey: status === 'failed' ? 'run_center.user_state_failed' : 'run_center.user_state_finished',
-        reasonKey: status === 'failed' ? 'run_center.user_reason_failed' : 'run_center.user_reason_finished',
-        action: '', actionKey: '', priority: 20,
-      };
-    }
-    if (resultDeliveryState === 'pending-recovery') {
-      return {
-        kind: 'pending_recovery', attention: true,
-        stateKey: 'run_center.user_state_pending_recovery',
-        reasonKey: 'run_center.user_reason_pending_recovery',
-        action: 'recover-result', actionKey: 'run_center.recover_result', priority: ATTENTION_STATE_PRIORITY.pending_recovery,
-      };
-    }
-    if (status === 'waiting_user') {
-      return {
-        kind: 'waiting_user', attention: true,
-        stateKey: 'run_center.user_state_waiting_user',
-        reasonKey: 'run_center.user_reason_waiting_user',
-        action: 'open-task', actionKey: 'run_center.open_task', priority: ATTENTION_STATE_PRIORITY.waiting_user,
-      };
-    }
-    if (context.hasReview || context.hasConflict || ['needs_review', 'blocked'].includes(status)) {
-      return {
-        kind: 'review', attention: true,
-        stateKey: 'run_center.user_state_review',
-        reasonKey: context.hasConflict ? 'run_center.user_reason_conflict' : 'run_center.user_reason_review',
-        action: 'open-handling', actionKey: 'run_center.open_handling', priority: ATTENTION_STATE_PRIORITY.review,
-      };
-    }
-    if (status === 'recoverable') {
-      return {
-        kind: 'recoverable', attention: true,
-        stateKey: 'run_center.user_state_recoverable',
-        reasonKey: 'run_center.user_reason_recoverable',
-        action: 'resume', actionKey: 'run_center.resume', priority: ATTENTION_STATE_PRIORITY.recoverable,
-      };
-    }
-    if (status === 'failed') {
-      const requiresModelConfiguration = ['model_preflight', 'provider_error'].includes(String(task?.errorCode || ''));
-      return {
-        kind: 'failed', attention: true,
-        stateKey: 'run_center.user_state_failed',
-        reasonKey: 'run_center.user_reason_failed',
-        action: requiresModelConfiguration ? 'configure-model' : 'retry',
-        actionKey: requiresModelConfiguration ? 'run_center.configure_model' : 'run_center.retry',
-        priority: ATTENTION_STATE_PRIORITY.failed,
-      };
-    }
-    if (task?.column === 'running' || ['created', 'queued', 'pending', 'running'].includes(status)) {
-      return {
-        kind: 'running', attention: false,
-        stateKey: status === 'running' ? 'run_center.user_state_running' : 'run_center.user_state_queued',
-        reasonKey: status === 'running' ? 'run_center.user_reason_running' : 'run_center.user_reason_queued',
-        action: '', actionKey: '', priority: 10,
-      };
-    }
-    return {
-      kind: 'completed', attention: false,
-      stateKey: status === 'completed' ? 'run_center.user_state_completed' : 'run_center.user_state_finished',
-      reasonKey: status === 'completed' ? 'run_center.user_reason_completed' : 'run_center.user_reason_finished',
-      action: '', actionKey: '', priority: 20,
-    };
   }
 
   function displayColumnForTask(task, context = {}) {
@@ -229,62 +168,6 @@
     };
   }
 
-  function buildDisplayRuns(runs, options) {
-    const sequenceByKey = buildRunSequence(runs);
-    return (Array.isArray(runs) ? runs : []).map((run) => displayRun(run, options, sequenceByKey.get(run.key)));
-  }
-
-  function orderedMembers(members, parentTaskIds = new Set()) {
-    return [...members].sort((left, right) => {
-      const parentPreference = Number(parentTaskIds.has(right.taskId)) - Number(parentTaskIds.has(left.taskId));
-      if (parentPreference) return parentPreference;
-      const updated = String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
-      return updated || String(left.taskId || '').localeCompare(String(right.taskId || ''));
-    });
-  }
-
-  function aggregateMembers(members, parentTaskIds = new Set()) {
-    const representative = orderedMembers(members, parentTaskIds)[0];
-    const updatedAt = members.reduce((latest, task) => {
-      const candidate = String(task.updatedAt || '');
-      return candidate > latest ? candidate : latest;
-    }, '');
-    const stateColumns = [...LOGICAL_ACTIVE_STATE_PRIORITY,
-      ...(representative.column === 'archived' ? ['archived', 'completed'] : ['completed', 'archived'])];
-    const stateTask = stateColumns.map((column) => members
-      .filter((task) => task.column === column)
-      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))[0])
-      .find(Boolean) || representative;
-    return {
-      representative,
-      aggregateTask: { ...representative, column: stateTask.column, status: stateTask.status, updatedAt },
-    };
-  }
-
-  function buildRunModels(projection) {
-    const tasks = Array.isArray(projection?.tasks) ? projection.tasks : [];
-    const groups = Array.isArray(projection?.groups) ? projection.groups : [];
-    const parentTaskIds = new Set(groups
-      .map((group) => group.parentTaskId)
-      .filter(Boolean));
-    const groupById = new Map(groups.flatMap((group) => [
-      [group.groupId, group], [group.coordinationId, group],
-    ].filter(([id]) => id)));
-    const runs = new Map();
-    tasks.forEach((task, index) => {
-      const key = logicalRunKey(task) || `unidentified:${index}`;
-      const members = runs.get(key) || [];
-      members.push(task);
-      runs.set(key, members);
-    });
-    return Array.from(runs.entries()).map(([key, members]) => {
-      const { representative, aggregateTask } = aggregateMembers(members, parentTaskIds);
-      const group = groupById.get(representative.groupId || representative.coordinationId);
-      const progress = group && group.parentTaskId === representative.taskId ? group.progress || null : null;
-      return { key, representative, aggregateTask, members: [...members], progress };
-    });
-  }
-
   function runForTask(projection, taskId) {
     const targetId = String(taskId || '');
     if (!targetId) return null;
@@ -322,20 +205,20 @@
     });
   }
 
-  function logicalTasks(projection) {
-    return buildRunModels(projection).map((run) => run.aggregateTask);
-  }
-
-  function filteredLogicalTasks(projection, search, filter, includeArchived = false, sourceFilter = 'all', agentName) {
-    return filterRuns(buildRunModels(projection), search, filter, includeArchived, sourceFilter, agentName)
-      .map((run) => run.aggregateTask);
-  }
-
-  function taskForSession(projection, sessionId, search, filter, sourceFilter = 'all', agentName) {
-    return filterRuns(buildRunModels(projection), search, filter, false, sourceFilter, agentName)
-      .filter((run) => run.members.some((task) => task.sessionId === sessionId))
-      .sort((left, right) => String(right.aggregateTask.updatedAt || '').localeCompare(String(left.aggregateTask.updatedAt || '')))[0]
-      ?.aggregateTask || null;
+  function quickArchiveButton(task, options) {
+    if (!task?.actions?.archive) return '';
+    const { text } = options;
+    const targetTaskId = task.interactionTaskId || task.taskId;
+    const busy = !!options.busyAction;
+    const working = busy && options.busyTaskId === targetTaskId;
+    const label = text(working ? 'run_center.action_working' : 'run_center.remove_from_list');
+    return root.uiIconButton?.({
+      label,
+      icon: working ? 'loader' : 'archive',
+      disabled: busy,
+      className: `run-center-quick-archive${working ? ' is-loading' : ''}`,
+      attrs: { 'data-run-center-quick-archive': targetTaskId },
+    }) || '';
   }
 
   function render(projection, options) {
@@ -345,7 +228,10 @@
     const rawTasks = Array.isArray(projection && projection.tasks) ? projection.tasks : [];
     if (!rawTasks.length) return stateView('run_center.board_empty');
 
-    const allRuns = buildRunModels(projection);
+    const allRuns = Array.isArray(options.runModels) ? options.runModels : buildRunModels(projection);
+    const conversationId = String(options.conversationId || '').trim();
+    const matchesConversation = (run) => !conversationId
+      || run.members.some((task) => String(task.conversationId || '') === conversationId);
     const filterOptions = {
       search: options.search,
       filter: options.filter,
@@ -358,14 +244,19 @@
     };
     const recentFirst = (left, right) => safeTime(right.aggregateTask?.updatedAt) - safeTime(left.aggregateTask?.updatedAt)
       || String(left.key || '').localeCompare(String(right.key || ''));
-    const runs = filterRuns(allRuns, filterOptions).sort(recentFirst);
-    const archivedRuns = filterRuns(allRuns, { ...filterOptions, filter: 'all', includeArchived: true })
-      .filter((run) => run.aggregateTask.column === 'archived')
+    const runs = (Array.isArray(options.filteredRuns)
+      ? [...options.filteredRuns]
+      : filterRuns(allRuns, filterOptions).filter(matchesConversation)).sort(recentFirst);
+    const archivedRuns = (Array.isArray(options.archivedRuns)
+      ? [...options.archivedRuns]
+      : filterRuns(allRuns, { ...filterOptions, filter: 'all', includeArchived: true })
+        .filter(matchesConversation)
+        .filter((run) => run.aggregateTask.column === 'archived'))
       .sort(recentFirst);
     const suppliedSelectedRunKey = String(options.selectedRunKey || '');
     const selectedRunKey = allRuns.some((run) => run.key === suppliedSelectedRunKey)
       ? suppliedSelectedRunKey
-      : runForTask(projection, options.selectedTaskId)?.key || '';
+      : allRuns.find((run) => run.members.some((task) => task.taskId === options.selectedTaskId))?.key || '';
     const visibleRuns = [...runs, ...(options.showArchived ? archivedRuns : [])];
     const requestedFocusKey = String(options.focusedRunKey || '');
     const rovingRunKey = visibleRuns.some((run) => run.key === requestedFocusKey)
@@ -378,7 +269,8 @@
       const label = key ? text(key) : '';
       return label && label !== key ? label : String(item?.title || fallback || '');
     };
-    const sequenceByKey = buildRunSequence(allRuns);
+    const sequenceByKey = options.sequenceByKey instanceof Map
+      ? options.sequenceByKey : buildRunSequence(allRuns);
     const card = (run) => {
       const task = run.aggregateTask;
       const display = displayRun(run, options, sequenceByKey.get(run.key));
@@ -409,7 +301,10 @@
         { icon: 'refresh', value: text('run_center.run_sequence', display.sequence) },
       ]);
       const selected = run.key === selectedRunKey;
-      return `<button type="button" class="dashboard-board-card${selected ? ' is-selected' : ''}" data-dashboard-board-run-key="${esc(run.key)}" data-dashboard-board-task-id="${esc(task.taskId)}" data-dashboard-board-session-id="${esc(task.sessionId)}" tabindex="${run.key === rovingRunKey ? '0' : '-1'}">
+      const interactionTaskId = task.interactionTaskId || task.taskId;
+      const interactionSessionId = task.interactionSessionId || task.sessionId;
+      return `<div class="dashboard-board-card-shell">
+        <button type="button" class="dashboard-board-card${selected ? ' is-selected' : ''}" data-dashboard-board-run-key="${esc(run.key)}" data-dashboard-board-task-id="${esc(interactionTaskId)}" data-dashboard-board-session-id="${esc(interactionSessionId)}" tabindex="${run.key === rovingRunKey ? '0' : '-1'}">
         <span class="dashboard-board-card-head">
           <span class="dashboard-status ${statusClass(task.status)}">${esc(text(statusKey(task.status)))}</span>
           <time datetime="${esc(task.updatedAt)}">${esc(formatDate(task.updatedAt))}</time>
@@ -421,25 +316,37 @@
           <span class="dashboard-board-progress"><i style="width:${completePercent}%"></i></span>
           ${(progress.failed || progress.attention) ? `<small>${esc(text('run_center.group_attention', { count: progress.failed + progress.attention }))}</small>` : ''}
         </span>` : ''}
-      </button>`;
+        </button>
+        ${quickArchiveButton(task, options)}
+      </div>`;
     };
+    const filteredColumn = COLUMN_KEYS.includes(options.filter) ? options.filter : '';
     const columns = COLUMN_KEYS.map((column) => {
-      const filteredColumn = COLUMN_KEYS.includes(options.filter) ? options.filter : '';
       const items = runs.filter((run) => displayColumnForTask(run.aggregateTask) === column
         && (!filteredColumn || column === filteredColumn));
+      if (filteredColumn && filteredColumn !== column) return '';
       return `<section class="dashboard-board-column${items.length ? '' : ' is-empty'}" data-dashboard-board-column="${column}">
         <header><span class="dashboard-board-column-dot is-${column}"></span><h2>${esc(text(`run_center.column_${column}`))}</h2><span>${items.length}</span></header>
-        <div class="dashboard-board-column-list">${items.length ? items.map(card).join('') : `<div class="dashboard-board-column-empty">${esc(text('run_center.column_empty'))}</div>`}</div>
+        <div class="dashboard-board-column-list" data-run-center-scroll-key="board-column:${column}">${items.length ? items.map(card).join('') : `<div class="dashboard-board-column-empty">${esc(text('run_center.column_empty'))}</div>`}</div>
       </section>`;
     }).join('');
     const archived = allRuns.filter((run) => run.aggregateTask.column === 'archived');
-    return `<div class="dashboard-board-scroll">
+    return `<div class="dashboard-board-scroll" data-run-center-scroll-key="board">
       <div class="dashboard-board-columns${runs.length ? ' has-items' : ''}">${columns}</div>
       ${archived.length ? `<section class="dashboard-board-archive">
-        <button type="button" data-dashboard-archive-toggle aria-expanded="${String(options.showArchived)}">
+        <div class="dashboard-board-archive-header"><button type="button" data-dashboard-archive-toggle aria-expanded="${String(options.showArchived)}">
           ${icon(options.showArchived ? 'chevron-down' : 'chevron-right')}
           <span>${esc(text('run_center.archive'))}</span><b>${archived.length}</b>
-        </button>
+        </button>${root.uiButton?.({
+          label: text(options.busyAction === 'purge-archived' ? 'run_center.action_working' : 'run_center.purge_archived'),
+          role: 'danger',
+          size: 'sm',
+          icon: options.busyAction === 'purge-archived' ? 'loader' : 'trash-2',
+          loading: options.busyAction === 'purge-archived',
+          disabled: !!options.busyAction,
+          className: 'run-center-purge-archived',
+          attrs: { 'data-run-center-purge-archived': true },
+        }) || ''}</div>
         ${options.showArchived ? `<div class="dashboard-board-archive-list">${archivedRuns.length ? archivedRuns.map(card).join('') : `<div class="dashboard-board-column-empty">${esc(text('run_center.no_matches'))}</div>`}</div>` : ''}
       </section>` : ''}
     </div>`;
@@ -456,6 +363,7 @@
     if (action === 'configure-model') return true;
     if (action === 'open-task') return !!context.conversationId;
     if (action === 'open-handling') return !!context.hasCollaboration || !!context.conversationId;
+    if (action === 'start') return !!set.start;
     if (action === 'retry') return !!set.retry;
     if (action === 'resume') return !!set.resume;
     if (action === 'recover-result') return !!set.recoverResult;
@@ -463,18 +371,20 @@
   }
 
   function queueGroups(runs, options = {}) {
-    const groups = { attention: [], active: [], completed: [] };
+    const groups = { attention: [], planned: [], active: [], completed: [] };
     for (const run of Array.isArray(runs) ? runs : []) {
       const task = run?.aggregateTask || run?.representative;
       if (!task) continue;
       const userState = userStateForTask(task, options.contextForRun?.(run) || {});
       if (userState.attention) groups.attention.push({ run, task, userState });
+      else if (task.status === 'planned') groups.planned.push({ run, task, userState });
       else if (['pending', 'running'].includes(displayColumnForTask(task))) groups.active.push({ run, task, userState });
       else groups.completed.push({ run, task, userState });
     }
     const recentFirst = (left, right) => safeTime(right.task.updatedAt) - safeTime(left.task.updatedAt)
       || String(left.run.key || '').localeCompare(String(right.run.key || ''));
     groups.attention.sort((left, right) => left.userState.priority - right.userState.priority || recentFirst(left, right));
+    groups.planned.sort(recentFirst);
     groups.active.sort((left, right) => Number(displayColumnForTask(right.task) === 'running')
       - Number(displayColumnForTask(left.task) === 'running') || recentFirst(left, right));
     groups.completed.sort(recentFirst);
@@ -486,9 +396,10 @@
     if (options.loading && !runs?.length) return stateView('run_center.loading');
     if (options.error) return stateView('run_center.load_failed', options.error);
     if (!Array.isArray(runs) || !runs.length) return stateView(options.filtered ? 'run_center.no_matches' : 'run_center.empty');
-    const sequenceByKey = buildRunSequence(options.allRuns || runs);
+    const sequenceByKey = options.sequenceByKey instanceof Map
+      ? options.sequenceByKey : buildRunSequence(options.allRuns || runs);
     const groups = queueGroups(runs, options);
-    const ordered = [...groups.attention, ...groups.active, ...groups.completed];
+    const ordered = [...groups.attention, ...groups.planned, ...groups.active, ...groups.completed];
     const selectedKey = ordered.some((item) => item.run.key === options.selectedRunKey)
       ? options.selectedRunKey : ordered[0]?.run.key || '';
     const rovingKey = ordered.some((item) => item.run.key === options.focusedRunKey)
@@ -498,30 +409,36 @@
       const sequenceLabel = text('run_center.run_sequence', display.sequence);
       const agent = display.agent || text('run_center.commander');
       const selected = run.key === selectedKey;
-      return `<button type="button" role="option" aria-selected="${String(selected)}" class="run-center-queue-item${selected ? ' is-selected' : ''}${userState.attention ? ' is-attention' : ''}" data-run-center-queue-run-key="${esc(run.key)}" data-run-center-queue-session="${esc(task.sessionId)}" data-run-center-queue-task="${esc(task.taskId)}" tabindex="${run.key === rovingKey ? '0' : '-1'}">
+      const interactionTaskId = task.interactionTaskId || task.taskId;
+      const interactionSessionId = task.interactionSessionId || task.sessionId;
+      return `<div class="run-center-queue-item-shell" role="listitem">
+        <button type="button" aria-current="${selected ? 'true' : 'false'}" class="run-center-queue-item${selected ? ' is-selected' : ''}${userState.attention ? ' is-attention' : ''}" data-run-center-queue-run-key="${esc(run.key)}" data-run-center-queue-session="${esc(interactionSessionId)}" data-run-center-queue-task="${esc(interactionTaskId)}" tabindex="${run.key === rovingKey ? '0' : '-1'}">
         <span class="run-center-queue-item-top"><span class="run-center-user-state is-${esc(userState.kind)}">${esc(text(userState.stateKey))}</span><time datetime="${esc(task.updatedAt)}">${esc(formatDate(task.updatedAt))}</time></span>
         <strong>${esc(display.title)}</strong>
         ${userState.attention ? `<span class="run-center-queue-reason">${esc(text(userState.reasonKey))}</span>` : ''}
         <span class="run-center-queue-meta"><span>${esc(sequenceLabel)}</span><span>${icon('terminal')}${esc(agent)}</span>${display.shortId ? `<span>${esc(display.shortId)}</span>` : ''}</span>
         ${userState.actionKey && recommendedActionAvailable(task.actions, userState, { conversationId: task.conversationId }) ? `<span class="run-center-queue-recommendation">${esc(text('run_center.recommended_action'))}<b>${esc(text(userState.actionKey))}</b>${icon('chevron-right')}</span>` : ''}
-      </button>`;
+        </button>
+        ${quickArchiveButton(task, options)}
+      </div>`;
     };
     const sections = [
       ['attention', 'run_center.queue_attention', groups.attention],
+      ['planned', 'run_center.queue_planned', groups.planned],
       ['active', 'run_center.queue_active', groups.active],
       ['completed', 'run_center.queue_completed', groups.completed],
     ].filter(([, , items]) => items.length).map(([kind, label, items]) => `<section class="run-center-queue-group is-${kind}">
       <header><h2>${esc(text(label))}</h2><span>${esc(items.length)}</span></header>
-      <div class="run-center-queue-list" role="listbox" aria-label="${esc(text(label))}">${items.map(renderItem).join('')}</div>
+      <div class="run-center-queue-list" role="list" aria-label="${esc(text(label))}">${items.map(renderItem).join('')}</div>
     </section>`).join('');
-    return `<div class="run-center-queue-scroll">${sections}</div>`;
+    return `<div class="run-center-queue-scroll" data-run-center-scroll-key="queue">${sections}</div>`;
   }
 
   root.CogSeedRunCenterBoard = Object.freeze({
-    COLUMN_KEYS, matchesFilter, filteredTasks, buildRunModels, runForTask, filterRuns,
-    filteredLogicalTasks, taskForSession, shouldShowSessionTitle, uniqueCardMeta,
-    logicalRunKey, logicalTasks, buildRunSequence, shortRunId, userStateForTask,
-    displayColumnForTask, matchesTimeFilter, displayRun, buildDisplayRuns, queueGroups,
-    recommendedActionAvailable, renderQueue, render,
+    COLUMN_KEYS, matchesFilter, buildRunModels, runForTask, filterRuns,
+    shouldShowSessionTitle, uniqueCardMeta, logicalRunKey, buildRunSequence, shortRunId, userStateForTask,
+    buildAttemptModels, reconcileAttemptSelection, failureCategory,
+    displayColumnForTask, matchesTimeFilter, displayRun, queueGroups,
+    recommendedActionAvailable, quickArchiveButton, renderQueue, render,
   });
 })(window);

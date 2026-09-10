@@ -56,7 +56,7 @@ beforeEach(async () => {
 afterEach(async () => {
   try {
     const sessions = await import('../../../src/main/model/core-agent/interactive-cli-sessions');
-    sessions._resetInteractiveCliSessionsForTest();
+    await sessions._resetInteractiveCliSessionsForTest();
     // Windows taskkill is asynchronous; let the shell/tree release its cwd
     // before removing the case workspace.
     if (process.platform === 'win32') await new Promise(resolve => setTimeout(resolve, 150));
