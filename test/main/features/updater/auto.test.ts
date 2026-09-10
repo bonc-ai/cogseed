@@ -30,6 +30,9 @@ const electronMock = vi.hoisted(() => {
 vi.mock('electron', () => ({ app: electronMock.app, autoUpdater: electronMock.autoUpdater }));
 
 const API_BASE = 'https://api.example.com';
+const packagedMac = { isPackaged: true, platform: 'darwin' as NodeJS.Platform };
+const packagedWindows = { isPackaged: true, platform: 'win32' as NodeJS.Platform };
+const packagedLinux = { isPackaged: true, platform: 'linux' as NodeJS.Platform };
 
 async function freshAuto(): Promise<typeof import('../../../../src/main/features/updater/auto')> {
   vi.resetModules();
@@ -58,7 +61,7 @@ describe('自动更新模块（Squirrel.Mac）', () => {
   it('打包模式：init 设置 feed URL（mac-arm64）并静默检查', async () => {
     electronMock.app.isPackaged = true;
     const auto = await freshAuto();
-    const status = auto.initAutoUpdate();
+    const status = auto.initAutoUpdate(undefined, packagedMac);
     expect(status.state).toBe('idle');
     expect(electronMock.autoUpdater.setFeedURL).toHaveBeenCalledWith({
       url: `${API_BASE}/updates/feed/mac-${process.arch}`,
@@ -70,7 +73,7 @@ describe('自动更新模块（Squirrel.Mac）', () => {
     electronMock.app.isPackaged = true;
     const auto = await freshAuto();
     const statuses: Array<{ state: string; version?: string; percent?: number }> = [];
-    auto.initAutoUpdate((s) => statuses.push(s));
+    auto.initAutoUpdate((s) => statuses.push(s), packagedMac);
 
     electronMock.autoUpdater.emit('checking-for-update');
     electronMock.autoUpdater.emit('update-available');
@@ -83,7 +86,7 @@ describe('自动更新模块（Squirrel.Mac）', () => {
   it('下载完成前调用 install 不触发 quitAndInstall；下载完成后触发', async () => {
     electronMock.app.isPackaged = true;
     const auto = await freshAuto();
-    auto.initAutoUpdate();
+    auto.initAutoUpdate(undefined, packagedMac);
 
     auto.installAutoUpdate();
     expect(electronMock.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
@@ -98,7 +101,7 @@ describe('自动更新模块（Squirrel.Mac）', () => {
     electronMock.app.isPackaged = true;
     const auto = await freshAuto();
     const statuses: Array<{ state: string; message?: string }> = [];
-    auto.initAutoUpdate((s) => statuses.push(s));
+    auto.initAutoUpdate((s) => statuses.push(s), packagedMac);
 
     electronMock.autoUpdater.emit('error', new Error('feed unreachable'));
     expect(auto.getAutoUpdateStatus()).toMatchObject({ state: 'error', message: 'feed unreachable' });
@@ -107,10 +110,31 @@ describe('自动更新模块（Squirrel.Mac）', () => {
   it('无更新事件回到 idle 状态', async () => {
     electronMock.app.isPackaged = true;
     const auto = await freshAuto();
-    auto.initAutoUpdate();
+    auto.initAutoUpdate(undefined, packagedMac);
 
     electronMock.autoUpdater.emit('checking-for-update');
     electronMock.autoUpdater.emit('update-not-available');
     expect(auto.getAutoUpdateStatus().state).toBe('idle');
+  });
+
+  it.each([
+    ['Windows', packagedWindows],
+    ['Linux', packagedLinux],
+  ])('打包后的 %s：自动更新禁用且不访问 Squirrel', async (_name, runtime) => {
+    electronMock.app.isPackaged = true;
+    const auto = await freshAuto();
+
+    expect(auto.initAutoUpdate(undefined, runtime)).toEqual({
+      state: 'disabled',
+      reason: 'unsupported_platform',
+    });
+    expect(auto.checkAutoUpdate(runtime)).toEqual({
+      state: 'disabled',
+      reason: 'unsupported_platform',
+    });
+    expect(electronMock.autoUpdater.on).not.toHaveBeenCalled();
+    expect(electronMock.autoUpdater.setFeedURL).not.toHaveBeenCalled();
+    expect(electronMock.autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    expect(electronMock.autoUpdater.quitAndInstall).not.toHaveBeenCalled();
   });
 });
