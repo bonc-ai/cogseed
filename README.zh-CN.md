@@ -180,7 +180,7 @@ Recall 在后续任务中检索已批准的资产并记录复用证据，同时�
 
 ## 上游署名
 
-CogSeed 基于 [Orkas](https://github.com/Orkas-AI/Orkas) 二次开发，延续并改造了其本地优先的多 Agent 协作与工具链实现。桌面端 `core-agent` 组件源自 [OpenClaw](https://github.com/openclaw/openclaw)。CogSeed 同时参考了 [Hermes-Agent](https://github.com/NousResearch/hermes-agent) 的规划与运行时适配模式。
+CogSeed 基于 Orkas 二次开发，延续并改造了其本地优先的多 Agent 协作与工具链实现。桌面端 `core-agent` 组件源自 [OpenClaw](https://github.com/openclaw/openclaw)。CogSeed 同时参考了 [Hermes-Agent](https://github.com/NousResearch/hermes-agent) 的规划与运行时适配模式。
 
 上游版权和许可证信息见 [`NOTICE`](./NOTICE)，第三方组件声明见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
 

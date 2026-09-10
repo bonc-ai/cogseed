@@ -1,5 +1,5 @@
 /**
- * ask_materials — grounded Q&A evidence service (COGSEED-39 ① Phase 4a).
+ * ask_materials — grounded Q&A evidence service (知识库问答 ① Phase 4a).
  *
  * One-call entry for "reliable Q&A within the material set": runs the hybrid
  * material search (Library vector + BM25, plus conversation attachments when
