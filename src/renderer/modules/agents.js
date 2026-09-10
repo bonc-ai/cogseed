@@ -2309,9 +2309,8 @@ async function _renderAgentDetailExecDefaults(agent) {
   await setModelSelect(currentProvider, currentModel);
 }
 
-/** P3394 外接智能体详情：托管网关运行状态 + 停止/启动按钮。
- *  复用现成 IPC p3394.external.list（返回 running/pid/port）与
- *  p3394.external.start/stop；仅对 runtime.kind==='p3394-gateway' 显示。 */
+/** P3394 外接智能体详情只显示安全状态。可写网关控制统一位于
+ *  设置—配置—外接网关与消息通道，避免两个管理入口发生状态分叉。 */
 async function _renderAgentDetailGateway(agent) {
   const section = document.getElementById('agents-detail-gateway-section');
   const slot = document.getElementById('agents-detail-gateway');
@@ -2323,48 +2322,36 @@ async function _renderAgentDetailGateway(agent) {
     return;
   }
   section.style.display = '';
-  const gateways = (typeof loadExternalGateways === 'function')
-    ? await loadExternalGateways({ force: true })
-    : [];
-  const gw = gateways.find((g) => g && g.cli === cli);
-  const running = !!(gw && gw.running);
+  let runtime = null;
+  try {
+    const registry = await window.cogseed.invoke('cogseed.agent.list');
+    runtime = Array.isArray(registry?.runtimes)
+      ? registry.runtimes.find((item) => item?.sourceKind === 'local-cli' && item.runtimeKind === cli)
+      : null;
+  } catch (err) {
+    _agentsLog.warn('safe gateway status read failed', { cli, error: err && (err.message || err) });
+  }
+  const running = runtime?.gatewayRunning === true;
   const statusText = running
     ? t('agents.gateway_running')
-      + (gw.pid ? ` · pid ${gw.pid}` : '')
-      + (gw.port ? ` · :${gw.port}` : '')
     : t('agents.gateway_offline');
-  const action = running ? 'stop' : 'start';
-  const btnLabel = running ? t('agents.gateway_stop') : t('agents.gateway_start');
+  const settingsButton = typeof window.uiButton === 'function' ? window.uiButton({
+    label: t('run_center.agent_configure_in_settings'),
+    size: 'sm',
+    icon: 'settings',
+    attrs: { 'data-agent-gateway-settings': true },
+  }) : '';
   slot.innerHTML = `
     <div class="agents-detail-gateway-status">
       <span class="agents-detail-gateway-dot ${running ? 'is-on' : 'is-off'}"></span>
       <span class="agents-detail-gateway-text">${escapeHtml(statusText)}</span>
-      <button type="button" class="btn btn-sm" data-gateway-action="${action}" data-gateway-cli="${escapeHtml(cli)}">${escapeHtml(btnLabel)}</button>
+      ${settingsButton}
     </div>`;
-  const btn = slot.querySelector('[data-gateway-action]');
+  const btn = slot.querySelector('[data-agent-gateway-settings]');
   if (!btn) return;
-  btn.addEventListener('click', async (e) => {
+  btn.addEventListener('click', (e) => {
     e.preventDefault();
-    btn.disabled = true;
-    try {
-      if (action === 'stop') {
-        await window.cogseed.invoke('p3394.external.stop', { cli });
-      } else {
-        const entries = (typeof loadLocalCliEntries === 'function')
-          ? await loadLocalCliEntries({ force: true })
-          : [];
-        const detected = entries.find((entry) => entry && entry.type === cli);
-        await window.cogseed.invoke('p3394.external.start', {
-          cli,
-          alias: agent.name || cli,
-          ...(detected && detected.path ? { binPath: detected.path } : {}),
-        });
-      }
-    } catch (err) {
-      _agentsLog.warn('p3394 gateway toggle failed', { cli, action, error: err && (err.message || err) });
-    }
-    btn.disabled = false;
-    void _renderAgentDetailGateway(agent);
+    window.CogSeedRunCenterSettings?.focusAnchor?.('gateways');
   });
 }
 

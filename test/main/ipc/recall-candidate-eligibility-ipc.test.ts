@@ -25,6 +25,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { trustedIpcSender } from '../../helpers/trusted-ipc-sender';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
 type InvokeResult = { ok: boolean; error?: string } & Record<string, unknown>;
 type InvokeFn = (event: unknown, req: { channel: string; payload?: unknown }) => Promise<InvokeResult>;
@@ -69,6 +70,7 @@ vi.mock('../../../src/main/features/kb_embed', () => ({
     const digest = createHash('sha256').update(text).digest();
     return Array.from({ length: 512 }, (_, i) => (digest[i % 32] / 255 - 0.5) * 0.2);
   },
+  closeEmbedder: () => {},
 }));
 
 /** 项目事实伪装成 personal —— PRD 3.4 明确排除，classification 阻断。 */
@@ -108,7 +110,8 @@ beforeEach(async () => {
   ipc.register();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await drainMainRuntimeForTest(UID);
   if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
   fs.rmSync(tmpDir, { recursive: true, force: true });

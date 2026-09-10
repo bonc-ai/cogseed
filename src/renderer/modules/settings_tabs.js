@@ -14,14 +14,19 @@ function _renderSettingsPageHeader() {
   root.innerHTML = uiPageHeader({ title: typeof t === 'function' ? t('settings.title') : '设置' });
 }
 
-function activateSettingsTab(name) {
+function _normalizeSettingsTab(name) {
+  return name === 'credentials' ? 'configuration' : name;
+}
+
+function activateSettingsTab(name, options = {}) {
   const tabs = Array.from(document.querySelectorAll('.settings-tab'));
   if (!tabs.length) return;
 
+  const requested = _normalizeSettingsTab(name);
   // If the requested tab was removed by open-source stripping, fall back to the
   // first surviving tab so no pane stays hidden.
-  const existing = tabs.find((btn) => btn.dataset.settingsTab === name);
-  const target = existing ? name : tabs[0].dataset.settingsTab;
+  const existing = tabs.find((btn) => btn.dataset.settingsTab === requested);
+  const target = existing ? requested : tabs[0].dataset.settingsTab;
   const panes = document.querySelectorAll('.settings-tab-pane');
 
   tabs.forEach((btn) => {
@@ -30,6 +35,15 @@ function activateSettingsTab(name) {
   panes.forEach((pane) => {
     pane.hidden = pane.dataset.settingsPane !== target;
   });
+
+  const anchor = typeof options === 'string' ? options : options?.anchor;
+  if (target === 'configuration') {
+    window.__settingsConfigurationAnchor = anchor || window.__settingsConfigurationAnchor || '';
+    window.CogSeedRunCenterSettings?.activate?.(window.__settingsConfigurationAnchor);
+  } else {
+    window.CogSeedRunCenterSettings?.deactivate?.();
+  }
+  return target;
 }
 
 function initSettingsTabs() {
@@ -54,3 +68,4 @@ function initSettingsTabs() {
 
 window.initSettingsTabs = initSettingsTabs;
 window.activateSettingsTab = activateSettingsTab;
+window.normalizeSettingsTab = _normalizeSettingsTab;

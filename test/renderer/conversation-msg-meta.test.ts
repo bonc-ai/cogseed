@@ -137,17 +137,24 @@ describe('conversation message metrics line', () => {
     });
     expect(segTexts.some((s) => s.startsWith('mseg:') && s.includes('chat.metrics.durationK|'))).toBe(true);
     expect(segTexts.some((s) => s.includes('chat.metrics.ttftK|'))).toBe(true);
-    // 速率段 2026-09-03 下线：tok/s 不再渲染（口径反复修正未达标）。
+    // 速率段停显：tok/s 不再渲染（口径反复不收敛，见 conversation-metrics.js）。
     expect(segTexts.some((s) => s.includes('tok/s'))).toBe(false);
-    expect(segTexts.some((s) => s.includes('chat.metrics.tokensK|') && s.includes('chat.metrics.tokensV|'))).toBe(true);
-    // Hover tooltip carries the cache breakdown lines.
-    expect(meta.title).toContain('缓存读 8K tok');
+    // fixture 带 cacheRead → 主读数走拆分模板（fresh 输入 + 缓存读标注），
+    // 不再把缓存并入"输入"（4a：合并展示造成"输入过大"误读）。
+    expect(segTexts.some((s) => s.includes('chat.metrics.tokensK|') && s.includes('chat.metrics.tokensVCache|'))).toBe(true);
+    expect(segTexts.some((s) => s.includes('chat.metrics.tokensV|'))).toBe(false);
+    // Hover tooltip 对齐 DeepSeek 官方 harness 四字段：未缓存输入 / 缓存读取 /
+    // 缓存命中（+缓存写）。
+    expect(meta.title).toContain('未缓存输入');
+    expect(meta.title).toContain('缓存读取 8K tok');
+    expect(meta.title).toContain('缓存命中');
 
     // Idempotent re-mount (e.g. finalize then refresh) updates, never duplicates.
     mount(ph, FULL_METRICS);
     expect(ph.children.length).toBe(1);
     expect(row.children.length).toBe(1);
-    expect((meta.children as Array<Record<string, unknown>>).length).toBe(3);
+    // 缓存命中率段（2026-09-08 显示分层）加入后共 4 段。
+    expect((meta.children as Array<Record<string, unknown>>).length).toBe(4);
   });
 
   it('produces no msg-meta node for messages without metrics', () => {

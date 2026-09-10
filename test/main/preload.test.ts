@@ -52,7 +52,14 @@ function fakeElement(id: string, options: {
   return element;
 }
 
-function loadPreload(bootResponse: unknown = null) {
+function loadPreload(bootResponse: unknown = null, options: {
+  argv?: string[];
+  AudioContext?: unknown;
+  env?: Record<string, string>;
+  navigator?: unknown;
+  platform?: string;
+  resourcesPath?: string;
+} = {}) {
   const exposed: Record<string, unknown> = {};
   const listeners = new Map<string, Set<Listener>>();
   const windowListeners = new Map<string, Set<WindowListener>>();
@@ -93,6 +100,7 @@ function loadPreload(bootResponse: unknown = null) {
     disconnect() {}
   }
   const window = {
+    AudioContext: options.AudioContext,
     addEventListener: vi.fn((type: string, listener: WindowListener) => {
       const set = windowListeners.get(type) || new Set<WindowListener>();
       set.add(listener);
@@ -108,11 +116,18 @@ function loadPreload(bootResponse: unknown = null) {
       if (id !== 'electron') throw new Error(`unexpected require: ${id}`);
       return { contextBridge, ipcRenderer, webUtils: undefined };
     },
-    process: { argv: [] as string[] },
+    process: {
+      argv: options.argv || [],
+      env: options.env || {},
+      platform: options.platform || 'linux',
+      resourcesPath: options.resourcesPath || '',
+    },
     window,
     document,
+    navigator: options.navigator,
     MutationObserver: FakeMutationObserver,
     console,
+    btoa,
     Date,
     Error,
     Promise,
@@ -472,5 +487,162 @@ describe('preload bridge', () => {
 
     ipcRenderer.invoke.mockImplementationOnce(() => { throw new Error('bridge unavailable'); });
     expect(() => api.log({ level: 'info' })).not.toThrow();
+  });
+
+  it('does not activate the packaged STT smoke from a renderer argument alone', async () => {
+    const getUserMedia = vi.fn();
+    const preload = loadPreload(null, {
+      argv: ['--cogseed-packaged-stt-smoke'],
+      navigator: { mediaDevices: { getUserMedia } },
+    });
+
+    preload.dispatchWindow('DOMContentLoaded', {});
+    await Promise.resolve();
+
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(preload.ipcRenderer.invoke).not.toHaveBeenCalledWith(
+      'cogseed.packagedSttSmokeReady',
+      expect.anything(),
+    );
+  });
+
+  it('drives the packaged STT smoke through media capture and the canonical bridge', async () => {
+    let processor: { onaudioprocess: null | ((event: unknown) => void) } | null = null;
+    const track = { readyState: 'live', stop: vi.fn() };
+    const mediaStream = { getAudioTracks: () => [track], getTracks: () => [track] };
+    class FakeAudioContext {
+      state = 'running';
+      destination = {};
+      createMediaStreamSource() { return { connect: vi.fn(), disconnect: vi.fn() }; }
+      createScriptProcessor() {
+        processor = { onaudioprocess: null, connect: vi.fn(), disconnect: vi.fn() } as never;
+        return processor;
+      }
+      close = vi.fn(async () => undefined);
+      resume = vi.fn(async () => undefined);
+    }
+    const preload = loadPreload(null, {
+      argv: ['--cogseed-packaged-stt-smoke'],
+      AudioContext: FakeAudioContext,
+      env: {
+        COGSEED_PACKAGED_STT_SMOKE_FILE: 'C:\\smoke\\result.json',
+        COGSEED_PACKAGED_STT_SMOKE_WAV: 'C:\\smoke\\fake.wav',
+      },
+      navigator: { mediaDevices: { getUserMedia: vi.fn(async () => mediaStream) } },
+      platform: 'win32',
+      resourcesPath: 'C:\\repo\\dist\\win-unpacked\\resources',
+    });
+    preload.ipcRenderer.invoke.mockImplementation(async (channel: string, request?: any) => {
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.start') {
+        return { ok: true, sessionId: 'stt-smoke-session' };
+      }
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.pushAudio') return { ok: true };
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.stop') {
+        const start = preload.ipcRenderer.send.mock.calls.find(([name]) => name === 'cogseed.streamStart');
+        const requestId = start?.[1]?.requestId;
+        setTimeout(() => {
+          preload.emit(`stream:${requestId}`, { type: 'event', event: { final: '这是普通话' } });
+          preload.emit(`stream:${requestId}`, { type: 'done' });
+        }, 0);
+        return { ok: true, text: '' };
+      }
+      return { ok: true };
+    });
+
+    preload.dispatchWindow('DOMContentLoaded', {});
+    await vi.waitFor(() => expect(processor).not.toBeNull());
+    const samples = Float32Array.from({ length: 4096 }, (_, index) => Math.sin(index / 8) * 0.25);
+    for (let chunk = 0; chunk < 22; chunk += 1) {
+      processor!.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
+    }
+
+    await vi.waitFor(() => {
+      expect(preload.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'cogseed.packagedSttSmokeReady',
+        expect.objectContaining({
+          audioTrackLive: true,
+          sampleCount: 89784,
+          nonZeroSampleCount: expect.any(Number),
+          rms: expect.any(Number),
+          pushAcknowledgements: 22,
+          sessionCreated: true,
+          stopAcknowledged: true,
+          finalEventObserved: true,
+          finalTextLength: 5,
+          failureCount: 0,
+        }),
+      );
+    });
+    const logicalChannels = preload.ipcRenderer.invoke.mock.calls
+      .filter(([channel]) => channel === 'cogseed.invoke')
+      .map(([, request]) => request.channel);
+    expect(logicalChannels).toEqual([
+      'stt.start',
+      ...Array.from({ length: 22 }, () => 'stt.pushAudio'),
+      'stt.stop',
+    ]);
+    expect(preload.ipcRenderer.send).toHaveBeenCalledWith(
+      'cogseed.streamStart',
+      expect.objectContaining({ channel: 'stt.results', payload: { sessionId: 'stt-smoke-session' } }),
+    );
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it('cancels the STT result stream and native session when the smoke fails before stop', async () => {
+    let processor: { onaudioprocess: null | ((event: unknown) => void) } | null = null;
+    const track = { readyState: 'live', stop: vi.fn() };
+    const mediaStream = { getAudioTracks: () => [track], getTracks: () => [track] };
+    class FakeAudioContext {
+      state = 'running';
+      destination = {};
+      createMediaStreamSource() { return { connect: vi.fn(), disconnect: vi.fn() }; }
+      createScriptProcessor() {
+        processor = { onaudioprocess: null, connect: vi.fn(), disconnect: vi.fn() } as never;
+        return processor;
+      }
+      close = vi.fn(async () => undefined);
+      resume = vi.fn(async () => undefined);
+    }
+    const preload = loadPreload(null, {
+      argv: ['--cogseed-packaged-stt-smoke'],
+      AudioContext: FakeAudioContext,
+      env: {
+        COGSEED_PACKAGED_STT_SMOKE_FILE: 'C:\\smoke\\result.json',
+        COGSEED_PACKAGED_STT_SMOKE_WAV: 'C:\\smoke\\fake.wav',
+      },
+      navigator: { mediaDevices: { getUserMedia: vi.fn(async () => mediaStream) } },
+      platform: 'win32',
+      resourcesPath: 'C:\\repo\\dist\\win-unpacked\\resources',
+    });
+    preload.ipcRenderer.invoke.mockImplementation(async (channel: string, request?: any) => {
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.start') {
+        return { ok: true, sessionId: 'stt-smoke-session' };
+      }
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.pushAudio') {
+        return { ok: false, error: 'forced push failure' };
+      }
+      if (channel === 'cogseed.invoke' && request?.channel === 'stt.cancel') return { ok: true };
+      return { ok: true };
+    });
+
+    preload.dispatchWindow('DOMContentLoaded', {});
+    await vi.waitFor(() => expect(processor).not.toBeNull());
+    const samples = Float32Array.from({ length: 4096 }, (_, index) => Math.sin(index / 8) * 0.25);
+    for (let chunk = 0; chunk < 22; chunk += 1) {
+      processor!.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
+    }
+
+    await vi.waitFor(() => {
+      expect(preload.ipcRenderer.invoke).toHaveBeenCalledWith(
+        'cogseed.packagedSttSmokeReady',
+        expect.objectContaining({ failureCount: 1, stopAcknowledged: false }),
+      );
+    });
+    const streamStart = preload.ipcRenderer.send.mock.calls.find(([name]) => name === 'cogseed.streamStart');
+    expect(preload.ipcRenderer.send).toHaveBeenCalledWith('cogseed.streamCancel', streamStart?.[1]?.requestId);
+    expect(preload.ipcRenderer.invoke).toHaveBeenCalledWith('cogseed.invoke', {
+      channel: 'stt.cancel', payload: { sessionId: 'stt-smoke-session' },
+    });
+    expect(track.stop).toHaveBeenCalledOnce();
   });
 });

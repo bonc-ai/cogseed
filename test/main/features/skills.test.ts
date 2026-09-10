@@ -24,14 +24,17 @@ vi.mock('../../../src/main/model/client', () => ({
 let tmpDir: string;
 let prevWs: string | undefined;
 let prevHome: string | undefined;
+let prevUserProfile: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-skills-'));
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
+  prevUserProfile = process.env.USERPROFILE;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
   process.env.HOME = tmpDir;
+  process.env.USERPROFILE = tmpDir;
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
   users.activateUser(TEST_UID);
@@ -48,6 +51,8 @@ afterEach(async () => {
     else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
     streamImpl.current = null;
     chatImpl.current = null;
     vi.unstubAllGlobals();
@@ -2364,16 +2369,18 @@ describe('skills › streamSendToSkillChat synthesized progress', () => {
 // "import from folder". These lock both doors onto one scanner.
 describe('skills › import security gate', () => {
   /**
-   * Build a source tree to import from, under `/private/tmp`.
+   * Build a source tree to import from an OS-safe temporary root.
    *
-   * Deliberately not `os.tmpdir()` nor the test workspace: on macOS both resolve
+   * On macOS, deliberately do not use `os.tmpdir()` nor the test workspace: both resolve
    * under `/private/var/...`, and importing refuses `/private` as a system
    * directory. A fixture placed there dies on that guard and never reaches the
    * security gate, so the test would pass or fail for the wrong reason.
-   * `/private/tmp` is the one explicitly allowed exception.
+   * `/private/tmp` is the explicitly allowed macOS exception. Windows and Linux
+   * use their native temp root, which is outside their import-source blacklist.
    */
   function writeSkill(name: string, files: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join('/private/tmp', `cogseed-imp-${name}-`));
+    const importRoot = process.platform === 'darwin' ? '/private/tmp' : os.tmpdir();
+    const dir = fs.mkdtempSync(path.join(importRoot, `cogseed-imp-${name}-`));
     for (const [rel, content] of Object.entries(files)) {
       const p = path.join(dir, rel);
       fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -2463,7 +2470,8 @@ describe('skills › import chat seeding', () => {
     + '# Tidy\n\nNormalize punctuation and collapse blank lines. No file, network, or shell access.\n';
 
   function srcDir(name: string, files: Record<string, string>): string {
-    const dir = fs.mkdtempSync(path.join('/private/tmp', `cogseed-seed-${name}-`));
+    const importRoot = process.platform === 'darwin' ? '/private/tmp' : os.tmpdir();
+    const dir = fs.mkdtempSync(path.join(importRoot, `cogseed-seed-${name}-`));
     for (const [rel, content] of Object.entries(files)) {
       const p = path.join(dir, rel);
       fs.mkdirSync(path.dirname(p), { recursive: true });

@@ -14,6 +14,7 @@ import {
   transitionCogSeedTask,
 } from './lifecycle';
 import {
+  admitPlannedCogSeedTask,
   appendCogSeedTaskEventIfActive,
   createCogSeedTask,
   listCogSeedTasks,
@@ -100,6 +101,7 @@ export interface CogSeedRuntimeStatus {
 
 export interface CogSeedRuntimeController {
   startCogSeedTask(userId: string, input: StartCogSeedTaskInput): Promise<CogSeedTaskRecord>;
+  startPlannedCogSeedTask(userId: string, taskId: string, input: StartCogSeedTaskInput): Promise<CogSeedTaskRecord>;
   retryCogSeedTask(userId: string, taskId: string, requestId: string): Promise<CogSeedTaskRecord>;
   resumeCogSeedTask(userId: string, taskId: string, input: ResumeCogSeedTaskInput): Promise<CogSeedTaskRecord>;
   retryCogSeedResultDelivery(userId: string, taskId: string): Promise<CogSeedTaskRecord>;
@@ -280,6 +282,29 @@ async function buildTaskExecutionContext(
     if (assetContext.length) context.push(...assetContext);
   }
   return context.length ? context : undefined;
+}
+
+async function linkKstarTask(userId: string, conversationId: string | undefined, cogseedTaskId: string): Promise<void> {
+  if (!conversationId) return;
+  try {
+    const lifecycle = await (await import('../kstar/lifecycle-adapter')).readKstarTaskLifecycle(userId, conversationId);
+    const task = lifecycle.task;
+    if (!task || task.conversationId !== conversationId) return;
+    const kstar = await import('../kstar/requirement-store');
+    if (task.cogseedTaskId !== cogseedTaskId) {
+      await kstar.replaceKstarTask(userId, { ...task, cogseedTaskId, updatedAt: new Date().toISOString() });
+    }
+    await updateCogSeedTask(userId, cogseedTaskId, (current) => ({
+      ...current,
+      kstarTaskId: task.id,
+      ...(lifecycle.requirement?.id ? { kstarRequirementId: lifecycle.requirement.id } : {}),
+      ...(lifecycle.projection?.id ? { kstarProjectionId: lifecycle.projection.id } : {}),
+      ...(lifecycle.requirement?.forecastId ? { kstarForecastId: lifecycle.requirement.forecastId } : {}),
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    log.warn('KSTAR/CogSeed task bridge degraded', { taskId: cogseedTaskId, error: logErrorRef(error) });
+  }
 }
 
 async function projectTaskEventBestEffort(
@@ -708,7 +733,17 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       if (activeRuns.has(initial.taskId)) return { task: persisted };
       if (persisted.status !== initial.status) return { task: persisted };
       let task = persisted;
-      if (!task.runtimeWorkerId) task = await updateCogSeedTask(userId, task.taskId, (current) => ({ ...current, runtimeWorkerId }));
+      if (task.status === 'planned') {
+        task = await admitPlannedCogSeedTask(userId, task.taskId, {
+          ...input,
+          initialStatus: 'planned',
+          spaceId: task.spaceId,
+          worktreeName: task.worktreeName,
+          runtimeWorkerId,
+        });
+      } else if (!task.runtimeWorkerId) {
+        task = await updateCogSeedTask(userId, task.taskId, (current) => ({ ...current, runtimeWorkerId }));
+      }
       if (task.status === 'created' || task.status === 'recoverable') {
         task = await transitionCogSeedTask(userId, task.taskId, 'queued');
       }
@@ -912,6 +947,7 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       capabilities,
     };
     const conversationId = await resolveConversationIdForTask(userId, created.task, input);
+    await linkKstarTask(userId, conversationId, created.task.taskId);
     launchInput.context = await buildTaskExecutionContext(userId, created.task, launchInput, conversationId);
     return launchTask(userId, created.task, launchInput);
   }
@@ -927,6 +963,31 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
       conversationId,
       input.executionKind,
       () => performStartTask(userId, input),
+    );
+  }
+
+  async function startPlannedTask(
+    userId: string,
+    taskId: string,
+    input: StartCogSeedTaskInput,
+  ): Promise<CogSeedTaskRecord> {
+    const planned = await readCogSeedTask(userId, taskId);
+    if (!planned) throw new Error('CogSeed task not found');
+    if (planned.status !== 'planned') return planned;
+    const capabilities = await resolveRuntimeCapabilities(userId, input.requestId, planned.runtimeSessionId);
+    const launchInput: StartCogSeedTaskInput & { runtimeSessionId?: string } = {
+      ...input,
+      ...(planned.abilityAssetIds ? { abilityAssetIds: planned.abilityAssetIds } : {}),
+      ...(input.workingDir || planned.workingDir ? { workingDir: input.workingDir || planned.workingDir } : {}),
+      capabilities,
+    };
+    const conversationId = await resolveConversationIdForTask(userId, planned, launchInput);
+    launchInput.context = await buildTaskExecutionContext(userId, planned, launchInput, conversationId);
+    return withTaskConversationAdmission(
+      userId,
+      conversationId,
+      launchInput.executionKind,
+      () => withCogSeedUserLaunchRecoveryAdmission(userId, () => launchTask(userId, planned, launchInput)),
     );
   }
 
@@ -1067,6 +1128,11 @@ export function createCogSeedRuntimeController(options: CogSeedRuntimeController
           );
         },
       );
+    },
+
+    async startPlannedCogSeedTask(userId, taskId, input) {
+      watchUser(userId);
+      return startPlannedTask(userId, taskId, input);
     },
 
     async retryCogSeedTask(userId, taskId, requestId) {

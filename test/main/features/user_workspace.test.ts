@@ -8,12 +8,15 @@ vi.mock('../../../src/main/logger', () => ({
 }));
 
 let tmpDir: string;
+let tmpContainer: string;
 let prevWs: string | undefined;
 let prevHome: string | undefined;
 let prevGuard: string | undefined;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ws-'));
+  tmpContainer = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-ws-'));
+  tmpDir = path.join(tmpContainer, 'data');
+  fs.mkdirSync(tmpDir, { recursive: true });
   prevWs = process.env.COGSEED_WORKSPACE_ROOT;
   prevHome = process.env.HOME;
   prevGuard = process.env.COGSEED_TCC_GUARD_FORCE;
@@ -28,7 +31,7 @@ afterEach(() => {
   else process.env.HOME = prevHome;
   if (prevGuard === undefined) delete process.env.COGSEED_TCC_GUARD_FORCE;
   else process.env.COGSEED_TCC_GUARD_FORCE = prevGuard;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(tmpContainer, { recursive: true, force: true });
 });
 
 // Electron's `dialog` and `BrowserWindow` are not available in unit tests,

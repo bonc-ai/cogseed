@@ -29,6 +29,7 @@ plan.md
 /.zcode/
 __pycache__/
 *.py[cod]
+*.tsbuildinfo
 
 # Unrelated project snapshots and inspection material (never commit)
 /.inspect-jiaoyu/
@@ -47,7 +48,9 @@ package.json.new
 
 # local build identity and development package output
 /.build
+/build-info.json
 /dist-dev
+build-info.json
 
 # Per-machine tool permissions. Plans under .claude/plans/ are shared
 # deliberately; this file is local state and would churn per developer.
@@ -69,3 +72,6 @@ package.json.new
 # Internal dev skills must not be tracked in the public repo.
 # Keep a local copy outside the checkout (e.g. ~/Desktop/cogseed-open-source-audit).
 .agents/skills/cogseed-open-source-audit/
+.tmp-override-src-*/
+.tmp-skill-import-*/
+.tmp-skill-runner-*/

@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-07
+
 ### Added
 
 - **In-app update reminders** — silent startup check plus a Settings › 通用 › 更新

@@ -347,8 +347,43 @@ export async function* mapCoreAgentEvents(
   let turnStarted = finalText.length > 0;
   let pendingSeparator = false;
 
+  // 思考流聚合缓冲（真机踩坑 2026-09-08 19:50）：逐 token 发 progress 会让
+  // 单回合 299 条思考洪泛，挤占 process 数组 300 条上限——工具 chatItem
+  // 被顶掉，历史面板只剩思考、写文件等工具记录全部丢失。聚合节流：
+  // 攒满 160 字符或思考结束（thinking_end/text 首达/工具开始）时整段
+  // 冲刷；渲染层思考行本来就按"最近未收行"续写，分段到达展示无差别。
+  let thinkBuf = '';
+  let thinkBufChars = 0;
+  const flushThink = function* (): Generator<StreamEvent> {
+    if (!thinkBuf) return;
+    const chunk = thinkBuf;
+    thinkBuf = '';
+    thinkBufChars = 0;
+    // origin:'thinking' 标记（PR209 评审 M9）：bus 旧格式 processItems
+    // 据此把同段思考续写到上一条，不逐条 append。
+    yield { type: 'progress', text: chunk, origin: 'thinking' };
+  };
+
   for await (const ev of events) {
+    // 思考结束边界：任何非 thinking 事件到达都先冲刷缓冲（保序：思考段
+    // 在其后的工具/正文之前）。
+    if (ev.type !== 'thinking_delta') {
+      yield* flushThink();
+    }
     switch (ev.type) {
+      case 'thinking_delta': {
+        // 模型思考流（子安 2026-09-08 需求：展示思考过程）：pi-ai 的
+        // thinking_delta 此前全链路（provider/runner/mapper）无转发被丢弃。
+        // 转为 progress 事件（聚合节流后），渲染层思考行滚动展示，投影器
+        // 落 reasoning 条目持久化，与工具调用平级交错。
+        const piece = ev.delta || '';
+        if (!piece) break;
+        thinkBuf += piece;
+        thinkBufChars += piece.length;
+        if (thinkBufChars >= 160) yield* flushThink();
+        break;
+      }
+
       case 'text_delta': {
         const piece = ev.text || '';
         if (!piece) break;

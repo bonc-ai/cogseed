@@ -101,16 +101,11 @@ async function bootApp() {
   // First-run walkthrough FIRST: check the machine-local onboarding marker
   // right after i18n, BEFORE Stage A/B. The walkthrough is a full-screen
   // overlay — the user should land on it immediately, never on a half-loaded
-  // main UI that swaps to the walkthrough seconds later. It is fire-and-
-  // forget so it never blocks first paint; Stage A/B keep warming the main
-  // UI underneath the overlay. `maybeStart` is idempotent (skips when the
-  // marker says completed), so the original post-Stage-B call below stays
-  // as a safety net for edge cases where the early check raced boot.
-  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
-    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
-      _bootLog.warn('onboarding maybeStart (early) failed', { error: (err && err.message) || String(err) });
-    });
-  }
+  // main UI that swaps to the walkthrough seconds later. Fire-and-forget so
+  // it never blocks first paint; the script itself is lazy-loaded only when
+  // the marker says this device hasn't completed it. The post-restore call
+  // below stays as a safety net (loader + maybeStart are both idempotent).
+  _maybeStartOnboardingFeature();
 
   // ── Stage A (parallel, no inter-dependencies) ──────────────────────
   // All four are independent IPC calls. Three downstream constraints,
@@ -144,12 +139,8 @@ async function bootApp() {
   // chat render finds the commander avatar warm; one cheap IPC, worth
   // it to avoid a default-avatar flash on the first frame.
   _restoreLastView();
-  // ── 工作空间 tab 冷启动预热 ─────────────────────────────────────────────
-  // workspace.js 原本是点击 tab 时才注入的懒加载脚本（3000 行/172KB），
-  // 每次打开软件后第一次点「工作空间」都要现场取代码 + 解析，产生可感知
-  // 延迟。这里改成打开软件时就把脚本注入好（只加载、不渲染），首次点击
-  // 只剩数据 IPC，跟同会话第二次点击一样快。
-  // requestIdleCallback 等主线程空闲再装，不挤占首帧；4s 兜底保证必装。
+  // Warm code and data only. Hidden DOM must not compete with an explicit
+  // workspace destination or reset the space selected while data is loading.
   {
     const _warmWorkspaceFeature = () => {
       const loader = typeof loadRendererFeature === 'function'
@@ -158,15 +149,7 @@ async function bootApp() {
       if (typeof loader !== 'function') return;
       Promise.resolve(loader('workspace'))
         .then(() => {
-          // 数据同样预热：在隐藏面板里先渲染一遍（不可见），首次点击只剩
-          // 极短刷新；本机 CLI 探测也提前完成，新建空间弹窗的基础 Agent
-          // 不再后补。用户已手动进入工作空间/面包屑已请求打开指定空间时跳过，
-          // 避免与点击路径的 renderWorkspace 并发互相覆盖。
-          if (currentView !== 'workspace' && currentView !== 'spaces'
-            && !window.__cogseedPendingOpenSpace
-            && typeof window.renderWorkspace === 'function') {
-            Promise.resolve(window.renderWorkspace()).catch(() => {});
-          }
+          if (typeof window.warmWorkspace === 'function') return window.warmWorkspace();
         })
         .catch((err) => {
           _bootLog.warn('workspace warmup load failed', { error: (err && err.message) || String(err) });
@@ -178,15 +161,11 @@ async function bootApp() {
       setTimeout(_warmWorkspaceFeature, 500);
     }
   }
-  // First-run walkthrough: fire-and-forget so it never blocks first paint.
-  // It reads the machine-local onboarding marker and only lifts the overlay
-  // on a device that hasn't completed it yet. Runs after the last view is
-  // restored so the app is fully painted underneath the overlay.
-  if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
-    Promise.resolve(window.csOnboarding.maybeStart()).catch((err) => {
-      _bootLog.warn('onboarding maybeStart failed', { error: (err && err.message) || String(err) });
-    });
-  }
+  // First-run walkthrough safety net: fire-and-forget so it never blocks
+  // first paint. Same lazy path as the early call — the marker gates both,
+  // and the loader/maybeStart are idempotent so the second call is a no-op
+  // when the early one already started the walkthrough.
+  _maybeStartOnboardingFeature();
 
   // Interactive tour is started by onboarding.js after completion
   // (removed duplicate auto-start to avoid "tour already running" conflict)
@@ -288,6 +267,31 @@ function _saveLastView(view, cid) {
   try {
     localStorage.setItem(_LAST_VIEW_KEY, JSON.stringify({ view, cid: cid || null }));
   } catch (_) {}
+}
+
+// ── 首启引导（onboarding）按需加载 ─────────────────────────────────────────
+// onboarding.js(168K)+css(33K) 只在设备未完成引导时才需要：先查机器本地
+// 标记（prefs IPC，无需脚本本体），未完成才经 lazy-features 注入并启动；
+// 已完成的老设备首屏少解析约 200K。幂等：loader 与 maybeStart 各自去重。
+function _maybeStartOnboardingFeature() {
+  Promise.resolve()
+    .then(() => window.cogseed.invoke('prefs.getOnboarding'))
+    .then((res) => {
+      if (res && res.completed === true) return; // 已完成：不加载不启动
+      const loader = typeof loadRendererFeature === 'function'
+        ? loadRendererFeature
+        : window.loadRendererFeature;
+      if (typeof loader !== 'function') return;
+      return Promise.resolve(loader('onboarding'))
+        .then(() => {
+          if (window.csOnboarding && typeof window.csOnboarding.maybeStart === 'function') {
+            return window.csOnboarding.maybeStart();
+          }
+        });
+    })
+    .catch((err) => {
+      _bootLog.warn('onboarding lazy load failed', { error: (err && err.message) || String(err) });
+    });
 }
 
 function _loadViewFeature(feature, view, run) {
@@ -402,33 +406,25 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  if (view === 'spaces') view = 'workspace';
+  if (typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
   if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();
   const openPersonalOntology = view === 'personal-ontology';
   const openLegacyAgentDashboard = view === 'dashboard';
+  const openLegacyAgentSettings = view === 'agents';
   // Keep deep links and persisted callers using the pre-unification routes
   // inside Run Center. The Run Center controller owns the secondary mode/tab
   // mapping, while boot only needs to select the shared panel.
-  const legacyRunCenterView = view === 'board' || view === 'runs' || view === 'collaboration'
+  const legacyRunCenterView = ['overview', 'board', 'runs', 'tasks', 'sessions', 'history', 'execution', 'collaboration'].includes(view)
     ? view : null;
-  // The restored five-tab vocabulary can also arrive as a direct deep link.
-  // Keep `agents` out of this list because that route still owns the global
-  // Connections/Agents surface outside Run Center.
-  const directRunCenterView = ['overview', 'tasks', 'sessions', 'history', 'execution'].includes(view)
-    ? view : null;
+  // Keep `agents` out of the direct-route list because that route still owns
+  // the global Connections/Agents surface outside Run Center.
   const requestedRunCenterView = openLegacyAgentDashboard ? 'agents' : opts.runCenterView;
-  // Keep the legacy expression explicit: callers that pass a secondary
-  // Run Center route still take precedence over the requested panel view.
-  const effectiveRunCenterView = legacyRunCenterView || requestedRunCenterView;
-  const normalizedRunCenterView = directRunCenterView || effectiveRunCenterView;
-  // The pre-unification `runs` route opened the execution-history surface.
-  // Keep that deep link stable while the visible Run Center `runs` tab opens
-  // the actionable queue through its own in-panel activation.
-  const runCenterInitialView = legacyRunCenterView === 'runs'
-    ? 'history' : normalizedRunCenterView;
+  const runCenterInitialView = legacyRunCenterView || requestedRunCenterView;
   if (openPersonalOntology) view = 'recall';
   if (openLegacyAgentDashboard) view = 'run-center';
   if (legacyRunCenterView) view = 'run-center';
-  if (directRunCenterView) view = 'run-center';
+  if (openLegacyAgentSettings) view = 'settings';
   if (view === 'evolution') view = 'skills';
   if (view !== 'run-center' && typeof window.stopRunCenterWatch === 'function') {
     window.stopRunCenterWatch();
@@ -445,6 +441,20 @@ function setView(view, cid, opts = {}) {
     window.__stopSttInputRecording();
   }
   _saveLastView(view, cid);
+  window.__runCenterReturnContext = view === 'conversation' && opts.runCenterReturn
+    ? opts.runCenterReturn : null;
+  const runCenterReturnButton = document.getElementById('run-center-return-btn');
+  if (runCenterReturnButton) runCenterReturnButton.hidden = !window.__runCenterReturnContext;
+  // Prepare synchronously before exposing the retained panel: otherwise its
+  // previous space paints for a frame before the deferred loader runs.
+  if (view === 'workspace') {
+    if (typeof window.prepareWorkspaceView === 'function') window.prepareWorkspaceView();
+  } else {
+    // A breadcrumb may have queued a destination before workspace.js loaded.
+    // Leaving cancels that intent even when its lifecycle hook is not ready.
+    window.__cogseedPendingOpenSpace = null;
+    if (typeof window.leaveWorkspace === 'function') window.leaveWorkspace();
+  }
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panelId = view === 'new-chat' ? 'panel-new-chat'
                 : view === 'auto' ? 'panel-auto'
@@ -488,12 +498,15 @@ function setView(view, cid, opts = {}) {
   }
   if (view === 'run-center') {
     _loadViewFeature('run-center', 'run-center', () => {
-      if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView);
+      if (typeof renderRunCenter === 'function') renderRunCenter(runCenterInitialView, opts.runCenterOptions || {});
     });
   }
   if (view === 'conversation' && cid) {
     currentCid = cid;
     if (typeof onEnterConversationView === 'function') onEnterConversationView();
+    if (opts.openRunContext && window.ConversationInfo?.openAndSetTab) {
+      window.ConversationInfo.openAndSetTab(opts.openRunContext);
+    }
     // If this conversation has an in-flight stream and its bubble is still
     // attached to #chat-history (sidebar tab toggle didn't wipe it), skip
     // the reload — wiping would orphan the bubble while the active stream
@@ -552,33 +565,6 @@ function setView(view, cid, opts = {}) {
     if (typeof _chatAttachRefreshFromServer === 'function') _chatAttachRefreshFromServer(DRAFT_CID);
     if (typeof _renderQuotePreview === 'function') _renderQuotePreview(DRAFT_CID);
     setTimeout(() => document.getElementById('new-chat-input')?.focus(), 50);
-  } else if (view === 'agents') {
-    currentCid = null;
-    _deferSidebarNavWork('agents-tab-load', () => {
-      // AI 团队已内嵌进「连接」：深链先切到 Agent tab。
-      if (typeof initConnections === 'function') initConnections();
-      else if (typeof window.initConnections === 'function') window.initConnections();
-      if (typeof activateConnectionsTab === 'function') activateConnectionsTab('agents');
-      _loadViewFeature('agents', 'agents', () => {
-        if (typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary) renderAgentsList(_agentsCache);
-        // Boot owns a summary-only list. Upgrade it once when the grid first needs
-        // descriptions/counts; subsequent visits reuse the full renderer cache.
-        const needsFullListing = !(typeof _agentsCache !== 'undefined' && _agentsCache && !_agentsCacheIsSummary);
-        if (needsFullListing) {
-          _deferSidebarNavWork('agents-tab-refresh', () => {
-            if (currentView !== 'agents') return;
-            Promise.resolve(loadAgents(false))
-              .then(() => {
-                if (currentView === 'agents' && typeof refreshSelectedAgentDetail === 'function') {
-                  return refreshSelectedAgentDetail();
-                }
-                return null;
-              })
-              .catch((e) => _bootLog.warn('agents refresh on tab entry failed', { error: (e && e.message) || String(e) }));
-          }, 0);
-        }
-      });
-    });
   } else if (view === 'skills') {
     currentCid = null;
     _deferSidebarNavWork('skills-tab-refresh', () => {
@@ -673,7 +659,9 @@ function setView(view, cid, opts = {}) {
     _deferSidebarNavWork('settings-tab-load', () => {
       _loadViewFeature('settings', 'settings', () => {
         if (typeof loadSettings === 'function') {
-          Promise.resolve(loadSettings())
+          const settingsTab = openLegacyAgentSettings ? 'configuration' : opts.settingsTab;
+          const settingsAnchor = openLegacyAgentSettings ? 'agents' : opts.settingsAnchor;
+          Promise.resolve(loadSettings({ tab: settingsTab, anchor: settingsAnchor }))
             .catch((e) => _bootLog.warn('settings page load failed', { error: (e && e.message) || String(e) }));
         }
       });

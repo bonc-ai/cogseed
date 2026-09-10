@@ -865,6 +865,17 @@ function imageMimeFromExt(ext: string): ImageMimeType {
   return 'image/jpeg'; // .jpg / .jpeg / fallback
 }
 
+/** Best-effort image extension from magic bytes. Channel image references
+ * (e.g. feishu image_key, G-17 byte path) carry no extension; imported
+ * attachments need one for mime routing. Unknown signatures fall back to png. */
+export function imageExtForBytes(bytes: Buffer): string {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
+  if (bytes.length >= 6 && bytes.subarray(0, 3).toString('latin1') === 'GIF') return 'gif';
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return 'png';
+}
+
 /**
  * Move an entire draft attachment dir (e.g. `main_chat/`, used by the
  * commander tab

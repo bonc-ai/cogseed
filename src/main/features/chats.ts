@@ -371,7 +371,7 @@ function _hasFreshParticipantSummary(c: Conversation): boolean {
   return !c.agent_id || c.agent_ids.includes(c.agent_id);
 }
 
-// COGSEED-15：会话参与智能体单一事实源。
+// 空间可用智能体：会话参与智能体单一事实源。
 // 汇总语义与 listConversations 完全一致：kind==='agent' 去重（同一 Agent 多次调用
 // 只计 1 个；角色/Skill/工具不计入）+ 起始 agent_id 兜底 + commander 独立布尔。
 // 数据源 = members.json（运行协作区域 /api/conversations/:cid/members 同一份文件），
@@ -1365,7 +1365,7 @@ export async function conversationSpaceId(uid: string, cid: string): Promise<str
  *  把整份 <cid>.jsonl 读进内存做 commander 正则扫描。工作空间中心
  *  （listSpaces）对 N 个空间 × M 个会话调用它，成本会放大成「全部
  *  消息字节总和」，是工作空间首屏卡顿的主因之一。最近会话只用到
- *  convs[0].title / updated_at，不需要智能体名单口径（COGSEED-15 的
+ *  convs[0].title / updated_at，不需要智能体名单口径（空间可用智能体 的
  *  名单一致性只作用于空间任务行，仍走完整版路径）。 */
 export async function listSpaceConversationsLight(userId: string, spaceId: string): Promise<Conversation[]> {
   if (!safeId(spaceId)) return [];
@@ -1395,7 +1395,7 @@ export async function listSpaceConversations(userId: string, spaceId: string): P
   if (!safeId(spaceId)) return [];
   const startedAt = Date.now();
   // 持久化元数据表路径：全部会话空闲（quiescent）且指纹命中 → 直接返回，
-  // 不再逐行读 members.json（COGSEED-15：bus 忙时必须实时，名单随 turn 变）。
+  // 不再逐行读 members.json（空间可用智能体：bus 忙时必须实时，名单随 turn 变）。
   const meta = await import('./workspace_meta');
   const bus = require('./group_chat/bus') as typeof import('./group_chat/bus');
   const tableEntry = await meta.getEntry<Conversation[]>(userId, 'conversations', spaceId);
@@ -1433,7 +1433,7 @@ export async function listSpaceConversations(userId: string, spaceId: string): P
     .filter((c) => !isDeletedConversation(c))
     .sort(_compareConversationIndexRows);
 
-  // COGSEED-15：空间任务行的智能体数量/名单与运行协作区域同一事实源
+  // 空间可用智能体：空间任务行的智能体数量/名单与运行协作区域同一事实源
   // （members.json 派生，kind==='agent' 去重；liveMembersOnly 跳过行内旧快照）。
   // 只覆盖返回行，不落盘。
   await Promise.all(rows.map(async (c) => {

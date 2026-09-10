@@ -4,6 +4,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { assertExecutableArch } = require('./runtime-gate.cjs');
 
 // Every electron-builder extraResources destination must be declared here.
 // Some destinations have their own specialist verifier; this registry makes a
@@ -13,6 +14,7 @@ const EXTRA_RESOURCES_CONTRACT = Object.freeze({
   runtime: 'target-runtime-gate',
   builtin: 'builtin-resource-contract',
   'builtin-packages': 'builtin-package-seed-contract',
+  'discovery-catalog': 'discovery-catalog-contract',
   officecli: 'officecli-release-gate',
   guardrail: 'guardrail-scanner-contract',
   'sherpa-onnx': 'pinned-offline-resource',
@@ -49,6 +51,14 @@ const SHERPA_ONNX_CONTRACT = Object.freeze({
     Object.freeze({ name: 'tokens.txt', bytes: 48_697, sha256: '8b294db9045d6e5f94647f4c1eec1af4da143a75053c399611444b378ff966ac' }),
   ]),
 });
+
+const SHERPA_ONNX_WINDOWS_NATIVE_FILES = Object.freeze([
+  'sherpa-onnx.node',
+  'onnxruntime.dll',
+  'onnxruntime_providers_shared.dll',
+  'sherpa-onnx-c-api.dll',
+  'sherpa-onnx-cxx-api.dll',
+]);
 
 const MAC_LOCALIZED_METADATA_CONTRACT = Object.freeze([
   Object.freeze({
@@ -213,6 +223,18 @@ function verifySherpaOnnxRoot(resourceRoot) {
   return verifyResourceContract(resourceRoot, SHERPA_ONNX_CONTRACT);
 }
 
+function verifySherpaOnnxWindowsNativeRoot(nativeRoot, options = {}) {
+  requireDirectory('sherpa-onnx Windows native root', nativeRoot);
+  for (const name of SHERPA_ONNX_WINDOWS_NATIVE_FILES) {
+    const file = path.join(nativeRoot, name);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      throw new Error(`[packaged-resource-gate] missing sherpa-onnx Windows native file: ${file}`);
+    }
+    assertExecutableArch(file, 'win32', 'x64', options);
+  }
+  return 'native:sherpa-onnx:win32-x64';
+}
+
 function verifyEmbeddingModelArchive(file) {
   requirePinnedFile('embedding-model archive', file, EMBEDDING_MODEL_CONTRACT.archive);
 }
@@ -251,6 +273,49 @@ function verifyMacLocalizedMetadataRoot(root, options = {}) {
     }
   }
   return 'resource:mac-locales:v1';
+}
+
+function booleanPlistEntries(file, label) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  } catch {
+    throw new Error(`[packaged-resource-gate] missing ${label}: ${file}`);
+  }
+  const entries = new Map();
+  const pattern = /<key>\s*([^<]+?)\s*<\/key>\s*<(true|false)\s*\/>/g;
+  for (const match of text.matchAll(pattern)) {
+    const key = match[1].trim();
+    if (entries.has(key)) {
+      throw new Error(`[packaged-resource-gate] duplicate ${label} key ${key}: ${file}`);
+    }
+    entries.set(key, match[2] === 'true');
+  }
+  return entries;
+}
+
+function verifyMacHardenedRuntimeEntitlements(buildConfig, projectRoot) {
+  const mac = buildConfig && typeof buildConfig === 'object' ? buildConfig.mac : null;
+  if (!mac || mac.hardenedRuntime !== true) {
+    throw new Error('[packaged-resource-gate] production mac build must enable hardenedRuntime');
+  }
+  const targets = [
+    ['main mac entitlement', mac.entitlements],
+    ['inherited mac entitlement', mac.entitlementsInherit],
+  ];
+  for (const [label, relativeFile] of targets) {
+    if (typeof relativeFile !== 'string' || !relativeFile.trim()) {
+      throw new Error(`[packaged-resource-gate] missing ${label} path`);
+    }
+    const file = path.resolve(projectRoot, relativeFile);
+    const entries = booleanPlistEntries(file, label);
+    if (entries.get('com.apple.security.device.audio-input') !== true) {
+      throw new Error(
+        `[packaged-resource-gate] ${label} must enable com.apple.security.device.audio-input: ${file}`,
+      );
+    }
+  }
+  return 'signing:mac-hardened-runtime:audio-input';
 }
 
 function requiredMacLocalizedMetadataVerificationEntries() {
@@ -308,13 +373,16 @@ module.exports = {
   MAC_LOCALIZED_METADATA_CONTRACT,
   MAC_LOCALIZED_METADATA_FILTERS,
   SHERPA_ONNX_CONTRACT,
+  SHERPA_ONNX_WINDOWS_NATIVE_FILES,
   parseAppleStrings,
   requiredMacLocalizedMetadataVerificationEntries,
   requiredPackagedResourceVerificationEntries,
   verifyExtraResourcesConfig,
   verifyEmbeddingModelArchive,
   verifyEmbeddingModelRoot,
+  verifyMacHardenedRuntimeEntitlements,
   verifyMacLocalizedMetadataRoot,
   verifyResourceContract,
   verifySherpaOnnxRoot,
+  verifySherpaOnnxWindowsNativeRoot,
 };

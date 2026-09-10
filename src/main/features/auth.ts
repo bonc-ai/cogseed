@@ -911,6 +911,15 @@ export function hasConfiguredModel(): { configured: boolean } {
   return { configured: false };
 }
 
+/** Explicit-user probe for background work that must not depend on whichever
+ * user happens to be active when the asynchronous task completes. */
+export function hasConfiguredModelForUser(userId: string): { configured: boolean } {
+  const store = loadProfilesForUser(userId);
+  if (store.entries.some((e) => isEntryAllowed(store, e))) return { configured: true };
+  if (process.env.ANTHROPIC_API_KEY) return { configured: true };
+  return { configured: false };
+}
+
 export function getConfiguredModelCooldown(): {
   profileId: string;
   cooledUntil: number;

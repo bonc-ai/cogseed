@@ -142,6 +142,19 @@ describe('diagnose-local-agents: binary lookup mirrors which.ts', () => {
     const found = await whichBin('claude', { extraDirs: [tmp], env: { PATH: '', PATHEXT: '.CMD' } });
     expect(found?.toLowerCase()).toBe(cmd.toLowerCase());
   });
+
+  it.runIf(process.platform === 'win32')('accepts a bundled bare Node shebang', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'diag-which-workbuddy-'));
+    try {
+      const bundledCli = path.join(tmp, 'codebuddy');
+      fs.writeFileSync(bundledCli, '#!/usr/bin/env node\nconsole.log("2.115.0");\n');
+
+      const found = await whichBin('codebuddy', { extraDirs: [tmp], env: { PATH: '' } });
+      expect(found?.toLowerCase()).toBe(bundledCli.toLowerCase());
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('diagnose-local-agents: config parsers redact and normalize', () => {

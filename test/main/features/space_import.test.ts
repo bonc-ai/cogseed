@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
+import { FILE_MODE_BITS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 vi.mock('../../../src/main/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -10,6 +12,7 @@ vi.mock('../../../src/main/logger', () => ({
 // 避免真实索引器加载 better-sqlite3 原生模块（本机 Node 版本与编译产物不匹配）
 vi.mock('../../../src/main/features/project_library_indexer', () => ({
   enqueue: vi.fn(),
+  drain: async () => {},
 }));
 
 let tmpDir: string;
@@ -25,7 +28,8 @@ beforeEach(async () => {
   users.activateUser(UID);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await drainMainRuntimeForTest(UID);
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -42,7 +46,7 @@ async function spaceContent(sid: string): Promise<string> {
   return paths.spaceContentDir(UID, sid);
 }
 
-describe('space_import › 本地文件夹整体导入（COGSEED-18）', () => {
+describe('space_import › 本地文件夹整体导入（本地文件夹导入）', () => {
   it('多级目录整体复制进空间 imports/，保留相对结构', async () => {
     const src = path.join(tmpDir, 'src-folder');
     fs.mkdirSync(path.join(src, 'sub', 'deep'), { recursive: true });
@@ -104,7 +108,7 @@ describe('space_import › 本地文件夹整体导入（COGSEED-18）', () => {
     expect(IMPORT_LIMITS.MAX_FILE_BYTES).toBe(100 * 1024 * 1024);
   });
 
-  it('无读权限文件跳过并记录 permission_denied', async () => {
+  it.runIf(FILE_MODE_BITS_SUPPORTED)('无读权限文件跳过并记录 permission_denied', async () => {
     const src = path.join(tmpDir, 'deny');
     fs.mkdirSync(src, { recursive: true });
     fs.writeFileSync(path.join(src, 'locked.txt'), 'secret');

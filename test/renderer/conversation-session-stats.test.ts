@@ -177,15 +177,17 @@ describe('conversation session stats line', () => {
     const texts = h.box.children.map((c) => String(c.textContent));
     expect(texts.some((s) => s.startsWith('chat.stats.counts|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.llmK|'))).toBe(true);
-    // 速率下线后 speed 段只显示首 token 平均值，不再拼 tok/s。
+    // fixture toolCalls=2 → 工具回合速率不可归属，speed 段只显示首 token 平均值，不拼 tok/s。
     expect(texts.some((s) => s.includes('chat.stats.speedK|'))).toBe(true);
     expect(texts.some((s) => s.includes('tok/s'))).toBe(false);
     expect(texts.some((s) => s.includes('chat.stats.cacheK|'))).toBe(true);
     expect(texts.some((s) => s.includes('chat.stats.ctxK|'))).toBe(true);
-    expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokV|'))).toBe(true);
+    // 会话 fixture 带 cacheRead → Token 段走拆分模板（fresh 输入 + 缓存读）。
+    expect(texts.some((s) => s.includes('chat.stats.tokK|') && s.includes('chat.stats.tokVCache|'))).toBe(true);
+    expect(texts.some((s) => s.includes('chat.stats.tokV|'))).toBe(false);
     // price in=1 out=2 (cache units absent → 0): (100K*1 + 10K*2)/1M = ¥0.12
     expect(texts).toContain('chat.stats.cost|{"c":"¥0.12"}');
-    // 110K/128K ≈ 86% ≥ 80% threshold → ctx segment carries the hot class.
+    // 150K/128K ≥ 80% threshold → ctx segment carries the hot class.
     const hot = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { className: string };
     expect(hot.className).toBe('seg seg-hot');
     // Cost span explains it is a local-price estimate, not a bill.
@@ -206,7 +208,7 @@ describe('conversation session stats line', () => {
     h.refresh();
     const ctx = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { textContent: string; className: string };
     // Only the used amount shows (no /window·% part), and it is not hot.
-    expect(ctx.textContent).toContain('110K');
+    expect(ctx.textContent).toContain('150K');
     expect(ctx.textContent).not.toContain('%');
     expect(ctx.className).toBe('seg');
   });

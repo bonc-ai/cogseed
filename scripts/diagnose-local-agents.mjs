@@ -437,8 +437,11 @@ async function isExecutableFile(p, platform) {
     if (!st.isFile()) return false;
     if (platform === 'win32') {
       // 镜像 which.ts：npm 会同时生成无扩展名的 `#!/bin/sh` bash shim 和
-      // `<name>.cmd`。bare shim 无法被 spawn 执行，跳过让 whichBin 命中 .cmd。
-      if (path.extname(p) === '' && await isShebangScript(p)) return false;
+      // `<name>.cmd`。跳过 shell shim 让 whichBin 命中 .cmd；WorkBuddy 内置的
+      // Node shebang 则可由下方 runVersionProbe 通过 Node runtime 启动。
+      if (path.extname(p) === '' && await isShebangScript(p)) {
+        return isNodeShebangScript(p);
+      }
       return true;
     }
     return (st.mode & 0o111) !== 0;
