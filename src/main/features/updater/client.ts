@@ -59,7 +59,7 @@ const DOWNLOAD_EXTENSIONS_ALLOWED = new Set(['.dmg', '.zip']);
 
 /**
  * Headers for the updates endpoints. The updates contract
- * (docs/design/updates-api.md, updates-server catalog) uses node-style
+ * (updates-server catalog) uses node-style
  * platform tokens darwin/win32/linux, while the shared client header carries
  * the app's own taxonomy ('mac'/'windows'/'pc') for other business APIs —
  * an unmapped 'mac' matches no catalog entry and silently reports "up to

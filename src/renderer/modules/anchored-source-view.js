@@ -1,5 +1,5 @@
 /**
- * Anchored source viewer (COGSEED-39 ② P3).
+ * Anchored source viewer (知识库问答 ② P3).
  *
  * Opens a modal showing the resolved source location for a citation anchor:
  * display path, PDF page (when known), and the located text window with the

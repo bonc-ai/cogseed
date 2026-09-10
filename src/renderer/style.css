@@ -2909,7 +2909,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   visibility: visible;
   opacity: 1;
 }
-/* COGSEED-19：空间组头「+」快速建任务入口——与 ⋯ 同款 hover 显现交互 */
+/* 空间快捷建任务：空间组头「+」快速建任务入口——与 ⋯ 同款 hover 显现交互 */
 .conv-space-quick-task {
   flex: 0 0 auto;
   width: 20px;
@@ -11524,6 +11524,14 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    不收回 send 的 auto margin 时，两个 auto 平分剩余空间，chip+mic 会
    悬在正中（chip 自身已带 margin-left:auto，见 .model-chip 主规则）。 */
 .exec-config-chip:not([hidden]) + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
+/* chip 隐藏（未配置模型且未选接收人）时，chip 的 margin-left:auto 随
+   display:none 失效，只剩 send 自身的 auto——间距落在 mic 与 send 之间，
+   语音按钮被留在左侧。把 auto 前移到 chip 后的第一个元素，mic+send
+   整组贴右；send 拿到 auto 的场景保持等值兜底，mic 已带 auto 时收回
+   send 的，避免两个 auto 平分把 mic 悬在正中。 */
+.model-chip[hidden] + .chat-stt-btn { margin-left: auto; }
+.model-chip[hidden] + .chat-send-btn { margin-left: auto; }
+.model-chip[hidden] + .chat-stt-btn + .chat-send-btn { margin-left: 0; }
 .model-chip--open .model-chip-chevron { transform: rotate(180deg); }
 /* Combined model+effort chip: "model · effort". The effort label is muted
    secondary text; the "·" separator is a lightweight visual divider. */

@@ -48,6 +48,7 @@ package.json.new
 # local build identity and development package output
 /.build
 /dist-dev
+/build-info.json
 
 # Per-machine tool permissions. Plans under .claude/plans/ are shared
 # deliberately; this file is local state and would churn per developer.

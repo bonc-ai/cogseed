@@ -180,7 +180,7 @@ Recall retrieves approved assets for later tasks and records reuse evidence with
 
 ## Upstream Attribution
 
-CogSeed is a secondary development of [Orkas](https://github.com/Orkas-AI/Orkas), extending its local-first multi-agent collaboration and tooling. The desktop `core-agent` component originates from [OpenClaw](https://github.com/openclaw/openclaw). CogSeed also incorporates planning and runtime adaptation patterns informed by [Hermes-Agent](https://github.com/NousResearch/hermes-agent).
+CogSeed is a secondary development of Orkas, extending its local-first multi-agent collaboration and tooling. The desktop `core-agent` component originates from [OpenClaw](https://github.com/openclaw/openclaw). CogSeed also incorporates planning and runtime adaptation patterns informed by [Hermes-Agent](https://github.com/NousResearch/hermes-agent).
 
 Upstream copyright and license information is recorded in [`NOTICE`](./NOTICE). Third-party component notices are recorded in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 
