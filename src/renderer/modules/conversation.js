@@ -12463,7 +12463,7 @@ function _makeConvChatController(cid, options = {}) {
         if (msgEl && Number.isFinite(options.sendWallMs)) {
           msgEl.dataset.localSendMs = String(options.sendWallMs);
         }
-        // 发送即起计（子安 2026-09-09）：面板与计时器在发送这一刻创建
+        // 发送即起计（交互设计 2026-09-09）：面板与计时器在发送这一刻创建
         // 并开始走秒，不等模型首事件（首 token 前的数秒空窗里用户就有
         // 「已发出、正在跑」的反馈）。预热失败不阻塞发送链路。
         if (msgEl && typeof window.chatStreamPrewarm === 'function') {
@@ -13102,7 +13102,7 @@ async function _cliFallbackGuideUser() {
 async function sendInConversation(cid, content, extra, options = {}) {
   if (!cid) return { started: false, aborted: false, errored: false, result: 'failure' };
   const startedAt = performance.now();
-  // 任务耗时本地计时（子安 2026-09-08 需求）：用户点击发送的瞬间（渲染
+  // 任务耗时本地计时（交互设计 2026-09-08 需求）：用户点击发送的瞬间（渲染
   // 进程墙钟）——计时完全本地，不含 IPC/网络往返，不依赖模型侧任何数据
   // （模型收到消息时间/开始思考时刻/吞吐等）。挂到当前会话 pending 记录，
   // 由首个流事件转移到面板（chat-stream 的 ticker/终态都读它）。

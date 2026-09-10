@@ -75,7 +75,7 @@ describe('messaging continuity commands (pure)', () => {
     expect(sanitizeFailureText('no such file: "C:\\Users\\bob smith"')).toBe('no such file: [路径]');
     // 无引号的家目录一级：紧邻词并入后占位（只并入一次，后续词不连拼）。
     expect(sanitizeFailureText('open /Users/alice smith failed')).toBe('open [路径] failed');
-    expect(sanitizeFailureText('stat /home/牛保康 结束')).toBe('stat [路径] 结束');
+    expect(sanitizeFailureText('stat /home/测试用户甲 结束')).toBe('stat [路径] 结束');
     // 引号内多段含空格路径：basename 无空白仍正常剥成文件名。
     expect(sanitizeFailureText("read '/Users/alice smith/Docs/a.txt'")).toBe('read a.txt');
     // 家目录下多段路径不受规则 b 影响（走常规 basename）。
@@ -86,8 +86,8 @@ describe('messaging continuity commands (pure)', () => {
 
   it('sanitizeFailureText also strips non-ASCII and Windows path segments', async () => {
     const { sanitizeFailureText } = await import('../../../src/main/features/messaging/runtime');
-    // 中文用户名目录：枚举 ASCII 的旧正则会漏掉 /Users/牛保康/ 前缀。
-    expect(sanitizeFailureText('failed: /Users/牛保康/project/report.md unreadable')).toBe(
+    // 中文用户名目录：枚举 ASCII 的旧正则会漏掉 /Users/测试用户甲/ 前缀。
+    expect(sanitizeFailureText('failed: /Users/测试用户甲/project/report.md unreadable')).toBe(
       'failed: report.md unreadable',
     );
     // Windows 反斜杠绝对路径。
