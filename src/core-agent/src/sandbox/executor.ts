@@ -106,41 +106,60 @@ export function killProcessTree(
     processKill?: ProcessKiller;
     spawnFn?: SpawnFn;
   } = {},
-): void {
+): Promise<void> {
   const platform = opts.platform ?? process.platform;
+  const fallback = () => {
+    try { child.kill(signal); } catch { /* Process may already be dead. */ }
+  };
   if (platform === "win32" && child.pid) {
+    let killer: ReturnType<SpawnFn>;
     try {
-      const killer = (opts.spawnFn ?? spawn)(windowsSystem32Tool("taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], {
+      killer = (opts.spawnFn ?? spawn)(windowsSystem32Tool("taskkill.exe"), ["/pid", String(child.pid), "/t", "/f"], {
         stdio: "ignore",
         windowsHide: true,
       });
-      const fallback = () => {
-        try { child.kill(signal); } catch { /* Process may already be dead. */ }
+    } catch {
+      fallback();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      let usedFallback = false;
+      const fallbackOnce = () => {
+        if (usedFallback) return;
+        usedFallback = true;
+        fallback();
       };
-      killer.once("error", fallback);
-      killer.once("exit", (code) => {
-        if (code !== 0) fallback();
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      killer.once("error", () => {
+        fallbackOnce();
+        finish();
+      });
+      killer.once("exit", (code, exitSignal) => {
+        if (code !== 0 || exitSignal) fallbackOnce();
+      });
+      killer.once("close", (code, closeSignal) => {
+        if (code !== 0 || closeSignal) fallbackOnce();
+        finish();
       });
       if (typeof killer.unref === "function") killer.unref();
-      return;
-    } catch {
-      // Fall back to killing the direct child below.
-    }
+    });
   }
 
   try {
     if (platform !== "win32" && child.pid) {
       (opts.processKill ?? process.kill)(-child.pid, signal);
-      return;
+      return Promise.resolve();
     }
   } catch {
     // Fall back to killing the shell process below.
   }
-  try {
-    child.kill(signal);
-  } catch {
-    // Process may already be dead.
-  }
+  fallback();
+  return Promise.resolve();
 }
 
 type OutputEncodingEnv = {
