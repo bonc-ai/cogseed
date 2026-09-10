@@ -66,6 +66,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:resources:setup
       - run: npm run lint
+      - name: P3394 Windows compatibility gate
+        run: npm run test:p3394:windows
       - run: node scripts/run-tests.mjs run --maxWorkers=1
       - run: npm run test:resources
       - run: npm run test:platform-native

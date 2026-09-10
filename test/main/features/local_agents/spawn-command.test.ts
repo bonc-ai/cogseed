@@ -61,7 +61,15 @@ describe('local_agents/spawn-command', () => {
         '"%COGSEED_TEST_NODE%" "%dp0%\\capture.cjs" %*',
         '',
       ].join('\r\n'));
-      const args = ['plain', 'space value', 'value & echo unsafe', '100%', 'quote"value', 'C:\\tail\\', 'line one\r\nLINE_TWO'];
+      const args = [
+        'plain',
+        'space value',
+        'value & pipe | in < out > caret ^ (group)',
+        '100% !delayed!',
+        'quote"value',
+        'C:\\tail\\',
+        '第一行\r\n第二行 & "quoted" %value%\n第三行 ^ (done)',
+      ];
       const env = {
         ...process.env,
         COGSEED_TEST_NODE: TEST_NODE,
@@ -75,6 +83,29 @@ describe('local_agents/spawn-command', () => {
         windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       });
 
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(args);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('round-trips a multiline prompt through a real .bat Node shim', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bat-shim-'));
+    try {
+      const shim = path.join(tmpDir, 'capture.BAT');
+      const capture = path.join(tmpDir, 'capture.cjs');
+      fs.writeFileSync(capture, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+      fs.writeFileSync(shim, '@echo off\r\n"%COGSEED_TEST_NODE%" "%~dp0\\capture.cjs" %*\r\n');
+      const args = ['第一行\n第二行 & "quoted" %value% | < > ^ (third)'];
+      const env = { ...process.env, COGSEED_TEST_NODE: TEST_NODE };
+      const resolved = resolveCliCommand(shim, args, 'win32', env);
+      const result = spawnSync(resolved.command, resolved.args, {
+        encoding: 'utf8',
+        env: { ...env, ...resolved.envPatch },
+        windowsHide: true,
+        windowsVerbatimArguments: resolved.windowsVerbatimArguments,
+      });
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual(args);
     } finally {
