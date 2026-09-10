@@ -7,6 +7,31 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+(未发布内容待积累)
+
+## [1.0.2] - 2026-09-10
+
+### Added
+
+- **Windows 支持统一** — Windows 平台能力与 develop 对齐：本地智能体生命周期加固、
+  CLI 常驻运行时、发布门禁稳定化，Windows 安装包（NSIS x64）纳入 CI 打包验证。
+- **知识库问答增强** — 跨库引导、元问题识别、全库概览路由与流式 IPC；文件预览
+  查看器与 PDF 引用页码定位；任务终态自动归档进知识库。
+- **继续任务按项目分组** — continue-work 会话按项目目录聚合。
+- **内置包升级** — eduseed-course-client 0.5.3（防串作业绑定预检 + 确认卡片黑屏
+  修复），平台内置包统一 0.4.2。
+
+### Changed
+
+- **对话核心 v2 交互重构** — 会话与任务交互重构，渠道接续（conv-core v2）。
+- **CLI 用量统计下线** — 外接智能体模型枚举支持；过程 UI 修复。
+
+### Fixed
+
+- **语音输入加固** — STT 音频输入与打包路径加固。
+- **设置页渲染修复** — 配置页顶部多余执行区块移除，恢复从模型配置开始渲染。
+- **连接页 Agent 标签保留**；macOS 仓库别名路径规范化。
+
 ### Security
 
 - Remove private development records and personal identifiers from source,
