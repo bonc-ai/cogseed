@@ -37,15 +37,37 @@ describe('release workflow contract', () => {
   it('keeps the CI job names exact and makes the Windows gate complete', () => {
     const workflow = load('ci.yml');
     expect(Object.keys(workflow.jobs).sort()).toEqual(['verify', 'verify-windows']);
-    const windows = commands(workflow.jobs['verify-windows']);
+    const windowsJob = workflow.jobs['verify-windows'];
+    const windows = commands(windowsJob);
     for (const expected of [
       'npm run lint',
       'node scripts/run-tests.mjs run --maxWorkers=1',
       'npm run test:resources',
       'npm run test:platform-native',
+      'npm run test:p3394:windows',
       'node p3394-gateway/test/smoke.cjs',
       'npm run build:win',
     ]) expect(windows).toContain(expected);
+    const p3394Index = steps(windowsJob).findIndex((step) => step.run === 'npm run test:p3394:windows');
+    const fullJsIndex = steps(windowsJob).findIndex((step) => step.run === 'node scripts/run-tests.mjs run --maxWorkers=1');
+    expect(p3394Index).toBeGreaterThanOrEqual(0);
+    expect(p3394Index).toBeLessThan(fullJsIndex);
+  });
+
+  it('pins the Windows P3394 lane to the platform-native regression suites', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+    expect(pkg.scripts['test:p3394:windows']).toBe('node scripts/run-p3394-windows-tests.mjs');
+    const source = fs.readFileSync(path.resolve('scripts/run-p3394-windows-tests.mjs'), 'utf8');
+    for (const suite of [
+      'test/main/features/local_agents/spawn-command.test.ts',
+      'test/main/features/local_agents/version.test.ts',
+      'test/main/features/p3394_bridge/gateway-models-probe.test.ts',
+      'test/main/features/p3394_bridge/p3394-windows-cli.test.ts',
+      'test/main/features/p3394_bridge/external-gateways.test.ts',
+      'test/main/features/sscli-shim-cancel.test.ts',
+      'test/main/features/cogseed_backend/worktree-manager.test.ts',
+    ]) expect(source).toContain(suite);
+    expect(source).toContain("process.platform !== 'win32'");
   });
 
   it('keeps compliance to its one required job', () => {
