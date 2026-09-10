@@ -207,6 +207,14 @@
     });
     return true;
   }
+  function openConnectionsTab(tab) {
+    const target = String(tab || '').trim();
+    if (target) rootWindow.__connectionsPendingTab = target;
+    rootWindow.setView?.('connections');
+    if (target && typeof rootWindow.activateConnectionsTab === 'function') {
+      rootWindow.activateConnectionsTab(target);
+    }
+  }
   function restoreFocus(snapshot, fallbackSelector = '') {
     if (!snapshot) return false;
     const target = panel();
@@ -1710,13 +1718,11 @@
       if (button.dataset.runCenterRefresh !== undefined) { refresh(); return; }
       if (button.dataset.runCenterCreateOpen !== undefined) { openCreate('create'); return; }
       if (button.dataset.runCenterConfigureModel !== undefined) {
-        rootWindow.setView?.('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
-        rootWindow.activateSettingsTab?.('configuration', { anchor: 'models' });
+        openConnectionsTab('models');
         return;
       }
       if (button.dataset.runCenterAgentSettings !== undefined) {
-        rootWindow.setView?.('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'agents' });
-        rootWindow.activateSettingsTab?.('configuration', { anchor: 'agents' });
+        openConnectionsTab('agents');
         return;
       }
       if (button.dataset.runCenterSettingsAnchor) {
