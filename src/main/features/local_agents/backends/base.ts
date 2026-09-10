@@ -20,8 +20,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildCliSpawnEnv, resolveCliCommand } from '../spawn-command.js';
 
-type KillableChild = Pick<ChildProcessWithoutNullStreams, 'kill' | 'pid'> & Partial<Pick<ChildProcessWithoutNullStreams, 'once' | 'off' | 'exitCode' | 'signalCode'>>;
+type KillableChild = Pick<ChildProcessWithoutNullStreams, 'kill' | 'pid'> & Partial<Pick<ChildProcessWithoutNullStreams, 'once' | 'off' | 'exitCode' | 'signalCode' | 'stdin' | 'stdout' | 'stderr' | 'unref'>>;
 type SpawnFn = typeof spawn;
+
+export type ProcessTreeTerminationOutcome =
+  | { status: 'terminated' }
+  | { status: 'termination-unverified' };
+
+const PROCESS_TREE_KILL_GRACE_MS = 3_000;
+const PROCESS_TREE_TERMINATION_DEADLINE_MS = 3_000;
 
 /** All event types a backend can emit. The runner persists these to
  *  `events.jsonl` verbatim and forwards them to the renderer through
@@ -239,24 +246,36 @@ function windowsSystem32Tool(name: string): string {
  *  `close` hangs for their full lifetime (see `spawnCli`). Windows uses
  *  taskkill's tree mode for the same reason. Both paths fall back to a
  *  direct child kill when the platform mechanism cannot start or fails.
- *  The returned promise never rejects and resolves only after the target
- *  child has closed (or, for lightweight pid-only handles, the PID is
- *  confirmed absent). Callers may therefore use it as the resource-release
- *  barrier for cancellation, timeout, restart, and application shutdown. */
+ *  The returned promise never rejects. It normally resolves only after the
+ *  target child has closed (or, for lightweight pid-only handles, the PID is
+ *  confirmed absent). If neither proof arrives by the final deadline after
+ *  SIGKILL, remaining stdio is destroyed and the distinct
+ *  `termination-unverified` outcome prevents callers from mistaking a
+ *  bounded best-effort cleanup for verified process exit. */
+export function killProcessTree(
+  child: KillableChild,
+  signal: NodeJS.Signals,
+): Promise<void>;
+export function killProcessTree(
+  child: KillableChild,
+  signal: NodeJS.Signals,
+  opts: { platform?: NodeJS.Platform; spawnFn?: SpawnFn },
+): Promise<ProcessTreeTerminationOutcome>;
 export function killProcessTree(
   child: KillableChild,
   signal: NodeJS.Signals,
   opts: { platform?: NodeJS.Platform; spawnFn?: SpawnFn } = {},
-): Promise<void> {
+): Promise<ProcessTreeTerminationOutcome | void> {
   const pid = child.pid;
   const platform = opts.platform ?? process.platform;
-  return new Promise(resolve => {
+  return new Promise<ProcessTreeTerminationOutcome | void>(resolve => {
     let settled = false;
     let signalAttemptDone = platform !== 'win32' || !pid;
     let targetClosed = child.exitCode != null || child.signalCode != null || !pid;
     let killer: ReturnType<SpawnFn> | null = null;
     let pidPoll: NodeJS.Timeout | null = null;
     let hardKillTimer: NodeJS.Timeout | null = null;
+    let terminationDeadlineTimer: NodeJS.Timeout | null = null;
 
     const cleanup = () => {
       if (killer) {
@@ -267,14 +286,20 @@ export function killProcessTree(
       if (typeof child.off === 'function') child.off('close', onTargetClose);
       if (pidPoll) clearInterval(pidPoll);
       if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (terminationDeadlineTimer) clearTimeout(terminationDeadlineTimer);
       pidPoll = null;
       hardKillTimer = null;
+      terminationDeadlineTimer = null;
     };
-    const maybeFinish = () => {
-      if (settled || !signalAttemptDone || !targetClosed) return;
+    const finish = (outcome: ProcessTreeTerminationOutcome) => {
+      if (settled) return;
       settled = true;
       cleanup();
-      resolve();
+      resolve(outcome);
+    };
+    const maybeFinish = () => {
+      if (!signalAttemptDone || !targetClosed) return;
+      finish({ status: 'terminated' });
     };
     const onTargetClose = () => {
       targetClosed = true;
@@ -282,6 +307,19 @@ export function killProcessTree(
     };
     const directKill = (nextSignal: NodeJS.Signals) => {
       try { child.kill(nextSignal); } catch { /* already gone */ }
+    };
+    const armTerminationDeadline = () => {
+      if (settled || targetClosed || terminationDeadlineTimer) return;
+      terminationDeadlineTimer = setTimeout(() => {
+        terminationDeadlineTimer = null;
+        if (settled) return;
+        for (const stream of [child.stdin, child.stdout, child.stderr]) {
+          try { stream?.destroy(); } catch { /* best effort */ }
+        }
+        try { child.unref?.(); } catch { /* best effort */ }
+        finish({ status: 'termination-unverified' });
+      }, PROCESS_TREE_TERMINATION_DEADLINE_MS);
+      terminationDeadlineTimer.unref?.();
     };
     let usedFallback = false;
     const fallbackOnce = () => {
@@ -324,13 +362,16 @@ export function killProcessTree(
       hardKillTimer = setTimeout(() => {
         hardKillTimer = null;
         if (targetClosed) return;
+        armTerminationDeadline();
         if (pid && platform !== 'win32') {
           try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
         } else {
           directKill('SIGKILL');
         }
-      }, 3_000);
+      }, PROCESS_TREE_KILL_GRACE_MS);
       hardKillTimer.unref?.();
+    } else if (!targetClosed) {
+      armTerminationDeadline();
     }
 
     if (pid && platform === 'win32') {

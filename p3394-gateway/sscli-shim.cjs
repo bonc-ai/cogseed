@@ -169,10 +169,12 @@ function windowsSystem32Tool(name) {
 function killProcessTree(child, signal = 'SIGTERM') {
   const pid = child && child.pid;
   return new Promise((resolve) => {
+    let settled = false;
     let signalDone = process.platform !== 'win32' || !pid;
     let targetDone = !pid || child.exitCode != null || child.signalCode != null;
     let killer = null;
     let hardKillTimer = null;
+    let terminationDeadlineTimer = null;
     let pidPoll = null;
     const onTargetClose = () => { targetDone = true; maybeFinish(); };
     const cleanup = () => {
@@ -183,14 +185,36 @@ function killProcessTree(child, signal = 'SIGTERM') {
       }
       if (child && typeof child.off === 'function') child.off('close', onTargetClose);
       if (hardKillTimer) clearTimeout(hardKillTimer);
+      if (terminationDeadlineTimer) clearTimeout(terminationDeadlineTimer);
       if (pidPoll) clearInterval(pidPoll);
+      hardKillTimer = null;
+      terminationDeadlineTimer = null;
+      pidPoll = null;
+    };
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
     };
     const maybeFinish = () => {
       if (!signalDone || !targetDone) return;
-      cleanup();
-      resolve();
+      finish({ status: 'terminated' });
     };
     const directKill = (nextSignal) => { try { child.kill(nextSignal); } catch { /* already gone */ } };
+    const armTerminationDeadline = () => {
+      if (settled || targetDone || terminationDeadlineTimer) return;
+      terminationDeadlineTimer = setTimeout(() => {
+        terminationDeadlineTimer = null;
+        if (settled) return;
+        for (const stream of [child && child.stdin, child && child.stdout, child && child.stderr]) {
+          try { stream?.destroy(); } catch { /* best effort */ }
+        }
+        try { child?.unref?.(); } catch { /* best effort */ }
+        finish({ status: 'termination-unverified' });
+      }, 3000);
+      terminationDeadlineTimer.unref?.();
+    };
     let usedFallback = false;
     const fallbackOnce = () => {
       if (usedFallback) return;
@@ -204,21 +228,25 @@ function killProcessTree(child, signal = 'SIGTERM') {
       signalDone = true;
       maybeFinish();
     };
-    if (!targetDone && typeof child.once === 'function') child.once('close', onTargetClose);
-    if (!targetDone && pid) {
-      pidPoll = setInterval(() => {
+    if (!targetDone && typeof child.once === 'function') {
+      child.once('close', onTargetClose);
+    } else if (!targetDone && pid) {
+      const checkPid = () => {
         try { process.kill(pid, 0); } catch (error) {
           if (!error || error.code !== 'ESRCH') return;
           targetDone = true;
           maybeFinish();
         }
-      }, 25);
+      };
+      pidPoll = setInterval(checkPid, 25);
       pidPoll.unref?.();
+      checkPid();
     }
     if (!targetDone && signal !== 'SIGKILL') {
       hardKillTimer = setTimeout(() => {
         hardKillTimer = null;
         if (targetDone) return;
+        armTerminationDeadline();
         if (pid && process.platform !== 'win32') {
           try { process.kill(-pid, 'SIGKILL'); } catch { directKill('SIGKILL'); }
         } else {
@@ -226,6 +254,8 @@ function killProcessTree(child, signal = 'SIGTERM') {
         }
       }, 3000);
       hardKillTimer.unref?.();
+    } else if (!targetDone) {
+      armTerminationDeadline();
     }
     if (pid && process.platform === 'win32') {
       try {
@@ -545,8 +575,14 @@ async function handleCancel(op) {
   const turn = activeTurn;
   const hit = Boolean(turn && turn.child && targetId
     && (String(turn.taskId) === targetId || String(turn.requestId) === targetId));
-  if (hit) await killProcessTree(turn.child, 'SIGTERM');
-  emit({ ok: true, request_id: op.request_id, killed: hit });
+  const termination = hit ? await killProcessTree(turn.child, 'SIGTERM') : null;
+  const verified = Boolean(hit && termination && termination.status === 'terminated');
+  emit({
+    ok: true,
+    request_id: op.request_id,
+    killed: verified,
+    ...(termination && termination.status !== 'terminated' ? { termination_status: termination.status } : {}),
+  });
 }
 process.stdin.on('data', (chunk) => {
   lineBuf += chunk;
