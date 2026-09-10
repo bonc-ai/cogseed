@@ -138,6 +138,66 @@ async function seedLinkedRun(input: {
 }
 
 describe('KSTAR run evidence', () => {
+  it('rejects a stale Requirement reference that belongs to another Task', async () => {
+    const userId = 'user-cross-task-requirement';
+    const linked = await seedLinkedRun({
+      userId,
+      suffix: 'foreign-requirement',
+      taskRunId: 'aggregate-foreign-requirement',
+      reuseTurnIds: [],
+      projection: { id: 'projection-foreign-requirement', assetIds: [] },
+    });
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = requirementStore.createKstarTaskRecord(userId, {
+      conversationId: 'conversation-requesting-task',
+      title: 'Requesting task',
+    });
+    await requirementStore.replaceKstarTask(userId, {
+      ...task,
+      requirementIds: [linked.requirement.id],
+    });
+
+    const { readKstarRunEvidence } = await import('../../../../src/main/features/kstar/run-evidence');
+    await expect(readKstarRunEvidence(userId, {
+      taskId: task.id,
+      taskRunId: 'aggregate-foreign-requirement',
+    })).rejects.toThrow('kstar requirement does not belong to task');
+  });
+
+  it.each([
+    ['taskId', 'kst-foreign-episode-task'],
+    ['requirementId', 'ksreq-foreign-episode-requirement'],
+  ] as const)('rejects an Episode whose persisted %s contradicts its Requirement link', async (field, value) => {
+    const userId = `user-cross-episode-${field}`;
+    const linked = await seedLinkedRun({
+      userId,
+      suffix: `cross-episode-${field}`,
+      taskRunId: `aggregate-cross-episode-${field}`,
+      reuseTurnIds: [],
+      projection: { id: `projection-cross-episode-${field}`, assetIds: [] },
+    });
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    const mismatchedEpisode = {
+      ...linked.episode,
+      id: `episode-mismatched-${field}`,
+      [field]: value,
+    };
+    await episodeStore.writeKstarEpisode(userId, mismatchedEpisode);
+    await requirementStore.replaceKstarRequirement(userId, {
+      ...linked.requirement,
+      projectionId: String(linked.projection.id),
+      projectionIds: [String(linked.projection.id)],
+      episodeIds: [mismatchedEpisode.id],
+    });
+
+    const { readKstarRunEvidence } = await import('../../../../src/main/features/kstar/run-evidence');
+    await expect(readKstarRunEvidence(userId, {
+      taskId: linked.task.id,
+      taskRunId: `aggregate-cross-episode-${field}`,
+    })).rejects.toThrow('kstar episode does not belong to requirement');
+  });
+
   it('isolates aggregate-run evidence through logical-task, Episode, Projection, and per-turn receipt references', async () => {
     const userId = 'user-a';
     const conversationId = 'conversation-shared';
@@ -1679,6 +1739,66 @@ describe('KSTAR run evidence', () => {
     expect(result.episodes).toHaveLength(1);
     expect(result.injectionReceipts).toHaveLength(1000);
     expect(result.assets).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+    expect(result.gaps).toContain('output_truncated');
+  });
+
+  it('caps Requirement reference traversal and reports the partial result', async () => {
+    const userId = 'user-requirement-traversal-cap';
+    const linked = await seedLinkedRun({
+      userId,
+      suffix: 'requirement-traversal-cap',
+      taskRunId: 'aggregate-requirement-traversal-cap',
+      reuseTurnIds: [],
+      projection: { id: 'projection-requirement-traversal-cap', assetIds: [] },
+    });
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    await requirementStore.replaceKstarTask(userId, {
+      ...linked.task,
+      requirementIds: [
+        linked.requirement.id,
+        ...Array.from({ length: 1000 }, (_, index) => `zzreq-traversal-${index}`),
+      ],
+    });
+
+    const { readKstarRunEvidence } = await import('../../../../src/main/features/kstar/run-evidence');
+    const result = await readKstarRunEvidence(userId, {
+      taskId: linked.task.id,
+      taskRunId: 'aggregate-requirement-traversal-cap',
+    });
+
+    expect(result.requirementIds).toEqual([linked.requirement.id]);
+    expect(result.truncated).toBe(true);
+    expect(result.gaps).toContain('output_truncated');
+  });
+
+  it('caps Episode reference traversal and reports the partial result', async () => {
+    const userId = 'user-episode-traversal-cap';
+    const linked = await seedLinkedRun({
+      userId,
+      suffix: 'episode-traversal-cap',
+      taskRunId: 'aggregate-episode-traversal-cap',
+      reuseTurnIds: [],
+      projection: { id: 'projection-episode-traversal-cap', assetIds: [] },
+    });
+    const requirementStore = await import('../../../../src/main/features/kstar/requirement-store');
+    await requirementStore.replaceKstarRequirement(userId, {
+      ...linked.requirement,
+      projectionId: String(linked.projection.id),
+      projectionIds: [String(linked.projection.id)],
+      episodeIds: [
+        linked.episode.id,
+        ...Array.from({ length: 1000 }, (_, index) => `zzepisode-traversal-${index}`),
+      ],
+    });
+
+    const { readKstarRunEvidence } = await import('../../../../src/main/features/kstar/run-evidence');
+    const result = await readKstarRunEvidence(userId, {
+      taskId: linked.task.id,
+      taskRunId: 'aggregate-episode-traversal-cap',
+    });
+
+    expect(result.episodes).toEqual([expect.objectContaining({ id: linked.episode.id })]);
     expect(result.truncated).toBe(true);
     expect(result.gaps).toContain('output_truncated');
   });
