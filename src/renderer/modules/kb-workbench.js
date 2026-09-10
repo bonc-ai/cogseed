@@ -9,6 +9,7 @@
     tree: [],
     kbStatus: new Map(), // relPath -> { status, chunks, kind, error }
     libs: [],
+    externalSources: [],
     currentLib: '',
     dirStack: [], // 相对库根的目录路径段（'' = 库根）
     filter: '',
@@ -49,6 +50,26 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function _tr(key, fallback, vars) {
+    const translated = typeof window.t === 'function' ? window.t(key, vars || {}) : '';
+    return translated && translated !== key ? translated : fallback;
+  }
+
+  function _externalSourceLabel(source) {
+    if (source && source.id === 'feishu-wiki') {
+      return _tr('kb.workbench.external_feishu', '飞书 Wiki');
+    }
+    return (source && source.id) || _tr('kb.workbench.external_source', '外部来源');
+  }
+
+  function _currentExternalSource() {
+    return _state.externalSources.find((source) => source.path === _state.currentLib) || null;
+  }
+
+  function _isExternalSourceSelected() {
+    return !_state.spaceId && !!_currentExternalSource();
   }
 
   // 统一图标：优先 icons.js 的 uiIconHtml（仓库规范），缺的名走内联 SVG。
@@ -108,7 +129,17 @@
   }
 
   function _findLibNode(name) {
-    return _state.tree.find((n) => n.type === 'dir' && n.name === name) || null;
+    const target = String(name || '');
+    const find = (nodes) => {
+      for (const node of nodes || []) {
+        if (!node || node.type !== 'dir') continue;
+        if (node.path === target || node.name === target) return node;
+        const nested = find(node.children || []);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    return find(_state.tree);
   }
 
   // 沿 dirStack 下钻到当前目录节点（dirStack 为空 = 库根）
@@ -151,7 +182,15 @@
         window.cogseed.invoke('spaces.list').catch(() => null),
       ]);
       _state.tree = (treeRes && Array.isArray(treeRes.tree)) ? treeRes.tree : [];
-      _state.libs = _state.tree.filter((n) => n.type === 'dir');
+      const externalRoot = _state.tree.find((node) => node && node.type === 'dir' && (node.path === 'external' || node.name === 'external')) || null;
+      _state.libs = _state.tree.filter((node) => node && node.type === 'dir' && node !== externalRoot);
+      _state.externalSources = externalRoot
+        ? (externalRoot.children || []).filter((node) => node && node.type === 'dir').map((node) => ({
+          id: node.name,
+          path: node.path || `external/${node.name}`,
+          node,
+        }))
+        : [];
       _state.spaces = (spacesRes && Array.isArray(spacesRes.spaces)) ? spacesRes.spaces : [];
       _state.kbStatus = new Map();
       const files = (kbRes && Array.isArray(kbRes.files)) ? kbRes.files : [];
@@ -159,8 +198,12 @@
         if (!f || !f.path) continue;
         _state.kbStatus.set(f.path, { status: f.status, chunks: f.chunks, kind: f.kind, error: f.error });
       }
-      if (!_state.libs.some((l) => l.name === _state.currentLib)) {
-        _state.currentLib = _state.libs.length ? _state.libs[0].name : '';
+      const availableLibs = [
+        ..._state.libs.map((lib) => lib.name),
+        ..._state.externalSources.map((source) => source.path),
+      ];
+      if (!availableLibs.includes(_state.currentLib)) {
+        _state.currentLib = availableLibs[0] || '';
         _state.dirStack = [];
       }
       _renderTree();
@@ -178,15 +221,29 @@
   function _renderTree() {
     const tree = document.getElementById('kb-wb-tree');
     if (!tree) return;
+    const personalLabel = _tr('kb.workbench.group_personal', '个人知识库');
+    const sharedLabel = _tr('kb.workbench.group_shared', '共享知识库');
+    const externalLabel = _tr('kb.workbench.group_external', '外部来源');
+    const externalItems = _state.externalSources
+      .filter((source) => {
+        if (!_state.treeFilter) return true;
+        const query = _state.treeFilter.toLowerCase();
+        return source.id.toLowerCase().includes(query) || _externalSourceLabel(source).toLowerCase().includes(query);
+      })
+      .map((source) =>
+        `<div class="kb-tree-item${source.path === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-external-source="${_esc(source.path)}">
+          ${_icon('book-open', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(_externalSourceLabel(source))}</span></div>`
+      ).join('');
     const groups = [
-      { key: '个人知识库', label: '个人知识库', plus: true, btnId: 'kb-new-lib', btnTitle: '创建个人知识库', html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
+      { key: 'personal', label: personalLabel, plus: true, btnId: 'kb-new-lib', btnTitle: _tr('kb.workbench.create_personal', '创建个人知识库'), html: _state.libs.filter((l) => !_state.treeFilter || l.name.toLowerCase().includes(_state.treeFilter)).map((l) =>
         `<div class="kb-tree-item${l.name === _state.currentLib && !_state.spaceId ? ' active' : ''}" data-kb-lib="${_esc(l.name)}">
           ${_icon('folder', 'kb-tree-ico')}<span class="kb-tree-name">${_esc(l.name)}</span></div>`
       ).join('') || '<div class="kb-tree-empty">暂无知识库，点击 ＋ 创建</div>' },
-      { key: '共享知识库', label: '共享知识库', plus: true, btnId: 'kb-new-shared-space', btnTitle: '创建共享知识库', html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
+      { key: 'shared', label: sharedLabel, plus: true, btnId: 'kb-new-shared-space', btnTitle: _tr('kb.workbench.create_shared', '创建共享知识库'), html: _state.spaces.filter((sp) => !_state.treeFilter || (sp.name || sp.space_id).toLowerCase().includes(_state.treeFilter)).map((sp) =>
         `<div class="kb-tree-item${sp.space_id === _state.spaceId ? ' active' : ''}" data-kb-space="${_esc(sp.space_id)}">
-          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="共享知识库">${_icon('users', 'kb-share-ico')}</span></div>`
+          ${_icon('folder', 'kb-tree-ico kb-tree-ico-space')}<span class="kb-tree-name">${_esc(sp.name || sp.space_id)}</span><span class="kb-badge-share" title="${_esc(sharedLabel)}">${_icon('users', 'kb-share-ico')}</span></div>`
       ).join('') || '<div class="kb-tree-placeholder">' + (_state.treeFilter ? '无匹配知识库' : '暂无共享空间') + '</div>' },
+      { key: 'external', label: externalLabel, plus: false, html: externalItems || `<div class="kb-tree-placeholder">${_esc(_state.treeFilter ? _tr('kb.workbench.no_matching_sources', '无匹配来源') : _tr('kb.workbench.external_empty', '暂无外部来源'))}</div>` },
     ];
     const groupHtml = groups.map((g) => {
       const open = !_state.treeGroups.has(g.key);
@@ -223,6 +280,9 @@
         e.preventDefault(); e.stopPropagation();
         _kbSpaceMenu(el.dataset.kbSpace, e.clientX, e.clientY);
       });
+    });
+    tree.querySelectorAll('[data-kb-external-source]').forEach((el) => {
+      el.addEventListener('click', () => _selectLib(el.dataset.kbExternalSource));
     });
     tree.querySelector('#kb-new-lib')?.addEventListener('click', (e) => { e.stopPropagation(); _createLib(); });
     tree.querySelector('#kb-new-shared-space')?.addEventListener('click', (e) => { e.stopPropagation(); _createSharedSpace(); });
@@ -956,6 +1016,7 @@
       el.addEventListener('click', () => _toggleDir(el.dataset.kbDir));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (_isExternalSourceSelected()) return;
         _kbRowMenu(el.dataset.kbDir, true, e.clientX, e.clientY);
       });
     });
@@ -963,12 +1024,14 @@
       el.addEventListener('click', () => _openFile(el.dataset.kbFile));
       el.addEventListener('contextmenu', (e) => {
         e.preventDefault(); e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
       const moreBtn = el.querySelector('.kb-mini-btn[title="更多"]');
       if (moreBtn) moreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
+        if (_isExternalSourceSelected()) _kbExternalFileMenu(el.dataset.kbFile, e.clientX, e.clientY);
+        else _kbRowMenu(el.dataset.kbFile, false, e.clientX, e.clientY);
       });
     });
     _renderCount(lib ? _countFiles(lib) : 0);
@@ -1115,7 +1178,7 @@
     _bindEmptyActions();
     list.querySelectorAll('[data-kb-space-file]').forEach((el) => {
       el.addEventListener('click', () => {
-        if (typeof uiToast === 'function') uiToast('空间库原文查看：后续版本支持', { variant: 'info' });
+        _openFile(el.dataset.kbSpaceFile);
       });
       // 共享库文件右键：置顶/编辑标签/重命名/成员权限▸/移动到/复制到/删除（对齐 ima）
       el.addEventListener('contextmenu', (e) => {
@@ -1190,10 +1253,23 @@
     if (el) el.textContent = String(n);
   }
 
+  // ── 文件查看（点击文件行 → 打开原文查看器）──
   function _openFile(relPath) {
-    // S2 接入 anchor-resolver 原文查看器；S1 先提示。
-    if (typeof uiToast === 'function') uiToast('原文查看器：S2 上线（anchor-resolver 已就绪）', { variant: 'info' });
-    _log.info('open file', relPath);
+    if (typeof window.__openAnchorViewer === 'function') {
+      window.__openAnchorViewer({
+        source: 'library',
+        scope: _state.spaceId ? 'space' : 'global',
+        path: relPath,
+        chunkIdx: 1,
+        ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
+        view: 'document',
+      });
+      return;
+    }
+    if (typeof uiToast === 'function') {
+      const translated = typeof window.t === 'function' ? window.t('kb.viewer.ui_unavailable') : '';
+      uiToast(translated && translated !== 'kb.viewer.ui_unavailable' ? translated : '原文查看器暂时不可用', { variant: 'warning' });
+    }
   }
 
   // 问答区提示：无消息时显示「基于某库提问」引导
@@ -1268,27 +1344,47 @@
       }
     }
     const isSpace = !!_state.spaceId;
-    const dispName = isSpace ? _state.spaceName : (_state.currentLib || '知识库');
+    const externalSource = _currentExternalSource();
+    const isExternal = !isSpace && !!externalSource;
+    const dispName = isSpace ? _state.spaceName : (isExternal ? _externalSourceLabel(externalSource) : (_state.currentLib || '知识库'));
     const nameEl = document.getElementById('kb-wb-lib-name');
     if (nameEl) nameEl.textContent = dispName;
     const cover = document.getElementById('kb-wb-lib-cover');
     if (cover) cover.style.background = isSpace
       ? 'linear-gradient(135deg, #BFF0DD, #7FDCB8)'
-      : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
+      : isExternal
+        ? 'linear-gradient(135deg, #DCE8FF, #AFC8FF)'
+        : 'linear-gradient(135deg, #D9F2E7, #A9E4C8)';
     const tagEl = document.getElementById('kb-wb-lib-tag');
-    if (tagEl) tagEl.textContent = isSpace ? '共享知识库' : '个人知识库';
+    if (tagEl) tagEl.textContent = isSpace
+      ? _tr('kb.workbench.group_shared', '共享知识库')
+      : isExternal
+        ? _tr('kb.workbench.external_source', '外部来源')
+        : _tr('kb.workbench.group_personal', '个人知识库');
     // 创建者（单用户客户端 = 本人）+ 描述（共享库有 description，否则占位提示）
     const ownerEl = document.getElementById('kb-wb-owner-name');
-    if (ownerEl) ownerEl.textContent = '我';
+    if (ownerEl) ownerEl.textContent = isExternal ? _externalSourceLabel(externalSource) : '我';
     const avatarEl = document.getElementById('kb-wb-owner-avatar');
     if (avatarEl) avatarEl.textContent = (dispName || '我').trim().charAt(0);
     const descEl = document.getElementById('kb-wb-lib-desc');
     if (descEl) {
       const sp = isSpace ? _state.spaces.find((x) => x.space_id === _state.spaceId) : null;
-      const desc = sp && sp.description ? String(sp.description) : '';
+      const desc = isExternal
+        ? _tr('kb.workbench.external_description', '通过已授权的外部来源导入，内容由来源同步管理。')
+        : (sp && sp.description ? String(sp.description) : '');
       descEl.textContent = desc || '快来填写描述吧~';
       descEl.classList.toggle('is-empty', !desc);
     }
+    const shareBtn = document.getElementById('kb-wb-share');
+    if (shareBtn) shareBtn.style.display = isExternal ? 'none' : '';
+    const moreBtn = document.getElementById('kb-wb-more-btn');
+    if (moreBtn) moreBtn.style.display = isExternal ? 'none' : '';
+    const moreMenu = document.getElementById('kb-wb-more-menu');
+    if (isExternal && moreMenu) moreMenu.hidden = true;
+    const importBtn = document.getElementById('kb-wb-import');
+    if (importBtn) importBtn.style.display = isExternal ? 'none' : '';
+    const importMenu = document.getElementById('kb-wb-import-menu');
+    if (isExternal && importMenu) importMenu.hidden = true;
     const membersEl = document.getElementById('kb-wb-members');
     if (membersEl) {
       // 成员入口仅共享知识库显示（个人知识库单用户，无成员概念）
@@ -1512,6 +1608,20 @@
       .catch(() => { /* 快照失败不阻塞展示；手动存档通道不受影响 */ });
   }
 
+  // 从“回答文本 → 脑图”记录快照到该回答消息（entry.mm），历史恢复时据此
+  // 把按钮标为「重新生成脑图」并在答案区内恢复预览，不再额外生成独立气泡。
+  function _recordAnswerMindmap(root, entry) {
+    if (!root || !root.label || !entry || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const key = _mmSnapshotKey();
+    window.cogseed.invoke('kb.mindmap.save', { key, root })
+      .then((r) => {
+        if (!r || !r.ok) return;
+        entry.mm = { key, label: root.label, ts: Date.now() };
+        _qaSaveCurrentSession();
+      })
+      .catch(() => { /* 快照失败不阻塞展示 */ });
+  }
+
   // 从会话历史还原一条脑图消息：先占位，再按 key 异步读档渲染
   function _appendMindmapMessage(box, m) {
     const ai = document.createElement('div');
@@ -1529,6 +1639,30 @@
       return;
     }
     window.cogseed.invoke('kb.mindmap.load', { key: m.key })
+      .then((r) => {
+        if (!canvas) return;
+        if (!r || !r.ok || !r.root) {
+          canvas.innerHTML = '<div class="kb-mm-fail">脑图存档已失效（可能已被删除）</div>';
+          return;
+        }
+        const root = r.root;
+        _state.mmCollapsed.clear();
+        canvas.innerHTML = _mmTreeSvg(root, _state.mmCollapsed, _mmRenderOpts());
+        canvas._mmRoot = root;
+        _bindMindCanvas(canvas);
+      })
+      .catch(() => { if (canvas) canvas.innerHTML = '<div class="kb-mm-fail">脑图载入失败</div>'; });
+  }
+
+  // 历史恢复时，在答案的「重新生成脑图」按钮下方异步载入该答案已存的脑图快照
+  function _qaSnapshotInto(row, key) {
+    if (!row || !key || !window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    const holder = document.createElement('div');
+    holder.className = 'kb-mm-msg';
+    holder.innerHTML = '<div class="kb-wb-mm-canvas"><div class="kb-mm-loading">正在载入脑图…</div></div>';
+    row.appendChild(holder);
+    const canvas = holder.querySelector('.kb-wb-mm-canvas');
+    window.cogseed.invoke('kb.mindmap.load', { key })
       .then((r) => {
         if (!canvas) return;
         if (!r || !r.ok || !r.root) {
@@ -1598,18 +1732,20 @@
     box.scrollTop = box.scrollHeight;
   }
 
-  // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）
-  function _genMindmapFromText(text, btn) {
+  // 对话回答 → 脑图：基于本条回答文本生成（复用 kb.mindmap 的 text 参数）。
+  // entry 是该回答在 qaHistory 里的消息对象：生成成功后把快照记到 entry.mm，
+  // 使该回答的按钮变为「重新生成脑图」（可覆盖式再生成）。
+  function _genMindmapFromText(text, btn, entry) {
     if (!text || !text.trim()) {
       if (typeof uiToast === 'function') uiToast('回答内容为空，无法生成脑图', { variant: 'warning' });
       return;
     }
     if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
     const anchor = btn && btn.parentElement ? btn.parentElement : null;
-    // 防止重复生成：按钮下方已有预览则不再叠加
-    if (anchor && anchor.querySelector('.kb-wb-mm-canvas')) {
-      if (typeof uiToast === 'function') uiToast('已生成，点击脑图可打开预览', { variant: 'info' });
-      return;
+    // 覆盖式再生成：先移除该回答下已有的脑图预览，避免叠加
+    if (anchor) {
+      const old = anchor.querySelector('.kb-mm-msg');
+      if (old) old.remove();
     }
     btn.disabled = true;
     const holder = document.createElement('div');
@@ -1627,7 +1763,7 @@
           const retryBtn = canvas.querySelector('.kb-mm-retry-btn');
           if (retryBtn) retryBtn.addEventListener('click', () => {
             holder.remove();
-            _genMindmapFromText(text, btn);
+            _genMindmapFromText(text, btn, entry);
           });
           return;
         }
@@ -1638,7 +1774,11 @@
         canvas.innerHTML = _mmTreeSvg(res.root, _state.mmCollapsed, _mmRenderOpts());
         canvas._mmRoot = res.root;
         _bindMindCanvas(canvas);
-        if (res.source === 'generated') _mmRecordToHistory(res.root);
+        if (res.source === 'generated') {
+          btn.textContent = '🧠 重新生成脑图';
+          if (entry && typeof entry === 'object') _recordAnswerMindmap(res.root, entry);
+          else _mmRecordToHistory(res.root);
+        }
       })
       .catch(() => {
         btn.disabled = false;
@@ -2339,13 +2479,15 @@
       const hit = candidates.find((p) => p.toLowerCase().endsWith(name.toLowerCase()));
       if (hit) {
         window.__openAnchorViewer({
-          source: _state.spaceId ? 'space' : 'library',
-          scope: _state.spaceId || 'global',
+          source: 'library',
+          scope: _state.spaceId ? 'space' : 'global',
           path: hit,
           chunkIdx: 0,
+          ...(_state.spaceId ? { spaceId: _state.spaceId } : {}),
         });
         return;
       }
+      return;
     }
     if (typeof uiToast === 'function') uiToast(`未在知识库中找到来源文档：${name}`, { variant: 'warning' });
   }
@@ -2694,23 +2836,65 @@
     const s = _state.qaSessions.find((x) => x.id === id);
     if (!s) return;
     _state.qaSessionId = id;
-    _state.qaHistory = (s.msgs || []).map((m) => (
+    const migrated = (s.msgs || []).map((m) => (
       m && m.kind === 'mindmap'
         ? { role: m.role, content: m.content, kind: 'mindmap', key: m.key, label: m.label, ts: m.ts }
-        : { role: m.role, content: m.content }
+        : {
+            role: m.role,
+            content: m.content,
+            ...(Array.isArray(m.evidence) && m.evidence.length ? { evidence: m.evidence } : {}),
+            ...(m.mm && m.mm.key ? { mm: m.mm } : {}),
+          }
     ));
+    _state.qaHistory = migrated;
     _clearQa();
     const box = document.getElementById('kb-qa-messages');
     if (!box) return;
+    // 上一个 AI 回答（供老会话的独立脑图气泡就近挂回所属回答）
+    let prevAi = null;
+    const refreshAiMm = (ai) => {
+      const btn = ai.row.querySelector('.kb-qa-mm-btn');
+      if (btn) { btn.innerHTML = '🧠 重新生成脑图'; btn.title = '重新生成该回答的脑图'; }
+      if (ai.msg.mm && ai.msg.mm.key) _qaSnapshotInto(ai.row, ai.msg.mm.key);
+    };
+    let legacyAttached = false;
+    const nextMsgs = [];
     for (const m of _state.qaHistory) {
       if (m.kind === 'mindmap') {
+        // 老会话兼容：该脑图就近挂到它前面那条“还没有脑图”的回答，按钮变「重新生成脑图」
+        if (prevAi && prevAi.msg && !(prevAi.msg.mm && prevAi.msg.mm.key)) {
+          prevAi.msg.mm = { key: m.key, label: m.label || '', ts: m.ts };
+          refreshAiMm(prevAi);
+          legacyAttached = true;
+          continue; // 已并入该回答，不再作为独立气泡/历史条目
+        }
+        nextMsgs.push(m);
         _appendMindmapMessage(box, m);
         continue;
       }
+      nextMsgs.push(m);
       const el = document.createElement('div');
       el.className = m.role === 'user' ? 'kb-qa-msg is-user' : 'kb-qa-msg is-ai';
-      el.innerHTML = `<div class="kb-qa-msg-body">${_esc(m.content)}</div>`;
+      const body = document.createElement('div');
+      body.className = 'kb-qa-msg-body';
+      if (m.role === 'user') body.textContent = m.content || '';
+      else body.innerHTML = _decorateAnswerHtml(m.content || '');
+      el.appendChild(body);
+      prevAi = null;
+      // 历史恢复：AI 回答重建引用 chips 与「生成脑图/重新生成脑图」按钮
+      if (m.role === 'assistant') {
+        if (Array.isArray(m.evidence) && m.evidence.length) el.appendChild(_qaRefsElement(m.evidence));
+        const mmRow = _qaMmButtonRow(m.content || '', m);
+        el.appendChild(mmRow);
+        if (m.mm && m.mm.key) _qaSnapshotInto(mmRow, m.mm.key);
+        prevAi = { row: mmRow, msg: m };
+      }
       box.appendChild(el);
+    }
+    if (legacyAttached) {
+      // 老会话结构顺带迁移为“回答内联脑图”，持久化后下次直接按 mm 读取
+      _state.qaHistory = nextMsgs;
+      _qaSaveCurrentSession();
     }
     _maybeShowQaHint();
   }
@@ -2753,12 +2937,12 @@
         const gone = _state.qaSessions.find((x) => x.id === id);
         _state.qaSessions = _state.qaSessions.filter((x) => x.id !== id);
         if (_state.qaSessionId === id) { _state.qaSessionId = null; _state.qaHistory = []; _clearQa(); }
-        // 删除会话时同步清理其脑图快照存档（key 含 '#' 的条目）
+        // 删除会话时同步清理其脑图快照存档（kind='mindmap' 独立消息 + 答案内联 mm）
         if (gone && window.cogseed && typeof window.cogseed.invoke === 'function') {
           (gone.msgs || []).forEach((m) => {
-            if (m && m.kind === 'mindmap' && m.key) {
-              window.cogseed.invoke('kb.mindmap.delete', { key: m.key }).catch(() => { /* ignore */ });
-            }
+            if (!m) return;
+            const key = (m.kind === 'mindmap' && m.key) || (m.mm && m.mm.key);
+            if (key) window.cogseed.invoke('kb.mindmap.delete', { key }).catch(() => { /* ignore */ });
           });
         }
         _qaPersist();
@@ -2770,6 +2954,116 @@
     const d = new Date(Number(ts) || 0);
     if (isNaN(d.getTime())) return '';
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  function _copyText(text, okMsg) {
+    const done = () => {
+      if (typeof uiToast === 'function') uiToast(okMsg || '已复制', { variant: 'success', timeoutMs: 1500 });
+    };
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+        done();
+      } catch { /* 复制失败静默 */ }
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else fallback();
+  }
+
+  // 引用区 = 底部「资料来源」折叠区：路径等宽小字，行内不打断正文，机器/溯源用途
+  function _qaRefsElement(evidence) {
+    const box = document.createElement('div');
+    box.className = 'kb-qa-src';
+    const n = evidence.length;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'kb-qa-src-toggle';
+    const list = document.createElement('div');
+    list.className = 'kb-qa-src-list';
+    list.hidden = true;
+    const setLabel = (open) => {
+      toggle.textContent = `资料来源 · ${n}${open ? ' ▴' : ' ▾'}`;
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    setLabel(false);
+    for (const r of evidence) {
+      const row = document.createElement('div');
+      row.className = 'kb-qa-src-row';
+      const pathBtn = document.createElement('button');
+      pathBtn.type = 'button';
+      pathBtn.className = 'kb-qa-src-path';
+      pathBtn.textContent = `${r.path}#chunk ${r.chunkIdx}`;
+      pathBtn.title = '跳转到原文';
+      pathBtn.addEventListener('click', () => _openAnchor(r));
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'kb-qa-src-copy';
+      copy.textContent = '⧉';
+      copy.title = '复制引用路径';
+      copy.setAttribute('aria-label', '复制引用路径');
+      copy.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _copyText(`${r.path}#chunk ${r.chunkIdx}`, '已复制引用路径');
+      });
+      row.appendChild(pathBtn);
+      row.appendChild(copy);
+      list.appendChild(row);
+    }
+    toggle.addEventListener('click', () => {
+      list.hidden = !list.hidden;
+      setLabel(!list.hidden);
+    });
+    box.appendChild(toggle);
+    box.appendChild(list);
+    return box;
+  }
+
+  function _qaMmButtonRow(answerText, entry) {
+    const row = document.createElement('div');
+    row.className = 'kb-qa-mm-action';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kb-qa-mm-btn';
+    const hasMm = !!(entry && entry.mm && entry.mm.key);
+    btn.innerHTML = hasMm ? '🧠 重新生成脑图' : '🧠 生成脑图';
+    btn.title = hasMm ? '重新生成该回答的脑图' : '基于本条回答内容生成脑图';
+    btn.addEventListener('click', () => _genMindmapFromText(answerText, btn, entry));
+    row.appendChild(btn);
+    return row;
+  }
+
+  // AI 回答正文 → “人读友好”HTML：
+  //  - 剔除行内 `path#chunk N` 溯源锚点（统一收敛到底部「资料来源」区，正文不再打断）
+  //  - 渲染 **加粗** 与 `行内代码`
+  //  - 空行分段；`-`/编号列表结构化
+  function _decorateAnswerHtml(text) {
+    let t = String(text || '');
+    t = t
+      .replace(/`[^`\n]+?#chunk\s*\d+`/g, '') // 反引号包裹的完整锚点
+      .replace(/[^\s，。；：、！？?（）()【】"'“”‘’]+?#chunk\s*\d+/g, ''); // 裸锚点
+    let html = _esc(t);
+    html = html.replace(/(^|[^`])`([^`\n]+)`/g, '$1<code>$2</code>'); // 行内代码
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>'); // **加粗**
+    const blocks = html.split(/\n{2,}/);
+    return blocks.map((block) => {
+      const lines = block.split('\n');
+      const out = [];
+      for (const ln of lines) {
+        let m;
+        if ((m = ln.match(/^\s*[-*•]\s+(.*)$/))) out.push(`<div class="kb-a-li">${m[1] || ''}</div>`);
+        else if ((m = ln.match(/^\s*(\d+)[.、]\s+(.*)$/))) out.push(`<div class="kb-a-li is-num">${m[1]}. ${m[2] || ''}</div>`);
+        else if (ln.trim()) out.push(`<div class="kb-a-line">${ln}</div>`);
+      }
+      return out.length ? `<div class="kb-a-block">${out.join('')}</div>` : '';
+    }).join('');
   }
 
   function _ask(question) {
@@ -2846,62 +3140,68 @@
         _state.qaAttachments = [];
         _renderQaAttachments();
       }
-      const handle = window.cogseed.stream('kbqa.askStream', { question: q, space_id: _state.spaceId || null, k: 8, attach_paths: attachPaths, history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1) }, (ev) => {
+      const handle = window.cogseed.stream('kbqa.askStream', {
+        question: q,
+        space_id: _state.spaceId || null,
+        // 问答检索范围跟随当前所在个人库目录（与 AI 解析/脑图一致）；整库视图时为 null。
+        dir: _state.spaceId ? null : (_state.currentLib || null),
+        k: 8,
+        attach_paths: attachPaths,
+        history: _state.qaHistory.filter((m) => m.kind !== 'mindmap').slice(0, -1),
+        // 用户在模型配置弹层里选定的模型（未选则走主进程默认）
+        model: (_qaModelEntry && _qaModelEntry.provider && _qaModelEntry.model)
+          ? { provider: _qaModelEntry.provider, model: _qaModelEntry.model }
+          : undefined,
+      }, (ev) => {
         if (!ev) return;
         if (ev.type === 'delta' && ev.text) {
           text += ev.text;
-          streamBody.textContent = text;
+          streamBody.innerHTML = _decorateAnswerHtml(text);
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'final') {
           ai.classList.remove('is-typing');
           text = ev.text || text;
-          streamBody.textContent = text;
-          // 多轮上下文：回答入 history + 持久化当前会话
-          _state.qaHistory.push({ role: 'assistant', content: text });
-          _qaSaveCurrentSession(q);
+          streamBody.innerHTML = _decorateAnswerHtml(text);
+          // 明确“未找到/无相关”结论 → 浅灰提示块，与有效信息做视觉隔离
+          if (ev.notFound) streamBody.classList.add('is-notfound');
+          // 多轮上下文：回答入 history + 持久化当前会话（AI 回答额外存引用锚点，
+          // 供“打开历史会话”时恢复引用 chips 与脑图按钮）
+          const asstMsg = { role: 'assistant', content: text };
+          _state.qaHistory.push(asstMsg);
           const evidence = Array.isArray(ev.evidence) ? ev.evidence : [];
           if (evidence.length) {
-            // 引用折叠（方案1）：默认只显示「引用(N)」按钮，点击展开全部锚点
-            const refs = document.createElement('div');
-            refs.className = 'kb-qa-refs';
-            const toggle = document.createElement('button');
-            toggle.type = 'button';
-            toggle.className = 'kb-qa-refs-toggle';
-            toggle.textContent = `引用(${evidence.length}) ▾`;
-            toggle.setAttribute('aria-expanded', 'false');
-            const list = document.createElement('div');
-            list.className = 'kb-qa-refs-list';
-            list.hidden = true;
-            for (const r of evidence) {
-              const chip = document.createElement('button');
-              chip.type = 'button';
-              chip.className = 'kb-qa-chip';
-              chip.textContent = `${r.path}#chunk ${r.chunkIdx} ↗`;
-              chip.title = '跳转到原文';
-              chip.addEventListener('click', () => _openAnchor(r));
-              list.appendChild(chip);
-            }
-            toggle.addEventListener('click', () => {
-              list.hidden = !list.hidden;
-              toggle.textContent = list.hidden ? `引用(${evidence.length}) ▾` : `引用(${evidence.length}) ▴`;
-              toggle.setAttribute('aria-expanded', String(!list.hidden));
-            });
-            refs.appendChild(toggle);
-            refs.appendChild(list);
-            streamBody.appendChild(refs);
+            // 精简持久化字段，控制 localStorage 体积（引用 chips/原文跳转只需这几项）
+            asstMsg.evidence = evidence.slice(0, 12).map((r) => ({
+              source: r.source || 'library',
+              scope: r.scope || 'global',
+              path: r.path,
+              chunkIdx: r.chunkIdx,
+            }));
+            streamBody.appendChild(_qaRefsElement(asstMsg.evidence));
           }
+          _qaSaveCurrentSession(q);
           // 每条 AI 回答末尾附「生成脑图」按钮：基于本条回答文本生成（不是整库）
-          const mmRow = document.createElement('div');
-          mmRow.className = 'kb-qa-mm-action';
-          const mmBtn = document.createElement('button');
-          mmBtn.type = 'button';
-          mmBtn.className = 'kb-qa-mm-btn';
-          mmBtn.innerHTML = '🧠 生成脑图';
-          mmBtn.title = '基于本条回答内容生成脑图';
-          const answerText = text;
-          mmBtn.addEventListener('click', () => _genMindmapFromText(answerText, mmBtn));
-          mmRow.appendChild(mmBtn);
-          streamBody.appendChild(mmRow);
+          streamBody.appendChild(_qaMmButtonRow(text, asstMsg));
+          // 未找到时跨库引导：内容在其它个人库目录 → 提供“前往该库提问”按钮
+          const sug = ev.suggestion;
+          if (sug && typeof sug.dir === 'string' && sug.dir && sug.path) {
+            const card = document.createElement('div');
+            card.className = 'kb-qa-suggest';
+            const txt = document.createElement('span');
+            txt.className = 'kb-qa-suggest-txt';
+            txt.innerHTML = `📁 当前库未找到，可能在「<b>${_esc(sug.dir)}</b>」：<code>${_esc(sug.path)}</code>`;
+            const goBtn = document.createElement('button');
+            goBtn.type = 'button';
+            goBtn.className = 'kb-qa-suggest-btn';
+            goBtn.textContent = '前往该库提问';
+            goBtn.addEventListener('click', () => {
+              if (_state.currentLib !== sug.dir) _selectLib(sug.dir);
+              _ask(q);
+            });
+            card.appendChild(txt);
+            card.appendChild(goBtn);
+            streamBody.appendChild(card);
+          }
           box.scrollTop = box.scrollHeight;
         } else if (ev.type === 'error') {
           ai.classList.remove('is-typing');
@@ -2915,13 +3215,43 @@
     }
   }
 
+  // 引用 → 统一原文查看器的整篇模式。
+  async function _openFileViewerForAnchor(anchor) {
+    if (!anchor || typeof anchor.path !== 'string' || !anchor.path) return false;
+    const isSpace = anchor.source === 'space' || anchor.scope === 'space';
+    const spaceId = isSpace ? String(anchor.spaceId || '') : '';
+    if (isSpace && !spaceId) {
+      if (typeof uiToast === 'function') uiToast('缺少空间信息，无法打开原文', { variant: 'warning' });
+      return false;
+    }
+    if (typeof window.__openAnchorViewer !== 'function') return false;
+    await window.__openAnchorViewer({
+      source: 'library',
+      scope: isSpace ? 'space' : 'global',
+      path: anchor.path,
+      chunkIdx: typeof anchor.chunkIdx === 'number' ? anchor.chunkIdx : 0,
+      ...(isSpace ? { spaceId } : {}),
+      ...(typeof anchor.quote === 'string' && anchor.quote.trim() ? { quote: anchor.quote } : {}),
+      view: 'document',
+    });
+    return true;
+  }
+
   function _openAnchor(ref) {
+    // library（个人库/空间库）引用 → 打开整篇原文并高亮/翻页；attachment 等回落片段查看器
+    if (ref && ref.source !== 'attachment' && (ref.scope === 'global' || ref.scope === 'space')) {
+      _openFileViewerForAnchor(ref);
+      return;
+    }
     if (typeof window.__openAnchorViewer === 'function') {
       window.__openAnchorViewer({
         source: ref.source || 'library',
         scope: ref.scope || 'global',
         path: ref.path,
         chunkIdx: ref.chunkIdx,
+        ...(ref.quote ? { quote: ref.quote } : {}),
+        ...(ref.cid ? { cid: ref.cid } : {}),
+        ...(ref.spaceId ? { spaceId: ref.spaceId } : {}),
       });
       return;
     }
@@ -2933,14 +3263,17 @@
     if (_state.streamHandle) return;
     if (!window.cogseed || typeof window.cogseed.stream !== 'function') return;
     try {
-      _state.streamHandle = window.cogseed.stream('kb.events', {}, (ev) => {
+      const handle = window.cogseed.stream('kb.events', {}, (ev) => {
         const inner = ev && ev.event;
         if (!inner || !inner.relPath) return;
         if (inner.status === 'deleted') _state.kbStatus.delete(inner.relPath);
         else _state.kbStatus.set(inner.relPath, { status: inner.status, chunks: inner.chunks, kind: inner.kind, error: inner.error });
         _renderFiles();
       });
-      _state.streamHandle.promise.catch(() => { /* ignore */ });
+      _state.streamHandle = handle;
+      handle.promise.catch(() => { /* ignore */ }).finally(() => {
+        if (_state.streamHandle === handle) _state.streamHandle = null;
+      });
     } catch (err) {
       _log.warn('subscribe kb.events failed', err);
     }
@@ -3067,8 +3400,11 @@
             <div class="kb-qa-degraded-note" id="kb-qa-degraded-note" hidden>当前解析降级，问答能力受限</div>
             <div class="kb-qa-attach-strip" id="kb-qa-attach-strip" hidden></div>
             <div class="kb-qa-box">
-              <select class="kb-qa-model" id="kb-qa-model" title="问答模型（真实配置）"></select>
-              <span class="kb-qa-divider"></span>
+              <button type="button" class="kb-qa-model-chip" id="kb-qa-tools" title="选择问答模型">
+                <span class="kb-qa-model-chip-ico">🧠</span>
+                <span class="kb-qa-model-chip-name" id="kb-qa-model-name">默认模型</span>
+                <span class="kb-qa-model-chip-caret">${_svg('chevron-down')}</span>
+              </button>
               <textarea class="kb-qa-input" id="kb-qa-input" rows="1" placeholder="基于知识库提问"></textarea>
               <div class="kb-qa-icon-wrap" id="kb-qa-attach-wrap">
                 <button type="button" class="kb-qa-icon-btn" id="kb-qa-attach" title="上传附件">${_svg('paperclip')}</button>
@@ -3079,7 +3415,6 @@
                   <div class="kb-qa-attach-tip-item">• 文本类附件会作为本次提问的补充上下文</div>
                 </div>
               </div>
-              <button type="button" class="kb-qa-icon-btn" id="kb-qa-tools" title="更多工具">${_svg('tools')}</button>
               <button type="button" class="kb-qa-send" id="kb-qa-send" title="发送" disabled>${_svg('send')}</button>
             </div>
             <div class="kb-qa-note">内容由 AI 生成仅供参考 · 引用均已核验锚点</div>
@@ -3292,17 +3627,20 @@
     });
     // 分享 + 更多菜单
     document.getElementById('kb-wb-share')?.addEventListener('click', () => {
+      if (_isExternalSourceSelected()) return;
       _kbShareDialogOpen();
     });
     const moreMenu = document.getElementById('kb-wb-more-menu');
     document.getElementById('kb-wb-more-btn')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (moreMenu) moreMenu.hidden = !moreMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-more-item').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.stopPropagation();
         if (moreMenu) moreMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const act = item.dataset.more;
         if (act === 'refresh') { _loadAll(); if (typeof uiToast === 'function') uiToast('已刷新', { variant: 'info' }); }
         else if (act === 'rename') {
@@ -3330,6 +3668,7 @@
     const importNoteSub = document.getElementById('kb-wb-import-note-sub');
     document.getElementById('kb-wb-import')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (_isExternalSourceSelected()) return;
       if (importMenu) importMenu.hidden = !importMenu.hidden;
     });
     document.querySelectorAll('.kb-wb-import-item').forEach((item) => {
@@ -3338,6 +3677,7 @@
         const act = item.dataset.imp;
         if (!act || act === 'note') return;
         if (importMenu) importMenu.hidden = true;
+        if (_isExternalSourceSelected()) return;
         const isSpace = !!_state.spaceId;
         if (act === 'file') { if (isSpace) _importSpaceFiles(); else _importFiles(); }
         else if (act === 'dir') { if (isSpace) _importSpaceDir(); else _importDir(); }
@@ -3366,6 +3706,7 @@
           e.stopPropagation();
           const act = item.dataset.imp;
           if (importMenu) importMenu.hidden = true;
+          if (_isExternalSourceSelected()) return;
           if (act === 'note-new') _kbNewNote();
           else if (act === 'note-import') { if (_state.spaceId) _importSpaceFiles(); else _importFiles(); }
         });
@@ -3423,9 +3764,10 @@
         if (typeof uiToast === 'function') uiToast('选择附件失败', { variant: 'error' });
       }
     });
-    // 更多工具：占位菜单
-    document.getElementById('kb-qa-tools')?.addEventListener('click', () => {
-      if (typeof uiToast === 'function') uiToast('更多工具：即将上线', { variant: 'info' });
+    // 模型配置：点击模型 chip 打开已配置模型选择弹层（不用填 key，key 在设置里配）
+    document.getElementById('kb-qa-tools')?.addEventListener('click', (e) => {
+      if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+      _openQaModelPicker();
     });
     // 脑图预览层事件：缩放 / 平移 / 关闭
     document.getElementById('kb-mm-export-btn')?.addEventListener('click', (e) => {
@@ -3563,39 +3905,178 @@
     document.getElementById('kb-qa-input')?.addEventListener('input', _syncSendState);
     document.getElementById('kb-qa-input')?.addEventListener('keyup', _syncSendState);
     _syncSendState();
-    _loadModelOptions();
+    _restoreQaModelSelection();
+    _renderQaModelChip();
+    _refreshQaModelChipLabel();
     _loadAll();
   }
 
-  // 模型下拉：真实配置（auth.listEntries），截断显示 + hover 全名
-  function _loadModelOptions() {
-    const sel = document.getElementById('kb-qa-model');
-    if (!sel) return;
-    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
-      sel.innerHTML = '<option>默认模型</option>';
-      return;
-    }
-    window.cogseed.invoke('auth.listEntries', { includeUnavailable: true })
+  // ── 问答模型配置：直接在已配置模型（设置里配好的 auth entries）中点选，
+  //    无需在此填 key。选择记忆到 localStorage，重启后恢复。 ──
+  const QA_MODEL_STORE_KEY = 'cogseed.kb-qa.model.entryId';
+  let _qaModelEntry = null; // { entryId, provider, providerLabel, model, modelName } | null（null = 默认模型）
+
+  function _restoreQaModelSelection() {
+    try {
+      const saved = localStorage.getItem(QA_MODEL_STORE_KEY);
+      _qaModelEntry = saved ? { entryId: saved } : null;
+    } catch (_) { _qaModelEntry = null; }
+  }
+
+  function _currentQaModelLabel(entries) {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return '';
+    const hit = (entries || []).find((e) => e && e.entryId === _qaModelEntry.entryId);
+    if (!hit) return '';
+    _qaModelEntry = {
+      entryId: hit.entryId,
+      provider: hit.provider,
+      providerLabel: hit.providerLabel || hit.provider,
+      model: hit.model,
+      modelName: hit.modelName || hit.model,
+    };
+    return `${hit.providerLabel || hit.provider} · ${hit.modelName || hit.model}`;
+  }
+
+  function _renderQaModelChip() {
+    const nameEl = document.getElementById('kb-qa-model-name');
+    if (!nameEl) return;
+    nameEl.textContent = _qaModelEntry && _qaModelEntry.entryId && _qaModelEntry.modelName
+      ? `${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}`
+      : '默认模型';
+    nameEl.title = nameEl.textContent;
+  }
+
+  // 仅存了 entryId 恢复时后台补拉一次真实条目，让 chip 显示模型名
+  function _refreshQaModelChipLabel() {
+    if (!_qaModelEntry || !_qaModelEntry.entryId) return;
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') return;
+    window.cogseed.invoke('auth.listEntries', {})
       .then((res) => {
         const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries : [];
-        if (!entries.length) {
-          sel.innerHTML = '<option>未配置模型（请到设置配置）</option>';
-          return;
+        const hit = entries.find((e) => e && e.entryId === _qaModelEntry.entryId);
+        if (hit) {
+          _qaModelEntry = {
+            entryId: hit.entryId,
+            provider: hit.provider,
+            providerLabel: hit.providerLabel || hit.provider,
+            model: hit.model,
+            modelName: hit.modelName || hit.model,
+          };
+          _renderQaModelChip();
         }
-        sel.innerHTML = entries.map((e, i) => {
-          const label = `${e.provider || ''} · ${e.modelName || e.model || ''}`;
-          return `<option value="${i}" title="${_esc(label)}">${_esc(label)}</option>`;
-        }).join('');
-        const first = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-        if (first) sel.title = first.title || first.textContent;
-        sel.addEventListener('change', () => {
-          const opt = sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
-          if (opt) sel.title = opt.title || opt.textContent;
-        });
+      })
+      .catch(() => { /* 保持默认标签 */ });
+  }
+
+  // 弹出模型选择：列出所有已配置（可用）模型；空态引导去设置一次配好 key
+  function _openQaModelPicker() {
+    if (!window.cogseed || typeof window.cogseed.invoke !== 'function') {
+      if (typeof uiToast === 'function') uiToast('问答服务不可用', { variant: 'warning' });
+      return;
+    }
+    window.cogseed.invoke('auth.listEntries', {})
+      .then((res) => {
+        const entries = (res && res.ok && Array.isArray(res.entries)) ? res.entries.filter((e) => e && e.modelAvailable !== false) : [];
+        _buildQaModelPicker(entries);
       })
       .catch(() => {
-        sel.innerHTML = '<option>默认模型</option>';
+        if (typeof uiToast === 'function') uiToast('获取模型列表失败', { variant: 'error' });
       });
+  }
+
+  function _buildQaModelPicker(entries) {
+    const el = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const overlay = el('div', 'kb-qa-model-overlay');
+    overlay.id = 'kb-qa-model-picker';
+    const pop = el('div', 'kb-qa-model-pop');
+    const head = el('div', 'kb-qa-model-pop-head');
+    head.append(el('span', 'kb-qa-model-pop-title', '选择问答模型'), el('span', 'kb-qa-model-pop-hint', '已配置模型，点击即切换'));
+    const closeBtn = el('button', 'kb-qa-model-pop-close', '✕');
+    closeBtn.type = 'button';
+    closeBtn.title = '关闭（Esc）';
+    head.appendChild(closeBtn);
+    pop.appendChild(head);
+
+    const list = el('div', 'kb-qa-model-pop-list');
+    const currentId = _qaModelEntry && _qaModelEntry.entryId;
+
+    // 「默认模型」行：清空自选，走系统默认
+    const defRow = el('button', 'kb-qa-model-item');
+    defRow.type = 'button';
+    const defIco = el('span', 'kb-qa-model-item-check', currentId ? '' : '✓');
+    const defMain = el('span', 'kb-qa-model-item-main');
+    defMain.append(el('span', 'kb-qa-model-item-name', '默认模型'), el('span', 'kb-qa-model-item-sub', '系统配置的默认问答模型'));
+    defRow.append(defIco, defMain);
+    defRow.addEventListener('click', () => { _selectQaModel(null); overlay.remove(); });
+    list.appendChild(defRow);
+
+    if (!entries.length) {
+      const empty = el('div', 'kb-qa-model-empty');
+      empty.append(
+        el('div', 'kb-qa-model-empty-title', '尚未配置模型'),
+        el('div', 'kb-qa-model-empty-sub', '到设置中配置一次 API Key 后即可在此选择'),
+      );
+      list.appendChild(empty);
+    } else {
+      for (const e of entries) {
+        const row = el('button', 'kb-qa-model-item');
+        row.type = 'button';
+        row.dataset.entryId = String(e.entryId || '');
+        const ico = el('span', 'kb-qa-model-item-check', currentId === e.entryId ? '✓' : '');
+        const main = el('span', 'kb-qa-model-item-main');
+        const name = el('span', 'kb-qa-model-item-name', `${e.providerLabel || e.provider} · ${e.modelName || e.model}`);
+        const sub = el('span', 'kb-qa-model-item-sub', e.model || '');
+        main.append(name, sub);
+        row.append(ico, main);
+        row.addEventListener('click', () => { _selectQaModel(e); overlay.remove(); });
+        list.appendChild(row);
+      }
+    }
+    pop.appendChild(list);
+
+    const foot = el('div', 'kb-qa-model-pop-foot');
+    const manageBtn = el('button', 'kb-qa-model-pop-manage', '去设置管理模型');
+    manageBtn.type = 'button';
+    manageBtn.addEventListener('click', () => {
+      overlay.remove();
+      if (typeof window.setView === 'function') window.setView('settings');
+      if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+    });
+    foot.appendChild(manageBtn);
+    pop.appendChild(foot);
+
+    overlay.appendChild(pop);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.remove(); });
+    overlay.tabIndex = -1;
+    document.body.appendChild(overlay);
+    overlay.focus();
+  }
+
+  function _selectQaModel(entry) {
+    if (entry) {
+      _qaModelEntry = {
+        entryId: entry.entryId,
+        provider: entry.provider,
+        providerLabel: entry.providerLabel || entry.provider,
+        model: entry.model,
+        modelName: entry.modelName || entry.model,
+      };
+    } else {
+      _qaModelEntry = null;
+    }
+    try {
+      localStorage.setItem(QA_MODEL_STORE_KEY, _qaModelEntry ? String(_qaModelEntry.entryId) : '');
+    } catch (_) { /* localStorage 不可用 */ }
+    _renderQaModelChip();
+    if (typeof uiToast === 'function') {
+      uiToast(_qaModelEntry ? `问答模型已切换：${_qaModelEntry.providerLabel || _qaModelEntry.provider} · ${_qaModelEntry.modelName}` : '已切回默认模型', { variant: 'success', timeoutMs: 2000 });
+    }
   }
 
   // 无输入时发送按钮置灰；有内容恢复可用
@@ -3803,6 +4284,12 @@
     ];
     if (!isDir) items.push({ key: 'reveal', label: '📂 在文件夹中显示', fn: () => _kbReveal(path) });
     _kbMenuShow(items, x, y);
+  }
+
+  function _kbExternalFileMenu(path, x, y) {
+    _kbMenuShow([
+      { key: 'reveal', label: _tr('kb.workbench.reveal_file', '在文件夹中显示'), fn: () => _kbReveal(path) },
+    ], x, y);
   }
 
   // ── 共享知识库（空间）重命名 / 删除（spaces.update / spaces.delete）──
@@ -4678,5 +5165,57 @@
     }
   }
 
+  window.addEventListener('i18n-change', () => {
+    if (!_state.rendered) return;
+    _renderTree();
+    _renderRight();
+  });
+
   window.renderKbWorkbench = renderKbWorkbench;
+
+  function _fvNormSpace(value) {
+    return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function _fvStripMdMarks(value) {
+    return String(value || '').split('\n').map((line) => line
+      .replace(/^\s*(?:#{1,6}[ \t]+|>[\t ]?|[-*+•][ \t]+|\d+[.、)][ \t]+|```+[^\n]*|~~~+)/, ''))
+      .join(' ');
+  }
+
+  function _fvCleanQuote(value) {
+    return _fvNormSpace(_fvStripMdMarks(value).replace(/\*\*|__|`/g, ''));
+  }
+
+  function _fvSignificantTokens(value) {
+    const seen = new Set();
+    const tokens = [];
+    String(value || '').split(/[^\p{L}\p{N}]+/u).forEach((token) => {
+      const cleaned = (token || '').replace(/[^\p{L}\p{N}_-]/gu, '');
+      if (cleaned && cleaned.length >= 3 && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        tokens.push(cleaned);
+      }
+    });
+    return tokens;
+  }
+
+  // 高亮纯函数（供渲染层回归测试锁定清洗/分词逻辑）
+  window.__kbFvUtils = {
+    stripMdMarks: _fvStripMdMarks,
+    cleanQuote: _fvCleanQuote,
+    normSpace: _fvNormSpace,
+    significantTokens: _fvSignificantTokens,
+  };
+
+  // 整篇原文打开桥（供 KB 面板外的引用点击复用，如 chat-citation）：
+  // 返回 true = 已交给整篇查看器；false = 请回落片段查看器。
+  window.__openKbSourceDocument = function openKbSourceDocument(anchor) {
+    if (!anchor || anchor.source === 'attachment') return Promise.resolve(false);
+    try {
+      return Promise.resolve(_openFileViewerForAnchor(anchor));
+    } catch (_) {
+      return Promise.resolve(false);
+    }
+  };
 })();

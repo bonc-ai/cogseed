@@ -1,5 +1,5 @@
 /**
- * Chat citation chips (COGSEED-39 ② P2).
+ * Chat citation chips (知识库问答 ② P2).
  *
  * Turns `path#chunk N` citations (optionally prefixed `[global]` / `[space]`)
  * inside rendered chat bubbles into clickable chips that open the anchored

@@ -72,6 +72,8 @@ function _cwIcon(name) {
     eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
     lock: '<circle cx="12" cy="16" r="1"/><rect x="3" y="10" width="18" height="12" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/>',
     loading: '<path d="M21 12a9 9 0 1 1-6.22-8.56"/>',
+    'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    'chevron-right': '<path d="m9 18 6-6-6-6"/>',
     'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5"/>',
   };
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths[name] || ''}</svg>`;
@@ -122,7 +124,7 @@ function open() {
     selectedSources: new Set(),
     sessions: [],
     selected: new Set(),
-    activeSourceTab: '',
+    activeSourceTab: 'all',
     imported: [],
     failed: [],
     cognitions: 0,
@@ -133,6 +135,8 @@ function open() {
     sourcesStatus: 'idle',
     sessionsStatus: 'idle',
     searchQuery: '',
+    timeRange: '7d',
+    collapsedProjects: new Set(),
     importItems: [],
     backdrop: null,
   };
@@ -237,7 +241,11 @@ function _cwRenderBody(options = {}) {
         </div>
         <p>${_cwEsc(_cwT('continue_work.sessions.subtitle', '每个会话会生成一份任务接续摘要；原会话保持不变。'))}</p>
       </div>
-      <div class="cw-source-tabs" data-cw-source-tabs></div>
+      <div class="cw-time-range" role="group" aria-label="${_cwEsc(_cwT('continue_work.sessions.time_range', '时间范围'))}" data-cw-time-range>
+        <span class="cw-time-range-label">${_cwEsc(_cwT('continue_work.sessions.time_range', '时间范围'))}</span>
+        ${[['7d', '7 天'], ['30d', '30 天'], ['90d', '90 天'], ['all', '全部']].map(([value, label]) => `
+          <button type="button" class="cw-time-range-option${_cw.timeRange === value ? ' is-active' : ''}" data-cw-time-range-option="${value}">${_cwEsc(_cwT(`continue_work.sessions.time_${value}`, label))}</button>`).join('')}
+      </div>
       <div class="cw-session-toolbar">
         <div class="cw-search">${_cwIcon('search')}<input type="text" data-cw-search placeholder="${_cwEsc(_cwT('continue_work.sessions.search', '搜索标题、项目或 Agent'))}" /></div>
         <button type="button" class="cw-select-all" data-cw-select-all>${_cwEsc(_cwT('continue_work.sessions.select_all', '全选当前结果'))}</button>
@@ -257,14 +265,7 @@ function _cwRenderBody(options = {}) {
     const selectAll = body.querySelector('[data-cw-select-all]');
     if (selectAll) {
       selectAll.addEventListener('click', () => {
-        const search = _cw.backdrop.querySelector('[data-cw-search]');
-        const q = String(search && search.value || '').trim().toLowerCase();
-        const tabSessions = _cw.activeSourceTab === 'all'
-          ? _cw.sessions.filter((s) => _cw.selectedSources.has(s.source))
-          : _cw.sessions.filter((s) => s.source === _cw.activeSourceTab);
-        const visible = tabSessions.filter((s) => (
-          !q || `${s.title} ${s.meta} ${s.source}`.toLowerCase().includes(q)
-        ));
+        const visible = _cwVisibleSessions();
         const allSelected = visible.length > 0 && visible.every((s) => _cw.selected.has(s.id));
         for (const s of visible) {
           if (allSelected) _cw.selected.delete(s.id);
@@ -273,11 +274,14 @@ function _cwRenderBody(options = {}) {
         _cwRenderSessionList();
       });
     }
+    body.querySelectorAll('[data-cw-time-range-option]').forEach((el) => {
+      el.addEventListener('click', () => {
+        _cw.timeRange = el.dataset.cwTimeRangeOption || 'all';
+        _cwRenderBody({ reload: false });
+      });
+    });
     if (reload || _cw.sessionsStatus === 'idle') void _cwLoadSessions();
-    else if (_cw.sessionsStatus === 'ready') {
-      _cwRenderSourceTabs();
-      _cwRenderSessionList();
-    }
+    else if (_cw.sessionsStatus === 'ready') _cwRenderSessionList();
   } else {
     body.innerHTML = `
       <div class="cw-section-intro">
@@ -496,7 +500,8 @@ async function _cwLoadSessions() {
             sessionId: s.sessionId,
             title: s.title || '',
             meta: s.projectPath || s.model || '',
-            time: s.createdAt || '',
+            projectPath: s.projectPath || '',
+            time: s.lastActivityAt || s.createdAt || '',
             initialMessage: s.initialMessage || '',
           });
         }
@@ -510,7 +515,8 @@ async function _cwLoadSessions() {
             filePath: s.filePath,
             title: s.firstMessage || '',
             meta: s.projectPath || '',
-            time: s.timestamp || '',
+            projectPath: s.projectPath || '',
+            time: s.lastActivityAt || s.timestamp || '',
           });
         }
       } else if (type === 'codex') {
@@ -523,7 +529,8 @@ async function _cwLoadSessions() {
             filePath: s.filePath,
             title: s.title || '',
             meta: s.cwd || '',
-            time: s.createdAt || '',
+            projectPath: s.cwd || '',
+            time: s.lastActivityAt || s.createdAt || '',
           });
         }
       } else if (type === 'workbuddy') {
@@ -536,7 +543,8 @@ async function _cwLoadSessions() {
             filePath: s.filePath,
             title: s.firstMessage || '',
             meta: s.projectPath || '',
-            time: s.timestamp || '',
+            projectPath: s.projectPath || '',
+            time: s.lastActivityAt || s.timestamp || '',
           });
         }
       } else if (type === 'opencode') {
@@ -550,7 +558,10 @@ async function _cwLoadSessions() {
             title: s.title || '',
             // 有项目 → 显示真实项目目录；global（无项目）→ 回退模型名。
             meta: s.projectPath || (s.model && s.model.modelID) || s.projectId || '',
-            time: s.timeCreated ? new Date(s.timeCreated).toISOString() : '',
+            projectPath: s.projectPath || '',
+            messageCount: s.messageCount,
+            time: s.timeUpdated ? new Date(s.timeUpdated).toISOString()
+              : (s.timeCreated ? new Date(s.timeCreated).toISOString() : ''),
           });
         }
       }
@@ -560,15 +571,46 @@ async function _cwLoadSessions() {
   }
 
   if (_cw !== state) return;
+  const timeValue = (session) => {
+    const parsed = Date.parse(session.time || '');
+    return Number.isNaN(parsed) ? -Infinity : parsed;
+  };
+  sessions.sort((a, b) => timeValue(b) - timeValue(a));
   state.sessions = sessions;
   state.sessionsStatus = 'ready';
   // 会话不默认全选：保持用户之前的选择，未选过的保持未选。
   state.selected = new Set(sessions.map((s) => s.id).filter((id) => state.selected.has(id)));
-  if (!state.activeSourceTab || !state.selectedSources.has(state.activeSourceTab)) {
-    state.activeSourceTab = wanted[0] || '';
-  }
-  _cwRenderSourceTabs();
+  state.activeSourceTab = 'all';
   _cwRenderSessionList();
+}
+
+function _cwProjectKey(session) {
+  const projectPath = String(session.projectPath || '').trim();
+  return projectPath ? `path:${projectPath}` : `unassigned:${session.source}`;
+}
+
+function _cwProjectName(projectKey, sessions) {
+  const first = sessions[0];
+  const projectPath = String(first?.projectPath || '').trim();
+  if (!projectPath) return _cwT('continue_work.sessions.unassigned_project', '未关联项目');
+  const normalized = projectPath.replace(/[\\/]+$/, '');
+  const name = normalized.split(/[\\/]/).pop();
+  return name || projectPath;
+}
+
+function _cwVisibleSessions() {
+  if (!_cw) return [];
+  const search = _cw.backdrop.querySelector('[data-cw-search]');
+  const q = String(search && search.value || _cw.searchQuery || '').trim().toLowerCase();
+  const now = Date.now();
+  const rangeMs = { '7d': 7, '30d': 30, '90d': 90 }[_cw.timeRange];
+  return _cw.sessions.filter((s) => {
+    if (!_cw.selectedSources.has(s.source)) return false;
+    if (q && !`${s.title} ${s.meta} ${s.projectPath} ${s.source}`.toLowerCase().includes(q)) return false;
+    if (!rangeMs) return true;
+    const timestamp = Date.parse(s.time || '');
+    return !Number.isNaN(timestamp) && now - timestamp <= rangeMs * 86400000;
+  });
 }
 
 /** 第二步：按已选 Agent 渲染会话 tab 栏（含「全部」）。 */
@@ -610,14 +652,7 @@ function _cwRenderSessionList() {
   const countEl = _cw.backdrop.querySelector('[data-cw-count]');
   if (!list) return;
 
-  const q = String(search && search.value || '').trim().toLowerCase();
-  // 「全部」tab 显示所有已选来源的会话；否则只显示当前 Agent tab。
-  const tabSessions = _cw.activeSourceTab === 'all'
-    ? _cw.sessions.filter((s) => _cw.selectedSources.has(s.source))
-    : _cw.sessions.filter((s) => s.source === _cw.activeSourceTab);
-  const visible = tabSessions.filter((s) => (
-    !q || `${s.title} ${s.meta} ${s.source}`.toLowerCase().includes(q)
-  ));
+  const visible = _cwVisibleSessions();
 
   if (countEl) {
     countEl.textContent = _cwT('continue_work.sessions.selection_summary', '已选 {selected} / {total}', {
@@ -635,7 +670,8 @@ function _cwRenderSessionList() {
     }
   }
 
-  if (!tabSessions.length) {
+  const allSessions = _cw.sessions.filter((s) => _cw.selectedSources.has(s.source));
+  if (!allSessions.length) {
     list.innerHTML = _cw.denied
       ? `<div class="cw-empty">${_cwEsc(_cwT('continue_work.source.permission_denied', '无法访问 Claude 数据目录，请检查软件权限。'))}</div>`
       : `<div class="cw-empty">${_cwEsc(_cwT('continue_work.sessions.none_for_source', '所选 Agent 没有可导入的历史会话。'))}</div>`;
@@ -653,48 +689,76 @@ function _cwRenderSessionList() {
     const time = s.time ? new Date(s.time).toLocaleString(_cwLocale(), {
       month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
     }) : '';
+    const messageCount = Number.isFinite(s.messageCount) && s.messageCount > 0
+      ? `${s.messageCount} ${_cwT('continue_work.sessions.messages_suffix', '条消息')}` : '';
     return `
       <div class="cw-session-row${selected ? ' is-selected' : ''}" data-cw-session="${_cwEsc(s.id)}">
         <span class="cw-check">${_cwIcon('check')}</span>
+        <span class="cw-session-agent" title="${_cwEsc(_cwSourceLabel(s.source))}">${_cwEsc(_cwSourceLabel(s.source).slice(0, 1))}</span>
         <div class="cw-session-body">
           <div class="cw-session-title">${_cwEsc(s.title || _cwT('continue_work.sessions.untitled', '未命名会话'))}</div>
           <div class="cw-session-meta">${_cwEsc(s.meta || '')}</div>
         </div>
-        <span class="cw-source-pill">${_cwEsc(_cwSourceLabel(s.source))}</span>
-        <span class="cw-session-time">${time}</span>
+        <span class="cw-session-time">${time}${messageCount ? ` · ${_cwEsc(messageCount)}` : ''}</span>
       </div>`;
   };
 
-  // 按天分组（今天 / 昨天 / 更早）。
-  const groups = [];
-  const now = new Date();
-  const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-  const todayKey = dayKey(now);
-  const yKey = dayKey(new Date(now.getTime() - 86400000));
-  const buckets = { today: [], yesterday: [], earlier: [] };
-  for (const s of visible) {
-    const d = s.time ? new Date(s.time) : null;
-    const key = d && !Number.isNaN(d.getTime()) ? dayKey(d) : '';
-    if (key === todayKey) buckets.today.push(s);
-    else if (key === yKey) buckets.yesterday.push(s);
-    else buckets.earlier.push(s);
+  if (!visible.length) {
+    list.innerHTML = `<div class="cw-empty">${_cwEsc(_cwT('continue_work.sessions.no_matches', '没有匹配的会话。'))}</div>`;
+    _cwRenderFoot();
+    return;
   }
-  if (buckets.today.length) groups.push([_cwT('continue_work.sessions.today', '今天'), buckets.today]);
-  if (buckets.yesterday.length) groups.push([_cwT('continue_work.sessions.yesterday', '昨天'), buckets.yesterday]);
-  if (buckets.earlier.length) groups.push([_cwT('continue_work.sessions.earlier', '更早'), buckets.earlier]);
-  if (!groups.length) groups.push([_cwT('continue_work.sessions.group', '会话'), visible]);
 
-  list.innerHTML = groups.map(([label, items]) => `
-    <section class="cw-session-group">
-      <div class="cw-group-label">${_cwEsc(label)}</div>
-      <div class="cw-session-list-inner">${items.map(rowHtml).join('')}</div>
-    </section>`).join('');
+  const groups = new Map();
+  visible.forEach((session) => {
+    const key = _cwProjectKey(session);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(session);
+  });
+  const projectGroups = [...groups.entries()].sort(([, a], [, b]) => {
+    const timeOf = (items) => Date.parse(items[0]?.time || '') || 0;
+    return timeOf(b) - timeOf(a);
+  });
+  const projectHtml = ([projectKey, items]) => {
+    const selectedCount = items.filter((s) => _cw.selected.has(s.id)).length;
+    const allSelected = selectedCount === items.length;
+    const collapsed = _cw.collapsedProjects.has(projectKey);
+    const projectPath = String(items[0].projectPath || '').trim();
+    return `
+      <section class="cw-project-group${collapsed ? ' is-collapsed' : ''}" data-cw-project="${_cwEsc(projectKey)}">
+        <div class="cw-project-row" data-cw-project-toggle="${_cwEsc(projectKey)}">
+          <span class="cw-check cw-project-check${allSelected ? ' is-checked' : ''}" data-cw-project-check="${_cwEsc(projectKey)}">${_cwIcon('check')}</span>
+          <span class="cw-project-folder">${_cwIcon('folder')}</span>
+          <div class="cw-project-copy">
+            <strong>${_cwEsc(_cwProjectName(projectKey, items))}</strong>
+            <small title="${_cwEsc(projectPath)}">${_cwEsc(projectPath || _cwT('continue_work.sessions.unassigned_project', '未关联项目'))}</small>
+          </div>
+          <span class="cw-project-count">${selectedCount}/${items.length}</span>
+          <span class="cw-project-chevron">${_cwIcon(collapsed ? 'chevron-right' : 'chevron-down')}</span>
+        </div>
+        <div class="cw-project-sessions">${items.map(rowHtml).join('')}</div>
+      </section>`;
+  };
+  list.innerHTML = projectGroups.map(projectHtml).join('');
 
   list.querySelectorAll('[data-cw-session]').forEach((row) => {
     row.addEventListener('click', () => {
       const id = row.dataset.cwSession;
       if (_cw.selected.has(id)) _cw.selected.delete(id);
       else _cw.selected.add(id);
+      _cwRenderSessionList();
+    });
+  });
+  list.querySelectorAll('[data-cw-project-toggle]').forEach((row) => {
+    row.addEventListener('click', (event) => {
+      const key = row.dataset.cwProjectToggle;
+      if (!key) return;
+      if (event.target.closest('[data-cw-project-check]')) {
+        const items = groups.get(key) || [];
+        const allSelected = items.every((s) => _cw.selected.has(s.id));
+        items.forEach((s) => allSelected ? _cw.selected.delete(s.id) : _cw.selected.add(s.id));
+      } else if (_cw.collapsedProjects.has(key)) _cw.collapsedProjects.delete(key);
+      else _cw.collapsedProjects.add(key);
       _cwRenderSessionList();
     });
   });

@@ -1,5 +1,5 @@
 /**
- * material-search (COGSEED-39 ① Phase 2) — hybrid vector + BM25 fusion.
+ * material-search (知识库问答 ① Phase 2) — hybrid vector + BM25 fusion.
  *
  * Inserts Library files with known fake embeddings (no real embedder), mocks
  * the query embedder to a fixed vector, then asserts:

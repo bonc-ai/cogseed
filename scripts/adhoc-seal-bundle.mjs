@@ -1,7 +1,7 @@
 /**
  * Bottom-up ad-hoc bundle sealing for LOCAL, certificate-free verification
  * runs (Squirrel.Mac update validation). Shared by
- * `scripts/test-update-local.mjs` and `scripts/build-hub-verify-artifacts.mjs`.
+ * `scripts/test-update-local.mjs` and development packaging helpers.
  *
  * Why this exists:
  *   - Electron ships helper apps and plain frameworks whose upstream seals

@@ -318,7 +318,7 @@ describe('settings model providers surface', () => {
     const indexHtml = readFileSync(resolve(root, 'src/renderer/index.html'), 'utf8');
     const source = readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8');
 
-    expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
+    expect(indexHtml).toContain('data-settings-tab="configuration" data-i18n="settings.tab.configuration"');
     expect(indexHtml).not.toContain('Model Authorization');
     // The standalone custom-provider list was folded into the provider
     // picker's two action rows; the dialogs remain reachable.

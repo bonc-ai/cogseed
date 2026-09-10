@@ -125,7 +125,7 @@ export interface SpaceArtifactEntry {
   time: number;
   /** 产物来源（前端区分「待确认」的 AI 产出）。 */
   source: SpaceArtifactSource;
-  /** 是否正式产物（COGSEED-16 起恒为 true：产物无确认态，产出即正式）。 */
+  /** 是否正式产物（产物确认态 起恒为 true：产物无确认态，产出即正式）。 */
   confirmed: boolean;
   /** 绝对路径（打开产物用）。 */
   path?: string;
@@ -336,7 +336,7 @@ export function isUnsafeWorkspaceRoot(dir: string): boolean {
 
 /** 扫描 AI 产出文件：先走消息 produced[]（已登记），再兜底扫会话工作区目录
  *  （未登记进 produced 的产物，如部分工具直接写文件）。按文件名去重（附件优先）。
- *  COGSEED-16：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
+ *  产物确认态：产物无确认态——所有产出自动成为正式产物，直接可打开/引用/删除。 */
 async function scanProducedFiles(
   uid: string,
   spaceId: string,
@@ -420,7 +420,7 @@ async function scanProducedFiles(
   }
 }
 
-// COGSEED-18：本地文件夹整体导入的产物（<空间内容目录>/imports/**，保留目录结构）。
+// 本地文件夹导入：本地文件夹整体导入的产物（<空间内容目录>/imports/**，保留目录结构）。
 // 全部为正式产物（无确认态），打开/删除沿用产物既有能力。
 async function scanImportedFiles(uid: string, spaceId: string, out: SpaceArtifactEntry[]): Promise<void> {
   const root = path.join(spaceContentDir(uid, spaceId), 'imports');

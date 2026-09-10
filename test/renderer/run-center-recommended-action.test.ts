@@ -21,6 +21,7 @@ function loadBoard() {
   const context: any = { window: {}, Object, String, Array, Map, Set, Date, Math, JSON, Number };
   context.window.window = context.window;
   vm.createContext(context);
+  vm.runInContext(read('src/renderer/modules/run-center-model.js'), context);
   vm.runInContext(read('src/renderer/modules/run-center-board.js'), context);
   return context.window.CogSeedRunCenterBoard;
 }

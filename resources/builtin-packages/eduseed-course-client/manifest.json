@@ -10,7 +10,7 @@
     "zh": "EduSeed 课程学习入口。学生端：查看挑战、预检交付物、提交项目、查看评分与教师反馈、课后复盘；教师端：创建挑战、发布作业、跟踪班级进度、完成终审。全部数据同步 EduSeed 平台，评分经 AI 初评、教师终审。",
     "en": "The EduSeed course portal. Students: browse challenges, precheck deliverables, submit projects, view scores and teacher feedback, and reflect after each challenge. Teachers: create challenges, publish assignments, track class progress, and finalize reviews. All data syncs with the EduSeed platform, with AI first-pass grading and teacher final review."
   },
-  "version": "0.4.1",
+  "version": "0.5.3",
   "compatible_cogseed": ">=1.0.0",
   "audience_roles": [
     "student",
@@ -43,7 +43,11 @@
       "read": [
         "<学生项目目录，由用户指定>"
       ],
-      "write": []
+      "write": [
+        "<学生项目目录，由用户指定>/挑战*_材料/**",
+        "<学生项目目录，由用户指定>/挑战*_正文/**",
+        "<学生项目目录，由用户指定>/挑战*_完整资料/**"
+      ]
     }
   },
   "license": {
@@ -69,6 +73,12 @@
       "plugin-version",
       "list-challenges",
       "get-challenge",
+      "get-challenge-content",
+      "export-challenge-pack",
+      "download-course-materials",
+      "list-course-materials",
+      "list-challenge-materials",
+      "download-challenge-materials",
       "get-dashboard",
       "list-my-submissions",
       "get-task",

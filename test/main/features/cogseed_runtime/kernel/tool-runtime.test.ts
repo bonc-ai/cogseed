@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FILE_SYMLINKS_SUPPORTED } from '../../../../helpers/fs-capabilities';
 
 import * as paths from '../../../../../src/main/paths';
 import { DEFAULT_RUNTIME_TOOL_POLICY } from '../../../../../src/main/features/cogseed_runtime/kernel/config';
@@ -161,7 +162,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     expect(grep.content).toContain('app.txt:1:needle here');
   });
 
-  it('rejects symlink escapes through the path sandbox', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('rejects symlink escapes through the path sandbox', async () => {
     const root = makeRoot();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-outside-'));
     const secret = path.join(outside, 'secret.txt');
@@ -225,7 +226,7 @@ describe('CogSeed Runtime tool runtime MVP', () => {
     expect(fs.readFileSync(target, 'utf8')).toBe('Alpha\nGamma\n');
   });
 
-  it('rejects write_file symlink escapes and outside paths', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('rejects write_file symlink escapes and outside paths', async () => {
     const root = makeRoot();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-runtime-write-outside-'));
     const secret = path.join(outside, 'secret.txt');

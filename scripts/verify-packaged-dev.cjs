@@ -16,7 +16,11 @@ const ASAR_REQUIRED = Object.freeze([
   'src/main/util/migrate-source-data-root.cjs',
   '.build/build-info.json',
   'src/main/index.ts',
+  'src/main/util/image-transform.ts',
   'src/renderer/modules/agents.js',
+  // 飞书图片链（G-17）的 webp 解码器 wasm：asarUnpack 后 asar 头中仍保留
+  // 条目（内容指向 unpacked 树）——缺失=发布版图片功能必坏，打包校验必须拦下。
+  'node_modules/@jsquash/webp/codec/dec/webp_dec.wasm',
 ]);
 const RESOURCE_REQUIRED = Object.freeze([
   ['builtin', '_manifest.json'],
@@ -44,6 +48,22 @@ function verifyPackagedDevBundle(appPath, options = {}) {
   }
   for (const required of ASAR_REQUIRED) {
     if (!entries.has(required)) errors.push(`missing app.asar entry: ${required}`);
+  }
+  // PR209 评审 M11：wasm 校验升级——asar 头条目存在不等于打包态可加载。
+  // ①校验 asarUnpack 后的物理文件真实存在于 app.asar.unpacked 树；
+  // ②用 new WebAssembly.Module 真编译字节（坏的/被裁剪的 wasm 立刻暴露）。
+  for (const wasmEntry of ASAR_REQUIRED.filter((e) => e.endsWith('.wasm'))) {
+    const unpackedPath = path.join(resources, 'app.asar.unpacked', wasmEntry);
+    if (!exists(unpackedPath)) {
+      errors.push(`missing unpacked wasm file: ${wasmEntry}`);
+      continue;
+    }
+    try {
+      const wasmBytes = (options.readUnpackedFile || ((p) => fs.readFileSync(p)))(unpackedPath);
+      new WebAssembly.Module(wasmBytes);
+    } catch (error) {
+      errors.push(`uncompilable wasm (packaged corrupt?): ${wasmEntry}: ${error.message || error}`);
+    }
   }
   for (const parts of RESOURCE_REQUIRED) {
     const requiredPath = path.join(resources, ...parts);

@@ -55,6 +55,7 @@ let tmpDir: string;
 let homeDir: string;
 let prevWs: string | undefined;
 let prevHome: string | undefined;
+let prevUserProfile: string | undefined;
 const TEST_UID = 'u1';
 
 beforeEach(async () => {
@@ -65,7 +66,9 @@ beforeEach(async () => {
   // points at a clean per-test dir — never the real ~/.claude.
   homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-home-'));
   prevHome = process.env.HOME;
+  prevUserProfile = process.env.USERPROFILE;
   process.env.HOME = homeDir;
+  process.env.USERPROFILE = homeDir;
   __nextChat = () => ({ ok: true, text: '' });
   vi.resetModules();
   const users = await import('../../../src/main/features/users');
@@ -74,8 +77,12 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await drainMainRuntimeForTest();
-  process.env.COGSEED_WORKSPACE_ROOT = prevWs;
-  process.env.HOME = prevHome;
+  if (prevWs === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+  else process.env.COGSEED_WORKSPACE_ROOT = prevWs;
+  if (prevHome === undefined) delete process.env.HOME;
+  else process.env.HOME = prevHome;
+  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = prevUserProfile;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   fs.rmSync(homeDir, { recursive: true, force: true });
 });
@@ -924,6 +931,17 @@ describe('session_import › Codex import', () => {
       JSON.stringify({ type: 'response_item', payload: { role: 'user', content: '写一个测试' } }),
     ].join('\n'));
 
+    fs.utimesSync(
+      path.join(codexDir, 'sessions', '2026', '08', '09', 'rollout-2026-08-09T12-00-00-test-session-id.jsonl'),
+      new Date('2026-08-09T12:00:00Z'),
+      new Date('2026-08-09T12:00:00Z'),
+    );
+    fs.utimesSync(
+      path.join(codexDir, 'sessions', '2026', '08', '08', 'rollout-2026-08-08T12-00-00-test-session-id.jsonl'),
+      new Date('2026-08-08T12:00:00Z'),
+      new Date('2026-08-08T12:00:00Z'),
+    );
+
     const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
     const sessions = await listCodexSessions(homeDir);
 
@@ -932,6 +950,26 @@ describe('session_import › Codex import', () => {
     expect(sessions[0].title).toContain('帮我重构这个函数');
     expect(sessions[0].cwd).toBe('/test/dir');
     expect(sessions[1].title).toContain('写一个测试');
+  });
+
+  it('orders the picker by last file activity, even when the session is in an older date directory', async () => {
+    writeCodexSession('2026-08-09', JSON.stringify({
+      type: 'session_meta', timestamp: '2026-08-09T12:00:00Z', payload: { cwd: '/newer-created' },
+    }));
+    writeCodexSession('2026-08-08', JSON.stringify({
+      type: 'session_meta', timestamp: '2026-08-08T12:00:00Z', payload: { cwd: '/resumed' },
+    }));
+
+    const newerCreatedPath = path.join(codexDir, 'sessions', '2026', '08', '09', 'rollout-2026-08-09T12-00-00-test-session-id.jsonl');
+    const olderPath = path.join(codexDir, 'sessions', '2026', '08', '08', 'rollout-2026-08-08T12-00-00-test-session-id.jsonl');
+    fs.utimesSync(newerCreatedPath, new Date('2026-08-09T12:00:00Z'), new Date('2026-08-09T12:00:00Z'));
+    fs.utimesSync(olderPath, new Date('2026-08-10T12:00:00Z'), new Date('2026-08-10T12:00:00Z'));
+
+    const { listCodexSessions } = await import('../../../src/main/features/session_import/codex-import');
+    const sessions = await listCodexSessions(homeDir);
+
+    expect(sessions[0].cwd).toBe('/resumed');
+    expect(sessions[0].lastActivityAt).toBe('2026-08-10T12:00:00.000Z');
   });
 
   // Codex writes `input_text` (Responses API). Matching only `text` left every

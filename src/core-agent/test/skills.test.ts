@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SkillLoader, parseFrontmatter } from "../src/skills/index.js";
+import {
+  DIRECTORY_LINKS_SUPPORTED,
+  DIRECTORY_LINK_TYPE,
+  FILE_SYMLINKS_SUPPORTED,
+} from "../../../test/helpers/fs-capabilities";
 
 let root: string;
 
@@ -141,14 +146,14 @@ describe("SkillLoader", () => {
     expect(list[0].description_en).toBe("");
   });
 
-  it("follows symlinked skill dirs (e.g. ~/.claude/skills entries)", () => {
+  it.runIf(DIRECTORY_LINKS_SUPPORTED)("follows symlinked skill dirs (e.g. ~/.claude/skills entries)", () => {
     // Real skill bodies live in a shared store; the scanned root holds
     // symlinks into it — the common `~/.claude/skills` layout.
     const store = path.join(root, "store");
     writeSkill(store, "linked", { name: "linked", description: "via symlink" });
     const base = path.join(root, "skills");
     fs.mkdirSync(base, { recursive: true });
-    fs.symlinkSync(path.join(store, "linked"), path.join(base, "linked"), "dir");
+    fs.symlinkSync(path.join(store, "linked"), path.join(base, "linked"), DIRECTORY_LINK_TYPE);
 
     const loader = new SkillLoader({ dirs: [base] });
     const list = loader.list();
@@ -156,11 +161,18 @@ describe("SkillLoader", () => {
     expect(list[0].description_en).toBe("via symlink");
   });
 
-  it("ignores symlinks that don't resolve to a directory", () => {
+  it.runIf(DIRECTORY_LINKS_SUPPORTED)("ignores dangling directory links", () => {
     const base = path.join(root, "skills");
     writeSkill(base, "real", { name: "real" });
-    // A dangling symlink and a symlink to a plain file must not be listed.
-    fs.symlinkSync(path.join(root, "nowhere"), path.join(base, "dangling"), "dir");
+    fs.symlinkSync(path.join(root, "nowhere"), path.join(base, "dangling"), DIRECTORY_LINK_TYPE);
+
+    const loader = new SkillLoader({ dirs: [base] });
+    expect(loader.list().map((s) => s.id)).toEqual(["real"]);
+  });
+
+  it.runIf(FILE_SYMLINKS_SUPPORTED)("ignores symlinks to plain files", () => {
+    const base = path.join(root, "skills");
+    writeSkill(base, "real", { name: "real" });
     fs.writeFileSync(path.join(root, "afile"), "x");
     fs.symlinkSync(path.join(root, "afile"), path.join(base, "tofile"));
 

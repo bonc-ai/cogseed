@@ -1,5 +1,5 @@
 /**
- * answer-verification (COGSEED-39 ① Phase 5) — citation reconciliation.
+ * answer-verification (知识库问答 ① Phase 5) — citation reconciliation.
  *
  * Pure-function tests (no DB, no LLM): anchor existence checks, claim
  * grading with an injected fake judge, and final verdicts.

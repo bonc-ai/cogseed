@@ -52,6 +52,8 @@ export interface ClaudeDesktopSessionSummary {
   title: string;
   /** ISO timestamp derived from the epoch-millis `createdAt`. */
   createdAt: string;
+  /** ISO timestamp of the most recent session activity. */
+  lastActivityAt: string;
   /** Model id recorded on the session, e.g. `claude-opus-4-8`. Empty if absent. */
   model: string;
   /** Working directory the session was opened against. */
@@ -95,18 +97,19 @@ interface DesktopSessionMeta {
  *  machine can have either or both installed. */
 export function claudeDesktopRoots(homedir = os.homedir(), platform = process.platform): string[] {
   const bases: string[] = [];
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
 
   if (platform === 'win32') {
-    const appData = process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
+    const appData = process.env.APPDATA || pathApi.join(homedir, 'AppData', 'Roaming');
     bases.push(appData);
   } else if (platform === 'darwin') {
-    bases.push(path.join(homedir, 'Library', 'Application Support'));
+    bases.push(pathApi.join(homedir, 'Library', 'Application Support'));
   } else {
-    const configHome = process.env.XDG_CONFIG_HOME || path.join(homedir, '.config');
+    const configHome = process.env.XDG_CONFIG_HOME || pathApi.join(homedir, '.config');
     bases.push(configHome);
   }
 
-  return bases.flatMap(base => [path.join(base, 'Claude'), path.join(base, 'Claude-3p')]);
+  return bases.flatMap(base => [pathApi.join(base, 'Claude'), pathApi.join(base, 'Claude-3p')]);
 }
 
 /**
@@ -146,7 +149,7 @@ export async function listClaudeDesktopSessions(
 
   if (!sawRoot) log.info('no claude desktop session directory found');
 
-  sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   return { ok: true, sessions };
 }
 
@@ -248,6 +251,7 @@ async function _parseDesktopSession(file: string): Promise<ClaudeDesktopSessionS
     sessionId,
     title,
     createdAt: _isoTime(meta.createdAt ?? meta.timestamp ?? meta.lastActivityAt),
+    lastActivityAt: _isoTime(meta.lastActivityAt ?? meta.createdAt ?? meta.timestamp),
     model: _str(meta.model),
     projectPath: _str(meta.cwd) || _str(meta.originCwd),
     initialMessage,

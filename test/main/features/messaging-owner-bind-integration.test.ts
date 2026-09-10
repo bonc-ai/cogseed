@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
 let tmpDir = '';
 let previousRoot: string | undefined;
@@ -13,7 +14,20 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  try {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    await Promise.all([manager.stopForUser('user-1'), manager.stopForUser('uid-1')]);
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const bus = await import('../../../src/main/features/group_chat/bus');
+    const userBindings = await bindings.listBindings('user-1');
+    const wechatBindings = await bindings.listBindings('uid-1');
+    await Promise.all([
+      ...userBindings.map((binding) => bus.abort('user-1', binding.cid)),
+      ...wechatBindings.map((binding) => bus.abort('uid-1', binding.cid)),
+    ]);
+    await drainMainRuntimeForTest('user-1', 'uid-1');
+  } catch { /* cleanup assertions below still report real filesystem leaks */ }
   vi.doUnmock('@larksuiteoapi/node-sdk');
   if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
@@ -72,7 +86,9 @@ vi.mock('../../../src/main/features/messaging/adapters', async (importOriginal) 
 /**
  * Integration: a real Feishu receive_v1 event flows through the actual
  * FeishuAdapter → onInbound → manager.enqueueInbound → owner auto-bind.
- * Only the Larksuite SDK transport is mocked (WSClient dispatcher capture).
+ * The Larksuite SDK transport is mocked (WSClient dispatcher capture), and
+ * the downstream Group Chat execution is stubbed after owner binding so this
+ * fixture does not leave an unrelated model turn running during cleanup.
  */
 describe('owner auto-bind through the real Feishu event path', () => {
   it('binds the sender from a real receive_v1 direct message while the window is open', async () => {
@@ -100,6 +116,10 @@ describe('owner auto-bind through the real Feishu event path', () => {
 
     const registry = await import('../../../src/main/features/messaging/registry');
     const manager = await import('../../../src/main/features/messaging/manager');
+    const groupSend = groupChatMocks.send;
+    if (!groupSend) throw new Error('static group-chat mock not installed');
+    groupSend.mockClear();
+    groupSend.mockImplementation(async () => ({ ok: true, msg: { id: 'owner-bind-msg', from: 'user', text: '' } }));
     const created = await registry.createInstance('user-1', {
       platform: 'feishu_lark',
       displayName: 'Real bot',

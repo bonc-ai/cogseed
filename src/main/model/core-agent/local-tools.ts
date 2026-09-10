@@ -1638,6 +1638,33 @@ function grepReadOperands(args: string[]): string[] {
   return hasPatternFlag ? operands : operands.slice(1);
 }
 
+function findReadOperands(args: string[]): string[] {
+  const operands: string[] = [];
+  let i = 0;
+  // Find's global options precede its path list. -D/-O may consume the
+  // following token; the remaining non-option tokens before the expression
+  // are the only paths that need filesystem read checks.
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === '-H' || arg === '-L' || arg === '-P' || /^-[DO]\d*$/.test(arg)) {
+      i += 1;
+      if ((arg === '-D' || arg === '-O') && i < args.length) i += 1;
+      continue;
+    }
+    break;
+  }
+  for (; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') {
+      if (args[i + 1]) operands.push(args[i + 1]);
+      break;
+    }
+    if (arg.startsWith('-') || arg === '(' || arg === ')' || arg === '!' || arg === ',') break;
+    operands.push(arg);
+  }
+  return operands;
+}
+
 function sedReadOperands(args: string[]): string[] {
   if (args.some((a) => a === '-i' || a.startsWith('-i'))) return [];
   const operands = bashNonFlagOperands(args);
@@ -1713,7 +1740,9 @@ function collectBashReadCandidates(command: string, workingDir: string, env: Rec
     if (!eff) continue;
     const { cmd, args } = eff;
 
-    if (BASH_READ_ALL_OPERANDS.has(cmd)) {
+    if (cmd === 'find') {
+      for (const operand of findReadOperands(args)) addBashCandidate(out, operand, cmd, workingDir, env);
+    } else if (BASH_READ_ALL_OPERANDS.has(cmd)) {
       for (const operand of bashNonFlagOperands(args)) addBashCandidate(out, operand, cmd, workingDir, env);
     } else if (BASH_READ_PATTERN_FIRST_CMDS.has(cmd)) {
       for (const operand of grepReadOperands(args)) addBashCandidate(out, operand, cmd, workingDir, env);

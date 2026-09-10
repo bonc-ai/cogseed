@@ -921,7 +921,7 @@ describe('chats › index repair', () => {
     expect(index[0].participant_summary_updated_at).toBe(index[0].updated_at);
   });
 
-  it('COGSEED-15：空间任务行与会话运行协作区域共用同一份参与智能体名单', async () => {
+  it('空间可用智能体：空间任务行与会话运行协作区域共用同一份参与智能体名单', async () => {
     const chats = await loadChats();
     const spaces = await import('../../../src/main/features/spaces');
     const created = await spaces.createSpace(TEST_UID, { name: '一致空间' });

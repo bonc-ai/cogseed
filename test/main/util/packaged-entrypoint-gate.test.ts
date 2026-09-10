@@ -13,6 +13,7 @@ const gate = require('../../../bin/packaged-entrypoint-gate.cjs') as {
   PACKAGED_JS_LOADER_FILES: readonly { packageName: string; entry: string }[];
   requiredPackagedEntrypointVerificationEntries(): string[];
   verifyBuildFilesConfig(build: unknown): string[];
+  verifyPackageRuntimeDependencies(packageJson: unknown): string[];
   verifyPackagedEntrypointPayload(root: string, options: { projectRoot: string }): string[];
   verifySourceEntrypointContract(root: string): string[];
 };
@@ -73,6 +74,14 @@ describe('packaged-entrypoint-gate', () => {
     );
 
     expect(() => gate.verifyBuildFilesConfig(packageJson.build)).toThrow(/runtime-gate\.cjs/);
+  });
+
+  it('requires every packaged TypeScript loader package to be a direct runtime dependency', () => {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8'));
+    delete packageJson.dependencies.esbuild;
+
+    expect(() => gate.verifyPackageRuntimeDependencies(packageJson))
+      .toThrow(/missing direct runtime dependency: esbuild/);
   });
 
   it('verifies the closed packaged bin tree and complete TypeScript loader chain', () => {
