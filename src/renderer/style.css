@@ -4898,14 +4898,15 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard .db-alert[data-level="error"] .db-alert-icon { background: var(--db-bad); }
 .dashboard .db-alert[data-level="error"] .db-alert-icon::before { content: "!"; }
 
-/* Table — compact, numeric columns right-aligned. */
+/* Table — compact, numeric columns right-aligned.
+   2026-09-11 需求变更：去掉卡片封装（border/radius/background）——表格以
+   原生形态展示，在父容器中水平居中（内容自然宽，两侧留白对称）。 */
 .dashboard .db-table-wrap {
   overflow-x: auto;
-  border: 1px solid var(--db-border);
-  border-radius: var(--db-radius);
-  background: var(--db-surface);
+  display: flex;
+  justify-content: center;
 }
-.dashboard .db-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.dashboard .db-table { width: auto; max-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .dashboard .db-table th,
 .dashboard .db-table td { padding: 7px 10px; border-bottom: 1px solid rgba(20, 71, 55, 0.08); text-align: left; }
 .dashboard .db-table tr:last-child td { border-bottom: none; }
