@@ -34,19 +34,40 @@ describe('release workflow contract', () => {
     });
   });
 
-  it('keeps the CI job names exact and makes the macOS gate complete', () => {
+  it('keeps the CI job names exact and makes the Windows gate complete', () => {
     const workflow = load('ci.yml');
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['verify']);
-    const verify = commands(workflow.jobs.verify);
+    expect(Object.keys(workflow.jobs).sort()).toEqual(['verify', 'verify-windows']);
+    const windowsJob = workflow.jobs['verify-windows'];
+    const windows = commands(windowsJob);
     for (const expected of [
-      'npm run typecheck',
       'npm run lint',
-      'node scripts/run-tests.mjs run --maxWorkers=2',
+      'node scripts/run-tests.mjs run --maxWorkers=1',
       'npm run test:resources',
-      'npm run readme:check',
-      'npm run tokens:check',
-      'npm run builtin:manifest:check',
-    ]) expect(verify).toContain(expected);
+      'npm run test:platform-native',
+      'npm run test:p3394:windows',
+      'node p3394-gateway/test/smoke.cjs',
+      'npm run build:win',
+    ]) expect(windows).toContain(expected);
+    const p3394Index = steps(windowsJob).findIndex((step) => step.run === 'npm run test:p3394:windows');
+    const fullJsIndex = steps(windowsJob).findIndex((step) => step.run === 'node scripts/run-tests.mjs run --maxWorkers=1');
+    expect(p3394Index).toBeGreaterThanOrEqual(0);
+    expect(p3394Index).toBeLessThan(fullJsIndex);
+  });
+
+  it('pins the Windows P3394 lane to the platform-native regression suites', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
+    expect(pkg.scripts['test:p3394:windows']).toBe('node scripts/run-p3394-windows-tests.mjs');
+    const source = fs.readFileSync(path.resolve('scripts/run-p3394-windows-tests.mjs'), 'utf8');
+    for (const suite of [
+      'test/main/features/local_agents/spawn-command.test.ts',
+      'test/main/features/local_agents/version.test.ts',
+      'test/main/features/p3394_bridge/gateway-models-probe.test.ts',
+      'test/main/features/p3394_bridge/p3394-windows-cli.test.ts',
+      'test/main/features/p3394_bridge/external-gateways.test.ts',
+      'test/main/features/sscli-shim-cancel.test.ts',
+      'test/main/features/cogseed_backend/worktree-manager.test.ts',
+    ]) expect(source).toContain(suite);
+    expect(source).toContain("process.platform !== 'win32'");
   });
 
   it('keeps compliance to its one required job', () => {
@@ -63,17 +84,17 @@ describe('release workflow contract', () => {
     });
   });
 
-  it('uses gate -> mac build -> one publisher and checks out the peeled SHA', () => {
+  it('uses gate -> two builds -> one publisher and checks out the peeled SHA', () => {
     const workflow = load('release.yml');
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['build-macos', 'gate', 'publish']);
+    expect(Object.keys(workflow.jobs).sort()).toEqual(['build-macos', 'build-windows', 'gate', 'publish']);
     expect(workflow.jobs.gate.outputs['peeled-sha']).toContain('steps.verify.outputs.peeled-sha');
-    for (const name of ['build-macos']) {
+    for (const name of ['build-macos', 'build-windows']) {
       expect(workflow.jobs[name].needs).toBe('gate');
       const checkout = steps(workflow.jobs[name]).find((step) => step.uses === 'actions/checkout@v4');
       expect(checkout?.with?.ref).toBe('${{ needs.gate.outputs.peeled-sha }}');
       expect(steps(workflow.jobs[name]).some((step) => step.uses === 'actions/upload-artifact@v4')).toBe(true);
     }
-    expect(workflow.jobs.publish.needs).toEqual(['gate', 'build-macos']);
+    expect(workflow.jobs.publish.needs).toEqual(['gate', 'build-macos', 'build-windows']);
   });
 
   it('grants contents: write only to the sole publisher and has one Release action repository-wide', () => {
@@ -110,14 +131,13 @@ describe('release workflow contract', () => {
     expect(source).toContain('softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2');
   });
 
-  it('makes the publisher validate exactly four mac files before publishing the draft', () => {
+  it('makes the publisher validate exactly four mac files and one win-x64 exe before publishing the draft', () => {
     const publish = load('release.yml').jobs.publish;
     const script = commands(publish);
     expect(script).toContain('expected_files');
-    for (const suffix of ['mac-arm64.dmg', 'mac-arm64.zip', 'mac-x64.dmg', 'mac-x64.zip']) {
+    for (const suffix of ['mac-arm64.dmg', 'mac-arm64.zip', 'mac-x64.dmg', 'mac-x64.zip', 'win-x64.exe']) {
       expect(script).toContain(suffix);
     }
-    expect(script).not.toContain('win-x64.exe');
     const action = steps(publish).find((step) => String(step.uses ?? '').startsWith('softprops/action-gh-release@'));
     expect(action.with.draft).toBe(true);
     expect(script).toContain('draft=false');

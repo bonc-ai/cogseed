@@ -5,6 +5,7 @@ import { createLogger } from '../../logger';
 import { safeId, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
 import { kstarEpisodePath, kstarRecordPath } from './paths';
+import { isCanonicalKstarReuseTurnIds } from './reuse-turn-ids';
 import {
   KSTAR_SCHEMA_VERSION,
   type KstarEpisodeRecord,
@@ -50,6 +51,10 @@ function validateEpisode(userId: string, episodeId: string, value: unknown): Kst
   assertPlainObject(record.r, 'kstar episode R');
   if (
     typeof record.sessionId !== 'string' || !record.sessionId ||
+    (record.reuseTurnIds !== undefined && !isCanonicalKstarReuseTurnIds(record.reuseTurnIds)) ||
+    (record.reuseTurnIdsTruncated !== undefined && record.reuseTurnIdsTruncated !== true) ||
+    (record.taskId !== undefined && (typeof record.taskId !== 'string' || !safeId(record.taskId))) ||
+    (record.requirementId !== undefined && (typeof record.requirementId !== 'string' || !safeId(record.requirementId))) ||
     typeof record.t.userGoal !== 'string' || !record.t.userGoal ||
     !Array.isArray(record.k.memoryRefs) ||
     !Array.isArray(record.k.contextRefs) ||
