@@ -92,6 +92,30 @@ describe('foldSessionMetrics', () => {
     expect(f.ctxText).toBe('600/4K·15%');
     expect(f.ctxHot).toBe(false);
   });
+  it('occupancy prefers lastCallUsage over the whole-run accumulation (2026-09-11)', () => {
+    // 真机事故回归锚点：单轮 33 步工具循环，累加 usage 566K 被当作窗口占用
+    // 显示。占用必须读最后一次调用的 prompt 侧用量；消耗行（inText 等）继续
+    // 用累加口径。
+    const f = foldSessionMetrics(
+      [m({ usage: {
+        inputTokens: 60_713, outputTokens: 17_083, cacheReadTokens: 505_216,
+        lastCallUsage: { inputTokens: 2_100, outputTokens: 900, cacheReadTokens: 15_400 },
+      } })],
+      { contextWindow: 1_048_576, price: null },
+    );
+    // 占用 = lastCallUsage 的 prompt 侧三项和 = 17.5K（input 2.1K + 缓存读
+    // 15.4K，不含 output；而非累加的 566K）
+    expect(f.ctxText).toBe('17.5K/1M·2%');
+    expect(f.ctxHot).toBe(false);
+    // 消耗口径不变：inText 仍是累加三项和 566K
+    expect(f.inText).toBe('566K');
+    // 无 lastCallUsage 时回退累加（旧数据/CLI 回合兼容）
+    const g = foldSessionMetrics(
+      [m({ usage: { inputTokens: 100, cacheReadTokens: 300 } })],
+      { contextWindow: 4_000, price: null },
+    );
+    expect(g.ctxText).toBe('400/4K·10%');
+  });
   it('cache hit uses billedInput denominator (DSH parity), inText keeps 3-term sum', () => {
     const f = foldSessionMetrics(
       [m({ usage: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 100 } })],

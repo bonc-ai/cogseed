@@ -118,7 +118,7 @@ function summarizeArgs(args: unknown): string | undefined {
 }
 
 /** usage 载荷的键名在上游（result.meta.usage）随 provider 而异，宽松取。 */
-function usagePayloadFrom(data: Record<string, unknown>): {
+function pickUsageFields(data: Record<string, unknown>): {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -145,6 +145,31 @@ function usagePayloadFrom(data: Record<string, unknown>): {
     // pi-ai 驼峰 / DeepSeek 下划线 / Anthropic 命名。
     ...(cacheRead !== undefined ? { cacheReadTokens: cacheRead } : {}),
     ...(cacheWrite !== undefined ? { cacheWriteTokens: cacheWrite } : {}),
+  };
+}
+
+/** usage 载荷（2026-09-11 双口径）：顶层字段=整轮累加（消耗口径，Token 段
+ *  继续用）；`lastCallUsage`=最后一次调用的 prompt 侧用量（当前上下文占用
+ *  的权威口径——累加值把每步重发的历史求和，绝不能当窗口占用展示）。 */
+function usagePayloadFrom(data: Record<string, unknown>): {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  lastCallUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
+} {
+  const nestedRaw = data.lastCallUsage;
+  const nested = nestedRaw && typeof nestedRaw === 'object' && !Array.isArray(nestedRaw)
+    ? pickUsageFields(nestedRaw as Record<string, unknown>)
+    : null;
+  return {
+    ...pickUsageFields(data),
+    ...(nested && Object.keys(nested).length ? { lastCallUsage: nested } : {}),
   };
 }
 

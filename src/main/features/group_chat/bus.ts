@@ -6704,6 +6704,15 @@ async function runActorTurnBody(
         usageOut.cacheReadTokens = usageIn.cacheReadTokens;
       if (typeof usageIn?.cacheWriteTokens === "number")
         usageOut.cacheWriteTokens = usageIn.cacheWriteTokens;
+      // lastCallUsage（2026-09-11）：占用口径，嵌套对象原样透传（白名单在
+      // client.ts 的 safeUsageForLog 一侧完成）。
+      if (
+        usageIn?.lastCallUsage && typeof usageIn.lastCallUsage === "object"
+      ) {
+        usageOut.lastCallUsage = usageIn.lastCallUsage as NonNullable<
+          GroupMessageMetrics["usage"]
+        >["lastCallUsage"];
+      }
       const toolCalls = Number(agentRunTimingData.tool_calls);
       replyMetrics = {
         startedAt,

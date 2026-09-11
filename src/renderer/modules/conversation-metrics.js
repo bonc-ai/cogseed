@@ -167,6 +167,7 @@ function foldSessionMetrics(metricsList, opts = {}) {
   let reportedCostUsd = 0;   // CLI/网关自报成本合计（美元）
   let reportedCostTurns = 0;
   let lastUsage = null;
+  let lastCtxUsage = null;   // 占用口径（lastCallUsage 优先，缺失回退 lastUsage）
   let lastUsageModel = null; // 自报模型 id——ctx 分母按它解析（CLI 回合不再错用全局模型窗口）
   for (const m of list) {
     if (num(m.toolCalls) > 0) steps += num(m.toolCalls);
@@ -192,6 +193,13 @@ function foldSessionMetrics(metricsList, opts = {}) {
     if (num(u.inputTokens) + num(u.outputTokens) > 0) {
       lastUsage = u;
       lastUsageModel = typeof m.model === 'string' && m.model ? m.model : null;
+      // 占用口径（2026-09-11）：优先最后一次调用的 prompt 侧用量
+      // （usage.lastCallUsage）——上方累加 usage 把每步工具循环重发的历史
+      // 求和，直接当窗口占用会虚高数倍（真机：单轮 33 步显示 566K，实际
+      // 最后一步 prompt 仅数十 K）。缺失时回退累加值（CLI 回合等旧数据）。
+      lastCtxUsage = (u.lastCallUsage && typeof u.lastCallUsage === 'object')
+        ? u.lastCallUsage
+        : u;
     }
   }
   // 命中率分母 = billedInput = input+cacheRead+cacheWrite（与 DSH billedInputTokens 口径一致，§101）
@@ -210,8 +218,9 @@ function foldSessionMetrics(metricsList, opts = {}) {
   const ctxWindow = (typeof windowFromModel === 'number' && windowFromModel > 0)
     ? windowFromModel
     : num(opts.contextWindow);
-  const ctxUsed = lastUsage
-    ? num(lastUsage.inputTokens) + num(lastUsage.cacheReadTokens) + num(lastUsage.cacheWriteTokens)
+  const ctxUsage = lastCtxUsage || lastUsage;
+  const ctxUsed = ctxUsage
+    ? num(ctxUsage.inputTokens) + num(ctxUsage.cacheReadTokens) + num(ctxUsage.cacheWriteTokens)
     : 0;
   const ctx = lastUsage && ctxWindow > 0
     ? { used: ctxUsed, window: ctxWindow }
