@@ -57,6 +57,17 @@ describe('mergeProcessTrail 饱和（PR209 评审 M7）', () => {
     expect(merged.length).toBe(MAX);
   });
 
+  it('预算内保持原序：reasoning 维持与工具的交错位置（2026-09-11 回归）', () => {
+    // 真机事故：落盘组装无条件按"非 reasoning 在前"拼接，整轮思考被推到
+    // 过程区末尾，历史重放里中途思考不可见。预算内必须保持条目原序。
+    const seq = mergeProcessTrail([], [toolItem(0), reasoningItem(0), toolItem(1), turnEntry()]);
+    const kinds = seq.map((e) => {
+      const item = (e as { item?: { kind?: string } }).item;
+      return item?.kind || (e as { type?: string }).type;
+    });
+    expect(kinds).toEqual(['toolExecution', 'reasoning', 'toolExecution', 'turn']);
+  });
+
   it('预算内全保留；超限时终态保底 1 条', () => {
     const few = mergeProcessTrail([], [toolItem(0), reasoningItem(0), turnEntry()]);
     expect(few).toHaveLength(3);

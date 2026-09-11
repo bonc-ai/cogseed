@@ -699,8 +699,13 @@ export function mergeProcessTrail(
     ...nonTurn.filter(isReasoning),
     ...turnEntries,
   ];
-  // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
-  if (ordered.length <= budget) return [...processItems, ...ordered];
+  // 上限内尽量保全：**保持原序**（2026-09-11 修复——reasoning 与工具的
+  // 交错位置是时间线语义：此前无条件用优先级序拼接，把整轮思考全部推到
+  // 过程区末尾，中途思考在历史重放里不可见。优先级序只用于超限时的取舍，
+  // 不得改变正常路径的顺序）。终态保到最后一档。
+  if (nonTurn.length + turnEntries.length <= budget) {
+    return [...processItems, ...nonTurn, ...turnEntries];
+  }
   const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
   // 预算共享（PR209 评审 M7）：非 reasoning 与 reasoning 两组共用
   // budget - keepTurn 的总额度——此前两组各 slice 同一 keepRest，合并

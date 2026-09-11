@@ -116,4 +116,29 @@ describe('process-persist collector', () => {
     expect((completed[0].item as { status?: string }).status).toBe('completed');
     expect((completed[0].item as { payload?: { text?: string } }).payload?.text).toBe('正在读取文件…继续分析…');
   });
+
+  it('多轮思考-工具交错：completed reasoning 按截断点顺序落盘（2026-09-11 复查）', () => {
+    // 真机现象复查：一轮 33 步的落盘里 13 条 completed reasoning 全部堆在
+    // usage 之后（过程区最末尾），中途的思考在时间线上不可见。本用例验证
+    // 投影+收集在"思考→工具→思考→工具"交错输入下是否保持顺序。
+    const c = createProcessCollector({ cid: 'c1', actorId: 'a1', turnId: 't7' });
+    c.feed({ type: 'progress', text: '思考一' });
+    c.feed(toolEvent('start', 'tool-1', {}));
+    c.feed(toolEvent('end', 'tool-1', {}));
+    c.feed({ type: 'progress', text: '思考二' });
+    c.feed(toolEvent('start', 'tool-2', {}));
+    c.feed(toolEvent('end', 'tool-2', {}));
+    c.finish('completed');
+    const kinds = c.entries.map((e) => (
+      e.type === 'chatItem'
+        ? String((e.item as { kind?: string; type?: string }).kind || (e.item as { type?: string }).type)
+        : e.type
+    ));
+    const reasonIdx = kinds.map((k, i) => (k === 'reasoning' ? i : -1)).filter((i) => i >= 0);
+    const toolIdx = kinds.map((k, i) => (k === 'toolExecution' ? i : -1)).filter((i) => i >= 0);
+    expect(reasonIdx).toHaveLength(2);
+    // 第一条思考在第一条工具之前；第二条思考在第一条工具之后（交错保持）。
+    expect(reasonIdx[0]).toBeLessThan(toolIdx[0]);
+    expect(reasonIdx[1]).toBeGreaterThan(toolIdx[0]);
+  });
 });
