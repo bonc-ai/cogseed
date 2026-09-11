@@ -14,6 +14,7 @@ import type {
   FeishuChat,
   FeishuDriveFile,
   FeishuWikiNode,
+  FeishuWikiSpace,
 } from './types';
 
 const log = createLogger('personal-context:feishu:api');
@@ -35,8 +36,10 @@ export interface FeishuApiClient {
   listCalendarEvents(calendarId: string, range: TimeRange, updatedAfter?: string): Promise<FeishuCalendarEvent[]>;
   /** 云空间文件；parentToken 为空时列根目录 */
   listDriveFiles(parentToken?: string): Promise<FeishuDriveFile[]>;
-  /** 知识库空间节点；spaceId 为空时列全部可见空间根节点 */
+  /** 知识库空间节点；spaceId 为空时遍历当前账号可见空间的文档树。 */
   listWikiNodes(spaceId?: string): Promise<FeishuWikiNode[]>;
+  /** 读取新版飞书文档正文（Markdown）；仅在用户明确导入时调用。 */
+  getDocumentRawContent(documentId: string): Promise<string>;
   listChats(): Promise<FeishuChat[]>;
   healthCheck(): Promise<HealthResult>;
 }
@@ -44,19 +47,31 @@ export interface FeishuApiClient {
 // ── HTTP 实现（骨架）──────────────────────────────────────────────────────
 const FEISHU_OPEN_BASE = 'https://open.feishu.cn';
 
-// 端点路径（待真实租户校准）
+// 只读端点。
 const EP_CALENDARS = '/open-apis/calendar/v4/calendars';
 const EP_CALENDAR_EVENTS = (calendarId: string) => `/open-apis/calendar/v4/calendars/${calendarId}/events`;
 const EP_DRIVE_FILES = '/open-apis/drive/v1/files';
+const EP_WIKI_SPACES = '/open-apis/wiki/v2/spaces';
 const EP_WIKI_NODES = '/open-apis/wiki/v2/spaces/{space_id}/nodes';
+const EP_DOCX_RAW_CONTENT = (documentId: string) => `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`;
 const EP_CHATS = '/open-apis/im/v1/chats';
 const EP_USER_INFO = '/open-apis/authen/v1/user_info';
+
+interface FeishuPageData<T> {
+  items?: T[];
+  has_more?: boolean;
+  page_token?: string;
+}
 
 interface FeishuListResponse<T> {
   code: number;
   msg: string;
-  data: { items?: T[] } | T[];
+  data: FeishuPageData<T> | T[];
 }
+
+const WIKI_PAGE_SIZE = '50';
+const MAX_WIKI_SPACES = 100;
+const MAX_WIKI_NODES = 5000;
 
 function isFeishuError(body: { code?: unknown; msg?: unknown }): boolean {
   return typeof body.code === 'number' && body.code !== 0;
@@ -64,18 +79,22 @@ function isFeishuError(body: { code?: unknown; msg?: unknown }): boolean {
 
 export interface HttpFeishuApiClientOptions {
   accessToken: string;
+  /** access token 被飞书拒绝时刷新；回调不得把令牌写入日志。 */
+  refreshAccessToken?: (rejectedAccessToken: string) => Promise<string | null>;
   /** 默认 https://open.feishu.cn；测试可注入 mock base（如 lark 域名） */
   baseUrl?: string;
   fetchImpl?: typeof fetch;
 }
 
 export class HttpFeishuApiClient implements FeishuApiClient {
-  private readonly accessToken: string;
+  private accessToken: string;
+  private readonly refreshAccessToken?: (rejectedAccessToken: string) => Promise<string | null>;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: HttpFeishuApiClientOptions) {
     this.accessToken = opts.accessToken;
+    this.refreshAccessToken = opts.refreshAccessToken;
     this.baseUrl = (opts.baseUrl ?? FEISHU_OPEN_BASE).replace(/\/+$/, '');
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
@@ -85,33 +104,80 @@ export class HttpFeishuApiClient implements FeishuApiClient {
     for (const [key, value] of Object.entries(params ?? {})) {
       if (value !== undefined) url.searchParams.set(key, value);
     }
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url.toString(), {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${this.accessToken}`,
-          'Content-Type': 'application/json; charset=utf-8',
-        },
-      });
-    } catch (err) {
-      throw new Error(`feishu api network error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    if (!response.ok) {
-      // HTTP 非 2xx：飞书通常返回 JSON body（含业务 code/msg），
-      // 一并带进错误信息，否则无法区分是哪个端点、什么原因。
-      let detail = '';
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const requestAccessToken = this.accessToken;
+      let response: Response;
       try {
-        const text = await response.text();
-        if (text) detail = `: ${text.slice(0, 400)}`;
+        response = await this.fetchImpl(url.toString(), {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${requestAccessToken}`,
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+        });
+      } catch (err) {
+        throw new Error(`feishu api network error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      let text = '';
+      try {
+        text = await response.text();
       } catch { /* body read is best effort */ }
-      throw new Error(`feishu api http ${response.status} ${path}${detail}`);
+      let body: { code?: unknown; msg?: unknown } = {};
+      if (text) {
+        try {
+          body = JSON.parse(text) as { code?: unknown; msg?: unknown };
+        } catch {
+          if (response.ok) throw new Error(`feishu api invalid json ${path}`);
+        }
+      }
+
+      const accessTokenExpired = response.status === 401 || body.code === 99991677;
+      if (attempt === 0 && accessTokenExpired && this.refreshAccessToken) {
+        const refreshed = await this.refreshAccessToken(requestAccessToken);
+        if (refreshed) {
+          this.accessToken = refreshed;
+          continue;
+        }
+      }
+      if (!response.ok) {
+        const detail = text ? `: ${text.slice(0, 400)}` : '';
+        throw new Error(`feishu api http ${response.status} ${path}${detail}`);
+      }
+      if (isFeishuError(body)) {
+        throw new Error(`feishu api error ${body.code}: ${body.msg ?? ''}`);
+      }
+      return body as T;
     }
-    const body = (await response.json()) as { code?: unknown; msg?: unknown };
-    if (isFeishuError(body)) {
-      throw new Error(`feishu api error ${body.code}: ${body.msg ?? ''}`);
-    }
-    return body as T;
+    throw new Error(`feishu api request failed ${path}`);
+  }
+
+  private async listPaged<T>(path: string, params: Record<string, string | undefined> = {}, maxItems = MAX_WIKI_NODES): Promise<T[]> {
+    const items: T[] = [];
+    let pageToken: string | undefined;
+    do {
+      const body = await this.get<FeishuListResponse<T>>(path, {
+        ...params,
+        page_size: params.page_size ?? WIKI_PAGE_SIZE,
+        page_token: pageToken,
+      });
+      const data = body.data;
+      const pageItems = Array.isArray(data) ? data : (data.items ?? []);
+      items.push(...pageItems);
+      if (items.length >= maxItems || Array.isArray(data) || data.has_more !== true || !data.page_token) break;
+      pageToken = data.page_token;
+    } while (true);
+    return items.slice(0, maxItems);
+  }
+
+  private async listWikiSpaces(): Promise<FeishuWikiSpace[]> {
+    return this.listPaged<FeishuWikiSpace>(EP_WIKI_SPACES, {}, MAX_WIKI_SPACES);
+  }
+
+  private async listWikiChildNodes(spaceId: string, parentNodeToken?: string): Promise<FeishuWikiNode[]> {
+    return this.listPaged<FeishuWikiNode>(EP_WIKI_NODES.replace('{space_id}', encodeURIComponent(spaceId)), {
+      parent_node_token: parentNodeToken,
+    });
   }
 
   async listCalendars(): Promise<FeishuCalendar[]> {
@@ -141,12 +207,39 @@ export class HttpFeishuApiClient implements FeishuApiClient {
   }
 
   async listWikiNodes(spaceId?: string): Promise<FeishuWikiNode[]> {
-    // 骨架：按空间列节点；未指定空间时先列空间列表（端点待校准），此处返回空
-    if (!spaceId) return [];
-    const body = await this.get<FeishuListResponse<FeishuWikiNode>>(EP_WIKI_NODES.replace('{space_id}', spaceId), {
-      page_size: '100',
-    });
-    return Array.isArray(body.data) ? body.data : (body.data.items ?? []);
+    const spaceIds = spaceId
+      ? [spaceId]
+      : (await this.listWikiSpaces()).map((space) => space.space_id).filter(Boolean);
+    const nodes: FeishuWikiNode[] = [];
+    const seen = new Set<string>();
+
+    for (const currentSpaceId of spaceIds) {
+      const pendingParents: Array<string | undefined> = [undefined];
+      while (pendingParents.length > 0 && nodes.length < MAX_WIKI_NODES) {
+        const parentNodeToken = pendingParents.shift();
+        const children = await this.listWikiChildNodes(currentSpaceId, parentNodeToken);
+        for (const child of children) {
+          if (!child || !child.node_token || !child.obj_token) continue;
+          const key = `${currentSpaceId}:${child.node_token}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const node = child.space_id ? child : { ...child, space_id: currentSpaceId };
+          nodes.push(node);
+          if (node.has_child) pendingParents.push(node.node_token);
+          if (nodes.length >= MAX_WIKI_NODES) break;
+        }
+      }
+      if (nodes.length >= MAX_WIKI_NODES) {
+        log.warn('feishu wiki node enumeration reached safety cap', { cap: MAX_WIKI_NODES });
+        break;
+      }
+    }
+    return nodes;
+  }
+
+  async getDocumentRawContent(documentId: string): Promise<string> {
+    const body = await this.get<{ data?: { content?: unknown } }>(EP_DOCX_RAW_CONTENT(documentId));
+    return typeof body.data?.content === 'string' ? body.data.content : '';
   }
 
   async listChats(): Promise<FeishuChat[]> {

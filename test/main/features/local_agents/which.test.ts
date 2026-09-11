@@ -108,6 +108,15 @@ describe('local_agents/which › whichBin', () => {
       expect((await whichBin('claude'))?.toLowerCase()).toBe(cmd.toLowerCase());
     });
 
+    it('accepts a bare Node shebang that the spawn layer can run', async () => {
+      const bundledCli = path.join(tmpDir, 'codebuddy');
+      fs.writeFileSync(bundledCli, '#!/usr/bin/env node\nconsole.log("2.115.0");\n');
+      process.env.PATH = '';
+
+      expect((await whichBin('codebuddy', { extraDirs: [tmpDir] }))?.toLowerCase())
+        .toBe(bundledCli.toLowerCase());
+    });
+
     it('accepts forward-slash explicit paths on Windows', async () => {
       const binPath = path.join(tmpDir, 'forward.cmd');
       fs.writeFileSync(binPath, '@echo hi\r\n');

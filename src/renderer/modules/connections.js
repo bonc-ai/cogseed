@@ -5,7 +5,7 @@
 //   - MCP与工具 tab  ← connectors 网格（connectors.js 按原 ID 渲染）
 //   - 数据源 tab     ← #panel-contexts（资料库）
 //   - 触点 tab       ← messaging/touchpoint（自设置迁入）
-//   - 模型与额度 tab ← 入口卡（暂保留，跳转设置 Model Providers）
+//   - 模型与额度 tab ← 入口卡（连接页内承载，不回跳设置页）
 // Tab switching + per-tab lazy priming + entry-card wiring live here.
 
 function _connectionsEl(id) {
@@ -42,7 +42,9 @@ function initConnections() {
 
   // Restore the last-visible tab across view re-entries (preserves the user's
   // position while inside the panel; defaults to the first tab on first open).
-  const lastTab = _connectionsLastTab || document.querySelector('.connections-tab.is-active')?.dataset.connectionsTab || tabs[0].dataset.connectionsTab;
+  const requestedTab = window.__connectionsPendingTab || '';
+  window.__connectionsPendingTab = '';
+  const lastTab = requestedTab || _connectionsLastTab || document.querySelector('.connections-tab.is-active')?.dataset.connectionsTab || tabs[0].dataset.connectionsTab;
   _renderConnectionsPageHeader();
   activateConnectionsTab(lastTab);
 }
@@ -53,10 +55,12 @@ let _connectionsMcpPrimed = false;
 let _connectionsSkillsPrimed = false;
 
 function _connectionsOpenTarget(target) {
-  // Agent / 数据源 / 触点 已内嵌；仅模型与额度保留入口卡。
-  if (target === 'models' && typeof setView === 'function') {
-    setView('settings');
-    if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab('credentials');
+  if (target === 'touchpoints') {
+    activateConnectionsTab('touchpoints');
+    return;
+  }
+  if (target === 'models') {
+    activateConnectionsTab('models');
   }
 }
 
@@ -136,12 +140,31 @@ function activateConnectionsTab(name) {
       });
   }
 
-  // Agent / 数据源 tab 内嵌了 AI 团队与资料库：切到该 tab 时按需加载。
+  // Agent tab 内嵌了 AI 团队：进入时加载完整列表，升级 boot 的摘要缓存。
   if (target === 'agents' && typeof loadAgents === 'function') {
-    // boot 只加载了 summary 列表（无描述）。这里始终走一次完整加载以升级缓存，
-    // 避免「介绍未填写」。_agentsCacheIsSummary 由 loadAgents 内部维护。
     Promise.resolve(loadAgents(false)).catch(() => {});
   }
+
+  // 触点 tab 内嵌原设置触点工作台；需要 settings bundle 里的
+  // messaging/touchpoint modules，但不再跳转到 Settings › Configuration。
+  if (target === 'touchpoints') {
+    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+    Promise.resolve(typeof loader === 'function' ? loader('settings') : undefined)
+      .then(() => {
+        if (typeof window.initTouchpointSettings === 'function') return window.initTouchpointSettings();
+        if (typeof initTouchpointSettings === 'function') return initTouchpointSettings();
+        return undefined;
+      })
+      .catch((err) => {
+        if (typeof createLogger === 'function') {
+          createLogger('connections').warn('touchpoints load failed', {
+            error: (err && err.message) || String(err),
+          });
+        }
+      });
+  }
+
+  // 数据源 tab 内嵌资料库。
   if (target === 'sources') {
     // 资料库（contexts）是懒加载模块：从「连接」视图进入时 boot 只初始化
     // tab 壳，不会加载 contexts.js。这里先加载模块再渲染，否则面板永远
@@ -159,18 +182,6 @@ function activateConnectionsTab(name) {
     }
   }
 
-  // 触点 tab 内嵌了飞书/消息平台：首次进入时初始化（依赖 settings bundle 已加载）。
-  if (target === 'touchpoints') {
-    const loader = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
-    if (typeof loader === 'function') {
-      Promise.resolve(loader('settings'))
-        .then(() => {
-          if (typeof window.initTouchpointSettings === 'function') return window.initTouchpointSettings();
-          return undefined;
-        })
-        .catch(() => {});
-    }
-  }
 }
 
 window.initConnections = initConnections;

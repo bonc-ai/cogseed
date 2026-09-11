@@ -399,7 +399,11 @@ function _bindModelMenuDismiss(menu, anchor) {
     _closeModelMenu();
   };
   menu._onViewportChange = onViewportChange;
-  setTimeout(() => document.addEventListener('mousedown', onDocDown, true), 0);
+  menu._onDocDownTimer = setTimeout(() => {
+    menu._onDocDownTimer = null;
+    if (document.getElementById('model-chip-menu') !== menu) return;
+    document.addEventListener('mousedown', onDocDown, true);
+  }, 0);
   document.addEventListener('keydown', onKey, true);
   window.addEventListener('resize', onViewportChange);
   document.addEventListener('scroll', onViewportChange, true);
@@ -408,6 +412,10 @@ function _bindModelMenuDismiss(menu, anchor) {
 function _closeModelMenu() {
   const menu = document.getElementById('model-chip-menu');
   if (!menu) return;
+  if (menu._onDocDownTimer != null) {
+    clearTimeout(menu._onDocDownTimer);
+    menu._onDocDownTimer = null;
+  }
   document.removeEventListener('mousedown', menu._onDocDown, true);
   document.removeEventListener('keydown', menu._onKey, true);
   window.removeEventListener('resize', menu._onViewportChange);
@@ -415,6 +423,9 @@ function _closeModelMenu() {
   menu.remove();
   document.querySelectorAll('.model-chip--open').forEach((el) => el.classList.remove('model-chip--open'));
 }
+
+// Kept as a small public bridge for boot/navigation teardown callers.
+window.closeModelChipMenu = _closeModelMenu;
 
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {

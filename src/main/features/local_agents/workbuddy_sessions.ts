@@ -49,6 +49,8 @@ export interface WorkbuddySessionSummary {
   firstMessage: string;
   /** ISO timestamp of the first user message. */
   timestamp: string;
+  /** ISO timestamp of the most recent valid transcript event. */
+  lastActivityAt: string;
   /** Full path to the jsonl file. */
   filePath: string;
 }
@@ -130,7 +132,7 @@ export async function listWorkbuddySessions(home = os.homedir()): Promise<Workbu
     }
   }
 
-  sessions.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  sessions.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   return sessions;
 }
 
@@ -140,6 +142,7 @@ async function _parseSessionSummary(file: string, projectPath: string): Promise<
   const sessionId = path.basename(file, '.jsonl');
   let firstMessage = '';
   let timestamp = '';
+  let lastActivityAt = '';
 
   try {
     const content = await fsp.readFile(file, 'utf8');
@@ -150,12 +153,16 @@ async function _parseSessionSummary(file: string, projectPath: string): Promise<
       try { obj = JSON.parse(line); }
       catch { continue; }
 
-      if (obj.type === 'message' && obj.role === 'user') {
+      const activityAt = normalizeTimestamp(obj.timestamp);
+      if (activityAt && (!lastActivityAt || activityAt > lastActivityAt)) {
+        lastActivityAt = activityAt;
+      }
+
+      if (!firstMessage && obj.type === 'message' && obj.role === 'user') {
         const query = extractUserQuery(obj.content);
         if (query) {
           firstMessage = query.slice(0, 100);
           timestamp = normalizeTimestamp(obj.timestamp);
-          break;
         }
       }
     }
@@ -165,7 +172,7 @@ async function _parseSessionSummary(file: string, projectPath: string): Promise<
   }
 
   if (!firstMessage || !timestamp) return null;
-  return { sessionId, projectPath, firstMessage, timestamp, filePath: file };
+  return { sessionId, projectPath, firstMessage, timestamp, lastActivityAt: lastActivityAt || timestamp, filePath: file };
 }
 
 /** WorkBuddy stores epoch-ms numbers; normalise to ISO. Tolerates an

@@ -10,25 +10,14 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { withDefaultWorkerLimit } from './test-worker-args.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require_ = createRequire(import.meta.url);
 const electronBin = require_('electron');
 const vitestBin = resolve(here, '..', 'node_modules', 'vitest', 'vitest.mjs');
 
-const forwardedArgs = process.argv.slice(2);
-const hasWorkerLimit = forwardedArgs.some((arg) =>
-  arg === '--maxWorkers' ||
-  arg.startsWith('--maxWorkers=') ||
-  arg === '--minWorkers' ||
-  arg.startsWith('--minWorkers='),
-);
-if (!hasWorkerLimit && forwardedArgs[0] === 'run') {
-  // The full Electron-as-Node suite can otherwise over-spawn Vitest fork
-  // workers and intermittently lose workers without a test failure. Keep a
-  // bounded default while preserving explicit caller overrides.
-  forwardedArgs.push('--maxWorkers=4');
-}
+const forwardedArgs = withDefaultWorkerLimit(process.argv.slice(2));
 
 // `convert-source-map` crashes on malformed inline sourceMappingURL comments
 // (tsx dist bundles are a known offender) and Vitest calls it without a

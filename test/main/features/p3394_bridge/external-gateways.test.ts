@@ -1,10 +1,12 @@
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
+import { spawn, spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { P3394HttpChannel } from '../../../../src/main/features/p3394_bridge/http-channel';
 import { P3394PeerRegistry } from '../../../../src/main/features/p3394_bridge/registry';
-import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, startExternalGateway, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
+import { listExternalGateways, p3394ExternalGatewayIdFor, respawnManagedGateways, runtimeModeForCli, startExternalGateway, stopAllExternalGateways, stopExternalGateway } from '../../../../src/main/features/p3394_bridge/external-gateways';
 import { p3394StateFile } from '../../../../src/main/features/p3394_bridge/runtime-paths';
 import * as fs from 'node:fs';
 
@@ -50,6 +52,197 @@ describe('P3394 external-agent gateway host', () => {
     expect(p3394ExternalGatewayIdFor('nonsense')).toBeNull();
   });
 
+  it('requests graceful shutdown for connected gateways and directly terminates recovered processes', async () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'features', 'p3394_bridge', 'external-gateways.ts'), 'utf8');
+    const declaration = /export async function stopAllExternalGateways\(\): Promise<void> \{[\s\S]*?^}/m.exec(source)?.[0];
+    if (!declaration) throw new Error('stopAllExternalGateways not found');
+    const runnable = declaration.replace(/^export /, '').replace(': Promise<void>', '');
+    const records = [
+      { cli: 'hermes', pid: 101, running: true },
+      { cli: 'claude', pid: 202, running: true },
+      { cli: 'recovered', pid: 303, running: true },
+      { cli: 'offline', pid: 404, running: false },
+    ];
+    const hermesChild = { connected: true };
+    const claudeChild = { connected: true };
+    const watched = new Map<string, object>([
+      ['hermes', hermesChild],
+      ['claude', claudeChild],
+      ['offline', {}],
+    ]);
+    const detached: string[] = [];
+    const gracefulResolvers: Array<(closed: boolean) => void> = [];
+    const requestGatewayShutdown = vi.fn(() => new Promise<boolean>((resolve) => { gracefulResolvers.push(resolve); }));
+    const killResolvers: Array<() => void> = [];
+    const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { killResolvers.push(resolve); }));
+    const stopAll = vm.runInNewContext(`(${runnable})`, {
+      listExternalGateways: () => records,
+      detachWatch: (cli: string) => { detached.push(cli); watched.delete(cli); },
+      requestGatewayShutdown,
+      killProcessTree,
+      watched,
+      process,
+      Promise,
+    }) as () => Promise<void>;
+
+    const completion = stopAll();
+    expect(completion && typeof completion.then).toBe('function');
+    expect(requestGatewayShutdown).toHaveBeenCalledTimes(2);
+    expect(requestGatewayShutdown).toHaveBeenNthCalledWith(1, hermesChild);
+    expect(requestGatewayShutdown).toHaveBeenNthCalledWith(2, claudeChild);
+    // No watched ChildProcess exists after app recovery, so this PID must
+    // enter the established cross-platform tree-kill path without IPC grace.
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(detached).toEqual(['hermes', 'claude', 'recovered']);
+    expect(watched.has('offline')).toBe(true);
+
+    let settled = false;
+    void completion.then(() => { settled = true; });
+    gracefulResolvers[0](true);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(watched.has('offline')).toBe(true);
+
+    gracefulResolvers[1](false);
+    await Promise.resolve();
+    expect(killProcessTree).toHaveBeenCalledTimes(2);
+    killResolvers[0]();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    killResolvers[1]();
+    await completion;
+    expect(watched.size).toBe(0);
+  });
+
+  it('delivers p3394-shutdown over IPC to a managed gateway before using signal fallback', async () => {
+    const previousPcDir = process.env.COGSEED_PC_DIR;
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-ipc-gateway-'));
+    const fixtureDir = path.join(fixtureRoot, 'p3394-gateway');
+    const fixtureScript = path.join(fixtureDir, 'gateway.cjs');
+    const gatewayHome = path.join(path.dirname(p3394StateFile('p3394-external-gateways.json')), 'external-gateways', 'hermes');
+    const ipcMarker = path.join(gatewayHome, 'ipc-shutdown.json');
+    const signalMarker = path.join(gatewayHome, 'signal-shutdown.txt');
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(fixtureScript, [
+      "const fs = require('node:fs');",
+      "const http = require('node:http');",
+      "const path = require('node:path');",
+      "const home = process.env.P3394_GATEWAY_HOME;",
+      "const runtimeRoot = path.resolve(home, '..', '..');",
+      "const endpoint = process.env.P3394_ADVERTISE_ENDPOINT;",
+      "fs.mkdirSync(home, { recursive: true });",
+      "fs.writeFileSync(path.join(runtimeRoot, 'p3394-peers.json'), JSON.stringify({ schemaVersion: 1, peers: [{ identity: { agent_id: process.env.P3394_AGENT_ID, display_name: 'fixture' }, aliases: [], manifest: {}, endpoints: [endpoint], updated_at: new Date().toISOString() }] }));",
+      "const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });",
+      "server.listen(Number(process.env.P3394_GATEWAY_PORT), process.env.P3394_GATEWAY_HOST);",
+      "process.once('message', (message) => { fs.writeFileSync(path.join(home, 'ipc-shutdown.json'), JSON.stringify(message)); server.close(() => process.exit(0)); });",
+      "process.once('SIGTERM', () => { fs.writeFileSync(path.join(home, 'signal-shutdown.txt'), 'SIGTERM'); process.exit(0); });",
+      '',
+    ].join('\n'));
+
+    try {
+      await stopExternalGateway('hermes');
+      process.env.COGSEED_PC_DIR = fixtureRoot;
+      const started = await startExternalGateway({
+        cli: 'hermes',
+        binPath: '/bin/echo',
+        bridgeInfo: { endpoint: 'http://127.0.0.1:1', token: 'fixture' },
+      });
+      expect(started.ok, 'fixture gateway failed to start: ' + (started.ok === false ? started.error : '')).toBe(true);
+
+      await stopExternalGateway('hermes');
+
+      expect(JSON.parse(fs.readFileSync(ipcMarker, 'utf8'))).toEqual({ type: 'p3394-shutdown' });
+      expect(fs.existsSync(signalMarker)).toBe(false);
+    } finally {
+      await stopExternalGateway('hermes').catch(() => {});
+      if (previousPcDir === undefined) delete process.env.COGSEED_PC_DIR;
+      else process.env.COGSEED_PC_DIR = previousPcDir;
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('awaits P3394 bridge and gateway shutdown before the Electron quit resumes', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    expect(source).not.toMatch(/app\.once\('before-quit',[\s\S]{0,400}?void stopP3394Bridge/);
+    expect(source).not.toMatch(/app\.once\('before-quit',[\s\S]{0,500}?void import\('\.\/features\/p3394_bridge\/external-gateways'\)/);
+
+    const handlerStart = source.indexOf("app.on('before-quit', async (e) =>", source.indexOf('let shutdownFlushed = false'));
+    const handlerEnd = source.indexOf("\n  });", handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+    const waitAt = handler.indexOf('await Promise.allSettled([');
+    const bridgeAt = handler.indexOf('stopP3394Bridge()');
+    const gatewaysAt = handler.indexOf('stopAllExternalGateways()');
+    const flushedAt = handler.indexOf('shutdownFlushed = true');
+    const quitAt = handler.indexOf('app.quit()');
+    expect(waitAt).toBeGreaterThan(-1);
+    expect(bridgeAt).toBeGreaterThan(waitAt);
+    expect(gatewaysAt).toBeGreaterThan(waitAt);
+    expect(flushedAt).toBeGreaterThan(gatewaysAt);
+    expect(quitAt).toBeGreaterThan(flushedAt);
+  });
+
+  it('guards before-quit cleanup with a promise assigned before cleanup can reenter', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src', 'main', 'index.ts'), 'utf8');
+    const stateStart = source.indexOf('let shutdownFlushed = false');
+    const handlerStart = source.indexOf("app.on('before-quit', async (e) =>", stateStart);
+    const handlerEnd = source.indexOf('\n  });', handlerStart);
+    const handler = source.slice(handlerStart, handlerEnd);
+
+    expect(source.slice(stateStart, handlerStart)).toContain('let shutdownPromise');
+    const completedGuardAt = handler.indexOf('if (shutdownFlushed) return');
+    const preventAt = handler.indexOf('e.preventDefault()');
+    const inFlightGuardAt = handler.indexOf('if (shutdownPromise)');
+    const assignAt = handler.indexOf('shutdownPromise = Promise.resolve().then(async () =>');
+    const cleanupAt = handler.indexOf('searchFeature.flushAll()');
+    const awaitAt = handler.lastIndexOf('await shutdownPromise');
+    expect(completedGuardAt).toBeGreaterThan(-1);
+    expect(preventAt).toBeGreaterThan(completedGuardAt);
+    expect(inFlightGuardAt).toBeGreaterThan(preventAt);
+    expect(assignAt).toBeGreaterThan(inFlightGuardAt);
+    expect(cleanupAt).toBeGreaterThan(assignAt);
+    expect(awaitAt).toBeGreaterThan(cleanupAt);
+  });
+
+  it.runIf(process.platform === 'win32')('waits for every managed gateway process tree before stopAll resolves', async () => {
+    const stateFile = p3394StateFile('p3394-external-gateways.json');
+    const pidFile = path.join(os.tmpdir(), `p3394-stop-all-pids-${process.pid}-${Date.now()}.txt`);
+    const fixture = writeNodeCli('p3394-stop-all-tree', [
+      "const fs = require('node:fs');",
+      "const { spawn } = require('node:child_process');",
+      "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "fs.writeFileSync(process.env.P3394_TREE_PID_FILE, process.pid + '\\n' + child.pid + '\\n');",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'));
+    const root = spawn(process.execPath, [fixture], {
+      env: { ...process.env, P3394_TREE_PID_FILE: pidFile },
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    try {
+      for (let i = 0; i < 100 && !fs.existsSync(pidFile); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const pids = fs.readFileSync(pidFile, 'utf8').trim().split('\n').map(Number);
+      fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+      fs.writeFileSync(stateFile, JSON.stringify({
+        schema_version: 1,
+        gateways: [{ cli: 'hermes', agent_id: 'hermes', bin: fixture, port: 1, pid: root.pid, started_at: new Date().toISOString() }],
+      }));
+
+      await stopAllExternalGateways();
+
+      const survivors = pids.filter((pid) => {
+        try { process.kill(pid, 0); return true; } catch { return false; }
+      });
+      expect(survivors).toEqual([]);
+    } finally {
+      if (root.pid) spawnSync('taskkill.exe', ['/pid', String(root.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+      fs.rmSync(fixture, { force: true });
+      fs.rmSync(pidFile, { force: true });
+      fs.rmSync(stateFile, { force: true });
+    }
+  });
+
   it('executes a task through the managed gateway and returns a real response', async () => {
     const token = 'ext-task-token';
     const registryFile = p3394StateFile('p3394-peers.json');
@@ -62,6 +255,9 @@ describe('P3394 external-agent gateway host', () => {
     const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
       if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        // 过程帧（progress/delta，kind=event）先于终态到达，不算回复——
+        // 等待条件只认终态信封，否则会把冷启动提示误当回复/错误回信。
+        if (envelope.kind === 'event') return;
         replies.push(envelope);
         replyResolve?.(envelope);
         return;
@@ -170,34 +366,44 @@ describe('P3394 external-agent gateway host', () => {
     }
   }, 60_000);
 
-  it('runs an absolute extensionless Windows shim through its .cmd sibling', async () => {
+  it('runs WorkBuddy through its Windows .cmd sibling with multiline prompts and oneshot model discovery', async () => {
     if (process.platform !== 'win32') return;
     const token = 'ext-windows-shim-token';
     const registryFile = p3394StateFile('p3394-peers.json');
-    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-windows-shim-'));
+    const shimRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-windows-shim-'));
+    const shimDir = path.join(shimRoot, 'node_modules', '.bin');
+    fs.mkdirSync(shimDir, { recursive: true });
     const shim = path.join(shimDir, 'agent shim');
     const cliScript = path.join(shimDir, 'fake-agent.cjs');
     const previousArgs = process.env.P3394_AGENT_CLI_ARGS;
-    fs.writeFileSync(cliScript, "process.stdout.write(process.argv.slice(2).join(' '));\n");
+    const previousExclude = process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+    const prompt = '第一行\r\n第二行 & "quoted" %value% !bang!\n第三行 | < > ^ (group)';
+    fs.writeFileSync(cliScript, [
+      "const args = process.argv.slice(2);",
+      "if (args.includes('--help')) process.stdout.write('  --model <model> Currently supported: (wb-fast, wb-smart)\\n');",
+      "else if (args.includes('--input-format')) process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'wb-smart' }) + '\\n');",
+      "else process.stdout.write(args.join(' '));",
+      '',
+    ].join('\n'));
     // npm on Windows leaves a POSIX shim beside the executable .cmd entry.
     fs.writeFileSync(shim, '#!/bin/sh\n');
     fs.writeFileSync(`${shim}.cmd`, '@echo off\r\nnode "%~dp0fake-agent.cjs" %*\r\n');
     process.env.P3394_AGENT_CLI_ARGS = '-p {message}';
     try { fs.rmSync(registryFile, { force: true }); } catch { /* isolate */ }
-    const registry = new P3394PeerRegistry({ filePath: registryFile });
     const channel = new P3394HttpChannel('ext-windows-shim-bridge', { listen: { host: '127.0.0.1', port: 0 }, authToken: token });
     await channel.listen();
     let replyResolve: ((value: unknown) => void) | null = null;
-    const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
-      if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+      if (envelope.sender.agent_id === 'workbuddy' && envelope.performative === 'inform') {
+        if (envelope.kind === 'event') return;
         replyResolve?.(envelope);
         return;
       }
       const senderId = envelope.sender.agent_id;
       const endpoints = (envelope.extensions?.endpoints ?? []).filter((v): v is string => typeof v === 'string');
-      if (registry.resolve(senderId).ok === false) {
-        registry.register({
+      const diskRegistry = new P3394PeerRegistry({ filePath: registryFile });
+      if (diskRegistry.resolve(senderId).ok === false) {
+        diskRegistry.register({
           identity: { agent_id: senderId, display_name: senderId },
           manifest: { spec_version: 'p3394/1.0', identity: { agent_id: senderId, display_name: senderId }, runtime: { kind: 'in_process' }, capability_profile: { agent_id: senderId, runtime_kind: 'cogseed-native', capabilities: ['handle_message'], supported_performatives: ['request'], supports_streaming: false, supports_artifacts: false }, channels: [{ id: 'x', kind: 'local', direction: 'inbound-outbound' }], session: { scope: 'per-conversation', requires_session_id: true }, security: { identity_source: 'cogseed-agent', renderer_identity_source: false, model_profile_separate_from_agent_id: true }, conformance: { level: 'level-2-session-aware', registry: true, agent_home: true, runtime_adapter: true } } as never,
           ...(endpoints.length ? { endpoints } : {}),
@@ -206,27 +412,45 @@ describe('P3394 external-agent gateway host', () => {
     });
     const port = ((channel as unknown as { server: import('node:http').Server }).server.address() as { port: number }).port;
     try {
-      await stopExternalGateway('hermes');
-      const started = await startExternalGateway({ cli: 'hermes', binPath: shim, bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
-      expect(started.ok).toBe(true);
-      if (!started.ok) throw new Error(started.error);
-      const dialer = new P3394HttpChannel('ext-windows-shim-dialer', { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
-      await dialer.dial('hermes');
-      await dialer.send({
-        spec_version: 'p3394/1.0', message_id: 'msg-windows-shim', session_id: 'ses-windows-shim', task_id: 'tsk-windows-shim', kind: 'task', performative: 'request',
-        sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'windows shim works' }] },
-        extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token }, idempotency_key: 'idem-windows-shim',
-      } as never);
-      const response = await Promise.race([reply, new Promise((_, reject) => setTimeout(() => reject(new Error('windows shim reply timeout')), 10_000))]) as { payload: { parts: Array<{ text?: string }> } };
-      expect(response.payload.parts[0].text).toContain('windows shim works');
-      await dialer.close();
+      for (const mode of ['sscli', 'oneshot'] as const) {
+        process.env.COGSEED_P3394_SSCLI_EXCLUDE = mode === 'oneshot' ? 'workbuddy' : '';
+        await stopExternalGateway('workbuddy');
+        try { fs.rmSync(registryFile, { force: true }); } catch { /* isolate restart */ }
+        const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
+        const started = await startExternalGateway({ cli: 'workbuddy', binPath: shim, bridgeInfo: { endpoint: `http://127.0.0.1:${port}`, token } });
+        expect(started.ok).toBe(true);
+        if (!started.ok) throw new Error(started.error);
+        const dialer = new P3394HttpChannel(`ext-windows-shim-dialer-${mode}`, { dial: { endpoints: [`http://127.0.0.1:${started.value.port}`] } });
+        try {
+          const modelsResponse = await fetch(`http://127.0.0.1:${started.value.port}/p3394/models`);
+          const models = await modelsResponse.json() as { status?: string; models?: Array<{ id?: string }>; error?: string };
+          if (mode === 'oneshot') {
+            expect(models.status, `${mode}: ${models.error || 'model probe unavailable'}`).toBe('ready');
+            expect(models.models?.map((model) => model.id), mode).toContain('wb-smart');
+          }
+          await dialer.dial('workbuddy');
+          await dialer.send({
+            spec_version: 'p3394/1.0', message_id: `msg-windows-shim-${mode}`, session_id: `ses-windows-shim-${mode}`, task_id: `tsk-windows-shim-${mode}`, kind: 'task', performative: 'request',
+            sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'workbuddy' }], payload: { parts: [{ type: 'text', text: prompt }] },
+            extensions: { reply_endpoint: `http://127.0.0.1:${port}`, reply_token: token }, idempotency_key: `idem-windows-shim-${mode}`,
+          } as never);
+          const response = await Promise.race([reply, new Promise((_, reject) => setTimeout(() => reject(new Error(`windows shim ${mode} reply timeout`)), 10_000))]) as { payload: { parts: Array<{ text?: string }> } };
+          expect(response.payload.parts[0].text, mode).toContain(prompt);
+        } finally {
+          replyResolve = null;
+          await dialer.close();
+          await stopExternalGateway('workbuddy');
+        }
+      }
     } finally {
-      await stopExternalGateway('hermes');
+      await stopExternalGateway('workbuddy');
       await channel.close();
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
-      try { fs.rmSync(shimDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { fs.rmSync(shimRoot, { recursive: true, force: true }); } catch { /* best effort */ }
       if (previousArgs === undefined) delete process.env.P3394_AGENT_CLI_ARGS;
       else process.env.P3394_AGENT_CLI_ARGS = previousArgs;
+      if (previousExclude === undefined) delete process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+      else process.env.COGSEED_P3394_SSCLI_EXCLUDE = previousExclude;
     }
   }, 60_000);
 
@@ -241,6 +465,9 @@ describe('P3394 external-agent gateway host', () => {
     const reply = new Promise<unknown>((resolve) => { replyResolve = resolve; });
     channel.subscribe((envelope) => {
       if (envelope.sender.agent_id === 'hermes' && envelope.performative === 'inform') {
+        // 过程帧（progress/delta，kind=event）先于终态到达，不算回复——
+        // 等待条件只认终态信封，否则会把冷启动提示误当回复/错误回信。
+        if (envelope.kind === 'event') return;
         replies.push(envelope);
         replyResolve?.(envelope);
         return;
@@ -530,4 +757,29 @@ describe('P3394 external-agent gateway host', () => {
       try { fs.rmSync(registryFile, { force: true }); } catch { /* best effort */ }
     }
   }, 60_000);
+});
+
+describe('G-35 任意智能体走 sscli（runtimeModeForCli）', () => {
+  it('未知名自接 CLI → sscli（经通用垫片，不再限定预设名单）', () => {
+    expect(runtimeModeForCli('my-custom-bot')).toBe('sscli');
+    expect(runtimeModeForCli('')).toBe('sscli');
+  });
+  it('预设 CLI → sscli；codex → 专属后端（undefined）', () => {
+    for (const cli of ['hermes', 'gemini', 'aider', 'openclaw', 'opencode', 'workbuddy']) {
+      expect(runtimeModeForCli(cli)).toBe('sscli');
+    }
+    expect(runtimeModeForCli('codex')).toBeUndefined();
+  });
+  it('排除表 COGSEED_P3394_SSCLI_EXCLUDE 命中 → 回 oneshot', () => {
+    const prev = process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+    process.env.COGSEED_P3394_SSCLI_EXCLUDE = 'weird-cli, another';
+    try {
+      expect(runtimeModeForCli('weird-cli')).toBeUndefined();
+      expect(runtimeModeForCli('another')).toBeUndefined();
+      expect(runtimeModeForCli('other')).toBe('sscli');
+    } finally {
+      if (prev === undefined) delete process.env.COGSEED_P3394_SSCLI_EXCLUDE;
+      else process.env.COGSEED_P3394_SSCLI_EXCLUDE = prev;
+    }
+  });
 });

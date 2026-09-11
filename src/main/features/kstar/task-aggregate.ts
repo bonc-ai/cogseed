@@ -1,4 +1,5 @@
 import { nowIso, safeId } from '../../storage';
+import { assertKstarTransition } from './state-machine';
 import type { RecallCandidateRecord } from '../recall/candidate-service';
 import type { KstarCandidateProposal } from './types';
 import { closeKstarRequirement } from './requirement-closure';
@@ -107,6 +108,7 @@ export async function drainKstarTaskState(
     currentRequirementId: undefined,
     updatedAt: nowIso(),
   };
+  assertKstarTransition('task', task.status, 'closed');
   await replaceKstarTask(userId, closedTask);
 
   const result: KstarTaskAggregateResult = {

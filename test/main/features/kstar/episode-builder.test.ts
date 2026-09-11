@@ -77,6 +77,40 @@ describe('KSTAR episode builders', () => {
     expect(cancelled.r).toMatchObject({ status: 'cancelled', failureKind: 'cancelled' });
   });
 
+  it('preserves timeout as a distinct terminal outcome', async () => {
+    const { buildRuntimeKstarEpisode } = await import('../../../../src/main/features/kstar/episode-builder');
+    const episode = buildRuntimeKstarEpisode({
+      userId: 'builder-user', runId: 'run-timeout', request: runtimeRequest(),
+      events: [{
+        type: 'error', request_id: 'req-a', runtime_session_id: 'mruntime-a', status: 'failed',
+        error: 'idle timeout', metadata: { failure_kind: 'timeout', code: 'runtime_timeout' },
+      }],
+      createdAt: '2026-08-05T00:00:00.000Z',
+    });
+
+    expect(episode.r).toMatchObject({ status: 'timed_out', failureKind: 'timeout', failureCode: 'runtime_timeout' });
+  });
+
+  it('records execution measurements on Runtime episodes', async () => {
+    const { buildRuntimeKstarEpisode } = await import('../../../../src/main/features/kstar/episode-builder');
+    const episode = buildRuntimeKstarEpisode({
+      userId: 'builder-user', runId: 'run-metrics', request: runtimeRequest(),
+      events: [
+        { ...toolCall, metadata: { ...toolCall.metadata, started_at_ms: 1000, network_access: true } },
+        { ...toolResult, metadata: { ...toolResult.metadata, finished_at_ms: 4500, network_access: true } },
+        { ...completed, metadata: { finished_at_ms: 5000 } },
+      ],
+      createdAt: '2026-08-05T00:00:00.000Z',
+    });
+
+    expect(episode.r).toMatchObject({
+      durationMs: 4000,
+      toolCallCount: 1,
+      failedToolCount: 0,
+      networkAccess: true,
+    });
+  });
+
   it('builds a group episode from bounded user and actor messages', async () => {
     const { buildGroupKstarEpisode } = await import('../../../../src/main/features/kstar/episode-builder');
     const episode = buildGroupKstarEpisode({
@@ -125,5 +159,32 @@ describe('KSTAR episode builders', () => {
     expect(episode.a.agentActions).toEqual([expect.objectContaining({ sequence: 0, actor: 'commander', action: 'Plan completed.', status: 'ok' })]);
     expect(episode.evidenceRefs).toContainEqual(expect.objectContaining({ kind: 'conversation', id: 'msg-user' }));
     expect(episode.evidenceRefs).not.toContainEqual(expect.objectContaining({ id: 'msg-old' }));
+    expect(episode).not.toHaveProperty('reuseTurnIds');
+  });
+
+  it('retains the newest unique safe reuse turn ids and records overflow', async () => {
+    const { buildGroupKstarEpisode } = await import('../../../../src/main/features/kstar/episode-builder');
+    const boundedTurnIds = Array.from({ length: 102 }, (_, index) => `turn-${index}`);
+    const episode = buildGroupKstarEpisode({
+      userId: 'builder-user',
+      runId: 'run-reuse-turns',
+      conversationId: 'cid-reuse-turns',
+      status: 'completed',
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-reuse', ts: '2026-08-05T00:00:01.000Z', from: 'user', text: 'Use prior context.' },
+      ],
+      reuseTurnIds: [
+        boundedTurnIds[0],
+        '../unsafe',
+        'x'.repeat(161),
+        boundedTurnIds[0],
+        ...boundedTurnIds.slice(1),
+      ],
+    });
+
+    expect(episode.reuseTurnIds).toEqual(boundedTurnIds.slice(-100));
+    expect(episode.reuseTurnIdsTruncated).toBe(true);
   });
 });

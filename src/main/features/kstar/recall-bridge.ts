@@ -1,10 +1,10 @@
 import { safeId } from '../../storage';
 import {
   saveRecallCandidate,
-  type RecallCandidateAction,
   type RecallCandidateRecord,
 } from '../recall/candidate-service';
 import type { KstarCandidateProposal } from './types';
+import { recallFieldsForKstarProposal } from './candidate-contract';
 
 /** Save proposals into Recall's pending review queue. Promotion is intentionally not part of this bridge.
  *  `spaceId`：任务/需求的工作空间归属（空间会话时即空间 id），透传给候选，
@@ -16,6 +16,7 @@ export async function saveKstarCandidateProposals(
 ): Promise<RecallCandidateRecord[]> {
   const candidates: RecallCandidateRecord[] = [];
   for (const proposal of proposals.slice(0, 3)) {
+    const action = recallFieldsForKstarProposal(proposal);
     candidates.push(await saveRecallCandidate(userId, {
       judgment: proposal.judgment,
       // value = judgment：saveRecallCandidate 的 reviewReady 要求 value 非空
@@ -25,8 +26,8 @@ export async function saveKstarCandidateProposals(
       // statement（已观测：'可复用经验：数据的文档…' 污染资产正文）。
       // 注意新建路径防呆：显式 value 必须配显式 suggestedAction，否则 weak。
       value: proposal.judgment,
-      // suggestedAction 收窄到 Recall 的受限行动集合（宽松来源按 'create' 兜底）。
-      suggestedAction: (proposal.suggestedAction || 'create') as RecallCandidateAction,
+      suggestedAction: action.suggestedAction,
+      ...(action.targetAssetId ? { targetAssetId: action.targetAssetId } : {}),
 
       ...(proposal.summary ? { summary: proposal.summary } : {}),
       ...(proposal.uncertainty ? { uncertainty: proposal.uncertainty } : {}),

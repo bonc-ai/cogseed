@@ -95,6 +95,33 @@ describe('claude desktop session scan', () => {
     expect(res.sessions[0].initialMessage).toBe('later question');
   });
 
+  it('uses last activity rather than session creation time for ordering', async () => {
+    const home = mkHome();
+    writeSession(home, {
+      workspace: 'older-created',
+      name: 'local_resumed.json',
+      body: {
+        sessionId: 'resumed', title: 'Resumed chat',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        lastActivityAt: '2026-06-02T00:00:00.000Z',
+      },
+    });
+    writeSession(home, {
+      workspace: 'newer-created',
+      name: 'local_idle.json',
+      body: {
+        sessionId: 'idle', title: 'Idle chat',
+        createdAt: '2026-06-01T00:00:00.000Z',
+        lastActivityAt: '2026-06-01T00:00:00.000Z',
+      },
+    });
+
+    const res = await listClaudeDesktopSessions(home, 'darwin');
+
+    expect(res.sessions.map((s) => s.sessionId)).toEqual(['resumed', 'idle']);
+    expect(res.sessions[0].lastActivityAt).toBe('2026-06-02T00:00:00.000Z');
+  });
+
   it('ignores the unrelated skills-plugin subtree in the same directory', async () => {
     const home = mkHome();
     writeSession(home, {

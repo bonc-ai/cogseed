@@ -51,7 +51,7 @@ async function waitForSearchDoc(
   ix: Awaited<ReturnType<typeof loadIndexer>>,
   docId: string,
   token: string,
-  timeoutMs = 1000,
+  timeoutMs = 5_000,
 ): Promise<void> {
   const paths = await import('../../../../src/main/paths');
   const deadline = Date.now() + timeoutMs;

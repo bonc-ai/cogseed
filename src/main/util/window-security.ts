@@ -1,4 +1,4 @@
-import type { BrowserWindowConstructorOptions, Session, WebPreferences } from 'electron';
+import type { BrowserWindowConstructorOptions, Session, WebContents, WebPreferences } from 'electron';
 
 /**
  * Security baseline for every BrowserWindow we create. Callers may add
@@ -220,4 +220,42 @@ export function installDenyAllRemotePermissionGate(
   remoteSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
   });
+}
+
+/** Permit only the main renderer's microphone and copy/paste permissions. */
+export function installMainRendererAudioPermissionGate(
+  targetSession: Pick<Session, 'setPermissionCheckHandler' | 'setPermissionRequestHandler'>,
+  mainWebContents: WebContents,
+  rendererUrl: string,
+): { checkCount: number; requestCount: number } {
+  const observation = { checkCount: 0, requestCount: 0 };
+  const isMainRendererRequest = (
+    webContents: WebContents | null,
+    details: { isMainFrame: boolean; requestingUrl?: string },
+  ): boolean => webContents === mainWebContents
+    && details.isMainFrame === true
+    && details.requestingUrl === rendererUrl;
+
+  targetSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    observation.checkCount += 1;
+    if (requestingOrigin !== 'file://' || !isMainRendererRequest(webContents, details)) return false;
+    if (permission === 'media') return details.mediaType === 'audio';
+    return permission === 'clipboard-read' || permission === 'clipboard-sanitized-write';
+  });
+  targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    observation.requestCount += 1;
+    let allowed = isMainRendererRequest(webContents, details);
+    if (permission === 'media') {
+      allowed = allowed
+        && 'securityOrigin' in details
+        && details.securityOrigin === 'file://'
+        && details.mediaTypes?.length === 1
+        && details.mediaTypes[0] === 'audio';
+    } else {
+      allowed = allowed
+        && (permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+    }
+    callback(allowed);
+  });
+  return observation;
 }
