@@ -73,6 +73,14 @@ export type UsagePayload = {
    *  不可见。schema 仍为事实源，此处保持同步）。 */
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
+   *  口径；上方字段为整轮累加（消耗口径）。与 schema 保持同步。 */
+  lastCallUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
   estimatedCost?: number;
   contextWindowRatio?: number;
 };

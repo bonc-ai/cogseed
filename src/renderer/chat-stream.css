@@ -23,7 +23,16 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  /* 行收缩贴合内容（2026-09-11）：默认 stretch 把每行拉到面板全宽，
+     hover 背景远长于截断后的行内容、尾部大片空白。flex-start 下子项
+     按内容宽收缩（width:fit-content 实测不生效——与行内 % max-width
+     循环解析，Chromium 按 available 取值仍得全宽）。 */
+  align-items: flex-start;
 }
+/* 展开态（diff/输出/思考全文）回到全宽：块级展开区需要整行宽可读。 */
+.cs-row.cs-open { align-self: stretch; }
+/* 正文段时间线段保持全宽：markdown 段落的排版基线与消息正文一致。 */
+.cs-text { width: 100%; }
 
 /* ── 计时/收起徽章：挂在消息头 cogseed 名字右侧，点击开合下方时间线 ── */
 .cs-badge {
@@ -56,8 +65,6 @@
 .cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
 /* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
 .cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
-/* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
-.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; }
 .cs-flow.failed .cs-badge { color: var(--color-stream-fail); }
 .cs-flow.failed .cs-badge:hover { color: var(--color-stream-fail-3); }
 .cs-badge-stop {
@@ -71,6 +78,9 @@
 
 /* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
 .cs-row {
+  /* 行宽由父级 align-items:flex-start 收缩到内容（见 .cs-flow-body 注释）；
+     max-width 兜底长命令/展开区不超面板。 */
+  max-width: 100%;
   padding: 3px 6px;
   border-radius: var(--radius-1);
   cursor: pointer;
@@ -78,10 +88,15 @@
 }
 .cs-row:hover { background: var(--color-stream-hover); }
 .cs-row-line {
-  display: flex;
-  align-items: center;
+  /* inline-flex（2026-09-11）：块级 div 的 auto 宽恒等于可用宽，把外层
+     任何收缩（fit-content/min-content）都顶回面板全宽——hover 背景因此
+     远长于行内容。改 inline-flex 后宽度=内容，配合 .cs-flow-body 的
+     flex-start 实现整行贴合内容。 */
+  display: inline-flex;
+  align-items: flex-start;
   gap: 7px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .cs-ico { display: inline-flex; flex: none; color: var(--color-stream-chip-2); }
@@ -114,16 +129,18 @@
   font-size: var(--font-size-2);
 }
 .cs-target {
-  /* 不再 flex:1 撑满——那会把耗时推到行最右（交互设计 2026-09-08：工具行
-     耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
-     max-width 截断保护。 */
   flex: 0 1 auto; min-width: 0;
-  /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
-  max-width: 68%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 单行紧凑（2026-09-11 需求变更，覆盖上一版的换行完整显示）：强制单行，
+     一行放不下直接硬截断（text-overflow: clip，不出现省略号），超出的
+     部分不换行不提示。宽度由 flex 收缩到行内可用空间。 */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
   color: var(--color-stream-target);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-size-2);
+  line-height: 1.5;
 }
 
 /* 行内 diff 统计与展开的 diff 正文 */
@@ -161,13 +178,13 @@
   font-size: var(--font-size-1); white-space: pre-wrap; word-break: break-all;
 }
 
-/* ── 思考行： brain 图标 + 思考 + 时长；点开看原文 ── */
+/* ── 思考行： brain 图标 + 思考 + 时长 + 常显单行预览；点开看全文 ── */
 .cs-row-think .cs-think-dur { color: var(--color-stream-dim); }
+/* 思考全文（点击行展开，2026-09-11 方案 C）：纯文本块——无边框、无底色、
+   无圆角，不算卡片。缩进对齐时间线正文。 */
 .cs-think-full {
   display: none;
   margin: 2px 0 2px 22px;
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--color-stream-guide-2);
   color: var(--color-stream-think);
   white-space: pre-wrap;
   word-break: break-word;
@@ -175,6 +192,8 @@
   line-height: 1.55;
 }
 .cs-row.cs-open .cs-think-full { display: block; }
+/* 展开态隐藏行内预览，避免与全文重复显示。 */
+.cs-row.cs-open .cs-think-live { display: none; }
 
 /* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
 /* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
@@ -253,13 +272,13 @@
   .cs-text { color: var(--text, var(--color-stream-fallback)); }
   .cs-usage-row { color: var(--color-stream-chip); }
   .cs-loading { color: var(--color-stream-chip); }
-  .cs-think-full { color: var(--color-stream-chip); border-left-color: var(--color-stream-dark-line); }
   /* 输出块与浅色模式同构：无底色卡，竖线引导（浅色 2026-09-08 21:10
      改法同步——此前暗色仍残留 rgba(0,0,0,.28) 深底卡）。 */
   .cs-row-out pre {
     background: transparent;
     border-left-color: var(--color-stream-dark-line-2);
   }
+  .cs-think-full { color: var(--color-stream-chip); }
   .cs-interaction-detail { background: var(--color-stream-dark-deep); }
   .cs-card.cs-interaction { background: var(--color-stream-dark-card); }
   .cs-btn { background: var(--color-stream-dark-hover); }

@@ -335,7 +335,7 @@ describe('chat-stream module', () => {
     expect(thinks[0].innerHTML).toContain('持续了');
   });
 
-  it('思考实时流式（2026-09-09）：inProgress 增量逐段落入且行自动展开，completed 前缀去重不重复', () => {
+  it('思考实时流式（2026-09-11 需求变更）：inProgress 增量逐段落入但行默认折叠，completed 前缀去重不重复', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = inserts[0].node;
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '正在' } });
@@ -343,9 +343,10 @@ describe('chat-stream module', () => {
     const body = bodyOf(flow);
     let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
     expect(thinks).toHaveLength(1);
-    // 进行中：增量聚合完整可见，且行自动展开（同步看到推理进度）。
+    // 进行中：增量聚合保留（点开可见全文），但行默认折叠——不自动 cs-open，
+    // 进度由行内 cs-think-live 单行实时预览承担。
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…');
-    expect(String(thinks[0].className)).toContain('cs-open');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
     // completed 整段（=已画前缀，无尾部差额）：不重复落入。
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
     thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
@@ -354,6 +355,28 @@ describe('chat-stream module', () => {
     // completed 带尾部差额（实时流只画到一半的补齐场景）：只补差额。
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r2', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…还有后续' } });
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…还有后续');
+  });
+
+  it('思考内容常显单行预览、点击展开纯文本全文（2026-09-11 方案 C）', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '核对 131072 的来源与回退链路' } });
+    const body = bodyOf(flow);
+    let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks).toHaveLength(1);
+    // 运行中：单行预览在。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    // 收行（后续工具行到来）：预览不再消失，全文块存在但默认收起。
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks[0].dataset.csClosed).toBe('1');
+    // 回归锚点：收行后内容必须仍可见（071bd064 曾把这里清空为只剩时长）。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    expect(thinks[0].innerHTML).toContain('cs-think-full');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
+    // 点击行 → 展开纯文本全文（fake DOM 用记录的 handler 触发）。
+    (thinks[0].handlers.click!)();
+    expect(String(thinks[0].className)).toContain('cs-open');
   });
 
   it('prewarm 发送即起计（2026-09-09）：面板与计时立即存在，真 turnId 首事件迁移接管', () => {
@@ -775,11 +798,10 @@ describe('chat-stream module', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].innerHTML).toContain('done');
     expect(rows[0].innerHTML).toContain('npm test');
-    // 工具行显示权威耗时（1500ms → 「1 秒」，floor 整秒口径见
-    // _csFmtDur，交互设计 2026-09-09 去小数需求），徽章显示整段总耗时
-    // （末终态 4s = 幻影收编后跨度）与工具数 2。
-    expect(rows[0].innerHTML).toContain('cs-dur');
-    expect(rows[0].innerHTML).toContain('1 秒');
+    // 工具行不再显示耗时（2026-09-11 需求变更：本地 CLI 毫秒级耗时信息
+    // 量低），行内只有目标与展开区；徽章仍显示整段总耗时与工具数 2。
+    expect(rows[0].innerHTML).not.toContain('cs-dur');
+    expect(rows[0].innerHTML).not.toContain('1 秒');
     expect(rows[1].innerHTML).toContain('搜索');
     expect(rows[1].innerHTML).toContain('ok');
     const badge = flow.querySelector('.cs-badge')!;

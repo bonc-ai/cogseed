@@ -99,6 +99,12 @@ export type AgentRunMeta = {
   stopReason: StopReason;
   /** Accumulated token usage. */
   usage: Usage;
+  /** Prompt-side usage of the FINAL model call only. Unlike `usage` (the
+   *  whole-run accumulation, where re-sent history is summed once per tool
+   *  round), this is the true current context occupancy — consumers that
+   *  show "how full is the window" must use this, not `usage`. Absent on
+   *  runs that never made a model call. */
+  lastCallUsage?: Usage;
   /** Number of tool-use loop iterations. */
   toolLoops: number;
   /** Number of compaction cycles. */
