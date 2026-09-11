@@ -10343,11 +10343,14 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.is-message-editing {
-  /* 编辑态居中对齐 AI 内容列（交互设计 2026-09-08 布局统一）：用户消息编辑时
-     原右对齐换居中，宽度与 AI 区块一致。 */
+  /* 2026-09-11 需求变更：编辑卡片右对齐。09-08 原设计为居中对齐 AI 内容
+     列，但用户消息自身的 margin-right:10%（右缘对齐 AI 块）仍然生效，
+     center + margin 叠加把卡片压到中部偏左、右侧留大片空白。
+     改 flex-end 后右缘回到与普通用户消息一致的列位（AI 块右缘）。
+     仅作用于编辑态——is-message-editing 随编辑开始/取消对称增删。 */
   width: min(80%, 760px);
   max-width: min(80%, 760px);
-  align-self: center;
+  align-self: flex-end;
   align-items: stretch;
 }
 .chat-message-edit-composer {
