@@ -141,4 +141,34 @@ describe('process-persist collector', () => {
     expect(reasonIdx[0]).toBeLessThan(toolIdx[0]);
     expect(reasonIdx[1]).toBeGreaterThan(toolIdx[0]);
   });
+
+  it('真实交错模式回放（19:38 消息形状）：reasoning 保持与工具交错（2026-09-11 深挖）', () => {
+    // 真机数据（180a07715650 / 75b8766fc839）的精确喂入模式：155 条老段
+    // 事件，53 个 progress 与 100 个 tool 事件按下列位置交错（含 10 组
+    // 三连 progress）。复现"收集器产出是否保持交错"。
+    const P_AT = new Set([0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 35, 40, 45, 50, 55, 60, 63, 68, 73, 78, 83, 86, 89, 90, 91, 96, 97, 98, 103, 104, 105, 110, 111, 112, 117, 118, 119, 124, 125, 126, 131, 132, 133, 138, 139, 140, 145, 146, 147, 150, 151, 152]);
+    const c = createProcessCollector({ cid: 'c1', actorId: 'a1', turnId: 't8' });
+    let toolSeq = 0;
+    for (let i = 0; i < 155; i++) {
+      if (P_AT.has(i)) {
+        c.feed({ type: 'progress', text: 'thinking-' + i });
+      } else {
+        toolSeq += 1;
+        c.feed(toolEvent(toolSeq % 2 === 0 ? 'end' : 'start', 'tool-' + Math.floor(toolSeq / 2), {}));
+      }
+    }
+    c.finish('completed');
+    const kinds = c.entries.map((e) => (
+      e.type === 'chatItem'
+        ? String((e.item as { kind?: string; type?: string }).kind || (e.item as { type?: string }).type)
+        : e.type
+    ));
+    const reasonIdx = kinds.map((k, i) => (k === 'reasoning' ? i : -1)).filter((i) => i >= 0);
+    const toolIdx = kinds.map((k, i) => (k === 'toolExecution' ? i : -1)).filter((i) => i >= 0);
+    const firstTool = toolIdx[0];
+    // 关键断言：至少有一条 reasoning 出现在第一个工具之后、最后一个工具之前
+    // （即保持交错，而非全部堆到尾部）。
+    const interleaved = reasonIdx.some((r) => r > firstTool && r < toolIdx[toolIdx.length - 1]);
+    expect({ reasonCount: reasonIdx.length, firstTool, reasonIdx: reasonIdx.slice(0, 6), interleaved }).toMatchObject({ interleaved: true });
+  });
 });
