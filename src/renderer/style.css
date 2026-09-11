@@ -4625,7 +4625,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .markdown-body em { font-style: italic; }
 .markdown-body a { color: var(--primary); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
-.markdown-body table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 12.5px; }
+/* 表格布局统一（2026-09-11，方案 B 全表类型覆盖）：markdown 原生表格与
+   dashboard 组件表格共用同一布局口径——铺满到 900px 上限，容器更宽时居中
+   （两侧留白对称），窄容器铺满；行/列在任何宽度下均匀铺开。
+   注意：气泡层的 .chat-bubble .markdown-body table 规则（特异性更高）不得
+   再声明 max-width——否则会静默压过这里（真机踩坑两次）。 */
+.markdown-body table { border-collapse: collapse; width: 100%; max-width: 900px; margin: 0.7em auto; font-size: 12.5px; }
 .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
 .markdown-body th { background: var(--bg); font-weight: 600; }
 
@@ -11413,11 +11418,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 /* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。
-   dashboard 表格（.db-table）豁免：它由自己的规则管（限宽 900 + 居中，
-   且外层 .db-table-wrap 已有横向滚动兜底）——不能豁免的话本条
-   max-width:100%（特异性 0,2,1）会压过 .dashboard .db-table（0,2,0），
-   900 上限与居中静默失效（真机踩坑 2026-09-11）。 */
-.chat-bubble .markdown-body table:not(.db-table) { display: block; max-width: 100%; overflow-x: auto; }
+   dashboard 表格（.db-table）豁免滚动容器化：布局由 .dashboard/.markdown-body
+   的表格规则统一管（限宽 900 + 居中）。这里不再声明 max-width——本规则
+   特异性更高，声明了会静默压过基础规则（真机踩坑 2026-09-11）。
+   display:block 仅作为极窄屏的横向滚动兜底。 */
+.chat-bubble .markdown-body table:not(.db-table) { display: block; overflow-x: auto; }
 .chat-bubble .markdown-body img   { max-width: 100%; }
 .chat-bubble .markdown-body .chat-md-img { width: 100%; height: 100%; }
 
