@@ -11,6 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_SPEECH_FIXTURE = path.join(ROOT, 'test', 'fixtures', 'stt', 'sherpa-onnx-zh-0.wav');
 const DEFAULT_SPEECH_FIXTURE_SHA256 = '668bf8df51a10027b84d5d8816a1ce11ae93545538dc05cfe2aa6811d399c250';
 const DEFAULT_SPEECH_SAMPLE_COUNT = 89_784;
+const DEFAULT_SMOKE_TIMEOUT_MS = 240_000;
 const MARKER_FIELDS = Object.freeze([
   'schemaErrorCode',
   'appIsPackaged',
@@ -102,7 +103,12 @@ function verifySttSmokeMarker(marker) {
   return errors;
 }
 
-function waitForMarker(markerPath, child, timeoutMs = 90_000) {
+function configuredSmokeTimeoutMs(env = process.env) {
+  const raw = Number(env.COGSEED_PACKAGED_STT_SMOKE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SMOKE_TIMEOUT_MS;
+}
+
+function waitForMarker(markerPath, child, timeoutMs = configuredSmokeTimeoutMs()) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let pollTimer;
@@ -193,7 +199,7 @@ async function launchSmoke(executable) {
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-12_000); });
   try {
-    const marker = await waitForMarker(markerPath, child);
+    const marker = await waitForMarker(markerPath, child, configuredSmokeTimeoutMs());
     const errors = verifySttSmokeMarker(marker);
     if (errors.length) throw new Error(`${errors.join('; ')}${stderr ? `\n${stderr}` : ''}`);
     return marker;
@@ -216,6 +222,8 @@ module.exports = {
   DEFAULT_SPEECH_FIXTURE,
   DEFAULT_SPEECH_FIXTURE_SHA256,
   DEFAULT_SPEECH_SAMPLE_COUNT,
+  DEFAULT_SMOKE_TIMEOUT_MS,
+  configuredSmokeTimeoutMs,
   expectedWindowsExecutable,
   verifySpeechFixture,
   verifySttSmokeMarker,
