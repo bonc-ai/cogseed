@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const WORKFLOW_JOBS = Object.freeze({
-  'ci.yml': Object.freeze(['verify']),
+  'ci.yml': Object.freeze(['verify', 'verify-windows']),
   'compliance.yml': Object.freeze(['compliance']),
 });
 const SHA_PATTERN = /^[0-9a-f]{40}$/i;

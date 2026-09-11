@@ -145,13 +145,22 @@ async function finishClosure(
     injectionReceipts: [],
     usageReceipts: [],
   };
-  if (episode.taskRunId) {
+  const receiptRunIds = episode.reuseTurnIds !== undefined
+    ? [...new Set(episode.reuseTurnIds)]
+    : episode.taskRunId
+      ? [episode.taskRunId]
+      : [];
+  if (receiptRunIds.length) {
     try {
+      const receiptRunIdSet = new Set(receiptRunIds);
       const [injectionReceipts, usageReceipts] = await Promise.all([
-        listInjectionReceipts(userId, episode.taskRunId),
-        listAssetUsageReceipts(userId, episode.taskRunId),
+        listInjectionReceipts(userId),
+        listAssetUsageReceipts(userId),
       ]);
-      attributionReceipts = { injectionReceipts, usageReceipts };
+      attributionReceipts = {
+        injectionReceipts: injectionReceipts.filter((receipt) => receiptRunIdSet.has(receipt.taskRunId)),
+        usageReceipts: usageReceipts.filter((receipt) => receiptRunIdSet.has(receipt.taskRunId)),
+      };
     } catch (error) {
       log.warn('kstar attribution receipt read degraded', {
         userId,
@@ -409,12 +418,17 @@ async function enrichEpisodeFromRequirementEvidence(
   userId: string,
   conversationId: string,
   episode: KstarEpisodeRecord,
+  requirementId?: string,
 ): Promise<KstarEpisodeRecord> {
   try {
-    const state = await readConversationTaskState(userId, conversationId);
-    const requirement = state?.currentRequirementId
-      ? await readKstarRequirement(userId, state.currentRequirementId)
+    const state = requirementId ? null : await readConversationTaskState(userId, conversationId);
+    const resolvedRequirementId = requirementId || state?.currentRequirementId;
+    const requirement = resolvedRequirementId
+      ? await readKstarRequirement(userId, resolvedRequirementId)
       : null;
+    if (requirement && requirement.conversationId !== conversationId) {
+      throw new Error('KSTAR requirement conversation mismatch');
+    }
     const evidence = requirement?.completionEvidence;
     if (!evidence) return episode;
     const r = { ...episode.r };
@@ -480,7 +494,22 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
     ...(teachingRefs.length ? { userTeachingSignalRefs: teachingRefs } : {}),
     ...(executionRefs.length ? { executionEvaluationRefs: executionRefs } : {}),
   });
-  let episode = await enrichEpisodeFromRequirementEvidence(input.userId, input.conversationId, built);
+  // New-format snapshot terminal events carry reuse_turn_ids ([] here is
+  // authoritative-empty, not "unknown"). When such an event reaches capture
+  // WITHOUT its task/requirement identity (transient provenance loss), the
+  // post-run current lifecycle may already belong to a LATER requirement — do
+  // not enrich from it. True legacy events (reuse_turn_ids undefined) keep the
+  // current-state fallback for backward compatibility.
+  const hasSnapshotFormat = built.reuseTurnIds !== undefined;
+  const degradedSnapshotWithoutRequirement = hasSnapshotFormat && !input.requirementId;
+  let episode = degradedSnapshotWithoutRequirement
+    ? built
+    : await enrichEpisodeFromRequirementEvidence(
+        input.userId,
+        input.conversationId,
+        built,
+        input.requirementId,
+      );
   // 空间归属：episode 构建链路（buildGroupKstarEpisode）不透传 workspaceId，
   // 这里从会话的 space_id 补齐——KStar 沉淀的资产才挂得到空间（空间资产
   // tab 按 asset.spaceId 过滤；否则全局可见但空间里看不到）。runtime 链路
@@ -525,20 +554,40 @@ export async function captureGroupKstarClosure(input: GroupKstarClosureInput): P
       conversationId: input.conversationId,
     });
   });
-  try {
-    const { attachKstarEpisodeToCurrentRequirement } = await import('./requirement-state');
-    await attachKstarEpisodeToCurrentRequirement(input.userId, {
-      conversationId: input.conversationId,
-      episodeId: episode.id,
-      ...(input.projectionId ? { projectionId: input.projectionId } : {}),
-      ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
-    });
-  } catch (error) {
-    log.warn('kstar requirement episode attachment degraded', {
+  const degradedSnapshotWithoutIdentity = hasSnapshotFormat
+    && !input.taskId
+    && !input.requirementId
+    && !input.projectionId
+    && !input.wakeRequestId;
+  if (degradedSnapshotWithoutRequirement) {
+    // Snapshot episodes without a requirement identity can bind ONLY through a
+    // resolved projection/wake provenance match under the explicitly provided
+    // task — never through the post-run current-lifecycle fallback. Surface
+    // them so unattached degraded episodes stay observable (identifiers only,
+    // no private text).
+    log.warn('kstar snapshot episode has no requirement identity; attachment limited to provenance match', {
       userId: input.userId,
       episodeId: episode.id,
-      error: (error as Error).message,
     });
+  }
+  if (!degradedSnapshotWithoutIdentity) {
+    try {
+      const { attachKstarEpisodeToRequirement } = await import('./requirement-state');
+      await attachKstarEpisodeToRequirement(input.userId, {
+        conversationId: input.conversationId,
+        episodeId: episode.id,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        ...(input.requirementId ? { requirementId: input.requirementId } : {}),
+        ...(input.projectionId ? { projectionId: input.projectionId } : {}),
+        ...(input.wakeRequestId ? { wakeRequestId: input.wakeRequestId } : {}),
+      }, { allowCurrentRequirementFallback: !hasSnapshotFormat });
+    } catch (error) {
+      log.warn('kstar requirement episode attachment degraded', {
+        userId: input.userId,
+        episodeId: episode.id,
+        error: (error as Error).message,
+      });
+    }
   }
   try {
     const { drainKstarTaskState } = await import('./task-aggregate');
@@ -651,7 +700,11 @@ export function startGroupKstarClosure(runtime: GroupKstarClosureRuntime = {}): 
           finishedAtMs: event.finished_at_ms,
           messages,
           ...(event.logical_run_id ? { logicalRunId: event.logical_run_id } : {}),
+          ...(event.task_id ? { taskId: event.task_id } : {}),
+          ...(event.requirement_id ? { requirementId: event.requirement_id } : {}),
           ...(event.execution_id ? { executionId: event.execution_id } : {}),
+          ...(event.reuse_turn_ids !== undefined ? { reuseTurnIds: event.reuse_turn_ids } : {}),
+          ...(event.reuse_turn_ids_truncated ? { reuseTurnIdsTruncated: true } : {}),
           ...(event.projection_id ? { projectionId: event.projection_id } : {}),
           ...(event.forecast_id ? { forecastId: event.forecast_id } : {}),
         });

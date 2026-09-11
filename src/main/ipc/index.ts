@@ -66,6 +66,7 @@ import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
 import * as kstarFailures from '../features/kstar/failure-service';
+import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
 import * as recallTree from '../features/recall/tree-service';
 import * as formalAssets from '../features/recall/formal-assets';
@@ -2769,6 +2770,13 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
+  },
+  'kstar.runEvidence.read': async ({ taskId, taskRunId } = {}, ctx) => {
+    if (!safeId(taskId) || !safeId(taskRunId)) throw new Error('invalid kstar run evidence input');
+    return {
+      ok: true,
+      evidence: await kstarRunEvidence.readKstarRunEvidence(ctx.userId, { taskId, taskRunId }),
+    };
   },
   'recall.projections.card': async ({ projectionId } = {}, ctx) => { if (!safeId(projectionId)) throw new Error('invalid projection id'); return { ok: true, card: await recallProjectionCard.buildProjectionCard(ctx.userId, projectionId) }; },
   'recall.projections.postCard': async ({ cid, projectionId } = {}, ctx) => { if (!safeId(cid) || !safeId(projectionId)) throw new Error('invalid projection message'); return { ok: true, ...(await recallProjectionMessage.postProjectionCardMessage(ctx.userId, { cid, projectionId }, { send: async (payload) => ({ id: (await groupChat.sendCommanderMessage({ userId: ctx.userId, cid, text: String(payload.text || ''), ...(payload.card ? { recall_projection_card: { projectionId: payload.card.projectionId } } : {}) })).msg?.id || '' }) })) }; },
