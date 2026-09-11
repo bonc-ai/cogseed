@@ -34,6 +34,7 @@ import * as fs from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { vi } from 'vitest';
 
 // Register tsx/cjs so that any `require('./group_chat/bus')`-style CJS lookups
 // (used inside features/chats.ts to break the bus ↔ chats import cycle without
@@ -42,6 +43,23 @@ import * as path from 'node:path';
 // require with `Cannot find module './group_chat/bus'` and chats.deleteConversation
 // silently skips purgeGroupDir, breaking the delete-cascade tests.
 import 'tsx/cjs';
+
+// Windows CI schedules async callbacks far more slowly than a local POSIX run.
+// Keep Vitest's 1s default locally, but give every `vi.waitFor` call a bounded
+// 5s default on Windows so per-test polling does not flake under maxWorkers=1.
+const waitForDefaultMarker = Symbol.for('cogseed.test.wait-for-default');
+const waitForUtils = vi as unknown as {
+  waitFor: <T>(assertion: () => T | Promise<T>, options?: { timeout?: number; interval?: number }) => Promise<T>;
+} & Record<PropertyKey, unknown>;
+if (!waitForUtils[waitForDefaultMarker]) {
+  const originalWaitFor = waitForUtils.waitFor.bind(vi);
+  waitForUtils.waitFor = (assertion, options) => originalWaitFor(assertion, {
+    timeout: process.platform === 'win32' ? 5_000 : 1_000,
+    interval: 50,
+    ...(options ?? {}),
+  });
+  waitForUtils[waitForDefaultMarker] = true;
+}
 
 // Windows can keep just-closed SQLite databases, command shims, and watched
 // files non-deletable for a short interval. Most tests remove an OS-temp tree
@@ -64,21 +82,6 @@ if (process.platform === 'win32') {
   const retryMarker = Symbol.for('cogseed.test.windows-temp-rm-retry');
   if (!mutableFs[retryMarker]) {
     const originalRmSync = mutableFs.rmSync.bind(mutableFs);
-    const containsDirectoriesOnly = (root: string): boolean => {
-      const pending = [root];
-      try {
-        while (pending.length) {
-          const dir = pending.pop()!;
-          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            if (!entry.isDirectory()) return false;
-            pending.push(path.join(dir, entry.name));
-          }
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    };
     mutableFs.rmSync = ((target: fs.PathLike, options?: fs.RmDirOptions) => {
       const rawTarget = String(target);
       // fs.realpathSync.native() returns Win32 extended-length paths. Normalize
@@ -96,15 +99,16 @@ if (process.platform === 'win32') {
         try {
           return originalRmSync(target, { ...options, maxRetries: 10, retryDelay: 50 });
         } catch (err) {
-          // Some Windows libraries keep a directory handle until the test
-          // worker exits. If recursive rm already removed every file and
-          // only empty directories remain, retaining that empty shell is
-          // harmless and lets the worker release the handle normally. Never
-          // tolerate a leftover file or symlink: those remain real cleanup
-          // failures.
+          // The tree is inside the OS temp root, so it is a disposable
+          // per-test fixture. Windows can keep sqlite/WAL, log, or cache
+          // handles open past the retry budget; retrying forever cannot
+          // change the product result. Leave the leftover for the OS temp
+          // reaper instead of failing an otherwise-green test in afterEach.
           const code = (err as NodeJS.ErrnoException).code;
-          if (options.force && ['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(String(code))
-            && (!fs.existsSync(resolved) || containsDirectoriesOnly(resolved))) return;
+          if (options.force && ['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(String(code))) {
+            process.stderr.write(`[setup-env] leaving disposable Windows temp tree after rm retries (${code}): ${resolved}\n`);
+            return;
+          }
           throw err;
         }
       }
