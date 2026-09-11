@@ -10353,13 +10353,17 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   align-self: flex-end;
   align-items: stretch;
 }
-/* 编辑卡片外框（2026-09-11 设计稿）：中性浅灰、四角同半径、淡边淡影。
-   覆盖用户气泡的绿调背景/绿边与右下 4px 切角——非编辑态消息不受影响。
-   .user 一并入选择器：否则同特异性的绿调气泡规则（后写）会赢。 */
+/* 编辑卡片外框（2026-09-11 设计稿）：中性浅灰、淡边淡影，非编辑态消息不受影响。
+   作用面（特异性实测）：主会话面板里 `#panel-conversation .chat-message.user >
+   .chat-bubble`（含 id）对颜色/边框/圆角/阴影一律胜出——本规则在那里只吃下
+   padding，外观由面板自己的「quiet Work Buddy」气泡规则给出（同为中性浅灰
+   无阴影，与设计稿一致，故无需 !important 硬拼）；嵌入式聊天面（无该 id 规则）
+   才由本规则的 background/border/box-shadow 生效。
+   圆角不在此声明：各面沿用自己气泡的圆角（主面板 20px；嵌入式保留用户气泡的
+   右下切角），避免为局部卡片改写全局气泡观感。 */
 .chat-message.user.is-message-editing .chat-bubble {
   background: #f5f6f7;
   border: 1px solid rgba(15, 23, 42, 0.06);
-  border-radius: 18px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
   padding: 14px;
 }
@@ -10398,8 +10402,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   gap: 10px;
 }
 .chat-message.is-message-editing .chat-message-edit-actions .btn {
-  /* 设计稿按钮：取消白底灰边、主按钮品牌绿、圆角 10（仅编辑卡片内）。 */
-  border-radius: 10px;
+  /* 设计稿按钮：取消白底灰边、主按钮品牌绿，尺寸放大到 8px 18px 内边距。
+     圆角不在此声明——沿用 .btn 自身的 8px（设计令牌 --radius-2 口径），
+     与全局按钮观感一致，也避免再引入一个超刻度圆角字面量。 */
   padding: 8px 18px;
 }
 
