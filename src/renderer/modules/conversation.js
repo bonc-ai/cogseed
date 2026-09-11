@@ -9272,7 +9272,8 @@ function _refreshSessionStats() {
     segs.push({ k: t('chat.stats.speedK'), v: f.ttftAvgText });
   }
   if (f.cacheHitText) segs.push({ k: t('chat.stats.cacheK'), v: f.cacheHitText });
-  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot });
+  // 上下文段独立加框突出（2026-09-11 需求）：总窗口 + 占用量一眼可辨。
+  if (f.ctxText) segs.push({ k: t('chat.stats.ctxK'), v: f.ctxText, hot: f.ctxHot, cls: 'ctx' });
   segs.push({
     k: t('chat.stats.tokK'),
     v: f.cacheReadText
@@ -9284,7 +9285,7 @@ function _refreshSessionStats() {
   box.hidden = false;
   segs.forEach((s) => {
     const seg = document.createElement('span');
-    seg.className = s.hot ? 'seg seg-hot' : 'seg';
+    seg.className = ['seg', s.hot ? 'seg-hot' : '', s.cls ? `seg-${s.cls}` : ''].filter(Boolean).join(' ');
     if (s.k) {
       const k = document.createElement('span');
       k.className = 'k';

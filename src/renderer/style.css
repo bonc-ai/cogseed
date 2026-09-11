@@ -10736,6 +10736,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .chat-session-stats[hidden] { display: none; }
 .chat-session-stats .seg-hot .v { color: var(--danger); }
+/* 上下文段独立加框（2026-09-11 需求）：模型窗口总大小 + 当前占用单独成框
+   突出显示；占用达到告警阈值（seg-hot）时边框同步转警示色。
+   本规则置于 .seg 基础规则之后以同特异性后写覆盖。 */
+.chat-session-stats .seg-ctx {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 1px 9px;
+  margin: 0 5px;
+}
+.chat-session-stats .seg-ctx.seg-hot { border-color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {
