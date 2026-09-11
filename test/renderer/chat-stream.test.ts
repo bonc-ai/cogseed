@@ -335,7 +335,7 @@ describe('chat-stream module', () => {
     expect(thinks[0].innerHTML).toContain('持续了');
   });
 
-  it('思考实时流式（2026-09-09）：inProgress 增量逐段落入且行自动展开，completed 前缀去重不重复', () => {
+  it('思考实时流式（2026-09-11 需求变更）：inProgress 增量逐段落入但行默认折叠，completed 前缀去重不重复', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     const flow = inserts[0].node;
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '正在' } });
@@ -343,9 +343,10 @@ describe('chat-stream module', () => {
     const body = bodyOf(flow);
     let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
     expect(thinks).toHaveLength(1);
-    // 进行中：增量聚合完整可见，且行自动展开（同步看到推理进度）。
+    // 进行中：增量聚合保留（点开可见全文），但行默认折叠——不自动 cs-open，
+    // 进度由行内 cs-think-live 单行实时预览承担。
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…');
-    expect(String(thinks[0].className)).toContain('cs-open');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
     // completed 整段（=已画前缀，无尾部差额）：不重复落入。
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'r1', kind: 'reasoning', status: 'completed', payload: { text: '正在读取文件…' } });
     thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));

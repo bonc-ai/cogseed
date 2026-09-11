@@ -86,9 +86,9 @@ describe('conversation produced chips', () => {
 
 
   it('shows intermediate process logs inline by default while keeping the activity strip visible', () => {
-    // 9.1 统一框架：运行中的真实工具事件/状态/检查点内联可见——process
-    // 容器由 document.createElement('details') 动态创建（className 设
-    // stream-process，expanded 时 open=true），activity 条继续显示状态。
+    // 9.1 统一框架 + 2026-09-11 需求变更：运行中的过程行内联平铺可见——
+    // 历史兜底容器由 document.createElement('div') 创建（className 设
+    // stream-process，无折叠卡语义），activity 条继续显示状态。
     expect(source).toContain("details.className = 'stream-process'");
     expect(source).toContain('stream-activity');
   });

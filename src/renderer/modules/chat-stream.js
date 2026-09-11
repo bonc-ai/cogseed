@@ -946,11 +946,11 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         const rDelta = String((payload && payload.delta) || '');
         const rFull = String((payload && payload.text) || '');
         if (status === 'inProgress') {
-          // 思考实时流式（交互设计 2026-09-09 需求）：增量逐段落入思考行，
-          // 行自动展开——进行中就能看到推理进度，不等完成态折叠块。
+          // 思考实时流式：增量逐段落入思考行。默认折叠（2026-09-11 需求
+          // 变更：交互过程不再自动展开全文）——行内 cs-think-live 保留单行
+          // 实时预览，用户点击行才展开 cs-think-full 全文。
           if (rDelta) {
-            const row = _csAppendReasoning(body, rDelta);
-            row.classList.add('cs-open');
+            _csAppendReasoning(body, rDelta);
           }
           return;
         }

@@ -11260,46 +11260,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 2026-09-11 需求变更：过程轨迹不再是 details 折叠卡——普通透明容器，
+   行直接平铺为纯文本（行样式见 .stream-process-line），无竖线/summary。 */
 .stream-process {
   margin-bottom: 8px;
-  border-left: 2px solid #cbd5e1;
-  padding-left: 10px;
 }
-.stream-process:not([open]) { margin-bottom: 0; }
-.stream-process-summary {
-  cursor: pointer;
-  list-style: none;
-  font-size: 12px;
-  color: #475569;
-  padding: 2px 0;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.stream-process-summary::-webkit-details-marker { display: none; }
-/* Same caret family as the tree nodes (chevron-right → rotate 90° when expanded). */
-.stream-process-caret {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  font-size: 13px;
-  line-height: 1;
-  color: #475569;
-  transition: transform 0.15s;
-}
-.stream-process[open] .stream-process-summary .stream-process-caret {
-  transform: rotate(90deg);
-}
-.stream-process-label { font-weight: 600; }
-.stream-process-runtime {
-  color: #64748b;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.stream-process-runtime[hidden] { display: none; }
 
 .stream-process-body {
   max-height: 300px;
@@ -11325,11 +11290,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   white-space: pre-wrap;
   word-break: break-all;
 }
-/* Four-tier hierarchy. The constraint: every content line must be
-   visually LIGHTER than the section header (`.stream-process-summary`,
-   slate-600 #475569 + 600) — content is supporting detail, the header
-   is the label. An earlier pass had bound/tool lines at slate-900 + 600
-   which inverted the hierarchy (content darker than its own label).
+/* Four-tier hierarchy. The constraint: every content line stays
+   subordinate to the message body — content is supporting detail
+   (2026-09-11 起无 summary 头，层级基准即正文文本).
    Tiers:
      1. Core    — milestones / tool calls / plans / file edits;
                   slate-500 + 500 weight. Distinguishable at a glance
@@ -11393,13 +11356,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   /* Appears below process section with a subtle divider when process is open */
 }
 /* Divider between the process trail and the final body — only when the
-   process section is actually visible. The placeholder bubble starts with
-   `.stream-process` carrying both `[open]` and inline `display:none` (so it
-   expands automatically the first time a process event arrives), and we
-   must NOT paint the dashed border above the body while the process row
-   is still hidden — otherwise the bubble shows a stray top divider above
-   the streaming text with nothing above it to separate from. */
-.stream-process[open]:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
+   process section is actually visible. 2026-09-11 起容器是普通 div（无
+   [open] 折叠态），以行内 display 样式判断可见性。 */
+.stream-process:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
   margin-top: 8px;
   padding-top: 10px;
   border-top: 1px dashed var(--border);
