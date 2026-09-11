@@ -4631,7 +4631,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    注意：气泡层的 .chat-bubble .markdown-body table 规则（特异性更高）不得
    再声明 max-width——否则会静默压过这里（真机踩坑两次）。 */
 .markdown-body table { border-collapse: collapse; width: 100%; max-width: 900px; margin: 0.7em auto; font-size: 12.5px; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: anywhere; }
 .markdown-body th { background: var(--bg); font-weight: 600; }
 
 /* ─── Chart bar ─── */
@@ -11417,12 +11417,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
 }
 
-/* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。
-   dashboard 表格（.db-table）豁免滚动容器化：布局由 .dashboard/.markdown-body
-   的表格规则统一管（限宽 900 + 居中）。这里不再声明 max-width——本规则
-   特异性更高，声明了会静默压过基础规则（真机踩坑 2026-09-11）。
-   display:block 仅作为极窄屏的横向滚动兜底。 */
-.chat-bubble .markdown-body table:not(.db-table) { display: block; overflow-x: auto; }
+/* 表格不再 display:block（2026-09-11 根因修复，踩坑两次的元凶）：
+   block 化的 table 元素盒与内部列网格脱节——元素被 width:100% 撑满而
+   网格仍按内容宽排布，右侧留下大片"空壳"空白（真机：元素 852px、最后
+   一格只到 590px，视觉表格"没铺满"且限定宽度规则全部失效）。
+   改为原生表格布局后 width/max-width/居中全部正常生效。
+   防撑破改由单元格断行承担（见 th/td 的 overflow-wrap）——超长 URL
+   等无空格内容可在格内换行，不再需要横向滚动容器。 */
 .chat-bubble .markdown-body img   { max-width: 100%; }
 .chat-bubble .markdown-body .chat-md-img { width: 100%; height: 100%; }
 
