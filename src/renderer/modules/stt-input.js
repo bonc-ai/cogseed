@@ -6,6 +6,30 @@
 // 只允许一路录音：点另一面板的麦克风会先停掉当前这路。
 
 (function () {
+  function sttMicrophonePermissionMessage(platform) {
+    const value = String(platform || '').toLowerCase();
+    if (value.startsWith('win')) {
+      return {
+        key: 'chat.stt.error_permission_windows',
+        fallback: '无法访问麦克风：请在「设置 → 隐私和安全性 → 麦克风」中允许桌面应用使用麦克风。',
+      };
+    }
+    if (value.startsWith('mac')) {
+      return {
+        key: 'chat.stt.error_permission_macos',
+        fallback: '无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许 CogSeed 使用麦克风。',
+      };
+    }
+    return {
+      key: 'chat.stt.error_permission_generic',
+      fallback: '无法访问麦克风：请在系统隐私设置中允许 CogSeed 使用麦克风。',
+    };
+  }
+
+  if (typeof module !== 'undefined' && typeof module.exports === 'object') {
+    module.exports = { sttMicrophonePermissionMessage };
+  }
+
   if (typeof window === 'undefined') return;
 
   const _log = (typeof createLogger === 'function')
@@ -28,14 +52,39 @@
   let _sessionId = null;
   let _streamCtrl = null;
   let _flushTimer = null;
+  let _cleanupTimer = null;
   let _pending = []; // Int16Array chunks awaiting flush
+  let _pushChain = Promise.resolve();
   let _waveBars = [];
   let _rafId = 0;
   let _recording = false;
+  let _starting = false;
+  let _stopping = false;
+  let _generation = 0;
+  let _notifiedIpcErrors = new Set();
   let _activePanel = null; // PANELS 项：当前正在录音的面板
 
   function _label(key, fallback) {
     return (typeof t === 'function') ? t(key, undefined) || fallback : fallback;
+  }
+
+  function _ipcError(response, fallback) {
+    if (!response || response.ok === false) {
+      const err = new Error((response && response.error) || fallback);
+      err.code = (response && response.code) || 'E_STT_IPC';
+      return err;
+    }
+    return null;
+  }
+
+  function _showRuntimeError(err, stage) {
+    const code = (err && err.code) || 'E_STT_IPC';
+    const key = `${stage}:${code}`;
+    if (_notifiedIpcErrors.has(key)) return;
+    _notifiedIpcErrors.add(key);
+    const text = (err && err.message) || _label('chat.stt.error_generic', '语音输入失败');
+    if (typeof uiAlert === 'function') void uiAlert(text);
+    else if (typeof uiToast === 'function') uiToast(text, { variant: 'error', timeoutMs: 6000 });
   }
 
   function _el(id) {
@@ -106,26 +155,116 @@
     if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
   }
 
-  function _cleanup() {
+  function _disposeCapture(audioCtx, source, processor, analyser, mediaStream) {
+    if (processor) {
+      processor.onaudioprocess = null;
+      try { processor.disconnect(); } catch (_) {}
+    }
+    if (analyser) { try { analyser.disconnect(); } catch (_) {} }
+    if (source) { try { source.disconnect(); } catch (_) {} }
+    if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
+    if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
+  }
+
+  function _releaseCapture() {
     _setRecording(false);
     _stopAnimation();
     _waveBars = [];
     if (_flushTimer) { clearInterval(_flushTimer); _flushTimer = null; }
-    if (_processor) { try { _processor.disconnect(); } catch (_) {} _processor = null; }
-    if (_analyser) { try { _analyser.disconnect(); } catch (_) {} _analyser = null; }
-    if (_source) { try { _source.disconnect(); } catch (_) {} _source = null; }
-    if (_audioCtx) { try { _audioCtx.close(); } catch (_) {} _audioCtx = null; }
-    if (_mediaStream) { _mediaStream.getTracks().forEach((t) => t.stop()); _mediaStream = null; }
+    const audioCtx = _audioCtx;
+    const source = _source;
+    const processor = _processor;
+    const analyser = _analyser;
+    const mediaStream = _mediaStream;
+    _audioCtx = null;
+    _source = null;
+    _processor = null;
+    _analyser = null;
+    _mediaStream = null;
+    _disposeCapture(audioCtx, source, processor, analyser, mediaStream);
     _pending = [];
-    _sessionId = null;
+  }
+
+  function _isCurrentSession(generation, sessionId) {
+    return generation === _generation && sessionId === _sessionId;
+  }
+
+  function _cancelResultStream() {
+    const streamCtrl = _streamCtrl;
     _streamCtrl = null;
+    if (streamCtrl && typeof streamCtrl.cancel === 'function') {
+      try { streamCtrl.cancel(); } catch (_) {}
+    }
+  }
+
+  function _isResultStreamCancellation(err) {
+    const message = err && err.message ? String(err.message) : String(err || '');
+    return (err && err.name === 'AbortError') || message === 'stream cancelled';
+  }
+
+  function _handleResultStreamFailure(err, generation, sessionId) {
+    if (!_isCurrentSession(generation, sessionId)) return;
+    const invoke = window.cogseed && typeof window.cogseed.invoke === 'function' ? window.cogseed.invoke : null;
+    _cleanup(generation, sessionId);
+    if (invoke) _cancelRemoteSession(invoke, sessionId);
+    _showRuntimeError(err, 'stream');
+    _log.warn('stt results stream failed', {
+      stage: 'stream',
+      code: (err && err.code) || 'E_STT_RESULTS_STREAM',
+    });
+  }
+
+  function _observeResultStream(streamCtrl, generation, sessionId) {
+    if (!streamCtrl || !streamCtrl.promise || typeof streamCtrl.promise.catch !== 'function') return;
+    void streamCtrl.promise.catch((err) => {
+      if (_isResultStreamCancellation(err)) return;
+      _handleResultStreamFailure(err, generation, sessionId);
+    });
+  }
+
+  function _cleanup(generation = _generation, sessionId = _sessionId) {
+    if (!_isCurrentSession(generation, sessionId)) return;
+    _cancelResultStream();
+    _releaseCapture();
+    if (_cleanupTimer) { clearTimeout(_cleanupTimer); _cleanupTimer = null; }
+    _pushChain = Promise.resolve();
+    _sessionId = null;
+    _notifiedIpcErrors = new Set();
+    _starting = false;
+    _stopping = false;
     _activePanel = null;
   }
 
+  function _cleanupDeadline(generation, sessionId) {
+    return new Promise((resolve) => {
+      if (_cleanupTimer) clearTimeout(_cleanupTimer);
+      _cleanupTimer = setTimeout(() => {
+        _cleanupTimer = null;
+        if (_isCurrentSession(generation, sessionId)) _cleanup(generation, sessionId);
+        resolve();
+      }, 800);
+    });
+  }
+
+  function _cancelRemoteSession(invoke, sessionId) {
+    let timer = null;
+    const deadline = new Promise((resolve) => {
+      timer = setTimeout(resolve, 800);
+    });
+    const remote = Promise.resolve()
+      .then(() => invoke('stt.cancel', { sessionId }))
+      .catch(() => {});
+    void Promise.race([remote, deadline]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
   function _flushAudio() {
-    if (!_sessionId || !_pending.length) return;
+    if (!_sessionId || !_pending.length) return _pushChain;
     const invoke = window.cogseed && typeof window.cogseed.invoke === 'function' ? window.cogseed.invoke : null;
-    if (!invoke) return;
+    if (!invoke) return _pushChain;
+    const sessionId = _sessionId;
+    const generation = _generation;
     const total = _pending.reduce((n, a) => n + a.length, 0);
     const all = new Int16Array(total);
     let off = 0;
@@ -134,9 +273,21 @@
     const bytes = new Uint8Array(all.buffer);
     let bin = '';
     for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    invoke('stt.pushAudio', { sessionId: _sessionId, chunk: btoa(bin) }).catch((err) => {
-      _log.warn('stt pushAudio failed', { error: (err && err.message) || String(err) });
+    const send = _pushChain.catch(() => {}).then(async () => {
+      const response = await invoke('stt.pushAudio', { sessionId, chunk: btoa(bin) });
+      const error = _ipcError(response, 'stt.pushAudio failed');
+      if (error) throw error;
     });
+    _pushChain = send;
+    void send.catch((err) => {
+      if (!_isCurrentSession(generation, sessionId)) return;
+      _showRuntimeError(err, 'push');
+      _log.warn('stt pushAudio failed', {
+        stage: 'push',
+        code: (err && err.code) || 'E_STT_PUSH_AUDIO',
+      });
+    });
+    return send;
   }
 
   function _writeText(text) {
@@ -144,12 +295,21 @@
     if (input) input.value = text || '';
   }
 
-  function _onResult(ev) {
+  function _onResult(ev, generation, sessionId) {
+    if (!_isCurrentSession(generation, sessionId)) return;
+    if (ev && ev.type === 'error') {
+      const err = new Error(typeof ev.text === 'string' && ev.text
+        ? ev.text
+        : _label('chat.stt.error_generic', '语音输入失败'));
+      err.code = 'E_STT_RESULTS_STREAM';
+      _handleResultStreamFailure(err, generation, sessionId);
+      return;
+    }
     if (!ev || !ev.event) return;
     if (typeof ev.event.partial === 'string') _writeText(ev.event.partial);
     else if (typeof ev.event.final === 'string') {
       _writeText(ev.event.final);
-      _cleanup();
+      _cleanup(generation, sessionId);
     }
   }
 
@@ -157,7 +317,11 @@
     const denied = /denied|notallowed|permission/i.test(rawMessage);
     const notFound = /notfound|not found|nodevice|no audio|noinput/i.test(rawMessage);
     let text;
-    if (denied) text = _label('chat.stt.error_permission', '无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许 CogSeed 使用麦克风。');
+    if (denied) {
+      const platform = navigator.userAgentData?.platform || navigator.platform;
+      const permissionMessage = sttMicrophonePermissionMessage(platform);
+      text = _label(permissionMessage.key, permissionMessage.fallback);
+    }
     else if (notFound) text = _label('chat.stt.error_no_mic', '未检测到麦克风设备，请检查麦克风是否连接。');
     else text = _label('chat.stt.error_generic', '语音输入启动失败') + (rawMessage ? '：' + rawMessage : '');
     if (typeof uiAlert === 'function') void uiAlert(text);
@@ -165,25 +329,46 @@
   }
 
   async function _start(panel) {
-    if (_recording) return;
+    if (_recording || (_starting && _activePanel === panel)) return;
+    const generation = ++_generation;
+    _starting = true;
     _activePanel = panel;
     const invoke = window.cogseed && typeof window.cogseed.invoke === 'function' ? window.cogseed.invoke : null;
     const stream = window.cogseed && typeof window.cogseed.stream === 'function' ? window.cogseed.stream : null;
-    if (!invoke || !stream) return;
+    if (!invoke || !stream) {
+      if (generation === _generation) _starting = false;
+      return;
+    }
+    let audioCtx = null;
+    let source = null;
+    let processor = null;
+    let analyser = null;
+    let mediaStream = null;
+    let sessionId = null;
+    let streamCtrl = null;
     try {
-      _mediaStream = await navigator.mediaDevices.getUserMedia({
+      mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true },
         video: false,
       });
-      _audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      _source = _audioCtx.createMediaStreamSource(_mediaStream);
+      if (generation !== _generation) {
+        _disposeCapture(null, null, null, null, mediaStream);
+        return;
+      }
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      if (generation !== _generation) {
+        _disposeCapture(audioCtx, null, null, null, mediaStream);
+        return;
+      }
+      source = audioCtx.createMediaStreamSource(mediaStream);
 
-      _analyser = _audioCtx.createAnalyser();
-      _analyser.fftSize = 128;
-      _analyser.smoothingTimeConstant = 0.8;
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.8;
 
-      _processor = _audioCtx.createScriptProcessor(4096, 1, 1);
-      _processor.onaudioprocess = (e) => {
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
         const input = e.inputBuffer.getChannelData(0);
         const int16 = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
@@ -193,59 +378,135 @@
         _pending.push(int16);
       };
 
-      _source.connect(_analyser);
-      _source.connect(_processor);
-      _processor.connect(_audioCtx.destination);
-
       const res = await invoke('stt.start', {});
-      _sessionId = res && res.sessionId ? res.sessionId : null;
-      if (!_sessionId) throw new Error('stt.start returned no session');
+      const startError = _ipcError(res, 'stt.start failed');
+      if (startError) throw startError;
+      sessionId = res && res.sessionId ? res.sessionId : null;
+      if (!sessionId) throw new Error('stt.start returned no session');
+      if (generation !== _generation) {
+        _disposeCapture(audioCtx, source, processor, analyser, mediaStream);
+        _cancelRemoteSession(invoke, sessionId);
+        return;
+      }
 
-      _streamCtrl = stream('stt.results', { sessionId: _sessionId }, _onResult);
+      streamCtrl = stream('stt.results', { sessionId }, (event) => {
+        _onResult(event, generation, sessionId);
+      });
+      _observeResultStream(streamCtrl, generation, sessionId);
+      source.connect(analyser);
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+
+      _audioCtx = audioCtx;
+      _source = source;
+      _processor = processor;
+      _analyser = analyser;
+      _mediaStream = mediaStream;
+      _sessionId = sessionId;
+      _streamCtrl = streamCtrl;
       _flushTimer = setInterval(_flushAudio, 300);
       _buildWave();
       _setRecording(true);
       _animateWave();
     } catch (err) {
-      const raw = (err && err.message) || String(err) || '';
-      _log.warn('stt start failed', { error: raw });
-      _showStartError(raw);
-      _cleanup();
+      if (streamCtrl && typeof streamCtrl.cancel === 'function') {
+        try { streamCtrl.cancel(); } catch (_) {}
+      }
+      _disposeCapture(audioCtx, source, processor, analyser, mediaStream);
+      if (sessionId) _cancelRemoteSession(invoke, sessionId);
+      if (generation === _generation) {
+        const raw = (err && err.message) || String(err) || '';
+        _log.warn('stt start failed', { stage: 'start', code: (err && err.code) || 'E_STT_START' });
+        _showStartError(raw);
+        _setRecording(false);
+        _activePanel = null;
+      }
+    } finally {
+      if (generation === _generation) _starting = false;
     }
   }
 
   async function _stop() {
-    if (!_sessionId) return;
+    if (!_sessionId || _stopping) return;
+    const sessionId = _sessionId;
+    const generation = _generation;
+    _stopping = true;
+    if (_flushTimer) { clearInterval(_flushTimer); _flushTimer = null; }
+    if (_processor) _processor.onaudioprocess = null;
     _flushAudio();
+    const pushChain = _pushChain;
+    _releaseCapture();
+    const deadline = _cleanupDeadline(generation, sessionId);
     const invoke = window.cogseed && typeof window.cogseed.invoke === 'function' ? window.cogseed.invoke : null;
-    if (invoke) {
-      try { await invoke('stt.stop', { sessionId: _sessionId }); }
-      catch (err) { _log.warn('stt stop failed', { error: (err && err.message) || String(err) }); }
-    }
-    // The results stream emits the final transcript and calls _cleanup; the
-    // fallback below guarantees cleanup even if the stream never settles.
-    setTimeout(_cleanup, 800);
+    const remoteFinalization = (async () => {
+      try { await pushChain; } catch (_) { /* push failure was logged at its boundary */ }
+      if (!invoke) return;
+      try {
+        const response = await invoke('stt.stop', { sessionId });
+        const error = _ipcError(response, 'stt.stop failed');
+        if (error) throw error;
+      } catch (err) {
+        if (_isCurrentSession(generation, sessionId)) {
+          _showRuntimeError(err, 'stop');
+          _log.warn('stt stop failed', {
+            stage: 'stop',
+            code: (err && err.code) || 'E_STT_STOP',
+          });
+        }
+      }
+    })();
+    await Promise.race([remoteFinalization, deadline]);
   }
 
-  function _cancel() {
-    if (_streamCtrl && typeof _streamCtrl.cancel === 'function') {
-      try { _streamCtrl.cancel(); } catch (_) {}
-    }
+  async function _cancel() {
+    if (_stopping) return;
+    _stopping = true;
+    _generation += 1;
+    const generation = _generation;
+    _starting = false;
+    const sessionId = _sessionId;
+    _cancelResultStream();
     _writeText('');
-    _cleanup();
+    _releaseCapture();
+    if (!sessionId) {
+      _cleanup(generation, sessionId);
+      return;
+    }
+    const deadline = _cleanupDeadline(generation, sessionId);
+    const invoke = window.cogseed && typeof window.cogseed.invoke === 'function' ? window.cogseed.invoke : null;
+    const remoteFinalization = (async () => {
+      try {
+        if (!invoke) return;
+        const response = await invoke('stt.cancel', { sessionId });
+        const error = _ipcError(response, 'stt.cancel failed');
+        if (error) throw error;
+      } catch (err) {
+        if (_isCurrentSession(generation, sessionId)) {
+          _showRuntimeError(err, 'cancel');
+          _log.warn('stt cancel failed', {
+            stage: 'cancel',
+            code: (err && err.code) || 'E_STT_CANCEL',
+          });
+        }
+      } finally {
+        _cleanup(generation, sessionId);
+      }
+    })();
+    await Promise.race([remoteFinalization, deadline]);
   }
 
   PANELS.forEach((panel) => {
     const btn = _el(panel.btn);
     if (btn) {
       btn.addEventListener('click', () => {
+        if (_stopping) return;
         if (_recording && _activePanel === panel) void _stop();
-        else if (_recording) { _cleanup(); void _start(panel); }
+        else if (_recording) { void _cancel().then(() => _start(panel)); }
         else void _start(panel);
       });
     }
     const cancel = _el(panel.cancel);
-    if (cancel) cancel.addEventListener('click', _cancel);
+    if (cancel) cancel.addEventListener('click', () => { void _cancel(); });
   });
 
   // 供 boot.js::setView 在视图切换（离开会话/新建会话面板）时调用：切走即停，

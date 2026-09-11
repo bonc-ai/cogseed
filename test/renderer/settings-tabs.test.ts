@@ -49,12 +49,12 @@ class FakeElement {
 function loadSettingsTabsModule() {
   const tabs = [
     new FakeElement({ settingsTab: 'data' }, ['settings-tab', 'is-active']),
-    new FakeElement({ settingsTab: 'credentials' }, ['settings-tab']),
+    new FakeElement({ settingsTab: 'configuration' }, ['settings-tab']),
     new FakeElement({ settingsTab: 'general' }, ['settings-tab']),
   ];
   const panes = [
     new FakeElement({ settingsPane: 'data' }, ['settings-tab-pane']),
-    new FakeElement({ settingsPane: 'credentials' }, ['settings-tab-pane']),
+    new FakeElement({ settingsPane: 'configuration' }, ['settings-tab-pane']),
     new FakeElement({ settingsPane: 'general' }, ['settings-tab-pane']),
   ];
   panes[1].hidden = true;
@@ -111,7 +111,7 @@ describe('settings tabs module', () => {
     const settingsScript = '<script src="./modules/settings.js"></script>';
 
     expect(fs.existsSync(modulePath)).toBe(true);
-    expect(indexHtml).toContain('data-i18n="settings.tab.credentials">Model Providers</button>');
+    expect(indexHtml).toContain('data-settings-tab="configuration" data-i18n="settings.tab.configuration"');
     // 触点已从设置迁至「连接 > 触点」，设置不再保留消息平台 tab。
     expect(indexHtml).not.toContain('data-i18n="settings.tab.messaging"');
     expect(indexHtml).toContain('data-connections-pane="touchpoints"');
@@ -195,6 +195,14 @@ describe('settings tabs module', () => {
     expect(panes[0].hidden).toBe(false);
     expect(panes[1].hidden).toBe(true);
     expect(panes[2].hidden).toBe(true);
+  });
+
+  it('keeps credentials as an alias for the canonical configuration tab', () => {
+    const { window, tabs, panes } = loadSettingsTabsModule();
+
+    expect(window.activateSettingsTab('credentials')).toBe('configuration');
+    expect(tabs[1].classList.contains('is-active')).toBe(true);
+    expect(panes[1].hidden).toBe(false);
   });
 
   it('keeps Feishu China and Lark Global as distinct supported channels', () => {
@@ -297,7 +305,7 @@ describe('settings tabs module', () => {
   });
 
   it('clears the wecom flow when the auth popup is blocked', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(source).toContain("labelFor('messaging.wecom_qr.popup_blocked', ''), 'error')");
     expect(source).toContain(`setNotice(labelFor('messaging.wecom_qr.popup_blocked', ''), 'error');
         await cancelWecomFlow({ silent: true, render: false });`);
@@ -375,7 +383,7 @@ describe('settings tabs module', () => {
   });
 
   it('treats a start response without qrUrl/qrCode as start-failed and renders the error in the QR area', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     // 启动响应既无 qrUrl 也无 qrCode → 按启动失败处理，绝不展示空二维码区域
     expect(source).toContain("if (!state.wechat.qrSource && !WECHAT_TERMINAL_STATES.has(state.wechat.state))");
     expect(source).toContain("state.wechat.error = labelFor('messaging.wechat_qr.start_failed', '')");
@@ -405,7 +413,7 @@ describe('settings tabs module', () => {
   });
 
   it('renders the wechat card with iLink copy and toggles the scan button to cancel while active', () => {
-    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8');
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/messaging-settings.js'), 'utf8').replace(/\r\n/g, '\n');
     expect(source).toContain("labelFor('messaging.wechat_qr.title', '')");
     expect(source).toContain("labelFor('messaging.wechat_qr.subtitle', '')");
     expect(source).toContain("flowActive ? 'messaging.wechat_qr.cancel' : 'messaging.wechat_qr.start'");

@@ -25,17 +25,19 @@
  */
 
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
-import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, Notification, ipcMain, nativeImage, net, protocol, session, shell, type WebContents } from 'electron';
 import { resolveRuntimeIdentity } from './brand';
 import { desktopPlatform, osVersion } from './system_info';
 import {
   hardenedWebPreferences,
   installDenyAllRemotePermissionGate,
   installExternalNavigationGuard,
+  installMainRendererAudioPermissionGate,
   installWecomQuickCreatePopupGuard,
   isOfficialWecomQuickCreateUrl,
 } from './util/window-security';
@@ -47,14 +49,36 @@ const PACKAGED_LAUNCH_SMOKE_FILE = app.isPackaged
   ? String(process.env.COGSEED_PACKAGED_LAUNCH_SMOKE_FILE || '').trim()
   : '';
 const IS_PACKAGED_LAUNCH_SMOKE = !!PACKAGED_LAUNCH_SMOKE_FILE;
+const PACKAGED_STT_SMOKE_FILE = app.isPackaged && process.platform === 'win32'
+  ? String(process.env.COGSEED_PACKAGED_STT_SMOKE_FILE || '').trim()
+  : '';
+const PACKAGED_STT_SMOKE_WAV = app.isPackaged && process.platform === 'win32'
+  ? String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim()
+  : '';
+if (!!PACKAGED_STT_SMOKE_FILE !== !!PACKAGED_STT_SMOKE_WAV) {
+  throw new Error('packaged STT smoke requires both marker and WAV paths');
+}
+if (PACKAGED_LAUNCH_SMOKE_FILE && PACKAGED_STT_SMOKE_FILE) {
+  throw new Error('packaged launch and STT smoke modes are mutually exclusive');
+}
+const IS_PACKAGED_STT_SMOKE = !!PACKAGED_STT_SMOKE_FILE;
+const IS_PACKAGED_SMOKE = IS_PACKAGED_LAUNCH_SMOKE || IS_PACKAGED_STT_SMOKE;
+if (IS_PACKAGED_STT_SMOKE) {
+  if (!path.isAbsolute(PACKAGED_STT_SMOKE_WAV) || !fs.existsSync(PACKAGED_STT_SMOKE_WAV)) {
+    throw new Error('packaged STT smoke WAV path must name an existing absolute file');
+  }
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-file-for-fake-audio-capture', PACKAGED_STT_SMOKE_WAV);
+}
 const MARKETPLACE_DEFAULTS_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_SERVER_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const MARKETPLACE_DEFAULTS_RETRY_DELAYS_MS = [3_000, 3_000, 3_000] as const;
 
 const RUNTIME_IDENTITY = resolveRuntimeIdentity(app.isPackaged);
 app.setName(RUNTIME_IDENTITY.appName);
-if (IS_PACKAGED_LAUNCH_SMOKE) {
-  app.setPath('userData', path.join(path.dirname(PACKAGED_LAUNCH_SMOKE_FILE), 'user-data'));
+if (IS_PACKAGED_SMOKE) {
+  const marker = PACKAGED_STT_SMOKE_FILE || PACKAGED_LAUNCH_SMOKE_FILE;
+  app.setPath('userData', path.join(path.dirname(marker), 'user-data'));
 } else if (!app.isPackaged) {
   const container = String(process.env.COGSEED_RUNTIME_CONTAINER || '').trim();
   if (!container) throw new Error('COGSEED_RUNTIME_CONTAINER was not initialized');
@@ -62,11 +86,12 @@ if (IS_PACKAGED_LAUNCH_SMOKE) {
 }
 
 // Register the KB file protocol BEFORE `app.whenReady()` — privileged
-// schemes can't be added after. `kb-file:///<relpath>` serves a single
-// file out of the current active user's `<uid>/cloud/contexts/`. Used by
-// the renderer's PDF iframe (Chromium's built-in PDFium handles `.pdf`
-// directly when served via a standard scheme). Other bytes types fall
-// back to `shell.openPath`.
+// schemes can't be added after. `kb-file://kb/<relpath>` serves a single
+// file out of the current active user's `<uid>/cloud/contexts/`;
+// `kb-file://space/<spaceId>/<relpath>` serves a space-library file from
+// that space's contexts dir. Used by the renderer's PDF iframe (Chromium's
+// built-in PDFium handles `.pdf` directly when served via a standard
+// scheme). Other bytes types fall back to `shell.openPath`.
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'kb-file',
@@ -186,6 +211,7 @@ import * as builtinMarketplaceStartup from './features/builtin_marketplace_start
 import * as builtinPackagesStartup from './features/builtin_packages_startup';
 import type { BuiltinMarketplaceSeedResult } from './features/builtin_marketplace';
 import * as chatAttachments from './features/chat_attachments';
+import * as spacesFeature from './features/spaces';
 import * as chatArtifacts from './features/chat_artifacts';
 import * as clientConfigFeature from './features/client_config';
 import * as connectorsFeature from './features/connectors';
@@ -194,6 +220,7 @@ import * as taskNotifications from './features/task_notifications';
 import { recoverRecallCaptures, startRecallCaptureOrchestrator } from './features/recall/capture-service';
 import { startAutoCloseRecovery, startGroupKstarClosure } from './features/kstar/task-closure';
 import { startGroupChatRecallTerminalProofs } from './features/group_chat/recall-terminal-proof';
+import { startTaskAutoArchiveOrchestrator } from './features/kb_task_auto_archive';
 import * as notificationPermissions from './features/notification_permissions';
 import {
   consumeColdLaunchConnectorCallback,
@@ -205,6 +232,8 @@ import * as windowState from './features/window_state';
 // through the open server bridge.
 
 let windowsTaskBadgeIcon: ReturnType<typeof nativeImage.createFromDataURL> | null = null;
+let mainRendererAudioPermissionObservation = { checkCount: 0, requestCount: 0 };
+let mainRendererWebContents: WebContents | null = null;
 
 function setTaskNotificationBadgeCount(count: number): void {
   const normalized = Math.max(0, Math.trunc(count));
@@ -238,14 +267,16 @@ function createWindow(): BrowserWindow {
     // 悬浮在内容上，窗口拖拽区由渲染层 CSS（.is-macos 各视图顶部条）声明。
     // Windows 保持原生 frame。
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' as const } : {}),
-    show: !IS_PACKAGED_LAUNCH_SMOKE,
+    show: !IS_PACKAGED_SMOKE,
     backgroundColor: '#ffffff',
     icon: path.join(paths.SRC_ROOT, 'resources', 'icons', 'icon.png'),
     webPreferences: hardenedWebPreferences({
       // preload sits next to index.ts in PC/src/main/ — just __dirname + 'preload.js'.
       preload: path.join(__dirname, 'preload.js'),
       devTools: dev,
-      additionalArguments: IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : [],
+      additionalArguments: IS_PACKAGED_STT_SMOKE
+        ? ['--cogseed-packaged-stt-smoke']
+        : (IS_PACKAGED_LAUNCH_SMOKE ? ['--cogseed-packaged-launch-smoke'] : []),
       // Enables Chromium's built-in PDF viewer (PDFium) inside iframes.
       // Required for `<iframe src="kb-file:///.../report.pdf">` in the KB
       // viewer. Has no effect on other plugin types since Electron strips
@@ -256,7 +287,14 @@ function createWindow(): BrowserWindow {
   windowState.watchWindowState(win);
   if (restored.isMaximized) win.maximize();
 
-  win.loadFile(path.join(paths.SRC_ROOT, 'renderer', 'index.html'));
+  const rendererFile = path.join(paths.SRC_ROOT, 'renderer', 'index.html');
+  mainRendererWebContents = win.webContents;
+  mainRendererAudioPermissionObservation = installMainRendererAudioPermissionGate(
+    session.defaultSession,
+    win.webContents,
+    pathToFileURL(rendererFile).toString(),
+  );
+  win.loadFile(rendererFile);
 
   // Block HTML <title> from populating the native titlebar — we want a
   // frame-only look (drag works, but no label across the top).
@@ -395,6 +433,55 @@ function registerIpc(): void {
         readyAt: new Date().toISOString(),
       };
       const marker = path.resolve(PACKAGED_LAUNCH_SMOKE_FILE);
+      const temp = `${marker}.${process.pid}.tmp`;
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+      fs.renameSync(temp, marker);
+      recorded = true;
+      setImmediate(() => app.quit());
+      return { ok: true };
+    });
+  }
+
+  if (IS_PACKAGED_STT_SMOKE) {
+    let recorded = false;
+    ipcMain.handle('cogseed.packagedSttSmokeReady', (event, payload) => {
+      if (recorded) return { ok: true };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner || owner.isDestroyed() || event.sender !== mainRendererWebContents) {
+        throw new Error('STT smoke sender is not the active main renderer');
+      }
+      const isNonNegativeInteger = (value: unknown): value is number => (
+        typeof value === 'number' && Number.isInteger(value) && value >= 0
+      );
+      const isNonNegativeNumber = (value: unknown): value is number => (
+        typeof value === 'number' && Number.isFinite(value) && value >= 0
+      );
+      const numericPayloadValid = isNonNegativeInteger(payload?.sampleCount)
+        && isNonNegativeInteger(payload?.nonZeroSampleCount)
+        && isNonNegativeNumber(payload?.rms)
+        && isNonNegativeInteger(payload?.pushAcknowledgements)
+        && isNonNegativeInteger(payload?.finalTextLength)
+        && isNonNegativeInteger(payload?.failureCount);
+      const safeInteger = (value: unknown): number => (isNonNegativeInteger(value) ? value : 0);
+      const safeNumber = (value: unknown): number => (isNonNegativeNumber(value) ? value : 0);
+      const record = {
+        schemaErrorCode: numericPayloadValid ? 0 : 1,
+        appIsPackaged: app.isPackaged,
+        permissionCheckCount: mainRendererAudioPermissionObservation.checkCount,
+        permissionRequestCount: mainRendererAudioPermissionObservation.requestCount,
+        audioTrackLive: payload?.audioTrackLive === true,
+        sampleCount: safeInteger(payload?.sampleCount),
+        nonZeroSampleCount: safeInteger(payload?.nonZeroSampleCount),
+        rms: safeNumber(payload?.rms),
+        pushAcknowledgements: safeInteger(payload?.pushAcknowledgements),
+        sessionCreated: payload?.sessionCreated === true,
+        stopAcknowledged: payload?.stopAcknowledged === true,
+        finalEventObserved: payload?.finalEventObserved === true,
+        finalTextLength: safeInteger(payload?.finalTextLength),
+        failureCount: safeInteger(payload?.failureCount),
+      };
+      const marker = path.resolve(PACKAGED_STT_SMOKE_FILE);
       const temp = `${marker}.${process.pid}.tmp`;
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
@@ -918,14 +1005,45 @@ function registerKbFileProtocol(): void {
   protocol.handle('kb-file', async (request) => {
     const reqUrl = request.url;
     try {
-      // URL shape on the wire: `kb-file://kb/<relpath>` — `kb` is a fixed
-      // fake host (see renderer `_encodeKbFileUrl`). Tolerate older /
-      // unusual normalisations (`kb-file://<seg>/...`, `kb-file:///…`) by
-      // extracting the pathname via `new URL`; standard-scheme URLs parse
-      // cleanly once a host is present.
+      // Two route shapes, dispatched by URL host:
+      //   kb-file://kb/<relpath>              — personal contexts file
+      //   kb-file://space/<spaceId>/<relpath> — space-library file
+      // The `kb` / `space` hosts are fixed fake hosts (see renderer
+      // `_encodeKbFileUrl`). Tolerate older / unusual normalisations
+      // (`kb-file://<seg>/...`, `kb-file:///…`) by extracting the pathname
+      // via `new URL`; standard-scheme URLs parse cleanly once a host is
+      // present.
       const uid = users.getActiveUserId();
-      const root = path.resolve(paths.userContextsDir(uid));
-      const resolved = resolveContainedProtocolFile(reqUrl, 'kb-file', root);
+      let root: string;
+      let resolveUrl = reqUrl;
+      let u: URL;
+      try { u = new URL(reqUrl); }
+      catch { return new Response('bad request', { status: 400 }); }
+      if (u.host.toLowerCase() === 'space') {
+        // spaceId is the first pathname segment; the remaining segments are
+        // the file's relative path inside the space contexts dir.
+        const segs = decodeURIComponent(u.pathname || '').replace(/^\/+/, '').split('/');
+        const spaceId = segs.shift() || '';
+        if (!spaceId || !storage.safeId(spaceId)) {
+          log.warn('kb-file/space: bad spaceId', { reqUrl });
+          return new Response('bad request', { status: 400 });
+        }
+        if (!segs.length) {
+          log.warn('kb-file/space: missing relpath', { reqUrl });
+          return new Response('bad request', { status: 400 });
+        }
+        if (!(await spacesFeature.spaceExists(uid, spaceId))) {
+          log.warn('kb-file/space: no such space', { reqUrl, spaceId });
+          return new Response('not found', { status: 404 });
+        }
+        root = path.resolve(paths.spaceContextsDir(uid, spaceId));
+        // Rebuild a clean `kb-file://kb/<rel>` so resolveContainedProtocolFile
+        // only sees the file-relative path (spaceId is consumed above).
+        resolveUrl = 'kb-file://kb/' + segs.map(encodeURIComponent).join('/');
+      } else {
+        root = path.resolve(paths.userContextsDir(uid));
+      }
+      const resolved = resolveContainedProtocolFile(resolveUrl, 'kb-file', root);
       if (resolved.ok === false) {
         log.warn('kb-file: rejected', { reqUrl, code: resolved.error });
         return new Response(resolved.error.replace('_', ' '), { status: resolved.status });
@@ -1186,7 +1304,7 @@ function registerPluginProtocol(): void {
 }
 
 // Single-instance lock prevents double-launch from duplicating the backend.
-const gotLock = IS_PACKAGED_LAUNCH_SMOKE  || app.requestSingleInstanceLock();
+const gotLock = IS_PACKAGED_SMOKE || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
@@ -1229,11 +1347,6 @@ if (!gotLock) {
     registerChatMediaProtocol();
     registerChatAppProtocol();
     registerPluginProtocol();
-    // Renderer permission gate. Media capture (microphone) is allowed for voice input;
-    // clipboard permissions are kept for copy/paste flows.
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'clipboard-read' || permission === 'clipboard-sanitized-write' || permission === 'media');
-    });
     registerIpc();
     const stopTaskNotifications = taskNotifications.startTaskNotifications({
       getActiveUserId: () => users.getActiveUserId(),
@@ -1271,11 +1384,8 @@ if (!gotLock) {
     app.once('before-quit', stopAutoCloseRecovery);
     const stopGroupChatRecallTerminalProofs = startGroupChatRecallTerminalProofs();
     app.once('before-quit', stopGroupChatRecallTerminalProofs);
-    app.once('before-quit', () => {
-      void stopP3394Bridge().catch(() => {});
-      // 受管 P3394 外接网关：应用退出时一并停止（桥下线后它们已无回发目标）。
-      void import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()).catch(() => {});
-    });
+    const stopTaskAutoArchive = startTaskAutoArchiveOrchestrator();
+    app.once('before-quit', stopTaskAutoArchive);
     clientConfigFeature.clientConfig.subscribeAll((keys) => {
       ipc.broadcastToRenderer('client-config:changed', { keys });
     });
@@ -1302,7 +1412,7 @@ if (!gotLock) {
       });
     }, CONNECTORS_BOOTSTRAP_DELAY_MS);
     connectorsTimer.unref?.();
-    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+    if (!IS_PACKAGED_SMOKE) {
       updatesIpc.initAutoUpdateBridge((channel, payload) => {
         ipc.broadcastToRenderer(channel, payload);
       });
@@ -1316,7 +1426,7 @@ if (!gotLock) {
     // inside the feature; a surfaced reminder is broadcast to the renderer.
     // Skipped in the packaged launch smoke so the smoke run never touches the
     // network.
-    if (!IS_PACKAGED_LAUNCH_SMOKE) {
+    if (!IS_PACKAGED_SMOKE) {
       registerDeferred('updater:check', async () => {
         const result = await updaterClient.checkForUpdates(users.getActiveUserId(), { manual: false });
         if (result.reminded && result.info) {
@@ -1454,6 +1564,12 @@ if (!gotLock) {
       const uid = users.getActiveUserId();
       if (uid) await recoverRecallCaptures(uid);
     }, 'parallel', BOOT_HEAVY_DISK_DELAY_MS, { resourceClass: 'disk', preferIdle: true });
+    registerDeferred('recall:validation-recovery', async () => {
+      const uid = users.getActiveUserId();
+      if (!uid) return;
+      const { recoverValidationApplications } = await import('./features/recall/validation-service');
+      await recoverValidationApplications(uid);
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
 
 
 
@@ -1474,16 +1590,27 @@ if (!gotLock) {
 
   // Flush pending search-index writes + close KB vector DBs before exit.
   let shutdownFlushed = false;
+  let shutdownPromise: Promise<void> | null = null;
   app.on('before-quit', async (e) => {
     if (shutdownFlushed) return;
     e.preventDefault();
-    try { await searchFeature.flushAll(); }
-    catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
-    try {
-      const kb = await import('./features/kb_vector');
-      kb.closeAllKb();
-    } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
-    shutdownFlushed = true;
-    app.quit();
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = Promise.resolve().then(async () => {
+      try { await searchFeature.flushAll(); }
+      catch (err) { createLogger('search').warn('final flush failed', { error: (err as Error).message }); }
+      try {
+        const kb = await import('./features/kb_vector');
+        kb.closeAllKb();
+      } catch (err) { createLogger('kb_vector').warn('close failed', { error: (err as Error).message }); }
+      // Keep Electron alive until the bridge and every managed external gateway
+      // process tree have completed their graceful shutdown.
+      await Promise.allSettled([
+        stopP3394Bridge(),
+        import('./features/p3394_bridge/external-gateways').then((m) => m.stopAllExternalGateways()),
+      ]);
+      shutdownFlushed = true;
+      app.quit();
+    });
+    await shutdownPromise;
   });
 }

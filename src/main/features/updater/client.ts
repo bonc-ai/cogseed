@@ -55,11 +55,11 @@ import type {
 const log = createLogger('updater');
 
 const LATEST_CHECK_TIMEOUT_MS = 15_000;
-const DOWNLOAD_EXTENSIONS_ALLOWED = new Set(['.dmg', '.zip']);
+const DOWNLOAD_EXTENSIONS_ALLOWED = new Set(['.dmg', '.exe', '.zip']);
 
 /**
  * Headers for the updates endpoints. The updates contract
- * (updates-server catalog) uses node-style
+ * (docs/design/updates-api.md, updates-server catalog) uses node-style
  * platform tokens darwin/win32/linux, while the shared client header carries
  * the app's own taxonomy ('mac'/'windows'/'pc') for other business APIs —
  * an unmapped 'mac' matches no catalog entry and silently reports "up to
@@ -103,6 +103,10 @@ function currentAppVersion(): string {
 }
 
 export { currentAppVersion };
+
+function isPackagedReminderPlatformUnsupported(): boolean {
+  return electronApp?.isPackaged === true && process.platform !== 'darwin';
+}
 
 function _asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -171,6 +175,12 @@ export async function checkForUpdates(
 ): Promise<CheckResult> {
   const now = opts.now ?? Date.now();
   const current = currentAppVersion();
+  if (isPackagedReminderPlatformUnsupported()) {
+    const state = readUpdaterState(userId);
+    state.last_check_at = now;
+    writeUpdaterState(userId, { ...state, latest_info: undefined });
+    return { checked: true, has_update: false, reminded: false, current_version: current };
+  }
   try {
     const info = await _fetchLatest();
     const state = readUpdaterState(userId);
@@ -226,7 +236,7 @@ export function installerFilenameFromUrl(url: string): string {
       if (DOWNLOAD_EXTENSIONS_ALLOWED.has(ext)) return base;
     }
   } catch { /* fall through to the fallback name */ }
-  const ext = url.toLowerCase().match(/\.(dmg|zip)(\?|$)/)?.[1] || 'dmg';
+  const ext = url.toLowerCase().match(/\.(dmg|exe|zip)(\?|$)/)?.[1] || 'dmg';
   return `CogSeed-${process.platform}-${process.arch}.${ext}`;
 }
 

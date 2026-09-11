@@ -75,10 +75,15 @@ async function _settingsSafeCall(label, fn) {
   }
 }
 
-async function loadSettings() {
+async function loadSettings(options = {}) {
   // 4-tab structure (batch 6). Initialize switching + activate default tab
   // (通用 by default — matches the is-active class on the markup).
   if (typeof initSettingsTabs === 'function') initSettingsTabs();
+  const requestedTab = options.tab || options.settingsTab;
+  const requestedAnchor = options.anchor || options.settingsAnchor;
+  if (requestedTab && typeof activateSettingsTab === 'function') {
+    activateSettingsTab(requestedTab, { anchor: requestedAnchor });
+  }
   _settingsBindConfiguredToggle();
   _settingsBindLanguageOnce();
   _settingsBindThinkingOnce();
@@ -104,6 +109,12 @@ async function loadSettings() {
     _settingsSafeCall('settings recycle refresh', _settingsRefreshRecycle),
     _settingsSafeCall('settings touchpoint refresh', () => window.initTouchpointSettings && window.initTouchpointSettings()),
     _settingsSafeCall('settings hub account refresh', () => window.initHubAccountSettings && window.initHubAccountSettings()),
+    _settingsSafeCall('settings execution and collaboration refresh', () => {
+      const pane = document.querySelector('[data-settings-pane="configuration"]');
+      return pane && pane.hidden === false
+        ? window.CogSeedRunCenterSettings?.load?.({ anchor: requestedAnchor })
+        : undefined;
+    }),
   ]);
   await _settingsSafeCall('settings model picker render', _settingsRenderPicker);
   await _settingsSafeCall('settings model entries render', _settingsRenderEntries);

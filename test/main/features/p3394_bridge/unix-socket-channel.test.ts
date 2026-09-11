@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   P3394UnixSocketChannel,
+  p3394LocalSocketEndpoint,
 } from '../../../../src/main/features/p3394_bridge/unix-socket-channel';
 
 let tmpDir: string;
@@ -13,7 +14,7 @@ let counter = 0;
 
 function socketPath(prefix: string): string {
   counter += 1;
-  return path.join(tmpDir, `${prefix}-${process.pid}-${counter}.sock`);
+  return p3394LocalSocketEndpoint(`${prefix}-${counter}`, { tempDir: tmpDir });
 }
 
 function envelope(overrides: Record<string, unknown> = {}) {
@@ -49,6 +50,12 @@ afterEach(() => {
 });
 
 describe('P3394UnixSocketChannel real transport', () => {
+  it('uses a platform-native local IPC endpoint', () => {
+    const endpoint = p3394LocalSocketEndpoint('native-endpoint', { tempDir: tmpDir });
+    if (process.platform === 'win32') expect(endpoint).toMatch(/^\\\\\.\\pipe\\p3394-/);
+    else expect(endpoint).toBe(path.join(tmpDir, `p3394-native-endpoint-${process.pid}.sock`));
+  });
+
   it('completes a request-reply exchange across independent Node processes', async () => {
     const requestPath = socketPath('proc-request');
     const replyPath = socketPath('proc-reply');
@@ -93,7 +100,6 @@ describe('P3394UnixSocketChannel real transport', () => {
     });
     expect(request.sender.agent_id).toBe('child-b');
     const replyClient = new P3394UnixSocketChannel('parent-a-reply', { socketPath: replyPath, token: 'tok-b' });
-    await waitFor(() => fs.existsSync(replyPath));
     await replyClient.send({ spec_version: 'p3394/1.0', message_id: 'proc-reply-1', session_id: request.session_id, task_id: request.task_id, kind: 'message', performative: 'inform', sender: { agent_id: 'parent-a' }, recipients: [{ agent_id: 'child-b' }], payload: { parts: [{ type: 'text', text: 'from parent' }] }, reply_to: request.message_id, idempotency_key: 'proc-reply-idem-1' });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`child did not exit: ${childStderr}`)), 5000);
@@ -290,28 +296,28 @@ describe('P3394UnixSocketChannel real transport', () => {
     await first.send(envelope({ message_id: 'msg-shared-1' }));
     await waitFor(() => received.includes('msg-shared-1'));
     await first.close();
-    expect(fs.existsSync(p)).toBe(true);
+    if (process.platform !== 'win32') expect(fs.existsSync(p)).toBe(true);
 
     const second = new P3394UnixSocketChannel('second-dialer', { socketPath: p, token: 'tok' });
     await second.dial();
     await second.send(envelope({ message_id: 'msg-shared-2' }));
     await waitFor(() => received.includes('msg-shared-2'));
     await second.close();
-    expect(fs.existsSync(p)).toBe(true);
+    if (process.platform !== 'win32') expect(fs.existsSync(p)).toBe(true);
     await server.close();
-    expect(fs.existsSync(p)).toBe(false);
+    if (process.platform !== 'win32') expect(fs.existsSync(p)).toBe(false);
   });
 
   it('graceful shutdown removes the socket file and refuses new sends', async () => {
     const p = socketPath('shutdown');
     const server = new P3394UnixSocketChannel('server', { socketPath: p, token: 'tok' });
     await server.listen();
-    expect(fs.existsSync(p)).toBe(true);
+    if (process.platform !== 'win32') expect(fs.existsSync(p)).toBe(true);
     const client = new P3394UnixSocketChannel('client', { socketPath: p, token: 'tok' });
     await client.dial();
     await server.close();
     await client.close();
-    expect(fs.existsSync(p)).toBe(false);
+    if (process.platform !== 'win32') expect(fs.existsSync(p)).toBe(false);
     await expect(server.send(envelope({ message_id: 'msg-late' }))).rejects.toThrow();
   });
 });

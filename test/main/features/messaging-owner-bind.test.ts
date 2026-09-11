@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { MessagingAdapter } from '../../../src/main/features/messaging/types';
+import { drainMainRuntimeForTest } from '../../helpers/drain-main-runtime';
 
 let tmpDir = '';
 let previousRoot: string | undefined;
@@ -35,7 +36,17 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  try {
+    const manager = await import('../../../src/main/features/messaging/manager');
+    await manager.stopForUser('user-1');
+    const bindings = await import('../../../src/main/features/messaging/bindings');
+    const bus = await import('../../../src/main/features/group_chat/bus');
+    const userBindings = await bindings.listBindings('user-1');
+    await Promise.all(userBindings.map((binding) => bus.abort('user-1', binding.cid)));
+    await drainMainRuntimeForTest('user-1');
+  } catch { /* cleanup assertions below still report real filesystem leaks */ }
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (previousRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
   else process.env.COGSEED_WORKSPACE_ROOT = previousRoot;
@@ -48,7 +59,10 @@ async function seededFeishu(uid: string, allowUserIds: string[] = []) {
   vi.doMock('../../../src/main/features/messaging/adapters', () => ({ createAdapter: vi.fn(() => adapter) }));
   const groupSend = vi.fn(async () => ({ ok: true }));
   vi.doMock('../../../src/main/features/group_chat', () => ({ send: groupSend }));
-  vi.doMock('../../../src/main/features/group_chat/bus', () => ({ subscribe: vi.fn() }));
+  vi.doMock('../../../src/main/features/group_chat/bus', () => ({
+    subscribe: vi.fn(() => () => undefined),
+    abort: vi.fn(async () => undefined),
+  }));
   const registry = await import('../../../src/main/features/messaging/registry');
   const manager = await import('../../../src/main/features/messaging/manager');
   const created = await registry.createInstance(uid, {
@@ -91,8 +105,9 @@ describe('messaging owner auto-bind from direct message', () => {
     const uid = 'user-1';
     const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
-    void manager.enqueueInbound(uid, envelope(instanceId));
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
     await drain(groupSend);
+    await inbound;
 
     const instance = await registry.getInstance(uid, instanceId);
     expect(instance).toMatchObject({
@@ -109,8 +124,9 @@ describe('messaging owner auto-bind from direct message', () => {
     const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
     // seededFeishu enabled the instance, which opens the window by itself —
     // no manual openOwnerBindingWindow call is needed.
-    void manager.enqueueInbound(uid, envelope(instanceId));
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
     await drain(groupSend);
+    await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).toMatchObject({
       ownerExternalUserId: 'ou_sender_1',
@@ -124,8 +140,9 @@ describe('messaging owner auto-bind from direct message', () => {
     const uid = 'user-1';
     const { manager, registry, instanceId } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
-    void manager.enqueueInbound(uid, envelope(instanceId, { isGroup: true, externalChatId: 'oc_group_1' }));
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId, { isGroup: true, externalChatId: 'oc_group_1' }));
     await vi.advanceTimersByTimeAsync(600);
+    await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
     await manager.stopForUser(uid);
@@ -137,8 +154,9 @@ describe('messaging owner auto-bind from direct message', () => {
     const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1000);
-    void manager.enqueueInbound(uid, envelope(instanceId));
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
     await drain(groupSend);
+    await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).not.toHaveProperty('ownerExternalUserId');
     await manager.stopForUser(uid);
@@ -154,8 +172,9 @@ describe('messaging owner auto-bind from direct message', () => {
       ownerIdentitySource: 'manual',
     });
     manager.openOwnerBindingWindow(uid, instanceId);
-    void manager.enqueueInbound(uid, envelope(instanceId));
+    const inbound = manager.enqueueInbound(uid, envelope(instanceId));
     await drain(groupSend);
+    await inbound;
 
     expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_existing' });
     await manager.stopForUser(uid);
@@ -166,12 +185,14 @@ describe('messaging owner auto-bind from direct message', () => {
     const uid = 'user-1';
     const { manager, registry, instanceId, groupSend } = await seededFeishu(uid, ['ou_sender_1']);
     manager.openOwnerBindingWindow(uid, instanceId);
-    void manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-1' }));
+    const firstInbound = manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-1' }));
     await drain(groupSend);
+    await firstInbound;
     // Second message from a different sender must not rebind; the allowlist
     // only admits the original sender, so no dispatch is expected here.
-    void manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-2', externalUserId: 'ou_other' }));
+    const secondInbound = manager.enqueueInbound(uid, envelope(instanceId, { externalMessageId: 'om-in-2', externalUserId: 'ou_other' }));
     await vi.advanceTimersByTimeAsync(600);
+    await secondInbound;
 
     expect(await registry.getInstance(uid, instanceId)).toMatchObject({ ownerExternalUserId: 'ou_sender_1' });
     await manager.stopForUser(uid);

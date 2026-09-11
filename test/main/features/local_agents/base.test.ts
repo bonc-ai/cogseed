@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -85,22 +86,22 @@ describe('local_agents/backends/base', () => {
     vi.useRealTimers();
   });
 
-  it('uses taskkill tree mode on Windows and falls back when taskkill fails', () => {
-    const callbacks = new Map<string, (...args: any[]) => void>();
-    const killer = {
-      once: vi.fn((event: string, cb: (...args: any[]) => void) => {
-        callbacks.set(event, cb);
-        return killer;
-      }),
-      unref: vi.fn(),
-    };
+  it('waits for taskkill close after a nonzero exit and completes the fallback first', async () => {
+    const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
     const spawnFn = vi.fn(() => killer);
-    const child = { pid: 2468, kill: vi.fn() };
+    const order: string[] = [];
+    const child = Object.assign(new EventEmitter(), {
+      pid: 2468,
+      kill: vi.fn(() => {
+        order.push('fallback');
+        return true;
+      }),
+    });
 
-    killProcessTree(child as any, 'SIGTERM', {
+    const completion = Promise.resolve(killProcessTree(child as any, 'SIGTERM', {
       platform: 'win32',
       spawnFn: spawnFn as any,
-    });
+    })).then(() => { order.push('resolved'); });
 
     expect(spawnFn).toHaveBeenCalledWith(
       expect.stringMatching(/taskkill\.exe$/i),
@@ -109,34 +110,227 @@ describe('local_agents/backends/base', () => {
     );
     expect(killer.unref).toHaveBeenCalledOnce();
     expect(child.kill).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(order).toEqual([]);
 
-    callbacks.get('exit')?.(1);
+    killer.emit('exit', 1);
+    await Promise.resolve();
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(order).toEqual(['fallback']);
+
+    killer.emit('close', 1, null);
+    await Promise.resolve();
+    expect(order).toEqual(['fallback']);
+
+    child.emit('close', null, 'SIGTERM');
+    await completion;
+    expect(order).toEqual(['fallback', 'resolved']);
+    expect(killer.listenerCount('error')).toBe(0);
+    expect(killer.listenerCount('exit')).toBe(0);
+    expect(killer.listenerCount('close')).toBe(0);
   });
 
-  it('falls back to the direct Windows child when taskkill cannot start', () => {
-    const child = { pid: 1357, kill: vi.fn() };
-    const spawnFn = vi.fn(() => { throw new Error('spawn failed'); });
+  it('waits for taskkill close after a successful exit without falling back', async () => {
+    const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const child = Object.assign(new EventEmitter(), { pid: 2468, kill: vi.fn(() => true) });
+    let settled = false;
 
-    killProcessTree(child as any, 'SIGKILL', {
+    const completion = killProcessTree(child as any, 'SIGTERM', {
+      platform: 'win32',
+      spawnFn: vi.fn(() => killer) as any,
+    }).then(() => { settled = true; });
+
+    killer.emit('exit', 0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    killer.emit('close', 0, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.emit('close', 0, null);
+    await completion;
+    expect(settled).toBe(true);
+    expect(killer.listenerCount('error')).toBe(0);
+    expect(killer.listenerCount('exit')).toBe(0);
+    expect(killer.listenerCount('close')).toBe(0);
+  });
+
+  it('waits for taskkill close after an error and does not fall back twice', async () => {
+    const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const child = Object.assign(new EventEmitter(), { pid: 2468, kill: vi.fn(() => true) });
+    let settled = false;
+
+    const completion = Promise.resolve(killProcessTree(child as any, 'SIGKILL', {
+      platform: 'win32',
+      spawnFn: vi.fn(() => killer) as any,
+    })).then(() => { settled = true; });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    killer.emit('error', new Error('taskkill failed to spawn'));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+    killer.emit('exit', 1);
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+
+    killer.emit('close', 1, null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.emit('close', null, 'SIGKILL');
+    await completion;
+    expect(settled).toBe(true);
+    expect(killer.listenerCount('error')).toBe(0);
+    expect(killer.listenerCount('exit')).toBe(0);
+    expect(killer.listenerCount('close')).toBe(0);
+  });
+
+  it('falls back to the direct Windows child when taskkill cannot start', async () => {
+    const child = Object.assign(new EventEmitter(), { pid: 1357, kill: vi.fn() });
+    const spawnFn = vi.fn(() => { throw new Error('spawn failed'); });
+    let settled = false;
+
+    const completion = killProcessTree(child as any, 'SIGKILL', {
       platform: 'win32',
       spawnFn: spawnFn as any,
-    });
+    }).then(() => { settled = true; });
 
+    expect(completion).toBeInstanceOf(Promise);
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.emit('close', null, 'SIGKILL');
+    await completion;
+    expect(settled).toBe(true);
   });
 
-  it('falls back to the direct POSIX child when no matching process group exists', () => {
-    const child = { pid: 9753, kill: vi.fn() };
+  it('escalates a failed Windows fallback and still waits for target close', async () => {
+    vi.useFakeTimers();
+    const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const child = Object.assign(new EventEmitter(), { pid: 1357, kill: vi.fn(() => true) });
+    let settled = false;
+    try {
+      const completion = killProcessTree(child as any, 'SIGTERM', {
+        platform: 'win32',
+        spawnFn: vi.fn(() => killer) as any,
+      }).then(() => { settled = true; });
+
+      killer.emit('error', new Error('taskkill unavailable'));
+      killer.emit('close', 1, null);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(child.kill).toHaveBeenLastCalledWith('SIGKILL');
+      expect(settled).toBe(false);
+
+      child.emit('close', null, 'SIGKILL');
+      await completion;
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles as termination-unverified when close never arrives after SIGKILL', async () => {
+    vi.useFakeTimers();
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 8642,
+      kill: vi.fn(() => true),
+      stdin: { destroy: vi.fn() },
+      stdout: { destroy: vi.fn() },
+      stderr: { destroy: vi.fn() },
+      unref: vi.fn(),
+    });
+    let settled = false;
+    let outcome: unknown;
+    try {
+      const completion = killProcessTree(child as any, 'SIGTERM', { platform: 'linux' })
+        .then((result) => {
+          settled = true;
+          outcome = result;
+        });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(processKill).toHaveBeenLastCalledWith(-8642, 'SIGKILL');
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(settled).toBe(true);
+      await completion;
+      expect(outcome).toEqual({ status: 'termination-unverified' });
+      expect(child.stdin.destroy).toHaveBeenCalledOnce();
+      expect(child.stdout.destroy).toHaveBeenCalledOnce();
+      expect(child.stderr.destroy).toHaveBeenCalledOnce();
+      expect(child.unref).toHaveBeenCalledOnce();
+      expect(child.listenerCount('close')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      processKill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for confirmed PID absence when given a lightweight child handle', async () => {
+    vi.useFakeTimers();
+    let alive = true;
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid === 8642 && !alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+    const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const child = { pid: 8642, kill: vi.fn(() => true) };
+    let settled = false;
+    try {
+      const completion = killProcessTree(child as any, 'SIGKILL', {
+        platform: 'win32',
+        spawnFn: vi.fn(() => killer) as any,
+      }).then(() => { settled = true; });
+
+      killer.emit('exit', 0, null);
+      killer.emit('close', 0, null);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      alive = false;
+      await vi.advanceTimersByTimeAsync(25);
+      await completion;
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      processKill.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to the direct POSIX child when no matching process group exists', async () => {
+    const child = Object.assign(new EventEmitter(), { pid: 9753, kill: vi.fn() });
     const processKill = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
       if (pid < 0) throw Object.assign(new Error('no such process group'), { code: 'ESRCH' });
       return true;
     }) as typeof process.kill);
 
-    killProcessTree(child as any, 'SIGTERM', { platform: 'darwin' });
+    const completion = killProcessTree(child as any, 'SIGTERM', { platform: 'darwin' });
 
+    expect(completion).toBeInstanceOf(Promise);
     expect(processKill).toHaveBeenCalledWith(-9753, 'SIGTERM');
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    let settled = false;
+    void completion.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    child.emit('close', null, 'SIGTERM');
+    await expect(completion).resolves.toEqual({ status: 'terminated' });
     processKill.mockRestore();
   });
 });

@@ -38,6 +38,7 @@ import { userLocalRoot, userMarketplaceSkillDir, userSkillsDir } from '../../pat
 import { safeId, writeJson } from '../../storage';
 import { fileEditLock } from '../../util/locks';
 import { createLogger } from '../../logger';
+import { bundledPythonExecutable } from '../../util/bundled-runtime';
 
 const log = createLogger('skill-invocability');
 
@@ -148,8 +149,11 @@ async function parseCheck(scriptPath: string): Promise<InvocabilityCheck> {
   const ext = path.extname(scriptPath).slice(1).toLowerCase();
 
   // Mirrors run-skill.cjs's extension dispatch. Kept parse-only.
+  const python = process.env.COGSEED_PYTHON
+    || bundledPythonExecutable()
+    || (process.platform === 'win32' ? 'python' : 'python3');
   const plans: Record<string, { cmd: string; args: string[] }> = {
-    py: { cmd: process.env.COGSEED_PYTHON || 'python3', args: ['-m', 'py_compile', scriptPath] },
+    py: { cmd: python, args: ['-m', 'py_compile', scriptPath] },
     js: { cmd: process.execPath, args: ['--check', scriptPath] },
     cjs: { cmd: process.execPath, args: ['--check', scriptPath] },
     mjs: { cmd: process.execPath, args: ['--check', scriptPath] },

@@ -74,6 +74,7 @@
       if (wb) wb.hidden = false;
       if (notes) notes.hidden = true;
       if (disc) disc.hidden = true;
+      if (typeof renderKbWorkbench === 'function') renderKbWorkbench();
       return;
     }
     if (key === 'notes') {

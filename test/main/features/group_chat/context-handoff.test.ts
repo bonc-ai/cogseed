@@ -74,6 +74,9 @@ describe('group_chat › switched-agent context handoff', () => {
     expect(out).toContain('重点是兼容老系统');
     // …while the agent's own trigger message is not digested as "missed".
     expect(out).not.toContain('现在轮到你来实现');
+    // G-26: the digest opens with the participant roster of the digested
+    // window so the receiving agent knows who it shares the chat with.
+    expect(out).toContain('<participants>user, commander</participants>');
     // Watermark persisted so the same digest is not re-attached.
     expect(m.contextSummaryWatermarkExistsForTest(TEST_UID, TEST_CID, 'agent-x')).toBe(true);
   });

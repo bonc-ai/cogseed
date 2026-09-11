@@ -13,6 +13,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
+const { EventEmitter } = require('events');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-gw-test-'));
 const GATEWAY_PORT = 19001;
@@ -91,6 +93,53 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function sha256(content) { return crypto.createHash('sha256').update(content).digest('hex'); }
 
+async function verifyBoundedGatewayProcessCleanup(check) {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'gateway.cjs'), 'utf8');
+  const method = /function killProcessTree\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!method) throw new Error('killProcessTree not found');
+  const timeouts = [];
+  const intervals = [];
+  const fakeTimer = (bucket) => (callback, delay) => {
+    const timer = { callback, delay, active: true, unref() {} };
+    bucket.push(timer);
+    return timer;
+  };
+  const clearTimer = (timer) => { if (timer) timer.active = false; };
+  const processKillCalls = [];
+  const killProcessTree = vm.runInNewContext(`(${method})`, {
+    process: { platform: 'linux', kill: (...args) => { processKillCalls.push(args); return true; } },
+    setTimeout: fakeTimer(timeouts),
+    clearTimeout: clearTimer,
+    setInterval: fakeTimer(intervals),
+    clearInterval: clearTimer,
+  });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 8642,
+    exitCode: null,
+    signalCode: null,
+    kill() { return true; },
+    stdin: { destroyed: false, destroy() { this.destroyed = true; } },
+    stdout: { destroyed: false, destroy() { this.destroyed = true; } },
+    stderr: { destroyed: false, destroy() { this.destroyed = true; } },
+    unrefCalled: false,
+    unref() { this.unrefCalled = true; },
+  });
+  let outcome = null;
+  void killProcessTree(child, 'SIGTERM').then((value) => { outcome = value; });
+  const grace = timeouts.find((timer) => timer.active && timer.delay === 3000);
+  if (grace) grace.callback();
+  await Promise.resolve();
+  const deadline = timeouts.find((timer) => timer.active && timer !== grace && timer.delay === 3000);
+  if (deadline) deadline.callback();
+  await Promise.resolve();
+  check('进程树清理：SIGKILL 后最终 deadline 返回 termination-unverified',
+    processKillCalls.some(([pid, signal]) => pid === -8642 && signal === 'SIGKILL')
+      && outcome && outcome.status === 'termination-unverified');
+  check('进程树清理：无法验证退出时销毁句柄并 unref',
+    child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed && child.unrefCalled
+      && child.listenerCount('close') === 0 && intervals.every((timer) => !timer.active));
+}
+
 async function main() {
   await new Promise((resolve) => cogseedServer.listen(COGSEED_PORT, '127.0.0.1', resolve));
   const env = {
@@ -116,6 +165,8 @@ async function main() {
   const check = (name, cond) => { if (!cond) failures.push(name); else console.log('  ✓ ' + name); };
 
   console.log('p3394-gateway smoke:');
+
+  await verifyBoundedGatewayProcessCleanup(check);
 
   // health + manifest
   const health = await request(GATEWAY_PORT, 'GET', '/p3394/health');
@@ -269,7 +320,7 @@ async function main() {
     "});",
   ].join('\n'));
   const FLOOD_PORT = GATEWAY_PORT + 70;
-  const floodEnv = { ...process.env, P3394_GATEWAY_PORT: String(FLOOD_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'flood-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: floodAgent, P3394_HEARTBEAT_MS: '0' };
+  const floodEnv = { ...process.env, P3394_GATEWAY_PORT: String(FLOOD_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'flood-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_SSCLI_NATIVE: '1', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: floodAgent, P3394_HEARTBEAT_MS: '0' };
   const floodGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: floodEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   await sleep(900);
   const floodMsg = { message_id: 'fl1', session_id: 's-flood', task_id: 'fltk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'flood me' }] }, idempotency_key: 'idem-flood1' };
@@ -308,6 +359,65 @@ async function main() {
   check('openclaw 一次性回发：终态回复正常', received.some((e) => e.session_id === 's-oc' && (e.payload.parts[0].text || '').includes('OC-REPLY-ONE-SHOT')));
   ocGw.kill('SIGTERM');
 
+  // G-27 CLI 原生会话恢复（oneshot resume）：opencode 形态（--session 续聊 +
+  // 输出含 sessionID 可提取）。假 CLI 带 --session 时回 RESUMED(id) 前缀、
+  // 无 --session 回 FRESH 前缀；--session 值以 poison 开头时报 session not
+  // found 退出非零（验证被拒清绑定 + transcript 回放重试一次的降级链）。
+  const resumeAgent = path.join(tmp, 'fake-resume-agent.cjs');
+  fs.writeFileSync(resumeAgent, [
+    "'use strict';",
+    "const argv = process.argv.slice(2);",
+    "const sessIdx = argv.indexOf('--session');",
+    "const sessionId = sessIdx >= 0 ? argv[sessIdx + 1] : null;",
+    "const msg = argv[0] || '';",
+    "if (sessionId && sessionId.startsWith('poison')) {",
+    "  process.stderr.write('Error: session not found: ' + sessionId + '\\n');",
+    "  process.exit(1);",
+    "}",
+    "const prefix = sessionId ? 'RESUMED(' + sessionId + '): ' : 'FRESH: ';",
+    "process.stdout.write(JSON.stringify({ sessionID: 'oc-fixed-sess', text: prefix + msg }) + '\\n');",
+    "process.exit(0);",
+  ].join('\n'));
+  const RESUME_PORT = GATEWAY_PORT + 90;
+  const resumeHome = path.join(tmp, 'resume-home');
+  const resumeEnv = { ...process.env, P3394_GATEWAY_PORT: String(RESUME_PORT), P3394_GATEWAY_HOME: resumeHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: resumeAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const resumeGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: resumeEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  await sleep(900);
+  const cliSessionFileOf = (sid) => path.join(resumeHome, 'sessions', sid, 'cli-session.json');
+
+  // 第一轮（s-r1）：无绑定 → FRESH 前缀；输出含 sessionID → cli-session.json 落盘
+  const r1 = { message_id: 'rm1', session_id: 's-r1', task_id: 'rtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first turn' }] }, idempotency_key: 'idem-r1' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r1 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  check('resume：首轮无 resume 参数（FRESH 前缀）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('FRESH: first turn')));
+  const r1CliSession = fs.existsSync(cliSessionFileOf('s-r1')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r1'), 'utf8')) : null;
+  check('resume：会话号从输出提取并落盘 cli-session.json', !!(r1CliSession && r1CliSession.sessionId === 'oc-fixed-sess' && r1CliSession.cli === 'opencode'));
+
+  // 第二轮（s-r1 同会话）：带 --session 续聊；不回放 [会话历史]（纯增量）
+  const r2 = { message_id: 'rm2', session_id: 's-r1', task_id: 'rtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second turn' }] }, idempotency_key: 'idem-r2' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r2 }, GATEWAY_TOKEN);
+  await sleep(1000);
+  const r2Reply = received.find((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('second turn'));
+  check('resume：第二轮带 --session 续聊（RESUMED 前缀）', !!(r2Reply && (r2Reply.payload.parts[0].text || '').includes('RESUMED(oc-fixed-sess): second turn')));
+  check('resume：第二轮不回放 [会话历史]（纯增量，CLI 自管记忆）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[会话历史]') && !(r2Reply.payload.parts[0].text || '').includes('first turn')));
+  // G-39 协作提示词每会话只注一次：首轮回显 prompt 含 hint；resume 第二轮
+  // 纯增量（无历史回放），若重注会出现在回显里。
+  check('协作提示词：每会话首轮注入（第一轮回显含 hint）', received.some((e) => e.session_id === 's-r1' && (e.payload.parts[0].text || '').includes('[P3394 协作工具]')));
+  check('协作提示词：第二轮不重注（纯增量无 hint）', !!(r2Reply && !(r2Reply.payload.parts[0].text || '').includes('[P3394 协作工具]')));
+
+  // 被拒重试（s-r2）：预埋毒会话号 → CLI 报 session not found → 清绑定、
+  // transcript 回放重跑一次 → 最终成功且为 FRESH 形态
+  fs.mkdirSync(path.dirname(cliSessionFileOf('s-r2')), { recursive: true });
+  fs.writeFileSync(cliSessionFileOf('s-r2'), JSON.stringify({ cli: 'opencode', sessionId: 'poison-9', updatedAt: new Date().toISOString() }));
+  const r3 = { message_id: 'rm3', session_id: 's-r2', task_id: 'rtk3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'retry turn' }] }, idempotency_key: 'idem-r3' };
+  await request(RESUME_PORT, 'POST', '/p3394/envelope', { envelope: r3 }, GATEWAY_TOKEN);
+  await sleep(1500);
+  check('resume：被拒后清绑定带回放重试（最终 FRESH 成功）', received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('FRESH: retry turn')));
+  check('resume：被拒重试不外发错误信封', !received.some((e) => e.session_id === 's-r2' && (e.payload.parts[0].text || '').includes('p3394_gateway_error')));
+  const r3CliSession = fs.existsSync(cliSessionFileOf('s-r2')) ? JSON.parse(fs.readFileSync(cliSessionFileOf('s-r2'), 'utf8')) : null;
+  check('resume：被拒后毒绑定被新会话号覆盖', !!(r3CliSession && r3CliSession.sessionId === 'oc-fixed-sess'));
+  resumeGw.kill('SIGTERM');
+
   // cancel 控制帧：长任务被终止，只回取消回执
   const cancelEnv = { message_id: 'm7', session_id: 's7', task_id: 'tsk-cancel-1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'SLEEP-5000 long task' }] }, idempotency_key: 'idem7' };
   await request(GATEWAY_PORT, 'POST', '/p3394/envelope', { envelope: cancelEnv }, GATEWAY_TOKEN);
@@ -345,12 +455,10 @@ async function main() {
   }
   const pidCtl = { message_id: 'pc1', session_id: 's-pid', task_id: 'tsk-pid-1', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-pid-ctl' };
   await request(PID_GW_PORT, 'POST', '/p3394/envelope', { envelope: pidCtl }, GATEWAY_TOKEN);
-  // 取消后短时间内进程应已被回收：kill(pid, 0) 报 ESRCH（或进程已退出）。
-  let pidGone = false;
-  for (let i = 0; i < 20 && !pidGone; i += 1) {
-    await sleep(100);
-    try { process.kill(childPid, 0); } catch { pidGone = true; }
-  }
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let pidGone = true;
+  try { process.kill(childPid, 0); pidGone = false; } catch { /* ESRCH */ }
+  check('cancel 回执只在 CLI pid 已回收后发送', received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '') === '[已取消]'));
   check('cancel 真正终止子进程：取消后 CLI pid 已被回收', childPid > 0 && pidGone);
   // 8s 睡眠任务被取消后不应在窗口期回发终态回复。
   check('cancel 后 8s 长任务不再回发终态', !received.some((e) => e.session_id === 's-pid' && (e.payload.parts[0].text || '').includes('FAKE-REPLY: SLEEP-8000')));
@@ -413,7 +521,7 @@ async function main() {
   // ── SSCLI 模式：常驻 CLI + JSONL 协议 ──
   const sscliLog = path.join(tmp, 'sscli-ops.jsonl');
   const SSCLI_PORT = GATEWAY_PORT + 30;
-  const sscliEnv = { ...process.env, P3394_GATEWAY_PORT: String(SSCLI_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'sscli-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: path.join(__dirname, 'fake-sscli-agent.cjs'), SSCLI_LOG_FILE: sscliLog };
+  const sscliEnv = { ...process.env, P3394_GATEWAY_PORT: String(SSCLI_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'sscli-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'sscli', P3394_SSCLI_NATIVE: '1', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: path.join(__dirname, 'fake-sscli-agent.cjs'), SSCLI_LOG_FILE: sscliLog };
   const sscliGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: sscliEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   let sscliGwLog = '';
   sscliGw.stdout.on('data', (c) => { sscliGwLog += c; });
@@ -433,6 +541,323 @@ async function main() {
   check('SSCLI 协议：hello/open_session/deliver 已交换', sscliOps.some((o) => o.op === 'hello') && sscliOps.some((o) => o.op === 'open_session') && sscliOps.some((o) => o.op === 'deliver'));
   check('SSCLI 会话复用：open_session 只发一次', sscliOps.filter((o) => o.op === 'open_session').length === 1);
   sscliGw.kill('SIGTERM');
+
+  // ── sscli-shim 通用垫片：非原生协议 CLI（hermes 形态）登记进 sscli 后，
+  // 网关经 sscli-shim 常驻垫片驱动一次性 CLI——协议帧（delta/completed）、
+  // transcript 回放会话连续、垫片会话目录隔离。P3394 标准推广后撤垫片
+  // 换直连，本用例即"过渡桥"的回归钉子。 ──
+  const shimAgent = path.join(tmp, 'fake-shim-agent.cjs');
+  fs.writeFileSync(shimAgent, [
+    "'use strict';",
+    "const msg = process.argv[2] || '';",
+    "// 分块输出：验证 shim 把 stdout chunk 逐个转成协议 delta 帧；附带 cwd。",
+    "// stderr 模拟 CLI 过程日志：工具行 + 噪声行（延迟 200ms 发，避开网关",
+    "// 80ms progress 合并窗口，保证噪声行独立成帧可被断言）。",
+    "process.stderr.write('[tools] Reading file src/x.ts\\n');",
+    "setTimeout(() => process.stderr.write('node:internal deprecation warning noise\\n'), 200);",
+    "process.stdout.write('SHIM-');",
+    "setTimeout(() => { process.stdout.write('REPLY: ' + msg + ' CWD:' + process.cwd()); process.exit(0); }, 350);",
+  ].join('\n'));
+  const SHIM_PORT = GATEWAY_PORT + 95;
+  const shimHome = path.join(tmp, 'shim-home');
+  const shimRequestedCwd = path.join(tmp, 'shim-requested-cwd');
+  fs.mkdirSync(shimRequestedCwd, { recursive: true });
+  const shimEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_PORT), P3394_GATEWAY_HOME: shimHome, COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'hermes', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const shimGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let shimGwLog = '';
+  shimGw.stdout.on('data', (c) => { shimGwLog += c; });
+  shimGw.stderr.on('data', (c) => { shimGwLog += c; });
+  await sleep(900);
+  check('shim：非原生 CLI 登记后走 sscli 模式', shimGwLog.includes('runtime: sscli'));
+  const shimMsg1 = { message_id: 'shm1', session_id: 'shim-s1', task_id: 'shtk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'first shim turn' }] }, idempotency_key: 'shim-idem1', extensions: { working_dir: shimRequestedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg1 }, GATEWAY_TOKEN);
+  // 等终态回复（delta 事件帧会先到，不能作为"完成"信号）。
+  const shimDone1 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('first shim turn'));
+  for (let i = 0; i < 50 && !shimDone1(); i += 1) await sleep(100);
+  check('shim：终态回复（deliver → shim → CLI → completed）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('SHIM-REPLY: first shim turn')));
+  check('shim：open_session workspace 作为 CLI cwd 生效（指南 §9.2）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('CWD:' + fs.realpathSync(shimRequestedCwd))));
+  const shimDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  check('shim：stdout chunk 转协议 delta 帧实时回发', shimDeltas.length >= 2 && shimDeltas.some((e) => (e.payload.parts[0].text || '').includes('SHIM-')));
+  const shimProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress');
+  check('shim：stderr 工具日志转 progress 帧（过程栏可见）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('[tools] Reading file')));
+  check('shim：stderr 噪声行被过滤（告警/调试不进过程栏）', !shimProgress.some((e) => (e.payload.parts[0].text || '').includes('node:internal')));
+  check('shim：冷启动提示进 progress 帧（spawn 即告知）', shimProgress.some((e) => (e.payload.parts[0].text || '').includes('正在启动')));
+  const shimMsg2 = { message_id: 'shm2', session_id: 'shim-s1', task_id: 'shtk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'second shim turn' }] }, idempotency_key: 'shim-idem2' };
+  await request(SHIM_PORT, 'POST', '/p3394/envelope', { envelope: shimMsg2 }, GATEWAY_TOKEN);
+  const shimDone2 = () => received.some((e) => e.session_id === 'shim-s1' && e.kind !== 'event' && (e.payload.parts[0].text || '').includes('second shim turn'));
+  for (let i = 0; i < 50 && !shimDone2(); i += 1) await sleep(100);
+  check('shim：transcript 回放保证会话连续（第二轮 prompt 含第一轮）', received.some((e) => e.session_id === 'shim-s1' && (e.payload.parts[0].text || '').includes('first shim turn') && (e.payload.parts[0].text || '').includes('second shim turn')));
+  const shimTranscript = path.join(shimHome, 'shim-sessions', 'shim-s1', 'transcript.jsonl');
+  check('shim：会话状态落垫片独立目录', fs.existsSync(shimTranscript));
+  shimGw.kill('SIGTERM');
+
+  // ── G-38 信封型 CLI 走垫片（openclaw --json 形态）：stdout 整体是 JSON
+  // 信封，垫片须提取 payloads[].text 作正文（终态经 completed.text 回传），
+  // 且不得把 JSON 碎片流式灌进气泡（零 delta 帧）。G-34 切垫片时该能力
+  // 遗漏——整坨 JSON 当正文回发的回归钉子。 ──
+  const shimOcAgent = path.join(tmp, 'fake-shim-openclaw.cjs');
+  fs.writeFileSync(shimOcAgent, [
+    "'use strict';",
+    "const msg = process.argv[2] || '';",
+    "const payload = JSON.stringify({ payloads: [{ text: 'OC-SHIM-REPLY: ' + msg }], meta: { agentMeta: { model: 'fake-model', usage: { total: 1 } } } });",
+    "setTimeout(() => { process.stdout.write(payload); process.exit(0); }, 150);",
+  ].join('\n'));
+  const SHIM_OC_PORT = GATEWAY_PORT + 97;
+  const shimOcEnv = { ...process.env, P3394_GATEWAY_PORT: String(SHIM_OC_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'shim-oc-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'openclaw', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: 'node', P3394_AGENT_CLI_ARGS: shimOcAgent + ' {message}', P3394_HEARTBEAT_MS: '0' };
+  const shimOcGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: shimOcEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+  let shimOcGwLog = '';
+  shimOcGw.stdout.on('data', (c) => { shimOcGwLog += c; });
+  shimOcGw.stderr.on('data', (c) => { shimOcGwLog += c; });
+  await sleep(900);
+  check('shim openclaw：登记后走 sscli 模式', shimOcGwLog.includes('runtime: sscli'));
+  const shimOcMsg = { message_id: 'socm1', session_id: 'shim-oc-s1', task_id: 'soctk1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'openclaw' }], payload: { parts: [{ type: 'text', text: 'envelope turn' }] }, idempotency_key: 'shim-oc-idem1', extensions: { reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(SHIM_OC_PORT, 'POST', '/p3394/envelope', { envelope: shimOcMsg }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message'); i += 1) await sleep(100);
+  const shimOcFinal = received.filter((e) => e.session_id === 'shim-oc-s1' && e.kind === 'message').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('shim openclaw：JSON 信封提取为正文（completed.text 终态）', shimOcFinal.includes('OC-SHIM-REPLY: envelope turn'));
+  check('shim openclaw：信封不漏进气泡（无 payloads/meta 键）', !shimOcFinal.includes('"payloads"') && !shimOcFinal.includes('agentMeta'));
+  const shimOcDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta');
+  check('shim openclaw：信封型不流式（零 delta 帧）', shimOcDeltas.length === 0);
+  const shimOcProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'shim-oc-s1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('shim openclaw：冷启动提示仍生效', shimOcProgress.includes('正在启动'));
+  shimOcGw.kill('SIGTERM');
+
+  // ── opencode 常驻（server 模式）：fake opencode server 实现 /session、
+  // /session/:id/message（同步终态）与 /event（SSE）。验证：runtime 选择、
+  // 正文 delta 透传（reasoning 流不混入）、工具 progress 帧、server 进程
+  // 跨会话/跨轮复用。真 opencode 的端到端实测见账本 G-37。 ──
+  const fakeOcServer = path.join(tmp, 'fake-opencode-server.cjs');
+  fs.writeFileSync(fakeOcServer, [
+    '#!/usr/bin/env node',
+    "'use strict';",
+    "const http = require('http');",
+    "const fs = require('fs');",
+    "if (process.env.FAKE_OC_PID) fs.appendFileSync(process.env.FAKE_OC_PID, process.pid + '\\n');",
+    "const descendant = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    "if (process.env.FAKE_OC_DESCENDANT_PID) fs.appendFileSync(process.env.FAKE_OC_DESCENDANT_PID, descendant.pid + '\\n');",
+    "let sseClients = [];",
+    "let sessionSeq = 0;",
+    "const inflight = new Map();",
+    "const abortUnavailable = new Set();",
+    "const server = http.createServer((req, res) => {",
+    "  const send = (obj) => { for (const r of sseClients) r.write('data: ' + JSON.stringify(obj) + '\\n\\n'); };",
+    "  if (req.method === 'POST' && req.url === '/session') {",
+    "    sessionSeq += 1;",
+    "    res.writeHead(200, { 'content-type': 'application/json' });",
+    "    res.end(JSON.stringify({ id: 'ses_fake_' + sessionSeq, title: 'fake' }));",
+    "    return;",
+    "  }",
+    "  const mMsg = req.url.match(/^\\/session\\/([^/]+)\\/message$/);",
+    "  if (req.method === 'POST' && mMsg) {",
+    "    const sid = decodeURIComponent(mMsg[1]);",
+    "    let body = '';",
+    "    req.on('data', (c) => { body += c; });",
+    "    req.on('end', () => {",
+    "      const prompt = JSON.parse(body).parts[0].text;",
+    "      if (prompt.includes('CANCEL-OPENCODE')) {",
+    "        if (process.env.FAKE_OC_INFLIGHT) fs.writeFileSync(process.env.FAKE_OC_INFLIGHT, sid);",
+    "        inflight.set(sid, res);",
+    "        if (prompt.includes('ABORT-UNAVAILABLE')) abortUnavailable.add(sid);",
+    "        return;",
+    "      }",
+    //      reasoning part 先建映射，其 delta 必须被网关丢弃（不进正文气泡）
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_r', type: 'reasoning', text: 'thinking' } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_r', field: 'text', delta: 'REASONING-NOISE' } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_t', type: 'text', text: '' } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'echo FAKE-TOOL' } } } } });",
+    "      send({ type: 'message.part.updated', properties: { sessionID: sid, part: { id: 'prt_tool', type: 'tool', tool: 'bash', state: { status: 'completed' } } } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'OC-PERSIST-' } });",
+    "      send({ type: 'message.part.delta', properties: { sessionID: sid, partID: 'prt_t', field: 'text', delta: 'REPLY: ' + prompt.slice(0, 20) } });",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: ' + prompt.slice(0, 20) }] }));",
+    "    });",
+    "    return;",
+    "  }",
+    "  const mAbort = req.url.match(/^\\/session\\/([^/]+)\\/abort$/);",
+    "  if (req.method === 'POST' && mAbort) {",
+    "    const sid = decodeURIComponent(mAbort[1]);",
+    "    if (process.env.FAKE_OC_ABORT_LOG) fs.appendFileSync(process.env.FAKE_OC_ABORT_LOG, 'request ' + sid + '\\n');",
+    "    if (abortUnavailable.has(sid)) { res.writeHead(404); res.end('{}'); return; }",
+    "    const active = inflight.get(sid);",
+    "    if (active && !active.destroyed) {",
+    "      active.writeHead(200, { 'content-type': 'application/json' });",
+    "      active.end(JSON.stringify({ info: { sessionID: sid }, parts: [{ type: 'text', text: 'OC-PERSIST-REPLY: CANCEL-OPENCODE' }] }));",
+    "      inflight.delete(sid);",
+    "    }",
+    "    setTimeout(() => {",
+    "      if (process.env.FAKE_OC_ABORT_LOG) fs.appendFileSync(process.env.FAKE_OC_ABORT_LOG, 'ack ' + sid + '\\n');",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ ok: true }));",
+    "    }, 500);",
+    "    return;",
+    "  }",
+    "  if (req.method === 'GET' && req.url === '/event') {",
+    "    res.writeHead(200, { 'content-type': 'text/event-stream' });",
+    "    res.write('data: ' + JSON.stringify({ type: 'server.connected', properties: {} }) + '\\n\\n');",
+    "    sseClients.push(res);",
+    "    req.on('close', () => { sseClients = sseClients.filter((r) => r !== res); });",
+    "    return;",
+    "  }",
+    "  res.writeHead(404); res.end('{}');",
+    "});",
+    "server.listen(0, '127.0.0.1', () => {",
+    "  process.stdout.write('opencode server listening on http://127.0.0.1:' + server.address().port + '\\n');",
+    "});",
+  ].join('\n'));
+  fs.chmodSync(fakeOcServer, 0o755);
+  const OC_PERSIST_PORT = GATEWAY_PORT + 96;
+  const ocPidFile = path.join(tmp, 'oc-server-pids.txt');
+  const ocDescendantPidFile = path.join(tmp, 'oc-server-descendant-pids.txt');
+  const ocInflightFile = path.join(tmp, 'oc-server-inflight.txt');
+  const ocAbortLog = path.join(tmp, 'oc-server-abort.log');
+  // 同一 working_dir：验证 server 按 cwd 复用（无 working_dir 时 fallback 到
+  // 每会话独立目录，server 必然不共享——那不是复用语义的用例）。
+  const ocSharedCwd = path.join(tmp, 'oc-shared-cwd');
+  fs.mkdirSync(ocSharedCwd, { recursive: true });
+  const ocGwEnv = { ...process.env, P3394_GATEWAY_PORT: String(OC_PERSIST_PORT), P3394_GATEWAY_HOME: path.join(tmp, 'oc-gw-home'), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT: 'opencode', P3394_AGENT_MODE: 'sscli', P3394_AGENT_CLI: fakeOcServer, P3394_HEARTBEAT_MS: '0', FAKE_OC_PID: ocPidFile, FAKE_OC_DESCENDANT_PID: ocDescendantPidFile, FAKE_OC_INFLIGHT: ocInflightFile, FAKE_OC_ABORT_LOG: ocAbortLog };
+  const ocPersistGw = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: ocGwEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  let ocPersistGwLog = '';
+  ocPersistGw.stdout.on('data', (c) => { ocPersistGwLog += c; });
+  ocPersistGw.stderr.on('data', (c) => { ocPersistGwLog += c; });
+  await sleep(900);
+  check('opencode 常驻：默认启用（runtime: opencode-persistent）', ocPersistGwLog.includes('runtime: opencode-persistent'));
+  const ocEnv1 = { message_id: 'ocm1', session_id: 'oc-fs1', task_id: 'oct1', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'first oc turn' }] }, idempotency_key: 'oc-idem1', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv1 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message'); i += 1) await sleep(100);
+  check('opencode 常驻：终态回复（HTTP 同步响应 parts 提取）', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY: first oc turn')));
+  // 过程帧晚于终态到达（SSE 与同步 HTTP 分属两条连接 + 网关 80ms 合并
+  // flush），终态一到就断言会抢跑——留出宽限窗口再验帧。
+  await sleep(500);
+  const ocDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
+  check('opencode 常驻：SSE 正文 delta 实时透传', ocDeltas.includes('OC-PERSIST-'));
+  check('opencode 常驻：reasoning 流不混入正文（partID 映射过滤）', !ocDeltas.includes('REASONING-NOISE'));
+  const ocProgress = received.filter((e) => e.kind === 'event' && e.session_id === 'oc-fs1' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('opencode 常驻：工具调用实时进 progress 帧（带参数）', ocProgress.includes('🔧 bash echo FAKE-TOOL'));
+  check('opencode 常驻：工具完成提示进 progress 帧', ocProgress.includes('✅ bash 完成'));
+  // 第二轮（同会话）+ 新会话各一条：server 进程全周期只 spawn 一次（按 cwd 复用）。
+  // 隔开首轮的 SSE 宽限窗口再连发，避免同会话两轮 turn 在宽限期内叠加。
+  await sleep(300);
+  const ocEnv2 = { message_id: 'ocm2', session_id: 'oc-fs1', task_id: 'oct2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'second oc turn' }] }, idempotency_key: 'oc-idem2', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv2 }, GATEWAY_TOKEN);
+  const ocEnv3 = { message_id: 'ocm3', session_id: 'oc-fs2', task_id: 'oct3', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'other session' }] }, idempotency_key: 'oc-idem3', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocEnv3 }, GATEWAY_TOKEN);
+  for (let i = 0; i < 80 && received.filter((e) => (e.session_id === 'oc-fs1' || e.session_id === 'oc-fs2') && e.kind === 'message').length < 3; i += 1) await sleep(100);
+  check('opencode 常驻：第二轮回信正常', received.some((e) => e.session_id === 'oc-fs1' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('second oc turn')));
+  check('opencode 常驻：跨会话回信正常', received.some((e) => e.session_id === 'oc-fs2' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('other session')));
+  let ocPids = [];
+  try { ocPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean); } catch {}
+  check('opencode 常驻：server 进程按 cwd 复用（多会话多轮只 spawn 一次）', ocPids.length === 1);
+  const ocCancelEnv = { message_id: 'ocm-cancel', session_id: 'oc-fs-cancel', task_id: 'oct-cancel', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'CANCEL-OPENCODE' }] }, idempotency_key: 'oc-idem-cancel', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocCancelEnv }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !fs.existsSync(ocInflightFile); i += 1) await sleep(50);
+  check('opencode 常驻：取消前 HTTP turn 确实在途', fs.existsSync(ocInflightFile));
+  const ocCancelCtl = { message_id: 'ocm-cancel-ctl', session_id: 'oc-fs-cancel', task_id: 'oct-cancel', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'oc-idem-cancel-ctl' };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocCancelCtl }, GATEWAY_TOKEN);
+  await sleep(200);
+  check('opencode 常驻：abort 确认前不发送取消回执', !received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'));
+  for (let i = 0; i < 30 && !received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let ocAbortEntries = [];
+  try { ocAbortEntries = fs.readFileSync(ocAbortLog, 'utf8').split('\n').filter(Boolean); } catch {}
+  check('opencode 常驻：取消调用权威 /session/:id/abort 端点', ocAbortEntries.some((line) => line.startsWith('request ')));
+  check('opencode 常驻：仅在 abort 确认后发送取消回执', ocAbortEntries.some((line) => line.startsWith('ack ')) && received.some((e) => e.session_id === 'oc-fs-cancel' && (e.payload.parts[0].text || '') === '[已取消]'));
+  check('opencode 常驻：handleCancel 命中并中断在途 HTTP 请求', ocPersistGwLog.includes('cancel task oct-cancel (killed)'));
+  await sleep(300);
+  check('opencode 常驻：取消后不发送正常终态', !received.some((e) => e.session_id === 'oc-fs-cancel' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('OC-PERSIST-REPLY')));
+
+  fs.rmSync(ocInflightFile, { force: true });
+  const ocFallbackEnv = { message_id: 'ocm-cancel-fallback', session_id: 'oc-fs-cancel-fallback', task_id: 'oct-cancel-fallback', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'CANCEL-OPENCODE ABORT-UNAVAILABLE' }] }, idempotency_key: 'oc-idem-cancel-fallback', extensions: { working_dir: ocSharedCwd, reply_endpoint: 'http://127.0.0.1:' + COGSEED_PORT, reply_token: COGSEED_TOKEN } };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocFallbackEnv }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !fs.existsSync(ocInflightFile); i += 1) await sleep(50);
+  const ocFallbackCtl = { message_id: 'ocm-cancel-fallback-ctl', session_id: 'oc-fs-cancel-fallback', task_id: 'oct-cancel-fallback', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'opencode' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'oc-idem-cancel-fallback-ctl' };
+  await request(OC_PERSIST_PORT, 'POST', '/p3394/envelope', { envelope: ocFallbackCtl }, GATEWAY_TOKEN);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 'oc-fs-cancel-fallback' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
+  let ocRestartPids = [];
+  try { ocRestartPids = fs.readFileSync(ocPidFile, 'utf8').split('\n').filter(Boolean).map(Number); } catch {}
+  check('opencode 常驻：abort 不可用时重启托管 server 后才回执', ocRestartPids.length === 2 && received.some((e) => e.session_id === 'oc-fs-cancel-fallback' && (e.payload.parts[0].text || '') === '[已取消]'));
+  let ocOldServerGone = ocRestartPids.length > 0;
+  if (ocRestartPids.length > 0) { try { process.kill(ocRestartPids[0], 0); ocOldServerGone = false; } catch {} }
+  check('opencode 常驻：abort 不可用时旧 server 已终止', ocOldServerGone);
+  ocPersistGw.send({ type: 'p3394-shutdown' });
+  let ocShutdownClosed = false;
+  await Promise.race([
+    new Promise((resolve) => ocPersistGw.once('close', () => { ocShutdownClosed = true; resolve(); })),
+    sleep(3000),
+  ]);
+  check('opencode 常驻：IPC graceful shutdown 关闭 gateway', ocShutdownClosed);
+  check('opencode 常驻：测试确实进入 gateway shutdown handler', ocPersistGwLog.includes('[p3394-gateway] shutting down (IPC)'));
+  if (!ocShutdownClosed) {
+    ocPersistGw.kill('SIGTERM');
+    await new Promise((resolve) => ocPersistGw.once('close', resolve));
+  }
+  if (process.platform === 'win32') {
+    // The abort-unavailable fallback restarts the managed server, so the PID
+    // files now hold both generations: 2 servers + 2 descendants. Windows can
+    // also take a moment to reap a taskkill tree after the gateway closes, so
+    // allow a bounded settle window before treating a surviving PID as a leak.
+    const ocTreePids = [ocPidFile, ocDescendantPidFile]
+      .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
+    const alive = new Set(ocTreePids);
+    const settleDeadline = Date.now() + 5_000;
+    while (alive.size > 0 && Date.now() < settleDeadline) {
+      for (const pid of alive) {
+        try { process.kill(pid, 0); } catch { alive.delete(pid); }
+      }
+      if (alive.size > 0) await sleep(100);
+    }
+    check('opencode 常驻：gateway close 后 server 进程树在宽限期内全部退出', ocTreePids.length === 4 && alive.size === 0);
+  }
+
+  // shutdown deadline 必须在 runtime.close() 之前生效；第二次 shutdown
+  // 请求必须立即退出。预加载器让 oneshot child 永不 close，稳定模拟挂死的
+  // runtime.close()，且不依赖 POSIX 信号语义。
+  const shutdownHangPreload = path.join(tmp, 'fake-hanging-spawn.cjs');
+  fs.writeFileSync(shutdownHangPreload, [
+    "'use strict';",
+    "const { EventEmitter } = require('events');",
+    "require('child_process').spawn = function () {",
+    "  const child = new EventEmitter();",
+    "  child.pid = 987654; child.exitCode = null; child.signalCode = null;",
+    "  child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();",
+    "  child.kill = () => true; child.unref = () => {};",
+    "  return child;",
+    "};",
+    "process.kill = () => true;",
+  ].join('\n'));
+  const startHangingGateway = async (port, suffix) => {
+    const hangEnv = { ...process.env, NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require=' + shutdownHangPreload].filter(Boolean).join(' '), P3394_GATEWAY_PORT: String(port), P3394_GATEWAY_HOME: path.join(tmp, 'shutdown-' + suffix), COGSEED_ENDPOINT: 'http://127.0.0.1:' + COGSEED_PORT, P3394_AGENT_MODE: 'oneshot', P3394_AGENT_CLI: 'fake-hang', P3394_HEARTBEAT_MS: '0' };
+    const child = spawn('node', [path.join(__dirname, '..', 'gateway.cjs')], { env: hangEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    let log = '';
+    child.stdout.on('data', (c) => { log += c; });
+    child.stderr.on('data', (c) => { log += c; });
+    for (let i = 0; i < 30 && !log.includes('P3394 endpoint'); i += 1) await sleep(50);
+    const envelope = { message_id: 'shutdown-' + suffix, session_id: 'shutdown-' + suffix, task_id: 'shutdown-' + suffix, kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'hermes' }], payload: { parts: [{ type: 'text', text: 'hang' }] }, idempotency_key: 'shutdown-' + suffix };
+    await request(port, 'POST', '/p3394/envelope', { envelope });
+    await sleep(100);
+    return { child, getLog: () => log };
+  };
+  const waitForChildClose = (child, timeoutMs) => new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) { resolve(true); return; }
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once('close', () => { clearTimeout(timer); resolve(true); });
+  });
+
+  const deadlineGw = await startHangingGateway(GATEWAY_PORT + 98, 'deadline');
+  deadlineGw.child.send({ type: 'p3394-shutdown' });
+  const deadlineClosed = await waitForChildClose(deadlineGw.child, 4000);
+  check('shutdown：runtime.close 挂死时仍受预先启动的 3s deadline 约束', deadlineClosed);
+  if (!deadlineClosed) { deadlineGw.child.kill('SIGKILL'); await waitForChildClose(deadlineGw.child, 1000); }
+
+  const secondSignalGw = await startHangingGateway(GATEWAY_PORT + 99, 'second-signal');
+  const signalHangingGateway = () => {
+    if (process.platform === 'win32') secondSignalGw.child.send({ type: 'p3394-shutdown' });
+    else secondSignalGw.child.kill('SIGTERM');
+  };
+  signalHangingGateway();
+  for (let i = 0; i < 20 && !secondSignalGw.getLog().includes('shutting down'); i += 1) await sleep(25);
+  signalHangingGateway();
+  const secondSignalClosed = await waitForChildClose(secondSignalGw.child, 750);
+  check('shutdown：第二次信号在清理挂起时强制立即退出', secondSignalClosed);
+  if (!secondSignalClosed) { secondSignalGw.child.kill('SIGKILL'); await waitForChildClose(secondSignalGw.child, 1000); }
 
   // ── Stream-json 包装器（sscli 主导）：模拟 claude -p --output-format
   // stream-json 事件流 → 逐 token delta 实时回发 + 终态回复不重复。 ──
@@ -510,7 +935,16 @@ async function main() {
     "  round += 1;",
     "  const text = String(msg.message && msg.message.content && msg.message.content[0] && msg.message.content[0].text || '');",
     "  process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:'PERSISTENT-' + round + ':'}}}) + '\\n');",
+    "  if (round === 1) {",
+    "    // 工具调用事件流：block_start 报名 → input_json_delta 流式参数 →",
+    "    // block_stop 收尾 → user 帧 tool_result。网关解析为 process rail 帧。",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_start',index:0,content_block:{type:'tool_use',id:'tu1',name:'Bash',input:{}}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'input_json_delta',partial_json:'{\"command\":\"npm test\"}'}}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_stop',index:0}}) + '\\n');",
+    "    process.stdout.write(JSON.stringify({type:'user',message:{content:[{type:'tool_result',tool_use_id:'tu1',content:'ok'}]}}) + '\\n');",
+    "  }",
     "  if (text.startsWith('long task')) return; // 挂起，等 cancel 终止整个进程树",
+    "  if (round === 3) return; // 第三轮挂起（模拟长任务），等 cancel 终止进程",
     "  setTimeout(() => {",
     "    process.stdout.write(JSON.stringify({type:'stream_event',event:{type:'content_block_delta',index:0,delta:{type:'text_delta',text:text.slice(0, 40)}}}) + '\\n');",
     "    process.stdout.write(JSON.stringify({type:'assistant',message:{content:[{type:'text',text:'PERSISTENT-' + round + ':' + text.slice(0, 40)}]}}) + '\\n');",
@@ -538,6 +972,10 @@ async function main() {
   const psDeltas = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'delta').map((e) => (e.payload.parts[0].text || '')).join('');
   check('claude 常驻：第一轮 delta 实时回发', psDeltas.includes('PERSISTENT-1'));
   check('claude 常驻：第一轮终态 = 累积文本', received.some((e) => e.session_id === 's-persistent' && e.kind === 'message' && (e.payload.parts[0].text || '').includes('PERSISTENT-1:first round')));
+  const psProgress = received.filter((e) => e.kind === 'event' && e.session_id === 's-persistent' && e.payload && e.payload.metadata && e.payload.metadata.stream_event === 'progress').map((e) => (e.payload.parts[0].text || '')).join('\n');
+  check('claude 常驻：tool_use 工具名进 progress 帧', psProgress.includes('🔧 Bash'));
+  check('claude 常驻：工具参数摘要进 progress 帧', psProgress.includes('npm test'));
+  check('claude 常驻：tool_result 完成提示进 progress 帧', psProgress.includes('工具执行完成'));
   // 第二轮：进程必须复用（pid 只记一次、argv 只记一次），且不带 [会话历史]
   // 前缀（进程内上下文自动延续）。
   const psMsg2 = { message_id: 'ps2', session_id: 's-persistent', task_id: 'pstk2', kind: 'task', performative: 'request', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'follow up' }] }, idempotency_key: 'idem-ps2' };
@@ -573,7 +1011,7 @@ async function main() {
   await sleep(400);
   const psCtl = { message_id: 'ps4', session_id: 's-persistent', task_id: 'pstk3', kind: 'control', performative: 'cancel', sender: { agent_id: 'cogseed' }, recipients: [{ agent_id: 'claude' }], payload: { parts: [{ type: 'text', text: 'cancel' }] }, idempotency_key: 'idem-ps-ctl' };
   await request(PERSISTENT_PORT, 'POST', '/p3394/envelope', { envelope: psCtl }, GATEWAY_TOKEN);
-  await sleep(400);
+  for (let i = 0; i < 50 && !received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'); i += 1) await sleep(100);
   check('claude 常驻：取消回执', received.some((e) => e.session_id === 's-persistent' && (e.payload.parts[0].text || '') === '[已取消]'));
   let psPidGone = true;
   const lastPid = Number(psPids[psPids.length - 1] || 0);
@@ -595,7 +1033,7 @@ async function main() {
   // fully exited; retry instead of failing a green protocol run on cleanup.
   await sleep(500);
   try {
-    const cleanupPids = [persistentPidFile, persistentDescendantPidFile]
+    const cleanupPids = [ocPidFile, persistentPidFile, persistentDescendantPidFile]
       .flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(Number));
     for (const pid of cleanupPids) { try { process.kill(pid, 'SIGKILL'); } catch {} }
     await sleep(200);

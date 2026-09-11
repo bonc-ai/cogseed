@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 const USER = 'cogseed-boot-recovery-user';
 let tmpDir: string;
@@ -17,10 +18,14 @@ beforeEach(() => {
   vi.resetModules();
 });
 
-afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await drainMainRuntimeForTest(USER);
+  } finally {
+    if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 describe('CogSeed cold-start recovery', () => {
