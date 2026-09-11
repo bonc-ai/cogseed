@@ -197,12 +197,24 @@ async function launchSmoke(executable) {
     },
   });
   let stderr = '';
+  let stdout = '';
   child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-12_000); });
+  child.stdout.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-12_000); });
   try {
     const marker = await waitForMarker(markerPath, child, configuredSmokeTimeoutMs());
     const errors = verifySttSmokeMarker(marker);
     if (errors.length) throw new Error(`${errors.join('; ')}${stderr ? `\n${stderr}` : ''}`);
     return marker;
+  } catch (error) {
+    // Preserve the packaged app's own diagnostics when the smoke times out or
+    // the marker is invalid; otherwise CI only sees "timed out" with no cause.
+    const message = error instanceof Error ? error.message : String(error);
+    const details = [
+      message,
+      stdout.trim() ? `--- app stdout (tail) ---\n${stdout.trim()}` : '',
+      stderr.trim() ? `--- app stderr (tail) ---\n${stderr.trim()}` : '',
+    ].filter(Boolean).join('\n');
+    throw new Error(details);
   } finally {
     await terminateChild(child);
     fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
