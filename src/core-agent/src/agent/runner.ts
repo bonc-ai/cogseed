@@ -866,6 +866,10 @@ export class AgentRunner {
     let toolLoops = 0;
     let compactionCount = 0;
     let lastUsage: import("../shared/types.js").Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0 };
+    // 最后一次模型调用的 usage（覆盖式，非累加）——"当前上下文占用"的唯一
+    // 正确口径。lastUsage 是整轮累加（每步重发的历史被求和一次），只适合
+    // 消耗/计费口径；窗口占用必须读这个（2026-09-11 统计口径修复）。
+    let lastCallUsage: import("../shared/types.js").Usage | undefined;
     const toolNamesSet = new Set<string>();
     const skillsLoadedSet = new Set<string>();
     let transientToolErrors = 0;
@@ -1081,6 +1085,7 @@ export class AgentRunner {
         // under-reported cache activity (cost/hit-rate blind spot). mergeUsage
         // sums input/output/cacheRead/cacheWrite/total consistently.
         lastUsage = mergeUsage(lastUsage, result.usage);
+        lastCallUsage = result.usage;
 
         if (result.stopReason === "max_tokens") {
           const maxOutputTokens = this.config.models.catalog[streamModel]?.maxOutputTokens
@@ -1148,6 +1153,7 @@ export class AgentRunner {
               provider: provider.id,
               stopReason: result.stopReason,
               usage: lastUsage,
+              ...(lastCallUsage ? { lastCallUsage } : {}),
               toolLoops,
               compactionCount,
               timings: finalizedRunTimings(startTime, timings),
@@ -1222,6 +1228,7 @@ export class AgentRunner {
               provider: provider.id,
               stopReason: summary.stopReason,
               usage: lastUsage,
+              ...(lastCallUsage ? { lastCallUsage } : {}),
               toolLoops,
               compactionCount,
               timings: finalizedRunTimings(startTime, timings),
@@ -1302,6 +1309,7 @@ export class AgentRunner {
               provider: provider.id,
               stopReason: result.stopReason,
               usage: lastUsage,
+              ...(lastCallUsage ? { lastCallUsage } : {}),
               toolLoops,
               compactionCount,
               timings: finalizedRunTimings(startTime, timings),
@@ -1620,6 +1628,7 @@ export class AgentRunner {
               provider: provider.id,
               stopReason: "end_turn",
               usage: lastUsage,
+              ...(lastCallUsage ? { lastCallUsage } : {}),
               toolLoops,
               compactionCount,
               timings: finalizedRunTimings(startTime, timings),
@@ -1790,7 +1799,7 @@ export class AgentRunner {
             kind: "timeout",
             message: "Run aborted",
             code: "ABORT_ERR",
-          }, lastUsage, toolLoops, compactionCount, true, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+          }, lastUsage, lastCallUsage, toolLoops, compactionCount, true, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
           yield { type: "done", result: e };
           return;
         }
@@ -1800,7 +1809,7 @@ export class AgentRunner {
             kind: "auth",
             message: err.message,
             code: errorCodeForMeta(err) || "AUTH_ERROR",
-          }, lastUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+          }, lastUsage, lastCallUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
           yield { type: "done", result: e };
           return;
         }
@@ -1824,7 +1833,7 @@ export class AgentRunner {
               kind: "context_overflow",
               message: err.message,
               code: errorCodeForMeta(err) || "CONTEXT_OVERFLOW",
-            }, lastUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+            }, lastUsage, lastCallUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
             yield { type: "done", result: e };
             return;
           }
@@ -1895,7 +1904,7 @@ export class AgentRunner {
               kind: "context_overflow",
               message: err.message,
               code: errorCodeForMeta(err) || "CONTEXT_OVERFLOW",
-            }, lastUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+            }, lastUsage, lastCallUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
             yield { type: "done", result: e };
             return;
           }
@@ -1917,7 +1926,7 @@ export class AgentRunner {
           kind: retryKind === "rate_limit" ? "rate_limit" : (retryKind === "timeout" ? "timeout" : "provider_error"),
           message: formatError(err),
           code: errorCodeForMeta(err),
-        }, lastUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+        }, lastUsage, lastCallUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
         yield { type: "done", result: e };
         return;
       }
@@ -1926,7 +1935,7 @@ export class AgentRunner {
     const exhausted = this.errorResult(startTime, modelId, provider.id, {
       kind: "provider_error",
       message: "Max retries exceeded",
-    }, lastUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
+    }, lastUsage, lastCallUsage, toolLoops, compactionCount, false, [...toolNamesSet], [...skillsLoadedSet], transientToolErrors, permanentToolErrors, finalizedRunTimings(startTime, timings));
     yield { type: "done", result: exhausted };
   }
 
@@ -2563,6 +2572,7 @@ export class AgentRunner {
     provider: string,
     error: AgentRunMeta["error"],
     usage?: Partial<AgentRunMeta["usage"]>,
+    lastCallUsage?: AgentRunMeta["lastCallUsage"],
     toolLoops = 0,
     compactionCount = 0,
     aborted = false,
@@ -2587,6 +2597,7 @@ export class AgentRunner {
           cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
           totalTokens: usage?.totalTokens ?? 0,
         },
+        ...(lastCallUsage ? { lastCallUsage } : {}),
         toolLoops,
         compactionCount,
         timings,

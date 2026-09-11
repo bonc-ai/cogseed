@@ -142,7 +142,11 @@ function _csFirstArg(args, keys) {
 }
 
 function _csFmtDur(ms) {
-  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  // 亚秒级显示毫秒（2026-09-11：本地 CLI 工具普遍几十毫秒完成，整秒
+  // 取整把真实耗时吞成"0 秒"，看起来像计时坏了——真机两轮误报）。
+  const v = Math.max(0, Number(ms) || 0);
+  if (v < 1000) return `${Math.round(v)}ms`;
+  const total = Math.floor(v / 1000);
   if (total < 60) return `${total} 秒`;
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
@@ -544,19 +548,13 @@ function _csRenderToolRow(row, payload, status) {
   const failed = status === 'failed';
   const target = _csTargetHtml(style.targetKind, args, argsSummary);
   const hover = [p.toolName, argsSummary].filter(Boolean).join(' ');
-  // 工具耗时：主进程权威 timing（存储补差后实时/历史同源）；历史重放是瞬时
-  // 到达，墙钟差恒为 0——没有 payload.timing 就不显示（不编造）。
-  let dur = '';
-  if (p.timing && typeof p.timing.startedAtMs === 'number'
-    && typeof p.timing.completedAtMs === 'number') {
-    dur = `<span class="cs-dur">${_csFmtDur(Math.max(0, p.timing.completedAtMs - p.timing.startedAtMs))}</span>`;
-  }
+  // 工具耗时不再显示（2026-09-11 需求变更）：本地 CLI 工具普遍毫秒级完成，
+  // 数字信息量低还占行宽；timing 数据仍随条目保留，需要时悬停/调试可查。
   // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
   const line = [
     `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
     `<span class="cs-verb${failed ? ' failed' : ''}${style.raw ? ' raw' : ''}">${_csEscapeHtml(style.verb)}</span>`,
     target,
-    dur,
   ];
   const blocks = [];
   if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);
@@ -653,12 +651,14 @@ function _csThinkDurText(row) {
 // 「上一锚点→下一锚点」窗口写回 csT0/csDur——见该处的推导注释。
 
 function _csRenderThinkRow(row) {
-  const running = row.dataset.csClosed !== '1';
+  // 单行预览常显（2026-09-11 方案 C）：不管运行中还是已收行，都显示思考
+  // 内容的一行预览（最后一个非空行，尾部截断）——收行后内容不再消失。
   let live = '';
-  if (running && row.dataset.csFull) {
+  if (row.dataset.csFull) {
     const tl = String(row.dataset.csFull).split('\n').filter(Boolean).pop() || '';
     if (tl) live = `<span class="cs-think-live">${_csEscapeHtml(tl.slice(-90))}</span>`;
   }
+  // 点击行展开全文：纯文本块，无边框/底色/圆角（不算卡片）。
   const full = row.dataset.csFull
     ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
   row.innerHTML = `
@@ -705,6 +705,7 @@ function _csAppendReasoning(body, text) {
     row = document.createElement('div');
     row.className = 'cs-row cs-row-think';
     row.dataset.csT0 = String(Date.now());
+    // 点击行展开/收起全文（方案 C：纯文本块，无卡片样式）。
     row.addEventListener('click', () => row.classList.toggle('cs-open'));
     body.appendChild(row);
   }
@@ -946,11 +947,11 @@ window.chatStreamHandleEvent = function chatStreamHandleEvent(cid, anchor, chatE
         const rDelta = String((payload && payload.delta) || '');
         const rFull = String((payload && payload.text) || '');
         if (status === 'inProgress') {
-          // 思考实时流式（交互设计 2026-09-09 需求）：增量逐段落入思考行，
-          // 行自动展开——进行中就能看到推理进度，不等完成态折叠块。
+          // 思考实时流式：增量逐段落入思考行。默认折叠（2026-09-11 需求
+          // 变更：交互过程不再自动展开全文）——行内 cs-think-live 保留单行
+          // 实时预览，用户点击行才展开 cs-think-full 全文。
           if (rDelta) {
-            const row = _csAppendReasoning(body, rDelta);
-            row.classList.add('cs-open');
+            _csAppendReasoning(body, rDelta);
           }
           return;
         }

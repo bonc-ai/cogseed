@@ -1497,6 +1497,26 @@ class CodexAppServerRuntime {
     await this.start();
     let threadId = this.threads.get(sessionId);
     if (!threadId) {
+      // G-27 持久化补齐（2026-09-11）：thread 映射此前只在内存——网关重启后
+      // 同一 P3394 会话静默 thread/start 换新原生会话，用户侧表现为"切走再
+      // 切回，智能体新建会话并重发内容"（实测同会话双 rollout）。对齐 sscli
+      // 路径的 cli-session.json：重启后先读盘 thread/resume 恢复原 thread；
+      // resume 被拒（rollout 已删/被孤儿 app-server 占用 writer）才清绑定按
+      // 全新会话处理，下一轮写回新 id。
+      const persisted = readCliSession(sessionId);
+      if (persisted && persisted.sessionId) {
+        try {
+          await this._request('thread/resume', { threadId: persisted.sessionId });
+          threadId = persisted.sessionId;
+          this.threads.set(sessionId, threadId);
+        } catch (resumeError) {
+          console.warn('[p3394-gateway] codex thread/resume rejected, starting fresh: '
+            + (resumeError && resumeError.message ? resumeError.message : String(resumeError)));
+          clearCliSession(sessionId);
+        }
+      }
+    }
+    if (!threadId) {
       // CogSeed 扩展（统一执行入口）：单轮模型 → thread/start 的 model 参数
       // （与 CogSeed 直连 backend 同一传法）；单轮强度 → config 的
       // model_reasoning_effort（CogSeed 统一档位 low/high 与 codex 值集 1:1）。
@@ -1529,6 +1549,7 @@ class CodexAppServerRuntime {
       threadId = result && result.thread && result.thread.id;
       if (!threadId) throw new Error('p3394_codex_thread_start_failed');
       this.threads.set(sessionId, threadId);
+      writeCliSession(sessionId, threadId);
     }
     // 可取消键与其余 runtime 一致：task_id 优先（cancel 控制帧按 task_id
     // 匹配），无 task_id 回退 message_id。

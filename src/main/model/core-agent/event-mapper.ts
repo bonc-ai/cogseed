@@ -607,7 +607,18 @@ export async function* mapCoreAgentEvents(
         if (result.meta.usage) {
           yield {
             type: 'event',
-            event: { stream: 'usage', data: result.meta.usage as unknown as Record<string, unknown> },
+            event: {
+              stream: 'usage',
+              // lastCallUsage（2026-09-11）：最后一次调用的 prompt 侧用量——
+              // "当前上下文占用"的权威口径。上方的累加 usage（每步重发历史
+              // 求和）只服务消耗/计费口径。
+              data: {
+                ...(result.meta.usage as unknown as Record<string, unknown>),
+                ...(result.meta.lastCallUsage
+                  ? { lastCallUsage: result.meta.lastCallUsage as unknown as Record<string, unknown> }
+                  : {}),
+              },
+            },
           };
         }
         if (result.meta.error) {
