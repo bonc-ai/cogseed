@@ -4899,13 +4899,15 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard .db-alert[data-level="error"] .db-alert-icon::before { content: "!"; }
 
 /* Table — compact, numeric columns right-aligned.
-   2026-09-11 需求变更：去掉卡片封装（border/radius/background）后表格
-   铺满容器左右边界（width:100%，列按内容比例均匀铺开）——占满即居中；
-   窄屏由 wrap 的横向滚动兜底。 */
+   2026-09-11 需求变更：去掉卡片封装（border/radius/background）。布局=限宽
+   居中铺满（方案 B，子安 2026-09-11 选定）：容器 ≤900px 时表格铺满左右
+   边界；容器更宽时以 900px 为上限居中（两侧对称留白），内部列仍铺满——
+   避免超宽窗口下一行文字横跨全屏、阅读视线来回跳。窄屏由 wrap 的横向
+   滚动兜底。上限调整只改这里一处。 */
 .dashboard .db-table-wrap {
   overflow-x: auto;
 }
-.dashboard .db-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.dashboard .db-table { width: 100%; max-width: 900px; margin: 0 auto; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .dashboard .db-table th,
 .dashboard .db-table td { padding: 7px 10px; border-bottom: 1px solid rgba(20, 71, 55, 0.08); text-align: left; }
 .dashboard .db-table tr:last-child td { border-bottom: none; }
