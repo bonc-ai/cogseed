@@ -4625,8 +4625,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .markdown-body em { font-style: italic; }
 .markdown-body a { color: var(--primary); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
-.markdown-body table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 12.5px; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+/* 表格布局统一（2026-09-11，方案 B 全表类型覆盖）：markdown 原生表格与
+   dashboard 组件表格共用同一布局口径——铺满到 900px 上限，容器更宽时居中
+   （两侧留白对称），窄容器铺满；行/列在任何宽度下均匀铺开。
+   注意：气泡层的 .chat-bubble .markdown-body table 规则（特异性更高）不得
+   再声明 max-width——否则会静默压过这里（真机踩坑两次）。 */
+.markdown-body table { border-collapse: collapse; width: 100%; max-width: 900px; margin: 0.7em auto; font-size: 12.5px; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: anywhere; }
 .markdown-body th { background: var(--bg); font-weight: 600; }
 
 /* ─── Chart bar ─── */
@@ -4898,17 +4903,20 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard .db-alert[data-level="error"] .db-alert-icon { background: var(--db-bad); }
 .dashboard .db-alert[data-level="error"] .db-alert-icon::before { content: "!"; }
 
-/* Table — compact, numeric columns right-aligned. */
+/* Table — compact, numeric columns right-aligned.
+   2026-09-11 需求变更：去掉卡片封装（border/radius/background）。布局=限宽
+   居中铺满（方案 B，子安 2026-09-11 选定）：容器 ≤900px 时表格铺满左右
+   边界；容器更宽时以 900px 为上限居中（两侧对称留白），内部列仍铺满——
+   避免超宽窗口下一行文字横跨全屏、阅读视线来回跳。窄屏由 wrap 的横向
+   滚动兜底。上限调整只改这里一处。 */
 .dashboard .db-table-wrap {
   overflow-x: auto;
-  border: 1px solid var(--db-border);
-  border-radius: var(--db-radius);
-  background: var(--db-surface);
 }
-.dashboard .db-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.dashboard .db-table { width: 100%; max-width: 900px; margin: 0 auto; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .dashboard .db-table th,
 .dashboard .db-table td { padding: 7px 10px; border-bottom: 1px solid rgba(20, 71, 55, 0.08); text-align: left; }
-.dashboard .db-table tr:last-child td { border-bottom: none; }
+/* 末行保留底线（2026-09-11）：卡片封装移除后，原来的 none 会让表格底部
+   缺一条线、视觉未闭合。 */
 .dashboard .db-table th { background: var(--db-surface-soft); font-weight: 600; color: var(--text); }
 .dashboard .db-table tbody tr:nth-child(even) td { background: rgba(248, 250, 252, 0.55); }
 .dashboard .db-table th[data-numeric="1"],
@@ -10335,26 +10343,45 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.is-message-editing {
-  /* 编辑态居中对齐 AI 内容列（交互设计 2026-09-08 布局统一）：用户消息编辑时
-     原右对齐换居中，宽度与 AI 区块一致。 */
+  /* 2026-09-11 需求变更：编辑卡片右对齐。09-08 原设计为居中对齐 AI 内容
+     列，但用户消息自身的 margin-right:10%（右缘对齐 AI 块）仍然生效，
+     center + margin 叠加把卡片压到中部偏左、右侧留大片空白。
+     改 flex-end 后右缘回到与普通用户消息一致的列位（AI 块右缘）。
+     仅作用于编辑态——is-message-editing 随编辑开始/取消对称增删。 */
   width: min(80%, 760px);
   max-width: min(80%, 760px);
-  align-self: center;
+  align-self: flex-end;
   align-items: stretch;
 }
+/* 编辑卡片外框（2026-09-11 设计稿）：中性浅灰、淡边淡影，非编辑态消息不受影响。
+   作用面（特异性实测）：主会话面板里 `#panel-conversation .chat-message.user >
+   .chat-bubble`（含 id）对颜色/边框/圆角/阴影一律胜出——本规则在那里只吃下
+   padding，外观由面板自己的「quiet Work Buddy」气泡规则给出（同为中性浅灰
+   无阴影，与设计稿一致，故无需 !important 硬拼）；嵌入式聊天面（无该 id 规则）
+   才由本规则的 background/border/box-shadow 生效。
+   圆角不在此声明：各面沿用自己气泡的圆角（主面板 20px；嵌入式保留用户气泡的
+   右下切角），避免为局部卡片改写全局气泡观感。 */
+.chat-message.user.is-message-editing .chat-bubble {
+  background: #f5f6f7;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  padding: 14px;
+}
 .chat-message-edit-composer {
-  width: min(620px, 100%);
+  /* 铺满卡片内容宽（2026-09-11 修正）：原 min(620px,100%) 上限让输入框
+     和按钮行在卡片右侧留出一条空白（反馈两轮的"右侧空白"即此）。 */
+  width: 100%;
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 .chat-message-edit-input {
   box-sizing: border-box;
   width: 100%;
-  min-height: 86px;
+  min-height: 108px;
   max-height: 260px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-strong, #cbd5e1);
-  border-radius: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 12px;
   background: var(--surface, var(--color-surface));
   color: var(--text, #1f2937);
   font: inherit;
@@ -10362,6 +10389,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   letter-spacing: 0;
   resize: none;
   overflow-y: auto;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 .chat-message-edit-input:focus {
   outline: 0;
@@ -10371,7 +10399,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .chat-message-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+}
+.chat-message.is-message-editing .chat-message-edit-actions .btn {
+  /* 设计稿按钮：取消白底灰边、主按钮品牌绿，尺寸放大到 8px 18px 内边距。
+     圆角不在此声明——沿用 .btn 自身的 8px（设计令牌 --radius-2 口径），
+     与全局按钮观感一致，也避免再引入一个超刻度圆角字面量。 */
+  padding: 8px 18px;
 }
 
 @media (max-width: 720px) {
@@ -10707,6 +10741,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .chat-session-stats[hidden] { display: none; }
 .chat-session-stats .seg-hot .v { color: var(--danger); }
+/* 上下文段独立加框（2026-09-11 需求）：模型窗口总大小 + 当前占用单独成框
+   突出显示；占用达到告警阈值（seg-hot）时边框同步转警示色。
+   本规则置于 .seg 基础规则之后以同特异性后写覆盖。 */
+.chat-session-stats .seg-ctx {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 1px 9px;
+  margin: 0 5px;
+}
+.chat-session-stats .seg-ctx.seg-hot { border-color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {
@@ -11260,46 +11304,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 2026-09-11 需求变更：过程轨迹不再是 details 折叠卡——普通透明容器，
+   行直接平铺为纯文本（行样式见 .stream-process-line），无竖线/summary。 */
 .stream-process {
   margin-bottom: 8px;
-  border-left: 2px solid #cbd5e1;
-  padding-left: 10px;
 }
-.stream-process:not([open]) { margin-bottom: 0; }
-.stream-process-summary {
-  cursor: pointer;
-  list-style: none;
-  font-size: 12px;
-  color: #475569;
-  padding: 2px 0;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.stream-process-summary::-webkit-details-marker { display: none; }
-/* Same caret family as the tree nodes (chevron-right → rotate 90° when expanded). */
-.stream-process-caret {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  font-size: 13px;
-  line-height: 1;
-  color: #475569;
-  transition: transform 0.15s;
-}
-.stream-process[open] .stream-process-summary .stream-process-caret {
-  transform: rotate(90deg);
-}
-.stream-process-label { font-weight: 600; }
-.stream-process-runtime {
-  color: #64748b;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.stream-process-runtime[hidden] { display: none; }
 
 .stream-process-body {
   max-height: 300px;
@@ -11325,11 +11334,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   white-space: pre-wrap;
   word-break: break-all;
 }
-/* Four-tier hierarchy. The constraint: every content line must be
-   visually LIGHTER than the section header (`.stream-process-summary`,
-   slate-600 #475569 + 600) — content is supporting detail, the header
-   is the label. An earlier pass had bound/tool lines at slate-900 + 600
-   which inverted the hierarchy (content darker than its own label).
+/* Four-tier hierarchy. The constraint: every content line stays
+   subordinate to the message body — content is supporting detail
+   (2026-09-11 起无 summary 头，层级基准即正文文本).
    Tiers:
      1. Core    — milestones / tool calls / plans / file edits;
                   slate-500 + 500 weight. Distinguishable at a glance
@@ -11393,13 +11400,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   /* Appears below process section with a subtle divider when process is open */
 }
 /* Divider between the process trail and the final body — only when the
-   process section is actually visible. The placeholder bubble starts with
-   `.stream-process` carrying both `[open]` and inline `display:none` (so it
-   expands automatically the first time a process event arrives), and we
-   must NOT paint the dashed border above the body while the process row
-   is still hidden — otherwise the bubble shows a stray top divider above
-   the streaming text with nothing above it to separate from. */
-.stream-process[open]:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
+   process section is actually visible. 2026-09-11 起容器是普通 div（无
+   [open] 折叠态），以行内 display 样式判断可见性。 */
+.stream-process:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
   margin-top: 8px;
   padding-top: 10px;
   border-top: 1px dashed var(--border);
@@ -11450,8 +11453,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
 }
 
-/* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。 */
-.chat-bubble .markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* 表格不再 display:block（2026-09-11 根因修复，踩坑两次的元凶）：
+   block 化的 table 元素盒与内部列网格脱节——元素被 width:100% 撑满而
+   网格仍按内容宽排布，右侧留下大片"空壳"空白（真机：元素 852px、最后
+   一格只到 590px，视觉表格"没铺满"且限定宽度规则全部失效）。
+   改为原生表格布局后 width/max-width/居中全部正常生效。
+   防撑破改由单元格断行承担（见 th/td 的 overflow-wrap）——超长 URL
+   等无空格内容可在格内换行，不再需要横向滚动容器。 */
 .chat-bubble .markdown-body img   { max-width: 100%; }
 .chat-bubble .markdown-body .chat-md-img { width: 100%; height: 100%; }
 

@@ -295,6 +295,14 @@ type SafeUsage = {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   totalTokens?: number;
+  /** 最后一次调用的 prompt 侧用量（2026-09-11）：当前上下文占用的权威
+   *  口径；上方字段为整轮累加（消耗口径）。 */
+  lastCallUsage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
 };
 
 export type LiveRunTimingPhase = 'provider' | 'tool' | 'compaction' | 'retry_wait' | 'other';
@@ -463,6 +471,20 @@ function safeUsageForLog(usage: unknown): SafeUsage | undefined {
   if (cacheReadTokens !== undefined) out.cacheReadTokens = cacheReadTokens;
   if (cacheWriteTokens !== undefined) out.cacheWriteTokens = cacheWriteTokens;
   if (totalTokens !== undefined) out.totalTokens = totalTokens;
+  const nestedRaw = u.lastCallUsage;
+  if (nestedRaw && typeof nestedRaw === 'object' && !Array.isArray(nestedRaw)) {
+    const n = nestedRaw as Record<string, unknown>;
+    const nested: NonNullable<SafeUsage['lastCallUsage']> = {};
+    const ni = finiteNumber(n.inputTokens);
+    const no = finiteNumber(n.outputTokens);
+    const ncr = finiteNumber(n.cacheReadTokens);
+    const ncw = finiteNumber(n.cacheWriteTokens);
+    if (ni !== undefined) nested.inputTokens = ni;
+    if (no !== undefined) nested.outputTokens = no;
+    if (ncr !== undefined) nested.cacheReadTokens = ncr;
+    if (ncw !== undefined) nested.cacheWriteTokens = ncw;
+    if (Object.keys(nested).length) out.lastCallUsage = nested;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -707,7 +729,13 @@ export function recordModelRawEventForLog(stats: ModelRunLogDiagnostics, ev: unk
       noteElapsedOnce(stats, 'doneRawEventMs', nowMs);
       const result = e.result as { meta?: Record<string, unknown> } | undefined;
       const meta = result?.meta || {};
-      stats.usage = safeUsageForLog(meta.usage) || stats.usage;
+      // meta.lastCallUsage（2026-09-11）平级挂在 meta 上，先并入 usage 再
+      // 走白名单过滤，否则占用口径字段会在这一站被剥掉。
+      stats.usage = safeUsageForLog(
+        meta.lastCallUsage
+          ? { ...(meta.usage && typeof meta.usage === 'object' ? meta.usage : {}), lastCallUsage: meta.lastCallUsage }
+          : meta.usage,
+      ) || stats.usage;
       stats.providerDurationMs = finiteNumber(meta.durationMs) ?? stats.providerDurationMs;
       stats.provider = typeof meta.provider === 'string' ? meta.provider : stats.provider;
       stats.model = typeof meta.model === 'string' ? meta.model : stats.model;
