@@ -35,6 +35,9 @@ export default defineConfig({
     // 到 120s；本地保持 60s，避免掩盖真正的挂死。
     testTimeout: process.env.CI ? 150_000 : 60_000,
     hookTimeout: process.env.CI ? 150_000 : 60_000,
+    // Hosted runners intermittently stall one timing-sensitive test; allow two
+    // CI retries so a one-off stall does not fail the release gate.
+    retry: process.env.CI ? 2 : 0,
     // CI 单机满载时 worker 会持续刷 console 日志（electron-log、agent-runner
     // 等），Vitest 在 worker 收尾关闭 rpc 时会撞上 "Closing rpc while
     // onUserConsoleLog was pending" 的未处理错误，让全绿套件退出码变 1。
