@@ -142,7 +142,11 @@ function _csFirstArg(args, keys) {
 }
 
 function _csFmtDur(ms) {
-  const total = Math.max(0, Math.floor((Number(ms) || 0) / 1000));
+  // 亚秒级显示毫秒（2026-09-11：本地 CLI 工具普遍几十毫秒完成，整秒
+  // 取整把真实耗时吞成"0 秒"，看起来像计时坏了——真机两轮误报）。
+  const v = Math.max(0, Number(ms) || 0);
+  if (v < 1000) return `${Math.round(v)}ms`;
+  const total = Math.floor(v / 1000);
   if (total < 60) return `${total} 秒`;
   return `${Math.floor(total / 60)} 分 ${total % 60} 秒`;
 }
@@ -544,19 +548,13 @@ function _csRenderToolRow(row, payload, status) {
   const failed = status === 'failed';
   const target = _csTargetHtml(style.targetKind, args, argsSummary);
   const hover = [p.toolName, argsSummary].filter(Boolean).join(' ');
-  // 工具耗时：主进程权威 timing（存储补差后实时/历史同源）；历史重放是瞬时
-  // 到达，墙钟差恒为 0——没有 payload.timing 就不显示（不编造）。
-  let dur = '';
-  if (p.timing && typeof p.timing.startedAtMs === 'number'
-    && typeof p.timing.completedAtMs === 'number') {
-    dur = `<span class="cs-dur">${_csFmtDur(Math.max(0, p.timing.completedAtMs - p.timing.startedAtMs))}</span>`;
-  }
+  // 工具耗时不再显示（2026-09-11 需求变更）：本地 CLI 工具普遍毫秒级完成，
+  // 数字信息量低还占行宽；timing 数据仍随条目保留，需要时悬停/调试可查。
   // 行 = 一行内联摘要（cs-row-line）+ 块级展开区（错误/输出，点行开合）。
   const line = [
     `<span class="cs-ico${failed ? ' failed' : ''}">${_csIco(style.icon)}</span>`,
     `<span class="cs-verb${failed ? ' failed' : ''}${style.raw ? ' raw' : ''}">${_csEscapeHtml(style.verb)}</span>`,
     target,
-    dur,
   ];
   const blocks = [];
   if (p.error) blocks.push(`<div class="cs-row-error">${_csEscapeHtml(p.error)}</div>`);

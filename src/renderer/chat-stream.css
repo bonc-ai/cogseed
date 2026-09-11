@@ -71,6 +71,10 @@
 
 /* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
 .cs-row {
+  /* 行宽贴合内容（2026-09-11：此前块级占满消息宽，hover 背景远长于截断
+     后的行内容，尾部大片空白）。长行（命令截断/展开区）仍受容器宽约束。 */
+  width: fit-content;
+  max-width: 100%;
   padding: 3px 6px;
   border-radius: var(--radius-1);
   cursor: pointer;
