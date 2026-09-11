@@ -86,7 +86,10 @@ function cacheHitPercentText(cacheReadTokens, inputTokens, cacheWriteTokens = 0)
 
 function messageMetricsLine(metrics) {
   if (!metrics || typeof metrics !== 'object') return null;
-  const { startedAt, firstTokenAt, completedAt, usage } = metrics;
+  const { startedAt, firstTokenAt, completedAt } = metrics;
+  // CLI 回合统计已下线（bus 剥 usage）：metrics 只带时间戳是常态而非异常。
+  // 宿主对象归一化后，inputTokens 等字段全部经 num() 安全取值。
+  const usage = metrics.usage || {};
   const hasUsage = usage && (num(usage.inputTokens) + num(usage.outputTokens)
     + num(usage.cacheReadTokens) + num(usage.cacheWriteTokens)) > 0;
   if (typeof startedAt !== 'number' || typeof completedAt !== 'number') return null;

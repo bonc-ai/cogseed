@@ -57,6 +57,18 @@ describe('messageMetricsLine', () => {
     });
     expect(line.titleLines.join(' ')).toContain('50K');
   });
+  it('metrics without usage (CLI turn after stats retirement) renders time-only, no crash', () => {
+    // 2026-09-11 codex 会话整页加载失败事故的回归锚点：bus 剥 usage 后
+    // metrics 只剩时间戳，inputTokens 等字段全部按 0 处理。
+    const line = messageMetricsLine({
+      startedAt: 1_000, firstTokenAt: 3_100, completedAt: 69_100,
+    });
+    expect(line).not.toBeNull();
+    expect(line.durationMs).toBe(68_100);
+    expect(line.inText).toBeNull();
+    expect(line.outText).toBeNull();
+    expect(line.cacheBadgeText).toBeNull();
+  });
 });
 
 describe('foldSessionMetrics', () => {

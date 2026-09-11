@@ -7842,11 +7842,22 @@ async function _loadOlderConversationHistory(cid, before) {
         .map(_groupMsgToLegacy)
         .sort((a, b) => _msTs(a && a.time) - _msTs(b && b.time));
       const fragment = document.createDocumentFragment();
-      messages.forEach((msg) => appendChatMessage(msg, false, {
-        cid,
-        container: fragment,
-        historyHydration: true,
-      }));
+      // 与 loadConversationHistory 主路径同款隔离：单条坏消息只丢自己。
+      messages.forEach((msg) => {
+        try {
+          appendChatMessage(msg, false, {
+            cid,
+            container: fragment,
+            historyHydration: true,
+          });
+        } catch (err) {
+          _convLog.warn('older history message render failed, skipping', {
+            cid,
+            msg_id: msg && msg._msg_id,
+            error: err && err.message,
+          });
+        }
+      });
       // Keep the auto-load sentinel as the first child. Every successively
       // older page lands immediately after it and before the already-mounted
       // transcript, preserving chronological order across repeated loads.
@@ -8316,15 +8327,32 @@ async function loadConversationHistory(cid, opts = {}) {
       // tree scans. Live messages and recovery paths still use the guarded
       // incremental insertion path below.
       const historyFragment = document.createDocumentFragment();
-      history.forEach((msg) => appendChatMessage(msg, false, {
-        cid,
-        // Only stamp authoritative source indexes returned by an anchored
-        // history read. A normal latest-page row has no global index; using
-        // its local 0..9 offset would let a later search falsely match it.
-        msgIndex: Number.isSafeInteger(msg?._history_index) ? msg._history_index : undefined,
-        container: historyFragment,
-        historyHydration: true,
-      }));
+      // 单条消息渲染失败只丢该条并记日志——一条坏消息不能把整个会话
+      // 炸成"加载失败"（2026-09-11 codex 会话 usage 缺失事故的教训）。
+      let renderFailures = 0;
+      history.forEach((msg) => {
+        try {
+          appendChatMessage(msg, false, {
+            cid,
+            // Only stamp authoritative source indexes returned by an anchored
+            // history read. A normal latest-page row has no global index; using
+            // its local 0..9 offset would let a later search falsely match it.
+            msgIndex: Number.isSafeInteger(msg?._history_index) ? msg._history_index : undefined,
+            container: historyFragment,
+            historyHydration: true,
+          });
+        } catch (err) {
+          renderFailures += 1;
+          _convLog.warn('history message render failed, skipping', {
+            cid,
+            msg_id: msg && msg._msg_id,
+            error: err && err.message,
+          });
+        }
+      });
+      if (renderFailures > 0) {
+        _convLog.warn('history render skipped broken messages', { cid, count: renderFailures });
+      }
       container.appendChild(historyFragment);
     }
     // 历史重载汇合点（空/非空分支都经过）：fragment 离屏装载期间
