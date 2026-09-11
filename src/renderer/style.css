@@ -10364,7 +10364,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   padding: 14px;
 }
 .chat-message-edit-composer {
-  width: min(620px, 100%);
+  /* 铺满卡片内容宽（2026-09-11 修正）：原 min(620px,100%) 上限让输入框
+     和按钮行在卡片右侧留出一条空白（反馈两轮的"右侧空白"即此）。 */
+  width: 100%;
   display: grid;
   gap: 12px;
 }
