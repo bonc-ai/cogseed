@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FILE_SYMLINKS_SUPPORTED } from '../../../helpers/fs-capabilities';
 
 import {
   captureSkillTree,
@@ -84,7 +85,7 @@ describe('Skill tree snapshots', () => {
     expect(await captureSkillTree(target)).toEqual(captured);
   });
 
-  it('refuses symbolic links instead of following them', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('refuses symbolic links instead of following them', async () => {
     const source = tempDir();
     const outside = tempDir();
     fs.writeFileSync(path.join(source, 'SKILL.md'), '---\nname: link\ndescription: link\n---\n');

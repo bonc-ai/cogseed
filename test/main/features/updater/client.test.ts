@@ -38,6 +38,16 @@ function stubFetch(impl: (input: string | URL | Request, init?: RequestInit) => 
 const DMG_BODY = 'fake-dmg-bytes-0123456789';
 const DMG_SHA = crypto.createHash('sha256').update(DMG_BODY).digest('hex');
 
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const original = process.platform;
+  Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, 'platform', { value: original, configurable: true });
+  }
+}
+
 function infoFixture(overrides: Record<string, unknown> = {}) {
   return {
     latest_version: '0.0.6',
@@ -57,6 +67,7 @@ async function resetState() {
 
 describe('checkForUpdates', () => {
   beforeEach(() => {
+    electronMock.app.isPackaged = false;
     electronMock.app.getVersion.mockReturnValue('0.0.5');
     process.env.COGSEED_API_BASE_URL = API_BASE;
     void resetState();
@@ -99,6 +110,22 @@ describe('checkForUpdates', () => {
     // Other metadata rides along unchanged.
     expect(headers['CogSeed-App-Version']).toBe('0.0.5');
     expect(headers['CogSeed-Arch']).toBe(process.arch);
+  });
+
+  it('skips packaged Windows latest checks instead of surfacing updates/latest 400', async () => {
+    electronMock.app.isPackaged = true;
+    const fetchMock = stubFetch(async () => new Response('bad platform', { status: 400 }));
+
+    const result = await withPlatform('win32', () => updater.checkForUpdates(UID, { manual: true, now: 1_000 }));
+
+    expect(result).toMatchObject({
+      checked: true,
+      has_update: false,
+      reminded: false,
+      current_version: '0.0.5',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(readUpdaterState(UID).latest_info).toBeUndefined();
   });
 
   it('throttles automatic reminders to once per day, same version', async () => {
@@ -255,9 +282,11 @@ describe('downloadUpdate', () => {
   it('derives safe filenames and falls back on traversal attempts', () => {
     expect(updater.installerFilenameFromUrl('https://dl.example.com/CogSeed-0.0.6-mac-arm64.dmg'))
       .toBe('CogSeed-0.0.6-mac-arm64.dmg');
+    expect(updater.installerFilenameFromUrl('https://dl.example.com/CogSeed-0.9.0-win-x64.exe'))
+      .toBe('CogSeed-0.9.0-win-x64.exe');
     const evil = updater.installerFilenameFromUrl('https://dl.example.com/CogSeed%2F..%2F..%2Fetc%2Fpasswd');
     expect(evil).not.toContain('..');
     expect(evil).not.toContain('/');
-    expect(evil.endsWith('.dmg') || evil.endsWith('.zip')).toBe(true);
+    expect(evil.endsWith('.dmg') || evil.endsWith('.zip') || evil.endsWith('.exe')).toBe(true);
   });
 });

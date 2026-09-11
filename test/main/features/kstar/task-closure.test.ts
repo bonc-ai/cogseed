@@ -42,6 +42,23 @@ const events: RuntimeEventEnvelope[] = [
   { type: 'result', request_id: request.request_id, runtime_session_id: request.runtime_session_id, status: 'completed', text: 'Report created.' },
 ];
 
+const conservativeInference = async (_userId: string, episode: any) => ({
+  review: {
+    expectedResult: episode.t.userGoal,
+    actualResult: episode.r.finalText || `Terminal status: ${episode.r.status}.`,
+    deltaR: 'unknown' as const,
+    deltaA: 'unknown' as const,
+    outcome: 'unclear' as const,
+    attribution: 'unclear' as const,
+    reason: 'No reusable conclusion.',
+    confidence: 0,
+    evidenceRefs: episode.evidenceRefs,
+  },
+  reviewState: 'unknown' as const,
+  inferenceMethod: 'deterministic' as const,
+  needsConfirmation: false,
+});
+
 
 async function seedLearningReview(
   userId: string,
@@ -111,9 +128,482 @@ describe('KSTAR completion evidence merge', () => {
     const review = await reviews.readKstarReview('closure-user', records[0].id as string);
     expect(review?.actualResult).toContain('Report written to disk.');
   });
+
+  it('uses the snapshotted requirement after the current lifecycle switches', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const firstTask = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-switched-evidence', title: 'First task' });
+    const firstRequirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: firstTask.id,
+      conversationId: 'cid-switched-evidence',
+      userMessageIds: ['msg-first-evidence'],
+      title: 'First task',
+      goalText: 'Produce the first result',
+    });
+    firstRequirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'FIRST-RUN-EVIDENCE',
+      producedFiles: ['first.md'],
+      acceptanceEvidence: [],
+    };
+    const secondTask = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-switched-evidence', title: 'Second task' });
+    const secondRequirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: secondTask.id,
+      conversationId: 'cid-switched-evidence',
+      userMessageIds: ['msg-second-evidence'],
+      title: 'Second task',
+      goalText: 'Produce the second result',
+    });
+    secondRequirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'SECOND-RUN-EVIDENCE',
+      producedFiles: ['second.md'],
+      acceptanceEvidence: [],
+    };
+    await store.replaceKstarTask('closure-user', { ...firstTask, requirementIds: [firstRequirement.id], currentRequirementId: firstRequirement.id });
+    await store.replaceKstarRequirement('closure-user', firstRequirement);
+    await store.replaceKstarTask('closure-user', { ...secondTask, requirementIds: [secondRequirement.id], currentRequirementId: secondRequirement.id });
+    await store.replaceKstarRequirement('closure-user', secondRequirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-switched-evidence'),
+      currentTaskId: secondTask.id,
+      currentRequirementId: secondRequirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-first-snapshot', conversationId: 'cid-switched-evidence', status: 'completed',
+      taskId: firstTask.id,
+      requirementId: firstRequirement.id,
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-first-evidence', from: 'user', text: 'Produce the first result', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-first-result', from: 'commander', text: 'generic result', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    expect(result.episode.r).toMatchObject({ finalText: 'FIRST-RUN-EVIDENCE', producedFiles: ['first.md'] });
+    expect(result.episode).toMatchObject({ taskId: firstTask.id, requirementId: firstRequirement.id });
+    const storedFirst = await store.readKstarRequirement('closure-user', firstRequirement.id);
+    const storedSecond = await store.readKstarRequirement('closure-user', secondRequirement.id);
+    expect(storedFirst?.episodeIds).toContain(result.episode.id);
+    expect(storedSecond?.episodeIds).not.toContain(result.episode.id);
+  });
+});
+
+describe('KSTAR degraded new-format closure fallback gating', () => {
+  it('does not merge current-lifecycle evidence or attach when a new-format terminal lost its task/requirement provenance', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    // The conversation's CURRENT lifecycle is a later task/requirement that
+    // carries completion evidence. The terminal event was new-format
+    // (reuse_turn_ids present) but degraded: task_id and requirement_id were
+    // lost before capture. The closure must NOT reach into the post-run
+    // current lifecycle to enrich or attach the episode.
+    const currentTask = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-degraded-snapshot', title: 'Current task' });
+    const currentRequirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: currentTask.id,
+      conversationId: 'cid-degraded-snapshot',
+      userMessageIds: ['msg-degraded-current'],
+      title: 'Current task',
+      goalText: 'Produce the current result',
+    });
+    currentRequirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'CURRENT-RUN-EVIDENCE',
+      producedFiles: ['current.md'],
+      acceptanceEvidence: [],
+    };
+    await store.replaceKstarTask('closure-user', { ...currentTask, requirementIds: [currentRequirement.id], currentRequirementId: currentRequirement.id });
+    await store.replaceKstarRequirement('closure-user', currentRequirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-degraded-snapshot'),
+      currentTaskId: currentTask.id,
+      currentRequirementId: currentRequirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-degraded-snapshot', conversationId: 'cid-degraded-snapshot', status: 'completed',
+      reuseTurnIds: [],
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-degraded-user', from: 'user', text: 'Do the current work', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-degraded-result', from: 'commander', text: 'generic result text', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    // Episode keeps its message-derived text — the current lifecycle's
+    // completion evidence is never merged in.
+    expect(result.episode.r.finalText).not.toBe('CURRENT-RUN-EVIDENCE');
+    expect(result.episode.r.producedFiles || []).not.toContain('current.md');
+    // And the episode is never attached to the (different) current
+    // requirement: episodeIds stays empty.
+    const stored = await store.readKstarRequirement('closure-user', currentRequirement.id);
+    expect(stored?.episodeIds).toEqual([]);
+  });
+
+  it('never falls back to a later open requirement of the same task when a new-format terminal kept only its task identity', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-degraded-same-task', title: 'Resolved task' });
+    const firstRequirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-degraded-same-task',
+      userMessageIds: ['msg-degraded-first'],
+      title: 'Earlier requirement',
+      goalText: 'Produce the first result',
+    });
+    const laterRequirement = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-degraded-same-task',
+      userMessageIds: ['msg-degraded-later'],
+      title: 'Later current requirement',
+      goalText: 'Produce the later result',
+    });
+    laterRequirement.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'LATER-RUN-EVIDENCE',
+      producedFiles: ['later.md'],
+      acceptanceEvidence: [],
+    };
+    await store.replaceKstarTask('closure-user', {
+      ...task,
+      requirementIds: [firstRequirement.id, laterRequirement.id],
+      currentRequirementId: laterRequirement.id,
+    });
+    await store.replaceKstarRequirement('closure-user', firstRequirement);
+    await store.replaceKstarRequirement('closure-user', laterRequirement);
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-degraded-same-task'),
+      currentTaskId: task.id,
+      currentRequirementId: laterRequirement.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-degraded-same-task', conversationId: 'cid-degraded-same-task', status: 'completed',
+      taskId: task.id,
+      reuseTurnIds: [],
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-degraded-same-user', from: 'user', text: 'Do the first work', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-degraded-same-result', from: 'commander', text: 'generic result text', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    // Evidence from the LATER current requirement is never merged into the
+    // snapshot episode (identity is task-only).
+    expect(result.episode.r.finalText).not.toBe('LATER-RUN-EVIDENCE');
+    expect(result.episode.r.producedFiles || []).not.toContain('later.md');
+    // Attachment must NOT fall back to the current (same-task) requirement:
+    // both requirements keep empty episodeIds.
+    const storedLater = await store.readKstarRequirement('closure-user', laterRequirement.id);
+    expect(storedLater?.episodeIds).toEqual([]);
+    const storedFirst = await store.readKstarRequirement('closure-user', firstRequirement.id);
+    expect(storedFirst?.episodeIds).toEqual([]);
+  });
+
+  it('still attaches by projection provenance when a new-format terminal kept its task and projection but lost requirement identity', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-degraded-proj-snap', title: 'Resolved task' });
+    const current = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-degraded-proj-snap',
+      userMessageIds: ['msg-degraded-proj-current'],
+      title: 'Current requirement',
+      goalText: 'Stay on the current requirement',
+    });
+    const matched = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-degraded-proj-snap',
+      userMessageIds: ['msg-degraded-proj-matched'],
+      title: 'Matched requirement',
+      goalText: 'Attach by projection provenance',
+    });
+    await store.replaceKstarTask('closure-user', {
+      ...task,
+      requirementIds: [current.id, matched.id],
+      currentRequirementId: current.id,
+    });
+    await store.replaceKstarRequirement('closure-user', current);
+    await store.replaceKstarRequirement('closure-user', { ...matched, projectionId: 'proj-snap-match' });
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-degraded-proj-snap'),
+      currentTaskId: task.id,
+      currentRequirementId: current.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-degraded-proj-snap', conversationId: 'cid-degraded-proj-snap', status: 'completed',
+      taskId: task.id,
+      projectionId: 'proj-snap-match',
+      reuseTurnIds: [],
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-degraded-proj-user', from: 'user', text: 'Attach by projection provenance', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-degraded-proj-result', from: 'commander', text: 'generic result text', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const storedMatched = await store.readKstarRequirement('closure-user', matched.id);
+    expect(storedMatched?.episodeIds).toContain('kse-run-degraded-proj-snap');
+    const storedCurrent = await store.readKstarRequirement('closure-user', current.id);
+    expect(storedCurrent?.episodeIds).toEqual([]);
+  });
+
+  it('still attaches by projection provenance when a new-format terminal kept ONLY its projection (task/requirement identity lost but the current task owns the projection)', async () => {
+    const store = await import('../../../../src/main/features/kstar/requirement-store');
+    // Snapshot event with ONLY a projection handle: no taskId/requirementId.
+    // The conversation's current task is the SAME task that owns the
+    // projection's requirement, so task resolution via state.currentTaskId
+    // must succeed and the projection provenance match must bind the episode.
+    // The identity-loss skip gate must not swallow this legitimate
+    // provenance-only path (regression: run-evidence could never find the
+    // Episode because requirement.episodeIds stayed empty).
+    const task = store.createKstarTaskRecord('closure-user', { conversationId: 'cid-proj-only-snap', title: 'Owning task' });
+    const owning = store.createKstarRequirementRecord('closure-user', {
+      taskId: task.id,
+      conversationId: 'cid-proj-only-snap',
+      userMessageIds: ['msg-proj-only-user'],
+      title: 'Owning requirement',
+      goalText: 'Produce the owning result',
+    });
+    owning.completionEvidence = {
+      finalStatus: 'completed',
+      finalText: 'OWNING-RUN-EVIDENCE',
+      producedFiles: ['owning.md'],
+      acceptanceEvidence: [],
+    };
+    await store.replaceKstarTask('closure-user', {
+      ...task,
+      requirementIds: [owning.id],
+      currentRequirementId: owning.id,
+    });
+    await store.replaceKstarRequirement('closure-user', { ...owning, projectionId: 'proj-only-snap' });
+    await store.writeConversationTaskState('closure-user', {
+      ...store.createInitialConversationTaskState('closure-user', 'cid-proj-only-snap'),
+      currentTaskId: task.id,
+      currentRequirementId: owning.id,
+      taskComplete: false,
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-proj-only-snap', conversationId: 'cid-proj-only-snap', status: 'completed',
+      projectionId: 'proj-only-snap',
+      reuseTurnIds: [],
+      startedAtMs: Date.parse('2026-08-05T00:00:00.000Z'), finishedAtMs: Date.parse('2026-08-05T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-proj-only-user', from: 'user', text: 'Produce the owning result', ts: '2026-08-05T00:00:01.000Z' },
+        { id: 'msg-proj-only-result', from: 'commander', text: 'generic result text', ts: '2026-08-05T00:00:30.000Z' },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    // Provenance-only binding still works: the resolved current task owns the
+    // projection, so the episode is attached to that requirement.
+    const storedOwning = await store.readKstarRequirement('closure-user', owning.id);
+    expect(storedOwning?.episodeIds).toContain(result.episode.id);
+    // Completion-evidence enrichment stays gated (snapshot + no requirementId):
+    // the owning requirement's evidence is never merged into the episode.
+    expect(result.episode.r.finalText).not.toBe('OWNING-RUN-EVIDENCE');
+    expect(result.episode.r.producedFiles || []).not.toContain('owning.md');
+  });
 });
 
 describe('KSTAR task closure', () => {
+
+  it('records applied only for a real injected citation with completed Host-observable evidence', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-applied', projectionId: 'proj-usage-applied',
+      assetId: 'asset-usage-applied', assetVersion: '1', messageId: 'msg-usage-applied',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-applied', conversationId: 'cid-usage-applied',
+      projectionId: 'proj-usage-applied', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-usage-user', from: 'user', text: 'Apply the projected asset.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-applied', from: 'agent-a', text: 'Verified result.', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-applied', version: '1', projection_id: 'proj-usage-applied' }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'tool-usage-a', name: 'read_file', arguments: { path: '/private/value' } } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: 'tool-usage-a', name: 'read_file', output: 'private result' } } },
+          ],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    expect(result.episode.r.status).toBe('completed');
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user', 'turn-usage-applied')).resolves.toEqual([
+      expect.objectContaining({
+        status: 'applied', evidenceKind: 'tool_call', assetId: 'asset-usage-applied',
+        evidenceRefs: [expect.objectContaining({ id: 'kse-run-usage-applied' })],
+      }),
+    ]);
+    expect(JSON.stringify(await usage.listAssetUsageReceipts('closure-user'))).not.toContain('/private/value');
+    expect(JSON.stringify(await usage.listAssetUsageReceipts('closure-user'))).not.toContain('private result');
+  });
+
+  it('records usage_unknown when a real citation has no Host-observable execution evidence', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-unknown', projectionId: 'proj-usage-unknown',
+      assetId: 'asset-usage-unknown', assetVersion: '1', messageId: 'msg-usage-unknown',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-unknown', conversationId: 'cid-usage-unknown',
+      projectionId: 'proj-usage-unknown', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-unknown-user', from: 'user', text: 'Consider the projected asset.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-unknown', from: 'agent-a', text: '', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-unknown', version: '1', projection_id: 'proj-usage-unknown' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user', 'turn-usage-unknown')).resolves.toEqual([
+      expect.objectContaining({ status: 'usage_unknown', evidenceKind: 'none', evidenceRefs: [] }),
+    ]);
+  });
+
+  it('does not apply one injected asset merely because another cited asset has a successful tool call', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-a', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-a', assetVersion: '1', messageId: 'msg-usage-specific-a',
+      boundary: 'real', status: 'injected',
+    });
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-specific-b', projectionId: 'proj-usage-specific',
+      assetId: 'asset-usage-specific-b', assetVersion: '1', messageId: 'msg-usage-specific-b',
+      boundary: 'real', status: 'injected',
+    });
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-specific', conversationId: 'cid-usage-specific',
+      projectionId: 'proj-usage-specific', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-usage-specific-user', from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-specific-a', from: 'agent-a', text: 'Used the first asset.', ts: '2026-09-04T00:00:20.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-a', version: '1', projection_id: 'proj-usage-specific' }],
+          process: [
+            { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: 'tool-specific-a', name: 'read_file' } } },
+            { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: 'tool-specific-a', name: 'read_file' } } },
+          ],
+        },
+        {
+          id: 'msg-usage-specific-b', from: 'agent-a', text: '', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-specific-b', version: '1', projection_id: 'proj-usage-specific' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+    await expect(usage.listAssetUsageReceipts('closure-user')).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ assetId: 'asset-usage-specific-a', status: 'applied', evidenceKind: 'tool_call' }),
+      expect.objectContaining({ assetId: 'asset-usage-specific-b', status: 'usage_unknown', evidenceKind: 'none' }),
+    ]));
+  });
+
+  it.each(['failed', 'cancelled', 'timed_out'] as const)(
+    'never infers applied for a %s run even when successful action evidence exists',
+    async (status) => {
+      const suffix = status.replace('_', '-');
+      const injections = await import('../../../../src/main/features/recall/injection-receipt');
+      await injections.recordInjectionReceipt('closure-user', {
+        taskRunId: `turn-usage-${suffix}`, projectionId: `proj-usage-${suffix}`,
+        assetId: `asset-usage-${suffix}`, assetVersion: '1', messageId: `msg-usage-${suffix}`,
+        boundary: 'real', status: 'injected',
+      });
+      const closure = await import('../../../../src/main/features/kstar/task-closure');
+      await closure.captureGroupKstarClosure({
+        userId: 'closure-user', runId: `run-usage-${suffix}`, conversationId: `cid-usage-${suffix}`,
+        projectionId: `proj-usage-${suffix}`, status,
+        startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+        finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+        messages: [
+          { id: `msg-user-${suffix}`, from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+          {
+            id: `msg-usage-${suffix}`, from: 'agent-a', text: 'A partial action happened.', ts: '2026-09-04T00:00:30.000Z',
+            recall_citations: [{ asset_id: `asset-usage-${suffix}`, version: '1', projection_id: `proj-usage-${suffix}` }],
+            process: [
+              { type: 'event', event: { stream: 'tool', data: { phase: 'start', id: `tool-${suffix}`, name: 'read_file' } } },
+              { type: 'event', event: { stream: 'tool', data: { phase: 'completed', id: `tool-${suffix}`, name: 'read_file' } } },
+            ],
+          },
+        ],
+        inferReview: conservativeInference,
+      });
+
+      const usage = await import('../../../../src/main/features/recall/asset-usage-receipt');
+      await expect(usage.listAssetUsageReceipts('closure-user', `turn-usage-${suffix}`)).resolves.toEqual([
+        expect.objectContaining({ status: 'usage_unknown', evidenceKind: 'none', evidenceRefs: [] }),
+      ]);
+    },
+  );
+
+  it('audits usage persistence degradation without changing the terminal closure result', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('closure-user', {
+      taskRunId: 'turn-usage-degraded', projectionId: 'proj-usage-degraded',
+      assetId: 'asset-usage-degraded', assetVersion: '1', messageId: 'msg-usage-degraded',
+      boundary: 'real', status: 'injected',
+    });
+    const usagePath = path.join(tmpDir, 'closure-user', 'cloud', 'recall', 'jsonl', 'asset-usage-receipts', 'events.jsonl');
+    fs.mkdirSync(path.dirname(usagePath), { recursive: true });
+    fs.writeFileSync(usagePath, '{malformed}\n', 'utf8');
+
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const result = await closure.captureGroupKstarClosure({
+      userId: 'closure-user', runId: 'run-usage-degraded', conversationId: 'cid-usage-degraded',
+      projectionId: 'proj-usage-degraded', status: 'completed',
+      startedAtMs: Date.parse('2026-09-04T00:00:00.000Z'),
+      finishedAtMs: Date.parse('2026-09-04T00:01:00.000Z'),
+      messages: [
+        { id: 'msg-user-degraded', from: 'user', text: 'Run the task.', ts: '2026-09-04T00:00:01.000Z' },
+        {
+          id: 'msg-usage-degraded', from: 'agent-a', text: 'Done.', ts: '2026-09-04T00:00:30.000Z',
+          recall_citations: [{ asset_id: 'asset-usage-degraded', version: '1', projection_id: 'proj-usage-degraded' }],
+        },
+      ],
+      inferReview: conservativeInference,
+    });
+
+    expect(result.episode.r.status).toBe('completed');
+    const failures = await import('../../../../src/main/features/kstar/failure-service');
+    await expect(failures.listKstarFailures('closure-user')).resolves.toEqual([
+      expect.objectContaining({ stage: 'capture', errorCode: 'asset_usage_persistence_failed', episodeId: result.episode.id }),
+    ]);
+  });
 
 
   it('attaches group terminal episodes to the open requirement without completing the task', async () => {
@@ -588,6 +1078,49 @@ describe('KSTAR direct experience asset line', () => {
     expect(pending[0].status).toBe('confirmed');
   });
 
+  it('updates the explicitly targeted existing asset through the direct KSTAR line', async () => {
+    const builder = await import('../../../../src/main/features/kstar/episode-builder');
+    const direct = await import('../../../../src/main/features/kstar/direct-experience-assets');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const originalCandidate = await candidates.saveRecallCandidate('closure-user', {
+      judgment: 'Keep the report verification rule.',
+      value: 'Keep report verification consistent across runs.',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'create',
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-original' }],
+    });
+    const original = await candidates.promoteRecallCandidate('closure-user', originalCandidate.id, { actor: 'user' });
+    const seededEpisode = builder.buildRuntimeKstarEpisode({
+      userId: 'closure-user', runId: 'run-direct-update', request, events,
+      createdAt: '2026-08-05T00:00:00.000Z',
+    });
+
+    await direct.precipitateDirectExperienceAssets('closure-user', seededEpisode, [{
+      judgment: 'Update the report verification rule to require an acceptance check.',
+      summary: 'Updated report verification rule',
+      suggestedType: 'rule',
+      suggestedScope: 'report',
+      suggestedAction: 'update',
+      targetAssetId: original.asset.id,
+      applicableWhen: ['处理报告类任务时'],
+      sourceRefs: [{ kind: 'execution', id: 'kse-run-direct-update' }],
+    }]);
+
+    const updated = await assets.readAbilityAsset('closure-user', original.asset.id);
+    expect(updated).toMatchObject({
+      id: original.asset.id,
+      version: '2',
+      statement: 'Update the report verification rule to require an acceptance check.',
+    });
+    expect(updated.evidenceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-original' }),
+      expect.objectContaining({ kind: 'execution', id: 'kse-run-direct-update' }),
+    ]));
+  });
+
   it('carries the conversation space into the asset through the real closure path (space asset tab)', async () => {
     // 真实链路：挂空间会话 → captureGroupKstarClosure（读 conversation.space_id
     // 填 episode.s.workspaceId）→ 任务级沉淀 → 资产带 spaceId。修复前 episode
@@ -717,6 +1250,90 @@ describe('KSTAR group terminal subscriber', () => {
 
     expect(captured).toHaveLength(1);
     expect(captured[0]).toMatchObject({ userId: 'group-user', runId: 'run-group-terminal', conversationId: 'cid-group', status: 'completed' });
+    stop();
+  });
+
+  it('persists terminal reuse turn ids and supplies their per-turn receipts to attribution', async () => {
+    const closure = await import('../../../../src/main/features/kstar/task-closure');
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const episodeStore = await import('../../../../src/main/features/kstar/episode-store');
+    const injection = await injections.recordInjectionReceipt('group-user', {
+      taskRunId: 'turn-terminal-a',
+      projectionId: 'projection-terminal-a',
+      assetId: 'asset-terminal-a',
+      assetVersion: '1',
+      boundary: 'real',
+      status: 'injected',
+      messageId: 'message-terminal-agent',
+    });
+    let listener: ((event: any) => void) | undefined;
+    let inferenceOptions: any;
+    let captureDone = false;
+    const inferReview = async (_userId: string, episode: any, options: any) => {
+      inferenceOptions = options;
+      return {
+        review: {
+          deltaR: 'unknown' as const,
+          deltaA: 'unknown' as const,
+          outcome: 'unclear' as const,
+          attribution: 'unclear' as const,
+          reason: 'Per-turn receipt attribution was inspected.',
+          confidence: 0,
+          evidenceRefs: episode.evidenceRefs,
+        },
+        reviewState: 'unknown' as const,
+        inferenceMethod: 'deterministic' as const,
+        needsConfirmation: false,
+      };
+    };
+    const stop = closure.startGroupKstarClosure({
+      subscribe: (next: (event: any) => void) => { listener = next; return () => { listener = undefined; }; },
+      readMessages: async () => [
+        { id: 'message-terminal-user', ts: '2026-09-10T00:00:01.000Z', from: 'user', text: 'Use the projected asset.' },
+        {
+          id: 'message-terminal-agent', ts: '2026-09-10T00:00:30.000Z', from: 'agent-a', text: 'The run failed after injection.',
+          recall_citations: [{ asset_id: 'asset-terminal-a', version: '1', projection_id: 'projection-terminal-a' }],
+        },
+      ],
+      capture: async (input) => {
+        try {
+          return await closure.captureGroupKstarClosure({ ...input, inferReview });
+        } finally {
+          captureDone = true;
+        }
+      },
+    });
+
+    listener?.({
+      run_id: 'aggregate-terminal-a',
+      user_id: 'group-user',
+      conversation_id: 'conversation-terminal-a',
+      status: 'failed',
+      started_at_ms: Date.parse('2026-09-10T00:00:00.000Z'),
+      finished_at_ms: Date.parse('2026-09-10T00:01:00.000Z'),
+      projection_id: 'projection-terminal-a',
+      reuse_turn_ids: ['turn-terminal-a'],
+      reuse_turn_ids_truncated: true,
+    });
+    const deadline = Date.now() + 2_000;
+    while (!captureDone && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(captureDone).toBe(true);
+    await expect(episodeStore.readKstarEpisode('group-user', 'kse-aggregate-terminal-a')).resolves.toMatchObject({
+      taskRunId: 'aggregate-terminal-a',
+      reuseTurnIds: ['turn-terminal-a'],
+      reuseTurnIdsTruncated: true,
+    });
+    expect(inferenceOptions?.injectionReceipts).toEqual([expect.objectContaining({ id: injection.id })]);
+    expect(inferenceOptions?.usageReceipts).toEqual([
+      expect.objectContaining({
+        taskRunId: 'turn-terminal-a',
+        projectionId: 'projection-terminal-a',
+        injectionReceiptId: injection.id,
+      }),
+    ]);
     stop();
   });
 

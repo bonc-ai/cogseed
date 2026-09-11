@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { armKillWatchdog } from '../../../../src/main/features/local_agents/backends/base';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 
 // Business invariants of the activity-aware kill watchdog
 // (backends/base.ts::armKillWatchdog). The bug class this guards: a
@@ -10,7 +11,8 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 
 function fakeChild() {
   const kill = vi.fn();
-  return { child: { kill } as unknown as ChildProcessWithoutNullStreams, kill };
+  const child = Object.assign(new EventEmitter(), { kill }) as unknown as ChildProcessWithoutNullStreams;
+  return { child, kill };
 }
 
 afterEach(() => {
@@ -80,5 +82,35 @@ describe('armKillWatchdog', () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(wd.fired()).toBe(null);
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('disarm preserves a pending hard kill after the watchdog fires until the child closes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { child, kill } = fakeChild();
+    const wd = armKillWatchdog(child, { timeoutMs: 120 });
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(wd.fired()).toBe('wall');
+    expect(kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM']);
+
+    wd.disarm();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('child close cancels a pending hard kill after the watchdog fires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { child, kill } = fakeChild();
+    const wd = armKillWatchdog(child, { timeoutMs: 120 });
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM']);
+
+    child.emit('close', 0, null);
+    wd.disarm();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM']);
   });
 });

@@ -75,6 +75,32 @@ describe('KSTAR episode store', () => {
     })).rejects.toThrow(/conflict/i);
   });
 
+  it('rejects oversized reuse turn ids and lists', async () => {
+    const { store } = await modules();
+    const record = sampleEpisode('kstar-user-a');
+
+    await expect(store.writeKstarEpisode('kstar-user-a', {
+      ...record,
+      reuseTurnIds: ['x'.repeat(161)],
+    })).rejects.toThrow(/malformed kstar episode/i);
+    await expect(store.writeKstarEpisode('kstar-user-a', {
+      ...record,
+      reuseTurnIds: Array.from({ length: 101 }, (_, index) => `turn-${index}`),
+    })).rejects.toThrow(/malformed kstar episode/i);
+  });
+
+  it('round-trips the explicit reuse-turn truncation fact', async () => {
+    const { store } = await modules();
+    const record = {
+      ...sampleEpisode('kstar-user-a', 'kse-run-truncated'),
+      reuseTurnIds: Array.from({ length: 100 }, (_, index) => `turn-${index + 5}`),
+      reuseTurnIdsTruncated: true as const,
+    };
+
+    await expect(store.writeKstarEpisode('kstar-user-a', record)).resolves.toEqual(record);
+    await expect(store.readKstarEpisode('kstar-user-a', record.id)).resolves.toEqual(record);
+  });
+
   it('rejects unsafe path segments before path construction', async () => {
     const { paths } = await modules();
     for (const invalid of ['../escape', 'nested/value', 'bad.value', '', ' user ', 'user\\id']) {

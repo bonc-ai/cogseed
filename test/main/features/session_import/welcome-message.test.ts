@@ -89,8 +89,8 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       userId: 'u1',
       sessionId: expect.stringMatching(/^reflect-welcome-/),
     }));
-    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('完善产品方案'));
-    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('只输出一条中文行动计划'));
+    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('完善产品方案'), expect.anything());
+    expect(modelMocks.runReflection).toHaveBeenCalledWith(expect.stringContaining('只输出一条中文行动计划'), expect.anything());
     expect(out.text).toContain('我不会在运行中静默改写正式资产');
   });
 
@@ -118,7 +118,19 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
     expect(out.text).not.toContain('核对产品对象和术语');
   });
 
+  // 本组用例 mock 了 CLI 探测/执行（不真跑宿主机 CLI），是 local-agent 回退
+  // 的行为钉子——setup-env 全局关闭回退（G-20：其余测试不得依赖宿主机 CLI），
+  // 这里用例级解除以验证回退逻辑本身。
+  function withLocalAgentFallback<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK;
+    delete process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK;
+    return fn().finally(() => {
+      if (prev !== undefined) process.env.COGSEED_DISABLE_LOCAL_AGENT_FALLBACK = prev;
+    });
+  }
+
   it('uses a detected local Agent when no API model is configured', async () => {
+    await withLocalAgentFallback(async () => {
     modelMocks.hasConfiguredModel.mockReturnValue({ configured: false });
     modelMocks.pickBestCliForFallback
       .mockResolvedValueOnce({
@@ -127,8 +139,9 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
         version: '1.0.0',
         available: true,
         auth: { loggedIn: true, mode: 'oauth' },
-      })
-      .mockResolvedValueOnce(null);
+      });
+    // 不再补 mockResolvedValueOnce(null)：成功路径一次 pick 即返回，残留的
+    // Once 队列会漏进后续用例（开关让 no-Agent 用例不再消费它）。
     modelMocks.runCliAgent.mockResolvedValueOnce({
       runId: 'local-plan-1',
       status: 'completed',
@@ -156,6 +169,7 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       skipDispatchCheck: true,
       prompt: expect.stringContaining('完善支付流程'),
     }));
+    });
   });
 
   it('reports when no local Agent is detected and does not invent a plan', async () => {
@@ -173,7 +187,56 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
     expect(modelMocks.runCliAgent).not.toHaveBeenCalled();
   });
 
+  // ── PR209 评审 M3 回归：总超时（40s）触发时必须 abort 传播（不留孤儿）。
+  // 挂起 mock + fake timers 推进 40s：race 的 abort 分支先 resolve，主流程
+  // 以 model_unavailable 收尾，且执行侧收到的 signal 处于 aborted 态。
+  it('aborts the API reflection signal when the total timeout fires (PR209 M3)', async () => {
+    vi.useFakeTimers();
+    try {
+      modelMocks.runReflection.mockImplementation((_prompt: string, _signal?: AbortSignal) => new Promise<string>(() => {
+        // 挂起不 resolve：模拟慢模型（真实 runner 响应 signal 中断）。
+      }));
+      const pending = generateWelcomeMessage({ userId: 'u1', conversationId: 'c1', sessionSummary: '完善产品方案' });
+      await vi.advanceTimersByTimeAsync(40_000);
+      const out = await pending;
+      expect(out.plan).toEqual([]);
+      expect(out.text).toContain('暂未生成 Action Plan：当前模型不可用');
+      const signal = modelMocks.runReflection.mock.calls[0][1] as AbortSignal | undefined;
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the local CLI signal aborted after the total timeout (PR209 M3)', async () => {
+    await withLocalAgentFallback(async () => {
+      vi.useFakeTimers();
+      try {
+        modelMocks.hasConfiguredModel.mockReturnValue({ configured: false });
+        modelMocks.pickBestCliForFallback.mockResolvedValue({
+          type: 'codex', path: '/usr/local/bin/codex', version: '1.0.0', available: true,
+          auth: { loggedIn: true, mode: 'oauth' },
+        });
+        modelMocks.runCliAgent.mockImplementation((_opts: unknown) => new Promise(() => {
+          // 挂起不 resolve：单次 CLI 30s 超时与总超时 40s 均会 abort 该
+          // signal（真实 runner 响应即杀进程树）——断言总超时点的端到端
+          // 必要条件：signal 必已 aborted，不区分由哪条链触发。
+        }));
+        const pending = generateWelcomeMessage({ userId: 'u1', sessionSummary: '完善支付流程' });
+        await vi.advanceTimersByTimeAsync(40_000);
+        const out = await pending;
+        expect(out.plan).toEqual([]);
+        expect(out.text).toContain('暂未生成 Action Plan：当前模型不可用');
+        const opts = modelMocks.runCliAgent.mock.calls[0][0] as { signal?: AbortSignal };
+        expect(opts.signal?.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('tries the next local Agent when the first one fails', async () => {
+    await withLocalAgentFallback(async () => {
     modelMocks.hasConfiguredModel.mockReturnValue({ configured: false });
     modelMocks.pickBestCliForFallback
       .mockResolvedValueOnce({
@@ -201,6 +264,7 @@ describe('generateWelcomeMessage — v1.6 structured resume template', () => {
       exclude: expect.any(Set),
     }));
     expect([...modelMocks.pickBestCliForFallback.mock.calls[1][0].exclude]).toEqual(['codex']);
+    });
   });
 
   it('reports an empty model reply separately', async () => {

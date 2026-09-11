@@ -30,7 +30,7 @@ import type {
 const PREDICATE_TESTS: Record<WorldModelPredicateKey, (s: WorldModelSnapshot) => boolean> = {
   workspace_unavailable: (s) => !s.environment.workspace.ok,
   model_not_configured: (s) => !s.environment.model.configured,
-  bash_unavailable: (s) => !s.environment.tools.bash,
+  bash_unavailable: (s) => s.environment.tools.bash === false,
   skills_missing: (s) => s.skills.status === 'missing',
   too_few_skills: (s) => s.skills.status === 'ok' && s.skills.total < 10,
   too_few_rules: (s) => s.ontology.totalRules < 5,
@@ -74,7 +74,7 @@ export function collectWorldSnapshot(
     taskRunId: string;
     workspace: { ok: boolean; path?: string };
     model: { configured: boolean; profile?: string };
-    tools: { fileSystem: boolean; bash: boolean };
+    tools: { fileSystem: boolean | 'unknown'; bash: boolean | 'unknown' };
     groupChatStatus: 'idle' | 'running' | 'aborted';
     requirementStatus?: string;
     projectionStatus?: string;
@@ -113,6 +113,22 @@ export async function saveWorldModelForecast(
   return record;
 }
 
+export async function saveWorldModelSnapshot(
+  userId: string,
+  snapshot: WorldModelSnapshot,
+): Promise<WorldModelSnapshot> {
+  await writeRecallJsonRecord(userId, 'world-model-snapshots', snapshot.id, snapshot as unknown as import('./types').RecallJsonRecord);
+  return snapshot;
+}
+
+export async function readWorldModelSnapshot(
+  userId: string,
+  snapshotId: string,
+): Promise<WorldModelSnapshot | null> {
+  const raw = await readRecallJsonRecord(userId, 'world-model-snapshots', snapshotId);
+  return raw ? raw as unknown as WorldModelSnapshot : null;
+}
+
 /** Read a world-model forecast record by id. */
 export async function readWorldModelForecast(
   userId: string,
@@ -146,6 +162,23 @@ export function buildWorldModelForecastRecord(
     snapshotId?: string;
   },
 ): WorldModelForecastRecord {
+  const forecastCreatedAt = input.forecast.forecastCreatedAt || new Date().toISOString();
+  const selected = input.forecast.candidates?.find((candidate) => candidate.id === input.forecast.selectedCandidateId);
+  const riskRank = { low: 1, medium: 2, high: 3 } as const;
+  const riskLevel = [...(input.forecast.predictedRisks || [])]
+    .sort((left, right) => riskRank[right.severity] - riskRank[left.severity])[0]?.severity || 'low';
+  const projectionConfirmedAt = input.projectionConfirmedAt || forecastCreatedAt;
+  const forecast = {
+    ...input.forecast,
+    forecastCreatedAt,
+    forecastConfidence: input.forecast.forecastConfidence ?? (selected ? Math.max(0, Math.min(1, selected.score.total)) : 0),
+    riskLevel: input.forecast.riskLevel || riskLevel,
+    contextFreshness: input.forecast.contextFreshness || {
+      projectionConfirmedAt,
+      projectedAt: forecastCreatedAt,
+      ageMs: Math.max(0, Date.parse(forecastCreatedAt) - Date.parse(projectionConfirmedAt)),
+    },
+  };
   const provenanceComplete = Boolean(
     input.projectionId
     && input.projectionConfirmedAt
@@ -166,7 +199,7 @@ export function buildWorldModelForecastRecord(
     ...(input.snapshotId ? { snapshotId: input.snapshotId } : {}),
     provenanceComplete,
     input: input.simulationInput,
-    forecast: input.forecast,
+    forecast,
     createdAt: new Date().toISOString(),
   };
 }

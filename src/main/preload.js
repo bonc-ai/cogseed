@@ -464,12 +464,154 @@ const cogseedApi = {
 };
 contextBridge.exposeInMainWorld('cogseed', cogseedApi);
 
+function runAfterDomReady(callback) {
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', callback, { once: true });
+    return;
+  }
+  callback();
+}
+
+// Windows final-package microphone smoke. This runs only when the packaged
+// verifier supplies the private renderer argument. It intentionally exercises
+// the same contextBridge invoke/stream functions as the UI and records only
+// booleans/counts — never captured audio, session ids, or transcript text.
+const _sttSmokeResourcesPath = String(process.resourcesPath || '').replaceAll('\\', '/');
+const _isPackagedSttSmoke = process.platform === 'win32'
+  && _sttSmokeResourcesPath.length > 0
+  && !_sttSmokeResourcesPath.includes('/node_modules/electron/')
+  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_FILE || '').trim().length > 0
+  && String(process.env.COGSEED_PACKAGED_STT_SMOKE_WAV || '').trim().length > 0
+  && process.argv.includes('--cogseed-packaged-stt-smoke');
+if (_isPackagedSttSmoke) {
+  runAfterDomReady(() => {
+    const metrics = {
+      audioTrackLive: false,
+      sampleCount: 0,
+      nonZeroSampleCount: 0,
+      rms: 0,
+      pushAcknowledgements: 0,
+      sessionCreated: false,
+      stopAcknowledged: false,
+      finalEventObserved: false,
+      finalTextLength: 0,
+      failureCount: 0,
+    };
+    let mediaStream = null;
+    let audioContext = null;
+    let source = null;
+    let processor = null;
+    let sessionId = null;
+    let resultStream = null;
+
+    const timeout = (promise, timeoutMs, label) => Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs)),
+    ]);
+    const pcmBase64 = (samples) => {
+      const pcm = new Int16Array(samples.length);
+      for (let index = 0; index < samples.length; index += 1) {
+        const value = Math.max(-1, Math.min(1, samples[index]));
+        pcm[index] = value < 0 ? value * 0x8000 : value * 0x7fff;
+      }
+      const bytes = new Uint8Array(pcm.buffer);
+      let binary = '';
+      for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
+      return btoa(binary);
+    };
+
+    const run = async () => {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, sampleRate: 16000, echoCancellation: false, noiseSuppression: false },
+          video: false,
+        });
+        metrics.audioTrackLive = mediaStream.getAudioTracks().some((track) => track.readyState === 'live');
+        const AudioContextConstructor = window.AudioContext;
+        audioContext = new AudioContextConstructor({ sampleRate: 16000 });
+        if (audioContext.state === 'suspended') await audioContext.resume();
+        source = audioContext.createMediaStreamSource(mediaStream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const chunks = [];
+        await timeout(new Promise((resolve) => {
+          processor.onaudioprocess = (event) => {
+            // The pinned Mandarin fixture contains 89,784 mono PCM samples.
+            const remaining = 89784 - metrics.sampleCount;
+            if (remaining <= 0) return;
+            const input = event.inputBuffer.getChannelData(0);
+            const chunk = new Float32Array(input.subarray(0, remaining));
+            chunks.push(chunk);
+            for (const sample of chunk) {
+              if (sample !== 0) metrics.nonZeroSampleCount += 1;
+              metrics.rms += sample * sample;
+            }
+            metrics.sampleCount += chunk.length;
+            if (metrics.sampleCount >= 89784) resolve();
+          };
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+        }), 15_000, 'audio capture');
+        metrics.rms = Math.sqrt(metrics.rms / metrics.sampleCount);
+
+        const started = await cogseedApi.invoke('stt.start', {});
+        if (!started || started.ok === false || !started.sessionId) throw new Error('stt.start failed');
+        sessionId = started.sessionId;
+        metrics.sessionCreated = true;
+        resultStream = cogseedApi.stream('stt.results', { sessionId }, (event) => {
+          if (event?.type === 'event' && typeof event.event?.final === 'string') {
+            metrics.finalEventObserved = true;
+            metrics.finalTextLength = event.event.final.length;
+          }
+        });
+        for (const chunk of chunks) {
+          const pushed = await cogseedApi.invoke('stt.pushAudio', {
+            sessionId,
+            chunk: pcmBase64(chunk),
+          });
+          if (!pushed || pushed.ok === false) throw new Error('stt.pushAudio failed');
+          metrics.pushAcknowledgements += 1;
+        }
+        const stopped = await cogseedApi.invoke('stt.stop', { sessionId });
+        if (!stopped || stopped.ok === false) throw new Error('stt.stop failed');
+        metrics.stopAcknowledged = true;
+        await timeout(resultStream.promise, 15_000, 'stt.results');
+      } catch (_) {
+        metrics.failureCount += 1;
+      } finally {
+        if (resultStream) resultStream.cancel();
+        if (sessionId && !metrics.stopAcknowledged) {
+          try {
+            await timeout(cogseedApi.invoke('stt.cancel', { sessionId }), 3_000, 'stt.cancel');
+          } catch (_) {
+            if (metrics.failureCount === 0) metrics.failureCount += 1;
+          }
+        }
+        if (processor) {
+          processor.onaudioprocess = null;
+          try { processor.disconnect(); } catch (_) {}
+        }
+        if (source) {
+          try { source.disconnect(); } catch (_) {}
+        }
+        if (audioContext) {
+          try { await audioContext.close(); } catch (_) {}
+        }
+        if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
+      }
+      await ipcRenderer.invoke('cogseed.packagedSttSmokeReady', metrics);
+    };
+    void run().catch((error) => {
+      console.error('[packaged-stt-smoke] failed to record result', error);
+    });
+  });
+}
+
 // Final-package launch smoke. The main process adds this private renderer
 // argument only when the release validator starts an isolated hidden window.
 // A successful ping proves the preload bridge and main IPC handler both ran;
 // DOMContentLoaded proves the packaged renderer was read and initialized.
 if (process.argv.includes('--cogseed-packaged-launch-smoke')) {
-  window.addEventListener('DOMContentLoaded', () => {
+  runAfterDomReady(() => {
     ipcRenderer.invoke('cogseed.ping')
       .then((ping) => ipcRenderer.invoke('cogseed.packagedLaunchSmokeReady', {
         preloadLoaded: true,
@@ -479,5 +621,5 @@ if (process.argv.includes('--cogseed-packaged-launch-smoke')) {
       .catch((error) => {
         console.error('[packaged-launch-smoke] preload/renderer readiness failed', error);
       });
-  }, { once: true });
+  });
 }

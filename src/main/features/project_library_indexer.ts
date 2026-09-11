@@ -743,7 +743,16 @@ export function statusSummary(uid: string, spaceId: string): { total: number; re
 
 export async function drain(uid: string): Promise<void> {
   const q = queueFor(uid);
-  while (q.scheduled || q.running || q.jobs.length) {
+  const keyPrefix = `${uid}:`;
+  for (;;) {
+    const reconciles = Array.from(_reconcileInFlight.entries())
+      .filter(([key]) => key.startsWith(keyPrefix))
+      .map(([, run]) => run);
+    if (reconciles.length) {
+      await Promise.allSettled(reconciles);
+      continue;
+    }
+    if (!q.scheduled && !q.running && q.jobs.length === 0) return;
     await new Promise((r) => setTimeout(r, 10));
   }
 }

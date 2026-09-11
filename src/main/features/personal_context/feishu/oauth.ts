@@ -88,15 +88,33 @@ export function createFetchTransport(fetchImpl: typeof fetch = fetch): HttpTrans
         headers: { 'Content-Type': 'application/json; charset=utf-8', ...headers },
         body: JSON.stringify(body),
       });
-      if (!response.ok) throw new Error(`http ${response.status}`);
-      return response.json();
+      return readJsonResponse(response);
     },
     async getJson(url, headers = {}) {
       const response = await fetchImpl(url, { method: 'GET', headers });
-      if (!response.ok) throw new Error(`http ${response.status}`);
-      return response.json();
+      return readJsonResponse(response);
     },
   };
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  let text = '';
+  try {
+    text = await response.text();
+  } catch {
+    if (!response.ok) throw new Error(`http ${response.status}`);
+    throw new Error('response body unreadable');
+  }
+  if (!text) {
+    if (!response.ok) throw new Error(`http ${response.status}`);
+    return {};
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (!response.ok) throw new Error(`http ${response.status}`);
+    throw new Error('response body is not valid json');
+  }
 }
 
 /**
@@ -121,7 +139,7 @@ function parseTokenResponse(body: unknown): FeishuTokenResponse {
   const data = body as { code?: unknown; msg?: unknown } & FeishuTokenResponse;
   if (typeof data.code === 'number' && data.code !== 0) {
     // 10003/10642 等 = 无效授权（invalid_grant 语义）
-    if (data.code === 10003 || data.code === 10642 || data.code === 99991672) {
+    if (data.code === 10003 || data.code === 10642 || data.code === 99991672 || data.code === 99991677) {
       throw new TokenEndpointError('invalid_grant', `飞书授权已失效（${data.code}），请重新授权`);
     }
     throw new TokenEndpointError('provider_error', `飞书 token 端点错误 ${data.code}: ${data.msg ?? ''}`);
@@ -204,7 +222,7 @@ export function createFeishuTokenEndpoint(opts: FeishuTokenEndpointOptions): Tok
           Authorization: `Bearer ${accessToken}`,
         })) as { code?: unknown; msg?: unknown; data?: { union_id?: string; tenant_key?: string; name?: string } };
         if (typeof body.code === 'number' && body.code !== 0) {
-          const invalid = body.code === 10003 || body.code === 10642 || body.code === 99991672;
+          const invalid = body.code === 10003 || body.code === 10642 || body.code === 99991672 || body.code === 99991677;
           return {
             ok: false,
             error: invalid ? '飞书令牌已失效' : `飞书健康检查失败（${body.code}）`,

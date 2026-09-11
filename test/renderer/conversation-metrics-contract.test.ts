@@ -18,8 +18,12 @@ describe('对话内用量契约（验收标准）', () => {
       { startedAt: 9, firstTokenAt: 10_000, completedAt: 15_000, usage: { inputTokens: 50, outputTokens: 25, cacheReadTokens: 450 }, toolCalls: 2 },
     ];
     const f = foldSessionMetrics(ms, { contextWindow: null, price: null });
-    expect(f.cacheHitText).toBe('83%'); // 750 / (150+750) ≈ 83.3
+    // 合并定稿（2026-09-08）：cacheHitText 用 DSH billedInput 分母
+    // （750/(150+750+0)=83%）；inText 为对账口径三项和（900），主显示
+    // 读数走 inFreshText（裸输入 150）。
+    expect(f.cacheHitText).toBe('83%');
     expect(f.inText).toBe('900');
+    expect(f.inFreshText).toBe('150');
   });
 
   it('缓存与费用是聚合段：正文不掺入（纯函数无 DOM 即为证）', () => {

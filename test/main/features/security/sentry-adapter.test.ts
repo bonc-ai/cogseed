@@ -12,7 +12,10 @@ import * as path from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { scanSkillDir } from '../../../../src/main/features/security/sentry-adapter';
+import {
+  isRetryableScannerProcessExit,
+  scanSkillDir,
+} from '../../../../src/main/features/security/sentry-adapter';
 
 const BUILTIN = path.resolve(__dirname, '../../../../resources/builtin/marketplace/skills');
 // The open-source tree ships without the deep-scanner engine; engine-backed
@@ -30,6 +33,16 @@ function mkSkill(files: Record<string, string>): string {
 }
 
 const CLEAN_MD = '---\nname: helper\ndescription: A normal helper skill\n---\nDoes normal things.\n';
+
+describe('security › sentry adapter › process recovery', () => {
+  it('retries only Windows native process crashes', () => {
+    expect(isRetryableScannerProcessExit(0xC0000005, 'win32')).toBe(true);
+    expect(isRetryableScannerProcessExit(0xC0000409, 'win32')).toBe(true);
+    expect(isRetryableScannerProcessExit(1, 'win32')).toBe(false);
+    expect(isRetryableScannerProcessExit(null, 'win32')).toBe(false);
+    expect(isRetryableScannerProcessExit(0xC0000005, 'darwin')).toBe(false);
+  });
+});
 
 describe('security › sentry adapter › real builtin corpus', () => {
   let dirs: string[] = [];
