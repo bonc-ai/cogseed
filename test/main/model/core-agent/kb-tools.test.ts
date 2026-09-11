@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 /**
  * kb_list / kb_search / kb_read tool contract tests. kb_embed is mocked so tests don't
@@ -32,10 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  try {
-    const kb = await import('../../../../src/main/features/kb_vector');
-    kb.closeAllKb();
-  } catch { /* ignore */ }
+  await drainMainRuntimeForTest(TEST_UID);
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });

@@ -2,27 +2,43 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 const UID = 'p3394-bridge-adapter-user';
 let tmpDir: string;
 let previousWorkspaceRoot: string | undefined;
+const trackedControllers = new Set<{ shutdown(): Promise<void> }>();
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p3394-bridge-adapter-'));
   previousWorkspaceRoot = process.env.COGSEED_WORKSPACE_ROOT;
   process.env.COGSEED_WORKSPACE_ROOT = tmpDir;
+  trackedControllers.clear();
   vi.resetModules();
 });
 
-afterEach(() => {
-  if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
-  else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+afterEach(async () => {
+  try {
+    await Promise.allSettled(Array.from(trackedControllers, (controller) => controller.shutdown()));
+    await drainMainRuntimeForTest(UID);
+  } finally {
+    if (previousWorkspaceRoot === undefined) delete process.env.COGSEED_WORKSPACE_ROOT;
+    else process.env.COGSEED_WORKSPACE_ROOT = previousWorkspaceRoot;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 async function load() {
   const adapterModule = await import('../../../../src/main/features/p3394_bridge/cogseed-runtime-adapter');
-  const controllerModule = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+  const rawControllerModule = await import('../../../../src/main/features/cogseed_backend/runtime-controller');
+  const controllerModule = {
+    ...rawControllerModule,
+    createCogSeedRuntimeController: (...args: Parameters<typeof rawControllerModule.createCogSeedRuntimeController>) => {
+      const controller = rawControllerModule.createCogSeedRuntimeController(...args);
+      trackedControllers.add(controller);
+      return controller;
+    },
+  };
   const executionModule = await import('../../../../src/main/features/cogseed_backend/cogseed-execution-store');
   const executorModule = await import('../../../../src/main/features/p3394_bridge/executor');
   const bridgeModule = await import('../../../../src/main/features/p3394_bridge/bridge');

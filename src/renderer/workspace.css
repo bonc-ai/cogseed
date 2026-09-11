@@ -26,8 +26,8 @@
 }
 
 .ws-view *, .ws-view *::before, .ws-view *::after { box-sizing: border-box; }
-.ws-view button, .ws-view input, .ws-view textarea, .ws-view select { font: inherit; color: inherit; }
-.ws-view button { cursor: pointer; border: 0; background: transparent; text-align: left; }
+.ws-view button:not(.ui-button):not(.ui-icon-button), .ws-view input, .ws-view textarea, .ws-view select { font: inherit; color: inherit; }
+.ws-view button:not(.ui-button):not(.ui-icon-button) { cursor: pointer; border: 0; background: transparent; text-align: left; }
 .ws-view h1, .ws-view h2, .ws-view h3 { margin: 0; }
 
 /* ── 通用按钮 ── */
@@ -492,6 +492,11 @@
 .ws-dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 60px; padding: 0 22px; border-top: 1px solid var(--ws-line); background: #fbfdfc; }
 .ws-dialog-foot small { max-width: 430px; color: #78857d; font-size: var(--font-size-1); line-height: 1.5; }
 .ws-dialog-foot > div { display: flex; gap: 8px; }
+@media (max-width: 560px) {
+  .ws-dialog-foot { flex-direction: column; align-items: stretch; padding: 12px 22px; gap: 8px; }
+  .ws-dialog-foot > div { justify-content: flex-end; }
+  .ws-dialog-foot button { flex-shrink: 0; white-space: nowrap; }
+}
 
 .ws-ability-scrim { z-index: var(--z-modal); background: rgba(25,36,30,.46); }
 .ws-ability-dialog { display: flex; flex-direction: column; width: min(900px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); overflow: hidden; border: 1px solid #d7e1db; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(25,36,30,.18); }
@@ -537,6 +542,9 @@
 
 /* ── 加载 / 空态 / 错误态 ── */
 .ws-loading { display: grid; place-items: center; min-height: 60vh; color: #7b857f; font-size: 13px; }
+.ws-detail-loading { display: grid; place-items: center; min-height: 160px; color: var(--muted); font-size: 13px; }
+.ws-recovery-page { width: 100%; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 12px; box-sizing: border-box; }
+.ws-refresh-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 44px; box-sizing: border-box; padding: 8px 16px; color: var(--muted); font-size: 13px; }
 .ws-empty { padding: 40px 20px; border: 1px dashed var(--ws-line-strong); border-radius: 12px; color: #87918b; background: #fafcfb; text-align: center; font-size: 12px; line-height: 1.6; }
 .ws-empty small { display: block; margin-top: 6px; color: #a4aca7; font-size: 11px; }
 .ws-load-error { display: grid; place-items: center; gap: 14px; min-height: 60vh; text-align: center; }

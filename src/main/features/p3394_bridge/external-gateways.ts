@@ -17,6 +17,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { app } from 'electron';
 import { createLogger } from '../../logger';
 import { p3394StateFile, variantRoot } from './runtime-paths';
+import { DEFAULT_USER_WORKSPACE } from '../../paths';
 import { P3394PeerRegistry } from './registry';
 import { getP3394BridgeInfo } from './app-wiring';
 import { detectOne } from '../local_agents/registry';
@@ -37,6 +38,7 @@ const watchedStartInput = new Map<string, { binPath?: string; alias?: string; br
 const restartCounts = new Map<string, number>();
 const WATCHDOG_RESTART_DELAY_MS = Number(process.env.COGSEED_P3394_WATCHDOG_DELAY_MS || 5_000);
 const WATCHDOG_MAX_CONSECUTIVE_FAILURES = 3;
+const GATEWAY_SHUTDOWN_GRACE_MS = 3_000;
 /** 已排队的自动重启定时器（key 为 cli）。detachWatch / stop 必须取消它，
  *  否则「删除 agent → 网关 crash 时排队的 timer 到点复活网关 → hello →
  *  投影重建同名 agent → 再次创建同名被拒」——重启必须尊重主动停止。 */
@@ -107,6 +109,34 @@ function watchGateway(cli: string, child: ChildProcess, input: { binPath?: strin
   });
 }
 
+/** Ask a live managed gateway to close its runtimes and listener itself.
+ *  Resolves false when IPC cannot be delivered or the child misses the
+ *  bounded grace period, allowing callers to retain process-tree fallback. */
+function requestGatewayShutdown(child: ChildProcess): Promise<boolean> {
+  if (!child.connected) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (closed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('close', onClose);
+      resolve(closed);
+    };
+    const onClose = () => finish(true);
+    const timer = setTimeout(() => finish(false), GATEWAY_SHUTDOWN_GRACE_MS);
+    timer.unref?.();
+    child.once('close', onClose);
+    try {
+      child.send({ type: 'p3394-shutdown' }, (error) => {
+        if (error) finish(false);
+      });
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 export interface P3394ExternalGatewayState {
   cli: string;
   agent_id: string;
@@ -141,15 +171,34 @@ export function p3394ExternalGatewayIdFor(cliType: string): string | null {
   return mapping ? mapping.id : null;
 }
 
-/** 托管网关的运行时模式（sscli 主导）：声明了的 CLI 走 sscli 路径——
- *  claude 用 stream-json 包装器逐 token 流式（配合 --include-partial-messages
- *  才真正出增量帧）；未声明的保持 oneshot 兜底。默认开启；发布时需要紧急
- *  回退到全部 oneshot 时设 COGSEED_P3394_STREAM_JSON=0。后续新增支持
- *  stream-json / 原生 p3394-sscli 的 CLI 只需在此登记。 */
+/** 托管网关的运行时模式（sscli 主导，"任意智能体"已落地 G-35）：
+ *  - claude 走 stream-json 包装器 / 常驻双工（逐 token 流式）；
+ *  - codex 走专有 app-server（runtimeFor 优先于 sscli，不在此表）；
+ *  - **其余一切 CLI（含未知名自接智能体）默认经 sscli-shim 通用协议垫片
+ *    走 p3394-sscli/1.0**——shim 本就为任意一次性命令行智能体设计（每轮
+ *    spawn + resume/transcript 语义），不再限定预设名单；这正是标准指南
+ *    "任意本地 Agent + 接入层 = P3394 节点"承诺的落地。
+ *  排除表：COGSEED_P3394_SSCLI_EXCLUDE=cli1,cli2 让个别 CLI 回 oneshot。
+ *  回退开关：COGSEED_P3394_STREAM_JSON=0 全部回 oneshot（紧急回退）；
+ *  COGSEED_P3394_SSCLI_SHIM=0 仅撤垫片（claude 保持 sscli）。 */
 const streamJsonEnabled = String(process.env.COGSEED_P3394_STREAM_JSON ?? '1') !== '0';
-const CLI_TO_RUNTIME_MODE: Record<string, string | undefined> = streamJsonEnabled
-  ? { claude: 'sscli' }
-  : {};
+const sscliShimEnabled = String(process.env.COGSEED_P3394_SSCLI_SHIM ?? '1') !== '0';
+/** 排除表调用时读取（运行时可配置；单次 split 开销可忽略）。 */
+function sscliExcludeHas(key: string): boolean {
+  return String(process.env.COGSEED_P3394_SSCLI_EXCLUDE ?? '')
+    .split(',').some((s) => s.trim().toLowerCase() === key && key);
+}
+/** 任意 CLI 的运行时模式判定（导出供测试）：G-35"任意智能体走 sscli"。 */
+export function runtimeModeForCli(cli: string): string | undefined {
+  if (!streamJsonEnabled) return undefined;
+  const key = String(cli || '').trim().toLowerCase();
+  // codex 的专有 app-server 后端优于 sscli（runtimeFor 分支顺序）。
+  if (key === 'codex') return undefined;
+  // claude 的 stream-json 包装器不依赖 shim，shim 关闭也保留 sscli。
+  if (key === 'claude') return 'sscli';
+  if (!sscliShimEnabled || sscliExcludeHas(key)) return undefined;
+  return 'sscli';
+}
 
 interface GatewayStateFile { schema_version: number; gateways: Array<Omit<P3394ExternalGatewayState, 'running'>> }
 
@@ -318,6 +367,25 @@ async function doStartExternalGateway(input: {
     P3394_GATEWAY_HOST: '127.0.0.1',
     P3394_ADVERTISE_ENDPOINT: 'http://127.0.0.1:' + port,
     P3394_GATEWAY_HOME: gatewayHome,
+    // §9.2 workspace allowlist 信任链对齐：主进程派发时下发的会话工作区
+    // （extensions.working_dir）有两类根——数据树内的空间/项目工作区
+    // （COGSEED_WORKSPACE_ROOT 涵盖）与默认会话工作区树
+    // DEFAULT_USER_WORKSPACE（userWorkSpace/，data/ 的兄弟目录，见
+    // paths.ts 目录文档）。两棵树都注入网关允许根，网关侧校验语义保持
+    // 不放松——只扩大到主进程自己的合法值域。
+    //
+    // PR209 评审 M12 说明：此 env 注入的是数据树整根（含各用户
+    // cloud/local），而非逐会话工作区——网关为 **per-CLI 长驻进程**，
+    // 启动时无法预知后续所有会话的工作区；收窄到会话粒度需要网关支持
+    // 动态 allowlist 注册（或 per-会话网关实例），属后续增强。当前实现
+    // 相对基线（空 allowlist = 全放行）方向为收紧，信任链闭合：网关仅
+    // 校验"主进程下发的 working_dir 在允许根内"，自身不主动越权读——
+    // 数据隔离由主进程派发时的 working_dir 选取保证。
+    ...(process.env.COGSEED_WORKSPACE_ROOT ? {
+      P3394_GATEWAY_ALLOWED_ROOTS: [process.env.COGSEED_WORKSPACE_ROOT, DEFAULT_USER_WORKSPACE, gatewayHome]
+        .filter(Boolean)
+        .join(path.delimiter),
+    } : {}),
     COGSEED_ENDPOINT: bridgeInfo.endpoint,
     COGSEED_TOKEN: bridgeInfo.token,
     P3394_AGENT: mapping.preset,
@@ -327,7 +395,8 @@ async function doStartExternalGateway(input: {
     P3394_AGENT_CLI: String(input.binPath || '').trim() || mapping.id,
     P3394_HEARTBEAT_MS: '30000',
     // sscli 主导：声明过的 CLI 走 sscli 路径（claude → stream-json 包装器）。
-    ...(CLI_TO_RUNTIME_MODE[cli] ? { P3394_AGENT_MODE: CLI_TO_RUNTIME_MODE[cli] } : {}),
+    // sscli 主导（G-35）：任意 CLI（含未知名自接）默认经 shim 走 sscli。
+    ...(runtimeModeForCli(cli) ? { P3394_AGENT_MODE: runtimeModeForCli(cli) } : {}),
     // per-agent 参数模板声明（「声明即生效」）：注入后网关即可控模型/强度
     // （预设之外的 CLI 尤其依赖此通道），能力协商随之披露。
     ...(declaredTemplates.modelArgs ? { P3394_AGENT_MODEL_ARGS: declaredTemplates.modelArgs } : {}),
@@ -340,7 +409,7 @@ async function doStartExternalGateway(input: {
     // (~/.local/bin, /opt/homebrew/bin, ...) so the gateway's own children
     // (bare preset commands like `codebuddy`) resolve like in a terminal.
     const childEnv = buildCliSpawnEnv(scriptPath, env);
-    child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, [scriptPath], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
     let errLog = '';
     let outLog = '';
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -368,7 +437,7 @@ async function doStartExternalGateway(input: {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
     if (!registered) {
-      killProcessTree(child, 'SIGTERM');
+      await killProcessTree(child, 'SIGTERM');
       const detail = [outLog.trim(), errLog.trim(), 'exit=' + String(child.exitCode)].filter(Boolean).join(' | ').slice(-1500);
       return { ok: false, error: 'p3394_gateway_registration_timeout' + (detail ? ': ' + detail : '') };
     }
@@ -389,7 +458,7 @@ async function doStartExternalGateway(input: {
     watchGateway(cli, child, { binPath: input.binPath, alias, bridgeInfo: input.bridgeInfo });
     return { ok: true, value: { ...record, running: true } };
   } catch (error) {
-    if (child && child.exitCode === null) killProcessTree(child, 'SIGTERM');
+    if (child && child.exitCode === null) await killProcessTree(child, 'SIGTERM');
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -534,8 +603,12 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
   const key = String(cli || '').trim();
   const record = listExternalGateways().find((g) => g.cli === key);
   if (!record) return { ok: true, value: null };
+  const child = watched.get(key);
   detachWatch(key);
-  killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+  const gracefullyClosed = child?.connected ? await requestGatewayShutdown(child) : false;
+  if (!gracefullyClosed) {
+    await killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+  }
   // 确认进程退出：SIGTERM 后短暂等待，仍存活则 SIGKILL 兜底——否则僵尸
   // 网关会继续 hello/心跳，删除 agent 后触发投影重建同名 agent。
   if (pidAlive(record.pid)) {
@@ -544,7 +617,7 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     if (pidAlive(record.pid)) {
-      killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGKILL');
+      await killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGKILL');
       await new Promise((resolve) => setTimeout(resolve, 200));
       log.warn('P3394 external gateway SIGKILL fallback', { cli: key, pid: record.pid });
     }
@@ -565,11 +638,19 @@ export async function stopExternalGateway(cli: string): Promise<P3394ExternalGat
  * still removes the matching record.
  */
 export async function stopAllExternalGateways(): Promise<void> {
+  const terminations = [];
   for (const record of listExternalGateways()) {
     if (!record.running) continue;
+    const child = watched.get(record.cli);
     detachWatch(record.cli);
-    killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+    const terminateTree = () => killProcessTree({ pid: record.pid, kill: (signal) => process.kill(record.pid, signal) }, 'SIGTERM');
+    if (!child?.connected) {
+      terminations.push(terminateTree());
+      continue;
+    }
+    terminations.push(requestGatewayShutdown(child).then((closed) => closed ? undefined : terminateTree()));
   }
+  await Promise.all(terminations);
   // 清空守护表（连同没有存活记录的 cli）。
   for (const cli of [...watched.keys()]) detachWatch(cli);
 }

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { readClaudeSessionTranscript } from '../../../src/main/features/local_agents/claude_sessions';
 
 const prevHome = process.env.HOME;
+const prevUserProfile = process.env.USERPROFILE;
 const tmpDirs: string[] = [];
 
 /** The reader sandboxes to `~/.claude/projects`, so tests must relocate HOME. */
@@ -13,6 +14,7 @@ function mkProjectsHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-claude-tx-'));
   tmpDirs.push(home);
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   const dir = path.join(home, '.claude', 'projects', 'proj');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -28,6 +30,8 @@ function turn(i: number, role: 'user' | 'assistant'): string {
 afterEach(() => {
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
+  if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = prevUserProfile;
   while (tmpDirs.length) fs.rmSync(tmpDirs.pop()!, { recursive: true, force: true });
 });
 

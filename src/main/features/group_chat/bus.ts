@@ -32,6 +32,7 @@ import {
   isPathAllowed,
 } from "../../util/path-sandbox";
 import { appendJsonlAtomic, genId12, nowIso, readJsonl, safeId } from "../../storage";
+import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -148,6 +149,21 @@ import {
 function thinkingLevelForRun(): "off" | "low" | "high" | "auto" {
   return getThinkingLevel();
 }
+
+/** 思考展示兜底辅助：本轮模型是否被识别为 reasoning 模型（deepseek/o系/
+ * gemini-pro/grok 等全系）。按模型名前缀宽松判定——与
+ * model_id_recognition.ts 的规则同源精简。
+ * PR209 评审 M8：无显式模型名（execConfig.model 为空）返回 **false**
+ * ——此前恒 true 会把 low 盲发给未显式指定模型的回合（实际走默认模型，
+ * 可能非推理端点），与「识别不出不盲发」的注释矛盾。默认链路的思考
+ * 兜底交给 pi-ai 模型目录的 defaultReasoning（已策展，更准确）。 */
+// 导出供回归测试（空模型名 → false 的收紧是 M8 的核心行为）。
+export function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
+  const modelId = String(item.execConfig?.model || "").trim().toLowerCase();
+  if (!modelId) return false;
+  return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
+    || /(thinking|reasoner|qwq)/.test(modelId);
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -199,6 +215,7 @@ import {
   type KStarDecisionRecord,
   type KStarExpectation,
 } from "../kstar/dispatch-decision";
+import { retainKstarReuseTurnIds } from "../kstar/reuse-turn-ids";
 import {
   buildP3394Level2Manifest,
   normalizeP3394AgentMessage,
@@ -214,6 +231,11 @@ import {
   type RecallPromptCitation,
 } from "../recall/prompt-injection";
 import { readAbilityAsset } from "../recall/asset-service";
+import {
+  createProcessCollector,
+  type PersistedChatEntry,
+  type ProcessCollector,
+} from "../chat_events/process-persist";
 import type { AssetRuntimeContext } from "../recall/formal-assets/runtime";
 import { recordRecallUsage } from "../recall/usage-service";
 
@@ -649,7 +671,54 @@ const MAX_WORKER_TURNS = 100; // hard ceiling against runaway loops
 type ProcessEvent = { stream: string; data?: unknown };
 type ProcessItem =
   | { type: "progress"; text: string; event?: ProcessEvent }
-  | { type: "event"; event: ProcessEvent };
+  | { type: "event"; event: ProcessEvent }
+  // PR209 评审 M9：思考 progress 的运行时标记（内存态专用，落盘 JSON.stringify
+  // 会带上但读取方忽略未知字段，无契约影响）。
+  | { type: "progress"; text: string; event?: ProcessEvent; _thinking?: boolean };
+
+/**
+ * conv-core 存储补差合并：老格式 processItems + chat_events 新条目合成单条
+ * 过程轨迹，总量守住 MAX_PROCESS_ITEMS_PER_TURN（消息过程上限是既有不变量，
+ * 见 bus-integration 饱和测试）。预算分配：turn 终态条目最优先（收束态总耗时
+ * 的唯一来源），工具 chatItem 次之（保持到达序），reasoning 垫底（与老格式
+ * progress 文本语义重复，超额先丢）。老格式已打满上限时新条目全弃——历史
+ * 重建回退老路径，行为与收编前完全一致。
+ */
+export function mergeProcessTrail(
+  processItems: ProcessItem[],
+  chatEntries: readonly PersistedChatEntry[],
+): Array<ProcessItem | PersistedChatEntry> {
+  const budget = MAX_PROCESS_ITEMS_PER_TURN - processItems.length;
+  if (budget <= 0) return [...processItems];
+  const turnEntries = chatEntries.filter((e) => e.type === "turn");
+  const nonTurn = chatEntries.filter((e) => e.type !== "turn");
+  const isReasoning = (e: PersistedChatEntry) =>
+    e.type === "chatItem" && (e.item as { kind?: string }).kind === "reasoning";
+  const ordered = [
+    ...nonTurn.filter((e) => !isReasoning(e)),
+    ...nonTurn.filter(isReasoning),
+    ...turnEntries,
+  ];
+  // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
+  if (ordered.length <= budget) return [...processItems, ...ordered];
+  const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
+  // 预算共享（PR209 评审 M7）：非 reasoning 与 reasoning 两组共用
+  // budget - keepTurn 的总额度——此前两组各 slice 同一 keepRest，合并
+  // 总长可达 2×keepRest 突破 300 上限（实测可到 401），与函数头注释
+  // 「守住 MAX_PROCESS_ITEMS_PER_TURN」矛盾。优先级序：非 reasoning
+  // （工具/正文/usage）先取，剩余额度给 reasoning。
+  const restBudget = Math.max(0, budget - keepTurn);
+  const nonReasoning = nonTurn.filter((e) => !isReasoning(e));
+  const reasoning = nonTurn.filter(isReasoning);
+  const keptNonReasoning = nonReasoning.slice(0, restBudget);
+  const keptReasoning = reasoning.slice(0, Math.max(0, restBudget - keptNonReasoning.length));
+  return [
+    ...processItems,
+    ...keptNonReasoning,
+    ...keptReasoning,
+    ...turnEntries.slice(0, keepTurn),
+  ];
+}
 
 function processEventForPersistence(raw: unknown): ProcessEvent | null {
   if (!raw || typeof raw !== "object") return null;
@@ -1111,6 +1180,10 @@ export type GroupEvent =
       turn_id?: string;
       source_msg_id?: string;
       reason?: "terminal_handoff";
+      /** 渠道任务接续（G0）失败回执：仅当回合因意外错误终止时由 worker
+       *  catch 分支携带（截断后的错误摘要）。正常 silent 与用户取消不带，
+       *  渠道 runtime 依此区分"要不要给用户一条失败提示"。 */
+      error?: string;
     };
 
 export type GroupListener = (ev: GroupEvent) => void;
@@ -1292,13 +1365,18 @@ interface CidState {
    * conversation bus becomes quiescent. It is intentionally content-free:
    * terminal listeners may feed OS notifications and must never receive
    * prompts, titles, or model output. */
-  taskRun?: {
+  taskRun?: TaskRunState;
+}
+
+interface TaskRunState {
     runId: string;
     startedAtMs: number;
     status: TaskTerminalStatus | null;
     anchorMessageId?: string;
     lastMessageId?: string;
     logicalRunId?: string;
+    taskId?: string;
+    requirementId?: string;
     executionId?: string;
     projectionId?: string;
     forecastId?: string;
@@ -1310,7 +1388,7 @@ interface CidState {
      *  清单，迁移证明就能显式关联到"哪一次真实加载"——不靠时间窗反查，也不靠
      *  execution id 推断粘合。 */
     reuseTurnIds?: string[];
-  };
+    reuseTurnIdsTruncated?: true;
 }
 
 export type TaskTerminalStatus =
@@ -1329,12 +1407,16 @@ export interface TaskTerminalEvent {
   finished_message_id?: string;
   /** Optional execution identity used by terminal proof adapters. */
   logical_run_id?: string;
+  task_id?: string;
+  requirement_id?: string;
   execution_id?: string;
   projection_id?: string;
   forecast_id?: string;
   /** 本次运行里落过 ContextReuseReceipt 的轮次 id（回执键为 `turn-<id>`）。
    *  迁移证明凭这份清单找到真实加载凭证，一一对应，不做推断。 */
   reuse_turn_ids?: string[];
+  /** True when reuse_turn_ids is only the newest retained suffix. */
+  reuse_turn_ids_truncated?: true;
   wake_request_id?: string;
 }
 
@@ -1528,15 +1610,95 @@ function _recordTaskRunOutcome(
   if (!run.status || rank[status] >= rank[run.status]) run.status = status;
 }
 
+function _recordTaskRunReuseTurn(state: CidState, turnId: string): void {
+  const run = state.taskRun;
+  if (!run) return;
+  const retained = retainKstarReuseTurnIds([...(run.reuseTurnIds || []), turnId]);
+  run.reuseTurnIds = retained.reuseTurnIds;
+  if (run.reuseTurnIdsTruncated || retained.truncated) run.reuseTurnIdsTruncated = true;
+}
+
+function _recordTaskRunKstarProvenance(
+  state: CidState,
+  provenance: {
+    taskId?: string;
+    requirementId?: string;
+    projectionId?: string;
+    forecastId?: string;
+    wakeRequestId?: string;
+    executionId?: string;
+  },
+  options: { fillIfAbsent?: boolean } = {},
+): void {
+  const run = state.taskRun;
+  if (!run) return;
+  const fillIfAbsent = options.fillIfAbsent === true;
+  // Passive per-message capture (fillIfAbsent) may only populate fields that
+  // are still unset: once a run's identity is resolved (by the first message's
+  // lifecycle or by an authoritative task decision), later messages of the
+  // same aggregate run must never change it. Authoritative call sites omit the
+  // option and keep the overwrite semantics — they represent real task
+  // decisions (dispatch routing / privileged dispatch approval / terminal
+  // provenance on enqueue).
+  //
+  // A passive fill must additionally never pair an already-frozen task with a
+  // DIFFERENT lifecycle. Passive capture always supplies a complete lifecycle
+  // pair, so filling requirement B (from a moved lifecycle) under frozen task
+  // A is exactly the cross-task contamination the freeze must prevent. When
+  // the run's task is still unset, or the incoming lifecycle resolves to the
+  // SAME task, per-field fill continues (a same-task later capture may still
+  // fill still-unset requirement/projection fields).
+  if (fillIfAbsent && provenance.taskId && run.taskId !== undefined && run.taskId !== provenance.taskId) {
+    return;
+  }
+  if (provenance.taskId && (fillIfAbsent ? run.taskId === undefined : true)) {
+    run.taskId = provenance.taskId;
+    run.logicalRunId = provenance.taskId;
+  }
+  if (provenance.requirementId && (fillIfAbsent ? run.requirementId === undefined : true)) {
+    run.requirementId = provenance.requirementId;
+  }
+  if (provenance.projectionId && (fillIfAbsent ? run.projectionId === undefined : true)) {
+    run.projectionId = provenance.projectionId;
+  }
+  if (provenance.forecastId && (fillIfAbsent ? run.forecastId === undefined : true)) {
+    run.forecastId = provenance.forecastId;
+  }
+  if (provenance.wakeRequestId && (fillIfAbsent ? run.wakeRequestId === undefined : true)) {
+    run.wakeRequestId = provenance.wakeRequestId;
+  }
+  if (provenance.executionId && (fillIfAbsent ? run.executionId === undefined : true)) {
+    run.executionId = provenance.executionId;
+  }
+}
+
+async function _captureCurrentTaskRunKstarProvenance(state: CidState): Promise<void> {
+  if (!state.taskRun) return;
+  try {
+    const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
+    const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
+    if (!lifecycle.task || !lifecycle.requirement) return;
+    _recordTaskRunKstarProvenance(state, {
+      taskId: lifecycle.task.id,
+      requirementId: lifecycle.requirement.id,
+      ...(lifecycle.projection?.id ? { projectionId: lifecycle.projection.id } : {}),
+      ...(lifecycle.requirement.forecastId ? { forecastId: lifecycle.requirement.forecastId } : {}),
+      ...(lifecycle.wakeRequest?.id ? { wakeRequestId: lifecycle.wakeRequest.id } : {}),
+    }, { fillIfAbsent: true });
+  } catch (error) {
+    log.warn('kstar active-run provenance capture degraded', {
+      cid: maskId(state.cid),
+      error: logErrorRef(error),
+    });
+  }
+}
+
 function _emitTaskRunTerminalIfQuiescent(
   state: CidState,
   stateFile?: StateFile,
 ): void {
   const run = state.taskRun;
   if (!run || !isQuiescent(state.uid, state.cid)) return;
-  // Clear synchronously before notifying. Concurrent status reconciliations
-  // can now observe the run as finished and cannot emit it twice.
-  state.taskRun = undefined;
   const waitingForUser =
     stateFile?.orchestration_ledger?.status === "waiting_for_form" ||
     stateFile?.orchestration_ledger?.status === "waiting_for_agent";
@@ -1546,65 +1708,60 @@ function _emitTaskRunTerminalIfQuiescent(
       : waitingForUser
         ? "waiting_input"
         : run.status || "failed";
+  const frozenReuseTurnIds: readonly string[] | undefined = run.reuseTurnIds === undefined
+    ? undefined
+    : Object.freeze([...run.reuseTurnIds]);
+  const terminalSnapshot = Object.freeze({
+    runId: run.runId,
+    startedAtMs: run.startedAtMs,
+    finishedAtMs: Date.now(),
+    status,
+    anchorMessageId: run.anchorMessageId,
+    lastMessageId: run.lastMessageId,
+    logicalRunId: run.logicalRunId,
+    taskId: run.taskId,
+    requirementId: run.requirementId,
+    executionId: run.executionId,
+    projectionId: run.projectionId,
+    forecastId: run.forecastId,
+    wakeRequestId: run.wakeRequestId,
+    cogseedTaskId: run.cogseedTaskId,
+    reuseTurnIds: frozenReuseTurnIds,
+    reuseTurnIdsTruncated: run.reuseTurnIdsTruncated,
+  });
+  // Freeze every terminal-owned fact before release. Later runs may now start,
+  // but background consumers only see this detached immutable snapshot.
+  state.taskRun = undefined;
   const listeners = [..._taskTerminalListeners];
   trackBackgroundWrite(state, (async () => {
-    // M-6: reuseTurnIds 只在内存。进程重启/崩溃后清单丢失，终态退回无回执
-    // 分支，该次运行的资产永不升档（回执文件本身已落盘 local/kstar/
-    // executions/turn-<turnId>/）。恢复：扫描本会话（targetSessionId=
-    // gconv-<cid>）且在本 run 开始之后落过的回执，按 turn- 前缀还原清单。
-    if (!run.reuseTurnIds?.length) {
-      try {
-        const { listReceipts } = await import('../p3394/context-reuse-receipt');
-        const receipts = await listReceipts(state.uid).catch(() => [] as Array<{ targetSessionId: string; executionId: string; createdAt: string }>);
-        const restored = receipts
-          .filter((receipt) => receipt.targetSessionId === `gconv-${state.cid}`
-            && Date.parse(receipt.createdAt) >= run.startedAtMs)
-          .map((receipt) => receipt.executionId)
-          .filter((executionId) => executionId.startsWith('turn-'))
-          .map((executionId) => executionId.slice('turn-'.length))
-          .filter(Boolean);
-        if (restored.length) run.reuseTurnIds = [...new Set(restored)];
-      } catch (err) {
-        log.warn(`task terminal receipt restore degraded cid=${state.cid}: ${(err as Error).message}`);
-      }
-    }
-    const event: TaskTerminalEvent = {
-      run_id: run.runId,
+    const event: TaskTerminalEvent = Object.freeze({
+      run_id: terminalSnapshot.runId,
       user_id: state.uid,
       conversation_id: state.cid,
-      status,
-      started_at_ms: run.startedAtMs,
-      finished_at_ms: Date.now(),
-      ...(run.anchorMessageId ? { anchor_message_id: run.anchorMessageId } : {}),
-      ...(run.lastMessageId ? { finished_message_id: run.lastMessageId } : {}),
-      ...(run.logicalRunId ? { logical_run_id: run.logicalRunId } : {}),
-      ...(run.executionId ? { execution_id: run.executionId } : {}),
-      ...(run.projectionId ? { projection_id: run.projectionId } : {}),
-      ...(run.forecastId ? { forecast_id: run.forecastId } : {}),
-      ...(run.wakeRequestId ? { wake_request_id: run.wakeRequestId } : {}),
-      ...(run.reuseTurnIds?.length ? { reuse_turn_ids: [...run.reuseTurnIds] } : {}),
-    };
-    if (!event.projection_id || !event.logical_run_id || !event.wake_request_id) {
-      try {
-        const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
-        const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
-        if (!event.logical_run_id && lifecycle.task?.id) event.logical_run_id = lifecycle.task.id;
-        if (!event.projection_id && lifecycle.projection?.id) event.projection_id = lifecycle.projection.id;
-        if (!event.forecast_id && lifecycle.requirement?.forecastId) event.forecast_id = lifecycle.requirement.forecastId;
-        if (!event.wake_request_id && lifecycle.wakeRequest?.id) event.wake_request_id = lifecycle.wakeRequest.id;
-      } catch (err) {
-        log.warn(`task terminal provenance lookup failed cid=${state.cid}: ${(err as Error).message}`);
-      }
-    }
-    if (!event.logical_run_id) event.logical_run_id = run.runId;
-    if (!event.execution_id) event.execution_id = run.runId;
-    if (run.cogseedTaskId) {
+      status: terminalSnapshot.status,
+      started_at_ms: terminalSnapshot.startedAtMs,
+      finished_at_ms: terminalSnapshot.finishedAtMs,
+      ...(terminalSnapshot.anchorMessageId ? { anchor_message_id: terminalSnapshot.anchorMessageId } : {}),
+      ...(terminalSnapshot.lastMessageId ? { finished_message_id: terminalSnapshot.lastMessageId } : {}),
+      logical_run_id: terminalSnapshot.logicalRunId || terminalSnapshot.taskId || terminalSnapshot.runId,
+      execution_id: terminalSnapshot.executionId || terminalSnapshot.runId,
+      ...(terminalSnapshot.taskId ? { task_id: terminalSnapshot.taskId } : {}),
+      ...(terminalSnapshot.requirementId ? { requirement_id: terminalSnapshot.requirementId } : {}),
+      ...(terminalSnapshot.projectionId ? { projection_id: terminalSnapshot.projectionId } : {}),
+      ...(terminalSnapshot.forecastId ? { forecast_id: terminalSnapshot.forecastId } : {}),
+      ...(terminalSnapshot.wakeRequestId ? { wake_request_id: terminalSnapshot.wakeRequestId } : {}),
+      ...(terminalSnapshot.reuseTurnIds !== undefined
+        ? { reuse_turn_ids: terminalSnapshot.reuseTurnIds as string[] }
+        : {}),
+      ...(terminalSnapshot.reuseTurnIdsTruncated ? { reuse_turn_ids_truncated: true as const } : {}),
+    });
+    if (terminalSnapshot.cogseedTaskId) {
       await observedTaskBridge().finishTask({
         userId: state.uid,
-        taskId: run.cogseedTaskId,
-        status,
+        taskId: terminalSnapshot.cogseedTaskId,
+        status: terminalSnapshot.status,
         ...(event.finished_message_id ? { messageId: event.finished_message_id } : {}),
-        ...(status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
+        ...(terminalSnapshot.status === 'failed' ? { errorCode: 'group_chat_run_failed' } : {}),
       });
     }
     for (const listener of listeners) {
@@ -1815,9 +1972,11 @@ export interface ProjectedGroupProcessInput {
   cid: string;
   agentId: string;
   turnId: string;
-  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta'
+  kind: 'task.created' | 'task.queued' | 'task.started' | 'model.delta' | 'progress'
     | 'tool.started' | 'tool.finished' | 'artifact' | 'task.completed' | 'task.failed'
-    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user';
+    | 'task.cancelled' | 'task.recoverable' | 'task.waiting_user'
+    // 过程叙述（载荷 {text}）：与 cogseed_backend 事件类型对齐（见其 types 注）。
+    | 'progress';
   data: Record<string, unknown>;
 }
 
@@ -2209,6 +2368,8 @@ export interface EnqueueParams {
   kstarDecision?: KStarDecisionRecord;
   /** Internal KSTAR terminal provenance used to enrich bus terminal events. */
   kstarTerminalProvenance?: {
+    taskId?: string;
+    requirementId?: string;
     logicalRunId?: string;
     executionId?: string;
     projectionId?: string;
@@ -2252,6 +2413,20 @@ export async function enqueue(params: EnqueueParams): Promise<GroupMessage> {
       runId: genId12(),
       startedAtMs: Date.now(),
       status: null,
+      // reuseTurnIds: [] here is AUTHORITATIVE-EMPTY, not "no receipts were
+      // tracked": downstream consumers treat `reuseTurnIds !== undefined` as a
+      // new-format terminal event and suppress the legacy taskRunId fallback.
+      // This is sound only because the run just opened and records its reuse
+      // turns in-process from here on. Persisted-dispatch recoveries never use
+      // this literal: they re-derive the authoritative list from the durable
+      // receipt via recoverPersistedDispatchReuseTurnIds (mismatch/not-found
+      // both yield []), so [] must not be seeded for runs whose receipt
+      // tracking happens outside this process.
+      reuseTurnIds: [],
+      ...(provenance?.taskId || provenance?.logicalRunId
+        ? { taskId: provenance.taskId || provenance.logicalRunId }
+        : {}),
+      ...(provenance?.requirementId ? { requirementId: provenance.requirementId } : {}),
       ...(provenance?.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
       ...(provenance?.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance?.projectionId ? { projectionId: provenance.projectionId } : {}),
@@ -2792,14 +2967,16 @@ async function _enqueueBody(
 
   if (state.taskRun && params.kstarTerminalProvenance) {
     const provenance = params.kstarTerminalProvenance;
-    state.taskRun = {
-      ...state.taskRun,
-      ...(provenance.logicalRunId ? { logicalRunId: provenance.logicalRunId } : {}),
+    _recordTaskRunKstarProvenance(state, {
+      ...(provenance.taskId || provenance.logicalRunId
+        ? { taskId: provenance.taskId || provenance.logicalRunId }
+        : {}),
+      ...(provenance.requirementId ? { requirementId: provenance.requirementId } : {}),
       ...(provenance.executionId ? { executionId: provenance.executionId } : {}),
       ...(provenance.projectionId ? { projectionId: provenance.projectionId } : {}),
       ...(provenance.forecastId ? { forecastId: provenance.forecastId } : {}),
       ...(provenance.wakeRequestId ? { wakeRequestId: provenance.wakeRequestId } : {}),
-    };
+    });
   }
 
   // Persist: main jsonl + each recipient + sender (so sender sees own history
@@ -2827,6 +3004,9 @@ async function _enqueueBody(
         sourceMessageId: msg.id,
       });
       if (observed) state.taskRun.cogseedTaskId = observed.taskId;
+    }
+    if (!params.internalControl && (fromActorId === USER_ID || params.externalInbound === true)) {
+      await _captureCurrentTaskRunKstarProvenance(state);
     }
   }
   // Strip the process trail before writing visibility slices: only the user-
@@ -3055,6 +3235,79 @@ export interface RecoverPersistedUserDispatchResult {
   disposition: PersistedUserDispatchRecoveryDisposition;
 }
 
+function stableRecoveredTaskRunId(input: RecoverPersistedUserDispatchInput): string {
+  return createHash('sha256')
+    .update(['persisted-dispatch', input.cid, input.messageId, input.actionRequestId].join('\0'))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+async function recoverPersistedDispatchReuseTurnIds(
+  userId: string,
+  cid: string,
+  actor: Actor,
+  turnId: string,
+): Promise<string[] | undefined> {
+  try {
+    const { readReceipt } = await import('../p3394/context-reuse-receipt');
+    const receipt = await readReceipt(userId, `turn-${turnId}`);
+    if (receipt.targetSessionId !== actorSessionId(cid, actor)) {
+      // A receipt that belongs to another actor's session is unusable for
+      // THIS run. Treat it as authoritative-empty ([]) with a distinct warn,
+      // NOT undefined: undefined would fall back to the legacy taskRunId
+      // path and silently lose the per-turn evidence marker.
+      log.warn('persisted dispatch receipt target mismatch', {
+        cid: maskId(cid),
+        turnId: maskId(turnId),
+      });
+      return [];
+    }
+    return [turnId];
+  } catch (error) {
+    if ((error as Error).message === 'context reuse receipt not found') return [];
+    log.warn('persisted dispatch receipt recovery degraded', {
+      cid: maskId(cid),
+      turnId: maskId(turnId),
+      error: logErrorRef(error),
+    });
+    return undefined;
+  }
+}
+
+async function recoverPersistedDispatchKstarProvenance(
+  userId: string,
+  cid: string,
+  messageId: string,
+): Promise<Pick<TaskRunState, 'taskId' | 'requirementId' | 'logicalRunId' | 'projectionId' | 'forecastId' | 'wakeRequestId'>> {
+  try {
+    const store = await import('../kstar/requirement-store');
+    const tasks = await store.listKstarTasksForConversation(userId, cid);
+    const matches: Array<{ task: Awaited<ReturnType<typeof store.readKstarTask>>; requirement: Awaited<ReturnType<typeof store.readKstarRequirement>> }> = [];
+    for (const task of tasks) {
+      const requirements = await store.listKstarRequirementsForTask(userId, task.id);
+      for (const requirement of requirements) {
+        if (requirement.userMessageIds.includes(messageId)) matches.push({ task, requirement });
+      }
+    }
+    if (matches.length !== 1 || !matches[0].task || !matches[0].requirement) return {};
+    const { task, requirement } = matches[0];
+    return {
+      taskId: task.id,
+      logicalRunId: task.id,
+      requirementId: requirement.id,
+      ...(requirement.projectionId ? { projectionId: requirement.projectionId } : {}),
+      ...(requirement.forecastId ? { forecastId: requirement.forecastId } : {}),
+      ...(requirement.wakeRequestId ? { wakeRequestId: requirement.wakeRequestId } : {}),
+    };
+  } catch (error) {
+    log.warn('persisted dispatch KSTAR provenance recovery degraded', {
+      cid: maskId(cid),
+      error: logErrorRef(error),
+    });
+    return {};
+  }
+}
+
 /** Repair the narrow crash window where a host-owned user message reached the
  * main JSONL but its QueueItem did not reach the in-memory runtime. The caller
  * supplies identities derived from a durable retry claim; this function never
@@ -3138,12 +3391,21 @@ export async function recoverPersistedUserDispatch(
     }
 
     if (!state.taskRun) {
+      const persistedStartedAtMs = Date.parse(msg.ts);
+      const [reuseTurnIds, kstarProvenance] = await Promise.all([
+        recoverPersistedDispatchReuseTurnIds(input.uid, input.cid, actor, input.turnId),
+        recoverPersistedDispatchKstarProvenance(input.uid, input.cid, msg.id),
+      ]);
       state.taskRun = {
-        runId: genId12(),
-        startedAtMs: Date.now(),
+        runId: stableRecoveredTaskRunId(input),
+        startedAtMs: Number.isFinite(persistedStartedAtMs)
+          ? persistedStartedAtMs
+          : Date.now(),
         status: null,
         anchorMessageId: msg.id,
         lastMessageId: msg.id,
+        ...(reuseTurnIds !== undefined ? { reuseTurnIds } : {}),
+        ...kstarProvenance,
       };
     }
     const runtime = ensureRuntime(state);
@@ -3631,6 +3893,13 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
       // turn_silent here so the placeholder always resolves; it's safe if a
       // terminal was already emitted (the renderer clears idempotently), and the
       // post-finally `_syncStateStatus` below reconciles conversation status.
+      // 渠道任务接续（G0）：意外失败带上截断的错误摘要，渠道 runtime 依此
+      // 给用户投递失败回执；用户主动中止（abort 信号已触发）不算失败，
+      // 不带 error，渠道侧保持静默。
+      const userAborted = w.abortController?.signal.aborted === true;
+      const failSummary = userAborted
+        ? undefined
+        : String((err as Error).message || 'unexpected error').slice(0, 200);
       try {
         emit(state, {
           type: "turn_silent",
@@ -3638,6 +3907,7 @@ async function runWorkerLoop(state: CidState, w: WorkerState): Promise<void> {
           actor: item.actor.id,
           turn_id: item.turnId,
           source_msg_id: item.msgId,
+          ...(failSummary ? { error: failSummary } : {}),
         });
       } catch (emitErr) {
         log.warn(
@@ -3781,6 +4051,15 @@ async function runActorTurn(
 ): Promise<ActorTurnResult> {
   const stepId = item.workflow_step_id;
   const processItems: ProcessItem[] = [];
+  // conv-core 存储补差：同一事件流并行产出 chat_events 结构化条目（含权威
+  // timing 与终态总耗时），随老格式一并持久化到消息 process 字段——历史
+  // 重建由此显示真实计时（老消息无新条目时回退原「无计时不编造」路径）。
+  const chatCollector = createProcessCollector({
+    cid: state.cid,
+    actorId: w.actor.id,
+    turnId: item.turnId,
+    startedAtMs: turnStartedAt,
+  });
   const observedTurn = state.taskRun?.cogseedTaskId
     ? await observedTaskBridge().startTurn({
         userId: state.uid,
@@ -3889,6 +4168,7 @@ async function runActorTurn(
       item,
       turnStartedAt,
       coordinatorContext,
+      chatCollector,
     );
     if (result.kind === "completed") {
       await settle({
@@ -3899,6 +4179,12 @@ async function runActorTurn(
     } else {
       await settle({ error: "Actor turn ended before producing a result." });
     }
+    chatCollector.finish(
+      result.kind === "completed" && result.aborted
+        ? 'cancelled'
+        : result.kind === "completed" ? "completed" : "failed",
+      result.kind === "completed" ? result.errText : undefined,
+    );
     if (observedTurn) {
       await observedTaskBridge().finishTask({
         userId: state.uid,
@@ -3910,7 +4196,7 @@ async function runActorTurn(
           : result.kind === 'early' && result.failureCode
             ? { errorCode: result.failureCode }
             : {}),
-        process: processItems,
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     return result;
@@ -3922,6 +4208,7 @@ async function runActorTurn(
       : "Actor turn failed unexpectedly.";
     const aborted =
       !!w.abortController?.signal.aborted && coordinatorAbort === null;
+    chatCollector.finish(aborted ? 'cancelled' : 'failed', message);
     try {
       await settle({ error: message, ...(aborted ? { aborted: true } : {}) });
     } catch (settleErr) {
@@ -3939,7 +4226,7 @@ async function runActorTurn(
         taskId: observedTurn.taskId,
         status: aborted ? 'cancelled' : 'failed',
         errorCode: aborted ? 'group_chat_turn_cancelled' : 'group_chat_turn_failed',
-        process: processItems,
+        process: mergeProcessTrail(processItems, chatCollector.entries),
       });
     }
     if (stepId && !settled) {
@@ -3980,6 +4267,7 @@ async function runActorTurnBody(
   item: QueueItem,
   turnStartedAt: number,
   coordinator: CoordinatorTurnContext,
+  chatCollector: ProcessCollector,
 ): Promise<ActorTurnResult> {
   const { uid, cid, actor } = w;
   const { processItems, lease: coordinatorLease } = coordinator;
@@ -4097,9 +4385,12 @@ async function runActorTurnBody(
   // happened with the Commander or another Agent before this turn. Carry a
   // bounded digest of that missed context into the new Agent session; the
   // helper advances a per-Agent watermark so the same history is not repeated.
+  // G-26: covers every dispatch source (user direct, commander dispatch,
+  // agent→agent) so an external gateway agent dispatched a task also receives
+  // the digest — previously only direct user messages triggered it.
   if (
     actor.kind === "agent"
-    && item.fromActorId === USER_ID
+    && item.fromActorId !== actor.id
     && !item.internalControl
     && !item.tap
   ) {
@@ -4293,6 +4584,8 @@ async function runActorTurnBody(
   // task + projection for this turn's user message. The Commander hint must
   // not claim tracked state that doesn't exist (see call site below).
   let hostOpenedTaskThisTurn = false;
+  let hostOpenedRequirementId: string | undefined;
+  let hostForecastStarted = false;
   if (isCommander) {
     // 空间模式会话（kind=space_builder）：用户↔构建师的一对一引导对话。
     // 构建师不派活不写文件——零额外工具，数据全部走 Runtime injection 快照。
@@ -4322,6 +4615,28 @@ async function runActorTurnBody(
       // failed with "forecast proposal is required". Only advertise the
       // tracked state when it is true.
       hostOpenedTaskThisTurn = routing.openedTask;
+      hostOpenedRequirementId = routing.requirementId;
+      if (routing.requirementId) {
+        try {
+          const store = await import('../kstar/requirement-store');
+          const requirement = await store.readKstarRequirement(uid, routing.requirementId);
+          const task = requirement ? await store.readKstarTask(uid, requirement.taskId) : null;
+          if (requirement && task) {
+            _recordTaskRunKstarProvenance(state, {
+              taskId: task.id,
+              requirementId: requirement.id,
+              ...(requirement.projectionId ? { projectionId: requirement.projectionId } : {}),
+              ...(requirement.forecastId ? { forecastId: requirement.forecastId } : {}),
+              ...(requirement.wakeRequestId ? { wakeRequestId: requirement.wakeRequestId } : {}),
+            });
+          }
+        } catch (error) {
+          log.warn('kstar run provenance capture degraded', {
+            cid: maskId(cid),
+            error: logErrorRef(error),
+          });
+        }
+      }
     }
     if (convKind === "space_builder") {
       systemPrompt = await buildSpaceBuilderSystemPrompt(uid);
@@ -4547,10 +4862,9 @@ async function runActorTurnBody(
               },
               { sessionId: `gconv-${cid}` },
             ).catch(() => undefined);
-            if (prepared) turnReuseReceiptPrepared = true;
-            if (state.taskRun) {
-              const turns = state.taskRun.reuseTurnIds || [];
-              if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+            if (prepared) {
+              turnReuseReceiptPrepared = true;
+              _recordTaskRunReuseTurn(state, item.turnId);
             }
           } catch {
             // receipt 落库失败不阻断回合——只是这次不产生迁移凭证。
@@ -4614,10 +4928,9 @@ async function runActorTurnBody(
                 },
                 { sessionId: `gmember-${cid}-${actor.id}` },
               ).catch(() => undefined);
-              if (prepared) turnReuseReceiptPrepared = true;
-              if (state.taskRun) {
-                const turns = state.taskRun.reuseTurnIds || [];
-                if (!turns.includes(item.turnId)) state.taskRun.reuseTurnIds = [...turns, item.turnId];
+              if (prepared) {
+                turnReuseReceiptPrepared = true;
+                _recordTaskRunReuseTurn(state, item.turnId);
               }
             } catch {
               // receipt 落库失败不阻断回合。
@@ -4658,12 +4971,6 @@ async function runActorTurnBody(
           );
           // 回执落成即登记到本次运行：终态事件靠这份清单把迁移证明关联到
           // 真实加载凭证。登记发生在注入的同一处，与回执用同一份事实。
-          if (state.taskRun) {
-            const turns = state.taskRun.reuseTurnIds || [];
-            if (!turns.includes(item.turnId)) {
-              state.taskRun.reuseTurnIds = [...turns, item.turnId];
-            }
-          }
           const inheritedReceipt = await recordInheritedCognitionReuse(
             uid,
             cid,
@@ -4675,7 +4982,10 @@ async function runActorTurnBody(
               truncatedByBudget(selection.selected, rendered),
             ),
           );
-          if (inheritedReceipt) turnReuseReceiptPrepared = true;
+          if (inheritedReceipt) {
+            turnReuseReceiptPrepared = true;
+            _recordTaskRunReuseTurn(state, item.turnId);
+          }
         }
       } catch (error) {
         // 继承注入失败不该让这一轮对话起不来——降级成这次不带继承认知。
@@ -4786,6 +5096,16 @@ async function runActorTurnBody(
   // discarded and we'd persist a bare "(stopped)" placeholder. Same pattern
   // as `agents.ts::streamSendToAgentEditChat` (skill / agent edit chats).
   let streamingText = "";
+  // 中间正文段累积（conv-core 持久化补差）：delta 不逐条喂收集器（token
+  // 级事件会刷爆 MAX_CHAT_ENTRIES），在首个非 delta 事件到达时把整段合成
+  // 一条 completed text 条目落盘——历史重放按段渲染中间正文；最终段
+  // （=消息正文）不落盘，渲染层凭 status 区分防重复。
+  let segmentText = "";
+  const flushTextSegmentForPersist = (): void => {
+    if (!segmentText) return;
+    chatCollector.feed({ type: "text-segment", text: segmentText });
+    segmentText = "";
+  };
   let errText: string | null = null;
   let aborted = false;
   let turnInfrastructureFailure = false;
@@ -5043,6 +5363,12 @@ async function runActorTurnBody(
           // bubble (token-by-token); other shapes feed the process
           // rail. Renderer dispatch lives in conversation.js process
           // event handler — see `data.type === 'delta'` branch.
+          // conv-core 阶段3：CLI 直连/网关共用漏斗同喂收集器——{stream:'cli'}
+          // 的 LocalEvent（tool-event 双相位）由投影器新分支转 ChatItem（含
+          // 权威 timing）；实时（ipc GroupEventChatProjector）与持久化
+          // （chatCollector）自此同源，本地 codex/opencode 过程可见与内置模型
+          // 同一套渲染语义。
+          chatCollector.feed(data);
           emit(state, {
             type: "process",
             cid,
@@ -5102,6 +5428,18 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
+      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
+      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
+      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
+      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
+      let gatewayTurnGoal: string | undefined;
+      try {
+        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+        const lifecycle = await readKstarTaskLifecycle(uid, cid);
+        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
+          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
+        }
+      } catch { /* KStar 不可用时退回默认稳定会话 */ }
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -5130,16 +5468,32 @@ async function runActorTurnBody(
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
+            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
+            //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
+            ...(item.references && item.references.length
+              ? {
+                  references: item.references.slice(0, 20).map((r) => ({
+                    source_cid: r.source_cid,
+                    source_msg_id: r.source_msg_id,
+                    from_actor: r.from_actor,
+                    ...(r.from_name ? { from_name: r.from_name } : {}),
+                    source_ts: r.source_ts,
+                    text: String(r.text || '').slice(0, 500),
+                  })),
+                }
+              : {}),
             // Prompt for the external gateway node. `sourceMessageText` is only
             // populated for direct user messages (see enqueue); commander
             // dispatch / handoff messages carry the full task inside the LLM
-            // payload envelope instead. Fall back to unwrapping that so a
-            // dispatched external agent never receives an empty prompt.
+            // payload envelope instead. G-26: keep the `<msg from=… to=…>`
+            // envelope on dispatched turns so the external agent can see who
+            // dispatched the task and who it was routed to (multi-agent
+            // routing context); direct user text stays unwrapped as before.
             prompt: [
               switchedContextDigest,
               _firstNonBlankText(
                 (item as { sourceMessageText?: string }).sourceMessageText,
-                _unwrapLlmTurnPayload(item.llmPayload),
                 item.llmPayload,
               ),
             ].filter(Boolean).join("\n\n"),
@@ -5157,21 +5511,18 @@ async function runActorTurnBody(
             },
             onProcess: forwardProcess,
           })
-        : await _runCliAgentTurn({
-            uid,
-            cid,
-            actor,
-            agent: cliAgent,
-            item,
-            slice,
-            workingDir: cliWorkingDir,
-            ...(turnProjectId ? { projectId: turnProjectId } : {}),
-            ...(turnSpaceId ? { spaceId: turnSpaceId } : {}),
-            signal: w.abortController.signal,
-            onCoordinatorActivity: (event) => coordinatorLease?.observe(event),
-            onProcessInfo: (pid) => coordinator.setCliProcessPid(pid),
-            onProcess: forwardProcess,
-          });
+        // G-19（兼容期结束）：legacy `cli` runtime 读回即迁移为 p3394-gateway
+        // （G-05 迁移器），直连执行分支已删除——此处不再有非网关路径。
+        : await (async (): Promise<{ text: string; produced: string[]; error?: string; failureKind?: string; failureCode?: string; infrastructureFailure?: boolean; aborted?: boolean }> => {
+            return {
+              text: "",
+              produced: [],
+              error: "p3394_gateway_unreachable: legacy direct-CLI path removed (G-19)",
+              failureKind: "runtime",
+              failureCode: "p3394_gateway_unreachable",
+              infrastructureFailure: true,
+            };
+          })();
       for (const p of cliOut.produced || []) await onFileWritten(p);
       // 外接智能体执行控制：模型随信封通用下发（网关按参数模板消费或忽略），
       // 网关 turn 的 exec_meta 记录实际下发值（任务级覆盖 > agent 默认
@@ -5331,10 +5682,20 @@ async function runActorTurnBody(
       // per-task override (renderer composer) > agent default (agent.json
       // `default_thinking`) > global preference. 'auto' = no override; let
       // the provider default / model decide.
-      const turnThinkingLevel: "auto" | "off" | "low" | "high"
+      let turnThinkingLevel: "auto" | "off" | "low" | "high"
         = item.execConfig?.effort
           ?? turnAgentSpec?.default_thinking
           ?? thinkingLevelForRun();
+      // 思考展示兜底（交互设计 2026-09-08：思考过程展示需求）：'auto' 时不传
+      // thinkingLevel，pi-ai 对 openai 兼容端点不会带 reasoning_effort，
+      // DeepSeek 中转端点缺该参数时思考模式默认关闭 → 全程无
+      // reasoning_content 流（真机 18:40 轮实测 thinking_level 0 次）。
+      // 用户未显式选 off 时，对已知 reasoning 模型按 'low' 发起——思考流
+      // 可达渲染层；显式 off 仍彻底关闭。模型名识别不出 reasoning 特征
+      // 时不强行注入（避免给不认识的服务盲发参数，保持方案 C 约定）。
+      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)) {
+        turnThinkingLevel = "low";
+      }
       // Effective model override priority: per-task override > agent
       // default (`default_model`). Commander / in-process agents only —
       // CLI turns apply their own model below (runtime.model + override).
@@ -5377,7 +5738,24 @@ async function runActorTurnBody(
         // process event so the renderer can show "actually running with X ·
         // effort Y" on the streaming bubble (unified execution entry).
         onResolvedRuntime: (runtime: ChatResolvedRuntime) => {
-          if (isCommander) commanderResolvedRuntime = runtime;
+          if (isCommander) {
+            commanderResolvedRuntime = runtime;
+            if (hostOpenedRequirementId && !hostForecastStarted) {
+              hostForecastStarted = true;
+              const requirementId = hostOpenedRequirementId;
+              void import('../kstar/auto-forecast').then(({ autoForecastForRequirement }) => (
+                autoForecastForRequirement(uid, cid, requirementId, {
+                  allowedToolNames: new Set(runtime.toolNames),
+                })
+              )).catch((error) => {
+                log.warn('kstar auto-forecast async degraded', {
+                  cid: maskId(cid),
+                  requirementId,
+                  error: (error as Error).message,
+                });
+              });
+            }
+          }
           turnExecMeta = {
             provider: runtime.providerId,
             model: runtime.modelId,
@@ -5474,14 +5852,26 @@ async function runActorTurnBody(
         }
         // Stream events → process channel.
         if (ev.type === "final") {
-          finalText = ev.text || "";
+          // 消息正文只承载「最终段」（实机反馈 2026-09-09：展开执行过程
+          // 只见工具调用，AI 的中间叙述无处可见）。中间段已在被工具/
+          // 思考截断时经 flushTextSegmentForPersist 落盘为 completed text
+          // 条目、进过程轨迹（时间序交错展示）；此前正文=全文聚合，中间
+          // 段在过程区又被收尾清理，等于彻底不可见。final 段不触发 flush，
+          // 此刻 segmentText 恰为最终段；纯文本轮（无截断）segmentText=
+          // 全文、行为不变；中间有叙述但收尾无文本的轮次回退全文（保全
+          // 旧语义）。abort salvage（下方 streamingText 兜底）仍取全文。
+          const finalSeg = segmentText;
+          finalText = finalSeg.trim() ? finalSeg : (ev.text || "");
         } else if (ev.type === "delta") {
           // Pulled out of the generic branch below so we can mirror the text
           // into `streamingText` for abort-time salvage. The activity++ +
           // process emit are kept identical to the prior behaviour so other
           // event consumers don't see any difference.
           const piece = (ev as { text?: string }).text;
-          if (typeof piece === "string") streamingText += piece;
+          if (typeof piece === "string") {
+            streamingText += piece;
+            segmentText += piece;
+          }
           activityEvents += 1;
           void touchActivity(uid, cid);
           // Anonymous workers are the commander's internal hands (silent, handed
@@ -5552,19 +5942,57 @@ async function runActorTurnBody(
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            if (text)
-              appendProcessItem(processItems, {
-                type: "progress",
-                text,
-                ...(event ? { event } : {}),
-              });
+            if (text) {
+              // 思考流按段续写（PR209 评审 M9）：origin:'thinking' 的
+              // progress 是 event-mapper 聚合出的思考段——续写到上一条
+              // 思考 progress（同段被多次冲刷的场景），与投影层「一次
+              // 思考一条记录」cardinality 一致；非思考 progress（retry/
+              // compaction/context_status 等）行为不变逐条 append。此前
+              // 逐条 append 时长思考（>~48KB/回合）会占满 300 上限并把
+              // 工具 chatItem 逐出。
+              const isThinking = (ev as { origin?: string }).origin === "thinking";
+              const lastItem = processItems[processItems.length - 1];
+              if (
+                isThinking
+                && lastItem
+                && lastItem.type === "progress"
+                && (lastItem as { _thinking?: boolean })._thinking
+              ) {
+                (lastItem as { text: string }).text += text;
+              } else {
+                const item: ProcessItem & { _thinking?: boolean } = {
+                  type: "progress",
+                  text,
+                  ...(event ? { event } : {}),
+                  ...(isThinking ? { _thinking: true } : {}),
+                };
+                appendProcessItem(processItems, item);
+              }
+            }
+            // 只在思考文本（真正的段落截断）前 flush 中间段；usage/runtime
+            // 等收尾事件跟在最终段后面，flush 会把最终段（=消息正文，
+            // 可能含 :::dashboard 等结构指令）误当中间段落落盘——重放
+            // 面板以纯文本显示源码、与正文重复（真机踩坑 2026-09-08）。
+            if (text) flushTextSegmentForPersist();
+            chatCollector.feed({ type: "progress", text: text || "" });
           } else if (ev.type === "event") {
             const event = processEventForPersistence(
               (ev as { event?: unknown }).event,
             );
-            if (event && event.stream !== "assistant") {
+            // CLI 回合剥除 usage（交互设计 2026-09-09：外接 CLI 的 token 输入/
+            // 输出/缓存命中先不显示——CLI 自报口径不可靠，计费输出≠可见
+            // 输出、可见输出无真值，缓存命中更是无从核对）。时间线 usage
+            // 行与持久化条目一并不产；时长/首 token（本地墙钟）不受影响。
+            const suppressCliUsage = !!cliAgent && event?.stream === "usage";
+            if (event && event.stream !== "assistant" && !suppressCliUsage) {
               appendProcessItem(processItems, { type: "event", event });
             }
+            // 喂入的是脱敏后形状：持久化的 chatItem 与老条目同源同隐私口径。
+            // 工具事件（stream==='tool'）截断正文段落——它前面的文本是
+            // 中间段，flush；usage/runtime 等非工具事件不 flush（防最终段
+            // 被误落盘）。
+            if (event && event.stream === "tool") flushTextSegmentForPersist();
+            if (event && !suppressCliUsage) chatCollector.feed({ type: "event", event });
           }
           // See the delta branch: anonymous workers don't surface to the UI.
           if (actor.kind !== "worker") {
@@ -6250,7 +6678,12 @@ async function runActorTurnBody(
     // didn't report are omitted, never fabricated.
     let replyMetrics: GroupMessageMetrics | undefined;
     if (cliTurnMetrics) {
-      replyMetrics = cliTurnMetrics;
+      // CLI 回合同上剥 usage：消息 metrics 只保留本地计时（时长/首
+      // token/模型名），token 与缓存字段不落——消息头小字与页脚会话
+      // 统计据此不再显示 CLI 回合的 token/缓存读数（历史消息不受
+      // 影响，如实保留当时记录）。
+      const { usage: _cliUsage, ...timingOnly } = cliTurnMetrics;
+      replyMetrics = timingOnly as GroupMessageMetrics;
     } else if (agentRunTimingData) {
       const durationMs = Number(agentRunTimingData.duration_ms);
       const completedAt = agentRunResultAt ?? Date.now();
@@ -6343,7 +6776,9 @@ async function runActorTurnBody(
       ...(persistedRecallCitations.length
         ? { recall_citations: persistedRecallCitations }
         : {}),
-      ...(tailProcessItems.length ? { process: tailProcessItems } : {}),
+      ...((tailProcessItems.length || chatCollector.entries.length)
+        ? { process: mergeProcessTrail(tailProcessItems, chatCollector.entries) }
+        : {}),
       // Unified execution entry: persist what actually ran on this turn.
       ...(turnExecMeta ? { exec_meta: turnExecMeta } : {}),
       // Final segment index when this turn was split at visible-dispatch
@@ -6381,6 +6816,16 @@ async function runActorTurnBody(
       if (failedUsageWrites.length) {
         log.warn(`Recall usage persistence partially failed cid=${cid} failed=${failedUsageWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(persistedRecallCitations.map((citation) => recordInjectionReceipt(uid, {
+        assetId: citation.asset_id,
+        assetVersion: citation.version,
+        taskRunId: item.turnId,
+        projectionId: citation.projection_id,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'injected',
+      })));
     }
     if (dispatchedUsage.length) {
       // Commander-dispatched grants ride the same usage ledger so the asset
@@ -6398,6 +6843,15 @@ async function runActorTurnBody(
       if (failedDispatchedWrites.length) {
         log.warn(`Recall dispatched usage persistence partially failed cid=${cid} failed=${failedDispatchedWrites.length}`);
       }
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(dispatchedUsage.map((grant) => recordInjectionReceipt(uid, {
+        assetId: grant.assetId,
+        assetVersion: grant.assetVersion,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'dispatched',
+      })));
     }
     await registerFinalOutputResources(outcome.produced || []);
   } else if (outcome.kind === "silent" && actor.kind !== "worker") {
@@ -6610,6 +7064,19 @@ async function runActorTurnBody(
           (outcome.kind === "persist" && !!outcome.failureKind)
         ? "failed"
         : "completed";
+  // conv-core 存储补差（真机踩坑 2026-09-08）：主回合路径此前从不调用
+  // chatCollector.finish——历史消息 process 只有 chatItem 条目、没有 turn
+  // 终态条目，历史重放拿不到权威终态/总耗时（面板徽章无耗时、失败回合
+  // 无 failed 依据）。runActorTurn wrapper 的 finish 只覆盖嵌套派发路径。
+  // ChatTurnTerminalStatus 与 TaskTerminalStatus 的 waiting_input 在
+  // chat_events 契约里不存在——等待输入对过程面板而言是暂停而非终态，
+  // 映射为 completed（面板收尾，等待卡片由 interaction 层另管）。
+  chatCollector.finish(
+    terminalStatus === "cancelled" ? "cancelled"
+      : terminalStatus === "failed" ? "failed"
+        : "completed",
+    errText || (outcome.kind === "persist" ? outcome.failureCode : undefined) || undefined,
+  );
   return {
     kind: "completed",
     text: workingText,
@@ -7419,7 +7886,7 @@ function kstarApprovalBlockedToolResult(code: string, message: string): { conten
 async function guardKstarPrivilegedDispatch(
   state: CidState,
   options: { allowHostAutoTracked?: boolean } = {},
-): Promise<{ content: string; isError: true } | { provenance: { logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
+): Promise<{ content: string; isError: true } | { provenance: { taskId?: string; requirementId?: string; logicalRunId?: string; projectionId?: string; forecastId?: string } }> {
   const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
   const lifecycle = await readKstarTaskLifecycle(state.uid, state.cid);
   if (!lifecycle.requirement?.projectionId) return { provenance: {} };
@@ -7442,14 +7909,33 @@ async function guardKstarPrivilegedDispatch(
     return { provenance: {} };
   }
   const provenance = {
-    ...(lifecycle.task?.id ? { logicalRunId: lifecycle.task.id } : {}),
+    ...(lifecycle.task?.id ? { taskId: lifecycle.task.id, logicalRunId: lifecycle.task.id } : {}),
+    requirementId: lifecycle.requirement.id,
     projectionId: lifecycle.projection.id,
     forecastId: lifecycle.requirement.forecastId,
   };
   if (state.taskRun) {
-    if (provenance.logicalRunId) state.taskRun.logicalRunId = provenance.logicalRunId;
-    state.taskRun.projectionId = provenance.projectionId;
-    state.taskRun.forecastId = provenance.forecastId;
+    _recordTaskRunKstarProvenance(state, provenance);
+    // Keep the durable CogSeed task aligned with the in-memory run provenance
+    // so either side can be used as the audit entry point after a restart.
+    if (lifecycle.task?.cogseedTaskId) {
+      try {
+        const { updateCogSeedTask } = await import('../cogseed_backend/task-store');
+        await updateCogSeedTask(state.uid, lifecycle.task.cogseedTaskId, (task) => ({
+          ...task,
+          kstarTaskId: lifecycle.task!.id,
+          ...(lifecycle.requirement?.id ? { kstarRequirementId: lifecycle.requirement.id } : {}),
+          kstarProjectionId: provenance.projectionId,
+          kstarForecastId: provenance.forecastId,
+          updatedAt: new Date().toISOString(),
+        }));
+      } catch (error) {
+        log.warn('kstar provenance bridge degraded', {
+          cid: maskId(state.cid),
+          error: logErrorRef(error),
+        });
+      }
+    }
   }
   return { provenance };
 }
@@ -9309,13 +9795,17 @@ async function hostRouteTaskTurn(
   messageText: string | undefined,
   sourceMessageId: string | undefined,
   workspaceId?: string,
-): Promise<{ openedTask: boolean }> {
+): Promise<{ openedTask: boolean; requirementId?: string }> {
   // Mixed routing: fast deterministic filter skips OBVIOUS trivial messages
   // (greetings/status/emoji) with zero model calls and zero KStar writes;
   // everything else goes to the model judgement which decides is_task AND
   // continuation in one call with full conversation context.
   const { isObviouslyTrivial, isClosingIntent } = await import('../kstar/task-intent');
+  const recordRouting = async (decision: import('../kstar/requirement-types').KstarRoutingDecision): Promise<void> => {
+    await import('../kstar/requirement-store').then((store) => store.recordKstarRoutingDecision(uid, cid, decision)).catch(() => undefined);
+  };
   if (isClosingIntent(messageText)) {
+    await recordRouting({ at: nowIso(), kind: 'closing_intent', isTask: true, continuation: true, reason: 'closing intent', ...(sourceMessageId ? { sourceMessageId } : {}) });
     // Deterministic closing intent ("完成/搞定/结束"): close the open task
     // via the finish path (requirement precipitation runs) and NEVER open a
     // new task from it. Checked before the trivial filter so it cannot be
@@ -9359,7 +9849,9 @@ async function hostRouteTaskTurn(
     }
     return { openedTask: false };
   }
-  if (isObviouslyTrivial(messageText)) return { openedTask: false };
+  if (isObviouslyTrivial(messageText)) {
+    return { openedTask: false };
+  }
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
     const lifecycle = await readKstarTaskLifecycle(uid, cid);
@@ -9369,6 +9861,7 @@ async function hostRouteTaskTurn(
     const verdict = await judgeModelRouting(uid, cid, messageText, openRequirement);
     if (!verdict) return { openedTask: false }; // timeout/enqueue failure → no routing decision (safe no-op)
     if (!verdict.isTask) return { openedTask: false }; // model says not a task → zero KStar writes
+    await recordRouting({ at: nowIso(), kind: 'model_judged', isTask: true, continuation: verdict.continuation, reason: 'model routing verdict', ...(sourceMessageId ? { sourceMessageId } : {}) });
 
     if (openRequirement && verdict.continuation === false) {
       // Model judged: user moved to a NEW task while one was open. Close the
@@ -9439,25 +9932,12 @@ async function hostRouteTaskTurn(
         },
       },
     );
-    // World-model prediction: the host owns forecast generation (dedicated
-    // runner over the committed projection knowledge). Run it ASYNC so the
-    // Commander turn starts immediately — a 10-30s forecast generation must
-    // never gate the user's reply. Errors are logged inside auto-forecast
-    // and execution proceeds without a forecast record if it fails.
-    const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, created.requirementId).catch((error) => {
-      log.warn('kstar auto-forecast async degraded', {
-        cid: maskId(cid),
-        requirementId: created.requirementId,
-        error: (error as Error).message,
-      });
-    });
     log.info('kstar host routing opened task', {
       cid: maskId(cid),
       requirementId: created.requirementId,
       sourceMessageId: sourceMessageId ? maskId(sourceMessageId) : undefined,
     });
-    return { openedTask: true };
+    return { openedTask: true, requirementId: created.requirementId };
   } catch (error) {
     log.warn(`kstar host routing degraded cid=${cid}: ${(error as Error).message}`);
     return { openedTask: false };
@@ -9481,6 +9961,7 @@ async function ensureKstarTaskForDispatch(
   taskText: string,
   sourceMessageId?: string,
   workspaceId?: string,
+  allowedToolNames: ReadonlySet<string> = new Set(),
 ): Promise<{ created: boolean; hint?: string }> {
   try {
     const { readKstarTaskLifecycle } = await import('../kstar/lifecycle-adapter');
@@ -9528,7 +10009,7 @@ async function ensureKstarTaskForDispatch(
     // runner), ASYNC so the dispatch turn is not gated by the 10-30s
     // generation call.
     const { autoForecastForRequirement } = await import('../kstar/auto-forecast');
-    void autoForecastForRequirement(uid, cid, result.requirementId).catch((error) => {
+    void autoForecastForRequirement(uid, cid, result.requirementId, { allowedToolNames }).catch((error) => {
       log.warn('kstar auto-forecast async degraded', {
         cid: maskId(cid),
         requirementId: result.requirementId,
@@ -9547,23 +10028,76 @@ async function ensureKstarTaskForDispatch(
 
 /**
  * Host-side validation of Commander-granted ability assets. The Commander
- * picks assets by id; the host verifies each is a real, active asset so a
- * hallucinated or stale id can never leak into a delegated turn. Returns
- * the granted ids (deduped, order-preserving) or a tool-error result.
+ * picks assets by id; the host verifies each is in the current confirmed
+ * Projection, frozen at the current asset version, and allowed for the target
+ * runtime so a hallucinated or stale id can never leak into a delegated turn.
+ * Returns the granted ids (deduped, order-preserving) or a tool-error result.
+ */
+type DispatchedAbilityAssetResolution =
+  | { ok: true; assetIds: string[] }
+  | { ok: false; error: string };
+
+const DISPATCHED_ASSET_ERRORS = Object.freeze({
+  malformed: "`ability_assets` must be an array of asset ids",
+  tooMany: "`ability_assets` supports at most 24 assets per dispatch",
+  projectionRequired: "Ability assets require a current confirmed Projection.",
+  outsideProjection: "Ability assets must be a subset of the current confirmed Projection.",
+  projectionStale: "Ability assets are not available at the confirmed Projection version.",
+  unauthorized: "Unknown ability asset or unauthorized ability asset.",
+  runtimeDenied: "Ability asset is not allowed for this dispatch.",
+});
+
+/**
+ * Validate an explicit cross-Agent asset grant against the current KSTAR
+ * lifecycle before the existing live runtime gate. An omitted or empty grant
+ * deliberately bypasses this lookup: delegated work without asset context is
+ * independent of whether the conversation has opened a governed task.
+ *
+ * The Projection is authoritative for membership and the stored version map
+ * is authoritative for freshness. Error text is intentionally stable and
+ * never includes a requested/allowed id, Projection contents, or live gate
+ * reasons; the Commander cannot use an authorization failure as an asset
+ * enumeration oracle.
  */
 async function resolveDispatchedAbilityAssets(
   uid: string,
+  cid: string,
   value: unknown,
   context: AssetRuntimeContext,
-): Promise<{ ok: true; assetIds: string[] } | { ok: false; error: string }> {
+): Promise<DispatchedAbilityAssetResolution> {
   if (value === undefined) return { ok: true, assetIds: [] };
   if (!Array.isArray(value)) {
-    return { ok: false, error: "`ability_assets` must be an array of asset ids" };
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.malformed };
   }
   const rawIds = value.map((entry) => String(entry || "").trim()).filter(Boolean);
   if (rawIds.length > 24) {
-    return { ok: false, error: "`ability_assets` supports at most 24 assets per dispatch" };
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.tooMany };
   }
+  if (!rawIds.length) return { ok: true, assetIds: [] };
+
+  let lifecycle: Awaited<ReturnType<typeof import("../kstar/lifecycle-adapter").readKstarTaskLifecycle>>;
+  try {
+    const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
+    lifecycle = await readKstarTaskLifecycle(uid, cid);
+  } catch {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
+  }
+  const projection = lifecycle.requirement && lifecycle.projection;
+  if (!projection || projection.status !== "confirmed") {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionRequired };
+  }
+
+  const projectionAssetIds = new Set(projection.assetIds);
+  if (rawIds.some((assetId) => !projectionAssetIds.has(assetId))) {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.outsideProjection };
+  }
+  try {
+    const { validateCommittedProjectionAssetVersions } = await import("../recall/context-projection");
+    await validateCommittedProjectionAssetVersions(uid, projection);
+  } catch {
+    return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
+  }
+
   const granted: string[] = [];
   const seen = new Set<string>();
   for (const rawId of rawIds) {
@@ -9573,15 +10107,15 @@ async function resolveDispatchedAbilityAssets(
     try {
       asset = await readAbilityAsset(uid, rawId);
     } catch {
-      return { ok: false, error: `unknown ability asset: ${rawId}` };
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
     }
-    if (!asset) return { ok: false, error: `unknown ability asset: ${rawId}` };
+    if (!asset) return { ok: false, error: DISPATCHED_ASSET_ERRORS.unauthorized };
+    if (projection.assetVersions?.[asset.id] !== asset.version) {
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.projectionStale };
+    }
     const gate = await evaluateRecallAssetRuntimeEligibility(uid, asset, context);
     if (!gate.eligible) {
-      return {
-        ok: false,
-        error: `ability asset is not allowed for this dispatch: ${rawId} (${gate.reasons.join(", ")})`,
-      };
+      return { ok: false, error: DISPATCHED_ASSET_ERRORS.runtimeDenied };
     }
     granted.push(asset.id);
   }
@@ -10438,7 +10972,7 @@ async function buildCommanderExtraTools(
         name: dispatchAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: dispatchActor.id,
         purpose: message,
@@ -10447,7 +10981,14 @@ async function buildCommanderExtraTools(
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: dispatch IS a task — auto-track + auto-project
       // when no KStar task is open (advisory; never blocks the dispatch).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         dispatchActor,
@@ -10646,7 +11187,7 @@ async function buildCommanderExtraTools(
         name: handoffAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: handoffActor.id,
         purpose: message,
@@ -10656,7 +11197,14 @@ async function buildCommanderExtraTools(
       // Layer 2 routing uplift: named hand-off is a formal task. The
       // auto-track flag is captured so the forecast gate is waived ONLY for
       // the dispatch that actually created the task (ONCE semantics).
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, message, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        message,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         handoffActor,
@@ -10999,7 +11547,7 @@ async function buildCommanderExtraTools(
           name: "Worker",
           joined_at: nowIso(),
         };
-        const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+        const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
           ...currentRecallScope,
           purpose: task,
           taskText: task,
@@ -11071,7 +11619,7 @@ async function buildCommanderExtraTools(
         name: namedAgent?.name || resolvedId,
         joined_at: nowIso(),
       };
-      const grantedAssets = await resolveDispatchedAbilityAssets(uid, input?.ability_assets, {
+      const grantedAssets = await resolveDispatchedAbilityAssets(uid, cid, input?.ability_assets, {
         ...currentRecallScope,
         agentId: namedActor.id,
         purpose: task,
@@ -11079,7 +11627,14 @@ async function buildCommanderExtraTools(
       });
       if (grantedAssets.ok !== true) return _toolError(grantedAssets.error);
       // Layer 2 routing uplift: named worker is a formal task.
-      const autoTask = await ensureKstarTaskForDispatch(uid, cid, task, currentSourceMessageId, currentProjectId);
+      const autoTask = await ensureKstarTaskForDispatch(
+        uid,
+        cid,
+        task,
+        currentSourceMessageId,
+        currentProjectId,
+        new Set(resolvedRuntime()?.toolNames || []),
+      );
       const prepared = await prepareNestedDispatchForTool(
         state,
         namedActor,

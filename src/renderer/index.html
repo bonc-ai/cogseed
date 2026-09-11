@@ -13,9 +13,9 @@
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
-  <link rel="stylesheet" href="./onboarding.css" />
   <link rel="stylesheet" href="./ui-components.css" />
   <link rel="stylesheet" href="./plugins.css" />
+  <link rel="stylesheet" href="./chat-stream.css" />
   <script>
     // macOS 无边框窗口（main/index.ts: titleBarStyle hiddenInset）：红绿灯
     // 悬浮在内容上，CSS 据此声明红绿灯让位与各视图顶部条的窗口拖拽区。
@@ -35,6 +35,7 @@
           <button class="sidebar-icon-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
             <span data-ui-icon="search" data-ui-icon-class="sidebar-top-tool-icon"></span>
           </button>
+          <div class="run-center-global-entry" id="run-center-global-entry"></div>
           <button class="sidebar-icon-btn" id="sidebar-collapse-btn" data-i18n-title="sidebar.collapse_title" title="收起侧边栏">
             <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-collapse-ico"></span>
             <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-expand-ico" hidden></span>
@@ -46,7 +47,7 @@
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span><span class="sidebar-btn-chip kb-new-chip" data-i18n="sidebar.kb_new">新</span></button>
-        <button class="sidebar-btn" id="run-center-btn"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行中心</span></button>
+        <button class="sidebar-btn" id="run-center-btn" hidden aria-hidden="true"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行与协作</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">连接</span></button>
       </div>
@@ -185,6 +186,12 @@
               <span data-ui-icon="code" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.rnd">Build app</span>
             </button>
+            <!-- T4 目标模式：描述目标 → commander 拆解子任务计划 → 用户
+                 确认 → 逐项派发（KStar 目标追踪 + plan rail + wake 审批）。 -->
+            <button type="button" class="new-chat-scenario-chip" data-scenario="goal">
+              <span data-ui-icon="target" data-ui-icon-class="new-chat-scenario-icon"></span>
+              <span class="new-chat-scenario-label" data-i18n="new_chat.quick.goal">Goal mode</span>
+            </button>
             </div>
           </div>
         </div>
@@ -211,6 +218,12 @@
                 </div>
               </div>
               <div class="chat-header-actions">
+                <button type="button" class="chat-header-details-btn" id="run-center-return-btn"
+                        data-i18n-title="run_center.return_to_center"
+                        data-i18n-aria-label="run_center.return_to_center"
+                        title="返回运行与协作" aria-label="返回运行与协作" hidden>
+                  <span data-ui-icon="chevron-left" data-ui-icon-class="chat-header-details-icon"></span>
+                </button>
                 <button type="button" class="chat-header-details-btn" id="chat-terminal-toggle"
                         data-i18n-title="terminal_panel.toggle_title"
                         data-i18n-aria-label="terminal_panel.toggle_title"
@@ -671,8 +684,8 @@
         <div id="connections-page-header"></div>
         <div class="connections-container">
           <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="连接">
-            <button type="button" class="connections-tab is-active" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
-            <button type="button" class="connections-tab" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab" data-connections-tab="agents" data-i18n="connections.tab.agents">Agent</button>
+            <button type="button" class="connections-tab is-active" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
             <button type="button" class="connections-tab" data-connections-tab="plugins" data-i18n="connections.tab.plugins">插件</button>
             <button type="button" class="connections-tab" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
             <button type="button" class="connections-tab" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
@@ -682,7 +695,7 @@
           <div class="connections-body">
 
             <!-- Agent → AI 团队面板整体内嵌 -->
-            <div class="connections-tab-pane" id="connections-pane-agents" data-connections-pane="agents">
+            <div class="connections-tab-pane" id="connections-pane-agents" data-connections-pane="agents" hidden>
               <!-- AI 团队（#panel-agents）整体内嵌：保留 id，渲染函数照常工作。 -->
       <section class="panel connections-embedded-panel" id="panel-agents">
         <!-- Grid view (default) -->
@@ -825,7 +838,7 @@
             </div>
 
             <!-- MCP与工具 → 真嵌入原 connectors 网格 -->
-            <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp" hidden>
+            <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp">
               <div class="connectors-grid-view" id="connectors-grid-view">
                 <div class="connectors-page-header">
                   <div class="connectors-page-header-main">
@@ -1024,7 +1037,7 @@
       </section>
             </div>
 
-            <!-- 触点 → 入口卡跳转到设置 > 消息平台 -->
+            <!-- 触点：连接页内直接承载原消息平台/触点工作台。 -->
             <div class="connections-tab-pane" id="connections-pane-touchpoints" data-connections-pane="touchpoints" hidden>
               <!-- 触点（飞书等）整体迁入：原设置 messaging pane 的内容原样搬移。 -->
               <div class="touchpoint-settings-shell" aria-live="polite">
@@ -1049,7 +1062,7 @@
               </div>
             </div>
 
-            <!-- 模型与额度 → 入口卡跳转到设置 > Model Providers -->
+            <!-- 模型与额度：连接页内入口，不再回跳设置配置页。 -->
             <div class="connections-tab-pane" id="connections-pane-models" data-connections-pane="models" hidden>
               <div class="cognition-subentry-list">
                 <button type="button" class="cognition-entry-card" data-connections-subentry="models">
@@ -1088,6 +1101,12 @@
       <!-- Run Center: private Task/Event projections only, loaded on demand. -->
       <section class="panel" id="panel-run-center">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
+        <!-- 唤醒审批控制中心（conv-core T3）：跨会话 pending wake 请求聚合。
+             无待审批时整条隐藏；有则置顶显示，批准/拒绝/跳会话与聊天内审批卡等效。 -->
+        <div class="wake-approvals-strip" id="wake-approvals-strip" hidden>
+          <h3 class="wake-approvals-title" data-i18n="dashboard.control_section">控制中心</h3>
+          <div class="wake-approvals-list" id="wake-approvals-list"></div>
+        </div>
         <div id="run-center-root"></div>
       </section>
 
@@ -1111,7 +1130,7 @@
         <div class="settings-container">
           <div class="settings-tabs" role="tablist">
             <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
-            <button class="settings-tab" data-settings-tab="credentials" data-i18n="settings.tab.credentials">Model Providers</button>
+            <button class="settings-tab" data-settings-tab="configuration" data-i18n="settings.tab.configuration">Configuration</button>
             <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
             <button class="settings-tab" data-settings-tab="usage" data-i18n="settings.tab.usage">账号与用量</button>
             <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
@@ -1264,7 +1283,8 @@
 
             <!-- ───────────────────────── 配置 ───────────────────────── -->
 
-            <div class="settings-tab-pane" data-settings-pane="credentials" hidden>
+            <div class="settings-tab-pane" data-settings-pane="configuration" hidden>
+              
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
               <div class="settings-group" id="settings-auth-profiles-recovery" hidden>
@@ -1926,7 +1946,6 @@
   <script src="./modules/model-guard.js"></script>
   <script src="./modules/delete-file-confirm.js"></script>
   <script src="./modules/interactive-tour.js"></script>
-  <script src="./modules/onboarding.js"></script>
   <script src="./modules/continue-work.js"></script>
   <script src="./modules/boot.js"></script>
   <script src="./modules/avatar.js"></script>
@@ -1937,6 +1956,7 @@
   <script src="./modules/ui-button.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>
+  <script src="./modules/wake-approvals.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
@@ -1966,6 +1986,8 @@
   <script src="./modules/chat-artifact.js"></script>
   <script src="./modules/plan-rail.js"></script>
   <script src="./modules/conversation-info.js"></script>
+  <script src="./modules/run-center-model.js"></script>
+  <script src="./modules/run-center-global.js"></script>
   <script src="./modules/queue-draft.js"></script>
   <script src="./modules/connectors.js"></script>
   <script src="./modules/connections.js"></script>
@@ -1974,6 +1996,7 @@
   <script src="./modules/bash_permission.js"></script>
   <script src="./modules/action-approval.js"></script>
   <script src="./modules/interactive-cli.js"></script>
+  <script src="./modules/chat-stream.js"></script>
   <!-- xterm.js (vendored, classic UMD) must load before terminal-panel.js. -->
   <script src="./vendor/xterm/xterm.js"></script>
   <script src="./vendor/xterm/addon-fit.js"></script>
@@ -1991,6 +2014,8 @@
   <script src="./modules/expense-agent-cards.js"></script>
   <script src="./modules/auto-title.js"></script>
   <script src="./modules/auto-events.js"></script>
+  <!-- Dashboard 卡片渲染器先于 utils.js 加载：utils 桥接 window.DashboardRenderer。 -->
+  <script src="./modules/dashboard.js"></script>
   <script src="./modules/utils.js"></script>
   <script src="./modules/validation-report-view.js"></script>
   <script src="./modules/oss.js"></script>

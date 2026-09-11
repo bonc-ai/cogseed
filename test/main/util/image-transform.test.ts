@@ -40,6 +40,34 @@ describe('image-transform › toCompressedGrayJpeg', () => {
     expect(Math.abs(g8 - b8)).toBeLessThanOrEqual(8);
   });
 
+  it('decodes webp sources (Jimp cannot) through the wasm libwebp bridge', async () => {
+    // Feishu stores every inbound image as webp; encode our fixture to webp
+    // (VP8L lossless) and verify the transform still yields a JPEG.
+    const encodeMod: any = await import('@jsquash/webp/encode.js' as any);
+    const { readFile } = await import('node:fs/promises');
+    const { createRequire } = await import('node:module');
+    const req = createRequire(import.meta.url as unknown as string);
+    const encWasm = new WebAssembly.Module(await readFile(req.resolve('@jsquash/webp/codec/enc/webp_enc.wasm')));
+    await encodeMod.init(encWasm);
+    const encode = encodeMod.default;
+    const { Jimp } = await import('jimp' as any);
+    const src: any = await Jimp.read(sourcePng);
+    const bitmap = src.bitmap.data as Uint8ClampedArray;
+    const encoded = await encode({
+      width: src.bitmap.width,
+      height: src.bitmap.height,
+      data: bitmap,
+    });
+    const webpBuf = Buffer.from(encoded);
+    expect(webpBuf.subarray(0, 4).toString('latin1')).toBe('RIFF');
+    expect(webpBuf.subarray(8, 12).toString('latin1')).toBe('WEBP');
+
+    const r = await toCompressedGrayJpeg(webpBuf, { maxDim: 600, quality: 60 });
+    expect(r.mimeType).toBe('image/jpeg');
+    expect(r.buf.subarray(0, 3).toString('hex')).toBe('ffd8ff');
+    expect(Math.max(r.width, r.height)).toBeLessThanOrEqual(600);
+  });
+
   it('does not upscale when source is smaller than maxDim', async () => {
     const { Jimp } = await import('jimp' as any);
     const small: any = new Jimp({ width: 100, height: 80, color: 0xFFFFFFFF });

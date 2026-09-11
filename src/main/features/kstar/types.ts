@@ -4,7 +4,7 @@ import type { ActionDeltaDetail, ResultDeltaDetail } from '../recall/world-model
 
 export const KSTAR_SCHEMA_VERSION = 1;
 
-export type KstarTaskStatus = 'completed' | 'failed' | 'cancelled' | 'waiting_input';
+export type KstarTaskStatus = 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'waiting_input';
 export type KstarOutcome = 'better_than_expected' | 'met_expected' | 'worse_than_expected' | 'unclear';
 export type KstarAttribution = 'knowledge_gap' | 'rule_gap' | 'template_gap' | 'skill_gap' | 'execution_gap' | 'unclear';
 
@@ -37,6 +37,13 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
   sessionId: string;
   sessionKind?: string;
   taskRunId?: string;
+  /** Per-turn run ids whose receipts are authoritatively associated with this aggregate run. */
+  reuseTurnIds?: string[];
+  /** True when reuseTurnIds is only the newest retained suffix, not complete ownership. */
+  reuseTurnIdsTruncated?: true;
+  /** Immutable lifecycle identities captured before the aggregate run was released. */
+  taskId?: string;
+  requirementId?: string;
   requestId?: string;
   runtimeSessionId?: string;
   /** Provenance hints for group-chat captures when a terminal event can be tied to a wake request. */
@@ -75,6 +82,10 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
     userFeedback?: unknown;
     failureKind?: string;
     failureCode?: string;
+    durationMs?: number;
+    toolCallCount?: number;
+    failedToolCount?: number;
+    networkAccess?: boolean;
   };
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
@@ -83,6 +94,31 @@ export interface KstarEpisodeRecord extends KstarJsonRecord {
 
 export type KstarReviewState = 'inferred' | 'needs_confirmation' | 'confirmed' | 'unknown';
 export type KstarReviewInferenceMethod = 'deterministic' | 'model' | 'commander' | 'user' | 'unknown';
+export type KstarEvidenceLayer = 'fact' | 'inference' | 'experience';
+export type KstarReviewStatus = 'pending' | 'confirmed' | 'rejected' | 'skipped';
+
+export type KstarSecondaryAttribution =
+  | 'task_interpretation_error'
+  | 'recall_miss'
+  | 'projection_omission'
+  | 'injection_failure'
+  | 'asset_not_applied'
+  | 'asset_not_applicable'
+  | 'asset_conflict'
+  | 'asset_outdated'
+  | 'execution_error'
+  | 'environment_failure'
+  | 'forecast_error'
+  | 'permission_blocked'
+  | 'user_goal_changed'
+  | 'insufficient_evidence';
+
+export interface KstarAttributionDetail {
+  category: KstarSecondaryAttribution;
+  confidence: number;
+  evidenceRefs: CognitionSourceRef[];
+  source: 'deterministic' | 'model' | 'user';
+}
 
 export interface KstarReviewRecord extends KstarJsonRecord {
   schemaVersion: 1;
@@ -100,11 +136,16 @@ export interface KstarReviewRecord extends KstarJsonRecord {
   reviewState?: KstarReviewState;
   inferenceMethod?: KstarReviewInferenceMethod;
   needsConfirmation?: boolean;
+  evidenceLayer?: KstarEvidenceLayer;
+  reviewStatus?: KstarReviewStatus;
   confirmedAt?: string;
   /** Model-reasoned reusable lesson ("why the gap happened + what is worth
    *  reusing"). When present it becomes the precipitation judgment instead
    *  of a fixed template sentence. */
   lesson?: string;
+  /** Optional evidence-bound secondary cause(s). Legacy Reviews omit this
+   *  field and remain readable. */
+  attributionDetails?: KstarAttributionDetail[];
   evidenceRefs: CognitionSourceRef[];
   createdAt: string;
   updatedAt: string;
@@ -122,7 +163,8 @@ export interface KstarLearningSignal {
 
 export interface KstarLearningProvenance {
   projectionId: string;
-  forecastId: string;
+  /** Missing only when advisory Forecast generation degraded before execution. */
+  forecastId?: string;
   episodeId: string;
   ruleRefs: string[];
   attribution: KstarAttribution;
@@ -135,6 +177,9 @@ export interface KstarCandidateProposal {
   summary?: string;
   uncertainty?: string;
   suggestedAction?: 'create' | 'update' | 'limit_scope' | 'pause' | 'keep_current' | 'reject';
+  /** Existing asset selected from the episode's persisted asset references.
+   * Required for update/limit_scope/pause; absent when the target is ambiguous. */
+  targetAssetId?: string;
   suggestedType: AbilityAssetType;
   suggestedScope: string;
   /** 适用范围。规则类候选必须带（PRD 3.1 的 RuleAsset 最低门槛）。
@@ -152,8 +197,29 @@ export interface KstarExtractionRunRecord extends KstarJsonRecord {
   episodeId: string;
   reviewId: string;
   candidateIds: string[];
-  status: 'created' | 'partial' | 'failed';
+  status: 'created' | 'partial' | 'degraded' | 'failed';
+  /** Result ids are populated when the requirement-level extraction pass runs. */
+  createdAssetIds?: string[];
+  mergedIntoIds?: string[];
+  updateCandidateIds?: string[];
+  failureIds?: string[];
+  completedAt?: string;
   createdAt: string;
   updatedAt: string;
   error?: string;
+}
+
+export type KstarFailureStage = 'capture' | 'review_inference' | 'precipitation' | 'control_receipt';
+
+export interface KstarFailureRecord extends KstarJsonRecord {
+  schemaVersion: 1;
+  stage: KstarFailureStage;
+  errorCode: string;
+  errorMessage: string;
+  at: string;
+  operationKey: string;
+  conversationId?: string;
+  episodeId?: string;
+  requirementId?: string;
+  taskId?: string;
 }

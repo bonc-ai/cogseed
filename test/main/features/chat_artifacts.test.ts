@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { FILE_SYMLINKS_SUPPORTED } from '../../helpers/fs-capabilities';
 
 const UID = 'u-artifact-001';
 const CID = 'conv-art-1';
@@ -262,7 +263,7 @@ describe('chat_artifacts › resolveArtifactFilePath', () => {
     expect(got.mime).toMatch(/javascript/);
   });
 
-  it('rejects a served asset symlink that escapes the artifact root', async () => {
+  it.runIf(FILE_SYMLINKS_SUPPORTED)('rejects a served asset symlink that escapes the artifact root', async () => {
     const { m, artifactId } = await seed();
     const outside = path.join(tmpDir, 'outside.js');
     const linked = path.join(cidDir(), artifactId, 'assets', 'app.js');

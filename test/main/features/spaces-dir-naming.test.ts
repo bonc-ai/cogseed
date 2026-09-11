@@ -150,8 +150,6 @@ describe('空间内容目录命名（目录名 = 空间名）', () => {
   });
 
   it('迁移失败（目录被占用）→ 保持旧 <sid> 目录，解析回退仍可用', async () => {
-    await activate();
-    const paths = await loadPaths();
     const spacesRoot = path.join(tmpDir, UID, 'cloud', 'spaces');
     const sid = 'sp_legacy003';
     const legacyDir = path.join(spacesRoot, sid);
@@ -162,17 +160,23 @@ describe('空间内容目录命名（目录名 = 空间名）', () => {
       secondary_template_ids: [], created_at: '2026-08-01T00:00:00', updated_at: '2026-08-01T00:00:00',
     }));
 
-    const mig = await import('../../../src/main/util/migrate-space-dir');
-    // spaces 根只读 → renameSync 真实失败（EACCES），迁移只告警不抛出
-    fs.chmodSync(spacesRoot, 0o555);
+    const denied = Object.assign(new Error('directory is busy'), { code: 'EACCES' });
+    vi.doMock('node:fs', () => ({
+      ...fs,
+      renameSync: vi.fn((source: fs.PathLike, target: fs.PathLike) => {
+        if (path.resolve(String(source)) === path.resolve(legacyDir)) throw denied;
+        return fs.renameSync(source, target);
+      }),
+    }));
     try {
-      expect(() => mig.migrateSpaceDirNames(UID)).not.toThrow();
+      await activate();
+      const paths = await loadPaths();
+      // renameSync 的确定性 EACCES 被迁移吞下并保留旧目录。
+      expect(paths.spaceContentDir(UID, sid)).toBe(path.join(spacesRoot, sid));
+      expect(fs.existsSync(path.join(legacyDir, 'data.txt'))).toBe(true);
     } finally {
-      fs.chmodSync(spacesRoot, 0o755);
+      vi.doUnmock('node:fs');
     }
-    // 无标记 → 回退 <sid> 目录，数据仍可读
-    expect(paths.spaceContentDir(UID, sid)).toBe(path.join(spacesRoot, sid));
-    expect(fs.existsSync(path.join(legacyDir, 'data.txt'))).toBe(true);
   });
 
   it('deleteSpace → 命名目录被删除', async () => {

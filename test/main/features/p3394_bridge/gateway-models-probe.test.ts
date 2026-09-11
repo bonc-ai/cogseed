@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
+import * as vm from 'node:vm';
+import { EventEmitter } from 'node:events';
 // gateway.cjs 顶层即起 HTTP 服务，不能整体 require——探测/解析/偏好纯函数
 // 抽在 p3394-gateway/models-probe.cjs（依赖注入版），这里直接测模块本体。
 import {
@@ -24,10 +27,12 @@ import {
 } from '../../../../p3394-gateway/models-probe.cjs';
 
 /** fake 子进程：脚本化 stdout/stderr 推送 + close 触发，不需要真 CLI。 */
-function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number; failSpawn?: Error }) {
+function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number; failSpawn?: Error; neverClose?: boolean }) {
   const listeners: Record<string, Array<(v: unknown) => void>> = {};
   return {
     on(event: string, cb: (v: unknown) => void) { (listeners[event] ??= []).push(cb); return this; },
+    once(event: string, cb: (v: unknown) => void) { (listeners[event] ??= []).push(cb); return this; },
+    off(event: string, cb: (v: unknown) => void) { listeners[event] = (listeners[event] ?? []).filter((listener) => listener !== cb); return this; },
     kill() { return true; },
     stdout: { on(event: string, cb: (v: unknown) => void) { (listeners['stdout:' + event] ??= []).push(cb); return this; } },
     stderr: { on(event: string, cb: (v: unknown) => void) { (listeners['stderr:' + event] ??= []).push(cb); return this; } },
@@ -39,8 +44,9 @@ function fakeChild(script: { emit?: Array<[string, string]>; closeWith?: number;
         for (const cb of listeners.error ?? []) cb(script.failSpawn);
         return;
       }
-      for (const cb of listeners.close ?? []) cb(script.closeWith ?? 0);
+      if (!script.neverClose) this.emitClose();
     },
+    emitClose() { for (const cb of listeners.close ?? []) cb(script.closeWith ?? 0); },
   };
 }
 
@@ -54,6 +60,159 @@ const SPAWN_FN = (script: Parameters<typeof fakeChild>[0]) => () => {
 const CLI_MODEL_REPLY = JSON.stringify({
   result: 'Current model: Sonnet 5 (effort: xhigh)\nUsage: /model <name>. '
     + 'Available: sonnet, opus, haiku, fable, best, sonnet[1m], opus[1m], fable[1m], opusplan, default, or a full model ID.',
+});
+
+type RuntimeCloseName = 'oneshot' | 'codex-app-server' | 'sscli' | 'stream-json' | 'claude-persistent' | 'opencode';
+
+function runtimeCloseFixture(name: RuntimeCloseName) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+  const bounds: Record<RuntimeCloseName, [string, string]> = {
+    oneshot: ['const oneshotRuntime = {', 'function clipReply'],
+    'codex-app-server': ['class CodexAppServerRuntime', 'const codexAppServerRuntime'],
+    sscli: ['class SscliRuntime', 'const sscliRuntime'],
+    'stream-json': ['class StreamJsonRuntime', 'const streamJsonRuntime'],
+    'claude-persistent': ['class ClaudePersistentRuntime', '// ── opencode 常驻'],
+    opencode: ['class OpencodeRuntime', 'const claudePersistentRuntime'],
+  };
+  const [startMarker, endMarker] = bounds[name];
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  const chunk = source.slice(start, end);
+  const method = /^  (?:async )?close\(\) \{[\s\S]*?^  \}/m.exec(chunk)?.[0];
+  if (!method) throw new Error(`close method not found for ${name}`);
+
+  const children = [{ pid: 101 }, { pid: 202 }];
+  const resolvers: Array<() => void> = [];
+  const killProcessTree = vi.fn(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+  const context: Record<string, unknown> = { killProcessTree, clearTimeout, clearInterval };
+  let receiver: Record<string, unknown>;
+  let hasState: () => boolean;
+  let expectedKills: number;
+
+  if (name === 'oneshot') {
+    const activeTasks = new Map([['a', children[0]], ['b', children[1]]]);
+    context.activeTasks = activeTasks;
+    receiver = {};
+    hasState = () => activeTasks.size === 2;
+    expectedKills = 2;
+  } else if (name === 'codex-app-server') {
+    receiver = { activeTurns: new Map([['task', { threadId: 'thread' }]]), child: children[0] };
+    hasState = () => (receiver.activeTurns as Map<string, unknown>).size === 1 && receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'sscli') {
+    receiver = { closing: false, heartbeatTimer: {}, child: children[0] };
+    hasState = () => receiver.child === children[0];
+    expectedKills = 1;
+  } else if (name === 'stream-json') {
+    receiver = { active: new Map([['a', children[0]], ['b', children[1]]]) };
+    hasState = () => (receiver.active as Map<string, unknown>).size === 2;
+    expectedKills = 2;
+  } else if (name === 'claude-persistent') {
+    receiver = {
+      sessions: new Map([['a', { child: children[0], idleTimer: null, turn: null }], ['b', { child: children[1], idleTimer: null, turn: null }]]),
+      turnKeys: new Map([['task', 'a']]),
+    };
+    hasState = () => (receiver.sessions as Map<string, unknown>).size === 2 && (receiver.turnKeys as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  } else {
+    receiver = {
+      closing: false,
+      servers: new Map([['a', { child: children[0] }], ['b', { child: children[1] }]]),
+      sessions: new Map([['session', { cwd: '/tmp' }]]),
+    };
+    hasState = () => (receiver.servers as Map<string, unknown>).size === 2 && (receiver.sessions as Map<string, unknown>).size === 1;
+    expectedKills = 2;
+  }
+
+  const close = vm.runInNewContext(`({${method}}).close`, context) as (this: Record<string, unknown>) => Promise<void>;
+  return { close, receiver, hasState, expectedKills, killProcessTree, resolvers };
+}
+
+function loadGatewayTreeKiller(name: 'gateway.cjs' | 'sscli-shim.cjs', context: Record<string, unknown>) {
+  const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+  const fn = /function killProcessTree\([\s\S]*?^}/m.exec(source)?.[0];
+  if (!fn) throw new Error(`killProcessTree not found in ${name}`);
+  return vm.runInNewContext(`(${fn})`, context) as (child: EventEmitter & { pid: number; kill: (signal: string) => boolean }, signal: string) => Promise<void>;
+}
+
+describe('gateway runtime shutdown contract', () => {
+  it.each<RuntimeCloseName>(['oneshot', 'codex-app-server', 'sscli', 'stream-json', 'claude-persistent', 'opencode'])(
+    '%s close awaits all process-tree terminations before clearing runtime state',
+    async (name) => {
+      const fixture = runtimeCloseFixture(name);
+      const completion = fixture.close.call(fixture.receiver);
+      expect(completion && typeof completion.then).toBe('function');
+      expect(fixture.killProcessTree).toHaveBeenCalledTimes(fixture.expectedKills);
+      expect(fixture.hasState()).toBe(true);
+
+      let settled = false;
+      void completion.then(() => { settled = true; });
+      for (const resolve of fixture.resolvers.slice(0, -1)) resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(fixture.hasState()).toBe(true);
+
+      fixture.resolvers.at(-1)?.();
+      await completion;
+      expect(fixture.hasState()).toBe(false);
+    },
+  );
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'])('%s closes the shebang probe handle in finally', (name) => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', name), 'utf8');
+    const helper = /function isNodeShebangScript\([\s\S]*?\n}/.exec(source)?.[0] || '';
+    expect(helper).toMatch(/try\s*{[\s\S]*?fs\.readSync[\s\S]*?}\s*finally\s*{[\s\S]*?fs\.closeSync/);
+  });
+
+  it.each(['gateway.cjs', 'sscli-shim.cjs'] as const)(
+    '%s taskkill fallback waits for the target child close before resolving',
+    async (name) => {
+      const killer = Object.assign(new EventEmitter(), { unref: vi.fn() });
+      const child = Object.assign(new EventEmitter(), { pid: 2468, kill: vi.fn(() => true) });
+      const killProcessTree = loadGatewayTreeKiller(name, {
+        spawn: vi.fn(() => killer),
+        windowsSystem32Tool: (tool: string) => tool,
+        process: { platform: 'win32', kill: vi.fn() },
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+      });
+      let settled = false;
+      const completion = killProcessTree(child, 'SIGTERM').then(() => { settled = true; });
+
+      killer.emit('error', new Error('taskkill failed'));
+      killer.emit('exit', 1, null);
+      killer.emit('close', 1, null);
+      await Promise.resolve();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+
+      child.emit('close', null, 'SIGTERM');
+      await completion;
+      expect(settled).toBe(true);
+    },
+  );
+
+  it('awaits every cancellation backend before sending the cancel reply', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    const handler = /async function handleCancel\([\s\S]*?^}/m.exec(source)?.[0] || '';
+    expect(handler).toContain('cancelledTasks.add(taskId)');
+    expect(handler).toMatch(/for \(const cancel of cancellers\)/);
+    expect(handler).toMatch(/await cancel\(taskId\)/);
+    expect(handler.indexOf('await cancel(taskId)')).toBeLessThan(handler.lastIndexOf("postReply(envelope, '[已取消]')"));
+    expect(handler).not.toMatch(/\.cancel\(taskId\)\s*\|\|/);
+    expect(source).toMatch(/async cancel\(taskId\) \{ return cancelTask\(taskId\); \}/);
+    expect(source).toMatch(/async function cancelTask\(taskId\)/);
+    expect(source).toMatch(/const ack = await this\._request\(\{ op: 'cancel', task_id: taskId \}/);
+    expect(source).toMatch(/async cancel\(taskId\)[\s\S]*?turn\.req\.once\('close'/);
+  });
+
+  it('waits for Claude model replacement and timeout termination before dropping state', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'p3394-gateway', 'gateway.cjs'), 'utf8');
+    expect(source).toMatch(/if \(entry && \(entry\.maxThinkingTokens[\s\S]*?await this\._terminateSession\(sessionId, entry\)/);
+    expect(source).toMatch(/timer: setTimeout\(\(\) => \{[\s\S]*?void this\._terminateSession\(sessionId, entry\)\.then\(\(\) => \{[\s\S]*?reject\(new Error\('p3394_claude_timeout'\)\)/);
+  });
 });
 
 describe('gateway executionPrefsFor — model + effort passthrough', () => {  const run = (ext: unknown) => executionPrefsFor({ extensions: ext });
@@ -315,6 +474,62 @@ describe('gateway probeInspectCommand — declared parsers (universal enumeratio
     expect(result.status).toBe('unavailable');
     expect(result.reason).toBe('no_inspect_declared');
   });
+
+  it('terminates the whole probe process tree on timeout', async () => {
+    const child = fakeChild({ neverClose: true });
+    let releaseKill!: () => void;
+    const killTreeFn = vi.fn(() => new Promise<void>((resolve) => { releaseKill = resolve; }));
+    let settled = false;
+    const resultPromise = probeInspectCommand({
+      cli: 'codebuddy', args: ['--help'], parser: 'help-model-list',
+      spawnFn: () => child, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '5' },
+    }) as Promise<{ status: string; reason: string }>;
+    void resultPromise.then(() => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(killTreeFn).toHaveBeenCalledWith(child, 'SIGTERM');
+    child.emitClose();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseKill();
+    const result = await resultPromise;
+    expect(result).toMatchObject({ status: 'unavailable', reason: 'timeout' });
+  });
+
+  it('escalates a stuck probe and waits for SIGKILL completion plus child close', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild({ neverClose: true });
+    const completions = new Map<string, () => void>();
+    const killTreeFn = vi.fn((_child: unknown, signal: string) => new Promise<void>((resolve) => {
+      completions.set(signal, resolve);
+    }));
+    let settled = false;
+    try {
+      const resultPromise = probeInspectCommand({
+        cli: 'codebuddy', args: ['--help'], parser: 'help-model-list',
+        spawnFn: () => child, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '10' },
+      });
+      void resultPromise.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM']);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(killTreeFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(killTreeFn.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL']);
+
+      completions.get('SIGTERM')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      completions.get('SIGKILL')?.();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.emitClose();
+      await expect(resultPromise).resolves.toMatchObject({ status: 'unavailable', reason: 'timeout' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('gateway probeStreamJsonInitModel — claude-compatible init-frame current model', () => {
@@ -338,12 +553,13 @@ describe('gateway probeStreamJsonInitModel — claude-compatible init-frame curr
       });
       return child;
     };
+    const killTreeFn = vi.fn();
     const result = await probeStreamJsonInitModel({
-      cli: 'codebuddy', args: ['-p'], spawnFn, env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
+      cli: 'codebuddy', args: ['-p'], spawnFn, killTreeFn, env: { P3394_INSPECT_TIMEOUT_MS: '2000' },
     }) as { current: string | null; models: Array<unknown> | null };
     expect(result?.current).toBe('auto');
     expect(result?.models).toBeNull(); // codebuddy init 不披露清单（实测）
-    expect(child.killed).toBe(true);   // init 一到即杀（零模型调用）
+    expect(killTreeFn).toHaveBeenCalledWith(child, 'SIGTERM'); // init 一到即整树杀（零模型调用）
     expect(child.stdinWrites).toHaveLength(1); // 触发 init 的 user 消息
   });
 
@@ -459,6 +675,101 @@ describe('gateway probeConfigModels — declared-config enumeration (hermes/open
     ]);
     // primary 的 provider/ 前缀剥掉，与清单 id 同口径（isCurrent 命中）。
     expect(result.current).toBe('example-model-2.5-flash');
+  });
+
+  it('claude config enumeration reads settings.json env slots, dedupes, strips ctx suffixes (2026-09-09 实机)', () => {
+    // 自定义模型网关部署：全家模型映射进槽位变量，init/列表探测只披露
+    // current——完整清单以 settings.json 为事实源。样例只含模型变量
+    //（真实配置的鉴权字段与枚举无关，不进测试）。
+    const CLAUDE_SETTINGS = JSON.stringify({
+      env: {
+        ANTHROPIC_MODEL: 'deepseek-v4-pro',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: 'deepseek-v4-flash-vision-exp',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: 'deepseek-v4-flash-vision-exp',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'deepseek-v4-flash-vision-exp[1M]',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+      },
+    });
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-claude-home');
+    const result = probeConfigModels({
+      configModels: 'claude',
+      env: { HOME: fakeHome },
+      readFileSync: (p: string) => {
+        if (p === path.join(fakeHome, '.claude', 'settings.json')) return CLAUDE_SETTINGS;
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 三槽位同模型去重 + [1M] 上下文后缀剥除 + 默认槽位最前。
+    expect(result.models.map((m) => m.id)).toEqual([
+      'deepseek-v4-pro',
+      'deepseek-v4-flash-vision-exp',
+      'deepseek-v4-flash',
+    ]);
+    expect(result.current).toBe('deepseek-v4-pro');
+  });
+
+  it('claude config enumeration degrades honestly without model slots', () => {
+    const EMPTY_SETTINGS = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://example.invalid' } });
+    const fakeHome = path.join(os.tmpdir(), 'p3394-model-probe-claude-empty');
+    const result = probeConfigModels({
+      configModels: 'claude',
+      env: { HOME: fakeHome },
+      readFileSync: () => EMPTY_SETTINGS,
+    }) as { status: string; reason: string };
+    expect(result.status).toBe('unavailable');
+    expect(result.reason).toBe('config_no_models');
+  });
+
+  it('gemini config enumeration: current from settings.json + official series deduped (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'gemini',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith(path.join('.gemini', 'settings.json'))) return JSON.stringify({ model: { name: 'gemini-2.5-flash' } });
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 配置里的当前模型置顶，官方常规模型去重补底。
+    expect(result.models.map((m) => m.id)).toEqual([
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash-lite',
+    ]);
+    expect(result.current).toBe('gemini-2.5-flash');
+  });
+
+  it('aider config enumeration: model.settings.yml entries + conf current first (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'aider',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith('.aider.model.settings.yml')) return '- name: deepseek-chat\n  extra: x\n- name: gpt-5\n';
+        if (p.endsWith('.aider.conf.yml')) return 'model: deepseek-chat\n';
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    expect(result.models.map((m) => m.id)).toEqual(['deepseek-chat', 'gpt-5']);
+    expect(result.current).toBe('deepseek-chat');
+  });
+
+  it('codex config enumeration: top-level model current + profiles bindings (2026-09-09 全量补全)', () => {
+    const result = probeConfigModels({
+      configModels: 'codex',
+      env: { HOME: '/tmp/nope' },
+      readFileSync: (p: string) => {
+        if (p.endsWith('config.toml')) return 'model = "gpt-5-codex"\nmodel_provider = "openai"\n\n[profiles.fast]\nmodel = "gpt-5-mini"\n\n[profiles.think]\nmodel = "gpt-5"\n';
+        throw new Error('ENOENT: ' + p);
+      },
+    }) as { status: string; current: string; models: Array<{ id: string }> };
+    expect(result.status).toBe('ready');
+    // 顶层默认置顶（current），[profiles.*] 绑定枚举成清单。
+    expect(result.models.map((m) => m.id)).toEqual(['gpt-5-codex', 'gpt-5-mini', 'gpt-5']);
+    expect(result.current).toBe('gpt-5-codex');
   });
 
   it('returns no_config_probe for unknown config keys', () => {

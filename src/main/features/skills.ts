@@ -69,6 +69,7 @@ import {
 import { normalizeInstallVersion } from './marketplace_installs';
 import { NAME_DISPLAY_MAX_UNITS, nameDisplayWidth } from '../util/name-limit';
 import { captureSkillTree, normalizeSkillSnapshotPath } from './skills/snapshot-service';
+import { createProcessCollector } from './chat_events/process-persist';
 
 // Names hidden from the in-app skill source-tree view. Marketplace sidecars are tooling
 // metadata, not authored content — surfacing them confuses users and looks like noise.
@@ -3853,6 +3854,13 @@ export async function* streamSendToSkillChat(
   // post-loop append — finally has to salvage what's been rendered.
   let streamingText = '';
   const processItems: any[] = [];
+  // conv-core 存储补差：chat_events 条目（含权威 timing 与终态总耗时）
+  // 与老格式双写持久化，历史重建优先消费新格式。
+  const chatCollector = createProcessCollector({
+    cid: `skill-edit-${skillId}`,
+    actorId: skillId,
+    turnId: `skill-edit-${skillId}-${Date.now().toString(36)}`,
+  });
   const written: string[] = [];
   // Set when the URL-import chat finalized as an external-package install: the
   // placeholder skill is deleted, so the post-loop persist must be skipped (it
@@ -4119,6 +4127,7 @@ export async function* streamSendToSkillChat(
           }
         }
       }
+      chatCollector.feed(event);
       yield event;
     }
 
@@ -4132,7 +4141,12 @@ export async function* streamSendToSkillChat(
     // for-await, which triggers `return()` on this generator — bypassing any
     // append placed after the loop. Keeping it here covers normal finish,
     // caught errors, and abort-driven returns alike.
-    const saved = processItems.length ? processItems : null;
+    chatCollector.finish(
+      opts.abortSignal?.aborted ? 'cancelled' : errMsg ? 'failed' : 'completed',
+      errMsg || undefined,
+    );
+    const allItems = [...processItems, ...chatCollector.entries];
+    const saved = allItems.length ? allItems : null;
     try {
       if (installedAsPkg) {
         // Placeholder skill (and its chat dir) was deleted after resolving the

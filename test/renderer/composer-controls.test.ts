@@ -8,11 +8,16 @@ const read = (relativePath: string) => fs.readFileSync(path.join(root, relativeP
 describe('composer control visual contract', () => {
   it('uses a neutral stop treatment while keeping send on the primary color', () => {
     const css = read('src/renderer/style.css');
+    const tokenCss = read('src/renderer/tokens.css');
     const streamingRule = css.match(/\.chat-send-btn\.streaming\s*{([\s\S]*?)}/)?.[1] || '';
     const conversationStopRule = css.match(/#panel-conversation \.chat-send-btn\.streaming,[\s\S]*?#panel-conversation \.chat-send-btn\.streaming:disabled\s*{([\s\S]*?)}/)?.[1] || '';
 
-    expect(css).toMatch(/--control-stop:\s*#5B6470;/);
-    expect(css).toMatch(/--control-stop-hover:\s*#46505B;/);
+    // style.css keeps the alias mapping; tokens.css owns the base literal
+    // (tokenization pass, see #203).
+    expect(css).toMatch(/--control-stop:\s*var\(--color-control-stop\);/);
+    expect(css).toMatch(/--control-stop-hover:\s*var\(--color-control-stop-hover\);/);
+    expect(tokenCss).toMatch(/--color-control-stop:\s*#5B6470;/);
+    expect(tokenCss).toMatch(/--color-control-stop-hover:\s*#46505B;/);
     expect(css).toMatch(/\.chat-send-btn\s*{[\s\S]*?background:\s*var\(--primary\);/);
     expect(streamingRule).toContain('background: var(--control-stop);');
     expect(streamingRule).not.toMatch(/#dc2626|var\(--danger\)/i);

@@ -73,6 +73,18 @@ describe('renderDashboard — component coverage (set A)', () => {
     expect(html).toMatch(/db-metric-delta[^>]*data-tone="positive"/);
   });
 
+  it('Metric: flat node shape (no props bag) renders label/value — 真机 5 空卡回归', () => {
+    // 不少模型把属性直接平铺在节点上（无 props 包裹），此前整卡渲染成空壳。
+    const html = renderDashboard({ root: { type: 'Stack', children: [
+      { type: 'Metric', label: 'marketplace 技能树目录数', value: '77', tone: 'neutral' },
+      { type: 'Metric', label: '~/.claude/skills 目录数', value: '62', tone: 'positive' },
+    ] } });
+    expect(html).toContain('marketplace 技能树目录数');
+    expect(html).toContain('>77<');
+    expect(html).toContain('~/.claude/skills 目录数');
+    expect(html).toContain('>62<');
+  });
+
   it('Alert: level + title + body', () => {
     const html = renderDashboard({ root: { type: 'Alert', props: { level: 'error', title: 'Down', body: 'Check uplink' } } });
     expect(html).toMatch(/data-level="error"/);

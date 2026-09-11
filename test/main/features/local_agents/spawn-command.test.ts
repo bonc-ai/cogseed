@@ -49,19 +49,27 @@ describe('local_agents/spawn-command', () => {
     expect(resolved.windowsVerbatimArguments).toBe(true);
   });
 
-  it.runIf(process.platform === 'win32')('round-trips hostile arguments through a real npm-style .cmd shim', () => {
+  it.runIf(process.platform === 'win32')('round-trips hostile arguments and preserves text after line breaks through a real npm-style .cmd shim', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-cmd-shim-'));
     try {
-      const capture = path.join(tmpDir, 'capture.cjs');
       const shim = path.join(tmpDir, 'node_modules', '.bin', 'capture.cmd');
+      const capture = path.join(path.dirname(shim), 'capture.cjs');
       fs.mkdirSync(path.dirname(shim), { recursive: true });
       fs.writeFileSync(capture, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
       fs.writeFileSync(shim, [
         '@echo off',
-        `"%COGSEED_TEST_NODE%" "${capture}" %*`,
+        '"%COGSEED_TEST_NODE%" "%dp0%\\capture.cjs" %*',
         '',
       ].join('\r\n'));
-      const args = ['plain', 'space value', 'value & echo unsafe', '100%', 'quote"value', 'C:\\tail\\'];
+      const args = [
+        'plain',
+        'space value',
+        'value & pipe | in < out > caret ^ (group)',
+        '100% !delayed!',
+        'quote"value',
+        'C:\\tail\\',
+        '第一行\r\n第二行 & "quoted" %value%\n第三行 ^ (done)',
+      ];
       const env = {
         ...process.env,
         COGSEED_TEST_NODE: TEST_NODE,
@@ -70,11 +78,34 @@ describe('local_agents/spawn-command', () => {
       const resolved = resolveCliCommand(shim, args, 'win32', env);
       const result = spawnSync(resolved.command, resolved.args, {
         encoding: 'utf8',
-        env,
+        env: { ...env, ...resolved.envPatch },
         windowsHide: true,
         windowsVerbatimArguments: resolved.windowsVerbatimArguments,
       });
 
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(args);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('round-trips a multiline prompt through a real .bat Node shim', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cogseed-bat-shim-'));
+    try {
+      const shim = path.join(tmpDir, 'capture.BAT');
+      const capture = path.join(tmpDir, 'capture.cjs');
+      fs.writeFileSync(capture, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+      fs.writeFileSync(shim, '@echo off\r\n"%COGSEED_TEST_NODE%" "%~dp0\\capture.cjs" %*\r\n');
+      const args = ['第一行\n第二行 & "quoted" %value% | < > ^ (third)'];
+      const env = { ...process.env, COGSEED_TEST_NODE: TEST_NODE };
+      const resolved = resolveCliCommand(shim, args, 'win32', env);
+      const result = spawnSync(resolved.command, resolved.args, {
+        encoding: 'utf8',
+        env: { ...env, ...resolved.envPatch },
+        windowsHide: true,
+        windowsVerbatimArguments: resolved.windowsVerbatimArguments,
+      });
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual(args);
     } finally {

@@ -53,6 +53,24 @@ export const P3394_UNIX_SOCKET_DEFAULTS = {
   reconnectBaseMs: 250,
 } as const;
 
+export interface P3394LocalSocketEndpointOptions {
+  platform?: NodeJS.Platform;
+  pid?: number;
+  tempDir?: string;
+}
+
+/** Resolve the local IPC address: Unix-domain socket on POSIX, named pipe on Windows. */
+export function p3394LocalSocketEndpoint(
+  channelId: string,
+  options: P3394LocalSocketEndpointOptions = {},
+): string {
+  const platform = options.platform ?? process.platform;
+  const pid = options.pid ?? process.pid;
+  const safeId = channelId.replace(/[^a-zA-Z0-9-]/g, '-').slice(0, 120) || 'channel';
+  if (platform === 'win32') return `\\\\.\\pipe\\p3394-${safeId}-${pid}`;
+  return path.join(options.tempDir ?? os.tmpdir(), `p3394-${safeId}-${pid}.sock`);
+}
+
 const FRAME_HEADER_BYTES = 4;
 const AUTH_FRAME = 'auth';
 const ENVELOPE_FRAME = 'envelope';
@@ -102,8 +120,7 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
     this.channel_id = channel_id;
     this.options = options;
     this.token = options.token ?? `p3394-token-${Math.random().toString(36).slice(2)}mssuect9`;
-    this.socketPath = options.socketPath
-      ?? path.join(os.tmpdir(), `p3394-${channel_id.replace(/[^a-zA-Z0-9-]/g, '-')}-${process.pid}.sock`);
+    this.socketPath = options.socketPath ?? p3394LocalSocketEndpoint(channel_id);
   }
 
   private frameLimit(): number {
@@ -322,6 +339,8 @@ export class P3394UnixSocketChannel implements P3394ChannelAdapter {
     }
     // A dialer may share this path with the peer's listener. Only the owner
     // of the listening server may remove the socket file during shutdown.
-    if (server) await fs.promises.rm(this.socketPath, { force: true }).catch(() => {});
+    if (server && process.platform !== 'win32') {
+      await fs.promises.rm(this.socketPath, { force: true }).catch(() => {});
+    }
   }
 }

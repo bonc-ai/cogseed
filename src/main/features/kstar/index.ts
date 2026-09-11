@@ -20,3 +20,7 @@ export * from './control-service';
 export * from './forecast-commit';
 export * from './commander-context';
 export * from './projection-decision-service';
+export * from './trace-types';
+export * from './trace';
+export * from './failure-service';
+export * from './run-evidence';

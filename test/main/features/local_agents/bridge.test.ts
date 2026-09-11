@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { drainMainRuntimeForTest } from '../../../helpers/drain-main-runtime';
 
 vi.mock('../../../../src/main/features/kb_embed', () => ({
   embedTexts: async (texts: string[]) => texts.map(() => {
@@ -93,8 +94,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  const kb = await import('../../../../src/main/features/kb_vector');
-  kb.closeAllKb();
+  await drainMainRuntimeForTest(TEST_UID);
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   if (prevHome === undefined) delete process.env.HOME;
   else process.env.HOME = prevHome;
