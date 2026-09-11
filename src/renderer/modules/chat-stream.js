@@ -657,16 +657,15 @@ function _csRenderThinkRow(row) {
     const tl = String(row.dataset.csFull).split('\n').filter(Boolean).pop() || '';
     if (tl) live = `<span class="cs-think-live">${_csEscapeHtml(tl.slice(-90))}</span>`;
   }
-  const full = row.dataset.csFull
-    ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
+  // 2026-09-11 需求变更：思考的展开全文块（cs-think-full 卡片）彻底移除——
+  // 只保留单行摘要（图标 + 思考 + 时长 + 运行中单行预览）。
   row.innerHTML = `
     <div class="cs-row-line">
       <span class="cs-ico">${_csIco('brain-circuit')}</span>
       <span class="cs-verb">思考</span>
       <span class="cs-row-dim cs-think-dur">${_csThinkDurText(row)}</span>
       ${live}
-    </div>
-    ${full}`;
+    </div>`;
 }
 
 /** 文字段实时 markdown 渲染（交互设计 2026-09-08：流式期间 # ** 等符号裸露）。
@@ -703,7 +702,7 @@ function _csAppendReasoning(body, text) {
     row = document.createElement('div');
     row.className = 'cs-row cs-row-think';
     row.dataset.csT0 = String(Date.now());
-    row.addEventListener('click', () => row.classList.toggle('cs-open'));
+    // 思考行不再可点击展开（2026-09-11：展开块移除，纯单行摘要）。
     body.appendChild(row);
   }
   if (text) row.dataset.csFull = (row.dataset.csFull || '') + text;

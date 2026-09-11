@@ -132,11 +132,13 @@
 }
 .cs-target {
   flex: 0 1 auto; min-width: 0;
-  /* 完整显示（2026-09-11 需求变更）：不再 68% 截断+单行省略——命令全文
-     换行展示，行/背景贴合全部文字，无尾部空白；超容器宽自然折行。 */
+  /* 单行紧凑（2026-09-11 需求变更，覆盖上一版的换行完整显示）：强制单行，
+     一行放不下直接硬截断（text-overflow: clip，不出现省略号），超出的
+     部分不换行不提示。宽度由 flex 收缩到行内可用空间。 */
   max-width: 100%;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
   color: var(--color-stream-target);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-size-2);
@@ -180,18 +182,7 @@
 
 /* ── 思考行： brain 图标 + 思考 + 时长；点开看原文 ── */
 .cs-row-think .cs-think-dur { color: var(--color-stream-dim); }
-.cs-think-full {
-  display: none;
-  margin: 2px 0 2px 22px;
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--color-stream-guide-2);
-  color: var(--color-stream-think);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: var(--font-size-2);
-  line-height: 1.55;
-}
-.cs-row.cs-open .cs-think-full { display: block; }
+/* 思考展开块（.cs-think-full）已移除（2026-09-11）：思考行只保留单行摘要。 */
 
 /* ── 时间线正文段（边说边执行的文字，交回前的时间线内呈现） ── */
 /* 实时 markdown 渲染后段内是块级 <p>/<ul>（各带自身 margin）——
@@ -270,7 +261,6 @@
   .cs-text { color: var(--text, var(--color-stream-fallback)); }
   .cs-usage-row { color: var(--color-stream-chip); }
   .cs-loading { color: var(--color-stream-chip); }
-  .cs-think-full { color: var(--color-stream-chip); border-left-color: var(--color-stream-dark-line); }
   /* 输出块与浅色模式同构：无底色卡，竖线引导（浅色 2026-09-08 21:10
      改法同步——此前暗色仍残留 rgba(0,0,0,.28) 深底卡）。 */
   .cs-row-out pre {
