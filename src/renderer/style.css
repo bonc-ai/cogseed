@@ -7650,7 +7650,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   right: 0;
   /* 左右 padding 与 .chat-history 的 10% 一致（交互设计 2026-09-08 布局统一）：
      输入框与对话内容共用同一水平范围，消除 32px 固定 padding 造成的错位。 */
-  padding: 20px 10% 32px;
+  /* 纵向上下同值（16px，同 --space-4 尺度）：输入卡片与统计栏作为一整列贴底，
+     上下只留对称呼吸位，其余高度交给消息区。 */
+  padding: 16px 10%;
   background: linear-gradient(to bottom, transparent 0%, var(--bg) 20%);
   z-index: var(--z-raised);
   pointer-events: none;
