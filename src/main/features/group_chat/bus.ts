@@ -5467,7 +5467,6 @@ async function runActorTurnBody(
       // 是外部协作的主目标，优先于话题隔离；sessionForGoal 的 goal 通道与
       // runP3394GatewayTurn 的 goal 参数保留——将来 KStar 需求粒度变粗
       // （真正的长话题）或出现显式"新话题"用户动作时，可恢复注入。
-      let gatewayTurnGoal: string | undefined;
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -5496,7 +5495,8 @@ async function runActorTurnBody(
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
-            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // goal 槽位宿主侧不注入（会话连续性优先，见上方注释）；网关
+            // runP3394GatewayTurn 的 goal 参数通道保留，恢复注入时加回这里。
             // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
             //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
             ...(item.references && item.references.length

@@ -65,8 +65,6 @@
 .cs-badge-tools:not(:empty)::before { content: '·'; padding: 0 4px 0 2px; opacity: .55; }
 /* 思考行运行中实时显示最新思考文本（截断一行；收行后仍只显时长）。 */
 .cs-think-live { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
-/* 工具行权威耗时（payload.timing；无 timing 不渲染——不编造）。 */
-.cs-dur { flex: none; font-variant-numeric: tabular-nums; opacity: .72; }
 .cs-flow.failed .cs-badge { color: var(--color-stream-fail); }
 .cs-flow.failed .cs-badge:hover { color: var(--color-stream-fail-3); }
 .cs-badge-stop {
