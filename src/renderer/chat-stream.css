@@ -23,7 +23,16 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  /* 行收缩贴合内容（2026-09-11）：默认 stretch 把每行拉到面板全宽，
+     hover 背景远长于截断后的行内容、尾部大片空白。flex-start 下子项
+     按内容宽收缩（width:fit-content 实测不生效——与行内 % max-width
+     循环解析，Chromium 按 available 取值仍得全宽）。 */
+  align-items: flex-start;
 }
+/* 展开态（diff/输出/思考全文）回到全宽：块级展开区需要整行宽可读。 */
+.cs-row.cs-open { align-self: stretch; }
+/* 正文段时间线段保持全宽：markdown 段落的排版基线与消息正文一致。 */
+.cs-text { width: 100%; }
 
 /* ── 计时/收起徽章：挂在消息头 cogseed 名字右侧，点击开合下方时间线 ── */
 .cs-badge {
@@ -71,9 +80,8 @@
 
 /* ── 动作行：外层管 hover/点击（块级），内层 cs-row-line 一行内联摘要 ── */
 .cs-row {
-  /* 行宽贴合内容（2026-09-11：此前块级占满消息宽，hover 背景远长于截断
-     后的行内容，尾部大片空白）。长行（命令截断/展开区）仍受容器宽约束。 */
-  width: fit-content;
+  /* 行宽由父级 align-items:flex-start 收缩到内容（见 .cs-flow-body 注释）；
+     max-width 兜底长命令/展开区不超面板。 */
   max-width: 100%;
   padding: 3px 6px;
   border-radius: var(--radius-1);
@@ -82,10 +90,15 @@
 }
 .cs-row:hover { background: var(--color-stream-hover); }
 .cs-row-line {
-  display: flex;
+  /* inline-flex（2026-09-11）：块级 div 的 auto 宽恒等于可用宽，把外层
+     任何收缩（fit-content/min-content）都顶回面板全宽——hover 背景因此
+     远长于行内容。改 inline-flex 后宽度=内容，配合 .cs-flow-body 的
+     flex-start 实现整行贴合内容。 */
+  display: inline-flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .cs-ico { display: inline-flex; flex: none; color: var(--color-stream-chip-2); }
