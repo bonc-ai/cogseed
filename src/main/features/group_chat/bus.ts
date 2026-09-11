@@ -5428,18 +5428,16 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
-      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
-      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
-      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
-      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
+      // G-28 话题隔离（2026-09-11 停用自动注入）：此前把"当前开放的 KStar
+      // 需求 id"作为 goal 传入信封，sessionForGoal 按 (会话,对端,goal) 分
+      // P3394 会话。但 KStar 的需求粒度是"每条实质提问一个新需求"——同一
+      // 会话连问两个问题 goal 就变，G-28 退化为"每问必开新会话"，外部智能
+      // 体对几分钟前的上下文全部失忆（实测同会话三连问产生三个 P3394 会
+      // 话、三个 codex 原生 thread）。会话连续性（同会话+同对端=同一会话）
+      // 是外部协作的主目标，优先于话题隔离；sessionForGoal 的 goal 通道与
+      // runP3394GatewayTurn 的 goal 参数保留——将来 KStar 需求粒度变粗
+      // （真正的长话题）或出现显式"新话题"用户动作时，可恢复注入。
       let gatewayTurnGoal: string | undefined;
-      try {
-        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
-        const lifecycle = await readKstarTaskLifecycle(uid, cid);
-        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
-          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
-        }
-      } catch { /* KStar 不可用时退回默认稳定会话 */ }
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
