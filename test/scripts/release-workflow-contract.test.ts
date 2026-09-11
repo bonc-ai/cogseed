@@ -34,24 +34,43 @@ describe('release workflow contract', () => {
     });
   });
 
-  it('keeps the CI job names exact and makes the Windows gate complete', () => {
+  it('keeps the CI job names exact and fans the Windows gate out into shards', () => {
     const workflow = load('ci.yml');
-    expect(Object.keys(workflow.jobs).sort()).toEqual(['verify', 'verify-windows']);
-    const windowsJob = workflow.jobs['verify-windows'];
-    const windows = commands(windowsJob);
+    expect(Object.keys(workflow.jobs).sort()).toEqual([
+      'build-windows',
+      'verify',
+      'verify-windows',
+      'verify-windows-native',
+      'verify-windows-shard',
+    ]);
+
+    const native = workflow.jobs['verify-windows-native'];
     for (const expected of [
+      'npm run typecheck',
       'npm run lint',
-      'node scripts/run-tests.mjs run --maxWorkers=1',
+      'npm run test:p3394:windows',
       'npm run test:resources',
       'npm run test:platform-native',
-      'npm run test:p3394:windows',
       'node p3394-gateway/test/smoke.cjs',
-      'npm run build:win',
-    ]) expect(windows).toContain(expected);
-    const p3394Index = steps(windowsJob).findIndex((step) => step.run === 'npm run test:p3394:windows');
-    const fullJsIndex = steps(windowsJob).findIndex((step) => step.run === 'node scripts/run-tests.mjs run --maxWorkers=1');
-    expect(p3394Index).toBeGreaterThanOrEqual(0);
-    expect(p3394Index).toBeLessThan(fullJsIndex);
+    ]) expect(commands(native)).toContain(expected);
+
+    const shard = workflow.jobs['verify-windows-shard'];
+    expect(shard.name).toBe('verify-windows-shard-${{ matrix.shard }}');
+    expect(shard.strategy).toMatchObject({ 'fail-fast': false, matrix: { shard: [1, 2, 3, 4] } });
+    expect(commands(shard)).toContain('node scripts/run-tests.mjs run --maxWorkers=1 --shard=${{ matrix.shard }}/4');
+
+    const build = workflow.jobs['build-windows'];
+    expect(commands(build)).toContain('npm run build:win');
+    const upload = steps(build).find((step) => step.uses === 'actions/upload-artifact@v4');
+    expect(upload?.with?.path).toContain('dist/CogSeed-*-win-x64.exe');
+
+    const aggregate = workflow.jobs['verify-windows'];
+    expect(aggregate.needs).toEqual(['verify-windows-native', 'verify-windows-shard', 'build-windows']);
+    expect(aggregate.if).toBe('always()');
+    const aggregateRun = commands(aggregate);
+    for (const need of ['verify-windows-native', 'verify-windows-shard', 'build-windows']) {
+      expect(aggregateRun).toContain(`needs.${need}.result`);
+    }
   });
 
   it('pins the Windows P3394 lane to the platform-native regression suites', () => {

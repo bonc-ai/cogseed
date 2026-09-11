@@ -222,6 +222,30 @@ describe('release gate verification', () => {
     ] } })).rejects.toThrow(/duplicate.*compliance/i);
   });
 
+  it('accepts the sharded Windows job graph and rejects unknown extra jobs', async () => {
+    const shardedCiJobs = [
+      { name: 'verify', status: 'completed', conclusion: 'success', run_attempt: 1 },
+      { name: 'verify-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
+      { name: 'verify-windows-native', status: 'completed', conclusion: 'success', run_attempt: 1 },
+      { name: 'build-windows', status: 'completed', conclusion: 'success', run_attempt: 1 },
+      ...[1, 2, 3, 4].map((shard) => ({
+        name: `verify-windows-shard-${shard}`,
+        status: 'completed',
+        conclusion: 'success',
+        run_attempt: 1,
+      })),
+    ];
+    await expect(run({ jobs: { '20/attempts/1': shardedCiJobs } })).resolves.toMatchObject({ peeledSha: SHA });
+    await expect(run({
+      jobs: {
+        '20/attempts/1': [
+          ...shardedCiJobs,
+          { name: 'verify-windows-extra', status: 'completed', conclusion: 'success', run_attempt: 1 },
+        ],
+      },
+    })).rejects.toThrow(/Unexpected ci\.yml jobs: verify-windows-extra/i);
+  });
+
   it('rejects missing or non-positive run_attempt values', async () => {
     await expect(run({ jobs: { '21/attempts/1': [
       { name: 'compliance', status: 'completed', conclusion: 'success' },

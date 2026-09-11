@@ -52,7 +52,7 @@ jobs:
           fi
           echo "✅ All commit author emails are noreply."
 
-  verify-windows:
+  verify-windows-native:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,11 +68,43 @@ jobs:
       - run: npm run lint
       - name: P3394 Windows compatibility gate
         run: npm run test:p3394:windows
-      - run: node scripts/run-tests.mjs run --maxWorkers=1
       - run: npm run test:resources
       - run: npm run test:platform-native
       - name: P3394 gateway protocol smoke
         run: node p3394-gateway/test/smoke.cjs
+
+  # Full JS suite split into four serial shards on separate runners. Each shard
+  # keeps --maxWorkers=1 (Windows process/timing stability) while the shards
+  # themselves run in parallel.
+  verify-windows-shard:
+    name: verify-windows-shard-${{ matrix.shard }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --prefer-offline
+      - run: node scripts/run-tests.mjs run --maxWorkers=1 --shard=${{ matrix.shard }}/4
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - run: npm run build:win
       # Known Windows packaged-STT gap: the smoke does not produce its marker
       # on the hosted runner yet. Keep it visible with the app's captured
@@ -88,3 +120,21 @@ jobs:
           path: dist/CogSeed-*-win-x64.exe
           if-no-files-found: error
           retention-days: 14
+
+  # Aggregate keeps the release-gate job name stable while failing closed if
+  # any Windows lane fails. `if: always()` is required so a failed dependency
+  # produces an explicit failure instead of a skipped job.
+  verify-windows:
+    needs: [verify-windows-native, verify-windows-shard, build-windows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Windows lane
+        run: |
+          set -euo pipefail
+          echo "native=${{ needs.verify-windows-native.result }}"
+          echo "shards=${{ needs.verify-windows-shard.result }}"
+          echo "build=${{ needs.build-windows.result }}"
+          test "${{ needs.verify-windows-native.result }}" = "success"
+          test "${{ needs.verify-windows-shard.result }}" = "success"
+          test "${{ needs.build-windows.result }}" = "success"
