@@ -95,7 +95,7 @@
      远长于行内容。改 inline-flex 后宽度=内容，配合 .cs-flow-body 的
      flex-start 实现整行贴合内容。 */
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   min-width: 0;
   max-width: 100%;
@@ -131,16 +131,16 @@
   font-size: var(--font-size-2);
 }
 .cs-target {
-  /* 不再 flex:1 撑满——那会把耗时推到行最右（交互设计 2026-09-08：工具行
-     耗时应紧跟目标文本，与思考行「· 持续了 Xs」同位同样式）。行宽仍由
-     max-width 截断保护。 */
   flex: 0 1 auto; min-width: 0;
-  /* 命令/查询类目标显式截断：超长部分直接隐去（对齐 CLI 行宽省略） */
-  max-width: 68%;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 完整显示（2026-09-11 需求变更）：不再 68% 截断+单行省略——命令全文
+     换行展示，行/背景贴合全部文字，无尾部空白；超容器宽自然折行。 */
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-all;
   color: var(--color-stream-target);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: var(--font-size-2);
+  line-height: 1.5;
 }
 
 /* 行内 diff 统计与展开的 diff 正文 */
