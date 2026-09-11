@@ -26,6 +26,21 @@ async function createTask(requestId = 'req-lifecycle') {
 }
 
 describe('CogSeed task lifecycle', () => {
+  it('separates executing status from the board-active (waiting_user) status', async () => {
+    // 2026-09-11 实机事故的回归锚点：waiting_user 是"已停止、等用户回话"，
+    // 在运营口径里算活跃（运行中心计数），但绝不能算执行中——否则会话
+    // processing 恒 true，发送按钮卡在停止态、后续消息被错排队。
+    const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');
+    expect(lifecycle.isCogSeedTaskActiveStatus('waiting_user')).toBe(true);
+    expect(lifecycle.isCogSeedTaskExecutingStatus('waiting_user')).toBe(false);
+    for (const status of ['created', 'queued', 'running'] as const) {
+      expect(lifecycle.isCogSeedTaskExecutingStatus(status)).toBe(true);
+    }
+    for (const status of ['planned', 'completed', 'failed', 'cancelled', 'recoverable'] as const) {
+      expect(lifecycle.isCogSeedTaskExecutingStatus(status)).toBe(false);
+    }
+  });
+
   it('keeps planned tasks inactive and allows direct archive without changing lifecycle status', async () => {
     const tasks = await import('../../../../src/main/features/cogseed_backend/task-store');
     const lifecycle = await import('../../../../src/main/features/cogseed_backend/lifecycle');

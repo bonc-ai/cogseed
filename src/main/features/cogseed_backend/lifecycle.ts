@@ -39,6 +39,17 @@ export function isCogSeedTaskActiveStatus(status: CogSeedTaskStatus): boolean {
   return status === 'created' || status === 'queued' || status === 'running' || status === 'waiting_user';
 }
 
+/**
+ * 执行中（executing）＝真的有活在跑。区别于 isCogSeedTaskActiveStatus 的
+ * 运营口径"还挂着"：`waiting_user` 表示任务已停止执行、正在等用户回话
+ * （状态机 TRANSITIONS 里它只在用户再说话时回到 queued），算进运行态会让
+ * 会话被判定为"正在回复"——发送按钮卡在停止态、后续消息被错排队
+ * （2026-09-11 实机事故）。运行中心/看板的活跃计数仍用上面那个宽口径。
+ */
+export function isCogSeedTaskExecutingStatus(status: CogSeedTaskStatus): boolean {
+  return status === 'created' || status === 'queued' || status === 'running';
+}
+
 export async function archiveCogSeedTask(userId: string, taskId: string): Promise<CogSeedTaskRecord> {
   assertCogSeedUserId(userId);
   assertCogSeedTaskId(taskId);
