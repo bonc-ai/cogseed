@@ -357,6 +357,28 @@ describe('chat-stream module', () => {
     expect(thinks[0].dataset.csFull).toBe('正在读取文件…还有后续');
   });
 
+  it('思考内容常显单行预览、点击展开纯文本全文（2026-09-11 方案 C）', () => {
+    handle({ type: 'chat.turn.started', turnId: 'T2', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'r1', kind: 'reasoning', status: 'inProgress', payload: { delta: '核对 131072 的来源与回退链路' } });
+    const body = bodyOf(flow);
+    let thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks).toHaveLength(1);
+    // 运行中：单行预览在。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    // 收行（后续工具行到来）：预览不再消失，全文块存在但默认收起。
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 't1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    thinks = body.children.filter((c) => String(c.className).includes('cs-row-think'));
+    expect(thinks[0].dataset.csClosed).toBe('1');
+    // 回归锚点：收行后内容必须仍可见（071bd064 曾把这里清空为只剩时长）。
+    expect(thinks[0].innerHTML).toContain('cs-think-live');
+    expect(thinks[0].innerHTML).toContain('cs-think-full');
+    expect(String(thinks[0].className)).not.toContain('cs-open');
+    // 点击行 → 展开纯文本全文（fake DOM 用记录的 handler 触发）。
+    (thinks[0].handlers.click!)();
+    expect(String(thinks[0].className)).toContain('cs-open');
+  });
+
   it('prewarm 发送即起计（2026-09-09）：面板与计时立即存在，真 turnId 首事件迁移接管', () => {
     const prewarm = g.window.chatStreamPrewarm as (c: string, m: unknown, t: number) => void;
     expect(typeof prewarm).toBe('function');

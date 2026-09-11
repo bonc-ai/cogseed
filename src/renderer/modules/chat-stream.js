@@ -651,21 +651,24 @@ function _csThinkDurText(row) {
 // 「上一锚点→下一锚点」窗口写回 csT0/csDur——见该处的推导注释。
 
 function _csRenderThinkRow(row) {
-  const running = row.dataset.csClosed !== '1';
+  // 单行预览常显（2026-09-11 方案 C）：不管运行中还是已收行，都显示思考
+  // 内容的一行预览（最后一个非空行，尾部截断）——收行后内容不再消失。
   let live = '';
-  if (running && row.dataset.csFull) {
+  if (row.dataset.csFull) {
     const tl = String(row.dataset.csFull).split('\n').filter(Boolean).pop() || '';
     if (tl) live = `<span class="cs-think-live">${_csEscapeHtml(tl.slice(-90))}</span>`;
   }
-  // 2026-09-11 需求变更：思考的展开全文块（cs-think-full 卡片）彻底移除——
-  // 只保留单行摘要（图标 + 思考 + 时长 + 运行中单行预览）。
+  // 点击行展开全文：纯文本块，无边框/底色/圆角（不算卡片）。
+  const full = row.dataset.csFull
+    ? `<div class="cs-think-full">${_csEscapeHtml(row.dataset.csFull)}</div>` : '';
   row.innerHTML = `
     <div class="cs-row-line">
       <span class="cs-ico">${_csIco('brain-circuit')}</span>
       <span class="cs-verb">思考</span>
       <span class="cs-row-dim cs-think-dur">${_csThinkDurText(row)}</span>
       ${live}
-    </div>`;
+    </div>
+    ${full}`;
 }
 
 /** 文字段实时 markdown 渲染（交互设计 2026-09-08：流式期间 # ** 等符号裸露）。
@@ -702,7 +705,8 @@ function _csAppendReasoning(body, text) {
     row = document.createElement('div');
     row.className = 'cs-row cs-row-think';
     row.dataset.csT0 = String(Date.now());
-    // 思考行不再可点击展开（2026-09-11：展开块移除，纯单行摘要）。
+    // 点击行展开/收起全文（方案 C：纯文本块，无卡片样式）。
+    row.addEventListener('click', () => row.classList.toggle('cs-open'));
     body.appendChild(row);
   }
   if (text) row.dataset.csFull = (row.dataset.csFull || '') + text;
