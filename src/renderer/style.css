@@ -4910,7 +4910,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard .db-table { width: 100%; max-width: 900px; margin: 0 auto; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .dashboard .db-table th,
 .dashboard .db-table td { padding: 7px 10px; border-bottom: 1px solid rgba(20, 71, 55, 0.08); text-align: left; }
-.dashboard .db-table tr:last-child td { border-bottom: none; }
+/* 末行保留底线（2026-09-11）：卡片封装移除后，原来的 none 会让表格底部
+   缺一条线、视觉未闭合。 */
 .dashboard .db-table th { background: var(--db-surface-soft); font-weight: 600; color: var(--text); }
 .dashboard .db-table tbody tr:nth-child(even) td { background: rgba(248, 250, 252, 0.55); }
 .dashboard .db-table th[data-numeric="1"],
@@ -11411,8 +11412,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
 }
 
-/* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。 */
-.chat-bubble .markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。
+   dashboard 表格（.db-table）豁免：它由自己的规则管（限宽 900 + 居中，
+   且外层 .db-table-wrap 已有横向滚动兜底）——不能豁免的话本条
+   max-width:100%（特异性 0,2,1）会压过 .dashboard .db-table（0,2,0），
+   900 上限与居中静默失效（真机踩坑 2026-09-11）。 */
+.chat-bubble .markdown-body table:not(.db-table) { display: block; max-width: 100%; overflow-x: auto; }
 .chat-bubble .markdown-body img   { max-width: 100%; }
 .chat-bubble .markdown-body .chat-md-img { width: 100%; height: 100%; }
 
