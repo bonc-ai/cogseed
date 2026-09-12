@@ -44,6 +44,8 @@ export interface RecallAssetTimelineItem {
     version?: string;
     projectionId?: string;
     taskRunId?: string;
+    /** 来源会话 id：使用记录页按它 join 会话名展示（不显示裸 id）。 */
+    conversationId?: string;
     transferProofId?: string;
     usageReceiptId?: string;
     /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
@@ -146,11 +148,34 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
       occurredAt,
       title: itemTitle('projection_confirmed'),
       summary: projection.purpose,
-      refs: { assetId: asset.id, projectionId: projection.id, taskRunId: projection.taskRunId },
+      refs: {
+        assetId: asset.id,
+        projectionId: projection.id,
+        taskRunId: projection.taskRunId,
+        ...(projection.conversationId ? { conversationId: projection.conversationId } : {}),
+      },
     });
   }
 
+  // usage → 来源会话：usage 只带 projectionId，会话 id 在投影记录上——
+  // 按投影 id 建缓存（同一批 usage 常共享投影，避免逐条读盘）。
+  const projectionConversations = new Map<string, string>();
+  const conversationOfProjection = async (projectionId?: string): Promise<string | undefined> => {
+    if (!projectionId) return undefined;
+    const cached = projectionConversations.get(projectionId);
+    if (cached !== undefined) return cached || undefined;
+    try {
+      const projection = await readContextProjection(userId, projectionId);
+      const conversationId = projection.conversationId || '';
+      projectionConversations.set(projectionId, conversationId);
+      return conversationId || undefined;
+    } catch {
+      projectionConversations.set(projectionId, '');
+      return undefined;
+    }
+  };
   for (const usage of await listRecallUsage(userId, assetId)) {
+    const usageConversationId = await conversationOfProjection(usage.projectionId);
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -164,6 +189,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
+        ...(usageConversationId ? { conversationId: usageConversationId } : {}),
         // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
         // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执

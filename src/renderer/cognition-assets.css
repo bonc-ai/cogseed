@@ -206,6 +206,16 @@
 .ca-fig-soil text { fill: #6f5a3a; font-weight: 500; }
 .ca-fig-soil:hover rect { fill: #e4d8c2; }
 
+/* ── 使用记录：资产卡片头部（收缩/展开）───────────────────────── */
+.ca-proof-head-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.ca-proof-head {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: flex-start; gap: 8px;
+  border: 0; background: none; padding: 4px 0; cursor: pointer; font: inherit; text-align: left;
+}
+.ca-proof-head .ca-chevron { color: var(--ca-ink3); font-size: 11px; margin-top: 2px; }
+.ca-proof-head:hover .ca-row-title { color: var(--ca-green-d); }
+.ca-proof-head-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
 .ca-tree-cap { text-align: center; color: var(--ca-ink3); font-size: 12px; margin: 2px 0 10px; }
 
 /* ── 简化交互：可点标题行 / 高级折叠区 ─────────────────────── */

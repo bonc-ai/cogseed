@@ -455,6 +455,7 @@ export async function buildRecallTurnPromptContext(
     const automatic = await createAutomaticContextProjection(userId, {
       taskRunId: input.taskRunId,
       taskText: input.taskText,
+      ...(input.cid ? { conversationId: input.cid } : {}),
       ...(input.agentId ? { agentId: input.agentId } : {}),
       ...(input.roleId ? { roleId: input.roleId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),

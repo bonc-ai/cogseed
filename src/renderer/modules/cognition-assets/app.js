@@ -53,6 +53,13 @@
       try {
         switch (act) {
           case 'go-back': router.back(); break;
+          case 'toggle-proof-asset': {
+            const key = String(id);
+            if (S.expandedProofs.has(key)) S.expandedProofs.delete(key);
+            else S.expandedProofs.add(key);
+            NS.notify();
+            break;
+          }
           case 'toggle-asset-more': {
             const wrap = el.closest('.ca-more-wrap');
             const menu = wrap ? wrap.querySelector('[data-asset-more]') : null;

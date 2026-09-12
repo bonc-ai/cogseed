@@ -146,6 +146,8 @@ export interface AutomaticProjectionInput {
   roleId?: string;
   projectId?: string;
   workspaceId?: string;
+  /** 来源会话 id：使用记录页按它把事件关联回会话名（用户需求：不显示裸 id）。 */
+  conversationId?: string;
   conversationKind?: string;
   fileKinds?: string[];
 }
@@ -606,6 +608,9 @@ export async function createAutomaticContextProjection(
   const workspaceId = input.workspaceId === undefined
     ? undefined
     : normalizeTerm(input.workspaceId, 'workspace id', 160);
+  const conversationId = input.conversationId === undefined
+    ? undefined
+    : normalizeTerm(input.conversationId, 'conversation id', 160);
   const id = automaticProjectionId(taskRunId, workspaceId);
   const existing = await readRecallJsonRecord(userId, 'projections', id);
   if (existing) {
@@ -684,6 +689,7 @@ export async function createAutomaticContextProjection(
     id,
     taskRunId,
     ...(workspaceId ? { workspaceId } : {}),
+    ...(conversationId ? { conversationId } : {}),
     ...(selection.degraded ? { selectionDegraded: true } : {}),
     purpose: 'conversation_reply',
     authorization: 'not_required',

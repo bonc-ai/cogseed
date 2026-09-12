@@ -482,16 +482,40 @@
         `<div class="ca-steps">${esc(T('cognition.proofs_empty_steps', '① 确认资产 → ② 任务中使用 → ③ 留下使用记录 → ④ 效果验证'))}</div>${btn(T('cognition.proof_open_asset', '查看资产'), 'open-overview', { primary: true })}`,
       )}</div>`;
     }
+    // 会话名 join：事件只带 conversationId，用户看不懂裸 id——按来源清单
+    // 里的会话项翻成标题；join 不到（会话已删/老数据无此字段）如实降级。
+    const convNames = new Map();
+    for (const group of S.sources) {
+      for (const item of Array.isArray(group.items) ? group.items : []) {
+        if (item.kind === 'conversation' && item.id) convNames.set(String(item.id), String(item.title || ''));
+      }
+    }
+    const conversationLabel = (cid) => {
+      if (!cid) return '';
+      const name = convNames.get(String(cid));
+      if (name) return T('cognition.proof_in_conversation', '在「{name}」中', { name: esc(name) });
+      return T('cognition.proof_conversation_gone', '原会话已删除');
+    };
     const sections = [...byAsset.entries()].map(([assetId, items]) => {
       const asset = S.assets.find((a) => String(a.id) === assetId);
       const title = asset ? (asset.title || assetId) : assetId;
+      // 卡片默认收缩：头部只给概要（使用/带入次数 + 最近时间），点开看逐条。
+      const expanded = S.expandedProofs.has(String(assetId));
+      const usedCount = items.filter((p) => p.kind === 'usage_recorded').length;
+      const projectedCount = items.filter((p) => p.kind === 'projection_confirmed').length;
+      const lastAt = items.reduce((max, p) => (String(p.occurredAt || '') > max ? String(p.occurredAt) : max), '');
+      const summaryLine = [
+        usedCount ? T('cognition.proof_used_times', '被实际使用 {n} 次', { n: String(usedCount) }) : '',
+        projectedCount ? T('cognition.proof_projected_times', '被带入任务 {n} 次', { n: String(projectedCount) }) : '',
+        lastAt ? T('cognition.proof_last_at', '最近 {when}', { when: fmtDate(lastAt) }) : '',
+      ].filter(Boolean).join(' · ');
       const rows = items.slice(0, 20).map((proof) => {
         const refs = proof.refs || {};
         const isOpen = String(route.proofEventId) === String(proof.id);
         const transferProofId = String(refs.transferProofId || '');
-        // meta 只留版本号：标题已区分「被带入」/「被实际使用」两种事件，
-        // 原 taskRunId 标注"在一次任务中被带入"会让两者读起来一样（冗余）。
+        // meta = 会话名 + 版本：告诉用户"在哪次对话里、用的哪个版本"。
         const metaParts = [
+          conversationLabel(refs.conversationId),
           refs.version ? `v${esc(String(refs.version))}` : '',
         ].filter(Boolean).join(' · ');
         let ratingHtml = '';
@@ -520,9 +544,17 @@
         </div>`;
       }).join('');
       return `<div class="ca-card ca-proof-asset">
-        <div class="ca-line"><div class="ca-row-title">${esc(title)}</div>
-        <div class="ca-right"><span class="ca-note">${esc(String(items.length))} ${esc(T('cognition.common_records', '条'))}</span>${btn(T('cognition.proof_open_asset', '查看资产'), 'open-asset', { id: assetId, small: true })}</div></div>
-        <div class="ca-proof-list">${rows}</div>
+        <div class="ca-proof-head-row">
+          <button type="button" class="ca-proof-head" data-act="toggle-proof-asset" data-id="${esc(assetId)}" aria-expanded="${expanded ? 'true' : 'false'}">
+            <span class="ca-chevron" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
+            <span class="ca-proof-head-main">
+              <span class="ca-row-title">${esc(title)}</span>
+              ${summaryLine ? `<span class="ca-sub">${esc(summaryLine)}</span>` : ''}
+            </span>
+          </button>
+          <div class="ca-right"><span class="ca-note">${esc(String(items.length))} ${esc(T('cognition.common_records', '条'))}</span>${btn(T('cognition.proof_open_asset', '查看资产'), 'open-asset', { id: assetId, small: true })}</div>
+        </div>
+        ${expanded ? `<div class="ca-proof-list">${rows}</div>` : ''}
       </div>`;
     }).join('');
     return `${heroHtml}${sections}`;

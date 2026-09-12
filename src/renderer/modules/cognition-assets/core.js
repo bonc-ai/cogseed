@@ -123,6 +123,8 @@
     experienceTotal: 0,
     tree: null,
     proofs: [],
+    /** 使用记录页：哪些资产卡片被展开（assetId 集合；重画后保留）。 */
+    expandedProofs: new Set(),
     continuationCount: 0,
     loadedAt: 0,
     /** 路由：{name, category, assetId, candidateId, manageTab, proofEventId} */
