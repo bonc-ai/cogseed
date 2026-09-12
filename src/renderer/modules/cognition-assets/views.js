@@ -483,18 +483,42 @@
       )}</div>`;
     }
     // 会话名 join：事件只带 conversationId，用户看不懂裸 id——按来源清单
-    // 里的会话项翻成标题；join 不到（会话已删/老数据无此字段）如实降级。
+    // 里的会话项翻成标题；join 不到（会话已删/老数据无此字段）用泛称，
+    // 不编造名字。整句叙事见 proofSentence。
     const convNames = new Map();
     for (const group of S.sources) {
       for (const item of Array.isArray(group.items) ? group.items : []) {
         if (item.kind === 'conversation' && item.id) convNames.set(String(item.id), String(item.title || ''));
       }
     }
-    const conversationLabel = (cid) => {
-      if (!cid) return '';
-      const name = convNames.get(String(cid));
-      if (name) return T('cognition.proof_in_conversation', '在「{name}」中', { name: esc(name) });
-      return T('cognition.proof_conversation_gone', '原会话已删除');
+    const wherePhrase = (cid) => {
+      const name = cid ? convNames.get(String(cid)) : '';
+      return name
+        ? T('cognition.proof_where_named', '对话《{name}》里', { name: esc(name) })
+        : T('cognition.proof_where_generic', '一次对话里');
+    };
+    /** 事件整句化（用户要求：一句话说明在什么时间、哪个对话里被怎么用）。 */
+    const proofSentence = (proof) => {
+      const refs = proof.refs || {};
+      const when = fmtDate(proof.occurredAt);
+      const where = wherePhrase(refs.conversationId);
+      const version = refs.version
+        ? T('cognition.proof_version_suffix', '（v{n}）', { n: String(refs.version) })
+        : '';
+      const kind = String(proof.kind || '');
+      if (kind === 'usage_recorded') {
+        return T('cognition.proof_sentence_usage', '{when}，在{where}被实际使用{version}', { when, where, version });
+      }
+      if (kind === 'projection_confirmed') {
+        return T('cognition.proof_sentence_projected', '{when}，在{where}被带入任务{version}', { when, where, version });
+      }
+      if (kind === 'asset_created') {
+        return T('cognition.proof_sentence_created', '{when}，这条内容被创建', { when });
+      }
+      if (kind === 'asset_version') {
+        return T('cognition.proof_sentence_version', '{when}，保存了新版本{version}', { when, version });
+      }
+      return T('cognition.proof_sentence_unknown', '{when}，{title}', { when, title: eventTitle(proof) });
     };
     const sections = [...byAsset.entries()].map(([assetId, items]) => {
       const asset = S.assets.find((a) => String(a.id) === assetId);
@@ -513,11 +537,6 @@
         const refs = proof.refs || {};
         const isOpen = String(route.proofEventId) === String(proof.id);
         const transferProofId = String(refs.transferProofId || '');
-        // meta = 会话名 + 版本：告诉用户"在哪次对话里、用的哪个版本"。
-        const metaParts = [
-          conversationLabel(refs.conversationId),
-          refs.version ? `v${esc(String(refs.version))}` : '',
-        ].filter(Boolean).join(' · ');
         let ratingHtml = '';
         if (isOpen) {
           if (transferProofId) {
@@ -535,10 +554,7 @@
         <div class="ca-proof-row${isOpen ? ' is-open' : ''}">
           <button type="button" class="ca-proof-event" data-act="proof-toggle" data-id="${esc(proof.id)}">
             <span class="ca-proof-dot" aria-hidden="true"></span>
-            <span class="ca-proof-body"><strong>${esc(eventTitle(proof))}</strong>
-            ${proofSummary(proof) ? `<span class="ca-proof-summary">${esc(proofSummary(proof).slice(0, 120))}</span>` : ''}
-            ${metaParts ? `<span class="ca-proof-meta">${metaParts}</span>` : ''}</span>
-            <time>${esc(fmtDate(proof.occurredAt))}</time>
+            <span class="ca-proof-body"><strong class="ca-proof-sentence">${esc(proofSentence(proof))}</strong></span>
           </button>
           ${ratingHtml}
         </div>`;
