@@ -118,55 +118,39 @@
   const candidateTitle = (candidate) => String(candidate.judgment || candidate.summary || '').trim().slice(0, 60)
     || T('cognition.candidate_untitled', '未命名候选');
 
-  /* ────────────────────────── 认知树 ────────────────────────── */
+  /* ────────────────────────── 认知树（方块示意版） ────────────────────────── */
   /* 垂直轴 = 处理梯度：土壤（记录）→ 根（候选）→ 干/枝（正式资产）→ 冠（已验证）。
-     每个部位可点击直达对应清单：土壤→数据来源、根→待我处理、枝→分类资产、冠→使用与证明。 */
+     现阶段用方块示意：土=大灰方块、根=小长方块、干=细长方块、模块=挂在树干上的方块。
+     每个方块可点击直达对应清单：土壤→数据来源、根→待我处理、枝→分类资产、冠→使用与证明。 */
 
-  function treeSvg(counts, info) {
-    const branch = (cx, cy, tx, ty, width) => `<path d="M${cx} ${cy} C${(cx + tx) / 2} ${cy - (cy - ty) * 0.35}, ${(cx + tx) / 2} ${ty + (cy - ty) * 0.3}, ${tx} ${ty}" stroke="#9a7a58" stroke-width="${width}" fill="none" stroke-linecap="round"/>`;
-    const leaf = (x, y, rotate, id, label, count, active) => {
-      const rx = 60, ry = 22;
-      return `<g class="ca-branch${active ? ' is-active' : ''}" data-act="filter-cat" data-id="${id}" role="button" tabindex="0" transform="translate(${x} ${y}) rotate(${rotate})">
-        <ellipse rx="${rx}" ry="${ry}" fill="${count > 0 ? '#cfe7d7' : '#eceae5'}"/>
-        <text y="5" text-anchor="middle" font-size="12.5" font-weight="${count > 0 ? 600 : 400}" fill="${count > 0 ? '#1f7a4d' : '#8a9098'}">${esc(label)} · ${count}</text>
-      </g>`;
-    };
+  function treeBlocks(counts, info) {
     const c = (id) => counts[id] || 0;
     const pending = Number(info.pending || 0);
     const validated = Number(info.validated || 0);
-    const fruits = [[302, 58], [398, 64], [350, 42]].slice(0, Math.min(validated, 3))
-      .map(([x, y]) => `<circle cx="${x}" cy="${y}" r="5.5" fill="#e2a33f"/>`).join('');
+    const leafBlock = (id, label) => `
+      <button type="button" class="ca-blk ca-blk-leaf${S.route.category === id ? ' is-on' : ''}${c(id) > 0 ? '' : ' is-empty'}" data-act="filter-cat" data-id="${id}">
+        <strong>${esc(label)}</strong><span>${c(id)}</span>
+      </button>`;
     return `
-    <svg class="ca-tree-svg" viewBox="0 0 700 480" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
-      <g class="ca-tree-soil" data-act="go-sources" role="button" tabindex="0">
-        <title>${esc(T('cognition.tree_soil_hint', '采集与来源记录保留在这里；点击查看数据来源'))}</title>
-        <path d="M44 438 Q120 424 205 434 T356 431 T505 436 T656 428 L656 460 Q520 470 360 465 T120 468 T44 460 Z" fill="#ece4d6"/>
-        <text x="350" y="454" text-anchor="middle" font-size="12" fill="#8a7554" paint-order="stroke" stroke="#ece4d6" stroke-width="3">${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</text>
-      </g>
-      <path d="M350 430 C346 392 342 360 340 312 C338 264 336 220 336 124" stroke="#9a7a58" stroke-width="24" fill="none" stroke-linecap="round"/>
-      <path d="M350 430 C334 437 318 439 304 441" stroke="#9a7a58" stroke-width="5" fill="none" stroke-linecap="round"/>
-      <path d="M350 432 C366 439 382 441 396 443" stroke="#9a7a58" stroke-width="5" fill="none" stroke-linecap="round"/>
-      <g class="ca-tree-root" data-act="go-review" role="button" tabindex="0">
-        <title>${esc(T('cognition.tree_root_hint', '待你确认的候选；点击进入待我处理'))}</title>
-        <rect x="248" y="382" width="204" height="28" rx="14" fill="${pending > 0 ? '#fdf6e7' : '#f4f4f1'}" stroke="${pending > 0 ? '#ecd9b0' : '#e4e4e0'}"/>
-        <circle cx="286" cy="396" r="6" fill="${pending > 0 ? '#e2a33f' : '#c9ccc9'}"/>
-        <text x="356" y="400" text-anchor="middle" font-size="12.5" font-weight="${pending > 0 ? 600 : 400}" fill="${pending > 0 ? '#96690f' : '#9aa0a6'}">${esc(T('cognition.tree_root_pending', '待确认 {n}', { n: String(pending) }))}</text>
-      </g>
-      ${branch(343, 262, 214, 240, 11)}
-      ${branch(341, 195, 466, 162, 11)}
-      ${branch(341, 244, 502, 246, 11)}
-      ${branch(342, 300, 452, 334, 11)}
-      ${leaf(150, 235, -8, 'personal', categoryLabel('personal'), c('personal'), S.route.category === 'personal')}
-      ${leaf(530, 150, 8, 'skill_method', categoryLabel('skill_method'), c('skill_method'), S.route.category === 'skill_method')}
-      ${leaf(565, 245, 4, 'rule', categoryLabel('rule'), c('rule'), S.route.category === 'rule')}
-      ${leaf(515, 335, -4, 'template', categoryLabel('template'), c('template'), S.route.category === 'template')}
-      <g class="ca-tree-crown" data-act="open-evidence" role="button" tabindex="0">
-        <title>${esc(T('cognition.tree_crown_hint', '已被真实复用或验证有效的资产；点击查看使用证明'))}</title>
-        <ellipse cx="350" cy="76" rx="104" ry="40" fill="${validated > 0 ? '#dcecdf' : '#eef1ee'}"/>
-        ${fruits}
-        <text x="350" y="81" text-anchor="middle" font-size="13" font-weight="${validated > 0 ? 600 : 400}" fill="${validated > 0 ? '#1f7a4d' : '#8a9098'}">${esc(T('cognition.tree_crown_validated', '已验证 {n}', { n: String(validated) }))}</text>
-      </g>
-    </svg>`;
+    <div class="ca-blocks" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
+      <button type="button" class="ca-blk ca-blk-crown${validated > 0 ? '' : ' is-empty'}" data-act="open-evidence" title="${esc(T('cognition.tree_crown_hint', '已被真实复用或验证有效的资产；点击查看使用证明'))}">
+        <strong>${esc(T('cognition.tree_crown_validated', '已验证 {n}', { n: String(validated) }))}</strong>
+      </button>
+      <span class="ca-blk-stem" aria-hidden="true"></span>
+      <div class="ca-blk-row">
+        ${leafBlock('personal', categoryLabel('personal'))}
+        ${leafBlock('skill_method', categoryLabel('skill_method'))}
+        ${leafBlock('rule', categoryLabel('rule'))}
+        ${leafBlock('template', categoryLabel('template'))}
+      </div>
+      <span class="ca-blk-stem" aria-hidden="true"></span>
+      <button type="button" class="ca-blk ca-blk-root${pending > 0 ? '' : ' is-empty'}" data-act="go-review" title="${esc(T('cognition.tree_root_hint', '待你确认的候选；点击进入待我处理'))}">
+        <i class="ca-blk-dot" aria-hidden="true"></i><strong>${esc(T('cognition.tree_root_pending', '待确认 {n}', { n: String(pending) }))}</strong>
+      </button>
+      <button type="button" class="ca-blk ca-blk-soil" data-act="go-sources" title="${esc(T('cognition.tree_soil_hint', '采集与来源记录保留在这里；点击查看数据来源'))}">
+        <strong>${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</strong>
+      </button>
+    </div>`;
   }
 
   /* ────────────────────────── 资产详情 ────────────────────────── */
@@ -267,7 +251,7 @@
           <div class="ca-sub">${esc(T('cognition.tree_panel_caption', '一位用户只有一棵树，四条主枝对应四类资产'))}；${esc(T('cognition.tree_click_hint', '点击分类查看明细'))}</div></div>
           <div class="ca-right">${stats.pending ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { small: true }) : ''}</div>
         </div>
-        ${treeSvg(counts, { pending: stats.pending, validated: stats.transferOk, sources: sourceCount, captures: captureCount })}
+        ${treeBlocks(counts, { pending: stats.pending, validated: stats.transferOk, sources: sourceCount, captures: captureCount })}
         <div class="ca-tree-cap">${esc(T('cognition.tree_legend_bud_hint', '枝头的小点是还没确认的候选；确认后它会成为同一根主枝上的正式资产。'))}</div>
       </div>
       ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => `
