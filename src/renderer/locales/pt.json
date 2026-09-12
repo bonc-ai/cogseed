@@ -4764,7 +4764,6 @@
   "cognition.candidate_locate_capture": "De qual captura isto veio?",
   "cognition.personal_profile_target": "Campo do modelo pessoal",
   "cognition.personal_profile_target_hint": "Sem seleção, o sistema faz a correspondência automaticamente; só grava em campos de modelos instalados.",
-  "cognition.status_deferred": "Adiado",
   "cognition.status_ignored": "Ignorado",
   "cognition.status_observed": "Em observação",
   "common.view": "Ver",

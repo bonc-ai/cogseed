@@ -5927,7 +5927,6 @@
   "ws.scenario.custom.name": "Custom",
   "ws.scenario.custom.description": "Build your own setup without a preset template; choose the roles and resources you need",
   "cognition.status_observed": "Observed",
-  "cognition.status_deferred": "Review later",
   "cognition.status_ignored": "Ignored",
   "cognition.capture_completed": "Completed",
   "cognition.personal_profile_target": "Personal template destination",

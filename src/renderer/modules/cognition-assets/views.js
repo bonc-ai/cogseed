@@ -369,14 +369,21 @@
 
   function viewCandidate(route) {
     const candidate = S.candidates.find((c) => String(c.id) === String(route.candidateId));
+    // 顶部「返回」按钮（原卡片底部的返回列表按钮已删，返回入口收在此处）。
+    const backHtml = `<button type="button" class="ca-backlink" data-act="go-back">← ${esc(T('common.back', '返回'))}</button>`;
     if (!candidate) {
-      return hero(T('cognition.candidate_eyebrow', 'CANDIDATE'), T('cognition.candidate_detail_title', '候选详情'), '') + empty(T('cognition.candidate_detail_missing', '这条候选已不在待处理列表中'), '');
+      return `${backHtml}${hero(T('cognition.candidate_eyebrow', 'CANDIDATE'), T('cognition.candidate_detail_title', '候选详情'), '')}${empty(T('cognition.candidate_detail_missing', '这条候选已不在待处理列表中'), '')}`;
     }
     const refs = evidenceRefs(candidate);
     const broken = evidenceMostlyUnavailable(candidate);
     const edit = candidate.capabilities && candidate.capabilities.canEdit;
     const field = (label, inner) => `<label class="ca-field"><span>${esc(label)}</span>${inner}</label>`;
-    return `${hero(
+    const actionsHtml = `<div class="ca-actions ca-actions-right">
+        ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
+        ${btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
+      </div>`;
+    return `${backHtml}
+    ${hero(
       T('cognition.candidate_eyebrow', 'CANDIDATE'), T('cognition.candidate_detail_title', '确认内容，也确认它该在什么范围生效'),
       T('cognition.candidate_detail_hint', '确认后会创建正式资产的第一个版本，并保留来源与撤销入口。'),
     )}
@@ -394,21 +401,17 @@
           ${field(T('cognition.candidate_scope_label', '作用范围'), `<input class="ca-input" data-f="scope" value="${esc(candidate.suggestedScope || '')}" placeholder="${esc(T('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}">`)}
           ${field(T('cognition.summary', '摘要'), `<input class="ca-input" data-f="summary" value="${esc(candidate.summary || '')}">`)}
         </details>
-        ${field(T('cognition.evidence_refs', '证据引用'), `<div class="ca-chips">${refs.map(evidenceChip).join('') || `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`}</div>`)}
+        <div class="ca-detail-foot">
+          ${field(T('cognition.evidence_refs', '证据引用'), `<div class="ca-chips">${refs.map(evidenceChip).join('') || `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`}</div>`)}
+          ${actionsHtml}
+        </div>
       ` : `
         <p class="ca-content-text">${esc(candidate.judgment || '')}</p>
         ${field(T('cognition.candidate_scope_label', '作用范围'), `<span class="ca-v">${esc(candidate.suggestedScope || T('cognition.asset_scope_unset', '未设置'))}</span>`)}
+        ${actionsHtml}
       `}
-      <div class="ca-actions ca-actions-right">
-        ${(candidate.capabilities && candidate.capabilities.canPromote) ? btn(T('cognition.candidate_save_and_use', '保存并使用'), 'cand-adopt-with-form', { id: candidate.id, primary: true }) : ''}
-        ${env_defer(candidate)}
-        ${btn(T('cognition.candidate_reject', '拒绝'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
-        ${btn(T('cognition.asset_list_back', '返回列表'), 'go-review', {})}
-      </div>
     </div>`;
   }
-  const env_defer = (candidate) => (candidate.capabilities && candidate.capabilities.canDefer)
-    ? btn(T('cognition.status_deferred', '稍后'), 'cand-decide', { id: candidate.id, data: { action: 'defer' } }) : '';
 
   /* ────────────────────────── 视图：使用与证明 ────────────────────────── */
 
@@ -740,7 +743,7 @@
       return `<button type="button" class="ca-tab${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra} title="${esc(T(tab.descKey, tab.desc))}">
         <strong>${esc(T(tab.titleKey, tab.title))}</strong><small>${esc(T(tab.descKey, tab.desc))}</small>
       </button>`;
-    }).join('')}</nav>`;
+    }).join('')}<button type="button" class="ca-refresh-btn" data-act="refresh" title="${esc(T('cognition.refresh_hint', '重新读取最新数据'))}" aria-label="${esc(T('common.refresh', '刷新'))}">⟳ ${esc(T('common.refresh', '刷新'))}</button></nav>`;
     let body = '';
     if (S.loading && !S.loaded) {
       body = `<div class="ca-loading">${esc(T('cognition.loading', '加载中…'))}</div>`;
@@ -753,12 +756,6 @@
       : '';
     root.innerHTML = `
       <div class="ca-app">
-        <header class="ca-head">
-          <h1>${esc(T('cognition.title', '认知资产'))}</h1>
-          <div class="ca-head-actions">
-            <button type="button" class="ca-refresh-btn" data-act="refresh" title="${esc(T('cognition.refresh_hint', '重新读取最新数据'))}" aria-label="${esc(T('common.refresh', '刷新'))}">⟳ ${esc(T('common.refresh', '刷新'))}</button>
-          </div>
-        </header>
         ${tabsHtml}
         ${errorBanner}
         <div class="ca-scroll" id="ca-scroll">${body}</div>

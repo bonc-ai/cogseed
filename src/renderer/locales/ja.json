@@ -4764,7 +4764,6 @@
   "cognition.candidate_locate_capture": "どの抽出から生まれたか",
   "cognition.personal_profile_target": "個人テンプレートの書き込み先",
   "cognition.personal_profile_target_hint": "未選択の場合はシステムが自動で照合します。インストール済みテンプレートの項目にのみ書き込みます。",
-  "cognition.status_deferred": "後で対応",
   "cognition.status_ignored": "無視済み",
   "cognition.status_observed": "観察中",
   "common.view": "表示",

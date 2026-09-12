@@ -5927,7 +5927,6 @@
   "ws.scenario.custom.name": "自定义",
   "ws.scenario.custom.description": "自由组合：不预设模板，自行选择角色与资源",
   "cognition.status_observed": "观察中",
-  "cognition.status_deferred": "稍后处理",
   "cognition.status_ignored": "已忽略",
   "cognition.capture_completed": "已完成",
   "cognition.personal_profile_target": "个人模板落点",

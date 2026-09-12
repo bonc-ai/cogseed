@@ -39,10 +39,8 @@
 }
 .ca-app * { box-sizing: border-box; }
 
-/* ── 页头 ─────────────────────────────────────────────────── */
-.ca-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.ca-head h1 { font-size: 20px; letter-spacing: .2px; }
-.ca-head-actions { display: flex; gap: 8px; }
+/* ── 页头（标题行已移除：侧栏已高亮「认知资产」，独立标题是冗余；
+     刷新按钮并入 tab 行右侧） ─────────────────────────────── */
 .ca-iconbtn {
   width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--ca-line);
   background: var(--ca-card); color: var(--ca-ink2); cursor: pointer; font-size: 14px;
@@ -59,6 +57,8 @@
 /* ── 四个主标签 ───────────────────────────────────────────── */
 /* ── 页头 tab（紧凑横排：标题 + 一句说明，下划线选中态） ───────────── */
 .ca-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--ca-line); }
+/* 刷新按钮停靠 tab 行右端（原页头行删除后的归宿）。 */
+.ca-tabs .ca-refresh-btn { margin-left: auto; align-self: center; }
 .ca-tab {
   display: flex; align-items: baseline; gap: 6px; padding: 7px 13px 8px;
   border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
@@ -126,6 +126,11 @@
 .ca-btn[disabled] { opacity: .5; cursor: default; }
 .ca-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .ca-actions-right { justify-content: flex-end; }
+/* 候选详情：决策按钮与「证据引用」同行（整组右端、垂直居中），不再独占
+   卡片底部一行。 */
+.ca-detail-foot { display: flex; align-items: center; gap: 16px; }
+.ca-detail-foot .ca-field { flex: 1; min-width: 0; margin-bottom: 0; }
+.ca-detail-foot .ca-actions { margin-top: 0; flex: 0 0 auto; }
 
 /* ── 标签片 ───────────────────────────────────────────────── */
 .ca-chip {
