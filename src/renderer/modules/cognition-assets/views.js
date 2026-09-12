@@ -148,8 +148,13 @@
     <svg class="ca-fig" viewBox="0 0 700 460" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
       <g class="ca-fig-soil" data-act="go-sources" role="button" tabindex="0">
         <title>${esc(T('cognition.tree_soil_hint', '采集与来源记录保留在这里；点击查看数据来源'))}</title>
-        <rect x="76" y="392" width="548" height="58" rx="8"/>
-        <text x="350" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</text>
+        <rect x="76" y="392" width="336" height="58" rx="8"/>
+        <text x="244" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</text>
+      </g>
+      <g class="ca-fig-soil" data-act="go-sources" role="button" tabindex="0">
+        <title>${esc(T('cognition.tree_soil_experience_hint', '真实任务的过程记录（KSTAR 经验）；点击查看'))}</title>
+        <rect x="428" y="392" width="196" height="58" rx="8"/>
+        <text x="526" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_experience', '经验 · {n}', { n: String(Number(info.experiences || 0)) }))}</text>
       </g>
       <g class="ca-fig-root${pending > 0 ? '' : ' is-empty'}" data-act="go-review" role="button" tabindex="0">
         <title>${esc(T('cognition.tree_root_hint', '待你确认的候选；点击进入待我处理'))}</title>
@@ -275,7 +280,7 @@
           <div class="ca-sub">${esc(T('cognition.tree_panel_caption', '一位用户只有一棵树，四条主枝对应四类资产'))}；${esc(T('cognition.tree_click_hint', '点击分类查看明细'))}</div></div>
           <div class="ca-right">${stats.pending ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { small: true }) : ''}</div>
         </div>
-        ${treeBlocks(counts, { pending: stats.pending, validated: stats.transferOk, sources: sourceCount, captures: captureCount })}
+        ${treeBlocks(counts, { pending: stats.pending, validated: stats.transferOk, sources: sourceCount, captures: captureCount, experiences: S.experienceTotal })}
         <div class="ca-tree-cap">${esc(T('cognition.tree_legend_bud_hint', '枝头的小点是还没确认的候选；确认后它会成为同一根主枝上的正式资产。'))}</div>
       </div>
       ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => `
@@ -549,6 +554,42 @@
     external: ['cognition.source_external', '授权外部系统', 'cognition.source_external_desc', '已授权且当前可用的外部连接器'],
   };
 
+  /* 任务经验（KSTAR episode）：土壤层的原料记录，与来源并列展示。 */
+  function experienceCard() {
+    const list = Array.isArray(S.experiences) ? S.experiences : [];
+    const total = Number(S.experienceTotal || list.length) || 0;
+    const STATUS = {
+      completed: ['cognition.exp_status_completed', '已完成'],
+      failed: ['cognition.exp_status_failed', '失败'],
+      cancelled: ['cognition.exp_status_cancelled', '已取消'],
+      timed_out: ['cognition.exp_status_timeout', '超时'],
+      waiting_input: ['cognition.exp_status_waiting', '等待输入'],
+      unknown: ['cognition.exp_status_unknown', '状态未知'],
+    };
+    const timeLabel = (iso) => {
+      const d = new Date(String(iso || ''));
+      if (Number.isNaN(d.getTime())) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    return `<div class="ca-card ca-source-card">
+      <div class="ca-line">
+        <div><div class="ca-row-title">${esc(T('cognition.experiences_title', '任务经验'))}</div><div class="ca-sub">${esc(T('cognition.experiences_hint', '来自真实任务的过程记录（KSTAR）；它们是资产的原料，不是资产本身。'))}</div></div>
+        <div class="ca-right">${chip(T('cognition.experiences_count', '{n} 条', { n: String(total) }), total ? 'green' : '')}</div>
+      </div>
+      ${list.length ? list.slice(0, 8).map((episode) => {
+        const [key, fb] = STATUS[episode.status] || STATUS.unknown;
+        const when = timeLabel(episode.createdAt);
+        return `<div class="ca-row is-flat">
+          <div class="ca-row-main">
+            <div class="ca-row-title">${esc(episode.goal || episode.summary || episode.id)}</div>
+            <div class="ca-row-meta">${esc(T(key, fb))}${when ? ` · ${esc(when)}` : ''}</div>
+          </div>
+        </div>`;
+      }).join('') : `<div class="ca-sub">${esc(T('cognition.experiences_empty', '还没有任务经验记录；任务完成后这里会出现过程记录。'))}</div>`}
+    </div>`;
+  }
+
   function viewSources() {
     const groups = S.sources;
     const items = groups.flatMap((g) => (Array.isArray(g.items) ? g.items : []));
@@ -566,6 +607,7 @@
       <div class="ca-stat"><b class="${issues ? 'is-warn' : ''}">${issues}</b><span>${esc(T('cognition.sources_stat_issues', '需要处理'))}</span></div>
     </div>
     ${issues ? `<div class="ca-notice">${`<button type="button" class="ca-attention-row" data-act="noop"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(issues) }))}</span></button>`}</div>` : ''}
+    ${experienceCard()}
     ${groups.map((group) => {
       const kind = kindOf(group);
       const [key, fb, descKey, descFb] = SOURCE_KINDS[kind] || ['cognition.source_other', kind, '', ''];

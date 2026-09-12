@@ -65,6 +65,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
+import { listKstarEpisodes } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -2767,6 +2768,27 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (conversationId !== undefined && !safeId(conversationId)) return { ok: false, error: 'invalid kstar failure conversation id' };
     try {
       return { ok: true, failures: await kstarFailures.listKstarFailures(ctx.userId, conversationId !== undefined ? { conversationId } : {}) };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.episodes.list': async ({ limit } = {}, ctx) => {
+    try {
+      const episodes = await listKstarEpisodes(ctx.userId);
+      const n = Number(limit);
+      const capped = Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 100;
+      return {
+        ok: true,
+        total: episodes.length,
+        episodes: episodes.slice(0, capped).map((episode) => ({
+          id: episode.id,
+          createdAt: episode.createdAt,
+          status: (episode.r && episode.r.status) || 'unknown',
+          goal: String((episode.t && episode.t.userGoal) || '').slice(0, 200),
+          summary: String((episode.s && episode.s.conversationSummary) || '').slice(0, 200),
+          durationMs: episode.r && typeof episode.r.durationMs === 'number' ? episode.r.durationMs : null,
+        })),
+      };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }
