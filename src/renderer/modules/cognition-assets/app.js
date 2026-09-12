@@ -18,7 +18,7 @@
 
   /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
   const WRITE_ACTIONS = new Set([
-    'refresh', 'cand-adopt', 'cand-adopt-with-form', 'cand-decide',
+    'refresh', 'cand-adopt-with-form', 'cand-decide',
     'asset-action', 'source-action', 'capture-action', 'organize-conv',
     'capture-policy', 'capture-toggle', 'capture-review-toggle', 'proof-rate',
   ]);
@@ -77,7 +77,6 @@
           case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
           case 'open-overview': router.go({ name: 'overview' }); break;
           case 'open-evidence': router.go({ name: 'evidence' }); break;
-          case 'cand-adopt': await A.adoptCandidate(id); break;
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm() || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;

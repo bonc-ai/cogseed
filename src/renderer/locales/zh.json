@@ -4742,7 +4742,7 @@
   "cognition.candidate_why_confirm": "为什么需要你确认",
   "cognition.candidate_evidence_basis": "来源依据",
   "cognition.candidate_no_evidence": "没有可追溯的证据引用；确认前建议先补证。",
-  "cognition.candidate_evidence_all_unavailable": "这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或直接拒绝。",
+  "cognition.candidate_evidence_all_unavailable": "这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。",
   "cognition.candidate_uncertainty": "尚不确定的部分",
   "cognition.candidate_reason_high_risk": "这条被判为高风险变更，确认前不会自动生效。",
   "cognition.candidate_reason_no_scope": "它还没有作用范围；没有范围的规则不会被带入任何任务。",

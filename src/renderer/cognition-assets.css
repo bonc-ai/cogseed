@@ -218,9 +218,10 @@
 
 .ca-tree-cap { text-align: center; color: var(--ca-ink3); font-size: 12px; margin: 2px 0 10px; }
 
-/* ── 简化交互：可点标题行 / 高级折叠区 ─────────────────────── */
-.ca-clickable { cursor: pointer; }
-.ca-clickable:hover .ca-row-title { color: var(--ca-green-d); }
+/* ── 简化交互：整卡可点 / 高级折叠区 ─────────────────────── */
+/* 候选卡整卡即入口：点任意位置进详情（行内决策按钮已移除）。 */
+.ca-candidate { cursor: pointer; }
+.ca-candidate:hover .ca-row-title { color: var(--ca-green-d); }
 .ca-advanced { border: 1px dashed var(--ca-line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
 .ca-advanced summary { cursor: pointer; color: var(--ca-ink3); font-size: 12.5px; user-select: none; }
 .ca-advanced[open] summary { margin-bottom: 8px; }

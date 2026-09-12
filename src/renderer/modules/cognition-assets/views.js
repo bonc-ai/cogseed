@@ -308,22 +308,18 @@
         : String(ref.title || ref.conversationTitle || '').trim() || T('cognition.source_resolved', '会话记录'))).join(' · ')}</div>`
       : '';
     const warnHtml = broken
-      ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或直接拒绝。'))}</div>`
+      ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>`
       : '';
-    const actionsHtml = broken
-      ? `<div class="ca-actions ca-actions-right">${btn(T('cognition.candidate_open_detail', '查看与调整'), 'open-candidate', { id: candidate.id })}${btn(T('cognition.candidate_reject', '不保存'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}</div>`
-      : `<div class="ca-actions ca-actions-right">
-          ${btn(T('cognition.candidate_confirm_scoped', '保存'), 'cand-adopt', { id: candidate.id, primary: true })}
-          ${btn(T('cognition.candidate_reject', '不保存'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
-        </div>`;
+    // 决策动作（保存/不保存/调整）统一收在详情页：卡片整体即入口，不再放
+    // 行内按钮——按钮与「点卡片进详情」的落点相冲突（用户实测反馈）。
     return `
-    <div class="ca-card ca-candidate${broken ? ' is-broken' : ''}">
-      <div class="ca-line ca-clickable" data-act="open-candidate" data-id="${esc(candidate.id)}" role="button" tabindex="0">
+    <div class="ca-card ca-candidate${broken ? ' is-broken' : ''}" data-act="open-candidate" data-id="${esc(candidate.id)}" role="button" tabindex="0">
+      <div class="ca-line">
         <div class="ca-row-title">${esc(candidateTitle(candidate))} <span class="ca-chevron" aria-hidden="true">›</span></div>
         <div class="ca-right">${chip(categoryLabel(candidate.suggestedType), '')} ${broken ? chip(T('cognition.candidate_evidence_weak', '来源已删'), 'amber') : chip(T('cognition.candidate_evidence_ok', '证据充足'), 'green')}</div>
       </div>
       <p class="ca-content-text">${esc(String(candidate.judgment || candidate.value || '').slice(0, 220))}</p>
-      ${refsHtml}${warnHtml}${actionsHtml}
+      ${refsHtml}${warnHtml}
     </div>`;
   }
 
@@ -389,7 +385,7 @@
         <div class="ca-row-title">${esc(candidateTitle(candidate))}</div>
         <div class="ca-right">${chip(categoryLabel(candidate.suggestedType))}${broken ? chip(T('cognition.candidate_evidence_weak', '证据不足'), 'amber') : ''}</div>
       </div>
-      ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或直接拒绝。'))}</div>` : ''}
+      ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
       ${edit ? `
         ${field(T('cognition.type', '类型'), `<select class="ca-input" data-f="type">${CATEGORIES.map(([id, key, fb]) => `<option value="${id}" ${candidate.suggestedType === id ? 'selected' : ''}>${esc(T(key, fb))}</option>`).join('')}</select>`)}
         ${field(T('cognition.judgment', '具体内容'), `<textarea class="ca-input ca-textarea" data-f="judgment">${esc(candidate.judgment || '')}</textarea>`)}
