@@ -657,6 +657,67 @@ describe('chat-stream module', () => {
     expect(() => handle({ type: 'chat.future' })).not.toThrow();
   });
 
+  // ── 切换对话后计时停摆的回归（根因：ticker 因 isConnected 自杀无重启 +
+  //    历史态流被 live 事件复用时形态不升级） ──────────────────────────────
+  it('切换会话（DOM 断开致 ticker 自杀）后复用运行流：计时自愈重启且起点不变', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'commander', startedAt: '' });
+    const flow = inserts[0].node;
+    expect(intervalCalls).toBe(1);
+    const t0 = flow.dataset.csT0;
+
+    // 模拟会话切换：container 清空 → flow 断开 → 下一次 tick 自杀（ticker 清空）。
+    flow.connected = false;
+    flow._csTicker = null;
+    flow.connected = true;
+
+    // live 事件继续到达并复用同一流 → 应自愈重启，且沿用原起点（不重置为 now）。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } });
+    expect(intervalCalls).toBe(2);
+    expect(flow.dataset.csT0).toBe(t0);
+  });
+
+  it('切换回来后历史重放先建历史态流：live 事件到达时升级运行形态并启动计时', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    const msgDiv = makeEl('div');
+    anchor.appendChild(msgDiv);
+    const items = [
+      { type: 'turn', turn: { type: 'chat.turn.started', turnId: 'T2', startedAt: '2026-09-12T10:00:00.000Z' } },
+      { type: 'chatItem', item: { type: 'chat.item', turnId: 'T2', itemId: 'i1', kind: 'reasoning', status: 'completed', payload: { text: 'x' } } },
+    ];
+    // 历史重放：回合无 turn.completed（任务仍在跑）——现状按完成态建流。
+    const ok = g.window.chatStreamRenderPersisted('c-1', msgDiv, items, { actorName: 'commander', turnId: 'T2' });
+    expect(ok).toBe(true);
+    const flow = msgDiv.querySelector('.cs-flow')!;
+    const badge = flow.querySelector('.cs-badge')!;
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
+    expect(badge.querySelector('.cs-badge-elapsed')).toBeNull();
+    expect(intervalCalls).toBe(0);
+
+    // live 事件到达（回合其实仍活跃）→ 升级：补计时位、文案回「工作中」、启动 ticker。
+    handle({ type: 'chat.item', turnId: 'T2', itemId: 'i2', kind: 'reasoning', status: 'inProgress', payload: { delta: 'y' } });
+    expect(badge.querySelector('.cs-badge-elapsed')).toBeTruthy();
+    expect(badge.querySelector('.cs-badge-label')!.textContent).toBe('工作中');
+    expect(intervalCalls).toBe(1);
+  });
+
+  it('终态流不被 live 迟到事件复活（csTerminal 保护）', () => {
+    let intervalCalls = 0;
+    g.setInterval = () => { intervalCalls += 1; return intervalCalls; };
+    handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
+    const flow = inserts[0].node;
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'i1', kind: 'toolExecution', status: 'completed', payload: { toolName: 'bash', argsSummary: 'ls' } });
+    handle({ type: 'chat.turn.completed', turnId: 'T1', status: 'completed', endedAt: '' });
+    const before = intervalCalls;
+
+    // 迟到事件（usage 收尾等）复用终态流：不得重启计时。
+    handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { text: 'tokens' } });
+    expect(intervalCalls).toBe(before);
+    expect(flow.querySelector('.cs-badge-label')!.textContent).toBe('已完成');
+  });
+
   it('interaction.requested 渲染审批卡，closed 撤卡禁用', () => {
     const replies: unknown[] = [];
     g.window.cogseed = { invoke: (_ch: string, payload: unknown) => { replies.push(payload); return Promise.resolve({ ok: true }); } };
