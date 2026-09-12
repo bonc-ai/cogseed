@@ -336,6 +336,13 @@
     const processed = S.candidates
       .filter((c) => ['confirmed', 'rejected', 'ignored'].includes(String(c.status || '')))
       .slice(0, 5);
+    // 处理结果按真实状态如实显示——此前无论保存还是拒绝都写「已保存」，
+    // 与筛选口径（confirmed/rejected/ignored 三种）不符（用户实测抓出）。
+    const processedLabel = (c) => ({
+      confirmed: T('cognition.candidate_status_promoted', '已保存'),
+      rejected: T('cognition.candidate_status_rejected', '未保存'),
+      ignored: T('cognition.candidate_status_ignored', '已忽略'),
+    }[String(c.status || '')] || String(c.status || ''));
     const attention = [];
     if (stats.sourceIssues) {
       attention.push(`<button type="button" class="ca-attention-row" data-act="go-sources"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></button>`);
@@ -358,7 +365,7 @@
     ${processed.length ? sectionHead(T('cognition.inbox_processed_badge', '处理记录'), T('cognition.inbox_processed_hint', '按处理时间倒序，只显示已处理的决定')) + `<div class="ca-card">${processed.map((c) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(candidateTitle(c))}</div>
-        <div class="ca-row-meta">${esc(fmtDate(c.updatedAt || c.createdAt))} · ${esc(T('cognition.candidate_status_promoted', '已保存'))}</div></div>
+        <div class="ca-row-meta">${esc(fmtDate(c.updatedAt || c.createdAt))} · ${esc(processedLabel(c))}</div></div>
       </div>`).join('')}</div>` : ''}`;
   }
 
