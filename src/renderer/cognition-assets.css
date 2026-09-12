@@ -6,6 +6,16 @@
  * 设计语言：浅绿主色 + 白卡片 + 轻边框，信息层级用字号/字重表达，不用重色块。
  * ========================================================================== */
 
+/* 面板内容根（index.html 里的裸容器）：必须显式建立 flex 高度链。
+   缺了这层，#ca-root 会退化成"内容多高就多高"，#panel-recall 的 overflow:hidden
+   会把超出视口的部分直接裁掉，且没有任何滚动条。 */
+#ca-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .ca-app {
   --ca-green: #189a5c;
   --ca-green-d: #0f7a47;
@@ -21,7 +31,8 @@
   --ca-red: #cf4a42;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 18px 26px 40px;
   color: var(--ca-ink);
   font-size: 13px;
@@ -56,7 +67,9 @@
 .ca-tabcard.is-on .ca-tab-copy strong { color: #116b40; }
 
 /* ── 滚动区 ───────────────────────────────────────────────── */
-.ca-scroll { flex: 1; overflow: auto; padding-bottom: 20px; }
+/* min-height:0 必须保留：flex item 默认 min-height:auto，会拒绝收缩到内容高度以下，
+   滚动条就永远不会出现。 */
+.ca-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 20px; }
 
 /* ── Hero ─────────────────────────────────────────────────── */
 .ca-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
