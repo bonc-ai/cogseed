@@ -172,32 +172,34 @@
 /* ── 树 ───────────────────────────────────────────────────── */
 .ca-tree-card { padding-bottom: 10px; }
 
-/* ── 认知树（方块示意版）：土/根/干/模块全部用方块表达 ─────────── */
-.ca-blocks { display: flex; flex-direction: column; align-items: center; max-width: 640px; margin: 8px auto 4px; }
-.ca-blk {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  border: 1px solid var(--ca-line); border-radius: 8px; background: var(--ca-card);
-  color: var(--ca-ink); font: inherit; cursor: pointer;
-  transition: background .15s, border-color .15s;
-}
-.ca-blk:hover { border-color: var(--ca-green-line); background: #f2f9f5; }
-.ca-blk strong { font-size: 13px; font-weight: 600; }
-.ca-blk span { font-size: 13px; color: var(--ca-ink3); }
-.ca-blk.is-empty { background: #fafaf9; border-color: #ececea; }
-.ca-blk.is-empty strong { color: var(--ca-ink3); font-weight: 400; }
-.ca-blk.is-on { border-color: var(--ca-green); background: var(--ca-green-bg); }
-.ca-blk-stem { width: 14px; height: 40px; background: #c3a179; }
-.ca-blk-row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; width: 100%; }
-.ca-blk-leaf { flex: 1 1 0; min-width: 118px; max-width: 150px; height: 58px; flex-direction: column; gap: 3px; background: #eaf5ee; border-color: #cfe7d7; }
-.ca-blk-leaf.is-empty { background: #fafaf9; border-color: #ececea; }
-.ca-blk-crown { width: 260px; height: 54px; background: #dcecdf; border-color: #c6dfcd; }
-.ca-blk-crown.is-empty { background: #eef1ee; border-color: #e2e6e2; }
-.ca-blk-root { width: 220px; height: 46px; background: #fdf6e7; border-color: #ecd9b0; }
-.ca-blk-root.is-empty { background: #f7f7f5; border-color: #e6e6e2; }
-.ca-blk-dot { width: 9px; height: 9px; border-radius: 50%; background: #e2a33f; flex: 0 0 auto; }
-.ca-blk-root.is-empty .ca-blk-dot { background: #c9ccc9; }
-.ca-blk-soil { width: 100%; max-width: 560px; height: 68px; background: #ece4d6; border-color: #ddd0ba; margin-top: 14px; }
-.ca-blk-soil strong { font-size: 13.5px; font-weight: 500; color: #6f5a3a; }
+/* ── 认知树（方块堆形版）：树干/枝条/树冠/根/土全部由方块堆出 ───── */
+.ca-fig { display: block; width: 100%; max-width: 640px; margin: 8px auto 4px; height: auto; }
+.ca-fig text { font-size: 13px; font-weight: 600; fill: var(--ca-ink); }
+.ca-fig-mod, .ca-fig-crown, .ca-fig-root, .ca-fig-soil { cursor: pointer; }
+.ca-fig-mod rect, .ca-fig-crown rect, .ca-fig-root rect, .ca-fig-soil rect { transition: fill .15s; }
+
+.ca-fig-mod rect { fill: #eaf5ee; stroke: #cfe7d7; stroke-width: 1; }
+.ca-fig-mod.is-empty rect { fill: #fafaf9; stroke: #ececea; }
+.ca-fig-mod.is-empty text { fill: var(--ca-ink3); font-weight: 400; }
+.ca-fig-mod.is-on rect { fill: var(--ca-green-bg); stroke: var(--ca-green); }
+.ca-fig-mod:hover rect { fill: #ddf0e4; }
+
+.ca-fig-crown rect { fill: #dcecdf; stroke: #c6dfcd; stroke-width: 1; }
+.ca-fig-crown.is-empty rect { fill: #eef1ee; stroke: #e2e6e2; }
+.ca-fig-crown.is-empty text { fill: var(--ca-ink3); font-weight: 400; }
+.ca-fig-crown:hover rect { fill: #cbe6d3; }
+
+.ca-fig-root rect { fill: #fdf6e7; stroke: #ecd9b0; stroke-width: 1; }
+.ca-fig-root circle { fill: #e2a33f; }
+.ca-fig-root text { fill: #96690f; }
+.ca-fig-root.is-empty rect { fill: #f7f7f5; stroke: #e6e6e2; }
+.ca-fig-root.is-empty circle { fill: #c9ccc9; }
+.ca-fig-root.is-empty text { fill: var(--ca-ink3); font-weight: 400; }
+.ca-fig-root:hover rect { fill: #faeecf; }
+
+.ca-fig-soil rect { fill: #ece4d6; stroke: #ddd0ba; stroke-width: 1; }
+.ca-fig-soil text { fill: #6f5a3a; font-weight: 500; }
+.ca-fig-soil:hover rect { fill: #e4d8c2; }
 
 .ca-tree-cap { text-align: center; color: var(--ca-ink3); font-size: 12px; margin: 2px 0 10px; }
 

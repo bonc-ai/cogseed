@@ -118,39 +118,63 @@
   const candidateTitle = (candidate) => String(candidate.judgment || candidate.summary || '').trim().slice(0, 60)
     || T('cognition.candidate_untitled', '未命名候选');
 
-  /* ────────────────────────── 认知树（方块示意版） ────────────────────────── */
+  /* ────────────────────────── 认知树（方块堆形版） ────────────────────────── */
   /* 垂直轴 = 处理梯度：土壤（记录）→ 根（候选）→ 干/枝（正式资产）→ 冠（已验证）。
-     现阶段用方块示意：土=大灰方块、根=小长方块、干=细长方块、模块=挂在树干上的方块。
-     每个方块可点击直达对应清单：土壤→数据来源、根→待我处理、枝→分类资产、冠→使用与证明。 */
+     全部用方块堆出树形：树干=竖长块、枝条=斜排小方块、树冠=三个方块拼蓬松、
+     根=小长方块、土=大灰方块；每个方块可点击直达对应清单。 */
 
   function treeBlocks(counts, info) {
     const c = (id) => counts[id] || 0;
     const pending = Number(info.pending || 0);
     const validated = Number(info.validated || 0);
-    const leafBlock = (id, label) => `
-      <button type="button" class="ca-blk ca-blk-leaf${S.route.category === id ? ' is-on' : ''}${c(id) > 0 ? '' : ' is-empty'}" data-act="filter-cat" data-id="${id}">
-        <strong>${esc(label)}</strong><span>${c(id)}</span>
-      </button>`;
+    /* 枝条：从树干斜向伸出的连续小方块（像素风），两端对准干边与模块方块。 */
+    const twig = (x1, y1, x2, y2) => {
+      const n = 5;
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        const x = Math.round(x1 + (x2 - x1) * t) - 9;
+        const y = Math.round(y1 + (y2 - y1) * t) - 9;
+        out.push(`<rect x="${x}" y="${y}" width="18" height="18" fill="#c3a179"/>`);
+      }
+      return out.join('');
+    };
+    const modBlock = (id, x, y, w, h) => `
+      <g class="ca-fig-mod${S.route.category === id ? ' is-on' : ''}${c(id) > 0 ? '' : ' is-empty'}" data-act="filter-cat" data-id="${id}" role="button" tabindex="0">
+        <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8"/>
+        <text x="${x + w / 2}" y="${y + h / 2 + 5}" text-anchor="middle">${esc(categoryLabel(id))} · ${c(id)}</text>
+      </g>`;
     return `
-    <div class="ca-blocks" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
-      <button type="button" class="ca-blk ca-blk-crown${validated > 0 ? '' : ' is-empty'}" data-act="open-evidence" title="${esc(T('cognition.tree_crown_hint', '已被真实复用或验证有效的资产；点击查看使用证明'))}">
-        <strong>${esc(T('cognition.tree_crown_validated', '已验证 {n}', { n: String(validated) }))}</strong>
-      </button>
-      <span class="ca-blk-stem" aria-hidden="true"></span>
-      <div class="ca-blk-row">
-        ${leafBlock('personal', categoryLabel('personal'))}
-        ${leafBlock('skill_method', categoryLabel('skill_method'))}
-        ${leafBlock('rule', categoryLabel('rule'))}
-        ${leafBlock('template', categoryLabel('template'))}
-      </div>
-      <span class="ca-blk-stem" aria-hidden="true"></span>
-      <button type="button" class="ca-blk ca-blk-root${pending > 0 ? '' : ' is-empty'}" data-act="go-review" title="${esc(T('cognition.tree_root_hint', '待你确认的候选；点击进入待我处理'))}">
-        <i class="ca-blk-dot" aria-hidden="true"></i><strong>${esc(T('cognition.tree_root_pending', '待确认 {n}', { n: String(pending) }))}</strong>
-      </button>
-      <button type="button" class="ca-blk ca-blk-soil" data-act="go-sources" title="${esc(T('cognition.tree_soil_hint', '采集与来源记录保留在这里；点击查看数据来源'))}">
-        <strong>${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</strong>
-      </button>
-    </div>`;
+    <svg class="ca-fig" viewBox="0 0 700 460" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
+      <g class="ca-fig-soil" data-act="go-sources" role="button" tabindex="0">
+        <title>${esc(T('cognition.tree_soil_hint', '采集与来源记录保留在这里；点击查看数据来源'))}</title>
+        <rect x="76" y="392" width="548" height="58" rx="8"/>
+        <text x="350" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</text>
+      </g>
+      <g class="ca-fig-root${pending > 0 ? '' : ' is-empty'}" data-act="go-review" role="button" tabindex="0">
+        <title>${esc(T('cognition.tree_root_hint', '待你确认的候选；点击进入待我处理'))}</title>
+        <rect x="278" y="344" width="144" height="46" rx="8"/>
+        <circle cx="308" cy="367" r="6"/>
+        <text x="374" y="372" text-anchor="middle">${esc(T('cognition.tree_root_pending', '待确认 {n}', { n: String(pending) }))}</text>
+      </g>
+      <rect x="343" y="98" width="14" height="56" fill="#c3a179"/>
+      <rect x="338" y="150" width="24" height="198" fill="#c3a179"/>
+      ${twig(344, 176, 252, 158)}
+      ${twig(356, 176, 448, 158)}
+      ${twig(344, 268, 252, 288)}
+      ${twig(356, 268, 448, 288)}
+      ${modBlock('personal', 84, 128, 172, 56)}
+      ${modBlock('skill_method', 444, 128, 172, 56)}
+      ${modBlock('rule', 84, 258, 172, 56)}
+      ${modBlock('template', 444, 258, 172, 56)}
+      <g class="ca-fig-crown${validated > 0 ? '' : ' is-empty'}" data-act="open-evidence" role="button" tabindex="0">
+        <title>${esc(T('cognition.tree_crown_hint', '已被真实复用或验证有效的资产；点击查看使用证明'))}</title>
+        <rect x="206" y="60" width="48" height="38" rx="6"/>
+        <rect x="446" y="60" width="48" height="38" rx="6"/>
+        <rect x="252" y="40" width="196" height="58" rx="8"/>
+        <text x="350" y="75" text-anchor="middle">${esc(T('cognition.tree_crown_validated', '已验证 {n}', { n: String(validated) }))}</text>
+      </g>
+    </svg>`;
   }
 
   /* ────────────────────────── 资产详情 ────────────────────────── */
