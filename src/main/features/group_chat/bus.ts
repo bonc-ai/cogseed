@@ -164,6 +164,38 @@ export function _modelSupportsThinkingByDefault(item: QueueItem): boolean {
   return /^(deepseek|o[134]-|gpt-5|gpt-4\.5|grok-|gemini-(pro|[23].*pro))/.test(modelId)
     || /(thinking|reasoner|qwq)/.test(modelId);
 }
+
+/** DeepSeek 官方直连域名判定（纯函数，供测试）。 */
+export function _isDeepSeekOfficialBaseUrl(url: unknown): boolean {
+  return /^https:\/\/(?:[a-z0-9-]+\.)*deepseek\.com\//i.test(String(url || ""));
+}
+
+/** 本轮是否流向 DeepSeek 官方直连端点（自定义 provider 指向
+ *  api.deepseek.com）。V4 系模型开推理（带 effort 档位）时正文通道为空
+ *  ——中间叙述全部写进 reasoning_content，界面表现为「AI 不说话只调
+ *  工具」。中转端点（commandcode 等）收到同样的 reasoning_effort 仍照常
+ *  写正文，所以升档兜底必须按端点区分：官方直连的 auto 回合不升 low
+ *  ——不传档位时 pi-ai 的 deepseek thinkingFormat 发
+ *  thinking:{type:"disabled"}，正文恢复「边说边做」；用户显式选档仍然
+ *  生效（思考模式下正文为空是该模型的固有行为）。内置 'deepseek'
+ *  provider 不在此列（其 defaultReasoning:'low' 是 V4 服务端 400 规避的
+ *  有意设计，见 external-providers.ts 注释）。 */
+export function _targetsDeepSeekOfficialApi(uid: unknown, providerId: unknown): boolean {
+  const pid = String(providerId || "").trim();
+  const u = String(uid || "").trim();
+  if (!pid || !u) return false;
+  try {
+    // 同步读取加密存储（无网络）。延迟 require 避免 bus 模块加载早期拉起
+    // auth/paths 整链。
+    const runtime = require("../../model/core-agent/custom_provider_runtime") as
+      typeof import("../../model/core-agent/custom_provider_runtime");
+    if (!runtime.isCustomProviderId(pid)) return false;
+    const cp = runtime.findCustomProvider(u, pid);
+    return !!cp && _isDeepSeekOfficialBaseUrl(cp.baseUrl);
+  } catch {
+    return false;
+  }
+}
 import type { AgentRunStatus } from "../agent_runtime_stats";
 import {
   activityFromLocalEvent,
@@ -5721,7 +5753,8 @@ async function runActorTurnBody(
       // 用户未显式选 off 时，对已知 reasoning 模型按 'low' 发起——思考流
       // 可达渲染层；显式 off 仍彻底关闭。模型名识别不出 reasoning 特征
       // 时不强行注入（避免给不认识的服务盲发参数，保持方案 C 约定）。
-      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)) {
+      if (turnThinkingLevel === "auto" && _modelSupportsThinkingByDefault(item)
+        && !_targetsDeepSeekOfficialApi(uid, item.execConfig?.provider)) {
         turnThinkingLevel = "low";
       }
       // Effective model override priority: per-task override > agent
