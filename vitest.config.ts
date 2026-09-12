@@ -33,8 +33,8 @@ export default defineConfig({
     // CI 全套件并发负载下 30s 会偶发误伤（本地通过、CI 超时）；给足余量。
     // Windows runner 上真实 shell/进程用例在满载时会超过 60s，CI 统一放宽
     // 到 120s；本地保持 60s，避免掩盖真正的挂死。
-    testTimeout: process.env.CI ? 120_000 : 60_000,
-    hookTimeout: process.env.CI ? 120_000 : 60_000,
+    testTimeout: process.env.CI ? 150_000 : 60_000,
+    hookTimeout: process.env.CI ? 150_000 : 60_000,
     // CI 单机满载时 worker 会持续刷 console 日志（electron-log、agent-runner
     // 等），Vitest 在 worker 收尾关闭 rpc 时会撞上 "Closing rpc while
     // onUserConsoleLog was pending" 的未处理错误，让全绿套件退出码变 1。
