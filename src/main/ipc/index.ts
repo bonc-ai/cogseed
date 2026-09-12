@@ -2793,6 +2793,18 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       return { ok: false, error: (error as Error).message };
     }
   },
+  'kstar.experiences.list': async ({ limit } = {}, ctx) => {
+    try {
+      const n = Number(limit);
+      const result = await kstarReviewService.listKstarExperiences(
+        ctx.userId,
+        Number.isFinite(n) && n > 0 ? n : undefined,
+      );
+      return { ok: true, total: result.total, experiences: result.experiences };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
   'kstar.runEvidence.read': async ({ taskId, taskRunId } = {}, ctx) => {
     if (!safeId(taskId) || !safeId(taskRunId)) throw new Error('invalid kstar run evidence input');
     return {

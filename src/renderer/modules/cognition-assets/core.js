@@ -151,7 +151,7 @@
   const LOADERS = {
     async snapshot() {
       store.errors = [];
-      const [assets, candidates, captures, settings, sources, teaching, inbox, episodes] = await Promise.all([
+      const [assets, candidates, captures, settings, sources, teaching, inbox, experiences] = await Promise.all([
         api.soft('recall.assets.list', {}, {}),
         api.soft('recall.candidates.list', {}, {}),
         api.soft('recall.captures.list', { limit: 40 }, {}),
@@ -159,7 +159,7 @@
         api.soft('recall.sources.list', {}, {}),
         api.soft('recall.teaching.list', {}, {}),
         api.soft('cognition.inbox.list', {}, {}),
-        api.soft('kstar.episodes.list', {}, {}),
+        api.soft('kstar.experiences.list', {}, {}),
       ]);
       store.assets = toArr(assets, ['assets', 'items']);
       store.candidates = toArr(candidates, ['candidates', 'items']);
@@ -169,9 +169,9 @@
       store.sources = toArr(sources, ['groups', 'sources']);
       store.teaching = toArr(teaching, ['signals', 'items']);
       store.inboxItems = toArr(inbox, ['items']);
-      // KSTAR 经验（episode）：土壤层的原料记录；失败不阻塞主快照。
-      store.experiences = toArr(episodes, ['episodes', 'items']);
-      store.experienceTotal = Number((episodes && episodes.total) || store.experiences.length) || 0;
+      // 提炼出的经验（KSTAR review 里 lesson 非空的记录，含沉淀状态）；失败不阻塞主快照。
+      store.experiences = toArr(experiences, ['experiences', 'items']);
+      store.experienceTotal = Number((experiences && experiences.total) || store.experiences.length) || 0;
       // 来源条目被包在分组里；补一层拍平给统计与详情用。
       store.sources.forEach((group) => {
         (Array.isArray(group.items) ? group.items : []).forEach((item) => { item.__groupKind = group.kind || ''; });

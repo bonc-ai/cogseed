@@ -554,18 +554,10 @@
     external: ['cognition.source_external', '授权外部系统', 'cognition.source_external_desc', '已授权且当前可用的外部连接器'],
   };
 
-  /* 任务经验（KSTAR episode）：土壤层的原料记录，与来源并列展示。 */
+  /* 提炼出的经验（KSTAR review.lesson）：真经验列表，非任务流水。 */
   function experienceCard() {
     const list = Array.isArray(S.experiences) ? S.experiences : [];
     const total = Number(S.experienceTotal || list.length) || 0;
-    const STATUS = {
-      completed: ['cognition.exp_status_completed', '已完成'],
-      failed: ['cognition.exp_status_failed', '失败'],
-      cancelled: ['cognition.exp_status_cancelled', '已取消'],
-      timed_out: ['cognition.exp_status_timeout', '超时'],
-      waiting_input: ['cognition.exp_status_waiting', '等待输入'],
-      unknown: ['cognition.exp_status_unknown', '状态未知'],
-    };
     const timeLabel = (iso) => {
       const d = new Date(String(iso || ''));
       if (Number.isNaN(d.getTime())) return '';
@@ -574,19 +566,19 @@
     };
     return `<div class="ca-card ca-source-card">
       <div class="ca-line">
-        <div><div class="ca-row-title">${esc(T('cognition.experiences_title', '任务经验'))}</div><div class="ca-sub">${esc(T('cognition.experiences_hint', '来自真实任务的过程记录（KSTAR）；它们是资产的原料，不是资产本身。'))}</div></div>
+        <div><div class="ca-row-title">${esc(T('cognition.experiences_title', '提炼出的经验'))}</div><div class="ca-sub">${esc(T('cognition.experiences_hint', '从任务中提炼出的可复用教训（KSTAR）；达到沉淀门槛的会自动成为候选。'))}</div></div>
         <div class="ca-right">${chip(T('cognition.experiences_count', '{n} 条', { n: String(total) }), total ? 'green' : '')}</div>
       </div>
-      ${list.length ? list.slice(0, 8).map((episode) => {
-        const [key, fb] = STATUS[episode.status] || STATUS.unknown;
-        const when = timeLabel(episode.createdAt);
+      ${list.length ? list.slice(0, 8).map((exp) => {
+        const when = timeLabel(exp.createdAt);
         return `<div class="ca-row is-flat">
           <div class="ca-row-main">
-            <div class="ca-row-title">${esc(episode.goal || episode.summary || episode.id)}</div>
-            <div class="ca-row-meta">${esc(T(key, fb))}${when ? ` · ${esc(when)}` : ''}</div>
+            <div class="ca-row-title">${esc(exp.lesson || exp.id)}</div>
+            <div class="ca-row-meta">${exp.goal ? `${esc(exp.goal)} · ` : ''}${esc(when)}</div>
           </div>
+          <div class="ca-row-side">${chip(exp.precipitated ? T('cognition.exp_precipitated', '已沉淀成候选') : T('cognition.exp_not_precipitated', '未沉淀'), exp.precipitated ? 'green' : 'line')}</div>
         </div>`;
-      }).join('') : `<div class="ca-sub">${esc(T('cognition.experiences_empty', '还没有任务经验记录；任务完成后这里会出现过程记录。'))}</div>`}
+      }).join('') : `<div class="ca-sub">${esc(T('cognition.experiences_empty', '还没有提炼出的经验；任务中发现的教训会出现在这里。'))}</div>`}
     </div>`;
   }
 
