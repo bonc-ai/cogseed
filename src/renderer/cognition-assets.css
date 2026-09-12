@@ -175,6 +175,11 @@
 .ca-branch { cursor: pointer; }
 .ca-branch ellipse { transition: fill .15s; }
 .ca-branch:hover ellipse { fill: #bfe0cb !important; }
+.ca-tree-soil, .ca-tree-root, .ca-tree-crown { cursor: pointer; }
+.ca-tree-soil path, .ca-tree-root rect, .ca-tree-crown ellipse { transition: fill .15s; }
+.ca-tree-soil:hover path { fill: #e4d8c2; }
+.ca-tree-root:hover rect { fill: #faeecf; }
+.ca-tree-crown:hover ellipse { fill: #c8e3d0; }
 .ca-tree-cap { text-align: center; color: var(--ca-ink3); font-size: 12px; margin: 2px 0 10px; }
 
 /* ── 候选 ─────────────────────────────────────────────────── */
