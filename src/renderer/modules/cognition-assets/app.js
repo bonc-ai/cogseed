@@ -54,13 +54,11 @@
           case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
           case 'open-overview': router.go({ name: 'overview' }); break;
           case 'open-evidence': router.go({ name: 'evidence' }); break;
-          case 'select-asset': router.go({ name: 'manage', manageTab: 'governance', assetId: id }, { replace: true }); break;
           case 'cand-adopt': await A.adoptCandidate(id); break;
           case 'cand-adopt-with-form': await A.adoptCandidate(id, readCandidateForm() || undefined); break;
           case 'cand-decide': await A.decideCandidate(id, el.dataset.action); break;
           case 'asset-action': await A.assetAction(id, el.dataset.action); break;
           case 'source-action': await A.sourceAction(el.dataset.kind || '', id, el.dataset.action); break;
-          case 'teaching-revoke': await A.teachingRevoke(id); break;
           case 'capture-action': await A.captureAction(id, el.dataset.action); break;
           case 'organize-conv': await A.organizeConversation(id); break;
           case 'capture-policy': await A.updateCaptureSettings({ executionPolicy: id }); break;
@@ -77,19 +75,12 @@
           case 'proof-toggle':
             router.go({ name: 'evidence', proofEventId: String(S.route.proofEventId) === id ? '' : id });
             break;
-          case 'proof-rate': await A.rateProof(id, el.dataset.feedback); break;
-          case 'proof-note-open': {
-            const zone = el.parentElement && el.parentElement.parentElement
-              ? el.parentElement.parentElement.querySelector('.ca-note-zone') : null;
-            if (zone) zone.hidden = false;
-            if (zone) zone.querySelector('textarea')?.focus();
-            break;
-          }
-          case 'proof-note-submit': {
-            const zone = el.parentElement && el.parentElement.parentElement;
-            const note = zone ? String((zone.querySelector('textarea') || {}).value || '').trim() : '';
-            if (!note) { await NS.alertUser(T('cognition.proof_evidence_note_required', '先写一句你观察到的变化——这句话就是这次评价的依据。')); break; }
-            await A.rateProof(id, 'positive', { note });
+          case 'proof-rate': {
+            // 说明是可选的：先写再点评，说明随评价一起附上。
+            const zone = el.closest('.ca-rating');
+            const noteEl = zone ? zone.querySelector('textarea[data-f="note"]') : null;
+            const note = noteEl ? String(noteEl.value || '').trim() : '';
+            await A.rateProof(id, el.dataset.feedback, note ? { note } : undefined);
             break;
           }
           case 'noop': break;

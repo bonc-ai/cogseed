@@ -126,7 +126,7 @@
     continuationCount: 0,
     loadedAt: 0,
     /** 路由：{name, category, assetId, candidateId, manageTab, proofEventId} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'governance', proofEventId: '' },
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' },
     backStack: [],
   };
   NS.store = store;
@@ -143,7 +143,8 @@
       .filter((item) => item.status === 'failed' || item.status === 'paused').length;
     const failedTasks = Number(s.captureCounts && s.captureCounts.failed || 0);
     const coveredAssets = new Set(s.proofs.map((p) => String((p.refs || {}).assetId || '')).filter(Boolean)).size;
-    return { confirmed, pending, validated, transferOk, sourceIssues, failedTasks, coveredAssets, proofCount: s.proofs.length };
+    const attention = s.assets.filter((a) => String(a.status || 'active') === 'paused' || String(a.status || '') === 'archived').length;
+    return { confirmed, pending, validated, transferOk, sourceIssues, failedTasks, coveredAssets, proofCount: s.proofs.length, attention };
   };
 
   /* ────────────────────────── 数据加载 ────────────────────────── */
@@ -214,8 +215,8 @@
   const TABS = [
     { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知', descKey: 'cognition.tab_overview_desc', desc: '我拥有什么' },
     { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理', descKey: 'cognition.tab_review_desc', desc: '需要我决定什么' },
-    { id: 'evidence', titleKey: 'cognition.tab_evidence', title: '使用与证明', descKey: 'cognition.tab_evidence_desc', desc: '用到了哪里、有没有效' },
-    { id: 'manage', titleKey: 'cognition.tab_manage', title: '设置与管理', descKey: 'cognition.tab_manage_desc', desc: '来源、整理与治理' },
+    { id: 'evidence', titleKey: 'cognition.tab_evidence', title: '使用记录', descKey: 'cognition.tab_evidence_desc', desc: '资产用得怎么样' },
+    { id: 'manage', titleKey: 'cognition.tab_manage', title: '设置与管理', descKey: 'cognition.tab_manage_desc', desc: '来源与整理' },
   ];
   NS.TABS = TABS;
 
@@ -226,7 +227,7 @@
     inbox: { name: 'review' }, overview: { name: 'review' }, candidates: { name: 'manage', manageTab: 'organize' },
     captures: { name: 'manage', manageTab: 'organize' }, deposition: { name: 'manage', manageTab: 'organize' },
     sources: { name: 'manage', manageTab: 'sources' }, proofs: { name: 'evidence' }, receipts: { name: 'evidence' },
-    governance: { name: 'manage', manageTab: 'governance' }, candidate: { name: 'review' },
+    governance: { name: 'overview' }, candidate: { name: 'review' },
     nonasset: { name: 'overview' }, skillupdate: { name: 'overview' },
   };
   NS.LEGACY = LEGACY;
@@ -237,7 +238,7 @@
       const current = store.route;
       const same = JSON.stringify(current) === JSON.stringify(next);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
-      store.route = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'governance', proofEventId: '' }, next);
+      store.route = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' }, next);
       NS.notify();
       const main = document.getElementById('ca-scroll');
       if (main) main.scrollTop = 0;
@@ -248,7 +249,7 @@
     },
     legacy(page) {
       const mapped = LEGACY[page] || { name: 'overview' };
-      router.go(Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'governance', proofEventId: '' }, mapped));
+      router.go(Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' }, mapped));
     },
   };
   NS.router = router;
