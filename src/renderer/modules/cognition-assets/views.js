@@ -423,21 +423,37 @@
     ['invalid', 'cognition.proof_degraded', '说不清'],
   ];
 
-  /** 时间线事件的原始标题是英文契约串（后端产物）；常见几类在这里翻成人话。 */
-  const EVENT_TITLE_MAP = {
-    'Asset created': 'cognition.proof_event_created',
-    'Asset version saved': 'cognition.proof_event_version',
-    'Asset updated': 'cognition.proof_event_updated',
+  /** 时间线事件标题：优先用 kind（稳定枚举）映射成人话；英文标题仅作兜底。
+   *  此前只映射了 title 的三种英文串，usage_recorded / projection_confirmed
+   *  两类漏网（用户实测"看不懂"），全部补齐；未知事件原样显示不编造。 */
+  const EVENT_TITLES = {
+    asset_created: ['cognition.proof_event_created', '已创建资产'],
+    asset_version: ['cognition.proof_event_version', '版本已保存'],
+    asset_updated: ['cognition.proof_event_updated', '资产已更新'],
+    projection_confirmed: ['cognition.proof_event_projection', '被带入一次任务'],
+    usage_recorded: ['cognition.proof_event_usage', '任务中被实际使用'],
   };
-  const EVENT_TITLE_FALLBACK = {
-    'cognition.proof_event_created': '已创建资产',
-    'cognition.proof_event_version': '版本已保存',
-    'cognition.proof_event_updated': '资产已更新',
+  const EVENT_TITLE_BY_TEXT = {
+    'Asset created': EVENT_TITLES.asset_created,
+    'Asset version saved': EVENT_TITLES.asset_version,
+    'Asset updated': EVENT_TITLES.asset_updated,
   };
   const eventTitle = (proof) => {
+    const byKind = EVENT_TITLES[String(proof.kind || '')];
+    if (byKind) return T(byKind[0], byKind[1]);
     const raw = String(proof.outcome || proof.title || proof.kind || '');
-    const key = EVENT_TITLE_MAP[raw];
-    return key ? T(key, EVENT_TITLE_FALLBACK[key]) : raw;
+    const byText = EVENT_TITLE_BY_TEXT[raw];
+    return byText ? T(byText[0], byText[1]) : raw;
+  };
+  /** 事件摘要过滤：版本号（meta 已显示）与技术 ID 不展示给用户；
+   *  已知技术串翻成人话，其余原样（未来若写入人话摘要可直接透出）。 */
+  const proofSummary = (proof) => {
+    const text = String(proof.summary || '').trim();
+    if (!text) return '';
+    if (/^v\d+$/i.test(text) || /^version\s*\d+$/i.test(text)) return '';
+    if (text.startsWith('review_decision:')) return '';
+    if (text === 'conversation_reply') return T('cognition.proof_summary_conversation', '来自一次对话');
+    return text;
   };
 
   function viewEvidence(route) {
@@ -473,9 +489,10 @@
         const refs = proof.refs || {};
         const isOpen = String(route.proofEventId) === String(proof.id);
         const transferProofId = String(refs.transferProofId || '');
+        // meta 只留版本号：标题已区分「被带入」/「被实际使用」两种事件，
+        // 原 taskRunId 标注"在一次任务中被带入"会让两者读起来一样（冗余）。
         const metaParts = [
           refs.version ? `v${esc(String(refs.version))}` : '',
-          refs.taskRunId ? esc(T('cognition.proof_task_used', '在一次任务中被带入')) : '',
         ].filter(Boolean).join(' · ');
         let ratingHtml = '';
         if (isOpen) {
@@ -495,7 +512,7 @@
           <button type="button" class="ca-proof-event" data-act="proof-toggle" data-id="${esc(proof.id)}">
             <span class="ca-proof-dot" aria-hidden="true"></span>
             <span class="ca-proof-body"><strong>${esc(eventTitle(proof))}</strong>
-            ${proof.summary ? `<span class="ca-proof-summary">${esc(String(proof.summary).slice(0, 120))}</span>` : ''}
+            ${proofSummary(proof) ? `<span class="ca-proof-summary">${esc(proofSummary(proof).slice(0, 120))}</span>` : ''}
             ${metaParts ? `<span class="ca-proof-meta">${metaParts}</span>` : ''}</span>
             <time>${esc(fmtDate(proof.occurredAt))}</time>
           </button>
@@ -695,7 +712,7 @@
         <header class="ca-head">
           <h1>${esc(T('cognition.title', '认知资产'))}</h1>
           <div class="ca-head-actions">
-            <button type="button" class="ca-iconbtn" data-act="refresh" title="${esc(T('common.refresh', '刷新'))}" aria-label="${esc(T('common.refresh', '刷新'))}">⟳</button>
+            <button type="button" class="ca-refresh-btn" data-act="refresh" title="${esc(T('cognition.refresh_hint', '重新读取最新数据'))}" aria-label="${esc(T('common.refresh', '刷新'))}">⟳ ${esc(T('common.refresh', '刷新'))}</button>
           </div>
         </header>
         ${tabsHtml}
