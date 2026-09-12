@@ -89,6 +89,21 @@ function apiForProtocol(protocol: CustomProvider['protocol']): Api {
 }
 
 /**
+ * OpenCode Zen/Go 端点自 2026-09-05 起要求每个请求带 `x-opencode-session`
+ * （服务端做会话路由，缺失直接 400 "cannot be routed correctly"）。pi-ai
+ * 自身不注入该头（上游 issue earendil-works/pi#4847，0.85.1 仍未修），
+ * 且 CogSeed 的 Model 构造在这里——按端点识别后补上。
+ * 值取 provider 级稳定 id：服务端要求"稳定"即可；逐对话一一对应需要请求级
+ * 上下文（模型层拿不到），先满足路由的最低要求。
+ */
+function customProviderHeaders(baseUrl: string, providerId: string): Record<string, string> | undefined {
+  if (/^https:\/\/(?:[a-z0-9-]+\.)?opencode\.ai\//i.test(String(baseUrl || ''))) {
+    return { 'x-opencode-session': `cogseed-${providerId}` };
+  }
+  return undefined;
+}
+
+/**
  * Hand-build a pi-ai Model for one (custom provider, model id) pair.
  * `baseUrl` is baked into the Model so createPiProvider routes there
  * directly. Cost is left at 0 (local stat display only — the real bill
@@ -101,6 +116,7 @@ export function buildCustomProviderModel(
 ): Model<Api> {
   const api = apiForProtocol(cp.protocol);
   const metadata = buildCustomProviderModelMeta(cp, modelId);
+  const headers = customProviderHeaders(cp.baseUrl, cp.id);
   const model: Model<Api> = {
     id: modelId,
     name: modelId,
@@ -109,6 +125,7 @@ export function buildCustomProviderModel(
     // us clear of catalog collisions.
     provider: customProviderId(cp.id) as any,
     baseUrl: cp.baseUrl,
+    ...(headers ? { headers } : {}),
     // 方案 C（参数真透传）：reasoning 按识别结果开启——pi-ai 对 openai
     // 兼容端点在 model.reasoning=true 且用户选了档位时会自动带上
     // reasoning_effort；anthropic 端点同理带 thinking。识别不出（未知
