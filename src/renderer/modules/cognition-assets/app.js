@@ -16,6 +16,13 @@
   let treeRequested = false;
   let booted = false;
 
+  /** 写操作集合：点击后按钮进入 pending（禁用+变淡），完成或重画后还原。 */
+  const WRITE_ACTIONS = new Set([
+    'refresh', 'cand-adopt', 'cand-adopt-with-form', 'cand-decide',
+    'asset-action', 'source-action', 'capture-action', 'organize-conv',
+    'capture-policy', 'capture-toggle', 'capture-review-toggle', 'proof-rate',
+  ]);
+
   /* ────────────────────────── 事件委托 ────────────────────────── */
 
   function readCandidateForm() {
@@ -41,8 +48,17 @@
       if (!el) return;
       const act = el.dataset.act;
       const id = el.dataset.id || '';
+      const isWrite = WRITE_ACTIONS.has(act);
+      if (isWrite) { el.classList.add('is-pending'); el.setAttribute('disabled', 'disabled'); }
       try {
         switch (act) {
+          case 'go-back': router.back(); break;
+          case 'toggle-asset-more': {
+            const wrap = el.closest('.ca-more-wrap');
+            const menu = wrap ? wrap.querySelector('[data-asset-more]') : null;
+            if (menu) { menu.hidden = !menu.hidden; el.classList.toggle('is-open', !menu.hidden); }
+            break;
+          }
           case 'refresh': await NS.reload({ tree: true }); await NS.reload(); break;
           case 'tab': router.go({ name: id }); break;
           case 'manage-tab': router.go({ name: 'manage', manageTab: id }); break;
@@ -88,6 +104,9 @@
         }
       } catch (error) {
         await NS.alertUser(String((error && error.message) || error));
+      } finally {
+        // reload 重画后原元素已脱离文档，清理无害；未重画时恢复可点。
+        if (isWrite) { el.classList.remove('is-pending'); el.removeAttribute('disabled'); }
       }
     });
     document.addEventListener('keydown', (event) => {

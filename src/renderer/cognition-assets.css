@@ -50,21 +50,19 @@
 .ca-iconbtn:hover { background: #f6f8f6; }
 
 /* ── 四个主标签 ───────────────────────────────────────────── */
-.ca-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
-.ca-tabcard {
-  display: flex; align-items: center; gap: 11px; text-align: left;
-  border: 1px solid var(--ca-line); background: var(--ca-card); border-radius: 12px;
-  padding: 12px 14px; cursor: pointer; font: inherit; color: inherit;
+/* ── 页头 tab（紧凑横排：标题 + 一句说明，下划线选中态） ───────────── */
+.ca-tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--ca-line); }
+.ca-tab {
+  display: flex; align-items: baseline; gap: 6px; padding: 7px 13px 8px;
+  border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; cursor: pointer; font: inherit; color: var(--ca-ink2);
 }
-.ca-tabcard:hover { border-color: #cfe0d4; }
-.ca-tabcard.is-on { border-color: var(--ca-green-line); background: var(--ca-green-bg); }
-.ca-tab-ico {
-  width: 10px; height: 10px; border-radius: 50%; background: #c9cfc9; flex: 0 0 auto;
-}
-.ca-tabcard.is-on .ca-tab-ico { background: var(--ca-green); }
-.ca-tab-copy strong { display: block; font-size: 13.5px; }
-.ca-tab-copy small { display: block; color: var(--ca-ink3); font-size: 11.5px; margin-top: 1px; }
-.ca-tabcard.is-on .ca-tab-copy strong { color: #116b40; }
+.ca-tab:hover { color: var(--ca-ink); }
+.ca-tab strong { font-size: 13.5px; font-weight: 600; }
+.ca-tab small { font-size: 11.5px; color: var(--ca-ink3); }
+.ca-tab.is-on { border-bottom-color: var(--ca-green); }
+.ca-tab.is-on strong { color: var(--ca-green-d); }
+.ca-tab.is-on small { color: #7a9b88; }
 
 /* ── 滚动区 ───────────────────────────────────────────────── */
 /* min-height:0 必须保留：flex item 默认 min-height:auto，会拒绝收缩到内容高度以下，
@@ -209,6 +207,29 @@
 .ca-advanced { border: 1px dashed var(--ca-line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
 .ca-advanced summary { cursor: pointer; color: var(--ca-ink3); font-size: 12.5px; user-select: none; }
 .ca-advanced[open] summary { margin-bottom: 8px; }
+
+/* ── 详情页：顶部返回 / 更多操作收口 / 写操作 pending ───────────── */
+.ca-backlink {
+  display: inline-flex; align-items: center; gap: 4px; margin: 0 0 10px;
+  border: 0; background: none; padding: 2px 0; cursor: pointer;
+  color: var(--ca-ink2); font: inherit; font-size: 12.5px;
+}
+.ca-backlink:hover { color: var(--ca-green-d); }
+.ca-more-wrap { margin-top: 12px; border-top: 1px dashed var(--ca-line); padding-top: 10px; }
+.ca-more-toggle {
+  border: 0; background: none; padding: 3px 0; cursor: pointer;
+  color: var(--ca-ink3); font: inherit; font-size: 12.5px;
+}
+.ca-more-toggle::after { content: ' ▾'; font-size: 10px; }
+.ca-more-toggle.is-open::after { content: ' ▴'; }
+.ca-more-toggle:hover { color: var(--ca-ink); }
+.ca-more { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ca-more-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--ca-line); border-radius: 8px; background: #fbfbfa; }
+.ca-more-copy { flex: 1 1 auto; min-width: 0; }
+.ca-more-copy strong { display: block; font-size: 12.5px; font-weight: 600; }
+.ca-more-copy span { display: block; font-size: 11.5px; color: var(--ca-ink3); margin-top: 1px; }
+/* 写操作进行中：按钮禁用+变淡（重画后自然消失） */
+.ca-btn.is-pending, .ca-iconbtn.is-pending, .ca-more-toggle.is-pending { opacity: .55; pointer-events: none; }
 
 /* ── 候选 ─────────────────────────────────────────────────── */
 .ca-candidate .ca-content-text { color: var(--ca-ink2); }

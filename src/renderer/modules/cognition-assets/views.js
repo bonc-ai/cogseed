@@ -195,7 +195,24 @@
         btn(T('cognition.asset_restore', '恢复'), 'asset-action', { id: asset.id, data: { action: 'restore' }, primary: true })],
     }[String(asset.status || 'active')] || [];
     const proofCount = S.proofs.filter((p) => String((p.refs || {}).assetId || '') === String(asset.id)).length;
+    // 元信息白话化：后端值可能是内部术语，认出常见形态翻成人话，认不出原样显示。
+    const scopeRaw = String(asset.scope || '');
+    const scopeText = !scopeRaw
+      ? T('cognition.asset_scope_unset', '还没设置')
+      : (/全局|画像/.test(scopeRaw) ? T('cognition.asset_scope_all', '所有对话') : scopeRaw);
+    const originText = {
+      user_confirmed: T('cognition.asset_origin_user', '你确认的'),
+      user_confirmed_unverified: T('cognition.asset_origin_user', '你确认的'),
+      automatically_extracted_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
+      system_precipitated_unverified: T('cognition.asset_origin_auto', '系统整理出来的'),
+    }[String(asset.lifecycleStatus || '')] || String(asset.lifecycleStatus || '—');
+    const moreRow = (label, hint, action) => `
+      <div class="ca-more-row">
+        <div class="ca-more-copy"><strong>${esc(label)}</strong><span>${esc(hint)}</span></div>
+        ${btn(label, 'asset-action', { id: asset.id, data: { action }, danger: true, small: true })}
+      </div>`;
     return `
+    <button type="button" class="ca-backlink" data-act="go-back">${esc(T('cognition.asset_back', '← 返回列表'))}</button>
     <div class="ca-card ca-asset-detail">
       <div class="ca-line">
         <div>
@@ -205,30 +222,21 @@
         <div class="ca-right">${assetStatusChip(asset)}</div>
       </div>
       <p class="ca-content-text">${esc(asset.statement || '')}</p>
-      <div class="ca-kv">
-        <div><div class="ca-k">${esc(T('cognition.asset_scope_label', '生效范围'))}</div><div class="ca-v">${esc(asset.scope || T('cognition.asset_scope_unset', '未设置'))}</div></div>
-        <div><div class="ca-k">${esc(T('cognition.asset_origin_label', '写入来源'))}</div><div class="ca-v">${esc({
-          user_confirmed: T('cognition.asset_origin_user', '确认采纳'),
-          user_confirmed_unverified: T('cognition.asset_origin_user', '确认采纳'),
-          automatically_extracted_unverified: T('cognition.asset_write_origin_auto', '自动采纳'),
-          system_precipitated_unverified: T('cognition.asset_write_origin_auto', '自动采纳'),
-        }[String(asset.lifecycleStatus || '')] || String(asset.lifecycleStatus || '—'))}</div></div>
-        <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '使用记录'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.common_records', '条'))}` : esc(T('cognition.asset_no_proofs', '暂无'))}</div></div>
-      </div>
-      ${affectedCopy.length ? `<div class="ca-sect"><h4>${esc(T('cognition.asset_impact_title', '影响预览'))}</h4><p>${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}</div></div>` : ''}
-      <div class="ca-sect">
-        <h4>${esc(T('cognition.asset_body_title', '资产本体'))}</h4>
-        <p>${esc(T('cognition.asset_body_hint', '三种操作影响不同：删除会从资产列表移除但保留历史；撤回使用只影响未来任务；彻底清除会删除全部历史与证据，不可恢复。'))}</p>
-        <div class="ca-actions">
-          ${btn(T('cognition.asset_delete', '删除'), 'asset-action', { id: asset.id, data: { action: 'delete' }, danger: true, small: true })}
-          ${btn(T('cognition.asset_revoke', '撤回使用'), 'asset-action', { id: asset.id, data: { action: 'revoke' }, danger: true, small: true })}
-          ${btn(T('cognition.asset_purge', '彻底清除'), 'asset-action', { id: asset.id, data: { action: 'purge' }, danger: true, small: true })}
+      <details class="ca-advanced">
+        <summary>${esc(T('cognition.asset_meta_summary', '详细信息'))}</summary>
+        <div class="ca-kv">
+          <div><div class="ca-k">${esc(T('cognition.asset_scope_label', '适用范围'))}</div><div class="ca-v">${esc(scopeText)}</div></div>
+          <div><div class="ca-k">${esc(T('cognition.asset_origin_label', '怎么来的'))}</div><div class="ca-v">${esc(originText)}</div></div>
+          <div><div class="ca-k">${esc(T('cognition.asset_proofs_label', '用过几次'))}</div><div class="ca-v">${proofCount ? `${proofCount} ${esc(T('cognition.asset_proof_times', '次'))}` : esc(T('cognition.asset_no_proofs', '还没用过'))}</div></div>
         </div>
-      </div>
-      <div class="ca-sect">
-        <div class="ca-actions">
-          ${btn(T('cognition.proof_open_asset', '查看使用记录'), 'open-evidence', { id: asset.id })}
-          ${btn(T('cognition.asset_list_back', '返回列表'), 'open-overview', {})}
+      </details>
+      ${affectedCopy.length ? `<div class="ca-sect"><p class="ca-note">${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}${proofCount ? btn(T('cognition.asset_usage_link', '查看使用记录'), 'open-evidence', { small: true }) : ''}</div></div>` : ''}
+      <div class="ca-more-wrap">
+        <button type="button" class="ca-more-toggle" data-act="toggle-asset-more">${esc(T('cognition.asset_more', '更多操作'))}</button>
+        <div class="ca-more" data-asset-more hidden>
+          ${moreRow(T('cognition.asset_delete', '删除'), T('cognition.asset_delete_hint', '从资产列表移除，历史记录保留'), 'delete')}
+          ${moreRow(T('cognition.asset_revoke', '撤回使用'), T('cognition.asset_revoke_hint', '只影响未来的任务'), 'revoke')}
+          ${moreRow(T('cognition.asset_purge', '彻底清除'), T('cognition.asset_purge_hint', '删除全部历史与证据，不可恢复'), 'purge')}
         </div>
       </div>
     </div>`;
@@ -254,7 +262,8 @@
     );
     if (route.assetId) {
       const asset = S.assets.find((a) => String(a.id) === String(route.assetId));
-      if (asset) return heroHtml + assetDetail(asset);
+      // 详情视图不显示统计条：那是列表页的上下文，详情页只讲这一条资产。
+      if (asset) return hero(T('cognition.tree_eyebrow', '我的认知'), T('cognition.overview_title', '我的认知资产'), '') + assetDetail(asset);
     }
     const filtered = S.assets.filter((a) => String(a.status || 'active') !== 'archived'
       && (!route.category || a.type === route.category));
@@ -660,9 +669,8 @@
     const tabsHtml = `<nav class="ca-tabs">${NS.TABS.map((tab) => {
       const active = activeTab === tab.id;
       const extra = tab.id === 'overview' ? ' data-cognition-page-link="assets"' : '';
-      return `<button type="button" class="ca-tabcard${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra}>
-        <span class="ca-tab-ico" aria-hidden="true"></span>
-        <span class="ca-tab-copy"><strong>${esc(T(tab.titleKey, tab.title))}</strong><small>${esc(T(tab.descKey, tab.desc))}</small></span>
+      return `<button type="button" class="ca-tab${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra} title="${esc(T(tab.descKey, tab.desc))}">
+        <strong>${esc(T(tab.titleKey, tab.title))}</strong><small>${esc(T(tab.descKey, tab.desc))}</small>
       </button>`;
     }).join('')}</nav>`;
     let body = '';
