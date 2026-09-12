@@ -311,10 +311,10 @@
       ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或直接拒绝。'))}</div>`
       : '';
     const actionsHtml = broken
-      ? `<div class="ca-actions ca-actions-right">${btn(T('cognition.candidate_open_detail', '查看与调整'), 'open-candidate', { id: candidate.id })}${btn(T('cognition.candidate_reject', '不要'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}</div>`
+      ? `<div class="ca-actions ca-actions-right">${btn(T('cognition.candidate_open_detail', '查看与调整'), 'open-candidate', { id: candidate.id })}${btn(T('cognition.candidate_reject', '不保存'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}</div>`
       : `<div class="ca-actions ca-actions-right">
-          ${btn(T('cognition.candidate_confirm_scoped', '存下来'), 'cand-adopt', { id: candidate.id, primary: true })}
-          ${btn(T('cognition.candidate_reject', '不要'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
+          ${btn(T('cognition.candidate_confirm_scoped', '保存'), 'cand-adopt', { id: candidate.id, primary: true })}
+          ${btn(T('cognition.candidate_reject', '不保存'), 'cand-decide', { id: candidate.id, data: { action: 'reject' }, danger: true })}
         </div>`;
     return `
     <div class="ca-card ca-candidate${broken ? ' is-broken' : ''}">
@@ -345,7 +345,7 @@
     }
     return `${hero(
       T('cognition.inbox', '待我处理'), T('cognition.review_title', '待我处理'),
-      T('cognition.inbox_page_hint', '每条只需要一个决定：存下来，还是不要。'),
+      T('cognition.inbox_page_hint', '每条只需要一个决定：保存，还是不保存。'),
       statsRow([
         [healthy.length, T('cognition.review_stat_wait', '等待确认')],
         [broken.length, T('cognition.review_stat_evidence', '来源已删')],
@@ -354,11 +354,11 @@
     ${attention.length ? `<div class="ca-notice">${attention.join('')}</div>` : ''}
     ${sectionHead(T('cognition.review_group_wait', '等待你确认'), T('cognition.review_group_wait_note', '确认后会创建 v1，并保留来源与撤销入口'))}
     ${healthy.length ? healthy.map((c) => candidateCard(c, false)).join('') : `<div class="ca-card">${empty(T('cognition.review_empty_wait', '当前没有等待确认的候选'))}</div>`}
-    ${broken.length ? sectionHead(T('cognition.review_group_evidence', '来源已删除的候选'), T('cognition.review_group_evidence_note', '这些候选的原始出处已被删除；可以点开确认后仍要保存，或直接不要')) + broken.map((c) => candidateCard(c, true)).join('') : ''}
+    ${broken.length ? sectionHead(T('cognition.review_group_evidence', '来源已删除的候选'), T('cognition.review_group_evidence_note', '这些候选的原始出处已被删除；可以点开确认后仍要保存，或选择不保存')) + broken.map((c) => candidateCard(c, true)).join('') : ''}
     ${processed.length ? sectionHead(T('cognition.inbox_processed_badge', '处理记录'), T('cognition.inbox_processed_hint', '按处理时间倒序，只显示已处理的决定')) + `<div class="ca-card">${processed.map((c) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(candidateTitle(c))}</div>
-        <div class="ca-row-meta">${esc(fmtDate(c.updatedAt || c.createdAt))} · ${esc(T('cognition.candidate_status_promoted', '已采纳'))}</div></div>
+        <div class="ca-row-meta">${esc(fmtDate(c.updatedAt || c.createdAt))} · ${esc(T('cognition.candidate_status_promoted', '已保存'))}</div></div>
       </div>`).join('')}</div>` : ''}`;
   }
 
