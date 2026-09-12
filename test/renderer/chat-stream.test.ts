@@ -557,6 +557,32 @@ describe('chat-stream module', () => {
     expect(flow.dataset.csText).toBeUndefined();
   });
 
+  it('文字段 rAF 合帧：帧延迟时画的是帧内最新全文，不停在调度那一刻的旧快照（真机 09-12 中间叙述截断）', () => {
+    // 真机事故：窗口被遮挡/后台节流时 rAF 不跑；一段叙述的全部增量在同一帧
+    // 窗口内到达，帧恢复后只画出「第一个增量那一刻」的前缀（如「我先」），
+    // 其余内容被 _csSegRaf 吞掉、再无重绘——中间叙述永久截断。
+    const frames: Array<() => void> = [];
+    g.requestAnimationFrame = (cb: () => void) => { frames.push(cb); return frames.length; };
+    try {
+      handle({ type: 'chat.turn.started', turnId: 'T-raf', cid: 'c-1', actorId: 'a', startedAt: '' });
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '我先' } });
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '实际探一下自己的运行时状态，再回答——不靠猜。' } });
+      const flow = inserts[0].node;
+      const seg = bodyOf(flow).children.filter((c) => String(c.className).includes('cs-text'))[0];
+      // 同一帧窗口内后续增量不重复排队（合帧不变），但帧内必须读最新文本。
+      expect(frames).toHaveLength(1);
+      frames.splice(0).forEach((cb) => cb());
+      expect(seg.textContent).toBe('我先实际探一下自己的运行时状态，再回答——不靠猜。');
+      // 帧跑完后的新增量照常再排一帧并追上。
+      handle({ type: 'chat.item', turnId: 'T-raf', itemId: 'i1', kind: 'text', status: 'inProgress', payload: { delta: '（补）' } });
+      expect(frames).toHaveLength(1);
+      frames.splice(0).forEach((cb) => cb());
+      expect(seg.textContent).toBe('我先实际探一下自己的运行时状态，再回答——不靠猜。（补）');
+    } finally {
+      delete g.requestAnimationFrame;
+    }
+  });
+
   it('usage 行渲染并含上下文告警，diff 行渲染增删统计与着色行', () => {
     handle({ type: 'chat.turn.started', turnId: 'T1', cid: 'c-1', actorId: 'a', startedAt: '' });
     handle({ type: 'chat.item', turnId: 'T1', itemId: 'u1', kind: 'usage', status: 'completed', payload: { inputTokens: 100, contextWindowRatio: 0.92 } });

@@ -675,8 +675,12 @@ function _csRenderThinkRow(row) {
  *  rAF 节流逐段渲染；renderer 不可用（测试 stub）退化为纯文本。渲染失败
  *  静默回退 textContent，正文永不丢。 */
 function _csPaintTextSeg(seg) {
-  const raw = seg.dataset.csSeg || '';
   const paint = () => {
+    // 帧内读最新文本，不在调度前抓快照（真机 09-12 截断事故：窗口遮挡/
+    // 后台节流时 rAF 不跑，一段叙述的增量全落在同一待刷帧里——快照读在
+    // 调度前只会画出第一个增量那一刻的前缀（如「我先」），后续增量被
+    // _csSegRaf 吞掉且帧内不重读，中间叙述就永久停在旧前缀）。
+    const raw = seg.dataset.csSeg || '';
     if (typeof renderMarkdownFull === 'function') {
       try {
         seg.innerHTML = `<div class="markdown-body">${renderMarkdownFull(raw)}</div>`;
