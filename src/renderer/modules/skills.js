@@ -21,6 +21,10 @@ const _GLOBAL_SKILL_GROUP_MIN = 2;
 
 const _skillsCognitionState = {
   page: 'assets',
+  /** 「管理来源」「自动整理」这类页头辅助入口的来处。返回键回到这里，
+   *  而不是写死回「待我处理」——从认知树点进来源管理再点返回被丢到
+   *  另一页，是用户迷路的老问题。 */
+  auxReturnPage: '',
   /** 「待我处理」的服务端读模型（cognition.inbox.list）。渲染层不自己判断
    *  什么算待办——判断在 formal-assets/inbox.ts，与 gate 同源。 */
   inboxItems: [],
@@ -375,6 +379,13 @@ function switchSkillsCognitionPage(page) {
     'candidate', 'tree', 'nonasset', 'skillupdate',
   ]);
   const next = allowed.has(requested) ? requested : 'inbox';
+  // 「管理来源」「自动整理」是页头辅助入口：从哪进的就回哪。此前两页的返回
+  // 写死回「待我处理」——从「我的认知树」点进来再点返回，用户会被丢到另一页。
+  const auxiliaryPages = new Set(['sources', 'captures']);
+  const originPages = new Set(['inbox', 'captures', 'assets', 'sources', 'proofs', 'governance']);
+  if (auxiliaryPages.has(next) && originPages.has(_skillsCognitionState.page) && _skillsCognitionState.page !== next) {
+    _skillsCognitionState.auxReturnPage = _skillsCognitionState.page;
+  }
   _skillsCognitionState.page = next;
   // 进「我的认知树」的二级页面（四类资产 + 详情）时，没有明确落点才默认
   // 「关于我」分类；一级页面（树视图）不设分类——树不按分类看。
@@ -526,6 +537,43 @@ function _cognitionRefText(ref) {
   if (ref && typeof ref === 'object') return _cognitionResolveSourceTitle(ref);
   // 纯字符串引用多半就是一个 id，没有可读名字可给。
   return String(ref || '').trim() ? _cognitionUnresolvedSourceLabel('') : '';
+}
+
+/**
+ * 「管理来源」「自动整理」的返回目标：回到用户真正进来的那一页。
+ * 没记录来处时退回调用方给的默认页（历史上是「待我处理」）。
+ */
+function _cognitionAuxBackProps(fallbackPage) {
+  const table = {
+    inbox: ['cognition.back_to_inbox', '返回待处理'],
+    assets: ['cognition.back_to_assets', '返回我的认知树'],
+    proofs: ['cognition.back_to_proofs', '返回复用与证明'],
+    governance: ['cognition.back_to_governance', '返回版本与治理'],
+    captures: ['cognition.back_to_captures', '返回自动整理'],
+    sources: ['cognition.back_to_sources', '返回管理来源'],
+  };
+  const target = table[_skillsCognitionState.auxReturnPage] ? _skillsCognitionState.auxReturnPage : (fallbackPage || 'inbox');
+  const [backKey, back] = table[target] || table.inbox;
+  return { backPage: target, backKey, back };
+}
+
+/**
+ * 一条证据引用当前是否"不可核对"：解析不到可读标题，且不是"暂未同步"。
+ * 与 chip 的显示口径同源（同一份 `recall.sources.list` 索引），保证
+ * "页面显示全不可用"与"前置提示触发"不会各说各话。
+ */
+function _cognitionSourceRefUnavailable(ref) {
+  const obj = ref && typeof ref === 'object' ? ref : null;
+  if (obj) {
+    const inline = String(obj.title || obj.conversationTitle || obj.name || '').trim();
+    if (inline) return false;
+  }
+  const id = String((obj ? (obj.id || obj.conversationId || obj.ref) : ref) || '').trim();
+  if (!id) return true;
+  const entry = _cognitionSourceIndex().get(id);
+  if (String(entry?.title || '').trim()) return false;
+  if (entry && (entry.status === 'pending' || entry.status === 'processing')) return false;
+  return true;
 }
 
 /**
@@ -1320,7 +1368,7 @@ function renderSkillsCognitionSources() {
     eyebrowKey: 'cognition.sources_eyebrow', eyebrow: 'SOURCES',
     titleKey: 'cognition.sources_title', title: '只从你授权的范围中发现认知',
     hintKey: 'cognition.sources_page_hint', hint: '五类来源分别管理授权、可用性和最近读取；来源不是正式认知资产。',
-    backPage: 'inbox',
+    ..._cognitionAuxBackProps('inbox'),
   });
   // 页底这句是这一页的边界声明：来源可读不等于内容会进资产。少了它，用户会
   // 把「授权一个目录」理解成「把整个目录写进记忆」。
@@ -1842,7 +1890,7 @@ function renderSkillsCognitionCaptures() {
       { value: _captureFilterCount('processing', counts), key: 'cognition.capture_metric_processing', label: '处理中' },
       { value: _captureFilterCount('failed', counts), key: 'cognition.capture_metric_abnormal', label: '异常' },
     ],
-    backPage: 'inbox',
+    ..._cognitionAuxBackProps('inbox'),
   });
   // 一句话说清"我看到的这些东西最后会去哪"。刻意不编号：编号会和下面的段落
   // 标题抢层级，用户以为要照着 1234 操作，而这只是去向说明。
@@ -1870,7 +1918,7 @@ function renderSkillsCognitionCaptures() {
     <div class="recall-capture-filter-bar">${filters}</div>
     <div class="recall-capture-task-list">${rows}</div>${more}
   </section>`;
-  host.innerHTML = `${hero}${chain}${_renderCognitionOverviewAttention({ includeProcessing: true })}${autoBlock}${manualBlock}${recordBlock}`;
+  host.innerHTML = `${hero}${chain}${_renderCognitionOverviewAttention({ includeProcessing: true, includeSourceIssues: false })}${autoBlock}${manualBlock}${recordBlock}`;
   // 候选就地展开在被选中的那条记录底下——宿主容器由 _captureTaskDetail 生成，
   // 所以必须在 innerHTML 之后调。没有展开任何记录时它找不到宿主，自然不渲染。
   renderSkillsCognitionCandidates();
@@ -2223,13 +2271,19 @@ function _renderCognitionInboxBand(band) {
  */
 function _renderCognitionOverviewAttention(options) {
   const includeProcessing = options?.includeProcessing === true;
+  // 来源问题统一由「待我处理」呈现（那是用户处理待办的唯一入口）；自动整理页
+  // 只保留整理任务自身的重试/配置入口。同一件事两页各挂一条，用户会以为是
+  // 两件不同的事。
+  const includeSourceIssues = options?.includeSourceIssues !== false;
   const captures = _skillsCognitionState.captureCounts || {};
   const recentCaptures = Array.isArray(_skillsCognitionState.recentCaptures) ? _skillsCognitionState.recentCaptures : [];
   const sourceItems = (Array.isArray(_skillsCognitionState.sources) ? _skillsCognitionState.sources : [])
     .flatMap((source) => _cognitionPrimarySourceItems(source));
   const captureModel = _skillsCognitionState.captureModel;
   const failedTasks = includeProcessing ? Number(captures.failed || 0) : 0;
-  const sourceIssues = sourceItems.filter((item) => item.status === 'failed' || item.status === 'paused').length;
+  const sourceIssues = includeSourceIssues
+    ? sourceItems.filter((item) => item.status === 'failed' || item.status === 'paused').length
+    : 0;
   const modelAuthorizationRequired = !!captureModel?.authorizationRequired;
   const modelRequired = (!!captureModel && (!captureModel.configured || modelAuthorizationRequired))
     || recentCaptures.some((capture) => capture.status === 'configuration_required');
@@ -2985,7 +3039,9 @@ function renderSkillsCognitionProofs() {
     ],
   });
   if (!allProofEvents.length) {
-    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty">${escapeHtml(_cognitionText('cognition.proofs_empty', '还没有资产被真正带入过任务。资产被使用后，这里会显示它在哪里用过、结果如何。'))}</div>`;
+    // 空态不是一句话，而是一段"怎么才会有内容"的引导：四步流程 + 入口。
+    // 「还没有」三个字回答不了用户的下一个问题——"那我要做什么？"
+    host.innerHTML = `${hero}<div class="skills-cognition-empty cognition-task-empty"><strong>${escapeHtml(_cognitionText('cognition.proofs_empty_title', '还没有资产被真实使用过'))}</strong><span>${escapeHtml(_cognitionText('cognition.proofs_empty_hint', '当资产在任务中被真正使用、并留下可核对的记录后，会在这里出现。系统不会把「已注入」当作「已使用」，也不会把「被使用」当作「有效」。'))}</span><span class="skills-cognition-meta">${escapeHtml(_cognitionText('cognition.proofs_empty_steps', '① 确认资产 → ② 任务中使用 → ③ 留下使用记录 → ④ 效果验证'))}</span><button type="button" class="btn btn-sm" data-cognition-page-link="assets">${escapeHtml(_cognitionText('cognition.proof_open_asset', '查看资产'))}</button></div>`;
     return;
   }
   // 全量非空但当前筛选为空是另一回事：说「还没有资产被带入过」会让用户以为
@@ -3209,6 +3265,12 @@ function renderSkillsCognitionCandidateDetail() {
   const detailUsedRefKeys = new Set(detailEditableRefs
     .filter((ref) => ref && ref.kind && ref.id)
     .map((ref) => `${ref.kind}:${ref.id}`));
+  // 多数（超过半数）引用不可核对才提示：单条消息被清理不打扰用户；来源
+  // 整体缺失却仍是主按钮"确认采纳"，才是把用户往盲批上推。
+  const detailCheckRefs = detailCapability.canEdit ? detailEditableRefs : detailEvidenceRefs;
+  const detailUnavailableCount = detailCheckRefs.filter((ref) => _cognitionSourceRefUnavailable(ref)).length;
+  const detailEvidenceMostlyUnavailable = detailCheckRefs.length > 0
+    && detailUnavailableCount * 2 > detailCheckRefs.length;
   const evidenceRefs = Array.isArray(candidate.evidenceRefs) && candidate.evidenceRefs.length
     ? candidate.evidenceRefs : (candidate.sourceRefs || []);
   const uncertainty = String(candidate.uncertainty || '').trim();
@@ -3233,6 +3295,7 @@ function renderSkillsCognitionCandidateDetail() {
       ${detailCapability.disabledReason ? `<p class="skills-cognition-meta cognition-candidate-blocked">${escapeHtml(_recallCandidateBlockedText(detailCapability.disabledReason))}</p>` : ''}
       ${_recallCandidateIneligibleBlock(detailCapability)}
       ${candidate.failureMessage ? `<p class="skills-cognition-error">${escapeHtml(candidate.failureMessage)}</p>` : ''}
+      ${detailEvidenceMostlyUnavailable ? `<div class="skills-cognition-warning">${escapeHtml(_cognitionText('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或直接拒绝。'))}</div>` : ''}
       <div class="skills-cognition-actions cognition-candidate-actions">
         ${detailCapability.canPromote ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-action="save-and-promote" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_confirm_scoped', '确认并限域'))}</button>` : ''}
         ${!detailCapability.canPromote && detailCapability.canEdit ? `<button type="button" class="btn btn-sm btn-primary" data-recall-candidate-action="save-only" data-recall-candidate-id="${escapeHtml(candidate.id)}">${escapeHtml(_cognitionText('cognition.candidate_save_edits', '保存修改'))}</button>` : ''}
