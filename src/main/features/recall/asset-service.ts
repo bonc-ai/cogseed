@@ -749,22 +749,13 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
  *  proj-a3ae7e6a3646 两条身份资产 omittedRefs=scope_mismatch）。
  *
  *  只改写 normalizeAssetScopeValue 能归一的；词表值原样跳过（幂等）。
- *  被未过期 confirmed 投影引用的资产跳过——scope 变更走版本递增，会令
- *  投影冻结的版本号失配（projection_asset_version_changed），等投影自然
- *  过期/重确认后再迁移。 */
+ *  不设 confirmed-投影冻结豁免（首版设了，实机验证推翻）：自动投影
+ *  （proj-auto-*）永不过期且每轮重建，豁免窗口永远不打开——而版本递增
+ *  走 append-only 快照，旧投影冻结的版本号仍能读到对应快照、注入内容
+ *  不受影响（buildPromptContextForProjections 仅在快照缺失且 live 版本
+ *  漂移时才跳过），因此迁移对被引用资产同样安全。 */
 export async function migrateLegacyFreeTextScopes(userId: string): Promise<number> {
   const { normalizeAssetScopeValue, isRecallScopeTerm } = await import('./scope-policy');
-  const { listContextProjections } = await import('./context-projection');
-  const frozenAssetIds = new Set<string>();
-  try {
-    for (const projection of await listContextProjections(userId)) {
-      if (projection.status !== 'confirmed') continue;
-      if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
-      for (const assetId of projection.assetIds || []) frozenAssetIds.add(assetId);
-    }
-  } catch (err) {
-    log.warn(`ability asset scope migration: projection scan failed, proceeding without freeze guard: ${(err as Error).message}`);
-  }
   let migrated = 0;
   for (const asset of await listAbilityAssets(userId)) {
     if (asset.status === 'revoked' || asset.status === 'purged') continue;
@@ -772,7 +763,6 @@ export async function migrateLegacyFreeTextScopes(userId: string): Promise<numbe
     if (isRecallScopeTerm(scope)) continue;
     const normalized = normalizeAssetScopeValue(scope);
     if (!normalized || normalized === scope.toLowerCase()) continue;
-    if (frozenAssetIds.has(asset.id)) continue;
     try {
       await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
         if (!raw) throw new Error('recall ability asset not found');
