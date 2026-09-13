@@ -382,6 +382,57 @@ describe('settings model providers surface', () => {
     ]) expect(style).toContain(selector);
   });
 
+  it('renders the unified model form with the designed field set (2026-09-13)', () => {
+    const source = readFileSync(resolve(root, 'src/renderer/modules/settings.js'), 'utf8');
+    for (const token of [
+      'settings-model-form-smart',
+      'settings-model-form-input-chips',
+      'settings-model-form-capability-chips',
+      'settings-model-form-levels',
+      'settings-model-form-level-add',
+      'settings-custom-provider-model-params',
+      'settings.custom_providers.smart_config',
+      'settings.custom_providers.input_types',
+      'settings.custom_providers.model_capabilities',
+      'settings.custom_providers.reasoning_levels',
+      'settings.custom_providers.reasoning_params_map',
+      'settings.custom_providers.reset_form',
+      'customProviders.fetchModels',
+    ]) expect(source).toContain(token);
+    const uiComponents = readFileSync(resolve(root, 'src/renderer/ui-components.css'), 'utf8');
+    for (const selector of [
+      '.settings-model-form__smart',
+      '.settings-check-chip',
+      '.settings-level-row',
+      '.settings-model-form__advanced',
+    ]) expect(uiComponents).toContain(selector);
+    // 新表单文案四语齐备（缺任一语会退回代码里的中文兜底）。
+    const requiredKeys = [
+      'settings.custom_providers.smart_config',
+      'settings.custom_providers.smart_config_hint',
+      'settings.custom_providers.smart_config_applied',
+      'settings.custom_providers.advanced_config',
+      'settings.custom_providers.input_types',
+      'settings.custom_providers.input_type_text',
+      'settings.custom_providers.input_type_image',
+      'settings.custom_providers.input_type_video',
+      'settings.custom_providers.input_type_pdf',
+      'settings.custom_providers.model_capabilities',
+      'settings.custom_providers.capability_structured_output',
+      'settings.custom_providers.capability_native_web_search',
+      'settings.custom_providers.capability_system_message',
+      'settings.custom_providers.reasoning_levels',
+      'settings.custom_providers.reasoning_levels_hint',
+      'settings.custom_providers.reasoning_params_map',
+      'settings.custom_providers.reasoning_params_map_hint',
+      'settings.custom_providers.reset_form',
+      'settings.custom_providers.error_reasoning_map',
+    ];
+    for (const { language, locale } of customProviderLocaleFiles) {
+      for (const key of requiredKeys) expect(locale[key], `${language}: ${key}`).toBeTruthy();
+    }
+  });
+
   it('refreshes the custom-provider list and CC Switch probe with the expected IPC channels', async () => {
     const { context, registry, invoke } = buildHarness();
 

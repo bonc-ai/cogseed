@@ -229,9 +229,17 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  vision?: unknown;
+  input?: unknown;
+  capabilities?: unknown;
+  reasoningLevels?: unknown;
+  reasoningParamsMap?: unknown;
 } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
-  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const raw = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+  };
   const id = boundedText(raw.id, `${field}.id`, 200);
   const boundedInteger = (candidate: unknown, name: string, max: number): number => {
     if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
@@ -242,7 +250,18 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
   const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
   if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
-  return { id, contextWindow, maxTokens };
+  // 新配置字段（2026-09-13 统一模型配置表单）原样透传——严格校验在
+  // custom_providers.normalizeModel（单一口径，避免两处规则漂移）。
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(raw.vision === undefined ? {} : { vision: raw.vision }),
+    ...(raw.input === undefined ? {} : { input: raw.input }),
+    ...(raw.capabilities === undefined ? {} : { capabilities: raw.capabilities }),
+    ...(raw.reasoningLevels === undefined ? {} : { reasoningLevels: raw.reasoningLevels }),
+    ...(raw.reasoningParamsMap === undefined ? {} : { reasoningParamsMap: raw.reasoningParamsMap }),
+  };
 }
 type StreamHandler = (
   payload: any,

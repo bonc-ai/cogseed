@@ -941,6 +941,11 @@ function _settingsCustomProviderModalStatus(kind, text) {
   status.className = 'form-msg' + (kind ? ` ${kind}` : '');
 }
 
+const _MODEL_FORM_INPUT_TYPES = ['text', 'image', 'video', 'pdf'];
+const _MODEL_FORM_CAPABILITIES = ['structured_output', 'native_web_search', 'system_message'];
+const _MODEL_FORM_MAX_LEVELS = 8;
+const _MODEL_FORM_MAX_LEVEL_LENGTH = 40;
+
 function _settingsNormalizeCustomProviderModel(input) {
   const id = String(input?.id || '').trim();
   const contextWindow = Number(input?.contextWindow);
@@ -953,7 +958,56 @@ function _settingsNormalizeCustomProviderModel(input) {
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > _CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS || maxTokens > contextWindow) {
     return { ok: false, error: t('settings.custom_providers.error_max_tokens') };
   }
-  return { ok: true, model: { id, contextWindow, maxTokens } };
+  // 新配置字段（2026-09-13 统一模型配置表单）：与后端 normalizeModel 同口径。
+  // 输入类型三态：调用方**显式提供**（统一表单，含文本勾选）才落 input 字段
+  // 并派生 vision；未提供（供应商新增的模型草稿行 / 旧调用方）保持不声明，
+  // 让 vision 走目录识别链——否则会把「未知」误标成「明确不支持图片」。
+  const declaredInput = Array.isArray(input?.inputTypes);
+  const inputTypes = declaredInput ? ['text'] : [];
+  for (const raw of declaredInput ? input.inputTypes : []) {
+    const token = String(raw || '').trim().toLowerCase();
+    if (_MODEL_FORM_INPUT_TYPES.includes(token) && !inputTypes.includes(token)) inputTypes.push(token);
+  }
+  const capabilities = [];
+  for (const raw of Array.isArray(input?.capabilities) ? input.capabilities : []) {
+    const token = String(raw || '').trim().toLowerCase();
+    if (_MODEL_FORM_CAPABILITIES.includes(token) && !capabilities.includes(token)) capabilities.push(token);
+  }
+  const reasoningLevels = [];
+  for (const raw of Array.isArray(input?.reasoningLevels) ? input.reasoningLevels : []) {
+    const token = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!token) continue;
+    if (token.length > _MODEL_FORM_MAX_LEVEL_LENGTH) {
+      return { ok: false, error: t('settings.custom_providers.error_reasoning_level_long') };
+    }
+    if (!reasoningLevels.includes(token)) reasoningLevels.push(token);
+  }
+  if (reasoningLevels.length > _MODEL_FORM_MAX_LEVELS) {
+    return { ok: false, error: t('settings.custom_providers.error_reasoning_levels_max') };
+  }
+  const rawMap = String(input?.reasoningParamsMap || '').trim();
+  let reasoningParamsMap;
+  if (rawMap) {
+    try {
+      const parsed = JSON.parse(rawMap);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('shape');
+      reasoningParamsMap = parsed;
+    } catch {
+      return { ok: false, error: t('settings.custom_providers.error_reasoning_map') };
+    }
+  }
+  return {
+    ok: true,
+    model: {
+      id,
+      contextWindow,
+      maxTokens,
+      ...(declaredInput ? { input: inputTypes } : {}),
+      ...(capabilities.length ? { capabilities } : {}),
+      ...(reasoningLevels.length ? { reasoningLevels } : {}),
+      ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
+    },
+  };
 }
 
 function _settingsIsValidCustomProviderUrl(value) {
@@ -1609,6 +1663,190 @@ async function _settingsRemoveCustomProvider(provider) {
   });
 }
 
+/** 统一模型配置表单（2026-09-13 产品设计稿）：字段与分组——
+ *  智能配置 / 模型 ID / 上下文窗口 / 最大输出 Token / 高级配置
+ *  （输入类型 · 模型能力 · 推理等级 · 推理参数映射）。新增与编辑共用。 */
+function _settingsModelFormInitial(model) {
+  const base = {
+    id: '',
+    contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
+    inputTypes: ['text'],
+    capabilities: [],
+    reasoningLevels: [],
+    reasoningParamsMap: '',
+    smart: true,
+  };
+  if (!model) return base;
+  // 老数据兼容：没有 input 字段时由 vision 推导（undefined=未知 → 只勾文本，
+  // 与后端「未声明不猜测」口径一致）。
+  const inputTypes = Array.isArray(model.input) && model.input.length
+    ? model.input.slice()
+    : (model.vision === true ? ['text', 'image'] : ['text']);
+  return {
+    id: model.id || '',
+    contextWindow: Number.isSafeInteger(model.contextWindow) ? model.contextWindow : base.contextWindow,
+    maxTokens: Number.isSafeInteger(model.maxTokens) ? model.maxTokens : base.maxTokens,
+    inputTypes: inputTypes.includes('text') ? inputTypes : ['text', ...inputTypes],
+    capabilities: Array.isArray(model.capabilities) ? model.capabilities.slice() : [],
+    reasoningLevels: Array.isArray(model.reasoningLevels) ? model.reasoningLevels.slice() : [],
+    reasoningParamsMap: model.reasoningParamsMap && typeof model.reasoningParamsMap === 'object'
+      ? JSON.stringify(model.reasoningParamsMap, null, 2)
+      : '',
+    smart: true,
+  };
+}
+
+function _settingsModelFormHint(text) {
+  return `<span class="settings-hint" title="${escapeHtml(text)}" aria-label="${escapeHtml(text)}">?</span>`;
+}
+
+function _settingsRenderModelFormHtml(initial) {
+  const inputChips = [
+    { value: 'text', label: t('settings.custom_providers.input_type_text'), locked: true },
+    { value: 'image', label: t('settings.custom_providers.input_type_image') },
+    { value: 'video', label: t('settings.custom_providers.input_type_video') },
+    { value: 'pdf', label: t('settings.custom_providers.input_type_pdf') },
+  ].map((item) => {
+    const checked = initial.inputTypes.includes(item.value);
+    return `<label class="settings-check-chip${checked ? ' is-checked' : ''}${item.locked ? ' is-locked' : ''}">`
+      + `<input type="checkbox" name="settings-model-form-input" value="${item.value}"${checked ? ' checked' : ''}${item.locked ? ' disabled' : ''}>`
+      + `<span class="settings-check-chip__box"></span>`
+      + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
+      + (item.locked ? `<span class="settings-check-chip__lock">${_settingsIconHtml('lock', 'ui-icon')}</span>` : '')
+      + '</label>';
+  }).join('');
+  const capabilityChips = [
+    { value: 'structured_output', label: t('settings.custom_providers.capability_structured_output') },
+    { value: 'native_web_search', label: t('settings.custom_providers.capability_native_web_search') },
+    { value: 'system_message', label: t('settings.custom_providers.capability_system_message') },
+  ].map((item) => {
+    const checked = initial.capabilities.includes(item.value);
+    return `<label class="settings-check-chip${checked ? ' is-checked' : ''}">`
+      + `<input type="checkbox" name="settings-model-form-capability" value="${item.value}"${checked ? ' checked' : ''}>`
+      + `<span class="settings-check-chip__box"></span>`
+      + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
+      + '</label>';
+  }).join('');
+  return `
+    <div class="settings-model-form">
+      <div class="settings-model-form__smart">
+        <span class="settings-model-form__smart-label">${escapeHtml(t('settings.custom_providers.smart_config'))}</span>
+        ${_settingsModelFormHint(t('settings.custom_providers.smart_config_hint'))}
+        <label class="toggle-switch"><input type="checkbox" id="settings-model-form-smart"${initial.smart ? ' checked' : ''}></label>
+      </div>
+      <div class="form-row">
+        <label for="settings-custom-provider-model-edit-id">${escapeHtml(t('settings.custom_providers.model_id'))}</label>
+        <input id="settings-custom-provider-model-edit-id" type="text" class="form-input" autocomplete="off" spellcheck="false"
+          placeholder="${escapeHtml(t('settings.custom_providers.model_id_placeholder'))}" value="${escapeHtml(initial.id)}" />
+      </div>
+      <div class="form-row">
+        <label for="settings-custom-provider-model-edit-context">${escapeHtml(t('settings.custom_providers.context_window'))} ${_settingsModelFormHint(t('settings.custom_providers.context_window_hint'))}</label>
+        <input id="settings-custom-provider-model-edit-context" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW}" step="1" class="form-input" value="${escapeHtml(String(initial.contextWindow))}" />
+      </div>
+      <div class="form-row">
+        <label for="settings-custom-provider-model-edit-output">${escapeHtml(t('settings.custom_providers.max_tokens'))} ${_settingsModelFormHint(t('settings.custom_providers.max_tokens_hint'))}</label>
+        <input id="settings-custom-provider-model-edit-output" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS}" step="1" class="form-input" value="${escapeHtml(String(initial.maxTokens))}" />
+      </div>
+      <details class="settings-model-form__advanced">
+        <summary>${escapeHtml(t('settings.custom_providers.advanced_config'))}</summary>
+        <div class="form-row">
+          <label>${escapeHtml(t('settings.custom_providers.input_types'))} ${_settingsModelFormHint(t('settings.custom_providers.input_types_hint'))}</label>
+          <div class="settings-check-chips" id="settings-model-form-input-chips">${inputChips}</div>
+        </div>
+        <div class="form-row">
+          <label>${escapeHtml(t('settings.custom_providers.model_capabilities'))} ${_settingsModelFormHint(t('settings.custom_providers.model_capabilities_hint'))}</label>
+          <div class="settings-check-chips" id="settings-model-form-capability-chips">${capabilityChips}</div>
+        </div>
+        <div class="form-row">
+          <label>${escapeHtml(t('settings.custom_providers.reasoning_levels'))} ${_settingsModelFormHint(t('settings.custom_providers.reasoning_levels_hint'))}</label>
+          <div class="settings-level-list" id="settings-model-form-levels"></div>
+          <button type="button" class="settings-level-add" id="settings-model-form-level-add" aria-label="${escapeHtml(t('settings.custom_providers.add_reasoning_level'))}">+</button>
+        </div>
+        <div class="form-row">
+          <label for="settings-custom-provider-model-params">${escapeHtml(t('settings.custom_providers.reasoning_params_map'))} ${_settingsModelFormHint(t('settings.custom_providers.reasoning_params_map_hint'))}</label>
+          <textarea id="settings-custom-provider-model-params" class="form-input settings-model-form__params" rows="4" spellcheck="false"
+            placeholder='{"high": {"reasoning_effort": "high"}}'>${escapeHtml(initial.reasoningParamsMap)}</textarea>
+        </div>
+      </details>
+    </div>
+  `;
+}
+
+function _settingsAppendModelLevelRow(container, value = '') {
+  if (!container) return null;
+  const row = document.createElement('div');
+  row.className = 'settings-level-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'form-input settings-level-row__input';
+  input.value = value;
+  input.placeholder = t('settings.custom_providers.reasoning_level_placeholder');
+  input.maxLength = _MODEL_FORM_MAX_LEVEL_LENGTH;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  const removeButton = document.createElement('button');
+  removeButton.type = 'button';
+  removeButton.className = 'settings-level-row__remove';
+  removeButton.title = t('settings.custom_providers.remove_reasoning_level');
+  removeButton.setAttribute('aria-label', removeButton.title);
+  removeButton.innerHTML = _settingsIconHtml('x', 'ui-icon');
+  removeButton.addEventListener('click', () => row.remove());
+  row.appendChild(input);
+  row.appendChild(removeButton);
+  container.appendChild(row);
+  return row;
+}
+
+function _settingsReadModelForm(body) {
+  const checkedValues = (name) => Array.from(body.querySelectorAll(`input[name="${name}"]`))
+    .filter((el) => el.checked)
+    .map((el) => el.value);
+  return {
+    id: body.querySelector('#settings-custom-provider-model-edit-id')?.value,
+    contextWindow: Number(body.querySelector('#settings-custom-provider-model-edit-context')?.value),
+    maxTokens: Number(body.querySelector('#settings-custom-provider-model-edit-output')?.value),
+    inputTypes: checkedValues('settings-model-form-input'),
+    capabilities: checkedValues('settings-model-form-capability'),
+    reasoningLevels: Array.from(body.querySelectorAll('.settings-level-row__input')).map((el) => el.value),
+    reasoningParamsMap: body.querySelector('#settings-custom-provider-model-params')?.value,
+  };
+}
+
+/** 智能配置：按模型 ID 从供应商远端清单预填窗口/输出/输入类型。
+ *  只填空缺、不覆盖用户输入；拉取失败静默（便利功能不阻断手动填写）。 */
+async function _settingsSmartFillModelForm(provider, body) {
+  const idInput = body.querySelector('#settings-custom-provider-model-edit-id');
+  const modelId = String(idInput?.value || '').trim();
+  if (!modelId) return;
+  const cache = _settingsState.modelSmartCache;
+  let models = cache && cache.providerId === provider.id ? cache.models : null;
+  if (!models) {
+    const res = await _settingsCallCustomProvider('customProviders.fetchModels', { providerId: provider.id });
+    if (!res || !res.ok || !Array.isArray(res.models)) return;
+    models = res.models;
+    _settingsState.modelSmartCache = { providerId: provider.id, models };
+  }
+  const hit = models.find((item) => item && item.id === modelId);
+  if (!hit) return;
+  const contextInput = body.querySelector('#settings-custom-provider-model-edit-context');
+  const outputInput = body.querySelector('#settings-custom-provider-model-edit-output');
+  if (contextInput && (!contextInput.value || Number(contextInput.value) === _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW) && Number.isSafeInteger(hit.contextWindow)) {
+    contextInput.value = String(hit.contextWindow);
+  }
+  if (outputInput && (!outputInput.value || Number(outputInput.value) === _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS) && Number.isSafeInteger(hit.maxTokens)) {
+    outputInput.value = String(hit.maxTokens);
+  }
+  if (hit.vision === true) {
+    const imageBox = body.querySelector('input[name="settings-model-form-input"][value="image"]');
+    if (imageBox && !imageBox.checked) {
+      imageBox.checked = true;
+      imageBox.closest('.settings-check-chip')?.classList.add('is-checked');
+    }
+  }
+  _settingsCustomProviderModalStatus('ok', t('settings.custom_providers.smart_config_applied', { model: modelId }));
+}
+
 function _settingsOpenCustomProviderModelEditor(provider, model = null, options = {}) {
   const overlay = document.getElementById('settings-custom-provider-modal');
   const title = document.getElementById('settings-custom-provider-modal-title');
@@ -1617,17 +1855,40 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
   if (!overlay || !title || !body || !actions || !provider?.id) return;
   const editing = !!model?.id;
   _settingsSetCustomProviderModalView('model-form', provider, model, options.preserveSession === true);
-  const current = model || {
-    id: '', contextWindow: _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW, maxTokens: _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS,
-  };
+  const initial = _settingsModelFormInitial(model);
+  if (!editing && options.draft) {
+    initial.id = String(options.draft.id || '');
+    if (Number.isSafeInteger(options.draft.contextWindow)) initial.contextWindow = options.draft.contextWindow;
+    if (Number.isSafeInteger(options.draft.maxTokens)) initial.maxTokens = options.draft.maxTokens;
+  }
   title.textContent = editing ? t('settings.custom_providers.edit_model') : t('settings.custom_providers.add_model');
-  body.innerHTML = `
-    <p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.model_id'))}</label><input id="settings-custom-provider-model-edit-id" type="text" class="form-input" autocomplete="off" spellcheck="false" value="${escapeHtml(current.id)}" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.context_window'))}</label><input id="settings-custom-provider-model-edit-context" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW}" step="1" class="form-input" value="${escapeHtml(String(current.contextWindow))}" /></div>
-    <div class="form-row"><label>${escapeHtml(t('settings.custom_providers.max_tokens'))}</label><input id="settings-custom-provider-model-edit-output" type="number" min="1" max="${_CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS}" step="1" class="form-input" value="${escapeHtml(String(current.maxTokens))}" /></div>
-  `;
+  body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>`
+    + _settingsRenderModelFormHtml(initial);
+  for (const level of initial.reasoningLevels) {
+    _settingsAppendModelLevelRow(body.querySelector('#settings-model-form-levels'), level);
+  }
+  body.querySelector('#settings-model-form-level-add')?.addEventListener('click', () => {
+    const container = body.querySelector('#settings-model-form-levels');
+    if (!container || container.children.length >= _MODEL_FORM_MAX_LEVELS) return;
+    _settingsAppendModelLevelRow(container);
+  });
+  const smartToggle = body.querySelector('#settings-model-form-smart');
+  body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
+    if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
+  });
   actions.innerHTML = '';
+  const resetButton = document.createElement('button');
+  resetButton.type = 'button';
+  resetButton.className = 'settings-model-form__reset';
+  resetButton.textContent = t('settings.custom_providers.reset_form');
+  resetButton.addEventListener('click', () => {
+    body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>`
+      + _settingsRenderModelFormHtml(initial);
+    for (const level of initial.reasoningLevels) {
+      _settingsAppendModelLevelRow(body.querySelector('#settings-model-form-levels'), level);
+    }
+    _settingsCustomProviderModalStatus('', '');
+  });
   const cancelButton = document.createElement('button');
   cancelButton.className = 'btn';
   cancelButton.textContent = t('common.cancel');
@@ -1641,14 +1902,11 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
     if (saveButton.disabled) return;
     const viewGeneration = _settingsState.customProviderModalView?.generation || 0;
     _settingsSetCustomProviderModalActionBusy(viewGeneration, 'model-save', true, saveButton);
-    const saved = await _settingsSaveCustomProviderModel(provider, editing ? model.id : null, {
-      id: body.querySelector('#settings-custom-provider-model-edit-id')?.value,
-      contextWindow: Number(body.querySelector('#settings-custom-provider-model-edit-context')?.value),
-      maxTokens: Number(body.querySelector('#settings-custom-provider-model-edit-output')?.value),
-    });
+    const saved = await _settingsSaveCustomProviderModel(provider, editing ? model.id : null, _settingsReadModelForm(body));
     _settingsSetCustomProviderModalActionBusy(viewGeneration, 'model-save', false, saveButton);
     if (!saved) return;
   });
+  actions.appendChild(resetButton);
   actions.appendChild(cancelButton);
   actions.appendChild(saveButton);
   _settingsCustomProviderModalStatus('', '');

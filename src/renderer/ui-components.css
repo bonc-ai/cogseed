@@ -583,3 +583,150 @@ body.ui-modal-open { overflow: hidden; }
   .ui-button.is-loading::before { animation-duration: 1.4s; }
   .auto-loading-state__spinner { animation-duration: 1.4s; }
 }
+
+/* ── 统一模型配置表单（2026-09-13 产品设计稿）──────────────────────────
+   字段与分组：智能配置 / 模型 ID / 上下文窗口 / 最大输出 Token /
+   高级配置（输入类型 · 模型能力 · 推理等级 · 推理参数映射）。
+   配色与圆角走 tokens（带兜底），与设置页既有 .form-row/.form-input 协调。 */
+.settings-model-form { display: flex; flex-direction: column; gap: 14px; }
+.settings-model-form__smart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-strong, var(--text, #111827));
+}
+.settings-model-form__smart-label { font-weight: 600; }
+.settings-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, #d1d5db);
+  color: var(--text-muted, #6b7280);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  flex: none;
+}
+.settings-model-form__advanced {
+  border-top: 1px solid var(--line, #eef0f3);
+  padding-top: 12px;
+}
+.settings-model-form__advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong, var(--text, #111827));
+  cursor: pointer;
+  list-style: none;
+}
+.settings-model-form__advanced > summary::-webkit-details-marker { display: none; }
+.settings-model-form__advanced > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+.settings-model-form__advanced:not([open]) > summary::before { transform: rotate(0deg); }
+.settings-model-form__advanced .form-row { margin-top: 14px; }
+.settings-check-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-check-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: var(--radius-control, 10px);
+  background: var(--surface, #fff);
+  font-size: 13px;
+  color: var(--text, #111827);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-check-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.settings-check-chip__box {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  border: 1.5px solid #c7ccd4;
+  background: #fff;
+  position: relative;
+  flex: none;
+}
+.settings-check-chip.is-checked .settings-check-chip__box { background: #111827; border-color: #111827; }
+.settings-check-chip.is-checked .settings-check-chip__box::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.settings-check-chip.is-locked { background: #f3f4f6; color: #6b7280; cursor: default; }
+.settings-check-chip__lock { display: inline-flex; color: #9ca3af; }
+.settings-check-chip__lock svg { width: 13px; height: 13px; }
+.settings-level-list { display: flex; flex-direction: column; gap: 8px; }
+.settings-level-row { display: flex; align-items: center; gap: 8px; }
+.settings-level-row__input { flex: 1; }
+.settings-level-row__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+  flex: none;
+}
+.settings-level-row__remove:hover { background: #f3f4f6; }
+.settings-level-add {
+  width: 38px;
+  height: 38px;
+  margin-top: 8px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: var(--radius-control, 10px);
+  background: #fff;
+  color: var(--text, #111827);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-level-add:hover { background: #f9fafb; }
+.settings-model-form__params {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-height: 84px;
+  resize: vertical;
+}
+.settings-model-form__reset {
+  margin-right: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #4b5563);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 4px;
+}
+@media (max-width: 720px) {
+  .settings-check-chips { gap: 6px; }
+  .settings-check-chip { padding: 6px 10px; font-size: 12px; }
+}

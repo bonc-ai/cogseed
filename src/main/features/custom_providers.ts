@@ -20,16 +20,24 @@
 
 import {
   createCustomProviderEntry,
+  CUSTOM_PROVIDER_MODEL_CAPABILITIES,
+  CUSTOM_PROVIDER_MODEL_INPUTS,
   DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
   loadCustomProviders,
   MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH,
+  MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS,
   MAX_CUSTOM_PROVIDER_MODELS,
+  MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH,
+  MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS,
+  MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH,
   mutateCustomProviders,
   type CustomProvider,
   type CustomProviderModel,
+  type CustomProviderModelCapability,
+  type CustomProviderModelInput,
 } from './auth';
 import { publicContextWindowFor, publicModelAbilitiesFor } from '../model/public_model_catalog';
 import { createLogger } from '../logger';
@@ -111,7 +119,10 @@ function normalizeModel(
 ): CustomProviderModel {
   const value = typeof raw === 'string' ? { id: raw } : raw;
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('model must be an object or string id');
-  const candidate = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown };
+  const candidate = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+  };
   if (typeof candidate.id !== 'string') throw new Error('model id required');
   const id = candidate.id.trim();
   if (!id) throw new Error('model id required');
@@ -130,12 +141,17 @@ function normalizeModel(
       ?? DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW,
     MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW,
   );
-  // Vision has NO guessed default: explicit > fallback > catalog, else
-  // undefined (= unknown; consumers treat unknown as pass-through).
+  // 输入类型（2026-09-13 统一模型配置表单）：显式声明时 text 恒入、白名单
+  // 校验、去重；vision 由 input 派生（含 image ⇔ true），保证新旧两个字段
+  // 单一口径。未声明 input 时 vision 走原链（显式 > fallback > 目录），
+  // 保持旧数据与旧调用方行为不变。
+  const input = normalizeModelInputs(candidate.input);
   const rawVision = candidate.vision;
-  const vision = typeof rawVision === 'boolean'
-    ? rawVision
-    : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision);
+  const vision = input
+    ? input.includes('image')
+    : (typeof rawVision === 'boolean'
+      ? rawVision
+      : (typeof fallback?.vision === 'boolean' ? fallback.vision : publicModelAbilitiesFor(id).vision));
   const maxTokens = normalizePositiveSafeInteger(
     candidate.maxTokens,
     'maxTokens',
@@ -143,7 +159,86 @@ function normalizeModel(
     MAX_CUSTOM_PROVIDER_MAX_TOKENS,
   );
   if (maxTokens > contextWindow) throw new Error('maxTokens must not exceed contextWindow');
-  return { id, contextWindow, maxTokens, ...(vision !== undefined ? { vision } : {}) };
+  const capabilities = normalizeModelCapabilities(candidate.capabilities);
+  const reasoningLevels = normalizeReasoningLevels(candidate.reasoningLevels);
+  const reasoningParamsMap = normalizeReasoningParamsMap(candidate.reasoningParamsMap);
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(vision !== undefined ? { vision } : {}),
+    ...(input ? { input } : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(reasoningLevels ? { reasoningLevels } : {}),
+    ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
+  };
+}
+
+/** 输入类型白名单校验（写入侧严格）：非数组/非法项直接抛错——UI 保存
+ *  路径的输入必须可信；读路径的宽容解析在 auth.ts。 */
+function normalizeModelInputs(value: unknown): CustomProviderModelInput[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('input must be an array');
+  const out: CustomProviderModelInput[] = ['text'];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid input type');
+    const token = raw.trim().toLowerCase() as CustomProviderModelInput;
+    if (!CUSTOM_PROVIDER_MODEL_INPUTS.includes(token)) throw new Error(`invalid input type: ${raw}`);
+    if (!out.includes(token)) out.push(token);
+  }
+  return out;
+}
+
+function normalizeModelCapabilities(value: unknown): CustomProviderModelCapability[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('capabilities must be an array');
+  const out: CustomProviderModelCapability[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid capability');
+    const token = raw.trim().toLowerCase() as CustomProviderModelCapability;
+    if (!CUSTOM_PROVIDER_MODEL_CAPABILITIES.includes(token)) throw new Error(`invalid capability: ${raw}`);
+    if (!out.includes(token)) out.push(token);
+  }
+  return out.length ? out : undefined;
+}
+
+function normalizeReasoningLevels(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error('reasoningLevels must be an array');
+  if (value.length > MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS) {
+    throw new Error(`reasoningLevels must contain at most ${MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS} items`);
+  }
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') throw new Error('invalid reasoning level');
+    const token = raw.replace(/\s+/g, ' ').trim();
+    if (!token) throw new Error('reasoning level required');
+    if (token.length > MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH) {
+      throw new Error(`reasoning level must be at most ${MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH} characters`);
+    }
+    if (!out.includes(token)) out.push(token);
+  }
+  return out.length ? out : undefined;
+}
+
+function normalizeReasoningParamsMap(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('reasoningParamsMap must be an object');
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS) {
+    throw new Error(`reasoningParamsMap must contain at most ${MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS} keys`);
+  }
+  if (!entries.length) return undefined;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error('reasoningParamsMap must be JSON-serializable');
+  }
+  if (serialized.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH) {
+    throw new Error(`reasoningParamsMap must be at most ${MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH} characters`);
+  }
+  return Object.fromEntries(entries);
 }
 
 function normalizeModels(models: unknown): CustomProviderModel[] {

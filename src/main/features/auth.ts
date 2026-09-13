@@ -266,13 +266,43 @@ export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
 export const MAX_CUSTOM_PROVIDER_MODELS = 100;
 export const MAX_CUSTOM_PROVIDER_MODEL_ID_LENGTH = 200;
 
+/** 输入类型（2026-09-13 统一模型配置表单）：与「输入类型」多选一一对应。
+ *  text 恒支持（表单里锁定勾选）；image 驱动 vision（供 pi-ai 的
+ *  model.input 与视觉降级链消费）；video/pdf 现在只落库声明——引擎侧
+ *  视频为展示-only、PDF 走抽取路径，不做注入。 */
+export type CustomProviderModelInput = 'text' | 'image' | 'video' | 'pdf';
+
+/** 模型能力（2026-09-13）：结构化输出 / 原生联网搜索 / 对话中系统消息。
+ *  落库声明 + 供构造 Model 时映射 compat 开关（developer role / strict
+ *  mode）；原生联网搜索按 api 注入（openai-responses），声明留档。 */
+export type CustomProviderModelCapability = 'structured_output' | 'native_web_search' | 'system_message';
+
+export const CUSTOM_PROVIDER_MODEL_INPUTS: readonly CustomProviderModelInput[] = ['text', 'image', 'video', 'pdf'];
+export const CUSTOM_PROVIDER_MODEL_CAPABILITIES: readonly CustomProviderModelCapability[] = [
+  'structured_output', 'native_web_search', 'system_message',
+];
+export const MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS = 8;
+export const MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH = 40;
+export const MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS = 16;
+export const MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH = 4_000;
+
 export interface CustomProviderModel {
   id: string;
   contextWindow: number;
   maxTokens: number;
   /** Accepts image inputs. undefined = unknown (no guessed default — the
-   *  conservative consumers pass images through when unknown). */
+   *  conservative consumers pass images through when unknown).
+   *  显式声明 input 时由 input 派生（含 image ⇔ true），保持单一口径。 */
   vision?: boolean;
+  /** 输入类型多选（缺省 = 未声明，行为与旧数据一致）。 */
+  input?: CustomProviderModelInput[];
+  /** 模型能力多选（缺省 = 未声明）。 */
+  capabilities?: CustomProviderModelCapability[];
+  /** 推理等级（从低到高，如 ['low','medium','high']）。落库声明；
+   *  档位下传链的消费接线留待后续（现状档位由全局/每任务配置驱动）。 */
+  reasoningLevels?: string[];
+  /** 推理参数映射（档位名 → 请求参数对象）。落库声明 + 可解析校验。 */
+  reasoningParamsMap?: Record<string, unknown>;
 }
 
 export interface CustomProvider {
@@ -621,15 +651,77 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
     );
     // vision 只收显式 boolean（probe/用户口径）；未知保持未知，不猜。
     const rawVision = (metadata as { vision?: unknown }).vision;
+    // 新表单字段（2026-09-13）：读时宽容——非法/超限值静默丢弃，不阻断
+    // 老数据加载（与 vision 同风格）。
+    const input = parseCustomProviderModelInputs((metadata as { input?: unknown }).input);
+    const capabilities = parseCustomProviderModelCapabilities((metadata as { capabilities?: unknown }).capabilities);
+    const reasoningLevels = parseCustomProviderReasoningLevels((metadata as { reasoningLevels?: unknown }).reasoningLevels);
+    const reasoningParamsMap = parseCustomProviderReasoningMap((metadata as { reasoningParamsMap?: unknown }).reasoningParamsMap);
     models.push({
       id,
       contextWindow,
       maxTokens,
       ...(typeof rawVision === 'boolean' ? { vision: rawVision } : {}),
+      ...(input ? { input } : {}),
+      ...(capabilities ? { capabilities } : {}),
+      ...(reasoningLevels ? { reasoningLevels } : {}),
+      ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
     });
     if (models.length >= MAX_CUSTOM_PROVIDER_MODELS) break;
   }
   return models;
+}
+
+/** 宽容解析：合法子集（白名单/去重/上限），空或全非法返回 undefined。 */
+function parseCustomProviderModelInputs(value: unknown): CustomProviderModelInput[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: CustomProviderModelInput[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.trim().toLowerCase() as CustomProviderModelInput;
+    if (!CUSTOM_PROVIDER_MODEL_INPUTS.includes(token) || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= CUSTOM_PROVIDER_MODEL_INPUTS.length) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function parseCustomProviderModelCapabilities(value: unknown): CustomProviderModelCapability[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: CustomProviderModelCapability[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.trim().toLowerCase() as CustomProviderModelCapability;
+    if (!CUSTOM_PROVIDER_MODEL_CAPABILITIES.includes(token) || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= CUSTOM_PROVIDER_MODEL_CAPABILITIES.length) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function parseCustomProviderReasoningLevels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const token = raw.replace(/\s+/g, ' ').trim();
+    if (!token || token.length > MAX_CUSTOM_PROVIDER_REASONING_LEVEL_LENGTH || out.includes(token)) continue;
+    out.push(token);
+    if (out.length >= MAX_CUSTOM_PROVIDER_MODEL_REASONING_LEVELS) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function parseCustomProviderReasoningMap(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length || entries.length > MAX_CUSTOM_PROVIDER_REASONING_MAP_KEYS) return undefined;
+  try {
+    if (JSON.stringify(value).length > MAX_CUSTOM_PROVIDER_REASONING_MAP_LENGTH) return undefined;
+  } catch {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
 }
 
 function migrateCustomProviderModelsFromEntries(

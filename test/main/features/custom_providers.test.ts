@@ -70,6 +70,59 @@ describe('custom providers', () => {
     const raw = fs.readFileSync(paths.userAuthProfilesFile(UID), 'utf8');
     expect(raw).not.toContain('sk-secret-value');
     expect(raw.trim().startsWith('{')).toBe(false);
+
+    // 统一模型配置表单字段（2026-09-13）：input / capabilities / reasoning*
+    // 落库；vision 由 input 派生；**未声明 input 时 vision 保持未知**——
+    // 模型草稿行等旧调用方不会被误标成「明确不支持图片」。
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'vision-model', contextWindow: 262144, maxTokens: 32768,
+      input: ['image', 'pdf', 'video'],
+      capabilities: ['structured_output', 'system_message', 'structured_output'],
+      reasoningLevels: ['low', 'medium', 'high'],
+      reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+    })).toEqual({
+      ok: true,
+      model: {
+        id: 'vision-model', contextWindow: 262144, maxTokens: 32768,
+        vision: true,
+        input: ['text', 'image', 'pdf', 'video'],
+        capabilities: ['structured_output', 'system_message'],
+        reasoningLevels: ['low', 'medium', 'high'],
+        reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+      },
+    });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'text-only-model', contextWindow: 131072, maxTokens: 8192, input: ['text'],
+    })).toEqual({
+      ok: true,
+      model: { id: 'text-only-model', contextWindow: 131072, maxTokens: 8192, vision: false, input: ['text'] },
+    });
+    const legacyModel = providers.addCustomProviderModel(UID, result.id, {
+      id: 'legacy-model', contextWindow: 131072, maxTokens: 8192,
+    });
+    expect(legacyModel).toMatchObject({ ok: true });
+    if (legacyModel.ok) {
+      expect(legacyModel.model).not.toHaveProperty('input');
+      expect(legacyModel.model.vision).toBeUndefined();
+    }
+
+    // 写入侧严格校验：非法枚举 / 超限 / 非对象映射一律拒绝。
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-input', contextWindow: 131072, maxTokens: 8192, input: ['audio'],
+    })).toEqual({ ok: false, error: 'invalid input type: audio' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-capability', contextWindow: 131072, maxTokens: 8192, capabilities: ['telepathy'],
+    })).toEqual({ ok: false, error: 'invalid capability: telepathy' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-level-long', contextWindow: 131072, maxTokens: 8192, reasoningLevels: ['x'.repeat(41)],
+    })).toEqual({ ok: false, error: 'reasoning level must be at most 40 characters' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-levels-max', contextWindow: 131072, maxTokens: 8192,
+      reasoningLevels: Array.from({ length: 9 }, (_, i) => `l${i}`),
+    })).toEqual({ ok: false, error: 'reasoningLevels must contain at most 8 items' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-map', contextWindow: 131072, maxTokens: 8192, reasoningParamsMap: 'oops',
+    })).toEqual({ ok: false, error: 'reasoningParamsMap must be an object' });
   });
 
   it('normalizes legacy string models and missing enabled state on read', async () => {
