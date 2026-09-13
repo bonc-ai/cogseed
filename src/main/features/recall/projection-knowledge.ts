@@ -95,6 +95,21 @@ async function loadOntologyFacts(
     .map(({ fact }) => fact);
 }
 
+/** 画像条目标题：≤80 字原样；超长在句读边界截断加省略号，不再半句断头
+ *  （T1.4：原 slice(0,80) 会把标题切成"……技术口径处理，而不是按终端用户提"
+ *  这种断头话，注入块/检索结果里的人读体验都受影响）。 */
+function ontologyTitle(statement: string): string {
+  if (statement.length <= 80) return statement;
+  const head = statement.slice(0, 80);
+  let cut = -1;
+  for (const mark of ['。', '；', '，', '、', '；', ' ', ',', ';']) {
+    cut = Math.max(cut, head.lastIndexOf(mark));
+  }
+  // 边界太靠前（前 40 字内无断点）时保长度优先，硬切。
+  const base = cut >= 40 ? head.slice(0, cut + 1) : head;
+  return `${base}…`;
+}
+
 function ontologyAssetFromEntry(
   text: string,
   source: 'user_profile' | 'shared_memory',
@@ -105,7 +120,7 @@ function ontologyAssetFromEntry(
   return {
     id: `onto-${contentKey.slice(0, 24)}`,
     version: '1',
-    title: statement.slice(0, 80) || 'Personal ontology',
+    title: ontologyTitle(statement) || 'Personal ontology',
     type: 'personal',
     statement,
     scope: 'general',
