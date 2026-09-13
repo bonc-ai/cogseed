@@ -119,7 +119,11 @@ function ontologyAssetFromEntry(
   };
 }
 
-function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
+/** USER.md / MEMORY.md → 虚拟画像资产（onto-<sha256 前 24 位>）。
+ *  导出供检索侧复用（search_ability_assets 把画像纳入检索池并标来源）；
+ *  条目不落盘、不进投影授权链——只作为背景通道存在（见 prompt-injection
+ *  的 <durable-profile-memory> 独立块）。 */
+export function loadOntologyAssets(userId: string): WorldModelAbilityAsset[] {
   const assets: WorldModelAbilityAsset[] = [];
   const sources = [
     { file: userProfileFile(userId), name: 'user_profile' as const },
