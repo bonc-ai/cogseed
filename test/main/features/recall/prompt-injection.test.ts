@@ -356,6 +356,90 @@ describe('confirmed Recall projection prompt injection', () => {
       .toEqual(records.map((record) => record.asset_id));
   });
 
+  describe('profile memory channel（2026-09-13 通道显式化）', () => {
+    async function writeProfileMemory() {
+      const paths = await import('../../../../src/main/paths');
+      const file = paths.userProfileFile('user-a');
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, '用户是该程序的开发人员，技术问题按内部排查处理。\n§\n回答时默认使用中文。', 'utf8');
+    }
+
+    it('committed 注入把画像条目放独立块：channel 标记、不携带 projection_id、不进 citations', async () => {
+      await writeProfileMemory();
+      const promoted = await createAssetWith({
+        judgment: 'Review OAuth callback and token exchange security.',
+        summary: 'OAuth review workflow',
+        sourceId: 'conversation-profile-channel',
+      });
+      const { projection, promptInjection } = await modules();
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-profile-channel',
+        purpose: 'global',
+        taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+      const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-profile-channel',
+        taskRunId: 'turn-profile-channel',
+        taskText: 'Audit OAuth callback handling',
+        committedProjectionId: confirmed.id,
+      });
+
+      // 双块并存：正式资产块（投影授权）+ 画像背景块（独立免责文案）。
+      expect(result.promptBlock).toContain('<confirmed-ability-assets>');
+      expect(result.promptBlock).toContain(promoted.asset.id);
+      expect(result.promptBlock).toContain('<durable-profile-memory>');
+      expect(result.promptBlock).toContain('not sufficient grounds for decisions');
+      expect(result.promptBlock).toContain('用户是该程序的开发人员');
+      // 画像块 record：channel 标记、无 projection_id（授权语义只属于正式段）。
+      const profileBlock = result.profileMemoryBlock ?? '';
+      expect(profileBlock).not.toBe('');
+      const profilePayload = profileBlock
+        .slice(profileBlock.indexOf('\n', profileBlock.indexOf('Background facts')) + 1)
+        .replace(/\n<\/durable-profile-memory>$/, '');
+      const profileRecords = JSON.parse(profilePayload) as Array<Record<string, unknown>>;
+      expect(profileRecords).toHaveLength(2);
+      for (const record of profileRecords) {
+        expect(record.channel).toBe('profile_memory');
+        expect(record.projection_id).toBeUndefined();
+        expect(String(record.asset_id)).toMatch(/^onto-/);
+      }
+      // citations 只含正式资产；画像注入清单供收据侧落账。
+      expect(result.citations.map((citation) => citation.assetId)).toEqual([promoted.asset.id]);
+      expect(result.profileMemoryEntries).toHaveLength(2);
+      expect(result.profileMemoryEntries!.every((entry) => entry.source === 'user_profile')).toBe(true);
+      expect(result.profileMemoryEntries!.every((entry) => /^onto-/.test(entry.id))).toBe(true);
+    });
+
+    it('无 durable memory 时不产生画像块，返回结构不携带画像字段', async () => {
+      const promoted = await createAssetWith({
+        judgment: 'Review OAuth callback and token exchange security.',
+        summary: 'OAuth review workflow',
+        sourceId: 'conversation-no-profile',
+      });
+      const { projection, promptInjection } = await modules();
+      const preview = await projection.previewContextProjection('user-a', {
+        taskRunId: 'task-no-profile',
+        purpose: 'global',
+        taskText: 'Audit OAuth callback handling',
+      }, fakeSemanticOptions);
+      const confirmed = await projection.confirmContextProjection('user-a', preview.id);
+
+      const result = await promptInjection.buildRecallTurnPromptContext('user-a', {
+        cid: 'cid-no-profile',
+        taskRunId: 'turn-no-profile',
+        taskText: 'Audit OAuth callback handling',
+        committedProjectionId: confirmed.id,
+      });
+
+      expect(result.promptBlock).toContain(promoted.asset.id);
+      expect(result.promptBlock).not.toContain('<durable-profile-memory>');
+      expect(result.profileMemoryBlock).toBeUndefined();
+      expect(result.profileMemoryEntries).toBeUndefined();
+    });
+  });
+
   describe('Commander-dispatched assets (agent grant)', () => {
     it('renders only the granted active assets with the dispatched block', async () => {
       const { assets, promptInjection } = await modules();

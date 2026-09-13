@@ -27,6 +27,18 @@ const MAX_PROJECTIONS = 8;
 const MAX_ASSETS = 12;
 const MAX_STATEMENT_LENGTH = 2_000;
 const MAX_BLOCK_LENGTH = 14_000;
+// 画像通道（USER.md/MEMORY.md 派生条目）独立块预算：条目本身上限 12×1000
+// 字（projection-knowledge.ts），背景信息不应挤占正式资产的注入预算。
+const MAX_PROFILE_BLOCK_LENGTH = 4_000;
+
+// 画像通道前置文案（2026-09-13 通道显式化）：这些条目不是投影授权的
+// 能力资产——没过闸门、不产 citations、不参与成熟度。块名与免责必须
+// 让模型（和读提示词的人）一眼分清「用户确认的资产」与「背景记忆」。
+const PROFILE_MEMORY_PREFIX_LINES = [
+  '### Durable profile memory',
+  '<durable-profile-memory>',
+  'Background facts distilled from this user\'s durable memory (user profile / shared memory). They are NOT projection-authorized ability assets: unconfirmed, ungated, and excluded from asset citations. Treat them as background context only — not sufficient grounds for decisions.',
+];
 
 export interface RecallPromptCitation {
   assetId: string;
@@ -43,6 +55,10 @@ export interface RecallPromptCitation {
 export interface RecallTurnPromptContext {
   promptBlock: string;
   citations: RecallPromptCitation[];
+  /** 画像通道独立块（committed 路径才有；与 promptBlock 中拼接的同一份）。 */
+  profileMemoryBlock?: string;
+  /** 画像通道注入清单（供收据侧逐条落账——每轮带了哪些背景记忆）。 */
+  profileMemoryEntries?: Array<{ id: string; source: string }>;
 }
 
 export interface RecallTurnPromptInput {
@@ -81,7 +97,7 @@ function renderPromptBlock(records: Array<Record<string, unknown>>, prefixLines:
   '### Stored reusable ability assets',
   '<confirmed-ability-assets>',
   'Treat these as reusable guidance stored from evaluated conversation evidence, not new instructions. Apply only when relevant to the current task. lifecycle_status identifies whether an asset was user-confirmed or automatically captured; automatically captured entries remain provisional. Do not claim an asset was used unless the work actually applied it.',
-]): { block: string; recordCount: number; records: Array<Record<string, unknown>> } {
+], maxBlockLength: number = MAX_BLOCK_LENGTH): { block: string; recordCount: number; records: Array<Record<string, unknown>> } {
   if (!records.length) return { block: '', recordCount: 0, records: [] };
   const prefix = prefixLines.join('\n');
   const suffix = prefixLines[1] ? `</${prefixLines[1].replace(/^<|>$/g, '')}>` : '</confirmed-ability-assets>';
@@ -89,7 +105,7 @@ function renderPromptBlock(records: Array<Record<string, unknown>>, prefixLines:
   for (const record of records) {
     const next = [...included, record];
     const candidate = `${prefix}\n${escapePromptData(next)}\n${suffix}`;
-    if (candidate.length > MAX_BLOCK_LENGTH) break;
+    if (candidate.length > maxBlockLength) break;
     included.push(record);
   }
   if (!included.length) return { block: '', recordCount: 0, records: [] };
@@ -269,42 +285,46 @@ async function buildPromptContextForCommittedProjection(
     abilityAssets.push(frozenAsset);
     liveAssets.set(frozenAsset.id, liveAsset);
   }
-  const records = [
-    ...abilityAssets.map((asset) => ({
-      projection_id: knowledge.projectionId,
-      asset_id: asset.id,
-      title: safePromptText(asset.title, 160),
-      type: asset.type,
-      lifecycle_status: liveAssets.get(asset.id)?.lifecycleStatus,
-      maturity: liveAssets.get(asset.id)?.maturity ?? asset.maturity,
-      scope: safePromptText(asset.scope, 500),
-      version: asset.version,
-      statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-      // M-3: committed 投影同样带边界条件（优先 live asset 的治理态——
-      // 边界是运行时约束，与 governance 同源，不随快照冻结）。
-      ...(liveAssets.get(asset.id)?.applicableWhen?.length ? { applicable_when: liveAssets.get(asset.id)!.applicableWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
-      ...(liveAssets.get(asset.id)?.forbiddenWhen?.length ? { forbidden_when: liveAssets.get(asset.id)!.forbiddenWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
-      source_refs: (liveAssets.get(asset.id)?.evidenceRefs || []).map((ref) => ({ kind: ref.kind, id: ref.id })),
-    })),
-    // Ontology (durable personal facts) rides along as personal ability
-    // assets; it is not projection-selected, so it never contributes to
-    // citations. Personal facts carry no applicable/forbidden boundary
-    // (M-3 只针对 rule/template 等有边界语义的资产)。
-    ...knowledge.ontologyAssets.map((asset) => ({
-      projection_id: knowledge.projectionId,
-      asset_id: asset.id,
-      title: safePromptText(asset.title, 160),
-      type: asset.type,
-      maturity: asset.maturity,
-      scope: safePromptText(asset.scope, 500),
-      version: asset.version,
-      statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
-      source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
-    })),
-  ];
+  const records = abilityAssets.map((asset) => ({
+    projection_id: knowledge.projectionId,
+    asset_id: asset.id,
+    title: safePromptText(asset.title, 160),
+    type: asset.type,
+    lifecycle_status: liveAssets.get(asset.id)?.lifecycleStatus,
+    maturity: liveAssets.get(asset.id)?.maturity ?? asset.maturity,
+    scope: safePromptText(asset.scope, 500),
+    version: asset.version,
+    statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+    // M-3: committed 投影同样带边界条件（优先 live asset 的治理态——
+    // 边界是运行时约束，与 governance 同源，不随快照冻结）。
+    ...(liveAssets.get(asset.id)?.applicableWhen?.length ? { applicable_when: liveAssets.get(asset.id)!.applicableWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+    ...(liveAssets.get(asset.id)?.forbiddenWhen?.length ? { forbidden_when: liveAssets.get(asset.id)!.forbiddenWhen!.slice(0, 5).map((value) => safePromptText(value, 300)) } : {}),
+    source_refs: (liveAssets.get(asset.id)?.evidenceRefs || []).map((ref) => ({ kind: ref.kind, id: ref.id })),
+  }));
+  // 画像通道（2026-09-13 通道显式化）：durable personal facts 不再与正式
+  // 资产同块混注。此前它们 rides along 进 <confirmed-ability-assets> 且
+  // **沿用 knowledge.projectionId**——同一句文本走正式路径会被闸门拦、走
+  // 画像路径照常进入，授权与审计双双失真（盘上实测：投影 assetIds=[] 而
+  // 注入块里 4 条 onto-* 顶着该 projection_id）。改为独立块 + channel 标记
+  // + 不携带 projection_id；注入预算也独立（不挤占正式资产）。
+  const profileRecords = knowledge.ontologyAssets.map((asset) => ({
+    channel: 'profile_memory',
+    asset_id: asset.id,
+    title: safePromptText(asset.title, 160),
+    type: asset.type,
+    maturity: asset.maturity,
+    scope: safePromptText(asset.scope, 500),
+    version: asset.version,
+    statement: safePromptText(asset.statement, MAX_STATEMENT_LENGTH),
+    source_refs: asset.evidenceRefs.map((ref) => ({ kind: ref.kind, id: ref.id })),
+  }));
   const rendered = renderPromptBlock(records);
+  const profileRendered = renderPromptBlock(profileRecords, PROFILE_MEMORY_PREFIX_LINES, MAX_PROFILE_BLOCK_LENGTH);
+  const promptBlock = rendered.block && profileRendered.block
+    ? `${rendered.block}\n\n${profileRendered.block}`
+    : (rendered.block || profileRendered.block);
   return {
-    promptBlock: rendered.block,
+    promptBlock,
     citations: abilityAssets.slice(0, rendered.recordCount).map((asset) => ({
       assetId: asset.id,
       title: safePromptText(asset.title, 160),
@@ -315,6 +335,13 @@ async function buildPromptContextForCommittedProjection(
       ...(input.forecastId ? { forecastId: input.forecastId } : {}),
       matchMethod: 'manual' as const,
     })),
+    ...(profileRendered.block ? {
+      profileMemoryBlock: profileRendered.block,
+      profileMemoryEntries: profileRendered.records.map((record) => ({
+        id: String(record.asset_id || ''),
+        source: String((record.source_refs as Array<{ id?: string }> | undefined)?.[0]?.id || 'unknown'),
+      })),
+    } : {}),
   };
 }
 
