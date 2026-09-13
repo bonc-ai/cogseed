@@ -742,6 +742,66 @@ export async function migrateLegacyUserFacingTitles(userId: string): Promise<num
   return migrated;
 }
 
+/** 一次性幂等迁移（A 轨道 · 2026-09-13 scope 枚举化）：存量自由文本 scope
+ *  （"用户全局画像"、"该用户的身份与沟通定位…"）能安全归一词表的改写为
+ *  词表值——否则它们在自动投影里永远匹配不上任务词（context-projection
+ *  scopeAppliesToPurpose），用户确认过的资产在正式通道全部失配（实机：
+ *  proj-a3ae7e6a3646 两条身份资产 omittedRefs=scope_mismatch）。
+ *
+ *  只改写 normalizeAssetScopeValue 能归一的；词表值原样跳过（幂等）。
+ *  被未过期 confirmed 投影引用的资产跳过——scope 变更走版本递增，会令
+ *  投影冻结的版本号失配（projection_asset_version_changed），等投影自然
+ *  过期/重确认后再迁移。 */
+export async function migrateLegacyFreeTextScopes(userId: string): Promise<number> {
+  const { normalizeAssetScopeValue, isRecallScopeTerm } = await import('./scope-policy');
+  const { listContextProjections } = await import('./context-projection');
+  const frozenAssetIds = new Set<string>();
+  try {
+    for (const projection of await listContextProjections(userId)) {
+      if (projection.status !== 'confirmed') continue;
+      if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
+      for (const assetId of projection.assetIds || []) frozenAssetIds.add(assetId);
+    }
+  } catch (err) {
+    log.warn(`ability asset scope migration: projection scan failed, proceeding without freeze guard: ${(err as Error).message}`);
+  }
+  let migrated = 0;
+  for (const asset of await listAbilityAssets(userId)) {
+    if (asset.status === 'revoked' || asset.status === 'purged') continue;
+    const scope = String(asset.scope || '');
+    if (isRecallScopeTerm(scope)) continue;
+    const normalized = normalizeAssetScopeValue(scope);
+    if (!normalized || normalized === scope.toLowerCase()) continue;
+    if (frozenAssetIds.has(asset.id)) continue;
+    try {
+      await updateRecallJsonRecord(userId, 'ability-assets', asset.id, (raw) => {
+        if (!raw) throw new Error('recall ability asset not found');
+        const current = asAsset(raw);
+        current.scope = normalized;
+        current.version = nextVersion(current.version);
+        current.updatedAt = new Date().toISOString();
+        return current;
+      });
+      const migratedAsset = await readAbilityAsset(userId, asset.id);
+      if (migratedAsset) {
+        await appendVersion(userId, migratedAsset, {
+          reason: `legacy free-text scope "${scope}" → controlled term "${normalized}" (2026-09-13 scope enumeration)`,
+          actor: 'system',
+        });
+        await appendAudit(userId, asset.id, 'updated', {
+          note: `legacy free-text scope "${scope}" → controlled term "${normalized}"`,
+          actor: 'system',
+        });
+      }
+      migrated += 1;
+    } catch (err) {
+      log.warn(`ability asset scope migration skipped id=${asset.id}: ${(err as Error).message}`);
+    }
+  }
+  if (migrated) log.info(`ability asset legacy scopes migrated count=${migrated}`);
+  return migrated;
+}
+
 export async function setAbilityAssetCrossScopeConfirmation(
   userId: string,
   assetId: string,

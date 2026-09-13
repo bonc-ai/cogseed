@@ -611,3 +611,38 @@ describe('治理动作', () => {
       .rejects.toThrow('already at that version');
   });
 });
+
+describe('存量自由文本 scope 迁移（A 轨道 2026-09-13）', () => {
+  async function seedWithScope(uid: string, scope: string) {
+    const { candidates, assets } = await modules();
+    const candidate = await candidates.saveRecallCandidate(uid, {
+      judgment: 'Keep architecture decisions in a decision log.',
+      suggestedType: 'rule', ...RULE_BOUNDARY, suggestedScope: scope,
+      sourceRefs: [{ kind: 'execution', id: 'exec-scope-mig' }],
+    });
+    const asset = (await candidates.promoteRecallCandidate(uid, candidate.id, { actor: 'user' })).asset;
+    return { assets, asset };
+  }
+
+  it('可归一的自由文本 scope 改写为词表值并递增版本；词表值幂等跳过；不可归一的保留', async () => {
+    const { assets, asset } = await seedWithScope('user-scope-mig', '用户全局画像');
+    expect(asset.scope).toBe('用户全局画像');
+
+    const first = await assets.migrateLegacyFreeTextScopes('user-scope-mig');
+    expect(first).toBe(1);
+    const migrated = await assets.readAbilityAsset('user-scope-mig', asset.id);
+    expect(migrated.scope).toBe('general');
+    expect(migrated.version).toBe('2');
+    // 版本快照与审计留痕（迁移走与 updateAbilityAsset 同一机制）。
+    expect((await assets.listAbilityAssetVersions('user-scope-mig', asset.id)).map((v) => v.version)).toEqual(['1', '2']);
+    expect((await assets.listAbilityAssetAudit('user-scope-mig', asset.id)).map((r) => r.action)).toContain('updated');
+
+    // 幂等：已是词表值，再跑空转。
+    expect(await assets.migrateLegacyFreeTextScopes('user-scope-mig')).toBe(0);
+
+    // 不可归一的自由文本保留原值（软着陆——token 软匹配兜底）。
+    const { assets: assets2, asset: asset2 } = await seedWithScope('user-scope-keep', '仅产品工作空间');
+    expect(await assets2.migrateLegacyFreeTextScopes('user-scope-keep')).toBe(0);
+    expect((await assets2.readAbilityAsset('user-scope-keep', asset2.id)).scope).toBe('仅产品工作空间');
+  });
+});

@@ -1527,6 +1527,13 @@ if (!gotLock) {
       const { migrateLegacyUserFacingTitles } = await import('./features/recall/asset-service');
       await migrateLegacyUserFacingTitles(users.getActiveUserId());
     }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
+    // A 轨道（2026-09-13 scope 枚举化）：存量自由文本 scope（"用户全局画像"）
+    // 归一为受控词表——否则自动投影永远 scope_mismatch，确认资产在正式通道
+    // 失效。幂等；被未过期 confirmed 投影引用的资产跳过。
+    registerDeferred('recall:migrate-legacy-scopes', async () => {
+      const { migrateLegacyFreeTextScopes } = await import('./features/recall/asset-service');
+      await migrateLegacyFreeTextScopes(users.getActiveUserId());
+    }, 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('boot:maintenance-sweeps', () => runBootMaintenanceSweeps(), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('search:reconcile', (signal) => searchFeature.reconcileActive(signal), 'serial', BOOT_HEAVY_DISK_DELAY_MS, idleDisk);
     registerDeferred('kb:reconcile', async (signal) => {

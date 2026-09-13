@@ -398,7 +398,8 @@
         ${field(T('cognition.judgment', '具体内容'), `<textarea class="ca-input ca-textarea" data-f="judgment">${esc(candidate.judgment || '')}</textarea>`)}
         <details class="ca-advanced">
           <summary>${esc(T('cognition.candidate_advanced', '高级选项（通常不用改）'))}</summary>
-          ${field(T('cognition.candidate_scope_label', '作用范围'), `<input class="ca-input" data-f="scope" value="${esc(candidate.suggestedScope || '')}" placeholder="${esc(T('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}">`)}
+          ${field(T('cognition.candidate_scope_label', '作用范围'), `<input class="ca-input" data-f="scope" list="ca-scope-terms" value="${esc(candidate.suggestedScope || '')}" placeholder="${esc(T('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}"><datalist id="ca-scope-terms"><option value="general"></option><option value="report"></option><option value="code"></option><option value="review"></option><option value="product"></option></datalist>`)}
+          <div class="ca-note">${esc(T('cognition.candidate_scope_hint', '建议用受控词：general=跨对话通用；report/code/review/product=任务类型。自由文本在自动投影中可能匹配不上任务。'))}</div>
           ${field(T('cognition.summary', '摘要'), `<input class="ca-input" data-f="summary" value="${esc(candidate.summary || '')}">`)}
         </details>
         <div class="ca-detail-foot">
