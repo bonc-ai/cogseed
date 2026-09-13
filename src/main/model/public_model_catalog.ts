@@ -70,12 +70,14 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     // 避免界面在 1048576/1000000 间跳变。
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1000000, maxTokens: 384000 },
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 384000 },
+    // 视觉口径 2026-09-13（产品负责人确认）：V4.1 系多模态（图片输入），登记
+    // vision——自定义供应商的运行时判定链据此兜底。
     // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与 v4-flash-
     // vision-exp 共用 1M 窗口；v4.1 是 V4 的迭代版本（用户实际配置的 id
     // 形态 `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1000000, maxTokens: 384000, vision: true },
-    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000 },
-    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000 },
+    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000, vision: true },
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000, vision: true },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },

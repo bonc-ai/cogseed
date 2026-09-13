@@ -38,7 +38,7 @@ describe('custom provider runtime', () => {
     const model = runtime.buildCustomProviderModel(record!, 'model-x');
     expect(model).toMatchObject({
       id: 'model-x', api, provider: `cp:${added.id}`, baseUrl: `https://${protocol}.example/v1`,
-      contextWindow: 131072, maxTokens: 8192,
+      contextWindow: 1000000, maxTokens: 384000,
     });
   });
 
@@ -68,7 +68,40 @@ describe('custom provider runtime', () => {
       contextWindow: 1048576, maxTokens: 65536,
     });
     expect(runtime.buildCustomProviderModel(record, 'unknown-model')).toMatchObject({
-      contextWindow: 131072, maxTokens: 8192,
+      contextWindow: 1000000, maxTokens: 384000,
     });
+  });
+
+  it('drives input/reasoning/compat from stored model config (2026-09-13)', async () => {
+    const providers = await import('../../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Config-driven relay',
+      protocol: 'openai',
+      baseUrl: 'https://config-driven.example/v1',
+      apiKey: 'secret',
+      models: [{
+        id: 'my-multimodal-model',
+        input: ['text', 'image'],
+        reasoningLevels: ['low', 'high'],
+        capabilities: ['system_message', 'structured_output'],
+      }],
+    });
+    if (!added.ok) throw new Error(added.error);
+    const record = providers.listCustomProviders(UID)[0];
+    const runtime = await import('../../../../src/main/model/core-agent/custom_provider_runtime');
+
+    // 配置驱动：勾了图片 → input 含 image；声明了推理等级 → reasoning
+    // 开启（识别器无输入也生效）；能力 → compat 开关。
+    const model = runtime.buildCustomProviderModel(record, 'my-multimodal-model');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.reasoning).toBe(true);
+    expect(model.compat).toMatchObject({ supportsDeveloperRole: true, supportsStrictMode: true });
+
+    // 未配置的模型（同 provider）：input 纯文本、reasoning 关闭（识别器
+    // 不出就绝不盲发）、无 compat 覆盖。
+    const plain = runtime.buildCustomProviderModel(record, 'plain-model');
+    expect(plain.input).toEqual(['text']);
+    expect(plain.reasoning).toBe(false);
+    expect(plain.compat).toBeUndefined();
   });
 });

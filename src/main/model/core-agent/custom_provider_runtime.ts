@@ -32,6 +32,7 @@ import type { LLMProvider } from '#core-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
 import { listCustomProviders } from '../../features/custom_providers';
 import type { CustomProvider } from '../../features/auth';
+import { publicModelAbilitiesFor } from '../../model/public_model_catalog';
 
 type CA = typeof import('#core-agent');
 let _caPromise: Promise<CA> | null = null;
@@ -44,11 +45,11 @@ const CUSTOM_PROVIDER_PREFIX = 'cp:';
 
 /** Default context window / max output tokens for a hand-built custom model.
  *  We can't know the real limits of an arbitrary third-party endpoint, so we
- *  pick conservative, widely-safe values. 131072 context is the same lower
- *  bound external-providers.ts uses for unknown ids; 8192 output avoids 400s
- *  on relays that cap low. Users can refine per-model later if needed. */
-const DEFAULT_CONTEXT_WINDOW = 131072;
-const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+ *  reference the unified product defaults (2026-09-13 十进制口径 1M / 384K，
+ *  与 auth.ts 的 DEFAULT_CUSTOM_PROVIDER_* 同源同值)。Users can refine
+ *  per-model later if needed. */
+const DEFAULT_CONTEXT_WINDOW = 1000000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 384000;
 
 /** True when a provider id addresses a custom provider (synthetic `cp:` id). */
 export function isCustomProviderId(providerId: string): boolean {
@@ -117,6 +118,23 @@ export function buildCustomProviderModel(
   const api = apiForProtocol(cp.protocol);
   const metadata = buildCustomProviderModelMeta(cp, modelId);
   const headers = customProviderHeaders(cp.baseUrl, cp.id);
+  // 配置 → 调用映射（2026-09-13 全面对齐，子安口径"配置驱动调用"）：
+  //   input（输入类型）   配置勾选 > 目录登记 > 识别器，图片直传模型
+  //   reasoning（推理）   配置声明了推理等级 > 识别器——没配等级的模型
+  //                      不带 reasoning_effort（选了档位也不会盲发参数）
+  //   capabilities        system_message → compat.supportsDeveloperRole、
+  //                      structured_output → compat.supportsStrictMode；
+  //                      native_web_search 按 api 注入（openai-responses），
+  //                      openai-completions 通道声明留档不生效
+  //   reasoningParamsMap  高级参数映射：落库+校验+展示；运行时注入接线
+  //                      留待后续（pi-ai 的 thinkingLevel 已覆盖常规档位）
+  const stored = cp.models.find((candidate) => candidate.id === modelId);
+  const acceptsImage = (Array.isArray(stored?.input) && stored!.input!.includes('image'))
+    || publicModelAbilitiesFor(modelId).vision === true
+    || recognition?.vision === true;
+  const declaredReasoning = (Array.isArray(stored?.reasoningLevels) && stored!.reasoningLevels!.length > 0)
+    || (stored?.reasoningParamsMap && Object.keys(stored!.reasoningParamsMap!).length > 0);
+  const capabilities = Array.isArray(stored?.capabilities) ? stored!.capabilities! : [];
   const model: Model<Api> = {
     id: modelId,
     name: modelId,
@@ -126,12 +144,19 @@ export function buildCustomProviderModel(
     provider: customProviderId(cp.id) as any,
     baseUrl: cp.baseUrl,
     ...(headers ? { headers } : {}),
-    // 方案 C（参数真透传）：reasoning 按识别结果开启——pi-ai 对 openai
-    // 兼容端点在 model.reasoning=true 且用户选了档位时会自动带上
-    // reasoning_effort；anthropic 端点同理带 thinking。识别不出（未知
-    // 模型）保持关闭，不给不认识的服务盲发参数。
-    reasoning: recognition?.reasoning === true,
-    input: recognition?.vision === true ? ['text', 'image'] : ['text'],
+    // 方案 C（参数真透传）：reasoning 按配置声明优先（统一表单「推理等
+    // 级」），未声明回退识别器；识别不出（未知模型）保持关闭，不给不认
+    // 识的服务盲发参数。
+    reasoning: declaredReasoning === true || recognition?.reasoning === true,
+    input: acceptsImage ? ['text', 'image'] : ['text'],
+    ...(capabilities.includes('system_message') || capabilities.includes('structured_output')
+      ? {
+        compat: {
+          ...(capabilities.includes('system_message') ? { supportsDeveloperRole: true } : {}),
+          ...(capabilities.includes('structured_output') ? { supportsStrictMode: true } : {}),
+        },
+      }
+      : {}),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: metadata.contextWindow,
     maxTokens: metadata.maxTokens,

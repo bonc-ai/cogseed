@@ -234,7 +234,7 @@ export function buildDeepSeekModel(modelId: string): Model<'openai-completions'>
     // openai-completions.js `model.input.includes("image")` 门），模型
     // 只能 read_file→"visual text not available"→ocr_file，多模态输入
     // 被结构性降级为 OCR。非 vision 模型仍为 ['text']（真不支持，不盲发）。
-    input: /vision|vl/i.test(modelId) ? ['text', 'image'] : ['text'],
+    input: /vision|vl|v4\.1/i.test(modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: deepseekContextWindow(modelId),
     maxTokens: deepseekMaxOutputTokens(modelId),
