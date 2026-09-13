@@ -75,6 +75,10 @@
 /* min-height:0 必须保留：flex item 默认 min-height:auto，会拒绝收缩到内容高度以下，
    滚动条就永远不会出现。 */
 .ca-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 20px; }
+/* 绘制边界隔离：面板内容整体是 innerHTML 全量重建，重绘瞬间曾出现旧帧
+   残留（警告条与字段行视觉重叠——实测 DOM 几何无重叠，属合成残影）。
+   contain 让容器内的重绘独立提交、内容不得画出边界，降低残影概率。 */
+.ca-scroll { contain: paint; }
 
 /* ── Hero ─────────────────────────────────────────────────── */
 .ca-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
