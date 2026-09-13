@@ -57,8 +57,9 @@ describe('publicContextWindowFor', () => {
   it('resolves aggregator-prefixed ids to their home-namespace entry', () => {
     // deepseek/deepseek-v4-flash-vision-exp is stored only as
     // deepseek-v4-flash-vision-exp in the deepseek namespace — the window
-    // belongs to the model, not the reseller (2026-08-27: suban confirmed 1M).
-    expect(publicContextWindowFor('deepseek/deepseek-v4-flash-vision-exp')).toBe(1_048_576);
+    // belongs to the model, not the reseller (2026-08-27: suban confirmed 1M;
+    // 2026-09-13: decimal 1000000 caliber).
+    expect(publicContextWindowFor('deepseek/deepseek-v4-flash-vision-exp')).toBe(1000000);
   });
 
   it('returns undefined instead of guessing for unknown or windowless ids', () => {
@@ -72,19 +73,20 @@ describe('publicContextWindowFor', () => {
     // 2026-09-11 口径更新（产品负责人确认）：V4 文本系列与此前已确认 1M 的
     // v4-flash-vision-exp 共用 1M 窗口，v4.1 为同族迭代。原先本文件把
     // deepseek-v4-pro 当"有 id 无窗口"的样本，该角色改由豆包条目承担。
-    expect(publicContextWindowFor('deepseek-v4-pro')).toBe(1_048_576);
-    expect(publicContextWindowFor('deepseek-v4.1-flash')).toBe(1_048_576);
+    // 2026-09-13 起窗口/输出统一十进制口径（1M=1000000、384K=384000）。
+    expect(publicContextWindowFor('deepseek-v4-pro')).toBe(1000000);
+    expect(publicContextWindowFor('deepseek-v4.1-flash')).toBe(1000000);
     // 用户实际配置的 id 形态（自定义供应商带 vendor 前缀）解析到同一窗口。
-    expect(publicContextWindowFor('deepseek/deepseek-v4.1-flash')).toBe(1_048_576);
+    expect(publicContextWindowFor('deepseek/deepseek-v4.1-flash')).toBe(1000000);
   });
 
   it('registers the 384K output ceiling for the deepseek V4/V4.1 family (2026-09-13)', () => {
-    // 产品负责人口径：V4/V4.1 最大输出 384K，与 1M 窗口配套。此前目录只登记
-    // 窗口不登记输出，模型输出被兜到保守默认 8192（编辑页显示偏低）。
-    expect(publicModelAbilitiesFor('deepseek-v4.1-flash').maxTokens).toBe(393_216);
-    expect(publicModelAbilitiesFor('deepseek/deepseek-v4.1-flash').maxTokens).toBe(393_216);
-    expect(publicModelAbilitiesFor('deepseek-v4-flash').maxTokens).toBe(393_216);
-    expect(publicModelAbilitiesFor('deepseek-v4-flash-vision-exp').maxTokens).toBe(393_216);
+    // 产品负责人口径（十进制）：V4/V4.1 最大输出 384K，与 1M 窗口配套。此前
+    // 目录只登记窗口不登记输出，模型输出被兜到保守默认 8192（编辑页偏低）。
+    expect(publicModelAbilitiesFor('deepseek-v4.1-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek/deepseek-v4.1-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek-v4-flash').maxTokens).toBe(384000);
+    expect(publicModelAbilitiesFor('deepseek-v4-flash-vision-exp').maxTokens).toBe(384000);
     // 输出上限必须 ≤ 窗口（校验前的静态护栏）。
     const abilities = publicModelAbilitiesFor('deepseek-v4.1-flash');
     expect(abilities.maxTokens!).toBeLessThanOrEqual(abilities.contextWindow!);

@@ -65,18 +65,17 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'MiniMax-M2.7', name: 'MiniMax 2.7' },
   ],
   deepseek: [
-    // 输出上限口径（2026-09-13 产品负责人）：V4 / V4.1 系列最大输出 384K，
-    // 与 1M 窗口配套登记——此前目录只登记窗口、不登记输出，新建/归一的
-    // 模型输出被兜到保守默认 8192（实机编辑页显示 8192 的根因）。
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576, maxTokens: 393_216 },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576, maxTokens: 393_216 },
-    // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与此前已确认
-    // 1M 的 v4-flash-vision-exp 共用 1M 窗口——原先"文本版无权威数字故不标"
-    // 的保守口径作废；v4.1 是 V4 的迭代版本（用户实际配置的 id 形态
-    // `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
-    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, maxTokens: 393_216, vision: true },
-    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1_048_576, maxTokens: 393_216 },
-    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_048_576, maxTokens: 393_216 },
+    // 输出口径（2026-09-13 产品负责人，十进制）：V4 / V4.1 系列窗口 1M
+    // （1000000）、最大输出 384K（384000）——与配置默认值同一进制口径，
+    // 避免界面在 1048576/1000000 间跳变。
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1000000, maxTokens: 384000 },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 384000 },
+    // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与 v4-flash-
+    // vision-exp 共用 1M 窗口；v4.1 是 V4 的迭代版本（用户实际配置的 id
+    // 形态 `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1000000, maxTokens: 384000, vision: true },
+    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000 },
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000 },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
@@ -94,7 +93,7 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'google/gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
     { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
     { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { id: 'deepseek/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
+    { id: 'deepseek/deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1000000, vision: true },
     { id: 'moonshotai/kimi-k2.7-code', name: 'Kimi K2.7 Code' },
     { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
     { id: 'qwen/qwen3.7-max', name: 'Qwen3.7 Max' },

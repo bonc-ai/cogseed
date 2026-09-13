@@ -516,8 +516,10 @@ describe('settings model providers surface', () => {
       name: 'DeepSeek',
       protocol: 'openai',
       models: [
-        { id: 'deepseek-v4-flash', contextWindow: 131072, maxTokens: 8192 },
-        { id: 'deepseek-v4-pro', contextWindow: 131072, maxTokens: 8192 },
+        // 默认口径 2026-09-13（十进制 1M / 384K）：目录认识的模型由后端
+        // 归一解析窗口/输出，草稿只送 id。
+        { id: 'deepseek-v4-flash', contextWindow: 1000000, maxTokens: 384000 },
+        { id: 'deepseek-v4-pro', contextWindow: 1000000, maxTokens: 384000 },
       ],
     }));
   });

@@ -675,9 +675,16 @@ body.ui-modal-open { overflow: hidden; }
   border: 1.5px solid #c7ccd4;
   background: #fff;
   position: relative;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.settings-check-chip.is-checked .settings-check-chip__box { background: #111827; border-color: #111827; }
-.settings-check-chip.is-checked .settings-check-chip__box::after {
+/* 勾选态由 input:checked 伪类驱动（2026-09-13 交互失效修复）：此前外观
+   挂在静态 is-checked 类上，点击后 checkbox 状态翻转但类不更新——
+   视觉毫无反应。伪类直接跟随控件状态，点击立即生效，无 JS 同步。 */
+.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box {
+  background: #111827;
+  border-color: #111827;
+}
+.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box::after {
   content: '';
   position: absolute;
   left: 4.5px;
@@ -687,6 +694,9 @@ body.ui-modal-open { overflow: hidden; }
   border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
+}
+.settings-check-chips .settings-check-chip input:not(:checked):disabled + .settings-check-chip__box {
+  opacity: 0.55;
 }
 .settings-check-chip.is-locked { background: #f3f4f6; color: #6b7280; cursor: default; }
 .settings-check-chip__lock { display: inline-flex; color: #9ca3af; }

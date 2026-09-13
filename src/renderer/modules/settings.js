@@ -765,8 +765,10 @@ function _settingsCustomProviderProtocolLabel(protocol) {
   return key || t('settings.custom_providers.protocol_unknown');
 }
 
-const _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW = 131072;
-const _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS = 8192;
+// 模型配置默认值（2026-09-13 产品口径，十进制）：与后端
+// DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW / MAX_TOKENS 同值同口径。
+const _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW = 1000000;
+const _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS = 384000;
 const _CUSTOM_PROVIDER_MAX_MODELS = 100;
 const _CUSTOM_PROVIDER_MAX_CONTEXT_WINDOW = 16777216;
 const _CUSTOM_PROVIDER_MAX_OUTPUT_TOKENS = 1048576;
@@ -1708,8 +1710,10 @@ function _settingsRenderModelFormHtml(initial) {
     { value: 'video', label: t('settings.custom_providers.input_type_video') },
     { value: 'pdf', label: t('settings.custom_providers.input_type_pdf') },
   ].map((item) => {
+    // 勾选态只由 input 的 checked 属性承载（CSS 以 input:checked 伪类驱动，
+    // 不再拼静态 is-checked 类）——点击切换即时生效，避免双源不同步。
     const checked = initial.inputTypes.includes(item.value);
-    return `<label class="settings-check-chip${checked ? ' is-checked' : ''}${item.locked ? ' is-locked' : ''}">`
+    return `<label class="settings-check-chip${item.locked ? ' is-locked' : ''}">`
       + `<input type="checkbox" name="settings-model-form-input" value="${item.value}"${checked ? ' checked' : ''}${item.locked ? ' disabled' : ''}>`
       + `<span class="settings-check-chip__box"></span>`
       + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
@@ -1722,7 +1726,7 @@ function _settingsRenderModelFormHtml(initial) {
     { value: 'system_message', label: t('settings.custom_providers.capability_system_message') },
   ].map((item) => {
     const checked = initial.capabilities.includes(item.value);
-    return `<label class="settings-check-chip${checked ? ' is-checked' : ''}">`
+    return `<label class="settings-check-chip">`
       + `<input type="checkbox" name="settings-model-form-capability" value="${item.value}"${checked ? ' checked' : ''}>`
       + `<span class="settings-check-chip__box"></span>`
       + `<span class="settings-check-chip__label">${escapeHtml(item.label)}</span>`
@@ -1839,10 +1843,7 @@ async function _settingsSmartFillModelForm(provider, body) {
   }
   if (hit.vision === true) {
     const imageBox = body.querySelector('input[name="settings-model-form-input"][value="image"]');
-    if (imageBox && !imageBox.checked) {
-      imageBox.checked = true;
-      imageBox.closest('.settings-check-chip')?.classList.add('is-checked');
-    }
+    if (imageBox && !imageBox.checked) imageBox.checked = true;
   }
   _settingsCustomProviderModalStatus('ok', t('settings.custom_providers.smart_config_applied', { model: modelId }));
 }

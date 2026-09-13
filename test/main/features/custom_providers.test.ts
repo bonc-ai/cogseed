@@ -49,7 +49,8 @@ describe('custom providers', () => {
         apiKey: 'sk-secret-value',
         enabled: true,
         models: [
-          { id: 'model-a', contextWindow: 131072, maxTokens: 8192 },
+          // 无显式值的模型走全局默认（2026-09-13 十进制口径 1M / 384K）。
+          { id: 'model-a', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'model-b', contextWindow: 262144, maxTokens: 16384 },
         ],
         source: 'manual',
@@ -185,16 +186,16 @@ describe('custom providers', () => {
         id: 'legacy-provider',
         enabled: true,
         models: [
-          { id: 'legacy-model', contextWindow: 131072, maxTokens: 8192 },
+          { id: 'legacy-model', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'configured-model', contextWindow: 524288, maxTokens: 32768 },
-          { id: 'invalid-metadata', contextWindow: 131072, maxTokens: 8192 },
+          { id: 'invalid-metadata', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'inverted-metadata', contextWindow: 4096, maxTokens: 4096 },
           { id: 'fallback-output-too-large', contextWindow: 4096, maxTokens: 4096 },
         ],
       }),
       expect.objectContaining({
         id: 'entry-backed-provider',
-        models: [{ id: 'entry-backed-model', contextWindow: 131072, maxTokens: 8192 }],
+        models: [{ id: 'entry-backed-model', contextWindow: 1000000, maxTokens: 384000 }],
       }),
       expect.objectContaining({ id: 'overlong-provider', models: [] }),
     ]);
@@ -231,7 +232,7 @@ describe('custom providers', () => {
     })).toEqual({ ok: true });
     expect(providers.listCustomProviders(UID)[0]).toMatchObject({
       name: 'Updated', baseUrl: 'https://two.example', apiKey: 'original-key',
-      models: [{ id: 'claude-x', contextWindow: 131072, maxTokens: 8192 }],
+      models: [{ id: 'claude-x', contextWindow: 1000000, maxTokens: 384000 }],
     });
   });
 
@@ -331,7 +332,7 @@ describe('custom providers', () => {
     });
     expect((await auth.listEntries()).entries.map((entry) => entry.model)).toEqual(['model-c', 'model-a']);
     expect(providers.listCustomProviders(UID)[0].models).toEqual([
-      { id: 'model-a', contextWindow: 131072, maxTokens: 8192 },
+      { id: 'model-a', contextWindow: 1000000, maxTokens: 384000 },
       { id: 'model-c', contextWindow: 1048576, maxTokens: 65536 },
     ]);
 
@@ -411,9 +412,9 @@ describe('custom providers', () => {
     if (!result.ok) throw new Error(result.error);
     const listed = providers.listCustomProviders(UID);
     const byId = Object.fromEntries(listed[0].models.map((m) => [m.id, m]));
-    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1_048_576);
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1000000);
     expect(byId['deepseek/deepseek-v4-flash-vision-exp'].vision).toBe(true);
-    expect(byId['totally-unknown-model'].contextWindow).toBe(131_072);
+    expect(byId['totally-unknown-model'].contextWindow).toBe(1000000);
     expect(byId['totally-unknown-model'].vision).toBeUndefined();
   });
 });

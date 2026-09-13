@@ -259,8 +259,11 @@ export interface TtsProfile {
   createdAt: number;
 }
 
-export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 131072;
-export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 8192;
+// 模型配置默认值口径（2026-09-13 产品口径，十进制）：新建/未声明模型的
+// 上下文窗口默认 1M（1000000）、最大输出默认 384K（384000）。此前为
+// 保守值 131072/8192——所有配置入口统一引用本常量，避免各处默认漂移。
+export const DEFAULT_CUSTOM_PROVIDER_CONTEXT_WINDOW = 1000000;
+export const DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS = 384000;
 export const MAX_CUSTOM_PROVIDER_CONTEXT_WINDOW = 16_777_216;
 export const MAX_CUSTOM_PROVIDER_MAX_TOKENS = 1_048_576;
 export const MAX_CUSTOM_PROVIDER_MODELS = 100;
@@ -1282,19 +1285,16 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
   const id = String(providerId || '').trim();
   if (!id) return { models: [] };
   if (isCustomProviderId(id)) {
-    // 方案 C：reasoning 标注按识别结果（与 custom_provider_runtime 的
-    // 透传判定同一数据源）——识别为支持推理的模型，UI 解锁档位且请求
-    // 真的会带 reasoning_effort；识别不出的保持 undefined（UI 显示能力
-    // 未知并禁用低/高），不再写死 false。
+    // 思考强度展示与配置严格同步（2026-09-13）：自定义模型的 reasoning
+    // 注解只认模型配置里的显式声明（统一模型表单的「推理等级 / 推理参数
+    // 映射」）——配置中未定义的选项不再靠识别猜测解锁 UI 档位（实机：
+    // deepseek 模型未配任何推理等级，前端却可切低/中/高）。声明后档位
+    // 恢复，形成"配置驱动展示"的闭环。运行时的 reasoning_effort 透传
+    // 判定（custom_provider_runtime）不变——展示链与执行链职责分离。
     const custom = customProviderForId(loadProfiles(), id);
     const models = custom?.models || [];
     const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
-    // reasoning 标注按识别结果（识别器不可用时省略该字段，与运行时不透传
-    // 的行为一致）；contextWindow/vision 透传不依赖识别器（目录解析独立）。
-    let recognizer: typeof import('../model/model_id_recognition') | null = null;
-    try {
-      recognizer = await import('../model/model_id_recognition');
-    } catch { recognizer = null; }
+    // contextWindow/vision 透传不依赖识别器（目录解析独立）。
     for (const model of models) {
       const abilities = publicModelAbilitiesFor(model.id);
       const stored = Number.isSafeInteger(model.contextWindow) && model.contextWindow > 0
@@ -1304,13 +1304,14 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
         : stored;
       const resolvedVision = typeof model.vision === 'boolean'
         ? model.vision : abilities.vision;
-      const recognized = recognizer ? await recognizer.recognizeModelByIdReady(model.id) : null;
+      const declaredReasoning = (Array.isArray(model.reasoningLevels) && model.reasoningLevels.length > 0)
+        || (model.reasoningParamsMap && Object.keys(model.reasoningParamsMap).length > 0);
       out.push({
         id: model.id,
         name: model.id,
         ...(resolvedWindow ? { contextWindow: resolvedWindow } : {}),
         ...(resolvedVision !== undefined ? { vision: resolvedVision } : {}),
-        ...(recognized?.reasoning !== undefined ? { reasoning: recognized.reasoning } : {}),
+        ...(declaredReasoning ? { reasoning: true } : {}),
       });
     }
     return { models: out };
