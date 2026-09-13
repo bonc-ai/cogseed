@@ -58,7 +58,7 @@ export interface RecallTurnPromptContext {
   /** 画像通道独立块（committed 路径才有；与 promptBlock 中拼接的同一份）。 */
   profileMemoryBlock?: string;
   /** 画像通道注入清单（供收据侧逐条落账——每轮带了哪些背景记忆）。 */
-  profileMemoryEntries?: Array<{ id: string; source: string }>;
+  profileMemoryEntries?: Array<{ id: string; source: string; version: string }>;
 }
 
 export interface RecallTurnPromptInput {
@@ -320,6 +320,11 @@ async function buildPromptContextForCommittedProjection(
   }));
   const rendered = renderPromptBlock(records);
   const profileRendered = renderPromptBlock(profileRecords, PROFILE_MEMORY_PREFIX_LINES, MAX_PROFILE_BLOCK_LENGTH);
+  const profileMemoryEntries = profileRendered.records.map((record) => ({
+    id: String(record.asset_id || ''),
+    source: String((record.source_refs as Array<{ id?: string }> | undefined)?.[0]?.id || 'unknown'),
+    version: String(record.version || '1'),
+  }));
   const promptBlock = rendered.block && profileRendered.block
     ? `${rendered.block}\n\n${profileRendered.block}`
     : (rendered.block || profileRendered.block);
@@ -337,10 +342,7 @@ async function buildPromptContextForCommittedProjection(
     })),
     ...(profileRendered.block ? {
       profileMemoryBlock: profileRendered.block,
-      profileMemoryEntries: profileRendered.records.map((record) => ({
-        id: String(record.asset_id || ''),
-        source: String((record.source_refs as Array<{ id?: string }> | undefined)?.[0]?.id || 'unknown'),
-      })),
+      profileMemoryEntries,
     } : {}),
   };
 }
@@ -403,7 +405,7 @@ export async function listConfirmedProjectionIdsForConversation(userId: string, 
 export async function buildConfirmedProjectionPromptContext(
   userId: string,
   cid: string,
-): Promise<{ promptBlock: string; citations: Array<{ assetId: string }> }> {
+): Promise<{ promptBlock: string; citations: RecallPromptCitation[] }> {
   let projectionIds: string[];
   try {
     projectionIds = await projectionIdsForConversation(userId, cid);

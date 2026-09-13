@@ -4846,6 +4846,10 @@ async function runActorTurnBody(
   // explicitly grants assets per dispatch via the tools' `ability_assets`
   // field, and only those render here. CLI agents never consume this path.
   let recallCitations: RecallPromptCitation[] = [];
+  // 画像通道注入清单（committed 投影路径才会携带）：收尾时逐条落
+  // InjectionReceipt（channel='profile_memory'）——「这轮带了哪些背景记忆」
+  // 从此可查（此前画像注入零收据，审计黑洞）。
+  let recallProfileMemory: Array<{ id: string; source: string; version: string }> = [];
   // Commander-granted assets actually injected into a delegated turn, kept for
   // the same usage ledger the Commander injection uses (outcome 'dispatched').
   let dispatchedUsage: Array<{ assetId: string; assetVersion: string }> = [];
@@ -4895,6 +4899,7 @@ async function runActorTurnBody(
         if (recallContext.promptBlock) {
           systemPrompt = `${systemPrompt}\n\n${recallContext.promptBlock}`;
           recallCitations = recallContext.citations;
+          recallProfileMemory = recallContext.profileMemoryEntries ?? [];
         }
         // PRD 3.6 Transfer Verified 闭环：投影资产真实注入时在同一处落
         // ContextReuseReceipt（key=turn-<turnId>），并登记到本次运行的
@@ -6895,6 +6900,22 @@ async function runActorTurnBody(
         messageId: persistedMsg.id,
         boundary: 'real',
         status: 'injected',
+        channel: 'projection',
+      })));
+    }
+    // 画像通道收据（2026-09-13）：只落 InjectionReceipt（channel 区分），
+    // 不写 usage-records——usage 流水按「资产被使用」记账，画像不是资产，
+    // 混入会让资产使用统计失真。审计「这轮带了什么」以收据流为准。
+    if (recallProfileMemory.length) {
+      const { recordInjectionReceipt } = await import('../recall/injection-receipt');
+      await Promise.allSettled(recallProfileMemory.map((entry) => recordInjectionReceipt(uid, {
+        assetId: entry.id,
+        assetVersion: entry.version,
+        taskRunId: item.turnId,
+        messageId: persistedMsg.id,
+        boundary: 'real',
+        status: 'injected',
+        channel: 'profile_memory',
       })));
     }
     if (dispatchedUsage.length) {
@@ -6921,6 +6942,7 @@ async function runActorTurnBody(
         messageId: persistedMsg.id,
         boundary: 'real',
         status: 'dispatched',
+        channel: 'projection',
       })));
     }
     await registerFinalOutputResources(outcome.produced || []);

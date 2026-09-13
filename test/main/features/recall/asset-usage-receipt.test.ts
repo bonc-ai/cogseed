@@ -136,4 +136,31 @@ describe('asset usage receipts', () => {
       })).resolves.toMatchObject({ status, evidenceRefs: [] });
     }
   });
+
+  it('persists profile-memory channel injection receipts and rejects unknown channels', async () => {
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    // 画像通道收据：无 projectionId（背景记忆不携带投影授权），channel 区分。
+    const receipt = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-profile',
+      channel: 'profile_memory',
+    });
+    expect(receipt).toMatchObject({ channel: 'profile_memory', status: 'injected' });
+    expect(receipt.projectionId).toBeUndefined();
+    const listed = await injections.listInjectionReceipts('user-a', 'turn-profile');
+    expect(listed).toEqual([expect.objectContaining({ channel: 'profile_memory' })]);
+    // 幂等：同键重落返回同一张收据（channel 不参与去重键）。
+    const again = await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'message-profile',
+      channel: 'profile_memory',
+    });
+    expect(again.id).toBe(receipt.id);
+    // 非法通道值在写入侧即拒绝。
+    await expect(injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-profile', assetId: 'onto-abc123def456abc123def456', assetVersion: '1',
+      boundary: 'real', status: 'injected',
+      channel: 'side_channel' as 'profile_memory',
+    })).rejects.toThrow('invalid injection receipt reference');
+  });
 });
