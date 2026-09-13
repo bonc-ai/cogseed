@@ -138,7 +138,14 @@ export async function handleRecallTaskTerminal(event: RecallTaskTerminalEvent): 
   } catch {
     return { handled: false, reason: 'no_confirmed_projection' };
   }
-  if (projection.status !== 'confirmed' || projection.taskRunId !== logicalRunId) {
+  // 身份匹配（T2.3 · 2026-09-13 三重错配修复之一）：run 级投影的 taskRunId
+  // === logicalRunId（原语义不变）；turn 级投影（自动投影 proj-auto-*，其
+  // taskRunId=注入发生的 turnId）额外要求该 turn 出现在 reuse_turn_ids——
+  // 这个清单只在真实落过 ContextReuseReceipt 时登记，等价于「本 run 内确实
+  // 在那一轮注入过」。此前 turn 级投影永远匹配不上 run 级 logicalRunId，
+  // 实机 22 张证明全部 receiptId=null、资产零升档（自动投影注入了 26 次）。
+  const turnOwned = event.reuse_turn_ids?.includes(projection.taskRunId) === true;
+  if (projection.status !== 'confirmed' || (!turnOwned && projection.taskRunId !== logicalRunId)) {
     return { handled: false, reason: 'no_confirmed_projection' };
   }
   if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) {
