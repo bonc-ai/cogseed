@@ -226,7 +226,15 @@ export function buildDeepSeekModel(modelId: string): Model<'openai-completions'>
     // true, paired with `defaultReasoning: 'low'` below so the request
     // always carries the effort field.
     reasoning: /^deepseek-v4-/.test(modelId),
-    input: ['text'],
+    // Vision modality（2026-09-13 修复）：按模型 id 判定，与
+    // model_id_recognition 的 deepseek 家族谓词（/vision|vl/i）同口径。
+    // 此前对所有 deepseek 模型硬编码 ['text']——vision 系（如
+    // deepseek-v4-flash-vision-exp）被误标纯文本，pi-ai 的
+    // openai-completions 适配器据此丢弃图片内容块（含工具结果附图，
+    // openai-completions.js `model.input.includes("image")` 门），模型
+    // 只能 read_file→"visual text not available"→ocr_file，多模态输入
+    // 被结构性降级为 OCR。非 vision 模型仍为 ['text']（真不支持，不盲发）。
+    input: /vision|vl/i.test(modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: deepseekContextWindow(modelId),
     maxTokens: deepseekMaxOutputTokens(modelId),

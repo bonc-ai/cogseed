@@ -1,11 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildDeepSeekModel,
   buildDoubaoModel,
   buildMoonshotModel,
   buildOpenAICompatibleModel,
   createMoonshotProvider,
   createOpenAICompatibleProvider,
 } from '../../../../src/main/model/core-agent/external-providers';
+
+describe('external-providers › buildDeepSeekModel', () => {
+  it('declares image input for vision variants so pi-ai keeps image blocks (2026-09-13 OCR 降级修复)', () => {
+    // 实机事故：deepseek-v4-flash-vision-exp 被硬编码 input:['text']，
+    // pi-ai openai-completions 的 `model.input.includes("image")` 门把图片
+    // 内容块全部丢弃——模型只能 read_file→ocr_file，多模态被降级为 OCR。
+    const vision = buildDeepSeekModel('deepseek-v4-flash-vision-exp');
+    expect(vision.input).toEqual(['text', 'image']);
+    expect(buildDeepSeekModel('deepseek-vl-chat').input).toEqual(['text', 'image']);
+    // 非 vision 模型仍为纯文本——不支持就声明不支持，不盲发图片。
+    expect(buildDeepSeekModel('deepseek-v4-flash').input).toEqual(['text']);
+    expect(buildDeepSeekModel('deepseek-chat').input).toEqual(['text']);
+    // 既有语义不回退：v4-* 仍按 reasoner 处理。
+    expect(vision.reasoning).toBe(true);
+  });
+});
 
 describe('external-providers › buildMoonshotModel', () => {
   it('builds a Model for https://api.moonshot.cn/v1 using openai-completions', () => {

@@ -5770,6 +5770,30 @@ async function runActorTurnBody(
         : turnAgentSpec?.default_model
           ? { ...turnAgentSpec.default_model }
           : undefined;
+      // 多模态降级提示（2026-09-13）：回合带图但实际执行模型（任务级覆盖
+      // 优先于界面选择）不支持视觉时，图片内容块会被 provider 层按
+      // input modality 丢弃，模型只能靠文件路径 + OCR 读图。此前零提示，
+      // 用户看到 OCR 误以为系统坏了。只说明原因，不改变行为——不支持
+      // 视觉的模型不发图是正确语义。
+      if (turnImages.length && turnModelOverride) {
+        const { recognizeModelById } = await import("../../model/model_id_recognition");
+        const bareModelId = String(turnModelOverride.model).split("/").pop() || String(turnModelOverride.model);
+        const recognized = recognizeModelById(bareModelId);
+        const visionCapable = recognized?.vision === true
+          || (recognized == null && /vision|vl/i.test(bareModelId));
+        if (!visionCapable) {
+          appendProcessItem(processItems, {
+            type: "event",
+            event: {
+              stream: "attachment",
+              data: {
+                phase: "vision-degraded",
+                note: `当前执行模型 ${turnModelOverride.model} 不支持视觉输入，图片以文件路径交给模型（可用 OCR 读取）`,
+              },
+            },
+          });
+        }
+      }
       for await (const ev of streamChatWithModel({
         userId: uid,
         message: messageText,
