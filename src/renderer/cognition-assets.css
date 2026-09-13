@@ -263,6 +263,11 @@
 .ca-candidate.is-broken { border-color: #f0dcb2; }
 .ca-src { color: var(--ca-ink3); font-size: 11.8px; margin-top: 8px; }
 .ca-field { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 11px; }
+/* 接缝补足：ca-warn / ca-line 只有上边距、ca-field 只有下边距，相邻时
+   两侧边距都为 0，警告条与「类型」行（无警告条时是标题行与「类型」行）
+   会贴在一起（实测反馈）。 */
+.ca-warn + .ca-field,
+.ca-line + .ca-field { margin-top: 10px; }
 .ca-field > span { color: var(--ca-ink2); font-size: 12.5px; text-align: right; padding-top: 8px; }
 .ca-input {
   border: 1px solid var(--ca-line); border-radius: 8px; padding: 7px 11px; font-size: 12.6px;
