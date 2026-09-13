@@ -644,7 +644,10 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
     const maxTokens = Math.min(
       normalizedLegacyCustomProviderNumber(
         metadata.maxTokens,
-        DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
+        // 未显式存过输出上限时优先取目录预设（2026-09-13 起目录登记 DeepSeek
+        // V4/V4.1 的 384K；此前一律兜 8192，编辑页显示偏低的根因）。已存的
+        // 显式值不受影响。
+        publicModelAbilitiesFor(id).maxTokens ?? DEFAULT_CUSTOM_PROVIDER_MAX_TOKENS,
         MAX_CUSTOM_PROVIDER_MAX_TOKENS,
       ),
       contextWindow,

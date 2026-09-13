@@ -641,7 +641,12 @@ body.ui-modal-open { overflow: hidden; }
 .settings-model-form__advanced:not([open]) > summary::before { transform: rotate(0deg); }
 .settings-model-form__advanced .form-row { margin-top: 14px; }
 .settings-check-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.settings-check-chip {
+/* 选择器必须限定在 .settings-check-chips 之下（2026-09-13 真机事故）：
+   chip 是 <label>，若用单类选择器（0-1-0）会被设置页既有的
+   `.form-row label { display:block }`（0-1-1）压过——inline-flex 被打回
+   block，勾选框 span 失去 flex item 的 blockify，width/height 失效塌成
+   一条 3×18 竖线。提权到后代选择器（0-2-0）后布局稳定。 */
+.settings-check-chips .settings-check-chip {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -651,19 +656,25 @@ body.ui-modal-open { overflow: hidden; }
   border-radius: var(--radius-control, 10px);
   background: var(--surface, #fff);
   font-size: 13px;
+  /* 覆盖 `.form-row label` 的 600 与 margin-bottom：chip 是选项卡不是字段名。 */
+  font-weight: 400;
+  margin-bottom: 0;
   color: var(--text, #111827);
   cursor: pointer;
   user-select: none;
 }
 .settings-check-chip input { position: absolute; opacity: 0; pointer-events: none; }
-.settings-check-chip__box {
+.settings-check-chips .settings-check-chip__box {
+  /* display 显式声明：即便祖先布局异常（非 flex），宽高也照常生效，
+     不会再退化成一条边框竖线。 */
+  display: inline-block;
+  flex: none;
   width: 16px;
   height: 16px;
   border-radius: 5px;
   border: 1.5px solid #c7ccd4;
   background: #fff;
   position: relative;
-  flex: none;
 }
 .settings-check-chip.is-checked .settings-check-chip__box { background: #111827; border-color: #111827; }
 .settings-check-chip.is-checked .settings-check-chip__box::after {

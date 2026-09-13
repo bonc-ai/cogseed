@@ -65,15 +65,18 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'MiniMax-M2.7', name: 'MiniMax 2.7' },
   ],
   deepseek: [
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
+    // 输出上限口径（2026-09-13 产品负责人）：V4 / V4.1 系列最大输出 384K，
+    // 与 1M 窗口配套登记——此前目录只登记窗口、不登记输出，新建/归一的
+    // 模型输出被兜到保守默认 8192（实机编辑页显示 8192 的根因）。
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576, maxTokens: 393_216 },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576, maxTokens: 393_216 },
     // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与此前已确认
     // 1M 的 v4-flash-vision-exp 共用 1M 窗口——原先"文本版无权威数字故不标"
     // 的保守口径作废；v4.1 是 V4 的迭代版本（用户实际配置的 id 形态
     // `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
-    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, vision: true },
-    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1_048_576 },
-    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_048_576 },
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1_048_576, maxTokens: 393_216, vision: true },
+    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1_048_576, maxTokens: 393_216 },
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1_048_576, maxTokens: 393_216 },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
