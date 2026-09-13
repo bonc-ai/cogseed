@@ -504,8 +504,8 @@ async function _validateUserRoute(
       throw new Error('invalid CLI fallback recipient');
     }
     const cli = runtime.cli;
-    const { hasConfiguredModel } = await import('../auth');
-    if (hasConfiguredModel().configured) throw new Error('CLI fallback is not active');
+    const { hasConfiguredModelForUser } = await import('../auth');
+    if (hasConfiguredModelForUser(userId).configured) throw new Error('CLI fallback is not active');
     const { detectAll } = await import('../local_agents/registry');
     const entries = await detectAll();
     const entry = entries.find((item) => item.type === cli);

@@ -82,11 +82,11 @@ export type SkillSourceLabel = 'builtin' | 'platform' | 'custom' | 'external' | 
 // Open-tier roots (external packages / global dirs) are matched by the caller-supplied
 // label map in `renderSkillLines`; this fast path only distinguishes the trusted tier and
 // is what allowlist ranking + advertise signals rely on.
-function skillSourceLabel(source: string): 'platform' | 'custom' | 'unknown' {
+function skillSourceLabel(source: string, uid = getActiveUserId()): 'platform' | 'custom' | 'unknown' {
   try {
     const resolved = path.resolve(source);
-    if (resolved === path.resolve(userSkillsDir(getActiveUserId()))) return 'custom';
-    if (resolved === path.resolve(userMarketplaceSkillsDir(getActiveUserId()))) return 'platform';
+    if (resolved === path.resolve(userSkillsDir(uid))) return 'custom';
+    if (resolved === path.resolve(userMarketplaceSkillsDir(uid))) return 'platform';
     // Catch-all. custom is now matched EXPLICITLY above, so an unrecognized
     // root falls here as `unknown` (lowest dedupe priority) instead of being
     // silently treated as `custom` (highest). Open-tier roots are ranked via
@@ -111,14 +111,20 @@ function _isBuiltinMarketplaceSkillDir(dir: string | undefined): boolean {
   return _readObjectJson(path.join(dir, '_install.json'))?.seed_source === 'builtin';
 }
 
-function skillSourceLabelForSpec(s: Pick<SkillAllowlistRef, 'source' | 'dir'>): SkillSourceLabel {
-  const base = skillSourceLabel(s.source || '');
+function skillSourceLabelForSpec(
+  s: Pick<SkillAllowlistRef, 'source' | 'dir'>,
+  uid = getActiveUserId(),
+): SkillSourceLabel {
+  const base = skillSourceLabel(s.source || '', uid);
   if (base === 'platform' && _isBuiltinMarketplaceSkillDir(s.dir)) return 'builtin';
   return base;
 }
 
-function skillSourceRank(s: Pick<SkillAllowlistRef, 'source' | 'dir'>): number {
-  return SOURCE_DEDUPE_RANK[skillSourceLabelForSpec(s)];
+function skillSourceRank(
+  s: Pick<SkillAllowlistRef, 'source' | 'dir'>,
+  uid = getActiveUserId(),
+): number {
+  return SOURCE_DEDUPE_RANK[skillSourceLabelForSpec(s, uid)];
 }
 
 // A compacted roster/skill-list entry shorter than this conveys no domain for
@@ -285,6 +291,7 @@ interface PromptRootEntry { label: string; root: string }
 async function renderSkillLines(
   specs: SkillSpec[],
   rootEntries: PromptRootEntry[],
+  uid: string,
 ): Promise<string> {
   if (!specs.length) return '';
   const lang = descriptionLang(getLanguage());
@@ -298,7 +305,7 @@ async function renderSkillLines(
   // roots with zero surviving entries would be prompt noise.
   const usedLabels = new Set<string>();
   const labelOf = (s: SkillSpec): string => {
-    const trusted = skillSourceLabelForSpec(s);
+    const trusted = skillSourceLabelForSpec(s, uid);
     if (trusted !== 'unknown') return trusted;
     return labelByRoot.get(path.resolve(s.source)) || 'unknown';
   };
@@ -535,20 +542,27 @@ export function normalizeKnownSkillRefsForDisplay(text: string, specs: SkillAllo
   );
 }
 
-// Skill loader is rebuilt on uid switch — `invalidateSkills()` clears it so
-// the next `getLoader()` call re-reads the new user's custom skills dir.
-let _loaderPromise: Promise<SkillLoaderInstance> | null = null;
+// Keep one in-flight/ready loader per uid. The uid is captured before the
+// dynamic import starts, so a user switch cannot change the roots selected by
+// an explicit-user request while the import is pending.
+let _loaderPromises = new Map<string, Promise<SkillLoaderInstance>>();
 
 async function getLoader(): Promise<SkillLoaderInstance> {
-  if (!_loaderPromise) {
-    _loaderPromise = import('#core-agent').then((m) => {
-      return new m.SkillLoader({
-        // builtin/platform listed first → product/platform override same-id custom skills.
-        dirs: [userMarketplaceSkillsDir(getActiveUserId()), userSkillsDir(getActiveUserId())],
-      });
-    });
-  }
-  return _loaderPromise;
+  return getLoaderForUser(getActiveUserId());
+}
+
+async function getLoaderForUser(uid: string): Promise<SkillLoaderInstance> {
+  const existing = _loaderPromises.get(uid);
+  if (existing) return existing;
+  const promise = import('#core-agent').then((core) => new core.SkillLoader({
+    // builtin/platform listed first → product/platform override same-id custom skills.
+    dirs: [userMarketplaceSkillsDir(uid), userSkillsDir(uid)],
+  }));
+  _loaderPromises.set(uid, promise);
+  promise.catch(() => {
+    if (_loaderPromises.get(uid) === promise) _loaderPromises.delete(uid);
+  });
+  return promise;
 }
 
 // OPEN-tier loader (external packages + global roots). Rebuilt whenever the
@@ -689,7 +703,7 @@ export async function searchOpenTierSkills(
   // receipt to check. Filtering would be a guaranteed no-op that reads as
   // coverage.
   const externalSet = new Set(dirs.external.map((d) => path.resolve(d)));
-  const trustedIds = new Set((await getLoader()).list().map((s) => s.id));
+  const trustedIds = new Set((await getLoaderForUser(uid)).list().map((s) => s.id));
   const disabled = disabledIds ? new Set(disabledIds) : null;
   const specs = loader.list().filter((s) =>
     !trustedIds.has(s.id)
@@ -732,6 +746,8 @@ export async function searchOpenTierSkills(
 }
 
 export interface SystemPromptBlockOptions {
+  /** Explicit user scope for queued/runtime turns. */
+  userId?: string;
   /**
    * Restrict the skills listing to a subset. When undefined, every skill
    * discovered by the loader is rendered (legacy behavior). When an empty
@@ -860,20 +876,23 @@ let _trustFilterCache: { uid: string; stamp: string; verdicts: Map<string, boole
  * synchronous tier above and schedules the expensive pass here. One pass is in
  * flight at most; ids scheduled while it runs are picked up by its loop.
  */
-let _trustRefreshPending = new Set<string>();
+const _trustRefreshPending = new Map<string, Set<string>>();
 let _trustRefreshInFlight: Promise<void> | null = null;
 
 function scheduleTrustRefresh(uid: string, skillIds: readonly string[]): void {
   if (!skillIds.length) return;
-  for (const id of skillIds) _trustRefreshPending.add(id);
+  const pending = _trustRefreshPending.get(uid) || new Set<string>();
+  for (const id of skillIds) pending.add(id);
+  _trustRefreshPending.set(uid, pending);
   if (_trustRefreshInFlight) return;
 
-  const stamp = _trustFilterCache?.stamp ?? '';
   _trustRefreshInFlight = (async () => {
     try {
       while (_trustRefreshPending.size > 0) {
-        const batch = [..._trustRefreshPending];
-        _trustRefreshPending = new Set();
+        const [uid, pending] = _trustRefreshPending.entries().next().value as [string, Set<string>];
+        _trustRefreshPending.delete(uid);
+        const batch = [...pending];
+        const stamp = _trustFilterCache?.uid === uid ? (_trustFilterCache.stamp ?? '') : '';
         try {
           const { withheld } = await partitionSkillsByTrustDeep(uid, batch);
           const blockedNow = new Set(withheld.map((w) => w.skillId));
@@ -919,9 +938,7 @@ function _marketplaceStamp(uid: string): string {
   }
 }
 
-async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Promise<T[]> {
-  let uid: string;
-  try { uid = getActiveUserId(); } catch { return specs; }
+async function _withholdUntrustedSpecsForUser<T extends { id: string }>(uid: string, specs: T[]): Promise<T[]> {
   if (!uid) return specs;
 
   const stamp = _marketplaceStamp(uid);
@@ -954,6 +971,12 @@ async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Pr
   return specs.filter((s) => verdicts.get(s.id) !== false);
 }
 
+async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Promise<T[]> {
+  let uid: string;
+  try { uid = getActiveUserId(); } catch { return specs; }
+  return _withholdUntrustedSpecsForUser(uid, specs);
+}
+
 /**
  * Blocked-skill ids among `skillIds`, for callers outside this module that gate
  * on trust without holding spec objects (the bash-command guard, the Runtime
@@ -963,9 +986,15 @@ async function _withholdUntrustedSpecs<T extends { id: string }>(specs: T[]): Pr
  * `_withholdUntrustedSpecs` does.
  */
 export async function blockedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
+  try { return blockedSkillIdsForUser(getActiveUserId(), skillIds); }
+  catch { return new Set(); }
+}
+
+/** User-scoped trust gate for queued/runtime callers. */
+export async function blockedSkillIdsForUser(uid: string, skillIds: readonly string[]): Promise<Set<string>> {
   if (!skillIds.length) return new Set();
   const probe = skillIds.map((id) => ({ id }));
-  const allowed = new Set((await _withholdUntrustedSpecs(probe)).map((s) => s.id));
+  const allowed = new Set((await _withholdUntrustedSpecsForUser(uid, probe)).map((s) => s.id));
   return new Set(skillIds.filter((id) => !allowed.has(id)));
 }
 
@@ -980,7 +1009,8 @@ export async function blockedSkillIds(skillIds: readonly string[]): Promise<Set<
  * `Source` label is derived from the exact root path rather than basename.
  */
 export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}): Promise<string> {
-  const loader = await getLoader();
+  const uid = opts.userId || getActiveUserId();
+  const loader = await getLoaderForUser(uid);
   const discoveredSpecs = loader.list();
   let specs: typeof discoveredSpecs;
   const disabled = opts.disabledIds ? new Set(opts.disabledIds) : null;
@@ -990,7 +1020,6 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   // `getLoader` (cached) was first instantiated; users.ts switches uid via
   // `activateUser` which calls `invalidateSkills` to drop the loader cache,
   // but the ROOT values must reflect the CURRENT uid regardless of cache age.
-  const uid = getActiveUserId();
   const marketplaceRoot = path.resolve(userMarketplaceSkillsDir(uid));
   const rootEntries: PromptRootEntry[] = [
     { label: 'builtin', root: marketplaceRoot },
@@ -1002,7 +1031,7 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   let allowlisted = false;
   let rawAllow: string[] = [];
   if (opts.allowlist === undefined) {
-    specs = await _withholdUntrustedSpecs(discoveredSpecs);
+    specs = await _withholdUntrustedSpecsForUser(uid, discoveredSpecs);
     rendered = filterDisabled(specs);
   } else {
     allowlisted = true;
@@ -1012,7 +1041,7 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
       rendered = [];
     } else {
       const trustCandidates = _skillTrustCandidatesForRefs(discoveredSpecs, rawAllow);
-      specs = await _withholdUntrustedSpecs(trustCandidates);
+      specs = await _withholdUntrustedSpecsForUser(uid, trustCandidates);
       const { ids } = resolveSkillAllowlistRefs(specs, rawAllow);
       const allow = new Set([...ids, ...rawAllow]);
       rendered = filterDisabled(specs.filter((s) => allow.has(s.id)));
@@ -1142,7 +1171,7 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   rendered = openRankByRoot.size
     ? dedupeSkillsByDisplayName(rendered, (s) => {
       const r = openRankByRoot.get(path.resolve(s.source || ''));
-      return r !== undefined ? r : skillSourceRank(s);
+      return r !== undefined ? r : skillSourceRank(s, uid);
     })
     : dedupeSkillsByDisplayName(rendered);
 
@@ -1163,7 +1192,7 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
   if (opts.onSkillAdvertised && rendered.length) {
     for (const s of rendered) {
       if (openRootSet.has(path.resolve(s.source || ''))) continue;
-      const label = skillSourceLabelForSpec(s);
+      const label = skillSourceLabelForSpec(s, uid);
       if (label === 'unknown') continue;
       try {
         opts.onSkillAdvertised(s.id, label === 'custom' ? 'A.custom' : 'A.platform');
@@ -1177,7 +1206,7 @@ export async function getSystemPromptBlock(opts: SystemPromptBlockOptions = {}):
     }
   }
 
-  const block = await renderSkillLines(rendered, rootEntries);
+  const block = await renderSkillLines(rendered, rootEntries, uid);
   // Task/authoring hint that GLOBAL-folder skills exist behind `skill_search`
   // (external packages are inlined above). Constant (no count) so global-folder
   // changes don't churn the cache prefix. Skipped under an allowlist — pinned
@@ -1245,7 +1274,7 @@ export interface BridgeSkillRow {
  * filter is the caller's job (bridge.ts passes the component-enabled set).
  */
 export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]> {
-  const loader = await getLoader();
+  const loader = await getLoaderForUser(uid);
   const lang = descriptionLang(getLanguage());
   const pick = await getPickDescription();
   // Agent-private skills never reach external CLI agents — the cogseed-bridge
@@ -1253,7 +1282,7 @@ export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]
   // Trust-withheld before anything else: the CLI agent is as much a consumer of
   // this listing as the in-process prompt is, so a tampered skill must not
   // reach it either.
-  let specs: SkillSpec[] = await _withholdUntrustedSpecs(loader.list().filter((s) => !s.ownerAgent));
+  let specs: SkillSpec[] = await _withholdUntrustedSpecsForUser(uid, loader.list().filter((s) => !s.ownerAgent));
   const rankByRoot = new Map<string, number>();
   const openDirs = _computeOpenTierDirs(uid);
   const openLoader = await getOpenLoader(openDirs);
@@ -1272,11 +1301,11 @@ export async function listSkillsForBridge(uid: string): Promise<BridgeSkillRow[]
   }
   specs = dedupeSkillsByDisplayName(specs, (s) => {
     const openRank = s.source ? rankByRoot.get(path.resolve(s.source)) : undefined;
-    return openRank !== undefined ? openRank : skillSourceRank(s);
+    return openRank !== undefined ? openRank : skillSourceRank(s, uid);
   });
   return specs.map((s) => {
     const openRank = rankByRoot.get(path.resolve(s.source));
-    const source = openRank === SOURCE_DEDUPE_RANK.external ? 'external' : skillSourceLabelForSpec(s);
+    const source = openRank === SOURCE_DEDUPE_RANK.external ? 'external' : skillSourceLabelForSpec(s, uid);
     return {
       id: s.id,
       name: s.name || s.id,
@@ -1352,10 +1381,9 @@ export async function invalidateSkills(): Promise<void> {
   _openLoader = null;
   for (const loader of _agentPrivateLoaders.values()) loader.invalidate();
   _agentPrivateLoaders = new Map();
-  if (_loaderPromise) {
-    const loader = await _loaderPromise;
-    loader.invalidate();
-  }
+  await Promise.all([..._loaderPromises.values()].map(async (promise) => {
+    try { (await promise).invalidate(); } catch { /* failed imports retry on demand */ }
+  }));
 }
 
 /** For diagnostics: return the skill list. Picks a description per the active UI language. */
@@ -1419,13 +1447,20 @@ export async function listAgentOwnedSkillIds(uid: string, agentId: string): Prom
  * that route even though the prompt path withholds it.
  */
 export async function listSkillSpecs(opts: { forAgentId?: string } = {}): Promise<SkillSpec[]> {
-  const loader = await getLoader();
-  let specs = await _withholdUntrustedSpecs(loader.list());
+  return listSkillSpecsForUser(getActiveUserId(), opts);
+}
+
+export async function listSkillSpecsForUser(
+  uid: string,
+  opts: { forAgentId?: string } = {},
+): Promise<SkillSpec[]> {
+  const loader = await getLoaderForUser(uid);
+  let specs = await _withholdUntrustedSpecsForUser(uid, loader.list());
   if (opts.forAgentId === undefined) return specs;
   const forAgentId = opts.forAgentId.trim();
   specs = specs.filter((s) => !s.ownerAgent || s.ownerAgent === forAgentId);
   const knownIds = new Set(specs.map((s) => s.id));
-  for (const { specs: privateList } of await loadAgentPrivateSkillSpecs(getActiveUserId(), forAgentId)) {
+  for (const { specs: privateList } of await loadAgentPrivateSkillSpecs(uid, forAgentId)) {
     const next = privateList
       .filter((s) => !s.ownerAgent || s.ownerAgent === forAgentId)
       .filter((s) => !knownIds.has(s.id));
@@ -1460,7 +1495,7 @@ export async function listSkillSpecsForAgentMetadata(
   uid: string,
   opts: { forAgentId?: string } = {},
 ): Promise<SkillAllowlistRef[]> {
-  const loader = await getLoader();
+  const loader = await getLoaderForUser(uid);
   const forAgentId = opts.forAgentId === undefined ? null : opts.forAgentId.trim();
   let specs: SkillAllowlistRef[] = loader.list();
   if (forAgentId !== null) {

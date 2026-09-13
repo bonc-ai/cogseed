@@ -68,6 +68,10 @@ export interface UserPreferences {
    * `COGSEED_METACOGNITION='0'` remains a higher-priority kill switch.
    * Reads go through `features/metacognition.isFeatureEnabled`. */
   metacognition_enabled?: boolean;
+  /** Creator Mode control-plane UI and draft generation. Default false. */
+  creator_mode_enabled?: boolean;
+  /** Publishing/materializing Creator presets. Requires Creator Mode. Default false. */
+  creator_mode_publish_enabled?: boolean;
   /** Thinking strength for chat model calls: 'auto' (model default),
    *  'off' | 'low' | 'high' forwarded to the runner's thinkingLevel. */
   thinking_level?: 'auto' | 'off' | 'low' | 'high';
@@ -98,6 +102,11 @@ function systemLanguage(): Lang {
 
 export function readPreferences(): UserPreferences {
   return readJsonSync<UserPreferences>(preferencesFile());
+}
+
+/** Read one user's preferences without consulting the mutable active-user singleton. */
+export function readPreferencesForUser(userId: string): UserPreferences {
+  return readJsonSync<UserPreferences>(userPreferencesFile(userId));
 }
 
 /** Merge `partial` into the on-disk preferences and atomically rewrite. */

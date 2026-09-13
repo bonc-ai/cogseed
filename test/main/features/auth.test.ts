@@ -29,6 +29,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.doUnmock('@earendil-works/pi-ai/oauth');
   vi.doUnmock('#core-agent');
+  vi.doUnmock('../../../src/main/logger');
   process.env.COGSEED_WORKSPACE_ROOT = prevWs;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -354,6 +355,24 @@ describe('auth › revealApiKey / updateApiKey', () => {
 });
 
 describe('auth › listProviders grouping', () => {
+  it('logs only stable metadata when the core-agent provider import fails', async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    vi.doMock('../../../src/main/logger', () => ({ createLogger: () => logger }));
+    vi.doMock('#core-agent', () => {
+      throw new Error('load failed /Users/private/provider.js ssh://private.internal ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+    });
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({ getOAuthProviders: () => [] }));
+
+    const auth = await import('../../../src/main/features/auth');
+    await auth.listProviders();
+
+    const logs = JSON.stringify(logger.warn.mock.calls);
+    expect(logs).toContain('core_agent_unavailable');
+    expect(logs).not.toContain('/Users/private/provider.js');
+    expect(logs).not.toContain('ssh://private.internal');
+    expect(logs).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz1234567890');
+  });
+
   it('returns providers in catalog order regardless of insertion order', async () => {
     const a = await import('../../../src/main/features/auth');
     // 插入顺序：anthropic → openai。CATALOG 顺序：openai 在 anthropic 之前。
@@ -436,6 +455,20 @@ describe('auth › pickRotationKey', () => {
 });
 
 describe('auth › entries (priority list)', () => {
+  it('reads explicit-user entries and configured-model state without active-user fallback', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const users = await import('../../../src/main/features/users');
+    users.activateUser('auth-user-a');
+    const p = await a.addApiKey('anthropic', 'key-user-a-xxxxxxxx', 'a');
+    await a.addEntry({ provider: 'anthropic', model: 'claude-opus-4-8', profileId: p.profileId });
+    users.activateUser('auth-user-b');
+
+    expect((await a.listEntriesForUser('auth-user-a')).entries).toHaveLength(1);
+    expect(a.hasConfiguredModelForUser('auth-user-a')).toEqual({ configured: true });
+    expect((await a.listEntriesForUser('auth-user-b')).entries).toEqual([]);
+    expect(a.hasConfiguredModelForUser('auth-user-b')).toEqual({ configured: false });
+  });
+
   it('listEntries is empty on a fresh store', async () => {
     const a = await import('../../../src/main/features/auth');
     const { entries } = await a.listEntries();
@@ -651,6 +684,69 @@ describe('auth › pickChatEntryGroup + 冷却联动', () => {
     expect(cd.isCooledDown(p1.profileId)).toBe(false);
 
     cd._clearAll();
+  });
+
+  it('explicit-user runtime entry refresh stays on the requested user after an active-user switch', async () => {
+    const users = await import('../../../src/main/features/users');
+    const oauthProvider = {
+      refreshToken: async () => {
+        users.activateUser('auth-refresh-other-user');
+        return { access: 'refreshed-access', refresh: 'refreshed-refresh', expires: Date.now() + 60_000 };
+      },
+      getApiKey: (credentials: { access: string }) => credentials.access,
+    };
+    vi.doMock('@earendil-works/pi-ai/oauth', () => ({
+      getOAuthProviders: () => [],
+      getOAuthProvider: () => oauthProvider,
+    }));
+
+    const a = await import('../../../src/main/features/auth');
+    const requestedUser = 'auth-refresh-requested-user';
+    a.saveProfilesForUser(requestedUser, {
+      version: 6,
+      profiles: {
+        'anthropic:oauth': {
+          type: 'oauth', provider: 'anthropic', label: 'oauth', access: 'expired-access',
+          refresh: 'refresh-token', expires: Date.now() - 1, createdAt: Date.now(), lastUsed: 0,
+        },
+      },
+      entries: [{
+        entryId: 'oauth-entry', provider: 'anthropic', model: 'claude-opus-4-8',
+        profileId: 'anthropic:oauth', lastUsed: 0, createdAt: Date.now(),
+      }],
+      searchProfiles: [], imageProfiles: [], videoProfiles: [], ttsProfiles: [], customProviders: [], authorizationRequests: [],
+    });
+
+    const choice = await a.pickRuntimeChatEntryForUser(requestedUser);
+    expect(choice).toMatchObject({ profileId: 'anthropic:oauth', apiKey: 'refreshed-access' });
+    expect(a.loadProfilesForUser(requestedUser).profiles['anthropic:oauth']).toMatchObject({ access: 'refreshed-access' });
+    users.activateUser(TEST_UID);
+  });
+
+  it('explicit-user rotation skips only that user\'s cooldown', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    cooldown._clearAll();
+    const requestedUser = 'auth-rotation-requested-user';
+    const profile = await a.addApiKeyForUser(requestedUser, 'anthropic', 'rotation-key-xxxxxxxx', 'requested');
+    await a.addEntryForUser(requestedUser, { provider: 'anthropic', model: 'claude-opus-4-8', profileId: profile.profileId });
+    cooldown.markCooldownForUser(requestedUser, profile.profileId, 'auth', 'requested user is cooling');
+
+    expect(await a.pickRotationKeyForUser(requestedUser, 'anthropic')).toBeNull();
+    cooldown._clearAll();
+  });
+
+  it('explicit-user candidate groups do not read legacy active-user cooldowns', async () => {
+    const a = await import('../../../src/main/features/auth');
+    const cooldown = await import('../../../src/main/model/core-agent/profile-cooldown');
+    cooldown._clearAll();
+    const requestedUser = 'auth-group-requested-user';
+    const profile = await a.addApiKeyForUser(requestedUser, 'anthropic', 'group-key-xxxxxxxx', 'requested');
+    await a.addEntryForUser(requestedUser, { provider: 'anthropic', model: 'claude-opus-4-8', profileId: profile.profileId });
+    cooldown.markCooldown(profile.profileId, 'auth', 'legacy active-user cooldown');
+
+    expect(await a.pickChatEntryGroupForUser(requestedUser)).toHaveLength(1);
+    cooldown._clearAll();
   });
 
   it('bumpEntryLastUsed 对不存在的 entryId 安全无操作', async () => {

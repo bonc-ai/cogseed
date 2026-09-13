@@ -86,6 +86,9 @@ const GREP_EXTRACT_CONCURRENCY = 4;
 
 export interface FileToolsOpts {
   userId: string;
+  /** Force file reads to stay within the explicitly resolved roots even when
+   *  the global local-access mode allows arbitrary filesystem paths. */
+  workspaceOnly?: boolean;
   /** Current conversation id. Scopes file tools to this cid's attachment
    *  dir (in addition to the user's active workspace). Omitted = no
    *  attachment scope (workspace-only). */
@@ -190,7 +193,7 @@ function permissionWaitProgress(ctx: ToolContext | undefined, operation: string)
 function guardPath(opts: FileToolsOpts, abs: string): string | null {
   const roots = allowedRoots(opts);
   if (roots.length && isPathAllowed(abs, roots)) return null;
-  if (!localAccessAllowsOutsideWorkspace()) {
+  if (opts.workspaceOnly || !localAccessAllowsOutsideWorkspace()) {
     return errText(
       'E_PATH_OUT_OF_SCOPE',
       `path is outside the current workspace/attachment scope and the current access mode only allows workspace files: ${abs}.`,

@@ -20,6 +20,9 @@ const TEST_UID = 'u1';
 function builtinDir(): string {
   return path.join(tmpDir, TEST_UID, 'local', 'marketplace', 'skills');
 }
+function builtinDirFor(uid: string): string {
+  return path.join(tmpDir, uid, 'local', 'marketplace', 'skills');
+}
 function customDir(): string {
   return path.join(tmpDir, TEST_UID, 'cloud', 'skills');
 }
@@ -348,6 +351,29 @@ describe('skill-registry › getSystemPromptBlock(allowlist)', () => {
     expect(constructed).toBe(2);
   });
 
+  it('captures explicit user roots before a dynamic loader import can observe an active-user switch', async () => {
+    const otherUid = 'u2';
+    writeSkill(customDir(), 'requested-skill', 'requested-skill', 'requested user skill');
+    writeSkill(path.join(tmpDir, otherUid, 'cloud', 'skills'), 'active-skill', 'active-skill', 'active user skill');
+
+    let releaseImport!: () => void;
+    const importGate = new Promise<void>((resolve) => { releaseImport = resolve; });
+    vi.doMock('#core-agent', async (importOriginal) => {
+      await importGate;
+      return importOriginal<any>();
+    });
+
+    const { getSystemPromptBlock } = await loadRegistry();
+    const promptPromise = getSystemPromptBlock({ userId: TEST_UID });
+    const users = await import('../../../src/main/features/users');
+    users.activateUser(otherUid);
+    releaseImport();
+
+    const prompt = await promptPromise;
+    expect(prompt).toContain('requested-skill');
+    expect(prompt).not.toContain('active-skill');
+  });
+
   it('lists agent-owned private and self-evolved skill ids', async () => {
     writeSkill(agentPrivateDir('sample-agent'), 'private-one', 'private-one', 'first private skill');
     writeSkill(agentEvolvedDir('sample-agent'), 'evolved-one', 'evolved-one', 'first evolved skill');
@@ -668,5 +694,31 @@ describe('skill-registry › trust withholding', () => {
     await drainTrustRefreshForTest();
     // Same cache generation: the background verdict now withholds it.
     expect(await getSystemPromptBlock()).not.toContain('fresh');
+  });
+
+  it('keeps mixed-user deep trust refresh work paired with its requesting uid', async () => {
+    writeSkill(builtinDirFor('u1'), 'u1-skill', 'u1-skill', 'one');
+    writeSkill(builtinDirFor('u2'), 'u2-skill', 'u2-skill', 'two');
+    let releaseFirst: (() => void) | null = null;
+    const firstScan = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const partitionSkillsByTrustDeep = vi.fn(async (uid: string, skillIds: readonly string[]) => {
+      if (uid === 'u1') await firstScan;
+      return { loadable: [...skillIds], withheld: [] };
+    });
+    vi.doMock('../../../src/main/features/skill_reverify', async (importOriginal) => ({
+      ...await importOriginal<typeof import('../../../src/main/features/skill_reverify')>(),
+      partitionSkillsByTrustDeep,
+    }));
+
+    const { getSystemPromptBlock, drainTrustRefreshForTest } = await loadRegistry();
+    await getSystemPromptBlock({ userId: 'u1' });
+    await getSystemPromptBlock({ userId: 'u2' });
+    releaseFirst!();
+    await drainTrustRefreshForTest();
+
+    expect(partitionSkillsByTrustDeep.mock.calls).toEqual([
+      ['u1', ['u1-skill']],
+      ['u2', ['u2-skill']],
+    ]);
   });
 });

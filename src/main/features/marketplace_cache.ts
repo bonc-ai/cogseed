@@ -77,7 +77,11 @@ function _freshnessAt(row: { published_at: number; updated_at?: number }): numbe
  *  the cached values. The cache dir itself existing is necessary but not sufficient — a
  *  half-written dir would also exist, hence the field comparison. */
 export async function isCacheFresh(kind: 'agent' | 'skill', id: string, expect: { version: string; published_at: number; updated_at?: number }): Promise<boolean> {
-  const dir = _cacheDir(kind, id);
+  return isCacheFreshForUser(getActiveUserId(), kind, id, expect);
+}
+
+export async function isCacheFreshForUser(userId: string, kind: 'agent' | 'skill', id: string, expect: { version: string; published_at: number; updated_at?: number }): Promise<boolean> {
+  const dir = _cacheDirForUser(userId, kind, id);
   if (!fs.existsSync(dir)) return false;
   const meta = await _readMeta(dir);
   if (!meta) return false;
@@ -88,12 +92,20 @@ export async function isCacheFresh(kind: 'agent' | 'skill', id: string, expect: 
 
 function _cacheDir(kind: 'agent' | 'skill', id: string): string {
   const uid = getActiveUserId();
+  return _cacheDirForUser(uid, kind, id);
+}
+
+function _cacheDirForUser(uid: string, kind: 'agent' | 'skill', id: string): string {
   return kind === 'agent' ? marketplaceCacheAgentDir(uid, id) : marketplaceCacheSkillDir(uid, id);
 }
 
 /** Touch `last_used_at` to now — call after a successful detail-page render OR install copy. */
 export async function touchCacheEntry(kind: 'agent' | 'skill', id: string): Promise<void> {
-  const dir = _cacheDir(kind, id);
+  return touchCacheEntryForUser(getActiveUserId(), kind, id);
+}
+
+export async function touchCacheEntryForUser(userId: string, kind: 'agent' | 'skill', id: string): Promise<void> {
+  const dir = _cacheDirForUser(userId, kind, id);
   const meta = await _readMeta(dir);
   if (!meta) return;
   meta.last_used_at = Date.now();
@@ -107,7 +119,12 @@ export async function touchCacheEntry(kind: 'agent' | 'skill', id: string): Prom
 export async function writeAgentCache(
   id: string, agentJson: Record<string, unknown>, meta: { version: string; published_at: number; updated_at?: number },
 ): Promise<void> {
-  const uid = getActiveUserId();
+  return writeAgentCacheForUser(getActiveUserId(), id, agentJson, meta);
+}
+
+export async function writeAgentCacheForUser(
+  uid: string, id: string, agentJson: Record<string, unknown>, meta: { version: string; published_at: number; updated_at?: number },
+): Promise<void> {
   await withMarketplaceCacheLock(uid, 'agent', id, async () => {
     const dir = marketplaceCacheAgentDir(uid, id);
     await fsp.rm(dir, { recursive: true, force: true });
@@ -124,7 +141,11 @@ export async function writeAgentCache(
 
 /** Read cached agent.json content. Returns null if missing / unreadable. */
 export async function readAgentCache(id: string): Promise<Record<string, unknown> | null> {
-  const dir = _cacheDir('agent', id);
+  return readAgentCacheForUser(getActiveUserId(), id);
+}
+
+export async function readAgentCacheForUser(userId: string, id: string): Promise<Record<string, unknown> | null> {
+  const dir = _cacheDirForUser(userId, 'agent', id);
   const file = path.join(dir, 'agent.json');
   if (!fs.existsSync(file)) return null;
   try { return JSON.parse(await fsp.readFile(file, 'utf8')) as Record<string, unknown>; }
@@ -138,7 +159,15 @@ export async function writeSkillCache(
   extract: (dir: string) => Promise<void> | void,
   meta: { version: string; published_at: number; updated_at?: number },
 ): Promise<void> {
-  const uid = getActiveUserId();
+  return writeSkillCacheForUser(getActiveUserId(), id, extract, meta);
+}
+
+export async function writeSkillCacheForUser(
+  uid: string,
+  id: string,
+  extract: (dir: string) => Promise<void> | void,
+  meta: { version: string; published_at: number; updated_at?: number },
+): Promise<void> {
   await withMarketplaceCacheLock(uid, 'skill', id, async () => {
     const dir = marketplaceCacheSkillDir(uid, id);
     await fsp.rm(dir, { recursive: true, force: true });
@@ -157,7 +186,11 @@ export async function writeSkillCache(
  *  directly for detail-page rendering). The `_cache.json` sentinel must NOT propagate to the
  *  install target — `installFromSkillCache` in `marketplace.ts` strips it on copy. */
 export function getSkillCacheDir(id: string): string {
-  return _cacheDir('skill', id);
+  return getSkillCacheDirForUser(getActiveUserId(), id);
+}
+
+export function getSkillCacheDirForUser(userId: string, id: string): string {
+  return _cacheDirForUser(userId, 'skill', id);
 }
 
 /** Read a single file from the cached skill dir. Used by the detail-page file viewer. The
@@ -165,10 +198,14 @@ export function getSkillCacheDir(id: string): string {
  *  the cache dir. Returns null on miss / unsafe path / I/O error. Reads up to 256 KB; bigger
  *  files are truncated with a marker so the detail view always renders within reasonable size. */
 export async function readSkillCacheFile(id: string, relFile: string): Promise<string | null> {
+  return readSkillCacheFileForUser(getActiveUserId(), id, relFile);
+}
+
+export async function readSkillCacheFileForUser(userId: string, id: string, relFile: string): Promise<string | null> {
   if (!relFile || relFile === '_cache.json') return null;
   const safe = _safeRel(relFile);
   if (!safe) return null;
-  const dir = _cacheDir('skill', id);
+  const dir = _cacheDirForUser(userId, 'skill', id);
   const target = path.resolve(dir, safe);
   if (!target.startsWith(path.resolve(dir) + path.sep) && target !== path.resolve(dir)) return null;
   if (!fs.existsSync(target) || !fs.statSync(target).isFile()) return null;
@@ -193,7 +230,11 @@ function _safeRel(rel: string): string | null {
 /** Return cached skill file list (relative paths, byte sizes). Used by the detail page's file
  *  tree. Skips _cache.json. */
 export async function listSkillCacheFiles(id: string): Promise<{ path: string; bytes: number }[]> {
-  const dir = _cacheDir('skill', id);
+  return listSkillCacheFilesForUser(getActiveUserId(), id);
+}
+
+export async function listSkillCacheFilesForUser(userId: string, id: string): Promise<{ path: string; bytes: number }[]> {
+  const dir = _cacheDirForUser(userId, 'skill', id);
   if (!fs.existsSync(dir)) return [];
   const out: { path: string; bytes: number }[] = [];
   function walk(d: string, rel = ''): void {
@@ -230,7 +271,11 @@ export interface ListingsCacheFile {
 const LISTINGS_VERSION = 4;
 
 export async function getListingsCache(): Promise<ListingsCacheFile> {
-  const file = marketplaceListingsCacheFile(getActiveUserId());
+  return getListingsCacheForUser(getActiveUserId());
+}
+
+export async function getListingsCacheForUser(userId: string): Promise<ListingsCacheFile> {
+  const file = marketplaceListingsCacheFile(userId);
   return _readListingsCacheFile(file);
 }
 
@@ -264,7 +309,10 @@ async function _writeListingsCacheFile(uid: string, entries: Record<string, List
 // don't trample each other. Atomic via temp + rename — partial writes never publish.
 let _listingsWriteQueue: Promise<void> = Promise.resolve();
 export function setListingsCache(entries: Record<string, ListingsCacheEntry>): Promise<void> {
-  const uid = getActiveUserId();
+  return setListingsCacheForUser(getActiveUserId(), entries);
+}
+
+export function setListingsCacheForUser(uid: string, entries: Record<string, ListingsCacheEntry>): Promise<void> {
   _listingsWriteQueue = _listingsWriteQueue.then(async () => {
     await _writeListingsCacheFile(uid, entries);
   }).catch((err) => {
@@ -274,7 +322,10 @@ export function setListingsCache(entries: Record<string, ListingsCacheEntry>): P
 }
 
 export function mergeListingsCache(entries: Record<string, ListingsCacheEntry>): Promise<void> {
-  const uid = getActiveUserId();
+  return mergeListingsCacheForUser(getActiveUserId(), entries);
+}
+
+export function mergeListingsCacheForUser(uid: string, entries: Record<string, ListingsCacheEntry>): Promise<void> {
   _listingsWriteQueue = _listingsWriteQueue.then(async () => {
     const file = marketplaceListingsCacheFile(uid);
     const current = await _readListingsCacheFile(file);
@@ -293,10 +344,14 @@ export function mergeListingsCache(entries: Record<string, ListingsCacheEntry>):
 /** Entry-point sweep: triggered once on each openMarketplace call. Cheap (O(N entries) stat).
  *  Returns bytes freed (0 when nothing to do). Idempotent / safe to no-op when cache is empty. */
 export async function sweepIfNeeded(): Promise<number> {
-  const root = marketplaceCacheDir(getActiveUserId());
+  return sweepIfNeededForUser(getActiveUserId());
+}
+
+export async function sweepIfNeededForUser(userId: string): Promise<number> {
+  const root = marketplaceCacheDir(userId);
   if (!fs.existsSync(root)) return 0;
 
-  const entries = await _listAllEntries(root);
+  const entries = await _listAllEntries(userId, root);
   if (entries.length === 0) return 0;
 
   const totalBytes = entries.reduce((s, e) => s + e.bytes, 0);
@@ -334,9 +389,9 @@ export async function sweepIfNeeded(): Promise<number> {
 
 interface SweepEntry { dir: string; bytes: number; lastUsedAt: number; dropped?: boolean }
 
-async function _listAllEntries(root: string): Promise<SweepEntry[]> {
+async function _listAllEntries(userId: string, root: string): Promise<SweepEntry[]> {
   const out: SweepEntry[] = [];
-  for (const kindDir of [marketplaceCacheAgentsDir(getActiveUserId()), marketplaceCacheSkillsDir(getActiveUserId())]) {
+  for (const kindDir of [marketplaceCacheAgentsDir(userId), marketplaceCacheSkillsDir(userId)]) {
     if (!fs.existsSync(kindDir)) continue;
     for (const sub of fs.readdirSync(kindDir, { withFileTypes: true })) {
       if (!sub.isDirectory()) continue;

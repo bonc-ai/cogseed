@@ -1,0 +1,110 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "presetId": "local-research",
+    "version": "1",
+    "displayName": "Local research agent",
+    "description": "Read-only research using the CogSeed runtime.",
+    "presetType": "cogseed-agent",
+    "model": {
+      "providerId": "provider-main",
+      "modelId": "deepseek-chat",
+      "reasoningProfile": "balanced"
+    },
+    "capabilities": [
+      {
+        "capabilityId": "tool.file",
+        "version": "1"
+      },
+      {
+        "capabilityId": "tool.search",
+        "version": "1"
+      }
+    ],
+    "prompt": {
+      "systemSections": [
+        "research",
+        "citations"
+      ],
+      "locale": "en"
+    },
+    "runtime": {
+      "sessionPolicy": "new-per-run",
+      "memoryPolicy": "read-only",
+      "loopPolicy": "single-agent",
+      "sandboxProfile": "creator-read-only-v1",
+      "timeoutMs": 60000,
+      "budget": {
+        "maxCost": 2,
+        "maxTokens": 8000
+      }
+    },
+    "permissions": {
+      "tools": [
+        "tool.file",
+        "tool.search"
+      ],
+      "files": [
+        "workspace.readonly"
+      ],
+      "sideEffects": [],
+      "approvalMode": "always"
+    },
+    "provenance": {
+      "createdBy": "creator-agent",
+      "sourceSessionId": "source-session",
+      "sourceAssetRefs": []
+    }
+  },
+  "catalog": [
+    {
+      "capabilityId": "model.provider-main.deepseek-chat",
+      "version": "1",
+      "kind": "model",
+      "displayName": "Configured model",
+      "available": true,
+      "permissions": [
+        "cost"
+      ],
+      "sourceRef": "provider.provider-main",
+      "health": "ready"
+    },
+    {
+      "capabilityId": "tool.file",
+      "version": "1",
+      "kind": "tool",
+      "displayName": "File",
+      "available": true,
+      "permissions": [
+        "read"
+      ],
+      "sourceRef": "agent-capability.file",
+      "health": "ready"
+    },
+    {
+      "capabilityId": "tool.search",
+      "version": "1",
+      "kind": "tool",
+      "displayName": "Search",
+      "available": true,
+      "permissions": [
+        "read"
+      ],
+      "sourceRef": "agent-capability.search",
+      "health": "ready"
+    }
+  ],
+  "actions": [
+    {
+      "kind": "local-read",
+      "capabilityId": "tool.file",
+      "fileGrant": "workspace.readonly",
+      "idempotencyKey": "read-1"
+    },
+    {
+      "kind": "mock-search",
+      "capabilityId": "tool.search",
+      "idempotencyKey": "search-1"
+    }
+  ]
+}
