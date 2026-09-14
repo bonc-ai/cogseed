@@ -76,6 +76,38 @@
     )).join('');
   }
 
+  function renderSidebarAppearance() {
+    const navItem = (icon, label, active = false) => `<button type="button" class="sidebar-btn${active ? ' active' : ''}">
+      <span data-ui-icon="${icon}" data-ui-icon-class="sidebar-btn-icon"></span><span>${label}</span>
+    </button>`;
+    const task = (title, time, active = false) => `<div class="conv-item${active ? ' active' : ''}">
+      <div class="conv-item-row"><div class="conv-item-title">${title}</div><span class="conv-item-time">${time}</span></div>
+    </div>`;
+    const sidebar = (selected) => `<div class="gallery-sidebar-frame"><aside class="sidebar">
+      <div class="sidebar-logo"><img class="logo-icon" src="../resources/icons/logo.png" alt="" /><span class="logo-text">CogSeed</span></div>
+      <div class="sidebar-actions">
+        ${navItem('plus', '新建任务', !selected)}
+        ${navItem('folder', '工作空间')}
+        ${navItem('git-branch', '认知资产')}
+        ${navItem('clock', '自动化')}
+        ${navItem('plug', '智能体 / 技能 / 连接')}
+      </div>
+      <div class="sidebar-conversation-nav"><div class="sidebar-section sidebar-conversations-section"><div class="conversation-list">
+        <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">最近任务</span></button></div>
+        ${task('项目里程碑与提醒', '2分', selected)}
+        ${task('资料来源与引用复核', '昨天')}
+        <div class="conv-list-section-header conv-list-space-title"><button type="button" class="conv-list-section-fold"><span data-ui-icon="chevron-down" data-ui-icon-class="conv-list-section-caret-icon"></span><span class="conv-list-section-label">空间</span></button></div>
+      </div></div></div>
+      <div class="sidebar-footer-actions"><div class="sidebar-footer-account"><button type="button" class="hub-chip">
+        <span class="hub-chip-avatar is-gradient" aria-hidden="true">陈</span><span class="hub-chip-meta"><span class="hub-chip-name">陈昱</span><span class="hub-chip-sub">个人工作空间</span></span><span class="hub-chip-chev" data-ui-icon="chevron-down"></span>
+      </button></div></div>
+    </aside></div>`;
+    byId('sidebar-appearance-specimens').innerHTML = [
+      specimen('默认侧栏', 'F4F8F5 主面 · 400 导航字重 · 500 用户名', sidebar(false)),
+      specimen('任务选中', '绿色 wash 只表达当前位置，不额外加粗', sidebar(true)),
+    ].join('');
+  }
+
   function renderUserMenus() {
     const identity = {
       name: '陈昱',
@@ -108,6 +140,36 @@
       '单一 Tab 入口 · 下划线选中 · 绿色键盘焦点',
       `<div class="ui-tabs" role="tablist" aria-label="能力页面">${tab('智能体', true, 6)}${tab('MCP 与工具', false, 4)}${tab('技能', false, 18)}${tab('资料库', false)}${tab('IM', false)}</div>`,
     );
+  }
+
+  function renderResourcePages() {
+    const tab = (label, selected) => `<button type="button" class="skills-cognition-tab ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-resource-tab>${label}</button>`;
+    const empty = (title, hint) => uiEmptyState({ kind: 'explained', title, hint });
+    byId('resource-page-specimens').innerHTML = [
+      specimen(
+        '无页签资源页',
+        '32px 桌面留白 · 1232px 内容上限 · 窄宽自动收敛',
+        `<div class="ui-resource-page gallery-resource-page-preview">
+          <div class="ws-center-header">${uiPageHeader({ title: '工作空间', actions: [{ label: '新建空间', icon: 'plus' }] })}</div>
+          <div class="auto-scroll">${empty('还没有工作空间', '正文与标题使用同一套响应式边距。')}</div>
+        </div>`,
+      ),
+      specimen(
+        '带页签资源页',
+        '透明选中态 · Header 后 12px · 页签与正文共用水平起点',
+        `<div class="ui-resource-page gallery-resource-page-preview">
+          <div class="skills-cognition-surface">
+            <div id="cognition-page-header">${uiPageHeader({ title: '认知资产' })}</div>
+            <div class="skills-cognition-tabs">
+              <div class="skills-cognition-tabs-row">
+                <div class="skills-cognition-tab-group" role="tablist" aria-label="认知资产页签预览">${tab('我的认知树', true)}${tab('待我处理', false)}${tab('复用与证明', false)}</div>
+              </div>
+            </div>
+            <div class="skills-cognition-page">${empty('当前分类暂无内容', '页签行为仍由业务页面负责。')}</div>
+          </div>
+        </div>`,
+      ),
+    ].join('');
   }
 
   function renderResourceCards() {
@@ -219,8 +281,72 @@
           ],
         }),
       },
+      {
+        label: '二级页面切换', note: '与技能分类同形 · 保留 Tab 语义与方向键切换',
+        html: uiSegmentedControl({
+          ariaLabel: 'MCP与工具',
+          role: 'tablist',
+          value: 'mcp',
+          items: [
+            { value: 'mcp', label: 'MCP 连接器' },
+            { value: 'plugins', label: '插件' },
+          ],
+        }),
+      },
     ];
     byId('segmented-control-specimens').innerHTML = cases.map((item) => specimen(item.label, item.note, item.html)).join('');
+  }
+
+  function composerToolbar({ conversation = false } = {}) {
+    const permission = conversation
+      ? '<span class="chat-permission-chip"><span data-ui-icon="lock" data-ui-icon-class="chat-permission-chip-icon"></span><span class="chat-permission-select ai-select"><button type="button" class="ai-select-trigger" aria-label="访问权限：请求批准" aria-haspopup="listbox" aria-expanded="false"><span class="ai-select-label"><span>请求批准</span></span><span data-ui-icon="chevron-down" data-ui-icon-class="ai-select-caret"></span></button></span></span>'
+      : '';
+    return `<div class="chat-bottom-bar">
+      <button type="button" class="chat-attach-btn" aria-label="添加附件">+</button>
+      <span class="chat-composer-divider" aria-hidden="true"></span>
+      <button type="button" class="chat-recipient-chip" aria-label="选择智能体、技能与引用"><span class="chat-recipient-prefix">@</span><span class="chat-recipient-name">项目助理</span></button>
+      <button type="button" class="workspace-chip" aria-label="选择工作空间"><span data-ui-icon="layout-grid" data-ui-icon-class="workspace-chip-icon"></span><span class="workspace-chip-prefix">工作空间：</span><span class="workspace-chip-label">默认工作区</span><span data-ui-icon="chevron-down" data-ui-icon-class="workspace-chip-chevron"></span></button>
+      ${permission}
+      <button type="button" class="model-chip exec-config-chip" aria-label="执行配置（本次任务）"><span data-ui-icon="settings" data-ui-icon-class="model-chip-icon"></span><span class="model-chip-label">DeepSeek V4 Flash</span><span class="exec-config-effort">自动</span><span data-ui-icon="chevron-down" data-ui-icon-class="model-chip-chevron"></span></button>
+      <button type="button" class="chat-stt-btn" aria-label="语音输入"><span data-ui-icon="mic" data-ui-icon-class="chat-stt-icon"></span></button>
+      <button type="button" class="chat-send-btn" aria-label="发送消息"><span data-ui-icon="send" data-ui-icon-class="send-icon"></span></button>
+    </div>`;
+  }
+
+  function composerDemo({ conversation = false, narrow = false, value = '' } = {}) {
+    const areaClass = conversation ? 'chat-input-area' : 'new-chat-input-area';
+    const demoClass = `gallery-composer-demo${conversation ? ' is-conversation' : ''}${narrow ? ' is-narrow' : ''}`;
+    const area = `<div class="${areaClass}">
+      <div class="chat-input-rich-wrap"><div class="chat-rich-editor" role="textbox" aria-multiline="true" data-placeholder="描述一项工作，或粘贴一份材料。输入 @ 选择智能体与技能。">${value}</div></div>
+      ${composerToolbar({ conversation })}
+    </div>`;
+    return `<div class="${demoClass}">${conversation ? `<div id="panel-conversation">${area}</div>` : area}</div>`;
+  }
+
+  function composerPopoverMatrix() {
+    const agent = `<div class="skill-picker composer-popover gallery-composer-popover">
+      <div class="skill-picker-tabs"><button type="button" class="skill-picker-tab active">智能体</button><button type="button" class="skill-picker-tab">技能</button></div>
+      <div class="skill-picker-header"><input type="text" value="" placeholder="搜索智能体…" /></div>
+      <div class="skill-picker-list"><div class="skill-picker-item active"><div class="skill-picker-item-name">cogseed</div><div class="skill-picker-item-desc">默认接收者，无需 @</div></div><div class="skill-picker-item"><div class="skill-picker-item-name">WorkBuddy</div><div class="skill-picker-item-desc">本地代码研发智能体</div></div></div>
+    </div>`;
+    const workspace = `<div class="workspace-menu space-menu composer-popover gallery-composer-popover">
+      <input class="workspace-menu-search" type="text" placeholder="搜索工作空间…" />
+      <div class="workspace-menu-list"><button type="button" class="workspace-menu-item workspace-menu-item--active"><span>默认工作区</span><span class="workspace-menu-check"><span data-ui-icon="check" data-ui-icon-class="workspace-check-icon"></span></span></button><button type="button" class="workspace-menu-item"><span>教育</span></button></div>
+    </div>`;
+    const permission = `<div class="ai-select-popover composer-popover chat-permission-popover gallery-composer-popover" role="listbox">
+      <div class="ai-select-options"><div class="ai-select-item" role="option" aria-selected="false"><div class="ai-select-item-label">完全访问</div></div><div class="ai-select-item" role="option" aria-selected="false"><div class="ai-select-item-label">帮我批准</div></div><div class="ai-select-item active" role="option" aria-selected="true"><div class="ai-select-item-label">请求批准</div></div></div>
+    </div>`;
+    return `<div class="gallery-composer-popover-grid"><div><strong>@ 智能体 / 技能</strong>${agent}</div><div><strong>工作空间</strong>${workspace}</div><div><strong>访问权限</strong>${permission}</div></div>`;
+  }
+
+  function renderComposerSpecimens() {
+    const cases = [
+      ['首页 / 900px', '完整标签 · 空正文使用安静发送键', composerDemo()],
+      ['已有对话 / 760px', '64–200px 正文 · 有内容时发送键转为品牌主操作', composerDemo({ conversation: true, value: '请核对这份项目材料。' })],
+      ['窄宽 / 480px', '按输入台自身宽度收起标签，不依赖页面宽度', composerDemo({ narrow: true, value: '请按团队整理客户信息。' })],
+    ];
+    byId('composer-specimens').innerHTML = cases.map(([label, note, html]) => specimen(label, note, `<div class="gallery-composer-stage">${html}</div>`)).join('')
+      + specimen('弹层 / 统一外壳', '互斥打开 · 同一描边、圆角、层级与阴影', composerPopoverMatrix());
   }
 
   function renderFormControls() {
@@ -589,13 +715,16 @@
 
   renderPageHeaders();
   renderSidebarTools();
+  renderSidebarAppearance();
   renderUserMenus();
+  renderResourcePages();
   renderTabs();
   renderResourceCards();
   renderSettingsSections();
   renderButtons();
   renderIconButtons();
   renderSegmentedControls();
+  renderComposerSpecimens();
   renderFormControls();
   renderSearchSelectionComponents();
   renderEmptyStates();

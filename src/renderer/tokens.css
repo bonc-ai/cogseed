@@ -10,6 +10,7 @@
   --color-brand: #0E9F6E;
   --color-brand-hover: #0A7A55;
   --color-brand-soft: #E2F5EC;
+  --color-accent-wash: rgba(14, 159, 110, 0.09);
   --color-accent: #0A7A55;
   --color-accent-hover: #086545;
   --color-accent-gradient: linear-gradient(135deg, #0A7A55, #086545);
@@ -47,7 +48,9 @@
   --color-control-stop: #5B6470;
   --color-control-stop-hover: #46505B;
   --color-scrim: rgba(20, 40, 30, 0.28);
-  --color-command-scrim: rgba(20, 71, 55, 0.40);
+  /* Command palettes share the modal scrim; the separate alias remains for
+     compatibility with older gallery and business-page selectors. */
+  --color-command-scrim: var(--color-scrim);
   --color-focus-halo: rgba(14, 159, 110, 0.12);
   --color-overlay-hover: rgba(20, 40, 30, 0.05);
   --color-overlay-fill: rgba(20, 40, 30, 0.06);
@@ -130,6 +133,8 @@
   --layout-titlebar-height: 52px;
   --layout-thread-width: 760px;
   --layout-thread-home-width: 720px;
+  --layout-composer-width-min: 480px;
+  --layout-composer-width-max: 900px;
   --layout-resource-detail-width: 880px;
   --layout-info-panel-width: 308px;
   --layout-settings-nav-width: 224px;
@@ -194,7 +199,7 @@
   --shadow-sm: 0 1px 2px rgba(20, 40, 30, 0.06);
   --shadow-card: 0 1px 2px rgba(20, 40, 30, 0.04), 0 8px 24px rgba(20, 40, 30, 0.05);
   --shadow-card-hover: 0 6px 18px rgba(20, 40, 30, 0.05);
-  --shadow-composer: 0 4px 32px rgba(24, 84, 60, 0.06), 0 1px 0 rgba(255, 255, 255, 0.70) inset;
+  --shadow-composer: var(--shadow-card);
   --shadow-dialog: 0 24px 60px rgba(20, 40, 30, 0.18);
   --focus-width: 1px;
   --focus-offset: 2px;

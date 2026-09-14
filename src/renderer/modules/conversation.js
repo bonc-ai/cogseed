@@ -25,26 +25,6 @@ function _conversationSpaceDisplayName(space) {
 const _SIDEBAR_COLLAPSE_KEY = 'chat.sidebar.collapse.v1';
 // 分区折叠：{ pinned, spaces, recent } + 空间组折叠 spaceGroups[sid]。默认全展开。
 let _sidebarCollapse = _loadSidebarCollapse();
-// 侧栏双 tab（ZCode 式）：'spaces'（空间）| 'recent'（最近任务）。默认最近任务。
-const _SIDEBAR_CONV_TAB_KEY = 'chat.sidebar.convTab.v1';
-let _sidebarConvTab = (() => {
-  try { return localStorage.getItem(_SIDEBAR_CONV_TAB_KEY) === 'spaces' ? 'spaces' : 'recent'; } catch (_) { return 'recent'; }
-})();
-function _setSidebarConvTab(tab) {
-  _sidebarConvTab = tab === 'spaces' ? 'spaces' : 'recent';
-  try { localStorage.setItem(_SIDEBAR_CONV_TAB_KEY, _sidebarConvTab); } catch (_) {}
-  _syncSidebarConvTabUI();
-  renderConversationList();
-}
-function _syncSidebarConvTabUI() {
-  const tabs = document.querySelectorAll('#sidebar-conv-tabs [data-conv-tab]');
-  tabs.forEach((btn) => {
-    const active = btn.dataset.convTab === _sidebarConvTab;
-    btn.classList.toggle('is-active', active);
-    if (active) btn.setAttribute('aria-selected', 'true');
-    else btn.removeAttribute('aria-selected');
-  });
-}
 function _loadSidebarCollapse() {
   try {
     const raw = JSON.parse(localStorage.getItem(_SIDEBAR_COLLAPSE_KEY) || '');
@@ -3632,36 +3612,9 @@ function _rememberGroupActor(cid, actor) {
   _groupMembersCache.set(cid, next);
   _refreshActorPlaceholders(cid, actor.id);
   _repaintPendingActorHeaders(cid);
-  _refreshSidebarBadgesForCid(cid);
   if (cid === currentCid) {
     try { _refreshChatHeader(); } catch (_) { /* not yet bound */ }
   }
-}
-
-// Repaint only the conv-row badge cluster for a single cid — full
-// `renderConversationList()` would rebuild the entire sidebar (and
-// destroy hover / focus state). The badge is a leaf node, so swapping
-// its innerHTML is enough.
-function _refreshSidebarBadgesForCid(cid) {
-  if (!cid) return;
-  const conv = (Array.isArray(conversations) ? conversations : []).find(
-    (x) => x && x.conversation_id === cid,
-  );
-  if (!conv) return;
-  const html = _renderConvAgentStackHtml(conv);
-  document.querySelectorAll(`.conv-item[data-cid="${CSS.escape(cid)}"]`).forEach((row) => {
-    let meta = row.querySelector(':scope > .conv-item-meta');
-    if (html) {
-      if (!meta) {
-        meta = document.createElement('div');
-        meta.className = 'conv-item-meta';
-        row.appendChild(meta);
-      }
-      meta.innerHTML = html;
-    } else if (meta) {
-      meta.remove();
-    }
-  });
 }
 
 // Read-side normalizer: jsonl records written before the multi-edit
@@ -5686,98 +5639,6 @@ function _renderConversationTimeBucketList(items, itemOpts = {}) {
   return parts.join('');
 }
 
-// ── Sidebar conv-row meta helpers ────────────────────────────────────────
-// Per-row elapsed text was intentionally removed: time recency is already
-// expressed by the time-bucket section headers (today / yesterday / last 7 …)
-// in `renderConversationList`, and duplicating it inline doubles the same
-// signal. The meta row keeps only the agent-avatar stack ("who's in this
-// conversation"), which carries information orthogonal to recency.
-
-// Deterministic id → palette pick. Mirrors PC/docs/design/TOKENS.md §1.4 agent
-// Sidebar conv-row agent badges. Render via the shared `renderAvatarHtml`
-// (same icon+color helper used everywhere else for agents) so the badges
-// match agent cards / chat rows visually instead of forking a separate
-// initial-letter style. `c.agent_id` from the conversation index is the
-// load-bearing source — it lets the badge render for unopened convs whose
-// `_groupMembersCache` slot is still empty (the cache only fills after
-// `_refreshGroupMembers` runs, i.e. after the user opens the conv).
-function _renderConvAgentStackHtml(c) {
-  if (!c) return '';
-  // Slot order: commander first (when it actually spoke in this conv),
-  // then agents. `c.commander_in_chat` (backend-derived from a
-  // <cid>.jsonl scan) is the truth — `members.json` always carries
-  // commander because `seedReservedActors` adds it at conv creation,
-  // so we can't infer "commander participated" from membership alone.
-  // An `@<agent>`-started conv where commander never replied therefore
-  // shows only the agent's avatar.
-  // Agents come from the union of:
-  // - `c.agent_ids` (backend snapshot from `members.json`) — covers every
-  //   conv whether or not the user has opened it.
-  // - `_groupMembersCache` (live per-cid roster) — covers the currently
-  //   open conv where `_rememberGroupActor` / `_refreshGroupMembers` keep
-  //   the list fresh, so a freshly @-mentioned agent shows up before the
-  //   next `listConversations` lands.
-  // Cap at 4 slots total.
-  // 空间可用智能体：空间会话按「空间可用智能体清单」渲染（与是否对话过无关，
-  // CogSeed 主智能体恒计入）；非空间会话维持原有参与者名单逻辑。
-  const spaceMeta = c.space_id ? _spaceById(c.space_id) : null;
-  const usableAgents = (spaceMeta && Array.isArray(spaceMeta.usable_agents) && spaceMeta.usable_agents.length)
-    ? spaceMeta.usable_agents
-    : null;
-  const slots = [];
-  if (usableAgents) {
-    const seenU = new Set();
-    for (const id of usableAgents) {
-      if (!id || seenU.has(id)) continue;
-      seenU.add(id);
-      slots.push(id === 'commander' ? { kind: 'commander', id: 'commander' } : { kind: 'agent', id });
-    }
-  } else {
-    if (c.commander_in_chat) slots.push({ kind: 'commander', id: 'commander' });
-    const seen = new Set();
-    if (Array.isArray(c.agent_ids)) {
-      for (const id of c.agent_ids) {
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        slots.push({ kind: 'agent', id });
-      }
-    }
-    const cached = _groupMembersCache.get(c.conversation_id);
-    if (Array.isArray(cached)) {
-      for (const a of cached) {
-        if (!a || !a.id || a.kind !== 'agent') continue;
-        if (seen.has(a.id)) continue;
-        seen.add(a.id);
-        slots.push({ kind: 'agent', id: a.id });
-      }
-    }
-    // 没有任何参与头像时（纯 CogSeed/Commander 对话、`commander_in_chat` 未标记、
-    // 无 agent 参与），回退显示 CogSeed 图标——每个会话都有这一个身份。
-    if (!slots.length) slots.push({ kind: 'commander', id: 'commander' });
-  }
-  const parts = slots.slice(0, 4).map((s) => {
-    if (s.kind === 'commander') {
-      const av = (typeof _commanderAvatar === 'function') ? _commanderAvatar() : { icon: '', color: '' };
-      return renderAvatarHtml(av.icon, av.color, {
-        size: 16,
-        seed: 'commander',
-        extraClass: 'conv-item-member',
-      });
-    }
-    let icon, color;
-    if (typeof _agentsCache !== 'undefined' && Array.isArray(_agentsCache)) {
-      const a = _agentsCache.find((x) => x && x.agent_id === s.id);
-      if (a) { icon = a.icon; color = a.color; }
-    }
-    return renderAvatarHtml(icon, color, {
-      size: 16,
-      seed: s.id || 'agent',
-      extraClass: 'conv-item-member',
-    });
-  });
-  return `<span class="conv-item-members">${parts.join('')}</span>`;
-}
-
 function _renderConversationSidebarItem(c, opts = {}) {
   const cid = escapeHtml(c.conversation_id);
   const rawTitle = c.title || t('chat.new_conv_title');
@@ -5786,7 +5647,6 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const isUntitled = !c.title;
   const editing = _conversationInlineRenameCid === c.conversation_id;
   const isPinned = !!c.pinned_at;
-  const isFromAuto = !!c.origin_auto_task_id;
   const hidePin = !!opts.hidePin;
   const menuTitle = escapeHtml(t('project.menu.more_actions'));
   // ZCode 式行内相对时间（58分 / 3小时 / 6小时）：最近任务平铺列表没有时间桶标题，
@@ -5796,13 +5656,7 @@ function _renderConversationSidebarItem(c, opts = {}) {
   const timeHtml = timeText
     ? `<span class="conv-item-time" data-time-iso="${escapeHtml(_conversationActivityIso(c) || '')}" title="${escapeHtml(_conversationAbsoluteTime(c))}">${escapeHtml(timeText)}</span>`
     : '';
-  // Auto-fired conversations get the same clock icon as the sidebar
-  // "Automation" tab, rendered to the LEFT of the title text. Visible in
-  // the sidebar conv list AND the project-detail conversations list (both
-  // reuse this renderer).
-  const autoIconHtml = isFromAuto
-    ? `<span class="conv-item-auto-icon" title="${escapeHtml(t('auto.title'))}" aria-label="${escapeHtml(t('auto.title'))}">${_uiIconHtml('clock', 'conv-item-auto-icon-svg') || ''}</span>`
-    : '';
+  const runningHtml = _convTaskStatusLine(c.conversation_id);
   const titleNode = editing
     ? uiInput({
         id: `conv-item-title-input-${c.conversation_id}`,
@@ -5816,7 +5670,6 @@ function _renderConversationSidebarItem(c, opts = {}) {
     opts.nested ? 'conv-item-nested' : '',
     currentCid === c.conversation_id ? 'active' : '',
     isPinned ? 'is-pinned' : '',
-    isFromAuto ? 'is-from-auto' : '',
     hidePin ? 'no-pin' : '',
   ].filter(Boolean).join(' ');
   const selectionHtml = _conversationMergeSelectionActive
@@ -5828,72 +5681,43 @@ function _renderConversationSidebarItem(c, opts = {}) {
         <span class="conv-item-actions">
           <button type="button" class="conv-item-action conv-item-menu"
                   data-conv-menu-cid="${cid}" data-hide-pin="${hidePin ? '1' : '0'}"
-                  title="${menuTitle}" aria-label="${menuTitle}">⋯</button>
+                  title="${menuTitle}" aria-label="${menuTitle}">
+            ${_uiIconHtml('more-horizontal', 'conv-item-menu-icon')}
+          </button>
         </span>`;
-  // 9.1 统一框架 · 左侧「任务与 Session」（恢复自 e88275e1）：聚合任务状态行
-  // （运行中执行方 / 排队消息 / 计划进度），数据来自真实运行态。
-  const taskLine = _convTaskStatusLine(c.conversation_id);
   return `
     <div class="${classes}" data-cid="${cid}">
       <div class="conv-item-row">
         ${selectionHtml}
-        ${autoIconHtml}
+        ${runningHtml}
         ${titleNode}
         ${timeHtml}
         ${actionsHtml}
       </div>
-      ${taskLine}
     </div>
   `;
 }
 
-// 9.1 统一框架 · 左侧「任务与 Session」：聚合会话的任务状态行。
-// 数据来源（全部真实运行态，不造数据）：
-//   - 运行中：state_changed 的在途执行方（_latestInFlight）；
-//   - 排队：本地消息队列（_getQueue）；
-//   - 计划进度：plan-rail 的 plan 事件（planFor）。
-// 无任何状态时返回空串，不渲染占位。
+// SidebarTasks：只把真实 running > 0 显示成紧邻标题的旋转指示器。
+// 排队与计划数据仍保留在各自状态源中，不挤占紧凑的侧栏任务行。
 function _convTaskStatusLine(cid) {
   if (!cid) return '';
-  const parts = [];
   const inFlight = (_latestInFlight.get(cid) || []).filter(Boolean).length;
-  if (inFlight > 0) {
-    parts.push(`<span class="conv-task-chip is-running"><span class="conv-task-dot"></span>${escapeHtml(t('chat.status.running'))}${inFlight > 1 ? ` ${inFlight}` : ''}</span>`);
-  }
-  // _getQueue 来自 queue-draft.js（独立脚本），跨模块调用加 typeof 守卫。
-  const queued = (typeof _getQueue === 'function') ? _getQueue(cid).length : 0;
-  if (queued > 0) {
-    parts.push(`<span class="conv-task-chip is-queued">${escapeHtml(t('chat.status.pending_short'))} ${queued}</span>`);
-  }
-  if (typeof window.planRail === 'object' && window.planRail
-      && typeof window.planRail.planFor === 'function') {
-    const plan = window.planRail.planFor(cid);
-    if (plan && plan.total > 0) {
-      const failed = plan.failed > 0;
-      const blocked = !failed && plan.blocked > 0;
-      const active = !failed && !blocked && plan.active > 0;
-      const cls = failed ? ' is-failed' : blocked ? ' is-blocked' : active ? ' is-active' : ' is-plan';
-      const label = t('chat.task_plan_label', { done: plan.done, total: plan.total });
-      const display = label && label !== 'chat.task_plan_label' ? label : `${plan.done}/${plan.total}`;
-      parts.push(`<span class="conv-task-chip${cls}">${escapeHtml(display)}</span>`);
-    }
-  }
-  if (!parts.length) return '';
-  return `<div class="conv-task-line">${parts.join('')}</div>`;
+  if (inFlight <= 0) return '';
+  const runningLabel = escapeHtml(t('chat.status.running'));
+  return `<span class="conv-task-indicator" role="img" aria-label="${runningLabel}" title="${runningLabel}"></span>`;
 }
 
-// 单项刷新任务状态行（state_changed / 队列 / plan 事件变化时由
-// _updateConvSidebarBadge 顺带调用）。
+// state_changed 后只替换该行的运行指示器，不重绘任务树。
 function _refreshConvTaskLine(cid) {
   if (!cid) return;
   const item = document.querySelector(`.conv-item[data-cid="${cid}"]`);
   if (!item) return;
-  item.querySelector('.conv-task-line')?.remove();
-  const line = _convTaskStatusLine(cid);
-  if (!line) return;
-  const meta = item.querySelector('.conv-item-meta');
-  if (meta) meta.insertAdjacentHTML('afterend', line);
-  else item.insertAdjacentHTML('beforeend', line);
+  item.querySelector('.conv-task-indicator')?.remove();
+  const indicator = _convTaskStatusLine(cid);
+  if (!indicator) return;
+  const title = item.querySelector('.conv-item-title, .conv-item-title-input');
+  if (title) title.insertAdjacentHTML('beforebegin', indicator);
 }
 
 /** 相对时间纯计算（iso → 「刚刚 / N 分 / N 小时 / N 天」）。空串 = 无时间可显示。 */
@@ -7312,13 +7136,15 @@ function _renderSpaceSidebarGroup(sp, convs) {
       data-conv-space-toggle="1" data-conv-space="${escapeHtml(sp.space_id)}"
       aria-expanded="${collapsed ? 'false' : 'true'}">
       <span class="conv-list-section-caret" aria-hidden="true">${_uiIconHtml(collapsed ? 'chevron-right' : 'chevron-down', 'conv-list-section-caret-icon')}</span>
+      <span class="conv-space-group-icon" aria-hidden="true">${_uiIconHtml('space', 'conv-space-group-icon-svg')}</span>
       ${labelHtml}
       <span class="conv-list-section-count">${convs.length}</span>
       <span class="conv-space-quick-task" role="button" tabindex="0" data-conv-space-quick-task="${escapeHtml(sp.space_id)}"
         title="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}" aria-label="${escapeHtml(t('sidebar.space_new_task', '在该空间下新建任务'))}">
         ${_uiIconHtml('plus', 'conv-space-quick-task-icon')}</span>
       <span class="conv-space-more-btn" role="button" tabindex="0" data-conv-space-more="${escapeHtml(sp.space_id)}"
-        title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">⋯</span>
+        title="${escapeHtml(moreTitle)}" aria-label="${escapeHtml(moreTitle)}">
+        ${_uiIconHtml('more-horizontal', 'conv-space-more-icon')}</span>
     </button>
     ${collapsed ? '' : convs.map((c) => _renderConversationSidebarItem(c, {
       bucketScope: `space:${sp.space_id}`,
@@ -7386,7 +7212,6 @@ function _renderChannelSidebarGroups(channelConvs) {
         <span class="conv-list-section-label">${escapeHtml(label)}</span>
       </button>
       <span class="conv-list-section-count">${convs.length}</span>
-      <span class="conv-list-section-rule" aria-hidden="true"></span>
     </div>
     ${collapsed ? '' : _renderConversationFlatList(convs, { bucketScope: `channel:${platform}`, nested: true })}`;
   }).join('');
@@ -7503,7 +7328,7 @@ function renderConversationList() {
   const container = document.getElementById('conversation-list');
   _ensureConversationTimeTicker();
   _sortConversationCacheForSidebar();
-  // 三段结构：置顶（pinned）→ 空间（space_id）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）。
+  // 三段结构：置顶（pinned）→ 最近（无 space_id，含纯 project_id 旧孤儿 F2-A）→ 空间（space_id）。
   // pin 的会话只在置顶区出现（不重复进空间/最近区）。
   const all = (conversations || []).filter(Boolean);
   const pinned = all.filter((c) => c.pinned_at);
@@ -7529,54 +7354,53 @@ function renderConversationList() {
       const bb = _spaceLatestAt(spaceMap.get(b.space_id));
       return (bb || '').localeCompare(aa || '');
     });
-  // ZCode 式双 tab：空间 tab 只显空间分组，最近任务 tab 只显置顶+最近。
-  const isSpacesTab = _sidebarConvTab === 'spaces';
-  const tabVisible = isSpacesTab
-    ? spacesWithConvs.length > 0
-    : (pinned.length > 0 || recent.length > 0 || hasDeferredRecent);
-  if (!tabVisible) {
+  const hasVisibleContent = pinned.length > 0
+    || recent.length > 0
+    || hasDeferredRecent
+    || spacesWithConvs.length > 0;
+  if (!hasVisibleContent) {
     container.innerHTML = `<div class="conv-empty" data-i18n="sidebar.conv_empty">${escapeHtml(t('sidebar.conv_empty'))}</div>`;
     if (typeof _refreshAutoExpandedTaskConvs === 'function') _refreshAutoExpandedTaskConvs();
-    _syncSidebarConvTabUI();
     return;
   }
   const parts = [];
-  if (isSpacesTab) {
-    // ② 空间区（ZCode「分组|项目」中的分组列表：空间组头 + 组内会话）
+  // 单列任务树：置顶 → 最近任务 → 空间。所有原有任务与空间操作保留。
+  if (pinned.length) {
+    parts.push(_renderSidebarSectionHeader('pinned', t('sidebar.pinned_section', '置顶')));
+    if (!_sidebarCollapse.pinned) {
+      parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
+    }
+  }
+  const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
+  const plainRecent = channelConvs.length
+    ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
+    : recent;
+  if (plainRecent.length || hasDeferredRecent || channelConvs.length) {
+    parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
+      action: 'new-task',
+      actionTitle: t('sidebar.new_task', '新建任务'),
+      actionIcon: 'plus',
+    }));
+    if (!_sidebarCollapse.recent) {
+      if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
+      parts.push(_renderConversationFlatList(plainRecent, {
+        bucketScope: 'sidebar',
+        loadMore: _sidebarHasMoreOld(),
+        loadMoreBucket: 'last30',
+      }));
+      if (channelConvs.length) parts.push(_renderChannelSidebarGroups(channelConvs));
+    }
+  }
+  if (spacesWithConvs.length) {
+    parts.push(_renderSidebarSectionHeader('spaces', t('sidebar.spaces_section', '空间'), {
+      action: 'new-space',
+      actionTitle: t('sidebar.new_space', '新建空间'),
+      actionIcon: 'plus',
+    }));
+  }
+  if (spacesWithConvs.length && !_sidebarCollapse.spaces) {
     for (const sp of spacesWithConvs) {
       parts.push(_renderSpaceSidebarGroup(sp, spaceMap.get(sp.space_id)));
-    }
-  } else {
-    // ① 置顶区
-    if (pinned.length) {
-      parts.push(_renderSidebarSectionHeader('pinned', t('sidebar.pinned_section', '置顶')));
-      if (!_sidebarCollapse.pinned) {
-        parts.push(_renderConversationFlatList(pinned, { bucketScope: 'pinned' }));
-      }
-    }
-    // ② 渠道分组区（飞书/微信等渠道会话；置顶的渠道会话留在置顶区不进组）
-    const channelConvs = recent.filter((c) => c && typeof c.channel_platform === 'string' && c.channel_platform);
-    const plainRecent = channelConvs.length
-      ? recent.filter((c) => !(c && typeof c.channel_platform === 'string' && c.channel_platform))
-      : recent;
-    if (channelConvs.length) {
-      parts.push(_renderChannelSidebarGroups(channelConvs));
-    }
-    // ③ 最近任务区（平铺，无时间桶标题）
-    if (plainRecent.length || hasDeferredRecent) {
-      parts.push(_renderSidebarSectionHeader('recent', t('sidebar.recent_tasks'), {
-        action: 'new-task',
-        actionTitle: t('sidebar.new_task', '新建任务'),
-        actionIcon: 'plus',
-      }));
-      if (!_sidebarCollapse.recent) {
-        if (_sidebarNewTaskOpen) parts.push(_renderSidebarNewTaskComposer());
-        parts.push(_renderConversationFlatList(plainRecent, {
-          bucketScope: 'sidebar',
-          loadMore: _sidebarHasMoreOld(),
-          loadMoreBucket: 'last30',
-        }));
-      }
     }
   }
   container.innerHTML = parts.join('');
@@ -7605,7 +7429,6 @@ function renderConversationList() {
 
   // 侧栏行不显示进行中徽标（_updateConvSidebarBadge 已空化），仅刷新全局 chip 与当前头。
   _refreshAllConvBadges();
-  _syncSidebarConvTabUI();
 }
 
 /** 空间组内最近活跃时间（排序用）。 */
@@ -7742,35 +7565,53 @@ const _PERMISSION_MODES = [
 ];
 
 let _permissionModeSelectBound = false;
+let _permissionModeSelectApi = null;
 
 function _permissionModeEl() {
   return document.getElementById('chat-permission-mode-select');
 }
 
+function _permissionModeOptions() {
+  return _PERMISSION_MODES.map((mode) => ({
+    value: mode.id,
+    label: (typeof t === 'function' && t(mode.labelKey)) || mode.label,
+  }));
+}
+
+function _ensurePermissionModeSelect() {
+  const host = _permissionModeEl();
+  if (!host || typeof window._aiSelectMount !== 'function') return null;
+  if (_permissionModeSelectApi?.el === host) return _permissionModeSelectApi;
+  _permissionModeSelectApi = window._aiSelectMount(host, {
+    options: _permissionModeOptions(),
+    value: 'ask',
+    ariaLabel: (typeof t === 'function' && t('chat.permission.label')) || '访问权限',
+    onChange: () => {},
+  });
+  const popover = _permissionModeSelectApi?.el?.querySelector('.ai-select-popover');
+  popover?.classList.add('composer-popover', 'chat-permission-popover');
+  const trigger = _permissionModeSelectApi?.el?.querySelector('.ai-select-trigger');
+  trigger?.addEventListener('click', () => {
+    if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('permission');
+  });
+  return _permissionModeSelectApi;
+}
+
 function _renderPermissionModeSelect(convMeta) {
-  const select = _permissionModeEl();
+  const select = _ensurePermissionModeSelect();
   if (!select) return;
   const current = convMeta && ['full', 'auto_approve', 'ask'].includes(convMeta.permission_mode)
     ? convMeta.permission_mode
     : 'ask';
-  // conversation.js 早于 utils.js（escapeHtml 的定义处）加载，模块加载时先按
-  // 默认「请求批准」填 select（与执行层未设置时的弹窗行为一致），此时
-  // escapeHtml 还没就绪，需要安全兜底。
-  const esc = (s) => (typeof escapeHtml === 'function' ? escapeHtml(String(s)) : String(s));
-  select.innerHTML = _PERMISSION_MODES.map((m) => {
-    const label = (typeof t === 'function' && t(m.labelKey)) || m.label;
-    return `<option value="${m.id}"${current === m.id ? ' selected' : ''}>${esc(label)}</option>`;
-  }).join('');
-  select.value = current;
+  select.setOptions(_permissionModeOptions(), { value: current });
 }
 
 function _bindPermissionModeSelect() {
   if (_permissionModeSelectBound) return;
-  _permissionModeSelectBound = true;
-  const select = _permissionModeEl();
+  const select = _ensurePermissionModeSelect();
   if (!select) return;
-  select.addEventListener('change', async () => {
-    const mode = select.value;
+  _permissionModeSelectBound = true;
+  select.onChange(async (mode) => {
     if (!currentCid || !['full', 'auto_approve', 'ask'].includes(mode)) return;
     try {
       await window.cogseed.invoke('conversations.setPermissionMode', { cid: currentCid, permission_mode: mode });
@@ -7778,6 +7619,9 @@ function _bindPermissionModeSelect() {
       if (typeof uiToast === 'function') uiToast((err && err.message) || '设置访问权限失败', { variant: 'warning' });
     }
   });
+  if (typeof window.registerComposerPopover === 'function') {
+    window.registerComposerPopover('permission', () => select.close());
+  }
 }
 
 function _membersRequestUrl(cid) {
@@ -17336,13 +17180,16 @@ function _initChatSelectionMenu() {
 }
 
 if (typeof window !== 'undefined') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', _initChatSelectionMenu, { once: true });
-  } else {
+  const initConversationComposerControls = () => {
     _initChatSelectionMenu();
+    _bindPermissionModeSelect();
+    // 权限选择器常驻底部栏，先按安全默认值「请求批准」填好；历史加载后
+    // 再由 _renderPermissionModeSelect(convMeta) 精确回填当前会话状态。
+    _renderPermissionModeSelect(null);
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initConversationComposerControls, { once: true });
+  } else {
+    initConversationComposerControls();
   }
-  _bindPermissionModeSelect();
-  // 权限 select 现在常驻底部栏（工作空间旁），先按默认「完全访问」填好，
-  // 等历史加载后再由 _renderPermissionModeSelect(convMeta) 精确回填。
-  _renderPermissionModeSelect(null);
 }

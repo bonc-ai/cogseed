@@ -20,8 +20,8 @@ describe('sidebar branding at narrow widths', () => {
     expect(iconRule).toContain('height: var(--control-height-sm)');
     expect(tokens).toContain('--control-height-sm: 28px;');
 
-    expect(textRule).toContain('font-size: var(--font-size-ui)');
-    expect(tokens).toContain('--font-size-ui: 14px;');
+    expect(textRule).toContain('font-size: var(--font-size-title)');
+    expect(tokens).toContain('--font-size-title: 15px;');
     expect(textRule).toContain('transition: font-size 0.2s ease');
 
     // Narrow state shrinks only the text: no icon override, no alignment

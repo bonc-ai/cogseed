@@ -93,6 +93,13 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceCss).toContain('.ws-role-primary-btn.ui-button');
   });
 
+  it('keeps collaborating Agent tool selection and keyboard focus visually observable', () => {
+    expect(workspaceSource).toContain('aria-pressed="${selected ? \'true\' : \'false\'}"');
+    expect(workspaceCss).toMatch(/\.ws-view \.ws-tool-row > button\.ws-tool-tile\s*\{[^}]*border:\s*1px solid transparent;/s);
+    expect(workspaceCss).toMatch(/\.ws-view \.ws-tool-row > button\.ws-tool-tile\.selected\s*\{[^}]*border-color:\s*#79c49e;/s);
+    expect(workspaceCss).toMatch(/\.ws-view \.ws-tool-row > button\.ws-tool-tile:focus-visible\s*\{[^}]*outline:/s);
+  });
+
   it('uses shared buttons for workspace card menus and artifact actions', () => {
     expect(workspaceSource).toContain("className: 'ws-more-action'");
     expect(workspaceSource).toContain("className: 'ws-more-danger'");

@@ -105,8 +105,12 @@ describe('connections navigation', () => {
     expect(indexHtml).toContain('id="connections-tools-switcher"');
     expect(indexHtml).toContain('data-connections-tools-view="plugins"');
     expect(indexHtml).not.toContain('id="connections-pane-models"');
-    expect(rendererCss).toMatch(/\.connections-tools-tab\.ui-button\.is-active\s*{[^}]*border-bottom-color:\s*var\(--color-accent\);/s);
-    expect(rendererCss).toMatch(/\.connections-tools-switcher\s*{[^}]*border-bottom:\s*1px solid var\(--line-default\);/s);
+    const source = fs.readFileSync(path.join(root, 'src/renderer/modules/connections.js'), 'utf8');
+    expect(source).toContain("role: 'tablist'");
+    expect(source).toContain("className: 'connections-tools-segments'");
+    expect(source).toContain("'data-connections-tools-tab': item.key");
+    expect(rendererCss).toMatch(/\.connections-tools-switcher\s*{[^}]*margin-bottom:\s*var\(--space-4\);/s);
+    expect(rendererCss).not.toContain('.connections-tools-tab.ui-button.is-active');
   });
 
   it('keeps the Agent tab inside Connections', () => {

@@ -186,6 +186,7 @@ describe('agent and skill category tabs', () => {
     context.renderAgentsGrid(agents);
     expect(el('agents-categories').innerHTML).toContain('通用');
     expect(el('agents-categories').innerHTML).not.toContain('未知');
+    expect(el('agents-categories').innerHTML).toContain('ui-segmented-control');
     expect(el('agents-grid').innerHTML).toContain('class="agent-card-open" data-agent-open');
     expect(el('agents-grid').innerHTML).toContain('aria-label="agents.manage_tooltip: No Category"');
     expect(el('agents-grid').innerHTML).not.toContain('role="button" tabindex="0"');

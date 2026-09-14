@@ -14,6 +14,12 @@ function newChatScenarioOrder(html: string) {
   return [...row![1].matchAll(/data-scenario="([^"]+)"/g)].map((m) => m[1]);
 }
 
+function newChatScenarioRow(html: string) {
+  const row = html.match(/<div class="new-chat-scenarios" id="new-chat-scenarios">([\s\S]*?)<\/div>/);
+  expect(row?.[1]).toBeTruthy();
+  return row![1];
+}
+
 describe('new chat home surface', () => {
   it('keeps the external agent entry while filtering voice input', () => {
     const html = read('src/renderer/index.html');
@@ -37,7 +43,10 @@ describe('new chat home surface', () => {
       'office',
       'rnd',
     ]);
-    expect(html).toContain('id="new-chat-secondary-actions"');
+    const scenarioRow = newChatScenarioRow(html);
+    expect(scenarioRow).toContain('id="new-chat-secondary-actions"');
+    expect(scenarioRow.indexOf('id="new-chat-secondary-actions"'))
+      .toBeLessThan(scenarioRow.indexOf('data-scenario="space_builder"'));
     expect(html).not.toContain('data-scenario="goal"');
     expect(html).not.toContain('data-scenario="ecommerce"');
     expect(html).not.toContain('data-scenario="creation"');
@@ -85,7 +94,7 @@ describe('new chat home surface', () => {
     expect(css).toMatch(/\.new-chat-greeting\s*{[\s\S]*?font-size:\s*34px;[\s\S]*?letter-spacing:\s*-0\.015em;/);
     expect(css).toMatch(/\.new-chat-scenarios\s*{[\s\S]*?flex-wrap:\s*wrap;[\s\S]*?justify-content:\s*space-between;/);
     expect(css).toMatch(/\.new-chat-input-area\s*{[\s\S]*?padding:\s*var\(--space-4\) var\(--space-4\) var\(--space-2\);[\s\S]*?border:\s*1px solid var\(--line-field\);/);
-    expect(css).toMatch(/#panel-new-chat \.workspace-chip-prefix,[\s\S]*?#panel-new-chat \.chat-recipient-name\s*{[\s\S]*?display:\s*none;/);
+    expect(css).toMatch(/@container composer \(max-width:\s*720px\)\s*\{[\s\S]*?\.workspace-chip-prefix,[\s\S]*?\.chat-recipient-name,[\s\S]*?\.model-chip-label,[\s\S]*?display:\s*none;/);
     expect(css).toMatch(/\.model-guard-banner\s*{[\s\S]*?height:\s*56px;/);
     expect(css).toMatch(/\.model-guard-dismiss\s*{[\s\S]*?width:\s*28px;[\s\S]*?height:\s*28px;/);
     expect(css).toMatch(/@media \(max-width: 1100px\)\s*{[\s\S]*?\.main-content:has\(#panel-new-chat\.active\):has\(#model-guard-banner\) \.main-top-actions\s*{[\s\S]*?flex-wrap:\s*wrap;/);

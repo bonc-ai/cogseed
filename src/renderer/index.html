@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./plugins.css" />
   <link rel="stylesheet" href="./chat-stream.css" />
+  <link rel="stylesheet" href="./resource-pages.css" />
   <script>
     // macOS 无边框窗口（main/index.ts: titleBarStyle hiddenInset）：红绿灯
     // 悬浮在内容上，CSS 据此声明红绿灯让位与各视图顶部条的窗口拖拽区。
@@ -35,19 +36,15 @@
         <div class="logo-text" data-i18n="brand.name">CogSeed</div>
       </div>
       <div class="sidebar-actions">
-        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
+        <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="plus" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
         <button class="sidebar-btn" id="workspace-btn"><span data-ui-icon="folder" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.workspace">空间中心</span></button>
-        <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span><span class="sidebar-btn-chip kb-new-chip" data-i18n="sidebar.kb_new">新</span></button>
+        <button class="sidebar-btn" id="kb-btn"><span data-ui-icon="book-open" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.kb">知识库</span></button>
         <button class="sidebar-btn" id="run-center-btn" hidden aria-hidden="true"><span data-ui-icon="activity" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.run_center">运行与协作</span></button>
         <button class="sidebar-btn" id="recall-btn"><span data-ui-icon="git-branch" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.recall">认知资产</span></button>
         <button class="sidebar-btn" id="auto-btn"><span data-ui-icon="clock" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.auto">自动化</span></button>
         <button class="sidebar-btn" id="connectors-btn"><span data-ui-icon="plug" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.connections">智能体 / 技能 / 连接</span></button>
       </div>
       <div class="sidebar-conversation-nav">
-        <div class="sidebar-conv-tabs" id="sidebar-conv-tabs" role="tablist">
-          <button type="button" class="sidebar-conv-tab" role="tab" data-conv-tab="spaces" data-i18n="sidebar.spaces_section">空间</button>
-          <button type="button" class="sidebar-conv-tab is-active" role="tab" aria-selected="true" data-conv-tab="recent" data-i18n="sidebar.recent_tasks">最近任务</button>
-        </div>
         <div class="sidebar-section sidebar-conversations-section">
           <div class="conversation-list" id="conversation-list">
             <div class="conv-empty" data-i18n="sidebar.conv_empty">No conversations yet</div>
@@ -70,7 +67,6 @@
       <div class="main-top-actions">
         <div class="model-guard-slot" id="model-guard-slot"></div>
         <div class="new-chat-home-actions">
-          <div class="new-chat-secondary-actions" id="new-chat-secondary-actions"></div>
           <button type="button" class="new-chat-external-agent-btn" id="new-chat-external-agent-btn">
             <span data-ui-icon="terminal" data-ui-icon-class="new-chat-external-agent-icon"></span>
             <span class="new-chat-external-agent-label">
@@ -150,9 +146,10 @@
                its template (per PC/docs/design/README §Surface B) and moves
                the caret to the first [...] placeholder. Wired by
                _initEmptyStateScenarios() in conversation.js. The shared home
-               composition distributes the seven actions across the thread width. -->
+               composition distributes the eight actions across the thread width. -->
           <div class="new-chat-scenarios-wrap" id="new-chat-scenarios-wrap">
             <div class="new-chat-scenarios" id="new-chat-scenarios">
+            <span class="new-chat-secondary-actions" id="new-chat-secondary-actions"></span>
             <button type="button" class="new-chat-scenario-chip is-space-builder" data-scenario="space_builder">
               <span data-ui-icon="layout-grid" data-ui-icon-class="new-chat-scenario-icon"></span>
               <span class="new-chat-scenario-label" data-i18n="new_chat.quick.space_builder">Space Mode</span>
@@ -308,10 +305,10 @@
                     <span class="chat-recipient-name" id="chat-recipient-name" data-i18n="chat.recipient_commander">Commander</span>
                   </button>
                   <!-- 每会话访问权限：紧跟工作空间 chip（JS 注入在 recipient 之后）。 -->
-                  <span class="chat-permission-chip" id="chat-permission-chip" data-i18n-title="chat.permission.title" title="访问权限">
+                  <div class="chat-permission-chip" id="chat-permission-chip" data-i18n-title="chat.permission.title" title="访问权限">
                     <span data-ui-icon="lock" data-ui-icon-class="chat-permission-chip-icon"></span>
-                    <select class="chat-permission-select" id="chat-permission-mode-select" aria-label="访问权限"></select>
-                  </span>
+                    <div class="chat-permission-select" id="chat-permission-mode-select"></div>
+                  </div>
                   <!-- Workspace chip is injected by user-workspace.js right after
                        the recipient chip — see initUserWorkspace(). -->
                   <div class="chat-skill-chip" id="chat-skill-chip" data-target="conversation" style="display:none">
@@ -452,7 +449,7 @@
       </section>
 
       <!-- Cognitive assets -->
-      <section class="panel" id="panel-recall">
+      <section class="panel ui-resource-page" id="panel-recall">
         <div class="skills-cognition-console">
           <div class="skills-cognition-surface">
           <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
@@ -661,7 +658,7 @@
       <!-- Connections — 连接：Agent / MCP与工具 / 数据源 / 触点 / 模型与额度。
            MCP 与工具 tab 真嵌入原 connectors 网格（connectors.js 仍按这些 ID 渲染）；
            Agent / 数据源 / 触点 / 模型与额度 为入口卡，跳转到各自面板。 -->
-      <section class="panel" id="panel-connections">
+      <section class="panel ui-resource-page" id="panel-connections">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
         <!-- 一级页面 header 统一由 uiPageHeader() 渲染（页面骨架规格 PH-01..PH-06）：
              标题为语义 h1，全宽通栏；连接页是 tab 容器，操作落在各 tab 内，故不设页级操作。
@@ -827,7 +824,7 @@
             <!-- MCP与工具 → 真嵌入原 connectors 网格 -->
             <div class="connections-tab-pane" id="connections-pane-mcp" data-connections-pane="mcp" hidden>
               <div class="connections-tools-shell">
-                <div class="connections-tools-switcher" id="connections-tools-switcher" role="tablist" data-i18n-aria-label="connections.tab.mcp" aria-label="MCP与工具"></div>
+                <div class="connections-tools-switcher" id="connections-tools-switcher"></div>
                 <div class="connections-tools-view" data-connections-tools-view="mcp">
                   <div class="connectors-grid-view" id="connectors-grid-view">
                     <div class="connectors-page-header">
@@ -985,7 +982,7 @@
               <h1 class="contexts-page-header-title" data-i18n="contexts.title">Library</h1>
             </div>
           </div>
-          <button type="button" class="contexts-page-header-search" id="contexts-page-header-search"
+          <button type="button" class="btn ui-button ui-button--secondary ui-button--sm contexts-page-header-search" id="contexts-page-header-search"
                   data-i18n-title="sidebar.search_title" title="Search (Cmd/Ctrl+K)">
             <span data-ui-icon="search" data-ui-icon-class="contexts-page-header-search-icon"></span>
             <span data-i18n="sidebar.search">Search</span>
@@ -1059,7 +1056,7 @@
            Commander. Main content: header + list. Create / edit happen in
            the reusable modal `#auto-task-dialog-overlay` below (also
            opened from the project-detail page's Automation tab). -->
-      <section class="panel" id="panel-auto">
+      <section class="panel ui-resource-page" id="panel-auto">
         <div class="auto-view">
           <div id="auto-page-header"></div>
           <div class="auto-scroll">
@@ -1086,7 +1083,7 @@
       </section>
 
       <!-- Workspace Center (空间中心：任务/产物/资产三 tab，由 workspace.js 渲染) -->
-      <section class="panel" id="panel-workspace">
+      <section class="panel ui-resource-page" id="panel-workspace">
         <div class="app-top-drag-strip" aria-hidden="true"></div>
         <div class="ws-view" id="ws-view"></div>
       </section>
@@ -1665,7 +1662,7 @@
   </div>
 
   <!-- Agent / skill / connector picker popup -->
-  <div class="skill-picker" id="agent-picker" style="display:none">
+  <div class="skill-picker composer-popover" id="agent-picker" style="display:none">
     <div class="skill-picker-tabs" role="tablist" aria-label="Picker type">
       <button type="button" class="skill-picker-tab active" data-agent-picker-tab="agents" data-i18n="agent_picker.tab_agents">Agents</button>
       <button type="button" class="skill-picker-tab" data-agent-picker-tab="skills" data-i18n="agent_picker.tab_skills">Skills</button>
@@ -1968,6 +1965,7 @@
   <script src="./modules/wake-approvals.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
+  <script src="./modules/composer-popovers.js"></script>
   <script src="./modules/file-operation-policy.js"></script>
   <script src="./modules/chat-file-viewer.js"></script>
   <script src="./modules/md-view-edit.js"></script>

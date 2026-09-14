@@ -819,15 +819,16 @@ function renderAgentsGrid(agents) {
   }
 
   if (chipsHost) {
-    const allActive = _agentsActiveCategory === '' ? ' is-active' : '';
-    const chipsHtml = [
-      `<button type="button" class="marketplace-chip${allActive}" data-agents-cat="">${escapeHtml(allLabel)}</button>`,
-      ...chipCodes.map((c) => {
-        const active = _agentsActiveCategory === c.code ? ' is-active' : '';
-        return `<button type="button" class="marketplace-chip${active}" data-agents-cat="${escapeHtml(c.code)}">${escapeHtml(c.label)}</button>`;
-      }),
-    ].join('');
-    chipsHost.innerHTML = chipsHtml;
+    if (typeof window.uiSegmentedControl !== 'function') throw new Error('agents require uiSegmentedControl');
+    chipsHost.innerHTML = window.uiSegmentedControl({
+      ariaLabel: t('agents.title'),
+      value: _agentsActiveCategory,
+      className: 'agents-category-filter',
+      items: [
+        { label: allLabel, value: '', attrs: { 'data-agents-cat': '' } },
+        ...chipCodes.map((c) => ({ label: c.label, value: c.code, attrs: { 'data-agents-cat': c.code } })),
+      ],
+    });
     chipsHost.querySelectorAll('[data-agents-cat]').forEach((btn) => {
       btn.addEventListener('click', () => {
         _agentsActiveCategory = btn.dataset.agentsCat || '';
@@ -3631,7 +3632,8 @@ function _findInputAreaTop(anchorEl) {
 
 function _positionPopoverAboveOrBelow(popover, anchorEl, opts = {}) {
   // Make invisible but laid out so we can measure it before positioning.
-  popover.style.display = 'flex';
+  popover.style.position = 'fixed';
+  popover.style.display = opts.display || 'flex';
   popover.style.left = '-9999px';
   popover.style.top = '-9999px';
   popover.style.maxHeight = '';
@@ -3956,6 +3958,7 @@ async function refreshAgentPickerContext(anchorId) {
 async function _openAgentPicker(anchorBtn) {
   const picker = document.getElementById('agent-picker');
   if (!anchorBtn || !picker) return;
+  if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('agent');
   picker.dataset.anchorId = anchorBtn.id;
   const openSeq = ++_agentPickerOpenSeq;
   _agentPickerLoadedTabs = new Set();
@@ -3990,13 +3993,22 @@ async function _openAgentPicker(anchorBtn) {
   }).catch(() => {});
 }
 
-function _closeAgentPicker() {
+function _closeAgentPicker({ returnFocus = false } = {}) {
   const picker = document.getElementById('agent-picker');
+  const anchorId = picker?.dataset.anchorId || '';
   if (picker) picker.style.display = 'none';
+  if (returnFocus && anchorId) document.getElementById(anchorId)?.focus();
   // NOTE: callers that close-without-selection (Esc / click-outside) must
   // also clear `_atKeyMark` — otherwise the next picker open would consume
   // a stale `@`. Selection callers leave the mark so _triggerPickerItem can
   // use it before clearing.
+}
+
+if (typeof window !== 'undefined' && typeof window.registerComposerPopover === 'function') {
+  window.registerComposerPopover('agent', () => {
+    _atKeyMark = null;
+    _closeAgentPicker();
+  });
 }
 
 function _renderAgentPickerList(filterText) {
@@ -5185,7 +5197,7 @@ function bindAgentPickers() {
     // composed; without this early-return, pressing Enter to commit an
     // English candidate would also fire our select-active-item handler.
     if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Escape') { _atKeyMark = null; _closeAgentPicker(); e.preventDefault(); return; }
+    if (e.key === 'Escape') { _atKeyMark = null; _closeAgentPicker({ returnFocus: true }); e.preventDefault(); return; }
     if ((e.key === 'Backspace' || e.key === 'Delete') && !searchInput.value && _atKeyMark) {
       const input = _consumeAtKeyChar();
       _closeAgentPicker();

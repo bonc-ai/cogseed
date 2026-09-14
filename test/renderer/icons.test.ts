@@ -44,6 +44,15 @@ describe('icons.js', () => {
     expect(left).not.toBe(right);
   });
 
+  it('renders the sidebar space glyph through the shared registry', () => {
+    const { uiIconHtml } = loadIcons();
+    const html = uiIconHtml('space', 'conv-space-group-icon-svg');
+
+    expect(html).toContain('is-space');
+    expect(html).toContain('M9 21V9');
+    expect(html).not.toBe(uiIconHtml('info', 'conv-space-group-icon-svg'));
+  });
+
   it('renders the knowledge-workbench actions without falling back to info', () => {
     const { uiIconHtml } = loadIcons();
     const info = uiIconHtml('info', 'kb-mm-icon');

@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./ui-components.css" />
   <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./component-gallery.css" />
+  <link rel="stylesheet" href="./resource-pages.css" />
 </head>
 <body class="component-gallery-body">
   <div class="gallery-shell">
@@ -32,12 +33,14 @@
         <a href="#window-chrome"><span>CHR</span>WindowChrome</a>
         <a href="#user-menu"><span>USR</span>UserMenu</a>
         <a href="#page-header"><span>PH</span>PageHeader</a>
+        <a href="#resource-pages"><span>PAGE</span>ResourcePage</a>
         <a href="#tabs"><span>TAB</span>Tabs</a>
         <a href="#resource-cards"><span>CARD</span>ResourceCard</a>
         <a href="#settings-sections"><span>SET</span>SettingsSection</a>
         <a href="#buttons"><span>BTN</span>Button</a>
         <a href="#icon-buttons"><span>IB</span>IconButton</a>
         <a href="#segmented-controls"><span>SEG</span>SegmentedControl</a>
+        <a href="#composer"><span>CMP</span>Composer</a>
         <a href="#form-controls"><span>FRM</span>Input · Select · Form</a>
         <a href="#search-selection-components"><span>SEL</span>检索与选择</a>
         <a href="#empty-states"><span>EMP</span>EmptyState</a>
@@ -47,7 +50,7 @@
 
       <div class="gallery-coverage" aria-label="设计系统覆盖范围">
         <span>共享基础层</span>
-        <strong>17 / 17 已定义</strong>
+        <strong>18 / 18 已定义</strong>
         <small>本页与真实页面复用同一套 token、CSS 和原生 JS primitives。</small>
       </div>
     </aside>
@@ -115,6 +118,7 @@
           <div><h2>WindowChrome</h2><p>macOS 红绿灯由 Electron 原生绘制；Shell 只管理右侧搜索、运行状态与侧栏收起/展开。</p></div>
         </div>
         <div class="gallery-control-grid" id="sidebar-tools-specimens"></div>
+        <div class="gallery-sidebar-grid" id="sidebar-appearance-specimens"></div>
       </section>
 
       <section class="gallery-section" id="page-header">
@@ -131,6 +135,14 @@
           <div><h2>UserMenu</h2><p>侧边栏底部保持单行个人身份入口；菜单向上弹出，设置与退出沿用真实图标、焦点和危险色。</p></div>
         </div>
         <div class="gallery-control-grid" id="user-menu-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="resource-pages">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">PAGE</span>
+          <div><h2>ResourcePage</h2><p>工作空间、自动化、认知资产和能力管理共用响应式边距、内容宽度与 Header 后留白；导航按页面需要出现。</p></div>
+        </div>
+        <div class="gallery-stack" id="resource-page-specimens"></div>
       </section>
 
       <section class="gallery-section" id="tabs">
@@ -179,6 +191,14 @@
           <div><h2>SegmentedControl</h2><p>浅色轨道 + 白色选中片；每项保留原生按钮、Tab 访问和 aria-pressed。</p></div>
         </div>
         <div class="gallery-control-grid" id="segmented-control-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="composer">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CMP</span>
+          <div><h2>Composer</h2><p>首页、已有对话和窄宽共用生产输入台样式；这里只核对视觉与响应式，发送、停止和排队仍由真实页面状态机负责。</p></div>
+        </div>
+        <div class="gallery-composer-grid" id="composer-specimens"></div>
       </section>
 
       <section class="gallery-section" id="form-controls">
@@ -286,6 +306,7 @@
   <script src="./modules/ui-empty.js"></script>
   <script src="./modules/ui-page-header.js"></script>
   <script src="./modules/ui-modal.js"></script>
+  <script src="./modules/composer-popovers.js"></script>
   <script src="./modules/utils.js"></script>
   <script src="./component-gallery.js"></script>
 </body>

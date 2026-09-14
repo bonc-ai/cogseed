@@ -544,11 +544,11 @@
    *  fixed = 始终展示且锁定的 tile（如 CogSeed，不写入 base_agents）；cliIds = 已选 cli type。 */
   function _baseAgentToolRow(cliIds, opts = {}) {
     const fixed = (opts.fixed || []).map((f) => `
-    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
+    <button type="button" class="ws-tool-tile selected locked" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(f.id)}" aria-pressed="true" disabled title="${escapeHtml(f.name)}"><span class="ws-tool-logo">${escapeHtml(f.letter || 'AG')}</span><span>${escapeHtml(f.name)}</span></button>`).join('');
     const cards = (opts.catalog || []).map((o) => {
       const selected = (cliIds || []).includes(o.id);
       return `
-    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
+    <button type="button" class="ws-tool-tile ${selected ? 'selected' : ''}" data-ws="${escapeHtml(opts.toggleAction || '')}" data-id="${escapeHtml(o.id)}" aria-pressed="${selected ? 'true' : 'false'}" title="${escapeHtml(o.name || o.id)}">${renderAvatarHtml(o.icon, o.color, { size: 38, seed: o.agent_id || o.id, letter: o.name || '' })}<span>${escapeHtml(o.name || o.id)}</span></button>`;
     }).join('');
     const body = fixed + cards;
     const empty = body ? '' : `<span class="ws-tool-empty">${opts.emptyText || ''}</span>`;

@@ -89,6 +89,24 @@ describe('first-version renderer components', () => {
     expect(() => uiSegmentedControl({ items: ['全部'] })).toThrow(/accessible label/);
   });
 
+  it('preserves tab semantics when SegmentedControl switches sibling views', () => {
+    const { uiSegmentedControl } = loadFactories();
+    const html = uiSegmentedControl({
+      ariaLabel: 'MCP与工具',
+      role: 'tablist',
+      value: 'plugins',
+      items: [
+        { value: 'mcp', label: 'MCP 连接器' },
+        { value: 'plugins', label: '插件', attrs: { 'data-view': 'plugins' } },
+      ],
+    });
+
+    expect(html).toContain('role="tablist" aria-label="MCP与工具"');
+    expect(html).toContain('role="tab" aria-selected="false" tabindex="-1"');
+    expect(html).toContain('role="tab" aria-selected="true" tabindex="0" data-view="plugins"');
+    expect(html).not.toContain('aria-pressed=');
+  });
+
   it('enforces the three EmptyState contracts and one-action boundary', () => {
     const { uiEmptyState } = loadFactories();
 
@@ -252,6 +270,8 @@ describe('component gallery integration contract', () => {
   it('maps the open-source design system into production tokens and shared chrome', () => {
     expect(tokens).toContain('--layout-sidebar-width: 280px;');
     expect(tokens).toContain('--layout-titlebar-height: 52px;');
+    expect(tokens).toContain('--layout-composer-width-min: 480px;');
+    expect(tokens).toContain('--layout-composer-width-max: 900px;');
     expect(tokens).toContain('--control-height-sm: 28px;');
     expect(tokens).toContain('--control-height: 32px;');
     expect(tokens).toContain('--control-height-lg: 36px;');
@@ -264,8 +284,10 @@ describe('component gallery integration contract', () => {
     expect(tokens).toContain('--color-accent-gradient: linear-gradient(135deg, #0A7A55, #086545);');
     expect(css).toContain('height: var(--control-height);');
     expect(css).toContain('.ui-button--lg { height: var(--control-height-lg); }');
+    expect(css).toMatch(/\.ui-button--primary \{[\s\S]*?background: var\(--control-primary-bg\);\s+background-color: var\(--color-accent\);/);
     expect(css).toMatch(/\.ui-button--primary:hover,[\s\S]*?background: var\(--control-primary-bg-hover\);/);
     expect(css).toContain('.ui-segmented-control > button[aria-pressed="true"]');
+    expect(css).toContain('.ui-segmented-control > button[aria-selected="true"]');
     expect(css).toContain('min-height: var(--layout-titlebar-height);');
     expect(css).toContain('border-radius: var(--radius-dialog);');
   });
@@ -276,6 +298,7 @@ describe('component gallery integration contract', () => {
     expect(gallery).toContain('OPEN SOURCE DESIGN SYSTEM / PRODUCTION MAPPING');
     expect(gallery).toContain('4 个角色 × 3 个尺寸 × 6 个可核对状态');
     expect(gallery).toContain('id="segmented-controls"');
+    expect(gallery).toContain('二级页面切换');
     expect(gallery).toContain('正文基线 15px');
     expect(gallery).toContain('4/7/8/9/11/12/14/∞');
     expect(gallery).not.toContain('首版范围');
@@ -283,7 +306,8 @@ describe('component gallery integration contract', () => {
     expect(galleryCss).toContain('grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);');
     expect(galleryCss).toContain('.gallery-radius-scale .rw { border-radius: var(--radius-window); }');
     expect(gallery).toContain('id="search-selection-components"');
-    expect(gallery).toContain('17 / 17 已定义');
+    expect(gallery).toContain('id="composer"');
+    expect(gallery).toContain('18 / 18 已定义');
   });
 
   it('integrates the open-source shell into real high-frequency pages', () => {
@@ -292,7 +316,8 @@ describe('component gallery integration contract', () => {
     expect(rendererCss).toContain('max-width: var(--layout-thread-home-width);');
     expect(rendererCss).toContain('grid-template-columns: var(--layout-settings-nav-width) minmax(0, 1fr);');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
-    expect(rendererCss).toContain('box-shadow: var(--shadow-composer), 0 0 0 3px var(--color-focus-halo);');
+    expect(rendererCss).toContain('border-color: var(--line-strong);');
+    expect(rendererCss).toContain('box-shadow: var(--shadow-composer);');
     expect(rendererCss).toContain('.auto-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }');
     expect(rendererCss).toContain('.skill-card.is-menu-open');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');

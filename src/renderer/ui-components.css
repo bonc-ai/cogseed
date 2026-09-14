@@ -10,6 +10,16 @@
 .ui-modal-overlay { z-index: var(--z-modal); }
 .ai-select-popover,
 .skill-picker { z-index: var(--z-modal-popover); }
+
+/* Composer-attached choosers keep their feature-specific content while
+ * sharing one surface contract. Their open/close ownership is coordinated by
+ * modules/composer-popovers.js. */
+.composer-popover {
+  border: 1px solid var(--line-field);
+  border-radius: var(--radius-popover);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
 .search-overlay { z-index: var(--z-command); }
 .ui-toast-host { z-index: var(--z-toast); }
 
@@ -19,13 +29,18 @@
 .search-overlay .search-modal,
 .gallery-command {
   width: min(640px, calc(100vw - 32px));
-  max-height: calc(100vh - 96px);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-popover);
+  max-height: calc(100dvh - clamp(64px, 10vh, var(--space-page)) - var(--space-4));
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-dialog);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow-dialog);
 }
-.search-overlay { padding: var(--space-6) var(--space-4); background: var(--color-command-scrim); }
+.search-overlay,
+.gallery-command-overlay {
+  padding: clamp(64px, 10vh, var(--space-page)) var(--space-4) var(--space-4);
+  background: var(--color-scrim);
+  backdrop-filter: none;
+}
 .search-overlay .search-input-row,
 .gallery-command__input-row {
   min-height: var(--control-height-lg);
@@ -34,7 +49,7 @@
 }
 .search-overlay .search-input-row:focus-within,
 .gallery-command__input-row:focus-within {
-  box-shadow: inset 3px 0 0 var(--color-accent);
+  box-shadow: inset 0 -1px 0 var(--color-accent);
 }
 .search-overlay .search-tabs.is-hidden { display: none; }
 .search-overlay .search-tab:focus-visible,
@@ -106,6 +121,7 @@
 .ui-button--lg { height: var(--control-height-lg); }
 .ui-button--primary {
   background: var(--control-primary-bg);
+  background-color: var(--color-accent);
   color: var(--control-primary-text);
   font-weight: var(--font-weight-medium);
 }
@@ -263,9 +279,11 @@
   font-size: var(--font-size-1);
   white-space: nowrap;
 }
-.ui-segmented-control > button:not([aria-pressed="true"]):hover { background: var(--color-overlay-hover); color: var(--text-heading); }
-.ui-segmented-control > button[aria-pressed="true"] { background: var(--surface-card); color: var(--text-heading); box-shadow: var(--shadow-sm); }
-.ui-segmented-control > button[aria-pressed="true"] .ui-segmented-control__label { font-weight: var(--font-weight-medium); }
+.ui-segmented-control > button:not([aria-pressed="true"]):not([aria-selected="true"]):hover { background: var(--color-overlay-hover); color: var(--text-heading); }
+.ui-segmented-control > button[aria-pressed="true"],
+.ui-segmented-control > button[aria-selected="true"] { background: var(--surface-card); color: var(--text-heading); box-shadow: var(--shadow-sm); }
+.ui-segmented-control > button[aria-pressed="true"] .ui-segmented-control__label,
+.ui-segmented-control > button[aria-selected="true"] .ui-segmented-control__label { font-weight: var(--font-weight-medium); }
 .ui-segmented-control > button:focus-visible {
   outline: var(--focus-width) solid var(--color-accent);
   outline-offset: var(--focus-offset);

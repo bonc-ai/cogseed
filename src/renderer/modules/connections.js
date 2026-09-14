@@ -75,22 +75,22 @@ function _bindConnectionsTablist(host, selector, activate) {
 
 function _renderConnectionsToolsSwitcher() {
   const host = _connectionsEl('connections-tools-switcher');
-  if (!host || typeof uiButton !== 'function') return;
+  if (!host || typeof uiSegmentedControl !== 'function') return;
   const items = [
     { key: 'mcp', label: _connectionsText('connections.tools.mcp', 'MCP 连接器') },
     { key: 'plugins', label: _connectionsText('connections.tab.plugins', '插件') },
   ];
-  host.innerHTML = items.map((item) => uiButton({
-    label: item.label,
-    role: 'ghost',
-    size: 'sm',
-    className: `connections-tools-tab${item.key === _connectionsToolsLastView ? ' is-active' : ''}`,
-    attrs: {
-      role: 'tab',
-      'aria-selected': item.key === _connectionsToolsLastView ? 'true' : 'false',
-      'data-connections-tools-tab': item.key,
-    },
-  })).join('');
+  host.innerHTML = uiSegmentedControl({
+    ariaLabel: _connectionsText('connections.tab.mcp', 'MCP与工具'),
+    role: 'tablist',
+    value: _connectionsToolsLastView,
+    className: 'connections-tools-segments',
+    items: items.map((item) => ({
+      label: item.label,
+      value: item.key,
+      attrs: { 'data-connections-tools-tab': item.key },
+    })),
+  });
   const buttons = Array.from(host.querySelectorAll('[data-connections-tools-tab]'));
   buttons.forEach((button) => {
     button.addEventListener('click', () => activateConnectionsToolsView(button.dataset.connectionsToolsTab));

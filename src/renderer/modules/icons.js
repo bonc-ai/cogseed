@@ -90,6 +90,7 @@
     'more-horizontal': '<circle cx="6" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><circle cx="18" cy="12" r="1.4" fill="currentColor" stroke="none"></circle>',
     'panel-list': '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path><path d="M7 8h4"></path><path d="M7 12h4"></path><path d="M7 16h4"></path>',
     panel: '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path>',
+    space: '<rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M9 21V9"></path>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>',
     'folder-open': '<path d="M3 8V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"></path><path d="M3.2 10.5A2 2 0 0 1 5.1 9h14.2a1.5 1.5 0 0 1 1.4 1.9l-1.5 5.7A3 3 0 0 1 16.3 19H5.2a2 2 0 0 1-2-1.6L2 12.4a1.6 1.6 0 0 1 1.2-1.9z"></path>',
     file: '<path d="M7 3.5h7l4 4v13H7z"></path><path d="M14 3.5v4h4"></path>',

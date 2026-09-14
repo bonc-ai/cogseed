@@ -81,6 +81,7 @@ function loadWorkspace() {
   });
   const context: any = { document, HTMLInputElement: class {}, Element: class {}, setTimeout, clearTimeout, Date: class extends Date { static now() { return now; } }, Map, Set, Intl, URL };
   context.window = { document, cogseed: { invoke }, addEventListener: (type: string, fn: () => void) => events.set(type, fn) };
+  context.renderAvatarHtml = (_icon: string, _color: string, options: any = {}) => `<span>${options.letter || ''}</span>`;
   context.setView = vi.fn((view: string) => {
     if (view === 'workspace') {
       context.window.prepareWorkspaceView?.();
@@ -178,6 +179,26 @@ describe('workspace navigation and asynchronous ownership', () => {
     expect(h.html()).toContain('data-ws="create-name"');
     expect(h.html()).not.toMatch(/<button[^>]*disabled[^>]*data-ws="confirm-create"/);
     expect(h.invoke.mock.calls.some(([channel]) => channel === 'spaces.create')).toBe(false);
+  });
+
+  it('exposes and updates the selected state of collaborating Agent tools', async () => {
+    const h = loadWorkspace();
+    h.answers.set('localAgents.list:', {
+      entries: [
+        { type: 'claude', available: true },
+        { type: 'codex', available: true },
+      ],
+    });
+    await h.visit(); await h.click('create-space'); await flush();
+
+    expect(h.control('toggle-create-tool', 'id', 'claude').attrs['aria-pressed']).toBe('true');
+    expect(h.control('toggle-create-tool', 'id', 'codex').attrs['aria-pressed']).toBe('false');
+
+    await h.click('toggle-create-tool', 'id', 'codex');
+    expect(h.control('toggle-create-tool', 'id', 'codex').attrs['aria-pressed']).toBe('true');
+
+    await h.click('toggle-create-tool', 'id', 'claude');
+    expect(h.control('toggle-create-tool', 'id', 'claude').attrs['aria-pressed']).toBe('false');
   });
 
   it('does not mark visible tasks busy while only an unused artifact read is pending', async () => {

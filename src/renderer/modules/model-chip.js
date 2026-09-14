@@ -429,9 +429,13 @@ function _closeModelMenu() {
 
 // Kept as a small public bridge for boot/navigation teardown callers.
 window.closeModelChipMenu = _closeModelMenu;
+if (typeof window.registerComposerPopover === 'function') {
+  window.registerComposerPopover('model', _closeModelMenu);
+}
 
 /** One menu, two sections: model (with provider drill-down) + effort. */
 function _toggleExecConfigMenu(anchor) {
+  if (typeof window.closeComposerPopovers === 'function') window.closeComposerPopovers('model');
   const old = document.getElementById('model-chip-menu');
   if (old) { _closeModelMenu(); return; }
 
@@ -442,7 +446,7 @@ function _toggleExecConfigMenu(anchor) {
   _modelChipRenderChip(anchor);
   const menu = document.createElement('div');
   menu.id = 'model-chip-menu';
-  menu.className = 'model-chip-menu model-chip-menu--exec';
+  menu.className = 'model-chip-menu model-chip-menu--exec composer-popover';
   anchor.classList.add('model-chip--open');
   _renderExecConfigMenu(menu, anchor);
   _positionModelMenu(menu, anchor);

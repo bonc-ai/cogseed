@@ -110,7 +110,7 @@ body {
   width: var(--sidebar-width, var(--layout-sidebar-width));
   min-width: 180px;
   max-width: 480px;
-  background: linear-gradient(180deg, var(--color-sidebar-top), var(--color-sidebar-bottom));
+  background: var(--color-sidebar-top);
   color: var(--text);
   display: flex;
   flex-direction: column;
@@ -171,7 +171,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 .logo-text {
   font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-ui);
+  font-size: var(--font-size-title);
   letter-spacing: -0.01em;
   color: var(--text);
   min-width: 0;
@@ -321,10 +321,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 
 .sidebar-actions {
-  padding: var(--space-1) var(--space-2);
+  padding: 0 var(--space-2);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 0;
   flex-shrink: 0;
 }
 
@@ -682,8 +682,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: var(--row-height-nav);
-  padding: 0 var(--space-3);
+  min-height: var(--control-height);
+  padding: 0 var(--space-2);
   border: none;
   background: transparent;
   color: var(--text-2);
@@ -706,11 +706,18 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   line-height: 0;
 }
 
+.sidebar-btn > span:not([data-ui-icon]):not(.sidebar-btn-icon):not(.sidebar-btn-running-chip) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-btn-icon {
   width: var(--icon-size);
   height: var(--icon-size);
   flex: 0 0 var(--icon-size);
-  color: var(--muted);
+  color: currentColor;
   display: block;
 }
 
@@ -724,9 +731,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 
 .sidebar-btn.active {
-  background: var(--primary-soft);
+  background: var(--color-accent-wash);
   color: var(--primary-text);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-regular);
 }
 
 /* Commander running-count chip — only visible when ≥1 group_chat is streaming
@@ -760,7 +767,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: stretch;
   padding: var(--space-1) var(--space-3);
   border-top: 1px solid var(--line-subtle);
-  background: transparent;
+  background: var(--color-sidebar-bottom);
   flex-shrink: 0;
 }
 
@@ -825,7 +832,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .hub-chip-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -911,7 +918,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .hub-chip-menu-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -992,51 +999,15 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .sidebar-conversation-nav {
   flex: 1;
   min-height: 0;
-  padding: 4px 8px 8px;
+  padding: 0 var(--space-2) var(--space-2);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border-top: 1px solid var(--line-subtle);
-  margin-top: 4px;
+  border-top: 0;
+  margin-top: var(--space-3);
 }
 .sidebar-conversation-nav::-webkit-scrollbar { width: 4px; }
 .sidebar-conversation-nav::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
-
-/* ZCode 式双 tab（空间 | 最近任务）：胶囊 tab 行，切换侧栏会话视图。 */
-.sidebar-conv-tabs {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 4px;
-  padding: 2px 2px 8px;
-}
-.sidebar-conv-tab {
-  flex: 1;
-  min-width: 0;
-  height: calc(var(--control-height-sm) - var(--space-1));
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--text-muted);
-  font-family: inherit;
-  font-size: var(--font-size-meta);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
-}
-.sidebar-conv-tab:hover {
-  background: var(--color-overlay-hover);
-  color: var(--text-2);
-}
-.sidebar-conv-tab.is-active {
-  background: var(--color-brand-soft);
-  color: var(--primary-text);
-  box-shadow: inset 0 0 0 1px var(--color-focus-halo);
-}
-.sidebar-conv-tab:focus-visible {
-  outline: var(--focus-width) solid var(--color-accent);
-  outline-offset: var(--focus-offset);
-}
 
 .sidebar-section {
   flex: 0 0 auto;
@@ -1054,9 +1025,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 
 .sidebar-conversations-section {
-  border-top: 1px solid rgba(20, 71, 55, 0.05);
-  margin-top: 8px;
-  padding-top: 4px;
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 .sidebar-section-title-row {
@@ -2622,7 +2593,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   overflow: visible;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
   padding-right: 0;
 }
 
@@ -2641,10 +2612,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .conv-list-section-header:first-child { padding-top: 4px; }
 .conv-list-section-header.is-collapsible {
   width: 100%;
-  min-height: 28px;
-  padding: 3px 6px 3px 4px;
+  min-height: 32px;
+  padding: var(--space-1);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   background: transparent;
   appearance: none;
   -webkit-appearance: none;
@@ -2653,38 +2624,32 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 5px;
-  color: #8b9ab1;
+  gap: var(--space-2);
+  color: var(--text-muted);
   transition: background 0.12s, color 0.12s;
 }
 .conv-list-section-header.is-collapsible:hover {
-  background: rgba(148, 163, 184, 0.08);
+  background: var(--color-overlay-hover);
   color: var(--text-2);
 }
 .conv-list-section-header.is-collapsible:focus-visible {
-  outline: 2px solid var(--color-focus-halo);
+  outline: var(--focus-width) solid var(--color-brand);
   outline-offset: 1px;
 }
 .conv-list-section-caret {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 20px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  color: #6f7f97;
-  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
-}
-.conv-list-section-header.is-collapsible:hover .conv-list-section-caret {
-  background: var(--surface);
-  color: var(--primary-text);
-  box-shadow: inset 0 0 0 1px rgba(24, 84, 60, 0.08);
+  color: var(--color-faint);
+  transition: color 0.12s;
 }
 .conv-list-section-caret-icon {
-  width: 14px;
-  height: 14px;
-  stroke-width: 2.15;
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
 }
 .conv-list-section-label {
   flex: 1;
@@ -2702,16 +2667,16 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .conv-list-section-count {
   flex: 0 0 auto;
-  min-width: 22px;
-  height: 18px;
-  padding: 0 7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   border-radius: 999px;
-  background: #eef2f7;
+  background: var(--color-overlay-fill);
   font-size: var(--font-size-1);
-  font-weight: 650;
-  color: #7f8fa8;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-faint);
   letter-spacing: 0;
-  line-height: 18px;
+  line-height: 20px;
   text-align: center;
 }
 /* 消息渠道分组（飞书/微信等）：标题行完全复用 conv-list-space-title 分区头
@@ -2735,25 +2700,26 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .conv-list-section-header.conv-list-space-title {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 14px 8px 6px 8px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #7c8a99;
-  letter-spacing: 0.02em;
-  margin-bottom: 2px;
+  gap: var(--space-1);
+  min-height: 28px;
+  padding: var(--space-1) 0 0;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-muted);
+  letter-spacing: 0;
+  margin-bottom: 0;
 }
-.conv-list-section-header.conv-list-space-title:first-child { padding-top: 8px; }
+.conv-list-section-header.conv-list-space-title:first-child { padding-top: 0; }
 /* 分区标题内的折叠按钮（占满，点击切换整区展开/收起） */
 .conv-list-section-fold {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 4px;
+  gap: var(--space-1);
+  padding: 2px var(--space-1);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: transparent;
   appearance: none;
   -webkit-appearance: none;
@@ -2765,7 +2731,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   text-align: left;
   cursor: pointer;
 }
-.conv-list-section-fold:hover { background: rgba(148, 163, 184, 0.14); color: var(--text-2); }
+.conv-list-section-fold:hover { background: var(--color-overlay-hover); color: var(--text-2); }
+.conv-list-section-fold:focus-visible { outline: var(--focus-width) solid var(--color-brand); outline-offset: 1px; }
 /* 分区标题右侧操作按钮（＋）：hover 分区标题时显示 */
 .conv-list-section-action {
   flex: 0 0 auto;
@@ -2775,9 +2742,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: transparent;
-  color: #7f8fa8;
+  color: var(--text-muted);
   cursor: pointer;
   visibility: hidden;
   opacity: 0;
@@ -2788,14 +2755,37 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   visibility: visible;
   opacity: 1;
 }
-.conv-list-section-action:hover { background: var(--surface); color: var(--primary-text); }
+.conv-list-section-action:hover { background: var(--color-overlay-hover); color: var(--text-2); }
+.conv-list-section-action:focus-visible { outline: var(--focus-width) solid var(--color-brand); outline-offset: 1px; }
 .conv-list-section-action-icon { width: 14px; height: 14px; }
-/* 空间折叠组内会话行：左侧缩进对齐空间名 */
+/* 空间标题保持普通字重；组内任务统一缩进，不增加色块或分割线。 */
 .conv-list-section-header[data-conv-space-toggle="1"] {
-  margin-top: 2px;
+  margin-top: 0;
+  color: var(--text-2);
+  font-size: var(--font-size-3);
+  font-weight: var(--font-weight-regular);
 }
-.conv-list-section-header[data-conv-space-toggle="1"] + .conv-item-nested {
-  margin-left: 10px;
+.conv-list-section-header[data-conv-space-toggle="1"] .conv-list-section-count {
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  line-height: inherit;
+}
+.conv-space-group-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--color-faint);
+}
+.conv-space-group-icon-svg {
+  width: 14px;
+  height: 14px;
+}
+.sidebar-conversations-section .conv-item-nested {
+  margin-left: var(--space-3);
 }
 /* 空间行 ⋯ 菜单按钮：hover 显现（与最近任务行的 ⋯ 同款交互） */
 .conv-space-more-btn {
@@ -2805,10 +2795,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
-  color: #7f8fa8;
-  font-size: 14px;
-  line-height: 1;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   cursor: pointer;
   visibility: hidden;
   opacity: 0;
@@ -2816,9 +2804,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .conv-space-more-btn:hover,
 .conv-space-more-btn:focus-visible {
-  background: rgba(148, 163, 184, 0.14);
-  color: var(--primary-text);
+  background: var(--color-overlay-hover);
+  color: var(--text-2);
 }
+.conv-space-more-icon { width: 14px; height: 14px; }
 .conv-list-section-header:hover .conv-space-more-btn,
 .conv-list-section-header:focus-within .conv-space-more-btn,
 .conv-list-section-header.is-menu-open .conv-space-more-btn {
@@ -2833,8 +2822,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
-  color: #7f8fa8;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   cursor: pointer;
   visibility: hidden;
   opacity: 0;
@@ -2842,8 +2831,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .conv-space-quick-task:hover,
 .conv-space-quick-task:focus-visible {
-  background: rgba(148, 163, 184, 0.14);
-  color: var(--primary-text);
+  background: var(--color-overlay-hover);
+  color: var(--text-2);
 }
 .conv-list-section-header:hover .conv-space-quick-task,
 .conv-list-section-header:focus-within .conv-space-quick-task {
@@ -2893,107 +2882,86 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .project-conv-list .conv-list-section-header.is-collapsible {
   margin: 2px 0;
 }
-.conversation-list-load-more {
-  align-self: center;
-  margin: 5px 8px 8px;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--accent, #4f6bed);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
+.conversation-list-load-more.ui-button {
+  align-self: stretch;
+  width: 100%;
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
 }
-.conversation-list-load-more:hover { background: rgba(79, 107, 237, 0.08); }
-.conversation-list-load-more:disabled { opacity: 0.5; cursor: default; }
 
 .conv-item {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
-  padding: 5px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  min-height: 32px;
+  margin: 0;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-control);
   cursor: pointer;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.35;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  color: var(--text-2);
+  font-size: var(--font-size-3);
+  line-height: 20px;
+  transition: background var(--duration-control) var(--easing-ui), color var(--duration-control) var(--easing-ui);
   position: relative;
+  box-sizing: border-box;
 }
 
 .conv-item-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
-.conv-item:hover { background: var(--surface-2); }
+.conv-item:hover,
+.conv-item:focus-within,
+.conv-item.is-menu-open { background: var(--color-overlay-hover); }
 .conv-item.active {
-  background: var(--primary-soft);
-  color: var(--primary-text);
-  border-color: rgba(14, 159, 110, 0.16);
-  font-weight: 600;
+  background: var(--color-accent-wash);
+  color: var(--text-2);
+  font-weight: var(--font-weight-regular);
 }
-.conv-item.active .conv-item-title { font-weight: 600; }
-
-/* Meta row below title — stacked agent avatars when the members cache has
-   data for this cid. Recency is expressed by the time-bucket section headers
-   above the list, not duplicated here. Hidden entirely when no member data
-   is available (degrades cleanly for unopened convs). */
-.conv-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.conv-item-members {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-/* The badge itself is an `.avatar-circle` (icon-on-color via the shared
-   avatar helper); this rule only carries the stacking ring + nudge so a
-   row of agents reads as one cluster against the sidebar background. */
-.conv-item-member { box-shadow: 0 0 0 2px var(--surface); }
-.conv-item-member + .conv-item-member { margin-left: -5px; }
-.conv-item.active .conv-item-member { box-shadow: 0 0 0 2px var(--primary-soft); }
+.conv-item.active .conv-item-title { font-weight: var(--font-weight-regular); }
 
 .conv-item-actions {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  transform: translateY(-50%);
 }
 
-/* ZCode 式行内相对时间：行尾弱化小字（58分 / 3小时 / 6小时）。
-   时间与 ⋯ 菜单相邻，hover 时菜单显现，时间让位不换行。 */
+/* 时间与更多操作共用行尾；hover、键盘 focus 或菜单展开时由更多按钮接管。 */
 .conv-item-time {
-  flex: 0 0 auto;
-  margin-left: auto;
-  padding-left: 6px;
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
   font-size: var(--font-size-1);
-  font-weight: 400;
-  line-height: 1;
-  color: #9aa7b4;
+  font-weight: var(--font-weight-regular);
+  line-height: 20px;
+  color: var(--color-faint);
   white-space: nowrap;
   user-select: none;
+  pointer-events: none;
 }
-.conv-item.active .conv-item-time { color: rgba(20, 71, 55, 0.55); }
-.conv-item:hover .conv-item-time { color: #8b9ab1; }
+.conv-item.active .conv-item-time { color: var(--text-muted); }
+.conv-item:hover .conv-item-time,
+.conv-item:focus-within .conv-item-time,
 .conv-item.is-menu-open .conv-item-time { visibility: hidden; }
 
 .conv-item-action {
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3010,62 +2978,41 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   opacity: 1;
 }
 
-.conv-item-menu {
-  font-size: 16px;
-  line-height: 1;
-}
+.conv-item-menu-icon { width: 16px; height: 16px; }
 
 .conv-item-menu:hover {
-  background: rgba(20, 71, 55, 0.08);
-  color: var(--color-ink-2);
+  background: var(--color-overlay-hover);
+  color: var(--text-2);
 }
+.conv-item-menu:focus-visible { outline: var(--focus-width) solid var(--color-brand); outline-offset: 1px; }
 
 .conv-item-title {
   flex: 1;
   min-width: 0;
+  padding-right: var(--space-6);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* 未命名会话（默认「新任务」标题）：弱化显示，参照大厂对 Untitled 的处理 */
 .conv-item-title-untitled {
-  color: #9aa7b4;
-  font-weight: 400;
+  color: var(--text-muted);
+  font-weight: var(--font-weight-regular);
 }
 .conv-item-title-input {
   flex: 1;
   min-width: 0;
-  height: 24px;
-  padding: 0 6px;
+  height: 28px;
+  margin: -4px var(--space-6) -4px 0;
+  padding: 0 var(--space-2);
   border: 1px solid var(--primary);
-  border-radius: 5px;
+  border-radius: var(--radius-field);
   background: var(--surface);
   color: var(--text);
   font: inherit;
   outline: none;
   box-shadow: 0 0 0 2px var(--color-focus-halo);
 }
-
-/* Clock icon shown to the left of the title when a conversation was
-   created by an auto-task fire. Matches the sidebar "Automation" tab
-   icon — same `clock` UI icon at 13px, muted by default, primary on
-   hover/active so the conv item still pops. */
-.conv-item-auto-icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--primary);
-  /* No margin-right — `.conv-item-row` has `gap: 6px` which handles the
-     clock-to-title spacing. Stacking the two would double the gap. */
-}
-.conv-item-auto-icon .conv-item-auto-icon-svg {
-  width: 13px;
-  height: 13px;
-}
-/* Auto-tab expand panel: every conv in the list is by definition from-auto
-   (filtered by origin_auto_task_id), so the per-row clock is pure noise. */
-.auto-row-convs-list .conv-item-auto-icon { display: none; }
 
 .conv-item-badge {
   flex-shrink: 0;
@@ -3285,9 +3232,13 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   min-width: 0;
 }
 .main-content:has(#panel-new-chat.active) .new-chat-home-actions { display: flex; }
-.new-chat-secondary-actions { flex: 0 0 auto; }
+.new-chat-secondary-actions {
+  display: flex;
+  flex: 0 0 auto;
+}
 .new-chat-goal-mode-btn.ui-button {
   min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
   color: var(--text-2);
 }
 .new-chat-goal-mode-btn.ui-button:hover { color: var(--text); }
@@ -5313,6 +5264,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-width: min(100%, var(--layout-composer-width-min));
   padding: var(--space-4) var(--space-4) var(--space-2);
   background: var(--surface-card);
   border: 1px solid var(--line-field);
@@ -5322,11 +5274,12 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
   /* See `.chat-input-area` — anchor for the floating workspace chip. */
   position: relative;
+  container: composer / inline-size;
 }
 
 .new-chat-input-area:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-composer), 0 0 0 3px var(--color-focus-halo);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-composer);
   transform: none;
 }
 
@@ -7605,11 +7558,12 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   /* Anchor for the absolutely-positioned `.chat-input-overlay` (attachments
      strip floats above this box). Plan rail lives inside the overlay too. */
   position: relative;
+  container: composer / inline-size;
 }
 
 .chat-input-area:focus-within {
-  border-color: var(--color-accent);
-  box-shadow: var(--shadow-composer), 0 0 0 3px var(--color-focus-halo);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-composer);
   transform: none;
 }
 
@@ -7778,10 +7732,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 
 #panel-conversation .chat-input-area {
-  width: min(82%, 1600px);
-  max-width: 100%;
+  width: 100%;
+  max-width: var(--layout-thread-width);
   gap: 6px;
-  padding: 10px 18px 12px;
+  padding: 10px 16px 12px;
 }
 
 #panel-conversation .chat-input-area textarea#chat-input:not(.chat-rich-source),
@@ -7792,7 +7746,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 
 #panel-conversation .chat-input-area .chat-bottom-bar {
-  padding: 4px;
+  padding: 0;
 }
 
 .chat-send-btn {
@@ -7815,9 +7769,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   background: var(--primary-hover);
 }
 
-/* In an active conversation the send action sits inside a dense tool row.
-   Keep it quiet and integrated; the new-chat landing retains the stronger
-   primary-green CTA. */
+/* In an active conversation the empty send action sits quietly inside the
+   dense tool row. The shared Composer contract below promotes it only when
+   the editor has content and the action is enabled. */
 #panel-conversation .chat-send-btn:not(.streaming):not(:disabled) {
   background: color-mix(in srgb, var(--surface-2) 78%, var(--surface));
   color: var(--primary-text);
@@ -8272,6 +8226,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* 每会话访问权限模式：底部栏里紧贴工作空间 chip 的紧凑下拉（Claude Code 风格三档） */
 .chat-permission-chip {
+  --chat-permission-control-height: 26px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -8282,39 +8237,56 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   background: var(--surface-2);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.chat-permission-chip:hover { border-color: var(--primary); }
-/* 聚焦时保留一个轻量边框提示，但去掉原生橙色 focus 环。 */
-.chat-permission-chip:focus-within { border-color: var(--primary); }
+.chat-permission-chip:hover,
+.chat-permission-chip:focus-within,
+.chat-permission-chip:has(.chat-permission-select.open) {
+  border-color: var(--line-field);
+  background: var(--color-overlay-hover);
+}
 .chat-permission-chip-icon {
   width: 12px;
   height: 12px;
   color: var(--muted);
   flex-shrink: 0;
 }
-.chat-permission-select {
-  appearance: none;
-  -webkit-appearance: none;
-  height: 18px;
-  max-width: 88px;
-  padding: 0 12px 0 0;
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 18px;
-  cursor: pointer;
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right center;
-  background-size: 9px 9px;
+.chat-permission-select.ai-select {
+  min-width: 0;
+  width: auto;
+  max-width: none;
 }
-.chat-permission-select:hover { color: var(--primary-text); }
-.chat-permission-select:focus,
-.chat-permission-select:focus-visible {
-  outline: none;
+.chat-permission-chip .chat-permission-select .ai-select-trigger {
+  width: auto;
+  min-width: 0;
+  height: calc(var(--chat-permission-control-height) - 2px);
+  padding: 0;
+  gap: var(--space-1);
+  border: 0;
+  background: transparent;
   box-shadow: none;
+  color: var(--text-2);
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
+}
+.chat-permission-chip .chat-permission-select .ai-select-trigger:hover,
+.chat-permission-chip .chat-permission-select.open .ai-select-trigger,
+.chat-permission-chip .chat-permission-select .ai-select-trigger:focus,
+.chat-permission-chip .chat-permission-select .ai-select-trigger:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--primary-text);
+}
+.chat-permission-select .ai-select-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-permission-select .ai-select-caret {
+  width: 12px;
+  height: 12px;
+}
+.chat-permission-popover {
+  min-width: 176px;
 }
 
 /* Attachments inside message bubbles (history + optimistic append) */
@@ -11475,10 +11447,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   background: var(--color-surface);
 }
 
-/* Composer chips — recipient / workspace / project / skill all share P3 chrome
-   (PC/docs/design/PATTERNS.md): surface-2 fill, 1px hairline border, radius 7,
-   12px / 500 / var(--text-2). The recipient "@" uses primary text while
-   field prefixes ("Project:" / "Workspace:") stay muted. */
+/* Composer chips share the compact control contract: 28px height, surface
+   fill, hairline field border, and 13px regular labels. The recipient "@"
+   uses primary text while field prefixes stay muted. */
 .chat-skill-chip {
   flex-shrink: 0;
   display: inline-flex;
@@ -11499,22 +11470,23 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 0;
-  padding: 4px 9px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  background: var(--surface-card);
+  border: 1px solid var(--line-field);
   color: var(--text-2);
   border-radius: 7px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.4;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
+  line-height: 1;
   cursor: pointer;
   font-family: inherit;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .chat-recipient-chip:hover {
-  background: var(--surface-3);
+  background: var(--color-overlay-hover);
   color: var(--text);
 }
 
@@ -11575,16 +11547,16 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* ─── Workspace chip (user working directory selector) ─── */
 
-/* Workspace chip — P3 chrome, same family as recipient / project / skill.
-   Open state uses primary-soft. The chip is JS-injected by user-workspace.js
-   right after the recipient chip in the composer bottom bar (per design P11). */
+/* Workspace chip uses the same compact chrome as recipient and model. It is
+   JS-injected by user-workspace.js after the recipient chip. */
 .workspace-chip {
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  min-height: var(--control-height-sm);
+  border: 1px solid var(--line-field);
+  background: var(--surface-card);
   color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 4px 9px;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
+  padding: 0 var(--space-2);
   border-radius: 7px;
   cursor: pointer;
   font-family: inherit;
@@ -11596,9 +11568,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 .workspace-chip:hover,
 .workspace-chip--open {
-  background: var(--primary-soft);
-  border-color: rgba(91, 87, 214, 0.18);
-  color: var(--primary-text);
+  background: var(--color-overlay-hover);
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 .workspace-chip--open .workspace-chip-chevron { color: var(--primary-text); }
 
@@ -11620,7 +11592,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 .workspace-chip-chevron {
   flex-shrink: 0;
-  color: var(--muted);
+  color: currentColor;
   transition: transform 0.2s;
 }
 
@@ -11630,11 +11602,6 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   flex: 0 0 auto;
 }
 
-#panel-new-chat .workspace-chip-prefix,
-#panel-new-chat .workspace-chip-label,
-#panel-new-chat .chat-recipient-name {
-  display: none;
-}
 
 .workspace-chip--open .workspace-chip-chevron {
   transform: rotate(180deg);
@@ -11645,13 +11612,13 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-field);
+  background: var(--surface-card);
   color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
   border-radius: 7px;
   cursor: pointer;
   font-family: inherit;
@@ -11667,9 +11634,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .model-chip:hover,
 .model-chip--open {
-  background: var(--primary-soft);
-  border-color: rgba(91, 87, 214, 0.18);
-  color: var(--primary-text);
+  background: var(--color-overlay-hover);
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 .model-chip-label {
   min-width: 0;
@@ -11687,9 +11654,6 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   height: 14px;
   flex: 0 0 auto;
 }
-#panel-new-chat .model-chip-icon { display: inline-flex; }
-#panel-new-chat .model-chip-label,
-#panel-new-chat .exec-config-effort { display: none; }
 .model-chip-chevron {
   width: 12px;
   height: 12px;
@@ -11966,11 +11930,11 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .exec-config-effort {
   flex-shrink: 0;
   white-space: nowrap;
-  font-size: 10px;
-  padding: 1px 5px;
+  font-size: var(--font-size-1);
+  padding: 1px var(--space-1);
   border-radius: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--color-overlay-fill);
+  border: 0;
   color: var(--muted);
 }
 .exec-config-effort.is-cli {
@@ -11984,6 +11948,89 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .model-chip.is-override {
   border-color: rgba(91, 87, 214, 0.35);
+}
+
+/* Composer contract: shared 28px controls, neutral focus, and labels that
+   collapse from the component's own width rather than from the whole page. */
+:is(.new-chat-input-area, #panel-conversation .chat-input-area) .chat-bottom-bar {
+  gap: var(--space-2);
+  padding: 0;
+}
+
+:is(.new-chat-input-area, #panel-conversation .chat-input-area) .chat-permission-chip {
+  height: var(--chat-permission-control-height);
+  min-height: var(--chat-permission-control-height);
+  padding: 0 var(--space-2);
+  border-color: var(--line-field);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+}
+
+:is(.new-chat-input-area, #panel-conversation .chat-input-area) :is(.chat-attach-btn, .chat-stt-btn, .chat-send-btn) {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+}
+
+:is(.new-chat-input-area, #panel-conversation .chat-input-area) :is(.chat-attach-btn, .chat-stt-btn, .chat-send-btn):hover {
+  background: var(--color-overlay-hover);
+  color: var(--text-body);
+}
+
+:is(.new-chat-input-area, #panel-conversation .chat-input-area):has(.chat-rich-editor:not(:empty)) .chat-send-btn:not(.streaming):not(:disabled) {
+  background: var(--control-primary-bg);
+  color: var(--color-surface);
+}
+
+:is(.new-chat-input-area, #panel-conversation .chat-input-area):has(.chat-rich-editor:not(:empty)) .chat-send-btn:not(.streaming):not(:disabled):hover {
+  background: var(--control-primary-bg-hover);
+  color: var(--color-surface);
+}
+
+@container composer (max-width: 720px) {
+  .workspace-chip-prefix,
+  .workspace-chip-label,
+  .chat-recipient-name,
+  .model-chip-label,
+  .exec-config-effort {
+    display: none;
+  }
+
+  .model-chip-icon {
+    display: inline-flex;
+  }
+
+  .chat-permission-chip {
+    position: relative;
+    width: var(--chat-permission-control-height);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .chat-permission-chip-icon {
+    position: absolute;
+    pointer-events: none;
+  }
+
+  .chat-permission-select.ai-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .chat-permission-chip .chat-permission-select .ai-select-trigger {
+    width: 100%;
+    height: 100%;
+  }
+
+  .chat-permission-select :is(.ai-select-label, .ai-select-caret) {
+    display: none;
+  }
 }
 
 /* Section-grouped picker (本地 Agent / API 连接模型). Section headers are
@@ -15341,7 +15388,12 @@ body:has(#panel-settings.active) .main-top-actions {
   display: none;
 }
 
-#panel-settings,
+#panel-settings {
+  min-height: var(--layout-titlebar-height);
+  padding: 0;
+  background: var(--surface);
+}
+
 #panel-settings #settings-page-header .ui-page-header {
   min-height: var(--layout-titlebar-height);
   padding-inline: var(--space-5);
@@ -15918,7 +15970,7 @@ body:has(#panel-settings.active) .main-top-actions {
   font-weight: var(--font-weight-medium);
   border-bottom: 0;
   margin-bottom: 0;
-  background: var(--primary-soft);
+  background: var(--color-accent-wash);
 }
 .settings-tab-icon { width: 18px; height: 18px; flex: 0 0 auto; }
 /* Generic inline status dot. Sidebar footer buttons draw their dot on the
@@ -16008,18 +16060,6 @@ body:has(#panel-settings.active) .main-top-actions {
 }
 .quota-placeholder-label { font-size: 12.5px; color: var(--text); }
 .quota-placeholder-note { font-size: 11.5px; color: var(--muted); }
-
-/* Connection management is a full workbench, so it must not inherit the
-   document-style horizontal inset used by ordinary settings forms. The
-   touchpoint/messaging shell now lives inside #panel-connections. */
-#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container {
-  padding-right: 12px;
-  padding-bottom: 12px;
-  padding-left: 12px;
-}
-#panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-tabs {
-  margin-bottom: 8px;
-}
 
 /* Messaging connection workbench: channel navigation and one focused settings surface. */
 .messaging-settings-shell {
@@ -17770,8 +17810,8 @@ body:has(#panel-settings.active) .main-top-actions {
   border-radius: 99px;
   background: var(--primary-soft);
   color: var(--primary-text);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
 }
 .account-type-badge.oauth {
   background: var(--success-soft);
@@ -19725,8 +19765,8 @@ body:has(#panel-settings.active) .main-top-actions {
   display: inline-flex;
   align-items: center;
   margin-top: 2px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: inherit;
   color: var(--muted);
 }
 /* Each task is its own bordered card. Inside `.auto-row-head`: expand
@@ -19852,8 +19892,8 @@ body:has(#panel-settings.active) .main-top-actions {
 }
 .auto-row-chip.is-attach { font-family: var(--font-mono); font-size: 11px; }
 .auto-row-chip.is-project {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: inherit;
   color: var(--primary-text);
   background: var(--primary-soft);
   border-color: var(--primary-soft);
@@ -19869,8 +19909,8 @@ body:has(#panel-settings.active) .main-top-actions {
   border-color: var(--success-soft);
 }
 .auto-row-chip.is-device-remote {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: inherit;
   color: var(--muted);
 }
 
@@ -19908,8 +19948,8 @@ body:has(#panel-settings.active) .main-top-actions {
   white-space: nowrap;
 }
 .auto-row-lastrun {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: inherit;
+  font-size: inherit;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -22492,41 +22532,11 @@ body:has(#panel-settings.active) .main-top-actions {
   min-height: 0;
 }
 .connections-tools-switcher {
-  display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-4);
-  margin-bottom: var(--space-5);
-  border-bottom: 1px solid var(--line-default);
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
+  min-width: 0;
+  margin-bottom: var(--space-4);
 }
-.connections-tools-switcher::-webkit-scrollbar { display: none; }
-.connections-tools-tab.ui-button {
-  flex: 0 0 auto;
-  height: var(--control-height);
-  padding: 0 var(--space-1);
-  border: 0;
-  border-bottom: 1.5px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: var(--font-size-ui-sm);
-  font-weight: var(--font-weight-regular);
-}
-.connections-tools-tab.ui-button:hover,
-.connections-tools-tab.ui-button:active {
-  background: transparent;
-  color: var(--text-heading);
-}
-.connections-tools-tab.ui-button.is-active {
-  border-bottom-color: var(--color-accent);
-  background: transparent;
-  color: var(--text-heading);
-  font-weight: var(--font-weight-medium);
-  margin-bottom: -1px;
-}
+.connections-tools-switcher .ui-segmented-control { max-width: 100%; }
 .connections-tools-view[hidden] { display: none; }
 .connections-tools-view:not([hidden]) {
   display: flex;
@@ -26914,10 +26924,6 @@ body.is-terminal-resizing {
   .touchpoint-delivery-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
-  #panel-connections:has(.touchpoint-settings-shell.is-connections-view) .connections-container {
-    padding-right: 8px;
-    padding-left: 8px;
-  }
   .touchpoint-connections-header > div {
     display: block;
   }
@@ -27438,53 +27444,25 @@ body.is-terminal-resizing {
   padding: 0;
 }
 
-.conv-task-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 3px;
-  padding-left: 2px;
-}
-.conv-task-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-1);
-  font-weight: 500;
-  line-height: 1;
-  padding: 2px 6px;
-  border-radius: 8px;
-  white-space: nowrap;
-  color: var(--muted);
-  background: color-mix(in srgb, var(--muted) 8%, transparent);
-}
-.conv-task-chip .conv-task-dot {
-  width: 5px;
-  height: 5px;
+.conv-task-indicator {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid color-mix(in srgb, var(--color-brand) 28%, transparent);
+  border-top-color: var(--color-brand);
+  border-right-color: var(--color-brand);
   border-radius: 50%;
-  background: currentColor;
+  animation: conv-task-spin 1s linear infinite;
 }
-.conv-task-chip.is-running {
-  color: var(--success);
-  background: rgba(16, 185, 129, 0.10);
+
+@keyframes conv-task-spin {
+  to { transform: rotate(360deg); }
 }
-.conv-task-chip.is-queued {
-  color: #b45309;
-  background: rgba(234, 179, 8, 0.14);
-}
-.conv-task-chip.is-plan,
-.conv-task-chip.is-active {
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-}
-.conv-task-chip.is-blocked {
-  color: #b45309;
-  background: rgba(234, 179, 8, 0.14);
-}
-.conv-task-chip.is-failed {
-  color: var(--danger);
-  background: rgba(239, 68, 68, 0.10);
+
+@media (prefers-reduced-motion: reduce) {
+  .conv-task-indicator { animation: none; }
 }
 
 /* 工作区目录缺失引导：重新选择按钮（files tab 空态下方）。 */
@@ -29779,11 +29757,6 @@ body.is-terminal-resizing {
   --kb-hover: var(--color-surface-2);
   --kb-active: var(--color-brand-soft);
   --kb-blue-line: var(--color-line-strong);
-}
-
-.sidebar-btn-chip.kb-new-chip {
-  margin-left: auto; padding: 0 6px; border-radius: var(--radius-pill);
-  background: var(--color-brand); color: var(--color-white); font-size: var(--font-size-1); font-weight: 600; line-height: 16px;
 }
 
 /* 生态外壳：rail + 子视图容器 */
