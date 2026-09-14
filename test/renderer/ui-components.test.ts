@@ -269,7 +269,7 @@ describe('component gallery integration contract', () => {
     const galleryScript = read('src/renderer/component-gallery.js');
     const pageHeaderCases = galleryScript.slice(
       galleryScript.indexOf('function renderPageHeaders'),
-      galleryScript.indexOf('function buttonForState'),
+      galleryScript.indexOf('function renderTabs'),
     );
     const automationHeader = galleryScript.slice(
       galleryScript.indexOf("byId('automation-preview').innerHTML = uiPageHeader"),

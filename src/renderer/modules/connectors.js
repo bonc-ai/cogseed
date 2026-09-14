@@ -581,7 +581,7 @@ function _renderCatalogCard(entry, instance) {
     : true;
 
   const card = document.createElement('div');
-  card.className = `connector-card${connected && !enabledFlag ? ' is-disabled' : ''}${degraded ? ' is-unverified' : ''}`;
+  card.className = `connector-card ui-resource-card${connected && !enabledFlag ? ' is-disabled' : ''}${degraded ? ' is-unverified' : ''}`;
   card.dataset.id = e.id;
 
   // Brand-color square per design (Surface E) — applied ONLY to the

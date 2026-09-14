@@ -1,0 +1,36 @@
+/* CogSeed 开源版 · 参考画布 · 1440×900；实际界面跟随可用视口 */
+:root{
+  --cs-sidebar-width:280px;
+  --cs-titlebar-height:52px;
+  --cs-thread-width:760px;
+  --cs-thread-width-home:720px;
+  --cs-panel-info-width:308px;
+
+  /* 通用控件三档；登录主按钮为 56px 特例 */
+  --cs-control-h-sm:28px;
+  --cs-control-h:32px;
+  --cs-control-h-lg:36px;
+
+  --cs-row-nav:36px;
+  --cs-row-list:34px;
+  --cs-row-table:44px;
+  --cs-row-table-head:34px;
+  --cs-row-menu:34px;
+  --cs-row-option:32px;
+  --cs-icon-size:16px;
+  --cs-icon-stroke:2;
+  --cs-scrollbar-w:6px;
+}
+
+:root {
+  --cs-card-width-max:400px;
+  --cs-card-row-width-max:800px;
+  --cs-card-grid-width-max:1232px;
+}
+
+:root {
+  --cs-composer-width-min:480px;
+  --cs-composer-width-max:900px;
+}
+
+:root{--cs-control-h-login:56px;--cs-control-h-segment:24px;}

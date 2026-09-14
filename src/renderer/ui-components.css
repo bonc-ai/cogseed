@@ -213,6 +213,150 @@
 .ui-segmented-control > button:disabled { color: var(--text-faint); cursor: not-allowed; }
 .ui-segmented-control__count { color: var(--text-muted); font-size: var(--font-size-1); font-variant-numeric: tabular-nums; }
 
+/* Tabs. Business pages keep their existing routing and roving-focus logic;
+ * these classes only own the shared open-source navigation appearance. */
+.ui-tabs {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-4);
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--line-hairline);
+  scrollbar-width: none;
+}
+.ui-tabs::-webkit-scrollbar { display: none; }
+.ui-tab {
+  flex: 0 0 auto;
+  min-width: max-content;
+  min-height: var(--control-height);
+  margin: 0 0 -1px;
+  padding: var(--space-3) 0;
+  border: 0;
+  border-bottom: 1.5px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-ui-sm);
+  font-weight: var(--font-weight-regular);
+  white-space: nowrap;
+  transition:
+    border-color var(--duration-control) var(--easing-ui),
+    color var(--duration-control) var(--easing-ui);
+}
+.ui-tab:hover { color: var(--text-heading); }
+.ui-tab.is-active,
+.ui-tab[aria-selected="true"] {
+  border-bottom-color: var(--text-heading);
+  color: var(--text-heading);
+  font-weight: var(--font-weight-medium);
+}
+.ui-tab:focus-visible,
+.ui-tab[data-preview-state="focus"] {
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
+}
+.ui-tab:disabled { color: var(--text-faint); cursor: not-allowed; }
+
+/* ResourceCard. Page modules retain their content, actions, and state
+ * machines; this marker keeps the common shell from drifting. */
+.ui-resource-card {
+  width: 100%;
+  max-width: 400px;
+  min-width: 0;
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-card);
+  box-sizing: border-box;
+  transition:
+    border-color var(--duration-control) var(--easing-ui),
+    box-shadow var(--duration-control) var(--easing-ui);
+}
+.ui-resource-card:not(.is-readonly):not(.is-disabled):hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }
+.ui-resource-card:focus-visible {
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 3px var(--color-focus-halo), var(--shadow-card-hover);
+}
+.ui-resource-card--row { max-width: 800px; }
+.ui-resource-card__header { display: flex; align-items: flex-start; gap: var(--space-3); }
+.ui-resource-card__icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-control);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-brand-soft);
+  color: var(--color-accent);
+}
+.ui-resource-card__icon .ui-icon { width: 18px; height: 18px; }
+.ui-resource-card__heading { min-width: 0; flex: 1 1 auto; }
+.ui-resource-card__title {
+  margin: 0;
+  color: var(--text-heading);
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5;
+}
+.ui-resource-card__description {
+  min-height: 3.3em;
+  margin: var(--space-3) 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: var(--font-size-ui-sm);
+  line-height: 1.65;
+}
+.ui-resource-card__footer {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.ui-resource-card__status { min-width: 0; color: var(--text-muted); font-size: var(--font-size-meta); }
+
+/* SettingsSection. It is intentionally flat: hierarchy comes from spacing
+ * and a hairline, never an extra page-level shadow. */
+.ui-settings-section {
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4);
+  border: 1px solid var(--line-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-card);
+  box-shadow: none;
+  box-sizing: border-box;
+}
+.ui-settings-section > .settings-group-head {
+  margin-bottom: var(--space-3);
+  min-width: 0;
+}
+.ui-settings-section__header {
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.ui-settings-section__title,
+.ui-settings-section .settings-group-title {
+  margin: 0;
+  color: var(--text-heading);
+  font-size: var(--font-size-3);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+.ui-settings-section__body { display: flex; flex-direction: column; gap: var(--space-3); }
+
 /* PageHeader */
 .ui-page-header {
   min-height: var(--layout-titlebar-height);
@@ -224,6 +368,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   background: var(--surface-card);
+  box-shadow: none;
   scrollbar-width: thin;
 }
 .ui-page-header__body {
@@ -273,12 +418,15 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--space-2);
+  background: transparent;
+  box-shadow: none;
   text-align: center;
 }
 .ui-empty-state__icon {
   width: 32px;
   height: 32px;
-  margin-bottom: var(--space-1);
+  margin: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -297,7 +445,7 @@
 }
 .ui-empty-state__hint {
   max-width: 440px;
-  margin: var(--space-2) 0 0;
+  margin: 0;
   color: var(--text-muted);
   font-size: var(--font-size-3);
   line-height: 1.7;

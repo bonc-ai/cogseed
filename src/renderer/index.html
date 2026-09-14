@@ -471,16 +471,16 @@
           <nav class="skills-cognition-tabs" id="skills-cognition-tabs" role="tablist" aria-label="认知资产任务视图" data-i18n-aria-label="cognition.task_views">
             <div class="skills-cognition-tabs-row">
             <div class="skills-cognition-tab-group" role="presentation">
-              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
+              <button type="button" id="skills-cognition-tab-assets" class="skills-cognition-tab ui-tab is-active" role="tab" aria-selected="true" aria-controls="skills-cognition-assets" data-cognition-page="assets">
                 <span class="skills-cognition-tab-label" data-i18n="cognition.my_assets">我的认知树</span>
               </button>
-              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-inbox" tabindex="-1" data-cognition-page="inbox">
+              <button type="button" id="skills-cognition-tab-inbox" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-inbox" tabindex="-1" data-cognition-page="inbox">
                 <span class="skills-cognition-tab-label" data-i18n="cognition.inbox">待我处理</span>
               </button>
-              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
+              <button type="button" id="skills-cognition-tab-proofs" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-proofs" tabindex="-1" data-cognition-page="proofs">
                 <span class="skills-cognition-tab-label" data-i18n="cognition.proofs">复用与证明</span>
               </button>
-              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
+              <button type="button" id="skills-cognition-tab-governance" class="skills-cognition-tab ui-tab" role="tab" aria-selected="false" aria-controls="skills-cognition-governance" tabindex="-1" data-cognition-page="governance">
                 <span class="skills-cognition-tab-label" data-i18n="cognition.governance">版本与治理</span>
               </button>
             </div>
@@ -676,12 +676,12 @@
              渲染入口见 connections.js::_renderConnectionsPageHeader。 -->
         <div id="connections-page-header"></div>
         <div class="connections-container">
-          <div class="connections-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="智能体 / 技能 / 连接">
-            <button type="button" class="connections-tab is-active" role="tab" aria-selected="true" data-connections-tab="agents" data-i18n="connections.tab.agents">智能体</button>
-            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
-            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
-            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
-            <button type="button" class="connections-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">IM</button>
+          <div class="connections-tabs ui-tabs" role="tablist" data-i18n-aria-label="sidebar.connections" aria-label="智能体 / 技能 / 连接">
+            <button type="button" class="connections-tab ui-tab is-active" role="tab" aria-selected="true" data-connections-tab="agents" data-i18n="connections.tab.agents">智能体</button>
+            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="mcp" data-i18n="connections.tab.mcp">MCP与工具</button>
+            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="skills" data-i18n="connections.tab.skills">技能</button>
+            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="sources" data-i18n="connections.tab.sources">资料库</button>
+            <button type="button" class="connections-tab ui-tab" role="tab" aria-selected="false" tabindex="-1" data-connections-tab="touchpoints" data-i18n="connections.tab.touchpoints">IM</button>
           </div>
           <div class="connections-body">
 
@@ -1144,7 +1144,7 @@
                    Maintenance actions on local data; not synced. -->
               <div class="settings-section-head" data-i18n="settings.section.local">本地</div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.contexts.title">资料库</div>
                   <div class="settings-group-sub" data-i18n="settings.contexts.sub">管理可供模型引用的资料库内容。</div>
@@ -1154,7 +1154,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.data_root.title">Data root</div>
                   <div class="settings-group-sub" data-i18n="settings.data_root.sub">All conversations, agents, skills, and Library content live under this directory. Click the path to open it in the OS file manager.</div>
@@ -1164,7 +1164,7 @@
                 </div>
               </div>
 
-              <div class="settings-group" id="settings-recycle-group">
+              <div class="settings-group ui-settings-section" id="settings-recycle-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.recycle.title">回收站</div>
                   <div class="settings-group-sub" data-i18n="settings.recycle.sub">本机删除会保留完整快照，可手动恢复或删除。</div>
@@ -1183,7 +1183,7 @@
             </div>
 
             <div class="settings-tab-pane" data-settings-pane="general" hidden>
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.language.title">语言 / Language</div>
                 </div>
@@ -1192,7 +1192,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.thinking.title">默认推理强度</div>
                   <div class="settings-group-sub" data-i18n="settings.thinking.sub">对话执行的默认思考强度（全局默认）。会话内可通过输入框右侧的执行配置临时调整，仅影响当前任务。</div>
@@ -1202,7 +1202,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.task_notifications.title">任务通知</div>
                   <div class="settings-group-sub" data-i18n="settings.task_notifications.sub">当 CogSeed 不在前台时，在任务完成、失败或需要输入时发送系统通知。</div>
@@ -1219,7 +1219,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.localexec.title">Tool Execution Access</div>
                   <div class="settings-group-sub" data-i18n="settings.localexec.sub">Controls whether agents can run terminal commands, create or edit workspace files, and generate PDFs, images, and interactive apps. Read-only tools are always available.</div>
@@ -1249,7 +1249,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.metacognition.title">Metacognition-level Agent Self-Evolution</div>
                   <div class="settings-group-sub" data-i18n="settings.metacognition.sub">When on, each agent periodically reviews its recent performance, draws lessons, and adjusts how it works so it does better next time.</div>
@@ -1270,7 +1270,7 @@
               
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
-              <div class="settings-group" id="settings-auth-profiles-recovery" hidden>
+              <div class="settings-group ui-settings-section" id="settings-auth-profiles-recovery" hidden>
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.auth_recovery.title">Model authorization needs repair</div>
                   <div class="settings-group-sub" id="settings-auth-profiles-recovery-message"></div>
@@ -1281,7 +1281,7 @@
                 </div>
               </div>
 
-              <div class="settings-group settings-model-auth-group" id="settings-model-authorizations">
+              <div class="settings-group ui-settings-section settings-model-auth-group" id="settings-model-authorizations">
                 <div class="settings-group-head">
                   <div>
                     <div class="settings-group-title" data-i18n="settings.add_auth_title">Add model authorization</div>
@@ -1318,7 +1318,7 @@
               </div>
 
 
-              <div class="settings-group settings-cli-fallback-group">
+              <div class="settings-group ui-settings-section settings-cli-fallback-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.cli_fallback.title">Commander CLI fallback</div>
                   <div class="settings-group-sub" data-i18n="settings.cli_fallback.sub">When no API-key model is configured, Commander routes chat to your signed-in CLI agent instead of failing.</div>
@@ -1338,7 +1338,7 @@
                 </div>
               </div>
 
-              <div class="settings-group settings-commander-backend-group">
+              <div class="settings-group ui-settings-section settings-commander-backend-group">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.commander_backend.title">Commander backend</div>
                   <div class="settings-group-sub" data-i18n="settings.commander_backend.sub">Commander always uses the built-in Core Agent.</div>
@@ -1356,7 +1356,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.search.title">Search API Key</div>
                   <div class="settings-group-sub" data-i18n="settings.search.sub">Priority: paid API &gt; model-native search &gt; built-in keyless scraper.</div>
@@ -1378,7 +1378,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.image.title">Image generation API Key</div>
                   <div class="settings-group-sub" data-i18n="settings.image.sub">API for the generate_image tool. Falls back to chat keys when those target OpenAI or Google.</div>
@@ -1400,7 +1400,7 @@
                 </div>
               </div>
 
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.tts.title">Text-to-speech API Key</div>
                 </div>
@@ -1441,7 +1441,7 @@
 
             <!-- ───────────────────────── 账号 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="account" hidden>
-              <div class="settings-group" id="hub-account-card"></div>
+              <div class="settings-group ui-settings-section" id="hub-account-card"></div>
             </div>
 
             <!-- ───────────────────────── 账号与用量 ─────────────────────────
@@ -1449,7 +1449,7 @@
                  不写额度账本、不扣减；空态 degraded 标注占位，规则待后端确认。 -->
             <div class="settings-tab-pane" data-settings-pane="usage" hidden>
               <div class="settings-section-head" data-i18n="settings.usage.section">用量</div>
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.usage.quota_title">体验额度 / 运行额度</div>
                   <div class="settings-group-sub" data-i18n="settings.usage.quota_sub">显示当前执行方、可用状态与额度来源。</div>
@@ -1461,7 +1461,7 @@
                   </div>
                 </div>
               </div>
-              <div class="settings-group">
+              <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.usage.connections_link_title">模型与额度</div>
                   <div class="settings-group-sub" data-i18n="settings.usage.connections_link_sub">模型配置与授权已移至「连接」。</div>

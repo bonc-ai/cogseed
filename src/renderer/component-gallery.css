@@ -144,6 +144,13 @@
 .gallery-section h2 { margin: 0; font-size: var(--font-size-6); line-height: var(--line-height-title); letter-spacing: var(--tracking-title); }
 .gallery-section__head p { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--font-size-3); line-height: var(--line-height-body); }
 .gallery-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.gallery-resource-grid,
+.gallery-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: var(--space-4); align-items: start; }
+.gallery-resource-grid .ui-resource-card { min-height: 188px; padding: var(--space-4); display: flex; flex-direction: column; }
+.gallery-resource-grid .ui-resource-card--row { grid-column: 1 / -1; max-width: 800px; }
+.gallery-settings-grid .ui-settings-section { margin-bottom: 0; }
+.gallery-settings-row { min-height: var(--control-height); padding-block: var(--space-2); border-bottom: 1px solid var(--line-hairline); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--text-secondary); font-size: var(--font-size-3); }
+.gallery-settings-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .gallery-specimen {
   border: 1px solid var(--line-default);
   border-radius: var(--radius-card);

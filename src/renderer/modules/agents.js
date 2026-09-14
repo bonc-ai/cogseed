@@ -889,7 +889,7 @@ function renderAgentsGrid(agents) {
     // review status here when that UI is enabled.
     const provenanceChips = _isAgentPlatformSource(a.source) ? _agentPlatformStatusChipsHtml(a) : '';
     return `
-      <div class="agent-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(a.agent_id)}" data-source="${escapeHtml(a.source || '')}">
+      <div class="agent-card ui-resource-card${enabled ? '' : ' is-disabled'}" data-id="${escapeHtml(a.agent_id)}" data-source="${escapeHtml(a.source || '')}">
         <button type="button" class="agent-card-open" data-agent-open aria-label="${escapeHtml(openLabel)}"></button>
         <div class="agent-card-header">
           ${avatarHtml}

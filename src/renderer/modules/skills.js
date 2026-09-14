@@ -5264,7 +5264,7 @@ function renderSkillsGrid(skills) {
       attrs: { 'data-skill-use': true, title: thisUseTitle, 'aria-label': thisUseTitle },
     });
     return `
-      <div class="skill-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
+      <div class="skill-card ui-resource-card${enabled ? '' : ' is-disabled'}${withheld ? ' is-withheld' : ''}" data-id="${escapeHtml(s.id)}" data-source="${escapeHtml(s.source || '')}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(s.name)}</span>
           ${_skillSecurityBadgeHtml(s)}
@@ -5511,7 +5511,7 @@ function _openSkillsSectionHtml(options = {}) {
       attrs: { 'data-open-use': true, title: useTitle, 'aria-label': useTitle },
     });
     return `
-      <div class="skill-card is-readonly${enabled ? '' : ' is-disabled'}" data-open-id="${escapeHtml(s.id)}"${sourceAttr}${packageAttr}>
+      <div class="skill-card ui-resource-card is-readonly${enabled ? '' : ' is-disabled'}" data-open-id="${escapeHtml(s.id)}"${sourceAttr}${packageAttr}>
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(displayName)}</span>
           ${moreBtn}
@@ -5542,7 +5542,7 @@ function _openSkillsSectionHtml(options = {}) {
       attrs: { 'data-open-package-more': true },
     });
     return `
-      <div class="skill-card is-readonly${p.enabled ? '' : ' is-disabled'}" data-open-package-card="1" data-open-package-name="${escapeHtml(packageName)}">
+      <div class="skill-card ui-resource-card is-readonly${p.enabled ? '' : ' is-disabled'}" data-open-package-card="1" data-open-package-name="${escapeHtml(packageName)}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(packageDisplayName)}</span>
           ${moreBtn}
@@ -5575,7 +5575,7 @@ function _openSkillsSectionHtml(options = {}) {
     });
     const summary = _globalSkillGroupSummary(group);
     return `
-      <div class="skill-card is-readonly${enabled ? '' : ' is-disabled'} skill-card--global-group" data-global-skill-group="${escapeHtml(group.key)}">
+      <div class="skill-card ui-resource-card is-readonly${enabled ? '' : ' is-disabled'} skill-card--global-group" data-global-skill-group="${escapeHtml(group.key)}">
         <div class="skill-card-header">
           <span class="skill-card-name">${escapeHtml(name)}</span>
           ${moreBtn}

@@ -1001,7 +1001,7 @@
       invalid ? { k: _t('ws.meta_invalid', '不可用引用'), v: _t('ws.item_count', '{count} 项', { count: invalid }) } : null,
     ].filter(Boolean);
     return `
-    <article class="ws-space-card" data-ws="open-space" data-space="${escapeHtml(s.space_id)}">
+    <article class="ws-space-card ui-resource-card" data-ws="open-space" data-space="${escapeHtml(s.space_id)}">
       <div class="ws-card-top">
         <div class="ws-space-name">
           <div class="ws-space-icon ${_spaceTone(s.space_type)}">${_icon(_spaceIconName(s.space_type), 'ui-icon')}</div>

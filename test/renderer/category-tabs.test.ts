@@ -306,7 +306,7 @@ describe('agent and skill category tabs', () => {
     expect(html).toContain('外部包');
     expect(html).toContain('cogseed-cli-smoke');
     expect(html).toContain('命令行 · `cogseed-cli-smoke`');
-    expect(html).toContain('skill-card is-readonly');
+    expect(html).toContain('skill-card ui-resource-card is-readonly');
     expect(html).toContain('data-open-package-card');
     expect(html).toContain('data-open-package-more');
     expect(html).not.toContain('packages-list');

@@ -1,0 +1,17 @@
+/* CogSeed 开源版 · 动效
+   全局同时最多一个动效焦点。禁止弹跳、缩放入场、渐变流光。 */
+:root{
+  --cs-ease-out:ease-out; /* @kind other */
+  --cs-ease-panel:cubic-bezier(.2,.8,.2,1); /* @kind other */
+
+  --cs-dur-hover:120ms; /* @kind other */
+  --cs-dur-control:140ms; /* @kind other */
+  --cs-dur-view:160ms; /* @kind other */
+  --cs-dur-panel:200ms; /* @kind other */
+  --cs-dur-progress:400ms; /* @kind other */
+
+  --cs-transition-hover:background var(--cs-dur-hover) var(--cs-ease-out); /* @kind other */
+}
+@keyframes cs-spin{to{transform:rotate(360deg)}}
+@keyframes cs-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes cs-skeleton{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}

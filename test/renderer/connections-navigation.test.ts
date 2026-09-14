@@ -90,14 +90,14 @@ function loadConnectionsModule() {
 
 describe('connections navigation', () => {
   it('matches the five capability entries from the open-source design system', () => {
-    const tablistStart = indexHtml.indexOf('class="connections-tabs"');
+    const tablistStart = indexHtml.indexOf('class="connections-tabs ui-tabs"');
     const tablistEnd = indexHtml.indexOf('</div>', tablistStart);
     const tablist = indexHtml.slice(tablistStart, tablistEnd);
     expect([...tablist.matchAll(/data-connections-tab="([^"]+)"/g)].map((match) => match[1])).toEqual([
       'agents', 'mcp', 'skills', 'sources', 'touchpoints',
     ]);
-    expect(tablist).toMatch(/connections-tab is-active"[^>]*data-connections-tab="agents"/);
-    expect(tablist).toMatch(/connections-tab is-active" role="tab" aria-selected="true"/);
+    expect(tablist).toMatch(/connections-tab ui-tab is-active"[^>]*data-connections-tab="agents"/);
+    expect(tablist).toMatch(/connections-tab ui-tab is-active" role="tab" aria-selected="true"/);
     expect(tablist.match(/role="tab"/g)).toHaveLength(5);
     expect(tablist.match(/tabindex="-1"/g)).toHaveLength(4);
     expect(tablist).not.toContain('data-connections-tab="plugins"');

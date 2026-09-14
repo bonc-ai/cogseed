@@ -29,6 +29,9 @@
       <nav class="gallery-nav">
         <a href="#foundations"><span>FND</span>基础标尺</a>
         <a href="#page-header"><span>PH</span>PageHeader</a>
+        <a href="#tabs"><span>TAB</span>Tabs</a>
+        <a href="#resource-cards"><span>CARD</span>ResourceCard</a>
+        <a href="#settings-sections"><span>SET</span>SettingsSection</a>
         <a href="#buttons"><span>BTN</span>Button</a>
         <a href="#icon-buttons"><span>IB</span>IconButton</a>
         <a href="#segmented-controls"><span>SEG</span>SegmentedControl</a>
@@ -40,7 +43,7 @@
 
       <div class="gallery-coverage" aria-label="设计系统覆盖范围">
         <span>共享基础层</span>
-        <strong>10 / 10 已定义</strong>
+        <strong>13 / 13 已定义</strong>
         <small>本页与真实页面复用同一套 token、CSS 和原生 JS primitives。</small>
       </div>
     </aside>
@@ -108,6 +111,30 @@
           <div><h2>PageHeader</h2><p>标题、数量和页面操作保持在同一行；不提供副标题插槽，所有操作统一为 secondary / sm。</p></div>
         </div>
         <div class="gallery-stack" id="page-header-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="tabs">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">TAB</span>
+          <div><h2>Tabs</h2><p>下划线导航保持单行滚动；左右方向键与 Home / End 复用真实页面的 roving-focus 约定。</p></div>
+        </div>
+        <div class="gallery-stack" id="tabs-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="resource-cards">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CARD</span>
+          <div><h2>ResourceCard</h2><p>工作空间、自动化、能力与插件共用同一外壳；业务内容、操作和状态仍由各页面负责。</p></div>
+        </div>
+        <div class="gallery-resource-grid" id="resource-card-specimens"></div>
+      </section>
+
+      <section class="gallery-section" id="settings-sections">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">SET</span>
+          <div><h2>SettingsSection</h2><p>浅描边、16px 内边距、无阴影；分组间距承担层级，不再由页面叠加卡片效果。</p></div>
+        </div>
+        <div class="gallery-settings-grid" id="settings-section-specimens"></div>
       </section>
 
       <section class="gallery-section" id="buttons">

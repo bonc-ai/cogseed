@@ -45,6 +45,44 @@
     )).join('');
   }
 
+  function renderTabs() {
+    const tab = (label, selected, count = '') => `<button type="button" class="ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-tab>${label}${count === '' ? '' : ` <span class="ui-segmented-control__count">${count}</span>`}</button>`;
+    byId('tabs-specimens').innerHTML = specimen(
+      '主页面导航',
+      '单一 Tab 入口 · 下划线选中 · 绿色键盘焦点',
+      `<div class="ui-tabs" role="tablist" aria-label="能力页面">${tab('智能体', true, 6)}${tab('MCP 与工具', false, 4)}${tab('技能', false, 18)}${tab('资料库', false)}${tab('IM', false)}</div>`,
+    );
+  }
+
+  function renderResourceCards() {
+    const card = ({ title, description, icon, status, action, row = false }) => `
+      <article class="ui-resource-card${row ? ' ui-resource-card--row' : ''}">
+        <div class="ui-resource-card__header">
+          <span class="ui-resource-card__icon"><span data-ui-icon="${icon}"></span></span>
+          <div class="ui-resource-card__heading"><h3 class="ui-resource-card__title">${title}</h3></div>
+        </div>
+        <p class="ui-resource-card__description">${description}</p>
+        <div class="ui-resource-card__footer"><span class="ui-resource-card__status">${status}</span>${uiButton({ label: action, role: 'primary', size: 'sm' })}</div>
+      </article>`;
+    byId('resource-card-specimens').innerHTML = [
+      card({ title: '产品研发', description: '组织需求、设计与研发交付，保留最近任务上下文。', icon: 'folder', status: '刚刚更新', action: '继续工作' }),
+      card({ title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' }),
+      card({ title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', row: true }),
+    ].join('');
+    hydrateUiIcons(byId('resource-card-specimens'));
+  }
+
+  function renderSettingsSections() {
+    const section = (title, rows, action = '') => `<section class="ui-settings-section" aria-label="${title}">
+      <header class="ui-settings-section__header"><h3 class="ui-settings-section__title">${title}</h3>${action}</header>
+      <div class="ui-settings-section__body">${rows.map(([label, value]) => `<div class="gallery-settings-row"><span>${label}</span><strong>${value}</strong></div>`).join('')}</div>
+    </section>`;
+    byId('settings-section-specimens').innerHTML = [
+      section('通用', [['语言', '简体中文'], ['默认推理强度', '中等']]),
+      section('数据', [['资料库', '3 个来源'], ['数据目录', '本机']], uiButton({ label: '打开目录', role: 'secondary', size: 'sm' })),
+    ].join('');
+  }
+
   function buttonForState(role, size, state) {
     return uiButton({
       label: state === 'loading' ? '处理中' : role.label,
@@ -315,6 +353,38 @@
         group.querySelectorAll('button').forEach((item) => item.setAttribute('aria-pressed', item === button ? 'true' : 'false'));
       });
     });
+    document.querySelectorAll('.ui-tabs').forEach((group) => {
+      const tabs = Array.from(group.querySelectorAll('[data-gallery-tab]'));
+      if (!tabs.length) return;
+      const activate = (tab) => {
+        tabs.forEach((item) => {
+          const selected = item === tab;
+          item.classList.toggle('is-active', selected);
+          item.setAttribute('aria-selected', selected ? 'true' : 'false');
+          item.tabIndex = selected ? 0 : -1;
+        });
+        tab.focus();
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      };
+      group.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-gallery-tab]');
+        if (tab && group.contains(tab)) activate(tab);
+      });
+      group.addEventListener('keydown', (event) => {
+        if (event.isComposing || event.keyCode === 229) return;
+        const current = event.target.closest('[data-gallery-tab]');
+        const index = tabs.indexOf(current);
+        if (index < 0) return;
+        let next = -1;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        if (next < 0) return;
+        event.preventDefault();
+        activate(tabs[next]);
+      });
+    });
     document.addEventListener('click', (event) => {
       const modalTrigger = event.target.closest('[data-modal-demo]');
       if (modalTrigger) {
@@ -353,6 +423,9 @@
   }
 
   renderPageHeaders();
+  renderTabs();
+  renderResourceCards();
+  renderSettingsSections();
   renderButtons();
   renderIconButtons();
   renderSegmentedControls();

@@ -2758,7 +2758,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--text-2);
 }
 .conv-list-section-header.is-collapsible:focus-visible {
-  outline: 2px solid rgba(91, 87, 214, 0.26);
+  outline: 2px solid var(--color-focus-halo);
   outline-offset: 1px;
 }
 .conv-list-section-caret {
@@ -3139,7 +3139,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--text);
   font: inherit;
   outline: none;
-  box-shadow: 0 0 0 2px rgba(91, 87, 214, 0.10);
+  box-shadow: 0 0 0 2px var(--color-focus-halo);
 }
 
 /* Clock icon shown to the left of the title when a conversation was
@@ -5361,7 +5361,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .new-chat-external-agent-btn:focus-visible {
-  outline: 3px solid rgba(91, 87, 214, 0.16);
+  outline: 3px solid var(--color-focus-halo);
   outline-offset: 2px;
 }
 
@@ -5619,7 +5619,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-size: 14px;
   font-weight: 600;
   outline: none;
-  box-shadow: 0 0 0 2px rgba(91, 87, 214, 0.10);
+  box-shadow: 0 0 0 2px var(--color-focus-halo);
 }
 .chat-header-title-input[hidden] { display: none !important; }
 .chat-header-meta {
@@ -15444,12 +15444,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    全宽通栏；下方间距由 .settings-container 的 padding 提供。 */
 #settings-page-header .ui-page-header { width: 100%; box-sizing: border-box; }
 .settings-section-head {
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: #7c8a99;
-  margin: 24px 4px 8px;
+  margin: var(--space-6) 0 var(--space-3);
+  color: var(--text-heading);
+  font-size: var(--font-size-3);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
 }
 .settings-section-head:first-child { margin-top: 0; }
 
@@ -15996,8 +15996,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
-  width: 100%;
+  width: auto;
   max-width: var(--layout-thread-width);
   margin: 0 auto;
   padding: var(--space-6) var(--space-6) var(--space-7);
@@ -17234,6 +17235,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .settings-row[hidden] { display: none !important; }
 .settings-row:last-child { margin-bottom: 0; }
+#settings-data-root-btn {
+  min-width: 0;
+  max-width: 100%;
+}
+#settings-data-root-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-row > label {
   flex: 0 0 80px;
   font-size: 13px;
@@ -17255,7 +17266,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .settings-row input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(91, 87, 214, 0.18);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 .settings-lang-opt {
   display: inline-flex;
@@ -17344,7 +17355,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .form-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(91, 87, 214, 0.18);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 .form-row .form-input { flex: 1; }
 .form-hint-url {
@@ -19567,7 +19578,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 #auto-date-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(91, 87, 214, 0.12);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 
 /* Title input — full-width, matches the schedule controls' chrome. */
@@ -19586,7 +19597,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 #auto-title-input:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(91, 87, 214, 0.12);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 #auto-freq-select,
 #auto-weekday-select,

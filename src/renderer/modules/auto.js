@@ -322,7 +322,7 @@ function _autoTaskMessagePreviewHtml(task, maxLength = 160) {
 function _autoRenderRow(task, opts) {
   // opts: { showProjectBadge?: boolean, onEdit: (task) => void, afterChange: () => void }
   const row = document.createElement('div');
-  row.className = 'auto-row' + (task.enabled ? '' : ' is-disabled');
+  row.className = 'auto-row ui-resource-card ui-resource-card--row' + (task.enabled ? '' : ' is-disabled');
   row.dataset.taskId = task.id;
 
   // ── Main column (left) ────────────────────────────────────────────────
@@ -882,7 +882,7 @@ function _autoRenderTemplates(container, opts = {}) {
     const meta = (!isBlank && tpl.schedule)
       ? `<span class="auto-tpl-card-meta">${escapeHtml(_autoFormatSummary({ schedule: tpl.schedule }))}</span>`
       : '';
-    return `<button type="button" class="auto-tpl-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
+    return `<button type="button" class="auto-tpl-card ui-resource-card${isBlank ? ' is-blank' : ''}" data-auto-tpl="${escapeHtml(tpl.id)}">`
       + `<span class="auto-tpl-card-ico">${iconHtml(tpl.icon, 'auto-tpl-ico')}</span>`
       + `<span class="auto-tpl-card-body">`
       + `<span class="auto-tpl-card-name">${name}</span>`
