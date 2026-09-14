@@ -62,9 +62,19 @@ describe('publicContextWindowFor', () => {
   });
 
   it('returns undefined instead of guessing for unknown or windowless ids', () => {
-    expect(publicContextWindowFor('deepseek-v4-pro')).toBeUndefined(); // catalog has the id but no window
+    expect(publicContextWindowFor('doubao-seed-2-0-pro-260215')).toBeUndefined(); // catalog has the id but no window
     expect(publicContextWindowFor('no-such-model')).toBeUndefined();
     expect(publicContextWindowFor('vendor/')).toBeUndefined();
     expect(publicContextWindowFor('')).toBeUndefined();
+  });
+
+  it('resolves the deepseek V4/V4.1 family to the confirmed 1M window', () => {
+    // 2026-09-11 口径更新（产品负责人确认）：V4 文本系列与此前已确认 1M 的
+    // v4-flash-vision-exp 共用 1M 窗口，v4.1 为同族迭代。原先本文件把
+    // deepseek-v4-pro 当"有 id 无窗口"的样本，该角色改由豆包条目承担。
+    expect(publicContextWindowFor('deepseek-v4-pro')).toBe(1_048_576);
+    expect(publicContextWindowFor('deepseek-v4.1-flash')).toBe(1_048_576);
+    // 用户实际配置的 id 形态（自定义供应商带 vendor 前缀）解析到同一窗口。
+    expect(publicContextWindowFor('deepseek/deepseek-v4.1-flash')).toBe(1_048_576);
   });
 });

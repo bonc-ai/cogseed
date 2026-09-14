@@ -188,8 +188,9 @@ describe('conversation session stats line', () => {
     // price in=1 out=2 (cache units absent → 0): (100K*1 + 10K*2)/1M = ¥0.12
     expect(texts).toContain('chat.stats.cost|{"c":"¥0.12"}');
     // 150K/128K ≥ 80% threshold → ctx segment carries the hot class.
+    // 2026-09-11：上下文段独立加框（seg-ctx）。
     const hot = h.box.children.find((c) => String(c.textContent).includes('chat.stats.ctxK|')) as { className: string };
-    expect(hot.className).toBe('seg seg-hot');
+    expect(hot.className).toBe('seg seg-hot seg-ctx');
     // Cost span explains it is a local-price estimate, not a bill.
     const cost = h.box.children[h.box.children.length - 1] as { title: string; textContent: string };
     expect(cost.textContent).toContain('¥0.12');
@@ -210,7 +211,8 @@ describe('conversation session stats line', () => {
     // Only the used amount shows (no /window·% part), and it is not hot.
     expect(ctx.textContent).toContain('150K');
     expect(ctx.textContent).not.toContain('%');
-    expect(ctx.className).toBe('seg');
+    // 2026-09-11：上下文段独立加框（seg-ctx）。
+    expect(ctx.className).toBe('seg seg-ctx');
   });
 
   it('declares chat.stats.* keys in all four locales', () => {
