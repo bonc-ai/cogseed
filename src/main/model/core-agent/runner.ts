@@ -1352,7 +1352,7 @@ async function buildExternalProvider(userId: string | null, providerId: string, 
  *  上限抹掉（2026-09-14 修复：此前恰好只有 external 路径被测试覆盖到）。
  *  导出供回归测试（同 bus.ts::_isDeepSeekOfficialBaseUrl 先例）。 */
 export function rotatingCandidateMaxTokens(
-  userId: string,
+  userId: string | null,
   candProviderId: string,
   candModelId: string,
   isExternal: boolean,

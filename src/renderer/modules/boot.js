@@ -461,7 +461,6 @@ function setView(view, cid, opts = {}) {
                 : view === 'run-center' ? 'panel-run-center'
                 : view === 'agents' || view === 'contexts' ? 'panel-connections'
                 : view === 'skills' ? 'panel-connections'
-                : view === 'personal-ontology' ? 'panel-recall'
                 : view === 'recall' ? 'panel-recall'
                 : view === 'connections' || view === 'connectors' ? 'panel-connections'
                 : view === 'spaces' || view === 'workspace' ? 'panel-workspace'
@@ -477,7 +476,7 @@ function setView(view, cid, opts = {}) {
   document.getElementById('auto-btn')?.classList.toggle('active', view === 'auto');
   document.getElementById('kb-btn')?.classList.toggle('active', view === 'kb');
   document.getElementById('run-center-btn')?.classList.toggle('active', view === 'run-center');
-  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall' || view === 'personal-ontology');
+  document.getElementById('recall-btn')?.classList.toggle('active', view === 'recall');
   document.getElementById('connectors-btn')?.classList.toggle('active', view === 'connections' || view === 'connectors' || view === 'agents' || view === 'contexts' || view === 'skills');
   document.getElementById('workspace-btn')?.classList.toggle('active', view === 'workspace');
   // 设置视图高亮同步到左下角融合面板的「设置」项（account-chip.js）。

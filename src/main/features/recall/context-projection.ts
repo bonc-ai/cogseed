@@ -773,14 +773,32 @@ export async function refreshCommittedProjectionAssetVersion(
   newVersion: string,
 ): Promise<number> {
   let refreshed = 0;
-  const projections = await listContextProjections(userId, { limit: 100 });
-  for (const projection of projections) {
+  // 全量列举投影文件（不走 listContextProjections——它内部 clamp 到 100 条，
+  // 存量超过 100 时最老的 committed 投影会漏刷新，版本强校验继续失败）。
+  let names: string[];
+  try {
+    names = await fs.readdir(projectionsDirectory(userId));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  const records = await Promise.all(names
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => readRecallJsonRecord(userId, 'projections', name.slice(0, -5))));
+  for (const raw of records) {
+    if (!raw) continue;
+    let projection: ContextProjectionRecord;
+    try {
+      projection = asProjection(raw);
+    } catch {
+      continue;
+    }
     if (!isCommittedProjection(projection)) continue;
     if (projection.expiresAt && Date.parse(projection.expiresAt) <= Date.now()) continue;
     if (!Array.isArray(projection.assetIds) || !projection.assetIds.includes(assetId)) continue;
     if (projection.assetVersions && projection.assetVersions[assetId] === newVersion) continue;
-    await updateRecallJsonRecord(userId, 'projections', projection.id, (raw) => {
-      const current = asProjection(raw);
+    await updateRecallJsonRecord(userId, 'projections', projection.id, (inner) => {
+      const current = asProjection(inner);
       if (!current.assetVersions || current.assetVersions[assetId] === newVersion) return current;
       current.assetVersions = { ...current.assetVersions, [assetId]: newVersion };
       return current;

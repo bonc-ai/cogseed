@@ -1500,7 +1500,9 @@ async function _settingsCommitCustomProviderPatch(provider, patch) {
 function _settingsWireCustomProviderField(body, inputId, options) {
   const input = body.querySelector('#' + inputId) || document.getElementById(inputId);
   if (!input) return null;
-  const original = String(input.value ?? '');
+  // let：提交成功后同步推进（焦点保护路径不整卡重画、wiring 不重建，
+  // Esc 还原基准若停留初始值会把已保存字段显示回旧值——2026-09-14 终审修）。
+  let original = String(input.value ?? '');
   input.dataset.escResets = '1';
   const commit = async () => {
     const value = String(input.value ?? '').trim();
@@ -1519,6 +1521,7 @@ function _settingsWireCustomProviderField(body, inputId, options) {
       input.value = original;
       return;
     }
+    original = value;
     _settingsSetCustomProviderFieldMessage(input, '');
   };
   input.addEventListener('blur', () => { void commit(); });
@@ -3202,7 +3205,7 @@ function _settingsOpenModal(overlay) {
   const onKey = (e) => {
     if (e.key !== 'Escape') return;
     if (e.target && e.target.dataset && e.target.dataset.escResets === '1') return;
-    _settingsCloseModal(overlay, onKey);
+    _settingsCloseModal(overlay);
   };
   overlay._onKey = onKey;
   document.addEventListener('keydown', onKey, true);

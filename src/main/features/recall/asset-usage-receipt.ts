@@ -140,6 +140,7 @@ export async function recordAssetUsageReceipt(
   if (injection.boundary !== input.boundary) throw new Error('injection receipt boundary mismatch');
 
   const id = receiptId(input);
+  const reasonText = compactReason(input.reason);
   const record: AssetUsageReceipt = {
     schemaVersion: 1,
     ownerId: userId,
@@ -153,7 +154,7 @@ export async function recordAssetUsageReceipt(
     evidenceRefs,
     evidenceKind: input.evidenceKind,
     boundary: input.boundary,
-    ...(compactReason(input.reason) ? { reason: compactReason(input.reason) } : {}),
+    ...(reasonText ? { reason: reasonText } : {}),
     createdAt: nowIso(),
   };
 

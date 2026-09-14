@@ -97,8 +97,9 @@ describe('personal ontology renderer integration', () => {
     expect(paneStart).toBeGreaterThan(0);
     const paneHtml = html.slice(paneStart, html.indexOf('</main>', paneStart));
     expect(paneHtml).toContain('id="panel-personal-ontology"');
-    // 技能库已移出到连接页，personal-ontology 深链仍归认知资产。
-    expect(boot).toContain("view === 'personal-ontology' ? 'panel-recall'");
+    // 技能库已移出到连接页，personal-ontology 深链在 boot 顶部归一化为 recall
+    //（永假分支已删，2026-09-14 终审清理）；展开由 core.js 的深链分支接管。
+    expect(boot).toContain("const openPersonalOntology = view === 'personal-ontology'");
     // 2026-09-14 认知资产前端重建：本体入口 = views.js overview 常驻行
     //（data-act="open-ontology"）+ core.js 的 NS.openPersonalOntology
     //（un-hide #skills-cognition-personal-ontology 后调 window.renderPersonalOntology）；

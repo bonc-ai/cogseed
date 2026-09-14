@@ -31,7 +31,6 @@
         act ? { 'data-act': act } : {},
         opts.id != null ? { 'data-id': String(opts.id) } : {},
         opts.data || {},
-        opts.go ? { 'data-go': String(opts.go) } : {},
         opts.title ? { title: opts.title } : {},
       ),
     });
@@ -272,13 +271,29 @@
     for (const [id] of CATEGORIES) counts[id] = S.assets.filter((a) => a.type === id && String(a.status || 'active') !== 'archived').length;
     const sourceCount = S.sources.reduce((n, group) => n + (Array.isArray(group.items) ? group.items.length : 0), 0);
     const captureCount = Array.isArray(S.captures) ? S.captures.length : 0;
+    // 每个资产的最近使用时间（时间线里 occurredAt 的最大值）：列表行此前
+    // 硬编码「最近无使用记录」，被真实复用过的资产也这么显示（终审修）。
+    const lastUseByAsset = new Map();
+    for (const proof of S.proofs) {
+      const assetId = String((proof.refs || {}).assetId || '');
+      const at = String(proof.occurredAt || '');
+      if (!assetId || !at) continue;
+      const current = lastUseByAsset.get(assetId);
+      if (!current || at > current) lastUseByAsset.set(assetId, at);
+    }
+    const lastUseText = (assetId) => {
+      const at = lastUseByAsset.get(String(assetId));
+      return at
+        ? T('cognition.asset_last_used_at', '最近使用 {when}', { when: fmtDate(at) })
+        : T('cognition.asset_last_use', '最近无使用记录');
+    };
     const heroHtml = hero(
       T('cognition.tree_eyebrow', '我的认知'), T('cognition.overview_title', '我的认知资产'),
       T('cognition.tree_page_hint', '树只展示正式认知资产。候选经确认后成为正式资产，经真实复用与证据验证后升级为「已验证」。'),
       statsRow([
         [stats.confirmed, T('cognition.overview_stat_confirmed', '已确认资产')],
         [stats.pending, T('cognition.overview_stat_pending', '待确认候选')],
-        [stats.validated, T('cognition.overview_stat_validated', '已验证')],
+        [stats.transferOk, T('cognition.overview_stat_validated', '已验证')],
         [stats.attention, T('cognition.overview_stat_attention', '需要关注')],
       ]),
     );
@@ -296,14 +311,15 @@
         <div class="ca-row" data-go-asset="${esc(asset.id)}" role="button" tabindex="0">
           <div class="ca-row-main">
             <div class="ca-row-title">${esc(asset.title || asset.id)}</div>
-            <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))} · ${esc(T('cognition.asset_last_use', '最近无使用记录'))}</div>
+            <div class="ca-row-meta">${esc(categoryLabel(asset.type))} · v${esc(String(asset.version || '1'))} · ${esc(lastUseText(asset.id))}</div>
           </div>
           <div class="ca-row-side">${assetStatusChip(asset)}<span class="ca-chevron">›</span></div>
         </div>`).join('')
       : empty(
         T('cognition.tree_empty', '还没有正式资产'),
         T('cognition.tree_empty_hint', '候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。'),
-        S.candidates.length ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
+        // 条件与按钮数字同口径（stats.pending），避免出现「查看 0 条」。
+        stats.pending ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
       );
     return `${heroHtml}
       <div class="ca-card ca-tree-card">
@@ -659,7 +675,7 @@
       T('cognition.sources_eyebrow', 'SOURCES'), T('cognition.sources_title', '来源健康'),
       T('cognition.sources_page_hint', '认知资产只从这五类来源采集。这里看每类的健康状态；点开看明细。'),
     )}
-    ${cards}
+    ${cards || `<div class="ca-card">${empty(T('cognition.sources_empty', '还没有任何来源记录'), T('cognition.sources_empty_hint', '完成几轮对话后，会话、文件与执行记录会作为来源出现在这里。'))}</div>`}
     <p class="ca-footnote">${esc(T('cognition.source_boundary_hint', '普通内容先成为候选；只有用户教学信号可在限定范围内形成可撤销回执。'))}</p>`;
   }
 
@@ -859,5 +875,4 @@
       </div>`;
   }
   NS.render = render;
-  NS.helpers = { sourceRefUnavailable, evidenceMostlyUnavailable, candidatePending, categoryLabel };
 })();

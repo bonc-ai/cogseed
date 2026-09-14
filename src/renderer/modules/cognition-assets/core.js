@@ -127,8 +127,6 @@
     expandedProofs: new Set(),
     /** 自动整理页：历史会话列表是否展开全部（默认收拢 5 条）。 */
     organizeListExpanded: false,
-    continuationCount: 0,
-    loadedAt: 0,
     /** 路由：{name, category, assetId, candidateId, manageTab, sourceKind, proofEventId} */
     route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' },
     backStack: [],
@@ -181,16 +179,11 @@
       // 提炼出的经验（KSTAR review 里 lesson 非空的记录，含沉淀状态）；失败不阻塞主快照。
       store.experiences = toArr(experiences, ['experiences', 'items']);
       store.experienceTotal = Number((experiences && experiences.total) || store.experiences.length) || 0;
-      // 来源条目被包在分组里；补一层拍平给统计与详情用。
-      store.sources.forEach((group) => {
-        (Array.isArray(group.items) ? group.items : []).forEach((item) => { item.__groupKind = group.kind || ''; });
-      });
       // 证明链只服务「使用与证明」与成熟度展示，失败不阻塞主快照。
       // 通道是语义化的时间线（recall.timeline.list）：每条事件带 refs
       // （assetId / transferProofId / usageReceiptId / version），与旧实现同源。
       const proofs = await api.soft('recall.timeline.list', { limit: 500 }, {});
       store.proofs = toArr(proofs, ['items', 'events']);
-      store.loadedAt = Date.now();
       store.loaded = true;
     },
     async tree() {
@@ -232,25 +225,16 @@
   ];
   NS.TABS = TABS;
 
-  /** 旧页面名 → 新路由（兼容 boot.js 深链与老入口）。 */
-  const LEGACY = {
-    assets: { name: 'overview' }, brain: { name: 'overview' }, context: { name: 'overview' },
-    ontology: { name: 'overview', category: 'personal' }, tree: { name: 'overview' },
-    inbox: { name: 'review' }, overview: { name: 'review' }, candidates: { name: 'manage', manageTab: 'organize' },
-    captures: { name: 'manage', manageTab: 'organize' }, deposition: { name: 'manage', manageTab: 'organize' },
-    sources: { name: 'manage', manageTab: 'sources' }, proofs: { name: 'evidence' }, receipts: { name: 'evidence' },
-    governance: { name: 'overview' }, candidate: { name: 'review' },
-    nonasset: { name: 'overview' }, skillupdate: { name: 'overview' },
-  };
-  NS.LEGACY = LEGACY;
-
   const router = {
     go(next, options) {
       const opts = options || {};
       const current = store.route;
-      const same = JSON.stringify(current) === JSON.stringify(next);
+      // 先把 next 归一到同一形状再比（部分键字面量 vs 全键展开的序列化恒不等，
+      // 连点同一 tab 会堆积重复栈项——2026-09-14 终审修）。
+      const merged = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, next);
+      const same = JSON.stringify(current) === JSON.stringify(merged);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
-      store.route = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, next);
+      store.route = merged;
       NS.notify();
       const main = document.getElementById('ca-scroll');
       if (main) main.scrollTop = 0;
@@ -258,10 +242,6 @@
     back() {
       const prev = store.backStack.pop();
       if (prev) router.go(prev, { replace: true });
-    },
-    legacy(page) {
-      const mapped = LEGACY[page] || { name: 'overview' };
-      router.go(Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, mapped));
     },
   };
   NS.router = router;
@@ -489,11 +469,6 @@
   NS.actions = actions;
 
   /** 旧全局入口兼容（boot.js 的深链调用它）。 */
-  window.switchSkillsCognitionPage = function switchSkillsCognitionPage(page) {
-    showRecallPanel();
-    router.legacy(page);
-  };
-
   /** 从会话消息的 [asset:<id>] 引用卡跳转到认知资产详情页。
    *  conversation.js 调用；不依赖调用方已在认知资产页。
    *  （旧定义在 skills-bindings.js，其词法依赖随 skills.js 瘦身删除，迁到这里。） */
