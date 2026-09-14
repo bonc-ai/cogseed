@@ -14,6 +14,9 @@
   let activeView = 'anchor';
   let activeResult = null;
   let requestSequence = 0;
+  // 转写纠错面板（宿主 A）：只在"阅读全文"且拿到文本时可用；原文只读。
+  let activeCorrection = null;
+  let correctionOpen = false;
 
   function formatFallback(text, vars) {
     return String(text || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => String(vars?.[key] ?? ''));
@@ -40,6 +43,7 @@
       '<pre class="anchored-source-text" data-anchor-view-text></pre>',
       '<div class="anchored-source-note" data-anchor-view-note hidden></div>',
       '</div>',
+      '<aside class="anchored-source-correct" data-anchor-view-correct hidden></aside>',
       '</div>',
     ].join('');
   }
@@ -61,6 +65,8 @@
     });
     modal.dialog.classList.add('anchored-source-modal');
     modal.then(() => {
+      // 关闭查看器时销毁纠错面板（其内部状态随 run 走，不跨文档复用）。
+      destroyCorrection();
       if (activeModal === modal) activeModal = null;
     });
     activeModal = modal;
@@ -95,20 +101,113 @@
       : canReturnToAnchor
         ? t('kb.viewer.back_to_anchor', '返回引用位置')
         : '';
-    if (!label) {
-      host.textContent = '';
-      return;
+    const buttons = [];
+    if (label) {
+      buttons.push(root.uiButton({
+        label,
+        icon: activeView === 'anchor' ? 'book-open' : 'quote',
+        role: 'secondary',
+        size: 'sm',
+        attrs: { 'data-anchor-view-toggle': 'true' },
+      }));
     }
-    host.innerHTML = root.uiButton({
-      label,
-      icon: activeView === 'anchor' ? 'book-open' : 'quote',
-      role: 'secondary',
-      size: 'sm',
-      attrs: { 'data-anchor-view-toggle': 'true' },
-    });
+    if (canCorrect()) {
+      buttons.push(root.uiButton({
+        label: correctionOpen
+          ? t('kb.transcriptCorrect.close_panel', '收起纠错')
+          : t('kb.transcriptCorrect.title', '转写纠错'),
+        icon: 'clipboard-list',
+        role: correctionOpen ? 'primary' : 'secondary',
+        size: 'sm',
+        attrs: { 'data-anchor-view-correct-toggle': 'true' },
+      }));
+    }
+    host.innerHTML = buttons.join('');
     host.querySelector('[data-anchor-view-toggle]')?.addEventListener('click', () => {
       void loadView(activeView === 'anchor' ? 'document' : 'anchor');
     });
+    host.querySelector('[data-anchor-view-correct-toggle]')?.addEventListener('click', () => {
+      void toggleCorrection();
+    });
+  }
+
+  /** 只有"阅读全文 + 已解析出文本 + 面板模块已加载"时才提供纠错入口。 */
+  function canCorrect() {
+    return activeView === 'document'
+      && Boolean(activeResult?.resolved)
+      && String(activeResult?.text || '').length > 0
+      && typeof root.KbTranscriptCorrect?.mount === 'function';
+  }
+
+  function destroyCorrection() {
+    try { activeCorrection?.destroy?.(); } catch (_) { /* 关闭失败不阻塞 */ }
+    activeCorrection = null;
+    correctionOpen = false;
+    const panel = element('[data-anchor-view-correct]');
+    if (panel) {
+      panel.hidden = true;
+      panel.textContent = '';
+    }
+    element('.anchored-source-viewer')?.classList.remove('is-correct-open');
+  }
+
+  /**
+   * 打开纠错面板。文档被截断时（viewer 为省内存只给引用附近片段）先取全文：
+   * 个人库走 contexts.read；空间库文件暂不支持（给出明确提示，不静默失败）。
+   */
+  async function resolveCorrectionText() {
+    const inline = String(activeResult?.text || '');
+    if (!activeResult?.truncated) return inline;
+    const path = String(activeAnchor?.path || '').trim();
+    const spaceId = activeAnchor?.spaceId;
+    if (path && !spaceId) {
+      try {
+        const res = await root.cogseed.invoke('contexts.read', { path });
+        const content = String(res?.content || res?.text || '');
+        if (content) return content;
+      } catch (error) {
+        log?.warn('correction full-text read failed', { error: error?.message || String(error) });
+      }
+    }
+    return inline;
+  }
+
+  async function toggleCorrection() {
+    if (correctionOpen) {
+      destroyCorrection();
+      renderActions();
+      return;
+    }
+    const panel = element('[data-anchor-view-correct]');
+    if (!panel || !canCorrect()) return;
+    panel.hidden = false;
+    panel.textContent = '';
+    setStatus(t('kb.viewer.loading_document', '正在读取原文…'), 'loading');
+    let text = '';
+    try {
+      text = await resolveCorrectionText();
+    } catch (_) {
+      text = String(activeResult?.text || '');
+    }
+    if (!modalIsOpen()) return;
+    setStatus('', '');
+    try {
+      activeCorrection = root.KbTranscriptCorrect.mount(panel, {
+        text,
+        docId: String(activeAnchor?.path || activeResult?.displayPath || 'transcript'),
+        displayPath: String(activeResult?.displayPath || activeAnchor?.path || ''),
+      });
+      correctionOpen = true;
+      element('.anchored-source-viewer')?.classList.add('is-correct-open');
+    } catch (error) {
+      log?.warn('correction panel mount failed', { error: error?.message || String(error) });
+      correctionOpen = false;
+      panel.hidden = true;
+      if (typeof root.uiToast === 'function') {
+        root.uiToast(t('kb.transcriptCorrect.unavailable', '转写纠错面板暂时不可用'), { variant: 'warning' });
+      }
+    }
+    renderActions();
   }
 
   function reasonText(reason) {
@@ -189,6 +288,8 @@
   async function loadView(view) {
     if (!activeAnchor || !ensureModal()) return;
     activeView = view === 'document' ? 'document' : 'anchor';
+    // 视图切换会换掉正文，纠错面板随之关闭，避免对旧文本做替换。
+    destroyCorrection();
     const sequence = ++requestSequence;
     renderLoading();
     try {
