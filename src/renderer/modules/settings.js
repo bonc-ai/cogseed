@@ -1635,6 +1635,10 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
     _settingsCustomProviderFieldHtml(window.uiField({
       id: nameId,
       label: t('settings.custom_providers.name'),
+      // 四张卡的字段都是必填（API Key 是"留空即不修改"的唯一例外）：整卡逐条
+      // 标"必填/选填"是噪音，这里不渲染标记，required 语义仍在控件上。
+      required: true,
+      showRequirement: false,
       control: {
         kind: 'input',
         value: provider.name || '',
@@ -1644,6 +1648,8 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
     _settingsCustomProviderFieldHtml(window.uiField({
       id: baseUrlId,
       label: t('settings.custom_providers.base_url'),
+      required: true,
+      showRequirement: false,
       control: {
         kind: 'input',
         value: provider.baseUrl || '',
@@ -1653,6 +1659,8 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
     _settingsCustomProviderFieldHtml(window.uiField({
       id: protocolId,
       label: t('settings.custom_providers.api_format'),
+      required: true,
+      showRequirement: false,
       control: {
         kind: 'select',
         value: provider.protocol || 'anthropic',
@@ -1667,6 +1675,8 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
     _settingsCustomProviderFieldHtml(window.uiField({
       id: apiKeyId,
       label: t('settings.custom_providers.api_key'),
+      // 例外：编辑态留空 = 保持原 key，所以它确实可留空；但也不逐条标"选填"。
+      showRequirement: false,
       hint: t('settings.custom_providers.api_key_replace_hint', {
         masked: provider.apiKeyMasked || t('settings.custom_providers.api_key_missing'),
       }),

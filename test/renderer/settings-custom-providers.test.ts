@@ -427,7 +427,13 @@ function buildHarness() {
     const control = options?.control || {};
     const hint = options?.hint ? `<p class="ui-field__hint">${String(options.hint)}</p>` : '';
     const placeholder = control.placeholder == null ? '' : ` placeholder="${String(control.placeholder)}"`;
+    // 真实 ui-form.js 每张字段都带"必填/选填"标记（除非 showRequirement: false）
+    // ——桩同形，卡片"不逐条标注"的断言才看得见真实产物。
+    const requirement = options?.showRequirement === false
+      ? ''
+      : `<span class="ui-field__requirement">${options?.required ? '必填' : '选填'}</span>`;
     return '<div class="ui-field"><span class="ui-field__label">' + String(options?.label || '') + '</span>'
+      + requirement
       + `<input id="${String(options?.id || '')}" class="form-input ui-input" value="${control.value == null ? '' : String(control.value)}"${placeholder} />`
       + hint + '</div>';
   };
@@ -1318,6 +1324,59 @@ describe('settings model providers surface', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const call = invoke.mock.calls.find(([channel]) => channel === 'customProviders.update');
     expect(call![1]).toEqual({ id: 'cp-1', baseUrl: 'https://relay2.example/v1' });
+  });
+
+  it('供应商详情卡不逐条标注必填/选填，必填语义仍在控件上（2026-09-14）', () => {
+    const { context, registry } = buildHarness();
+    context.__provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 1000000, maxTokens: 384000 }],
+    };
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    // 四个字段都是必填（API Key 是"留空即不修改"），逐条标注是噪音 → 一个字都不渲染。
+    expect(body.innerHTML).not.toContain('ui-field__requirement');
+    expect(body.innerHTML).not.toContain('选填');
+    expect(body.innerHTML).not.toContain('必填');
+    // 去掉的只是标注，字段本身一个都不少。
+    for (const id of [
+      'settings-custom-provider-detail-name',
+      'settings-custom-provider-detail-base-url',
+      'settings-custom-provider-detail-protocol',
+      'settings-custom-provider-detail-api-key',
+    ]) {
+      expect(body.querySelector('#' + id), id).toBeTruthy();
+    }
+  });
+
+  it('新建供应商：必填项为空就不让保存（不发 IPC，就地报错，2026-09-14）', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const g = context as any;
+    g._settingsOpenCustomProviderModal();
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    const status = registry.get('settings-custom-provider-modal-status')!;
+    const saveBtn = registry.get('settings-custom-provider-modal-actions')!.children[1] as any;
+    const addCalls = () => invoke.mock.calls.filter(([channel]: any[]) => channel === 'customProviders.add');
+
+    // 空表单 → 卡在名称
+    await saveBtn.click();
+    expect(addCalls()).toHaveLength(0);
+    expect(status.textContent).toBe('settings.custom_providers.error_name');
+
+    // 有名称、没有合法 Base URL → 卡在地址
+    (body.querySelector('#settings-custom-provider-name') as any).value = 'Relay';
+    await saveBtn.click();
+    expect(addCalls()).toHaveLength(0);
+    expect(status.textContent).toBe('settings.custom_providers.error_base_url');
+
+    // 名称 + 合法地址、没有 API Key（新建时必填）→ 卡在 key
+    (body.querySelector('#settings-custom-provider-base-url') as any).value = 'https://relay.example/v1';
+    await saveBtn.click();
+    expect(addCalls()).toHaveLength(0);
+    expect(status.textContent).toBe('settings.custom_providers.error_api_key');
   });
 
   it('renders compact model badges and a per-model switch that confirms before disabling a bound model', async () => {
