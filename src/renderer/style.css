@@ -8226,7 +8226,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* 每会话访问权限模式：底部栏里紧贴工作空间 chip 的紧凑下拉（Claude Code 风格三档） */
 .chat-permission-chip {
-  --chat-permission-control-height: 26px;
+  --chat-permission-control-height: 24px;
   display: inline-flex;
   align-items: center;
   gap: 2px;

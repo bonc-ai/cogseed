@@ -55,7 +55,7 @@ describe('composer control visual contract', () => {
     expect(css).toMatch(/\.workspace-chip-label\s*\{[\s\S]*?font-family:\s*inherit;[\s\S]*?font-size:\s*inherit;/);
     expect(css).toMatch(/\.model-chip-label\s*\{[\s\S]*?font-family:\s*inherit;[\s\S]*?font-size:\s*inherit;/);
     expect(css).toMatch(/\.chat-permission-select\.ai-select\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?width:\s*auto;/);
-    expect(css).toMatch(/\.chat-permission-chip\s*\{[\s\S]*?--chat-permission-control-height:\s*26px;/);
+    expect(css).toMatch(/\.chat-permission-chip\s*\{[\s\S]*?--chat-permission-control-height:\s*24px;/);
     expect(css).toMatch(/:is\(\.new-chat-input-area, #panel-conversation \.chat-input-area\) \.chat-permission-chip\s*\{[\s\S]*?height:\s*var\(--chat-permission-control-height\);[\s\S]*?min-height:\s*var\(--chat-permission-control-height\);/);
     expect(css).toMatch(/\.chat-permission-chip \.chat-permission-select \.ai-select-trigger\s*\{[\s\S]*?width:\s*auto;[\s\S]*?font-size:\s*var\(--font-size-ui-sm\);[\s\S]*?font-weight:\s*var\(--font-weight-regular\);/);
     expect(css).toMatch(/\.chat-permission-chip \.chat-permission-select \.ai-select-trigger:focus,[\s\S]*?border:\s*0;[\s\S]*?box-shadow:\s*none;/);
