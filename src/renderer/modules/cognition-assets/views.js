@@ -133,14 +133,15 @@
 
   /* ────────────────────────── 认知树（方块堆形版） ────────────────────────── */
   /* 垂直轴 = 处理梯度：土壤（记录）→ 根（候选）→ 干/枝（正式资产）→ 冠（已验证）。
-     全部用方块堆出树形：树干=竖长块、枝条=斜排小方块、树冠=三个方块拼蓬松、
-     根=小长方块、土=大灰方块；每个方块可点击直达对应清单。 */
+     全部用方块堆出树形：树干=「个人本体」干块（关于我类资产归属于本体内部，
+     不再单列为枝）、枝条=斜排小方块、树冠=三个方块拼蓬松、根=小长方块、
+     土=大灰方块；每个方块可点击直达对应清单。 */
 
   function treeBlocks(counts, info) {
     const c = (id) => counts[id] || 0;
     const pending = Number(info.pending || 0);
     const validated = Number(info.validated || 0);
-    /* 枝条：从树干斜向伸出的连续小方块（像素风），两端对准干边与模块方块。 */
+    /* 枝条：从干块斜向伸出的连续小方块（像素风），两端对准干边与模块方块。 */
     const twig = (x1, y1, x2, y2) => {
       const n = 5;
       const out = [];
@@ -156,6 +157,15 @@
       <g class="ca-fig-mod${S.route.category === id ? ' is-on' : ''}${c(id) > 0 ? '' : ' is-empty'}" data-act="filter-cat" data-id="${id}" role="button" tabindex="0">
         <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8"/>
         <text x="${x + w / 2}" y="${y + h / 2 + 5}" text-anchor="middle">${esc(categoryLabel(id))} · ${c(id)}</text>
+      </g>`;
+    // 树干主体 = 个人本体：关于我类资产（c('personal')）归属于本体内部，
+    // 不再作为独立枝叶；点击干块直接进入本体工作台（2026-09-14 布局调整）。
+    const trunk = `
+      <g class="ca-fig-mod ca-fig-trunk${S.route.category === 'personal' ? ' is-on' : ''}${c('personal') > 0 ? '' : ' is-empty'}" data-act="open-ontology" role="button" tabindex="0">
+        <title>${esc(T('cognition.ontology_entry_hint', '我是谁、我怎么工作：画像与偏好的结构化整理'))}</title>
+        <rect x="298" y="150" width="104" height="68" rx="8"/>
+        <text x="350" y="182" text-anchor="middle">${esc(T('cognition.ontology_entry_title', '个人本体'))}</text>
+        <text class="ca-fig-sub" x="350" y="200" text-anchor="middle">${esc(`${categoryLabel('personal')} ${c('personal')}`)}</text>
       </g>`;
     return `
     <svg class="ca-fig" viewBox="0 0 700 460" role="img" aria-label="${esc(T('cognition.tree_panel_title', '我的认知树'))}">
@@ -175,13 +185,12 @@
         <circle cx="308" cy="367" r="6"/>
         <text x="374" y="372" text-anchor="middle">${esc(T('cognition.tree_root_pending', '待确认 {n}', { n: String(pending) }))}</text>
       </g>
-      <rect x="343" y="98" width="14" height="56" fill="#c3a179"/>
-      <rect x="338" y="150" width="24" height="198" fill="#c3a179"/>
-      ${twig(344, 176, 252, 158)}
-      ${twig(356, 176, 448, 158)}
-      ${twig(344, 268, 252, 288)}
-      ${twig(356, 268, 448, 288)}
-      ${modBlock('personal', 84, 128, 172, 56)}
+      <rect x="343" y="98" width="14" height="52" fill="#c3a179"/>
+      <rect x="343" y="218" width="24" height="126" fill="#c3a179"/>
+      ${twig(402, 178, 448, 156)}
+      ${twig(402, 208, 448, 286)}
+      ${twig(298, 208, 252, 286)}
+      ${trunk}
       ${modBlock('skill_method', 444, 128, 172, 56)}
       ${modBlock('rule', 84, 258, 172, 56)}
       ${modBlock('template', 444, 258, 172, 56)}
@@ -296,15 +305,7 @@
         T('cognition.tree_empty_hint', '候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。'),
         S.candidates.length ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
       );
-    // 个人本体入口：本体工作台内嵌在本面板下方（#skills-cognition-personal-ontology），
-    // 旧入口随 skills.js 瘦身消失过——此处常驻一行，保证功能可达。
-    const ontologyEntry = `<div class="ca-row is-flat" data-act="open-ontology" ${roleBtn()}>
-        <div class="ca-row-main"><div class="ca-row-title">${esc(T('cognition.ontology_entry_title', '个人本体'))}</div>
-        <div class="ca-row-meta">${esc(T('cognition.ontology_entry_hint', '我是谁、我怎么工作：画像与偏好的结构化整理'))}</div></div>
-        <div class="ca-row-side"><span class="ca-chevron" aria-hidden="true">›</span></div>
-      </div>`;
     return `${heroHtml}
-      ${ontologyEntry}
       <div class="ca-card ca-tree-card">
         <div class="ca-line">
           <div><h3>${esc(T('cognition.tree_panel_title', '我的认知树'))}</h3>
