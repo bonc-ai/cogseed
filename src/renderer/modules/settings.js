@@ -1679,6 +1679,9 @@ function _settingsModelFormInitial(model) {
     capabilities: [],
     reasoningLevels: [],
     reasoningParamsMap: '',
+    // 智能配置的触发判定：仅在「首次手动新增模型」时可用（smart=true）。
+    // 编辑已有模型一律 false——填充只填空缺不覆盖用户输入，而编辑模式字段
+    // 已有值，填充既无意义还会在 blur 时弹「已按…智能填充」误导用户。
     smart: true,
   };
   if (!model) return base;
@@ -1697,7 +1700,7 @@ function _settingsModelFormInitial(model) {
     reasoningParamsMap: model.reasoningParamsMap && typeof model.reasoningParamsMap === 'object'
       ? JSON.stringify(model.reasoningParamsMap, null, 2)
       : '',
-    smart: true,
+    smart: false,
   };
 }
 
@@ -1736,11 +1739,12 @@ function _settingsRenderModelFormHtml(initial) {
   }).join('');
   return `
     <div class="settings-model-form">
+      ${initial.smart ? `
       <div class="settings-model-form__smart">
         <span class="settings-model-form__smart-label">${escapeHtml(t('settings.custom_providers.smart_config'))}</span>
         ${_settingsModelFormHint(t('settings.custom_providers.smart_config_hint'))}
         <label class="toggle-switch"><input type="checkbox" id="settings-model-form-smart"${initial.smart ? ' checked' : ''}></label>
-      </div>
+      </div>` : ''}
       <div class="form-row">
         <label for="settings-custom-provider-model-edit-id">${escapeHtml(t('settings.custom_providers.model_id'))}</label>
         <input id="settings-custom-provider-model-edit-id" type="text" class="form-input" autocomplete="off" spellcheck="false"
@@ -1863,6 +1867,9 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
     initial.id = String(options.draft.id || '');
     if (Number.isSafeInteger(options.draft.contextWindow)) initial.contextWindow = options.draft.contextWindow;
     if (Number.isSafeInteger(options.draft.maxTokens)) initial.maxTokens = options.draft.maxTokens;
+    // 预填路径（一键配置/导入打开表单）禁用智能填充：字段已带值，且这类
+    // 场景用户没有表达「手动配置」的意图，弹「已按…智能填充」纯属干扰。
+    initial.smart = false;
   }
   title.textContent = editing ? t('settings.custom_providers.edit_model') : t('settings.custom_providers.add_model');
   /** 渲染 + 绑定（可重入）：初次打开与「重置表单」共用。2026-09-14 保存
@@ -1880,10 +1887,15 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
       if (!container || container.children.length >= _MODEL_FORM_MAX_LEVELS) return;
       _settingsAppendModelLevelRow(container);
     });
-    const smartToggle = body.querySelector('#settings-model-form-smart');
-    body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
-      if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
-    });
+    // 智能填充唯一触发链：仅首次手动新增（initial.smart）时存在开关并绑定
+    // blur；编辑模式/预填路径不渲染开关、不绑定——无论从哪个入口进来，
+    // 「已按…智能填充」只可能出现在手动新增表单里。
+    if (initial.smart) {
+      const smartToggle = body.querySelector('#settings-model-form-smart');
+      body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
+        if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
+      });
+    }
   };
   renderForm();
   actions.innerHTML = '';

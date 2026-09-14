@@ -646,6 +646,47 @@ describe('settings model providers surface', () => {
     });
   });
 
+  it('gates smart-fill to first-time manual model entry only (2026-09-13 触发收敛)', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const g = context as any;
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
+    };
+    g._settingsOpenCustomProviderModal(provider);
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    const fetchCalls = () => invoke.mock.calls.filter(([channel]: any[]) => channel === 'customProviders.fetchModels');
+
+    // 编辑已有模型：开关与「已按…智能填充」提示的载体整块不渲染，blur 不拉远端清单。
+    g._settingsOpenCustomProviderModelEditor(provider, provider.models[0]);
+    expect(body.innerHTML).not.toContain('settings-model-form__smart');
+    expect(body.querySelector('#settings-model-form-smart')).toBeNull();
+    const editIdInput = body.querySelector('#settings-custom-provider-model-edit-id') as any;
+    editIdInput.value = 'gpt-4.1-mini';
+    await editIdInput.dispatch('blur');
+    expect(fetchCalls()).toHaveLength(0);
+
+    // 一键/预填路径（options.draft）：同样不渲染、不触发。
+    g._settingsOpenCustomProviderModelEditor(provider, null, { draft: { id: 'relay-x', contextWindow: 200000, maxTokens: 32000 } });
+    expect(body.innerHTML).not.toContain('settings-model-form__smart');
+    expect(body.querySelector('#settings-model-form-smart')).toBeNull();
+
+    // 首次手动新增：开关在、默认开，blur 触发远端清单拉取（便利功能保留）。
+    g._settingsOpenCustomProviderModelEditor(provider);
+    expect(body.innerHTML).toContain('settings-model-form__smart');
+    const smartToggle = body.querySelector('#settings-model-form-smart') as any;
+    expect(smartToggle).toBeTruthy();
+    // 渲染即默认开（harness 不解析无值裸属性，用 HTML 串锁定 checked）。
+    expect(body.innerHTML).toContain('settings-model-form-smart" checked');
+    // FakeElement 不把 checked 属性反映为 .checked 属性（浏览器行为），显式置真。
+    smartToggle.checked = true;
+    const addIdInput = body.querySelector('#settings-custom-provider-model-edit-id') as any;
+    addIdInput.value = 'gpt-4.1-mini';
+    await addIdInput.dispatch('blur');
+    expect(fetchCalls()).toHaveLength(1);
+  });
+
   it('prevents duplicate model tests and renders the backend duration field', async () => {
     const { context, registry, invoke } = buildHarness();
     const provider = {
