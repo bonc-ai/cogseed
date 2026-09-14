@@ -121,7 +121,7 @@ describe('first-version renderer components', () => {
   });
 
   it('renders Input, Textarea, and the unified AiSelect host from one field contract', () => {
-    const { uiField, uiSelect, hydrateUiFormSelects } = loadFactories();
+    const { uiField, uiSelect, hydrateUiFormSelects, uiDateRangePicker } = loadFactories();
 
     const input = uiField({
       id: 'task-name',
@@ -155,7 +155,29 @@ describe('first-version renderer components', () => {
     expect(select).toContain('frequency-label');
     expect(select).not.toContain('<select');
     expect(uiSelect({ id: 'sort', ariaLabel: '排序方式', options: [] })).toContain('&quot;ariaLabel&quot;:&quot;排序方式&quot;');
+    expect(uiSelect({ id: 'model', searchable: true, loading: true, total: 47 }))
+      .toContain('&quot;searchable&quot;:true');
+    expect(uiSelect({ id: 'model', searchable: true, loading: true, total: 47 }))
+      .toContain('&quot;loading&quot;:true');
+    expect(uiSelect({ id: 'model', searchable: true, loading: true, total: 47 }))
+      .toContain('&quot;total&quot;:47');
     expect(typeof hydrateUiFormSelects).toBe('function');
+
+    const range = uiDateRangePicker({
+      id: 'report-range',
+      ariaLabel: '报告日期范围',
+      startLabel: '开始日期',
+      endLabel: '结束日期',
+      start: '2026-09-01',
+      end: '2026-09-14',
+      invalidEnd: true,
+    });
+    expect(range).toContain('class="date-range-picker"');
+    expect(range).toContain('type="date"');
+    expect(range).toContain('id="report-range-start"');
+    expect(range).toContain('id="report-range-end"');
+    expect(range).toContain('aria-label="报告日期范围"');
+    expect(range).toContain('aria-invalid="true"');
   });
 
   it('makes field errors and composed form structure observable', () => {
@@ -241,6 +263,8 @@ describe('component gallery integration contract', () => {
     expect(gallery).not.toContain('UX Quality Spike');
     expect(galleryCss).toContain('grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);');
     expect(galleryCss).toContain('.gallery-radius-scale .rw { border-radius: var(--radius-window); }');
+    expect(gallery).toContain('id="search-selection-components"');
+    expect(gallery).toContain('16 / 16 已定义');
   });
 
   it('integrates the open-source shell into real high-frequency pages', () => {
@@ -294,6 +318,10 @@ describe('component gallery integration contract', () => {
     expect(gallery).toContain('id="form-controls"');
     expect(css).toContain('.form-input');
     expect(css).toContain('.ai-select-trigger');
+    expect(galleryScript).toContain('searchable: true');
+    expect(galleryScript).toContain('uiDateRangePicker({');
+    expect(css).toContain('.ai-select-search-input');
+    expect(css).toContain('.date-range-picker');
   });
 
   it('keeps modal, nested popover, command, and toast ordering tokenized', () => {

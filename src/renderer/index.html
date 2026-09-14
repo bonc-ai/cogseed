@@ -1289,11 +1289,11 @@
                   </div>
                 </div>
                 <div class="settings-row settings-model-picker-row">
-                  <label data-i18n="settings.provider">Provider</label>
+                  <label id="settings-picker-provider-label" data-i18n="settings.provider">Provider</label>
                   <div class="ai-select" id="settings-picker-provider"></div>
                 </div>
                 <div class="settings-row settings-model-picker-row">
-                  <label data-i18n="settings.model">Model</label>
+                  <label id="settings-picker-model-label" data-i18n="settings.model">Model</label>
                   <div class="ai-select" id="settings-picker-model"></div>
                 </div>
                 <div class="settings-row settings-model-auth-actions">
@@ -1767,7 +1767,7 @@
           </div>
           <div class="form-row ui-field auto-schedule-cell" id="auto-row-date" hidden>
             <div class="ui-field__label-row"><label for="auto-date-input" data-i18n="auto.date_label">Date</label></div>
-            <input class="form-input ui-control" type="date" id="auto-date-input" />
+            <input class="form-input ui-control ui-input ui-date-control" type="date" id="auto-date-input" />
           </div>
           <div class="form-row ui-field auto-schedule-cell" id="auto-row-weekday" hidden>
             <div class="ui-field__label-row"><span class="ui-field__label" id="auto-weekday-label" data-i18n="auto.weekday_label">Weekday</span></div>
@@ -1888,23 +1888,23 @@
   </div>
 
   <!-- Global search overlay (Cmd+K) -->
-  <div class="search-overlay" id="search-overlay" style="display:none">
-    <div class="search-modal">
+  <div class="search-overlay" id="search-overlay" style="display:none" aria-hidden="true">
+    <div class="search-modal" role="dialog" aria-modal="true" aria-label="Global search" data-i18n-aria-label="search.dialog_label">
       <div class="search-input-row">
         <span data-ui-icon="search" data-ui-icon-class="search-input-icon"></span>
-        <input type="text" id="search-input" data-i18n-placeholder="search.input_placeholder" placeholder="Search tasks and Library…" autocomplete="off" spellcheck="false" />
-        <button class="search-close-btn" id="search-close-btn" data-i18n-title="search.close_title" title="Close (Esc)">
+        <input type="text" id="search-input" data-i18n-placeholder="search.input_placeholder" placeholder="Search tasks and Library…" autocomplete="off" spellcheck="false" aria-controls="search-body" />
+        <button type="button" class="search-close-btn" id="search-close-btn" data-i18n-title="search.close_title" data-i18n-aria-label="search.close_title" title="Close (Esc)" aria-label="Close (Esc)">
           <span data-ui-icon="x" data-ui-icon-class="search-close-icon"></span>
         </button>
       </div>
       <div class="search-tabs" id="search-tabs" role="tablist">
-        <button class="search-tab is-active" data-tab="all" data-i18n="search.tab.all">All</button>
-        <button class="search-tab" data-tab="chat" data-i18n="search.tab.chat">Chats</button>
-        <button class="search-tab" data-tab="agent" data-i18n="search.tab.agent">Agents</button>
-        <button class="search-tab" data-tab="skill" data-i18n="search.tab.skill">Skills</button>
-        <button class="search-tab" data-tab="context" data-i18n="search.tab.context">Library</button>
+        <button type="button" class="search-tab is-active" role="tab" aria-selected="true" data-tab="all" data-i18n="search.tab.all">All</button>
+        <button type="button" class="search-tab" role="tab" aria-selected="false" data-tab="chat" data-i18n="search.tab.chat">Chats</button>
+        <button type="button" class="search-tab" role="tab" aria-selected="false" data-tab="agent" data-i18n="search.tab.agent">Agents</button>
+        <button type="button" class="search-tab" role="tab" aria-selected="false" data-tab="skill" data-i18n="search.tab.skill">Skills</button>
+        <button type="button" class="search-tab" role="tab" aria-selected="false" data-tab="context" data-i18n="search.tab.context">Library</button>
       </div>
-      <div class="search-body" id="search-body">
+      <div class="search-body" id="search-body" aria-live="polite">
         <div class="search-empty" data-i18n="search.empty_hint">Type a keyword to start searching</div>
       </div>
     </div>

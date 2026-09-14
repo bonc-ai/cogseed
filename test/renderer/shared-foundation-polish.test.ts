@@ -112,10 +112,38 @@ describe('open-source shared foundation polish', () => {
     for (const id of ['page-header', 'tabs', 'resource-cards', 'settings-sections', 'empty-states']) {
       expect(gallery).toContain(`id="${id}"`);
     }
-    expect(gallery).toContain('13 / 13 已定义');
+    expect(gallery).toContain('16 / 16 已定义');
     expect(galleryScript).toContain('function renderTabs()');
     expect(galleryScript).toContain('function renderResourceCards()');
     expect(galleryScript).toContain('function renderSettingsSections()');
     expect(galleryScript).toContain('event.isComposing || event.keyCode === 229');
+  });
+
+  it('integrates retrieval and selection components without changing their business seams', () => {
+    const settings = read('src/renderer/modules/settings.js');
+    const search = read('src/renderer/modules/search.js');
+    const gallery = read('src/renderer/component-gallery.js');
+
+    const providerMount = settings.slice(
+      settings.indexOf('_settingsState.pickerProviderSel = _aiSelectMount'),
+      settings.indexOf('_settingsState.pickerProviderSel.onChange'),
+    );
+    const modelMount = settings.slice(
+      settings.indexOf('_settingsState.pickerModelSel = _aiSelectMount'),
+      settings.indexOf('_settingsState.pickerModelSel.onChange'),
+    );
+    expect(providerMount).toContain('searchable: true');
+    expect(providerMount).toContain("labelledBy: 'settings-picker-provider-label'");
+    expect(modelMount).toContain('searchable: true');
+    expect(modelMount).toContain("labelledBy: 'settings-picker-model-label'");
+    expect(settings).toContain('sel.setLoading?.(Boolean(providerId));');
+    expect(search).toContain('if (e.isComposing || e.keyCode === 229) return;');
+    expect(search).toContain('_trapSearchFocus(e, overlay);');
+    expect(search).toContain('_renderSearchLoading(query);');
+    expect(search).toContain("apiFetch('/api/search/global'");
+    expect(search).toContain("setView('conversation', r.cid");
+    expect(index).toContain('class="form-input ui-control ui-input ui-date-control" type="date" id="auto-date-input"');
+    expect(gallery).toContain("['loading', '搜索中']");
+    expect(gallery).toContain("['keyboard', '键盘 / IME']");
   });
 });

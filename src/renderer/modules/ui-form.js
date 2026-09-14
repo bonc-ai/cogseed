@@ -4,7 +4,7 @@
 (function initUiForm(root) {
   'use strict';
 
-  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number']);
+  const INPUT_TYPES = new Set(['text', 'search', 'email', 'url', 'password', 'number', 'date']);
 
   function escapeText(value) {
     return String(value == null ? '' : value)
@@ -72,6 +72,11 @@
       disabled: Boolean(value.disabled),
       invalid: Boolean(value.invalid),
       required: Boolean(value.required),
+      searchable: Boolean(value.searchable),
+      searchPlaceholder: value.searchPlaceholder == null ? null : String(value.searchPlaceholder),
+      loading: Boolean(value.loading),
+      total: value.total != null && Number.isFinite(Number(value.total)) ? Number(value.total) : null,
+      initialQuery: value.initialQuery == null ? '' : String(value.initialQuery),
       previewState: value.previewState || '',
     };
     const classes = [
@@ -105,6 +110,11 @@
         options: config.options || [],
         value: config.value || '',
         ...(config.placeholder == null ? {} : { placeholder: config.placeholder }),
+        ...(config.searchPlaceholder == null ? {} : { searchPlaceholder: config.searchPlaceholder }),
+        searchable: Boolean(config.searchable),
+        loading: Boolean(config.loading),
+        total: config.total,
+        initialQuery: config.initialQuery || '',
         onChange,
       });
       const trigger = api.el.querySelector('.ai-select-trigger');
@@ -125,6 +135,36 @@
       host._uiSelectApi = api;
       return api;
     });
+  }
+
+  function uiDateRangePicker(options) {
+    const value = options || {};
+    const id = String(value.id || '').trim();
+    if (!id) throw new TypeError('uiDateRangePicker requires an id');
+    const startId = `${id}-start`;
+    const endId = `${id}-end`;
+    const classes = ['date-range-picker', value.className || ''].filter(Boolean).join(' ');
+    const start = uiInput({
+      id: startId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.start || '',
+      disabled: value.disabled,
+      invalid: value.invalidStart,
+      previewState: value.startPreviewState,
+      attrs: { 'aria-label': value.startLabel || 'Start date' },
+    });
+    const end = uiInput({
+      id: endId,
+      type: 'date',
+      className: 'ui-date-control',
+      value: value.end || '',
+      disabled: value.disabled,
+      invalid: value.invalidEnd,
+      previewState: value.endPreviewState,
+      attrs: { 'aria-label': value.endLabel || 'End date' },
+    });
+    return `<div class="${escapeText(classes)}" id="${escapeText(id)}" role="group" aria-label="${escapeText(value.ariaLabel || 'Date range')}">${start}<span class="date-range-picker__separator" aria-hidden="true">${escapeText(value.separator || 'to')}</span>${end}</div>`;
   }
 
   function renderControl(options) {
@@ -192,10 +232,11 @@
   root.uiTextarea = uiTextarea;
   root.uiSelect = uiSelect;
   root.hydrateUiFormSelects = hydrateUiFormSelects;
+  root.uiDateRangePicker = uiDateRangePicker;
   root.uiField = uiField;
   root.uiForm = uiForm;
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { uiInput, uiTextarea, uiSelect, hydrateUiFormSelects, uiField, uiForm };
+    module.exports = { uiInput, uiTextarea, uiSelect, hydrateUiFormSelects, uiDateRangePicker, uiField, uiForm };
   }
 })(typeof window !== 'undefined' ? window : globalThis);

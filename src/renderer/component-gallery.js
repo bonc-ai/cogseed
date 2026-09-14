@@ -4,8 +4,13 @@
   const galleryTranslations = {
     'ai_select.placeholder': '请选择',
     'ai_select.empty': '没有可选项',
+    'ai_select.loading': '正在读取选项…',
+    'ai_select.no_results': '未找到与「{query}」匹配的选项',
+    'ai_select.result_count': '显示 {visible} / {total} 项',
+    'ai_select.search_placeholder': '搜索选项…',
   };
-  window.t = window.t || ((key) => galleryTranslations[key] || key);
+  window.t = window.t || ((key, values = {}) => String(galleryTranslations[key] || key)
+    .replace(/\{([a-z]+)\}/gi, (_, name) => values[name] == null ? '' : values[name]));
 
   const byId = (id) => document.getElementById(id);
 
@@ -215,6 +220,112 @@
       ],
     });
     hydrateUiFormSelects(byId('form-composition-specimen'));
+  }
+
+  function renderSearchSelectionComponents() {
+    const commandStates = [
+      ['default', '默认'], ['open', '打开'], ['loading', '搜索中'], ['empty', '无结果'],
+      ['error', '错误'], ['narrow', '窄宽'], ['keyboard', '键盘 / IME'],
+    ];
+    const selectStates = [
+      ['default', '默认'], ['open', '打开'], ['loading', '搜索中'], ['empty', '无结果'],
+      ['disabled', '禁用'], ['error', '错误'], ['narrow', '窄宽'],
+    ];
+    const stateButtons = (states, attr, selected) => states.map(([id, label]) => uiButton({
+      label,
+      role: 'secondary',
+      size: 'sm',
+      className: id === selected ? 'is-selected' : '',
+      attrs: { [attr]: id },
+    })).join('');
+    byId('command-palette-state-tabs').innerHTML = stateButtons(commandStates, 'data-command-state', 'default');
+    byId('searchable-select-state-tabs').innerHTML = stateButtons(selectStates, 'data-search-select-state', 'default');
+
+    const renderCommandState = (state) => {
+      const host = byId('command-palette-specimen');
+      const query = state === 'empty' ? '不存在的资料' : '季度复盘';
+      let body = '<div class="search-empty">输入关键词开始搜索</div>';
+      if (state === 'open' || state === 'narrow') {
+        body = '<div class="search-section-label">任务</div><div class="search-result active" role="option" aria-selected="true"><div class="search-result-head"><span class="search-result-kind is-chat">任务</span><span class="search-result-title">产品季度复盘</span><span class="search-result-meta">我 · 今天 11:20</span></div><div class="search-result-snippet">核对<strong>季度复盘</strong>材料与交付时间</div></div>';
+      } else if (state === 'loading') {
+        body = '<div class="search-empty search-loading" role="status">正在搜索“季度复盘”…</div>';
+      } else if (state === 'empty') {
+        body = '<div class="search-empty">未找到“不存在的资料”相关内容</div>';
+      } else if (state === 'error') {
+        body = '<div class="search-empty search-error">搜索失败，请稍后重试</div>';
+      } else if (state === 'keyboard') {
+        body = '<div class="gallery-command__state" id="gallery-command-key-state">方向键移动，Enter 打开；组合输入期间动作键保持静默。</div>';
+      }
+      host.classList.toggle('is-narrow', state === 'narrow');
+      host.innerHTML = `<div class="gallery-command gallery-command--inline"><div class="gallery-command__input-row"><span data-ui-icon="search"></span><input type="text" aria-label="全局搜索" value="${state === 'default' ? '' : query}" /><kbd>⌘K</kbd></div><div class="search-body">${body}</div></div>`;
+      const input = host.querySelector('input');
+      if (state === 'keyboard' && input) {
+        input.addEventListener('keydown', (event) => {
+          const status = byId('gallery-command-key-state');
+          if (event.isComposing || event.keyCode === 229) {
+            status.textContent = 'IME 组合中：未执行导航或打开动作。';
+            return;
+          }
+          if (['ArrowDown', 'ArrowUp', 'Enter'].includes(event.key)) {
+            event.preventDefault();
+            status.textContent = `已识别键盘动作：${event.key}`;
+          }
+        });
+        input.focus();
+      }
+      hydrateUiIcons(host);
+      byId('command-palette-state-tabs').querySelectorAll('[data-command-state]').forEach((button) => {
+        button.classList.toggle('is-selected', button.dataset.commandState === state);
+      });
+    };
+
+    const selectOptions = [
+      { value: 'core', label: 'Core Agent', hint: '内置模型' },
+      { value: 'openai', label: 'OpenAI', hint: 'API Key / OAuth' },
+      { value: 'anthropic', label: 'Anthropic', hint: 'API Key' },
+      { value: 'google', label: 'Google Gemini', hint: 'API Key' },
+      { value: 'custom', label: '自定义供应商', hint: 'OpenAI 兼容协议' },
+    ];
+    let selectApi = null;
+    const renderSelectState = (state) => {
+      selectApi?.close();
+      const host = byId('searchable-select-specimen');
+      host.classList.toggle('is-narrow', state === 'narrow');
+      host.innerHTML = uiSelect({
+        id: 'gallery-search-select',
+        ariaLabel: '模型或供应商',
+        placeholder: '选择模型或供应商',
+        options: selectOptions,
+        searchable: true,
+        total: 47,
+        loading: state === 'loading',
+        initialQuery: state === 'empty' ? '不存在' : '',
+        disabled: state === 'disabled',
+        invalid: state === 'error',
+      });
+      [selectApi] = hydrateUiFormSelects(host);
+      if (['open', 'loading', 'empty'].includes(state)) selectApi.open();
+      byId('searchable-select-state-tabs').querySelectorAll('[data-search-select-state]').forEach((button) => {
+        button.classList.toggle('is-selected', button.dataset.searchSelectState === state);
+      });
+    };
+
+    byId('date-range-picker-specimen').innerHTML = [
+      ['默认', uiDateRangePicker({ id: 'gallery-date-range-default', ariaLabel: '报告日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-01', end: '2026-09-14' })],
+      ['错误', uiDateRangePicker({ id: 'gallery-date-range-error', ariaLabel: '无效日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-20', end: '2026-09-14', invalidStart: true, invalidEnd: true })],
+      ['窄宽 / 焦点', uiDateRangePicker({ id: 'gallery-date-range-narrow', className: 'is-narrow', ariaLabel: '窄宽日期范围', startLabel: '开始日期', endLabel: '结束日期', separator: '至', start: '2026-09-01', end: '2026-09-14', startPreviewState: 'focus' })],
+    ].map(([label, html]) => `<div class="gallery-control-state"><span>${label}</span>${html}</div>`).join('');
+
+    byId('command-palette-state-tabs').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-command-state]');
+      if (button) renderCommandState(button.dataset.commandState);
+    });
+    byId('searchable-select-state-tabs').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-search-select-state]');
+      if (button) renderSelectState(button.dataset.searchSelectState);
+    });
+    renderCommandState('default');
+    renderSelectState('default');
   }
 
   function renderEmptyStates() {
@@ -430,6 +541,7 @@
   renderIconButtons();
   renderSegmentedControls();
   renderFormControls();
+  renderSearchSelectionComponents();
   renderEmptyStates();
   renderModalLaunchers();
   renderAutomation();

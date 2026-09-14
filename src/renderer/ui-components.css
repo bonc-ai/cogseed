@@ -13,6 +13,68 @@
 .search-overlay { z-index: var(--z-command); }
 .ui-toast-host { z-index: var(--z-toast); }
 
+/* SearchableSelect / CommandPalette / DateRangePicker.  These classes are
+ * presentation seams; existing AiSelect, search.js and auto.js retain all
+ * value, routing, IPC and scheduling behaviour. */
+.search-overlay .search-modal,
+.gallery-command {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-popover);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+.search-overlay { padding: var(--space-6) var(--space-4); background: var(--color-command-scrim); }
+.search-overlay .search-input-row,
+.gallery-command__input-row {
+  min-height: var(--control-height-lg);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line-default);
+}
+.search-overlay .search-input-row:focus-within,
+.gallery-command__input-row:focus-within {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+.search-overlay .search-tabs.is-hidden { display: none; }
+.search-overlay .search-tab:focus-visible,
+.search-overlay .search-result:focus-visible,
+.gallery-command button:focus-visible,
+.gallery-command input:focus-visible {
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: var(--focus-offset);
+}
+.search-overlay .search-empty,
+.gallery-command__state { color: var(--text-muted); }
+.search-error { color: var(--status-danger-text); }
+.search-overlay .search-result.active,
+.search-overlay .search-result:hover { background: var(--surface-subtle); }
+.search-overlay .search-result mark { color: inherit; background: transparent; font-weight: var(--font-weight-bold); }
+.search-overlay .search-close-btn,
+.search-overlay .search-history-clear,
+.search-overlay .search-history-item {
+  color: var(--text-muted);
+  border-color: var(--line-default);
+  background: var(--surface-card);
+}
+.search-overlay .search-close-btn:hover,
+.search-overlay .search-history-clear:hover,
+.search-overlay .search-history-item:hover { color: var(--text-body); background: var(--surface-subtle); }
+.date-range-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.date-range-picker__separator { color: var(--text-muted); font-size: var(--font-size-2); }
+.date-range-picker .ui-control { min-width: 0; }
+.ui-date-control { color-scheme: light; }
+@media (max-width: 480px) {
+  .date-range-picker { grid-template-columns: minmax(0, 1fr); }
+  .date-range-picker__separator { display: none; }
+}
+
 /* Button */
 .ui-button {
   height: var(--control-height);
@@ -644,7 +706,64 @@ body.ui-modal-open { overflow: hidden; }
   border-radius: var(--radius-popover);
   background: var(--surface-raised);
   box-shadow: var(--shadow-card);
+  padding: var(--space-1);
 }
+.ai-select-options { max-height: 240px; overflow-y: auto; }
+.ai-select-search-row {
+  height: 34px;
+  margin-bottom: var(--space-1);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--line-default);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+.ai-select-search-icon { width: var(--icon-size); height: var(--icon-size); display: inline-flex; }
+.ai-select-search-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-body);
+  font: inherit;
+}
+.ai-select-search-input::placeholder { color: var(--text-faint); }
+.ai-select-search-input::-webkit-search-cancel-button { appearance: none; }
+.ai-select-footer {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-top: 1px solid var(--line-default);
+  color: var(--text-faint);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-1);
+}
+.ai-select-loading::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  margin-right: var(--space-2);
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--color-brand);
+  border-radius: var(--radius-pill);
+  display: inline-block;
+  vertical-align: -2px;
+  animation: ui-component-spin 0.8s linear infinite;
+}
+.search-loading::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  margin-right: var(--space-2);
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--color-brand);
+  border-radius: var(--radius-pill);
+  display: inline-block;
+  vertical-align: -3px;
+  animation: ui-component-spin 0.8s linear infinite;
+}
+.ai-select-item-label strong { font-weight: var(--font-weight-bold); }
 .ai-select-item:hover,
 .ai-select-item.hover { background: var(--surface-subtle); }
 .ai-select-item.active {
@@ -754,6 +873,7 @@ body.ui-modal-open { overflow: hidden; }
   font: inherit;
   box-sizing: border-box;
 }
+.auto-task-dialog #auto-date-input { color-scheme: light; }
 .auto-task-dialog #auto-date-input:focus-visible,
 .auto-task-dialog #auto-title-input:focus-visible {
   border-color: var(--color-brand);
@@ -784,5 +904,7 @@ body.ui-modal-open { overflow: hidden; }
   .ui-button,
   .ui-icon-button { transition-duration: 0ms; }
   .ui-button.is-loading::before { animation-duration: 1.4s; }
+  .ai-select-loading::before { animation-duration: 1.4s; }
+  .search-loading::before { animation-duration: 1.4s; }
   .auto-loading-state__spinner { animation-duration: 1.4s; }
 }

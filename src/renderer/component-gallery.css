@@ -243,6 +243,19 @@
 .gallery-control-state > span:first-child { margin-bottom: var(--space-2); display: block; color: var(--text-muted); font-size: var(--font-size-1); font-weight: var(--font-weight-semibold); }
 .gallery-control-state--wide { grid-column: 1 / -1; }
 .gallery-control-state .ai-select { width: 100%; }
+.gallery-search-select-demo { min-height: 54px; padding: var(--space-4); }
+.gallery-search-select-demo.is-narrow { max-width: 240px; }
+.gallery-date-range-states { padding: var(--space-4); display: grid; gap: var(--space-4); }
+.gallery-date-range-states .date-range-picker.is-narrow { max-width: 240px; grid-template-columns: minmax(0, 1fr); }
+.gallery-date-range-states .date-range-picker.is-narrow .date-range-picker__separator { display: none; }
+.gallery-command--inline { width: 100%; max-height: 360px; padding: 0; display: block; overflow: hidden; }
+.gallery-command--inline .gallery-command__input-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); }
+.gallery-command--inline input { width: 100%; }
+.gallery-command--inline kbd { padding: 1px var(--space-2); border: 1px solid var(--line-default); border-radius: var(--radius-xs); color: var(--text-muted); background: var(--surface-subtle); font: var(--font-size-1) var(--font-mono); }
+.gallery-command--inline .search-body { min-height: 120px; max-height: 240px; }
+#command-palette-specimen { padding: var(--space-4); }
+#command-palette-specimen.is-narrow { max-width: 320px; }
+.gallery-command__state { padding: var(--space-5); text-align: center; font-size: var(--font-size-2); }
 .gallery-form-demo { padding: var(--space-5); }
 .gallery-automation-frame { min-height: 460px; border: 1px solid var(--line-default); border-radius: var(--radius-card); overflow: hidden; background: var(--surface-card); box-shadow: var(--shadow-card); }
 .gallery-auto-content { min-height: 360px; padding: var(--space-5); background: var(--surface-app); }
@@ -258,7 +271,7 @@
 .gallery-error p { margin: var(--space-1) 0 var(--space-4); color: var(--text-secondary); font-size: var(--font-size-3); }
 
 .gallery-command-overlay { position: fixed; inset: 0; z-index: var(--z-command); padding-top: 80px; display: flex; align-items: flex-start; justify-content: center; background: var(--color-command-scrim); backdrop-filter: blur(2px); }
-.gallery-command { width: min(720px, calc(100vw - 48px)); min-height: 56px; padding: var(--space-3) var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-card); display: grid; grid-template-columns: 20px minmax(0, 1fr) 32px; align-items: center; gap: var(--space-3); background: var(--surface-raised); box-shadow: var(--shadow-dialog); }
+.gallery-command-overlay > .gallery-command { width: min(640px, calc(100vw - 32px)); min-height: 56px; padding: var(--space-3) var(--space-4); border: 1px solid var(--line-default); border-radius: var(--radius-card); display: grid; grid-template-columns: 20px minmax(0, 1fr) 32px; align-items: center; gap: var(--space-3); background: var(--surface-raised); box-shadow: var(--shadow-dialog); }
 .gallery-command > .ui-icon { color: var(--text-muted); }
 .gallery-command input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-body); font: inherit; }
 .gallery-command button { width: 32px; height: 32px; border: 0; border-radius: var(--radius-control); display: grid; place-items: center; background: transparent; color: var(--text-muted); cursor: pointer; }

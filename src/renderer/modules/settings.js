@@ -2137,6 +2137,8 @@ async function _settingsRenderPicker() {
     _settingsState.pickerProviderEl = providerEl;
     _settingsState.pickerProviderSel = _aiSelectMount(providerEl, {
       placeholder: t('settings.picker.select_provider'),
+      searchable: true,
+      labelledBy: 'settings-picker-provider-label',
     });
     _settingsState.pickerProviderSel.onChange(async (val) => {
       const action = _settingsPickerActionForValue(val);
@@ -2168,6 +2170,8 @@ async function _settingsRenderPicker() {
     _settingsState.pickerModelEl = modelEl;
     _settingsState.pickerModelSel = _aiSelectMount(modelEl, {
       placeholder: t('settings.picker.pick_provider_first'),
+      searchable: true,
+      labelledBy: 'settings-picker-model-label',
     });
     _settingsState.pickerModelSel.onChange((val) => {
       _settingsSetStatus('settings-picker-status', '', '');
@@ -2200,13 +2204,16 @@ async function _settingsPopulatePickerModel(providerId, selected) {
   const requestGeneration = ++_settingsState.pickerModelRequestGeneration;
   const provider = _settingsState.providers.find((p) => p.id === providerId);
   if (provider && provider.id === 'openai-compatible') {
+    sel.setLoading?.(false);
     sel.setOptions([], { value: '', placeholder: t('settings.picker.manual_model_in_form') });
     return;
   }
   if (provider && provider.manualModel && provider.providerKind !== 'custom') {
+    sel.setLoading?.(false);
     sel.setOptions([], { value: '', placeholder: t('settings.picker.manual_model_in_form') });
     return;
   }
+  sel.setLoading?.(Boolean(providerId));
   const models = await _settingsGetModels(providerId);
   const activeProviderId = _settingsState.pickerProviderSel?.getValue() || '';
   if (
@@ -2214,6 +2221,7 @@ async function _settingsPopulatePickerModel(providerId, selected) {
     || activeProviderId !== providerId
     || sel !== _settingsState.pickerModelSel
   ) return;
+  sel.setLoading?.(false);
   sel.setOptions(
     models.map((m) => ({ value: m.id, label: m.name || m.id })),
     { value: selected || '', placeholder: providerId ? t('settings.picker.select_model') : t('settings.picker.pick_provider_first') },
