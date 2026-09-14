@@ -425,3 +425,10 @@
 /* #ca-root 的 ID 级 display:flex 会盖过 UA 的 [hidden]{display:none}——
    独立界面模式收起认知树主体时必须显式把 hidden 落成真隐藏。 */
 #ca-root[hidden] { display: none; }
+
+/* 设置项卡片（整理方式页，2026-09-14 分区重构）：卡片头=设置名（可带右对齐
+   状态与操作），卡片内=选项行与选中说明。与「从历史会话整理」等卡片同族。 */
+.ca-setcard .ca-line { margin-bottom: 12px; }
+.ca-setcard .ca-subnav { margin-bottom: 8px; }
+.ca-setcard .ca-note { margin: 0; }
+.ca-line-center { justify-content: center; margin-top: 12px; }

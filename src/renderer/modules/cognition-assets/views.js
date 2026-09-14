@@ -752,9 +752,10 @@
     const recordTitle = (capture) => (NS.vocabulary
       ? NS.vocabulary.recordTitle(capture)
       : String(capture.conversationTitle || capture.title || capture.id || ''));
+    const policyEntry = POLICY.find(([id]) => id === policy) || POLICY[0];
     return `${hero(
       T('cognition.tab_manage', '设置与管理'), T('cognition.capture_activity_title', '整理方式'),
-      T('cognition.capture_activity_hint', '自动发现值得留存的内容；只有需要你判断时才打扰你。'),
+      T('cognition.capture_activity_hint', '这几项决定候选什么时候被提炼、要不要先经过你确认。'),
       statsRow([
         [Number((S.captureCounts && S.captureCounts.review) || 0), T('cognition.capture_metric_review', '待确认')],
         [Number((S.captureCounts && S.captureCounts.processing) || 0), T('cognition.capture_metric_processing', '处理中')],
@@ -762,25 +763,39 @@
       ]),
     )}
     <div class="ca-flow">${[T('cognition.capture_chain_source', '会话 / 执行结果'), T('cognition.capture_chain_candidate', '提取候选'), T('cognition.capture_chain_confirm', '你确认'), T('cognition.capture_chain_asset', '我的资产')].map((s) => `<b>${esc(s)}</b>`).join('<i>→</i>')}</div>
-    ${sectionHead(T('cognition.capture_auto_title', '整理时机与设置'), T('cognition.capture_trigger_note', '三种时机同时只有一种生效'))}
-    <div class="ca-setrow">
-      <div class="ca-sub">${esc(T((POLICY.find(([id]) => id === policy) || POLICY[0])[3], (POLICY.find(([id]) => id === policy) || POLICY[0])[4]))}</div>
-      <div class="ca-actions">${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', { primary: !enabled })}</div>
+    <div class="ca-card ca-setcard">
+      <div class="ca-line">
+        <div><div class="ca-row-title">${esc(T('cognition.capture_switch_title', '自动整理'))}</div>
+        <div class="ca-sub">${esc(T('cognition.capture_switch_hint', '自动发现值得留存的内容；只有需要你判断时才打扰你。'))}</div></div>
+        <div class="ca-right">${chip(enabled ? T('cognition.capture_switch_on', '已开启') : T('cognition.capture_switch_off', '已关闭'), enabled ? 'green' : 'line')}
+          ${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', { small: true, danger: enabled, primary: !enabled })}</div>
+      </div>
     </div>
-    <div class="ca-subnav">${POLICY.map(([id, key, fb]) => btn(T(key, fb), 'capture-policy', { id, className: `ca-pill${policy === id ? ' is-on' : ''}` })).join('')}</div>
-    ${sectionHead(T('cognition.capture_review_title', '候选怎么确认'), '')}
-    <div class="ca-subnav">
-      ${btn(T('cognition.capture_review_auto', '自动采纳'), 'capture-review-toggle', { id: 'auto', className: `ca-pill${reviewAuto ? ' is-on' : ''}` })}
-      ${btn(T('cognition.capture_review_manual', '先问我'), 'capture-review-toggle', { id: 'manual', className: `ca-pill${!reviewAuto ? ' is-on' : ''}` })}
+    <div class="ca-card ca-setcard">
+      <div class="ca-line">
+        <div class="ca-row-title">${esc(T('cognition.capture_trigger_title', '整理时机'))}</div>
+        <span class="ca-note">${esc(T('cognition.capture_trigger_note', '三种时机同时只有一种生效'))}</span>
+      </div>
+      <div class="ca-subnav">${POLICY.map(([id, key, fb]) => btn(T(key, fb), 'capture-policy', { id, className: `ca-pill${policy === id ? ' is-on' : ''}` })).join('')}</div>
+      <p class="ca-note">${esc(T(policyEntry[3], policyEntry[4]))}</p>
     </div>
-    <p class="ca-note">${esc(T(reviewAuto ? 'cognition.capture_review_auto_note' : 'cognition.capture_review_manual_note', reviewAuto ? '符合条件的候选会自动采纳（不再询问）' : '候选先进入待确认，由你决定'))}</p>
+    <div class="ca-card ca-setcard">
+      <div class="ca-line">
+        <div class="ca-row-title">${esc(T('cognition.capture_review_title', '候选怎么确认'))}</div>
+      </div>
+      <div class="ca-subnav">
+        ${btn(T('cognition.capture_review_auto', '自动采纳'), 'capture-review-toggle', { id: 'auto', className: `ca-pill${reviewAuto ? ' is-on' : ''}` })}
+        ${btn(T('cognition.capture_review_manual', '先问我'), 'capture-review-toggle', { id: 'manual', className: `ca-pill${!reviewAuto ? ' is-on' : ''}` })}
+      </div>
+      <p class="ca-note">${esc(T(reviewAuto ? 'cognition.capture_review_auto_note' : 'cognition.capture_review_manual_note', reviewAuto ? '符合条件的候选会自动采纳（不再询问）' : '候选先进入待确认，由你决定'))}</p>
+    </div>
     ${sectionHead(T('cognition.capture_manual_title', '从历史会话整理'), T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'))}
     <div class="ca-card">${conversations.length ? conversations.map((conv) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(fmtDate(conv.updatedAt || conv.createdAt))}</div></div>
         <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
       </div>`).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
-      ${conversationItems.length > 5 ? btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${conversationItems.length} 个会话`, { n: String(conversationItems.length) }), 'toggle-organize-list', { small: true }) : ''}
+      ${conversationItems.length > 5 ? `<div class="ca-line ca-line-center">${btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${conversationItems.length} 个会话`, { n: String(conversationItems.length) }), 'toggle-organize-list', { small: true })}</div>` : ''}
     </div>
     ${S.captures.length ? sectionHead(T('cognition.capture_task_log_title', '整理记录')) + `<div class="ca-card">${S.captures.slice(0, 8).map((capture) => `
       <div class="ca-row is-flat">
