@@ -113,7 +113,7 @@ describe('open-source shared foundation polish', () => {
       expect(gallery).toContain(`id="${id}"`);
     }
     expect(gallery).toContain('id="window-chrome"');
-    expect(gallery).toContain('17 / 17 已定义');
+    expect(gallery).toContain('18 / 18 已定义');
     expect(galleryScript).toContain('function renderSidebarTools()');
     expect(galleryScript).toContain('function renderTabs()');
     expect(galleryScript).toContain('function renderResourceCards()');

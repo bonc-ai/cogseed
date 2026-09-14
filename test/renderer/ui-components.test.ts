@@ -298,7 +298,7 @@ describe('component gallery integration contract', () => {
     expect(gallery).toContain('OPEN SOURCE DESIGN SYSTEM / PRODUCTION MAPPING');
     expect(gallery).toContain('4 个角色 × 3 个尺寸 × 6 个可核对状态');
     expect(gallery).toContain('id="segmented-controls"');
-    expect(gallery).toContain('二级页面切换');
+    expect(gallery).toContain('原生按钮、Tab 访问和 aria-pressed');
     expect(gallery).toContain('正文基线 15px');
     expect(gallery).toContain('4/7/8/9/11/12/14/∞');
     expect(gallery).not.toContain('首版范围');
@@ -312,7 +312,7 @@ describe('component gallery integration contract', () => {
 
   it('integrates the open-source shell into real high-frequency pages', () => {
     expect(rendererCss).toContain('font-family: var(--font-sans);');
-    expect(rendererCss).toContain('min-height: var(--row-height-nav);');
+    expect(rendererCss).toContain('min-height: var(--control-height);');
     expect(rendererCss).toContain('max-width: var(--layout-thread-home-width);');
     expect(rendererCss).toContain('grid-template-columns: var(--layout-settings-nav-width) minmax(0, 1fr);');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');

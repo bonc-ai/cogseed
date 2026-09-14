@@ -28,7 +28,7 @@ describe('workspace navigation design-system integration', () => {
     expect(workspaceSource).toContain("className: 'ws-asset-filters'");
     expect(workspaceSource).toContain("attrs: { 'data-ws': 'asset-filter', 'data-type': id }");
     expect(componentsCss).toMatch(/\.ui-segmented-control\s*\{[^}]*background:\s*var\(--color-overlay-fill\);/s);
-    expect(componentsCss).toMatch(/\.ui-segmented-control > button\[aria-pressed="true"\]\s*\{[^}]*background:\s*var\(--surface-card\);[^}]*box-shadow:\s*var\(--shadow-sm\);/s);
+    expect(componentsCss).toMatch(/\.ui-segmented-control > button\[aria-pressed="true"\],\s*\.ui-segmented-control > button\[aria-selected="true"\]\s*\{[^}]*background:\s*var\(--surface-card\);[^}]*box-shadow:\s*var\(--shadow-sm\);/s);
     expect(workspaceCss).toContain('.ws-ref-tabs { flex: none; }');
     expect(workspaceCss).toContain('.ws-asset-filters { margin-bottom: var(--space-3); }');
     expect(tokensCss).toMatch(/--shadow-sm:\s*0 1px 2px rgba\(20, 40, 30, 0\.06\);/);

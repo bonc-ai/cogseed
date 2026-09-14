@@ -2633,8 +2633,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   color: var(--text-2);
 }
 .conv-list-section-header.is-collapsible:focus-visible {
-  outline: var(--focus-width) solid var(--color-brand);
-  outline-offset: 1px;
+  outline: var(--focus-width) solid var(--color-accent);
+  outline-offset: var(--focus-offset);
+  box-shadow: 0 0 0 3px var(--color-focus-halo);
 }
 .conv-list-section-caret {
   width: 16px;
