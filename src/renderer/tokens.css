@@ -134,6 +134,10 @@
   --layout-info-panel-width: 308px;
   --layout-settings-nav-width: 224px;
   --layout-card-grid-width: 1232px;
+  --card-width-min: 280px;
+  --card-grid-gap: var(--space-4);
+  --card-width-max: 400px;
+  --card-grid-width-max: var(--layout-card-grid-width);
   --control-height-sm: 28px;
   --control-height: 32px;
   --control-height-lg: 36px;

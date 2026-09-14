@@ -76,6 +76,31 @@
     )).join('');
   }
 
+  function renderUserMenus() {
+    const identity = {
+      name: '陈昱',
+      description: '个人工作空间',
+      avatar: { text: '陈', variant: 'gradient' },
+    };
+    const trigger = (open) => uiUserMenuTrigger({
+      ...identity,
+      id: `gallery-user-menu-${open ? 'open' : 'closed'}`,
+      open,
+      ariaLabel: '陈昱的用户菜单',
+    });
+    const panel = uiUserMenuPanel({
+      ...identity,
+      items: [
+        { action: 'settings', label: '设置', icon: 'settings' },
+        { action: 'sign-out', label: '退出登录', icon: 'log-out', danger: true, separatorBefore: true },
+      ],
+    });
+    byId('user-menu-specimens').innerHTML = [
+      specimen('默认入口', '头像 · 名称 · 工作空间 · 展开箭头', `<div class="gallery-user-menu-demo">${trigger(false)}</div>`),
+      specimen('菜单展开', '顶部身份 · 设置 · 危险操作', `<div class="gallery-user-menu-demo is-open">${trigger(true)}<div class="hub-chip-menu" role="menu">${panel}</div></div>`),
+    ].join('');
+  }
+
   function renderTabs() {
     const tab = (label, selected, count = '') => `<button type="button" class="ui-tab${selected ? ' is-active' : ''}" role="tab" aria-selected="${selected ? 'true' : 'false'}" tabindex="${selected ? '0' : '-1'}" data-gallery-tab>${label}${count === '' ? '' : ` <span class="ui-segmented-control__count">${count}</span>`}</button>`;
     byId('tabs-specimens').innerHTML = specimen(
@@ -97,7 +122,10 @@
       </article>`;
     byId('resource-card-specimens').innerHTML = [
       card({ title: '产品研发', description: '组织需求、设计与研发交付，保留最近任务上下文。', icon: 'folder', status: '刚刚更新', action: '继续工作' }),
+      card({ title: '每日工作收尾', description: '下班前整理当天进展、风险和明日待办。', icon: 'clock', status: '每天 18:00', action: '使用模板' }),
       card({ title: '项目分析师', description: '核对材料并整理风险线索，适用于通用分析任务。', icon: 'users', status: '可使用', action: '使用智能体' }),
+      card({ title: '需求证据整理', description: '把多来源反馈整理成可追溯的问题主题与证据账本。', icon: 'database', status: '已启用', action: '使用技能' }),
+      card({ title: 'GitHub', description: '查找和管理代码仓库、Issue、PR、文件与代码。', icon: 'globe', status: '未连接', action: '连接账户' }),
       card({ title: '每天整理工作日报', description: '每天 18:30 · 这台 Mac · 汇总当日任务与交付。', icon: 'clock', status: '已启用 · 最近运行 18:30', action: '查看记录', row: true }),
     ].join('');
     hydrateUiIcons(byId('resource-card-specimens'));
@@ -561,6 +589,7 @@
 
   renderPageHeaders();
   renderSidebarTools();
+  renderUserMenus();
   renderTabs();
   renderResourceCards();
   renderSettingsSections();

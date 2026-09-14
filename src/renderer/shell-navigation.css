@@ -109,6 +109,12 @@ html.is-macos body.shell-sidebar-hidden .app-top-drag-strip {
   left: var(--shell-header-inset);
 }
 
+/* Settings replaces the application rail with its own category navigation. */
+html.is-macos body:has(#panel-settings.active) #settings-page-header .ui-page-header {
+  padding-inline-start: 84px;
+  -webkit-app-region: drag;
+}
+
 /* A native Electron drag rectangle can swallow a floating control regardless
  * of z-index. Exclude the recovery gutter, then restore dragging on the inset
  * header content while keeping its controls interactive. */

@@ -752,20 +752,19 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
    The primary class is kept for semantic grouping only. */
 .sidebar-btn.primary {}
 
-/* Sidebar footer actions — 左下角融合入口（用户状态 + 设置，见
-   account-chip.js）：单一状态栏常驻，单击展开 / 再击收起，面板向上展开。 */
+/* Sidebar footer UserMenu — 单行个人身份入口，菜单向上展开。 */
 .sidebar-footer-actions {
   display: flex;
   flex-direction: column;
   gap: 2px;
   align-items: stretch;
-  padding: 6px 12px 10px;
-  border-top: 1px solid rgba(24, 84, 60, 0.06);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--line-subtle);
   background: transparent;
   flex-shrink: 0;
 }
 
-/* ── 左下角 Hub 账号常驻入口（方案 A，modules/account-chip.js）─────────── */
+/* ── 左下角共享 UserMenu（modules/ui-user-menu.js）───────────────────── */
 .sidebar-footer-account {
   position: relative;   /* 菜单绝对定位的基准 */
   flex: none;
@@ -773,10 +772,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .hub-chip {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--space-2);
   width: 100%;
-  min-height: 40px;
-  padding: 5px 8px;
+  min-height: 48px;
+  padding: var(--space-2);
   border: none;
   background: transparent;
   border-radius: var(--radius-sm);
@@ -786,7 +785,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   color: var(--text-2);
   transition: background 0.15s ease;
 }
-.hub-chip:hover { background: var(--primary-soft); }
+.hub-chip:hover { background: var(--surface-2); }
 .hub-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .hub-chip:disabled { cursor: default; opacity: 0.85; }
 .hub-chip:disabled:hover { background: transparent; }
@@ -798,9 +797,9 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px dashed var(--border-strong);
-  color: var(--muted);
+  background: var(--primary-soft);
+  border: none;
+  color: var(--primary-text);
 }
 .hub-chip-avatar-icon { width: 16px; height: 16px; }
 .hub-chip-avatar.is-signed {
@@ -860,13 +859,11 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   color: var(--muted);
   transition: transform 0.15s ease;
 }
-/* 融合面板展开时入口的状态反馈 */
-.sidebar-footer-account.is-open .hub-chip { background: var(--primary-soft); color: var(--primary-text); }
+/* 菜单展开时保留轻量入口反馈。 */
+.sidebar-footer-account.is-open .hub-chip { background: var(--surface-2); color: var(--text); }
 .sidebar-footer-account.is-open .hub-chip-chev { transform: rotate(180deg); }
 
-/* 静态 UI 优化：已登录行常驻浅底、渐变首字母头像、未登录副标题主色 */
-.hub-chip.is-signed-row { background: var(--primary-soft); }
-.hub-chip.is-signed-row:hover { background: var(--primary-soft); border-radius: var(--radius-sm); }
+/* 本地身份与已登录身份共用绿色首字头像；账号状态留在菜单动作里。 */
 .hub-chip-avatar.is-gradient {
   border: none;
   background: linear-gradient(135deg, var(--color-brand), #3EC6A0);
@@ -876,19 +873,17 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .hub-chip-sub.is-accent { color: var(--primary-text); font-family: inherit; }
 
-/* 账号 + 设置融合面板（左下角点击向上展开）。
-   bottom: calc(100% - 6px) 与入口重叠 6px，视觉上连成一体；
-   底部内边距相应加大。 */
+/* UserMenu 浮层：与入口保持 6px 间距。 */
 .hub-chip-menu {
   position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: calc(100% - 6px);
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   box-shadow: 0 12px 32px rgba(20, 40, 30, 0.16), 0 2px 8px rgba(20, 40, 30, 0.08);
-  padding: 6px 6px 14px;
+  padding: var(--space-1);
   z-index: var(--z-popover);
   transform-origin: bottom left;
   animation: hub-chip-pop 0.15s ease;
@@ -901,8 +896,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 9px 11px;
-  margin-bottom: 4px;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  margin-bottom: var(--space-1);
   border-bottom: 1px solid var(--border);
 }
 /* 未登录态：头卡整体是登录入口（点击开始浏览器授权登录）。 */
@@ -935,7 +930,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 7px 9px;
+  min-height: 36px;
+  padding: var(--space-2) var(--space-3);
   border: none;
   background: transparent;
   border-radius: 8px;
@@ -956,7 +952,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .hub-chip-menu-sep {
   height: 1px;
   background: var(--border);
-  margin: 5px 9px;
+  margin: var(--space-1) var(--space-2);
 }
 /* 「收起面板」按钮：面板底部整条居中，点击 = 收起（等价于再次点击入口）。 */
 .hub-chip-menu-collapse {
@@ -15337,10 +15333,46 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 
 /* ═══ Settings panel ═══════════════════════════════════════════════════ */
 
+/* Settings owns the window while active. Its category rail replaces the
+   application rail and the back action restores the originating view. */
+body:has(#panel-settings.active) > .app-container > .sidebar,
+body:has(#panel-settings.active) .app-shell-tools,
+body:has(#panel-settings.active) .main-top-actions {
+  display: none;
+}
+
+#panel-settings,
+#panel-settings #settings-page-header .ui-page-header {
+  min-height: var(--layout-titlebar-height);
+  padding-inline: var(--space-5);
+  background: var(--surface);
+  border-bottom-color: var(--line-subtle);
+}
+
+.settings-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  min-height: 36px;
+  margin: 0 0 var(--space-4);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--font-size-ui);
+  cursor: pointer;
+}
+.settings-back-btn:hover { background: var(--surface-2); color: var(--text); }
+.settings-back-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.settings-back-icon { width: 14px; height: 14px; }
+
 .settings-container {
   flex: 1;
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: var(--layout-settings-nav-width) minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -15846,11 +15878,10 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 /* Signed-in hero: softer padding so the badge + identity line read first. */
 .hub-hero-compact { padding: 22px 24px 20px; }
 
-/* Settings uses the open-source design system's dedicated category rail.
-   At constrained widths it becomes a horizontally scrollable tab row. */
+/* Settings uses the open-source design system's dedicated category rail. */
 .settings-tabs {
   display: flex;
-  flex: 0 0 var(--layout-settings-nav-width);
+  min-width: 0;
   flex-direction: column;
   gap: var(--space-1);
   margin: 0;
@@ -15863,10 +15894,14 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   position: relative;
 }
 .settings-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
   background: transparent;
   border: none;
-  min-height: var(--row-height-nav);
-  padding: 0 var(--space-3);
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-control);
   font-size: var(--font-size-ui);
   font-weight: var(--font-weight-regular);
@@ -15876,7 +15911,8 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   text-align: left;
   transition: color 0.12s;
 }
-.settings-tab:hover { color: var(--text); }
+.settings-tab:hover { color: var(--text); background: var(--surface-2); }
+.settings-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .settings-tab.is-active {
   color: var(--primary-text);
   font-weight: var(--font-weight-medium);
@@ -15884,6 +15920,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   margin-bottom: 0;
   background: var(--primary-soft);
 }
+.settings-tab-icon { width: 18px; height: 18px; flex: 0 0 auto; }
 /* Generic inline status dot. Sidebar footer buttons draw their dot on the
    label span so their own ::after can remain reserved for the status badge. */
 .has-dot:not(.sidebar-footer-btn)::after {
@@ -15907,11 +15944,12 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   min-width: 0;
   min-height: 0;
   width: auto;
-  max-width: var(--layout-thread-width);
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-6) var(--space-7);
+  max-width: none;
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
+  background: var(--surface);
 }
 
 .settings-tab-pane:not([hidden]) {
@@ -15920,34 +15958,40 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+  padding: var(--space-5) var(--space-6) var(--space-7);
+}
+
+.settings-tab-pane:not([hidden]) > * {
+  width: min(100%, var(--layout-thread-width));
+  margin-right: auto;
+  margin-left: auto;
+  box-sizing: border-box;
+}
+
+.settings-pane-title {
+  margin: 0 auto var(--space-6);
+  color: var(--text-heading);
+  font-size: var(--font-size-6);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
 }
 
 @media (max-width: 760px) {
+  .settings-container { grid-template-columns: 184px minmax(0, 1fr); }
   .settings-tabs {
-    flex-basis: 184px;
     padding: var(--space-3);
   }
-  .settings-body {
-    padding: var(--space-5) var(--space-4) var(--space-7);
-  }
+  .settings-tab-pane:not([hidden]) { padding: var(--space-5) var(--space-4) var(--space-7); }
 }
 
 @media (max-width: 640px) {
-  .settings-container {
-    flex-direction: column;
-  }
+  .settings-container { grid-template-columns: 156px minmax(0, 1fr); }
   .settings-tabs {
-    flex: 0 0 auto;
-    flex-direction: row;
-    padding: var(--space-2) var(--space-4);
-    border-right: 0;
-    border-bottom: 1px solid var(--line-subtle);
-    overflow-x: auto;
-    overflow-y: hidden;
+    padding: var(--space-3) var(--space-2);
   }
   .settings-tab {
-    flex: 0 0 auto;
-    white-space: nowrap;
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
   }
 }
 
@@ -17899,14 +17943,14 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 }
 .settings-ccswitch-row-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--font-weight-medium);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .settings-ccswitch-row-meta {
-  font-size: 11px;
+  font-size: var(--font-size-1);
   color: var(--muted);
   font-family: var(--font-mono);
   overflow: hidden;
@@ -17949,7 +17993,7 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   border-radius: 8px;
   background: transparent;
   color: var(--text-2);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   font-family: inherit;
   cursor: pointer;
 }

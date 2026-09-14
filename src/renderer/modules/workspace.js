@@ -924,7 +924,7 @@
       ) || String(a.space_id).localeCompare(String(b.space_id))
       : (a, b) => String(b.last_conversation_at || b.updated_at || '').localeCompare(String(a.last_conversation_at || a.updated_at || '')));
     const spacesContent = sorted.length
-      ? `<div class="ws-space-grid">${sorted.map(_spaceCardHtml).join('')}</div>`
+      ? `<div class="ws-space-grid ui-resource-grid">${sorted.map(_spaceCardHtml).join('')}</div>`
       : window.uiEmptyState(_spaces.length ? {
           kind: 'actionable',
           title: _t('ws.no_matching_spaces', '没有匹配的空间'),
@@ -977,11 +977,11 @@
         ${_catalogs.templates.error || !_catalogs.templates.loaded ? _catalogStatus('templates') : ''}
         ${_catalogs.templates.loaded ? `${_scenarios.length
           ? `<div class="ws-create-group-label">${_t('ws.scenes_group', '场景')}</div>
-             <div class="ws-template-grid ws-scene-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
+             <div class="ws-template-grid ws-scene-grid ui-resource-grid">${_scenarios.map(_sceneCardHtml).join('')}</div>`
           : ''}
         ${_templates.length
           ? `<div class="ws-create-group-label">${_t('ws.templates_group', '角色模板')}</div>
-             <div class="ws-template-grid">${_templates.map(_templateCardHtml).join('')}</div>`
+             <div class="ws-template-grid ui-resource-grid">${_templates.map(_templateCardHtml).join('')}</div>`
           : (!_scenarios.length ? window.uiEmptyState({ kind: 'quiet', title: _t('ws.no_templates', '暂无可用空间模板。') }) : '')}` : ''}
       </section>
       </div>

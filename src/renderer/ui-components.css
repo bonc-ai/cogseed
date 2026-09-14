@@ -96,8 +96,7 @@
     color var(--duration-control) var(--easing-ui),
     background-color var(--duration-control) var(--easing-ui),
     border-color var(--duration-control) var(--easing-ui),
-    box-shadow var(--duration-control) var(--easing-ui),
-    filter var(--duration-control) var(--easing-ui);
+    box-shadow var(--duration-control) var(--easing-ui);
 }
 .ui-button--sm {
   height: var(--control-height-sm);
@@ -129,7 +128,7 @@
 .ui-button--primary[data-preview-state="hover"],
 .ui-button--primary:active,
 .ui-button--primary[data-preview-state="active"] {
-  filter: brightness(0.92);
+  background: var(--control-primary-bg-hover);
 }
 .ui-button--secondary:hover,
 .ui-button--secondary[data-preview-state="hover"] {
@@ -324,9 +323,25 @@
 
 /* ResourceCard. Page modules retain their content, actions, and state
  * machines; this marker keeps the common shell from drifting. */
+.ui-resource-grid {
+  display: grid;
+  width: 100%;
+  max-width: var(--card-grid-width-max);
+  min-width: 0;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, max(var(--card-width-min), calc((100% - 2 * var(--card-grid-gap)) / 3))), 1fr));
+  gap: var(--card-grid-gap);
+  align-items: stretch;
+}
+.ui-resource-grid[class] > * {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
 .ui-resource-card {
   width: 100%;
-  max-width: 400px;
+  max-width: var(--card-width-max);
   min-width: 0;
   border: 1px solid var(--line-default);
   border-radius: var(--radius-card);

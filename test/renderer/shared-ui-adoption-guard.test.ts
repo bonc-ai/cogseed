@@ -7,6 +7,7 @@ const modulesRoot = path.join(root, 'src/renderer/modules');
 
 const sharedControlFactories = new Set([
   'ui-button.js',
+  'ui-user-menu.js',
   'ui-form.js',
   'ui-segmented-control.js',
 ]);

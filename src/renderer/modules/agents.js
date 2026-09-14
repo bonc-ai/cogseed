@@ -933,7 +933,7 @@ function renderAgentsGrid(agents) {
     return `
       <section class="agents-source-section">
         <div class="agents-source-section-head">${escapeHtml(label)} · ${list.length}</div>
-        <div class="agents-source-section-grid">
+        <div class="agents-source-section-grid ui-resource-grid">
           ${list.map(cardHtml).join('')}
         </div>
       </section>

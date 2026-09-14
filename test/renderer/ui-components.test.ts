@@ -237,6 +237,7 @@ describe('component gallery integration contract', () => {
       './ui-components.css',
       './shell-navigation.css',
       './modules/ui-button.js',
+      './modules/ui-user-menu.js',
       './modules/ui-sidebar-tools.js',
       './modules/ui-segmented-control.js',
       './modules/ui-form.js',
@@ -263,6 +264,7 @@ describe('component gallery integration contract', () => {
     expect(tokens).toContain('--color-accent-gradient: linear-gradient(135deg, #0A7A55, #086545);');
     expect(css).toContain('height: var(--control-height);');
     expect(css).toContain('.ui-button--lg { height: var(--control-height-lg); }');
+    expect(css).toMatch(/\.ui-button--primary:hover,[\s\S]*?background: var\(--control-primary-bg-hover\);/);
     expect(css).toContain('.ui-segmented-control > button[aria-pressed="true"]');
     expect(css).toContain('min-height: var(--layout-titlebar-height);');
     expect(css).toContain('border-radius: var(--radius-dialog);');
@@ -288,7 +290,7 @@ describe('component gallery integration contract', () => {
     expect(rendererCss).toContain('font-family: var(--font-sans);');
     expect(rendererCss).toContain('min-height: var(--row-height-nav);');
     expect(rendererCss).toContain('max-width: var(--layout-thread-home-width);');
-    expect(rendererCss).toContain('flex: 0 0 var(--layout-settings-nav-width);');
+    expect(rendererCss).toContain('grid-template-columns: var(--layout-settings-nav-width) minmax(0, 1fr);');
     expect(rendererCss).toContain('max-width: var(--layout-card-grid-width);');
     expect(rendererCss).toContain('box-shadow: var(--shadow-composer), 0 0 0 3px var(--color-focus-halo);');
     expect(rendererCss).toContain('.auto-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-card-hover); }');

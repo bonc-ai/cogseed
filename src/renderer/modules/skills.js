@@ -5293,7 +5293,7 @@ function renderSkillsGrid(skills) {
     return `
       <section class="skills-source-section">
         <div class="skills-source-section-head">${escapeHtml(label)} · ${list.length}</div>
-        <div class="skills-source-section-grid">
+        <div class="skills-source-section-grid ui-resource-grid">
           ${list.map(cardHtml).join('')}
         </div>
       </section>
@@ -5612,7 +5612,7 @@ function _openSkillsSectionHtml(options = {}) {
         <span>${escapeHtml(t('skills.global_group'))} · ${list.length}</span>
         ${hintHtml}
       </div>
-      <div class="skills-source-section-grid">${tiles.join('')}</div>
+      <div class="skills-source-section-grid ui-resource-grid">${tiles.join('')}</div>
     </section>`;
   };
   const externalHtml = externalPackageRows.length
@@ -5622,7 +5622,7 @@ function _openSkillsSectionHtml(options = {}) {
         <span>${escapeHtml(t('skills.external_group'))} · ${externalPackageRows.length}</span>
         <span class="skills-source-section-hint">${escapeHtml(t('skills.external_group_hint'))}</span>
       </div>
-      <div class="skills-source-section-grid">${externalPackageRows.map(packageCard).join('')}</div>
+      <div class="skills-source-section-grid ui-resource-grid">${externalPackageRows.map(packageCard).join('')}</div>
     </section>`
     : '';
   return externalHtml

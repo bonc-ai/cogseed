@@ -892,7 +892,7 @@ function _autoRenderTemplates(container, opts = {}) {
   }).join('');
   const head = `<div class="auto-tpl-subhead">${escapeHtml(t('auto.templates_more'))}</div>`;
   container.classList.toggle('is-compact', compact);
-  container.innerHTML = head + `<div class="auto-tpl-grid">${cards}</div>`;
+  container.innerHTML = head + `<div class="auto-tpl-grid ui-resource-grid">${cards}</div>`;
   if (typeof hydrateUiIcons === 'function') hydrateUiIcons(container);
   container.querySelectorAll('[data-auto-tpl]').forEach((btn) => {
     btn.addEventListener('click', () => _autoApplyTemplate(btn.getAttribute('data-auto-tpl')));

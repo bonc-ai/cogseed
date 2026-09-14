@@ -406,6 +406,12 @@ async function initUser() {
 // ─── View routing ───
 
 function setView(view, cid, opts = {}) {
+  if (view === 'settings' && currentView !== 'settings') {
+    window.__settingsReturnTarget = {
+      view: currentView || 'new-chat',
+      cid: currentView === 'conversation' ? currentCid : null,
+    };
+  }
   if (view === 'spaces') view = 'workspace';
   if (typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
   if (typeof window.closeModelChipMenu === 'function') window.closeModelChipMenu();

@@ -703,7 +703,7 @@
             </div>
           </div>
           <div class="agents-grid-scroll">
-            <div class="agents-grid" id="agents-grid"></div>
+            <div class="agents-grid ui-resource-grid" id="agents-grid"></div>
             <div class="agents-empty" id="agents-empty" data-i18n="agents.empty">No agents yet</div>
           </div>
         </div>
@@ -841,14 +841,14 @@
                           <span class="connectors-group-label" data-i18n="connectors.group.connected">Connected</span>
                           <span class="connectors-group-count" id="connectors-group-connected-count"></span>
                         </div>
-                        <div class="connectors-grid" id="connectors-grid-connected"></div>
+                        <div class="connectors-grid ui-resource-grid" id="connectors-grid-connected"></div>
                       </div>
                       <div class="connectors-group" id="connectors-group-available" style="display:none">
                         <div class="connectors-group-label-row">
                           <span class="connectors-group-label" data-i18n="connectors.group.available">Available</span>
                           <span class="connectors-group-count" id="connectors-group-available-count"></span>
                         </div>
-                        <div class="connectors-grid" id="connectors-grid-available"></div>
+                        <div class="connectors-grid ui-resource-grid" id="connectors-grid-available"></div>
                       </div>
                       <div class="connectors-empty empty" id="connectors-empty" style="display:none" data-i18n="connectors.empty">No connectors available.</div>
                     </div>
@@ -884,7 +884,7 @@
                     </div>
                   </div>
                   <div class="skills-grid-scroll">
-                    <div class="skills-grid" id="skills-grid"></div>
+                    <div class="skills-grid ui-resource-grid" id="skills-grid"></div>
                     <div class="skills-empty" id="skills-empty" data-i18n="skills.empty">No skills yet</div>
                   </div>
                 </div>
@@ -1103,20 +1103,46 @@
              渲染入口见 settings_tabs.js::_renderSettingsPageHeader。 -->
         <div id="settings-page-header"></div>
         <div class="settings-container">
-          <div class="settings-tabs" role="tablist">
-            <button class="settings-tab is-active" data-settings-tab="data" data-i18n="settings.tab.data">数据</button>
-            <button class="settings-tab" data-settings-tab="configuration" data-i18n="settings.tab.configuration">Configuration</button>
-            <button class="settings-tab" data-settings-tab="account" data-i18n="settings.tab.account">账号</button>
-            <button class="settings-tab" data-settings-tab="usage" data-i18n="settings.tab.usage">账号与用量</button>
-            <button class="settings-tab" data-settings-tab="general" data-i18n="settings.tab.general">通用</button>
-            <button class="settings-tab" data-settings-tab="security" data-i18n="settings.tab.security">安全与信任</button>
-            <button class="settings-tab" data-settings-tab="about" data-i18n="settings.tab.about">关于我们</button>
-          </div>
+          <aside class="settings-tabs" aria-label="设置" data-i18n-aria-label="settings.title">
+            <button type="button" class="settings-back-btn" id="settings-back-btn">
+              <span data-ui-icon="chevron-left" data-ui-icon-class="settings-back-icon"></span>
+              <span data-i18n="settings.back_to_app">返回应用</span>
+            </button>
+            <button class="settings-tab is-active" data-settings-tab="data">
+              <span data-ui-icon="database" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.data">数据</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="configuration">
+              <span data-ui-icon="key" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.configuration">Configuration</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="account">
+              <span data-ui-icon="lock" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.account">账号</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="usage">
+              <span data-ui-icon="clock" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.usage">账号与用量</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="general">
+              <span data-ui-icon="settings" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.general">通用</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="security">
+              <span data-ui-icon="shield" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.security">安全与信任</span>
+            </button>
+            <button class="settings-tab" data-settings-tab="about">
+              <span data-ui-icon="info" data-ui-icon-class="settings-tab-icon"></span>
+              <span data-i18n="settings.tab.about">关于我们</span>
+            </button>
+          </aside>
 
           <div class="settings-body">
 
             <!-- ───────────────────────── 数据 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="data">
+              <h1 class="settings-pane-title" data-i18n="settings.tab.data">数据</h1>
               <!-- ─── 记忆 ───────────────────────────────────────────────
                    Entry card into the memory detail page (#panel-memory). The
                    whole card is clickable; memory.js binds the handler + fills
@@ -1170,11 +1196,13 @@
 
             <!-- ───────────────────────── 通用 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="security" hidden>
+              <h1 class="settings-pane-title" data-i18n="settings.tab.security">安全与信任</h1>
               <div class="settings-section-head" data-i18n="settings.security.section">安全与信任</div>
               <div id="settings-security-body"></div>
             </div>
 
             <div class="settings-tab-pane" data-settings-pane="general" hidden>
+              <h1 class="settings-pane-title" data-i18n="settings.tab.general">通用</h1>
               <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
                   <div class="settings-group-title" data-i18n="settings.language.title">语言 / Language</div>
@@ -1259,7 +1287,7 @@
             <!-- ───────────────────────── 配置 ───────────────────────── -->
 
             <div class="settings-tab-pane" data-settings-pane="configuration" hidden>
-              
+              <h1 class="settings-pane-title" data-i18n="settings.tab.configuration">配置</h1>
               <div class="settings-section-note" data-i18n="settings.section.models_note">API keys and OAuth tokens are stored locally only — never synced or sent off-device.</div>
 
               <div class="settings-group ui-settings-section" id="settings-auth-profiles-recovery" hidden>
@@ -1433,6 +1461,7 @@
 
             <!-- ───────────────────────── 账号 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="account" hidden>
+              <h1 class="settings-pane-title" data-i18n="settings.tab.account">账号</h1>
               <div class="settings-group ui-settings-section" id="hub-account-card"></div>
             </div>
 
@@ -1440,6 +1469,7 @@
                  额度明细前端占位（hosted-only）。本开源构建不接 Token 平台、
                  不写额度账本、不扣减；空态 degraded 标注占位，规则待后端确认。 -->
             <div class="settings-tab-pane" data-settings-pane="usage" hidden>
+              <h1 class="settings-pane-title" data-i18n="settings.tab.usage">账号与用量</h1>
               <div class="settings-section-head" data-i18n="settings.usage.section">用量</div>
               <div class="settings-group ui-settings-section">
                 <div class="settings-group-head">
@@ -1466,6 +1496,7 @@
 
             <!-- ───────────────────────── 关于我们 ───────────────────────── -->
             <div class="settings-tab-pane" data-settings-pane="about" hidden>
+              <h1 class="settings-pane-title" data-i18n="settings.tab.about">关于我们</h1>
               <div class="settings-about-card">
                 <div class="settings-about-main">
                   <img class="settings-about-icon" src="../resources/icons/icon.png" alt="" draggable="false" />
@@ -1929,6 +1960,7 @@
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-user-menu.js"></script>
   <script src="./modules/ui-sidebar-tools.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-form.js"></script>
@@ -2001,8 +2033,8 @@
        (like account-chip.js) so the banner can surface on any view; it only
        consumes `updates:*` push events and `updates.*` IPC channels. -->
   <script src="./modules/updater.js"></script>
-  <!-- 左下角 Hub 账号常驻入口（方案 A）。常驻加载（不随 settings lazy feature），
-       仅消费 hub-account.* 既有 IPC 与 hub-account:login-result 推送，不新增通道。 -->
+  <!-- 左下角共享 UserMenu。account-chip.js 只负责真实账号状态与动作，
+       结构由 ui-user-menu.js 统一渲染，不新增 IPC 通道。 -->
   <script src="./modules/account-chip.js"></script>
 
   <!--
