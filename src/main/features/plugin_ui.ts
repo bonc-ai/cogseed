@@ -344,6 +344,8 @@ export async function savePluginRuntimeConfig(
   //      自己服务器的地址（换服务器自动换），这里拆出地址；整串仍是 api_key
   //      （平台认证对整串做哈希）。
   //   2) JSON 接入信息 {"server":"…","api_key":"…"}（/companion 兼容形式）。
+  // 规则：密钥/接入信息自带地址为权威——无条件覆盖表单预填或已存的旧
+  // server_url（换 key 即换服务器，存量用户无需手动清地址/重下配置）。
   if (typeof input.api_key === 'string') {
     const pasted = input.api_key.trim();
     if (pasted.startsWith('{')) {
@@ -355,9 +357,7 @@ export async function savePluginRuntimeConfig(
           return { ok: false, error: '接入信息格式不正确（需要 {"server":"…","api_key":"…"}）' };
         }
         input.api_key = blobKey;
-        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
-          input.server_url = blobServer;
-        }
+        input.server_url = blobServer;
       } catch {
         return { ok: false, error: '接入信息格式不正确（需要合法 JSON）' };
       }
@@ -372,9 +372,7 @@ export async function savePluginRuntimeConfig(
         if (!validatePlatformServerUrl(origin)) {
           return { ok: false, error: '密钥内嵌的平台地址不合法' };
         }
-        if (typeof input.server_url !== 'string' || !input.server_url.trim()) {
-          input.server_url = origin;
-        }
+        input.server_url = origin;
       } catch {
         return { ok: false, error: '密钥内嵌的平台地址无法解析' };
       }
