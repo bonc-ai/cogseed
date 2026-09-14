@@ -5489,7 +5489,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   display: flex;
   flex-direction: column;
   background: transparent; /* show body grid */
-  /* Container-type kept for layout queries (2026-09-14: inline cards no longer use cqw width). */
+  /* Used by `.chat-input-form { width: 40cqw }`. */
   container-type: inline-size;
   --chat-input-reserve: 140px;
   /* Live height of the docked terminal panel (set by terminal-panel.js).
@@ -9530,8 +9530,8 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .chat-input-form {
   margin-top: 10px;
   padding: 10px 12px;
-  /* 宽度与消息气泡一致（2026-09-14 统一），不再按比例收窄。 */
-  width: 100%;
+  /* Stable 40% of chat pane, not bubble width. */
+  width: 40cqw;
   max-width: 100%;
   min-width: 280px;
   background: rgba(14, 165, 233, 0.06);
@@ -9773,7 +9773,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
    the user explicitly approves before any marketplace resource is installed. */
 .chat-marketplace-request {
   margin-top: 10px;
-  width: 100%;
+  width: min(360px, 100%);
   max-width: 100%;
   min-width: 280px;
   background: var(--color-surface);
