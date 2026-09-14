@@ -37,9 +37,9 @@
 /* 空态里"标题 / 说明 / 步骤 / 入口"各占一行：挤成一行会让"发生了什么"
    和"该做什么"粘在一起，读不出层次。（.skills-cognition-empty 是 inline 流，
    这里把它下面的直接子元素竖过来。） */
-.cognition-task-empty > strong { display: block; color: var(--fg, #111827); font-size: 13px; margin: 0 0 6px; }
+.cognition-task-empty > strong { display: block; color: var(--fg, var(--color-ink)); font-size: 13px; margin: 0 0 6px; }
 .cognition-task-empty > span { display: block; max-width: 720px; margin: 0 auto 10px; line-height: 1.7; }
-.cognition-task-empty > .skills-cognition-meta { color: var(--muted-fg, #6b7280); font-size: var(--font-size-1); }
+.cognition-task-empty > .skills-cognition-meta { color: var(--muted-fg, var(--color-muted)); font-size: var(--font-size-1); }
 .cognition-task-empty > button, .cognition-task-empty > .btn { margin-top: 4px; }
 .recall-proof-list { display: grid; max-width: 1480px; margin: 0 auto; gap: 14px; }
 .recall-proof-asset { padding: 0; overflow: hidden; border-radius: 10px; }
