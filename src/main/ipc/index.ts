@@ -65,6 +65,7 @@ import { readKstarTaskLifecycle } from '../features/kstar/lifecycle-adapter';
 import * as kstarTaskClosure from '../features/kstar/task-closure';
 import * as kstarReviewService from '../features/kstar/review-service';
 import * as kstarTrace from '../features/kstar/trace';
+import { listKstarEpisodes } from '../features/kstar/episode-store';
 import * as kstarFailures from '../features/kstar/failure-service';
 import * as kstarRunEvidence from '../features/kstar/run-evidence';
 import * as recallProofs from '../features/recall/proof-service';
@@ -107,6 +108,8 @@ import * as recycleBin from '../features/recycle_bin';
 import * as search from '../features/search';
 import * as auth from '../features/auth';
 import * as customProviders from '../features/custom_providers';
+import * as modelOverrides from '../features/model_overrides';
+import { curatedModelsFor } from '../model/provider_catalog';
 import * as modelAuthorizationDiscovery from '../features/model_authorization_discovery';
 import { probeCcSwitch } from '../features/ccswitch_import';
 import * as imageAuth from '../features/image_auth';
@@ -229,9 +232,17 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   id: string;
   contextWindow: number;
   maxTokens: number;
+  vision?: unknown;
+  input?: unknown;
+  capabilities?: unknown;
+  reasoningLevels?: unknown;
+  reasoningParamsMap?: unknown;
 } {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${field} required`);
-  const raw = value as { id?: unknown; contextWindow?: unknown; maxTokens?: unknown };
+  const raw = value as {
+    id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
+    input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+  };
   const id = boundedText(raw.id, `${field}.id`, 200);
   const boundedInteger = (candidate: unknown, name: string, max: number): number => {
     if (!Number.isSafeInteger(candidate) || (candidate as number) <= 0 || (candidate as number) > max) {
@@ -242,7 +253,18 @@ function boundedCustomProviderModel(value: unknown, field: string): {
   const contextWindow = boundedInteger(raw.contextWindow, `${field}.contextWindow`, 16_777_216);
   const maxTokens = boundedInteger(raw.maxTokens, `${field}.maxTokens`, 1_048_576);
   if (maxTokens > contextWindow) throw new Error(`${field}.maxTokens must not exceed contextWindow`);
-  return { id, contextWindow, maxTokens };
+  // 新配置字段（2026-09-13 统一模型配置表单）原样透传——严格校验在
+  // custom_providers.normalizeModel（单一口径，避免两处规则漂移）。
+  return {
+    id,
+    contextWindow,
+    maxTokens,
+    ...(raw.vision === undefined ? {} : { vision: raw.vision }),
+    ...(raw.input === undefined ? {} : { input: raw.input }),
+    ...(raw.capabilities === undefined ? {} : { capabilities: raw.capabilities }),
+    ...(raw.reasoningLevels === undefined ? {} : { reasoningLevels: raw.reasoningLevels }),
+    ...(raw.reasoningParamsMap === undefined ? {} : { reasoningParamsMap: raw.reasoningParamsMap }),
+  };
 }
 type StreamHandler = (
   payload: any,
@@ -2772,6 +2794,39 @@ const invokeHandlers: Record<string, InvokeHandler> = {
       return { ok: false, error: (error as Error).message };
     }
   },
+  'kstar.episodes.list': async ({ limit } = {}, ctx) => {
+    try {
+      const episodes = await listKstarEpisodes(ctx.userId);
+      const n = Number(limit);
+      const capped = Number.isFinite(n) && n > 0 ? Math.min(n, 200) : 100;
+      return {
+        ok: true,
+        total: episodes.length,
+        episodes: episodes.slice(0, capped).map((episode) => ({
+          id: episode.id,
+          createdAt: episode.createdAt,
+          status: (episode.r && episode.r.status) || 'unknown',
+          goal: String((episode.t && episode.t.userGoal) || '').slice(0, 200),
+          summary: String((episode.s && episode.s.conversationSummary) || '').slice(0, 200),
+          durationMs: episode.r && typeof episode.r.durationMs === 'number' ? episode.r.durationMs : null,
+        })),
+      };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
+  'kstar.experiences.list': async ({ limit } = {}, ctx) => {
+    try {
+      const n = Number(limit);
+      const result = await kstarReviewService.listKstarExperiences(
+        ctx.userId,
+        Number.isFinite(n) && n > 0 ? n : undefined,
+      );
+      return { ok: true, total: result.total, experiences: result.experiences };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
+  },
   'kstar.runEvidence.read': async ({ taskId, taskRunId } = {}, ctx) => {
     if (!safeId(taskId) || !safeId(taskRunId)) throw new Error('invalid kstar run evidence input');
     return {
@@ -4907,6 +4962,57 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
     return customProviders.setCustomProviderEnabled(ctx.userId, id, args.enabled);
   },
+  // ── 内置预设的本地覆盖（设置页「预设详情」）──
+  // 窗口/输出的用户级覆盖：只改本机生效值（运行时预算 + 模型下拉），不动预设。
+  'modelOverrides.list': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const presetModels = curatedModelsFor(provider);
+    return {
+      ok: true,
+      provider,
+      models: modelOverrides.describeModelAbilityOverrides(ctx.userId, provider, presetModels),
+      caps: {
+        contextWindow: modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW,
+        maxTokens: modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS,
+      },
+    };
+  },
+  'modelOverrides.set': async (args, ctx) => {
+    const provider = boundedText(args?.provider, 'provider', 120);
+    const model = boundedText(args?.model, 'model', 200);
+    const presetModels = curatedModelsFor(provider);
+    const presetEntry = presetModels.find((entry) => entry.id === model);
+    const preset = {
+      ...(typeof presetEntry?.contextWindow === 'number' ? { contextWindow: presetEntry.contextWindow } : {}),
+      ...(typeof presetEntry?.maxTokens === 'number' ? { maxTokens: presetEntry.maxTokens } : {}),
+    };
+    const toPatch = (value: unknown, max: number): number | null | undefined => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > max) {
+        throw new Error('override value must be a positive safe integer within range');
+      }
+      return value as number;
+    };
+    return modelOverrides.setModelOverride(
+      ctx.userId,
+      provider,
+      model,
+      {
+        contextWindow: toPatch(args?.contextWindow, modelOverrides.MAX_OVERRIDE_CONTEXT_WINDOW),
+        maxTokens: toPatch(args?.maxTokens, modelOverrides.MAX_OVERRIDE_OUTPUT_TOKENS),
+      },
+      {
+        ...(typeof preset.contextWindow === 'number' ? { contextWindow: preset.contextWindow } : {}),
+        ...(typeof preset.maxTokens === 'number' ? { maxTokens: preset.maxTokens } : {}),
+      },
+    );
+  },
+  'modelOverrides.clear': async (args, ctx) => modelOverrides.clearModelOverride(
+    ctx.userId,
+    boundedText(args?.provider, 'provider', 120),
+    boundedText(args?.model, 'model', 200),
+  ),
   'customProviders.model.add': async (args, ctx) => customProviders.addCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),
@@ -4918,6 +5024,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.modelId, 'modelId', 200),
     boundedCustomProviderModel(args.model, 'model'),
   ),
+  // 模型级开关（S2）：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
+  // 配置与绑定都保留，随时可拨回。
+  'customProviders.model.setEnabled': async (args, ctx) => {
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderModelEnabled(
+      ctx.userId,
+      boundedText(args?.providerId, 'providerId', 120),
+      boundedText(args?.modelId, 'modelId', 200),
+      args.enabled,
+    );
+  },
   'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),

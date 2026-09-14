@@ -53,7 +53,10 @@ const legacyRawControlBaseline: Record<string, number> = {
   'run-center-board.js': 3,
   'search.js': 3,
   'settings-security.js': 7,
-  'settings.js': 25,
+  // 2026-09-13 统一模型配置表单（产品设计稿）：模型表单重构新增输入类型/
+  // 模型能力勾选 chips、推理等级行与参数映射 textarea（智能配置开关复用
+  // .toggle-switch）。有意扩表 +5，非回涨；该表单后续迁移 ui-* 工厂时随表下调。
+  'settings.js': 30,
   'skills.js': 146,
   'terminal-panel.js': 3,
   'text-view-edit.js': 3,

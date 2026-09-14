@@ -99,4 +99,73 @@ describe('Recall message usage feedback', () => {
       cid: 'cid-a', messageId: 'msg-user', feedback: 'negative',
     })).rejects.toThrow(/assistant message/i);
   });
+
+  it('negative feedback writes a contradicted usage receipt when the injection receipt exists (T2.2)', async () => {
+    await appendMessage('cid-neg', {
+      id: 'msg-neg', ts: new Date().toISOString(), from: 'commander', to: ['user'],
+      turn_id: 'turn-neg', text: 'Answer',
+      recall_citations: [{
+        asset_id: 'asset-neg', title: 'Rule', type: 'rule', version: '1', scope: 'global',
+        projection_id: 'proj-neg', match_method: 'semantic',
+      }],
+    });
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    await injections.recordInjectionReceipt('user-a', {
+      taskRunId: 'turn-neg', projectionId: 'proj-neg', assetId: 'asset-neg', assetVersion: '1',
+      boundary: 'real', status: 'injected', messageId: 'msg-neg',
+    });
+    const feedback = await import('../../../../src/main/features/recall/usage-feedback-service');
+    const usageReceipts = await import('../../../../src/main/features/recall/asset-usage-receipt');
+
+    await feedback.recordRecallMessageFeedback('user-a', {
+      cid: 'cid-neg', messageId: 'msg-neg', feedback: 'negative',
+    });
+
+    const receipts = await usageReceipts.listAssetUsageReceipts('user-a', 'turn-neg');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject({
+      status: 'contradicted',
+      assetId: 'asset-neg',
+      evidenceKind: 'agent_action',
+      injectionReceiptId: expect.stringMatching(/^inj-/),
+    });
+  });
+
+  it('a second negative feedback on the same asset raises a pause recommendation (T2.2)', async () => {
+    const feedback = await import('../../../../src/main/features/recall/usage-feedback-service');
+    const injections = await import('../../../../src/main/features/recall/injection-receipt');
+    const candidates = await import('../../../../src/main/features/recall/candidate-service');
+    const assets = await import('../../../../src/main/features/recall/asset-service');
+    // 真实资产（治理建议写在资产记录上，不能用裸 id）。
+    const candidate = await candidates.saveRecallCandidate('user-a', {
+      judgment: 'Prefer concise answers.', suggestedType: 'personal',
+      suggestedScope: 'general', sourceRefs: [{ kind: 'execution', id: 'exec-neg' }],
+    });
+    const { asset } = await candidates.promoteRecallCandidate('user-a', candidate.id, { actor: 'user' });
+    for (const [messageId, turnId] of [['msg-n1', 'turn-n1'], ['msg-n2', 'turn-n2']] as const) {
+      await appendMessage('cid-neg2', {
+        id: messageId, ts: new Date().toISOString(), from: 'commander', to: ['user'],
+        turn_id: turnId, text: 'Answer',
+        recall_citations: [{
+          asset_id: asset.id, title: 'Rule', type: 'personal', version: '1', scope: 'general',
+          projection_id: 'proj-n', match_method: 'semantic',
+        }],
+      });
+      await injections.recordInjectionReceipt('user-a', {
+        taskRunId: turnId, projectionId: 'proj-n', assetId: asset.id, assetVersion: '1',
+        boundary: 'real', status: 'injected', messageId,
+      });
+    }
+
+    await feedback.recordRecallMessageFeedback('user-a', { cid: 'cid-neg2', messageId: 'msg-n1', feedback: 'negative' });
+    let current = await assets.readAbilityAsset('user-a', asset.id);
+    expect(current.recommendedAction).toBeUndefined();
+
+    await feedback.recordRecallMessageFeedback('user-a', { cid: 'cid-neg2', messageId: 'msg-n2', feedback: 'negative' });
+    current = await assets.readAbilityAsset('user-a', asset.id);
+    expect(current.recommendedAction).toBe('pause');
+    expect(current.recommendationReason).toContain('负反馈');
+    // 建议非停用：治理状态仍是 active，由人在治理页决定。
+    expect(current.status).toBe('active');
+  });
 });

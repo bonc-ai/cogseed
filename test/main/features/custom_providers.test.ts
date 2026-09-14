@@ -49,7 +49,8 @@ describe('custom providers', () => {
         apiKey: 'sk-secret-value',
         enabled: true,
         models: [
-          { id: 'model-a', contextWindow: 131072, maxTokens: 8192 },
+          // 无显式值的模型走全局默认（2026-09-13 十进制口径 1M / 384K）。
+          { id: 'model-a', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'model-b', contextWindow: 262144, maxTokens: 16384 },
         ],
         source: 'manual',
@@ -70,6 +71,59 @@ describe('custom providers', () => {
     const raw = fs.readFileSync(paths.userAuthProfilesFile(UID), 'utf8');
     expect(raw).not.toContain('sk-secret-value');
     expect(raw.trim().startsWith('{')).toBe(false);
+
+    // 统一模型配置表单字段（2026-09-13）：input / capabilities / reasoning*
+    // 落库；vision 由 input 派生；**未声明 input 时 vision 保持未知**——
+    // 模型草稿行等旧调用方不会被误标成「明确不支持图片」。
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'vision-model', contextWindow: 262144, maxTokens: 32768,
+      input: ['image', 'pdf', 'video'],
+      capabilities: ['structured_output', 'system_message', 'structured_output'],
+      reasoningLevels: ['low', 'medium', 'high'],
+      reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+    })).toEqual({
+      ok: true,
+      model: {
+        id: 'vision-model', contextWindow: 262144, maxTokens: 32768,
+        vision: true,
+        input: ['text', 'image', 'pdf', 'video'],
+        capabilities: ['structured_output', 'system_message'],
+        reasoningLevels: ['low', 'medium', 'high'],
+        reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+      },
+    });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'text-only-model', contextWindow: 131072, maxTokens: 8192, input: ['text'],
+    })).toEqual({
+      ok: true,
+      model: { id: 'text-only-model', contextWindow: 131072, maxTokens: 8192, vision: false, input: ['text'] },
+    });
+    const legacyModel = providers.addCustomProviderModel(UID, result.id, {
+      id: 'legacy-model', contextWindow: 131072, maxTokens: 8192,
+    });
+    expect(legacyModel).toMatchObject({ ok: true });
+    if (legacyModel.ok) {
+      expect(legacyModel.model).not.toHaveProperty('input');
+      expect(legacyModel.model.vision).toBeUndefined();
+    }
+
+    // 写入侧严格校验：非法枚举 / 超限 / 非对象映射一律拒绝。
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-input', contextWindow: 131072, maxTokens: 8192, input: ['audio'],
+    })).toEqual({ ok: false, error: 'invalid input type: audio' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-capability', contextWindow: 131072, maxTokens: 8192, capabilities: ['telepathy'],
+    })).toEqual({ ok: false, error: 'invalid capability: telepathy' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-level-long', contextWindow: 131072, maxTokens: 8192, reasoningLevels: ['x'.repeat(41)],
+    })).toEqual({ ok: false, error: 'reasoning level must be at most 40 characters' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-levels-max', contextWindow: 131072, maxTokens: 8192,
+      reasoningLevels: Array.from({ length: 9 }, (_, i) => `l${i}`),
+    })).toEqual({ ok: false, error: 'reasoningLevels must contain at most 8 items' });
+    expect(providers.addCustomProviderModel(UID, result.id, {
+      id: 'bad-map', contextWindow: 131072, maxTokens: 8192, reasoningParamsMap: 'oops',
+    })).toEqual({ ok: false, error: 'reasoningParamsMap must be an object' });
   });
 
   it('normalizes legacy string models and missing enabled state on read', async () => {
@@ -132,16 +186,16 @@ describe('custom providers', () => {
         id: 'legacy-provider',
         enabled: true,
         models: [
-          { id: 'legacy-model', contextWindow: 131072, maxTokens: 8192 },
+          { id: 'legacy-model', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'configured-model', contextWindow: 524288, maxTokens: 32768 },
-          { id: 'invalid-metadata', contextWindow: 131072, maxTokens: 8192 },
+          { id: 'invalid-metadata', contextWindow: 1000000, maxTokens: 384000 },
           { id: 'inverted-metadata', contextWindow: 4096, maxTokens: 4096 },
           { id: 'fallback-output-too-large', contextWindow: 4096, maxTokens: 4096 },
         ],
       }),
       expect.objectContaining({
         id: 'entry-backed-provider',
-        models: [{ id: 'entry-backed-model', contextWindow: 131072, maxTokens: 8192 }],
+        models: [{ id: 'entry-backed-model', contextWindow: 1000000, maxTokens: 384000 }],
       }),
       expect.objectContaining({ id: 'overlong-provider', models: [] }),
     ]);
@@ -178,7 +232,7 @@ describe('custom providers', () => {
     })).toEqual({ ok: true });
     expect(providers.listCustomProviders(UID)[0]).toMatchObject({
       name: 'Updated', baseUrl: 'https://two.example', apiKey: 'original-key',
-      models: [{ id: 'claude-x', contextWindow: 131072, maxTokens: 8192 }],
+      models: [{ id: 'claude-x', contextWindow: 1000000, maxTokens: 384000 }],
     });
   });
 
@@ -278,7 +332,7 @@ describe('custom providers', () => {
     });
     expect((await auth.listEntries()).entries.map((entry) => entry.model)).toEqual(['model-c', 'model-a']);
     expect(providers.listCustomProviders(UID)[0].models).toEqual([
-      { id: 'model-a', contextWindow: 131072, maxTokens: 8192 },
+      { id: 'model-a', contextWindow: 1000000, maxTokens: 384000 },
       { id: 'model-c', contextWindow: 1048576, maxTokens: 65536 },
     ]);
 
@@ -358,9 +412,9 @@ describe('custom providers', () => {
     if (!result.ok) throw new Error(result.error);
     const listed = providers.listCustomProviders(UID);
     const byId = Object.fromEntries(listed[0].models.map((m) => [m.id, m]));
-    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1_048_576);
+    expect(byId['deepseek/deepseek-v4-flash-vision-exp'].contextWindow).toBe(1000000);
     expect(byId['deepseek/deepseek-v4-flash-vision-exp'].vision).toBe(true);
-    expect(byId['totally-unknown-model'].contextWindow).toBe(131_072);
+    expect(byId['totally-unknown-model'].contextWindow).toBe(1000000);
     expect(byId['totally-unknown-model'].vision).toBeUndefined();
   });
 });
@@ -443,6 +497,51 @@ describe('custom providers › fetchCustomProviderModels', () => {
     expect(failed.ok).toBe(false);
     if (failed.ok) return;
     expect(failed.error).not.toContain('gk-live');
+  });
+
+  it('maps declared input modalities and capabilities into the fetched rows', async () => {
+    // /models 只保证 id；能拿尽拿的扩展字段（OpenRouter 等）要落进结果，运行时
+    // 才能"配置驱动调用"：input 模态参与多模态判定，capabilities 映射 compat。
+    const providers = await import('../../../src/main/features/custom_providers');
+    const added = providers.addCustomProvider(UID, {
+      name: 'Meta Relay', protocol: 'openai', baseUrl: 'https://meta.example/v1', apiKey: 'sk-meta',
+    });
+    if (!added.ok) throw new Error(added.error);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonBody({
+      data: [
+        {
+          id: 'relay-multimodal',
+          context_length: 200000,
+          top_provider: { max_completion_tokens: 64000 },
+          supported_parameters: ['reasoning', 'structured_outputs', 'web_search_options', 'temperature'],
+          architecture: { input_modalities: ['text', 'image', 'video', 'audio'] },
+        },
+        // 只声明能力、没有模态：能力仍要落库（不能因为缺 input 就丢）。
+        { id: 'relay-capability-only', capabilities: ['structured_output', 'unknown-capability'] },
+        // 'file' 是 OpenRouter 口径的 PDF；文本模态由我们补齐。
+        { id: 'relay-file-only', architecture: { input_modalities: ['file'] } },
+      ],
+    })));
+
+    const res = await providers.fetchCustomProviderModels(UID, added.id);
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.models).toEqual([
+      {
+        id: 'relay-multimodal',
+        contextWindow: 200000,
+        maxTokens: 64000,
+        input: ['text', 'image', 'video'],
+        capabilities: ['structured_output', 'native_web_search'],
+        reasoning: true,
+        vision: true,
+      },
+      { id: 'relay-capability-only', capabilities: ['structured_output'] },
+      // 显式声明了模态就必须诚实表态：没有 image 就是 vision false，
+      // 不能再让目录/识别器的视觉兜底把它翻过来。
+      { id: 'relay-file-only', input: ['text', 'pdf'], vision: false },
+    ]);
   });
 
   it('fails fast for unknown providers without issuing any request', async () => {

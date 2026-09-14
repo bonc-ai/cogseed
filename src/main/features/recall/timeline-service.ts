@@ -44,6 +44,8 @@ export interface RecallAssetTimelineItem {
     version?: string;
     projectionId?: string;
     taskRunId?: string;
+    /** 来源会话 id：使用记录页按它 join 会话名展示（不显示裸 id）。 */
+    conversationId?: string;
     transferProofId?: string;
     usageReceiptId?: string;
     /** 使用记录自身 id（N-5: 不是回执 id，仅展示用，不参与回执索引）。 */
@@ -112,6 +114,25 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   const asset = await readAbilityAsset(userId, assetId);
   const items: RecallAssetTimelineItem[] = [];
 
+  // taskRunId → 会话 id：旧投影没有 conversationId 字段，用 KSTAR episode 的
+  // 会话归属回溯（sessionId 带 gconv- 前缀，去掉后与来源清单里的会话 id 对齐）。
+  // 注意：usage/投影事件里的 taskRunId 是**回合 run id**，落在 episode 的
+  // reuseTurnIds 数组里（episode.taskRunId 是 episode 自身 id，两者不同）——
+  // 两处都建索引，实测 bc8f09cc4d56 只在 reuseTurnIds 命中。
+  // 动态 import：recall 与 kstar 相互沉淀，静态 import 成环。
+  const episodeConversationByRun = new Map<string, string>();
+  try {
+    const { listKstarEpisodes } = await import('../kstar/episode-store');
+    for (const episode of await listKstarEpisodes(userId)) {
+      const sessionId = episode.sessionId ? String(episode.sessionId).replace(/^gconv-/, '') : '';
+      if (!sessionId) continue;
+      if (episode.taskRunId) episodeConversationByRun.set(String(episode.taskRunId), sessionId);
+      for (const runId of Array.isArray(episode.reuseTurnIds) ? episode.reuseTurnIds : []) {
+        if (runId) episodeConversationByRun.set(String(runId), sessionId);
+      }
+    }
+  } catch { /* kstar 不可用不阻断时间线 */ }
+
   for (const audit of await listAbilityAssetAudit(userId, assetId)) {
     const kind = auditTimelineKind(audit.action);
     if (!kind || typeof audit.id !== 'string' || !audit.id
@@ -140,17 +161,45 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
   for (const projection of await listContextProjections(userId)) {
     if (projection.status !== 'confirmed' || !projection.assetIds.includes(asset.id)) continue;
     const occurredAt = projection.confirmedAt || projection.decidedAt || projection.createdAt;
+    const projectionConversationId = projection.conversationId
+      || episodeConversationByRun.get(String(projection.taskRunId || ''));
     pushSorted(items, {
       id: `${projection.id}-confirmed`,
       kind: 'projection_confirmed',
       occurredAt,
       title: itemTitle('projection_confirmed'),
       summary: projection.purpose,
-      refs: { assetId: asset.id, projectionId: projection.id, taskRunId: projection.taskRunId },
+      refs: {
+        assetId: asset.id,
+        projectionId: projection.id,
+        taskRunId: projection.taskRunId,
+        ...(projectionConversationId ? { conversationId: projectionConversationId } : {}),
+      },
     });
   }
 
+  // usage → 来源会话：usage 只带 projectionId，会话 id 在投影记录上——
+  // 按投影 id 建缓存（同一批 usage 常共享投影，避免逐条读盘）。
+  const projectionConversations = new Map<string, string>();
+  const conversationOfProjection = async (projectionId?: string): Promise<string | undefined> => {
+    if (!projectionId) return undefined;
+    const cached = projectionConversations.get(projectionId);
+    if (cached !== undefined) return cached || undefined;
+    try {
+      const projection = await readContextProjection(userId, projectionId);
+      const conversationId = projection.conversationId || '';
+      projectionConversations.set(projectionId, conversationId);
+      return conversationId || undefined;
+    } catch {
+      projectionConversations.set(projectionId, '');
+      return undefined;
+    }
+  };
   for (const usage of await listRecallUsage(userId, assetId)) {
+    // 会话 id：新投影的 conversationId 优先；旧数据用 episode 的
+    // taskRunId→sessionId 回溯——用户要求老记录也能看出"在哪个对话里被用"。
+    const usageConversationId = (await conversationOfProjection(usage.projectionId))
+      || episodeConversationByRun.get(String(usage.taskRunId || ''));
     pushSorted(items, {
       id: usage.id,
       kind: 'usage_recorded',
@@ -164,6 +213,7 @@ export async function listAbilityAssetTimeline(userId: string, assetId: string):
         version: usage.assetVersion,
         projectionId: usage.projectionId,
         taskRunId: usage.taskRunId,
+        ...(usageConversationId ? { conversationId: usageConversationId } : {}),
         // N-5: usage 行不再伪装 usageReceiptId。前端按 receiptId 索引回执，
         // usage 记录 id 不是回执 id——放了会让「详情/回执」在 usage 行恒查
         // 不到（口径漂移：transfer_completed 行的 usageReceiptId 才是真回执

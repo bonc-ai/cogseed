@@ -133,6 +133,49 @@
   --color-stream-dark-hover-2: rgba(255, 255, 255, .07);
   --color-stream-fallback: #E5E7EB;
 
+  /* ── Cognition assets palette（认知资产页专属配色，2026-09-14 从
+        cognition-assets.css 上移到 tokens.css。值与原字面量逐一对齐；
+        同族微差色（Δ≤8/255）合并为同一 token，肉眼不可辨。图示四层用的
+        土壤/根/枝/冠配色也在这里。新样式请引用这些 token，不要再写字面量。） ── */
+  --color-ca-green: #189a5c;
+  --color-ca-green-deep: #0f7a47;
+  --color-ca-green-text: #1c7d50;
+  --color-ca-green-text-deep: #116b40;
+  --color-ca-green-bg: #e9f5ee;          /* 合并 #eaf5ee */
+  --color-ca-green-fill: #ddf0e4;        /* 合并 #dcecdf */
+  --color-ca-green-line: #8fcfae;
+  --color-ca-green-line-2: #cfe7d7;      /* 合并 #cfe0d4 */
+  --color-ca-green-line-3: #c6dfcd;      /* 合并 #cbe6d3 */
+  --color-ca-green-mid: #7a9b88;
+  --color-ca-green-dim: #6f8378;
+  --color-ca-ink: #1d1f1e;
+  --color-ca-ink-2: #54595e;             /* 合并 #5c6166 */
+  --color-ca-ink-3: #8a9098;
+  --color-ca-ink-4: #9aa0a6;
+  --color-ca-ink-faint: #b7bdb7;
+  --color-ca-dot-empty: #c9ccc9;
+  --color-ca-line: #e8eae8;
+  --color-ca-line-dim: #e6e6e2;          /* 合并 #e2e6e2 / #ececea */
+  --color-ca-fill-empty: #eef1ee;
+  --color-ca-paper: #fafaf9;             /* 合并 #f7f7f5 / #fbfbfa / #fbfcfa */
+  --color-ca-hover: #f6f8f6;
+  --color-ca-chip-bg: #f1f2f0;
+  --color-ca-amber-bg: #fdf6e7;
+  --color-ca-amber-ink: #96690f;
+  --color-ca-amber-ink-2: #8a6717;
+  --color-ca-amber-ink-3: #6d5417;
+  --color-ca-amber-line: #f0dcb2;        /* 合并 #ecd9b0 */
+  --color-ca-amber-hover: #faeecf;
+  --color-ca-amber-dot: #e2a33f;
+  --color-ca-soil: #ece4d6;
+  --color-ca-soil-line: #ddd0ba;
+  --color-ca-soil-hover: #e4d8c2;
+  --color-ca-soil-ink: #6f5a3a;
+  --color-ca-red: #cf4a42;
+  --color-ca-red-line: #ecc8c4;
+  --color-ca-red-bg: #fdf0ef;
+  --color-ca-row-hover: rgba(0, 0, 0, 0.03);
+
   /* Elevation and focus */
   --shadow-card: 0 1px 2px rgba(20, 71, 55, 0.04), 0 8px 24px rgba(20, 71, 55, 0.06);
   --shadow-card-hover: 0 4px 16px rgba(20, 71, 55, 0.06);

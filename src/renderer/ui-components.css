@@ -583,3 +583,171 @@ body.ui-modal-open { overflow: hidden; }
   .ui-button.is-loading::before { animation-duration: 1.4s; }
   .auto-loading-state__spinner { animation-duration: 1.4s; }
 }
+
+/* ── 统一模型配置表单（2026-09-13 产品设计稿）──────────────────────────
+   字段与分组：智能配置 / 模型 ID / 上下文窗口 / 最大输出 Token /
+   高级配置（输入类型 · 模型能力 · 推理等级 · 推理参数映射）。
+   配色与圆角走 tokens（带兜底），与设置页既有 .form-row/.form-input 协调。 */
+.settings-model-form { display: flex; flex-direction: column; gap: 14px; }
+.settings-model-form__smart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-strong, var(--text, var(--color-ink)));
+}
+.settings-model-form__smart-label { font-weight: 600; }
+.settings-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, var(--color-faint));
+  color: var(--text-muted, var(--color-muted));
+  font-size: var(--font-size-1);
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+  flex: none;
+}
+.settings-model-form__advanced {
+  border-top: 1px solid var(--line, var(--color-border-soft));
+  padding-top: 12px;
+}
+.settings-model-form__advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong, var(--text, var(--color-ink)));
+  cursor: pointer;
+  list-style: none;
+}
+.settings-model-form__advanced > summary::-webkit-details-marker { display: none; }
+.settings-model-form__advanced > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+.settings-model-form__advanced:not([open]) > summary::before { transform: rotate(0deg); }
+.settings-model-form__advanced .form-row { margin-top: 14px; }
+.settings-check-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 选择器必须限定在 .settings-check-chips 之下（2026-09-13 真机事故）：
+   chip 是 <label>，若用单类选择器（0-1-0）会被设置页既有的
+   `.form-row label { display:block }`（0-1-1）压过——inline-flex 被打回
+   block，勾选框 span 失去 flex item 的 blockify，width/height 失效塌成
+   一条 3×18 竖线。提权到后代选择器（0-2-0）后布局稳定。 */
+.settings-check-chips .settings-check-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line, var(--color-border-soft));
+  border-radius: var(--radius-control, 10px);
+  background: var(--surface, var(--color-white));
+  font-size: 13px;
+  /* 覆盖 `.form-row label` 的 600 与 margin-bottom：chip 是选项卡不是字段名。 */
+  font-weight: 400;
+  margin-bottom: 0;
+  color: var(--text, var(--color-ink));
+  cursor: pointer;
+  user-select: none;
+}
+.settings-check-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.settings-check-chips .settings-check-chip__box {
+  /* display 显式声明：即便祖先布局异常（非 flex），宽高也照常生效，
+     不会再退化成一条边框竖线。 */
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-1);
+  border: 1.5px solid var(--color-faint);
+  background: var(--color-white);
+  position: relative;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+/* 勾选态由 input:checked 伪类驱动（2026-09-13 交互失效修复）：此前外观
+   挂在静态 is-checked 类上，点击后 checkbox 状态翻转但类不更新——
+   视觉毫无反应。伪类直接跟随控件状态，点击立即生效，无 JS 同步。 */
+.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box {
+  background: var(--color-ink);
+  border-color: var(--color-ink);
+}
+.settings-check-chips .settings-check-chip input:checked + .settings-check-chip__box::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--color-white);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.settings-check-chips .settings-check-chip input:not(:checked):disabled + .settings-check-chip__box {
+  opacity: 0.55;
+}
+.settings-check-chip.is-locked { background: var(--color-surface-2); color: var(--color-muted); cursor: default; }
+.settings-check-chip__lock { display: inline-flex; color: var(--color-faint); }
+.settings-check-chip__lock svg { width: 13px; height: 13px; }
+.settings-level-list { display: flex; flex-direction: column; gap: 8px; }
+.settings-level-row { display: flex; align-items: center; gap: 8px; }
+.settings-level-row__input { flex: 1; }
+.settings-level-row__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted, var(--color-muted));
+  cursor: pointer;
+  flex: none;
+}
+.settings-level-row__remove:hover { background: var(--color-surface-2); }
+.settings-level-add {
+  width: 38px;
+  height: 38px;
+  margin-top: 8px;
+  border: 1px solid var(--line, var(--color-border-soft));
+  border-radius: var(--radius-control, 10px);
+  background: var(--color-white);
+  color: var(--text, var(--color-ink));
+  font-size: var(--font-size-6);
+  line-height: 1;
+  cursor: pointer;
+}
+.settings-level-add:hover { background: var(--color-bg); }
+.settings-model-form__params {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  min-height: 84px;
+  resize: vertical;
+}
+.settings-model-form__reset {
+  margin-right: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, var(--color-ink-2));
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0 4px;
+}
+@media (max-width: 720px) {
+  .settings-check-chips { gap: 6px; }
+  .settings-check-chip { padding: 6px 10px; font-size: 12px; }
+}

@@ -83,9 +83,12 @@ const TOUR_STEPS = [
       const visible = !!panel && panel.offsetParent !== null;
       if (!visible) return document.getElementById('recall-btn');
       return (
-        document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
-        || document.querySelector('#panel-recall .skills-cognition-tab[data-cognition-page="captures"]')
+        // 新 UI（cognition-assets）的候选动作；旧 data-recall-candidate-action
+        // 属性随 skills.js 瘦身消失（2026-09-14 终审补，否则引导步骤永不推进）。
+        document.querySelector('#panel-recall [data-act="cand-adopt-with-form"], #panel-recall [data-act="cand-decide"]')
+        || document.querySelector('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')
         || document.querySelector('#panel-recall [data-cognition-page-link="captures"]')
+        || document.querySelector('#panel-recall .ca-tab[data-id="review"]')
       );
     },
     position: 'bottom',
@@ -124,8 +127,9 @@ const TOUR_STEPS = [
       const visible = !!panel && panel.offsetParent !== null;
       if (!visible) return document.getElementById('recall-btn');
       return (
-        document.querySelector('#panel-recall [data-ability-asset-id]:not(.is-selected)')
-        || document.querySelector('#panel-recall [data-ability-asset-id]')
+        // 新认知资产页的资产行是 data-go-asset（旧 UI 的 data-ability-asset-id
+        // 已随 skills.js 瘦身消失，2026-09-14 补上新选择器）。
+        document.querySelector('#panel-recall [data-go-asset]')
       );
     },
     position: 'right',
@@ -252,23 +256,23 @@ function _setupTourListeners() {
     if (!_tourState || _tourState.completed) return;
     const node = event.target;
     if (!node || typeof node.closest !== 'function') return;
-    if (node.closest('#panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')) {
+    if (node.closest('#panel-recall [data-act="cand-adopt-with-form"], #panel-recall [data-act="cand-decide"], #panel-recall [data-recall-candidate-action="promote"], #panel-recall [data-recall-candidate-action="save-and-promote"], #panel-recall [data-recall-candidate-action="reject"], #panel-recall [data-recall-candidate-action="ignore"], #panel-recall [data-recall-candidate-action="keep-current"], #panel-recall [data-recall-candidate-promote-all]')) {
       _tourState.recallReviewed = true;
       _checkStepComplete();
       return;
     }
-    // 沉淀任务 tab（常驻导航）：无候选时点 tab 也算展示了"审核候选"的位置。
-    if (node.closest('#panel-recall .skills-cognition-tab[data-cognition-page="captures"], #panel-recall [data-cognition-page-link="captures"]')) {
+    // 无候选时点「待我处理」tab 也算展示了"审核候选"的位置（新 UI 的 tab）。
+    if (node.closest('#panel-recall [data-cognition-page-link="captures"], #panel-recall .ca-tab[data-id="review"]')) {
       _tourState.capturesTabClicked = true;
       _checkStepComplete();
       return;
     }
-    if (node.closest('#panel-recall .skills-cognition-tab[data-cognition-page="assets"], #panel-recall [data-cognition-page-link="assets"]')) {
+    if (node.closest('#panel-recall [data-cognition-page-link="assets"], #panel-recall .ca-tab[data-id="overview"]')) {
       _tourState.assetsOpened = true;
       _checkStepComplete();
       return;
     }
-    if (node.closest('#panel-recall [data-ability-asset-id]')) {
+    if (node.closest('#panel-recall [data-go-asset], #panel-recall [data-ability-asset-id]')) {
       _tourState.assetDetailViewed = true;
       _checkStepComplete();
     }

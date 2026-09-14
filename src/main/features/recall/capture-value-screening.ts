@@ -89,7 +89,8 @@ export type RecallCandidateClassificationReason =
   | 'personal_not_stable'
   | 'skill_shape_incomplete'
   | 'judgment_is_meta_commentary'
-  | 'type_conflicts_with_existing';
+  | 'type_conflicts_with_existing'
+  | 'statement_over_soft_budget';
 
 export interface RecallCandidateClassificationResult {
   /** 仅由 blocking 原因决定。false → 候选不得进入 pending_review。 */
@@ -480,6 +481,13 @@ export function assessRecallCandidateClassification(
       || (boundaries.forbiddenWhen?.length || 0) > 0;
     if (!hasBoundary) pushUnique(advisoryReasons, 'rule_missing_boundary');
   }
+
+  // P2 内容瘦身（2026-09-13）：statement 软预算。statement = judgment + value
+  // 拼接（candidate-service 晋升时），长叙事应留在 evidence——statement 只写
+  // 「结论 + 该怎么做」。超 300 字只记 advisory 不阻断：存量 300-800 字合法
+  // 存在，且现有硬上限是 4000（boundedText），300 只能作提示不能作闸门。
+  const statementLength = candidate.judgment.length + String(candidate.value || '').length;
+  if (statementLength > 300) pushUnique(advisoryReasons, 'statement_over_soft_budget');
 
   return { ok: blockingReasons.length === 0, blockingReasons, advisoryReasons };
 }
