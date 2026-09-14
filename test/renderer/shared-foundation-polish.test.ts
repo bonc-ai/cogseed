@@ -106,13 +106,15 @@ describe('open-source shared foundation polish', () => {
     expect(rule(rendererCss, '#settings-data-root-path')).toContain('text-overflow: ellipsis;');
   });
 
-  it('shows the five shared foundations in the production component gallery', () => {
+  it('shows the shared foundations and shell chrome in the production component gallery', () => {
     const gallery = read('src/renderer/component-gallery.html');
     const galleryScript = read('src/renderer/component-gallery.js');
     for (const id of ['page-header', 'tabs', 'resource-cards', 'settings-sections', 'empty-states']) {
       expect(gallery).toContain(`id="${id}"`);
     }
-    expect(gallery).toContain('16 / 16 已定义');
+    expect(gallery).toContain('id="window-chrome"');
+    expect(gallery).toContain('17 / 17 已定义');
+    expect(galleryScript).toContain('function renderSidebarTools()');
     expect(galleryScript).toContain('function renderTabs()');
     expect(galleryScript).toContain('function renderResourceCards()');
     expect(galleryScript).toContain('function renderSettingsSections()');

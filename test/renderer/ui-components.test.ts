@@ -12,6 +12,7 @@ function loadFactories() {
   for (const file of [
     'src/renderer/modules/icons.js',
     'src/renderer/modules/ui-button.js',
+    'src/renderer/modules/ui-sidebar-tools.js',
     'src/renderer/modules/ui-segmented-control.js',
     'src/renderer/modules/ui-form.js',
     'src/renderer/modules/ui-empty.js',
@@ -54,6 +55,20 @@ describe('first-version renderer components', () => {
 
     expect(() => uiIconButton({ icon: 'x' })).toThrow(/accessible label/);
     expect(uiIconButton({ icon: 'x', label: '关闭弹窗' })).toContain('aria-label="关闭弹窗"');
+  });
+
+  it('keeps shell search before collapse and exposes one recovery entry', () => {
+    const { uiSidebarTools } = loadFactories();
+    const expanded = uiSidebarTools({ collapsed: false });
+    const collapsed = uiSidebarTools({ collapsed: true });
+
+    expect(expanded.indexOf('is-search')).toBeLessThan(expanded.indexOf('is-panel'));
+    expect(expanded).toContain('data-i18n-title="sidebar.search_title"');
+    expect(expanded).toContain('aria-expanded="true"');
+    expect(collapsed).not.toContain('is-search');
+    expect(collapsed).toContain('data-i18n-title="sidebar.expand_title"');
+    expect(collapsed).toContain('aria-expanded="false"');
+    expect(collapsed.match(/<button/g)).toHaveLength(1);
   });
 
   it('renders SegmentedControl as pressed native buttons with inline counts', () => {
@@ -220,7 +235,9 @@ describe('component gallery integration contract', () => {
     for (const asset of [
       './tokens.css',
       './ui-components.css',
+      './shell-navigation.css',
       './modules/ui-button.js',
+      './modules/ui-sidebar-tools.js',
       './modules/ui-segmented-control.js',
       './modules/ui-form.js',
       './modules/ui-empty.js',
@@ -264,7 +281,7 @@ describe('component gallery integration contract', () => {
     expect(galleryCss).toContain('grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);');
     expect(galleryCss).toContain('.gallery-radius-scale .rw { border-radius: var(--radius-window); }');
     expect(gallery).toContain('id="search-selection-components"');
-    expect(gallery).toContain('16 / 16 已定义');
+    expect(gallery).toContain('17 / 17 已定义');
   });
 
   it('integrates the open-source shell into real high-frequency pages', () => {

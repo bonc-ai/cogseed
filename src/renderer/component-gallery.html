@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="./tokens.css" />
   <link rel="stylesheet" href="./style.css" />
   <link rel="stylesheet" href="./ui-components.css" />
+  <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./component-gallery.css" />
 </head>
 <body class="component-gallery-body">
@@ -28,6 +29,7 @@
 
       <nav class="gallery-nav">
         <a href="#foundations"><span>FND</span>基础标尺</a>
+        <a href="#window-chrome"><span>CHR</span>WindowChrome</a>
         <a href="#page-header"><span>PH</span>PageHeader</a>
         <a href="#tabs"><span>TAB</span>Tabs</a>
         <a href="#resource-cards"><span>CARD</span>ResourceCard</a>
@@ -44,7 +46,7 @@
 
       <div class="gallery-coverage" aria-label="设计系统覆盖范围">
         <span>共享基础层</span>
-        <strong>16 / 16 已定义</strong>
+        <strong>17 / 17 已定义</strong>
         <small>本页与真实页面复用同一套 token、CSS 和原生 JS primitives。</small>
       </div>
     </aside>
@@ -104,6 +106,14 @@
             </div>
           </article>
         </div>
+      </section>
+
+      <section class="gallery-section" id="window-chrome">
+        <div class="gallery-section__head">
+          <span class="gallery-section__id">CHR</span>
+          <div><h2>WindowChrome</h2><p>macOS 红绿灯由 Electron 原生绘制；Shell 只管理右侧搜索、运行状态与侧栏收起/展开。</p></div>
+        </div>
+        <div class="gallery-control-grid" id="sidebar-tools-specimens"></div>
       </section>
 
       <section class="gallery-section" id="page-header">
@@ -260,6 +270,7 @@
 
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-sidebar-tools.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>

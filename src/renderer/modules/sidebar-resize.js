@@ -112,20 +112,30 @@
     });
   }
 
-  // ── 收起侧边栏（窄图标条，Codex / WorkBuddy 风格）────────────────────
-  // 点击 logo 行右侧的收起按钮切换 `body.sidebar-collapsed`（CSS 折叠成
-  // 48px 窄条，只留图标）。状态持久化在 localStorage，折叠时隐藏拖拽把手。
+  // ── 收起侧边栏与 Shell 恢复入口 ───────────────────────────────────────
+  // 按钮位于侧边栏外的全局 Shell 层；收起后侧边栏不再占宽，
+  // 展开入口也不会被 macOS 的原生拖拽区域吞掉。
   const COLLAPSE_KEY = 'cogseed:sidebar-collapsed';
 
-  function applyCollapsed(collapsed) {
-    document.body.classList.toggle('sidebar-collapsed', collapsed);
+  function syncCollapseButton(collapsed) {
+    document.body.classList.toggle('shell-sidebar-hidden', collapsed);
     const btn = document.getElementById('sidebar-collapse-btn');
     if (btn) {
       const key = collapsed ? 'sidebar.expand_title' : 'sidebar.collapse_title';
       const fallback = collapsed ? '展开侧边栏' : '收起侧边栏';
       const translated = typeof t === 'function' ? t(key) : key;
       btn.title = translated && translated !== key ? translated : fallback;
+      btn.setAttribute('aria-label', btn.title);
+      btn.setAttribute('aria-expanded', String(!collapsed));
+      btn.setAttribute('data-i18n-title', key);
+      btn.setAttribute('data-i18n-aria-label', key);
     }
+  }
+
+  function applyCollapsed(collapsed) {
+    document.body.classList.toggle('sidebar-collapsed', collapsed);
+    syncCollapseButton(collapsed);
+    if (collapsed && typeof window.closeRunCenterGlobal === 'function') window.closeRunCenterGlobal();
     try { localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (_) {}
   }
 
@@ -139,11 +149,11 @@
       applyCollapsed(!document.body.classList.contains('sidebar-collapsed'));
     });
     window.addEventListener('i18n-change', () => {
-      applyCollapsed(document.body.classList.contains('sidebar-collapsed'));
+      syncCollapseButton(document.body.classList.contains('sidebar-collapsed'));
     });
   }
 
-  // 启动自愈：折叠态只应呈现在 48px 窄条。若 class 与真实渲染宽度不一致
+  // 启动自愈：折叠态不应再占据布局宽度。若 class 与真实渲染宽度不一致
   // （半程状态 / 早前异常残留），页面资源加载完成后按 class 重新落实一次。
   // 仅按宽度判定，正常路径宽度与 class 一致则无任何动作，不影响既有交互。
   window.addEventListener('load', () => {
@@ -151,7 +161,7 @@
     if (!sidebar) return;
     const collapsed = document.body.classList.contains('sidebar-collapsed');
     const w = sidebar.getBoundingClientRect().width;
-    if ((collapsed && w > 60) || (!collapsed && w < 100)) {
+    if ((collapsed && w > 1) || (!collapsed && w < 100)) {
       applyCollapsed(collapsed);
     }
   });

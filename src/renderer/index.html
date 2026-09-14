@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="./workspace.css" />
   <link rel="stylesheet" href="./recall-local.css" />
   <link rel="stylesheet" href="./ui-components.css" />
+  <link rel="stylesheet" href="./shell-navigation.css" />
   <link rel="stylesheet" href="./plugins.css" />
   <link rel="stylesheet" href="./chat-stream.css" />
   <script>
@@ -27,20 +28,11 @@
 </head>
 <body>
   <div class="app-container">
+    <div class="app-shell-tools sidebar-tools" id="app-shell-tools"></div>
     <aside class="sidebar">
       <div class="sidebar-logo">
         <img class="logo-icon" src="../resources/icons/logo.png" alt="" draggable="false" />
         <div class="logo-text" data-i18n="brand.name">CogSeed</div>
-        <div class="sidebar-top-tools">
-          <button class="sidebar-icon-btn" id="sidebar-search-btn" data-i18n-title="sidebar.search_title" title="Global search (Cmd/Ctrl+K)">
-            <span data-ui-icon="search" data-ui-icon-class="sidebar-top-tool-icon"></span>
-          </button>
-          <div class="run-center-global-entry" id="run-center-global-entry"></div>
-          <button class="sidebar-icon-btn" id="sidebar-collapse-btn" data-i18n-title="sidebar.collapse_title" title="收起侧边栏">
-            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-collapse-ico"></span>
-            <span data-ui-icon="panel" data-ui-icon-class="sidebar-top-tool-icon sb-expand-ico" hidden></span>
-          </button>
-        </div>
       </div>
       <div class="sidebar-actions">
         <button class="sidebar-btn primary" id="new-chat-btn"><span data-ui-icon="message-square" data-ui-icon-class="sidebar-btn-icon"></span><span data-i18n="sidebar.new_chat">新建任务</span><span class="sidebar-btn-running-chip" id="commander-running-chip" hidden></span></button>
@@ -1937,6 +1929,7 @@
   <script src="./modules/chat-lightbox.js"></script>
   <script src="./modules/icons.js"></script>
   <script src="./modules/ui-button.js"></script>
+  <script src="./modules/ui-sidebar-tools.js"></script>
   <script src="./modules/ui-segmented-control.js"></script>
   <script src="./modules/ui-form.js"></script>
   <script src="./modules/ui-empty.js"></script>

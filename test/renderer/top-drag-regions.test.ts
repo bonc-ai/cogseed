@@ -10,8 +10,37 @@ const workspaceCss = fs.readFileSync(path.join(root, 'src/renderer/workspace.css
 const modelChip = fs.readFileSync(path.join(root, 'src/renderer/modules/model-chip.js'), 'utf8');
 const boot = fs.readFileSync(path.join(root, 'src/renderer/modules/boot.js'), 'utf8');
 const sidebarResize = fs.readFileSync(path.join(root, 'src/renderer/modules/sidebar-resize.js'), 'utf8');
+const shellNavigation = fs.readFileSync(path.join(root, 'src/renderer/shell-navigation.css'), 'utf8');
+const mainIndex = fs.readFileSync(path.join(root, 'src/main/index.ts'), 'utf8');
 
 describe('macOS top drag regions', () => {
+  it('bounds panel drag strips to main content so shell tools keep mouse hit targets', () => {
+    const mainContentRule = css.match(/\.main-content\s*\{([^}]*)}/)?.[1] || '';
+    const dragStripRule = css.match(/\.is-macos \.app-top-drag-strip\s*\{([^}]*)}/)?.[1] || '';
+
+    expect(mainContentRule).toContain('position: relative;');
+    expect(dragStripRule).toContain('position: absolute;');
+    expect(dragStripRule).not.toContain('position: fixed;');
+  });
+
+  it('keeps sidebar drag geometry outside native controls and shell tools', () => {
+    const sidebarDragRule = shellNavigation.match(/\.is-macos \.sidebar::before\s*\{([^}]*)}/)?.[1] || '';
+    const sidebarLogoRule = shellNavigation.match(/\.is-macos \.sidebar-logo\s*\{([^}]*)}/)?.[1] || '';
+
+    expect(sidebarDragRule).toContain('left: 76px;');
+    expect(sidebarDragRule).toContain('right: var(--shell-tools-reserved-width);');
+    expect(sidebarLogoRule).toContain('-webkit-app-region: no-drag;');
+  });
+
+  it('aligns native traffic lights and keeps the collapsed recovery gutter clickable', () => {
+    expect(mainIndex).toContain('trafficLightPosition: { x: 12, y: 19 }');
+    expect(html.indexOf('id="app-shell-tools"')).toBeLessThan(html.indexOf('<aside class="sidebar">'));
+    expect(shellNavigation).toContain('html.is-macos .shell-sidebar-hidden .app-shell-tools');
+    expect(shellNavigation).toContain('--shell-expand-left: 104px;');
+    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?-webkit-app-region:\s*no-drag;/);
+    expect(shellNavigation).toMatch(/html\.is-macos body\.shell-sidebar-hidden \.main-content :is\([\s\S]*?\.ui-page-header__body[\s\S]*?-webkit-app-region:\s*drag;/);
+  });
+
   it.each(['connections', 'workspace'])('covers the %s panel top edge', (panel) => {
     expect(html).toMatch(new RegExp(`id="panel-${panel}"[\\s\\S]*?class="app-top-drag-strip"`));
   });

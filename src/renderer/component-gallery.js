@@ -8,6 +8,9 @@
     'ai_select.no_results': '未找到与「{query}」匹配的选项',
     'ai_select.result_count': '显示 {visible} / {total} 项',
     'ai_select.search_placeholder': '搜索选项…',
+    'sidebar.search_title': '全局搜索 (Cmd/Ctrl+K)',
+    'sidebar.collapse_title': '收起侧边栏',
+    'sidebar.expand_title': '展开侧边栏',
   };
   window.t = window.t || ((key, values = {}) => String(galleryTranslations[key] || key)
     .replace(/\{([a-z]+)\}/gi, (_, name) => values[name] == null ? '' : values[name]));
@@ -47,6 +50,29 @@
       item.label,
       item.note,
       uiPageHeader(item.options),
+    )).join('');
+  }
+
+  function renderSidebarTools() {
+    const cases = [
+      {
+        collapsed: false,
+        label: '侧栏展开',
+        note: '原生窗口控件在左·搜索与收起在右',
+      },
+      {
+        collapsed: true,
+        label: '侧栏收起',
+        note: '只保留可聚焦、可恢复的展开入口',
+      },
+    ];
+    byId('sidebar-tools-specimens').innerHTML = cases.map((item) => specimen(
+      item.label,
+      item.note,
+      `<div class="gallery-window-chrome${item.collapsed ? ' is-collapsed' : ''}">
+        <span class="gallery-window-chrome__native">原生窗口控件区</span>
+        <div class="sidebar-tools">${uiSidebarTools({ collapsed: item.collapsed })}</div>
+      </div>`,
     )).join('');
   }
 
@@ -534,6 +560,7 @@
   }
 
   renderPageHeaders();
+  renderSidebarTools();
   renderTabs();
   renderResourceCards();
   renderSettingsSections();

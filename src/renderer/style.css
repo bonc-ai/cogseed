@@ -181,48 +181,13 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   transition: font-size 0.2s ease;
 }
 
-/* 侧边栏顶部工具：logo 行内右侧的小图标（搜索 / 运行与协作 / 收起侧边栏），类似
-   Codex / WorkBuddy 的紧凑工具栏——不占横向空间的图标按钮。 */
-.sidebar-top-tools {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  margin-left: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  flex-shrink: 0;
-}
-.sidebar-icon-btn {
-  width: var(--control-height-sm);
-  height: var(--control-height-sm);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--radius-icon-button);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.sidebar-icon-btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.sidebar-top-tool-icon {
-  width: var(--icon-size);
-  height: var(--icon-size);
-}
-
 /* ── macOS 无边框标题栏 ─────────────────────────────────────────────────
    main/index.ts 以 titleBarStyle 'hiddenInset' 打开窗口：无原生标题栏
    （也就没有分割线），红绿灯悬浮在内容上（index.html 加 .is-macos）。
    此处保留红绿灯让位并声明窗口拖拽区——每个视图的顶部条整体可拖
-   （标题栏语义），条内按钮/输入/链接等控件 no-drag 保持可点。侧栏整体
-   抬升到全宽拖拽条（.app-top-drag-strip）之上，
-   保证侧栏内按钮永不被拖拽区吞掉。收起/展开两种状态下按钮位置完全一致
-   （40px 顶距 + 26px 按钮，中心 y=53）。 */
+   （标题栏语义），条内按钮/输入/链接等控件 no-drag 保持可点。主内容
+   拖拽条（.app-top-drag-strip）限制在 .main-content 内；右侧 Shell 工具
+   和收起后的恢复入口由 shell-navigation.css 统一避让原生拖拽区。 */
 .is-macos .sidebar {
   z-index: calc(var(--z-raised) + 1);
 }
@@ -241,7 +206,6 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
   padding-top: calc(var(--layout-titlebar-height) + var(--space-1));
   -webkit-app-region: drag;
 }
-.is-macos .sidebar-top-tools { -webkit-app-region: no-drag; }
 .is-macos .chat-header { -webkit-app-region: drag; }
 .is-macos .chat-header-actions,
 .is-macos .chat-header-title-input,
@@ -301,22 +265,11 @@ body.is-sidebar-resizing iframe { pointer-events: none; }
 .is-macos .settings-tabs button {
   -webkit-app-region: no-drag;
 }
-/* 收起态：红绿灯让位收窄；logo 行整体退出拖拽区（保证展开按钮必可点，
-   避免父级拖拽区吞掉子按钮点击），顶部 30px 拖拽带仍可拖窗口；
-   40px 顶距 + 26px 按钮与展开态位置完全一致（中心 y=53，不跳位）。
-   注意：.is-macos 加在 <html> 上，选择器必须写 html.is-macos body.…，
-   body.… .is-macos … 永不匹配（.is-macos 不在 body 内部）。 */
-html.is-macos body.sidebar-collapsed .sidebar::before { height: 30px; }
-html.is-macos body.sidebar-collapsed .sidebar-logo {
-  padding: 40px 10px 10px;
-  justify-content: center;
-  -webkit-app-region: no-drag;
-}
-/* 新建任务首页（主界面）：面板顶部没有条带结构，这里放一个专属拖拽条
-   （position:fixed 全宽、随面板显隐），使顶部整条可拖；右上角外接 Agent
-   入口按钮抬升到拖拽条之上保持可点。 */
+/* 新建任务首页（主界面）：面板顶部没有条带结构，这里放一个专属拖拽条。
+   绝对定位以 .main-content 为包含块，禁止延伸到左侧栏的 Shell 按钮下方；
+   右上角外接 Agent 入口按钮抬升到拖拽条之上保持可点。 */
 .is-macos .app-top-drag-strip {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
@@ -357,51 +310,6 @@ html.is-macos body.sidebar-collapsed .sidebar-logo {
   z-index: calc(var(--z-raised) + 1);
   -webkit-app-region: no-drag;
 }
-
-/* 收起侧边栏（窄图标条）：body.sidebar-collapsed 由 sidebar-resize.js 切换。
-   只保留主按钮图标，隐藏文字 / 会话列表 / 搜索；logo 行只留 logo + 展开按钮。 */
-body.sidebar-collapsed .sidebar {
-  width: 48px !important;
-  min-width: 48px;
-  max-width: 48px;
-}
-body.sidebar-collapsed .sidebar-logo {
-  padding: 12px 10px;
-  justify-content: center;
-}
-body.sidebar-collapsed .logo-text,
-body.sidebar-collapsed #sidebar-search-btn,
-body.sidebar-collapsed .logo-icon { display: none; }
-/* hydrateUiIcons 会给 [data-ui-icon] 强制 inline style display:inline-flex，
-   会覆盖 hidden 属性——因此展开图标默认显式隐藏（!important 压过 inline style）。 */
-.sb-expand-ico { display: none !important; }
-body.sidebar-collapsed .sb-collapse-ico { display: none !important; }
-body.sidebar-collapsed .sb-expand-ico { display: inline-flex !important; }
-body.sidebar-collapsed .sb-expand-ico svg { transform: scaleX(-1); }
-body.sidebar-collapsed .sidebar-top-tools { position: static; margin-left: 0; flex-direction: column; gap: 8px; }
-body.sidebar-collapsed #sidebar-collapse-btn { order: -1; }
-body.sidebar-collapsed .sidebar-actions { padding: 4px; }
-body.sidebar-collapsed .sidebar-actions .sidebar-btn {
-  justify-content: center;
-  padding: 10px 0;
-}
-body.sidebar-collapsed .sidebar-actions .sidebar-btn > span:not([data-ui-icon]):not(.sidebar-btn-icon),
-body.sidebar-collapsed .sidebar-conversation-nav,
-body.sidebar-collapsed .sidebar-resize-handle { display: none; }
-/* 融合入口折叠态：状态栏压缩为头像图标按钮（隐藏文字/状态点/箭头），
-   点击仍向上展开完整面板，设置入口不丢失。 */
-body.sidebar-collapsed .sidebar-footer-actions { padding: 6px 6px 10px; }
-body.sidebar-collapsed .sidebar-footer-account { display: block; }
-body.sidebar-collapsed .hub-chip {
-  justify-content: center;
-  padding: 7px 0;
-  border-radius: var(--radius-sm);
-}
-body.sidebar-collapsed .hub-chip-meta,
-body.sidebar-collapsed .hub-chip-dot,
-body.sidebar-collapsed .hub-chip-chev { display: none; }
-/* 折叠时面板宽度锚定最小值（侧栏只有 48px），仍向上完整展开。 */
-body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 
 @container (max-width: 230px) {
   /* Keep the brand text visible on the narrow rail — only shrink it.
@@ -28691,10 +28599,8 @@ body.is-terminal-resizing {
   body:has(:is(#panel-run-center, #panel-workspace).active) .logo-text,
   body:has(:is(#panel-run-center, #panel-workspace).active) .logo-icon,
   body:has(:is(#panel-run-center, #panel-workspace).active) #sidebar-search-btn,
-  body:has(:is(#panel-run-center, #panel-workspace).active) #sidebar-collapse-btn,
   body:has(:is(#panel-run-center, #panel-workspace).active) .sidebar-conversation-nav,
   body:has(:is(#panel-run-center, #panel-workspace).active) .sidebar-resize-handle { display: none; }
-  body:has(:is(#panel-run-center, #panel-workspace).active) .sidebar-top-tools { margin-left: 0; }
   body:has(:is(#panel-run-center, #panel-workspace).active) .sidebar-actions { padding: 4px; }
   body:has(:is(#panel-run-center, #panel-workspace).active) .sidebar-actions .sidebar-btn {
     position: relative;
