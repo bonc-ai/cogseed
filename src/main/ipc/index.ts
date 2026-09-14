@@ -151,6 +151,7 @@ import { invokeHandlers as desktopWorkbenchHandlers } from './desktop-workbench'
 import { invokeHandlers as hubAccountHandlers } from './hub-account';
 import { invokeHandlers as memoryHandlers } from './memory';
 import { invokeHandlers as cognitionHandlers } from './cognition';
+import { invokeHandlers as transcriptHandlers } from './transcript';
 import { invokeHandlers as updatesHandlers } from './updates';
 import { genId12, readJsonl, safeId } from '../storage';
 import { createLogger, logFromRenderer } from '../logger';
@@ -5883,6 +5884,11 @@ const invokeHandlers: Record<string, InvokeHandler> = {
   // the recall surface); the legacy store-asset handler of the same name in
   // ipc/cognition.ts must not shadow it, so it is excluded from the spread.
   ...(({ 'cognition.assets.list': _legacyCognitionAssetsList, ...rest }) => rest)(cognitionHandlers),
+
+  // 转写纠错词表与清理产物（方案 v0.2 P0）。词表是用户确认过的
+  // wrong→correct 纠错对；扫描只产候选，替换必须显式接受，原文永不就地改写
+  // （apply 只产出清理版 + run 快照，见 features/transcript_correction_runs）。
+  ...transcriptHandlers,
 
   // P3394 TaskContinuationSnapshot and ContextReuseReceipt handlers for
 };
