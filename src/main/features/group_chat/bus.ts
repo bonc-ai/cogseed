@@ -679,43 +679,73 @@ type ProcessItem =
 /**
  * conv-core 存储补差合并：老格式 processItems + chat_events 新条目合成单条
  * 过程轨迹，总量守住 MAX_PROCESS_ITEMS_PER_TURN（消息过程上限是既有不变量，
- * 见 bus-integration 饱和测试）。预算分配：turn 终态条目最优先（收束态总耗时
- * 的唯一来源），工具 chatItem 次之（保持到达序），reasoning 垫底（与老格式
- * progress 文本语义重复，超额先丢）。老格式已打满上限时新条目全弃——历史
- * 重建回退老路径，行为与收编前完全一致。
+ * 见 bus-integration 饱和测试）。
+ *
+ * 顺序契约（2026-09-11 真机二次事故）：条目顺序即时间线，合并结果的相对顺序
+ * 必须与到达序一致——渲染层一见 chatItem 就整体走事件重放（不再看老格式），
+ * 顺序错了历史里就成了「中途思考全堆到末尾」。取舍只决定丢谁，绝不改变保留
+ * 项的前后关系（19:38 消息：收集器 33 段思考本已与工具交错，落盘变成末尾
+ * 14 段——正是超额路径按"非 reasoning 在前"重排 + 截断所致）。
+ *
+ * 超额预算分配：
+ *   1. 老格式思考 progress（_thinking 内存态标记）与 chat_events reasoning 是
+ *      同一次思考的重复存储——超额时先从后往前丢这些重复项换预算。真机
+ *      19:38：155+164 超 19 条，丢 19 条重复思考后 136+164=300 恰好落回预算
+ *      内，零丢失且时间线完整（对齐"丢谁不丢序"）。
+ *   2. 仍超额才按优先级选保留集合：turn 终态（收束态总耗时的唯一来源）>
+ *      非 reasoning（工具/正文/usage）> reasoning；选中后仍按原序输出。
+ * 老格式已打满上限、且没有重复思考可丢时新条目全弃——历史重建回退老路径，
+ * 行为与收编前完全一致。
  */
 export function mergeProcessTrail(
   processItems: ProcessItem[],
   chatEntries: readonly PersistedChatEntry[],
 ): Array<ProcessItem | PersistedChatEntry> {
-  const budget = MAX_PROCESS_ITEMS_PER_TURN - processItems.length;
-  if (budget <= 0) return [...processItems];
+  const budget = MAX_PROCESS_ITEMS_PER_TURN;
+  // 老格式自身已打满上限：新条目全弃——历史重建回退老路径，行为与收编前一致。
+  if (processItems.length >= budget) return [...processItems];
   const turnEntries = chatEntries.filter((e) => e.type === "turn");
   const nonTurn = chatEntries.filter((e) => e.type !== "turn");
   const isReasoning = (e: PersistedChatEntry) =>
     e.type === "chatItem" && (e.item as { kind?: string }).kind === "reasoning";
-  const ordered = [
-    ...nonTurn.filter((e) => !isReasoning(e)),
-    ...nonTurn.filter(isReasoning),
-    ...turnEntries,
-  ];
-  // 上限内尽量保全：先按优先序截断非终态条目，终态保到最后一档。
-  if (ordered.length <= budget) return [...processItems, ...ordered];
-  const keepTurn = Math.min(turnEntries.length, Math.max(1, budget));
-  // 预算共享（PR209 评审 M7）：非 reasoning 与 reasoning 两组共用
-  // budget - keepTurn 的总额度——此前两组各 slice 同一 keepRest，合并
-  // 总长可达 2×keepRest 突破 300 上限（实测可到 401），与函数头注释
-  // 「守住 MAX_PROCESS_ITEMS_PER_TURN」矛盾。优先级序：非 reasoning
-  // （工具/正文/usage）先取，剩余额度给 reasoning。
-  const restBudget = Math.max(0, budget - keepTurn);
-  const nonReasoning = nonTurn.filter((e) => !isReasoning(e));
-  const reasoning = nonTurn.filter(isReasoning);
-  const keptNonReasoning = nonReasoning.slice(0, restBudget);
-  const keptReasoning = reasoning.slice(0, Math.max(0, restBudget - keptNonReasoning.length));
+  const isThinkingLegacy = (e: ProcessItem | PersistedChatEntry) =>
+    e.type === "progress" && (e as { _thinking?: boolean })._thinking === true;
+  const total = (legacy: readonly unknown[]) =>
+    legacy.length + nonTurn.length + turnEntries.length;
+
+  // 只在「新条目确有 reasoning」时才把老格式思考当重复——收集器没产出
+  // reasoning 的回合（老投影/异常轮次）里老格式思考是唯一来源，必须留。
+  let head: ProcessItem[] = processItems;
+  if (nonTurn.some(isReasoning) && processItems.some(isThinkingLegacy) && total(processItems) > budget) {
+    const kept = [...processItems];
+    for (
+      let i = kept.length - 1;
+      i >= 0 && total(kept) > budget;
+      i -= 1
+    ) {
+      if (isThinkingLegacy(kept[i])) kept.splice(i, 1);
+    }
+    head = kept;
+  }
+  // 预算内：原序直出（终态条目本就是时间线最后一条，无需搬家）。上限内
+  // 保持原序是硬要求——reasoning 与工具的交错位置就是时间线语义。
+  if (total(head) <= budget) {
+    return [...head, ...nonTurn, ...turnEntries];
+  }
+  // 仍超额：先选保留集合（优先级），再按原序拼接（保留项相对位置不变）。
+  const restBudget = Math.max(0, budget - head.length);
+  const keepTurn = Math.min(turnEntries.length, Math.max(1, restBudget));
+  const take = Math.max(0, restBudget - keepTurn);
+  const keepIdx = new Set<number>();
+  for (let i = 0; i < nonTurn.length && keepIdx.size < take; i += 1) {
+    if (!isReasoning(nonTurn[i])) keepIdx.add(i);
+  }
+  for (let i = 0; i < nonTurn.length && keepIdx.size < take; i += 1) {
+    if (isReasoning(nonTurn[i])) keepIdx.add(i);
+  }
   return [
-    ...processItems,
-    ...keptNonReasoning,
-    ...keptReasoning,
+    ...head,
+    ...nonTurn.filter((_, i) => keepIdx.has(i)),
     ...turnEntries.slice(0, keepTurn),
   ];
 }
@@ -5428,18 +5458,15 @@ async function runActorTurnBody(
       // （如 project_dir）未满足时不派发，返回表单块由 runTerminal 提升为
       // <agent-input-form> 询问用户。
       const sharedFormBlock = await _maybeBuildCliInputForm(uid, cid, cliAgent);
-      // G-28 话题隔离：当前会话有开放的 KStar 需求（= 系统判定的当前话题）
-      // 时以需求 id 作 goal——sessionForGoal 按 (会话, 对端, goal) 分 P3394
-      // 会话，话题（需求）切换自动开新会话，旧话题记忆不互相污染；无开放
-      // 需求（闲聊）时 goal 缺省，保持原有稳定会话，连续性不受影响。
-      let gatewayTurnGoal: string | undefined;
-      try {
-        const { readKstarTaskLifecycle } = await import("../kstar/lifecycle-adapter");
-        const lifecycle = await readKstarTaskLifecycle(uid, cid);
-        if (lifecycle.requirement && lifecycle.requirement.status === "open") {
-          gatewayTurnGoal = "req:" + lifecycle.requirement.id;
-        }
-      } catch { /* KStar 不可用时退回默认稳定会话 */ }
+      // G-28 话题隔离（2026-09-11 停用自动注入）：此前把"当前开放的 KStar
+      // 需求 id"作为 goal 传入信封，sessionForGoal 按 (会话,对端,goal) 分
+      // P3394 会话。但 KStar 的需求粒度是"每条实质提问一个新需求"——同一
+      // 会话连问两个问题 goal 就变，G-28 退化为"每问必开新会话"，外部智能
+      // 体对几分钟前的上下文全部失忆（实测同会话三连问产生三个 P3394 会
+      // 话、三个 codex 原生 thread）。会话连续性（同会话+同对端=同一会话）
+      // 是外部协作的主目标，优先于话题隔离；sessionForGoal 的 goal 通道与
+      // runP3394GatewayTurn 的 goal 参数保留——将来 KStar 需求粒度变粗
+      // （真正的长话题）或出现显式"新话题"用户动作时，可恢复注入。
       const cliOut = sharedFormBlock
         ? { text: sharedFormBlock, produced: [] as string[] }
         : isP3394Gateway
@@ -5468,7 +5495,8 @@ async function runActorTurnBody(
               ? { reasoningEffort: item.execConfig.effort }
               : {}),
             ...(item.execConfig?.model ? { model: item.execConfig.model } : {}),
-            ...(gatewayTurnGoal ? { goal: gatewayTurnGoal } : {}),
+            // goal 槽位宿主侧不注入（会话连续性优先，见上方注释）；网关
+            // runP3394GatewayTurn 的 goal 参数通道保留，恢复注入时加回这里。
             // T1 引用信封化：本轮 quote/@ 的引用快照进信封 metadata 槽位
             //（正文文本已含 <referenced-messages> 可读版，双通道冗余供给）。
             ...(item.references && item.references.length
@@ -6706,6 +6734,15 @@ async function runActorTurnBody(
         usageOut.cacheReadTokens = usageIn.cacheReadTokens;
       if (typeof usageIn?.cacheWriteTokens === "number")
         usageOut.cacheWriteTokens = usageIn.cacheWriteTokens;
+      // lastCallUsage（2026-09-11）：占用口径，嵌套对象原样透传（白名单在
+      // client.ts 的 safeUsageForLog 一侧完成）。
+      if (
+        usageIn?.lastCallUsage && typeof usageIn.lastCallUsage === "object"
+      ) {
+        usageOut.lastCallUsage = usageIn.lastCallUsage as NonNullable<
+          GroupMessageMetrics["usage"]
+        >["lastCallUsage"];
+      }
       const toolCalls = Number(agentRunTimingData.tool_calls);
       replyMetrics = {
         startedAt,
