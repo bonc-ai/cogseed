@@ -11826,30 +11826,31 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   max-width: min(320px, calc(100vw - 16px));
   z-index: var(--z-modal-popover);
 }
+/* 级联飞出层（2026-09-14）：一级 provider 行 → 二级模型清单 → 三级思考强度。
+   贴触发行右侧展开，右边放不下时由 JS 翻到左侧；层级高于主菜单，样式与主
+   菜单同源（复用 .model-chip-menu 外壳与行样式，只补定位与行距）。 */
+.model-chip-flyout {
+  position: fixed;
+  max-height: min(320px, 50vh);
+}
+.model-chip-flyout .model-chip-menu-item:has(> .model-chip-menu-arrow) {
+  padding-right: 30px;
+}
+.model-chip-flyout .model-chip-menu-item--provider {
+  padding-right: 30px;
+}
+.model-chip-flyout-sub {
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .model-chip-menu-header {
   font-size: 11px;
   color: var(--muted);
   padding: 4px 8px 6px;
-}
-/* 二级列表返回行：轻量文字钮（无框，悬停浅底），弱于行级条目。 */
-.model-chip-menu-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin: 0 0 2px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--muted);
-  background: transparent;
-  border: none;
-  border-radius: 7px;
-  cursor: pointer;
-}
-.model-chip-menu-back:hover { background: var(--surface-2); }
-.model-chip-menu-back-icon {
-  width: 13px;
-  height: 13px;
-  display: block;
 }
 /* 外接智能体模型菜单：搜索框（长清单客户端过滤，CodexHost 对标）。 */
 .model-chip-menu-search {

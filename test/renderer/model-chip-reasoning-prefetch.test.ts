@@ -36,9 +36,11 @@ describe('exec-config chip — reasoning capability prefetch', () => {
 
   it('warm-prefetches on entries load — boot path and entries-changed event', () => {
     // refreshModelChipEntries + cogseed:model-entries-changed + 菜单冷开
-    // 三处都要触发预取。
-    const calls = chip.match(/void _prefetchReasoningForEntries\(\)/g) || [];
+    // 三处都要触发预取（entries-changed 带 force=true：设置页改完模型配置后
+    // 三级飞出层的档位标注必须换新，不能沿用启动时的旧表）。
+    const calls = chip.match(/void _prefetchReasoningForEntries\(/g) || [];
     expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(chip).toContain('void _prefetchReasoningForEntries(true)');
   });
 
   it('skips providers that already have a table (no refetch per menu open)', () => {
