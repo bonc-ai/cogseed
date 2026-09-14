@@ -77,13 +77,23 @@ const textPayloadSchema = z.object({
 });
 
 const usagePayloadSchema = z.object({
-  /** 输入/输出 token 数（口径沿用 #84 对话内统计）。 */
+  /** 输入/输出 token 数（口径沿用 #84 对话内统计）。
+   *  注意：这是**整轮累加**（每步工具循环的调用求和）——消耗口径。 */
   inputTokens: z.number().nonnegative().optional(),
   outputTokens: z.number().nonnegative().optional(),
   /** 缓存读/写 token 数（2026-09-08 补：面板用量行与页脚 meta 口径
    *  一致——投影器 usagePayloadFrom 已带上，schema 此前会静默剥掉）。 */
   cacheReadTokens: z.number().nonnegative().optional(),
   cacheWriteTokens: z.number().nonnegative().optional(),
+  /** 最后一次调用的 prompt 侧用量（2026-09-11 补）：**当前上下文占用**的
+   *  权威口径——上方累加字段把每步重发的历史求和，绝不能当窗口占用展示。
+   *  schema 必须登记，否则 zod 静默剥离（2026-09-08 cacheRead 同类教训）。 */
+  lastCallUsage: z.object({
+    inputTokens: z.number().nonnegative().optional(),
+    outputTokens: z.number().nonnegative().optional(),
+    cacheReadTokens: z.number().nonnegative().optional(),
+    cacheWriteTokens: z.number().nonnegative().optional(),
+  }).optional(),
   /** 按用户默认单价估算的费用（非账单金额）。 */
   estimatedCost: z.number().nonnegative().optional(),
   /** 上下文窗口占用比（0-1），接近 1 触发压缩提示（矩阵 #10）。 */

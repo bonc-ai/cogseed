@@ -4625,8 +4625,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .markdown-body em { font-style: italic; }
 .markdown-body a { color: var(--primary); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
-.markdown-body table { border-collapse: collapse; width: 100%; margin: 0.7em 0; font-size: 12.5px; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+/* 表格布局统一（2026-09-11，方案 B 全表类型覆盖）：markdown 原生表格与
+   dashboard 组件表格共用同一布局口径——铺满到 900px 上限，容器更宽时居中
+   （两侧留白对称），窄容器铺满；行/列在任何宽度下均匀铺开。
+   注意：气泡层的 .chat-bubble .markdown-body table 规则（特异性更高）不得
+   再声明 max-width——否则会静默压过这里（真机踩坑两次）。 */
+.markdown-body table { border-collapse: collapse; width: 100%; max-width: 900px; margin: 0.7em auto; font-size: 12.5px; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; overflow-wrap: anywhere; }
 .markdown-body th { background: var(--bg); font-weight: 600; }
 
 /* ─── Chart bar ─── */
@@ -4898,17 +4903,20 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .dashboard .db-alert[data-level="error"] .db-alert-icon { background: var(--db-bad); }
 .dashboard .db-alert[data-level="error"] .db-alert-icon::before { content: "!"; }
 
-/* Table — compact, numeric columns right-aligned. */
+/* Table — compact, numeric columns right-aligned.
+   2026-09-11 需求变更：去掉卡片封装（border/radius/background）。布局=限宽
+   居中铺满（方案 B，子安 2026-09-11 选定）：容器 ≤900px 时表格铺满左右
+   边界；容器更宽时以 900px 为上限居中（两侧对称留白），内部列仍铺满——
+   避免超宽窗口下一行文字横跨全屏、阅读视线来回跳。窄屏由 wrap 的横向
+   滚动兜底。上限调整只改这里一处。 */
 .dashboard .db-table-wrap {
   overflow-x: auto;
-  border: 1px solid var(--db-border);
-  border-radius: var(--db-radius);
-  background: var(--db-surface);
 }
-.dashboard .db-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.dashboard .db-table { width: 100%; max-width: 900px; margin: 0 auto; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .dashboard .db-table th,
 .dashboard .db-table td { padding: 7px 10px; border-bottom: 1px solid rgba(20, 71, 55, 0.08); text-align: left; }
-.dashboard .db-table tr:last-child td { border-bottom: none; }
+/* 末行保留底线（2026-09-11）：卡片封装移除后，原来的 none 会让表格底部
+   缺一条线、视觉未闭合。 */
 .dashboard .db-table th { background: var(--db-surface-soft); font-weight: 600; color: var(--text); }
 .dashboard .db-table tbody tr:nth-child(even) td { background: rgba(248, 250, 252, 0.55); }
 .dashboard .db-table th[data-numeric="1"],
@@ -7642,7 +7650,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   right: 0;
   /* 左右 padding 与 .chat-history 的 10% 一致（交互设计 2026-09-08 布局统一）：
      输入框与对话内容共用同一水平范围，消除 32px 固定 padding 造成的错位。 */
-  padding: 20px 10% 32px;
+  /* 纵向上下同值（16px，同 --space-4 尺度）：输入卡片与统计栏作为一整列贴底，
+     上下只留对称呼吸位，其余高度交给消息区。 */
+  padding: 16px 10%;
   background: linear-gradient(to bottom, transparent 0%, var(--bg) 20%);
   z-index: var(--z-raised);
   pointer-events: none;
@@ -10335,26 +10345,45 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 
 .chat-message.is-message-editing {
-  /* 编辑态居中对齐 AI 内容列（交互设计 2026-09-08 布局统一）：用户消息编辑时
-     原右对齐换居中，宽度与 AI 区块一致。 */
+  /* 2026-09-11 需求变更：编辑卡片右对齐。09-08 原设计为居中对齐 AI 内容
+     列，但用户消息自身的 margin-right:10%（右缘对齐 AI 块）仍然生效，
+     center + margin 叠加把卡片压到中部偏左、右侧留大片空白。
+     改 flex-end 后右缘回到与普通用户消息一致的列位（AI 块右缘）。
+     仅作用于编辑态——is-message-editing 随编辑开始/取消对称增删。 */
   width: min(80%, 760px);
   max-width: min(80%, 760px);
-  align-self: center;
+  align-self: flex-end;
   align-items: stretch;
 }
+/* 编辑卡片外框（2026-09-11 设计稿）：中性浅灰、淡边淡影，非编辑态消息不受影响。
+   作用面（特异性实测）：主会话面板里 `#panel-conversation .chat-message.user >
+   .chat-bubble`（含 id）对颜色/边框/圆角/阴影一律胜出——本规则在那里只吃下
+   padding，外观由面板自己的「quiet Work Buddy」气泡规则给出（同为中性浅灰
+   无阴影，与设计稿一致，故无需 !important 硬拼）；嵌入式聊天面（无该 id 规则）
+   才由本规则的 background/border/box-shadow 生效。
+   圆角不在此声明：各面沿用自己气泡的圆角（主面板 20px；嵌入式保留用户气泡的
+   右下切角），避免为局部卡片改写全局气泡观感。 */
+.chat-message.user.is-message-editing .chat-bubble {
+  background: #f5f6f7;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  padding: 14px;
+}
 .chat-message-edit-composer {
-  width: min(620px, 100%);
+  /* 铺满卡片内容宽（2026-09-11 修正）：原 min(620px,100%) 上限让输入框
+     和按钮行在卡片右侧留出一条空白（反馈两轮的"右侧空白"即此）。 */
+  width: 100%;
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 .chat-message-edit-input {
   box-sizing: border-box;
   width: 100%;
-  min-height: 86px;
+  min-height: 108px;
   max-height: 260px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-strong, #cbd5e1);
-  border-radius: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 12px;
   background: var(--surface, var(--color-surface));
   color: var(--text, #1f2937);
   font: inherit;
@@ -10362,6 +10391,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   letter-spacing: 0;
   resize: none;
   overflow-y: auto;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 .chat-message-edit-input:focus {
   outline: 0;
@@ -10371,7 +10401,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .chat-message-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+}
+.chat-message.is-message-editing .chat-message-edit-actions .btn {
+  /* 设计稿按钮：取消白底灰边、主按钮品牌绿，尺寸放大到 8px 18px 内边距。
+     圆角不在此声明——沿用 .btn 自身的 8px（设计令牌 --radius-2 口径），
+     与全局按钮观感一致，也避免再引入一个超刻度圆角字面量。 */
+  padding: 8px 18px;
 }
 
 @media (max-width: 720px) {
@@ -10707,6 +10743,16 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .chat-session-stats[hidden] { display: none; }
 .chat-session-stats .seg-hot .v { color: var(--danger); }
+/* 上下文段独立加框（2026-09-11 需求）：模型窗口总大小 + 当前占用单独成框
+   突出显示；占用达到告警阈值（seg-hot）时边框同步转警示色。
+   本规则置于 .seg 基础规则之后以同特异性后写覆盖。 */
+.chat-session-stats .seg-ctx {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 1px 9px;
+  margin: 0 5px;
+}
+.chat-session-stats .seg-ctx.seg-hot { border-color: var(--danger); }
 
 @media (hover: none), (pointer: coarse) {
   #panel-conversation .chat-message .chat-bubble-actions {
@@ -11260,46 +11306,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* 2026-09-11 需求变更：过程轨迹不再是 details 折叠卡——普通透明容器，
+   行直接平铺为纯文本（行样式见 .stream-process-line），无竖线/summary。 */
 .stream-process {
   margin-bottom: 8px;
-  border-left: 2px solid #cbd5e1;
-  padding-left: 10px;
 }
-.stream-process:not([open]) { margin-bottom: 0; }
-.stream-process-summary {
-  cursor: pointer;
-  list-style: none;
-  font-size: 12px;
-  color: #475569;
-  padding: 2px 0;
-  user-select: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.stream-process-summary::-webkit-details-marker { display: none; }
-/* Same caret family as the tree nodes (chevron-right → rotate 90° when expanded). */
-.stream-process-caret {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  font-size: 13px;
-  line-height: 1;
-  color: #475569;
-  transition: transform 0.15s;
-}
-.stream-process[open] .stream-process-summary .stream-process-caret {
-  transform: rotate(90deg);
-}
-.stream-process-label { font-weight: 600; }
-.stream-process-runtime {
-  color: #64748b;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.stream-process-runtime[hidden] { display: none; }
 
 .stream-process-body {
   max-height: 300px;
@@ -11325,11 +11336,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   white-space: pre-wrap;
   word-break: break-all;
 }
-/* Four-tier hierarchy. The constraint: every content line must be
-   visually LIGHTER than the section header (`.stream-process-summary`,
-   slate-600 #475569 + 600) — content is supporting detail, the header
-   is the label. An earlier pass had bound/tool lines at slate-900 + 600
-   which inverted the hierarchy (content darker than its own label).
+/* Four-tier hierarchy. The constraint: every content line stays
+   subordinate to the message body — content is supporting detail
+   (2026-09-11 起无 summary 头，层级基准即正文文本).
    Tiers:
      1. Core    — milestones / tool calls / plans / file edits;
                   slate-500 + 500 weight. Distinguishable at a glance
@@ -11393,13 +11402,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   /* Appears below process section with a subtle divider when process is open */
 }
 /* Divider between the process trail and the final body — only when the
-   process section is actually visible. The placeholder bubble starts with
-   `.stream-process` carrying both `[open]` and inline `display:none` (so it
-   expands automatically the first time a process event arrives), and we
-   must NOT paint the dashed border above the body while the process row
-   is still hidden — otherwise the bubble shows a stray top divider above
-   the streaming text with nothing above it to separate from. */
-.stream-process[open]:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
+   process section is actually visible. 2026-09-11 起容器是普通 div（无
+   [open] 折叠态），以行内 display 样式判断可见性。 */
+.stream-process:not([style*="display:none"]) + .stream-final:not([style*="display:none"]) {
   margin-top: 8px;
   padding-top: 10px;
   border-top: 1px dashed var(--border);
@@ -11450,8 +11455,13 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   overflow: hidden;
 }
 
-/* 其它易撑破气泡的块级内容（表格、长 URL/图片）也约束到气泡宽度以内。 */
-.chat-bubble .markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* 表格不再 display:block（2026-09-11 根因修复，踩坑两次的元凶）：
+   block 化的 table 元素盒与内部列网格脱节——元素被 width:100% 撑满而
+   网格仍按内容宽排布，右侧留下大片"空壳"空白（真机：元素 852px、最后
+   一格只到 590px，视觉表格"没铺满"且限定宽度规则全部失效）。
+   改为原生表格布局后 width/max-width/居中全部正常生效。
+   防撑破改由单元格断行承担（见 th/td 的 overflow-wrap）——超长 URL
+   等无空格内容可在格内换行，不再需要横向滚动容器。 */
 .chat-bubble .markdown-body img   { max-width: 100%; }
 .chat-bubble .markdown-body .chat-md-img { width: 100%; height: 100%; }
 
@@ -25727,7 +25737,7 @@ body.is-terminal-resizing {
    un-prefixed copies apply inside the modal's .cs-import-scope wrapper. */
 .cs-import-scope{
   --cs-ink:var(--color-ink); --cs-ink-soft:var(--color-ink-2); --cs-muted:var(--color-muted); --cs-faint:var(--color-faint);
-  --cs-line:#E3EAE6; --cs-line-soft:var(--color-surface-2); --cs-line-strong:#C8D5CE;
+  --cs-line:var(--color-border-soft); --cs-line-soft:var(--color-surface-2); --cs-line-strong:#C8D5CE;
   --cs-forest:var(--color-brand); --cs-forest-deep:var(--color-brand-hover); --cs-forest-weak:var(--color-brand-soft);
   --cs-bud:#E09B2D; --cs-bud-weak:#FBF1DC; --cs-clay:#DE5B45; --cs-clay-weak:#FBE9E5;
   --cs-grad:linear-gradient(135deg,var(--color-brand),var(--color-brand-hover));
@@ -27051,7 +27061,7 @@ body.is-terminal-resizing {
 .sec-time { color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .sec-table-foot {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 11px 15px; border-top: 1px solid var(--border); background: #fafcfb;
+  padding: 11px 15px; border-top: 1px solid var(--border); background: var(--color-surface-4);
 }
 .sec-hint { font-size: 12px; color: var(--text-3); }
 
@@ -27073,7 +27083,7 @@ body.is-terminal-resizing {
 .sec-picker-input {
   width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit;
   border: 1px solid var(--border-strong); border-radius: 9px; margin-bottom: 10px;
-  color: var(--text); background: #fafcfb; outline: none;
+  color: var(--text); background: var(--color-surface-4); outline: none;
 }
 .sec-picker-input:focus { border-color: var(--primary); }
 .sec-picker-list { max-height: 240px; overflow-y: auto; }
@@ -27134,7 +27144,7 @@ body.is-terminal-resizing {
 .imp-finding-dot.low { background: var(--text-3); }
 .imp-finding-text { flex: 1; color: var(--text-2); }
 .imp-finding-loc { color: var(--text-3); font-size: 11.5px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.imp-findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: #FAFCFB; }
+.imp-findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: var(--color-surface-4); }
 .imp-foot { display: flex; align-items: center; gap: 10px; }
 .imp-spacer { flex: 1; }
 .imp-btn-primary { background: var(--primary); border-color: var(--primary); color: var(--color-surface); }
@@ -27158,7 +27168,7 @@ body.is-terminal-resizing {
 
 /* ── Step 1 来源卡片（原型：agent-mark 圆标 + 状态点 + 计数）── */
 .cw-source-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:14px 13px;text-align:left;
-  border:1px solid var(--border,#E3EAE6);border-radius:11px;background:var(--surface,var(--color-surface));cursor:pointer;
+  border:1px solid var(--border,var(--color-border-soft));border-radius:11px;background:var(--surface,var(--color-surface));cursor:pointer;
   transition:border-color .16s,box-shadow .16s,background .16s,transform .16s;font-family:inherit}
 .cw-source-card:hover{border-color:#9ec9b7;box-shadow:0 5px 16px rgba(14,159,110,.08);transform:translateY(-1px)}
 .cw-source-card.is-selected{border-color:color-mix(in srgb,var(--primary,var(--color-brand)) 45%,transparent);
@@ -27183,11 +27193,11 @@ body.is-terminal-resizing {
 /* ── Step 2 会话分组 + source-pill ── */
 .cw-session-group{margin-bottom:14px}
 .cw-group-label{margin-bottom:7px;color:var(--muted,var(--color-muted));font-size:12px;font-weight:650}
-.cw-session-list-inner{border:1px solid var(--border,#E3EAE6);border-radius:10px;overflow:hidden;background:var(--surface,var(--color-surface))}
+.cw-session-list-inner{border:1px solid var(--border,var(--color-border-soft));border-radius:10px;overflow:hidden;background:var(--surface,var(--color-surface))}
 .cw-session-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto auto;gap:12px;align-items:center;
-  padding:11px 13px;border-bottom:1px solid var(--border,#E3EAE6);cursor:pointer;transition:background .15s}
+  padding:11px 13px;border-bottom:1px solid var(--border,var(--color-border-soft));cursor:pointer;transition:background .15s}
 .cw-session-row:last-child{border-bottom:0}
-.cw-session-row:hover{background:#fafcfb}
+.cw-session-row:hover{background:var(--color-surface-4)}
 .cw-session-row.is-selected{background:var(--surface-2,var(--color-surface-2))}
 .cw-session-row.is-selected .cw-check{background:var(--primary,var(--color-brand));border-color:var(--primary,var(--color-brand))}
 .cw-session-row.is-selected .cw-check svg{opacity:1}
@@ -27222,7 +27232,7 @@ body.is-terminal-resizing {
 .cw-progress-summary{display:flex;flex-direction:column;gap:7px;margin:4px 0 14px}
 .cw-progress-count{align-self:flex-end;font-size:12px;font-weight:650;color:var(--text-2,var(--color-ink-2));font-variant-numeric:tabular-nums}
 .cw-import-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;align-items:center;
-  padding:11px 13px;border:1px solid var(--border,#E3EAE6);border-radius:10px;margin-bottom:8px;background:var(--surface,var(--color-surface))}
+  padding:11px 13px;border:1px solid var(--border,var(--color-border-soft));border-radius:10px;margin-bottom:8px;background:var(--surface,var(--color-surface))}
 .cw-import-state{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--surface-2,var(--color-surface-2));color:var(--muted,var(--color-muted))}
 .cw-import-state svg{width:14px;height:14px}
@@ -27241,7 +27251,7 @@ body.is-terminal-resizing {
 
 /* 成功面板 */
 .cw-success-panel{display:none;align-items:flex-start;gap:12px;margin-top:6px;padding:15px 16px;
-  border:1px solid color-mix(in srgb,var(--primary,var(--color-brand)) 30%,var(--border,#E3EAE6));border-radius:12px;
+  border:1px solid color-mix(in srgb,var(--primary,var(--color-brand)) 30%,var(--border,var(--color-border-soft)));border-radius:12px;
   background:var(--primary-soft,var(--color-brand-soft))}
 .cw-success-panel.show{display:flex}
 .cw-success-panel svg{width:22px;height:22px;color:var(--primary-text,var(--color-brand-hover));flex:none;margin-top:1px}
@@ -31703,16 +31713,30 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: .92em; color: #35513F;
   background: rgba(14, 159, 110, .1); border-radius: var(--radius-1); padding: 0 4px;
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-block { margin: 7px 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-line { line-height: 1.6; margin: 2px 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li {
-  position: relative; padding-left: 17px; margin: 2px 0; line-height: 1.6; color: var(--kb-text, #22372B);
+/* 回答正文改走渲染层统一 Markdown 管线（.kb-a-md = 该管线的容器）：
+   结构样式（标题/列表/链接/表格/代码块）沿用 .markdown-body，
+   但字号/行高/颜色回到 KB 面板自身 token，避免正文颜色被聊天区的
+   .markdown-body(#374151 / 13px) 覆盖而与本面板配色串味。 */
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md {
+  color: inherit; font-size: inherit; line-height: inherit;
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li::before {
-  content: '•'; position: absolute; left: 3px; color: var(--kb-green, #0E9F6E);
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h1,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h2,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h3,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h4,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h5,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h6 {
+  color: var(--kb-text, #22372B);
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num { padding-left: 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num::before { content: none; }
+/* 正文行内引用 chip：见 `_citeChipHtml`。复用 .kb-qa-chip 的胶囊外观，
+   只做行内对齐与尺寸微调——它嵌在段落/列表项里，不能撑高行距。 */
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-qa-cite {
+  display: inline-flex; vertical-align: baseline; max-width: 220px;
+  padding: 0 6px; margin: 0 2px; font-size: .92em; line-height: 1.5;
+}
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-qa-cite:focus-visible {
+  outline: 2px solid var(--kb-accent, #0E9F6E); outline-offset: 1px;
+}
 /* Settings > Configuration > Execution & collaboration. These are page-level
    compositions of the shared controls; Agent and touchpoint DOM stay single-
    instance and are moved into their canonical settings hosts at runtime. */
