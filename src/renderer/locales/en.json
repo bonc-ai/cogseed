@@ -6715,6 +6715,8 @@
   "exec_config.subheader_cli": "{name} runs on an external CLI",
   "exec_config.section_model": "Model",
   "exec_config.section_provider": "Model provider",
+  "exec_config.manage_models": "Manage models",
+  "exec_config.manage_models_hint": "Open Settings → Configuration to manage providers and models",
   "exec_config.provider_no_models": "No models configured for this provider",
   "exec_config.model_levels_configured": "Configured levels: {levels}",
   "exec_config.section_effort": "Reasoning effort",

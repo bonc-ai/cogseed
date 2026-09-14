@@ -587,6 +587,10 @@ function _renderExecConfigMenu(menu, anchor) {
   if (_modelChipEntries.length || cfg.model) {
     _renderProviderRows(menu, anchor, target, cfg);
   }
+  // 「管理模型」兜底入口（产品交互图）：列表下方一行，跳「设置 → 配置」。
+  // 菜单管的是"本次任务用哪个"，配置页管的是"有哪些可用"——没有这行时
+  // 用户只能自己找设置入口。
+  _renderManageModelsRow(menu);
 
   // 推理能力标注/模型清单/声明档位补拉（冷开兜底）：预取通常在条目加载时已
   // 完成，这里只处理「菜单先开、数据后到」的窗口——取回新数据且菜单仍留在
@@ -630,6 +634,57 @@ function _setTaskEffort(target, level) {
     _modelChipRenderAll();
   } catch (err) {
     _modelChipLog.warn('set task effort failed', { error: (err && err.message) || String(err) });
+  }
+}
+
+/** 「管理模型」行：与列表项同款行样式 + 上方分隔线，点击跳设置配置页。 */
+function _renderManageModelsRow(menu) {
+  const divider = document.createElement('div');
+  divider.className = 'model-chip-menu-divider';
+  divider.setAttribute('role', 'separator');
+  menu.appendChild(divider);
+
+  const row = document.createElement('div');
+  row.className = 'model-chip-menu-item model-chip-menu-item--action';
+  row.tabIndex = 0;
+  row.dataset.action = 'manage-models';
+  row.title = t('exec_config.manage_models_hint');
+  row.innerHTML = '<span class="model-chip-menu-main">'
+    + `<span class="model-chip-menu-name">${escapeHtml(t('exec_config.manage_models'))}</span>`
+    + '</span>';
+  const open = (e) => {
+    if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+    _openModelManagement();
+  };
+  row.addEventListener('click', open);
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      _openModelManagement();
+    }
+  });
+  menu.appendChild(row);
+}
+
+/** 跳到「设置 → 配置」：与 Run Center 的锚点跳转同一条缝——
+ *  setView 负责切视图并懒加载设置特性（boot.js 用 opts.settingsTab/anchor 调
+ *  loadSettings），activateSettingsTab 负责立刻切 tab 与锚点（设置特性已在内存
+ *  时的路径）。两处都传 anchor='models'：配置页的 focusAnchor 表里
+ *  models → #settings-model-authorizations（模型供应商/模型配置那一组），
+ *  落地就停在模型区而不是配置页顶部。 */
+function _openModelManagement() {
+  _closeMenuWithFlyouts();
+  try {
+    const rootWindow = (typeof window !== 'undefined') ? window : null;
+    const viewFn = (typeof setView === 'function') ? setView : (rootWindow ? rootWindow.setView : null);
+    if (typeof viewFn === 'function') {
+      viewFn('settings', undefined, { settingsTab: 'configuration', settingsAnchor: 'models' });
+    }
+    if (rootWindow && typeof rootWindow.activateSettingsTab === 'function') {
+      rootWindow.activateSettingsTab('configuration', { anchor: 'models' });
+    }
+  } catch (err) {
+    _modelChipLog.warn('open model management failed', { error: (err && err.message) || String(err) });
   }
 }
 

@@ -248,6 +248,10 @@ function buildHarness(options: { override?: Record<string, unknown> } = {}) {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
     dispatchEvent: vi.fn(),
+    // 「管理模型」跳转的官方缝（boot.js 暴露的 setView + settings_tabs 的
+    // activateSettingsTab），用 spy 断言语义而不是断言实现细节。
+    setView: vi.fn(),
+    activateSettingsTab: vi.fn(),
   };
   windowObj.window = windowObj;
 
@@ -287,7 +291,7 @@ function buildHarness(options: { override?: Record<string, unknown> } = {}) {
   };
   vm.createContext(context);
   vm.runInContext(readFileSync(resolve(root, 'src/renderer/modules/model-chip.js'), 'utf8'), context, { filename: 'model-chip.js' });
-  return { context, registry, body, invoke, overrides, entries, documentListeners };
+  return { context, registry, body, invoke, overrides, entries, documentListeners, windowObj };
 }
 
 async function openMenu(h: ReturnType<typeof buildHarness>) {
@@ -411,6 +415,30 @@ describe('exec-config chip — provider → model → thinking-strength cascade'
     expect(h.registry.get('model-chip-flyout-models')).toBeUndefined();
     // 一级菜单仍在——收起的是级联，不是整个入口。
     expect(h.registry.get('model-chip-menu')).toBeTruthy();
+  });
+
+  it('puts a 「管理模型」entry under the provider list and jumps to Settings → Configuration', async () => {
+    const h = buildHarness();
+    await openMenu(h);
+    const menu = h.registry.get('model-chip-menu')!;
+    // 位置：provider 列表之后（隔一条分隔线），与列表项同款行样式。
+    const orderedChildren = menu.children.filter((child) => child.className.includes('model-chip-menu-item') || child.className.includes('model-chip-menu-divider'));
+    const last = orderedChildren[orderedChildren.length - 1];
+    expect(last.dataset.action).toBe('manage-models');
+    expect(orderedChildren[orderedChildren.length - 2].classList.contains('model-chip-menu-divider')).toBe(true);
+    expect(last.querySelector('.model-chip-menu-name')!.textContent).toBe('exec_config.manage_models');
+    expect(last.classList.contains('model-chip-menu-item--action')).toBe(true);
+
+    await last.click();
+    // 跳转走官方缝：先切视图（带 configuration tab + models 锚点），再切 tab。
+    expect(h.windowObj.setView).toHaveBeenCalledWith('settings', undefined, {
+      settingsTab: 'configuration',
+      settingsAnchor: 'models',
+    });
+    expect(h.windowObj.activateSettingsTab).toHaveBeenCalledWith('configuration', { anchor: 'models' });
+    // 跳转前整层收起，不把菜单/飞出层留在新页面上。
+    expect(h.registry.get('model-chip-menu')).toBeUndefined();
+    expect(h.registry.get('model-chip-flyout-models')).toBeUndefined();
   });
 
   it('pins the flyout on click and collapses flyouts before the menu on Escape', async () => {

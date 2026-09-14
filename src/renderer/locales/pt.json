@@ -5086,6 +5086,8 @@
   "exec_config.subheader_cli": "{name} executa em uma CLI externa",
   "exec_config.section_model": "Modelo",
   "exec_config.section_provider": "Provedor de modelo",
+  "exec_config.manage_models": "Gerenciar modelos",
+  "exec_config.manage_models_hint": "Abra Configurações → Configuração para gerenciar provedores e modelos",
   "exec_config.provider_no_models": "Nenhum modelo configurado para este provedor",
   "exec_config.model_levels_configured": "Níveis configurados: {levels}",
   "exec_config.section_effort": "Esforço de raciocínio",

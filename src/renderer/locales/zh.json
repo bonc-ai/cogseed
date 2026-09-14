@@ -6715,6 +6715,8 @@
   "exec_config.subheader_cli": "{name} 由外部 CLI 执行",
   "exec_config.section_model": "模型",
   "exec_config.section_provider": "模型提供商",
+  "exec_config.manage_models": "管理模型",
+  "exec_config.manage_models_hint": "打开「设置 → 配置」，管理模型供应商与模型",
   "exec_config.provider_no_models": "该提供商未配置模型",
   "exec_config.model_levels_configured": "已配置档位：{levels}",
   "exec_config.section_effort": "推理强度",

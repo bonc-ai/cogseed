@@ -5086,6 +5086,8 @@
   "exec_config.subheader_cli": "{name} は外部CLIで実行されます",
   "exec_config.section_model": "モデル",
   "exec_config.section_provider": "モデルプロバイダー",
+  "exec_config.manage_models": "モデルを管理",
+  "exec_config.manage_models_hint": "「設定 → 構成」でモデルプロバイダーとモデルを管理します",
   "exec_config.provider_no_models": "このプロバイダーにはモデルが設定されていません",
   "exec_config.model_levels_configured": "設定済みレベル：{levels}",
   "exec_config.section_effort": "推論強度",

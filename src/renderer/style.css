@@ -11839,6 +11839,12 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 .model-chip-flyout .model-chip-menu-item--provider {
   padding-right: 30px;
 }
+/* 「管理模型」入口上方的分隔线：把"选模型"的列表与"去配置"的动作分开。 */
+.model-chip-menu-divider {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--border);
+}
 .model-chip-flyout-sub {
   margin-top: 1px;
   font-size: 11px;
