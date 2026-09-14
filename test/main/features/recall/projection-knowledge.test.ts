@@ -86,4 +86,31 @@ describe('committed projection knowledge', () => {
     await expect(knowledge.loadCommittedProjectionKnowledge('user-a', preview.id))
       .rejects.toMatchObject({ code: 'projection_not_committed' });
   });
+
+  it('cuts ontology titles at sentence boundaries instead of mid-word (T1.4)', async () => {
+    const paths = await import('../../../../src/main/paths');
+    const profileFile = paths.userProfileFile('user-a');
+    fs.mkdirSync(path.dirname(profileFile), { recursive: true });
+    // 条目1（111 字，第 51 字有句读边界）：走边界截断分支。
+    const bounded = 'A'.repeat(50) + '，' + 'B'.repeat(60);
+    // 条目2（82 字，前 40 字内只有第 3 字一个句读）：保长度硬切分支。
+    const hardCut = '第一句。' + '长'.repeat(78) + '。';
+    fs.writeFileSync(profileFile, `${bounded}\n§\n${hardCut}`, 'utf8');
+
+    const { loadOntologyAssets } = await import('../../../../src/main/features/recall/projection-knowledge');
+    const assets = loadOntologyAssets('user-a');
+
+    expect(assets).toHaveLength(2);
+    const [boundedAsset, hardCutAsset] = assets;
+    // 边界分支：在「，」处收口，带省略号，且不超过 80+1。
+    expect(boundedAsset.title.endsWith('，…')).toBe(true);
+    expect(boundedAsset.title.length).toBeLessThanOrEqual(81);
+    // 硬切分支：无近处句读，保长度硬切，同样以省略号收尾。
+    expect(hardCutAsset.title.startsWith('第一句。')).toBe(true);
+    expect(hardCutAsset.title.endsWith('…')).toBe(true);
+    expect(hardCutAsset.title.length).toBeLessThanOrEqual(81);
+    // statement 保留全文；id 仍按全文内容寻址。
+    expect(boundedAsset.statement).toBe(bounded);
+    expect(assets.every((asset) => /^onto-[a-f0-9]{24}$/.test(asset.id))).toBe(true);
+  });
 });

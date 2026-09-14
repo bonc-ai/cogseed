@@ -102,7 +102,16 @@ document.addEventListener('keydown', (e) => {
   // IME composition guard — Chinese / Japanese / Korean Enter commits a
   // candidate; don't fire menu actions while a composition is active.
   if (e.isComposing || e.keyCode === 229) return;
-  if (e.key === 'Escape') { e.preventDefault(); closeContextMenu(); return; }
+  // Escape 分层（2026-09-14 真机）：菜单从弹窗里弹出时必须先收菜单、再收弹窗。
+  // 各弹窗的 Escape 监听是 document 上的 capture 监听，而本模块在启动时就注册
+  // （早于任何弹窗）——先处理并 stopImmediatePropagation，弹窗这一下就不会
+  // 关掉，用户不会留下一个悬空菜单。
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeContextMenu();
+    return;
+  }
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     let next = _ctxMenuActiveIdx + 1;
@@ -126,7 +135,10 @@ document.addEventListener('keydown', (e) => {
     try { it.onClick(); }
     catch (err) { _ctxMenuLog.warn('item onClick threw on Enter', err); }
   }
-});
+  // capture 监听：菜单在启动时注册（早于任何弹窗的 Escape 监听），capture +
+  // 注册顺序保证「先收菜单」；弹窗的 capture 监听被上面 stopImmediatePropagation
+  // 拦下，不会顺带把弹窗关掉（2026-09-14 真机：否则用户留下一个悬空菜单）。
+}, true);
 
 window.addEventListener('scroll', () => closeContextMenu(), true);
 window.addEventListener('resize', () => closeContextMenu());

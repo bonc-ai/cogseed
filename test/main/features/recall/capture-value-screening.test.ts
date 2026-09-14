@@ -514,4 +514,29 @@ describe('Recall candidate classification gate', () => {
 
     expect(result.advisoryReasons).not.toContain('rule_missing_boundary');
   });
+
+  it('advises (never blocks) when the statement exceeds the 300-char soft budget', () => {
+    // statement = judgment + value 拼接。300 字内：不提示。
+    const compact = assessRecallCandidateClassification({
+      ...base,
+      judgment: '正式评审必须先讲产品模型',
+      summary: '评审顺序规则',
+      value: '避免评审跑偏',
+      suggestedType: 'rule',
+    }, { applicableWhen: ['正式评审'] });
+    expect(compact.advisoryReasons).not.toContain('statement_over_soft_budget');
+    expect(compact.ok).toBe(true);
+
+    // 超 300 字：只记 advisory，不阻断——长叙事留证据区，statement 写结论+动作。
+    const verbose = assessRecallCandidateClassification({
+      ...base,
+      judgment: '正式评审必须先讲产品模型，再谈实现细节。'.repeat(20),
+      summary: '评审顺序规则',
+      value: '避免评审跑偏到实现细节上',
+      suggestedType: 'rule',
+    }, { applicableWhen: ['正式评审'] });
+    expect(verbose.advisoryReasons).toContain('statement_over_soft_budget');
+    expect(verbose.ok).toBe(true);
+    expect(verbose.blockingReasons).not.toContain('statement_over_soft_budget');
+  });
 });

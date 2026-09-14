@@ -11,6 +11,9 @@ const state = readFileSync(resolve(root, 'src/renderer/modules/state.js'), 'utf8
 const lazy = readFileSync(resolve(root, 'src/renderer/modules/lazy-features.js'), 'utf8');
 const ontology = readFileSync(resolve(root, 'src/renderer/modules/personal-ontology.js'), 'utf8');
 const skills = readFileSync(resolve(root, 'src/renderer/modules/skills.js'), 'utf8');
+// 2026-09-14 认知资产前端重建：本体入口与深链兼容迁至 cognition-assets/*。
+const cognitionCore = readFileSync(resolve(root, 'src/renderer/modules/cognition-assets/core.js'), 'utf8');
+const cognitionViews = readFileSync(resolve(root, 'src/renderer/modules/cognition-assets/views.js'), 'utf8');
 
 function loadPersonalOntology(invoke: any) {
   const element = () => ({
@@ -94,9 +97,16 @@ describe('personal ontology renderer integration', () => {
     expect(paneStart).toBeGreaterThan(0);
     const paneHtml = html.slice(paneStart, html.indexOf('</main>', paneStart));
     expect(paneHtml).toContain('id="panel-personal-ontology"');
-    // 技能库已移出到连接页，personal-ontology 深链仍归认知资产。
-    expect(boot).toContain("view === 'personal-ontology' ? 'panel-recall'");
-    expect(boot).toContain("switchSkillsCognitionPage('assets')");
+    // 技能库已移出到连接页，personal-ontology 深链在 boot 顶部归一化为 recall
+    //（永假分支已删，2026-09-14 终审清理）；展开由 core.js 的深链分支接管。
+    expect(boot).toContain("const openPersonalOntology = view === 'personal-ontology'");
+    // 2026-09-14 认知资产前端重建：本体入口 = views.js overview 常驻行
+    //（data-act="open-ontology"）+ core.js 的 NS.openPersonalOntology
+    //（un-hide #skills-cognition-personal-ontology 后调 window.renderPersonalOntology）；
+    // 旧 switchSkillsCognitionPage('assets') 跳页入口已随重建移除。
+    expect(cognitionViews).toContain('data-act="open-ontology"');
+    expect(cognitionCore).toContain('skills-cognition-personal-ontology');
+    expect(cognitionCore).toContain('renderPersonalOntology');
     expect(boot).toContain("_loadViewFeature('recall', 'recall'");
     // The sidebar button is gone; personal ontology is reached from Recall's
     // "关于我" tab instead of a fixed primary entry.

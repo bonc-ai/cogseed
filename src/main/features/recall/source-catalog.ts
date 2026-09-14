@@ -318,6 +318,10 @@ function executionLifecycle(status: executionRecords.ExecutionStatus): { status:
   if (status === 'queued') return { status: 'pending', reason: 'execution_queued' };
   if (status === 'running') return { status: 'processing', reason: 'execution_running' };
   if (status === 'completed') return { status: 'ready' };
+  // 用户主动取消=正常终止，不是故障：把它算 failed 会让"待我处理"永驻一条
+  // 无从处理的假警报（2026-09-14 修：实机出现 [failed] execution_cancelled）。
+  // 超时/真失败仍算 failed（用户可能需重跑）。
+  if (status === 'cancelled') return { status: 'ready' };
   return { status: 'failed', reason: `execution_${status}` };
 }
 
