@@ -327,6 +327,21 @@
     return (result && result.error) || T('cognition.candidate_error_generic', '这次操作没有完成，请稍后重试。');
   };
 
+  /** 手动沉淀（整理会话）失败的错误文案：已知内部消息翻成人话，
+   *  未知错误原样透出（不吞失败）。自 skills-bindings.js 迁入。 */
+  NS.captureErrorText = function captureErrorText(error) {
+    const raw = String(error && error.message ? error.message : error || '').trim();
+    const messages = {
+      'conversation has no completed exchange': ['cognition.capture_error_no_completed_exchange', '当前会话还没有完成一轮问答，暂时无法沉淀。'],
+      'conversation is still waiting for a response': ['cognition.capture_error_waiting_response', '当前会话仍在等待回复，完成后才能沉淀。'],
+      'recall capture is disabled': ['cognition.capture_error_disabled', '沉淀功能已关闭，请先在沉淀设置中开启。'],
+      'conversation not found': ['cognition.capture_error_conversation_not_found', '找不到这个会话，暂时无法沉淀。'],
+    };
+    const localized = messages[raw];
+    if (localized) return T(localized[0], localized[1]);
+    return raw || T('cognition.capture_error_unknown', '沉淀任务发生未知错误');
+  };
+
   /* ────────────────────────── 动作层 ────────────────────────── */
   /* 所有写操作收口在这里：调用 IPC → toast → reload。视图里不允许直接 invoke。 */
 

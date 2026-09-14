@@ -597,13 +597,20 @@ function _renderExecConfigMenu(menu, anchor) {
   // 顶层时原位重画。changed 才重画（否则「重画→再预取→再重画」死循环）。
   menu.dataset.view = 'exec';
   void _prefetchReasoningForEntries().then((changed) => {
-    if (changed && menu.isConnected && menu.dataset.view === 'exec') {
-      // 重画会 menu.innerHTML='' 重建行：悬停打开的飞出层绑在旧行上，
-      // mouseleave 永不触发——先收掉，否则飞出层悬空残留到外部点击。
-      _closeFlyouts();
+    if (!changed || !menu.isConnected || menu.dataset.view !== 'exec') return;
+    const repaint = () => {
+      if (!menu.isConnected || menu.dataset.view !== 'exec') return;
       _renderExecConfigMenu(menu, anchor);
       _positionModelMenu(menu, anchor);
+    };
+    // 飞出层正被使用（悬停级联中）时推迟到关闭后再重画：重画会重建行，
+    // 旧行上打开的飞出层既收不到 mouseleave（悬空）、也会把用户正看的
+    // 级联拆掉。推迟使重画永不发生在飞出层打开期间——悬空成因被消除。
+    if (_flyoutProviderKey) {
+      _pendingExecRepaint = repaint;
+      return;
     }
+    repaint();
   });
 }
 
@@ -776,6 +783,7 @@ const _FLYOUT_CLOSE_DELAY = 220;
 let _flyoutOpenTimer = null;
 let _flyoutCloseTimer = null;
 let _flyoutPinned = false;
+let _pendingExecRepaint = null;
 let _flyoutProviderKey = '';
 
 function _cancelFlyoutTimers() {
@@ -812,6 +820,12 @@ function _closeFlyouts() {
   _closeFlyout('levels');
   _closeFlyout('models');
   _flyoutPinned = false;
+  // 推迟的 exec 重画（飞出层使用中到达的 prefetch 数据）：关闭时机到了再画。
+  if (_pendingExecRepaint) {
+    const repaint = _pendingExecRepaint;
+    _pendingExecRepaint = null;
+    setTimeout(repaint, 0);
+  }
 }
 
 function _inFlyout(node) {

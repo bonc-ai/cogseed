@@ -681,7 +681,7 @@
     ${experienceCard()}
     ${groups.map((group) => {
       const kind = kindOf(group);
-      const [key, fb, descKey, descFb] = SOURCE_KINDS[kind] || ['cognition.source_other', kind, '', ''];
+      const [key, fb, descKey, descFb] = SOURCE_KINDS[kind] || ['cognition.source_other', T('cognition.source_other_label', '其他来源'), '', ''];
       const list = Array.isArray(group.items) ? group.items : [];
       return `<div class="ca-card ca-source-card">
         <div class="ca-line">
@@ -746,7 +746,7 @@
       </div>`).join('')}</div>
     <div class="ca-setrow">
       <div class="ca-sub">${esc(enabled ? T('cognition.capture_enabled_on', '自动整理已开启') : T('cognition.capture_enabled_off', '自动整理已关闭'))} · ${esc(reviewAuto ? T('cognition.capture_review_auto_note', '符合条件的候选会自动采纳（不再询问）') : T('cognition.capture_review_manual_note', '候选先进入待确认，由你决定'))}</div>
-      <div class="ca-actions">${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', {})}${btn(T('cognition.capture_review_switch', reviewAuto ? '改为先问我' : '改为自动采纳'), 'capture-review-toggle', {})}</div>
+      <div class="ca-actions">${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', {})}${btn(T(reviewAuto ? 'cognition.capture_review_switch_ask' : 'cognition.capture_review_switch_auto', reviewAuto ? '改为先问我' : '改为自动采纳'), 'capture-review-toggle', {})}</div>
     </div>
     ${sectionHead(T('cognition.capture_manual_title', '从历史会话整理'), T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'))}
     <div class="ca-card">${conversations.length ? conversations.map((conv) => `

@@ -131,7 +131,12 @@
           default: break;
         }
       } catch (error) {
-        await NS.alertUser(String((error && error.message) || error));
+        // 带错误码的走候选/晋升码表翻译；手动沉淀类错误走 capture 文案；
+        // 都不是则透出原始消息（不吞失败）。
+        const message = error && error.code && NS.recallErrorText
+          ? NS.recallErrorText(error)
+          : (NS.captureErrorText ? NS.captureErrorText(error) : String((error && error.message) || error));
+        await NS.alertUser(message);
       } finally {
         // reload 重画后原元素已脱离文档，清理无害；未重画时恢复可点。
         if (isWrite) { el.classList.remove('is-pending'); el.removeAttribute('disabled'); }

@@ -17,7 +17,9 @@ import * as path from 'node:path';
 import * as vm from 'node:vm';
 
 const root = path.join(__dirname, '../..');
-const bindings = fs.readFileSync(path.join(root, 'src/renderer/modules/skills-bindings.js'), 'utf8');
+// 错误文案表 2026-09-14 随 skills.js 瘦身迁至 cognition-assets/core.js（NS.recallErrorText），
+// 读取源同步迁移。
+const bindings = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/core.js'), 'utf8');
 const capabilities = fs.readFileSync(path.join(root, 'src/main/features/recall/candidate-capabilities.ts'), 'utf8');
 const promotion = fs.readFileSync(path.join(root, 'src/main/features/recall/formal-assets/promotion.ts'), 'utf8');
 const locales = Object.fromEntries(['zh', 'en', 'ja', 'pt'].map((name) => [
@@ -50,21 +52,23 @@ function declaration(name: string): string {
   return `${sliceBlock(bindings, start)};`;
 }
 
-function fn(name: string): string {
-  const start = bindings.indexOf(`function ${name}`);
-  if (start < 0) throw new Error(`missing function: ${name}`);
+function fn(marker: string): string {
+  const start = bindings.indexOf(marker);
+  if (start < 0) throw new Error(`missing block: ${marker}`);
   return sliceBlock(bindings, start);
 }
 
 type ErrorResult = { ok?: false; code?: string; error?: string; promotionReasons?: string[] };
 
 function loadFormatter(locale: 'zh' | 'en' | 'ja' | 'pt' = 'zh') {
-  const sandbox: any = { t: (key: string) => locales[locale][key] ?? key };
+  const sandbox: any = { window: { t: (key: string) => locales[locale][key] ?? key } };
   vm.runInNewContext([
+    'var NS = {};',
+    fn('function T(key, fallback, vars)'),
     declaration('RECALL_CANDIDATE_ERROR_TEXTS'),
     declaration('RECALL_PROMOTION_BLOCK_TEXTS'),
-    fn('_recallCandidateErrorText'),
-    'this.format = _recallCandidateErrorText;',
+    `${fn('NS.recallErrorText = function recallErrorText')};`,
+    'this.format = NS.recallErrorText;',
     'this.codeTexts = RECALL_CANDIDATE_ERROR_TEXTS;',
     'this.blockTexts = RECALL_PROMOTION_BLOCK_TEXTS;',
   ].join('\n'), sandbox);

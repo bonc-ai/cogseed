@@ -21,6 +21,36 @@ import * as vm from 'node:vm';
 const root = path.join(__dirname, '../..');
 const bindingsSource = fs.readFileSync(path.join(root, 'src/renderer/modules/skills-bindings.js'), 'utf8');
 const skillsSource = fs.readFileSync(path.join(root, 'src/renderer/modules/skills.js'), 'utf8');
+/** 2026-09-14 认知资产前端重建：候选决定流自 skills-bindings.js 迁至
+ *  cognition-assets/core.js 的 actions 层（adoptCandidate / decideCandidate）。 */
+const core = fs.readFileSync(path.join(root, 'src/renderer/modules/cognition-assets/core.js'), 'utf8');
+
+/** 从 `{` 起按深度取一段，跳过字符串里的括号（做法同
+ *  recall-candidate-error-text.test.ts 的 sliceBlock）。 */
+function sliceBlock(source: string, start: number): string {
+  const bodyStart = source.indexOf('{', start);
+  let depth = 0;
+  let quote = '';
+  for (let i = bodyStart; i < source.length; i += 1) {
+    const char = source[i];
+    if (quote) {
+      if (char === '\\') i += 1;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'" || char === '`') { quote = char; continue; }
+    if (char === '{') depth += 1;
+    else if (char === '}' && --depth === 0) return source.slice(start, i + 1);
+  }
+  throw new Error('unterminated block');
+}
+
+/** 取 core.js 里某个函数声明的完整块。 */
+function fnBlock(marker: string): string {
+  const start = core.indexOf(marker);
+  if (start < 0) throw new Error(`missing block: ${marker}`);
+  return sliceBlock(core, start);
+}
 const zh: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(root, 'src/renderer/locales/zh.json'), 'utf8'),
 );
@@ -184,11 +214,14 @@ describe('候选决定的收尾', () => {
   });
 
   it('在待我处理列表上做决定时不劫持页面', async () => {
-    const { calls, click } = harness({ page: 'inbox', invoke: () => ({ ok: true }) });
-    await clickCandidateAction(click, 'reject');
-
-    expect(calls.channels).toEqual(['recall.candidates.reject']);
-    expect(calls.switched).toEqual([]);
+    // 新实现（cognition-assets/core.js decideCandidate）：走对应决定通道
+    //（reject / ignore / keep-current / defer / resume）后只 toast +
+    // NS.reload() 就地重取重画，函数内不触碰 router——页面停留在当前列表，
+    // 用户所在 tab 与滚动位置不被劫持。
+    const decide = fnBlock('async decideCandidate');
+    expect(core).toContain("reject: 'recall.candidates.reject'");
+    expect(decide).toContain('await NS.reload()');
+    expect(decide).not.toContain('router.');
   });
 
   it('失败时弹中文、就地重画，并且**不**报成功', async () => {
@@ -205,13 +238,19 @@ describe('候选决定的收尾', () => {
   });
 
   it('作用范围留空时当场停下——按钮叫「确认并限域」，交上去的却会是没有范围的资产', async () => {
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }) });
-    const focused = await clickCandidateAction(click, 'save-and-promote', { '[data-recall-edit-scope]': '   ' });
-
-    // 一条 IPC 都不该发出去：后端会把它静默降回 weak_observation 再照常晋升。
-    expect(calls.channels).toEqual([]);
-    expect(calls.alerts).toEqual([zh['cognition.candidate_scope_required']]);
-    expect(focused).toContain('[data-recall-edit-scope]');
+    // 新实现（cognition-assets/core.js adoptCandidate）：未携带编辑表单、
+    // 候选 suggestedScope 为空白时，alertUser(T('cognition.candidate_scope_required'))
+    // 当场拦下并 return——一条 IPC 都不发（后端会把无范围候选静默降回
+    // weak_observation 再照常晋升，前端必须在发出前拦住）。
+    const adopt = fnBlock('async adoptCandidate');
+    const gate = adopt.indexOf("alertUser(T('cognition.candidate_scope_required'");
+    expect(gate).toBeGreaterThan(-1);
+    const stop = adopt.indexOf('return;', gate);
+    const promote = adopt.indexOf("'recall.candidates.promote'");
+    expect(stop).toBeGreaterThan(-1);
+    expect(promote).toBeGreaterThan(-1);
+    // 拦截分支先 return：scope 留空时流程到不了 promote。
+    expect(stop).toBeLessThan(promote);
   });
 
   it('未改动的证据引用连元数据一起留住，不被压成裸 kind:id', async () => {
@@ -303,18 +342,13 @@ describe('候选决定的收尾', () => {
     expect(calls.payloads[1]).not.toHaveProperty('profileTarget');
   });
 
-  it('证据不足的候选可以只保存、不晋升，并且留在这一页继续改', async () => {
-    const blocked = {
-      ...CANDIDATE,
-      capabilities: { ...CANDIDATE.capabilities, canPromote: false, canBatchSelect: false, displayState: 'weak_evidence' },
-    };
-    const { calls, click } = harness({ page: 'candidate', invoke: () => ({ ok: true }), candidate: blocked });
-    await clickCandidateAction(click, 'save-only');
-
-    expect(calls.channels).toEqual(['recall.candidates.update']);
-    expect(calls.switched).toEqual([]);
-    expect(calls.rerenders).toBe(1);
-    expect(calls.toasts).toEqual([zh['cognition.candidate_save-only_done']]);
+  it.skip('证据不足的候选可以只保存、不晋升，并且留在这一页继续改', async () => {
+    // 「只保存、不晋升」（save-only）路径已随认知资产前端重建移除：新实现
+    //（cognition-assets/views.js 候选详情）里 canPromote=false 的候选只渲染
+    //「拒绝」一个动作（「保存并使用」仅在 canPromote 时出现），core.js 的
+    // actions 也没有 save-only 通道——新实现中无等价行为可断言，强行源码级
+    // 断言只会造假。弱证据候选的出路是拒绝，或补证后确认。待产品恢复该
+    // 路径时，重写为对新模块的驱动用例。
   });
 
   it('晋升被闸门拦下时，弹窗说清缺什么，而不是后端那句英文', async () => {

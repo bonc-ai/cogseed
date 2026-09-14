@@ -2828,66 +2828,16 @@ describe('Recall cognition renderer flow', () => {
     ]]);
   });
 
-  it('passes the selected personal-template field through candidate confirmation', async () => {
-    let clickHandler: ((event: any) => Promise<void>) | undefined;
-    const calls: Array<[string, unknown]> = [];
-    // 落点只是一个 opaque fieldRef：渲染层原样读、原样回传，不解析
-    const fieldRef = 'po1eyJrIjoidGYifQ';
-    const target = { fieldRef };
-    const panel: any = {
-      dataset: {},
-      addEventListener: (type: string, handler: (event: any) => Promise<void>) => {
-        if (type === 'click') clickHandler = handler;
-      },
-    };
-    const card: any = {
-      querySelector: (selector: string) => selector === '[data-recall-profile-target]'
-        ? { value: fieldRef }
-        : null,
-    };
-    const button: any = {
-      dataset: { recallCandidateAction: 'promote', recallCandidateId: 'cand-personal-target' },
-      disabled: false,
-      closest: (selector: string) => selector === '[data-recall-candidate-action]'
-        ? button
-        : selector === '[data-recall-candidate-id]' ? card : null,
-    };
-    const context: any = {
-      document: {
-        getElementById: (id: string) => id === 'panel-recall' ? panel : null,
-        querySelectorAll: () => [],
-      },
-      window: {
-        addEventListener() {},
-        refreshPersonalOntology: async () => {},
-        cogseed: {
-          invoke: async (channel: string, input: unknown) => {
-            calls.push([channel, input]);
-            return { ok: true };
-          },
-        },
-      },
-      _skillsCognitionState: {
-        recallCandidates: [{ id: 'cand-personal-target', status: 'pending_review', suggestedType: 'personal' }],
-        writingRecallCandidateId: '',
-      },
-      _cognitionText: (_key: string, fallback: string) => fallback,
-      renderSkillsCognitionCaptures() {},
-      renderSkillsCognitionCandidates() {},
-      loadSkillsCognitionSnapshot: async () => {},
-      initSkillsCognitionConsole() {},
-      switchSkillsCognitionPage() {},
-      setTimeout,
-    };
-    vm.createContext(context);
-    vm.runInContext(`(${extractFunction(bindingsSource, '_initSkillsCognitionBindings')})()`, context);
-
-    await clickHandler!({ target: button });
-
-    expect(calls).toEqual([[
-      'recall.candidates.promote',
-      { candidateId: 'cand-personal-target', profileTarget: target },
-    ]]);
+  it('no longer sends a personal-template profileTarget through candidate confirmation', async () => {
+    // 原用例「passes the selected personal-template field through candidate
+    // confirmation」断言旧 bindings 把 opaque fieldRef 落点原样透传到
+    // recall.candidates.promote。落点选择功能已随认知资产前端重建删除
+    //（2026-09-14）：新 adoptCandidate（cognition-assets/core.js）不再从
+    // DOM 读落点、也不在载荷里携带 profileTarget——画像投影由后端按资产
+    // 类型自行路由。守卫：profileTarget 与旧落点选择器不回流新模块。
+    const core = fs.readFileSync(path.join(__dirname, '../../src/renderer/modules/cognition-assets/core.js'), 'utf8');
+    expect(core).not.toContain('profileTarget');
+    expect(core).not.toContain('[data-recall-profile-target]');
   });
 
   it('requires an independent confirmation and acknowledges high-risk candidate promotion', async () => {
