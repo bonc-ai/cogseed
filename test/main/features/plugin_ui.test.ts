@@ -226,6 +226,35 @@ describe('plugin_ui › runtime config store', () => {
     }
   });
 
+  it('overwrites a previously stored server_url with the new key embedded address (key is authoritative)', async () => {
+    const { savePluginRuntimeConfig, readPluginRuntimeConfig } = await loadPluginUi();
+    installPkg('withui');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ ok: true, agent_id: 'student-companion-S-3', role: 'student', person_id: 'S-3' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      // 存量用户：先存一份"旧服务器"配置
+      await savePluginRuntimeConfig(TEST_UID, 'withui', {
+        server_url: 'http://old-server.example.com',
+        api_key: 'k-old',
+        student_id: 'S-3',
+        role: 'student',
+      });
+      // 只粘贴新 v2 密钥（表单未提交 server_url）→ 旧地址必须被密钥内嵌地址覆盖
+      const origin = 'https://edu.example.com';
+      const b64 = Buffer.from(origin, 'utf8').toString('base64url');
+      const v2key = `eduseed1.${b64}.course-abcdefghijklmnop-qrstuvwxyz123456-ABCDEFGHIJKLMNOP`;
+      const res = await savePluginRuntimeConfig(TEST_UID, 'withui', { api_key: v2key });
+      expect(res.ok).toBe(true);
+      const stored = readPluginRuntimeConfig(TEST_UID, 'withui');
+      expect(stored.server_url).toBe(origin);
+      expect(stored.api_key).toBe(v2key);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('rejects the save when identity resolution fails and no role/id was given', async () => {
     const { savePluginRuntimeConfig } = await loadPluginUi();
     installPkg('withui');
