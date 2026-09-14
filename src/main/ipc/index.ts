@@ -34,6 +34,7 @@ import * as spaceImport from '../features/space_import';
 import * as spaceFiles from '../features/project_files';
 import * as spaceLibraryIndexer from '../features/project_library_indexer';
 import * as groupChat from '../features/group_chat';
+import * as confirmCards from '../features/group_chat/confirm-cards';
 import { GroupEventChatProjector } from '../features/chat_events/project-group-event';
 import {
   createChatEventProjectorState,
@@ -1190,14 +1191,16 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     };
   },
 
-  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列。
-  'groupChat.sendConfirm': async ({ cid, artifactId, op, payload }, ctx) => {
-    return groupChat.sendConfirmAndMark({
+  // 确认卡片专用通道（2026-09-14 Bug3）：幂等 + 直达总线，绕过渲染层发送队列；
+  // action: 'confirm' | 'cancel'（评审补强：取消同通道、同步落盘 cancelled）。
+  'groupChat.sendConfirm': async ({ cid, artifactId, op, payload, action }, ctx) => {
+    return confirmCards.sendConfirmAndMark({
       userId: ctx.userId,
       cid,
       artifactId,
       op: typeof op === 'string' ? op : String(op ?? ''),
       payload,
+      action: action === 'cancel' ? 'cancel' : 'confirm',
     });
   },
 
