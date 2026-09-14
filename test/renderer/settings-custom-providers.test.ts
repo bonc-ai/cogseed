@@ -124,9 +124,15 @@ class FakeElement {
 
   querySelectorAll(selector: string) {
     const out: FakeElement[] = [];
+    // 属性选择器 input[name="x"]——保存链读取 checkbox 靠它（2026-09-14）。
+    const byName = selector.match(/^([a-z0-9-]+)\[name="([^"]+)"\]$/);
     const visit = (el: FakeElement) => {
       if (selector.startsWith('#') && el.id === selector.slice(1)) out.push(el);
       if (selector.startsWith('.') && el.className.split(/\s+/).includes(selector.slice(1))) out.push(el);
+      if (byName && el.tagName.toLowerCase() === byName[1] && el.getAttribute('name') === byName[2]) out.push(el);
+      // 标签选择器（'input' 等）——复现保存链需要按标签找 checkbox。
+      if (!selector.startsWith('#') && !selector.startsWith('.') && !selector.startsWith('[')
+        && el.tagName.toLowerCase() === selector.toLowerCase()) out.push(el);
       for (const child of el.children) visit(child);
     };
     for (const child of this.children) visit(child);
@@ -143,12 +149,24 @@ class FakeElement {
       const attrs = match[2];
       const id = attrs.match(/\bid="([^"]+)"/)?.[1] || '';
       const className = attrs.match(/\bclass="([^"]+)"/)?.[1] || '';
-      if (!id && !className) continue;
+      const nameAttr = attrs.match(/\bname="([^"]+)"/)?.[1] || '';
+      // 带 name 的控件（chips checkbox 等）也进树——只有 id/class 的旧过滤
+      // 会把它们整个丢掉，query 不到（2026-09-14 保存失效排查）。
+      if (!id && !className && !nameAttr) continue;
       const child = new FakeElement(this.registry, id, match[1]);
       child.className = className;
       child.type = attrs.match(/\btype="([^"]+)"/)?.[1] || '';
       child.value = attrs.match(/\bvalue="([^"]*)"/)?.[1] || '';
       child.placeholder = attrs.match(/\bplaceholder="([^"]*)"/)?.[1] || '';
+      // 全属性按对象属性填充：本类 getAttribute 读 (this)[name]，而非 attrs
+      // 字典——checkbox 的 name/value 属性因此可查（2026-09-14 保存失效
+      // 排查）。不覆盖上面已显式赋值的字段（className/value 等）。
+      for (const attrMatch of attrs.matchAll(/([a-z0-9-]+)="([^"]*)"/gi)) {
+        const key = attrMatch[1].replace(/-([a-z])/g, (_all, letter) => letter.toUpperCase());
+        if ((child as any)[key] === undefined || (child as any)[key] === '') {
+          if (key !== 'class') (child as any)[key] = attrMatch[2];
+        }
+      }
       for (const dataMatch of attrs.matchAll(/data-([a-z0-9-]+)="([^"]*)"/gi)) {
         child.dataset[dataMatch[1].replace(/-([a-z])/g, (_all, letter) => letter.toUpperCase())] = dataMatch[2];
       }
@@ -570,6 +588,62 @@ describe('settings model providers surface', () => {
     vm.runInContext('_settingsOpenCustomProviderModal(__provider)', context);
     vm.runInContext('_settingsOpenCustomProviderModelEditor(__provider, __provider.models[0])', context);
     expect(documentListeners.get('keydown')).toHaveLength(1);
+  });
+
+  it('persists advanced fields when saving from the model editor (2026-09-14 保存失效排查)', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const g = context as any;
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
+    };
+    g._settingsOpenCustomProviderModal(provider);
+    g._settingsOpenCustomProviderModelEditor(provider, provider.models[0]);
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    // 修改高级配置：勾「图片」、勾一个能力、加推理等级、填参数映射。
+    const inputs = Array.from(body.querySelectorAll('input')) as any[];
+    const imageBox = inputs.find((el) => el.getAttribute('name') === 'settings-model-form-input'
+      && el.getAttribute('value') === 'image');
+    imageBox.checked = true;
+    const capabilityBox = inputs.find((el) => el.getAttribute('name') === 'settings-model-form-capability'
+      && el.getAttribute('value') === 'structured_output');
+    capabilityBox.checked = true;
+    body.querySelector('#settings-model-form-level-add').click();
+    const levelInput = body.querySelector('.settings-level-row__input') as any;
+    levelInput.value = 'high';
+    body.querySelector('#settings-custom-provider-model-params').value = '{"high": {"reasoning_effort": "high"}}';
+
+    // 「重置表单」后重新修改（2026-09-14 保存失效的复现路径：重置曾丢失
+    // 事件绑定，"+"加不了等级 → 保存等级为空 → 库里保持旧值）。
+    const actions = registry.get('settings-custom-provider-modal-actions')!;
+    actions.children[0].click(); // 重置
+    const resetImage = Array.from(body.querySelectorAll('input[name="settings-model-form-input"]')).find((el: any) => el.getAttribute('value') === 'image') as any;
+    resetImage.checked = true;
+    const resetCap = Array.from(body.querySelectorAll('input[name="settings-model-form-capability"]')).find((el: any) => el.getAttribute('value') === 'structured_output') as any;
+    resetCap.checked = true;
+    body.querySelector('#settings-model-form-level-add').click();
+    (body.querySelector('.settings-level-row__input') as any).value = 'high';
+    body.querySelector('#settings-custom-provider-model-params').value = '{"high": {"reasoning_effort": "high"}}';
+
+    // 点保存（actions：重置 / 取消 / 保存）。
+    const save = actions.children[actions.children.length - 1];
+    save.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const call = invoke.mock.calls.find(([channel]: any[]) => channel === 'customProviders.model.update');
+    expect(call).toBeTruthy();
+    expect(call![1].model).toMatchObject({
+      id: 'gpt-4.1-mini',
+      contextWindow: 131072,
+      maxTokens: 8192,
+      input: ['text', 'image'],
+      capabilities: ['structured_output'],
+      reasoningLevels: ['high'],
+      reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+    });
   });
 
   it('prevents duplicate model tests and renders the backend duration field', async () => {

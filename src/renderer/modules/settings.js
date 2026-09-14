@@ -1863,31 +1863,34 @@ function _settingsOpenCustomProviderModelEditor(provider, model = null, options 
     if (Number.isSafeInteger(options.draft.maxTokens)) initial.maxTokens = options.draft.maxTokens;
   }
   title.textContent = editing ? t('settings.custom_providers.edit_model') : t('settings.custom_providers.add_model');
-  body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>`
-    + _settingsRenderModelFormHtml(initial);
-  for (const level of initial.reasoningLevels) {
-    _settingsAppendModelLevelRow(body.querySelector('#settings-model-form-levels'), level);
-  }
-  body.querySelector('#settings-model-form-level-add')?.addEventListener('click', () => {
-    const container = body.querySelector('#settings-model-form-levels');
-    if (!container || container.children.length >= _MODEL_FORM_MAX_LEVELS) return;
-    _settingsAppendModelLevelRow(container);
-  });
-  const smartToggle = body.querySelector('#settings-model-form-smart');
-  body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
-    if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
-  });
+  /** 渲染 + 绑定（可重入）：初次打开与「重置表单」共用。2026-09-14 保存
+   *  失效排查：此前重置只重设 innerHTML 不重绑事件——重置后「+」加不了
+   *  推理等级、智能配置失灵；等级加不上 → 保存的等级为空 → 归一化时
+   *  空等级不落字段 → 库里保持旧值，表象即"改了高级配置保存不上"。 */
+  const renderForm = () => {
+    body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>`
+      + _settingsRenderModelFormHtml(initial);
+    for (const level of initial.reasoningLevels) {
+      _settingsAppendModelLevelRow(body.querySelector('#settings-model-form-levels'), level);
+    }
+    body.querySelector('#settings-model-form-level-add')?.addEventListener('click', () => {
+      const container = body.querySelector('#settings-model-form-levels');
+      if (!container || container.children.length >= _MODEL_FORM_MAX_LEVELS) return;
+      _settingsAppendModelLevelRow(container);
+    });
+    const smartToggle = body.querySelector('#settings-model-form-smart');
+    body.querySelector('#settings-custom-provider-model-edit-id')?.addEventListener('blur', () => {
+      if (smartToggle?.checked) void _settingsSmartFillModelForm(provider, body);
+    });
+  };
+  renderForm();
   actions.innerHTML = '';
   const resetButton = document.createElement('button');
   resetButton.type = 'button';
   resetButton.className = 'settings-model-form__reset';
   resetButton.textContent = t('settings.custom_providers.reset_form');
   resetButton.addEventListener('click', () => {
-    body.innerHTML = `<p class="settings-custom-provider-modal-subtitle">${escapeHtml(provider.name || provider.id)}</p>`
-      + _settingsRenderModelFormHtml(initial);
-    for (const level of initial.reasoningLevels) {
-      _settingsAppendModelLevelRow(body.querySelector('#settings-model-form-levels'), level);
-    }
+    renderForm();
     _settingsCustomProviderModalStatus('', '');
   });
   const cancelButton = document.createElement('button');
