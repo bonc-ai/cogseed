@@ -90,7 +90,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 ### 步骤 4.5 — 提交摘要人工确认（MVP User Story，硬性）
 
 在调用 `submit-project` / `submit-and-track` 之前，必须：
-1. 向学生展示**提交摘要**：**提交身份（学号，取自运行时 submit 结果的 studentId，A2-2 硬性）**、挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
+1. 向学生展示**提交摘要**：**提交身份（学号，取自运行时 submit 结果的 studentId，A2-2 硬性）**、**挑战名称（challengeTitle，取自 get-challenge 返回的 title）**、挑战 ID、项目标题、GitHub 仓库、AAR/自评字数、交付物检查结果、缺件清单；
 2. 明确提问："将以 <学号> 身份提交，确认吗？（回复'确认'后才会写平台）"；
 3. **只在学生明确确认后**执行写入。学生未确认/要求修改 → 停止并列出待改项。
 失败行为：`never_submit_without_user_confirm`
@@ -102,7 +102,7 @@ description: ① 帮学生查挑战、预检交付物、提交项目并跟踪评
 
 1. 创建 artifact（title=「待确认：提交项目」），含两个文件：
    - `index.html`：确认卡片宿主模板（附录 A，**原样使用**，不要增删改动）
-   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`（A2-2 硬性：payload 必须包含 `提交身份` 字段 = 运行时 submit 结果的 studentId）
+   - `confirm-config.json`：`{"op":"submit-project","payload":{…完整写入载荷…}}`（A2-2 硬性：payload 必须包含 `提交身份` 字段 = 运行时 submit 结果的 studentId；Bug2 硬性：payload 必须包含 `challengeTitle` = get-challenge 返回的 title，与 `challengeId` 并存——卡片会把「挑战名称」与「挑战 ID」分开展示，不得只用裸 ID 充当挑战名）
 2. 对话中会渲染出插件确认面板（载荷摘要 + 确认/取消按钮）；
 3. 等待用户操作：
    - 收到 `{"action":"plugin-confirm","op":"submit-project","payload":…}` → 用该 payload 执行第 5 步 `submit-project`；
