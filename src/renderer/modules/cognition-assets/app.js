@@ -28,12 +28,15 @@
   function readCandidateForm() {
     const card = document.querySelector('.ca-candidate-detail');
     if (!card) return null;
+    // 只读候选（无任何表单控件）时返回 null：调用方按「未携带编辑」处理，
+    // 防止一次「保存并使用」用空串覆盖已有内容。
+    if (!card.querySelector('[data-f]')) return null;
     const value = (name) => {
       const el = card.querySelector(`[data-f="${name}"]`);
       return el ? String(el.value || '') : '';
     };
     return {
-      suggestedType: value('type'),
+      suggestedType: String(card.dataset.candType || ''),
       suggestedScope: value('scope'),
       summary: value('summary'),
       judgment: value('judgment'),
@@ -53,6 +56,18 @@
       try {
         switch (act) {
           case 'go-back': router.back(); break;
+          case 'cand-type': {
+            // 类型选择是纯前端态：只更新 chip 选中与卡片 dataset，不触发重画
+            // （整页重画会丢失其他字段未保存的输入）。
+            const card = el.closest('.ca-candidate-detail');
+            if (card) card.dataset.candType = id;
+            el.parentElement.querySelectorAll('.ca-chip-opt').forEach((chipEl) => {
+              const on = chipEl === el;
+              chipEl.classList.toggle('is-green', on);
+              chipEl.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+            break;
+          }
           case 'toggle-proof-asset': {
             const key = String(id);
             if (S.expandedProofs.has(key)) S.expandedProofs.delete(key);
@@ -74,6 +89,7 @@
           case 'go-sources': router.go({ name: 'manage', manageTab: 'sources' }); break;
           case 'go-organize': router.go({ name: 'manage', manageTab: 'organize' }); break;
           case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
+          case 'open-ontology': await NS.openPersonalOntology(); break;
           case 'open-asset': router.go({ name: 'overview', assetId: id }); break;
           case 'open-overview': router.go({ name: 'overview' }); break;
           case 'open-evidence': router.go({ name: 'evidence' }); break;
@@ -117,6 +133,15 @@
     });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && S.route.assetId) router.back();
+    });
+    // div[role=button] 控件（行、chip 单选、tab、折叠头）不含原生 button 的
+    // 键盘激活，Enter/Space 在委托层统一转成 click，保持键盘可达。
+    root.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const el = event.target.closest && event.target.closest('[data-act][role="button"], [data-go-asset][role="button"]');
+      if (!el || el.getAttribute('aria-disabled') === 'true') return;
+      event.preventDefault();
+      el.click();
     });
   }
 
@@ -166,4 +191,8 @@
   } else {
     scheduleBoot();
   }
+
+  // 语言切换：视图全部在渲染时取文案，整页重画即可跟上（旧实现曾在
+  // skills-bindings.js 里重画，随瘦身丢失）。
+  window.addEventListener('i18n-change', () => { if (booted) NS.render(); });
 })();

@@ -15,19 +15,32 @@
 
   /* ────────────────────────── 共享零件 ────────────────────────── */
 
+  /* 按钮一律走共享 uiButton 工厂（shared-ui-adoption-guard 约束：本模块不落
+   * 裸控件）。视觉仍由 .ca-btn 系列类驱动（cognition-assets.css 内
+   * .ca-app 前缀覆盖全局 .btn 默认）。 */
   const btn = (label, act, options) => {
     const opts = options || {};
-    const cls = ['ca-btn', opts.primary ? 'is-primary' : '', opts.danger ? 'is-danger' : '', opts.small ? 'is-sm' : ''].filter(Boolean).join(' ');
-    const attrs = [
-      act ? `data-act="${esc(act)}"` : '',
-      opts.id != null ? `data-id="${esc(opts.id)}"` : '',
-      opts.data ? Object.entries(opts.data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ') : '',
-      opts.go ? `data-go="${esc(opts.go)}"` : '',
-      opts.disabled ? 'disabled' : '',
-      opts.title ? `title="${esc(opts.title)}"` : '',
-    ].filter(Boolean).join(' ');
-    return `<button type="button" class="${cls}" ${attrs}>${esc(label)}</button>`;
+    const classes = ['ca-btn', opts.primary ? 'is-primary' : '', opts.danger ? 'is-danger' : '', opts.small ? 'is-sm' : '', opts.className || ''].filter(Boolean).join(' ');
+    return window.uiButton({
+      label,
+      className: classes,
+      size: opts.small ? 'sm' : 'md',
+      ...(opts.disabled ? { disabled: true } : {}),
+      attrs: Object.assign(
+        {},
+        act ? { 'data-act': act } : {},
+        opts.id != null ? { 'data-id': String(opts.id) } : {},
+        opts.data || {},
+        opts.go ? { 'data-go': String(opts.go) } : {},
+        opts.title ? { title: opts.title } : {},
+      ),
+    });
   };
+
+  /** 行内可选块（chip 单选、tab、折叠头等富内容控件）：不用裸 button，
+   *  用 div[role=button]——键盘 Enter/Space 由 app.js 委托层统一触发，
+   *  与资产列表行（data-go-asset）同一交互契约。 */
+  const roleBtn = (extra = '') => `role="button" tabindex="0"${extra ? ` ${extra}` : ''}`;
 
   const chip = (label, tone) => `<span class="ca-chip${tone ? ` is-${tone}` : ''}">${esc(label)}</span>`;
 
@@ -212,7 +225,7 @@
         ${btn(label, 'asset-action', { id: asset.id, data: { action }, danger: true, small: true })}
       </div>`;
     return `
-    <button type="button" class="ca-backlink" data-act="go-back">${esc(T('cognition.asset_back', '← 返回列表'))}</button>
+    ${btn(T('cognition.asset_back', '← 返回列表'), 'go-back', { className: 'ca-backlink' })}
     <div class="ca-card ca-asset-detail">
       <div class="ca-line">
         <div>
@@ -232,7 +245,7 @@
       </details>
       ${affectedCopy.length ? `<div class="ca-sect"><p class="ca-note">${esc(affectedCopy[0])}</p><div class="ca-actions">${affectedCopy.slice(1).join('')}${proofCount ? btn(T('cognition.asset_usage_link', '查看使用记录'), 'open-evidence', { small: true }) : ''}</div></div>` : ''}
       <div class="ca-more-wrap">
-        <button type="button" class="ca-more-toggle" data-act="toggle-asset-more">${esc(T('cognition.asset_more', '更多操作'))}</button>
+        ${btn(T('cognition.asset_more', '更多操作'), 'toggle-asset-more', { className: 'ca-more-toggle' })}
         <div class="ca-more" data-asset-more hidden>
           ${moreRow(T('cognition.asset_delete', '删除'), T('cognition.asset_delete_hint', '从资产列表移除，历史记录保留'), 'delete')}
           ${moreRow(T('cognition.asset_revoke', '撤回使用'), T('cognition.asset_revoke_hint', '只影响未来的任务'), 'revoke')}
@@ -283,7 +296,15 @@
         T('cognition.tree_empty_hint', '候选被确认为正式资产后会出现在这里；当前还没有已确认的资产。'),
         S.candidates.length ? btn(T('cognition.tree_view_buds', '查看 {n} 条待确认候选', { n: String(stats.pending) }), 'go-review', { primary: true }) : '',
       );
+    // 个人本体入口：本体工作台内嵌在本面板下方（#skills-cognition-personal-ontology），
+    // 旧入口随 skills.js 瘦身消失过——此处常驻一行，保证功能可达。
+    const ontologyEntry = `<div class="ca-row is-flat" data-act="open-ontology" ${roleBtn()}>
+        <div class="ca-row-main"><div class="ca-row-title">${esc(T('cognition.ontology_entry_title', '个人本体'))}</div>
+        <div class="ca-row-meta">${esc(T('cognition.ontology_entry_hint', '我是谁、我怎么工作：画像与偏好的结构化整理'))}</div></div>
+        <div class="ca-row-side"><span class="ca-chevron" aria-hidden="true">›</span></div>
+      </div>`;
     return `${heroHtml}
+      ${ontologyEntry}
       <div class="ca-card ca-tree-card">
         <div class="ca-line">
           <div><h3>${esc(T('cognition.tree_panel_title', '我的认知树'))}</h3>
@@ -293,8 +314,7 @@
         ${treeBlocks(counts, { pending: stats.pending, validated: stats.transferOk, sources: sourceCount, captures: captureCount, experiences: S.experienceTotal })}
         <div class="ca-tree-cap">${esc(T('cognition.tree_legend_bud_hint', '枝头的小点是还没确认的候选；确认后它会成为同一根主枝上的正式资产。'))}</div>
       </div>
-      ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => `
-        <button type="button" class="ca-chip${String(route.category || '') === id ? ' is-green' : ''} ca-chip-btn" data-act="filter-cat" data-id="${esc(id)}">${esc(label)} ${count}</button>`).join(' '))}
+      ${sectionHead(T('cognition.overview_list_title', '资产明细'), '', chips.map(([id, label, count]) => btn(`${label} ${count}`, 'filter-cat', { id, className: `ca-chip ca-chip-btn${String(route.category || '') === id ? ' is-green' : ''}` })).join(' '))}
       ${listHtml}`;
   }
 
@@ -341,10 +361,10 @@
     }[String(c.status || '')] || String(c.status || ''));
     const attention = [];
     if (stats.sourceIssues) {
-      attention.push(`<button type="button" class="ca-attention-row" data-act="go-sources"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></button>`);
+      attention.push(`<div class="ca-attention-row" data-act="go-sources" ${roleBtn()}><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(stats.sourceIssues) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }
     if (stats.failedTasks) {
-      attention.push(`<button type="button" class="ca-attention-row" data-act="go-organize"><span>${esc(T('cognition.overview_failed_tasks', '{count} 个整理任务需要重试', { count: String(stats.failedTasks) }))}</span><b>${esc(T('common.handle', '处理'))}</b></button>`);
+      attention.push(`<div class="ca-attention-row" data-act="go-organize" ${roleBtn()}><span>${esc(T('cognition.overview_failed_tasks', '{count} 个整理任务需要重试', { count: String(stats.failedTasks) }))}</span><b>${esc(T('common.handle', '处理'))}</b></div>`);
     }
     return `${hero(
       T('cognition.inbox', '待我处理'), T('cognition.review_title', '待我处理'),
@@ -370,7 +390,7 @@
   function viewCandidate(route) {
     const candidate = S.candidates.find((c) => String(c.id) === String(route.candidateId));
     // 顶部「返回」按钮（原卡片底部的返回列表按钮已删，返回入口收在此处）。
-    const backHtml = `<button type="button" class="ca-backlink" data-act="go-back">← ${esc(T('common.back', '返回'))}</button>`;
+    const backHtml = btn(`← ${T('common.back', '返回')}`, 'go-back', { className: 'ca-backlink' });
     if (!candidate) {
       return `${backHtml}${hero(T('cognition.candidate_eyebrow', 'CANDIDATE'), T('cognition.candidate_detail_title', '候选详情'), '')}${empty(T('cognition.candidate_detail_missing', '这条候选已不在待处理列表中'), '')}`;
     }
@@ -387,20 +407,20 @@
       T('cognition.candidate_eyebrow', 'CANDIDATE'), T('cognition.candidate_detail_title', '确认内容，也确认它该在什么范围生效'),
       T('cognition.candidate_detail_hint', '确认后会创建正式资产的第一个版本，并保留来源与撤销入口。'),
     )}
-    <div class="ca-card ca-candidate-detail">
+    <div class="ca-card ca-candidate-detail" data-cand-type="${esc(candidate.suggestedType || '')}">
       <div class="ca-line">
         <div class="ca-row-title">${esc(candidateTitle(candidate))}</div>
         <div class="ca-right">${chip(categoryLabel(candidate.suggestedType))}${broken ? chip(T('cognition.candidate_evidence_weak', '证据不足'), 'amber') : ''}</div>
       </div>
       ${broken ? `<div class="ca-warn">${esc(T('cognition.candidate_evidence_all_unavailable', '这条候选的大部分来源记录已被删除，无法核对证据。建议补充新证据后保存，或选择不保存。'))}</div>` : ''}
       ${edit ? `
-        ${field(T('cognition.type', '类型'), `<select class="ca-input" data-f="type">${CATEGORIES.map(([id, key, fb]) => `<option value="${id}" ${candidate.suggestedType === id ? 'selected' : ''}>${esc(T(key, fb))}</option>`).join('')}</select>`)}
-        ${field(T('cognition.judgment', '具体内容'), `<textarea class="ca-input ca-textarea" data-f="judgment">${esc(candidate.judgment || '')}</textarea>`)}
+        ${field(T('cognition.type', '类型'), `<div class="ca-chips">${CATEGORIES.map(([id, key, fb]) => { const on = String(candidate.suggestedType || '') === id; return `<span class="ca-chip ca-chip-opt${on ? ' is-green' : ''}" data-act="cand-type" data-id="${esc(id)}" ${roleBtn(`aria-pressed="${on ? 'true' : 'false'}"`)}>${esc(T(key, fb))}</span>`; }).join('')}</div>`)}
+        ${field(T('cognition.judgment', '具体内容'), window.uiTextarea({ id: 'ca-cand-judgment', value: candidate.judgment || '', attrs: { 'data-f': 'judgment' } }))}
         <details class="ca-advanced">
           <summary>${esc(T('cognition.candidate_advanced', '高级选项（通常不用改）'))}</summary>
-          ${field(T('cognition.candidate_scope_label', '作用范围'), `<input class="ca-input" data-f="scope" list="ca-scope-terms" value="${esc(candidate.suggestedScope || '')}" placeholder="${esc(T('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'))}"><datalist id="ca-scope-terms"><option value="general"></option><option value="report"></option><option value="code"></option><option value="review"></option><option value="product"></option></datalist>`)}
+          ${field(T('cognition.candidate_scope_label', '作用范围'), window.uiInput({ id: 'ca-cand-scope', value: candidate.suggestedScope || '', placeholder: T('cognition.candidate_scope_placeholder', '例如：仅产品工作空间'), attrs: { 'data-f': 'scope' } }))}
           <div class="ca-note">${esc(T('cognition.candidate_scope_hint', '建议用受控词：general=跨对话通用；report/code/review/product=任务类型。自由文本在自动投影中可能匹配不上任务。'))}</div>
-          ${field(T('cognition.summary', '摘要'), `<input class="ca-input" data-f="summary" value="${esc(candidate.summary || '')}">`)}
+          ${field(T('cognition.summary', '摘要'), window.uiInput({ id: 'ca-cand-summary', value: candidate.summary || '', attrs: { 'data-f': 'summary' } }))}
         </details>
         <div class="ca-detail-foot">
           ${field(T('cognition.evidence_refs', '证据引用'), `<div class="ca-chips">${refs.map(evidenceChip).join('') || `<span class="ca-note">${esc(T('cognition.candidate_no_evidence', '没有可追溯的证据引用；确认前建议先补证。'))}</span>`}</div>`)}
@@ -543,7 +563,7 @@
             ratingHtml = `<div class="ca-rating"><strong>${esc(T('cognition.proof_rate_question', '这次用得怎么样？'))}</strong>
               <div class="ca-actions">${PROOF_FEEDBACKS.map(([value, key, fb]) => btn(T(key, fb), 'proof-rate', { id: transferProofId, data: { feedback: value, proof: proof.id } })).join('')}</div>
               <div class="ca-note-zone">
-                <textarea class="ca-input ca-textarea" data-f="note" placeholder="${esc(T('cognition.proof_note_optional_placeholder', '可补充一句你观察到的变化（可选；先写再点评，说明会随评价一起附上）'))}"></textarea>
+                ${window.uiTextarea({ id: `ca-proof-note-${esc(proof.id)}`, placeholder: T('cognition.proof_note_optional_placeholder', '可补充一句你观察到的变化（可选；先写再点评，说明会随评价一起附上）'), attrs: { 'data-f': 'note' } })}
               </div>
             </div>`;
           } else {
@@ -552,22 +572,22 @@
         }
         return `
         <div class="ca-proof-row${isOpen ? ' is-open' : ''}">
-          <button type="button" class="ca-proof-event" data-act="proof-toggle" data-id="${esc(proof.id)}">
+          <div class="ca-proof-event" data-act="proof-toggle" data-id="${esc(proof.id)}" ${roleBtn()}>
             <span class="ca-proof-dot" aria-hidden="true"></span>
             <span class="ca-proof-body"><strong class="ca-proof-sentence">${esc(proofSentence(proof))}</strong></span>
-          </button>
+          </div>
           ${ratingHtml}
         </div>`;
       }).join('');
       return `<div class="ca-card ca-proof-asset">
         <div class="ca-proof-head-row">
-          <button type="button" class="ca-proof-head" data-act="toggle-proof-asset" data-id="${esc(assetId)}" aria-expanded="${expanded ? 'true' : 'false'}">
+          <div class="ca-proof-head" data-act="toggle-proof-asset" data-id="${esc(assetId)}" aria-expanded="${expanded ? 'true' : 'false'}" ${roleBtn()}>
             <span class="ca-chevron" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
             <span class="ca-proof-head-main">
               <span class="ca-row-title">${esc(title)}</span>
               ${summaryLine ? `<span class="ca-sub">${esc(summaryLine)}</span>` : ''}
             </span>
-          </button>
+          </div>
           <div class="ca-right"><span class="ca-note">${esc(String(items.length))} ${esc(T('cognition.common_records', '条'))}</span>${btn(T('cognition.proof_open_asset', '查看资产'), 'open-asset', { id: assetId, small: true })}</div>
         </div>
         ${expanded ? `<div class="ca-proof-list">${rows}</div>` : ''}
@@ -585,8 +605,7 @@
 
   function viewManage(route) {
     const sub = route.manageTab === 'organize' ? 'organize' : 'sources';
-    const nav = `<div class="ca-subnav">${MANAGE_TABS.map(([id, key, fb]) => `
-      <button type="button" class="ca-pill${sub === id ? ' is-on' : ''}" data-act="manage-tab" data-id="${id}" ${id === 'organize' ? 'data-cognition-page-link="captures"' : ''}>${esc(T(key, fb))}</button>`).join('')}</div>`;
+    const nav = `<div class="ca-subnav">${MANAGE_TABS.map(([id, key, fb]) => btn(T(key, fb), 'manage-tab', { id, className: `ca-pill${sub === id ? ' is-on' : ''}`, ...(id === 'organize' ? { data: { 'cognition-page-link': 'captures' } } : {}) })).join('')}</div>`;
     if (sub === 'organize') return nav + viewOrganize();
     return nav + viewSources();
   }
@@ -643,7 +662,7 @@
       <div class="ca-stat"><b>${usable}</b><span>${esc(T('cognition.sources_stat_usable', '可用'))}</span></div>
       <div class="ca-stat"><b class="${issues ? 'is-warn' : ''}">${issues}</b><span>${esc(T('cognition.sources_stat_issues', '需要处理'))}</span></div>
     </div>
-    ${issues ? `<div class="ca-notice">${`<button type="button" class="ca-attention-row" data-act="noop"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(issues) }))}</span></button>`}</div>` : ''}
+    ${issues ? `<div class="ca-notice"><div class="ca-attention-row is-static"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(issues) }))}</span></div></div>` : ''}
     ${experienceCard()}
     ${groups.map((group) => {
       const kind = kindOf(group);
@@ -741,10 +760,10 @@
     const tabsHtml = `<nav class="ca-tabs">${NS.TABS.map((tab) => {
       const active = activeTab === tab.id;
       const extra = tab.id === 'overview' ? ' data-cognition-page-link="assets"' : '';
-      return `<button type="button" class="ca-tab${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra} title="${esc(T(tab.descKey, tab.desc))}">
+      return `<div class="ca-tab${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra} title="${esc(T(tab.descKey, tab.desc))}" ${roleBtn()}>
         <strong>${esc(T(tab.titleKey, tab.title))}</strong><small>${esc(T(tab.descKey, tab.desc))}</small>
-      </button>`;
-    }).join('')}<button type="button" class="ca-refresh-btn" data-act="refresh" title="${esc(T('cognition.refresh_hint', '重新读取最新数据'))}" aria-label="${esc(T('common.refresh', '刷新'))}">⟳ ${esc(T('common.refresh', '刷新'))}</button></nav>`;
+      </div>`;
+    }).join('')}${btn(`⟳ ${T('common.refresh', '刷新')}`, 'refresh', { className: 'ca-refresh-btn', title: T('cognition.refresh_hint', '重新读取最新数据') })}</nav>`;
     let body = '';
     if (S.loading && !S.loaded) {
       body = `<div class="ca-loading">${esc(T('cognition.loading', '加载中…'))}</div>`;

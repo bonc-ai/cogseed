@@ -341,3 +341,69 @@
   .ca-split { grid-template-columns: minmax(0, 1fr); }
   .ca-whenwrap { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ── 共享控件工厂适配（uiButton / uiInput / uiTextarea 落位） ──────────
+   本页按钮与输入走共享工厂（shared-ui-adoption-guard 约束：新模块零裸控件），
+   工厂产物带全局 .btn / .ui-button / .form-input 默认样式且 ui-components.css
+   加载在最后；面板内以 ca 视觉为准，统一用 .ca-app 前缀在此覆盖。 */
+.ca-app .ui-button {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--ca-line); background: var(--ca-card); color: var(--ca-ink);
+  padding: 6px 13px; border-radius: 8px; font-size: var(--font-size-3); font-weight: 400;
+  cursor: pointer; font-family: inherit; transition: none;
+}
+.ca-app .ui-button:hover { background: var(--color-ca-hover); }
+.ca-app .ui-button[disabled] { opacity: .5; cursor: default; }
+.ca-app .ui-button.ca-btn.is-primary { background: var(--ca-green); border-color: var(--ca-green); color: var(--color-white); font-weight: 600; }
+.ca-app .ui-button.ca-btn.is-primary:hover { background: var(--ca-green-d); }
+.ca-app .ui-button.ca-btn.is-danger { color: var(--ca-red); border-color: var(--color-ca-red-line); }
+.ca-app .ui-button.ca-btn.is-danger:hover { background: var(--color-ca-red-bg); }
+.ca-app .ui-button.ca-btn.is-sm { padding: 4px 10px; font-size: 12px; border-radius: var(--radius-2); }
+/* 文字型按钮（返回链接 / 更多操作 / 刷新） */
+.ca-app .ui-button.ca-backlink {
+  display: inline-flex; align-items: center; gap: 4px; margin: 0 0 10px;
+  border: 0; background: none; padding: 2px 0; cursor: pointer;
+  color: var(--ca-ink2); font-weight: 400; font-size: var(--font-size-3);
+}
+.ca-app .ui-button.ca-backlink:hover { background: none; color: var(--ca-green-d); }
+.ca-app .ui-button.ca-more-toggle {
+  border: 0; background: none; padding: 3px 0; cursor: pointer;
+  color: var(--ca-ink3); font-weight: 400; font-size: var(--font-size-3);
+}
+.ca-app .ui-button.ca-more-toggle::after { content: ' ▾'; font-size: var(--font-size-1); }
+.ca-app .ui-button.ca-more-toggle.is-open::after { content: ' ▴'; }
+.ca-app .ui-button.ca-more-toggle:hover { background: none; color: var(--ca-ink); }
+.ca-app .ui-button.ca-refresh-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+  border: 1px solid var(--ca-line); background: none; color: var(--ca-ink2);
+  font-size: var(--font-size-2); cursor: pointer; font-weight: 400;
+}
+.ca-app .ui-button.ca-refresh-btn:hover { border-color: var(--ca-green-line); color: var(--ca-green-d); background: none; }
+/* 筛选 chip 按钮 / 管理 pill */
+.ca-app .ui-button.ca-chip-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px;
+  font-size: var(--font-size-2); background: var(--color-ca-chip-bg); color: var(--color-ca-ink-2);
+  border: 0; font-weight: 400; white-space: nowrap;
+}
+.ca-app .ui-button.ca-chip-btn:hover { background: var(--color-ca-hover); }
+.ca-app .ui-button.ca-chip-btn.is-green { background: var(--ca-green-bg); color: var(--color-ca-green-text); }
+.ca-app .ui-button.ca-pill {
+  border: 1px solid var(--ca-line); background: var(--ca-card); border-radius: 999px;
+  padding: 6px 15px; font-size: var(--font-size-3); color: var(--ca-ink2); font-weight: 400;
+}
+.ca-app .ui-button.ca-pill:hover { border-color: var(--color-ca-green-line-2); background: var(--ca-card); }
+.ca-app .ui-button.ca-pill.is-on { background: var(--ca-green-bg); border-color: var(--ca-green-line); color: var(--color-ca-green-text-deep); font-weight: 600; }
+/* 输入 / 多行输入（工厂类 form-input ui-control ui-input/ui-textarea） */
+.ca-app .ui-input, .ca-app .ui-textarea {
+  border: 1px solid var(--ca-line); border-radius: 8px; padding: 7px 11px;
+  font-size: var(--font-size-3); font-family: inherit; font-weight: 400;
+  background: var(--color-ca-paper); color: var(--ca-ink); width: 100%; box-sizing: border-box;
+}
+.ca-app .ui-textarea { min-height: 96px; resize: vertical; line-height: 1.65; }
+.ca-app .ui-input:focus, .ca-app .ui-textarea:focus { outline: none; border-color: var(--ca-green-line); background: var(--color-white); }
+/* 候选类型 chip 单选（div[role=button]，键盘激活走 app.js 委托） */
+.ca-app .ca-chip-opt { cursor: pointer; }
+.ca-app .ca-chip-opt:hover { filter: brightness(.97); }
+/* 复合行控件 div 化后补 cursor（.ca-proof-head 原生 button 时代自带） */
+.ca-app .ca-proof-head { cursor: pointer; }
+.ca-app .ca-attention-row.is-static { cursor: default; }

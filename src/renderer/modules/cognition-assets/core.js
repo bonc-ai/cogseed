@@ -256,6 +256,75 @@
   };
   NS.router = router;
 
+  /* ────────────────────────── 错误文案（自 skills-bindings.js 迁入） ────────────────────────── */
+  /* 后端抛的 message 是内部契约语言（`no successful transfer proof for task
+   * run`、`recall candidate is terminal` 等），不能原样给用户看：按 result.code
+   * 翻译；取不到已知码时退回原始 error——宁可露出英文也不吞掉失败。
+   * 码表：proof-service.ts::recallProofError / candidate-capabilities.ts /
+   * promotion.ts::PromotionBlockReason。 */
+
+  const RECALL_CANDIDATE_ERROR_TEXTS = {
+    recall_candidate_terminal: ['cognition.candidate_error_terminal',
+      '这条候选已经处理过了（已确认、已拒绝或已失效），不能再改。回「待我处理」看当前待办。'],
+    recall_candidate_not_promotable: ['cognition.candidate_error_not_promotable',
+      '这条候选现在不能确认为正式资产。'],
+    recall_candidate_not_found: ['cognition.candidate_error_not_found',
+      '这条候选已经不在了，可能已被处理或已过期。'],
+    recall_candidate_duplicate: ['cognition.candidate_error_duplicate',
+      '已经有一条内容相同的候选，先去处理那一条。'],
+    recall_candidate_handoff_incomplete: ['cognition.candidate_error_handoff_incomplete',
+      '上一次确认没有走完，资产还没落定。先重试确认，再修改内容。'],
+    recall_candidate_evidence_insufficient: ['cognition.candidate_error_evidence_insufficient',
+      '证据不足：补上可追溯的证据引用后才能确认。'],
+    recall_candidate_risk_gate: ['cognition.candidate_error_risk_gate',
+      '这是高风险变更，需要你单独确认后才能保存。'],
+    recall_candidate_non_asset_decision: ['cognition.candidate_error_non_asset_decision',
+      '这条候选的结论是「保持当前版本」或「拒绝」，不走确认为资产这条路。'],
+    recall_candidate_security_blocked: ['cognition.candidate_error_security_blocked',
+      '内容被认知安全闸门拦下，不能沉淀为资产。'],
+    recall_candidate_unknown_source: ['cognition.candidate_error_unknown_source',
+      '有一条证据引用在来源列表里找不到，不能保存。证据只能从真实来源中选取。'],
+    recall_capture_not_review_ready: ['cognition.candidate_error_capture_not_review_ready',
+      '它所属的沉淀任务还没到可复核状态，稍后再确认。'],
+    recall_capture_writing: ['cognition.candidate_error_capture_writing',
+      '它所属的沉淀任务正在写入，等这一次写完再试。'],
+  };
+
+  /** 晋升闸门的拦截原因。与 promotion.ts::PromotionBlockReason 一一对应。 */
+  const RECALL_PROMOTION_BLOCK_TEXTS = {
+    personal_is_project_fact: ['cognition.candidate_block_personal_is_project_fact',
+      '这是项目或任务事实，它属于项目，不属于「关于我」。'],
+    template_not_reusable_structure: ['cognition.candidate_block_template_not_reusable_structure',
+      '模板要的是从来源里抽出来的可复用结构，指向原文件本身不算。'],
+    skill_not_executable: ['cognition.candidate_block_skill_not_executable',
+      '方法要写成可执行、可检验的样子，能力自述不算。'],
+    rule_boundary_required: ['cognition.candidate_block_rule_boundary_required',
+      '规则要先确认适用与禁止范围。'],
+    judgment_is_meta_commentary: ['cognition.candidate_block_judgment_is_meta_commentary',
+      '这段判断是在评价这条候选本身，不是可复用的内容。'],
+    type_conflicts_with_existing: ['cognition.candidate_block_type_conflicts_with_existing',
+      '同一句话已经以另一种类型存在，分类不可信；先裁定它到底属于哪一类。'],
+  };
+
+  /** 把 IPC 失败体（{code, error, promotionReasons}）翻成给用户看的话。 */
+  NS.recallErrorText = function recallErrorText(result) {
+    const code = String((result && result.code) || '');
+    if (code === 'promotion_blocked') {
+      const reasons = Array.isArray(result && result.promotionReasons) ? result.promotionReasons : [];
+      const lines = reasons
+        .map((reason) => RECALL_PROMOTION_BLOCK_TEXTS[reason])
+        .filter(Boolean)
+        .map((entry) => `· ${T(entry[0], entry[1])}`);
+      const head = T('cognition.candidate_error_promotion_blocked', '这条候选还不够格成为正式资产：');
+      return lines.length
+        ? `${head}\n${lines.join('\n')}`
+        : `${head}${T('cognition.candidate_error_promotion_blocked_unknown', '请检查内容、类型与作用范围。')}`;
+    }
+    const entry = RECALL_CANDIDATE_ERROR_TEXTS[code];
+    if (entry) return T(entry[0], entry[1]);
+    return (result && result.error) || T('cognition.candidate_error_generic', '这次操作没有完成，请稍后重试。');
+  };
+
   /* ────────────────────────── 动作层 ────────────────────────── */
   /* 所有写操作收口在这里：调用 IPC → toast → reload。视图里不允许直接 invoke。 */
 
@@ -297,6 +366,15 @@
         return;
       }
       const result = await api.call('recall.candidates.promote', { candidateId, ...(candidate.risk === 'high' ? { riskAcknowledged: true } : {}) });
+      // 晋升可能改变个人画像投影：异步刷新本体，失败只提醒不阻断（资产已落库）。
+      void (async () => {
+        if (typeof window.refreshPersonalOntology !== 'function') return;
+        try {
+          await window.refreshPersonalOntology();
+        } catch (error) {
+          toast(T('personalOntology.profile_sync_warning', '资产已保存，个人画像自动更新未完成，稍后可重试。'), 'warning');
+        }
+      })();
       if (result && result.assetId) {
         toast(T('cognition.candidate_promoted', '已成为正式资产'), 'success');
         router.go({ name: 'overview', assetId: result.assetId });
@@ -387,10 +465,63 @@
 
   /** 旧全局入口兼容（boot.js 的深链调用它）。 */
   window.switchSkillsCognitionPage = function switchSkillsCognitionPage(page) {
+    showRecallPanel();
+    router.legacy(page);
+  };
+
+  /** 从会话消息的 [asset:<id>] 引用卡跳转到认知资产详情页。
+   *  conversation.js 调用；不依赖调用方已在认知资产页。
+   *  （旧定义在 skills-bindings.js，其词法依赖随 skills.js 瘦身删除，迁到这里。） */
+  window.openCognitionAssetById = function openCognitionAssetById(assetId) {
+    if (!assetId) return false;
+    showRecallPanel();
+    router.go({ name: 'overview', category: '', assetId: String(assetId) });
+    return true;
+  };
+
+  /* ────────────────────────── 个人本体（内嵌工作台） ────────────────────────── */
+  /* #panel-personal-ontology 整体内嵌在 #panel-recall（index.html，含骨架与
+   * 「返回认知树」按钮），渲染函数来自 personal-ontology.js（随 recall 特性组
+   * 加载）。旧实现的显隐控制在 skills.js 被删的 4549 行里；此处接管：
+   * overview 常驻入口（views.js）+ boot.js 深链 + 面板内返回按钮。 */
+
+  function showRecallPanel() {
     try {
       if (typeof window._setViewFromSidebar === 'function') window._setViewFromSidebar('recall');
       else document.getElementById('recall-btn')?.click();
     } catch (_) { /* 面板切换失败也要完成路由 */ }
-    router.legacy(page);
+  }
+
+  function wireOntologyBackButton(section) {
+    const back = section.querySelector('[data-cognition-subview-tree]');
+    if (!back || back.dataset.ontologyBackWired === '1') return;
+    back.dataset.ontologyBackWired = '1';
+    back.addEventListener('click', () => { NS.closePersonalOntology(); });
+  }
+
+  NS.openPersonalOntology = async function openPersonalOntology() {
+    showRecallPanel();
+    const section = document.getElementById('skills-cognition-personal-ontology');
+    if (!section) return;
+    // 深链可能早于 recall 特性组加载完成：渲染函数不在时按需补载再画。
+    if (typeof window.renderPersonalOntology !== 'function') {
+      const load = typeof loadRendererFeature === 'function' ? loadRendererFeature : window.loadRendererFeature;
+      if (typeof load === 'function') {
+        try { await load('personal-ontology'); } catch (_) { /* 渲染函数缺席时下面跳过 */ }
+      }
+    }
+    section.hidden = false;
+    wireOntologyBackButton(section);
+    if (typeof window.renderPersonalOntology === 'function') {
+      try { await window.renderPersonalOntology(); } catch (_) { /* 本体渲染失败不阻塞主 UI */ }
+    }
+    section.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  NS.closePersonalOntology = function closePersonalOntology() {
+    const section = document.getElementById('skills-cognition-personal-ontology');
+    if (section) section.hidden = true;
+    const main = document.getElementById('ca-scroll');
+    if (main) main.scrollTop = 0;
   };
 })();
