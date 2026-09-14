@@ -92,14 +92,16 @@ describe('custom provider model persistence (真实磁盘回路)', () => {
     const model = providers.listCustomProviders(UID)[0].models.find((m) => m.id === 'rich-model');
     expect(model?.reasoningLevels).toEqual(['low', 'high']);
 
-    // 显式空数组（用户清空）仍然生效——不被"保留旧值"挡住。
-    const cleared = providers.updateCustomProviderModel(UID, added.id, 'rich-model', {
+    // 空数组（快照形态/未渲染的等级行）同样保留——自动快照无论带 undefined
+    // 还是 []，都不能清掉用户配置（2026-09-14 终版：保数据优先，清空需删模型）。
+    const emptied = providers.updateCustomProviderModel(UID, added.id, 'rich-model', {
       id: 'rich-model', contextWindow: 1000000, maxTokens: 384000, input: ['text'],
       reasoningLevels: [],
+      capabilities: [],
     });
-    expect(cleared.ok).toBe(true);
-    if (!cleared.ok) return;
-    expect(cleared.model.reasoningLevels).toBeUndefined();
-    expect(cleared.model.capabilities).toEqual(['structured_output']);
+    expect(emptied.ok).toBe(true);
+    if (!emptied.ok) return;
+    expect(emptied.model.reasoningLevels).toEqual(['low', 'high']);
+    expect(emptied.model.capabilities).toEqual(['structured_output']);
   });
 });
