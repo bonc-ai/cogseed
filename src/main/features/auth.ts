@@ -317,6 +317,16 @@ export interface CustomProviderModel {
   reasoningLevels?: string[];
   /** 推理参数映射（档位名 → 请求参数对象）。落库声明 + 可解析校验。 */
   reasoningParamsMap?: Record<string, unknown>;
+  /**
+   * 模型级启用开关（2026-09-14 参考图：行内开关）。**缺省 = 启用**，
+   * 只在关闭时写 `false`（与 cloud/config/component-enabled.json 同约定：
+   * 老数据无需迁移，也不写一堆 true）。
+   * 关闭语义（S2）：从模型选择器隐藏（auth.listModels 过滤）+ 阻止新绑定
+   * （isCustomProviderModelAllowed）+ 已绑定条目按既有"不可用即跳过"机制
+   * 自动兜底到下一条；模型参数（窗口/输出/推理档位/输入类型）原样保留，
+   * 随时可开关恢复。
+   */
+  enabled?: boolean;
 }
 
 export interface CustomProvider {
@@ -674,11 +684,14 @@ function parseCustomProviderModels(value: unknown): CustomProviderModel[] {
     const capabilities = parseCustomProviderModelCapabilities((metadata as { capabilities?: unknown }).capabilities);
     const reasoningLevels = parseCustomProviderReasoningLevels((metadata as { reasoningLevels?: unknown }).reasoningLevels);
     const reasoningParamsMap = parseCustomProviderReasoningMap((metadata as { reasoningParamsMap?: unknown }).reasoningParamsMap);
+    // enabled 只在显式 false 时落字段（true/缺失都等于启用）。
+    const modelEnabled = (metadata as { enabled?: unknown }).enabled;
     models.push({
       id,
       contextWindow,
       maxTokens,
       ...(typeof rawVision === 'boolean' ? { vision: rawVision } : {}),
+      ...(modelEnabled === false ? { enabled: false } : {}),
       ...(input ? { input } : {}),
       ...(capabilities ? { capabilities } : {}),
       ...(reasoningLevels ? { reasoningLevels } : {}),
@@ -940,10 +953,14 @@ function customProviderForId(store: ProfilesFile, providerId: string): CustomPro
   return (store.customProviders || []).find((provider) => provider.id === id);
 }
 
+/** 该模型是否可用：存在 **且** 未被模型级开关关闭。
+ *  关闭后这里返回 false → isEntryAllowed 判条目"不可用" → 对话调度按既有
+ *  "跳过不可用条目、兜底到下一条"机制处理（auth.ts pickChatEntryGroup）。 */
 function isCustomProviderModelAllowed(provider: CustomProvider, model: string): boolean {
   const normalized = String(model || '').trim();
   if (!normalized) return false;
-  return provider.models.some((candidate) => candidate.id === normalized);
+  const hit = provider.models.find((candidate) => candidate.id === normalized);
+  return !!hit && hit.enabled !== false;
 }
 
 function isEntryAllowed(store: ProfilesFile, entry: Entry): boolean {
@@ -1303,7 +1320,9 @@ export async function listModels(providerId: string): Promise<{ models: { id: st
     // 恢复，形成"配置驱动展示"的闭环。运行时的 reasoning_effort 透传
     // 判定（custom_provider_runtime）不变——展示链与执行链职责分离。
     const custom = customProviderForId(loadProfiles(), id);
-    const models = custom?.models || [];
+    // 模型级开关关闭的不进选择器（S2：隐藏 + 阻止新绑定；详情卡用的是
+    // customProviders.list 的全量清单，开关本身仍然可见可拨回）。
+    const models = (custom?.models || []).filter((model) => model.enabled !== false);
     const out: { id: string; name: string; contextWindow?: number; vision?: boolean; reasoning?: boolean }[] = [];
     // contextWindow/vision 透传不依赖识别器（目录解析独立）。
     for (const model of models) {

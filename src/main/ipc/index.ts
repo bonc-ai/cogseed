@@ -5023,6 +5023,17 @@ const invokeHandlers: Record<string, InvokeHandler> = {
     boundedText(args?.modelId, 'modelId', 200),
     boundedCustomProviderModel(args.model, 'model'),
   ),
+  // 模型级开关（S2）：关闭 = 选择器隐藏 + 阻止新绑定 + 已绑定条目跳过兜底；
+  // 配置与绑定都保留，随时可拨回。
+  'customProviders.model.setEnabled': async (args, ctx) => {
+    if (typeof args?.enabled !== 'boolean') throw new Error('enabled must be boolean');
+    return customProviders.setCustomProviderModelEnabled(
+      ctx.userId,
+      boundedText(args?.providerId, 'providerId', 120),
+      boundedText(args?.modelId, 'modelId', 200),
+      args.enabled,
+    );
+  },
   'customProviders.model.remove': async (args, ctx) => customProviders.removeCustomProviderModel(
     ctx.userId,
     boundedText(args?.providerId, 'providerId', 120),

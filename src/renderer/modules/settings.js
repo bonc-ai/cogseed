@@ -1444,6 +1444,168 @@ function _settingsRerenderCustomProviderModalForI18n() {
   }
 }
 
+/** 字段容器：uiField + 就地错误行（失败时只写文案，不改结构）。 */
+function _settingsCustomProviderFieldHtml(fieldHtml) {
+  return '<div class="settings-custom-provider-field">' + fieldHtml
+    + '<div class="form-msg settings-custom-provider-field-msg"></div></div>';
+}
+
+function _settingsSetCustomProviderFieldMessage(input, text) {
+  const scope = input && typeof input.closest === 'function'
+    ? input.closest('.settings-custom-provider-field')
+    : null;
+  const el = scope ? scope.querySelector('.settings-custom-provider-field-msg') : null;
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'form-msg settings-custom-provider-field-msg' + (text ? ' error' : '');
+}
+
+/** 部分更新提交：只带变更字段；成功后就地重画详情卡（名称/掩码/开关态跟着换新）。 */
+async function _settingsCommitCustomProviderPatch(provider, patch) {
+  const res = await _settingsCallCustomProvider('customProviders.update', { id: provider.id, ...patch });
+  if (!res || !res.ok) {
+    return { ok: false, error: (res && res.error) || t('settings.custom_providers.save_failed') };
+  }
+  await _settingsReload();
+  const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id) || provider;
+  const generation = _settingsState.customProviderModalView?.generation || 0;
+  if (_settingsIsCustomProviderModalViewActive(generation, provider.id)) {
+    _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+  }
+  _settingsSetStatus('settings-picker-status', 'ok', t('settings.custom_providers.update_ok'));
+  return { ok: true, provider: refreshed };
+}
+
+/** 字段即改即存：blur/Enter 提交，Escape 还原，校验失败就地红字并回滚显示。 */
+function _settingsWireCustomProviderField(body, inputId, options) {
+  const input = body.querySelector('#' + inputId) || document.getElementById(inputId);
+  if (!input) return null;
+  const original = String(input.value ?? '');
+  const commit = async () => {
+    const value = String(input.value ?? '').trim();
+    const problem = options.validate ? options.validate(value) : '';
+    if (problem) {
+      _settingsSetCustomProviderFieldMessage(input, problem);
+      input.value = original;
+      return;
+    }
+    if (options.skip && options.skip(value)) return;
+    input.disabled = true;
+    const res = await _settingsCommitCustomProviderPatch(options.provider, options.patch(value));
+    input.disabled = false;
+    if (!res.ok) {
+      _settingsSetCustomProviderFieldMessage(input, res.error);
+      input.value = original;
+      return;
+    }
+    _settingsSetCustomProviderFieldMessage(input, '');
+  };
+  input.addEventListener('blur', () => { void commit(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { input.value = original; input.blur(); }
+  });
+  return input;
+}
+
+/** 模型行徽标：窗口 / 输出 / 视觉 / 推理（紧凑 pill，替换旧的长文案）。 */
+function _settingsCustomProviderModelBadges(model) {
+  const badges = [];
+  const windowLabel = _settingsFormatTokenLimit(model.contextWindow);
+  if (windowLabel) badges.push(windowLabel);
+  const outputLabel = _settingsFormatTokenLimit(model.maxTokens);
+  if (outputLabel) badges.push(outputLabel);
+  const seesImages = model.vision === true
+    || (Array.isArray(model.input) && model.input.includes('image'));
+  if (seesImages) badges.push(t('settings.custom_providers.badge_vision'));
+  if (Array.isArray(model.reasoningLevels) && model.reasoningLevels.length) {
+    badges.push(t('settings.custom_providers.badge_reasoning'));
+  }
+  return badges;
+}
+
+/** 每模型开关（S2）：关闭前提示已绑定条目；失败回滚开关位置。 */
+function _settingsCustomProviderModelToggle(provider, model) {
+  const label = document.createElement('label');
+  label.className = 'toggle-switch is-compact settings-custom-provider-model-toggle';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = model.enabled !== false;
+  const accessible = t('settings.custom_providers.model_toggle_label', { model: model.id });
+  input.setAttribute('aria-label', accessible);
+  input.title = accessible;
+  input.addEventListener('change', async () => {
+    const next = input.checked;
+    if (!next) {
+      const bound = (_settingsState.entries || [])
+        .filter((entry) => entry.provider === 'cp:' + provider.id && entry.model === model.id);
+      if (bound.length) {
+        const confirmed = typeof uiConfirm === 'function'
+          ? await uiConfirm(t('settings.custom_providers.disable_model_confirm', { count: String(bound.length) }))
+          : true;
+        if (!confirmed) { input.checked = true; return; }
+      }
+    }
+    input.disabled = true;
+    const res = await _settingsCallCustomProvider('customProviders.model.setEnabled', {
+      providerId: provider.id,
+      modelId: model.id,
+      enabled: next,
+    });
+    input.disabled = false;
+    if (!res || !res.ok) {
+      input.checked = !next;
+      _settingsCustomProviderModalStatus('error', (res && res.error) || t('settings.custom_providers.save_failed'));
+      return;
+    }
+    _settingsCustomProviderModalStatus('', t(
+      next ? 'settings.custom_providers.model_enabled_ok' : 'settings.custom_providers.model_disabled_ok',
+      { model: model.id },
+    ));
+    await _settingsReload();
+    const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id) || provider;
+    const generation = _settingsState.customProviderModalView?.generation || 0;
+    if (_settingsIsCustomProviderModalViewActive(generation, provider.id)) {
+      _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+    }
+  });
+  label.appendChild(input);
+  return label;
+}
+
+/** ⋯ 菜单：低频/危险动作收进溢出菜单，头部只留启用开关。 */
+function _settingsOpenCustomProviderMenu(provider, event) {
+  if (typeof showContextMenu !== 'function') return;
+  const enabled = provider.enabled !== false;
+  showContextMenu(event, [
+    {
+      label: t('settings.custom_providers.fetch_models'),
+      icon: 'refresh',
+      onClick: () => { void _settingsOpenCustomProviderFetchModels(provider); },
+    },
+    {
+      label: t('settings.custom_providers.copy_base_url'),
+      icon: 'link',
+      onClick: () => {
+        try {
+          void navigator.clipboard?.writeText(provider.baseUrl || '');
+          _settingsSetStatus('settings-picker-status', 'ok', t('settings.custom_providers.copied'));
+        } catch (_) { /* 剪贴板不可用：静默（地址本来就在卡上） */ }
+      },
+    },
+    {
+      label: enabled ? t('settings.custom_providers.disable') : t('settings.custom_providers.enable'),
+      icon: enabled ? 'x' : 'check',
+      onClick: () => { void _settingsSetCustomProviderEnabled(provider, !enabled); },
+    },
+    {
+      label: t('settings.custom_providers.delete_provider'),
+      icon: 'trash',
+      onClick: () => { void _settingsRemoveCustomProvider(provider); },
+    },
+  ]);
+}
 function _settingsOpenCustomProviderDetails(provider, options = {}) {
   const overlay = document.getElementById('settings-custom-provider-modal');
   const title = document.getElementById('settings-custom-provider-modal-title');
@@ -1453,69 +1615,186 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
   _settingsSetCustomProviderModalView('details', provider, null, options.preserveSession === true);
   const models = _settingsCustomProviderModels(provider);
   const enabled = provider.enabled !== false;
-  title.textContent = provider.name || provider.id;
-  body.innerHTML = `
-    <div class="settings-custom-provider-detail-toolbar">
-      <span class="settings-custom-provider-state ${enabled ? 'is-enabled' : 'is-disabled'}">${escapeHtml(enabled ? t('common.enabled') : t('common.disabled'))}</span>
-      <div class="settings-custom-provider-detail-actions" id="settings-custom-provider-detail-actions"></div>
-    </div>
-    <dl class="settings-custom-provider-facts">
-      <div><dt>${escapeHtml(t('settings.custom_providers.base_url'))}</dt><dd>${escapeHtml(provider.baseUrl || '')}</dd></div>
-      <div><dt>${escapeHtml(t('settings.custom_providers.api_format'))}</dt><dd>${escapeHtml(_settingsCustomProviderApiFormatLabel(provider.protocol))}</dd></div>
-      <div><dt>${escapeHtml(t('settings.custom_providers.api_key'))}</dt><dd class="account-mask">${escapeHtml(provider.apiKeyMasked || t('settings.custom_providers.api_key_missing'))}</dd></div>
-    </dl>
-    <div class="settings-custom-provider-detail-models">
-      <div class="settings-custom-provider-detail-models-head"><h4>${escapeHtml(t('settings.custom_providers.models'))}</h4><button type="button" class="btn" id="settings-custom-provider-detail-add-model">${_settingsIconHtml('plus', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.add_model'))}</span></button></div>
-      <div id="settings-custom-provider-detail-model-list" class="settings-custom-provider-detail-model-list"></div>
-    </div>
-  `;
-  const detailActions = body.querySelector('#settings-custom-provider-detail-actions') || document.getElementById('settings-custom-provider-detail-actions');
-  detailActions?.appendChild(_settingsCustomProviderActionButton(
-    'edit-pencil', t('settings.custom_providers.edit_provider'), 'btn btn-sm',
-    () => _settingsOpenCustomProviderModal(provider),
-  ));
-  detailActions?.appendChild(_settingsCustomProviderActionButton(
-    enabled ? 'x' : 'check',
-    enabled ? t('settings.custom_providers.disable') : t('settings.custom_providers.enable'),
-    'btn btn-sm',
-    () => _settingsSetCustomProviderEnabled(provider, !enabled),
-  ));
-  detailActions?.appendChild(_settingsCustomProviderActionButton(
-    'trash', t('settings.custom_providers.delete_provider'), 'icon-btn danger',
-    () => _settingsRemoveCustomProvider(provider),
-  ));
+  // 标题用中性文案：卡片头部已有「图标 + 名称」，标题再写一遍名称是重复。
+  title.textContent = t('settings.custom_providers.detail_title');
 
-  const modelList = body.querySelector('#settings-custom-provider-detail-model-list') || document.getElementById('settings-custom-provider-detail-model-list');
+  const nameId = 'settings-custom-provider-detail-name';
+  const baseUrlId = 'settings-custom-provider-detail-base-url';
+  const protocolId = 'settings-custom-provider-detail-protocol';
+  const apiKeyId = 'settings-custom-provider-detail-api-key';
+
+  const fieldsHtml = [
+    _settingsCustomProviderFieldHtml(window.uiField({
+      id: nameId,
+      label: t('settings.custom_providers.name'),
+      control: {
+        kind: 'input',
+        value: provider.name || '',
+        attrs: { maxlength: '60', autocomplete: 'off', spellcheck: 'false' },
+      },
+    })),
+    _settingsCustomProviderFieldHtml(window.uiField({
+      id: baseUrlId,
+      label: t('settings.custom_providers.base_url'),
+      control: {
+        kind: 'input',
+        value: provider.baseUrl || '',
+        attrs: { autocomplete: 'off', spellcheck: 'false' },
+      },
+    })),
+    _settingsCustomProviderFieldHtml(window.uiField({
+      id: protocolId,
+      label: t('settings.custom_providers.api_format'),
+      control: {
+        kind: 'select',
+        value: provider.protocol || 'anthropic',
+        options: [
+          { value: 'anthropic', label: t('settings.custom_providers.api_format_anthropic') },
+          { value: 'openai', label: t('settings.custom_providers.api_format_openai') },
+          { value: 'openai-responses', label: t('settings.custom_providers.api_format_openai_responses') },
+          { value: 'gemini', label: t('settings.custom_providers.api_format_gemini') },
+        ],
+      },
+    })),
+    _settingsCustomProviderFieldHtml(window.uiField({
+      id: apiKeyId,
+      label: t('settings.custom_providers.api_key'),
+      hint: t('settings.custom_providers.api_key_replace_hint', {
+        masked: provider.apiKeyMasked || t('settings.custom_providers.api_key_missing'),
+      }),
+      control: {
+        kind: 'input',
+        type: 'password',
+        value: '',
+        placeholder: provider.apiKeyMasked || '',
+        attrs: { autocomplete: 'new-password', spellcheck: 'false' },
+      },
+    })),
+  ].join('');
+
+  body.innerHTML = '<div class="settings-custom-provider-detail-header">'
+    + '<div class="settings-custom-provider-detail-identity">'
+    + '<span class="settings-custom-provider-detail-icon">' + _settingsIconHtml('box', 'ui-icon') + '</span>'
+    + '<span class="settings-custom-provider-detail-name">' + escapeHtml(provider.name || provider.id) + '</span>'
+    + '</div>'
+    + '<div class="settings-custom-provider-detail-header-actions" id="settings-custom-provider-detail-header-actions"></div>'
+    + '</div>'
+    + '<p class="settings-custom-provider-detail-subtitle">' + escapeHtml(t('settings.custom_providers.detail_subtitle')) + '</p>'
+    + '<div class="settings-custom-provider-detail-fields">' + fieldsHtml + '</div>'
+    + '<div class="settings-custom-provider-detail-models">'
+    + '<div class="settings-custom-provider-detail-models-head"><h4>' + escapeHtml(t('settings.custom_providers.models')) + '</h4>'
+    + '<div class="settings-custom-provider-detail-models-actions" id="settings-custom-provider-detail-models-actions"></div>'
+    + '</div>'
+    + '<div id="settings-custom-provider-detail-model-list" class="settings-custom-provider-detail-model-list"></div>'
+    + '</div>';
+
+  // 头部：启用开关 + ⋯ 菜单（低频/危险动作收进菜单，头部只留一个开关）
+  const headerActions = body.querySelector('#settings-custom-provider-detail-header-actions');
+  if (headerActions) {
+    const toggle = document.createElement('label');
+    toggle.className = 'toggle-switch settings-custom-provider-detail-toggle';
+    const toggleInput = document.createElement('input');
+    toggleInput.type = 'checkbox';
+    toggleInput.checked = enabled;
+    const toggleLabel = t('settings.custom_providers.provider_toggle_label', { name: provider.name || provider.id });
+    toggleInput.setAttribute('aria-label', toggleLabel);
+    toggleInput.title = toggleLabel;
+    toggleInput.addEventListener('change', () => {
+      void _settingsSetCustomProviderEnabled(provider, toggleInput.checked);
+    });
+    toggle.appendChild(toggleInput);
+    headerActions.appendChild(toggle);
+    headerActions.appendChild(_settingsCustomProviderActionButton(
+      'more-horizontal',
+      t('settings.custom_providers.actions'),
+      'icon-btn settings-custom-provider-menu-btn',
+      (event) => { _settingsOpenCustomProviderMenu(provider, event || {}); },
+    ));
+  }
+
+  // 字段：即改即存（customProviders.update 的部分更新语义）
+  _settingsWireCustomProviderField(body, nameId, {
+    provider,
+    skip: (value) => !value || value === (provider.name || ''),
+    validate: (value) => (value ? '' : t('settings.custom_providers.error_name')),
+    patch: (value) => ({ name: value }),
+  });
+  _settingsWireCustomProviderField(body, baseUrlId, {
+    provider,
+    skip: (value) => value === (provider.baseUrl || ''),
+    validate: (value) => (_settingsIsValidCustomProviderUrl(value) ? '' : t('settings.custom_providers.error_base_url')),
+    patch: (value) => ({ baseUrl: value }),
+  });
+  _settingsWireCustomProviderField(body, apiKeyId, {
+    provider,
+    skip: (value) => !value,
+    patch: (value) => ({ apiKey: value }),
+  });
+  if (typeof hydrateUiFormSelects === 'function') {
+    hydrateUiFormSelects(body, {
+      [protocolId]: (value) => {
+        if (!value || value === provider.protocol) return;
+        void _settingsCommitCustomProviderPatch(provider, { protocol: value }).then((res) => {
+          if (!res.ok) _settingsCustomProviderModalStatus('error', res.error);
+        });
+      },
+    });
+  }
+
+  // 模型列表：紧凑徽标 + 测试/编辑/删除 + 每模型开关
+  const modelList = body.querySelector('#settings-custom-provider-detail-model-list')
+    || document.getElementById('settings-custom-provider-detail-model-list');
   if (modelList) {
     if (!models.length) {
-      modelList.innerHTML = `<div class="settings-empty">${escapeHtml(t('settings.custom_providers.empty_models'))}</div>`;
+      modelList.innerHTML = '<div class="settings-empty">'
+        + escapeHtml(t('settings.custom_providers.empty_models_hint')) + '</div>';
     } else {
       for (const model of models) {
         const row = document.createElement('div');
-        row.className = 'settings-custom-provider-detail-model-row';
+        row.className = 'settings-custom-provider-detail-model-row'
+          + (model.enabled === false ? ' is-model-disabled' : '');
+        row.dataset.modelId = model.id;
         const info = document.createElement('div');
         info.className = 'settings-custom-provider-detail-model-info';
-        info.innerHTML = `<strong>${escapeHtml(model.id)}</strong><span>${escapeHtml(t('settings.custom_providers.context_badge', { value: _settingsFormatTokenLimit(model.contextWindow) }))}</span><span>${escapeHtml(t('settings.custom_providers.output_badge', { value: _settingsFormatTokenLimit(model.maxTokens) }))}</span>`;
+        const name = document.createElement('strong');
+        name.textContent = model.id;
+        info.appendChild(name);
+        for (const badge of _settingsCustomProviderModelBadges(model)) {
+          const badgeEl = document.createElement('span');
+          badgeEl.className = 'settings-custom-provider-model-badge';
+          badgeEl.textContent = badge;
+          info.appendChild(badgeEl);
+        }
+        if (model.enabled === false) {
+          const note = document.createElement('span');
+          note.className = 'settings-custom-provider-model-note';
+          note.textContent = t('settings.custom_providers.model_disabled_note');
+          info.appendChild(note);
+        }
         const rowActions = document.createElement('div');
         rowActions.className = 'settings-custom-provider-detail-model-actions';
         rowActions.appendChild(_settingsCustomProviderActionButton('zap', t('settings.custom_providers.test_model'), 'icon-btn', () => _settingsTestCustomProviderModel(provider, model)));
         rowActions.appendChild(_settingsCustomProviderActionButton('edit-pencil', t('settings.custom_providers.edit_model'), 'icon-btn', () => _settingsOpenCustomProviderModelEditor(provider, model)));
         rowActions.appendChild(_settingsCustomProviderActionButton('trash', t('settings.custom_providers.remove_model'), 'icon-btn danger', () => _settingsRemoveCustomProviderModel(provider, model.id)));
+        rowActions.appendChild(_settingsCustomProviderModelToggle(provider, model));
         row.appendChild(info);
         row.appendChild(rowActions);
         modelList.appendChild(row);
       }
     }
   }
-  const addModelButton = body.querySelector('#settings-custom-provider-detail-add-model') || document.getElementById('settings-custom-provider-detail-add-model');
-  addModelButton?.addEventListener('click', () => _settingsOpenCustomProviderModelEditor(provider));
-  // 远端模型发现：调服务自己的 list-models 端点拉全量清单，勾选导入。
-  const fetchModelsButton = document.createElement('button');
-  fetchModelsButton.type = 'button';
-  fetchModelsButton.className = 'btn';
-  fetchModelsButton.innerHTML = `${_settingsIconHtml('refresh', 'ui-icon')}<span>${escapeHtml(t('settings.custom_providers.fetch_models'))}</span>`;
-  fetchModelsButton.addEventListener('click', () => _settingsOpenCustomProviderFetchModels(provider));
-  addModelButton?.parentNode?.appendChild(fetchModelsButton);
+
+  const modelsActions = body.querySelector('#settings-custom-provider-detail-models-actions');
+  if (modelsActions) {
+    modelsActions.appendChild(_settingsCustomProviderActionButton(
+      'plus', t('settings.custom_providers.add_model'), 'btn btn-primary btn-sm',
+      () => _settingsOpenCustomProviderModelEditor(provider),
+    ));
+    modelsActions.appendChild(_settingsCustomProviderActionButton(
+      'refresh', t('settings.custom_providers.fetch_models'), 'btn btn-sm',
+      () => _settingsOpenCustomProviderFetchModels(provider),
+    ));
+  }
 
   actions.innerHTML = '';
   const closeButton = document.createElement('button');

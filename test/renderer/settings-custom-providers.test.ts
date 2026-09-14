@@ -143,17 +143,43 @@ class FakeElement {
     this.html = value;
     for (const child of this.children) child.parentElement = null;
     this.children.length = 0;
-    const tagPattern = /<([a-z0-9-]+)\b([^>]*)>/gi;
+    this.textContent = '';
+    // 栈式解析（2026-09-14）：扁平解析会把嵌套层级压平——字段容器里的
+    // 输入框会变成容器的兄弟节点，`input.closest('.field')` 这类包含关系
+    // 断言在 harness 里永远为 null。这里按开/闭标签维护父子栈。
+    // 帧栈：每个开标签都压一帧（纯结构标签的帧 el=null），闭标签按帧弹出——
+    // 只压"进树节点"会让无 id/class 的标签把栈带偏，嵌套关系随之错位。
+    const stack: Array<FakeElement | null> = [this];
+    const currentParent = (): FakeElement => {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        const frame = stack[i];
+        if (frame) return frame;
+      }
+      return this;
+    };
+    const token = /<\/?([a-z0-9-]+)\b([^>]*)>|([^<]+)/gi;
     let match: RegExpExecArray | null;
-    while ((match = tagPattern.exec(value))) {
-      const attrs = match[2];
+    while ((match = token.exec(value))) {
+      const raw = match[0];
+      const text = match[3];
+      if (text !== undefined) {
+        const node = currentParent();
+        const trimmed = text.trim();
+        if (trimmed) node.textContent += trimmed;
+        continue;
+      }
+      if (raw.startsWith('</')) {
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+      const attrs = match[2] || '';
       const id = attrs.match(/\bid="([^"]+)"/)?.[1] || '';
       const className = attrs.match(/\bclass="([^"]+)"/)?.[1] || '';
       const nameAttr = attrs.match(/\bname="([^"]+)"/)?.[1] || '';
       // 带 name 的控件（chips checkbox 等）也进树——只有 id/class 的旧过滤
       // 会把它们整个丢掉，query 不到（2026-09-14 保存失效排查）。
-      if (!id && !className && !nameAttr) continue;
       const child = new FakeElement(this.registry, id, match[1]);
+      const hasIdentity = Boolean(id || className || nameAttr);
       child.className = className;
       child.type = attrs.match(/\btype="([^"]+)"/)?.[1] || '';
       child.value = attrs.match(/\bvalue="([^"]*)"/)?.[1] || '';
@@ -163,15 +189,15 @@ class FakeElement {
       // 永远看不到「已保存的高级配置真的渲染进了表单」，回显缺陷测不出来。
       if (/(?:^|\s)checked(?:\s|$)/.test(attrs)) child.checked = true;
       if (match[1].toLowerCase() === 'textarea') {
-        const close = value.indexOf('</textarea>', tagPattern.lastIndex);
+        const close = value.indexOf('</textarea>', token.lastIndex);
         if (close >= 0) {
-          child.value = value.slice(tagPattern.lastIndex, close)
+          child.value = value.slice(token.lastIndex, close)
             .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
         }
       }
       // 全属性按对象属性填充：本类 getAttribute 读 (this)[name]，而非 attrs
-      // 字典——checkbox 的 name/value 属性因此可查（2026-09-14 保存失效
-      // 排查）。不覆盖上面已显式赋值的字段（className/value 等）。
+      // 字典——checkbox 的 name/value 属性因此可查。不覆盖上面已显式赋值的
+      // 字段（className/value 等）。
       for (const attrMatch of attrs.matchAll(/([a-z0-9-]+)="([^"]*)"/gi)) {
         const key = attrMatch[1].replace(/-([a-z])/g, (_all, letter) => letter.toUpperCase());
         if ((child as any)[key] === undefined || (child as any)[key] === '') {
@@ -181,7 +207,11 @@ class FakeElement {
       for (const dataMatch of attrs.matchAll(/data-([a-z0-9-]+)="([^"]*)"/gi)) {
         child.dataset[dataMatch[1].replace(/-([a-z])/g, (_all, letter) => letter.toUpperCase())] = dataMatch[2];
       }
-      this.appendChild(child);
+      // 只有带 id/class/name 的节点进树（保持旧过滤：纯结构标签不进树），
+      // 但每个开标签都要占一帧，闭标签才能把栈弹回正确层级。
+      const selfClosing = /\/>$/.test(raw);
+      if (hasIdentity) child && currentParent().appendChild(child);
+      if (!selfClosing) stack.push(hasIdentity ? child : null);
     }
   }
 
@@ -191,6 +221,21 @@ class FakeElement {
 
   getBoundingClientRect() {
     return { top: 0, bottom: 20, left: 0, right: 100, width: 100, height: 20 };
+  }
+
+  // 字段容器用 closest() 找就地错误行（真实 DOM 有；harness 需等价实现）。
+  closest(selector: string) {
+    const matches = (el: FakeElement): boolean => {
+      if (selector.startsWith('.')) return el.className.split(/\s+/).includes(selector.slice(1));
+      if (selector.startsWith('#')) return el.id === selector.slice(1);
+      return el.tagName.toLowerCase() === selector.toLowerCase();
+    };
+    let node: FakeElement | null = this;
+    while (node) {
+      if (matches(node)) return node;
+      node = node.parentElement;
+    }
+    return null;
   }
 
   // 面板渲染有"元素已被移除就不再写 DOM"的守卫（避免异步回来写进已关闭的弹窗）；
@@ -220,8 +265,6 @@ function buildHarness() {
     'settings-custom-provider-models',
     'settings-custom-provider-model-list',
     'settings-custom-provider-add-model',
-    'settings-custom-provider-detail-actions',
-    'settings-custom-provider-detail-add-model',
     'settings-custom-provider-detail-model-list',
     'settings-picker-provider',
     'settings-picker-model',
@@ -357,9 +400,13 @@ function buildHarness() {
   // VM 里只装最小等价桩：字段要带出可寻址的输入，按钮要带出可点标签。
   windowObj.uiField = (options: any) => {
     const control = options?.control || {};
+    const hint = options?.hint ? `<p class="ui-field__hint">${String(options.hint)}</p>` : '';
+    const placeholder = control.placeholder == null ? '' : ` placeholder="${String(control.placeholder)}"`;
     return '<div class="ui-field"><span class="ui-field__label">' + String(options?.label || '') + '</span>'
-      + `<input id="${String(options?.id || '')}" class="form-input ui-input" value="${control.value == null ? '' : String(control.value)}" /></div>`;
+      + `<input id="${String(options?.id || '')}" class="form-input ui-input" value="${control.value == null ? '' : String(control.value)}"${placeholder} />`
+      + hint + '</div>';
   };
+  windowObj.showContextMenu = vi.fn();
   windowObj.uiButton = (options: any) => `<button type="button" class="btn ui-button ${String(options?.className || '')}" data-label="${String(options?.label || '')}">${String(options?.label || '')}</button>`;
   windowObj.uiIconButton = (options: any) => `<button type="button" class="ui-icon-button" data-label="${String(options?.label || '')}"></button>`;
   vm.createContext(context);
@@ -433,6 +480,8 @@ describe('settings model providers surface', () => {
       '.settings-custom-provider-secret-input',
       '@media (max-width: 720px)',
       '.settings-custom-provider-model-draft-remove',
+      '.settings-custom-provider-detail-header-actions > .icon-btn',
+      '.settings-custom-provider-detail-model-list',
     ]) expect(style).toContain(selector);
   });
 
@@ -614,8 +663,13 @@ describe('settings model providers surface', () => {
 
     vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
     const detailList = registry.get('settings-custom-provider-detail-model-list')!;
-    const actionButtons = detailList.children[0].children[1].children;
+    const rowChildren = detailList.children[0].children[1].children;
+    // 行内动作仍是三个图标钮（测试/编辑/删除），行尾另有每模型开关（label 容器，
+    // 不是按钮）——两类控件分开数，避免把开关也当成图标钮。
+    const actionButtons = rowChildren.filter((child: any) => child.className.includes('icon-btn'));
     expect(actionButtons).toHaveLength(3);
+    expect(rowChildren.filter((child: any) => child.className.includes('settings-custom-provider-model-toggle')))
+      .toHaveLength(1);
     for (const button of actionButtons) {
       expect(button.innerHTML).not.toContain('<span>');
       expect(button.title).toBeTruthy();
@@ -1044,7 +1098,8 @@ describe('settings model providers surface', () => {
     expect(manageButton).toBeTruthy();
     await manageButton!.click();
     expect(registry.get('settings-custom-provider-modal')!.classList.contains('open')).toBe(true);
-    expect(registry.get('settings-custom-provider-modal-title')!.textContent).toBe('Disabled Relay');
+    // 详情卡标题改用中性文案（名称在卡片头部的「图标 + 名称」里，避免重复）
+    expect(registry.get('settings-custom-provider-modal-title')!.textContent).toBe('settings.custom_providers.detail_title');
   });
 
   it('gives built-in preset rows a settings entry and writes a local window/output override', async () => {
@@ -1124,6 +1179,83 @@ describe('settings model providers surface', () => {
     await saveButton().click();
     expect(invoke.mock.calls.some(([channel]) => channel === 'modelOverrides.set')).toBe(false);
     expect(editor.querySelector('.settings-preset-editor-error')!.textContent).toBe('settings.preset.error_order');
+  });
+
+  it('edits provider fields in place (B2 即时提交): blur commits the changed field only', async () => {
+    const { context, registry, invoke } = buildHarness();
+    context.__provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***', models: [{ id: 'gpt-4.1-mini', contextWindow: 1000000, maxTokens: 384000 }],
+    };
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+
+    const baseUrl = registry.get('settings-custom-provider-detail-base-url')!;
+    expect(baseUrl.value).toBe('https://relay.example/v1');
+    // 非法 URL：就地报错，不发 IPC
+    baseUrl.value = 'ftp://nope';
+    await baseUrl.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(invoke.mock.calls.some(([channel]) => channel === 'customProviders.update')).toBe(false);
+    expect(baseUrl.closest('.settings-custom-provider-field')!.querySelector('.settings-custom-provider-field-msg')!.textContent)
+      .toBe('settings.custom_providers.error_base_url');
+    // 合法新值：提交时只带变更字段（部分更新）
+    baseUrl.value = 'https://relay2.example/v1';
+    await baseUrl.dispatch('blur');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const call = invoke.mock.calls.find(([channel]) => channel === 'customProviders.update');
+    expect(call![1]).toEqual({ id: 'cp-1', baseUrl: 'https://relay2.example/v1' });
+  });
+
+  it('renders compact model badges and a per-model switch that confirms before disabling a bound model', async () => {
+    const { context, registry, invoke } = buildHarness();
+    context.__provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{
+        id: 'gpt-4.1-mini', contextWindow: 1000000, maxTokens: 384000,
+        input: ['text', 'image'], reasoningLevels: ['low', 'high'],
+      }],
+    };
+    context.__entries = [{ entryId: 'e-1', provider: 'cp:cp-1', model: 'gpt-4.1-mini', profileId: 'cp:cp-1' }];
+    vm.runInContext('_settingsState.entries = __entries; _settingsOpenCustomProviderDetails(__provider)', context);
+
+    const row = registry.get('settings-custom-provider-detail-model-list')!.children[0];
+    expect(Array.from(row.querySelectorAll('.settings-custom-provider-model-badge'), (el: any) => el.textContent))
+      .toEqual(['1M', '384K', 'settings.custom_providers.badge_vision', 'settings.custom_providers.badge_reasoning']);
+
+    const toggleLabel = row.querySelector('.settings-custom-provider-model-toggle')!;
+    const toggle = toggleLabel.children[0] as any;
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    await toggle.dispatch('change');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 有绑定条目 → 先确认（把副作用讲在动手之前）
+    expect(context.uiConfirm).toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith('customProviders.model.setEnabled', {
+      providerId: 'cp-1', modelId: 'gpt-4.1-mini', enabled: false,
+    });
+  });
+
+  it('rolls the model switch back and reports when the toggle write fails', async () => {
+    const { context, registry, invoke } = buildHarness();
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'customProviders.model.setEnabled') return { ok: false, error: 'boom' };
+      if (channel === 'customProviders.list') return { ok: true, providers: [] };
+      return { ok: true };
+    });
+    context.__provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***', models: [{ id: 'gpt-4.1-mini', contextWindow: 1000000, maxTokens: 384000 }],
+    };
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+    const row = registry.get('settings-custom-provider-detail-model-list')!.children[0];
+    const toggle = row.querySelector('.settings-custom-provider-model-toggle')!.children[0] as any;
+    toggle.checked = false;
+    await toggle.dispatch('change');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 失败回滚到原状态 + 弹窗状态行报错
+    expect(toggle.checked).toBe(true);
+    expect(registry.get('settings-custom-provider-modal-status')!.textContent).toBe('boom');
   });
 
   it('reloads includeUnavailable entries after reordering instead of trusting the filtered response', async () => {

@@ -16868,88 +16868,11 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 .settings-custom-provider-model-draft-remove .ui-icon { width: 14px; height: 14px; }
 .settings-custom-provider-add-model { margin-top: 10px; }
-.settings-custom-provider-detail-toolbar,
 .settings-custom-provider-detail-models-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-.settings-custom-provider-detail-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 2px;
-}
-/* Minimal toolbar: quiet text buttons, background only on hover. */
-.settings-custom-provider-detail-actions .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-}
-.settings-custom-provider-detail-actions .btn:hover {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.settings-custom-provider-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  font-size: 12px;
-  font-weight: 550;
-  white-space: nowrap;
-}
-.settings-custom-provider-state::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.settings-custom-provider-state.is-enabled {
-  color: var(--success);
-}
-.settings-custom-provider-state.is-disabled {
-  color: var(--muted);
-}
-.settings-custom-provider-facts {
-  display: grid;
-  gap: 7px;
-  margin: 16px 0 18px;
-}
-.settings-custom-provider-facts > div {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-.settings-custom-provider-facts dt {
-  flex: 0 0 96px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-}
-.settings-custom-provider-facts dd {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  color: var(--text);
-}
-.settings-custom-provider-facts dd.account-mask {
-  font-family: var(--font-mono);
-  font-size: 12px;
 }
 .settings-custom-provider-detail-models-head { margin-bottom: 10px; }
 .settings-custom-provider-detail-models-head h4 {
@@ -17145,7 +17068,52 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   font-size: 13px;
   font-weight: 550;
 }
-/* Token badges stay plain text — no chips, no tinted backgrounds. */
+/* 供应商详情卡（2026-09-14 参考图改造，B2 即时提交）：头部（图标·名称·启用
+   开关·⋯ 菜单）、字段区（改完即存）、模型列表（紧凑徽标 + 行内开关）。 */
+.settings-custom-provider-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-custom-provider-detail-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-custom-provider-detail-icon { display: inline-flex; align-items: center; color: var(--muted); flex: 0 0 auto; }
+.settings-custom-provider-detail-icon .ui-icon { width: 22px; height: 22px; }
+.settings-custom-provider-detail-name {
+  font-size: var(--font-size-5);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-custom-provider-detail-header-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.settings-custom-provider-detail-subtitle { margin: 6px 0 0; font-size: var(--font-size-2); color: var(--muted); line-height: 1.5; }
+.settings-custom-provider-detail-fields { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.settings-custom-provider-field { display: flex; flex-direction: column; gap: 2px; }
+.settings-custom-provider-detail-models-head h4 { margin: 0; font-size: var(--font-size-4); font-weight: 600; }
+.settings-custom-provider-detail-models-actions { display: flex; align-items: center; gap: 8px; }
+.settings-custom-provider-detail-model-list { max-height: min(46vh, 420px); overflow-y: auto; }
+/* 模型行徽标：窗口 / 输出 / 视觉 / 推理，浅底 pill（覆盖上面的纯文本 span 规则）。 */
+.settings-custom-provider-detail-model-info .settings-custom-provider-model-badge {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--font-size-1);
+  font-weight: 500;
+  line-height: 1.6;
+}
+.settings-custom-provider-detail-model-info .settings-custom-provider-model-note {
+  color: var(--muted);
+  font-size: var(--font-size-1);
+}
+.settings-custom-provider-model-toggle { margin-left: 6px; }
+.settings-custom-provider-detail-model-row.is-model-disabled .settings-custom-provider-detail-model-info strong {
+  color: var(--muted);
+}
+/* Token badges（旧的纯文本口径）保留给尚未迁移的行；新行用上面的 pill。 */
 .settings-custom-provider-detail-model-info span {
   flex: 0 0 auto;
   padding: 0;
@@ -17164,7 +17132,7 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
 }
 /* Ghost icon buttons: no border, no fill; subtle hover only. */
 .settings-custom-provider-detail-model-actions .icon-btn,
-.settings-custom-provider-detail-actions > .icon-btn {
+.settings-custom-provider-detail-header-actions > .icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -17177,21 +17145,21 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   color: var(--muted);
 }
 .settings-custom-provider-detail-model-actions .icon-btn:hover,
-.settings-custom-provider-detail-actions > .icon-btn:hover {
+.settings-custom-provider-detail-header-actions > .icon-btn:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 .settings-custom-provider-detail-model-actions .icon-btn.danger,
-.settings-custom-provider-detail-actions > .icon-btn.danger {
+.settings-custom-provider-detail-header-actions > .icon-btn.danger {
   color: var(--danger);
 }
 .settings-custom-provider-detail-model-actions .icon-btn.danger:hover,
-.settings-custom-provider-detail-actions > .icon-btn.danger:hover {
+.settings-custom-provider-detail-header-actions > .icon-btn.danger:hover {
   background: rgba(220, 38, 38, 0.08);
   color: var(--danger);
 }
 .settings-custom-provider-action-icon { width: 15px; height: 15px; }
-.settings-custom-provider-detail-actions button.is-busy,
+.settings-custom-provider-detail-header-actions button.is-busy,
 .settings-custom-provider-detail-model-actions button.is-busy,
 .settings-custom-provider-model-draft-remove.is-busy {
   cursor: wait;
@@ -17201,9 +17169,9 @@ body.sidebar-collapsed .hub-chip-menu { left: 0; right: auto; width: 236px; }
   .settings-model-picker-row { align-items: stretch; flex-direction: column; gap: 7px; }
   .settings-model-picker-row > label { flex-basis: auto; }
   .settings-model-auth-label-spacer { display: none; }
-  .settings-custom-provider-detail-toolbar,
   .settings-custom-provider-detail-models-head { align-items: stretch; flex-direction: column; }
-  .settings-custom-provider-detail-actions { justify-content: flex-start; }
+  .settings-custom-provider-detail-header { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .settings-custom-provider-detail-header-actions { justify-content: flex-start; }
   .settings-custom-provider-detail-model-row { align-items: flex-start; flex-direction: column; }
   .settings-custom-provider-detail-model-info { align-items: flex-start; flex-wrap: wrap; width: 100%; }
   .settings-custom-provider-detail-model-info strong { flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }

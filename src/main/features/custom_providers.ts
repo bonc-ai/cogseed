@@ -122,6 +122,7 @@ function normalizeModel(
   const candidate = value as {
     id?: unknown; contextWindow?: unknown; maxTokens?: unknown; vision?: unknown;
     input?: unknown; capabilities?: unknown; reasoningLevels?: unknown; reasoningParamsMap?: unknown;
+    enabled?: unknown;
   };
   if (typeof candidate.id !== 'string') throw new Error('model id required');
   const id = candidate.id.trim();
@@ -168,6 +169,11 @@ function normalizeModel(
   const capabilities = normalizeModelCapabilities(candidate.capabilities);
   const reasoningLevels = normalizeReasoningLevels(candidate.reasoningLevels);
   const reasoningParamsMap = normalizeReasoningParamsMap(candidate.reasoningParamsMap);
+  // 模型级开关（2026-09-14）：调用方**未提供**时保留旧值（部分更新语义，
+  // 否则改窗口会把开关重置成启用）；显式 false 才落字段，true 视为清除。
+  const enabled = candidate.enabled === undefined
+    ? fallback?.enabled
+    : (candidate.enabled === false ? false : undefined);
   return {
     id,
     contextWindow,
@@ -177,6 +183,7 @@ function normalizeModel(
     ...(capabilities ? { capabilities } : {}),
     ...(reasoningLevels ? { reasoningLevels } : {}),
     ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
+    ...(enabled === false ? { enabled: false } : {}),
   };
 }
 
@@ -563,6 +570,53 @@ export function updateCustomProviderModel(
     }
   });
   return { ok: true, model };
+}
+
+/**
+ * 模型级启用开关（2026-09-14 参考图行内开关）。
+ *
+ * S2 语义：关闭 = 从模型选择器隐藏（auth.listModels 过滤）+ 阻止新绑定
+ * （isCustomProviderModelAllowed → 条目校验失败）+ 已绑定条目按既有
+ * "不可用即跳过、兜底到下一条"机制处理；**模型配置与绑定条目都保留**，
+ * 随时拨回即恢复（与"删除模型"分工：删除会连带清理绑定条目）。
+ *
+ * 存储：只写 `enabled:false`，开启时删除该字段（缺省=启用）。
+ */
+export function setCustomProviderModelEnabled(
+  userId: string,
+  id: string,
+  modelId: string,
+  enabled: boolean,
+): { ok: true; model: CustomProviderModel } | { ok: false; error: string } {
+  let providerId: string;
+  let targetModelId: string;
+  try {
+    providerId = normalizeProviderId(id);
+    targetModelId = normalizeModel({ id: modelId }).id;
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+  if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled must be boolean' };
+  const provider = listCustomProviders(userId).find((candidate) => candidate.id === providerId);
+  if (!provider) return { ok: false, error: 'not found' };
+  const stored = provider.models.find((candidate) => candidate.id === targetModelId);
+  if (!stored) return { ok: false, error: 'model not found' };
+  let updated: CustomProviderModel = stored;
+  mutateCustomProviders(userId, ({ customProviders }) => {
+    const target = customProviders.find((candidate) => candidate.id === providerId);
+    const model = target?.models.find((candidate) => candidate.id === targetModelId);
+    if (!target || !model) throw new Error('custom provider model not found during enable update');
+    if (enabled) delete model.enabled;
+    else model.enabled = false;
+    target.updatedAt = Date.now();
+    updated = { ...model };
+  });
+  log.info('custom provider model enabled state changed', {
+    provider: providerId,
+    model: targetModelId,
+    enabled,
+  });
+  return { ok: true, model: updated };
 }
 
 export function removeCustomProviderModel(
