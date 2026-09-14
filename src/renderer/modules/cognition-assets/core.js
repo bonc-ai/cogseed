@@ -142,7 +142,11 @@
     const transferOk = s.assets.filter((a) => a.maturity === 'transfer_validated' || a.maturity === 'effectiveness_validated').length;
     const sourceIssues = s.sources
       .flatMap((group) => (Array.isArray(group.items) ? group.items : []))
-      .filter((item) => item.status === 'failed' || item.status === 'paused').length;
+      // 用户主动暂停的来源（reason=source_paused）不算"需要处理"——用户
+      // 自己停的，再提示他去处理自相矛盾；连接器断开等真故障的 paused
+      // 仍计入（2026-09-14 修：实机出现 [paused] source_paused 假警报）。
+      .filter((item) => item.status === 'failed'
+        || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused')).length;
     const failedTasks = Number(s.captureCounts && s.captureCounts.failed || 0);
     const coveredAssets = new Set(s.proofs.map((p) => String((p.refs || {}).assetId || '')).filter(Boolean)).size;
     const attention = s.assets.filter((a) => String(a.status || 'active') === 'paused' || String(a.status || '') === 'archived').length;
