@@ -1753,7 +1753,16 @@ function _settingsOpenCustomProviderDetails(provider, options = {}) {
       [protocolId]: (value) => {
         if (!value || value === provider.protocol) return;
         void _settingsCommitCustomProviderPatch(provider, { protocol: value }).then((res) => {
-          if (!res.ok) _settingsCustomProviderModalStatus('error', res.error);
+          if (res.ok) return;
+          // 失败回滚显示：名称/URL 字段失败会把输入框还原，下拉没有"原始值"
+          // 可写——重画详情卡让选项回到已存协议（先重画再报错，报错不会被
+          // 重画清掉）。
+          const generation = _settingsState.customProviderModalView?.generation || 0;
+          if (_settingsIsCustomProviderModalViewActive(generation, provider.id)) {
+            const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id) || provider;
+            _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
+          }
+          _settingsCustomProviderModalStatus('error', res.error);
         });
       },
     });
@@ -1920,13 +1929,18 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
   const importButton = document.createElement('button');
   importButton.className = 'btn btn-primary';
   importButton.disabled = selectable.length === 0;
+  // 导入进行中不允许再次触发：勾选框在导入期间仍可点，change 会走
+  // syncSelection 把按钮重新启用——没有这把锁就能并发点出第二轮导入
+  // （后端会按"已存在"拒掉，但用户会看到误导性的部分失败提示）。
+  let importing = false;
   importButton.addEventListener('click', async () => {
-    if (importButton.disabled) return;
+    if (importButton.disabled || importing) return;
     const picked = selectableInputs
       .filter((input) => input.checked)
       .map((input) => input.value)
       .filter((id) => !existing.has(id));
     if (!picked.length) return;
+    importing = true;
     importButton.disabled = true;
     // 服务/目录给出的元数据（A/B 层）随导入落库；窗口值没给时保持默认，
     // 用户可在导入后的编辑表单里改。推理（reasoning）不入库——模型配置里没有
@@ -1966,6 +1980,7 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
       if (added && added.ok) imported += 1;
       else if (!firstError) firstError = `${id}: ${(added && added.error) || 'failed'}`;
     }
+    importing = false;
     if (imported > 0) await _settingsReload();
     const refreshed = _settingsState.customProviders.find((item) => item.id === provider.id);
     if (refreshed) _settingsOpenCustomProviderDetails(refreshed, { preserveSession: true });
@@ -1975,6 +1990,8 @@ async function _settingsOpenCustomProviderFetchModels(provider) {
   actions.appendChild(importButton);
 
   const syncSelection = () => {
+    // 导入进行中不让 change 事件改按钮状态（见 importing 锁的注释）。
+    if (importing) return;
     const picked = selectableInputs.filter((input) => input.checked).length;
     importButton.textContent = t('settings.custom_providers.fetch_models_import', { count: picked });
     importButton.disabled = picked === 0;

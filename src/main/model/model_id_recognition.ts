@@ -171,8 +171,9 @@ function fromCatalogRow(row: CatalogRow, source: 'catalog' | 'family'): Recogniz
     reasoning: row.reasoning,
     vision: row.input ? row.input.includes('image') : undefined,
     // 目录登记的模态原样带出：调用方（远端清单、运行时）据此落库/构造
-    // model.input，vision 只是它的派生值。
-    input: row.input,
+    // model.input，vision 只是它的派生值。没登记就不带键（避免产出
+    // { input: undefined }——toStrictEqual 的消费方会把它当差异）。
+    ...(row.input ? { input: row.input } : {}),
   };
 }
 

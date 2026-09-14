@@ -1007,6 +1007,59 @@ describe('settings model providers surface', () => {
     expect(importButton.disabled).toBe(true);
   });
 
+  it('导入进行中勾选变化不得重新启用导入按钮（并发防重，2026-09-14 复查）', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const g = context as any;
+    const provider = {
+      id: 'cp-1', name: 'Relay', protocol: 'openai', baseUrl: 'https://relay.example/v1',
+      enabled: true, apiKeyMasked: 'sk-***',
+      models: [{ id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 }],
+    };
+    // model.add 挂起成手动放行的 promise，把"导入在途"钉住在可控的时间点。
+    const addResolvers: Array<() => void> = [];
+    invoke.mockImplementation(async (channel: string, payload?: any) => {
+      if (channel === 'customProviders.list') return { ok: true, providers: [provider] };
+      if (channel === 'customProviders.fetchModels') {
+        return {
+          ok: true,
+          models: [
+            { id: 'relay-a', contextWindow: 200000, maxTokens: 64000 },
+            { id: 'relay-b', contextWindow: 131072, maxTokens: 8192 },
+            { id: 'gpt-4.1-mini', contextWindow: 131072, maxTokens: 8192 },
+          ],
+        };
+      }
+      if (channel === 'customProviders.model.add') {
+        return new Promise((resolve) => { addResolvers.push(() => resolve({ ok: true, model: payload?.model })); });
+      }
+      return { ok: true };
+    });
+    g._settingsOpenCustomProviderModal(provider);
+    await g._settingsOpenCustomProviderFetchModels(provider);
+    const importButton = registry.get('settings-custom-provider-modal-actions')!.children[1] as any;
+    const boxes = registry.get('settings-custom-provider-fetch-list')!.querySelectorAll('.settings-custom-provider-fetch-box') as any[];
+    expect(importButton.disabled).toBe(false);
+
+    const clickPromise = importButton.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 导入在途：按钮禁用。
+    expect(importButton.disabled).toBe(true);
+    // 竞态：导入期间取消勾选一行（picked 仍为 1）——没有 importing 锁时
+    // syncSelection 会把按钮重新启用，用户即可点出第二轮导入。
+    boxes[1].checked = false;
+    await boxes[1].dispatch('change');
+    expect(importButton.disabled).toBe(true);
+
+    // 放行两笔在途写入（第二笔在第一笔放行后才进入），导入按进入循环前的快照完成。
+    addResolvers[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addResolvers.length).toBe(2);
+    addResolvers[1]!();
+    await clickPromise;
+    const adds = invoke.mock.calls.filter(([channel]: any[]) => channel === 'customProviders.model.add');
+    expect(adds).toHaveLength(2);
+  });
+
   it('拉取模型列表：导入把服务声明的模态与能力一起落库（2026-09-14）', async () => {
     const { context, registry, invoke } = buildHarness();
     const g = context as any;
