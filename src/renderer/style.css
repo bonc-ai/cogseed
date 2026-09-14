@@ -25727,7 +25727,7 @@ body.is-terminal-resizing {
    un-prefixed copies apply inside the modal's .cs-import-scope wrapper. */
 .cs-import-scope{
   --cs-ink:var(--color-ink); --cs-ink-soft:var(--color-ink-2); --cs-muted:var(--color-muted); --cs-faint:var(--color-faint);
-  --cs-line:#E3EAE6; --cs-line-soft:var(--color-surface-2); --cs-line-strong:#C8D5CE;
+  --cs-line:var(--color-border-soft); --cs-line-soft:var(--color-surface-2); --cs-line-strong:#C8D5CE;
   --cs-forest:var(--color-brand); --cs-forest-deep:var(--color-brand-hover); --cs-forest-weak:var(--color-brand-soft);
   --cs-bud:#E09B2D; --cs-bud-weak:#FBF1DC; --cs-clay:#DE5B45; --cs-clay-weak:#FBE9E5;
   --cs-grad:linear-gradient(135deg,var(--color-brand),var(--color-brand-hover));
@@ -27051,7 +27051,7 @@ body.is-terminal-resizing {
 .sec-time { color: var(--text-3); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .sec-table-foot {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 11px 15px; border-top: 1px solid var(--border); background: #fafcfb;
+  padding: 11px 15px; border-top: 1px solid var(--border); background: var(--color-surface-4);
 }
 .sec-hint { font-size: 12px; color: var(--text-3); }
 
@@ -27073,7 +27073,7 @@ body.is-terminal-resizing {
 .sec-picker-input {
   width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit;
   border: 1px solid var(--border-strong); border-radius: 9px; margin-bottom: 10px;
-  color: var(--text); background: #fafcfb; outline: none;
+  color: var(--text); background: var(--color-surface-4); outline: none;
 }
 .sec-picker-input:focus { border-color: var(--primary); }
 .sec-picker-list { max-height: 240px; overflow-y: auto; }
@@ -27134,7 +27134,7 @@ body.is-terminal-resizing {
 .imp-finding-dot.low { background: var(--text-3); }
 .imp-finding-text { flex: 1; color: var(--text-2); }
 .imp-finding-loc { color: var(--text-3); font-size: 11.5px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.imp-findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: #FAFCFB; }
+.imp-findings-more { padding: 8px 12px; font-size: 12px; color: var(--text-3); background: var(--color-surface-4); }
 .imp-foot { display: flex; align-items: center; gap: 10px; }
 .imp-spacer { flex: 1; }
 .imp-btn-primary { background: var(--primary); border-color: var(--primary); color: var(--color-surface); }
@@ -27158,7 +27158,7 @@ body.is-terminal-resizing {
 
 /* ── Step 1 来源卡片（原型：agent-mark 圆标 + 状态点 + 计数）── */
 .cw-source-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:14px 13px;text-align:left;
-  border:1px solid var(--border,#E3EAE6);border-radius:11px;background:var(--surface,var(--color-surface));cursor:pointer;
+  border:1px solid var(--border,var(--color-border-soft));border-radius:11px;background:var(--surface,var(--color-surface));cursor:pointer;
   transition:border-color .16s,box-shadow .16s,background .16s,transform .16s;font-family:inherit}
 .cw-source-card:hover{border-color:#9ec9b7;box-shadow:0 5px 16px rgba(14,159,110,.08);transform:translateY(-1px)}
 .cw-source-card.is-selected{border-color:color-mix(in srgb,var(--primary,var(--color-brand)) 45%,transparent);
@@ -27183,11 +27183,11 @@ body.is-terminal-resizing {
 /* ── Step 2 会话分组 + source-pill ── */
 .cw-session-group{margin-bottom:14px}
 .cw-group-label{margin-bottom:7px;color:var(--muted,var(--color-muted));font-size:12px;font-weight:650}
-.cw-session-list-inner{border:1px solid var(--border,#E3EAE6);border-radius:10px;overflow:hidden;background:var(--surface,var(--color-surface))}
+.cw-session-list-inner{border:1px solid var(--border,var(--color-border-soft));border-radius:10px;overflow:hidden;background:var(--surface,var(--color-surface))}
 .cw-session-row{display:grid;grid-template-columns:24px minmax(0,1fr) auto auto;gap:12px;align-items:center;
-  padding:11px 13px;border-bottom:1px solid var(--border,#E3EAE6);cursor:pointer;transition:background .15s}
+  padding:11px 13px;border-bottom:1px solid var(--border,var(--color-border-soft));cursor:pointer;transition:background .15s}
 .cw-session-row:last-child{border-bottom:0}
-.cw-session-row:hover{background:#fafcfb}
+.cw-session-row:hover{background:var(--color-surface-4)}
 .cw-session-row.is-selected{background:var(--surface-2,var(--color-surface-2))}
 .cw-session-row.is-selected .cw-check{background:var(--primary,var(--color-brand));border-color:var(--primary,var(--color-brand))}
 .cw-session-row.is-selected .cw-check svg{opacity:1}
@@ -27222,7 +27222,7 @@ body.is-terminal-resizing {
 .cw-progress-summary{display:flex;flex-direction:column;gap:7px;margin:4px 0 14px}
 .cw-progress-count{align-self:flex-end;font-size:12px;font-weight:650;color:var(--text-2,var(--color-ink-2));font-variant-numeric:tabular-nums}
 .cw-import-row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;align-items:center;
-  padding:11px 13px;border:1px solid var(--border,#E3EAE6);border-radius:10px;margin-bottom:8px;background:var(--surface,var(--color-surface))}
+  padding:11px 13px;border:1px solid var(--border,var(--color-border-soft));border-radius:10px;margin-bottom:8px;background:var(--surface,var(--color-surface))}
 .cw-import-state{width:26px;height:26px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;
   background:var(--surface-2,var(--color-surface-2));color:var(--muted,var(--color-muted))}
 .cw-import-state svg{width:14px;height:14px}
@@ -27241,7 +27241,7 @@ body.is-terminal-resizing {
 
 /* 成功面板 */
 .cw-success-panel{display:none;align-items:flex-start;gap:12px;margin-top:6px;padding:15px 16px;
-  border:1px solid color-mix(in srgb,var(--primary,var(--color-brand)) 30%,var(--border,#E3EAE6));border-radius:12px;
+  border:1px solid color-mix(in srgb,var(--primary,var(--color-brand)) 30%,var(--border,var(--color-border-soft)));border-radius:12px;
   background:var(--primary-soft,var(--color-brand-soft))}
 .cw-success-panel.show{display:flex}
 .cw-success-panel svg{width:22px;height:22px;color:var(--primary-text,var(--color-brand-hover));flex:none;margin-top:1px}
@@ -31703,16 +31703,30 @@ section.kb-wb-right { display: flex; flex-direction: column; min-width: 0; min-h
   font-size: .92em; color: #35513F;
   background: rgba(14, 159, 110, .1); border-radius: var(--radius-1); padding: 0 4px;
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-block { margin: 7px 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-line { line-height: 1.6; margin: 2px 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li {
-  position: relative; padding-left: 17px; margin: 2px 0; line-height: 1.6; color: var(--kb-text, #22372B);
+/* 回答正文改走渲染层统一 Markdown 管线（.kb-a-md = 该管线的容器）：
+   结构样式（标题/列表/链接/表格/代码块）沿用 .markdown-body，
+   但字号/行高/颜色回到 KB 面板自身 token，避免正文颜色被聊天区的
+   .markdown-body(#374151 / 13px) 覆盖而与本面板配色串味。 */
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md {
+  color: inherit; font-size: inherit; line-height: inherit;
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li::before {
-  content: '•'; position: absolute; left: 3px; color: var(--kb-green, #0E9F6E);
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h1,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h2,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h3,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h4,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h5,
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-md h6 {
+  color: var(--kb-text, #22372B);
 }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num { padding-left: 0; }
-.kb-qa-msg.is-ai .kb-qa-msg-body .kb-a-li.is-num::before { content: none; }
+/* 正文行内引用 chip：见 `_citeChipHtml`。复用 .kb-qa-chip 的胶囊外观，
+   只做行内对齐与尺寸微调——它嵌在段落/列表项里，不能撑高行距。 */
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-qa-cite {
+  display: inline-flex; vertical-align: baseline; max-width: 220px;
+  padding: 0 6px; margin: 0 2px; font-size: .92em; line-height: 1.5;
+}
+.kb-qa-msg.is-ai .kb-qa-msg-body .kb-qa-cite:focus-visible {
+  outline: 2px solid var(--kb-accent, #0E9F6E); outline-offset: 1px;
+}
 /* Settings > Configuration > Execution & collaboration. These are page-level
    compositions of the shared controls; Agent and touchpoint DOM stay single-
    instance and are moved into their canonical settings hosts at runtime. */
