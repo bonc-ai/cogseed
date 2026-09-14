@@ -432,3 +432,8 @@
 .ca-setcard .ca-subnav { margin-bottom: 8px; }
 .ca-setcard .ca-note { margin: 0; }
 .ca-line-center { justify-content: center; margin-top: 12px; }
+
+/* tab 行紧凑模式（窄窗口自适应，2026-09-14）：隐藏副标题小字腾宽度，
+   6 个 tab 不挤压折行。由 app.js 测量后切换。 */
+.ca-tabs.is-compact .ca-tab small { display: none; }
+.ca-tabs.is-compact .ca-tab { padding: 8px 11px 9px; }
