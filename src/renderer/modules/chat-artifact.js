@@ -149,22 +149,32 @@
         // but guard anyway — a result for a non-current cid is a stale fire.
         if (!cid || cid !== currentCid) return;
         const p = data.payload;
-        // 确认卡片走专用幂等通道（2026-09-14 Bug3 修复）：绕过普通发送队列，
-        // 主进程直达总线；点击即乐观置 submitting，成功 confirmed 只读，
-        // 失败 failed 可重试。状态随卡片 dataset 走，重渲染按消息体回放。
-        if (p && typeof p === 'object' && p.action === 'plugin-confirm') {
+        // 确认/取消卡片走专用幂等通道（2026-09-14 Bug3 修复 + 评审补强）：
+        // 绕过普通发送队列，主进程直达总线；点击即乐观置 submitting，
+        // 成功 confirmed/cancelled 只读，失败 failed 可重试。取消与确认同通道
+        // 对称处理（旧路径会被 busy 死锁卡在「待发送」，智能体收不到取消）。
+        if (p && typeof p === 'object' && (p.action === 'plugin-confirm' || p.action === 'plugin-cancel')) {
+          const isCancel = p.action === 'plugin-cancel';
+          const targetState = isCancel ? 'cancelled' : 'confirmed';
           const card = frame.closest ? frame.closest('.chat-artifact-card') : null;
           if (card) {
             const st = String(card.dataset.confirmState || '');
-            if (st === 'submitting' || st === 'confirmed') return; // 防抖 + 幂等
+            if (st === 'submitting' || st === 'confirmed' || st === 'cancelled') return; // 防抖 + 终态幂等
             _setConfirmState(card, 'submitting');
             const invoke = window.cogseed && window.cogseed.invoke;
             if (typeof invoke !== 'function') { _setConfirmState(card, 'failed'); return; }
-            invoke('groupChat.sendConfirm', { cid, artifactId, op: String(p.op || ''), payload: p.payload })
+            invoke('groupChat.sendConfirm', {
+              cid,
+              artifactId,
+              op: String(p.op || ''),
+              payload: p.payload,
+              action: isCancel ? 'cancel' : 'confirm',
+            })
               .then((res) => {
                 if (res && res.ok === false && res.code === 'ALREADY_CONFIRMED') return _setConfirmState(card, 'confirmed');
+                if (res && res.ok === false && res.code === 'ALREADY_CANCELLED') return _setConfirmState(card, 'cancelled');
                 if (!res || res.ok === false) return _setConfirmState(card, 'failed');
-                _setConfirmState(card, 'confirmed');
+                _setConfirmState(card, targetState);
               })
               .catch((err) => _setConfirmState(card, 'failed', (err && err.message) || ''));
             return;
