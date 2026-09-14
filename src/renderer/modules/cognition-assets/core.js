@@ -224,6 +224,10 @@
     { id: 'overview', titleKey: 'cognition.tab_overview', title: '我的认知', descKey: 'cognition.tab_overview_desc', desc: '我拥有什么' },
     { id: 'review', titleKey: 'cognition.tab_review', title: '待我处理', descKey: 'cognition.tab_review_desc', desc: '需要我决定什么' },
     { id: 'evidence', titleKey: 'cognition.tab_evidence', title: '使用记录', descKey: 'cognition.tab_evidence_desc', desc: '资产用得怎么样' },
+    // 「从历史会话整理」（动作）与「整理记录」（历史）从设置页拆出为并列 tab
+    // （2026-09-14）；设置固定末位。
+    { id: 'organize-history', titleKey: 'cognition.tab_organize_history', title: '从历史会话整理', descKey: 'cognition.tab_organize_history_desc', desc: '挑一段会话开始整理' },
+    { id: 'capture-log', titleKey: 'cognition.tab_capture_log', title: '整理记录', descKey: 'cognition.tab_capture_log_desc', desc: '整理任务的历史' },
     { id: 'manage', titleKey: 'cognition.tab_manage', title: '设置与管理', descKey: 'cognition.tab_manage_desc', desc: '来源与整理' },
   ];
   NS.TABS = TABS;

@@ -735,23 +735,11 @@
     const policy = String(settings.executionPolicy || 'smart');
     const enabled = settings.enabled !== false;
     const reviewAuto = String(settings.reviewPolicy || 'auto') === 'auto';
-    const conversationItems = S.sources
-      .filter((g) => String(g.kind || '') === 'conversation' || (g.items || []).some((i) => i.kind === 'conversation'))
-      .flatMap((g) => (Array.isArray(g.items) ? g.items : []));
-    // 默认收拢最近 5 条可整理会话，「查看全部」展开（列表与侧栏高度重复，铺开即噪音）。
-    const listLimit = S.organizeListExpanded ? conversationItems.length : Math.min(5, conversationItems.length);
-    const conversations = conversationItems.slice(0, listLimit);
     const POLICY = [
       ['smart', 'cognition.capture_policy_smart_title', '任务结束后发现', 'cognition.capture_policy_smart_hint', '任务完成或出现用户纠正时，在本机分析有意义的变化。'],
       ['nightly', 'cognition.capture_policy_nightly_title', '本地夜间整理', 'cognition.capture_policy_nightly_hint', '仅在你启用后运行；设备休眠时顺延到下一个可运行窗口。'],
       ['manual', 'cognition.capture_policy_manual_title', '主动整理', 'cognition.capture_policy_manual_hint', '从历史会话里挑选内容整理，读取前会先让你确认范围。'],
     ];
-    const captureStatus = (capture) => (NS.vocabulary
-      ? NS.vocabulary.captureStatusText(capture.status)
-      : String(capture.status || ''));
-    const recordTitle = (capture) => (NS.vocabulary
-      ? NS.vocabulary.recordTitle(capture)
-      : String(capture.conversationTitle || capture.title || capture.id || ''));
     const policyEntry = POLICY.find(([id]) => id === policy) || POLICY[0];
     return `${hero(
       T('cognition.tab_manage', '设置与管理'), T('cognition.capture_activity_title', '整理方式'),
@@ -788,16 +776,44 @@
         ${btn(T('cognition.capture_review_manual', '先问我'), 'capture-review-toggle', { id: 'manual', className: `ca-pill${!reviewAuto ? ' is-on' : ''}` })}
       </div>
       <p class="ca-note">${esc(T(reviewAuto ? 'cognition.capture_review_auto_note' : 'cognition.capture_review_manual_note', reviewAuto ? '符合条件的候选会自动采纳（不再询问）' : '候选先进入待确认，由你决定'))}</p>
-    </div>
-    ${sectionHead(T('cognition.capture_manual_title', '从历史会话整理'), T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'))}
+    </div>`;
+  }
+
+  /* 从历史会话整理（独立 tab，2026-09-14 自设置页拆出）。 */
+  function viewOrganizeHistory() {
+    const conversationItems = S.sources
+      .filter((g) => String(g.kind || '') === 'conversation' || (g.items || []).some((i) => i.kind === 'conversation'))
+      .flatMap((g) => (Array.isArray(g.items) ? g.items : []));
+    // 默认收拢最近 5 条可整理会话，「查看全部」展开（列表与侧栏高度重复，铺开即噪音）。
+    const listLimit = S.organizeListExpanded ? conversationItems.length : Math.min(5, conversationItems.length);
+    const conversations = conversationItems.slice(0, listLimit);
+    return `${hero(
+      T('cognition.capture_manual_eyebrow', 'ORGANIZE'), T('cognition.capture_manual_title', '从历史会话整理'),
+      T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'),
+    )}
     <div class="ca-card">${conversations.length ? conversations.map((conv) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(fmtDate(conv.updatedAt || conv.createdAt))}</div></div>
         <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
       </div>`).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
       ${conversationItems.length > 5 ? `<div class="ca-line ca-line-center">${btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${conversationItems.length} 个会话`, { n: String(conversationItems.length) }), 'toggle-organize-list', { small: true })}</div>` : ''}
-    </div>
-    ${S.captures.length ? sectionHead(T('cognition.capture_task_log_title', '整理记录')) + `<div class="ca-card">${S.captures.slice(0, 8).map((capture) => `
+    </div>`;
+  }
+
+  /* 整理记录（独立 tab，2026-09-14 自设置页拆出）。 */
+  function viewCaptureLog() {
+    const captureStatus = (capture) => (NS.vocabulary
+      ? NS.vocabulary.captureStatusText(capture.status)
+      : String(capture.status || ''));
+    const recordTitle = (capture) => (NS.vocabulary
+      ? NS.vocabulary.recordTitle(capture)
+      : String(capture.conversationTitle || capture.title || capture.id || ''));
+    const captures = Array.isArray(S.captures) ? S.captures : [];
+    return `${hero(
+      T('cognition.capture_log_eyebrow', 'LOG'), T('cognition.capture_task_log_title', '整理记录'),
+      T('cognition.capture_log_hint', '每次整理的执行结果；失败的可以重试。'),
+    )}
+    ${captures.length ? `<div class="ca-card">${captures.map((capture) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(recordTitle(capture))}</div>
         <div class="ca-row-meta">${esc(captureStatus(capture))} · ${esc(fmtDate(capture.updatedAt || capture.createdAt))}</div></div>
@@ -805,7 +821,7 @@
           ${capture.status === 'failed' ? btn(T('cognition.capture_action_retry', '重试'), 'capture-action', { id: capture.id, data: { action: 'retry' }, small: true }) : ''}
           ${capture.status === 'paused' ? btn(T('cognition.capture_action_resume', '继续'), 'capture-action', { id: capture.id, data: { action: 'resume' }, small: true }) : ''}
         </div>
-      </div>`).join('')}</div>` : ''}`;
+      </div>`).join('')}</div>` : `<div class="ca-card">${empty(T('cognition.capture_log_empty', '还没有整理记录'))}</div>`}`;
   }
 
   /* ────────────────────────── 渲染入口 ────────────────────────── */
@@ -821,13 +837,15 @@
       return `<div class="ca-tab${active ? ' is-on' : ''}" data-act="tab" data-id="${tab.id}"${extra} title="${esc(T(tab.descKey, tab.desc))}" ${roleBtn()}>
         <strong>${esc(T(tab.titleKey, tab.title))}</strong><small>${esc(T(tab.descKey, tab.desc))}</small>
       </div>`;
-    }).join('')}${btn(`⟳ ${T('common.refresh', '刷新')}`, 'refresh', { className: 'ca-refresh-btn', title: T('cognition.refresh_hint', '重新读取最新数据') })}</nav>`;
+    }).join('')}</nav>`;
     let body = '';
     if (S.loading && !S.loaded) {
       body = `<div class="ca-loading">${esc(T('cognition.loading', '加载中…'))}</div>`;
     } else if (route.name === 'review') body = viewReview(route);
     else if (route.name === 'evidence') body = viewEvidence(route);
     else if (route.name === 'experiences') body = viewExperiences();
+    else if (route.name === 'organize-history') body = viewOrganizeHistory();
+    else if (route.name === 'capture-log') body = viewCaptureLog();
     else if (route.name === 'manage') body = viewManage(route);
     else body = viewOverview(route);
     const errorBanner = S.errors.length && S.loaded

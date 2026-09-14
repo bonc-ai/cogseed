@@ -185,6 +185,33 @@
     booted = true;
     bindEvents(root);
     NS.onChange(NS.render);
+    // tab 自适应：6 个中文 tab 在窄窗口会挤压折行——重画后检测每个 tab 是否
+    // 被压到内容放不下，是则切紧凑模式（CSS 隐藏副标题小字腾出宽度）。
+    NS.onChange(() => {
+      requestAnimationFrame(() => {
+        const tabs = document.querySelector('#ca-root .ca-tabs');
+        if (!tabs) return;
+        const squeezed = Array.from(tabs.children).some((tab) => tab.scrollWidth > tab.clientWidth);
+        tabs.classList.toggle('is-compact', squeezed);
+      });
+    });
+    // tab 自适应：6 个中文 tab 在窄窗口会被压到折行。检测用 Range 取
+    // 主标题的**文本行**数（flex 子元素被 blockify，元素级 getClientRects
+    // 恒为 1，测不出折行；Range 量的是文本自身），>1 即切紧凑模式
+    // （CSS 隐藏副标题腾出宽度）。
+    const fitTabs = () => {
+      const tabs = document.querySelector('#ca-root .ca-tabs');
+      if (!tabs) return;
+      const lineCount = (el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return range.getClientRects().length;
+      };
+      const folded = Array.from(tabs.querySelectorAll('.ca-tab strong')).some((el) => lineCount(el) > 1);
+      tabs.classList.toggle('is-compact', folded);
+    };
+    NS.onChange(() => requestAnimationFrame(fitTabs));
+    window.addEventListener('resize', () => requestAnimationFrame(fitTabs));
     NS.render();
     await NS.reload();
     // 概览是树的第一眼：快照落地后按需补一次树。
