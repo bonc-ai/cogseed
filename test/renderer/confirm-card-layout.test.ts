@@ -13,8 +13,9 @@ describe('confirm / artifact card layout contract (2026-09-14 Bug3)', () => {
     expect(css).toMatch(/\.chat-message\.assistant \.chat-bubble:has\(\.chat-artifact-host\)\s*{[^}]*align-self:\s*stretch/);
     expect(css).toMatch(/\.chat-artifact-card\s*{[^}]*width:\s*100%/);
     expect(css).toMatch(/\.chat-artifact-card\s*{[^}]*margin:\s*0;/);
-    expect(css).not.toMatch(/\.chat-input-form\s*{[^}]*40cqw/);
-    expect(css).not.toMatch(/\.chat-marketplace-request\s*{[^}]*min\(360px/);
+    // 超范围回退（评审意见）：.chat-input-form / .chat-marketplace-request 维持既有宽度，本 PR 只动确认卡片
+    expect(css).toMatch(/\.chat-input-form\s*{[^}]*width:\s*40cqw/);
+    expect(css).toMatch(/\.chat-marketplace-request\s*{[^}]*min\(360px,\s*100%\)/);
   });
 
   it('confirmed/cancelled readonly state styles exist for history replay', () => {
