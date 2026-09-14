@@ -513,27 +513,33 @@ export function updateCustomProviderModel(
   let model: CustomProviderModel;
   try { model = normalizeModel(input, previous); }
   catch (error) { return { ok: false, error: (error as Error).message }; }
-  // 部分更新语义（2026-09-14 保存失效根治）：调用方**未提供或提供为空**的
-  // 高级字段保留旧值——自动保存/UI 状态重放只带基础字段（或空数组）时，
-  // 不再把已配置的推理等级/能力/参数映射抹掉（实机：boot 后 ~30s 一条
-  // 快照 update 反复清掉用户配置，表象即"保存后重进变回旧值"）。
-  // 快照的空数组来自"等级行从未渲染/勾选"的表单读取，与用户删行清空
-  // 无法在后端区分——保数据优先：清空暂不生效（删模型重建可达成）。
+  // 部分更新语义（2026-09-14 保存链定稿）：调用方**未提供**（undefined）的
+  // 高级字段保留旧值——导入/草稿等只带基础字段的调用方不会抹掉高级配置；
+  // **显式空数组/空对象 = 用户清空**（统一表单取消勾选、删空等级行、清空
+  // 参数映射都是这个形态），照写不误。
+  // 早期版本把"空"也当成"未提供"来保数据，那是为绕开渲染层模型投影丢字段
+  // 造成的假清空（模型行投影把 input/等级/能力压掉 → 表单只能按空态保存）。
+  // 投影修好后真凶消失，这里回归标准部分更新语义：否则用户永远清不掉已配
+  // 的高级选项（取消勾选→保存→重进又回来了，与"存不上"是同一类表象）。
   const raw = (input || {}) as {
+    input?: unknown; vision?: unknown;
     reasoningLevels?: unknown; capabilities?: unknown; reasoningParamsMap?: unknown;
   };
-  const isEmpty = (value: unknown) => value === undefined
-    || (Array.isArray(value) && !value.length)
-    || (value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length);
-  if (isEmpty(raw.reasoningLevels) && previous.reasoningLevels?.length) {
+  if (raw.reasoningLevels === undefined && previous.reasoningLevels?.length) {
     model.reasoningLevels = previous.reasoningLevels;
   }
-  if (isEmpty(raw.capabilities) && previous.capabilities?.length) {
+  if (raw.capabilities === undefined && previous.capabilities?.length) {
     model.capabilities = previous.capabilities;
   }
-  if (isEmpty(raw.reasoningParamsMap) && previous.reasoningParamsMap
+  if (raw.reasoningParamsMap === undefined && previous.reasoningParamsMap
     && Object.keys(previous.reasoningParamsMap).length) {
     model.reasoningParamsMap = previous.reasoningParamsMap;
+  }
+  // 输入类型同理：未声明 input/vision 的调用方不该把已声明的多模态能力
+  // 降级成"只剩文本"（显式声明 vision 的调用方除外，避免两个字段打架）。
+  if (raw.input === undefined && raw.vision === undefined
+    && Array.isArray(previous.input) && previous.input.length) {
+    model.input = previous.input;
   }
   if (model.id !== previousId && provider.models.some((candidate) => candidate.id === model.id)) {
     return { ok: false, error: 'model already exists' };

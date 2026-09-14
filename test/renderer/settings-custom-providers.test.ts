@@ -158,6 +158,17 @@ class FakeElement {
       child.type = attrs.match(/\btype="([^"]+)"/)?.[1] || '';
       child.value = attrs.match(/\bvalue="([^"]*)"/)?.[1] || '';
       child.placeholder = attrs.match(/\bplaceholder="([^"]*)"/)?.[1] || '';
+      // 浏览器行为对齐（2026-09-14 回显回归）：裸 checked 属性要反映成 .checked
+      // 属性，textarea 的初始值来自元素文本而不是 value 属性。缺这两条，harness
+      // 永远看不到「已保存的高级配置真的渲染进了表单」，回显缺陷测不出来。
+      if (/(?:^|\s)checked(?:\s|$)/.test(attrs)) child.checked = true;
+      if (match[1].toLowerCase() === 'textarea') {
+        const close = value.indexOf('</textarea>', tagPattern.lastIndex);
+        if (close >= 0) {
+          child.value = value.slice(tagPattern.lastIndex, close)
+            .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        }
+      }
       // 全属性按对象属性填充：本类 getAttribute 读 (this)[name]，而非 attrs
       // 字典——checkbox 的 name/value 属性因此可查（2026-09-14 保存失效
       // 排查）。不覆盖上面已显式赋值的字段（className/value 等）。
@@ -644,6 +655,147 @@ describe('settings model providers surface', () => {
       reasoningLevels: ['high'],
       reasoningParamsMap: { high: { reasoning_effort: 'high' } },
     });
+  });
+
+  // 2026-09-14 回显失效根因回归：模型行投影曾把 input/vision/capabilities/
+  // reasoningLevels/reasoningParamsMap 压掉，详情行 ✏️ 拿残模型开表单 →
+  // 高级配置永远显示"没配过"，原样保存再把 input 覆盖成 ["text"]。
+  const ADVANCED_MODEL = {
+    id: 'deepseek/deepseek-v4.1-flash',
+    contextWindow: 1000000,
+    maxTokens: 384000,
+    vision: true,
+    input: ['text', 'image', 'video', 'pdf'],
+    capabilities: ['structured_output'],
+    reasoningLevels: ['low', 'medium', 'high'],
+    reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+  };
+  const advancedProvider = () => ({
+    id: 'cp-1', name: 'command', protocol: 'openai', baseUrl: 'https://api.example/v1',
+    enabled: true, apiKeyMasked: 'sk-***',
+    models: [JSON.parse(JSON.stringify(ADVANCED_MODEL))],
+  });
+
+  it('projects stored provider models losslessly so the editor can read the advanced config', () => {
+    const { context } = buildHarness();
+    context.__provider = advancedProvider();
+    const projected = vm.runInContext('_settingsCustomProviderModels(__provider)', context);
+    expect(projected).toEqual([ADVANCED_MODEL]);
+  });
+
+  it('reopens the model editor from the detail row with the stored advanced config (2026-09-14 回显失效根因)', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const provider = advancedProvider();
+    context.__provider = provider;
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+
+    // 详情行动作：测试 / 编辑 / 删除 —— 走真实入口（✏️），不直接喂原始模型。
+    const editButton = registry.get('settings-custom-provider-detail-model-list')!.children[0].children[1].children[1];
+    await editButton.click();
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    for (const value of ['text', 'image', 'video', 'pdf']) {
+      expect(body.innerHTML).toContain(`name="settings-model-form-input" value="${value}" checked`);
+    }
+    expect(body.innerHTML).toContain('name="settings-model-form-capability" value="structured_output" checked');
+    expect(Array.from(body.querySelectorAll('.settings-level-row__input'), (el: any) => el.value)).toEqual(['low', 'medium', 'high']);
+    expect(JSON.parse((body.querySelector('#settings-custom-provider-model-params') as any).value))
+      .toEqual({ high: { reasoning_effort: 'high' } });
+
+    // 打开即可原样保存：表单读回来的就是盘上那份配置（未改任何字段）。
+    expect(vm.runInContext('_settingsReadModelForm(document.getElementById("settings-custom-provider-modal-body"))', context)).toEqual({
+      id: 'deepseek/deepseek-v4.1-flash',
+      contextWindow: 1000000,
+      maxTokens: 384000,
+      inputTypes: ['text', 'image', 'video', 'pdf'],
+      capabilities: ['structured_output'],
+      reasoningLevels: ['low', 'medium', 'high'],
+      reasoningParamsMap: '{\n  "high": {\n    "reasoning_effort": "high"\n  }\n}',
+    });
+
+    const actions = registry.get('settings-custom-provider-modal-actions')!;
+    actions.children[actions.children.length - 1].click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const call = invoke.mock.calls.find(([channel]: any[]) => channel === 'customProviders.model.update');
+    expect(call).toBeTruthy();
+    expect(call![1].model).toEqual({
+      id: 'deepseek/deepseek-v4.1-flash',
+      contextWindow: 1000000,
+      maxTokens: 384000,
+      input: ['text', 'image', 'video', 'pdf'],
+      capabilities: ['structured_output'],
+      reasoningLevels: ['low', 'medium', 'high'],
+      reasoningParamsMap: { high: { reasoning_effort: 'high' } },
+    });
+  });
+
+  it('sends explicit empty advanced fields when the user clears them, so clearing can persist', async () => {
+    const { context, registry, invoke } = buildHarness();
+    const provider = advancedProvider();
+    context.__provider = provider;
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+    await registry.get('settings-custom-provider-detail-model-list')!.children[0].children[1].children[1].click();
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    // 清空高级配置：取消图片/视频/PDF、取消能力、删掉全部推理等级、清空参数映射。
+    for (const el of body.querySelectorAll('input[name="settings-model-form-input"]')) {
+      if ((el as any).value !== 'text') (el as any).checked = false;
+    }
+    for (const el of body.querySelectorAll('input[name="settings-model-form-capability"]')) (el as any).checked = false;
+    for (const removeButton of body.querySelectorAll('.settings-level-row__remove')) await (removeButton as any).click();
+    (body.querySelector('#settings-custom-provider-model-params') as any).value = '';
+
+    const actions = registry.get('settings-custom-provider-modal-actions')!;
+    actions.children[actions.children.length - 1].click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const call = invoke.mock.calls.find(([channel]: any[]) => channel === 'customProviders.model.update');
+    expect(call).toBeTruthy();
+    // 空数组/空对象必须显式出现在载荷里：后端"未提供=保留旧值"，
+    // 字段缺失就永远清不掉（清空与保存不生效是同一类表象）。
+    expect(call![1].model).toEqual({
+      id: 'deepseek/deepseek-v4.1-flash',
+      contextWindow: 1000000,
+      maxTokens: 384000,
+      input: ['text'],
+      capabilities: [],
+      reasoningLevels: [],
+      reasoningParamsMap: {},
+    });
+  });
+
+  it('keeps in-progress advanced edits when an i18n redraw rebuilds the model form', async () => {
+    const { context, registry, windowObj } = buildHarness();
+    const provider = advancedProvider();
+    context.__provider = provider;
+    vm.runInContext('_settingsOpenCustomProviderDetails(__provider)', context);
+    await registry.get('settings-custom-provider-detail-model-list')!.children[0].children[1].children[1].click();
+
+    const body = registry.get('settings-custom-provider-modal-body')!;
+    const chip = (name: string, value: string) => Array.from(body.querySelectorAll(`input[name="${name}"]`))
+      .find((el: any) => el.value === value) as any;
+    // 用户正在编辑：取消视频、补一个能力、加一级、改参数映射。
+    chip('settings-model-form-input', 'video').checked = false;
+    chip('settings-model-form-capability', 'system_message').checked = true;
+    (body.querySelector('#settings-model-form-level-add') as any).click();
+    const levelInputs = body.querySelectorAll('.settings-level-row__input');
+    (levelInputs[levelInputs.length - 1] as any).value = 'xhigh';
+    (body.querySelector('#settings-custom-provider-model-params') as any).value = '{"xhigh": {"reasoning_effort": "high"}}';
+
+    windowObj.dispatchEvent({ type: 'i18n-change' });
+
+    expect(chip('settings-model-form-input', 'image').checked).toBe(true);
+    expect(chip('settings-model-form-input', 'video').checked).toBe(false);
+    expect(chip('settings-model-form-capability', 'structured_output').checked).toBe(true);
+    expect(chip('settings-model-form-capability', 'system_message').checked).toBe(true);
+    expect(Array.from(body.querySelectorAll('.settings-level-row__input'), (el: any) => el.value))
+      .toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect((body.querySelector('#settings-custom-provider-model-params') as any).value)
+      .toBe('{"xhigh": {"reasoning_effort": "high"}}');
+    expect((body.querySelector('#settings-custom-provider-model-edit-id') as any).value).toBe('deepseek/deepseek-v4.1-flash');
   });
 
   it('gates smart-fill to first-time manual model entry only (2026-09-13 触发收敛)', async () => {

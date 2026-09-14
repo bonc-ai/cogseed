@@ -65,7 +65,7 @@ describe('custom provider model persistence (真实磁盘回路)', () => {
     });
   });
 
-  it('keeps advanced fields when an update omits them (2026-09-14 保存失效根治)', async () => {
+  it('keeps advanced fields an update omits, and clears them when the form says clear', async () => {
     const providers = await import('../../../src/main/features/custom_providers');
     const added = await providers.addCustomProvider(UID, {
       name: 'Partial Relay',
@@ -77,31 +77,44 @@ describe('custom provider model persistence (真实磁盘回路)', () => {
         input: ['image'],
         capabilities: ['structured_output'],
         reasoningLevels: ['low', 'high'],
+        reasoningParamsMap: { high: { reasoning_effort: 'high' } },
       }],
     });
     if (!added.ok) throw new Error(added.error);
 
-    // 只带基础字段的更新（自动保存/UI 重放的快照形态）——高级字段必须保留。
+    // 只带基础字段的更新（导入/草稿等旧调用方形态）：高级字段一律保留，
+    // 连 input 也不降级——否则"未声明"会被读成"只剩文本"。
     const res = providers.updateCustomProviderModel(UID, added.id, 'rich-model', {
-      id: 'rich-model', contextWindow: 1000000, maxTokens: 384000, input: ['text', 'image', 'video', 'pdf'],
+      id: 'rich-model', contextWindow: 1000000, maxTokens: 384000,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
+    expect(res.model.input).toEqual(['text', 'image']);
+    expect(res.model.vision).toBe(true);
     expect(res.model.reasoningLevels).toEqual(['low', 'high']);
     expect(res.model.capabilities).toEqual(['structured_output']);
-    const model = providers.listCustomProviders(UID)[0].models.find((m) => m.id === 'rich-model');
-    expect(model?.reasoningLevels).toEqual(['low', 'high']);
+    expect(res.model.reasoningParamsMap).toEqual({ high: { reasoning_effort: 'high' } });
+    const kept = providers.listCustomProviders(UID)[0].models.find((m) => m.id === 'rich-model');
+    expect(kept?.reasoningLevels).toEqual(['low', 'high']);
 
-    // 空数组（快照形态/未渲染的等级行）同样保留——自动快照无论带 undefined
-    // 还是 []，都不能清掉用户配置（2026-09-14 终版：保数据优先，清空需删模型）。
+    // 显式空数组/空对象 = 用户在统一表单里清空（取消勾选、删空等级行、清空
+    // 参数映射）——必须照写，否则"取消了保存不生效"就是同一类表象。
     const emptied = providers.updateCustomProviderModel(UID, added.id, 'rich-model', {
       id: 'rich-model', contextWindow: 1000000, maxTokens: 384000, input: ['text'],
       reasoningLevels: [],
       capabilities: [],
+      reasoningParamsMap: {},
     });
     expect(emptied.ok).toBe(true);
     if (!emptied.ok) return;
-    expect(emptied.model.reasoningLevels).toEqual(['low', 'high']);
-    expect(emptied.model.capabilities).toEqual(['structured_output']);
+    expect(emptied.model.input).toEqual(['text']);
+    expect(emptied.model.vision).toBe(false);
+    expect(emptied.model.reasoningLevels).toBeUndefined();
+    expect(emptied.model.capabilities).toBeUndefined();
+    expect(emptied.model.reasoningParamsMap).toBeUndefined();
+    const cleared = providers.listCustomProviders(UID)[0].models.find((m) => m.id === 'rich-model');
+    expect(cleared?.reasoningLevels).toBeUndefined();
+    expect(cleared?.capabilities).toBeUndefined();
+    expect(cleared?.input).toEqual(['text']);
   });
 });

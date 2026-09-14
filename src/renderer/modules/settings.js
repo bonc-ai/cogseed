@@ -830,21 +830,31 @@ function _settingsCustomProviderApiFormatLabel(protocol) {
   return _settingsCustomProviderProtocolLabel(key);
 }
 
+/** 模型行的单一投影：供应商条目、详情行、编辑表单、导入去重全部走这里。
+ *  2026-09-14 回显失效根因：这里曾把每条模型压成 {id, contextWindow,
+ *  maxTokens}——统一模型表单新增的 input / vision / capabilities /
+ *  reasoningLevels / reasoningParamsMap 在投影处被丢掉。详情行的 ✏️ 把
+ *  这个残模型交给编辑表单（_settingsModelFormInitial 读不到 input 只能按
+ *  "没配过"渲染：勾选全空、等级空、参数映射空），保存读的又是这份空态，
+ *  于是①重进永远看不到已保存的高级配置，②原样保存会把 input 覆盖成
+ *  ["text"]（连模型的多模态能力一起抹掉）。
+ *  投影必须无损：只归一化 id / 窗口 / 输出上限，其余配置字段原样透传。 */
 function _settingsCustomProviderModels(provider) {
   if (!Array.isArray(provider?.models)) return [];
   const seen = new Set();
   const models = [];
   for (const raw of provider.models) {
-    const id = String(typeof raw === 'string' ? raw : raw?.id || '').trim();
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const id = String(typeof raw === 'string' ? raw : source.id || '').trim();
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const contextWindow = Number.isSafeInteger(raw?.contextWindow) && raw.contextWindow > 0
-      ? raw.contextWindow
+    const contextWindow = Number.isSafeInteger(source.contextWindow) && source.contextWindow > 0
+      ? source.contextWindow
       : _CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW;
-    const maxTokens = Number.isSafeInteger(raw?.maxTokens) && raw.maxTokens > 0
-      ? raw.maxTokens
+    const maxTokens = Number.isSafeInteger(source.maxTokens) && source.maxTokens > 0
+      ? source.maxTokens
       : _CUSTOM_PROVIDER_DEFAULT_MAX_TOKENS;
-    models.push({ id, contextWindow, maxTokens });
+    models.push({ ...source, id, contextWindow, maxTokens });
   }
   return models;
 }
@@ -1005,11 +1015,15 @@ function _settingsNormalizeCustomProviderModel(input) {
       contextWindow,
       maxTokens,
       ...(declaredInput ? { input: inputTypes } : {}),
-      // 表单路径（declaredInput）显式携带能力/等级——空数组表示用户清空，
-      // 与"未提供"（草稿行等旧调用方，后端保留旧值）区分开。
+      // 表单路径（declaredInput）显式携带能力/等级/参数映射——空数组、空对象
+      // 表示用户清空，与"未提供"（草稿行等旧调用方，后端保留旧值）区分开。
+      // 参数映射以前只在有内容时才带字段，清空因此不可表达（后端按"未提供"
+      // 保留旧值）——现在表单路径固定携带，空即清。
       ...(declaredInput ? { capabilities } : {}),
       ...(declaredInput ? { reasoningLevels } : {}),
-      ...(reasoningParamsMap ? { reasoningParamsMap } : {}),
+      ...(declaredInput
+        ? { reasoningParamsMap: reasoningParamsMap || {} }
+        : (reasoningParamsMap ? { reasoningParamsMap } : {})),
     },
   };
 }
@@ -1413,17 +1427,11 @@ function _settingsRerenderCustomProviderModalForI18n() {
 
   if (view.kind === 'model-form' && provider) {
     const body = document.getElementById('settings-custom-provider-modal-body');
-    const id = body?.querySelector('#settings-custom-provider-model-edit-id')?.value || '';
-    const contextWindow = body?.querySelector('#settings-custom-provider-model-edit-context')?.value || '';
-    const maxTokens = body?.querySelector('#settings-custom-provider-model-edit-output')?.value || '';
+    // 重渲染前取整份表单状态：高级配置（输入类型/能力/推理等级/参数映射）
+    // 也是用户正在编辑的内容，只回填三个基础字段会把它们静默清空。
+    const state = body ? _settingsReadModelForm(body) : null;
     _settingsOpenCustomProviderModelEditor(provider, view.model, { preserveSession: true });
-    const nextBody = document.getElementById('settings-custom-provider-modal-body');
-    const nextId = nextBody?.querySelector('#settings-custom-provider-model-edit-id');
-    const nextContext = nextBody?.querySelector('#settings-custom-provider-model-edit-context');
-    const nextOutput = nextBody?.querySelector('#settings-custom-provider-model-edit-output');
-    if (nextId) nextId.value = id;
-    if (nextContext) nextContext.value = contextWindow;
-    if (nextOutput) nextOutput.value = maxTokens;
+    _settingsApplyModelFormState(document.getElementById('settings-custom-provider-modal-body'), state);
   }
 }
 
@@ -1821,6 +1829,35 @@ function _settingsReadModelForm(body) {
     reasoningLevels: Array.from(body.querySelectorAll('.settings-level-row__input')).map((el) => el.value),
     reasoningParamsMap: body.querySelector('#settings-custom-provider-model-params')?.value,
   };
+}
+
+/** _settingsReadModelForm 的逆操作：把一份表单状态写回（重）渲染后的表单。
+ *  语言切换等 i18n 重渲染会整块重建表单 DOM，旧实现只回填 id/窗口/输出，
+ *  用户正在改的高级配置（勾选/等级/参数映射）归零 —— 与"保存没生效"
+ *  同一类回显缺陷，这里按整份状态回填。 */
+function _settingsApplyModelFormState(body, state) {
+  if (!body || !state) return;
+  const setValue = (selector, value) => {
+    const el = body.querySelector(selector);
+    if (el && value !== undefined && value !== null) el.value = String(value);
+  };
+  setValue('#settings-custom-provider-model-edit-id', state.id);
+  if (Number.isFinite(state.contextWindow)) setValue('#settings-custom-provider-model-edit-context', state.contextWindow);
+  if (Number.isFinite(state.maxTokens)) setValue('#settings-custom-provider-model-edit-output', state.maxTokens);
+  setValue('#settings-custom-provider-model-params', state.reasoningParamsMap);
+  const applyChecked = (name, values) => {
+    const selected = new Set(Array.isArray(values) ? values : []);
+    for (const el of body.querySelectorAll(`input[name="${name}"]`)) {
+      el.checked = selected.has(el.value);
+    }
+  };
+  applyChecked('settings-model-form-input', state.inputTypes);
+  applyChecked('settings-model-form-capability', state.capabilities);
+  const levelList = body.querySelector('#settings-model-form-levels');
+  if (levelList) {
+    levelList.innerHTML = '';
+    for (const level of state.reasoningLevels || []) _settingsAppendModelLevelRow(levelList, level);
+  }
 }
 
 /** 智能配置：按模型 ID 从供应商远端清单预填窗口/输出/输入类型。
