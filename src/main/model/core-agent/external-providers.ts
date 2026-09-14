@@ -39,6 +39,7 @@
 import type { LLMProvider } from '#core-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import { curatedModelsFor } from '../provider_catalog';
+import { publicModelAbilitiesFor } from '../public_model_catalog';
 
 // core-agent is an ESM package and the CogSeed main process is CJS, so
 // **static import is not allowed**. Reuse the dynamic-import + lazy cache
@@ -182,62 +183,51 @@ export async function createMoonshotProvider(config: CreateMoonshotProviderConfi
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
 
-// Context windows from https://api-docs.deepseek.com/quick_start/pricing
-// (checked 2026-04). DeepSeek V4 series introduced 1M-token context via
-// Compressed Sparse Attention. Fallback 131072 for unknown ids (safe lower
-// bound; older deprecated v3 snapshots top out there).
-const DEEPSEEK_CONTEXT_WINDOW: Record<string, number> = {
-  'deepseek-v4-pro':   1_048_576,
-  'deepseek-v4-flash': 1_048_576,
-};
+// 窗口/输出**不再本地维护第二张表**（2026-09-14 单一口径）：一律读公共预设
+// public_model_catalog（V4 系列 1,000,000 / 384,000，十进制；官方文档复核）。
+// 这里只保留"预设不认识这个 id"时的保守兜底：128K 窗口 / 8K 输出（旧快照与
+// 自建部署的安全下界）。
+const DEEPSEEK_FALLBACK_CONTEXT_WINDOW = 131_072;
+const DEEPSEEK_FALLBACK_MAX_TOKENS = 8_192;
 
-function deepseekContextWindow(modelId: string): number {
-  return DEEPSEEK_CONTEXT_WINDOW[modelId] ?? 131072;
-}
+/** 视觉兜底提示：预设登记 vision 的 id 优先；未登记但命名可见的 vision/vl
+ *  （以及聚合器侧的 v4.1 系）也按多模态处理，与识别层同口径。 */
+const DEEPSEEK_VISION_HINT = /vision|vl|v4\.1/i;
 
-// V4 reasoner series streams long reasoning + final answer; 32K matches
-// pi-ai's clamp ceiling in simple-options. Older `deepseek-chat` /
-// `deepseek-reasoner` and unknown ids fall back to the conservative 8192.
-const DEEPSEEK_MAX_OUTPUT_TOKENS: Record<string, number> = {
-  'deepseek-v4-pro':   32768,
-  'deepseek-v4-flash': 16384,
-};
-
-function deepseekMaxOutputTokens(modelId: string): number {
-  return DEEPSEEK_MAX_OUTPUT_TOKENS[modelId] ?? 8192;
+/** 思考（reasoning）判定：V4 全系（`deepseek-v4-*`、`deepseek-v4.*-*`、
+ *  `deepseek-flash`）与 `deepseek-reasoner` 都是思考模型；`deepseek-chat`
+ *  不是。V4 Flash 也会自发返回 reasoning_content，一旦进入历史就必须继续带
+ *  reasoning_effort（否则厂商 400，见 createDeepSeekProvider 的 all-or-none
+ *  注释），所以宁可标 true；未知 id 保持 false，不盲发参数。 */
+function deepseekReasonsById(modelId: string): boolean {
+  const id = String(modelId || '').trim().toLowerCase();
+  if (!id || /^deepseek-chat(\b|$)/.test(id)) return false;
+  return /^deepseek-v4([.-]|$)/.test(id) || /^deepseek-flash$/.test(id) || /reasoner/.test(id);
 }
 
 export function buildDeepSeekModel(modelId: string): Model<'openai-completions'> {
   const curated = curatedModelsFor('deepseek').find((m) => m.id === modelId);
+  // 单一口径（2026-09-14）：窗口/输出/多模态一律读公共预设（含未上架别名），
+  // 适配器不再自带第二张表——此前 v4-flash-vision-exp 等未登记 id 会静默
+  // 兜到 131072/8192，界面却按预设显示 1M/384K（8~47 倍漂移）。
+  const abilities = publicModelAbilitiesFor(modelId);
   return {
     id: modelId,
     name: curated?.name || modelId,
     api: 'openai-completions',
     provider: 'deepseek' as any,
     baseUrl: DEEPSEEK_BASE_URL,
-    // Both V4 Pro and V4 Flash must be treated as reasoners: empirically
-    // V4 Flash also spontaneously returns `reasoning_content`, and once
-    // that lands in session history, subsequent turns missing
-    // `reasoning_effort` get rejected by DeepSeek (misleading error
-    // message "reasoning_content in the thinking mode must be passed
-    // back"). pi-ai's openai-completions adapter only attaches
-    // `reasoning_effort` when `model.reasoning === true` (see pi-ai
-    // openai-completions.js line 396), so we must mark every v4-* as
-    // true, paired with `defaultReasoning: 'low'` below so the request
-    // always carries the effort field.
-    reasoning: /^deepseek-v4-/.test(modelId),
-    // Vision modality（2026-09-13 修复）：按模型 id 判定，与
-    // model_id_recognition 的 deepseek 家族谓词（/vision|vl/i）同口径。
-    // 此前对所有 deepseek 模型硬编码 ['text']——vision 系（如
-    // deepseek-v4-flash-vision-exp）被误标纯文本，pi-ai 的
-    // openai-completions 适配器据此丢弃图片内容块（含工具结果附图，
-    // openai-completions.js `model.input.includes("image")` 门），模型
-    // 只能 read_file→"visual text not available"→ocr_file，多模态输入
-    // 被结构性降级为 OCR。非 vision 模型仍为 ['text']（真不支持，不盲发）。
-    input: /vision|vl|v4\.1/i.test(modelId) ? ['text', 'image'] : ['text'],
+    // 思考判定见 deepseekReasonsById 的注释：pi-ai 的 openai-completions
+    // 适配器只在 model.reasoning === true 时带 reasoning_effort，配合
+    // createDeepSeekProvider 的 defaultReasoning: 'low' 让请求始终带上档位。
+    reasoning: deepseekReasonsById(modelId),
+    // 多模态：预设登记 vision 的 id 优先，命名可见的 vision/vl 兜底；非 vision
+    // 模型保持 ['text']（真不支持，不盲发）——否则 pi-ai 会丢弃图片内容块，
+    // 多模态输入被结构性降级为 OCR。
+    input: abilities.vision === true || DEEPSEEK_VISION_HINT.test(modelId) ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: deepseekContextWindow(modelId),
-    maxTokens: deepseekMaxOutputTokens(modelId),
+    contextWindow: abilities.contextWindow ?? DEEPSEEK_FALLBACK_CONTEXT_WINDOW,
+    maxTokens: abilities.maxTokens ?? DEEPSEEK_FALLBACK_MAX_TOKENS,
   };
 }
 

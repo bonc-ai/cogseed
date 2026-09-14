@@ -18,6 +18,18 @@ export interface ProviderModelEntry {
   vision?: boolean;
 }
 
+/**
+ * 元数据别名（不进入任何 provider 的模型列表）：只用于**按 id 解析**窗口与
+ * 能力——聚合器命名空间（openrouter/opencode 等转售的 id）与用户自定义
+ * 供应商都会拿这些 id 来查元数据，但它们不该被当成"某家直连可选模型"广告
+ * 出去。2026-09-14：DeepSeek 直连实测拒绝 v4.1 系（400），故从 deepseek
+ * 列表移除，元数据落在这里（V4.1 系仍是多模态，产品口径 2026-09-13）。
+ */
+export const PUBLIC_MODEL_UNLISTED_ALIASES: readonly ProviderModelEntry[] = [
+  { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000, vision: true },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000, vision: true },
+];
+
 export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderModelEntry[]>> = {
   anthropic: [
     { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' },
@@ -65,19 +77,19 @@ export const PUBLIC_PROVIDER_MODELS: Readonly<Record<string, readonly ProviderMo
     { id: 'MiniMax-M2.7', name: 'MiniMax 2.7' },
   ],
   deepseek: [
-    // 输出口径（2026-09-13 产品负责人，十进制）：V4 / V4.1 系列窗口 1M
-    // （1000000）、最大输出 384K（384000）——与配置默认值同一进制口径，
-    // 避免界面在 1048576/1000000 间跳变。
+    // 直连命名空间（2026-09-14 与厂商 /v1/models 对齐 + 真机逐模型实测）：
+    //   厂商公告：deepseek-flash、deepseek-v4-pro
+    //   未公告但实测可接受：deepseek-v4-flash、deepseek-v4-flash-vision-exp
+    // v4.1 系（deepseek-v4.1-pro / -flash）**不属于直连命名空间**——实测
+    // 400「The supported API model names are deepseek-flash, deepseek-v4-pro」，
+    // 已从本列表移除（它们只在聚合器命名空间有效）；其窗口/多模态元数据保留
+    // 在 PUBLIC_MODEL_UNLISTED_ALIASES，供聚合器与自定义供应商按 id 解析。
+    // 输出口径（2026-09-13 产品负责人 + 2026-09-14 官方文档复核，十进制）：
+    // V4 系列窗口 1M（1000000）、最大输出 384K（384000）。
+    { id: 'deepseek-flash', name: 'DeepSeek Flash', contextWindow: 1000000, maxTokens: 384000 },
     { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1000000, maxTokens: 384000 },
     { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 384000 },
-    // 视觉口径 2026-09-13（产品负责人确认）：V4.1 系多模态（图片输入），登记
-    // vision——自定义供应商的运行时判定链据此兜底。
-    // 窗口口径 2026-09-11 更新（产品负责人确认）：V4 文本系列与 v4-flash-
-    // vision-exp 共用 1M 窗口；v4.1 是 V4 的迭代版本（用户实际配置的 id
-    // 形态 `deepseek/deepseek-v4.1-flash`），同族同窗口，一并登记。
     { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision (exp)', contextWindow: 1000000, maxTokens: 384000, vision: true },
-    { id: 'deepseek-v4.1-pro', name: 'DeepSeek V4.1 Pro', contextWindow: 1000000, maxTokens: 384000, vision: true },
-    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 1000000, maxTokens: 384000, vision: true },
   ],
   doubao: [
     { id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
@@ -156,7 +168,12 @@ function publicModelCatalogEntryFor(modelId: string): ProviderModelEntry | undef
   };
   const direct = lookup(id);
   if (direct) return direct;
+  const alias = (needle: string): ProviderModelEntry | undefined =>
+    PUBLIC_MODEL_UNLISTED_ALIASES.find((entry) => entry.id === needle);
   const slash = id.indexOf('/');
-  if (slash > 0 && slash < id.length - 1) return lookup(id.slice(slash + 1));
-  return undefined;
+  if (slash > 0 && slash < id.length - 1) {
+    const stripped = id.slice(slash + 1);
+    return lookup(stripped) || alias(stripped);
+  }
+  return alias(id);
 }
