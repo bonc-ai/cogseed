@@ -9,7 +9,10 @@ describe('confirm / artifact card layout contract (2026-09-14 Bug3)', () => {
   it('inline cards fill bubble width — no 40cqw / fixed px narrowing', () => {
     const css = read('src/renderer/style.css');
     expect(css).not.toMatch(/\.chat-artifact-card\s*{[^}]*40cqw/);
+    // 评审定稿 v3：气泡拉伸铺满消息块 + 卡片 100% 与正文左右对齐（margin 0，不居中）
+    expect(css).toMatch(/\.chat-message\.assistant \.chat-bubble:has\(\.chat-artifact-host\)\s*{[^}]*align-self:\s*stretch/);
     expect(css).toMatch(/\.chat-artifact-card\s*{[^}]*width:\s*100%/);
+    expect(css).toMatch(/\.chat-artifact-card\s*{[^}]*margin:\s*0;/);
     expect(css).not.toMatch(/\.chat-input-form\s*{[^}]*40cqw/);
     expect(css).not.toMatch(/\.chat-marketplace-request\s*{[^}]*min\(360px/);
   });
