@@ -527,17 +527,26 @@
         try { await load('personal-ontology'); } catch (_) { /* 渲染函数缺席时下面跳过 */ }
       }
     }
+    // 独立界面（2026-09-14）：本体工作台独占内容区——收起新 UI 主体
+    // （认知树/资产列表），不再以"树下方半页卡片"的形式共存。
+    const appRoot = document.getElementById('ca-root');
+    if (appRoot) appRoot.hidden = true;
     section.hidden = false;
+    section.classList.add('is-standalone');
     wireOntologyBackButton(section);
     if (typeof window.renderPersonalOntology === 'function') {
       try { await window.renderPersonalOntology(); } catch (_) { /* 本体渲染失败不阻塞主 UI */ }
     }
-    section.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
 
   NS.closePersonalOntology = function closePersonalOntology() {
     const section = document.getElementById('skills-cognition-personal-ontology');
-    if (section) section.hidden = true;
+    if (section) {
+      section.hidden = true;
+      section.classList.remove('is-standalone');
+    }
+    const appRoot = document.getElementById('ca-root');
+    if (appRoot) appRoot.hidden = false;
     const main = document.getElementById('ca-scroll');
     if (main) main.scrollTop = 0;
   };
