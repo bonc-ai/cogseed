@@ -174,7 +174,7 @@
         <rect x="76" y="392" width="336" height="58" rx="8"/>
         <text x="244" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_label', '土壤 · 来源 {s} · 采集 {c}', { s: String(Number(info.sources || 0)), c: String(Number(info.captures || 0)) }))}</text>
       </g>
-      <g class="ca-fig-soil" data-act="go-sources" role="button" tabindex="0">
+      <g class="ca-fig-soil" data-act="go-experiences" role="button" tabindex="0">
         <title>${esc(T('cognition.tree_soil_experience_hint', '真实任务的过程记录（KSTAR 经验）；点击查看'))}</title>
         <rect x="428" y="392" width="196" height="58" rx="8"/>
         <text x="526" y="426" text-anchor="middle">${esc(T('cognition.tree_soil_experience', '经验 · {n}', { n: String(Number(info.experiences || 0)) }))}</text>
@@ -611,7 +611,7 @@
   /* ────────────────────────── 视图：设置与管理 ────────────────────────── */
 
   const MANAGE_TABS = [
-    ['sources', 'cognition.tab_sources', '数据来源'],
+    ['sources', 'cognition.tab_sources', '来源健康'],
     ['organize', 'cognition.capture_activity_title', '自动整理'],
   ];
 
@@ -619,85 +619,115 @@
     const sub = route.manageTab === 'organize' ? 'organize' : 'sources';
     const nav = `<div class="ca-subnav">${MANAGE_TABS.map(([id, key, fb]) => btn(T(key, fb), 'manage-tab', { id, className: `ca-pill${sub === id ? ' is-on' : ''}`, ...(id === 'organize' ? { data: { 'cognition-page-link': 'captures' } } : {}) })).join('')}</div>`;
     if (sub === 'organize') return nav + viewOrganize();
-    return nav + viewSources();
+    // 两层结构：无 sourceKind=五类概览；有=该类明细（下钻）。
+    return nav + (route.sourceKind ? viewSourceDetail(route) : viewSourcesOverview());
   }
 
-  const SOURCE_KINDS = {
-    conversation: ['cognition.source_conversation', '会话', 'cognition.source_conversation_desc', '已完成会话及其可引用消息'],
-    artifact: ['cognition.source_artifact', 'Artifact 与文件', 'cognition.source_artifact_desc', '上下文文件和会话产物'],
-    execution: ['cognition.source_execution', '执行与评价', 'cognition.source_execution_desc', '任务执行与结果评估'],
-    teaching: ['cognition.source_teaching', '用户教学信号', 'cognition.source_teaching_desc', '用户明确要求记住或纠正的内容'],
-    external: ['cognition.source_external', '授权外部系统', 'cognition.source_external_desc', '已授权且当前可用的外部连接器'],
-  };
+  /** 来源健康口径（与顶部待办一致）：failed，或非用户主动暂停的 paused。 */
+  function sourceItemNeedsAttention(item) {
+    return item.status === 'failed'
+      || (item.status === 'paused' && String(item.statusReason || '') !== 'source_paused');
+  }
 
-  /* 提炼出的经验（KSTAR review.lesson）：真经验列表，非任务流水。 */
-  function experienceCard() {
+  /* 概览层：五类来源各一张卡——名称、条数、健康徽标、异常摘要；点卡片下钻明细。 */
+  function viewSourcesOverview() {
+    const groups = S.sources;
+    const cards = groups.map((group) => {
+      const kind = String(group.kind || '');
+      const items = Array.isArray(group.items) ? group.items : [];
+      const issues = items.filter(sourceItemNeedsAttention);
+      const health = !items.length
+        ? chip(T('cognition.sources_health_empty', '空'), '')
+        : issues.length
+          ? chip(T('cognition.sources_health_issues', '{n} 条异常', { n: String(issues.length) }), 'amber')
+          : chip(T('cognition.sources_health_ok', '正常'), 'green');
+      const issueRows = issues.slice(0, 2).map((item) => `
+        <div class="ca-row is-flat">
+          <div class="ca-row-main"><div class="ca-row-title">${esc(item.title || item.id)}</div>
+          <div class="ca-row-meta">${esc(NS.vocabulary ? NS.vocabulary.sourceReasonText(item.statusReason) || NS.vocabulary.sourceStatusText(item.status) : String(item.status || ''))}</div></div>
+        </div>`).join('');
+      return `<div class="ca-card ca-source-card" data-act="go-source-kind" data-id="${esc(kind)}" ${roleBtn()}>
+        <div class="ca-line">
+          <div><div class="ca-row-title">${esc(NS.vocabulary ? NS.vocabulary.kindLabel(kind) : kind)}</div>
+          <div class="ca-sub">${esc(items.length)} ${esc(T('cognition.sources_items_unit', '条'))}</div></div>
+          <div class="ca-right">${health}<span class="ca-chevron" aria-hidden="true">›</span></div>
+        </div>
+        ${issueRows ? `<div class="ca-warn">${issueRows}</div>` : ''}
+      </div>`;
+    }).join('');
+    return `${hero(
+      T('cognition.sources_eyebrow', 'SOURCES'), T('cognition.sources_title', '来源健康'),
+      T('cognition.sources_page_hint', '认知资产只从这五类来源采集。这里看每类的健康状态；点开看明细。'),
+    )}
+    ${cards}
+    <p class="ca-footnote">${esc(T('cognition.source_boundary_hint', '普通内容先成为候选；只有用户教学信号可在限定范围内形成可撤销回执。'))}</p>`;
+  }
+
+  /* 明细层：某一类来源的全部条目——状态与原因用人话，操作按状态条件渲染。 */
+  function viewSourceDetail(route) {
+    const kind = String(route.sourceKind || '');
+    const group = S.sources.find((row) => String(row.kind || '') === kind);
+    const items = Array.isArray(group && group.items) ? group.items : [];
+    const usable = items.filter((i) => i.status === 'ready' || !i.status).length;
+    const issues = items.filter(sourceItemNeedsAttention).length;
+    const kindName = NS.vocabulary ? NS.vocabulary.kindLabel(kind) : kind;
+    const rows = items.map((item) => {
+      const statusText = NS.vocabulary ? NS.vocabulary.sourceStatusText(item.status) : String(item.status || '');
+      const reasonText = NS.vocabulary ? NS.vocabulary.sourceReasonText(item.statusReason) : '';
+      const needsAttention = sourceItemNeedsAttention(item);
+      const userPaused = item.status === 'paused' && String(item.statusReason || '') === 'source_paused';
+      const action = needsAttention && item.status === 'failed'
+        ? btn(T('cognition.source_retry', '重试'), 'source-action', { id: item.id, data: { action: 'retry', kind }, small: true })
+        : item.status === 'paused'
+          ? btn(T('cognition.source_resume', '恢复'), 'source-action', { id: item.id, data: { action: 'resume', kind }, small: true })
+          : btn(T('cognition.source_pause', '暂停'), 'source-action', { id: item.id, data: { action: 'pause', kind }, small: true });
+      return `<div class="ca-row is-flat">
+        <div class="ca-row-main">
+          <div class="ca-row-title">${esc(item.title || item.id)}</div>
+          <div class="ca-row-meta">${esc(statusText)}${reasonText && needsAttention ? ` · ${esc(reasonText)}` : (userPaused && reasonText ? ` · ${esc(reasonText)}` : '')}</div>
+        </div>
+        <div class="ca-row-side">${action}</div>
+      </div>`;
+    }).join('');
+    return `${btn(`← ${T('cognition.sources_back_overview', '返回来源概览')}`, 'go-sources-overview', { className: 'ca-backlink' })}
+    ${hero(T('cognition.sources_eyebrow', 'SOURCES'), kindName,
+      T('cognition.sources_detail_hint', '这一类来源的全部条目；异常条目带原因与处理入口。'))}
+    <div class="ca-statbar">
+      <div class="ca-stat"><b>${items.length}</b><span>${esc(T('cognition.sources_stat_visible', '收录条目'))}</span></div>
+      <div class="ca-stat"><b>${usable}</b><span>${esc(T('cognition.sources_stat_usable', '可用'))}</span></div>
+      <div class="ca-stat"><b class="${issues ? 'is-warn' : ''}">${issues}</b><span>${esc(T('cognition.sources_stat_issues', '需要处理'))}</span></div>
+    </div>
+    ${rows || `<div class="ca-card">${empty(T('cognition.sources_detail_empty', '这一类还没有来源条目'))}</div>`}`;
+  }
+
+  /* ────────────────────────── 视图：提炼出的经验 ────────────────────────── */
+  /* 经验（KSTAR review.lesson）的家：入口在认知树土壤区的「经验」块，
+   * 不再挂在来源页（2026-09-14 归位——来源页只讲采集渠道健康）。 */
+  function viewExperiences() {
     const list = Array.isArray(S.experiences) ? S.experiences : [];
     const total = Number(S.experienceTotal || list.length) || 0;
     const timeLabel = (iso) => {
       const d = new Date(String(iso || ''));
       if (Number.isNaN(d.getTime())) return '';
       const pad = (n) => String(n).padStart(2, '0');
-      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
-    return `<div class="ca-card ca-source-card">
-      <div class="ca-line">
-        <div><div class="ca-row-title">${esc(T('cognition.experiences_title', '提炼出的经验'))}</div><div class="ca-sub">${esc(T('cognition.experiences_hint', '从任务中提炼出的可复用教训（KSTAR）；达到沉淀门槛的会自动成为候选。'))}</div></div>
-        <div class="ca-right">${chip(T('cognition.experiences_count', '{n} 条', { n: String(total) }), total ? 'green' : '')}</div>
-      </div>
-      ${list.length ? list.slice(0, 8).map((exp) => {
-        const when = timeLabel(exp.createdAt);
-        return `<div class="ca-row is-flat">
-          <div class="ca-row-main">
-            <div class="ca-row-title">${esc(exp.lesson || exp.id)}</div>
-            <div class="ca-row-meta">${exp.goal ? `${esc(exp.goal)} · ` : ''}${esc(when)}</div>
-          </div>
-          <div class="ca-row-side">${chip(exp.precipitated ? T('cognition.exp_precipitated', '已沉淀成候选') : T('cognition.exp_not_precipitated', '未沉淀'), exp.precipitated ? 'green' : 'line')}</div>
-        </div>`;
-      }).join('') : `<div class="ca-sub">${esc(T('cognition.experiences_empty', '还没有提炼出的经验；任务中发现的教训会出现在这里。'))}</div>`}
-    </div>`;
-  }
-
-  function viewSources() {
-    const groups = S.sources;
-    const items = groups.flatMap((g) => (Array.isArray(g.items) ? g.items : []));
-    const usable = items.filter((i) => i.status === 'ok' || i.status === 'available' || !i.status).length;
-    const issues = items.filter((i) => i.status === 'failed' || i.status === 'paused').length;
-    const kindOf = (group) => String(group.kind || (group.items && group.items[0] && group.items[0].kind) || 'conversation');
-    return `${hero(
-      T('cognition.sources_eyebrow', 'SOURCES'), T('cognition.sources_title', '数据来源'),
-      T('cognition.sources_page_hint', '五类来源分别管理授权、可用性和最近读取；来源不是正式认知资产。'),
-    )}
-    <div class="ca-statbar">
-      <div class="ca-stat"><b>${groups.length}</b><span>${esc(T('cognition.sources_stat_kinds', '来源类型'))}</span></div>
-      <div class="ca-stat"><b>${items.length}</b><span>${esc(T('cognition.sources_stat_visible', '当前可见'))}</span></div>
-      <div class="ca-stat"><b>${usable}</b><span>${esc(T('cognition.sources_stat_usable', '可用'))}</span></div>
-      <div class="ca-stat"><b class="${issues ? 'is-warn' : ''}">${issues}</b><span>${esc(T('cognition.sources_stat_issues', '需要处理'))}</span></div>
-    </div>
-    ${issues ? `<div class="ca-notice"><div class="ca-attention-row is-static"><span>${esc(T('cognition.overview_source_issues', '{count} 条来源记录需要处理', { count: String(issues) }))}</span></div></div>` : ''}
-    ${experienceCard()}
-    ${groups.map((group) => {
-      const kind = kindOf(group);
-      const [key, fb, descKey, descFb] = SOURCE_KINDS[kind] || ['cognition.source_other', T('cognition.source_other_label', '其他来源'), '', ''];
-      const list = Array.isArray(group.items) ? group.items : [];
-      return `<div class="ca-card ca-source-card">
-        <div class="ca-line">
-          <div><div class="ca-row-title">${esc(T(key, fb))}</div><div class="ca-sub">${esc(descFb ? T(descKey, descFb) : '')}</div></div>
-          <div class="ca-right">${chip(`${list.length} · ${T('cognition.sources_visible', '可见')}`, list.length ? 'green' : '')}</div>
+    const rows = list.map((exp) => `
+      <div class="ca-row is-flat">
+        <div class="ca-row-main">
+          <div class="ca-row-title">${esc(exp.lesson || '')}</div>
+          <div class="ca-row-meta">${exp.goal ? `${esc(exp.goal)} · ` : ''}${esc(timeLabel(exp.createdAt))}</div>
         </div>
-        ${list.slice(0, 8).map((item) => `
-          <div class="ca-row is-flat">
-            <div class="ca-row-main"><div class="ca-row-title">${esc(item.title || item.id)}</div>
-            <div class="ca-row-meta">${esc(item.status === 'failed' ? T('cognition.source_status_failed', '读取失败') : item.status === 'paused' ? T('cognition.source_status_paused', '已暂停') : T('cognition.source_status_ok', '可用'))}</div></div>
-            <div class="ca-row-side">
-              ${item.status === 'paused' ? btn(T('cognition.source_resume', '恢复'), 'source-action', { id: item.id, data: { action: 'resume', kind }, small: true })
-                : item.status === 'failed' ? btn(T('cognition.source_retry', '重试'), 'source-action', { id: item.id, data: { action: 'retry', kind }, small: true })
-                  : btn(T('cognition.source_pause', '暂停'), 'source-action', { id: item.id, data: { action: 'pause', kind }, small: true })}
-            </div>
-          </div>`).join('')}
-      </div>`;
-    }).join('')}
-    <p class="ca-footnote">${esc(T('cognition.source_boundary_hint', '普通内容先成为候选；只有用户教学信号可在限定范围内形成可撤销回执。'))}</p>`;
+        <div class="ca-row-side">${chip(exp.precipitated ? T('cognition.exp_precipitated', '已沉淀成候选') : T('cognition.exp_not_precipitated', '未沉淀'), exp.precipitated ? 'green' : 'line')}</div>
+      </div>`).join('');
+    return `${hero(
+      T('cognition.experiences_eyebrow', 'EXPERIENCES'), T('cognition.experiences_title', '提炼出的经验'),
+      T('cognition.experiences_hint', '从任务中提炼出的可复用教训（KSTAR）；达到沉淀门槛的会自动成为候选。'),
+    )}
+    <div class="ca-card ca-source-card">
+      ${rows || `<div class="ca-sub">${esc(T('cognition.experiences_empty', '还没有提炼出的经验；任务中发现的教训会出现在这里。'))}</div>`}
+      ${total > list.length ? `<div class="ca-sub">${esc(T('cognition.experiences_more_hint', '仅显示最近 {n} 条', { n: String(list.length) }))}</div>` : ''}
+    </div>`;
   }
 
   function viewOrganize() {
@@ -705,25 +735,23 @@
     const policy = String(settings.executionPolicy || 'smart');
     const enabled = settings.enabled !== false;
     const reviewAuto = String(settings.reviewPolicy || 'auto') === 'auto';
-    const conversations = S.sources
+    const conversationItems = S.sources
       .filter((g) => String(g.kind || '') === 'conversation' || (g.items || []).some((i) => i.kind === 'conversation'))
-      .flatMap((g) => (Array.isArray(g.items) ? g.items : []))
-      .slice(0, 8);
+      .flatMap((g) => (Array.isArray(g.items) ? g.items : []));
+    // 默认收拢最近 5 条可整理会话，「查看全部」展开（列表与侧栏高度重复，铺开即噪音）。
+    const listLimit = S.organizeListExpanded ? conversationItems.length : Math.min(5, conversationItems.length);
+    const conversations = conversationItems.slice(0, listLimit);
     const POLICY = [
       ['smart', 'cognition.capture_policy_smart_title', '任务结束后发现', 'cognition.capture_policy_smart_hint', '任务完成或出现用户纠正时，在本机分析有意义的变化。'],
       ['nightly', 'cognition.capture_policy_nightly_title', '本地夜间整理', 'cognition.capture_policy_nightly_hint', '仅在你启用后运行；设备休眠时顺延到下一个可运行窗口。'],
       ['manual', 'cognition.capture_policy_manual_title', '主动整理', 'cognition.capture_policy_manual_hint', '从历史会话里挑选内容整理，读取前会先让你确认范围。'],
     ];
-    const statusText = (capture) => ({
-      completed: T('cognition.capture_status_completed', '已完成'),
-      review_ready: T('cognition.capture_status_review', '待确认'),
-      processing: T('cognition.capture_status_processing', '整理中'),
-      failed: T('cognition.capture_status_failed', '失败'),
-      cancelled: T('cognition.capture_status_cancelled', '已取消'),
-      paused: T('cognition.capture_status_paused', '已暂停'),
-      queued: T('cognition.capture_status_queued', '排队中'),
-      waiting_quiet: T('cognition.capture_status_waiting', '等待中'),
-    }[String(capture.status || '')] || String(capture.status || ''));
+    const captureStatus = (capture) => (NS.vocabulary
+      ? NS.vocabulary.captureStatusText(capture.status)
+      : String(capture.status || ''));
+    const recordTitle = (capture) => (NS.vocabulary
+      ? NS.vocabulary.recordTitle(capture)
+      : String(capture.conversationTitle || capture.title || capture.id || ''));
     return `${hero(
       T('cognition.tab_manage', '设置与管理'), T('cognition.capture_activity_title', '自动整理'),
       T('cognition.capture_activity_hint', '自动发现值得留存的内容；只有需要你判断时才打扰你。'),
@@ -735,26 +763,29 @@
     )}
     <div class="ca-flow">${[T('cognition.capture_chain_source', '会话 / 执行结果'), T('cognition.capture_chain_candidate', '提取候选'), T('cognition.capture_chain_confirm', '你确认'), T('cognition.capture_chain_asset', '我的资产')].map((s) => `<b>${esc(s)}</b>`).join('<i>→</i>')}</div>
     ${sectionHead(T('cognition.capture_auto_title', '整理时机与设置'), T('cognition.capture_trigger_note', '三种时机同时只有一种生效'))}
-    <div class="ca-whenwrap">${POLICY.map(([id, key, fb, descKey, descFb]) => `
-      <div class="ca-card ca-whencard${policy === id ? ' is-on' : ''}">
-        <div class="ca-line"><div class="ca-row-title">${esc(T(key, fb))}</div><div class="ca-right">${policy === id ? `<span class="ca-chip is-green">${esc(T('cognition.capture_mode_on', '使用中'))}</span>` : ''}</div></div>
-        <p class="ca-sub">${esc(T(descKey, descFb))}</p>
-        ${policy === id ? '' : `<div class="ca-actions">${btn(T('cognition.capture_mode_use', '切换为此方式'), 'capture-policy', { id, small: true })}</div>`}
-      </div>`).join('')}</div>
     <div class="ca-setrow">
-      <div class="ca-sub">${esc(enabled ? T('cognition.capture_enabled_on', '自动整理已开启') : T('cognition.capture_enabled_off', '自动整理已关闭'))} · ${esc(reviewAuto ? T('cognition.capture_review_auto_note', '符合条件的候选会自动采纳（不再询问）') : T('cognition.capture_review_manual_note', '候选先进入待确认，由你决定'))}</div>
-      <div class="ca-actions">${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', {})}${btn(T(reviewAuto ? 'cognition.capture_review_switch_ask' : 'cognition.capture_review_switch_auto', reviewAuto ? '改为先问我' : '改为自动采纳'), 'capture-review-toggle', {})}</div>
+      <div class="ca-sub">${esc(T((POLICY.find(([id]) => id === policy) || POLICY[0])[3], (POLICY.find(([id]) => id === policy) || POLICY[0])[4]))}</div>
+      <div class="ca-actions">${btn(enabled ? T('cognition.capture_toggle_off', '关闭') : T('cognition.capture_toggle_on', '开启'), 'capture-toggle', { primary: !enabled })}</div>
     </div>
+    <div class="ca-subnav">${POLICY.map(([id, key, fb]) => btn(T(key, fb), 'capture-policy', { id, className: `ca-pill${policy === id ? ' is-on' : ''}` })).join('')}</div>
+    ${sectionHead(T('cognition.capture_review_title', '候选怎么确认'), '')}
+    <div class="ca-subnav">
+      ${btn(T('cognition.capture_review_auto', '自动采纳'), 'capture-review-toggle', { id: 'auto', className: `ca-pill${reviewAuto ? ' is-on' : ''}` })}
+      ${btn(T('cognition.capture_review_manual', '先问我'), 'capture-review-toggle', { id: 'manual', className: `ca-pill${!reviewAuto ? ' is-on' : ''}` })}
+    </div>
+    <p class="ca-note">${esc(T(reviewAuto ? 'cognition.capture_review_auto_note' : 'cognition.capture_review_manual_note', reviewAuto ? '符合条件的候选会自动采纳（不再询问）' : '候选先进入待确认，由你决定'))}</p>
     ${sectionHead(T('cognition.capture_manual_title', '从历史会话整理'), T('cognition.capture_manual_note', '整理会使用模型额度，随时可以取消'))}
     <div class="ca-card">${conversations.length ? conversations.map((conv) => `
       <div class="ca-row is-flat">
         <div class="ca-row-main"><div class="ca-row-title">${esc(conv.title || conv.id)}</div><div class="ca-row-meta">${esc(fmtDate(conv.updatedAt || conv.createdAt))}</div></div>
         <div class="ca-row-side">${btn(T('cognition.capture_manual_history_create', '开始整理'), 'organize-conv', { id: conv.id, small: true })}</div>
-      </div>`).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}</div>
-    ${S.captures.length ? sectionHead(T('cognition.capture_task_log_title', '② 整理记录')) + `<div class="ca-card">${S.captures.slice(0, 8).map((capture) => `
+      </div>`).join('') : `<div class="ca-note">${esc(T('cognition.capture_tasks_empty_hint', '一轮会话结束后，系统会在静默期结束后创建整理任务。'))}</div>`}
+      ${conversationItems.length > 5 ? btn(T(S.organizeListExpanded ? 'cognition.capture_list_collapse' : 'cognition.capture_list_expand', S.organizeListExpanded ? '收起' : `查看全部 ${conversationItems.length} 个会话`, { n: String(conversationItems.length) }), 'toggle-organize-list', { small: true }) : ''}
+    </div>
+    ${S.captures.length ? sectionHead(T('cognition.capture_task_log_title', '整理记录')) + `<div class="ca-card">${S.captures.slice(0, 8).map((capture) => `
       <div class="ca-row is-flat">
-        <div class="ca-row-main"><div class="ca-row-title">${esc(capture.conversationTitle || capture.title || capture.id)}</div>
-        <div class="ca-row-meta">${esc(statusText(capture))} · ${esc(fmtDate(capture.updatedAt || capture.createdAt))}</div></div>
+        <div class="ca-row-main"><div class="ca-row-title">${esc(recordTitle(capture))}</div>
+        <div class="ca-row-meta">${esc(captureStatus(capture))} · ${esc(fmtDate(capture.updatedAt || capture.createdAt))}</div></div>
         <div class="ca-row-side">
           ${capture.status === 'failed' ? btn(T('cognition.capture_action_retry', '重试'), 'capture-action', { id: capture.id, data: { action: 'retry' }, small: true }) : ''}
           ${capture.status === 'paused' ? btn(T('cognition.capture_action_resume', '继续'), 'capture-action', { id: capture.id, data: { action: 'resume' }, small: true }) : ''}
@@ -781,6 +812,7 @@
       body = `<div class="ca-loading">${esc(T('cognition.loading', '加载中…'))}</div>`;
     } else if (route.name === 'review') body = viewReview(route);
     else if (route.name === 'evidence') body = viewEvidence(route);
+    else if (route.name === 'experiences') body = viewExperiences();
     else if (route.name === 'manage') body = viewManage(route);
     else body = viewOverview(route);
     const errorBanner = S.errors.length && S.loaded

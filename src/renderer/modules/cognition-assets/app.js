@@ -86,7 +86,10 @@
           case 'manage-tab': router.go({ name: 'manage', manageTab: id }); break;
           case 'filter-cat': router.go({ name: 'overview', category: id }); break;
           case 'go-review': router.go({ name: 'review' }); break;
-          case 'go-sources': router.go({ name: 'manage', manageTab: 'sources' }); break;
+          case 'go-sources': router.go({ name: 'manage', manageTab: 'sources', sourceKind: '' }); break;
+          case 'go-source-kind': router.go({ name: 'manage', manageTab: 'sources', sourceKind: id }); break;
+          case 'go-sources-overview': router.go({ name: 'manage', manageTab: 'sources', sourceKind: '' }); break;
+          case 'go-experiences': router.go({ name: 'experiences' }); break;
           case 'go-organize': router.go({ name: 'manage', manageTab: 'organize' }); break;
           case 'open-candidate': router.go({ name: 'review', candidateId: id }); break;
           case 'open-ontology': await NS.openPersonalOntology(); break;
@@ -99,15 +102,32 @@
           case 'source-action': await A.sourceAction(el.dataset.kind || '', id, el.dataset.action); break;
           case 'capture-action': await A.captureAction(id, el.dataset.action); break;
           case 'organize-conv': await A.organizeConversation(id); break;
-          case 'capture-policy': await A.updateCaptureSettings({ executionPolicy: id }); break;
+          case 'capture-policy': {
+            // 分段单选：点已选中项不重复提交。
+            const current = String((S.captureSettings || {}).executionPolicy || 'smart');
+            if (id && id !== current) await A.updateCaptureSettings({ executionPolicy: id });
+            break;
+          }
           case 'capture-toggle': {
             const enabled = !(S.captureSettings && S.captureSettings.enabled !== false);
+            if (!enabled) {
+              // 关闭自动整理是破坏性操作（新候选不再被发现）：确认+后果说明。
+              const ok = await NS.confirmUser(T('cognition.capture_disable_confirm', '关闭后新会话不再自动提炼候选，已有的资产与记录不受影响。确认关闭自动整理？'));
+              if (!ok) break;
+            }
             await A.updateCaptureSettings({ enabled });
             break;
           }
           case 'capture-review-toggle': {
+            // 单选组按所点项设置；点已选中项不重复提交。
             const auto = String((S.captureSettings || {}).reviewPolicy || 'auto') === 'auto';
-            await A.updateCaptureSettings({ reviewPolicy: auto ? 'manual' : 'auto' });
+            const next = id === 'auto' ? 'auto' : 'manual';
+            if ((next === 'auto') !== auto) await A.updateCaptureSettings({ reviewPolicy: next });
+            break;
+          }
+          case 'toggle-organize-list': {
+            S.organizeListExpanded = !S.organizeListExpanded;
+            NS.notify();
             break;
           }
           case 'proof-toggle':

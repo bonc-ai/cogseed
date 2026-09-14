@@ -125,10 +125,12 @@
     proofs: [],
     /** 使用记录页：哪些资产卡片被展开（assetId 集合；重画后保留）。 */
     expandedProofs: new Set(),
+    /** 自动整理页：历史会话列表是否展开全部（默认收拢 5 条）。 */
+    organizeListExpanded: false,
     continuationCount: 0,
     loadedAt: 0,
-    /** 路由：{name, category, assetId, candidateId, manageTab, proofEventId} */
-    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' },
+    /** 路由：{name, category, assetId, candidateId, manageTab, sourceKind, proofEventId} */
+    route: { name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' },
     backStack: [],
   };
   NS.store = store;
@@ -244,7 +246,7 @@
       const current = store.route;
       const same = JSON.stringify(current) === JSON.stringify(next);
       if (!opts.replace && !same) store.backStack.push(Object.assign({}, current));
-      store.route = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' }, next);
+      store.route = Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, next);
       NS.notify();
       const main = document.getElementById('ca-scroll');
       if (main) main.scrollTop = 0;
@@ -255,7 +257,7 @@
     },
     legacy(page) {
       const mapped = LEGACY[page] || { name: 'overview' };
-      router.go(Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', proofEventId: '' }, mapped));
+      router.go(Object.assign({ name: 'overview', category: '', assetId: '', candidateId: '', manageTab: 'sources', sourceKind: '', proofEventId: '' }, mapped));
     },
   };
   NS.router = router;

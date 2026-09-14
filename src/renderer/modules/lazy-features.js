@@ -48,6 +48,7 @@ const _rendererFeatureManifest = Object.freeze({
   recall: [
     { src: './modules/recall-information-architecture.js' },
     { src: './modules/cognition-assets/core.js' },
+    { src: './modules/cognition-assets/vocabulary.js' },
     { src: './modules/cognition-assets/views.js' },
     { src: './modules/cognition-assets/app.js' },
     { src: './modules/personal-ontology.js' },
